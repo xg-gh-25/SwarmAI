@@ -12,6 +12,12 @@ numbers instead of impressions (design: docs/design/pipeline-speed-systematic-fi
   taken out of model time, and ``active_minutes`` = wall − idle. A wake by
   automation (a ``<task-notification>``, a compaction continuation) is not idle:
   that wait is the run's own background work.
+- blocked minutes: time a tool call sat waiting on a human decision — an approval
+  prompt's surfaced→decided span from the daemon log (``$SWARM_LOG_DIR``, default
+  ``<app data>/logs/backend-daemon.log*``) for the run's ``session_id``, an
+  AskUserQuestion call's span, or, when no logged wait covers it, the whole span
+  of a call denied/timed out by the approval gate. Out of tool time and active
+  time: wall = active + blocked + idle.
 - API responses, tool calls, share of responses carrying exactly one call
 - per-tool counts and p50/p90 exec seconds; per-category model+tool minutes
 - mechanical jobs the model did by hand (pytest, stage-JSON assembly,
@@ -461,6 +467,100 @@ def _overlap(spans: list[tuple[float, float]], a: float, b: float) -> float:
     return sum(max(0.0, min(b, e) - max(a, s)) for s, e in spans)
 
 
+def _merge(spans: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for a, b in sorted(s for s in spans if s[1] > s[0]):
+        if out and a <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+# ── blocked time (a tool call waiting on a human decision) ──────────────────
+# The dangerous-command gate logs when it surfaces an approval prompt and when the
+# decision (approve / deny / timeout) arrives; the transcript only shows the call's
+# total span. Daemon log lines are local wall-clock, ``YYYY-MM-DD HH:MM:SS,mmm``.
+_LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),(\d{3})")
+_SURFACED_RE = re.compile(r"permission_surfaced session_id=(\S+) request_id=(perm_[0-9a-f]+)")
+_DECIDED_RE = re.compile(r"User decision for (perm_[0-9a-f]+): (\w+)")
+_HUMAN_TOOLS = frozenset({"AskUserQuestion"})
+_DENIED_RE = re.compile(r"PreToolUse:\w+ hook error: (?:User denied:|审批超时)")
+
+
+def _log_dir() -> Path:
+    env = os.environ.get("SWARM_LOG_DIR")
+    return Path(env).expanduser() if env else _workspace().parent / "logs"
+
+
+def permission_waits(session_ids: "set[str]", lo: float, hi: float,
+                     log_dir: "Path | None" = None) -> list[dict]:
+    """Approval prompts surfaced to ``session_ids`` inside ``[lo, hi]``, from the
+    daemon logs: ``{"start", "end", "decision"}``. A prompt with no decision line
+    yet (still pending, or its line rotated away) ends at ``hi``. A missing or
+    unreadable log yields []: the transcript fallback in ``blocked_spans`` covers
+    denials, an approved wait is then invisible."""
+    if not session_ids:
+        return []
+    surfaced: dict[str, float] = {}
+    decided: dict[str, tuple[float, str]] = {}
+    for path in sorted(glob.glob(str((log_dir or _log_dir()) / "backend-daemon.log*"))):
+        try:
+            fh = open(path, encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for line in fh:
+                if "perm_" not in line:
+                    continue
+                m = _LOG_TS_RE.match(line)
+                if not m:
+                    continue
+                try:
+                    t = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").timestamp() \
+                        + int(m.group(2)) / 1000
+                except ValueError:
+                    continue
+                s = _SURFACED_RE.search(line)
+                if s and s.group(1) in session_ids:
+                    surfaced.setdefault(s.group(2), t)
+                    continue
+                d = _DECIDED_RE.search(line)
+                if d:
+                    decided.setdefault(d.group(1), (t, d.group(2)))
+    out = []
+    for rid, start in surfaced.items():
+        end, decision = decided.get(rid, (hi, "pending"))
+        if end > lo and start < hi:
+            out.append({"start": max(start, lo), "end": min(max(end, start), hi), "decision": decision})
+    return sorted(out, key=lambda w: w["start"])
+
+
+def blocked_spans(uses, results, waits: list[dict]) -> tuple[list[tuple[float, float]], dict]:
+    """Spans a tool call sat waiting on a human, merged, plus a breakdown.
+
+    Sources: the logged approval waits; an AskUserQuestion call's whole span; and a
+    call whose result is an approval denial/timeout that no logged wait covers (the
+    log rotated or was absent) — its whole span, which is almost all wait."""
+    spans = [(w["start"], w["end"]) for w in waits]
+    decisions = collections.Counter(w["decision"] for w in waits)
+    ask = fallback = 0
+    for uid, (name, _inp, t, _mid) in uses.items():
+        res = results.get(uid)
+        if not res:
+            continue
+        if name in _HUMAN_TOOLS:
+            spans.append((t, res[0]))
+            ask += 1
+        elif res[1] and _DENIED_RE.search(_result_text(res[3])) \
+                and _overlap(spans, t, res[0]) == 0:
+            spans.append((t, res[0]))
+            fallback += 1
+            decisions["deny (transcript)"] += 1
+    return _merge(spans), {"approval_waits": len(waits) + fallback, "ask_user": ask,
+                           "decisions": dict(decisions)}
+
+
 def _result_text(body: object) -> str:
     if isinstance(body, str):
         return body
@@ -474,7 +574,8 @@ def _context_tokens(usage: dict) -> int:
                ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
 
 
-def _time_split(uses, results, responses, lo: float, idle: "list[tuple[float, float]] | None" = None):
+def _time_split(uses, results, responses, lo: float, idle: "list[tuple[float, float]] | None" = None,
+                blocked: "list[tuple[float, float]] | None" = None):
     """Attribute wall time to model steps vs tool execution, and to categories.
 
     A response's model time runs from the previous response's end (its last
@@ -484,8 +585,11 @@ def _time_split(uses, results, responses, lo: float, idle: "list[tuple[float, fl
     tool_result. Both are split evenly across the response's calls when
     attributing to categories. ``gaps`` (the per-step distribution) keeps the
     pre-first-call gap only, which is the "thinking before acting" latency.
-    Any part of a gap inside an ``idle`` span (waiting on a human) is not model time."""
-    idle = idle or []
+    Any part of a gap inside an ``idle`` span (waiting on a human) is not model time,
+    and any part of either inside a ``blocked`` span (a call waiting on a human
+    decision) is neither model nor tool time."""
+    idle = _merge((idle or []) + (blocked or []))
+    blocked = blocked or []
     model_s = tool_s = 0.0
     gaps: list[float] = []
     by_cat: dict[str, list[float]] = collections.defaultdict(lambda: [0, 0.0, 0.0])
@@ -501,7 +605,7 @@ def _time_split(uses, results, responses, lo: float, idle: "list[tuple[float, fl
         model = gap + (last_use - first_use)
         model_s += model
         done = [results[i][0] for i in ids if i in results]
-        span = max(0.0, max(done) - last_use) if done else 0.0
+        span = max(0.0, max(done) - last_use - _overlap(blocked, last_use, max(done))) if done else 0.0
         tool_s += span
         for i in ids:
             cat = by_cat[classify_command(uses[i][0], uses[i][1])]
@@ -731,7 +835,8 @@ def _stage_record_counts(uses: dict) -> dict:
             "by_stage": dict(by_stage)}
 
 
-def profile_run(run_state: dict, transcripts: list[str], run_dir: "Path | None" = None) -> dict:
+def profile_run(run_state: dict, transcripts: list[str], run_dir: "Path | None" = None,
+                log_dir: "Path | None" = None) -> dict:
     """Speed profile of one run from its owning transcripts (see module docstring).
     ``run_dir`` adds the test-runner executions recorded in the run's evidence."""
     lo, hi = run_window(run_state)
@@ -742,7 +847,12 @@ def profile_run(run_state: dict, transcripts: list[str], run_dir: "Path | None" 
     uses, results, responses = _collect(records, lo, hi)
     idle = _idle_intervals(records, lo, hi)
     idle_s = sum(b - a for a, b in idle)
-    model_s, tool_s, gaps, categories = _time_split(uses, results, responses, lo, idle)
+    sids = {s for s in (run_state.get("session_id"),) if isinstance(s, str) and s}
+    blocked, blocked_info = blocked_spans(uses, results, permission_waits(sids, lo, hi, log_dir))
+    blocked = [(a, b) for a, b in blocked if b > a]
+    # a wait cannot also be idle; never subtract the same second twice from active
+    blocked_s = sum(b - a - _overlap(idle, a, b) for a, b in blocked)
+    model_s, tool_s, gaps, categories = _time_split(uses, results, responses, lo, idle, blocked)
 
     with_calls = [r for r in responses.values() if r["uses"]]
     per_tool: dict[str, list[float]] = collections.defaultdict(list)
@@ -802,9 +912,11 @@ def profile_run(run_state: dict, transcripts: list[str], run_dir: "Path | None" 
         "transcripts": [os.path.basename(p) for p in transcripts],
         "wall_minutes": round((hi - lo) / 60, 1),
         # wall minus the spans spent waiting on a human (see module docstring)
-        "active_minutes": round(max(0.0, hi - lo - idle_s) / 60, 1),
+        "active_minutes": round(max(0.0, hi - lo - idle_s - blocked_s) / 60, 1),
         "idle_minutes": round(idle_s / 60, 1),
         "idle_spans": len(idle),
+        "blocked_minutes": round(blocked_s / 60, 1),
+        "blocked": blocked_info,
         "model_minutes": round(model_s / 60, 1),
         "tool_minutes": round(tool_s / 60, 1),
         "api_responses": len(responses),
@@ -910,6 +1022,9 @@ def _render(p: dict) -> str:
     lines = [
         f"{p['run_id']} ({p['profile']}, {p['status']}) — wall {p['wall_minutes']} min"
         f" = active {p.get('active_minutes', p['wall_minutes'])}"
+        f" + blocked {p.get('blocked_minutes', 0.0)}"
+        f" ({(p.get('blocked') or {}).get('approval_waits', 0)} approval waits"
+        f"{', ' + str(p['blocked']['ask_user']) + ' questions' if (p.get('blocked') or {}).get('ask_user') else ''})"
         f" + idle {p.get('idle_minutes', 0.0)} ({p.get('idle_spans', 0)} waits on a human)"
         f" · model {p['model_minutes']} + tools {p['tool_minutes']}",
         f"transcripts: {', '.join(p['transcripts']) or '(none found)'}",

@@ -642,4 +642,70 @@ class TestIdleTime:
         p = prof.profile_run(json.loads((run_dir / "run.json").read_text()), [path])
         assert p["idle_minutes"] == round((3600 - 140) / 60, 1)   # ended, never came back
         assert p["active_minutes"] == round(140 / 60, 1)
-        assert "active 2.3 + idle 57.7 (1 waits on a human)" in prof._render(p)
+        assert "active 2.3 + blocked 0.0 (0 approval waits) + idle 57.7 (1 waits on a human)" \
+            in prof._render(p)
+
+
+# ── blocked time (a call waiting on a human decision) ──────────────────────
+def _log_line(t: int, text: str) -> str:
+    """A daemon log line at run offset ``t`` (local wall-clock, as the daemon writes)."""
+    from datetime import datetime as _dt
+    stamp = _dt.fromtimestamp(prof._ts(T0) + t)
+    return f"{stamp:%Y-%m-%d %H:%M:%S},000 [1] - {text}\n"
+
+
+class TestBlockedTime:
+    def _state(self, run_dir, sid="app-1"):
+        state = json.loads((run_dir / "run.json").read_text())
+        state["session_id"] = sid
+        return state
+
+    def test_logged_approval_wait_leaves_tool_and_active_time(self, ws, tmp_path):
+        tmp, run_dir = ws
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        (logs / "backend-daemon.log.1").write_text(
+            _log_line(105, "core.streaming_orchestrator - INFO - session_unit.permission_surfaced"
+                           " session_id=app-1 request_id=perm_aaaaaaaaaaaa command=git commit")
+            + _log_line(105, "x - INFO - session_unit.permission_surfaced session_id=OTHER"
+                             " request_id=perm_bbbbbbbbbbbb command=x")   # another session
+            + _log_line(1905, "core.security_hooks - INFO - User decision for perm_aaaaaaaaaaaa: approve")
+            + "garbage line perm_ without a timestamp\n", encoding="utf-8")
+        recs = [_use("u1", 100, "m1", "Bash", {"command": "git commit --amend -m x"}),
+                _res("u1", 1910)]
+        path = _write_jsonl(tmp / "claude" / "projects" / "-ws" / "t.jsonl", recs)
+        p = prof.profile_run(self._state(run_dir), [path], log_dir=logs)
+        assert p["blocked_minutes"] == 30.0                 # 105 → 1905
+        assert p["blocked"] == {"approval_waits": 1, "ask_user": 0, "decisions": {"approve": 1}}
+        assert p["tool_minutes"] == round(10 / 60, 1)      # 1810 s span − 1800 s wait
+        assert p["active_minutes"] == 30.0                 # 3600 − 1800 blocked (turn never ended)
+
+    def test_denial_without_log_falls_back_to_the_call_span(self, ws, tmp_path):
+        tmp, run_dir = ws
+        recs = [_use("u1", 100, "m1", "Bash", {"command": "git commit --amend -m x"}),
+                _res("u1", 1300, "PreToolUse:Bash hook error: User denied: Matches dangerous"
+                                 " command pattern", error=True),
+                _use("u2", 1310, "m2", "Bash", {"command": "ls"}),
+                _res("u2", 1400, "PreToolUse:Bash hook error: pytest piped into tail", error=True),
+                _use("u3", 1410, "m3", "AskUserQuestion", {}), _res("u3", 1710)]
+        path = _write_jsonl(tmp / "claude" / "projects" / "-ws" / "t.jsonl", recs)
+        p = prof.profile_run(self._state(run_dir), [path], log_dir=tmp_path / "nologs")
+        assert p["blocked_minutes"] == round((1200 + 300) / 60, 1)   # not the u2 gate denial
+        assert p["blocked"]["approval_waits"] == 1
+        assert p["blocked"]["ask_user"] == 1
+        assert p["blocked"]["decisions"] == {"deny (transcript)": 1}
+
+    def test_pending_wait_ends_at_window_and_out_of_window_is_dropped(self, tmp_path):
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        (logs / "backend-daemon.log").write_text(
+            _log_line(3000, "x - session_unit.permission_surfaced session_id=s"
+                            " request_id=perm_cccccccccccc command=x")
+            + _log_line(-600, "x - session_unit.permission_surfaced session_id=s"
+                              " request_id=perm_dddddddddddd command=x")
+            + _log_line(-500, "x - User decision for perm_dddddddddddd: deny"), encoding="utf-8")
+        lo, hi = prof._ts(T0), prof._ts(T_END)
+        waits = prof.permission_waits({"s"}, lo, hi, logs)
+        assert [(round(w["start"] - lo), round(w["end"] - lo), w["decision"]) for w in waits] == \
+            [(3000, 3600, "pending")]
+        assert prof.permission_waits(set(), lo, hi, logs) == []
