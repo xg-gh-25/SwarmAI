@@ -2532,7 +2532,7 @@ def _maybe_autoaggregate_test_artifact(run_state, profile, reg, project, run_id)
         return None
     test_rec = next(
         (s for s in run_state.get("stages", [])
-         if s.get("stage", "") == "test"
+         if s.get("stage", s.get("name", "")) == "test"   # legacy name-keyed record too
          and s.get("status") in ("completed", "done")),
         None,
     )

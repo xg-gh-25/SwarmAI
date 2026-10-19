@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.scripts.artifact_cli import _repo_root_for_file
+from scripts.artifact_cli import _repo_root_for_file
 
 
 def _init_repo(root: Path) -> None:

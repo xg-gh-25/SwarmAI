@@ -23,7 +23,24 @@ _CLI = Path(__file__).resolve().parent.parent / "scripts" / "artifact_cli.py"
 #  - _ensure_project_dir itself IS the registration choke.
 # Any OTHER function doing a parents=True mkdir must call _ensure_project_dir. If you
 # add a legitimately-non-Projects mkdir, add its function name here WITH a reason.
-_ALLOWLIST = {"_ensure_project_dir"}
+_ALLOWLIST = {
+    "_ensure_project_dir",
+    # Each of these mkdirs only INSIDE an existing run directory
+    # (Projects/<P>/.artifacts/runs/<R>/, created by run-create through
+    # _ensure_project_dir), in the app state dir, or in the target repo:
+    # none can mint a new Projects/<name>/.
+    "_generate_review_deliverable",  # <target repo>/.aidlc/deliverables/<run_id>
+    "_ledger_add",                   # <app data>/state/pipeline_agent_audit/
+    "_write_gate0_prompt",           # run_dir/evidence/prompts
+    "_write_gate1_prompt",           # run_dir/evidence/prompts
+    "_write_gate_prompt",            # run_dir/evidence/prompts
+    "_write_review_inputs",          # run_dir/evidence/prompts
+    "_write_review_prompts",         # run_dir/evidence/prompts
+    "_write_expert_prompts",         # run_dir/evidence/prompts
+    "_snapshot_gate2_round1",        # run_dir/evidence/prompts/round1
+    "cmd_gate2_ledger",              # run_dir/evidence
+    "cmd_gate2_fixspec",             # run_dir/evidence/fixing-spec-r<N>.json
+}
 
 
 _MODULE_LEVEL = "<module>"

@@ -187,7 +187,7 @@ class TestPublishAutoRecordOwnership:
 
         seen_profile = {}
 
-        def _capture(stage, data, profile="full"):
+        def _capture(stage, data, profile="full", **_kw):  # e.g. run_created_at (cutovers)
             seen_profile["p"] = profile
             return []
 
@@ -211,7 +211,7 @@ class TestPublishAutoRecordOwnership:
 
         seen_profile = {}
 
-        def _capture(stage, data, profile="full"):
+        def _capture(stage, data, profile="full", **_kw):  # e.g. run_created_at (cutovers)
             seen_profile["p"] = profile
             return []
 
