@@ -6,6 +6,12 @@ numbers instead of impressions (design: docs/design/pipeline-speed-systematic-fi
 
 - wall / model / tool minutes (model time = gap between the last tool_result
   and the next response's first tool_use; tool time = tool_use → tool_result)
+- idle minutes: time the session sat waiting on a human — from a turn's end
+  (``stop_hook_summary`` system record, or an ``[Request interrupted by user``
+  marker) to the next human prompt, or to the window's end if none came. It is
+  taken out of model time, and ``active_minutes`` = wall − idle. A wake by
+  automation (a ``<task-notification>``, a compaction continuation) is not idle:
+  that wait is the run's own background work.
 - API responses, tool calls, share of responses carrying exactly one call
 - per-tool counts and p50/p90 exec seconds; per-category model+tool minutes
 - mechanical jobs the model did by hand (pytest, stage-JSON assembly,
@@ -389,6 +395,72 @@ def _collect(records: list[dict], lo: float, hi: float):
     return uses, results, responses
 
 
+_TURN_END_SUBTYPES = frozenset({"stop_hook_summary"})
+_INTERRUPT_RE = re.compile(r"^\[Request interrupted by user")
+_AUTOMATED_PROMPT_RE = re.compile(
+    r"^(?:<task-notification>|This session is being continued from a previous conversation)")
+
+
+def _prompt_kind(rec: dict) -> "str | None":
+    """``human`` / ``interrupt`` / ``automated`` for a main-thread user record that
+    carries text and no tool_result; None for anything else."""
+    if rec.get("type") != "user" or rec.get("isSidechain") or rec.get("isMeta"):
+        return None
+    content = _message(rec).get("content")
+    if isinstance(content, list):
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+            return None
+        text = " ".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
+    elif isinstance(content, str):
+        text = content
+    else:
+        return None
+    text = text.strip()
+    if not text:
+        return None
+    if _INTERRUPT_RE.match(text):
+        return "interrupt"
+    if rec.get("isCompactSummary") or _AUTOMATED_PROMPT_RE.match(text):
+        return "automated"
+    return "human"
+
+
+def _idle_intervals(records: list[dict], lo: float, hi: float) -> list[tuple[float, float]]:
+    """Spans the main thread waited on a human, clipped to ``[lo, hi]``.
+
+    A span opens at the first turn end (stop-hook summary or interrupt marker) after
+    the last assistant activity and closes at the next human prompt; one still open
+    when the records run out closes at ``hi``. Assistant activity or an automated
+    wake closes it without counting it (the session was working or waiting on its
+    own background work)."""
+    spans: list[tuple[float, float]] = []
+    ended: "float | None" = None
+    for rec in sorted(records, key=lambda r: _safe_ts(r) or 0.0):
+        t = _safe_ts(rec)
+        if t is None or rec.get("isSidechain"):
+            continue
+        if t > hi:
+            break  # an open span closes at hi either way
+        kind = _prompt_kind(rec)
+        if (rec.get("type") == "system" and rec.get("subtype") in _TURN_END_SUBTYPES) \
+                or kind == "interrupt":
+            if ended is None:
+                ended = t
+        elif kind == "human":
+            if ended is not None:
+                spans.append((ended, t))
+            ended = None
+        elif kind == "automated" or rec.get("type") == "assistant":
+            ended = None
+    if ended is not None:
+        spans.append((ended, hi))
+    return [(max(a, lo), min(b, hi)) for a, b in spans if min(b, hi) > max(a, lo)]
+
+
+def _overlap(spans: list[tuple[float, float]], a: float, b: float) -> float:
+    return sum(max(0.0, min(b, e) - max(a, s)) for s, e in spans)
+
+
 def _result_text(body: object) -> str:
     if isinstance(body, str):
         return body
@@ -402,7 +474,7 @@ def _context_tokens(usage: dict) -> int:
                ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
 
 
-def _time_split(uses, results, responses, lo: float):
+def _time_split(uses, results, responses, lo: float, idle: "list[tuple[float, float]] | None" = None):
     """Attribute wall time to model steps vs tool execution, and to categories.
 
     A response's model time runs from the previous response's end (its last
@@ -411,7 +483,9 @@ def _time_split(uses, results, responses, lo: float):
     model time. Its tool time runs from that last tool_use to its last
     tool_result. Both are split evenly across the response's calls when
     attributing to categories. ``gaps`` (the per-step distribution) keeps the
-    pre-first-call gap only, which is the "thinking before acting" latency."""
+    pre-first-call gap only, which is the "thinking before acting" latency.
+    Any part of a gap inside an ``idle`` span (waiting on a human) is not model time."""
+    idle = idle or []
     model_s = tool_s = 0.0
     gaps: list[float] = []
     by_cat: dict[str, list[float]] = collections.defaultdict(lambda: [0, 0.0, 0.0])
@@ -422,7 +496,7 @@ def _time_split(uses, results, responses, lo: float):
             continue
         first_use = min(uses[i][2] for i in ids)
         last_use = max(uses[i][2] for i in ids)
-        gap = max(0.0, first_use - last)
+        gap = max(0.0, first_use - last - _overlap(idle, last, first_use))
         gaps.append(gap)
         model = gap + (last_use - first_use)
         model_s += model
@@ -666,7 +740,9 @@ def profile_run(run_state: dict, transcripts: list[str], run_dir: "Path | None" 
     for path in dict.fromkeys(transcripts):  # same path given twice counts once
         records.extend(_load_records(path, seen))
     uses, results, responses = _collect(records, lo, hi)
-    model_s, tool_s, gaps, categories = _time_split(uses, results, responses, lo)
+    idle = _idle_intervals(records, lo, hi)
+    idle_s = sum(b - a for a, b in idle)
+    model_s, tool_s, gaps, categories = _time_split(uses, results, responses, lo, idle)
 
     with_calls = [r for r in responses.values() if r["uses"]]
     per_tool: dict[str, list[float]] = collections.defaultdict(list)
@@ -725,6 +801,10 @@ def profile_run(run_state: dict, transcripts: list[str], run_dir: "Path | None" 
         "status": run_state.get("status"),
         "transcripts": [os.path.basename(p) for p in transcripts],
         "wall_minutes": round((hi - lo) / 60, 1),
+        # wall minus the spans spent waiting on a human (see module docstring)
+        "active_minutes": round(max(0.0, hi - lo - idle_s) / 60, 1),
+        "idle_minutes": round(idle_s / 60, 1),
+        "idle_spans": len(idle),
         "model_minutes": round(model_s / 60, 1),
         "tool_minutes": round(tool_s / 60, 1),
         "api_responses": len(responses),
@@ -828,8 +908,10 @@ def write_metrics(run_dir: Path, profile: dict) -> None:
 
 def _render(p: dict) -> str:
     lines = [
-        f"{p['run_id']} ({p['profile']}, {p['status']}) — wall {p['wall_minutes']} min = "
-        f"model {p['model_minutes']} + tools {p['tool_minutes']}",
+        f"{p['run_id']} ({p['profile']}, {p['status']}) — wall {p['wall_minutes']} min"
+        f" = active {p.get('active_minutes', p['wall_minutes'])}"
+        f" + idle {p.get('idle_minutes', 0.0)} ({p.get('idle_spans', 0)} waits on a human)"
+        f" · model {p['model_minutes']} + tools {p['tool_minutes']}",
         f"transcripts: {', '.join(p['transcripts']) or '(none found)'}",
         f"responses {p['api_responses']} · tool calls {p['tool_calls']} · errors {p['tool_errors']}"
         f" · single-call responses {p['single_call_response_ratio']}"

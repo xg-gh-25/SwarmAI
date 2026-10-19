@@ -579,3 +579,67 @@ def test_heredoc_quoting_a_stage_json_command_is_not_counted():
            "python backend/scripts/artifact_cli.py run-update --stage-json '{\"stage\":\"deliver\"}'\n"
            "EOF")
     assert "deliver" not in prof.stage_record_writes(cmd)
+
+
+# ── idle time (waiting on a human) ─────────────────────────────────────────
+def _sys(t, subtype="stop_hook_summary"):
+    return {"type": "system", "subtype": subtype, "timestamp": _at(t), "uuid": f"s-{t}"}
+
+
+def _prompt(t, text, **extra):
+    return {"type": "user", "timestamp": _at(t), "uuid": f"p-{t}",
+            "message": {"content": text}, **extra}
+
+
+class TestIdleTime:
+    """A turn's end → the next human prompt is idle: out of model time and active time."""
+
+    def test_wait_between_turns_is_idle_not_model(self, ws):
+        tmp, run_dir = ws
+        recs = [
+            _use("u1", 60, "m1", "Bash", {"command": "ls"}), _res("u1", 70),
+            _sys(80),                                  # turn 1 ends
+            _prompt(1880, "## Current UI State\n继续"),  # human returns 30 min later
+            _use("u2", 1890, "m2", "Bash", {"command": "ls"}), _res("u2", 1900),
+        ]
+        path = _write_jsonl(tmp / "claude" / "projects" / "-ws" / "t.jsonl", recs)
+        p = prof.profile_run(json.loads((run_dir / "run.json").read_text()), [path])
+        assert p["idle_spans"] == 1                    # 80 → 1880; turn 2 never ended
+        # gaps: 0→60 (60 s) and 70→1890 minus idle 80→1880 (1800 s) = 20 s
+        assert p["model_minutes"] == round(80 / 60, 1)
+        assert p["model_step_seconds"]["p90"] == 60.0
+
+    def test_spans_and_closers(self):
+        lo, hi = prof._ts(T0), prof._ts(T_END)
+        recs = [
+            _sys(100), _sys(110),                       # the FIRST end opens the span
+            _prompt(400, "hi"),                         # 100 → 400 idle
+            _use("u1", 410, "m1", "Bash", {"command": "ls"}),
+            _prompt(420, [{"type": "text", "text": "[Request interrupted by user]"}]),
+            _prompt(500, "resume"),                     # 420 → 500 idle
+            _sys(600),
+            _prompt(700, "<task-notification>\n<task-id>x</task-id>"),  # automation: no idle
+            _prompt(800, "hi again"),
+            _sys(900),
+            _prompt(950, "This session is being continued from a previous conversation"),
+            _sys(1000), {**_sys(1500), "isSidechain": True},  # sidechain end ignored
+        ]                                               # 1000 → hi: still waiting at the end
+        spans = prof._idle_intervals(recs, lo, hi)
+        assert [(round(a - lo), round(b - lo)) for a, b in spans] == \
+            [(100, 400), (420, 500), (1000, 3600)]
+
+    def test_meta_and_tool_results_are_not_prompts(self):
+        assert prof._prompt_kind(_prompt(1, "x", isMeta=True)) is None
+        assert prof._prompt_kind(_res("u1", 1)) is None
+        assert prof._prompt_kind(_prompt(1, "   ")) is None
+        assert prof._prompt_kind(_prompt(1, "x", isCompactSummary=True)) == "automated"
+        assert prof._prompt_kind(_prompt(1, "看一下")) == "human"
+
+    def test_render_shows_active_and_idle(self, ws):
+        tmp, run_dir = ws
+        path = _write_jsonl(tmp / "claude" / "projects" / "-ws" / "t.jsonl",
+                            _run_records() + [_sys(140)])
+        p = prof.profile_run(json.loads((run_dir / "run.json").read_text()), [path])
+        assert p["idle_minutes"] == round((3600 - 140) / 60, 1)   # ended, never came back
+        assert p["active_minutes"] == round(140 / 60, 1)
+        assert "active 2.3 + idle 57.7 (1 waits on a human)" in prof._render(p)
