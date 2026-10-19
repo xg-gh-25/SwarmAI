@@ -2834,3 +2834,62 @@ class TestProfileFirstSetVsDowngrade:
             c.cmd_run_update(self._args("run_dg", "research"), reg)
         assert _read_run(rf)["profile"] == "full", \
             "a real full→research downgrade must remain blocked (C036)"
+
+
+class TestCheckpointStaleRuns:
+    """A running run with real work (tokens>0) but no progress for hours is PAUSED for
+    review (work preserved, not abandoned) and surfaces to the user via a non-crash
+    reason → pause_kind 'decision'. Fills the D6 gap (_abandon_verdict keeps such runs)."""
+
+    _WORK = [{"stage": "build", "status": "completed", "token_cost": 500}]
+
+    def test_stuck_working_run_is_paused_for_review(self, workspace):
+        from scripts.artifact_cli import checkpoint_stale_runs, _CRASH_ZOMBIE_REASON
+
+        f = _create_run(workspace, "TestProject", "run_stuck", "running",
+                        hours_ago=6, stages=self._WORK)
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
+            n = checkpoint_stale_runs()
+        assert n == 1
+        d = _read_run(f)
+        assert d["status"] == "paused"
+        assert d["checkpoint"]["stale_review"] is True
+        # NOT the crash marker → _to_response resolves pause_kind to 'decision' (surfaced)
+        assert d["checkpoint"]["reason"] != _CRASH_ZOMBIE_REASON
+        assert "needs review" in d["checkpoint"]["reason"]
+
+    def test_fresh_working_run_not_paused(self, workspace):
+        from scripts.artifact_cli import checkpoint_stale_runs
+
+        f = _create_run(workspace, "TestProject", "run_fresh", "running",
+                        hours_ago=1, stages=self._WORK)
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
+            assert checkpoint_stale_runs() == 0
+        assert _read_run(f)["status"] == "running"
+
+    def test_empty_shell_left_to_the_reaper(self, workspace):
+        # tokens==0 (no token_cost) → NOT paused here; the abandon reaper owns empty shells
+        from scripts.artifact_cli import checkpoint_stale_runs
+
+        f = _create_run(workspace, "TestProject", "run_shell", "running", hours_ago=6)
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
+            assert checkpoint_stale_runs() == 0
+        assert _read_run(f)["status"] == "running"
+
+    def test_completed_run_not_paused(self, workspace):
+        from scripts.artifact_cli import checkpoint_stale_runs
+
+        f = _create_run(workspace, "TestProject", "run_done", "completed",
+                        hours_ago=10, stages=self._WORK)
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
+            assert checkpoint_stale_runs() == 0
+        assert _read_run(f)["status"] == "completed"
+
+    def test_idempotent_second_pass_is_noop(self, workspace):
+        from scripts.artifact_cli import checkpoint_stale_runs
+
+        _create_run(workspace, "TestProject", "run_stuck2", "running",
+                    hours_ago=6, stages=self._WORK)
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
+            assert checkpoint_stale_runs() == 1
+            assert checkpoint_stale_runs() == 0  # now paused, no longer 'running'

@@ -1878,6 +1878,99 @@ def cleanup_orphans(threshold_hours: float = 2.0) -> dict:
     return {"abandoned_count": abandoned_count, "projects_scanned": projects_scanned}
 
 
+# A running run that has made NO progress for this long but DID real work (tokens>0) is
+# NOT the empty-shell orphan the reaper abandons — _abandon_verdict's D6 guard keeps it to
+# avoid losing work, which then lets it hang forever (run_340478c9: 18h). This is the
+# complement to the in-runner circuit breaker: the breaker stops a run that LOOPS (its
+# session is alive, re-running tests); this catches a run whose driver died or wedged (no
+# activity at all). Long + tokens-gated so a legitimately long BUILD (which can go hours
+# without writing run.json, pipeline-run-worktree §8.2) is never tripped.
+STALE_REVIEW_HOURS = 4.0
+_STALE_REVIEW_REASON = "stale pipeline run: no progress for >{h}h — needs review (stuck run)"
+
+
+def _stale_review_verdict(data: dict, threshold) -> bool:
+    """True when a running run should be PAUSED for human review: it is running, did real
+    work (tokens>0, so not an empty-shell orphan the reaper handles), is not terminal, and
+    its updated_at is older than *threshold* (an aware datetime)."""
+    if data.get("status") != "running" or is_terminal_run(data):
+        return False
+    if _run_tokens(data) <= 0:
+        return False  # empty shell → the reaper's abandon path, not review
+    updated_str = data.get("updated_at", data.get("created_at", ""))
+    if not updated_str:
+        return False
+    try:
+        updated_at = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return False
+    return updated_at < threshold
+
+
+def checkpoint_stale_runs(threshold_hours: float = STALE_REVIEW_HOURS) -> int:
+    """Pause stuck-but-worked running runs across ALL projects for human review.
+
+    Fills the D6 gap: _abandon_verdict preserves a running run with tokens>0 (never
+    abandons it, to avoid losing work) — but then nothing stops it hanging forever. Once
+    such a run has made no progress for threshold_hours this converts it to a
+    decision-pause (checkpoint.reason != _CRASH_ZOMBIE_REASON → pause_kind 'decision'), so
+    it reaches the user via AttentionAuthority instead of spinning unseen. Work is
+    preserved (status flips to paused, nothing is deleted); a human resumes or ends it.
+    Idempotent: a paused run is no longer 'running'. Returns the count paused."""
+    from datetime import timedelta
+    from core.run_lock import atomic_write_json, try_run_lock
+
+    ws = _get_workspace()
+    projects_dir = ws / "Projects"
+    if not projects_dir.exists():
+        return 0
+    threshold = datetime.now(timezone.utc) - timedelta(hours=threshold_hours)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    paused = 0
+    for project_dir in projects_dir.iterdir():
+        if not project_dir.is_dir():
+            continue
+        runs_dir = project_dir / ".artifacts" / "runs"
+        if not runs_dir.is_dir():
+            continue
+        for rd in runs_dir.iterdir():
+            run_file = rd / "run.json"
+            if not run_file.is_file():
+                continue
+            try:
+                data = json.loads(run_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not _stale_review_verdict(data, threshold):
+                continue
+            with try_run_lock(rd) as got:
+                if not got:
+                    continue  # a command holds the lock = the run is active, not stuck
+                try:
+                    fresh = json.loads(run_file.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if not _stale_review_verdict(fresh, threshold):
+                    continue
+                completed = [s.get("stage", "unknown") for s in fresh.get("stages", [])
+                             if s.get("status") == "completed"]
+                fresh["status"] = "paused"
+                fresh["updated_at"] = now_iso
+                fresh["checkpoint"] = {
+                    "reason": _STALE_REVIEW_REASON.format(h=round(threshold_hours, 1)),
+                    "stage": completed[-1] if completed else "unknown",
+                    "checkpointed_at": now_iso,
+                    "completed_stages": completed,
+                    "forced": False,
+                    "stale_review": True,
+                }
+                atomic_write_json(run_file, fresh)
+                paused += 1
+    return paused
+
+
 def cmd_cleanup_orphans(args, reg: ArtifactRegistry) -> None:
     """CLI handler for cleanup-orphans subcommand."""
     threshold = getattr(args, "threshold", None)

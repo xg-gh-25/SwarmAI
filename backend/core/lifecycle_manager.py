@@ -300,6 +300,7 @@ class LifecycleManager:
                         await self._purge_stale_cold()
                         await self._cleanup_stale_channel_sessions()
                         await self._cleanup_expired_messages()
+                        await self._checkpoint_stale_pipeline_runs()
                     # Radar ToDo sweep every 30th cycle (~30 min)
                     if cycle % 30 == 0 and cycle > 0:
                         await self._sweep_todos()
@@ -325,6 +326,21 @@ class LifecycleManager:
                     logger.error("Maintenance loop error: %s", exc, exc_info=True)
         except asyncio.CancelledError:
             logger.info("Maintenance loop cancelled")
+
+    async def _checkpoint_stale_pipeline_runs(self) -> None:
+        """Pause a pipeline run that is stuck (status=running, real work done, but no
+        progress for hours) into a decision-pause, so a run whose driver died or wedged
+        reaches the user instead of hanging forever (the D6-preserved case that the
+        reaper deliberately will not abandon). Complement to pipeline_test's in-runner
+        circuit breaker, which stops a run that LOOPS. Disk scan → offloaded to a thread;
+        never raises into the loop."""
+        try:
+            from scripts.artifact_cli import checkpoint_stale_runs
+            n = await asyncio.to_thread(checkpoint_stale_runs)
+            if n:
+                logger.info("Paused %d stuck pipeline run(s) for review", n)
+        except Exception as exc:  # noqa: BLE001 — maintenance must never die on this
+            logger.warning("stale pipeline-run check failed: %s", exc)
 
     async def _health_check_all(self) -> None:
         """Health check all alive units. Detect dead subprocesses."""
