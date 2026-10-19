@@ -207,21 +207,25 @@ export interface TabViewProps {
   onRetryQueueTimeout: () => void;
 }
 
-/** A bubble's React key: the client id when the row carries one, so the stream-end
- *  reconcile — which swaps the live bubble's client id for the DB row's id and keeps
- *  the client id in `metadata.client_id` — does not remount the turn (its 2s fold
- *  lingers and open choices live in the mounted view). Role-prefixed; a key already
- *  used in this list (two rows of one cut turn sharing a client id) falls back to the
- *  row id, so keys stay unique. */
-function makeBubbleKey(): (msg: { id: string; role: string; metadata?: { client_id?: string } }) => string {
+/** Each bubble's React key (and its view-memory scope): the client id when the row
+ *  carries one, so the stream-end reconcile — which swaps the live bubble's client id
+ *  for the DB row's id and keeps the client id in `metadata.client_id` — does not
+ *  remount the turn (its 2s fold lingers and open choices live in the mounted view).
+ *  Role-prefixed. When several rows share a client id (a continued or cut turn), the
+ *  LAST one — the live tail, the one that is ending — keeps the client-id key; the
+ *  earlier ones are keyed by their row id, so keys stay unique. */
+export function bubbleKeys(messages: Array<{ id: string; role: string; metadata?: { client_id?: string } }>): Map<string, string> {
+  const keys = new Map<string, string>();
   const used = new Set<string>();
-  return (msg) => {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
     // The live bubble's id IS its client id; the DB row carries it in metadata.
     const preferred = `${msg.role}:${msg.metadata?.client_id ?? msg.id}`;
     const key = used.has(preferred) ? `id:${msg.id}` : preferred;
     used.add(key);
-    return key;
-  };
+    keys.set(msg.id, key);
+  }
+  return keys;
 }
 
 function TabViewImpl({
@@ -629,7 +633,7 @@ function TabViewImpl({
         // Active-tab-only source → PIT71 cross-tab-leak safe (this loop
         // only ever renders the active tab's messages).
         const resolvedPendingToolUseId = resolvePendingToolUseId(pendingQuestion, activeTabPendingQuestion);
-        const bubbleKey = makeBubbleKey();
+        const keys = bubbleKeys(messages);
         return messages.map((msg, idx) => {
           // System messages render as divider lines. Three variants by id prefix:
           //   'compact-' → compaction divider + collapsible summary card
@@ -715,10 +719,11 @@ function TabViewImpl({
             messages.slice(lastResumeBoundaryIdx + 1).some(m => m.role !== 'system');
           const isPriorSession = hasContentAfterBoundary && idx < lastResumeBoundaryIdx;
           return (
-            <React.Fragment key={bubbleKey(msg)}>
+            <React.Fragment key={keys.get(msg.id)}>
               <div className={isPriorSession ? 'opacity-50' : undefined} data-msg-id={msg.id} {...ANCHOR_PROPS}>
                 <MessageBubble
                   message={msg}
+                  viewKey={keys.get(msg.id)}
                   onAnswerQuestion={onAnswerQuestion}
                   onPermissionDecision={onPermissionDecision}
                   onEscalationSelect={onEscalationSelect}

@@ -633,7 +633,8 @@ function isReadOnlySegment(segment: string): boolean {
   if (!READ_ONLY_HEADS.has(head)) return false;
   if (head === 'sed' && tokens.some((t) => /^-[a-zA-Z]*i/.test(t) || t.startsWith('--in-place'))) return false;
   // sed's own write / execute commands (`w file`, `W file`, `e cmd`, `s///w file`).
-  if (head === 'sed' && tokens.slice(1).some((t) => !t.startsWith('-') && /(?:^|[;}\s/])[wWe](?:\s|$)/.test(t))) return false;
+  if (head === 'sed' && tokens.slice(1).some((t) => !t.startsWith('-')
+    && (/(?:^|[;}\s/])[wWe](?:\s|$)/.test(t) || /^s(.).*?\1.*?\1[gpiImM0-9]*[wWe]/.test(t)))) return false;
   if (head === 'sort' && tokens.some((t) => t === '-o' || t.startsWith('--output'))) return false;
   if (head === 'tree' && tokens.some((t) => t === '-o' || t.startsWith('--output'))) return false;
   if ((head === 'rg' || head === 'ugrep') && tokens.some((t) => t === '--pre' || t.startsWith('--pre='))) return false;
@@ -693,7 +694,7 @@ function labelBash(cmd: string): Pick<StepLabel, 'verb' | 'object' | 'path' | 'c
     // An in-place edit (`sed -i … f`, `perl -pi -e … f`) of ONE file, in a command of
     // one segment: that file changed. Anything else that may write stays a run.
     const inPlace = (head === 'sed' && args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith('--in-place')))
-      || (head === 'perl' && args.some((a) => /^-(?![MI])[a-zA-Z]*i/.test(a)) && args.some((a) => /^-(?![MI])[a-zA-Z]*p/.test(a)));
+      || (head === 'perl' && args.some((a) => /^-(?![MmI])[a-zA-Z]*i/.test(a)) && args.some((a) => /^-(?![MmI])[a-zA-Z]*p/.test(a)));
     if (inPlace && segments.length === 1) {
       // The files are the arguments after the script: sed's script is the first
       // non-flag argument unless it came with -e / -f; perl's comes with -e. Exactly

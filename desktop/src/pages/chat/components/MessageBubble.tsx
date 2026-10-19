@@ -27,6 +27,8 @@ import { AssistantMessageView } from './AssistantMessageView';
 
 export interface MessageBubbleProps {
   message: Message;
+  /** The bubble's list key (TabView `bubbleKeys`): scopes the turn's view memory. */
+  viewKey?: string;
   onAnswerQuestion?: (toolUseId: string, answers: Record<string, string>) => void;
   onPermissionDecision?: (requestId: string, decision: 'approve' | 'deny') => void;
   onEscalationSelect?: (escalationId: string, optionLabel: string) => void;
@@ -63,6 +65,7 @@ function MessageBubbleImpl({
   onCancelQueued,
   onContinue,
   readOnly,
+  viewKey,
 }: MessageBubbleProps) {
   if (message.role === 'user') {
     return (
@@ -76,6 +79,7 @@ function MessageBubbleImpl({
   return (
     <AssistantMessageView
       message={message}
+      viewKey={viewKey}
       onAnswerQuestion={onAnswerQuestion}
       onPermissionDecision={onPermissionDecision}
       onEscalationSelect={onEscalationSelect}

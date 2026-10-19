@@ -496,10 +496,13 @@ export function workCounts(g: WorkGroup): { steps: number; files: number; comman
  *  which thoughts merged into a call — kept per message (`scope`) for the app's
  *  lifetime, so a remount (a tab switch, a block re-keyed at the settle) shows the same
  *  durations and structure as before it. Bounded: the oldest messages are dropped. */
-// `last`: the last render that saw it live. The end is the first render that sees it
-// done — unless that render came more than RENDER_GAP_MS after `last` (a background tab
-// does not render): then when it ended is unknown, and no duration is shown (`end` = -1)
-// rather than one that counts the time the tab was hidden.
+// `last`: the last moment it was SEEN live — a render, or the block's 1s visibility
+// tick (WorkGroupView), which advances it only while the block is on screen. The end is
+// the first render that sees it done — unless that came more than RENDER_GAP_MS after
+// `last`, i.e. the block was not on screen (a background tab neither renders nor
+// ticks): then when it ended is unknown, and no duration is shown (`end` = -1) rather
+// than one that counts the hidden time. A quiet but visible stream keeps `last` fresh
+// through the tick, so it keeps its duration.
 interface ViewMemory { times: Map<string, { start: number; last: number; end?: number }>; merged: Set<string> }
 const RENDER_GAP_MS = 10_000;
 const endOf = (seen: { last: number }, now: number) => (now - seen.last <= RENDER_GAP_MS ? now : -1);
@@ -555,6 +558,7 @@ const NOTE_CLASS = 'text-[12.5px] [&_p]:text-[12.5px] [&_li]:text-[12.5px] [&_p]
   + '[&_h1]:text-[13px] [&_h2]:text-[13px] [&_h3]:text-[12.5px] [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_h1]:text-[var(--color-text-secondary)] [&_h2]:text-[var(--color-text-secondary)]';
 
 export function WorkGroupView({ scope, group, expanded, flat, onToggle, thoughtOpen, onThoughtToggle, renderNote, tail, defaultOpen }: WorkGroupViewProps) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const local = useRef<ViewMemory | null>(null);
   if (!scope && !local.current) local.current = newMemory();
   const mem = scope ? memoryOf(scope) : local.current!;
@@ -593,6 +597,21 @@ export function WorkGroupView({ scope, group, expanded, flat, onToggle, thoughtO
   // How long the block itself was live, as this view saw it (none from history —
   // persisted blocks carry no timing): the WORKED line says it from 5s.
   const spanKey = `grp:${group.id}`;
+  // While the block is live and ON SCREEN, advance `last` every second (no re-render):
+  // a long quiet stretch — a big tool input the SDK sends whole, a slow first token —
+  // is still "seen live". A hidden tab is display:none (no offsetParent): no advance.
+  const liveKeys = useRef<string[]>([]);
+  liveKeys.current = [spanKey, ...raw.flatMap((it) => ('thought' in it && it.thought.live ? [it.key] : []))];
+  useEffect(() => {
+    if (!group.live) return undefined;
+    const id = setInterval(() => {
+      const el = rootRef.current;
+      if (!el || el.offsetParent === null || document.visibilityState === 'hidden') return;
+      const t = Date.now();
+      for (const k of liveKeys.current) { const seen = mem.times.get(k); if (seen && seen.end === undefined) seen.last = t; }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [group.live, mem]);
   const span = mem.times.get(spanKey);
   if (group.live) { if (!span) mem.times.set(spanKey, { start: now, last: now }); else span.last = now; }
   else if (span && span.end === undefined) span.end = endOf(span, now);
@@ -651,7 +670,7 @@ export function WorkGroupView({ scope, group, expanded, flat, onToggle, thoughtO
     const shownFlat = showAll || group.live || lingering ? items : items.slice(0, PAGE);
     const hiddenFlat = items.length - shownFlat.length;
     return (
-      <div data-testid="work-group" data-live={group.live ? 'true' : 'false'} data-flat="true" className="space-y-0.5">
+      <div ref={rootRef} data-testid="work-group" data-live={group.live ? 'true' : 'false'} data-flat="true" className="space-y-0.5">
         {/* One child layout in every branch (button slot, items, button slot): the
             items keep their slot, so a block that stops being live never remounts them. */}
         {group.live ? showAllButton(hiddenFlat) : null}
@@ -671,6 +690,7 @@ export function WorkGroupView({ scope, group, expanded, flat, onToggle, thoughtO
     const shown = items; // live: everything, nothing cut off the top (folds keep it short)
     return (
       <div
+        ref={rootRef}
         data-testid="work-group"
         data-live="true"
         className="my-1.5 border-l-2 border-[var(--color-text-muted)] bg-[var(--color-hover)]/40 rounded-r-lg px-2.5 py-1.5"
@@ -710,7 +730,7 @@ export function WorkGroupView({ scope, group, expanded, flat, onToggle, thoughtO
     workedSeconds !== undefined && workedSeconds >= MIN_DURATION_S && formatSeconds(workedSeconds),
   ].filter(Boolean).join(' · ');
   return (
-    <div data-testid="work-group" data-live="false" className="my-0.5">
+    <div ref={rootRef} data-testid="work-group" data-live="false" className="my-0.5">
       <div data-testid="group-row" className="group/row flex items-center min-w-0 text-[12.5px] text-[var(--color-text-muted)]">
         <button
           type="button"

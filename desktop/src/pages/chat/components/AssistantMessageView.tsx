@@ -84,6 +84,9 @@ const FULL_CLASS = 'text-[15px] text-[var(--color-text-secondary)]';
 export interface AssistantMessageViewProps {
   /** The assistant message to render */
   message: Message;
+  /** Its list key (TabView `bubbleKeys`), unique per row and stable across the
+   *  reconcile: scopes the view memory (durations, merges). */
+  viewKey?: string;
   /** Callback when the user answers an ask_user_question block */
   onAnswerQuestion?: (toolUseId: string, answers: Record<string, string>) => void;
   /** Callback when the user approves/denies a permission request */
@@ -122,6 +125,7 @@ const MEMORY_ICON_MAP: Record<MemorySaveStatus, string> = {
 
 export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   message,
+  viewKey,
   onAnswerQuestion,
   onPermissionDecision,
   onEscalationSelect,
@@ -313,7 +317,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // The view memory's key must survive the stream-end reconcile, which swaps the live
   // bubble's client id for the DB row's id; the row carries the client id in its
   // metadata, so the client id is the key on both sides.
-  const memoryScope = message.metadata?.client_id ?? message.id;
+  // Two rows sharing a client id (a continued turn) get different list keys, so the
+  // list key — when the list gives one — keeps their memories apart.
+  const memoryScope = viewKey ?? message.metadata?.client_id ?? message.id;
   const leadThoughts = new Set((leadEnd < 0 ? [] : view.units.slice(0, leadEnd)).filter((u) => u.kind === 'thought'));
   // While the answer-so-far streams, the block of work above it stays open (groupWork
   // `holdLiveAboveAnswer`): it does not fold and re-open if a tool call follows.
@@ -505,7 +511,10 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     });
     // The block is live until the answer starts AND the plan is through (it then folds
     // FOLD_DELAY_MS later): text after a stage's end row mid-run is narration the next
-    // call will turn into a note — it must not fold the checklist and re-open it.
+    // call will turn into a note — it must not fold the checklist and re-open it. A turn
+    // that stops mid-plan keeps the block open above its answer until the stream ends,
+    // as a chat turn's WORKED block does (groupWork holdLiveAboveAnswer); its clock stops
+    // when the answer starts.
     const answerStarted = sections.slice(lastRow + 1).some((s) => s.kind === 'unit' && s.unit.kind === 'outcome');
     const planDone = lines.every((l) => l.status === 'done' || l.status === 'skipped');
     // The block's time: earliest start to latest end over every round, by time — a
@@ -534,6 +543,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
             choice={processChoice.get(blockKey)}
             onChoose={(open) => chooseProcess(blockKey, open)}
             mustOpen={allWork.some((u) => u.kind === 'interrupt' && isUnanswered(u.block))}
+            clockStopped={answerStarted}
           >
             {lineEls}
           </PipelineBlock>

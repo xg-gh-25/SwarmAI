@@ -52,26 +52,29 @@ export interface PipelineBlockProps {
   onChoose: (open: boolean) => void;
   /** Something in it needs the user (an unanswered question / permission): open. */
   mustOpen?: boolean;
+  /** The answer has started: the header clock stops (it is the run's time, not the
+   *  answer's), even while the block stays open above a turn that stopped mid-plan. */
+  clockStopped?: boolean;
   /** One element per line, in `lines` order (PipelineStageRow or its pending form). */
   children: React.ReactNode[];
 }
 
-export function PipelineBlock({ lines, live, stoppedHere, startedAt, endedAt, files, choice, onChoose, mustOpen, children }: PipelineBlockProps) {
+export function PipelineBlock({ lines, live, stoppedHere, startedAt, endedAt, files, choice, onChoose, mustOpen, clockStopped, children }: PipelineBlockProps) {
   const { t } = useTranslation();
   const auto = useLinger(live);
   const [hover, setHover] = useState(false);
   // The live header's clock ticks on its own: a long call streams nothing for minutes.
   const [, tick] = useState(0);
   useEffect(() => {
-    if (!live) return undefined;
+    if (!live || clockStopped) return undefined;
     const id = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(id);
-  }, [live]);
+  }, [live, clockStopped]);
   const open = !!mustOpen || (choice ?? (auto || stoppedHere));
   const done = lines.filter((l) => l.status === 'done' || l.status === 'skipped').length;
   const running = lines.find((l) => l.status === 'running' && !l.gate);
   const a = startedAt ? Date.parse(startedAt) : NaN;
-  const b = live ? Date.now() : endedAt ? Date.parse(endedAt) : NaN;
+  const b = live && !clockStopped ? Date.now() : endedAt ? Date.parse(endedAt) : NaN;
   const secs = Number.isFinite(a) && Number.isFinite(b) && b >= a ? Math.round((b - a) / 1000) : null;
   const gate2 = lines.find((l) => l.stage === 'gate2' && l.status === 'done');
   const g2Round = gate2?.rounds[gate2.rounds.length - 1];

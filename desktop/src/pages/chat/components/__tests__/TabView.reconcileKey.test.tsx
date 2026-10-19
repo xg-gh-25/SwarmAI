@@ -14,7 +14,7 @@ import { afterActivation } from './scrollTestUtils';
 import type { Message } from '../../../../types';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string, d?: unknown) => (typeof d === 'string' ? d : k) }) }));
-vi.mock('../MessageBubble', () => ({ MessageBubble: ({ message }: { message: Message }) => <div data-testid="bubble">{message.id}</div> }));
+vi.mock('../MessageBubble', () => ({ MessageBubble: ({ message, viewKey }: { message: Message; viewKey?: string }) => <div data-testid="bubble" data-view-key={viewKey}>{message.id}</div> }));
 vi.mock('../WelcomeScreen', () => ({ WelcomeScreen: () => <div data-testid="welcome" /> }));
 vi.mock('../../../../components/chat', () => ({ ChatErrorMessage: () => <div /> }));
 vi.mock('../../../../components/common', () => ({ Spinner: () => <div /> }));
@@ -48,6 +48,20 @@ describe('TabView — reconcile keeps the turn mounted', () => {
     await afterActivation();
     expect(getByTestId('bubble').textContent).toBe('db-uuid-1'); // it re-rendered…
     expect(getByTestId('bubble')).toBe(before); // …in the same element
+  });
+
+  it('a continued turn: the TAIL row (the one ending) keeps its element across the rename; each row has its own view key', async () => {
+    const store = messageStoreRegistry.getOrCreate('A');
+    store.replace([asst('db-1', { client_id: 'local-c1-asst' }), asst('local-c1-asst')]);
+    const { getAllByTestId } = render(<TabView {...props} />);
+    await afterActivation();
+    const tail = getAllByTestId('bubble')[1];
+    act(() => { store.replace([asst('db-1', { client_id: 'local-c1-asst' }), asst('db-2', { client_id: 'local-c1-asst' })]); });
+    await afterActivation();
+    expect(getAllByTestId('bubble')[1].textContent).toBe('db-2');
+    expect(getAllByTestId('bubble')[1]).toBe(tail);
+    const keys = getAllByTestId('bubble').map((b) => b.dataset.viewKey);
+    expect(new Set(keys).size).toBe(2);
   });
 
   it('two rows with one client id still render both (unique keys)', async () => {

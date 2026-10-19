@@ -67,14 +67,16 @@ describe('toolRow — shell commands', () => {
     expect(bash("sed -i -e 's/a/b/' src/f.ts")).toMatchObject({ verb: 'Edited', object: 'f.ts' });
     expect(bash("sed -i 's/a/b/' src/a.ts src/b.ts").verb).toBe('Ran');
     // -M / -I are module and include switches, not -i / -p: printing to stdout
-    expect(bash("perl -Mstrict -ne 'print' src/f.txt").verb).not.toBe('Edited');
+    expect(bash("perl -Mstrict -pe 's/a/b/' src/f.txt").verb).not.toBe('Edited');
+    expect(bash("perl -mList::Util -pe 's/a/b/' src/f.txt").verb).not.toBe('Edited');
   });
 
   it('a command that may write is never an exploration row (fail closed)', () => {
     for (const cmd of ['grep -l foo src | xargs rm', 'find . -name "*.tmp" -delete', 'cat $(ls -t logs | head -1)', 'sort -o out.txt in.txt',
       // background job, process substitution, an attached redirection, write / execute options
       'cat a.txt & rm -rf build/', 'cat <(rm -rf out.txt)', 'grep foo src/a.ts>out.txt', 'cat a.ts &>log.txt',
-      'tree -o out.txt', "sed -n 'w out.txt' a.ts", "sed 's/a/b/w out.txt' a.ts", 'rg --pre ./x.sh foo']) {
+      'tree -o out.txt', "sed -n 'w out.txt' a.ts", "sed 's/a/b/w out.txt' a.ts", 'rg --pre ./x.sh foo',
+      "sed -n 's/a/b/gw out.txt' a.ts", "sed 's/x/y/ge' a.ts"]) {
       const r = bash(cmd);
       expect(r.verb).toBe('Ran');
       expect(r.explore).toBe(false);
