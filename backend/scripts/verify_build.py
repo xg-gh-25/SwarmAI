@@ -383,15 +383,27 @@ def _check_data_via_health(port: int, data_path: str) -> tuple[bool, str]:
 
 
 def _check_native_via_import(port: int, native_path: str) -> tuple[bool, str]:
-    """Check if a native extension is loadable."""
+    """Check if a native extension is loadable.
+
+    Timeout is 30s, not the 5s the import/data checks use, because the native
+    probes pay a COLD first-call cost inside the frozen bundle: the very first
+    `get_language("python")` makes tree_sitter_language_pack extract and load its
+    grammar shared library out of the PyInstaller onedir, measured at ~8.8s on a
+    warm host (0.0016s on every call after). At 5s that answer never arrives, so
+    `urlopen` raised and the probe reported "endpoint unavailable" — an
+    unmeasurable probe, NOT a broken build — which the manifest then counted as a
+    CRITICAL tree_sitter_ast failure and falsely blocked the release (same
+    false-alarm class as the --thinking-display gate). The server reliably answers
+    in ~9s, so waiting is enough; 30s leaves margin for slower CI I/O.
+    """
     try:
         url = f"http://127.0.0.1:{port}/api/system/verify-native?path={native_path}"
         req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
             return data.get("loadable", False), data.get("detail", "")
-    except Exception:
-        return False, "endpoint unavailable"
+    except Exception as e:
+        return False, f"endpoint unavailable ({type(e).__name__}: {e})"
 
 
 def _find_bundled_claude_cli(binary_path: str) -> Path | None:
