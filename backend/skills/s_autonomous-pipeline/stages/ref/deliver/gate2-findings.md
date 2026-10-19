@@ -6,6 +6,17 @@ outcome and what to record.
 
 ## Merge and deduplicate
 
+`[GATE·cli]` (runs created from 2026-10-18T20:00Z): each expert's marker keeps the findings
+of its own answer. DELIVER `stage-complete` refuses unless (1) every expert in
+`dispatch_plan.deliver` completed in this review cycle (meta-review exempt on
+trivial/research/docs); (2) every HIGH (conf ≥ 5) and MED (conf ≥ 7) an expert reported has
+its OWN record in `findings[]` (one record per reported finding; a cross-specialist merge may
+list several specialists), with that `specialist`, at least as severe (a MED stays conf ≥ 7),
+naming its file; (3) each answer could be read: JSON finding lines, or a final `NO FINDINGS`.
+Never drop or downgrade one you think is a false positive: record it as reported, `resolved:
+true`, `finding` = "Not a bug: <evidence>": its specialist's re-check confirms or refutes
+that. Unprovable (no audit hook) → `gate2_findings_unverified_reason` in the record.
+
 - `NO FINDINGS` → skip that specialist. Otherwise parse each JSON line into one list.
   A bare `NO FINDINGS` from a reviewer that shows no evidence of reading the files is
   the self-review failure signature, not a clean result.
@@ -85,6 +96,10 @@ have been in it): then re-check by re-spawning the round-1 prompts. A changed fi
 text diff cannot show (binary, too large) is named on the diff's `NOT INCLUDED` line.
 `not_rechecked` lists findings it could not route (no specialist / text, no round-1
 prompt): route those by hand. This is the second and last round; a third needs a recorded reason.
+Answers are bound too: the re-check prompt numbers the items `R1…`; the specialist answers
+`R<n>: RESOLVED` / `R<n>: NOT RESOLVED`, and a finding recorded `resolved: true` whose latest
+re-check answer is not RESOLVED blocks. A NOT RESOLVED sticks to that prompt: re-spawning
+until a round says RESOLVED does not clear it; fix again + gate2-recheck, or record `resolved: false`.
 `[GATE·cli]` (runs created from 2026-10-18T18:00Z): DELIVER `stage-complete` refuses while a
 specialist with a fixed HIGH / conf ≥ 7 MED has no sub-agent of this run that read its
 `<id>-recheck.md` as gate2-recheck last wrote it (re-run gate2-recheck after a further fix →

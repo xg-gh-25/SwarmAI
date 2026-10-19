@@ -1232,6 +1232,12 @@ def create_agent_tool_audit_hook(
                     final = last_message if isinstance(last_message, str) and last_message.strip() \
                         else (_read_subagent_final_text(transcript_path) if transcript_path else "")
                     base["verdict"] = _gate_verdict(expert_id, final)
+                elif expert_id:
+                    # Key present = this daemon records the expert's own findings and
+                    # re-check answers (DELIVER stage-complete compares the record).
+                    final = last_message if isinstance(last_message, str) and last_message.strip() \
+                        else (_read_subagent_final_text(transcript_path) if transcript_path else "")
+                    base.update(_expert_answer(final))
                 session_marker.write_text(json.dumps(base))
 
                 # DISTINCT adversarial marker — consumed by the live commit gate
@@ -1548,6 +1554,90 @@ def _resolve_attribution(head_eid: Optional[str], pairs: list,
     if len(pairs) == 1:
         return pairs[0][0], pairs[0][1], "prompt_file"
     return owner, None, "session"
+
+
+# A Gate-2 expert's OWN answer, kept on its marker so DELIVER stage-complete can check the
+# findings the orchestrator recorded against what the expert reported (artifact_cli
+# ``_gate2_findings_errors``) and a re-check's RESOLVED / NOT RESOLVED per item.
+_REPORTED_MAX = 60
+_SEV_TOKEN = re.compile(r"^(CRITICAL|BLOCKER|BLOCK|HIGH|MEDIUM|MED|LOW)$", re.I)
+# A re-check answer line: "R1: RESOLVED — …", "- R2 (a.py:12): NOT RESOLVED", "Item R3 is
+# unresolved". The verdict words are searched on the rest of the line.
+_RECHECK_LINE_RE = re.compile(r"^\W*(?:item\s+)?R(\d{1,3})\b([^\n]{0,200})", re.I | re.M)
+_CODE_BLOCK_RE = re.compile(r"```[\w-]*\n([\s\S]*?)```")
+
+
+def _finding_row(d: dict) -> Optional[dict]:
+    sev = str(d.get("severity") or "").strip()
+    if not _SEV_TOKEN.match(sev):
+        return None
+    line = d.get("line")
+    return {"severity": sev.upper(), "confidence": d.get("confidence"),
+            "path": str(d.get("path") or "")[:300],
+            "line": line if isinstance(line, int) and not isinstance(line, bool) else None,
+            "category": str(d.get("category") or "")[:80],
+            "summary": str(d.get("summary") or d.get("description") or "")[:240]}
+
+
+def _rows_of(obj) -> list:
+    """Finding rows in one parsed JSON value: a finding object, a list of them, or a
+    meta-review object whose ``risks`` list holds them (``description`` = summary)."""
+    if isinstance(obj, list):
+        return [r for x in obj for r in _rows_of(x)]
+    if not isinstance(obj, dict):
+        return []
+    if isinstance(obj.get("risks"), list):
+        return [r for x in obj["risks"] if isinstance(x, dict)
+                for r in [_finding_row({**x, "summary": x.get("summary") or x.get("description")})] if r]
+    r = _finding_row(obj)
+    return [r] if r else []
+
+
+def _expert_answer(final_text: str) -> dict:
+    """Findings and re-check answers from a Gate-2 expert's final answer.
+
+    ``reported`` = its findings: whole JSON values first (each fenced code block and the
+    whole answer: a findings array, a meta-review ``{"risks": [...]}``), then one JSON
+    object per line (trailing commas allowed), de-duplicated. ``reported_state`` =
+    "findings" | "no_findings" (no finding and the answer ENDS in ``NO FINDINGS``, or a
+    meta-review ``"verdict": "CLEAR"``) | "unparsed" (neither: DELIVER refuses to compare
+    blind). ``recheck_answers`` = {"<n>": "RESOLVED" | "NOT RESOLVED"} from ``R<n> …``
+    lines; NOT RESOLVED wins when an item is answered both ways."""
+    text = final_text or ""
+    rows: list = []
+    for chunk in [m.group(1) for m in _CODE_BLOCK_RE.finditer(text)] + [text]:
+        try:
+            rows += _rows_of(json.loads(chunk.strip()))
+        except (ValueError, TypeError):
+            pass
+    for raw in text.splitlines():
+        s = raw.strip().lstrip("-*• ").strip().rstrip(",").strip()
+        if not (s.startswith("{") and s.endswith("}")) or "severity" not in s:
+            continue
+        try:
+            rows += _rows_of(json.loads(s))
+        except (ValueError, TypeError):
+            continue
+    uniq: list = []
+    for r in rows:
+        if r not in uniq:
+            uniq.append(r)
+    answers: dict = {}
+    for n, rest in _RECHECK_LINE_RE.findall(text):
+        n = str(int(n))
+        if re.search(r"NOT\s+RESOLVED|UNRESOLVED", rest, re.I):
+            answers[n] = "NOT RESOLVED"
+        elif re.search(r"\bRESOLVED\b", rest, re.I) and answers.get(n) != "NOT RESOLVED":
+            answers[n] = "RESOLVED"
+    tail = next((ln for ln in reversed(text.strip().splitlines()) if ln.strip()), "")
+    if uniq:
+        state = "findings"
+    elif re.search(r"\bNO FINDINGS\b", tail) or re.search(r"\"verdict\"\s*:\s*\"CLEAR\"", text):
+        state = "no_findings"
+    else:
+        state = "unparsed"
+    return {"reported": uniq[:_REPORTED_MAX], "reported_state": state,
+            "recheck_answers": answers}
 
 
 def _gate_verdict(expert_id: Optional[str], final_text: str) -> Optional[str]:

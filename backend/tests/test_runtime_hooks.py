@@ -2596,3 +2596,41 @@ async def test_file_attribution_never_takes_a_foreign_or_ambiguous_run(tmp_path,
     legacy = _handout(tmp_path, "run_legacy", "gate1-skeptic.md", "EXPERT-ID: gate1-skeptic", session_id=None)
     base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: gate1-skeptic\nread {legacy}", [legacy])
     assert (base["run_id"], base["expert_id"]) == ("run_mine", "gate1-skeptic")
+
+
+# ── a Gate-2 expert's own findings and re-check answers on its marker ─────────
+def test_expert_answer_parses_finding_lines_risks_and_recheck_answers():
+    import core.runtime_hooks as rh
+    ans = rh._expert_answer(
+        "Checked a.py and b.py.\n```\n"
+        '{"severity":"HIGH","confidence":8,"path":"backend/core/a.py","line":12,"category":"c","summary":"x","specialist":"correctness"}\n'
+        '- {"severity":"med","confidence":7,"path":"b.py","category":"c","summary":"y"}\n'
+        '{"severity":"NOPE","path":"z"}\n```\n'
+        "R1: RESOLVED — a.py:14 now checks gen\nR2: NOT RESOLVED — still racy\n"
+        "> quoted: R2: RESOLVED\n")
+    assert ans["reported_state"] == "findings" and len(ans["reported"]) == 2
+    assert ans["reported"][0]["severity"] == "HIGH" and ans["reported"][0]["line"] == 12
+    assert ans["reported"][1]["severity"] == "MED"
+    assert ans["recheck_answers"] == {"1": "RESOLVED", "2": "NOT RESOLVED"}   # stricter wins
+    meta = rh._expert_answer('```json\n{"risks": [{"category": "deployment", "description": '
+                             '"restart drops turns", "severity": "HIGH"}], "verdict": '
+                             '"RISKS_IDENTIFIED"}\n```')
+    assert meta["reported"][0]["summary"] == "restart drops turns"
+    assert rh._expert_answer("I read a.py and b.py.\nNO FINDINGS")["reported_state"] == "no_findings"
+    assert rh._expert_answer("looks fine")["reported_state"] == "unparsed"
+
+
+@pytest.mark.asyncio
+async def test_a_gate2_expert_marker_carries_its_answer(tmp_path, monkeypatch):
+    import core.runtime_hooks as rh
+    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+    transcript = tmp_path / "sub.jsonl"
+    _gate_transcript(transcript, "EXPERT-ID: correctness",
+                     '{"severity":"HIGH","confidence":9,"path":"a.py","category":"c","summary":"s"}')
+    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-x"})
+    await hook({"agent_id": "a-5", "agent_transcript_path": str(transcript), "agent_type": "x"},
+               None, MagicMock())
+    data = json.loads(next(p for p in tmp_path.glob("session_sess-x_*.marker")
+                           if "_adv_" not in p.name).read_text())
+    assert data["reported_state"] == "findings" and data["reported"][0]["path"] == "a.py"
+    assert data["recheck_answers"] == {} and "verdict" not in data
