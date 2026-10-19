@@ -1725,3 +1725,24 @@ class TestExitEvidenceLists:
         tmpl = pv.STAGE_RECORD_TEMPLATES["test"]["exit_evidence"]
         assert tmpl and all(isinstance(v, str) for v in tmpl.values())
         assert {"wtf", "fixes", "unfixed"} <= set(tmpl)
+
+
+def test_untested_for_budget_flag_comes_from_the_newest_scope_report(tmp_path):
+    """DELIVER's attention flag for test files cut for time is computed from the runner's
+    evidence (the newest of regression / verify), never written by the model."""
+    t = tmp_path / "evidence" / "tests"
+    t.mkdir(parents=True)
+
+    def ev(mode, at, skipped):
+        (t / f"latest-{mode}.json").write_text(json.dumps(
+            {"schema": 1, "run_id": "run_u", "mode": mode, "finished_at": at,
+             "skipped_for_budget": skipped}))
+
+    assert cli._untested_for_budget_flag(tmp_path, "run_u") is None
+    ev("verify", "2026-01-01T00:01:00Z", ["backend/tests/test_v.py"])
+    ev("regression", "2026-01-01T00:02:00Z", ["backend/tests/test_a.py", "import::core.x"])
+    flag = cli._untested_for_budget_flag(tmp_path, "run_u")
+    assert flag.startswith(cli._RUNNER_FLAG_PREFIX + "1 test file(s)")
+    assert "test_a.py" in flag and "test_v.py" not in flag and "regression" in flag
+    ev("regression", "2026-01-01T00:02:00Z", [])
+    assert cli._untested_for_budget_flag(tmp_path, "run_u") is None

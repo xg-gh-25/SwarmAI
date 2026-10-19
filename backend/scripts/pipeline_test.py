@@ -866,22 +866,49 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
     # module (artifact_cli, security_hooks) has 60+ direct importers, and most of them
     # never call the lines this run changed. The rest keep their order behind them and are
     # the first to go when the selection does not fit the budget (_cut_to_budget).
-    syms: set[str] = set()
-    for f, _, _ in mfiles:
-        got = changed_symbols(repo, f)
-        if got:
-            syms |= got
-    if syms and rank:
-        word = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(syms))) + r")\b")
-        for t in rank:
-            hits = len(set(word.findall(_read_text(repo / t))))
-            if hits:
-                rank[t] = (0, -hits)
+    for t, hits in symbol_hits(repo, [f for f, _, _ in mfiles], list(rank)).items():
+        rank[t] = (0, -hits)
     rec = [f for f in dict.fromkeys(recent) if f not in changed_tests and (repo / f).is_file()]
     skip = set(changed_tests) | set(rec)
     importers = [t for t in sorted(rank, key=lambda t: (rank[t], t)) if t not in skip]
-    ordered = changed_tests + rec + importers
-    return ordered[:cap], ordered[cap:], [m for m, _ in mods]
+    # The must-run part (changed tests, recent real failures, importers naming a changed
+    # symbol) is never cut by the file cap: the cap only bounds the rest.
+    head = changed_tests + rec + [t for t in importers if rank[t][0] == 0]
+    rest = [t for t in importers if rank[t][0] != 0]
+    room = max(0, cap - len(head))
+    return head + rest[:room], rest[room:], [m for m, _ in mods]
+
+
+def symbol_hits(repo: Path, module_files: list[str], tests: list[str]) -> dict[str, int]:
+    """test → how many distinct changed symbols (``changed_symbols``) of
+    ``module_files`` its source names as a whole word; tests naming none are absent."""
+    syms: set[str] = set()
+    for f in module_files:
+        got = changed_symbols(repo, f)
+        if got:
+            syms |= got
+    if not syms:
+        return {}
+    word = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(syms))) + r")\b")
+    out: dict[str, int] = {}
+    for t in tests:
+        n = len(set(word.findall(_read_text(repo / t))))
+        if n:
+            out[t] = n
+    return out
+
+
+def must_run_files(repo: Path, plan: dict) -> set[str]:
+    """The part of a verify / regression selection that is never cut for time: the run's
+    own test files, its AC test files, and selected importers that name a changed
+    function / class / constant. Deterministic for a given change: it does not depend
+    on machine load or workers granted."""
+    changed = plan.get("changed") or []
+    own = {f for f in changed if _is_backend_test(f)}
+    ac = set(plan.get("ac_files") or []) | set((plan.get("ac_first") or {}).keys())
+    mods = [f for f, _, _ in _changed_module_files(repo, changed)]
+    sel = [f for f in plan.get("targets") or {} if f not in own]
+    return own | ac | set(symbol_hits(repo, mods, sel))
 
 
 # ── per-test event stream (survives a killed or os._exit()-ed shard) ────────
@@ -1371,6 +1398,29 @@ def _target_cost(f: str, sel, durations: dict) -> float:
         return sum(durations.get(n, DEFAULT_TEST_COST_S) for n in sel)
     known = [v for k, v in durations.items() if k.split("::")[0] == f]
     return sum(known) if known else DEFAULT_FILE_COST_S
+
+
+def _seconds_needed(targets: dict, durations: dict, workers: int) -> float:
+    """Wall seconds ``targets`` need on ``workers`` at BUDGET_FILL (0 without history)."""
+    if not durations or not targets:
+        return 0.0
+    cost = sum(_target_cost(f, sel, durations) for f, sel in targets.items())
+    return cost / (max(1, workers) * BUDGET_FILL)
+
+
+def _must_run_refusal(ns, deadline_s: float, n_files: int, workers: int) -> dict:
+    """Error for a must-run set that does not fit the deadline: the scope is fixed by
+    the change, so the time grows, not the scope shrinks. Gives the exact command."""
+    d = int(min(MAX_DEADLINE, math.ceil(deadline_s / 10.0) * 10))
+    run = f" --run-id {ns.run_id}" if ns.run_id else ""
+    cmd = (f"perl -e 'alarm {d + 15}; exec @ARGV' backend/.venv/bin/python "
+           f"backend/scripts/pipeline_test.py --project {ns.project}{run} --mode {ns.mode} "
+           f"--deadline {d}")
+    return {"mode": ns.mode, "error": (
+        f"the {n_files} must-run test file(s) of this change (its own tests, AC tests, "
+        f"tests naming a changed symbol) need about {d}s on the {workers} worker(s) "
+        f"granted, more than this call's deadline. They are never cut for time. Run "
+        f"exactly: {cmd}"), "next_action": cmd}
 
 
 def _cut_to_budget(targets: dict, durations: dict, workers: int, seconds: float,
@@ -3692,9 +3742,14 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     ctx.workers = max(1, len(tokens))
     budget_cut: list[str] = []
     if ns.mode in REUSE_MODES and run_targets:
-        protect = set((plan.get("ac_first") or {}).keys()) | {
-            f for f in plan["changed"] if _is_backend_test(f)}
-        secs = ctx.deadline_at - min(20.0, deadline * 0.25) - time.monotonic()
+        protect = must_run_files(ctx.repo, plan)
+        reserve = min(20.0, deadline * 0.25)
+        secs = ctx.deadline_at - reserve - time.monotonic()
+        must = {f: v for f, v in run_targets.items() if f in protect}
+        need = _seconds_needed(must, ctx.durations, ctx.workers)
+        if need > secs:
+            _release_workers(tokens)
+            return _must_run_refusal(ns, need + reserve + 5, len(must), ctx.workers), 2
         run_targets, budget_cut = _cut_to_budget(run_targets, ctx.durations, ctx.workers,
                                                  secs, protect)
         if budget_cut:

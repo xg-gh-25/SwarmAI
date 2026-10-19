@@ -9,8 +9,10 @@ Tests go ONLY through `RUN`: `pipeline_test_gate` denies direct pytest/vitest/ts
 One call per mode, foreground, never split; no full suite (STEERING R9).
 
 1. **L1+L2+L3 in one call:** `RUN --mode regression`. L1 = BUILD `ac_coverage` tests, L2 =
-   tests importing a changed module, those naming a changed function first (cut to the
-   time budget, overflow in `skipped_for_budget`), L3 =
+   tests importing a changed module; those naming a changed function always run, the
+   rest are cut to the time budget (`skipped_for_budget`, flagged in REPORT §10). A
+   must-run set over the deadline is refused with the larger-deadline command: run it
+   as given. L3 =
    import smoke; `desktop/src` changes add `vitest related` + `tsc`. Run it fresh even
    if BUILD was green (post-refactor tree). Zero L2 files, non-SwarmAI stack, skips:
    `ref/test/layers.md`.

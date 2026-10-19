@@ -1126,6 +1126,49 @@ def test_verify_budget_cut_is_green_listed_and_never_cached(rig, tmp_path, capsy
     assert out["cached"] is False, out
 
 
+def test_must_run_tests_are_never_cut_and_get_more_time_instead(rig, tmp_path, capsys):
+    """The scope is fixed by the change: an importer naming a changed function is never
+    cut for time. When the must-run set does not fit, the runner refuses with the exact
+    command carrying a larger deadline, and runs nothing."""
+    repo = rig({"backend/core/calc.py": "def compute_total(a, b):\n    return a + b\n",
+                "backend/tests/test_calc_uses.py": (
+                    "from core.calc import compute_total\n\n\n"
+                    "def test_t():\n    assert compute_total(1, 2) == 3\n")},
+               run_state={"files_touched": ["backend/core/calc.py"]})
+    _write(repo, {"backend/core/calc.py": "def compute_total(a, b):\n    return b + a\n"})
+    plan = {"changed": ["backend/core/calc.py"],
+            "targets": {"backend/tests/test_calc_uses.py": None}}
+    assert pt.must_run_files(repo, plan) == {"backend/tests/test_calc_uses.py"}
+    cache = tmp_path / "cache"
+    cache.mkdir(exist_ok=True)
+    (cache / "durations.json").write_text(json.dumps(
+        {"backend/tests/test_calc_uses.py::test_t": [500.0, time.time()]}))
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert code == 2 and "never cut for time" in out["error"], out
+    assert "--deadline" in out["next_action"] and f"--run-id {RUN_ID}" in out["next_action"]
+    d = int(out["next_action"].split("--deadline ")[1].split()[0])
+    assert d >= 500 / pt.BUDGET_FILL and f"alarm {d + 15};" in out["next_action"]
+    runs = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs"
+    assert not (runs / RUN_ID / "evidence" / "tests" / "latest-verify.json").exists()
+
+
+def test_file_cap_never_drops_importers_naming_a_changed_symbol(rig, tmp_path):
+    files = {"backend/core/hub2.py": "def shared_thing():\n    return 1\n"}
+    for i in range(3):
+        files[f"backend/tests/test_named_{i}.py"] = (
+            "from core.hub2 import shared_thing\n\n\ndef test_n():\n    assert shared_thing()\n")
+        files[f"backend/tests/test_plain_{i}.py"] = (
+            "from core import hub2\n\n\ndef test_p():\n    assert hub2\n")
+    repo = rig(files)
+    _write(repo, {"backend/core/hub2.py": "def shared_thing():\n    return 2\n"})
+    cache = tmp_path / "cache"
+    sgraph = pt.build_source_graph(repo, cache)
+    graph = pt.build_import_graph(repo, cache, sgraph)
+    sel, skipped, _ = pt.select_backend(repo, ["backend/core/hub2.py"], graph, 2, (), sgraph)
+    assert sorted(sel) == [f"backend/tests/test_named_{i}.py" for i in range(3)]
+    assert sorted(skipped) == [f"backend/tests/test_plain_{i}.py" for i in range(3)]
+
+
 def _seed_evidence(tmp_path: Path, mode: str, failures: list, finished_at: str) -> None:
     d = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs" / RUN_ID / "evidence" / "tests"
     d.mkdir(parents=True, exist_ok=True)

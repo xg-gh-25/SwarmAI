@@ -9847,6 +9847,17 @@ def _derive_stage_fields(
         derived["push_ready"] = {"value": cand_rec["push_ready"], "upper_bound": bound,
                                  "reasons": reasons,
                                  "source": "gates" + (" + model lowered" if lowered else "")}
+        # Test files the runner selected for this change but left out for time: a
+        # tool-computed attention flag (REPORT §10 + the completion summary), not a
+        # model claim. Non-blocking: the must-run part is never cut (pipeline_test).
+        if isinstance(artifact, dict):
+            flag = _untested_for_budget_flag(run_dir, run_id)
+            kept = [f for f in artifact.get("attention_flags") or []
+                    if not (isinstance(f, str) and f.startswith(_RUNNER_FLAG_PREFIX))]
+            artifact["attention_flags"] = kept + ([flag] if flag else [])
+            if flag:
+                derived["untested_for_budget"] = {"value": flag,
+                                                  "source": "evidence/tests skipped_for_budget"}
 
     if not skipped:
         budget = _stage_budget(run_id, run_dir, run_state, stage, artifact)
@@ -9855,6 +9866,30 @@ def _derive_stage_fields(
 
     cand_rec["derived_sources"] = {k: v.get("source") for k, v in derived.items()}
     return derived, exit_result
+
+
+_RUNNER_FLAG_PREFIX = "[runner] "
+
+
+def _untested_for_budget_flag(run_dir: "Path | None", run_id: str) -> "str | None":
+    """One line naming the test files the NEWEST verify / regression report selected for
+    this change but did not run (``skipped_for_budget``, import-smoke entries excluded);
+    None when every selected file ran."""
+    if run_dir is None:
+        return None
+    evs = [e for e in (_read_run_evidence(run_dir, f"tests/latest-{m}.json", run_id)
+                       for m in ("regression", "verify")) if isinstance(e, dict)]
+    if not evs:
+        return None
+    ev = max(evs, key=lambda e: str(e.get("finished_at") or ""))
+    left = [f for f in ev.get("skipped_for_budget") or []
+            if isinstance(f, str) and not f.startswith("import::")]
+    if not left:
+        return None
+    names = ", ".join(Path(f).name for f in left[:6]) + (f" (+{len(left) - 6})" if len(left) > 6 else "")
+    return (f"{_RUNNER_FLAG_PREFIX}{len(left)} test file(s) that import a changed module "
+            f"were not run in this run ({ev.get('mode')}, time budget): {names}. They name "
+            f"none of the changed functions; CI BVT or a later run covers them")
 
 
 def _stage_boundary_fail(stage: str, errors: "list[str]", *, data=None, record=None,
