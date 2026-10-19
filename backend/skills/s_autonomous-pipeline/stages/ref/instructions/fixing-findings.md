@@ -14,6 +14,13 @@ review's findings go through the same four steps:
    evidence); classify blocking vs not. Then group by CAUSE, not by reporter or file:
    findings that share a broken invariant, a missing owner, a duplicated writer are ONE
    cluster. Default reading: findings in one area share a cause until you can say why not.
+   **`[MUST]` Scope: only what this change introduced is fixed in this run.** A finding about
+   behaviour the diff did not create (pre-existing, residual, "not caused by this change")
+   goes into no cluster: record it as a known issue (REPORT §10 and the commit message) for
+   the user to schedule. The one exception: it makes this change's own tests red. Folding it
+   in widens the diff, reopens every reviewer and the full test run, and is where new
+   regressions come from (a pre-existing timeout "fixed" in passing turned a gate's deny into
+   an allow; the next round's work was reverting it).
 3. **Write ONE fixing spec for the round** (the artifact's fix record; for Gate-2 the
    `FIXING_SPEC` of `docs/design/pipeline-anti-whack-a-mole.md`): per cluster the findings
    it covers, the cause (`invariant` / `root_cause`), the scope (every site with the same

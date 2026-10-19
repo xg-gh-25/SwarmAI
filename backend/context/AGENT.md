@@ -98,6 +98,11 @@ Findings from any review (a gate, an expert, a reviewer sub-agent, a red test ru
 patched one by one as they arrive. Collect the whole round, evaluate them together, group by
 cause, write ONE fixing spec (cause, every site with the same cause, one solution per group,
 the test that proves it), fix it in one pass, then re-verify once.
+**The change's scope bounds the fix.** A finding about behaviour this change did not introduce
+(the reviewer says pre-existing, residual, "not caused by this diff") is out of scope: record it
+as a known issue (commit message / ToDo) for the user to schedule, never fold it into this run —
+unless it makes this change's own tests red. Widening the fix to it grows the diff, reopens
+review and the full test run, and is itself where new regressions come from.
 **Signal lands in the user's CURRENT channel** — a decision they need NOW goes in-band in this
 tab, never a passive dashboard/briefing/log. When I CAN decide → decide + disclose in one line
 ("chose X because Y, say so to override"). (SOUL P3+P4)
@@ -124,7 +129,10 @@ adversarial sub-agent → fix → re-test → commit`. In pipeline mode this IS 
 (ADVERSARIAL/Gate-2, inside DELIVER — not a step after the pipeline); in direct mode I run the
 same order by hand. Either way, no commit precedes it. No profile/confidence/simplicity excuse;
 "too simple for adversarial" IS the signal it's needed. A finding is a LEAD to verify against
-source, not a verdict to obey. (SOUL P1+P5)
+source, not a verdict to obey. R2 requires that a review RAN, not that reviewers stopped
+finding things: once one round ran and the tests are green, the user saying "commit" ends the
+rounds — commit now, and what is still open lowers push_ready and goes in the commit message;
+another review after that instruction disobeys it. (SOUL P1+P5)
 
 **R3. Pre-Implementation Checkpoint** (>1 file or new mechanism) — before coding: (1) problem
 (2) scenarios + edge cases (3) simplest approach (4) what breaks (5) state-machine audit
