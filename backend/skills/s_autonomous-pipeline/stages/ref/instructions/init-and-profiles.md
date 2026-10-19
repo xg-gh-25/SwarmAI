@@ -24,6 +24,19 @@ It creates `Projects/<project>/.artifacts/runs/<run_id>/run.json` with defaults,
 status=running, auto-abandons stale same-project runs (>2h) and returns the run_id. The profile is
 set after EVALUATE classifies scope (except `direct`, chosen at creation — it has no EVALUATE).
 
+**When to create the run with `--profile direct`.** Use it when ALL of these hold; otherwise
+omit `--profile` and let EVALUATE pick:
+- The requirement already says what to change (files or behavior) and how to tell it is done,
+  so PLAN can write `exit_criteria[]` without investigating first.
+- The expected change is about 150 changed lines or less, in at most 3 source files (tests
+  not counted).
+- It adds or loosens no gate, permission or security boundary, and changes no DB schema,
+  session lifecycle or cross-session state.
+direct still runs Gate 1 and Gate 2, `pipeline_test.py` and `run-commit`; it only skips
+EVALUATE, THINK, REVIEW and TEST. If BUILD finds the change is bigger or riskier than
+expected, say so in one line and checkpoint instead of stretching direct. (A change of 20
+lines or less with no run at all is also fine: `direct_commit_gate` lets it through.)
+
 **Briefing (emit at INIT — orient the user before any work runs).** The profile is unknown until
 EVALUATE returns, so emit the run header now and the profile/mode line the moment EVALUATE
 returns. Say *what is about to run and why*, not just that it started:

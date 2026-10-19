@@ -3,7 +3,7 @@
 You ARE the orchestrator: run every stage inline in this session, never via a sibling skill or slash command. A run delivers an accountability unit of work: a defensible commit plus a short, honest REPORT.md (omit fine-grained detail and anything uncertain). `ref/` paths below are under `backend/skills/s_autonomous-pipeline/stages/`.
 
 ## Core Loop
-1. **INIT**: `run-create --project <P> --requirement "<text>"` (`--profile direct` for a direct fix), emit the briefing; resume a paused run instead if one exists (`ref/instructions/init-and-profiles.md`).
+1. **INIT**: `run-create --project <P> --requirement "<text>"` (`--profile direct` for a small, fully specified change: `ref/instructions/init-and-profiles.md`), emit the briefing; resume a paused run instead if one exists (`ref/instructions/init-and-profiles.md`).
 2. **PROFILE**: EVALUATE's scope picks the profile (table below); state it with a one-line why.
 3. **STAGE**, for each profile stage: `stage-start` → SIGNAL/CHECK/FAIL line → read the card → execute → classify decisions → `stage-complete` → landmark → continue. ★ Gate 0 fires inside EVALUATE, ★ Gate 1 after PLAN (④), ★ Gate 2 inside DELIVER (⑧).
 4. **DELIVER**: Taste Decision Gate → deliver card → Quality Convergence Loop (6-layer gate × max 3) → push-ready or escalate (`ref/instructions/deliver-convergence.md`).
@@ -20,12 +20,12 @@ Authoritative stage lists: `backend/core/pipeline_profiles.py`. trivial/docs/res
 | docs | evaluate think plan deliver reflect | docs only |
 | research | evaluate think reflect | research only |
 | goal | evaluate think plan goal_cycle deliver reflect | must iterate: metric, sweep, convergence |
-| direct | plan build deliver | direct fix; PLAN holds the exit contract |
+| direct | plan build deliver | small, fully specified change; PLAN holds the exit contract |
 
 Prefer the lightest profile that fits; goal only when you must iterate, not because the result is checkable. ADVERSARIAL (stage 7 of 9) runs inside DELIVER, so no profile lists it. Max retries: build/test 3, deliver/reflect 1, others 2.
 
 ## 3c. Execute Stage Behavior
-- **Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage <S>` → card path, upstream artifacts, ACs, exit criteria, valid examples (review/deliver add changed files, experts, ready prompts).
+- **Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage <S>` → card path, upstream artifacts, ACs, exit criteria, valid examples (review/deliver add changed files, experts, ready prompts). Read its stdout as is; no `> file` + re-read.
 - <!-- R-instr-004 --> **[GATE·cli] BLOCKING:** before executing ANY stage, read its execution card `stages/<S>.md`; read a `stages/ref/` file only when the card's "Read only if" condition holds. Skipping the card skips the stage's quality gate (`stage_doc_consumed: true`; run-update exits 1 without it). Read from `backend/skills/`, never `.claude/skills/`.
 - **Tests:** only `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode tdd|verify|regression|recheck [--files …]` (`--mode probe|mutation` for heavy verification). Direct pytest/vitest/tsc is denied while your run is active.
 - **Exit:** `python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage <S> --data @/tmp/<R>/<S>.json` with `{"artifact": {...}, "record": {"decisions": [...]}}`. It validates first (each error names the `path` and expected value; fix from that, never from artifact_cli.py source), fills derived fields, publishes, records, advances. Do not run `--check` before it: it writes nothing on a failure, so a preflight only adds a call (use `--check` to ask whether the exit criteria are met mid-stage). When it says the exit criteria are met, stop verifying.

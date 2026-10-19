@@ -435,6 +435,23 @@ def test_gate0_prompt_writes_the_fenced_prompt_and_records_the_handout(ws, capsy
     assert code == 1 and "evidence" in out["error"]
 
 
+def test_gate0_prompt_refuses_a_claim_stage_complete_would_reject(ws, capsys):
+    """run_925edb0e: the skeptic ran on a claim with "the fix" in it; stage-complete then
+    rejected it (M1), so the reworded claim needed two more skeptic rounds."""
+    from tests.test_stage_boundary_commands import _call
+    root, reg = ws
+    rd = _make_run(root, "run_g0m", "bugfix")
+    bad = dict(UND, claim="X early-returns on a stale gen (a.py:12), so the fix is to drop it")
+    code, out = _call(cli.cmd_gate0_prompt, reg, capsys, project=PROJECT, run_id="run_g0m",
+                      data=json.dumps({"understanding": bad}))
+    assert code == 1 and "M1 solution-language" in out["error"], out
+    assert "gate0_handout" not in json.loads((rd / "run.json").read_text())
+    assert not (rd / "evidence" / "prompts" / "gate0-skeptic.md").exists()
+    code, out = _call(cli.cmd_gate0_prompt, reg, capsys, project=PROJECT, run_id="run_g0m",
+                      data=json.dumps({"understanding": UND}))
+    assert code == 0 and out["ok"], out
+
+
 def test_gate0_needs_the_spawn_text_unchanged(audit, monkeypatch):
     """red-team 2026-10-18: words added around "read <path>" could steer the skeptic."""
     import hashlib
