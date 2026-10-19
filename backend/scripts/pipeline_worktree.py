@@ -49,7 +49,7 @@ CARD_OVERRIDES = {
     "goal_cycle": "use `artifact_cli.py run-diff --mark/--since` for anchors and diffs, not "
                   "`git rev-parse HEAD` / `<commit>..HEAD` in the main checkout.",
     "deliver": "skip the card's staging / unstaging and run-commit steps: stage-complete "
-               "lands the change when push_ready (run-commit afterwards only confirms).",
+               "lands the change, PUSH-READY or not (run-commit afterwards only confirms).",
 }
 
 
@@ -614,7 +614,8 @@ def _current_entry(run_state: dict, name: str) -> "dict | None":
 def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bool,
                  workspace, self_repo, gen_b, requirement: str,
                  precheck=None, message: "str | None" = None,
-                 review_not_converged: bool = False) -> "dict | None":
+                 review_not_converged: bool = False,
+                 not_ready: "str | None" = None) -> "dict | None":
     """Deliver stage-complete landing; None when nothing to do (not isolated / not
     push-ready / already integrated). Exits with a §7.7 error on refusal.
     *precheck(review_at)* → error strings (D7 coverage, experts that have not reviewed
@@ -623,8 +624,10 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
     that the ONLY thing keeping DELIVER from PUSH-READY is a Gate-2 loop that did not
     converge in 3 rounds with a SOUND root-cause verdict. The run is autonomous, so it
     lands anyway, the same as run-commit in shared mode (f2ffe9c2); every landed commit
-    is marked review_not_converged and push_ready itself stays false (push is gated)."""
-    if not is_isolated(run_state) or not (push_ready or review_not_converged):
+    is marked review_not_converged and push_ready itself stays false (push is gated).
+    Since 2026-10-19 every completed DELIVER lands (commit-ready is not push-ready):
+    *not_ready* (the push_ready reason) marks each landed commit push_ready: false."""
+    if not is_isolated(run_state):
         return None
     _CTX.update(project=run_state.get("project"), run_id=run_id)
     run_dir = run_file.parent
@@ -716,6 +719,9 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
             res["resyncs"] = resyncs
         if review_not_converged and not push_ready:
             res["review_not_converged"] = True
+        if not push_ready:
+            res["push_ready"] = False
+            res["push_ready_reason"] = str(not_ready or "no reason recorded")[:500]
         landed[name] = res
         _record_landing(run_file, run_state, run_id, name, m, res)
     return {"landed": {k: {"sha": v["sha"], "files": len(v["files"]), "commit_s": v["commit_s"],
@@ -815,6 +821,9 @@ def _record_landing(run_file: Path, run_state: dict, run_id: str, name: str, mai
                 c["resyncs"] = res["resyncs"]
             if res.get("review_not_converged"):
                 c["review_not_converged"] = True   # the shared-mode run-commit's mark
+            if res.get("push_ready") is False:
+                c["push_ready"] = False
+                c["push_ready_reason"] = res.get("push_ready_reason")
             commits.append(c)
         d["commits"] = commits
         ft = d.get("files_touched") or []
@@ -877,7 +886,7 @@ def completion_block(run_id: str, run_state: dict) -> "str | None":
             changed = True
         if changed:
             return (f"worktree {wt} holds an unintegrated change: land it (deliver "
-                    "stage-complete with push_ready) or end the run as failed/abandoned with "
+                    "stage-complete; it lands even when not PUSH-READY) or end the run as failed/abandoned with "
                     "a reason (the change is then saved to the ledger)")
     return None
 

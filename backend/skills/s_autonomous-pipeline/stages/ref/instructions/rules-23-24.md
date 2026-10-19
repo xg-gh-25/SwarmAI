@@ -81,7 +81,7 @@ fills the derived ones):**
 | Flat field | On stage | Gate that reads it |
 |------------|----------|--------------------|
 | `stage_doc_consumed: true` | evaluate/build/review/test/deliver/reflect | `run-update` per-stage gate (exit 1 if absent) |
-| `push_ready: true` | deliver | `run-commit` refuses without it (exit 2) |
+| `push_ready: true` | deliver | without it `run-commit` still commits, each commit marked `push_ready: false` + reason; push stays blocked |
 | `outputs_surfaced` — NOT a stage-record field: written by the `surface_run_outputs` tool (marker beside run.json) or `run-update --status completed --outputs-surfaced` (run-level); a deliver-record flag is read only as legacy. Never re-record deliver to add it | — (completion) | completion surface gate |
 | `token_cost: <int>` | every stage | metrics/calibration (WARN if 0) |
 | `skip_reason` / `notes` | any SKIPPED stage | completion skip gate |

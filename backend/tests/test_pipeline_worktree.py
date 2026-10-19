@@ -468,7 +468,7 @@ def test_released_worktree_paths_resolve_to_main_and_cache_dropped(flow, monkeyp
     assert rw.landed_path(wt / ".." / ".." / "x", flow["ws"]) is None
 
 
-def test_isolated_land_force_records_d7_bypass(flow, monkeypatch):
+def test_isolated_land_has_no_force_past_d7(flow, monkeypatch):
     import artifact_cli as ac
     rid, f, wt = _prepared(flow)
     _evidence(f, rid, wt)
@@ -483,14 +483,10 @@ def test_isolated_land_force_records_d7_bypass(flow, monkeypatch):
         with pytest.raises(SystemExit):
             ac._land_isolated_deliver("P", rid, f, True, None, warns)
         assert _state(f)["worktrees"][0]["state"] == "active"
-        os.environ[hook_token.TOKEN_ENV] = hook_token.issue(f.parent, "s1", rid, "stage-complete")
-        res = ac._land_isolated_deliver("P", rid, f, True, None, warns,
-                                        force_reason="security reviewer unavailable")
+        with pytest.raises(TypeError):  # the force_reason override is gone
+            ac._land_isolated_deliver("P", rid, f, True, None, warns, force_reason="x")
     finally:
         os.environ.pop(hook_token.TOKEN_ENV, None)
-    assert res["landed"]["swarmai"]["sha"] == _g(flow["main"], "rev-parse", "HEAD")
-    iv = _state(f)["interventions"][-1]
-    assert iv["kind"] == "d7_force_bypass" and "security" in iv["note"]
 
 
 # ── SOUND, not converged: an isolated run lands anyway (autonomous, f2ffe9c2 twin) ──
@@ -543,9 +539,10 @@ def test_isolated_land_proceeds_when_only_review_did_not_converge(flow, monkeypa
     assert any("review_not_converged" in w for w in warns)
 
 
-def test_isolated_land_still_waits_when_push_ready_fails_for_another_reason(flow, monkeypatch):
-    """Any other push_ready failure (tests, completion audit, a model-lowered push_ready)
-    keeps the landing off: nothing is committed and the worktree stays active."""
+def test_isolated_land_proceeds_marked_when_push_ready_fails_for_another_reason(flow, monkeypatch):
+    """Commit-ready is not push-ready: any other push_ready failure (tests, completion
+    audit, a model-lowered push_ready) still lands, every commit marked push_ready:
+    false with the reason and NOT review_not_converged; push stays blocked."""
     import artifact_cli as ac
     rid, f, wt = _prepared(flow)
     _evidence(f, rid, wt)
@@ -553,10 +550,16 @@ def test_isolated_land_still_waits_when_push_ready_fails_for_another_reason(flow
     monkeypatch.setattr(ac, "_only_review_not_converged", lambda *a, **k: False)
     monkeypatch.setattr(ac, "_generate_review_deliverable", lambda *a, **k: ([], []))
     _all_reviewed(ac, monkeypatch)
-    assert _land_via_cli(ac, rid, f, [], {"stage": "deliver", "push_ready": False}) is None
-    assert _g(flow["main"], "rev-parse", "HEAD") == head
-    assert _state(f)["worktrees"][0]["state"] == "active"
-    assert not any(c.get("review_not_converged") for c in _state(f).get("commits") or [])
+    warns: list = []
+    res = _land_via_cli(ac, rid, f, warns, {"stage": "deliver", "push_ready": False,
+                                            "push_ready_reason": "regression red"})
+    new = _g(flow["main"], "rev-parse", "HEAD")
+    assert new != head and res["landed"]["swarmai"]["sha"] == new
+    assert "NOT PUSH-READY: regression red" in _g(flow["main"], "log", "-1", "--format=%B")
+    c = _state(f)["commits"][-1]
+    assert c["push_ready"] is False and c["push_ready_reason"] == "regression red"
+    assert not c.get("review_not_converged")
+    assert any("do NOT push" in w for w in warns)
 
 
 def test_push_ready_landing_is_not_marked_review_not_converged(flow):
@@ -565,6 +568,7 @@ def test_push_ready_landing_is_not_marked_review_not_converged(flow):
     res = _land(flow, rid, f)
     assert "review_not_converged" not in res["landed"]["swarmai"]
     assert "review_not_converged" not in _state(f)["commits"][-1]
+    assert "push_ready" not in _state(f)["commits"][-1]
 
 
 # ── automatic landing while main keeps moving ─────────────────────────────────

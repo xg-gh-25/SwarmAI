@@ -5395,11 +5395,13 @@ def _commit_title(requirement: str) -> str:
     return commit_message.title_from_requirement(requirement)
 
 
-def _commit_message(run_id: str, requirement: str, deliver: "dict | None") -> str:
+def _commit_message(run_id: str, requirement: str, deliver: "dict | None",
+                    not_ready: "str | None" = None) -> str:
     """This run's commit message: ``commit_message.build`` — the one builder shared
-    with the worktree landing (pipeline_worktree.land_deliver)."""
+    with the worktree landing (pipeline_worktree.land_deliver). *not_ready*: the
+    push_ready reason when DELIVER was not PUSH-READY (written into the message)."""
     import commit_message
-    return commit_message.build(run_id, requirement, deliver)
+    return commit_message.build(run_id, requirement, deliver, not_ready)
 
 
 def _only_review_not_converged(project: str, run_id: str, run_file: Path, run_state: dict,
@@ -5453,7 +5455,11 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     touched both gets one commit per repo.
 
     Safety valves:
-      - PUSH-READY gate must have passed (deliver stage push_ready=true), else refuse.
+      - DELIVER must have completed, else refuse. A DELIVER that is not PUSH-READY still
+        commits (the run is autonomous and its work is never left uncommitted): each
+        commit is marked ``push_ready: false`` with the reason, REPORT §10 and the
+        completion summary say so, and push stays blocked. There is no override flag:
+        ``--force`` was removed 2026-10-19 (the model used it to bypass push_ready).
       - files_touched must be non-empty, else refuse (nothing to commit).
       - If the working tree has changes NOT in files_touched, WARN + list them
         (a forgotten record surfaces loudly) but still commit only tracked files.
@@ -5481,39 +5487,33 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
          and s.get("status") in ("completed", "done")),
         None,
     )
-    push_ready = bool(deliver_rec and deliver_rec.get("push_ready", False))
-    # A review loop that did not converge in 3 rounds never blocks the commit: the run is
-    # autonomous, and a refused run-commit would hand it to a human. The root-cause
-    # review said SOUND, the open items are in REPORT §10, push_ready stays false (push
-    # is gated) and the commit is marked review_not_converged.
-    _review_open = (not push_ready) and _only_review_not_converged(
-        args.project, args.run_id, run_file, run_state, deliver_rec)
-    if _review_open:
-        print(json.dumps({"warning": "deliver is not PUSH-READY only because Gate-2 did not "
-                                     "converge in 3 rounds (root-cause review: SOUND). "
-                                     "Committing locally; the commit is marked "
-                                     "review_not_converged and the open items are in REPORT §10."}),
-              file=sys.stderr)
-        push_ready = True  # for the commit gate only; the record keeps push_ready false
-    # A forced commit past this gate is recorded (commits[].forced_push_ready + a
-    # push_ready_force_bypass intervention) so it never reads as a qualified commit
-    # in run.json, the REPORT or the chat completion summary.
-    _forced_push_ready = (not push_ready) and bool(getattr(args, "force", False))
-    if _forced_push_ready:
-        print(json.dumps({
-            "warning": "push_ready gate FORCE-BYPASSED: deliver is not PUSH-READY ("
-                       + str((deliver_rec or {}).get("push_ready_reason") or "no reason recorded")
-                       + "). The commit is marked forced_push_ready and recorded as a "
-                         "push_ready_force_bypass intervention.",
-        }), file=sys.stderr)
-    if not push_ready and not getattr(args, "force", False):
+    if deliver_rec is None:
         print(json.dumps({
             "blocked": True,
-            "error": "run-commit refused: deliver stage is not PUSH-READY. "
-                     "Auto-commit runs only after the push-ready gate passes. "
-                     "Pass --force to override.",
+            "error": "run-commit refused: DELIVER has not completed. Run "
+                     "`stage-complete --stage deliver` first; a DELIVER that is not "
+                     "PUSH-READY still completes (push_ready: false + reason) and then "
+                     "commits here.",
         }), file=sys.stderr)
         sys.exit(2)
+    push_ready = bool(deliver_rec.get("push_ready", False))
+    # Commit-ready is not push-ready (2026-10-19). A run always ends in a local commit:
+    # a refused run-commit left the work uncommitted, so a human had to force it (six
+    # forced commits in four real runs). Not PUSH-READY → commit anyway, mark every
+    # commit push_ready: false with the reason; push stays blocked.
+    _not_ready_reason = "" if push_ready else (
+        str(deliver_rec.get("push_ready_reason") or "").strip() or "no reason recorded")
+    _review_open = (not push_ready) and _only_review_not_converged(
+        args.project, args.run_id, run_file, run_state, deliver_rec)
+    if not push_ready:
+        print(json.dumps({"warning": "deliver is not PUSH-READY ("
+                          + _not_ready_reason[:400] + "): committing locally anyway. Every "
+                          "commit is marked push_ready: false"
+                          + (" and review_not_converged" if _review_open else "")
+                          + "; the reasons are in REPORT §10; do NOT push."}),
+              file=sys.stderr)
+    _not_ready_mark = ({} if push_ready else
+                       {"push_ready": False, "push_ready_reason": _not_ready_reason[:500]})
 
     # ── Gate 2: files_touched must be non-empty ──────────────────────────────
     files_touched = run_state.get("files_touched", [])
@@ -5543,7 +5543,7 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     #     whatever was collected; a genuinely-empty completed with a non-empty declared
     #     set DOES refuse (that is the real "you declared experts but none ran" case).
     # Only a run that DECLARED a non-empty required_experts AND is missing at least one
-    # is refused. `--force` (operator override) bypasses, mirroring the push_ready gate.
+    # is refused; the remedy (spawn the missing experts) needs no human. No override.
     _required = run_state.get("required_experts")
     # Gate-2 Red Team HIGH trigger, re-derived here from the deliver artifact so a
     # path that never persisted it (publish without --run-id, a hand-edited
@@ -5566,51 +5566,33 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                        "coverage gate SKIPPED. A malformed declaration bypasses the "
                        "gate; fix it to a list[str] to enforce." % type(_required).__name__,
         }), file=sys.stderr)
-    # Gate-2 security+state-machine HIGH: a --force that SKIPS a would-be-D7-refusal
-    # must leave an audit trail — else "committed with full expert coverage" and
-    # "committed despite declared experts never reviewing" are indistinguishable, the
-    # exact integrity hole D7 exists to close. Compute the shortfall EVEN under --force
-    # so we can record it; only the sys.exit(2) is suppressed by --force.
-    _d7_forced_missing: "list[str]" = []
     if isinstance(_required, list) and _required:
         _missing = _d7_missing_required_experts(_required, args.run_id)
         if _missing:
-            if getattr(args, "force", False):
-                # Override honored, but recorded (intervention written post-commit in the
-                # fresh-reread transaction below) + a loud WARN now.
-                _d7_forced_missing = _missing
-                print(json.dumps({
-                    "warning": "D7 coverage gate FORCE-BYPASSED: declared expert(s) with "
-                               "no adversarial marker this run were skipped via --force: "
-                               + ", ".join(_missing) + ". Recorded as a d7_force_bypass "
-                               "intervention on run.json for audit.",
-                    "forced_missing_experts": _missing,
-                }), file=sys.stderr)
-            else:
-                _plain = sorted(set(_missing) & _d7_plain_marker_expert_ids(args.run_id))
-                _why = ("" if not _plain else
-                        " Of these, " + ", ".join(_plain) + " DID run for this run: its "
-                        "EXPERT-ID was read, but the spawn was not classified adversarial, so "
-                        "only a plain marker was written. Likely causes: the daemon predates "
-                        "registry-backed classification (rebuild/restart it), the expert "
-                        "registry failed to load (see the daemon log), or the expert's "
-                        "frontmatter lacks `spawn_as: adversarial`. Re-spawn after fixing.")
-                print(json.dumps({
-                    "blocked": True,
-                    "error": (
-                        "run-commit refused (D7): this run declared required expert(s) that "
-                        "did NOT run an adversarial review this run: " + ", ".join(_missing)
-                        + ". Spawn the missing specialist expert(s) to review the diff (each "
-                        "writes an EXPERT-ID marker on completion), THEN re-run run-commit. A "
-                        "declared expert cannot be skipped — that is the purpose of the run's "
-                        "required_experts. (Genuinely not enforceable? Re-run with --force.)"
-                        + _why
-                    ),
-                    "missing_experts": _missing,
-                    "ran_without_adversarial_marker": _plain,
-                    "declared": sorted(_required),
-                }), file=sys.stderr)
-                sys.exit(2)
+            _plain = sorted(set(_missing) & _d7_plain_marker_expert_ids(args.run_id))
+            _why = ("" if not _plain else
+                    " Of these, " + ", ".join(_plain) + " DID run for this run: its "
+                    "EXPERT-ID was read, but the spawn was not classified adversarial, so "
+                    "only a plain marker was written. Likely causes: the daemon predates "
+                    "registry-backed classification (rebuild/restart it), the expert "
+                    "registry failed to load (see the daemon log), or the expert's "
+                    "frontmatter lacks `spawn_as: adversarial`. Re-spawn after fixing.")
+            print(json.dumps({
+                "blocked": True,
+                "error": (
+                    "run-commit refused (D7): this run declared required expert(s) that "
+                    "did NOT run an adversarial review this run: " + ", ".join(_missing)
+                    + ". Spawn the missing specialist expert(s) to review the diff (each "
+                    "writes an EXPERT-ID marker on completion), THEN re-run run-commit. A "
+                    "declared expert cannot be skipped — that is the purpose of the run's "
+                    "required_experts."
+                    + _why
+                ),
+                "missing_experts": _missing,
+                "ran_without_adversarial_marker": _plain,
+                "declared": sorted(_required),
+            }), file=sys.stderr)
+            sys.exit(2)
 
     # ── Resolve each file to its git repo root; group so multi-repo runs get
     #    one commit per repo. Never `git add -A`. (Resolver is module-level
@@ -5720,7 +5702,7 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     _deliver_art = _load_stage_artifacts(args.project, args.run_id, run_state,
                                          ("deliver",)).get("deliver")
     commit_msg = _commit_message(args.run_id, str(run_state.get("requirement") or ""),
-                                 _deliver_art)
+                                 _deliver_art, _not_ready_reason or None)
 
     if sha_commits:
         # Source files are already committed (verified above): stage only B.
@@ -5729,9 +5711,8 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                                      for r, fs in by_repo.items()})
         by_repo = defaultdict(list, {r: fs for r, fs in by_repo.items() if fs})
 
-    if _forced_push_ready:
-        for _c in sha_commits:
-            _c["forced_push_ready"] = True
+    for _c in sha_commits:
+        _c.update(_not_ready_mark)
     committed, warnings = list(sha_commits), []
     warnings.extend(warnings_b)  # §4.9 derivative-B generation notes (set above)
     if unresolved:
@@ -5894,7 +5875,7 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
             sha = subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"],
                                  capture_output=True, text=True, timeout=10).stdout.strip()
             committed.append({"repo": root, "sha": sha, "files": staged.splitlines(),
-                              **({"forced_push_ready": True} if _forced_push_ready else {}),
+                              **_not_ready_mark,
                               **({"review_not_converged": True} if _review_open else {})})
         else:
             warnings.append(f"[{root}] git commit failed: {commit.stderr.strip()[:200]}")
@@ -5953,23 +5934,6 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                     f"file(s) absent from files_touched (human edit → autonomy−)"
                 )
 
-            # The push_ready force-bypass, recorded the same way as the D7 one below.
-            if _forced_push_ready:
-                _append_intervention(
-                    fresh, stage="deliver", kind="push_ready_force_bypass", avoidable=True,
-                    note=("committed via --force while deliver was not PUSH-READY: "
-                          + str((deliver_rec or {}).get("push_ready_reason") or "no reason recorded")),
-                )
-            # Gate-2 HIGH: persist the D7 force-bypass so a later audit can tell this
-            # commit did NOT satisfy its declared expert coverage. Same fresh-reread
-            # transaction (no stale clobber). avoidable=True — a forced skip of a
-            # declared expert is an avoidable autonomy deduction, not a clean commit.
-            if _d7_forced_missing:
-                _append_intervention(
-                    fresh, stage="deliver", kind="d7_force_bypass", avoidable=True,
-                    note=("committed via --force despite declared expert(s) with no "
-                          "adversarial marker this run: " + ", ".join(_d7_forced_missing[:8])),
-                )
 
             tmp = run_file.with_suffix(".commits.tmp")
             tmp.write_text(json.dumps(fresh, indent=2), encoding="utf-8")
@@ -10290,10 +10254,6 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     if stage not in pv.STAGE_RECORD_SCHEMAS:
         _stage_boundary_fail(stage, [f"Input: unknown stage '{stage}' "
                                      f"(known: {list(pv.STAGE_RECORD_SCHEMAS)})"])
-    if getattr(args, "force", False) and (stage != "deliver" or not (args.reason or "").strip()):
-        _stage_boundary_fail(stage, ["Input: --force applies only to `--stage deliver` of an "
-                                     "isolated run and needs --reason (it is recorded as a "
-                                     "d7_force_bypass intervention)"])
     run_dir = run_file.parent
     profile = normalize_profile(run_state.get("profile"))
     now = _utc_now_iso()
@@ -10460,7 +10420,6 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         # so the manifest does not advance; rerunning stage-complete retries.
         landing = _land_isolated_deliver(
             project, run_id, run_file, bool(cand_rec.get("push_ready")), reg, warnings,
-            force_reason=(args.reason.strip() if getattr(args, "force", False) else None),
             deliver_rec=cand_rec)
     if next_stage:
         from core.artifact_registry import PIPELINE_STATES
@@ -10515,27 +10474,26 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
 
 def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready: bool,
                            reg: ArtifactRegistry, warnings: "list[str]",
-                           force_reason: "str | None" = None,
                            deliver_rec: "dict | None" = None) -> "dict | None":
     """Deliver landing for an isolated run (pipeline_worktree.land_deliver), with B
     written into the worktree before the final commit and REPORT.md refreshed after.
-    *force_reason* (stage-complete --force --reason): land despite the review
-    precheck, recorded as a d7_force_bypass intervention — run-commit's override.
-    *deliver_rec*: the DELIVER record being completed. When push_ready is false ONLY
-    because Gate-2 did not converge in 3 rounds (root-cause review: SOUND), the run
-    lands anyway, marked review_not_converged — the isolated twin of run-commit's
-    exception (cmd_run_commit), which an isolated run never reaches: run-commit only
-    confirms an isolated landing."""
+    *deliver_rec*: the DELIVER record being completed. A DELIVER that is not
+    PUSH-READY lands anyway (commit-ready is not push-ready, as in cmd_run_commit):
+    every landed commit is marked push_ready: false with the reason, plus
+    review_not_converged when Gate-2's 3 rounds are the only reason."""
     import pipeline_worktree as _pw
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
     if not _pw.is_isolated(run_state):
         return None
     review_open = (not push_ready) and _only_review_not_converged(
         project, run_id, run_file, run_state, deliver_rec)
-    if review_open:
-        warnings.append("deliver is not PUSH-READY only because Gate-2 did not converge in "
-                        "3 rounds (root-cause review: SOUND). Landing locally; the commit is "
-                        "marked review_not_converged and the open items are in REPORT §10.")
+    not_ready = "" if push_ready else (
+        str((deliver_rec or {}).get("push_ready_reason") or "").strip() or "no reason recorded")
+    if not push_ready:
+        warnings.append(f"deliver is not PUSH-READY ({not_ready[:400]}): landing locally "
+                        "anyway; every commit is marked push_ready: false"
+                        + (" and review_not_converged" if review_open else "")
+                        + ", the reasons are in REPORT §10; do NOT push.")
 
     def gen_b(wt: Path, files: "list[str]") -> "list[str]":
         from core.run_worktree import WorktreeError
@@ -10582,14 +10540,6 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
                 if stale:
                     errs.append("Gate-2 expert(s) have not reviewed the current change "
                                 "(recorded at deliver stage-start): " + ", ".join(stale))
-        if errs and force_reason:
-            from core.run_lock import update_run
-            note = f"landed via --force ({force_reason}): " + "; ".join(errs)
-            update_run(run_file, lambda d: _append_intervention(
-                d, stage="deliver", kind="d7_force_bypass", avoidable=True, note=note))
-            warnings.append("review precheck FORCE-BYPASSED and recorded as a d7_force_bypass "
-                            "intervention: " + "; ".join(errs))
-            return []
         return errs
 
     _requirement = str(run_state.get("requirement") or "")
@@ -10598,8 +10548,10 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
                                push_ready=push_ready, workspace=_get_workspace(),
                                self_repo=_BACKEND_DIR.parent, gen_b=gen_b,
                                requirement=_requirement,
-                               message=_commit_message(run_id, _requirement, _deliver_art),
-                               precheck=precheck, review_not_converged=review_open)
+                               message=_commit_message(run_id, _requirement, _deliver_art,
+                                                       not_ready or None),
+                               precheck=precheck, review_not_converged=review_open,
+                               not_ready=not_ready or None)
     if landing:
         import contextlib
         import io
@@ -12834,7 +12786,6 @@ def main() -> None:
     p_run_commit = sub.add_parser("run-commit", help="Auto local-commit this run's files after PUSH-READY (never pushes)")
     p_run_commit.add_argument("--project", required=True)
     p_run_commit.add_argument("--run-id", required=True, help="Pipeline run ID")
-    p_run_commit.add_argument("--force", action="store_true", help="Commit even if push_ready gate hasn't passed")
     p_run_commit.add_argument("--sha", default=None,
                               help="Record already-landed commit(s) of this run (comma-separated) "
                                    "instead of staging files_touched; each must be reachable from "
@@ -12992,12 +12943,6 @@ def main() -> None:
                                   help='{"artifact": {...}, "record": {...}} — inline JSON, @PATH or @-')
     p_stage_complete.add_argument("--check", action="store_true",
                                   help="Validate only; write nothing")
-    p_stage_complete.add_argument("--force", action="store_true",
-                                  help="deliver of an isolated run only: land despite the "
-                                       "expert-review precheck (D7); needs --reason; recorded "
-                                       "as a d7_force_bypass intervention")
-    p_stage_complete.add_argument("--reason", default=None,
-                                  help="why --force is needed (recorded)")
     p_g0 = sub.add_parser("gate0-prompt", help="Gate-0: write the EVALUATE skeptic prompt for this understanding, record the hand-out (single-line JSON)")
     p_g0.add_argument("--project", required=True)
     p_g0.add_argument("--run-id", required=True)

@@ -49,7 +49,8 @@ def title_from_requirement(requirement: str) -> str:
     return cut_subject(raw.splitlines()[0]) if raw else ""
 
 
-def build(run_id: str, requirement: str, deliver: "dict | None") -> str:
+def build(run_id: str, requirement: str, deliver: "dict | None",
+          not_ready: "str | None" = None) -> str:
     """Subject: the DELIVER ``title`` as written (folded, cut at a word boundary), else
     the requirement's first line cut the same way. A title that is empty or the
     template placeholder is no title. Body: ``outcome.result_now``, the ``approach``
@@ -73,6 +74,9 @@ def build(run_id: str, requirement: str, deliver: "dict | None") -> str:
     approach = [fold(a) for a in raw_approach if isinstance(a, str)]
     approach = [a for a in approach if a and a not in tmpl_approach]
     parts = [p for p in (result_now, "\n".join(f"- {a}" for a in approach)) if p]
+    if not_ready:  # committed although DELIVER was not PUSH-READY: say so in git log
+        parts.append("NOT PUSH-READY: " + fold(not_ready)[:300] + "\nDo not push this "
+                     "commit before the gaps in the run's REPORT §10 are closed.")
     parts.append(f"(auto local-commit, run {run_id}; not pushed)")
     parts.append(TRAILER)
     return subject + "\n\n" + "\n\n".join(parts)

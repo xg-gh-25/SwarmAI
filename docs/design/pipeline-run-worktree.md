@@ -341,7 +341,7 @@ SwarmAI 里的代码改动按规则本来就走 run，主工作区里的未提�
 
 **前置条件**（任一不满足：不写任何东西，stage 不前进，返回对应错误）：
 - 调用者是 owner；在 run 锁内重新读 status，不是终止状态。
-- 原 `run-commit` 的 gate：`push_ready`、D7 专家覆盖、Red Team；`--force` 语义和审计记录不变。
+- 原 `run-commit` 的 gate：D7 专家覆盖、Red Team。2026-10-19 起「能提交」和「能 push」分开：`push_ready` 为 false 也落地，每个 commit 标 `push_ready: false` 和原因（commit message 里写 `NOT PUSH-READY: …`），push 仍被挡住；`--force` 已删除。
 - worktree 校验通过（§5.2）；HEAD 等于 base；没有 rebase 在进行；没有未合并条目。
 - 重算的 `T` 等于 evidence 和审查记录里的 `T`，否则 `changed_since_review`。
 - 集成分支当前 sha `C` 等于 `base`，否则 `needs_resync`。
@@ -729,7 +729,7 @@ P0 的 `updatedInput` 探针按真实拓扑重跑：Bash 链（改写 hook + app
 | 问题 | 修法 | 测试 |
 |---|---|---|
 | token 可伪造（§16.7 MED） | 签发记录只放 daemon 内存（`core/hook_token.py`）；CLI 经 owner-only 的 Unix socket（按端口区分，dev 与 daemon 可并存）核销；daemon 不在即拒绝；`main.py` 启停服务；服务没起来时 `run_owner_gate` 不签发并 deny。没有 AF_UNIX 的平台保留文件方式 | 手写的旧格式 token 文件不被接受；签发方停掉后核销失败、不再签发；socket 0600、目录 0700；gate 在服务停掉时 deny |
-| isolated run 的 D7 预检没有覆盖开关 | deliver 的 `stage-complete --force --reason '<为什么>'`：预检（声明的专家、改动后未重审的 Gate-2 专家）放行，记一条 `d7_force_bypass` intervention；树绑定（审查 = 测试 = 落地）不能 force | 无 `--force` 拒绝、带 `--force` 落地并留下 intervention |
+| isolated run 的 D7 预检没有覆盖开关 | 不再提供覆盖（2026-10-19 删除 `stage-complete --force --reason`：真实 run 里 force 被模型用来绕过检查）。预检的补救（补派专家、重审）不需要人 | 缺专家时拒绝，补派后落地 |
 | 卡片的步骤在 isolated run 里不适用（§6.2、§6.3） | stage-start 输出 `card_override`（build：files_touched 自动推导；test：不做逐个修复的 commit；goal_cycle：用 `run-diff`；deliver：跳过暂存与 run-commit），卡片不动 | build / deliver 的输出 |
 | 释放后 rail 行 404（§6.4） | `run_worktree.landed_path`：已不存在、位于某个 run worktree 下、且该 run 已落地的路径 → main 里的同一文件；只用于 `GET /workspace/file`（读），home 检查照旧 | 释放前不映射、释放后映射、不存在的文件和 `..` 不映射 |
 | 闲置释放后不能自动重建（§8.3） | 快照另记改动集的树 `T` 和未 add 文件列表；下一次 owner 的 stage-start（每个 stage-start 都签 token）从 bundle 取回快照，在原 base 建 worktree，文件 = 快照、index = `T`，校验 `T` 和未 add 列表都一致才算成功，否则删掉重建的 worktree 并报告。重建前 deliver 的 `stage-complete` 拒绝落地（`worktree_released`），`completed` 也被挡（改动只在 ledger 里）——此前这两处会把只在 ledger 里的改动当成已交付放过去 | sweep 释放 → 完成和落地被拒 → stage-start 重建，`T` 相同、探针仍未 add |

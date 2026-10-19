@@ -61,14 +61,17 @@ honest "N/A — bounded feature" beats a manufactured insight).
 ## `run-commit` — the only commit channel
 
 `python backend/scripts/artifact_cli.py run-commit --project <P> --run-id <R>`, right after
-`stage-complete` records `push_ready: true`. It stages EXACTLY this run's
+DELIVER `stage-complete` (PUSH-READY or not). It stages EXACTLY this run's
 `files_touched` via `git add -- <path>` (never `git add -A`, so it never adds a parallel
 session's in-flight edits, R29), and the `git commit` is pathspec-scoped too
 (`git commit -m <msg> -- <files>`), so a file another session pre-staged stays
 staged-but-uncommitted. The message is machine-rendered from the ledger. It commits in
 whichever repo each file lives in (source repo and/or SwarmWS) and **NEVER pushes**
-(STEERING #5 limits auto-push, not local commit). It refuses if the deliver record is
-not `push_ready` or `files_touched` is empty, refuses (D7) unless every
+(STEERING #5 limits auto-push, not local commit). Commit-ready is not push-ready: a
+deliver record with `push_ready: false` still commits, and every commit is marked
+`push_ready: false` + the reason (also in the commit message: `NOT PUSH-READY: …`); push
+stays blocked. There is no `--force`. It refuses if DELIVER has not completed or
+`files_touched` is empty, refuses (D7) unless every
 `required_experts` entry left a review marker this run, and WARNS, listing them, when
 the tree has changes this run did not track. Still good hygiene first: `git diff --cached
 --name-only`, then `git restore --staged -- <path>` for anything not this run's.
@@ -150,7 +153,7 @@ words, what was wrong before this run, what is true now, and the few key moves. 
 open (deferred finding, unrun check, needed restart, known risk) goes in `attention_flags`. The
 chat completion block and the REPORT TL;DR + §10 render both through one function
 (`core.run_delivery_summary.review_summary`), together with unresolved findings, a
-push_ready=false reason and any forced commit. A part with nothing recorded shows 未记录, so a
+push_ready=false reason and any forced commit (legacy records only: `--force` is gone). A part with nothing recorded shows 未记录, so a
 skipped `outcome` is visible to the reviewer, never filled in from the requirement text. A
 present `outcome` of any other shape (a plain string, `approach` not a list of strings) is
 rejected at DELIVER stage-complete, because the summary could not read it.

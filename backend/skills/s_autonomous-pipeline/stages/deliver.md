@@ -12,18 +12,17 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 8. **Seed lessons** into the reflect record; write `outcome` = {`problem_before`, `result_now`, `approach[]`} (validated) + open items in `attention_flags`; REPORT.md is projected (`ref/deliver/report-and-commit.md`).
 9. **Exit** (below), then `python backend/scripts/artifact_cli.py run-commit --project <P> --run-id <R>` (local, never pushes).
 
-**Sub-agent configuration:** `run_in_background: false`, never pin a model; a failed spawn → go on (ALL rejected → `ref/deliver/gate2-dispatch.md`).
+**Sub-agents:** `run_in_background: false`, never pin a model; a failed spawn → go on (ALL rejected → `ref/deliver/gate2-dispatch.md`).
 
 ## Gates
 - `[GATE·cli]` Adversarial review is NON-NEGOTIABLE: no "tests pass / simple code" exemption. <!-- R-deliver-001 -->
 - `[GATE·cli]` Check 9 depth validation needs `adversarial_review.profile_tier == "full"` for full/bugfix; `run-update --status completed` BLOCKS on `skipped`/`lite`. <!-- R-deliver-002 R-deliver-005 -->
 - Adversarial Review Gate (BLOCKING) — multi-specialist — `[GATE·cli]`: before the report and any commit. <!-- R-deliver-004 -->
-- `[MUST]` BLOCKING: spawn ALL selected specialists in a SINGLE message (parallel Agent calls). The tier is `[GATE·cli]`; the batching is discipline. <!-- R-deliver-006 -->
+- `[MUST]` BLOCKING: spawn ALL selected specialists in ONE message (parallel Agent calls). The tier is `[GATE·cli]`; batching is discipline. <!-- R-deliver-006 -->
 - Meta-Review (BLOCKING) — `[GATE·validator]`: a full/bugfix deliver artifact without `meta_review`/`meta_review_verdict` is blocked; trivial/research/docs exempt. <!-- R-deliver-009 -->
-- Push-Ready Gate (binary) — `[GATE·cli]`: `run-commit` requires `push_ready: true`. <!-- R-deliver-003 -->
-- `[GATE·cli]` MANDATORY + gated: run-scoped source committed (commits ∩ files_touched) → `run-update --status completed` BLOCKS until there is surface evidence: the `surface_run_outputs` tool's marker naming every commit, or `--outputs-surfaced` on that call (legacy: a deliver-record flag); docs-only runs exempt; never re-record deliver to acknowledge it (`complete.md` Step 0). <!-- R-deliver-015 -->
+- Push-Ready (binary) — `[GATE·cli]`: false → `run-commit` still commits, marked; never push. <!-- R-deliver-003 -->
+- `[GATE·cli]` Run source committed → `run-update --status completed` BLOCKS until surface evidence: the `surface_run_outputs` marker naming every commit, or `--outputs-surfaced` on that call; docs-only exempt; never re-record deliver for it (`complete.md` Step 0). <!-- R-deliver-015 -->
 - `[GATE·cli]` D7: `run-commit` refuses unless every `required_experts` entry reviewed this run.
-
 
 ## Read only if
 - Dispatch rules, tiering, Red Team, rejected spawn → `ref/deliver/gate2-dispatch.md`
@@ -33,5 +32,5 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 - Lessons, REPORT.md, Canvas, `run-commit` refusal, boundary, PR → `ref/deliver/report-and-commit.md`
 
 ## Exit
-`python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage deliver --data @/tmp/<R>/deliver.json` with `{"artifact": {...}, "record": {"decisions": [...]}}` (stage-start examples; no `--check` first). `push_ready` = tool-computed upper bound; you may only LOWER it (`"push_ready": false` + `push_ready_reason`). Writes REPORT.md if missing. `exit_criteria_met: true` → stop verifying.
-> **⏭️ Continuation contract — advance is not the end of your turn.** stage-complete advances to REFLECT (COMPLETE when the profile ends at deliver, e.g. `direct`). Run `run-commit`, read `next_card`, execute it **in this same turn**. Only legal hand-backs: a stage-boundary **L2 Judgment** via the Escalation Routing Protocol, a **true checkpoint trigger** (retries exhausted, mid-stage L2), a pending user question, or an abandon verdict. `next_action` is AUTHORITATIVE.
+`python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage deliver --data @/tmp/<R>/deliver.json` with `{"artifact": {...}, "record": {"decisions": [...]}}` (stage-start examples; no `--check` first). `push_ready` = tool-computed bound; you may only LOWER it (`"push_ready": false` + `push_ready_reason`). Writes REPORT.md if missing. `exit_criteria_met: true` → stop verifying.
+> **⏭️ Continuation contract — advance is not the end of your turn.** stage-complete advances to REFLECT (COMPLETE when the profile ends at deliver, e.g. `direct`). Run `run-commit`, read `next_card`, execute it **in this same turn**. Only legal hand-backs: a stage-boundary **L2 Judgment** (Escalation Routing Protocol), a **true checkpoint trigger**, a pending user question, or an abandon verdict. `next_action` is AUTHORITATIVE.

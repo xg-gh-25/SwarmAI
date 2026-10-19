@@ -69,10 +69,10 @@ def _run_update(workspace, run_id, **kw):
         cmd_run_update(args, reg=None)
 
 
-def _run_commit(workspace, run_id, force=False):
+def _run_commit(workspace, run_id):
     from scripts.artifact_cli import cmd_run_commit
     from unittest.mock import patch
-    args = Namespace(project="TestProject", run_id=run_id, force=force)
+    args = Namespace(project="TestProject", run_id=run_id)
     captured = {}
     with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
         try:
@@ -103,14 +103,21 @@ class TestFilesTouchedDedupAppend:
 
 
 class TestRunCommitGates:
-    def test_refuses_when_not_push_ready(self, workspace, capsys):
-        # deliver stage exists but push_ready=false
-        _write_run(workspace, "run_d",
-                   stages=[{"stage": "deliver", "status": "completed", "push_ready": False}],
+    def test_refuses_when_deliver_has_not_completed(self, workspace, capsys):
+        _write_run(workspace, "run_d", stages=[{"stage": "test", "status": "completed"}],
                    files_touched=["a.py"])
         r = _run_commit(workspace, "run_d")
         assert r.get("exit") == 2
-        assert "PUSH-READY" in capsys.readouterr().err
+        assert "DELIVER has not completed" in capsys.readouterr().err
+
+    def test_run_commit_has_no_force_flag(self, monkeypatch, capsys):
+        """--force bypassed push_ready (six forced commits in four real runs): gone."""
+        import scripts.artifact_cli as cli
+        monkeypatch.setattr("sys.argv", ["artifact_cli.py", "run-commit", "--project", "P",
+                                         "--run-id", "r", "--force"])
+        with pytest.raises(SystemExit) as e:
+            cli.main()
+        assert e.value.code == 2 and "unrecognized arguments: --force" in capsys.readouterr().err
 
     def test_a_non_converged_review_does_not_block_the_commit(self, workspace, capsys, monkeypatch):
         """Gate-2 did not converge and the root-cause review said SOUND: autonomous, so
@@ -167,13 +174,6 @@ class TestRunCommitGates:
         assert r.get("exit") == 2
         assert "files_touched" in capsys.readouterr().err
 
-    def test_force_overrides_push_ready_gate(self, workspace):
-        # not push_ready, but --force + empty files still blocked on files (gate order)
-        _write_run(workspace, "run_f",
-                   stages=[{"stage": "deliver", "status": "completed", "push_ready": False}],
-                   files_touched=[])
-        r = _run_commit(workspace, "run_f", force=True)
-        assert r.get("exit") == 2  # still blocked — files_touched empty
 
 
 class TestRunCommitPathspecOnly:
@@ -1107,9 +1107,9 @@ class TestRunCommitTrackedDeletion:
         assert _src(committed) == ["keep.py"], committed
 
 
-class TestForcedCommitIsRecorded:
-    """run_39068a4a AC3: --force past the push_ready gate leaves a trace, so a forced
-    commit is never indistinguishable from a qualified one."""
+class TestNotReadyCommitIsMarked:
+    """Commit-ready is not push-ready: a DELIVER that is not PUSH-READY still commits,
+    and that commit is never indistinguishable from a qualified one."""
 
     def _git(self, repo, *a, env=None):
         return subprocess.run(["git", "-C", str(repo), *a],
@@ -1130,29 +1130,36 @@ class TestForcedCommitIsRecorded:
         (repo / "f.py").write_text("v2\n")
         return repo
 
-    def test_forced_commit_is_marked_and_audited(self, workspace, tmp_path, capsys):
+    def test_not_ready_commit_is_marked_not_forced(self, workspace, tmp_path, capsys):
         repo = self._repo(tmp_path)
         rf = _write_run(workspace, "run_force1",
                         stages=[{"stage": "deliver", "status": "completed", "push_ready": False,
                                  "push_ready_reason": "regression not clean"}, _DELIVERED[1]],
                         files_touched=[str(repo / "f.py")])
-        _run_commit(workspace, "run_force1", force=True)
+        r = _run_commit(workspace, "run_force1")
         out = capsys.readouterr()
-        assert "push_ready gate FORCE-BYPASSED" in out.err
+        assert r.get("exit") is None, out.err
+        assert "not PUSH-READY" in out.err and "do NOT push" in out.err
         data = json.loads(rf.read_text())
-        assert data["commits"][0]["forced_push_ready"] is True
-        kinds = [i.get("kind") for i in data.get("interventions", [])]
-        assert "push_ready_force_bypass" in kinds
+        c = data["commits"][0]
+        assert c["push_ready"] is False and c["push_ready_reason"] == "regression not clean"
+        assert "forced_push_ready" not in c
+        # not a human intervention: the autonomous path
+        assert not [i for i in data.get("interventions", []) if "force" in str(i.get("kind"))]
+        msg = self._git(repo, "log", "-1", "--format=%B").stdout
+        assert "NOT PUSH-READY: regression not clean" in msg
 
     def test_qualified_commit_carries_no_force_mark(self, workspace, tmp_path, capsys):
         repo = self._repo(tmp_path)
         rf = _write_run(workspace, "run_force2",
                         stages=_DELIVERED,
                         files_touched=[str(repo / "f.py")])
-        _run_commit(workspace, "run_force2", force=True)
+        _run_commit(workspace, "run_force2")
         capsys.readouterr()
         data = json.loads(rf.read_text())
         assert "forced_push_ready" not in data["commits"][0]
+        assert "push_ready" not in data["commits"][0]
+        assert "NOT PUSH-READY" not in self._git(repo, "log", "-1", "--format=%B").stdout
         assert "push_ready_force_bypass" not in [i.get("kind") for i in data.get("interventions", [])]
 
 
@@ -1230,13 +1237,13 @@ class TestOneDeliveryOneCommit:
         (repo / "f.py").write_text("v2\n")
         return repo
 
-    @pytest.mark.parametrize("force", [False, True])
-    def test_no_lessons_refuses_and_commits_nothing(self, workspace, tmp_path, capsys, force):
+    @pytest.mark.parametrize("ready", [True, False])
+    def test_no_lessons_refuses_and_commits_nothing(self, workspace, tmp_path, capsys, ready):
         repo = self._repo(tmp_path)
         _write_run(workspace, "run_nolessons",
-                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   stages=[{"stage": "deliver", "status": "completed", "push_ready": ready}],
                    files_touched=[str(repo / "f.py")])
-        r = _run_commit(workspace, "run_nolessons", force=force)
+        r = _run_commit(workspace, "run_nolessons")
         err = capsys.readouterr().err
         assert r.get("exit") == 2
         assert "ONE commit" in err and "run-update" in err and "run-report" in err

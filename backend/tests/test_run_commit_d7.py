@@ -211,7 +211,7 @@ def test_run_commit_fail_open_legacy_run_no_required_experts(tmp_path, monkeypat
 
 # ── Gate-1 MED (normalization symmetry): the marker-writer forces a LOWERCASE registry
 #    id, so a declared "Correctness"/"Security" (title-case) MUST still match — else a
-#    false self-lock trains the --force bypass D7 exists to kill. ─────────────────────
+#    false self-lock would push the run toward a bypass. ─────────────────────
 def test_d7_declared_titlecase_matches_lowercase_marker(tmp_path, monkeypatch):
     mod = _load_d7()
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
@@ -245,11 +245,9 @@ def test_d7_uppercase_marker_also_normalized(tmp_path, monkeypatch):
     missing = mod._d7_missing_required_experts(["correctness"], rid)
     assert missing == [], f"mixed-case marker must normalize to match lowercase declared, got {missing}"
 
-def test_run_commit_force_bypass_is_recorded(tmp_path, monkeypatch):
-    """Gate-2 security+state-machine HIGH: --force skips a would-be-D7-refusal, but the
-    bypass MUST be recorded as a d7_force_bypass intervention on run.json (else a forced
-    commit is indistinguishable from a D7-satisfied one — the audit hole the gate exists
-    to close). Also asserts the loud WARN names the skipped expert."""
+def test_run_commit_has_no_force_bypass_of_d7(tmp_path, monkeypatch):
+    """--force is gone (2026-10-19): a missing declared expert refuses with no override;
+    the remedy (spawn it) needs no human."""
     import os
     rid = "run_d7force"
     ws, repo, rundir = _seed_run(tmp_path, rid, ["correctness", "security"])
@@ -257,13 +255,6 @@ def test_run_commit_force_bypass_is_recorded(tmp_path, monkeypatch):
     _write_marker(audit, "sessX", 1, "correctness", rid)  # security missing
     env = dict(os.environ, SWARM_DATA_DIR=str(tmp_path), SWARM_WORKSPACE=str(ws))
     r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid, "--force"], env)
-    # --force suppresses the exit 2 refuse
-    assert r.returncode != 2, f"--force must suppress the D7 refuse, got exit 2: {r.stdout}{r.stderr}"
-    # loud WARN names the skipped expert
-    assert "FORCE-BYPASSED" in (r.stdout + r.stderr) and "security" in (r.stdout + r.stderr), \
-        f"force-bypass must emit a loud WARN naming the skipped expert: {r.stdout}{r.stderr}"
-    # the bypass is persisted as an intervention on run.json
-    state = json.loads((rundir / "run.json").read_text())
-    kinds = [i.get("kind") for i in state.get("interventions", [])]
-    assert "d7_force_bypass" in kinds, \
-        f"a --force D7 skip must be recorded as a d7_force_bypass intervention, got {kinds}"
+    assert r.returncode == 2 and "unrecognized arguments: --force" in r.stderr, r.stderr
+    r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid], env)
+    assert r.returncode == 2 and "security" in r.stderr and "--force" not in r.stderr, r.stderr

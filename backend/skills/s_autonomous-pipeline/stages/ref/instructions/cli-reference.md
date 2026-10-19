@@ -23,7 +23,7 @@ advance  --project <P> --state <stage> --run-id <RUN>   # advance the state mach
 run-create  --project <P> --requirement "<text>" [--profile <profile>]
 run-update  --project <P> --run-id <R> [--stage-json '<json>'] [--status <S>] [--profile <P>]
             [--outputs-surfaced]   # with --status completed, only when the surface_run_outputs tool is unavailable
-run-commit  --project <P> --run-id <R> [--sha <sha>[,<sha>]] [--force]
+run-commit  --project <P> --run-id <R> [--sha <sha>[,<sha>]]   # commits even when not PUSH-READY (marked); no --force
             # --sha: record commits already made for this run instead of staging files_touched
             # (each reachable from HEAD, newer than the run, 'Run: <R>' in its message,
             # touching a files_touched path). A commit made by hand must name the run id.

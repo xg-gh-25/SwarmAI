@@ -49,8 +49,9 @@ whether a statement is code-enforced, or you are planning/estimating work (Rule 
     `.artifacts/runs/<RUN_ID>/REPORT.md`. `run-update --status completed` BLOCKS if REPORT.md is
     missing or <500 bytes.
 13. <!-- R-instr-028 --> **[MUST] Binary push-ready gate at delivery.** No numeric score. Binary:
-    PUSH-READY (all gates pass) or NOT-PUSH-READY (blockers listed). (The `push_ready: true` flag
-    is [GATE·cli] — `run-commit` refuses without it; the binary-not-numeric *framing* is [MUST].)
+    PUSH-READY (all gates pass) or NOT-PUSH-READY (blockers listed). (The `push_ready` flag is
+    [GATE·cli]: computed by the tool; false still commits locally, marked, and blocks push; the
+    binary-not-numeric *framing* is [MUST].)
 14. <!-- R-instr-029 --> **[MUST] Source-path reads.** Always read from `backend/skills/` (source of
     truth), not `.claude/skills/` (projected copy).
 15. **[GUIDE] Value over completion.** The purpose is qualified value, not finished stages. A run
