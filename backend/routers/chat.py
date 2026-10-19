@@ -1138,6 +1138,7 @@ async def _compaction_signature(session_id: str) -> str:
     try:
         return await db.compaction_signature(session_id)
     except Exception:  # noqa: BLE001
+        logger.debug("compaction signature failed session=%s", session_id, exc_info=True)
         return "0.0"
 
 
