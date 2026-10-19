@@ -354,10 +354,43 @@ All commits in this repo MUST end with:
 Co-Authored-By: Swarm <swarm@swarmai.dev>
 ```
 Never use Claude/Anthropic identity in commit trailers. This overrides any SDK or harness
-default. Commit directly to `main` (project convention) — never auto-branch. The one
-exception is tool-made: an isolated pipeline run works on a local `run/<run_id>` branch in
-`~/.swarm-ai/worktrees/<run_id>/<repo>`, never pushed; its commit lands on `main` by
-`merge --ff-only` and the branch is deleted (`docs/design/pipeline-run-worktree.md` §11).
+default. Every commit lands on `main` (project convention); never push a branch. Branches
+exist only as short-lived, local worktree branches, deleted once their commit is on `main`:
+an isolated pipeline run works on `run/<run_id>` in `~/.swarm-ai/worktrees/<run_id>/<repo>`
+and lands by `merge --ff-only` (`docs/design/pipeline-run-worktree.md` §11); any other agent
+follows "Code changes outside a pipeline run" below.
+
+### Code changes outside a pipeline run — always in your own worktree
+
+Never edit files in the main checkout (`swarmai/`). Several sessions edit this repo at once and
+share that checkout and its git index: an edit there gets swept into another session's
+commit, a commit made there picks up another session's staged files, and an uncommitted edit
+there blocks a run's `merge --ff-only` landing. All three happened on 2026-10-19.
+
+- **SwarmAI app sessions** are enforced: with worktree mode on, `worktree_write_gate` denies a
+  write to the main checkout and prints the `run-create --profile direct` command. A small
+  change (< 50 non-test source lines) dispatches no Gate-2 expert, only meta-review.
+- **Every other agent** (Claude Code, Kiro, Kiro Crew, Cursor, Codex) is not seen by that
+  hook. Nothing enforces this for you; do it yourself:
+
+```bash
+git worktree add -b <agent>/<topic> <scratch>/wt-<topic> main   # NOT under ~/.swarm-ai/worktrees
+# edit + test inside the worktree; run tests with the main checkout's venv python
+#   (backend/.venv/bin/python by absolute path — a .venv symlink trips conftest's WRONG PYTHON);
+#   frontend: symlink desktop/node_modules from the main checkout
+git commit -- <paths>                 # explicit pathspec, never a bare `git commit -a`
+git rebase main                       # main moves every few minutes
+git -C <main checkout> merge --ff-only <agent>/<topic>
+git worktree remove <scratch>/wt-<topic> && git branch -d <agent>/<topic>
+```
+
+- `~/.swarm-ai/worktrees/` belongs to the pipeline: its hourly sweeper moves anything there
+  that is not a run's worktree into `.quarantine/`. Put yours in your agent's scratch dir.
+- `merge --ff-only` refused with "would be overwritten" means another session has an
+  uncommitted edit to a file you changed. Never stash, restore or overwrite it. Wait for that
+  session to commit, or, when the edits do not overlap, back up its file, ff-merge onto the
+  committed version, put its file back (`git merge-file` 3-way) and check its hunks survived.
+- Not-fast-forward: `git rebase main` again, re-run the affected tests, retry.
 
 **Write it yourself — nothing enforces it for a manual commit.** Only the pipeline's
 `run-commit` (`backend/scripts/artifact_cli.py`) builds the trailer into its own message. For any commit you make

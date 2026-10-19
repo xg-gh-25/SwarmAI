@@ -15,7 +15,8 @@ in `.kiro/steering/swarmai-dev-rules.md`.
 The three rules people get wrong most often (full detail in AGENTS.md):
 
 1. **No push unless build, tests, and `cd backend && python scripts/ci_eval_gate.py` are all
-   green.** Commit directly to `main`; never auto-branch.
+   green.** Commits land on `main`; never push a branch. Edit in your own git worktree, never in
+   the shared main checkout (AGENTS.md "Code changes outside a pipeline run").
 2. **pytest needs a wall-clock cap:**
    `perl -e 'alarm 90; exec @ARGV' python -m pytest tests/test_<module>.py -v --timeout=60`
    (from `backend/`). Never pipe pytest through `| tail`.

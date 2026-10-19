@@ -16,6 +16,8 @@ internal production-safety) DOES NOT APPLY here. Workspace rules win on conflict
 
 Commit directly to `main` and `git push origin main` (no branches, no PRs) —
 but ONLY after the build/tests/eval gate in AGENTS.md "Before You Push" is green.
+Make every code change in your own git worktree, never in the shared main checkout
+(AGENTS.md "Code changes outside a pipeline run").
 
 ## Platform Rules
 
