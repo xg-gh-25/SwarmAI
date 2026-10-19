@@ -79,7 +79,7 @@ class TestDefine:
     def test_all_profiles_covered(self):
         """Each of the 5 profiles appears exactly once."""
         profiles = {r["expected_profile"] for r in STRESS_REQUIREMENTS}
-        assert profiles == {"trivial", "full", "research", "docs", "bugfix"}
+        assert profiles == {"trivial", "full", "research", "direct", "bugfix"}
 
     def test_requirements_are_real(self):
         """Each requirement has a non-empty description."""

@@ -50,7 +50,7 @@ triggers a score adjustment or escalation, update the artifact accordingly befor
 ### Working-Backwards Lens (GREENFIELD ONLY) `[GATE·validator]` <!-- R-evaluate-013 -->
 `INTERROGATE THE CUSTOMER VALUE — SELF-ANSWER, RECORDED FOR REPORT §10`
 **Trigger:** ONLY when `understanding.work_type == "greenfield"` AND the profile is strict
-(full/goal, not trivial/docs/research). For every other work type (bugfix, existing-feature,
+(full/goal, not trivial/research). For every other work type (bugfix, existing-feature,
 refactor, research, docs) skip it. Customer/value framing is only meaningful for a NET-NEW
 feature; that is the deliberate difference from the always-on Understanding Gate and Ambiguity
 Scan.

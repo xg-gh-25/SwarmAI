@@ -9,7 +9,7 @@ outcome and what to record.
 `[GATE·cli]` (runs created from 2026-10-18T20:00Z): each expert's marker keeps the findings
 of its own answer. DELIVER `stage-complete` refuses unless (1) every expert in
 `dispatch_plan.deliver` completed in this review cycle (meta-review exempt on
-trivial/research/docs); (2) every HIGH (conf ≥ 5) and MED (conf ≥ 7) an expert reported has
+trivial/research); (2) every HIGH (conf ≥ 5) and MED (conf ≥ 7) an expert reported has
 its OWN record in `findings[]` (one record per reported finding; a cross-specialist merge may
 list several specialists), with that `specialist`, at least as severe (a MED stays conf ≥ 7),
 naming its file; (3) each answer could be read: JSON finding lines, or a final `NO FINDINGS`.

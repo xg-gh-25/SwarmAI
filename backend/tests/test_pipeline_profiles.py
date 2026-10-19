@@ -19,7 +19,7 @@ class TestPipelineProfiles:
 
     def test_all_profiles_present(self):
         """All 7 profiles exist (direct = the lightweight contract→build→deliver path)."""
-        expected = {"full", "trivial", "research", "docs", "bugfix", "goal", "direct"}
+        expected = {"full", "trivial", "research", "bugfix", "goal", "direct"}
         assert set(PIPELINE_PROFILES.keys()) == expected
 
     def test_no_empty_stage_lists(self):
@@ -39,7 +39,6 @@ class TestPipelineProfiles:
         ("full", ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]),
         ("trivial", ["evaluate", "think", "build", "review", "test", "deliver", "reflect"]),
         ("research", ["evaluate", "think", "reflect"]),
-        ("docs", ["evaluate", "think", "plan", "deliver", "reflect"]),
         ("bugfix", ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]),
         ("goal", ["evaluate", "think", "plan", "goal_cycle", "deliver", "reflect"]),
     ])
@@ -128,10 +127,21 @@ class TestIsRelaxedProfile:
     the 6+ scattered `profile in ('full','bugfix','')` (fail-OPEN) literals whose
     inconsistency let 'Full' skip adversarial enforcement."""
 
-    @pytest.mark.parametrize("profile", ["trivial", "docs", "research",
-                                          "Trivial", "DOCS", "  research  "])
+    @pytest.mark.parametrize("profile", ["trivial", "research", "Trivial", "  research  "])
     def test_relaxed_profiles(self, profile):
         assert is_relaxed_profile(profile) is True
+
+    def test_an_old_docs_run_keeps_its_own_stage_list(self):
+        from core.pipeline_profiles import get_profile_stages
+        assert "docs" not in PIPELINE_PROFILES            # cannot be chosen
+        assert get_profile_stages("docs") == ["evaluate", "think", "plan", "deliver", "reflect"]
+
+    @pytest.mark.parametrize("profile", ["docs", "DOCS"])
+    def test_removed_docs_profile_is_strict_and_refused(self, profile):
+        from core.pipeline_profiles import removed_profile_error
+        assert is_relaxed_profile(profile) is False   # an old docs run is judged strictly
+        assert "direct" in removed_profile_error(profile)
+        assert removed_profile_error("full") is None and removed_profile_error(None) is None
 
     @pytest.mark.parametrize("profile", ["full", "bugfix", "goal", "standard",
                                           "Full", "FULL", "BugFix", ""])

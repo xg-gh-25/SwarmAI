@@ -226,7 +226,7 @@ class TestUnderstandingGatePasses:
 # Relaxed profiles — no false-block when the block is absent
 # ---------------------------------------------------------------------------
 class TestRelaxedProfilesNotFalseBlocked:
-    @pytest.mark.parametrize("profile", ["trivial", "docs", "research"])
+    @pytest.mark.parametrize("profile", ["trivial", "research"])
     def test_missing_block_not_blocked_on_relaxed(self, profile):
         data = {"recommendation": "GO", "scope": "standard", "acceptance_criteria": ["x"]}
         errors = validate_artifact_data("evaluate", data, profile=profile)
@@ -236,7 +236,7 @@ class TestRelaxedProfilesNotFalseBlocked:
         """If a relaxed profile DOES supply an understanding block, M1/M2 still scan it
         (cheap, no skeptic) — a solution-language claim is still caught."""
         data = _eval("docs", "I will rewrite the section to fix the doc.", _GOOD_EVIDENCE)
-        errors = validate_artifact_data("evaluate", data, profile="docs")
+        errors = validate_artifact_data("evaluate", data, profile="trivial")
         assert _ug_errors(errors), f"relaxed profile must still scan a present block: {errors}"
 
 

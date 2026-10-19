@@ -1094,7 +1094,7 @@ _EVIDENCE_MIN_CHARS = 20
 # DEFAULT (any profile not explicitly relaxed is strict). This closes the
 # "standard" alias (rank-4, == full) AND any unknown/future profile in one move,
 # matching the design's "all work types" intent (adversarial HIGH, run_862fa4e0).
-_RELAXED_UNDERSTANDING_PROFILES = ("trivial", "docs", "research")
+_RELAXED_UNDERSTANDING_PROFILES = ("trivial", "research")
 
 # ---------------------------------------------------------------------------
 # Self-Socratic ambiguity scan — interrogate the SPEC/framing, not the user
@@ -2382,7 +2382,7 @@ def validate_artifact_data(
             f"(stages: {get_profile_stages(profile)}). "
             f"Publish this stage under a profile whose stage-list includes it, or "
             f"re-run run-create with the profile that matches your work "
-            f"(e.g. a markdown+commit change is 'trivial', not 'docs')."
+            f"(e.g. a documentation change in a code repo is 'direct')."
         ]
 
     schema = STAGE_SCHEMAS.get(stage)
@@ -5615,7 +5615,8 @@ def evidence_regressions(ev: dict | None) -> int | None:
 
 
 def push_ready_upper_bound(
-    artifact: dict, profile: str, *, test_evidence: dict | None = None,
+    artifact: dict, profile: str, *, docs_only: bool = False,
+    test_evidence: dict | None = None,
     test_artifact: dict | None = None, exit_result: dict | None = None,
     all_test_evidence: list | None = None, evidence_fresh: dict | None = None,
     honor_deferred: bool = False,
@@ -5652,9 +5653,10 @@ def push_ready_upper_bound(
             reasons.append("tests: runner evidence records no passing test (counts.passed == 0)")
         if quality.get("tests_pass") is False:
             reasons.append("tests: quality.tests_pass is false")
-    elif str(profile or "").strip().lower() not in ("docs", "research"):
-        # a profile that changes code ships only on a runner report: an artifact field
-        # the model writes is not test evidence (quality audit r2, 2026-10-19)
+    elif not docs_only:
+        # a change with code ships only on a runner report: an artifact field the model
+        # writes is not test evidence (quality audit r2, 2026-10-19). Judged on the DIFF
+        # (docs_only_paths), never on the profile name: a profile can be declared.
         reasons.append("tests: no runner evidence (backend/scripts/pipeline_test.py "
                        "report) for this run")
     else:

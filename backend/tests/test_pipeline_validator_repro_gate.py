@@ -107,7 +107,7 @@ class TestReproGateDoesNotFalseBlock:
         """Relaxed profile (docs) + scope=bugfix → REPRO relaxed, matching the
         depth-check relaxation pattern (adversarial LOW)."""
         errors = validate_artifact_data(
-            "evaluate", _bug_eval(), profile="docs",
+            "evaluate", _bug_eval(), profile="trivial",
         )
         repro = [e for e in errors if "REPRO gate" in e]
         assert repro == [], f"docs profile must relax REPRO gate, got: {errors}"

@@ -29,7 +29,7 @@ Structural checks (`validate_exit_criteria`, error code `E_EXIT_CRITERIA`):
   could never be met. List each test file, or use `mode:regression` for whole-scope coverage.
 - `expect`: non-empty; use `pass` (test), `no_new_findings` (probe), `all_killed`
   (mutation), `done` (manual).
-- Missing or empty list → BLOCK on strict profiles (everything except trivial/docs/research;
+- Missing or empty list → BLOCK on strict profiles (everything except trivial/research;
   `direct` is strict). Relaxed profiles may omit it.
 
 ## How each kind is judged

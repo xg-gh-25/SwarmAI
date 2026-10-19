@@ -168,8 +168,8 @@ class TestMigrationClassGate:
     def test_relaxed_profile_exempt(self):
         data = _eval("refactor")
         data["understanding"]["claim"] = "migrate and unify all the write paths"
-        errors = validate_artifact_data("evaluate", data, profile="docs")
-        assert self._mc_errors(errors) == [], f"docs profile must be exempt: {errors}"
+        errors = validate_artifact_data("evaluate", data, profile="trivial")
+        assert self._mc_errors(errors) == [], f"a relaxed profile must be exempt: {errors}"
 
     def test_empty_migration_class_still_blocks(self):
         # a present-but-empty block (no enumeration_cmd/members) is not a real declaration
@@ -276,7 +276,7 @@ class TestWorkTypeGating:
 # Relaxed profiles — greenfield in a relaxed profile is exempt
 # ---------------------------------------------------------------------------
 class TestRelaxedProfilesExempt:
-    @pytest.mark.parametrize("profile", ["trivial", "docs", "research"])
+    @pytest.mark.parametrize("profile", ["trivial", "research"])
     def test_greenfield_relaxed_not_required(self, profile):
         data = _eval("greenfield", wb=None, pre_mortem=None, profile_understanding=False)
         errors = validate_artifact_data("evaluate", data, profile=profile)

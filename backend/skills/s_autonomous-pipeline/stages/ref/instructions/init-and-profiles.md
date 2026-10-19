@@ -63,7 +63,7 @@ After EVALUATE selects the profile, state it with the reason:
    Stages this run: <the profile's stage list>
 ```
 
-**Profile vs mode (don't conflate):** there are **7 profiles** (full, trivial, research, docs,
+**Profile vs mode (don't conflate):** there are **6 profiles** (full, trivial, research,
 bugfix, goal, direct — the *stage set* + rigor) and **2 execution modes** (full = one-shot,
 goal = iterative; how BUILD/REVIEW/TEST run). Every profile passes through the gates that apply to
 its stages.
@@ -101,7 +101,9 @@ gates (Gate 0 in EVALUATE, Gate 1 after PLAN, Gate 2 in DELIVER) ride within the
 renumber them; `★ Gate 0` is the EVALUATE-stage landmark.
 
 Scope → profile mapping (EVALUATE's classification): standard/complex → full; trivial → trivial;
-research-only → research; docs-only → docs; bugfix → bugfix; goal → goal. `direct`
+research-only → research; bugfix → bugfix; goal → goal. docs-only has no profile (the docs
+profile was removed): outside a code repo edit without a run; in a code repo abandon this run
+and use a late-start `direct` run (below). `direct`
 (plan → build → deliver) is not chosen by EVALUATE: it is created up front for a direct fix (the
 `direct_commit_gate` sends a no-run session committing >20 source lines to
 `run-create --profile direct`). PLAN carries the exit contract; DELIVER is non-skippable; strict.
@@ -124,7 +126,7 @@ review (feature implemented, committed, tests pass) and the work is bounded (you
 approach, the files, the shape of done). ONE known change, even if a test verifies it, is full
 (or bugfix/trivial if it matched those size gates).
 
-**Prefer the lightest profile that fits** (docs/trivial/bugfix before full before goal). The
+**Prefer the lightest profile that fits** (trivial/bugfix before full before goal). The
 decision tree in `stages/evaluate.md` evaluates the size/bug gates FIRST and goal LAST on purpose.
 EVALUATE classifies no scope → default **full**. The user can override ("skip research, I know the
 approach" → bugfix) or force ("use goal", "use full pipeline").

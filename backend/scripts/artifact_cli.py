@@ -2437,6 +2437,11 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
     """Create a new pipeline run state file."""
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
+    from core.pipeline_profiles import removed_profile_error
+    _removed = removed_profile_error(getattr(args, "profile", None))
+    if _removed:
+        print(json.dumps({"ok": False, "code": "E_PROFILE_REMOVED", "error": _removed}))
+        sys.exit(1)
     run_id = _gen_run_id()
 
     # Load historical calibration for budget estimate
@@ -3619,6 +3624,12 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         run_state["taste_decisions"].append(decision)
 
     if args.profile:
+        from core.pipeline_profiles import removed_profile_error
+        _removed = removed_profile_error(args.profile)
+        if _removed:
+            print(json.dumps({"ok": False, "blocked": True, "code": "E_PROFILE_REMOVED",
+                              "error": _removed}))
+            sys.exit(1)
         # ── GATE: Profile immutability after BUILD ──────────────────────────────
         # C036 (2026-06-01): Agent circumvented adversarial review gate by
         # switching profile from "full" → "bugfix" at DELIVER stage. The adversarial
@@ -3626,7 +3637,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         # Fix: profile downgrades are REJECTED once any stage past evaluate exists.
         # Upgrades (trivial→full) are always allowed (more rigor = safe).
         # "standard" kept as backwards-compat alias for "full" (legacy run.json files may use it)
-        _PROFILE_RANK = {"trivial": 1, "docs": 2, "research": 2, "bugfix": 3, "direct": 3, "full": 4, "standard": 4, "goal": 4}
+        _PROFILE_RANK = {"trivial": 1, "research": 2, "bugfix": 3, "direct": 3, "full": 4, "standard": 4, "goal": 4}
         current_profile = run_state.get("profile")
         # C3: normalize before rank lookup — a variant ("Full") would otherwise miss
         # the table and default to rank 3, mis-ordering the downgrade guard (C036).
@@ -9829,8 +9840,9 @@ def _deliver_push_ready_bound(
                          or plan_rec.get("exit_contract_source") == _EXIT_CONTRACT_SOURCE)
     if contract_required and (not isinstance(exit_result, dict) or exit_result.get("met") is None):
         eff_exit = {"met": False, "unmet": ["(no exit contract declared at PLAN)"]}
+    _ft = [f for f in run_state.get("files_touched") or [] if isinstance(f, str)]
     bound, reasons = pv.push_ready_upper_bound(
-        artifact or {}, profile, test_evidence=newest,
+        artifact or {}, profile, docs_only=pv.docs_only_paths(_ft), test_evidence=newest,
         test_artifact=_stage_artifact(project, run_state, "test"),
         exit_result=eff_exit, all_test_evidence=evidence, evidence_fresh=fresh,
         honor_deferred=honor_deferred,
@@ -13586,7 +13598,7 @@ def _evaluate_work_type(project: str, run_state: dict) -> "str | None":
 
 def _is_relaxed_for_gate1(profile: str) -> bool:
     """Profiles that skip Gate-1 (stages/ref/build/gate1.md trigger table)."""
-    return profile in ("trivial", "research", "docs")
+    return profile in ("trivial", "research")
 
 
 def _fit_stage_start(out: dict) -> dict:

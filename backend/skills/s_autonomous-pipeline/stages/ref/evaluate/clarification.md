@@ -72,7 +72,7 @@ unknowable, which is why this step is mechanical and validator-enforced.
 }
 ```
 **Rules `[GATE·validator]` (`pipeline_validator._check_ambiguity_scan`, publish-time BLOCK):** <!-- R-evaluate-001 -->
-- Strict profiles (full/bugfix/goal) REQUIRE the `ambiguity_scan` block; **trivial/docs/research
+- Strict profiles (full/bugfix/goal) REQUIRE the `ambiguity_scan` block; **trivial/research
   are exempt** (anti-ceremony, the same rigor tiers as the Understanding Gate).
 - **Every hit MUST carry a non-empty `resolution`** (self-answer OR escalation reason,
   ≥12 chars). An unresolved hit BLOCKS: that is what proves the loop RAN.

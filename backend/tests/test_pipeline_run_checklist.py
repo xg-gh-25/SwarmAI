@@ -47,7 +47,7 @@ class TestProfileGates:
         assert pp.PROFILE_GATES["goal"] == ("gate0", "gate1", "gate2")
         assert pp.PROFILE_GATES["direct"] == ("gate2",)
         assert pp.PROFILE_GATES["trivial"] == ("gate2",)
-        assert pp.PROFILE_GATES["docs"] == ("gate2",)
+        assert "docs" not in pp.PROFILE_GATES   # removed profile
         assert pp.PROFILE_GATES["research"] == ()
 
     def test_every_profile_has_an_entry(self):
@@ -140,7 +140,7 @@ class TestRefreshedRunBlock:
 
 
 class TestPlanNextGate1:
-    @pytest.mark.parametrize("profile,nxt", [("full", "gate1"), ("goal", "gate1"), ("direct", "build"), ("docs", "deliver")])
+    @pytest.mark.parametrize("profile,nxt", [("full", "gate1"), ("goal", "gate1"), ("direct", "build")])
     def test_plan_next_names_gate1_when_the_profile_lists_it(self, profile, nxt):
         before = _state(profile, plan={"stage": "plan", "status": "in_progress"})
         after = _state(profile, plan={"stage": "plan", "status": "completed"})

@@ -32,7 +32,7 @@ call, `run_in_background: false`, AFTER Gate-2 passes and BEFORE push-ready.
   `resolved` is the mark every reader honors — the push-ready HIGH check reads only it —
   while the summary also accepts the status/mitigation text alone; every unmarked risk is
   listed under 遗留问题.
-- Profiles: full, bugfix and every other strict profile run it; trivial, research, docs
+- Profiles: full, bugfix and every other strict profile run it; trivial and research
   skip it (no operational context to analyze).
 
 ## Quality Convergence Loop (max 3 iterations)

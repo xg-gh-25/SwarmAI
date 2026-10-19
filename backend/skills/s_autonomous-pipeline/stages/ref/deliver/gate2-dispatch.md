@@ -19,7 +19,7 @@ specialists find what a generalist misses.
 | full, standard (and every strict profile, incl. `direct`) | All scope-gated specialists + Red Team (conditional) |
 | bugfix | Correctness + Security (tier default) |
 | trivial | Skip entirely |
-| research, docs | Skip entirely (no code changes) |
+| research | Skip entirely (no code changes) |
 
 **Exception — `understanding.work_type == refactor`:** never apply the bugfix
 narrowing, even when the profile resolved to bugfix. A refactor's risk is structural:
@@ -131,7 +131,7 @@ never as an extra sequential round:
 Neither fired → skip it and say why in the gate outcome. Once it has run, a fixed HIGH
 does not send it again; it is counted against the same 3-round cap as every expert.
 
-**`[GATE·validator]` HIGH trigger is mechanical** (strict profiles; trivial/docs/research
+**`[GATE·validator]` HIGH trigger is mechanical** (strict profiles; trivial/research
 exempt): every finding records its producer in `specialist` — the reviewer's EXPERT-ID.
 `stage-start`'s prompt files fill the output format's `"specialist"` with it; with the
 `spawn_prompt.py` fallback, replace `<name>` with the EXPERT-ID yourself (`red-team` for

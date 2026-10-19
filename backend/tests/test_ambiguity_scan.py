@@ -201,13 +201,13 @@ class TestHitResolutionEnforced:
 # Relaxed profiles — exempt when absent; still scan hits when present (AC7)
 # ---------------------------------------------------------------------------
 class TestRelaxedProfiles:
-    @pytest.mark.parametrize("profile", ["trivial", "docs", "research"])
+    @pytest.mark.parametrize("profile", ["trivial", "research"])
     def test_missing_scan_not_blocked_on_relaxed(self, profile):
         data = _eval(ambiguity_scan=None, profile_strict_extras=False)
         errors = validate_artifact_data("evaluate", data, profile=profile)
         assert _as_errors(errors) == [], f"{profile}: missing scan must NOT block: {errors}"
 
-    @pytest.mark.parametrize("profile", ["trivial", "docs", "research"])
+    @pytest.mark.parametrize("profile", ["trivial", "research"])
     def test_think_missing_scan_not_blocked_on_relaxed(self, profile):
         data = _think(ambiguity_scan=None)
         errors = validate_artifact_data("think", data, profile=profile)
@@ -220,7 +220,7 @@ class TestRelaxedProfiles:
             hit_count=1,
         )
         data = _eval(ambiguity_scan=scan, profile_strict_extras=False)
-        errors = validate_artifact_data("evaluate", data, profile="docs")
+        errors = validate_artifact_data("evaluate", data, profile="trivial")
         assert _as_errors(errors), f"relaxed profile must still catch a bad hit: {errors}"
 
 

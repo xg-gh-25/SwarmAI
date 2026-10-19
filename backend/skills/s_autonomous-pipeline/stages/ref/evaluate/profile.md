@@ -12,7 +12,7 @@ digraph profile_selection {
   rankdir=TB;
   start [label="Parse requirement", shape=ellipse];
   q0 [label="Only .md/.rst\nchanges?", shape=diamond];
-  docs [label="DOCS", shape=box];
+  docs [label="NO PROFILE: abandon the run\n(code repo: late-start direct)", shape=box];
   q1 [label="No code output?\n(research only)", shape=diamond];
   research [label="RESEARCH", shape=box];
   q2 [label="≤1 file, config/const\nonly, no logic?", shape=diamond];

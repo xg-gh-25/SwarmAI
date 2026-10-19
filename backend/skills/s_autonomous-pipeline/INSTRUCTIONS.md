@@ -10,14 +10,13 @@ You ARE the orchestrator: run every stage inline in this session, never via a si
 5. **REFLECT**: `stages/reflect.md`. 6. **COMPLETE**: Step 6 below.
 
 ## Profiles
-Authoritative stage lists: `backend/core/pipeline_profiles.py`. trivial/docs/research run relaxed; every other profile is strict.
+Authoritative stage lists: `backend/core/pipeline_profiles.py`. trivial/research run relaxed; every other profile is strict.
 
 | Profile | Stages | When |
 |---|---|---|
 | full | evaluate think plan build review test deliver reflect | standard/complex; default |
 | bugfix | same as full | a bug |
 | trivial | evaluate think build review test deliver reflect | tiny change |
-| docs | evaluate think plan deliver reflect | docs only |
 | research | evaluate think reflect | research only |
 | goal | evaluate think plan goal_cycle deliver reflect | must iterate: metric, sweep, convergence |
 | direct | plan build deliver | small, fully specified change; PLAN holds the exit contract |

@@ -62,7 +62,7 @@ def _good_finding(**over):
 
 def test_template_passes_and_exempt_profiles_skip():
     assert ds.plan_errors(_plan(), "full") == []
-    for p in ("trivial", "docs", "research"):
+    for p in ("trivial", "research"):
         assert ds.plan_errors({}, p) == []
 
 
@@ -142,7 +142,7 @@ def test_build_break_test_shape():
 def test_build_skips_without_a_plan_design_or_for_exempt_profiles():
     assert ds.build_errors({}, None, "full") == []
     assert ds.build_errors({}, {}, "full") == []
-    assert ds.build_errors({}, _plan(), "docs") == []
+    assert ds.build_errors({}, _plan(), "research") == []
 
 
 # ── 3. Fix by class ──────────────────────────────────────────────────────────
@@ -274,7 +274,7 @@ def test_validate_stage_candidate_runs_the_design_gate(monkeypatch):
 def test_root_template_passes_and_missing_root_blocks():
     assert ds.root_cause_errors(_eval(), "full") == []
     assert ds.root_cause_errors({"understanding": {"claim": "x"}}, "full")
-    assert ds.root_cause_errors({}, "docs") == []
+    assert ds.root_cause_errors({}, "research") == []
 
 
 def test_shallow_why_chain_is_rejected():

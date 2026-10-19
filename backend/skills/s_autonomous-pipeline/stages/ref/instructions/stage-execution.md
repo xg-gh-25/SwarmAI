@@ -89,7 +89,7 @@ Code-enforced at publish by `pipeline_validator.validate_artifact_data`: strict 
 (full/bugfix/goal) BLOCK without an `understanding` block carrying real `evidence`
 ("Understanding gate:" marker); M1 blocks a solution-language `claim`, M2 blocks an unresolved
 hedge. Bug-class evals may use the legacy `observation_evidence` alias (keeps the "REPRO gate:"
-marker). Relaxed profiles (trivial/docs/research) aren't forced to carry the block, but a present
+marker). Relaxed profiles (trivial/research) aren't forced to carry the block, but a present
 block is still scanned. M3 (the skeptic sub-agent) is behavioral, spawned in evaluate.md.
 
 ## 3c. Execute Stage Behavior — dispatch table

@@ -74,8 +74,9 @@ STRESS_REQUIREMENTS: list[dict[str, str]] = [
             "Add module-level docstrings to pipeline_profiles.py, pipeline_validator.py, "
             "and the pipelines router following SwarmAI documentation standards"
         ),
-        "expected_profile": "docs",
-        "rationale": "Documentation only. No logic changes.",
+        "expected_profile": "direct",
+        "rationale": "Docstrings in code files, no logic change: a direct run (the docs "
+                     "profile was removed).",
     },
     {
         "id": "stress_bugfix",

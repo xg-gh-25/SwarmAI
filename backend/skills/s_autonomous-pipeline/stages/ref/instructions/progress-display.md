@@ -65,7 +65,7 @@ self-answered rows are what the user most needs to audit); load-bearing assumpti
 (desktop/direct); a background/headless run publishes with `--quiet` → no block, and the §4.6 audit
 surfaces at the run-end REPORT + Pipeline card instead (never lost, a different surface). Skip the
 inline emit only when EVALUATE produced no structured `requirements[]` — a RELAXED profile
-(trivial/docs/research) or a legacy old-shape run; the free-text landmark is then enough. ⚠️ On a
+(trivial/research) or a legacy old-shape run; the free-text landmark is then enough. ⚠️ On a
 STRICT profile (full/bugfix/goal) EVALUATE is required to emit the structured block (evaluate.md
 Structured Requirements `[MUST]`), so "no requirements[]" is NOT a legitimate skip there —
 produce it.

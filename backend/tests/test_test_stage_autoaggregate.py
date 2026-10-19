@@ -158,7 +158,7 @@ def test_stage_matched_by_name_field_fallback():
 
 # ── AC4: profile gating ──────────────────────────────────────────────────────
 def test_ac4_non_strict_profile_no_publish():
-    for prof in ("trivial", "docs", "research", "goal"):
+    for prof in ("trivial", "research", "goal"):
         rs = _run_state_with_test()
         reg = _MockReg()
         assert _maybe_autoaggregate_test_artifact(rs, prof, reg, "P", "run_x") is None

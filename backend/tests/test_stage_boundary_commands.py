@@ -537,7 +537,8 @@ def test_push_ready_needs_runner_evidence_not_an_artifact_claim():
     art["quality"]["tests_pass"] = True
     ok, reasons = pv.push_ready_upper_bound(art, "full")
     assert ok is False and any("no runner evidence" in r for r in reasons)
-    assert pv.push_ready_upper_bound(art, "docs")[0] is True  # no code, no runner
+    assert pv.push_ready_upper_bound(art, "direct", docs_only=True)[0] is True  # docs diff, no runner
+    assert pv.push_ready_upper_bound(art, "docs")[0] is False  # the profile NAME exempts nothing
 
 
 def test_push_ready_bound_exit_criteria_strict_only():
@@ -2128,3 +2129,21 @@ def test_late_start_keeps_a_finished_stage_and_other_profiles(ws, capsys):
     _make_run(root, "run_full_late", "full")
     _start(reg, capsys, "run_full_late", "build")
     assert _run_state(root, "run_full_late")["stages"] == []   # only direct starts late
+
+
+def test_run_update_refuses_the_removed_docs_profile(ws, capsys):
+    root, reg = ws
+    _make_run(root, "run_nodocs", "full", stages=["evaluate"])
+    code, out = _call(cli.cmd_run_update, reg, capsys,
+                      **vars(_run_update_args("run_nodocs", profile="docs")))
+    assert code == 1 and out["code"] == "E_PROFILE_REMOVED" and "direct" in out["error"]
+    assert _run_state(root, "run_nodocs")["profile"] == "full"
+
+
+def test_a_docs_profile_run_editing_code_is_not_push_ready():
+    import pipeline_validator as pv
+    art = _clean_deliver()
+    art["quality"]["tests_pass"] = True
+    ok, reasons = pv.push_ready_upper_bound(art, "docs", docs_only=pv.docs_only_paths(
+        ["backend/scripts/catalog.py", "README.md"]))
+    assert ok is False and any("no runner evidence" in r for r in reasons)

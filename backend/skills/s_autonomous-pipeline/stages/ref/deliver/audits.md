@@ -94,7 +94,7 @@ Record in the deliver artifact:
 > wording to [MUST].
 
 After the meta-review, before the Doc Sync Check. Applies to every profile that produces
-user-facing output (full, bugfix); skip for research/docs. It catches "the code is
+user-facing output (full, bugfix); skip for research. It catches "the code is
 correct but the output is useless": adversarial review validates code quality,
 meta-review validates operational correctness, neither asks whether a real user benefits.
 

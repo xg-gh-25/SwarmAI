@@ -37,7 +37,7 @@ THINK runs no tests. If a probe needs code run, only via
 
 ## Gates
 
-- **Validator-enforced (`_check_ambiguity_scan`) `[GATE·validator]`:** strict profiles REQUIRE the `ambiguity_scan` block; trivial/docs/research exempt; every hit needs a non-empty resolution (≥12 chars) or it BLOCKS. `hits: []` is valid (scanned, clean). <!-- R-think-001 -->
+- **Validator-enforced (`_check_ambiguity_scan`) `[GATE·validator]`:** strict profiles REQUIRE the `ambiguity_scan` block; trivial/research exempt; every hit needs a non-empty resolution (≥12 chars) or it BLOCKS. `hits: []` is valid (scanned, clean). <!-- R-think-001 -->
 - **Minimum requirements (BLOCKING):** `[MUST]` (1) at least **2 distinct approaches** with explicit tradeoffs (not 1 approach + "don't do it"); (2) at least **3 risk probes** attempted (verified, falsified, or unresolved); (3) each alternative states its **cost** (effort, risk, tradeoff), not just benefits. "This is obvious" is no excuse: trivial work belongs in the `trivial` profile (skips THINK); if you are here, go deep or EVALUATE mis-classified. <!-- R-think-002 -->
 - `[GATE·validator]` `solution_class` + ≥ 2 `alternatives` (≥ 1 `targets_root`) when EVALUATE recorded a `root_cause`; the 3-probe count is discipline. <!-- R-think-003 -->
 

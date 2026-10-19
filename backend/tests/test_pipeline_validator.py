@@ -4002,7 +4002,7 @@ class TestRedTeamTrigger:
                                            run_created_at=post))
         assert len(dep) == 1 and dep[0].startswith("Depth: "), dep
 
-    @pytest.mark.parametrize("profile", ["trivial", "docs", "research"])
+    @pytest.mark.parametrize("profile", ["trivial", "research"])
     def test_relaxed_profiles_exempt(self, profile):
         from scripts.pipeline_validator import _red_team_trigger_errors
         assert _red_team_trigger_errors(self._art([self._high()])["adversarial_review"],

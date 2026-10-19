@@ -56,8 +56,8 @@ carries `ruled_out`:
 // or, for an exempt run:
 "cross_boundary": { "value": false, "ruled_out": "pure-logic change to score_confidence() — no event/wire/migration/shared-path/fe-be/act-sense seam; single file, callers in same module" }
 ```
-**Profile consistency (silent-escape guard):** `docs` and `research` have NO TEST/REVIEW stage,
-so `cross_boundary.value == true` under either is a SCOPE CONTRADICTION: the flag would have no
+**Profile consistency (silent-escape guard):** `research` has NO TEST/REVIEW stage,
+so `cross_boundary.value == true` under it is a SCOPE CONTRADICTION: the flag would have no
 stage enforcing Layer 4. The profile is wrong, not the classification: re-route to
 `bugfix`/`full`/`goal`. Only exception: a docs-only edit *describing* a boundary
 (`cross_boundary=false`, `ruled_out: "docs describe the seam, no code crosses it"`).

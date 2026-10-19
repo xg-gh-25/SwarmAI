@@ -20,7 +20,7 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 - `[GATE·cli]` Check 9 depth validation needs `adversarial_review.profile_tier == "full"` for full/bugfix; `run-update --status completed` BLOCKS on `skipped`/`lite`. <!-- R-deliver-002 R-deliver-005 -->
 - Adversarial Review Gate (BLOCKING), multi-specialist `[GATE·cli]`: before report + commit. <!-- R-deliver-004 -->
 - `[GATE·hook]` every round (round 1, each `gate2-recheck` batch) in ONE message: a solo spawn after a sibling finished is denied once. <!-- R-deliver-006 -->
-- Meta-Review (BLOCKING) `[GATE·validator]`: full/bugfix deliver needs `meta_review`/`meta_review_verdict`; trivial/research/docs exempt. <!-- R-deliver-009 -->
+- Meta-Review (BLOCKING) `[GATE·validator]`: full/bugfix deliver needs `meta_review`/`meta_review_verdict`; trivial/research exempt. <!-- R-deliver-009 -->
 - Push-Ready (binary) — `[GATE·cli]`: false → `run-commit` still commits, marked; never push. <!-- R-deliver-003 -->
 - `[GATE·cli]` Run source committed → `run-update --status completed` BLOCKS until surface evidence: the `surface_run_outputs` marker naming every commit, or `--outputs-surfaced` on that call; docs-only exempt; never re-record deliver for it (`complete.md` Step 0). <!-- R-deliver-015 -->
 - `[GATE·cli]` D7: a `required_experts` entry that did not review sets push_ready false; never blocks landing.

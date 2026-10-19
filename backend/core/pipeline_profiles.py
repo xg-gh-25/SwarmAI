@@ -25,7 +25,6 @@ PIPELINE_PROFILES: dict[str, list[str]] = {
     "full": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
     "trivial": ["evaluate", "think", "build", "review", "test", "deliver", "reflect"],
     "research": ["evaluate", "think", "reflect"],
-    "docs": ["evaluate", "think", "plan", "deliver", "reflect"],
     "bugfix": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
     "goal": ["evaluate", "think", "plan", "goal_cycle", "deliver", "reflect"],
     # direct (G1, pipeline-speed-systematic-fix §4-G): the lightweight profile for a
@@ -40,7 +39,23 @@ PIPELINE_PROFILES: dict[str, list[str]] = {
 # understanding/REPRO block required). EVERYTHING ELSE — full, bugfix, goal, the
 # legacy "standard" alias, AND any unknown/variant value — is STRICT. This is the
 # single source of truth for the relaxed/strict decision; see is_relaxed_profile.
-_RELAXED_PROFILES: frozenset[str] = frozenset({"trivial", "docs", "research"})
+_RELAXED_PROFILES: frozenset[str] = frozenset({"trivial", "research"})
+
+# Profiles that can no longer be chosen, with what to do instead. Their stage lists
+# stay readable (_LEGACY_PROFILE_STAGES) so an old run still shows its own stages.
+# "docs" (removed 2026-10-20): it walked five stages for a text change while a direct
+# run starts at DELIVER, and its relaxed rigor followed the profile NAME, so a "docs"
+# run that edited code could ship with no tests and no review.
+REMOVED_PROFILES: dict[str, str] = {
+    "docs": ("the docs profile was removed. Documents outside a code repo (SwarmWS "
+             "Knowledge / DDD) need no run: edit them directly. Documents in a code repo: "
+             "`run-create --profile direct`, `stage-start --stage build`, edit, "
+             "`stage-start --stage deliver`, stage-complete (a documentation-only diff gets "
+             "no expert and needs no test run)."),
+}
+_LEGACY_PROFILE_STAGES: dict[str, list[str]] = {
+    "docs": ["evaluate", "think", "plan", "deliver", "reflect"],
+}
 
 # Legacy / spelling aliases → canonical profile name. "standard" is the historical
 # rank-4 alias of "full" (same stage set). Keep this the ONLY place aliases live.
@@ -103,7 +118,6 @@ PROFILE_GATES: dict[str, tuple[str, ...]] = {
     "goal": ("gate0", "gate1", "gate2"),
     "direct": ("gate2",),  # gate1.md's trigger table does not run Gate 1 for direct
     "trivial": ("gate2",),
-    "docs": ("gate2",),
     "research": (),
 }
 
@@ -118,7 +132,14 @@ def profile_gates(profile: str | None) -> tuple[str, ...]:
 def get_profile_stages(profile: str | None) -> list[str]:
     """Get the ordered stage list for a pipeline profile.
 
-    Normalizes first (so 'Full'/'FULL'/'standard' resolve to full's stages), then
-    falls back to 'full' if the normalized profile is still unknown or None.
+    Normalizes first (so 'Full'/'FULL'/'standard' resolve to full's stages); a
+    removed profile (an old run) keeps its own list; otherwise falls back to 'full'
+    if the normalized profile is still unknown or None.
     """
-    return PIPELINE_PROFILES.get(normalize_profile(profile), PIPELINE_PROFILES["full"])
+    key = normalize_profile(profile)
+    return PIPELINE_PROFILES.get(key) or _LEGACY_PROFILE_STAGES.get(key) or PIPELINE_PROFILES["full"]
+
+
+def removed_profile_error(profile: str | None) -> "str | None":
+    """The refusal text when *profile* can no longer be chosen, else None."""
+    return REMOVED_PROFILES.get(normalize_profile(profile)) if profile else None

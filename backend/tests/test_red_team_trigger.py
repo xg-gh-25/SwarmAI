@@ -181,7 +181,7 @@ def test_nested_finding_sources(ar, blocked):
     assert bool(_blocks(ar)) is blocked
 
 
-@pytest.mark.parametrize("profile", ["trivial", "docs", "research"])
+@pytest.mark.parametrize("profile", ["trivial", "research"])
 def test_relaxed_profiles_never_trigger(profile):
     assert pv._red_team_triggered(_ar([_high()]), profile) == []
     assert pv._red_team_gate(_ar([_high()]), profile, run_created_at=POST) == []
