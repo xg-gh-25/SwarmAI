@@ -141,6 +141,13 @@ from utils.file_lock import flock_exclusive_nb, flock_unlock  # noqa: E402
 
 RUNNER_VERSION = "2"
 TEST_MODES = ("tdd", "verify", "regression", "recheck")
+# Circuit breaker: stop a non-converging build<->verify loop from spinning forever.
+# The loop is agent/skill-driven (prose caps only), so run_340478c9 ran 42 verify
+# rounds over ~18h. Counted from the append-only run_index (per run_id). A hard ceiling
+# catches runaway re-runs; a stall detector catches "same blocking failures N rounds
+# running = not making progress". Operator override: SWARM_CIRCUIT_BREAKER_FORCE=1.
+CIRCUIT_MAX_ROUNDS = 25    # total verify/recheck/regression runs in one run_id -> abort
+CIRCUIT_STALL_ROUNDS = 4   # consecutive verify/recheck runs with the SAME blocking set -> abort
 ALL_MODES = TEST_MODES + ("probe", "mutation")
 TDD_MAX_FILES = 5
 CAP_FILES = 40
@@ -2623,7 +2630,7 @@ def _write_evidence(ev_root: Path, mode: str, ev: dict, kind: str = "run",
             "kind": kind, "mode": mode, "finished_at": ev.get("finished_at"),
             "ts": round(time.time(), 3), "evidence": path.name,
             "cached": bool(ev.get("cached")), "auto_recheck_of": auto_recheck_of,
-            "rechecked_from": rechecked_from})
+            "rechecked_from": rechecked_from, "blocking_sig": _blocking_sig(ev)})
     except OSError:  # bookkeeping only; never fails the evidence write
         pass
     try:
@@ -2648,6 +2655,57 @@ def _append_run_index(tdir: Path, entry: dict) -> None:
         _write_json(tdir / RUN_INDEX, cur)
     finally:
         _unlock(fd)
+
+
+def _blocking_sig(ev: dict) -> list[str]:
+    """Sorted nodeids of the BLOCKING failures in this evidence — the circuit breaker's
+    per-round fingerprint. Non-blocking failures (pre-existing / flaky / global-deadline
+    timeouts, via ``_failure_nonblocking``) are excluded, so a stable pre-existing set or a
+    load-induced deadline timeout never reads as a stall; only genuinely-blocking failures
+    that persist across rounds do."""
+    return sorted(f.get("nodeid", "") for f in (ev.get("failures") or [])
+                  if isinstance(f, dict) and not _failure_nonblocking(f))
+
+
+def _breaker_result(mode: str, reason: str) -> dict:
+    """Abort payload (exit 2) when the circuit breaker trips. Points at run-checkpoint;
+    re-running is futile because the breaker re-trips on the unchanged run_index until the
+    run is checkpointed or the root cause is fixed."""
+    return {"mode": mode, "ok": False, "circuit_breaker": {"tripped": True, "reason": reason},
+            "error": "circuit breaker: " + reason,
+            "action": ("run-checkpoint (true trigger: stuck / retries exhausted) and fix the root "
+                       "cause or escalate — do NOT re-run tests, the loop is not converging. "
+                       "Operator override only: SWARM_CIRCUIT_BREAKER_FORCE=1")}
+
+
+def _circuit_breaker_check(ev_root: Path, mode: str) -> dict | None:
+    """Refuse another verify/recheck/regression when this run is in a non-converging loop
+    (prevents run_340478c9's 42-round / ~18h spin). Reads the append-only run_index;
+    returns an abort dict (caller exits 2) or None to proceed. tdd is never gated — it is
+    the write-tests phase and is expected to repeat. Operator override:
+    SWARM_CIRCUIT_BREAKER_FORCE=1."""
+    if mode not in ("verify", "recheck", "regression"):
+        return None
+    if os.environ.get("SWARM_CIRCUIT_BREAKER_FORCE") == "1":
+        return None
+    idx = _read_json(ev_root / "tests" / RUN_INDEX)
+    if not isinstance(idx, list):
+        return None
+    runs = [e for e in idx if isinstance(e, dict) and e.get("kind") == "run"
+            and e.get("mode") in ("verify", "recheck", "regression")]
+    if len(runs) >= CIRCUIT_MAX_ROUNDS:
+        return _breaker_result(
+            mode, f"{len(runs)} verify/recheck/regression rounds in this run (hard limit "
+            f"{CIRCUIT_MAX_ROUNDS}) — the build<->verify loop is not converging")
+    vr = [e for e in runs if e.get("mode") in ("verify", "recheck")]
+    sigs = [tuple(e.get("blocking_sig") or []) for e in vr[-CIRCUIT_STALL_ROUNDS:]]
+    if len(sigs) >= CIRCUIT_STALL_ROUNDS and sigs[0] and all(s == sigs[0] for s in sigs):
+        shown = list(sigs[0])[:5]
+        return _breaker_result(
+            mode, f"{CIRCUIT_STALL_ROUNDS} consecutive verify/recheck rounds left the SAME "
+            f"blocking failure(s) unfixed ({', '.join(shown)}"
+            f"{'...' if len(sigs[0]) > 5 else ''}) — re-running is not making progress")
+    return None
 
 
 # Evidence retention: every call writes ``<mode>-<ts>.json`` (+ ``logs-<mode>-<ts>/``
@@ -3292,6 +3350,10 @@ def _ref_nodeids(repo: Path, project: str, run_state: dict, ac_entries: list) ->
 
 def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> tuple[dict, int]:
     started_at = _now_iso()
+    if ns.run_id:
+        tripped = _circuit_breaker_check(ev_root, ns.mode)
+        if tripped is not None:
+            return tripped, 2
     sgraph = build_source_graph(ctx.repo, ctx.cache)
     graph = build_import_graph(ctx.repo, ctx.cache, sgraph)
     plan, err = _plan(ctx, ns, ev_root, run_state, graph, sgraph)

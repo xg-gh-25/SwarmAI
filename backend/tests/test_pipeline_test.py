@@ -258,6 +258,58 @@ def test_per_test_hang_still_blocks(rig, capsys, tmp_path, monkeypatch):
     assert f["classification"] != "timeout"  # a per-test hang never becomes infra-timeout
 
 
+# ── circuit breaker ─────────────────────────────────────────────────────────
+def _write_run_index(tmp_path, entries):
+    d = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs" / RUN_ID / "evidence" / "tests"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "run_index.json").write_text(json.dumps(entries), encoding="utf-8")
+
+
+def test_circuit_breaker_trips_on_stalled_identical_rounds(rig, capsys, tmp_path):
+    # N consecutive verify rounds with the SAME blocking failure set = no progress -> abort.
+    rig()
+    sig = ["backend/tests/test_x.py::test_add"]
+    _write_run_index(tmp_path, [{"kind": "run", "mode": "verify", "blocking_sig": sig}
+                                for _ in range(pt.CIRCUIT_STALL_ROUNDS)])
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert code == 2 and out["circuit_breaker"]["tripped"] is True, out
+    assert "not making progress" in out["circuit_breaker"]["reason"]
+
+
+def test_circuit_breaker_hard_ceiling_trips_even_without_a_stall(rig, capsys, tmp_path):
+    # Distinct blocking sets each round (no stall) still hit the absolute ceiling.
+    rig()
+    _write_run_index(tmp_path, [{"kind": "run", "mode": "verify", "blocking_sig": [f"a::{i}"]}
+                                for i in range(pt.CIRCUIT_MAX_ROUNDS)])
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert code == 2 and out["circuit_breaker"]["tripped"] is True, out
+    assert "hard limit" in out["circuit_breaker"]["reason"]
+
+
+def test_circuit_breaker_allows_progress(rig, capsys, tmp_path):
+    # Blocking set shrinks each round -> progress -> never trips (runs normally).
+    rig()
+    _write_run_index(tmp_path, [
+        {"kind": "run", "mode": "verify", "blocking_sig": ["a::1", "a::2", "a::3"]},
+        {"kind": "run", "mode": "verify", "blocking_sig": ["a::1", "a::2"]},
+        {"kind": "run", "mode": "verify", "blocking_sig": ["a::1"]},
+        {"kind": "run", "mode": "verify", "blocking_sig": []},
+    ])
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert out.get("circuit_breaker") is None, out
+
+
+def test_circuit_breaker_force_override(rig, capsys, tmp_path, monkeypatch):
+    # Operator override bypasses the breaker even past the ceiling.
+    rig()
+    monkeypatch.setenv("SWARM_CIRCUIT_BREAKER_FORCE", "1")
+    sig = ["backend/tests/test_x.py::test_add"]
+    _write_run_index(tmp_path, [{"kind": "run", "mode": "verify", "blocking_sig": sig}
+                                for _ in range(pt.CIRCUIT_MAX_ROUNDS + 2)])
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert out.get("circuit_breaker") is None, out
+
+
 # ── B2 classification ───────────────────────────────────────────────────────
 CLS_TEST = '''from pathlib import Path
 
