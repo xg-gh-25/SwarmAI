@@ -53,6 +53,14 @@ review sets push_ready false (`_d7_missing_required_experts`); it never blocks t
 landing, which only the test evidence decides. Dispatch exactly that set, in ONE batch.
 Never constrain `required_experts` down to the tier instead: that hides the gap.
 
+**Small change (≤ 20 non-test source lines, no new code file, no sensitive path —
+auth / data / infra / config, the REVIEW fan-out pattern):** no Gate-2 specialist, no
+meta-review, no re-check, declared `required_experts` included (`_small_change`, XG
+2026-10-20). Changed again after a review by ≤ 20 lines with no added file: the review
+holds, no re-review (`pipeline_worktree._small_review_delta`; the delta is recorded in
+`review-tree.json`). A larger change after review: re-check only that delta
+(`gate2-recheck`), never a fresh round 1.
+
 **Risk, not size, picks the tier.** There is no line-count override to the full tier.
 A change with no code file (`pipeline_validator.docs_only_paths`: prose, images; not
 expert / skill / agent definitions, not dependency manifests) gets no specialist and no

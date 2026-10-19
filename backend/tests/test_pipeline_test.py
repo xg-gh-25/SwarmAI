@@ -1412,7 +1412,7 @@ def test_regression_reuses_passing_files_until_a_changed_file_is_edited(rig, cap
     assert ran() == ["alpha", "alpha", "beta", "beta"]
 
 
-def test_file_key_covers_imports_conftests_every_changed_file_and_head(rig, tmp_path):
+def test_file_key_covers_imports_conftests_every_changed_file_not_head(rig, tmp_path):
     repo = rig({"backend/tests/test_y.py": "def test_y():\n    assert True\n"})
     _write(repo, {"docs/a.md": "doc\n"})
     ctx = SimpleNamespace(repo=repo, python=sys.executable)
@@ -1427,7 +1427,7 @@ def test_file_key_covers_imports_conftests_every_changed_file_and_head(rig, tmp_
     _write(repo, {"docs/a.md": "doc v2\n"})  # imported by nobody: still an input of all
     k1 = keys()
     assert all(k1[f] != k0[f] for f in files)
-    assert keys(head="h2") != k1
+    assert keys(head="h2") == k1  # T6: no HEAD in the key; main reaches a file via its closure
     _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return a + b + 0\n"})
     k2 = keys()  # an import of test_x only (not in the changed list passed here)
     assert k2["backend/tests/test_x.py"] != k1["backend/tests/test_x.py"]

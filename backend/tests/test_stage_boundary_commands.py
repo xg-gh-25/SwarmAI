@@ -901,7 +901,8 @@ def test_stage_start_deliver_scope_experts_and_prompts(ws, capsys):
 
 @pytest.mark.parametrize("profile,work_type,ins,dels,required,expect", [
     ("full", None, 10, 5, [], set()),                               # < 50 lines → none
-    ("full", None, 10, 5, ["security"], {"security"}),              # … unless required
+    ("full", None, 10, 5, ["security"], set()),                     # ≤ 20 lines: small, even if required
+    ("full", None, 25, 5, ["security"], {"security"}),              # 21-49 lines: only the required
     ("bugfix", None, 60, 0, [], {"correctness", "security"}),       # bugfix default
     ("bugfix", "refactor", 60, 0, [],
      {"correctness", "api-contract", "integration", "red-team"}),   # refactor rule

@@ -50,7 +50,7 @@ Per-file reuse (verify / regression, ``_l2_file_keys`` / ``_reusable``): an L2 t
 whose every result passed (or skipped) in this run's latest verify or regression is not
 re-run when its per-file key is unchanged; its earlier results are merged in, listed in
 ``reused_from`` and named in a warning. The key covers the runner version, interpreter,
-HEAD, pytest configs, the file, its conftest chain and their transitive imports, and
+pytest configs (not HEAD: a main commit outside a file's closure keeps it), the file, its conftest chain and their transitive imports, and
 every changed file (the whole-run key's input set: a module can load a changed file
 without an import edge). So reuse serves re-runs on an unchanged tree: verify then
 regression, a call that was not cacheable, a different selection. AC (L1) files,
@@ -95,6 +95,7 @@ atomically (tmp + replace) under ``tests/.run_index.lock``; one object per evide
 - ``rechecked_from``: the base evidence ``finished_at`` a recheck / overlay built on, else null
 - ``blocking_sig``: sorted nodeids of the evidence's blocking failures (``_blocking_sig``);
   the circuit breaker compares it across rounds to detect a loop making no progress
+- ``unfinished``: tests the deadline left unrun; a continuation's progress (T5)
 An automatic recheck writes two entries: ``kind=run, mode=recheck, auto_recheck_of=M``
 and ``kind=overlay, mode=M``.
 
@@ -2974,7 +2975,8 @@ def _write_evidence(ev_root: Path, mode: str, ev: dict, kind: str = "run",
             "kind": kind, "mode": mode, "finished_at": ev.get("finished_at"),
             "ts": round(time.time(), 3), "evidence": path.name,
             "cached": bool(ev.get("cached")), "auto_recheck_of": auto_recheck_of,
-            "rechecked_from": rechecked_from, "blocking_sig": _blocking_sig(ev)})
+            "rechecked_from": rechecked_from, "blocking_sig": _blocking_sig(ev),
+            "unfinished": len(_unfinished_failures(ev))})
     except OSError:  # bookkeeping only; never fails the evidence write
         pass
     try:
@@ -3030,6 +3032,41 @@ def _unfinished(f: dict) -> bool:
 
 def _unfinished_failures(ev: dict) -> list:
     return [f for f in ev.get("failures") or [] if isinstance(f, dict) and _unfinished(f)]
+
+
+# T5: a continuation makes progress when the count of tests the deadline left unrun
+# shrinks; counting passes hid a stall (+3 passes per call, the rest never started).
+STALL_SHRINK = 0.10    # a call must cut the unfinished count by at least this share
+STALL_SPLIT_AFTER = 2  # this many stalled calls in a row -> split per file
+STALL_TRIP_AFTER = 4   # this many -> stop (the breaker)
+
+
+def _continuation_series(ev_root: Path, mode: str) -> "list[int]":
+    """Unfinished counts of the current round of ``mode``: its first run, then each
+    continuation's merged result (kind=overlay), oldest first."""
+    idx = _read_json(ev_root / "tests" / RUN_INDEX)
+    if not isinstance(idx, list):
+        return []
+    rows = [e for e in idx if isinstance(e, dict)]
+    start = max((i for i, e in enumerate(rows) if e.get("kind") == "run"
+                 and e.get("mode") == mode and not e.get("auto_recheck_of")), default=None)
+    if start is None:
+        return []
+    out = [rows[start].get("unfinished")]
+    out += [e.get("unfinished") for e in rows[start + 1:]
+            if e.get("kind") == "overlay" and e.get("mode") == mode]
+    return [n for n in out if isinstance(n, int)]
+
+
+def _stalled_calls(series: "list[int]") -> int:
+    """Trailing calls in a row that cut the unfinished count by less than STALL_SHRINK."""
+    n = 0
+    for a, b in zip(reversed(series[:-1]), reversed(series[1:])):
+        if a > 0 and b > a * (1 - STALL_SHRINK):
+            n += 1
+        else:
+            break
+    return n
 
 
 def _open_stage(run_state: dict) -> "str | None":
@@ -3122,6 +3159,13 @@ def _circuit_breaker_check(ev_root: Path, mode: str, profile: str = "") -> dict 
         return _breaker_result(
             mode, f"{len(rounds)} verify/recheck/regression rounds in this run (hard limit "
             f"{CIRCUIT_MAX_ROUNDS}) — the build<->verify loop is not converging")
+    if mode in ("verify", "regression"):
+        stalled = _stalled_calls(_continuation_series(ev_root, mode))
+        if stalled >= STALL_TRIP_AFTER:
+            return _breaker_result(
+                mode, f"{stalled} continuation calls in a row cut the count of unfinished "
+                f"tests by less than {STALL_SHRINK:.0%} (even split per file) — the scope "
+                "does not finish")
     vr = runs  # regression too: a continuation that stops shrinking is a stall
     sigs = [tuple(e.get("blocking_sig") or []) for e in vr[-CIRCUIT_STALL_ROUNDS:]]
     if len(sigs) >= CIRCUIT_STALL_ROUNDS and sigs[0] and all(s == sigs[0] for s in sigs):
@@ -3378,7 +3422,7 @@ def _l2_file_keys(ctx, files, changed: list[str], sgraph: dict | None,
                   head: str | None, cross_run: bool = False) -> dict[str, str]:
     """test file → digest of every input a WHOLE-file result of it depends on.
 
-    Runner version, interpreter, HEAD, pytest configs, the file, its conftest chain and
+    Runner version, interpreter, pytest configs (no HEAD), the file, its conftest chain and
     their transitive backend-local imports, and EVERY changed file — the same input set
     the whole-run key (``_key_inputs``) trusts. Static imports alone are not enough: a
     module can load a changed file by computed name (``importlib``), by bare-name
@@ -3395,8 +3439,13 @@ def _l2_file_keys(ctx, files, changed: list[str], sgraph: dict | None,
             digests[rel] = _file_digest(ctx.repo / rel)
         return digests[rel]
 
+    # No HEAD in the key (T6, XG 2026-10-20): main moves every few minutes and a HEAD key
+    # re-ran every file each time. A main commit reaches a test through its import closure
+    # (hashed below) or, by dynamic load, only through a changed file of THIS run (all in
+    # ``changed``, hashed for every file); a main commit that loads code by computed name
+    # outside both is CI's (BVT) to catch, accepted.
     common = hashlib.sha256("\0".join([RUNNER_VERSION, _python_id(ctx.python),
-                                       "bvt-cross-run" if cross_run else (head or "none")]).encode())
+                                       "bvt-cross-run" if cross_run else "per-file"]).encode())
     for p in sorted(set(changed) | set(_PYTEST_CONFIGS)):
         common.update(p.encode() + b"\0" + digest(p).encode() + b"\0")
     out: dict[str, str] = {}
@@ -3557,7 +3606,8 @@ def _probe_rows(ctx, ev_root: Path, refs: list[str], changed: list[str]) -> list
 CONTEXT_REPLAY_MAX_S = 45.0  # recorded seconds of earlier same-file tests a continuation replays
 
 
-def _replay_file_context(ctx, plan: dict, prev: dict, prev_failures: list) -> None:
+def _replay_file_context(ctx, plan: dict, prev: dict, prev_failures: list,
+                         no_replay: bool = False) -> None:
     """A continuation runs a file's unfinished tests in a fresh process, without the
     tests that ran before them in that file: one that only fails after an earlier
     test's leftovers would pass here (red-team 2026-10-19). So, per file, replay the
@@ -3578,13 +3628,19 @@ def _replay_file_context(ctx, plan: dict, prev: dict, prev_failures: list) -> No
     passed = {r["nodeid"] for r in prev.get("results") or []
               if isinstance(r, dict) and r.get("outcome") == "passed"}
     alone = 0
+    # T4: a file's prefix is replayed on ONE continuation only. Replaying it every call
+    # spent half of each 95 s call on tests that had passed, so a slow file never got
+    # through (run_600db8ac: 3 tests per call). After that one replay its remaining tests
+    # run alone and are listed as context-unverified, never hidden.
+    replayed = set(prev.get("context_replayed") or [])
     for file, ids in unfinished.items():
         first = min((order.index(n) for n in ids if n in order), default=None)
         pre = [n for n in order[:first or 0] if n.split("::")[0] == file and n in passed]
         if not pre:
             continue
         cost = sum(ctx.durations.get(n, DEFAULT_TEST_COST_S) for n in pre)
-        if cost > CONTEXT_REPLAY_MAX_S or len(pre) + len(ids) > PREFIX_KEEP_ARGS:
+        if (no_replay or file in replayed or cost > CONTEXT_REPLAY_MAX_S
+                or len(pre) + len(ids) > PREFIX_KEEP_ARGS):
             alone += len(ids)
             # their pass is real but not in-file-context: listed (REPORT §10), never hidden
             plan.setdefault("context_unverified", []).extend(ids)
@@ -3597,6 +3653,9 @@ def _replay_file_context(ctx, plan: dict, prev: dict, prev_failures: list) -> No
             else:
                 plan["targets"].pop(file, None)
         plan.setdefault("ordered", []).append([_backend_rel(n) for n in pre + ids])
+        plan.setdefault("context_replayed", []).append(file)
+    if replayed:
+        plan["context_replayed"] = sorted(replayed | set(plan.get("context_replayed") or []))
     if alone:
         ctx.warnings.append(
             f"{alone} unfinished test(s) continued without replaying the earlier tests of "
@@ -3686,7 +3745,26 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                 plan["rechecked"] += 1
             else:
                 lost.append(n or "<no nodeid>")
-        _replay_file_context(ctx, plan, prev, prev_failures)
+        stalled = _stalled_calls(_continuation_series(ev_root, auto_of)) if auto_of else 0
+        split = bool(auto_of) and stalled >= STALL_SPLIT_AFTER
+        _replay_file_context(ctx, plan, prev, prev_failures, no_replay=split)
+        if split:
+            # T5: no replay (it is what eats the call) and the cheapest files first, so
+            # whatever fits finishes; the rest stay listed, never hidden.
+            def cost(f):
+                sel = plan["targets"][f]
+                return sum(ctx.durations.get(n, DEFAULT_TEST_COST_S) for n in (sel or [f]))
+            plan["targets"] = dict(sorted(plan["targets"].items(), key=lambda kv: cost(kv[0])))
+            plan["per_file_split"] = True
+            ctx.warnings.append(f"continuation stalled {stalled} calls in a row (unfinished "
+                                f"count cut by < {STALL_SHRINK:.0%}): split per file, cheapest "
+                                "first, no replay of earlier tests")
+        if auto_of and not plan.get("per_file_split"):
+            started = {_rfile(r) for r in prev.get("results") or []
+                       if isinstance(r, dict) and r.get("outcome") not in ("timeout", None)}
+            plan["targets"] = dict(sorted(plan["targets"].items(),
+                                          key=lambda kv: kv[0] in started))
+            plan["fresh_first"] = True
         before = prev.get("changed_files") if isinstance(prev.get("changed_files"), dict) else {}
         scope = [f for f in changed if before.get(f) != _file_digest(ctx.repo / f)]
         if plan["base_mode"] == "regression":
@@ -3844,9 +3922,16 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
     if base.get("mode") == "regression" and ac_entries:
         layers["ac_driven"] = _ac_layer(repo, ac_entries, results)
     ev = dict(base)
+    cr = sorted(set(base.get("context_replayed") or []) | set(re_ev.get("context_replayed") or []))
+    if cr:
+        ev_replayed = cr
+    else:
+        ev_replayed = None
     cu = sorted(set(base.get("context_unverified") or []) | set(re_ev.get("context_unverified") or []))
     if cu:
         ev["context_unverified"] = cu
+    if ev_replayed:
+        ev["context_replayed"] = ev_replayed
     # The tree the merged evidence describes is the RECHECK's: it re-selected tests for
     # every file changed since the base (an overlay with budget skips is never made), so
     # its file digests, HEAD and tree digest are the ones staleness checks must compare.
@@ -4024,10 +4109,17 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
         ctx.seq += 1
         backend = ctx.repo / "backend"
         # recheck of order_dependent failures: their prefix runs as ONE ordered job, first
-        jobs = [_pytest_job(ctx, f"ordered{ctx.seq}-{k}", o, backend, False)
-                for k, o in enumerate(ordered)] + jobs
-        jobs += _pytest_jobs(ctx, run_targets, "main", first=plan.get("ac_first"),
-                             durations=ctx.durations) if run_targets else []
+        ord_jobs = [_pytest_job(ctx, f"ordered{ctx.seq}-{k}", o, backend, False)
+                    for k, o in enumerate(ordered)]
+        main_jobs = _pytest_jobs(ctx, run_targets, "main", first=plan.get("ac_first"),
+                                 durations=ctx.durations) if run_targets else []
+        if plan.get("fresh_first"):
+            # T3: a continuation starts the files that never got to run before the
+            # half-done ones (whose replay jobs are the ordered ones): otherwise the same
+            # slow files fill every call and the rest never start.
+            jobs = jobs + main_jobs + ord_jobs
+        else:
+            jobs = ord_jobs + jobs + main_jobs
         if tokens:
             tokens = _trim_tokens(tokens, jobs)
             ctx.workers = len(tokens)  # re-runs in classify_failures stay inside them too
@@ -4177,6 +4269,8 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
           **({"bvt_files": list(plan["bvt"])} if plan.get("bvt") else {}),
           **({"context_unverified": sorted(set(plan["context_unverified"]))}
              if plan.get("context_unverified") else {}),
+          **({"context_replayed": sorted(set(plan["context_replayed"]))}
+             if plan.get("context_replayed") else {}),
           "results": [{k: v for k, v in r.items() if k != "_reused"} if r.get("_reused")
                       else {**_evidence_result(r, refs),
                             **({"requeued": True} if r.get("requeued") else {})}

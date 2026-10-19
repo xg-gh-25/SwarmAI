@@ -531,7 +531,18 @@ def _deliver_sync(run_id: str, run_file: Path, run_state: dict, wts, run_dir: Pa
     rt.parent.mkdir(parents=True, exist_ok=True)
     rec = _review_record(run_dir)
     if rec.get("trees") != trees:
-        if _review_carries(run_id, rec, wts, trees):
+        small = _small_review_delta(rec, wts, trees)
+        if small is not None and not _review_carries(run_id, rec, wts, trees):
+            # Review in proportion (XG 2026-10-20): a few changed lines since the review
+            # (a log line, a message, a comment) keep it; the delta is recorded for REPORT.
+            atomic_write_json(rt, {"run_id": run_id, "trees": trees, "bases": bases,
+                                   "at": rec.get("at"),
+                                   "unreviewed_deltas": list(rec.get("unreviewed_deltas") or [])
+                                   + [{"lines": small, "at": rw._now_iso()}]})
+            out["review_note"] = (f"{small} line(s) changed since the Gate-2 review (<= "
+                                  f"{SMALL_REVIEW_DELTA_LINES}, no new file): the review still "
+                                  "holds; no re-review")
+        elif _review_carries(run_id, rec, wts, trees):
             # a rebase that left the run's own patch alone, onto commits touching none
             # of its files: the review and its timestamp still hold
             atomic_write_json(rt, {"run_id": run_id, "trees": trees, "bases": bases,
@@ -627,6 +638,38 @@ def _review_carries(run_id: str, rec: dict, wts, trees: dict) -> bool:
         if not rw.carries_over(w, run_id, rb.get(name), rt.get(name), e.get("base"), trees[name]):
             return False
     return True
+
+
+SMALL_REVIEW_DELTA_LINES = 20
+
+
+def _small_review_delta(rec: dict, wts, trees: dict) -> "int | None":
+    """Lines changed between the reviewed trees and *trees*, when that delta is small
+    (<= SMALL_REVIEW_DELTA_LINES in total, no added file in any repo); else None."""
+    rt = rec.get("trees") or {}
+    if not rec.get("at") or not rt:
+        return None
+    total = 0
+    for e, w, _m in wts:
+        name = e["repo_name"]
+        old, new = rt.get(name), trees.get(name)
+        if old == new:
+            continue
+        if not (old and new):
+            return None
+        try:
+            if rw._out(w, "diff", "--name-only", "--diff-filter=A", old, new).strip():
+                return None
+            for ln in rw._out(w, "diff", "--numstat", "--no-renames", old, new).splitlines():
+                a, d, _p = (ln.split("\t", 2) + ["", ""])[:3]
+                if not (a.isdigit() and d.isdigit()):
+                    return None   # binary
+                total += int(a) + int(d)
+        except rw.WorktreeError:
+            return None
+        if total > SMALL_REVIEW_DELTA_LINES:
+            return None
+    return total if total else None
 
 
 def _tests_carry(run_id: str, run_dir: Path, wts) -> bool:

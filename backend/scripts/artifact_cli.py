@@ -5747,6 +5747,8 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                        "gate; fix it to a list[str] to enforce." % type(_required).__name__,
         }), file=sys.stderr)
     _degraded = isinstance(deliver_rec.get("degraded"), dict)
+    if isinstance(_required, list) and _required and _review_waiver(run_state):
+        _required = []   # a small change: declared experts are not dispatched
     if isinstance(_required, list) and _required:
         _missing = _d7_missing_required_experts(_required, args.run_id)
         if _missing and (_degraded or not push_ready):
@@ -10476,7 +10478,7 @@ def _drop_unplanned_review_checks(errors: "list[str]", run_state: dict,
     dropped = [e for e in errors if presence(str(e))]
     if dropped:
         warnings.append(f"{len(dropped)} review-presence check(s) not applied: deliver "
-                        "stage-start dispatched no reviewer for this documentation-only change")
+                        "stage-start dispatched no reviewer (documentation-only or small change)")
     return [e for e in errors if e not in dropped]
 
 
@@ -10907,6 +10909,8 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
                 required = probe["required_experts"]
         except Exception as e:  # noqa: BLE001 — an unreadable artifact must not crash landing
             warnings.append(f"Red Team trigger check skipped: {type(e).__name__}: {e}")
+        if isinstance(required, list) and required and _review_waiver(run_state):
+            required = []   # a small change: declared experts are not dispatched
         if isinstance(required, list) and required:
             missing = _d7_missing_required_experts(required, run_id)
             if missing:
@@ -11099,6 +11103,40 @@ def _is_docs_only(scope: dict) -> bool:
     return pv.docs_only_paths(paths)
 
 
+# Review in proportion to risk (XG 2026-10-20): a few lines of non-sensitive code (a
+# message string, a log line, a comment) get no Gate-2 specialist, no meta-review and
+# no re-check, declared ``required_experts`` included. The tests still decide landing.
+SMALL_CHANGE_LINES = 20
+
+
+def _small_change(scope: dict) -> "str | None":
+    """The reason a change is too small to review, else None: at most SMALL_CHANGE_LINES
+    non-test source lines, no new code file, no sensitive path (auth / data / infra /
+    config, the REVIEW fan-out pattern). Docs-only changes have their own rule."""
+    src = [c for c in scope.get("changed_files", []) if not c.get("is_test")]
+    if not src or _is_docs_only(scope):
+        return None
+    lines = (scope.get("source_insertions", scope.get("diff_insertions", 0))
+             + scope.get("source_deletions", scope.get("diff_deletions", 0)))
+    if lines > SMALL_CHANGE_LINES:
+        return None
+    if any(c.get("status") == "A" and Path(c["path"]).suffix in (".py", ".ts", ".tsx", ".js", ".rs")
+           for c in src):
+        return None
+    if any(_REVIEW_SENSITIVE_RE.search(_rel(c)) for c in src):
+        return None
+    return f"{lines} non-test source line(s) <= {SMALL_CHANGE_LINES}, no new code file, no sensitive path"
+
+
+def _review_waiver(run_state: dict) -> "str | None":
+    """``_small_change`` of the run's change NOW (recomputed, never a recorded flag)."""
+    ft = run_state.get("files_touched")
+    try:
+        return _small_change(_changed_files_scope(ft if isinstance(ft, list) else []))
+    except Exception:  # noqa: BLE001 — cannot size the change: review it
+        return None
+
+
 def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "list[dict]":
     """deliver.md "Step 1: Scope Detection" as code: tier default ∪ file-pattern
     triggers ∪ run.json required_experts; refactor rule; bugfix default
@@ -11119,6 +11157,8 @@ def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "lis
     def add(eid: str, why: str) -> None:
         picked.setdefault(eid, why)
 
+    if _small_change(scope):
+        return []
     changed = [c for c in scope.get("changed_files", []) if not c.get("is_test")]
     total = (scope.get("source_insertions", scope.get("diff_insertions", 0))
              + scope.get("source_deletions", scope.get("diff_deletions", 0)))
@@ -13795,10 +13835,12 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
             for e in experts:
                 if e.get("prompt_path"):
                     e["spawn"] = _spawn_text(e["id"], e["prompt_path"])
-            if _is_docs_only(scope) and not experts:
+            _small = _small_change(scope)
+            if (_is_docs_only(scope) or _small) and not experts:
                 mr, w = None, []
-                out["review_note"] = ("documentation-only change: no Gate-2 expert and no "
-                                      "meta-review are dispatched")
+                out["review_note"] = (("documentation-only change" if not _small else
+                                       f"small change ({_small})")
+                                      + ": no Gate-2 expert and no meta-review are dispatched")
             else:
                 mr, w = _write_gate_prompt(
                     "meta-review", project, run_dir,
@@ -13811,7 +13853,7 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
                 ledger_warn += _ledger_add(run_id, [mr])
             # meta-review is part of DELIVER's plan (the profiler listed it as unplanned),
             # also when its prompt had to be emitted by hand
-            dispatched = experts + ([] if (_is_docs_only(scope) and not experts)
+            dispatched = experts + ([] if ((_is_docs_only(scope) or _small) and not experts)
                                     else [{"id": "meta-review"}])
             out["experts"] = experts
         # The plan the profiler compares actual spawns against (report-only).
