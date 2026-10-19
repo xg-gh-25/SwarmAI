@@ -29,6 +29,10 @@ vi.mock('../../../../contexts/HealthContext', () => ({
   }),
 }));
 
+/** Open every folded run of finished calls ("Bash ×4 · Read ×2"), so each call is a row. */
+const expandFolds = (root: HTMLElement = document.body) => {
+  for (const f of within(root).queryAllByTestId('step-fold')) fireEvent.click(within(f).getByRole('button'));
+};
 const tu = (id: string, summary = 'Running: ls', name = 'Bash', category = 'bash', parent?: string): ContentBlock =>
   ({ type: 'tool_use', id, name, summary, category, ...(parent ? { parentToolUseId: parent } : {}) }) as ContentBlock;
 const tr = (id: string): ContentBlock => ({ type: 'tool_result', toolUseId: id, content: 'ok', isError: false, truncated: false }) as ContentBlock;
@@ -119,6 +123,8 @@ describe('two levels at most', () => {
     fireEvent.click(screen.getByTestId('pipeline-stage-row').querySelector('button')!);
     const body = screen.getByTestId('stage-body');
     expect(within(body).queryByTestId('group-toggle')).toBeNull();
+    expect(within(body).getAllByTestId('step-fold').length).toBeGreaterThan(0);
+    expandFolds(body);
     expect(within(body).getAllByTestId('step-row')).toHaveLength(4);
     expect(within(body).getByTestId('thought-text').textContent).toBe('between');
   });

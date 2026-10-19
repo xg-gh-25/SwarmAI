@@ -414,6 +414,41 @@ class TestOrchestratorWiring:
         assert stage_at > _tool_result_at(events, "tu1"), "stage row must follow its tool_result"
         assert reader.calls == ["run_t1", "run_t1"]  # one pre-read, one post-read
 
+    # DELIVER's start row (status in_progress) comes before Gate 2 and push_ready
+    # exist: a "needs you" card built then would be partial and stay in history.
+    _TEST_DONE = {"stage": "test", "status": "completed"}
+    _STARTED = {"profile": "full", "stages": {"test": _TEST_DONE},
+                "timing": {"deliver": {"started_at": "2026-10-19T02:00:00Z"}}}
+
+    def _spy_attention(self, monkeypatch) -> list:
+        built: list = []
+        monkeypatch.setattr(pse, "attention_block", lambda run_id, state, at: built.append(run_id) or {
+            "type": "pipeline_attention", "runId": run_id, "items": [{"kind": "gate"}], "at": at})
+        return built
+
+    def test_no_attention_card_when_deliver_starts(self, monkeypatch):
+        from tests.test_tool_call_leak_guard import _make_result_message
+        built = self._spy_attention(monkeypatch)
+        monkeypatch.setattr(pse, "read_stage_state", _ScriptedReader(
+            {"profile": "full", "stages": {"test": self._TEST_DONE}, "timing": {}}, self._STARTED))
+        events, raised = _drive_stream(self._orch(), [
+            _bash_use("tu1", CLI.format(rid="run_t1")), _result("tu1"), _make_result_message()])
+        assert raised is None
+        blocks = [b for e in _stage_events(events) for b in e["content"]]
+        assert [(b["stage"], b["status"]) for b in blocks if b["type"] == "pipeline_stage"] == [("deliver", "in_progress")]
+        assert built == []
+
+    def test_attention_card_when_deliver_ends(self, monkeypatch):
+        from tests.test_tool_call_leak_guard import _make_result_message
+        built = self._spy_attention(monkeypatch)
+        ended = {"profile": "full", "stages": {"test": self._TEST_DONE, "deliver": {"stage": "deliver", "status": "completed"}},
+                 "timing": {"deliver": {"started_at": "2026-10-19T02:00:00Z", "completed_at": "2026-10-19T02:30:00Z"}}}
+        monkeypatch.setattr(pse, "read_stage_state", _ScriptedReader(self._STARTED, ended))
+        _, raised = _drive_stream(self._orch(), [
+            _bash_use("tu2", CLI.format(rid="run_t1")), _result("tu2"), _make_result_message()])
+        assert raised is None
+        assert built == ["run_t1"]
+
     def test_unchanged_state_yields_nothing(self, monkeypatch):
         from tests.test_tool_call_leak_guard import _make_result_message
         monkeypatch.setattr(pse, "read_stage_state", _ScriptedReader(AFTER, AFTER))

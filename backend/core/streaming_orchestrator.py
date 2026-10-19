@@ -365,9 +365,13 @@ class StreamingOrchestrator:
             if before is not None:
                 # No baseline (the pre-read failed or found no run.json): seed only.
                 # Diffing against nothing would emit every stage already finished.
-                blocks += _pse.new_stage_blocks(run_id, before, after, at)
+                # Off the event loop: it reads the evaluate/deliver artifacts (Gate 0/2 rows).
+                blocks += await executors.run_in("io", _pse.new_stage_blocks, run_id, before, after, at)
             # What needs the user rides with the DELIVER row (structured fields only).
-            if any(b.get("stage") == "deliver" for b in blocks):
+            # Only when DELIVER ends: its start row (status in_progress) comes before
+            # Gate 2 and push_ready exist, and a card built then would be partial.
+            if any(b.get("stage") == "deliver" and b.get("status") in ("completed", "skipped")
+                   for b in blocks):
                 ab = await executors.run_in("io", _pse.attention_block, run_id, after, at)
                 if ab:
                     blocks.append(ab)

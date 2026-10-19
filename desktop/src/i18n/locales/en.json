@@ -249,6 +249,7 @@
     "turn": {
       "thinking": "Thinking",
       "readTimes": "{{count}}×",
+      "foldCount": "{{tool}} ×{{count}}",
       "nowUsing": "now {{tool}}",
       "subAgentStatus": {
         "failed": "failed",
@@ -259,16 +260,15 @@
       "showAll": "{{count}} more · show all",
       "backToLatestThinking": "Thinking · back to latest",
       "stage": {
+        "unfinished": "not finished in this turn",
         "skipped": "skipped",
         "running": "in progress",
         "ariaDone": "Pipeline stage {{stage}} done",
         "ariaSkipped": "Pipeline stage {{stage}} skipped",
+        "ariaUnfinished": "Pipeline stage {{stage}} not finished in this turn",
         "ariaRunning": "Pipeline stage {{stage}} in progress",
         "position": "stage {{position}} of {{total}}",
-        "changed_one": "changed {{count}} file",
-        "changed_other": "changed {{count}} files",
-        "next": "next {{stages}}",
-        "changedNames": "changed {{files}}"
+        "next": "next {{stages}}"
       },
       "failedOne": "failed",
       "result": "Result",

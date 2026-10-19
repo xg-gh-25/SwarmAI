@@ -49,7 +49,7 @@ import { PipelineStageRow } from './PipelineStageRow';
 import { FileChip } from './FileChip';
 import { AttentionCard, DeliverablesCard, RunAlignment } from './TurnCards';
 import { NextSteps } from './NextSteps';
-import { deriveTurnView, extractNextSteps, groupWork, isUnanswered, sectionUnits, turnChangedFiles } from '../turnView';
+import { deriveTurnView, extractNextSteps, groupWork, isGateStage, isUnanswered, sectionUnits, stageCounts, turnChangedFiles } from '../turnView';
 import type { NoteUnit, ProcessUnit, TurnUnit, WorkItem } from '../turnView';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
@@ -311,7 +311,14 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // While the answer-so-far streams, the block of work above it stays open (groupWork
   // `holdLiveAboveAnswer`): it does not fold and re-open if a tool call follows.
   const holdLiveAboveAnswer = !!isStreaming;
-  const sections = sectionUnits(view.units, !!isStreaming, view.liveStage);
+  // A pipeline turn with a run block: the run's requirement is the intent, so no
+  // leading text stays above the first stage (first level = stage / gate rows).
+  const sections = sectionUnits(view.units, !!isStreaming, view.liveStage, { keepLeadText: !view.run });
+  // The live / where-it-stopped section is the last STAGE section: a gate row holds no
+  // work (GATE 0 sits after EVALUATE, whose section is still collecting work).
+  const isGateSec = (s: (typeof sections)[number]) => s.kind === 'stage' && isGateStage(s.block.stage);
+  const lastSection = sections.reduce((at, s, k) => (s.kind === 'unit' || isGateSec(s) ? at : k), -1);
+  const onlyTailAfter = (k: number) => sections.slice(k + 1).every((s) => isGateSec(s) || (s.kind === 'unit' && s.unit.kind === 'outcome'));
   // A finished turn with no result would show nothing but folded blocks: its last
   // note (not the intent) shows under the folded line of the block holding it; with
   // no such note, the turn's last block starts open. Both are chosen among the units
@@ -430,12 +437,15 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     // Same key while running and once finished, so the row folds 2s after it ends.
     const key = `sec-${name}-${n}`;
     const children = sec.children;
-    const changed = turnChangedFiles(children);
     const failed = children.some((u) => u.kind === 'process' && !!u.unrecoveredFailure);
     const mustOpen = children.some((u) => u.kind === 'interrupt' && isUnanswered(u.block));
     const attentionHere = attentionPending && sec.kind === 'stage' && sec.block.stage === 'deliver';
     if (attentionHere) attentionPending = false;
-    const liveSec = !!isStreaming && sec.kind === 'liveStage';
+    // The stage now running: the last section of a streaming turn (a started stage
+    // that has not ended, the legacy live stage, or a stage that just ended and whose
+    // next one has not started yet — its work is still arriving).
+    const liveSec = !!isStreaming && k === lastSection && onlyTailAfter(k);
+    const running = sec.kind === 'liveStage' || sec.block.status === 'in_progress';
     // Inside a stage (a lane item) a question / permission / the answer-so-far is
     // still not process: it is reset to the answer's size and contrast.
     const body = children.length || liveSec
@@ -451,13 +461,15 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           <PipelineStageRow
             block={sec.kind === 'stage' ? sec.block : undefined}
             live={sec.kind === 'liveStage' ? sec.stage : undefined}
-            position={sec.kind === 'liveStage' ? sec.position : undefined}
-            upcoming={sec.kind === 'liveStage' ? upcomingStages(view.run?.stages, sec.stage.stage) : undefined}
-            startedAt={sec.kind === 'stage' ? (sec.prevAt ?? message.timestamp) : undefined}
-            changedCount={changed.length}
-            changedFiles={changed}
+            position={sec.kind === 'liveStage' ? sec.position
+              : running && sec.block.position !== null ? { n: sec.block.position, total: sec.block.total } : undefined}
+            upcoming={running && liveSec ? upcomingStages(view.run?.stages, name) : undefined}
+            running={liveSec}
+            startedAt={sec.kind === 'stage' ? (sec.startedAt ?? sec.prevAt ?? message.timestamp) : undefined}
+            counts={stageCounts(children)}
             failed={failed}
             mustOpen={mustOpen}
+            defaultOpen={noResult && k === lastSection && sections.slice(k + 1).every(isGateSec)}
             choice={processChoice.get(key)}
             onChoose={(open) => chooseProcess(key, open)}
           >

@@ -14,7 +14,7 @@ import { describe, it, expect } from 'vitest';
 import type { ContentBlock } from '../../types';
 import {
   deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, isGateBlock, groupSteps, thoughtTail,
-  changedFiles, sectionUnits, stageHeadline, toolCall,
+  changedFiles, sectionUnits, toolCall,
 } from './turnView';
 import type { ToolUseContent } from '../../types';
 
@@ -630,11 +630,6 @@ describe('v7.1 — what changed, stage sections, clickable Bash paths', () => {
     expect(sectionUnits(v.units, false).map((s) => s.kind)).toEqual(['stage', 'unit']);
   });
 
-  it('stageHeadline keeps the first segment', () => {
-    expect(stageHeadline('GO · profile: full · scope: standard')).toBe('GO');
-    expect(stageHeadline('3 sub-agents(spec/quality)· spec PASS')).toBe('3 sub-agents');
-    expect(stageHeadline(null)).toBe('');
-  });
 
   it.each([
     ['cd /a/repo && cat src/x.ts', '/a/repo/src/x.ts'],

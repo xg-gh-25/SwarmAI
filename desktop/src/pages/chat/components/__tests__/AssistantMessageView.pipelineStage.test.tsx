@@ -2,14 +2,14 @@
  * AssistantMessageView × pipeline_stage — a stage row folds its own work (v7.1).
  *
  * What is tested (real AssistantMessageView + ProcessBlock, only leaf contexts mocked):
- * - a finished stage is ONE row ("⑤ BUILD · GATE 1 WARN") that holds the work done
- *   before it; folded by default, it opens to that work on click
- * - progress is the plan position, not a workload: the running stage says
- *   "⑥ REVIEW · in progress · stage 5 of 8" and holds the live work, open; a finished
- *   row carries no step count and no position
- * - colour only for exceptions: WARN is amber, PASS neutral; the ④ GATE row shows
- *   its verdict once ("④ GATE 1 · WARN", never "GATE1 · ★ GATE 1 WARN")
- * - the stage summary (model-written run.json text) is plain text, never markup
+ * - a finished stage is ONE row ("BUILD · GATE 1 WARN · 1 step · 1 command") that holds
+ *   the work done before it; folded by default, it opens to that work on click
+ * - the running stage says "REVIEW · in progress · stage 5 of 8" and holds the live
+ *   work, open; a finished row carries no position
+ * - colour only for exceptions: WARN is amber, PASS neutral; a gate row shows its
+ *   verdict once, never "GATE1 · ★ GATE 1 WARN"
+ * (labels without circled numbers and counts instead of file names:
+ *  PipelineStageRow.labels.test.tsx)
  * - text before the first work (the alignment) stays outside every stage
  * - an unanswered question inside a finished stage keeps that stage open
  */
@@ -55,23 +55,25 @@ describe('AssistantMessageView — pipeline stage rows', () => {
   it('history: a finished stage is one row that folds the work done before it', () => {
     renderView([tu('a'), stage(), tu('b')], false);
     const row = screen.getByTestId('pipeline-stage-row');
-    expect(row.textContent).toContain('⑤ BUILD');
+    expect(row.textContent).toContain('BUILD');
     expect(row.textContent).toContain('GATE 1 WARN');
     expect(row.textContent).toContain('5m 00s'); // 21:55 → 22:00
     expect(row.textContent).not.toContain('stage 4 of 8');
-    expect(row.textContent).not.toMatch(/step/);
-    expect(row.dataset.open).toBe('false');
-    // Folded: only the work after the last stage (b) is in the stream.
-    expect(screen.getAllByTestId('work-group')).toHaveLength(1);
-    fireEvent.click(row.querySelector('button')!);
+    // a (before the row) and b (after it: the turn ended in this stage) are both its work
+    expect(screen.getByTestId('stage-counts').textContent).toBe('· 2 steps · 2 commands');
+    // The turn has no result and ended in this stage: it starts open (where it stopped).
     expect(row.dataset.open).toBe('true');
-    expect(screen.getAllByTestId('work-group')).toHaveLength(2);
+    // The work after the last row (b) stays under it: nothing at the top level.
+    expect(screen.getAllByTestId('work-group').every((g) => row.contains(g))).toBe(true);
+    fireEvent.click(row.querySelector('button')!);
+    expect(row.dataset.open).toBe('false');
+    expect(screen.queryAllByTestId('work-group')).toHaveLength(0);
   });
 
   it('streaming: the running stage names its plan position and holds the live work, open', () => {
     renderView([tu('a'), tr('a'), stage(), tu('b')], true);
     const live = screen.getByTestId('pipeline-stage-live');
-    expect(live.textContent).toContain('⑥ REVIEW');
+    expect(live.textContent).toContain('REVIEW');
     expect(live.textContent).toContain('stage 5 of 8');
     expect(live.firstElementChild?.querySelector('.animate-spin')).toBeNull(); // the live card holds the one spinner
     expect(live.querySelector('[data-live="true"]')).not.toBeNull();
@@ -82,13 +84,13 @@ describe('AssistantMessageView — pipeline stage rows', () => {
     renderView([tu('a'), tr('a'), stage({ stage: 'plan', ordinal: 3, position: 3, next: 'gate1', nextOrdinal: 4, gate: null }),
       tu('b')], true);
     const live = screen.getByTestId('pipeline-stage-live');
-    expect(live.textContent).toContain('④ GATE 1');
+    expect(live.textContent).toContain('GATE 1');
     expect(live.textContent).not.toMatch(/stage \d of/);
   });
 
   it('streaming: right after a stage finishes, before any next step, the next stage is named', () => {
     renderView([tu('a'), tr('a'), stage()], true);
-    expect(screen.getByTestId('pipeline-stage-live').textContent).toContain('⑥ REVIEW');
+    expect(screen.getByTestId('pipeline-stage-live').textContent).toContain('REVIEW');
   });
 
   it('a finished turn shows no running stage', () => {
@@ -96,22 +98,22 @@ describe('AssistantMessageView — pipeline stage rows', () => {
     expect(screen.queryByTestId('pipeline-stage-live')).toBeNull();
   });
 
-  it('the summary is plain text — markup is shown, not interpreted', () => {
+  it('the summary (model-written) never reaches the row — neither as text nor as markup', () => {
     const { container } = renderView(
       [tu('a'), stage({ gate: null, summary: '<img src=x onerror=alert> **bold** [link] · more' })], false);
     const row = screen.getByTestId('pipeline-stage-row');
-    expect(row.textContent).toContain('<img src=x onerror=alert> **bold** [link]');
-    expect(row.textContent).not.toContain('more'); // headline = first segment
+    expect(row.textContent).not.toContain('onerror');
+    expect(row.textContent).not.toContain('bold');
     expect(row.querySelector('img')).toBeNull();
     expect(row.querySelector('a')).toBeNull();
     expect(container.querySelector('strong')).toBeNull();
   });
 
-  it('the ④ GATE row says its verdict once; PASS is neutral, WARN amber', () => {
+  it('a gate row says its verdict once; PASS is neutral, WARN amber', () => {
     renderView([tu('a'), stage({ stage: 'gate1', ordinal: 4, position: null, gate: { name: 'GATE 1', verdict: 'PASS' } }),
       tu('b'), stage({ gate: { name: 'GATE 1', verdict: 'WARN' } })], false);
     const [gate, build] = screen.getAllByTestId('pipeline-stage-row');
-    expect(gate.textContent).toContain('④ GATE 1');
+    expect(gate.textContent).toContain('GATE 1');
     expect(gate.textContent?.match(/GATE/g)).toHaveLength(1);
     expect(gate.querySelector('.text-amber-400, .text-red-400')).toBeNull();
     expect(build.querySelector('.text-amber-400')?.textContent).toContain('WARN');
@@ -120,7 +122,7 @@ describe('AssistantMessageView — pipeline stage rows', () => {
   it('a skipped stage says so and has no gate chip when none was recorded', () => {
     renderView([tu('a'), stage({ stage: 'plan', ordinal: 3, status: 'skipped', gate: null })], false);
     const row = screen.getByTestId('pipeline-stage-row');
-    expect(row.textContent).toContain('③ PLAN');
+    expect(row.textContent).toContain('PLAN');
     expect(row.textContent).toContain('skipped');
     expect(row.textContent).not.toContain('GATE');
   });
@@ -140,22 +142,5 @@ describe('AssistantMessageView — pipeline stage rows', () => {
     renderView([tu('a'), ask, stage({ gate: null })], false);
     expect(screen.getByTestId('pipeline-stage-row').dataset.open).toBe('true');
     expect(screen.getByText(/STAGE_Q/)).toBeTruthy();
-  });
-});
-
-describe('AssistantMessageView — a stage with no summary names what it changed (AC8)', () => {
-  const ed = (id: string, p: string): ContentBlock =>
-    ({ type: 'tool_use', id, name: 'Edit', summary: `Writing to ${p}`, category: 'write' }) as ContentBlock;
-  const files = ['/r/a.ts', '/r/b.ts', '/r/c.ts', '/r/d.ts'];
-
-  it('no summary: the changed file names, at most three, "+N" for the rest', () => {
-    renderView([...files.map((p, i) => ed(`e${i}`, p)), stage({ gate: null, summary: null }), tx('done')], false);
-    expect(screen.getByTestId('stage-changed-files').textContent).toBe('changed a.ts, b.ts, c.ts +1');
-  });
-
-  it('with a summary: the summary, and the count form instead of names', () => {
-    renderView([...files.map((p, i) => ed(`e${i}`, p)), stage({ gate: null, summary: 'TDD green' }), tx('done')], false);
-    expect(screen.queryByTestId('stage-changed-files')).toBeNull();
-    expect(screen.getByTestId('pipeline-stage-row').textContent).toContain('changed 4 files');
   });
 });

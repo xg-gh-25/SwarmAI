@@ -338,7 +338,10 @@ export interface PipelineStageContent {
   type: 'pipeline_stage';
   runId: string;
   stage: string;
-  status: 'completed' | 'skipped';
+  /** `in_progress`: the stage STARTED (its row opens here); a later `completed` /
+   *  `skipped` block for the same run + stage updates that row in place. Older
+   *  sessions have only the terminal block. */
+  status: 'completed' | 'skipped' | 'in_progress';
   ordinal: number | null;
   /** 1-based index in the run's profile stage list (null: stage not in the profile). */
   position: number | null;
@@ -348,7 +351,7 @@ export interface PipelineStageContent {
   nextOrdinal: number | null;
   gate: { name: string; verdict: string } | null;
   summary: string | null;
-  /** ISO time the backend observed the transition. */
+  /** ISO time of the transition (an `in_progress` block: when the stage started). */
   at: string;
 }
 
@@ -363,6 +366,8 @@ export interface PipelineRunContent {
   profile: string | null;
   stages: string[];
   requirement: string;
+  /** The stage in progress when the run was announced (a resumed run, mid-way). */
+  current?: string | null;
   at: string;
 }
 

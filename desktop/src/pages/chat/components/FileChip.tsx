@@ -38,9 +38,11 @@ export interface FileChipProps {
   change?: 'new' | 'edited';
   /** Open on the diff without a tag (e.g. on an "Edited" step row). */
   diff?: boolean;
+  /** Wrap a long name instead of cutting it (tool rows: a file name is never cut). */
+  wrap?: boolean;
 }
 
-export function FileChip({ path, name, change, diff }: FileChipProps) {
+export function FileChip({ path, name, change, diff, wrap }: FileChipProps) {
   const { t } = useTranslation();
   // A read-only preview (History) shows the file but does not act on it.
   const readOnly = useContext(ReadOnlyContext);
@@ -62,7 +64,7 @@ export function FileChip({ path, name, change, diff }: FileChipProps) {
   const body = (
     <>
       {icon}
-      <span className="truncate min-w-0">{label}</span>
+      <span className={wrap ? 'min-w-0 break-all text-left' : 'truncate min-w-0'}>{label}</span>
       {tag}
     </>
   );

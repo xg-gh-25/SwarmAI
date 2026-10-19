@@ -20,16 +20,25 @@ The module is pure and fail-safe (it never raises):
 - ``read_stage_state(run_id)`` — reads run.json (the authority) into
   ``{"profile", "stages": {stage: last record}}``.
 - ``new_stage_blocks(run_id, before, after, at)`` — one ``pipeline_stage`` content
-  block per stage whose status became terminal (completed / skipped) between the
-  two states, in the profile's stage order.
+  block per stage that STARTED between the two states (``stage_timing.<stage>.
+  started_at`` appeared: status ``in_progress``, ``at`` = that start) and one per
+  stage whose status became terminal (completed / skipped), completions first, each
+  group in the profile's stage order. The frontend opens a stage's row at its start
+  block and updates that same row in place at its completion block, so a row owns
+  the work from its start to the next row's start.
 
 Block shape (camelCase: the frontend converts only tool_use_id / is_error)::
 
     {"type": "pipeline_stage", "runId", "stage", "status", "ordinal", "position",
      "total", "profile", "next", "nextOrdinal", "gate", "summary", "at"}
 
-``ordinal`` is the circled number the pipeline's progress display uses (①–⑩: Gate 1
-holds ④ and the adversarial gate ⑧, so build is ⑤ and deliver ⑨). ``summary`` is the
+``ordinal`` is the stage's slot in the pipeline order (Gate 1 holds 4 and the
+adversarial gate 8, so build is 5 and deliver 9); the chat no longer prints it as a
+circled number, but the frontend still uses it. Gates have no stage record, so
+each gate gets its own row from where its verdict is recorded: Gate 0 from the
+evaluation artifact (after evaluate's row), Gate 1 from the build / goal_cycle
+record, Gate 2 from the deliver (else goal_cycle) artifact (before deliver's row).
+A gate that did not run has no row. ``summary`` is the
 stage record's own summary — model-written text — so it is collapsed to one line,
 capped at ``SUMMARY_MAX`` characters and rendered as plain text by the frontend.
 
@@ -38,7 +47,7 @@ context_injector treats them as non-conversational, and every other content read
 selects text/tool blocks by type, so a backend-observed row never re-enters a model
 prompt as something the assistant said.
 
-@exports parse_watched_run_id, read_stage_state, new_stage_blocks,
+@exports parse_watched_run_id, read_stage_state, new_stage_blocks, current_stage,
          STAGE_ORDINALS, SUMMARY_MAX, BLOCK_TYPE
 """
 from __future__ import annotations
@@ -62,7 +71,7 @@ BLOCK_TYPE = "pipeline_stage"
 # gate1 / adversarial / adversarial_review as stages, so those map to their gate
 # slot. goal_cycle replaces build/review/test and takes build's slot.
 STAGE_ORDINALS: dict[str, int] = {
-    "evaluate": 1, "think": 2, "plan": 3, "gate1": 4, "build": 5, "review": 6,
+    "evaluate": 1, "gate0": 1, "think": 2, "plan": 3, "gate1": 4, "gate2": 8, "build": 5, "review": 6,
     "test": 7, "adversarial": 8, "adversarial_review": 8, "deliver": 9,
     "reflect": 10, "goal_cycle": 5,
 }
@@ -181,8 +190,11 @@ def read_stage_state(run_id: object) -> Optional[dict]:
                     stages[rec["stage"]] = rec
             profile = data.get("profile")
             req = data.get("requirement")
+            timing = data.get("stage_timing") if isinstance(data.get("stage_timing"), dict) else {}
             return {"profile": profile if isinstance(profile, str) else None,
                     "stages": stages,
+                    "timing": {k: v for k, v in timing.items()
+                               if isinstance(k, str) and isinstance(v, dict)},
                     "status": data.get("status") if isinstance(data.get("status"), str) else None,
                     "requirement": req if isinstance(req, str) else None,
                     "run_dir": str(hit.parent)}
@@ -214,7 +226,7 @@ def _summary(rec: dict) -> Optional[str]:
 def _gate(rec: dict) -> Optional[dict]:
     verdict = rec.get("gate1_verdict")
     if isinstance(verdict, str) and verdict.strip():
-        return {"name": "GATE 1", "verdict": verdict.strip()[:16]}
+        return {"name": "GATE 1", "verdict": verdict.strip()[:40]}
     return None
 
 
@@ -222,6 +234,78 @@ def _gate1_recorded(state: Optional[dict], stage: str) -> Optional[str]:
     rec = ((state or {}).get("stages") or {}).get(stage)
     v = rec.get("gate1_verdict") if isinstance(rec, dict) else None
     return v.strip() if isinstance(v, str) and v.strip() else None
+
+
+_LEGACY_GATE2_STAGES = ("adversarial", "adversarial_review")
+
+
+def _gate0_row_verdict(state: dict, rec: dict) -> Optional[str]:
+    """Gate 0's verdict: the evaluation artifact's ``understanding.skeptic_verdict``,
+    else the legacy keys on the evaluate record. None when Gate 0 did not run."""
+    art = _artifact(state.get("run_dir"), rec)
+    und = art.get("understanding") if isinstance(art.get("understanding"), dict) else {}
+    for verdict in (und.get("skeptic_verdict"), _gate0_verdict(rec)):
+        if isinstance(verdict, str) and verdict.strip():
+            return verdict.strip()[:40]
+    return None
+
+
+def _gate2_row_verdict(state: dict) -> Optional[str]:
+    """Gate 2's verdict as "<fixed>/<total> fixed" ("PASS" with no findings), from the
+    deliver artifact's ``adversarial_review``, else the goal_cycle artifact's. None
+    when neither carries one (the gate did not run) — or when a legacy adversarial
+    stage record exists, because that record already has its own row."""
+    stages = state.get("stages") or {}
+    if any(name in stages for name in _LEGACY_GATE2_STAGES):
+        return None
+    for name in ("deliver", "goal_cycle"):
+        adv = _artifact(state.get("run_dir"), stages.get(name)).get("adversarial_review")
+        if not isinstance(adv, dict):
+            continue
+        total, fixed = adv.get("findings_total"), adv.get("findings_fixed")
+        if isinstance(total, int) and isinstance(fixed, int):
+            return "PASS" if total == 0 else f"{fixed}/{total} fixed"
+        return "done"
+    return None
+
+
+def _timing(state: Optional[dict], stage: str, key: str) -> Optional[str]:
+    t = ((state or {}).get("timing") or {}).get(stage)
+    v = t.get(key) if isinstance(t, dict) else None
+    return v if isinstance(v, str) and v else None
+
+
+def _started_at(state: Optional[dict], stage: str) -> Optional[str]:
+    return _timing(state, stage, "started_at")
+
+
+def _window_open(state: Optional[dict], stage: str) -> bool:
+    """The stage has a started window with no end. artifact_cli's stage-start re-opens
+    a COMPLETED stage by writing a new started_at and dropping completed_at (keeping
+    first_started_at), while the stage record stays "completed" — so a terminal record
+    is open again when its window says so. A terminal record whose timing never had an
+    end (older runs) is not open."""
+    if not _started_at(state, stage) or _timing(state, stage, "completed_at"):
+        return False
+    if _status(state, stage) in ("completed", "skipped"):
+        return bool(_timing(state, stage, "first_started_at"))
+    return True
+
+
+def current_stage(state: Optional[dict]) -> Optional[str]:
+    """The stage now in progress: the latest-started one whose window is open
+    (``_window_open``: started, not ended — a re-opened completed stage counts). None
+    when no stage is running."""
+    best: Optional[tuple[str, str]] = None
+    for name in ((state or {}).get("timing") or {}):
+        start = _started_at(state, name)
+        if not start or not _window_open(state, name):
+            continue
+        # artifact_cli writes every timestamp with one UTC format, so ISO strings
+        # order as times.
+        if best is None or start > best[0]:
+            best = (start, name)
+    return best[1] if best else None
 
 
 def new_stage_blocks(
@@ -236,7 +320,9 @@ def new_stage_blocks(
     verdict is written onto the build (or goal_cycle) record, usually before that
     stage finishes. So a newly recorded ``gate1_verdict`` becomes its own ④ row, and
     on a strict profile plan's ``next`` is ④ — the live line says GATE 1 while the
-    skeptic runs, then the gate row hands over to BUILD."""
+    skeptic runs, then the gate row hands over to BUILD. Gate 0 and Gate 2 rows come
+    with the stage that records them (see ``_gate0_row_verdict`` /
+    ``_gate2_row_verdict``), so they appear exactly once, when that stage finishes."""
     if not after:
         return []
     stages_after: dict[str, dict] = after.get("stages") or {}
@@ -256,6 +342,13 @@ def new_stage_blocks(
 
     strict = not is_relaxed_profile(profile)
     blocks: list[dict[str, Any]] = []
+
+    def _gate_row(stage: str, name: str, verdict: str, nxt: Optional[str]) -> dict:
+        return {"type": BLOCK_TYPE, "runId": run_id, "stage": stage,
+                "status": "completed", "ordinal": STAGE_ORDINALS.get(stage),
+                "position": None, "total": len(order), "profile": profile,
+                "next": nxt, "nextOrdinal": STAGE_ORDINALS.get(nxt) if nxt else None,
+                "gate": {"name": name, "verdict": verdict}, "summary": None, "at": at}
     for name in names:
         rec = stages_after[name]
         verdict = _gate1_recorded(after, name)
@@ -271,10 +364,17 @@ def new_stage_blocks(
                 "gate": _gate(rec), "summary": None, "at": at,
             })
         status = _status(after, name)
-        if status not in ("completed", "skipped") or _status(before, name) == status:
+        reclosed = (status in ("completed", "skipped") and _window_open(before, name)
+                    and not _window_open(after, name))
+        if status not in ("completed", "skipped") or (_status(before, name) == status and not reclosed):
             continue
         position = order.index(name) + 1 if name in order else None
         nxt = _next_after(name)
+        first_close = _status(before, name) != status  # a re-closed stage: no second gate row
+        if name == "deliver" and status == "completed" and first_close:
+            gate2 = _gate2_row_verdict(after)
+            if gate2:
+                blocks.append(_gate_row("gate2", "GATE 2", gate2, "deliver"))
         if (name == "plan" and strict and nxt in ("build", "goal_cycle")
                 and not _gate1_recorded(after, nxt)):
             nxt = "gate1"
@@ -293,6 +393,28 @@ def new_stage_blocks(
             "gate": None,
             "summary": _summary(rec),
             "at": at,
+        })
+        if name == "evaluate" and status == "completed" and first_close:
+            gate0 = _gate0_row_verdict(after, rec)
+            if gate0:
+                blocks.append(_gate_row("gate0", "GATE 0", gate0, nxt))
+    # Stages that started in this call (after every completion: "complete X, start Y"
+    # reads X done, then Y running). A stage that also finished in this call has its
+    # completed row already; a start that was known before is not repeated.
+    timing_order = [s for s in order if s in (after.get("timing") or {})]
+    timing_order += [s for s in (after.get("timing") or {}) if s not in order]
+    for name in timing_order:
+        start = _started_at(after, name)
+        if not start or start == _started_at(before, name):
+            continue
+        if not _window_open(after, name):
+            continue  # started and finished in this call: its completed row says it
+        blocks.append({
+            "type": BLOCK_TYPE, "runId": run_id, "stage": name, "status": "in_progress",
+            "ordinal": STAGE_ORDINALS.get(name),
+            "position": order.index(name) + 1 if name in order else None,
+            "total": len(order), "profile": profile, "next": None, "nextOrdinal": None,
+            "gate": None, "summary": None, "at": start,
         })
     return blocks
 
@@ -341,8 +463,12 @@ def run_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str,
         return None
     profile = state.get("profile")
     stages = list(get_profile_stages(profile)) if profile else []
+    # `current`: the stage in progress when the block is written. A resumed run is
+    # announced again in a new session mid-run; without this the chat would show its
+    # FIRST stage as running.
     return {"type": RUN_BLOCK_TYPE, "runId": run_id, "profile": profile,
-            "stages": stages, "requirement": requirement, "at": at}
+            "stages": stages, "requirement": requirement, "current": current_stage(state),
+            "at": at}
 
 
 def _artifact(run_dir: Optional[str], record: Optional[dict]) -> dict:

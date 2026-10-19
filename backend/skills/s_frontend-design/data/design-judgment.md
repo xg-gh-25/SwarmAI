@@ -301,7 +301,7 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   intent + status + result, expandable for detail. Chat products already fold a
   finished REASONING phase behind one line (e.g. ChatGPT's "Thought for Ns") and keep
   the answer outside it; this surface extends that fold to finished WORK segments,
-  with a summary that names the effect rather than the duration.
+  each summarized in counts on one line.
 - **Why:** an autonomous agent is opaque by default; trust requires legibility. A
   typed action stream turns an opaque loop into an auditable one. But legible is not
   equally visible: a long turn produces far more process than answer, and if visual
@@ -330,7 +330,10 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   IN the stream, in-band (approve / stop / answer) — never a passive panel the user
   must dig out; a needs-you step outranks the live work as the single focus, and an
   approval shows the exact action being approved. (4) Long/nested work (sub-agents)
-  is summarized, expandable, not dumped. (5) **Zero per-item chrome.** Labels and
+  is summarized, expandable, not dumped: a sub-agent's row shows its whole task (it
+  wraps, never cut) and its time — elapsed while it runs, duration once done — and
+  opening it shows the task, its result and its own calls. Its verdict is not on the
+  row. (5) **Zero per-item chrome.** Labels and
   controls live only on GROUP headers and turn landmarks (the alignment, the stage
   rows, the result divider) — never on the repeated item. A thought carries no
   "Thought" label and no "Show all / Show less" button: dim italic says it is a
@@ -338,13 +341,21 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   control (click / Enter opens it in place). A label that every item carries tells
   the reader nothing and taxes every line; it is the cheapest way to dilute a
   stream. A group of ONE item is that item — never a header that opens to the
-  same line again. (6) **One row per tool call, and it is the REAL call.** The row
-  shows the tool's own name (Bash / Read / Edit / Grep / Agent …) and its own command or
-  arguments — never a translated verb, a category word or a "program name only"
-  summary: the user audits what was actually run. The only thing a Bash row drops is
-  what never says what it does (a leading `cd <dir> &&` / `export` setup, a
-  timeout wrapper); adjacent reads of one file are one row. A command's last output
-  line is not a "result" and stays off the row; an error goes one line below.
+  same line again. (6) **A tool row is the REAL call, a step quieter than the
+  thinking around it.** The row shows the tool's own name (Bash / Read / Edit / Grep /
+  Agent …) and its own command or arguments — never a translated verb, a category word
+  or a "program name only" summary: the user audits what was actually run. It is
+  smaller and dimmer than a thought, and a file name on it is never cut. The only
+  thing a Bash row drops is what never says what it does (a leading `cd <dir> &&` /
+  `export` setup, a timeout wrapper). A command's last output line is not a "result"
+  and stays off the row; an error goes one line below. **Adjacent finished calls fold
+  by default:** two or more consecutive calls that finished cleanly are ONE row
+  ("Bash ×4 · Read ×2") that opens to one row per call — so a block reads as what is
+  running now plus a few folded runs. A running call, a failed call and a sub-agent
+  never fold. **Nothing on screen changes shape the moment the next item arrives:** a
+  finished call joins the fold above, and an older thought collapses to one line,
+  only 2s (the fold linger) after a later item arrived — and the live block never cuts
+  items off its top; the delayed folds keep it short.
   (7) **Two levels, by design.** FIRST level: the intent (from ONE source — the run's
   requirement, else the text written before any work, else the opening thought),
   WORKING / WORKED blocks, the plan's stage rows, things that need the user, and the
@@ -353,17 +364,31 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   first-level items — a thought or a note never becomes a first-level row (that
   fragments the turn into a stack of WORKED lines), and a folded block says its size
   in counts (steps · files changed · commands), never a title borrowed from its first
-  thought (which the body then repeats).
+  thought (which the body then repeats). **Every stage and every gate that ran has
+  its own row** (a run of the 9-stage pipeline shows GATE 0 / 1 / 2 too), labelled in
+  the same tag style and at the same left edge as WORKED / WORKING, without an
+  ordinal. A stage row opens when the stage STARTS and owns everything up to the next
+  row's start; when the stage ends the same row updates in place (status, duration)
+  and nothing under it moves. It folds that work and says it in counts plus its
+  duration — no file names, no model-written summary. In a pipeline turn the first
+  level between the intent and the result is only these rows: work before the first
+  stage belongs to it, work after the last row stays under it, and a resumed turn
+  opens the run's current stage at once. A gate row says only its verdict, holds no
+  work and sits next to the stage it guards (GATE 1 before BUILD): the run records a
+  gate's start but not its end, so a gate that owned "start to next start" would
+  swallow the stage it guards.
 - **Principles (each names the decision it serves):**
   - **One focus at a time** — Check 4 applied across time: the live segment while
     working, the result once done, and a step that needs the user above both. If every
     segment is boxed, nothing reads as "now".
-  - **Progress is position in the plan, not effort spent** — "stage 4 of 8" answers
-    "how far along, how much left"; "92 steps" answers neither. Step counts belong
-    behind disclosure.
-  - **Summaries name effects, not effort** — a folded segment says what changed or
-    what was found ("edited A and B"), not how many reads, commands and thoughts it
-    took.
+  - **Progress is position in the plan, not effort spent** — the RUNNING stage says
+    "stage 4 of 8", which answers "how far along, how much left"; "92 steps" answers
+    neither.
+  - **A folded line says its size, the body says what** — a finished block or stage
+    folds to counts (steps · files changed · commands) and its duration. File names
+    and model summaries on the folded line made every line long and different and the
+    stream unscannable (XG 2026-10-19); what changed is one click down, and the
+    result section says what the turn produced.
   - **A finding sits with the work that produced it** — text the agent writes between
     steps is that segment's conclusion: tighter to the work above than to what follows
     (Proximity; Part 2 #9). Interim notes are a lower tier than the final answer.
@@ -387,12 +412,14 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   state); a label or toggle repeated on every item ("Thought" + "Show all" under
   each thought); a single-step group whose header opens to the same step; a tool call
   rewritten into a category word or "inline script" (the user cannot audit it); a
-  stack of first-level WORKED rows, one per thought; a meta-comment about the model ("started without
+  stack of first-level WORKED rows, one per thought; a screen of near-identical
+  finished tool rows, one per call; a cut file name or sub-agent task; a stage's
+  work shown under the gate row next to it; a meta-comment about the model ("started without
   restating the ask") that the user cannot act on.
 - **The tell:** you are giving finished work the same border and weight as the work
-  in progress, or a count ("12 steps · 7 thoughts") is the headline of a summary.
-  Ask which of the four questions the user is asking right now, and give weight only
-  to the answer to that one.
+  in progress, or the tool rows are what the eye lands on first. Ask which of the four
+  questions the user is asking right now, and give weight only to the answer to that
+  one.
 
 ### Surface 7 — Infinite Canvas / Whiteboard (spatial surface)
 - **Convergence:** tldraw · Excalidraw · Figma · Penpot — an infinite pannable/

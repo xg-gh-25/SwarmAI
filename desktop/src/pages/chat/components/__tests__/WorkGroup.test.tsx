@@ -79,14 +79,20 @@ describe('WorkGroupView', () => {
     expect(screen.getByTestId('group-row').textContent).not.toContain('0');
   });
 
-  it('flat (inside a stage) keeps the window: the newest 12 while live, a show-all for the rest', () => {
+  it('flat (inside a stage): live shows every item; once done, the first 12 and a show-all', () => {
     const blocks: ContentBlock[] = [];
-    for (let i = 0; i < 30; i += 1) blocks.push(tu(`s${i}`, `Running: echo ${i}`), res(`s${i}`, 'ok'));
+    // failed calls never fold (WorkGroup.density.test.tsx), so each stays its own row
+    for (let i = 0; i < 30; i += 1) blocks.push(tu(`s${i}`, `Running: echo ${i}`), res(`s${i}`, 'no', true));
     const [live] = groupsOf(blocks, true);
-    show(live, { flat: true });
+    const r = show(live, { flat: true });
+    expect(screen.getAllByTestId('step-row')).toHaveLength(30);
+    expect(screen.queryByTestId('show-all-steps')).toBeNull();
+    r.unmount();
+    const [done] = groupsOf(blocks, false);
+    show(done, { flat: true });
     const rows = screen.getAllByTestId('step-row');
     expect(rows).toHaveLength(12);
-    expect(within(rows[11]).getByTestId('strip-target').textContent).toBe('echo 29');
+    expect(within(rows[0]).getByTestId('strip-target').textContent).toBe('echo 0');
     fireEvent.click(screen.getByTestId('show-all-steps'));
     expect(screen.getAllByTestId('step-row')).toHaveLength(30);
   });
@@ -127,7 +133,8 @@ describe('WorkGroupView', () => {
 
   it('adjacent reads of one file are one row with N× and the ranges read', () => {
     const rd = (id: string) => tu(id, 'Reading /r/src/a.ts', 'Read');
-    const [g] = groupsOf([rd('a'), res('a', 'lines 1–200'), rd('b'), res('b', 'lines 200–400'), tu('c', 'Running: ls'), tx('x')]);
+    // the failed call keeps the merged read from folding with it
+    const [g] = groupsOf([rd('a'), res('a', 'lines 1–200'), rd('b'), res('b', 'lines 200–400'), tu('c', 'Running: ls'), res('c', 'no', true), tx('x')]);
     show(g, { expanded: true });
     expect(screen.getAllByTestId('step-row')).toHaveLength(2);
     expect(screen.getByTestId('step-repeat').textContent).toBe('2×');
@@ -183,7 +190,7 @@ describe('WorkGroupView', () => {
 
   it('`defaultOpen`: a turn with nothing to read starts with its last block open, newest items', () => {
     const blocks: ContentBlock[] = [];
-    for (let i = 0; i < 20; i += 1) blocks.push(tu(`s${i}`, `Running: echo ${i}`), res(`s${i}`, 'ok'));
+    for (let i = 0; i < 20; i += 1) blocks.push(tu(`s${i}`, `Running: echo ${i}`), res(`s${i}`, 'no', true));
     const [g] = groupsOf(blocks);
     show(g, { defaultOpen: true });
     const rows = screen.getAllByTestId('step-row');

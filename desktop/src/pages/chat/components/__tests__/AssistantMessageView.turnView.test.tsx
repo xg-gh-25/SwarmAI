@@ -32,6 +32,10 @@ vi.mock('../../../../contexts/HealthContext', () => ({
     triggerHealthCheck: vi.fn(),
   }),
 }));
+/** Open every folded run of finished calls ("Bash ×4 · Read ×2"), so each call is a row. */
+const expandFolds = (root: HTMLElement = document.body) => {
+  for (const f of within(root).queryAllByTestId('step-fold')) fireEvent.click(within(f).getByRole('button'));
+};
 const injectSpy = vi.fn();
 vi.mock('../../injectChatInput', () => ({
   dispatchInjectChatInput: (d: unknown) => injectSpy(d),
@@ -78,11 +82,12 @@ describe('AssistantMessageView — work groups (AC1)', () => {
     expect(within(card).getByTestId('group-row').textContent).toContain('Working');
     // The live card is never a toggle: only finished work folds.
     expect(screen.queryByTestId('group-toggle')).toBeNull();
+    // the 37 finished calls are one folded row; the running call is its own row, last
+    expect(screen.getByTestId('step-fold').textContent).toContain('Bash ×37');
     const rows = screen.getAllByTestId('step-row');
-    expect(rows).toHaveLength(12);
+    expect(rows).toHaveLength(1);
     expect(rows[rows.length - 1].textContent).toContain('needle37');
     expect(rows[rows.length - 1].dataset.status).toBe('pending');
-    expect(screen.getByTestId('show-all-steps').textContent).toContain('26 more');
     // The running strip holds the one spinner.
     expect(container.querySelectorAll('.animate-spin')).toHaveLength(1);
     expect(rows[rows.length - 1].querySelector('.animate-spin')).not.toBeNull();
@@ -95,8 +100,9 @@ describe('AssistantMessageView — work groups (AC1)', () => {
     expect(screen.getAllByTestId('group-row')).toHaveLength(1);
     expect(screen.getByTestId('group-row').textContent).toContain('Worked');
     expect(container.querySelector('.animate-spin')).toBeNull();
-    expect(screen.getAllByTestId('step-row')).toHaveLength(12);
-    fireEvent.click(screen.getByTestId('show-all-steps'));
+    // the last call never finished (the turn ended on it): it stays its own row
+    expect(screen.getByTestId('step-fold').textContent).toContain('Bash ×37');
+    expandFolds();
     expect(screen.getAllByTestId('step-row')).toHaveLength(38);
     fireEvent.click(screen.getByTestId('group-toggle'));
     expect(screen.queryAllByTestId('step-row')).toHaveLength(0);
@@ -195,6 +201,7 @@ describe('AssistantMessageView — the answer-so-far and a turn without a result
   it('a finished turn with no text at all opens its last block', () => {
     renderView([tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd'), tr('b')]);
     expect(screen.getByTestId('group-body')).toBeTruthy();
+    expandFolds();
     expect(screen.getAllByTestId('step-row')).toHaveLength(2);
   });
 
@@ -210,9 +217,11 @@ describe('AssistantMessageView — the answer-so-far and a turn without a result
       profile: 'full', next: 'review', nextOrdinal: 6, gate: null, summary: 'ok', at: '2026-10-18T00:00:00Z' } as ContentBlock;
     renderView([tu('a', 'Running: ls'), tr('a'), tx('inside the stage'), tu('b', 'Running: pwd'), tr('b'), stage, tu('c', 'Running: make'), tr('c')]);
     expect(screen.queryByTestId('turn-tail')).toBeNull();
-    const open = screen.getAllByTestId('group-body');
-    expect(open).toHaveLength(1);
-    expect(open[0].textContent).toContain('make');
+    // the work after the last row stays under it, and that stage starts open
+    const body = screen.getByTestId('stage-body');
+    expandFolds(body);
+    expect(body.textContent).toContain('make');
+    expect(screen.queryAllByTestId('group-body')).toHaveLength(0);
   });
 
   it('no top-level tail for a note inside a stage (the stage row is the fold)', () => {
@@ -253,6 +262,7 @@ describe('AssistantMessageView — one strip per tool call (AC3)', () => {
     const cmd = 'Running: R=run_df73d970; python3 -c "import json; print(1)"';
     renderView([tu('a', cmd), tu('b', "Running: cd /a && perl -e 'alarm 60; exec @ARGV' node -e \"x()\""), tx('done')]);
     fireEvent.click(screen.getByTestId('group-toggle'));
+    expandFolds();
     expect(screen.getAllByTestId('strip-target').map((e) => e.textContent)).toEqual(['R=run_df73d970; python3 -c "import json; print(1)"', 'node -e "x()"']);
     expect(document.body.textContent).not.toContain('inline script');
   });
@@ -342,9 +352,19 @@ describe('AssistantMessageView — thoughts carry no chrome (AC4)', () => {
     }
   });
 
-  it('while the turn streams a finished thought keeps 3 lines', () => {
-    render(viewOf([tu('a', 'Running: ls'), tr('a'), tu('a1', 'Running: pwd'), tr('a1'), tu('a2', 'Running: id'), tr('a2'), th(LONG), tu('b', 'Running: pwd')], true));
-    expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('3');
+  it('while the turn streams a thought keeps 3 lines until 2s after the next item arrives, then 1', () => {
+    vi.useFakeTimers();
+    try {
+      const head = [tu('a', 'Running: ls'), tr('a'), tu('a1', 'Running: pwd'), tr('a1'), tu('a2', 'Running: id'), tr('a2'), th(LONG)];
+      const { rerender } = render(viewOf(head, true));
+      rerender(viewOf([...head, tu('b', 'Running: pwd')], true));
+      // the next item has arrived: nothing changed shape yet
+      expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('3');
+      act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 5); });
+      expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('1');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a one-line thought is not a control', () => {
@@ -393,17 +413,20 @@ describe('AssistantMessageView — fold timing', () => {
     expect(screen.getByTestId('thought-text').textContent).toBe('step one, then two');
   });
 
-  it('in the 2s after it finishes, a group keeps its live layout (newest strips), then folds', () => {
-    const many = Array.from({ length: 15 }, (_, i) => [tu(`s${i}`, `Running: cat f${i}.ts`), tr(`s${i}`)]).flat();
+  it('in the 2s after it finishes, a group keeps its live layout (every strip), then folds', () => {
+    // failed calls never fold, so each stays a row
+    const many = Array.from({ length: 15 }, (_, i) => [tu(`s${i}`, `Running: cat f${i}.ts`), res(`s${i}`, 'no', true)]).flat();
     const { rerender } = render(viewOf([...many, tu('z', 'Running: date')], true));
+    // live: nothing is cut off the top
+    expect(screen.getAllByTestId('step-row')).toHaveLength(16);
     // The turn ends: the block stops being live (text after work while streaming is
     // the live block's own last item, so only the end of the turn ends it).
-    rerender(viewOf([...many, tu('z', 'Running: date'), tr('z'), tx('done')], false));
+    rerender(viewOf([...many, tu('z', 'Running: date'), res('z', 'no', true), tx('done')], false));
     const body = screen.getByTestId('group-body');
     expect(body.dataset.liveLayout).toBe('true');
-    expect(body.textContent).toContain('f14.ts'); // the newest strips, not reshuffled to the first
-    expect(body.textContent).not.toContain('f0.ts');
-    expect(screen.getAllByTestId('step-row')).toHaveLength(12);
+    expect(body.textContent).toContain('f14.ts');
+    expect(body.textContent).toContain('f0.ts'); // the same rows as while live: nothing reshuffled
+    expect(screen.getAllByTestId('step-row')).toHaveLength(16);
     act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS); });
     expect(screen.queryByTestId('group-body')).toBeNull(); // folded in one move
     fireEvent.click(screen.getByTestId('group-toggle'));
@@ -455,19 +478,22 @@ describe('AssistantMessageView — a sub-agent on its strip', () => {
     expect(row.querySelector('.animate-spin')).not.toBeNull();
   });
 
-  it('done, while the turn streams: the live summary is its verdict', () => {
+  it('done, while the turn streams: its verdict is in its detail, not on the row', () => {
     withProgress([agent, ...subs(3), { type: 'tool_result', toolUseId: 'ag', isError: false } as ContentBlock, tx('Review passed.')],
       { ag: { parentToolUseId: 'ag', status: 'completed', toolUses: 3, summary: 'PASS — no findings\nmore detail' } });
     // still streaming: the block is the open WORKING card (its rows are shown)
-    expect(screen.getByTestId('agent-verdict').textContent).toContain('PASS — no findings');
-    expect(screen.getByTestId('agent-verdict').textContent).not.toContain('more detail');
+    const row = screen.getAllByTestId('step-row').find((r) => r.dataset.tool === 'Agent')!;
+    expect(row.textContent).not.toContain('PASS — no findings');
+    fireEvent.click(within(row).getByTestId('agent-toggle'));
+    expect(screen.getByTestId('agent-result').textContent).toBe('PASS — no findings\nmore detail');
   });
 
-  it('from history: the persisted result is its verdict, however long', () => {
+  it('from history: the persisted result is its verdict, whole, in its detail', () => {
     const verdict = 'BLOCK — two findings in the commit gate; see the report for both of them';
     renderView([agent, ...subs(3), res('ag', verdict), tx('Review done.')]);
     fireEvent.click(screen.getByTestId('group-toggle'));
-    expect(screen.getByTestId('agent-verdict').textContent).toBe(`· ${verdict}`);
+    fireEvent.click(screen.getByTestId('agent-toggle'));
+    expect(screen.getByTestId('agent-result').textContent).toBe(verdict);
   });
 });
 
@@ -515,7 +541,7 @@ describe('AssistantMessageView — turn frame and lane (AC5, AC6)', () => {
       tx('Now the two docs:'), wr('c', '/r/a.md'), wr('d', '/r/b.md'), tx('done')]);
     fireEvent.click(screen.getByTestId('group-toggle'));
     const body = screen.getByTestId('group-body');
-    expect([...body.children].map((c) => c.getAttribute('data-testid'))).toEqual(['step-row', 'group-note', 'step-row', 'group-note', 'step-row', 'step-row']);
+    expect([...body.children].map((c) => c.getAttribute('data-testid'))).toEqual(['step-row', 'group-note', 'step-row', 'group-note', 'step-fold']);
     expect(screen.getByText('Now the two docs:')).toBeTruthy();
   });
 

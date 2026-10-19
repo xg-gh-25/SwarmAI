@@ -59,7 +59,7 @@
  * like the main agent's steps.
  *
  * @exports deriveTurnView, groupWork, toolCall, stepLabel,
- *          extractNextSteps, isLandmarkText, sectionUnits, isGateBlock,
+ *          extractNextSteps, isLandmarkText, sectionUnits, stageCounts, isGateStage, isGateBlock,
  *          and the TurnView / TurnUnit / ProcessUnit / Step / ToolStep /
  *          ToolStatus / StepLabel / StepVerb / ToolCallView / WorkGroup / WorkItem /
  *          NextStepsResult types
@@ -305,6 +305,8 @@ export function deriveTurnView(
   };
 
   let run: PipelineRunContent | undefined;
+  // A pipeline turn: its stage headings are said by the backend rows (stripStageHeading).
+  const pipelineTurn = content.some((b) => b.type === 'pipeline_stage' || b.type === 'pipeline_run');
   let thoughts = 0;
   let texts = 0;
   let attention: PipelineAttentionContent | undefined;
@@ -312,7 +314,27 @@ export function deriveTurnView(
   content.forEach((block, index) => {
     if (block.type === 'tool_result') return; // consumed by its tool_use
     if (isSubAgentBlock(block)) return; // nested under its Agent step below
-    if (block.type === 'pipeline_run') { run ??= block; return; }
+    if (block.type === 'pipeline_run') {
+      // …unless the turn itself starts that stage (the block is written from the state
+      // AFTER the call that announced it, so `current` may be a stage this very call
+      // starts — its own start row opens it).
+      const startsHere = content.some((b) => b.type === 'pipeline_stage' && b.status === 'in_progress'
+        && b.runId === block.runId && b.stage === block.current);
+      const stages = Array.isArray(block.stages) ? block.stages : [];
+      if (!run && block.current && !startsHere) {
+        // A run announced mid-way (a resumed run): its current stage is running from
+        // here — open its row now (an end block later in the turn updates it).
+        seg = null;
+        units.push({ kind: 'stage', index, block: {
+          type: 'pipeline_stage', runId: block.runId, stage: block.current, status: 'in_progress',
+          ordinal: null, position: stages.indexOf(block.current) >= 0 ? stages.indexOf(block.current) + 1 : null,
+          total: stages.length, profile: block.profile, next: null, nextOrdinal: null,
+          gate: null, summary: null, at: block.at,
+        } });
+      }
+      run ??= block;
+      return;
+    }
     if (block.type === 'pipeline_attention') { attention = block; return; }
     if (block.type === 'turn_deliverables') {
       for (const f of block.files ?? []) {
@@ -331,11 +353,13 @@ export function deriveTurnView(
       return;
     }
     if (block.type === 'text') {
-      const text = block.text || '';
-      if (!text.trim()) return;
-      seg = null;
+      const raw = block.text || '';
+      if (!raw.trim()) return;
       const textOrdinal = texts;
       texts += 1;
+      const text = pipelineTurn ? stripStageHeading(raw) : raw;
+      if (!text.trim()) return; // only a stage heading: the backend row says it
+      seg = null;
       if (index > lastToolIdx) {
         units.push({ kind: 'outcome', text, index, textOrdinal });
       } else if (isLandmarkBlock(block, text)) {
@@ -473,12 +497,19 @@ export function deriveTurnView(
     // that row's `next` no longer holds — show no stage rather than a stale one. Any
     // other landmark (the "✦ ⑦ TEST" line the pipeline writes after each row) keeps it.
     const landmarkAfter = units.slice(stageAt + 1).some((u) => u.kind === 'landmark' && !!u.blocks);
-    if (prevStage?.block.next && !landmarkAfter) {
+    // The latest stage (not gate) row that started and has not ended is the one
+    // running: its own section is live (sectionUnits).
+    const open = [...units].reverse().find((u): u is Extract<TurnUnit, { kind: 'stage' }> =>
+      u.kind === 'stage' && !isGateStage(u.block.stage));
+    if (open && open.block.status === 'in_progress') {
+      liveStage = { stage: open.block.stage, ordinal: open.block.ordinal };
+    } else if (prevStage?.block.next && !landmarkAfter) {
       liveStage = { stage: prevStage.block.next, ordinal: prevStage.block.nextOrdinal };
     } else if (!prevStage && run?.stages?.length && !landmarkAfter) {
-      // Before the first stage row: the plan's first stage is running, so its work
-      // sits under that stage from the start and folds in place when the row lands.
-      liveStage = { stage: run.stages[0], ordinal: null };
+      // Before the first stage row: the run's current stage (a resumed run), else the
+      // plan's first stage, is running, so its work sits under that stage from the
+      // start and folds in place when the row lands.
+      liveStage = { stage: run.current ?? run.stages[0], ordinal: null };
     }
   }
 
@@ -1064,16 +1095,46 @@ export function groupWork(units: TurnUnit[], isStreaming: boolean, opts: GroupWo
 
 // ── Stage sections (pipeline turns) ─────────────────────────────────────────
 //
-// A `stage` row is written when a stage FINISHES, after its work. So the units
-// between two stage rows are that stage's work: a finished stage folds them under
-// its row (one line per stage — design-judgment Surface 6, "process folds, it is
-// not deleted"); the work after the last row, while streaming, is the stage now
-// running and stays open. Text before the first work is the alignment and stays
-// in the stream; so does everything after the last row once the turn is over.
+// Each stage row owns the work from its START to the next row's start (XG
+// 2026-10-19): the backend writes an `in_progress` block when a stage starts and a
+// `completed` / `skipped` block for the same run + stage when it ends. The start
+// block opens the section; the end block updates that section's row in place (same
+// section, same children, same React key — the row folds where it is). A finished
+// stage folds its work under its row (design-judgment Surface 6, "process folds, it
+// is not deleted").
+//
+// Older sessions have only end blocks. For them a row still takes the work before it
+// (end-based), the previous non-gate row's time is its start, and work after the last
+// row stays under that row once the turn is over.
+//
+// First level of a pipeline turn: INTENT, stage / gate rows, RESULT. So thoughts and
+// notes before the first stage go into the first stage (a turn without a run block
+// keeps its leading text: that text is its intent), and once the turn is over the
+// work after the last row stays under it; only the trailing answer (the result)
+// stays at the top.
+//
+// GATE rows (gate0 / gate1 / gate2) hold no work and say only their verdict. The run
+// records a gate's START (Gate 1's prompt hand-out) but not its END — the verdict is
+// written when the guarded stage completes — so a gate that owned "its start to the
+// next start" would swallow the stage it guards. A gate's own sub-agent is part of
+// that stage's work. A gate row sits next to the stage it guards: GATE 0 after
+// EVALUATE, GATE 1 before BUILD / GOAL CYCLE, GATE 2 before DELIVER.
 
 export type TurnSection =
   | { kind: 'unit'; unit: TurnUnit }
-  | { kind: 'stage'; block: PipelineStageContent; children: TurnUnit[]; prevAt?: string }
+  | {
+      kind: 'stage';
+      block: PipelineStageContent;
+      children: TurnUnit[];
+      /** End-based (older sessions): the previous non-gate row's time. */
+      prevAt?: string;
+      /** When the stage started: its start block's time, else `prevAt`. */
+      startedAt?: string;
+      /** A started stage that ended: how many children it had at its end block. Work
+       *  after that is still its own (start to next start), unless the next row is
+       *  an end block with no start, which then takes it. */
+      endedAt?: number;
+    }
   | {
       kind: 'liveStage';
       stage: LiveStage;
@@ -1082,47 +1143,169 @@ export type TurnSection =
       children: TurnUnit[];
     };
 
-export function sectionUnits(units: TurnUnit[], isStreaming: boolean, liveStage?: LiveStage): TurnSection[] {
+/** A gate row's stage name: gate0 / gate1 / gate2. */
+export const isGateStage = (stage: string): boolean => /^gate\d$/i.test(stage);
+
+/** A model-written stage heading ("## ✦ ⑤ BUILD", "## ★ Gate 0: SUPPORTED"). */
+const STAGE_HEADING_RE = /^\s*#{1,6}\s*[✦★]/;
+const GATE_HEADING_RE = /\bgate\s*[012]\b/i; // the pipeline writes "★ GATE 1: …" too
+/** The verdict right after "Gate N" (":", "—", "**" between) is a pass — never "NO-GO". */
+const GATE_PASS_RE = /\b[Gg]ate\s*[012][\s:：*—–-]*(PASS|SUPPORTED|PROCEED|GO)\b(?!-)/i;
+
+/** In a pipeline turn, a text's leading stage heading and its "→ …" lines are what
+ *  the backend row already says: they are removed, the rest of the text is kept. A
+ *  gate heading that is not a pass keeps the whole text (its reasons). Returns ''
+ *  when nothing is left. Text with no such heading is returned unchanged. */
+export function stripStageHeading(text: string): string {
+  const lines = text.split('\n');
+  let i = 0;
+  while (i < lines.length && !lines[i].trim()) i += 1;
+  if (i >= lines.length || !STAGE_HEADING_RE.test(lines[i])) return text;
+  if (GATE_HEADING_RE.test(lines[i]) && !GATE_PASS_RE.test(lines[i])) return text;
+  i += 1;
+  while (i < lines.length && (/^\s*→/.test(lines[i]) || !lines[i].trim())) i += 1;
+  return lines.slice(i).join('\n');
+}
+
+/** A stage row's counts: its tool calls, the files they changed, its shell commands. */
+export function stageCounts(units: TurnUnit[]): { steps: number; files: number; commands: number } {
+  const steps = units.flatMap((u) => (u.kind === 'process'
+    ? u.steps.filter((s): s is ToolStep => s.kind === 'tool') : []));
+  return {
+    steps: steps.length,
+    files: changedFiles(steps).length,
+    commands: steps.filter((s) => s.block.name === 'Bash').length,
+  };
+}
+
+type StageSection = Extract<TurnSection, { kind: 'stage' }>;
+
+/** Where a gate row goes: next to the stage it guards (see the header above). */
+function placeGates(out: TurnSection[]): TurnSection[] {
+  const gates = out.filter((s): s is StageSection => s.kind === 'stage' && isGateStage(s.block.stage));
+  if (!gates.length) return out;
+  const rest = out.filter((s) => !(s.kind === 'stage' && isGateStage(s.block.stage)));
+  for (const g of gates) {
+    const natural = out.indexOf(g);
+    // The stage it guards: the nearest one at or before the gate's own position.
+    const guards = g.block.stage === 'gate0' ? ['evaluate'] : g.block.stage === 'gate2' ? ['deliver'] : ['build', 'goal_cycle'];
+    let target = -1;
+    for (let k = rest.length - 1; k >= 0; k -= 1) {
+      const s = rest[k];
+      if (s.kind === 'stage' && guards.includes(s.block.stage) && s.block.runId === g.block.runId
+        && out.indexOf(s) < natural) { target = k; break; }
+    }
+    if (target < 0) {
+      // Not found: keep it where it arrived (after whatever came before it).
+      const before = out.slice(0, natural).filter((s) => rest.includes(s)).length;
+      rest.splice(before, 0, g);
+    } else {
+      rest.splice(g.block.stage === 'gate0' ? target + 1 : target, 0, g);
+    }
+  }
+  return rest;
+}
+
+export function sectionUnits(
+  units: TurnUnit[], isStreaming: boolean, liveStage?: LiveStage, opts: { keepLeadText?: boolean } = {},
+): TurnSection[] {
   if (!units.some((u) => u.kind === 'stage') && !(isStreaming && liveStage)) {
     return units.map((unit) => ({ kind: 'unit', unit }));
   }
+  const keepLeadText = opts.keepLeadText ?? true;
   const out: TurnSection[] = [];
+  let buffer: TurnUnit[] = [];
   let i = 0;
-  // Alignment: whatever the model wrote before it started working.
+  // Before any work: the intent text stays at the top; thoughts go to the first stage.
   while (i < units.length && units[i].kind !== 'process' && units[i].kind !== 'stage') {
-    out.push({ kind: 'unit', unit: units[i] });
+    const u = units[i];
+    if (u.kind === 'thought' || !keepLeadText) buffer.push(u);
+    else out.push({ kind: 'unit', unit: u });
     i += 1;
   }
-  let buffer: TurnUnit[] = [];
-  let last: PipelineStageContent | undefined;
+  let current: StageSection | undefined; // a section opened by a start block
+  let last: StageSection | undefined; // the latest non-gate section
   let lastWithPosition: PipelineStageContent | undefined;
+  const same = (a: PipelineStageContent, b: PipelineStageContent) => a.stage === b.stage && a.runId === b.runId;
   for (; i < units.length; i += 1) {
     const u = units[i];
-    if (u.kind === 'stage') {
-      out.push({ kind: 'stage', block: u.block, children: buffer, prevAt: last?.at });
-      buffer = [];
-      last = u.block;
-      if (u.block.position !== null) lastWithPosition = u.block;
-    } else {
-      buffer.push(u);
+    if (u.kind !== 'stage') {
+      if (current) current.children.push(u);
+      else buffer.push(u);
+      continue;
     }
+    const block = u.block;
+    if (isGateStage(block.stage)) {
+      out.push({ kind: 'stage', block, children: [] });
+      continue;
+    }
+    if (block.position !== null) lastWithPosition = block;
+    if (block.status === 'in_progress') {
+      if (current && same(current.block, block) && current.block.status === 'in_progress') continue; // repeated start
+      // A new start: the work before it (before the first stage) is this stage's.
+      const sec: StageSection = { kind: 'stage', block, children: buffer, startedAt: block.at };
+      buffer = [];
+      out.push(sec);
+      current = sec;
+      last = sec;
+      continue;
+    }
+    const open = [...out].reverse().find((s): s is StageSection =>
+      s.kind === 'stage' && same(s.block, block) && s.block.status === 'in_progress');
+    if (open) {
+      // Its end: the same row, updated in place; work so far stays where it is.
+      open.block = block;
+      if (buffer.length) { open.children.push(...buffer); buffer = []; }
+      open.endedAt = open.children.length;
+      continue;
+    }
+    // End-based (no start block): the row takes the work before it — including the
+    // work after a started stage's end, which that stage was only holding.
+    if (current && current.endedAt !== undefined && block.status !== 'skipped') {
+      buffer = [...current.children.splice(current.endedAt), ...buffer];
+    }
+    const sec: StageSection = { kind: 'stage', block, children: buffer, prevAt: last?.block.at, startedAt: last?.block.at };
+    buffer = [];
+    out.push(sec);
+    last = sec;
+    current = undefined;
   }
-  if (!buffer.length) return out;
-  const stage = liveStage;
-  if (isStreaming && stage) {
-    const position = stage.stage !== 'gate1' && lastWithPosition && lastWithPosition.position !== null
-      ? { n: lastWithPosition.position + 1, total: lastWithPosition.total }
-      : undefined;
-    out.push({ kind: 'liveStage', stage, position, children: buffer });
-  } else {
+  // The trailing answer is the result (the answer-so-far while streaming): it stays
+  // at the top, never inside a stage — a finished stage folds, and would hide it.
+  let trailing: TurnUnit[] = [];
+  // (A stage still running and streaming keeps its answer-so-far: it is open and live,
+  // and lifting it would move every between-calls note in and out of the stage.)
+  if (current && !buffer.length && !(isStreaming && current.block.status === 'in_progress')) {
+    let tail = current.children.length;
+    while (tail > 0 && current.children[tail - 1].kind === 'outcome') tail -= 1;
+    trailing = current.children.splice(tail);
+  }
+  if (buffer.length) {
+    if (isStreaming && liveStage && !current) {
+      let tail = buffer.length;
+      while (tail > 0 && buffer[tail - 1].kind === 'outcome') tail -= 1;
+      trailing = buffer.splice(tail);
+      const position = !isGateStage(liveStage.stage) && lastWithPosition && lastWithPosition.position !== null
+        ? { n: lastWithPosition.position + 1, total: lastWithPosition.total }
+        : undefined;
+      out.push({ kind: 'liveStage', stage: liveStage, position, children: buffer });
+      buffer = [];
+    } else if (!isStreaming) {
+      // The turn is over: work after the last row stays under it (a skipped row did
+      // no work: the latest row that ran); the trailing answer stays at the top.
+      const holder = [...out].reverse().find((sec): sec is StageSection => sec.kind === 'stage'
+        && !isGateStage(sec.block.stage) && sec.block.status !== 'skipped');
+      let tail = buffer.length;
+      while (tail > 0 && buffer[tail - 1].kind === 'outcome') tail -= 1;
+      if (holder) {
+        holder.children.push(...buffer.slice(0, tail));
+        buffer = buffer.slice(tail);
+      }
+    }
     out.push(...buffer.map((unit): TurnSection => ({ kind: 'unit', unit })));
   }
-  return out;
-}
-
-/** The first segment of a stage summary ("GO · profile: full" → "GO"). */
-export function stageHeadline(summary: string | null | undefined): string {
-  return (summary ?? '').split(/\s+·\s+|[(（]/)[0].trim().slice(0, 48);
+  out.push(...trailing.map((unit): TurnSection => ({ kind: 'unit', unit })));
+  return placeGates(out);
 }
 
 // ── Notes ────────────────────────────────────────────────────────────────────
