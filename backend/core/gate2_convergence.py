@@ -13,11 +13,11 @@ own record of the findings.
 - ``recheck``    something is open and every expert with open items has rounds left
 - ``root_cause`` an expert with open items used all MAX_ROUNDS and no root-cause
                  verdict exists yet: hand out ONE fresh-context root-cause review
-- ``sound``      the root-cause review said the approach is right (or a second miss
-                 after a redesign): stop fixing; open items go to REPORT §10; the code
-                 commits locally with push_ready false
-- ``redesign``   the root-cause review said WRONG-APPROACH and this run has not been
-                 redesigned yet: back to PLAN once
+- ``sound``      the root-cause review has answered (SOUND or WRONG-APPROACH): stop;
+                 the verdict, its reasons and every open item go to REPORT §10; the code
+                 commits locally with push_ready false (再一再二不再三: no 4th round)
+- ``redesign``   only while ``MAX_REDESIGNS`` > 0 (it is 0 since 2026-10-19: a redesign
+                 restarted the three rounds, so a run could review six times)
 
 An expert's latest round is "open" when it answered ``NOT RESOLVED`` to a re-check
 item, reported a blocking finding (``core.gate2_findings.is_blocking``), or its answer
@@ -33,6 +33,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 MAX_ROUNDS = 3
+MAX_REDESIGNS = 0  # WRONG-APPROACH after round 3 is recorded, not redesigned
 ROOT_CAUSE_ID = "root-cause"
 # Spawns that are not Gate-2 review rounds of a reviewer.
 NOT_REVIEWERS = frozenset({ROOT_CAUSE_ID, "meta-review", "gate0-skeptic", "gate1-skeptic"})
@@ -109,7 +110,7 @@ def outcome(rows_by_expert: "dict[str, list[dict]]", root_rows: "list[dict]",
         action = "recheck"
     elif verdict is None:
         action = "root_cause"
-    elif verdict == WRONG and redesigns_used < 1:
+    elif verdict == WRONG and redesigns_used < MAX_REDESIGNS:
         action = "redesign"
     else:
         action = "sound"

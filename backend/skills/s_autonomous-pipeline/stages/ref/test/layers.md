@@ -59,8 +59,8 @@ commands — `pipeline_test_gate` denies them.
   tests naming a changed `backend/scripts/*.py`, plus changed test files; uncapped, never
   cut for time. Changed = run.json `files_touched` entries git reports changed (else
   `git diff HEAD` ∪ untracked). Tests reaching a change only through another module are
-  not run: `transitive_unrun` lists them and DELIVER flags them in REPORT §10 (CI BVT and
-  later runs cover them). NOT the full suite.
+  not run: `transitive_unrun` lists them all and DELIVER flags them in REPORT §10. NOT the
+  full suite.
 - Frontend: changed `desktop/src/**` files add `vitest related <files> --run` and
   `tsc --noEmit` inside the same call (result under `frontend` in the output).
 - Why: a change to `auth.py` can break `test_session.py`, which imports auth. AC tests
@@ -74,8 +74,11 @@ commands — `pipeline_test_gate` denies them.
   deadlock risk (STEERING R9); the runner has no full-suite mode. Other projects: read
   their TECH.md / STEERING for the full-suite policy (the xdist hazard is SwarmAI-only).
 
-### Layer 3 — build/import smoke (`layers.import_smoke`)
+### Layer 3 — CI BVT + build/import smoke (`layers.ci_bvt`, `layers.import_smoke`)
 
+- `regression` runs the CI BVT files (`backend/tests/bvt_manifest.txt`, the list CI's
+  backend job reads) in the same call: the run stops at a local commit and never sees CI,
+  so the BVT runs here. Lowest priority, never cut; `continue: true` covers it too.
 - The runner imports every changed, non-test backend module (zero-infrastructure E2E
   proxy). For desktop changes, `tsc --noEmit` is the load check.
 - Why: catches wiring bugs (circular imports, missing dependencies, wrong relative

@@ -110,17 +110,19 @@ recoverable at Gate 2, so instruction-only is sufficient here.
 **WARN** → show `⚠️ GATE 1: WARN` + one line per non-PASS check + `→ Acknowledged.
 Proceeding to BUILD with noted concerns.` Log the warnings and continue; no user interrupt.
 
-**BLOCK** → present to the user:
+**BLOCK** → decide it yourself; never ask the user (the pipeline is autonomous):
 
 ```
 🛑 GATE 1: BLOCK — direction challenge
   Issue: {specific finding from sub-agent}
   Structural alternative: {what the sub-agent proposed}
-  [Fix Plan — revise and re-run Gate 1]  [Proceed Anyway — accept risk]
+  → revising the plan (retry {n}/2)
 ```
 
-- **Fix Plan:** return to PLAN, revise the approach, re-run Gate 1. Max 2 retries.
-- **Proceed Anyway:** explicit user override. Log it (`gate1_override: true`) and continue.
+- **Fix the plan:** return to PLAN, take the structural alternative (or say in the plan
+  why it is wrong), re-run Gate 1. Max 2 retries.
+- **Still BLOCK after 2 retries:** proceed. Log `gate1_override: true` and put each
+  blocking finding, with why you proceeded, in the DELIVER `attention_flags` (REPORT §10).
   The override is NOT silent: it is recorded in run.json for signal-quality tracking.
 
 ## Recording
@@ -136,7 +138,7 @@ Then repeat the same `gate1_*` keys in the `record` of the build `stage-complete
 Fields:
 - `gate1_verdict`: PASS, WARN, BLOCK or SKIPPED
 - `gate1_blocking`: always `true` (the gate is active); `false` only with SKIPPED
-- `gate1_override`: `true` if the user chose "Proceed Anyway" on a BLOCK
+- `gate1_override`: `true` if the run proceeded on a BLOCK after 2 plan revisions
 - `gate1_checks`: per-check detail for signal-quality tracking
 - `gate1_retries`: PLAN revisions attempted (0, 1 or 2)
 

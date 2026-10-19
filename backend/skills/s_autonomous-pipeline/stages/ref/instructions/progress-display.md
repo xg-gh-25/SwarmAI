@@ -37,7 +37,7 @@ PHASE C: DELIVERY    ⑧⑨⑩     — shared quality gate + knowledge loop
 → PASS | all 5 checks clean
   (or) → BLOCK | Check 4 SSA: plan targets symptom, not root cause
          Structural alternative: fix producer to guarantee dict shape
-         [Fix Plan]  [Proceed Anyway]
+         → revising the plan (retry 1/2)
 
 ## ★ GATE 2: ADVERSARIAL
 → 3 findings (1 HIGH, 2 LOW) | 3 fixed, 0 remaining

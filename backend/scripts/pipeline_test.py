@@ -7,11 +7,12 @@ structured evidence that ``stage-complete`` reads. One call per mode; zero model
 
 Modes:
 - ``tdd``        only the explicit ``--files`` (max 5); repeat counter per file
-- ``verify``     changed test files + recent failures + transitive importers of changed
-                 modules (direct importers; transitive ones are named in REPORT §10, not run);
-                 all of it runs, ``--deadline auto`` sizes the time to it) + tests
-                 naming a changed backend/scripts/*.py file (subprocess-driven)
-- ``regression`` L1 ac_coverage tests + L2 dependency scope + L3 import smoke
+- ``verify``     changed test files + recent failures + every direct importer of a changed
+                 module (transitive importers are named in REPORT §10, not run) + tests
+                 naming a changed (or renamed / deleted) backend/scripts/*.py file; all of
+                 it runs, across as many calls as it takes (``continue: true``)
+- ``regression`` L1 ac_coverage tests + L2 dependency scope + import smoke + the CI BVT
+                 manifest (``tests/bvt_manifest.txt``, the same files CI runs)
 - ``recheck``    previous evidence failures + tests affected by files changed since
 - ``probe``      G2 heavy probe with convergence rules (``--name N -- argv...``)
 - ``mutation``   mutation testing in a throwaway worktree (``--mutations spec.json``)
@@ -23,9 +24,10 @@ Usage (from the repo root or backend/):
 ``--deadline`` defaults to 95 s so the runner reports before the documented
 ``alarm 110`` wrapper, inside the Bash tool's 120 s default. A selection that does not
 fit is never cut: the output says ``continue: true`` with the ``unfinished`` count, and
-the SAME command runs only those tests next (repeat until ``continue`` is gone). Values
-above 100 s are allowed up to 1800 s (clamped) but warn: the outer alarm must then be at
-least deadline + 10 s. SIGTERM / SIGALRM /
+the SAME command runs only those tests next (repeat until ``continue`` is gone). The test
+modes refuse a deadline above 100 s (it would outlive ``alarm 110`` and die before
+reporting); only ``probe`` / ``mutation`` (one indivisible check) take up to 575 s, with
+the outer alarm at deadline + 10 s and the Bash tool timeout raised to match. SIGTERM / SIGALRM /
 SIGINT abort every running child process group, remove any private or
 half-created worktree (``git worktree remove --force`` + ``prune``) and print one
 JSON error object (exit 2). Worktrees are added with ``core.hooksPath=/dev/null``.
@@ -164,7 +166,7 @@ REVERSE_DEPTH = 1
 WRAPPER_ALARM_S = 110  # the documented perl alarm: under the Bash tool's 120 s default
 DEFAULT_DEADLINE = 95.0
 SAFE_DEADLINE = WRAPPER_ALARM_S - 10.0
-MAX_DEADLINE = 1800.0
+MAX_DEADLINE = 575.0  # probe / mutation only: one Bash call is capped at 600 s
 # Every call stays inside the 120 s Bash default (alarm 110, deadline 95). A selection
 # that does not fit is not cut and not refused: the unfinished tests are reported
 # (``unfinished``, ``continue: true``) and the SAME command runs only those next time
@@ -855,7 +857,7 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
     # by symbol name. Expert review 2026-10-19 showed name matching misses renames,
     # import rebinding, multi-line imports, getattr dispatch, multi-hop callers and
     # constructed subcommands: each a silent false green. The scope is fixed by the
-    # change and never capped; --deadline auto gives it the time.
+    # change and never capped; a scope that does not fit one call continues in the next.
     del cap
     importers = [t for t in sorted(rank, key=lambda t: (rank[t], t)) if t not in skip]
     return changed_tests + rec + importers, [], [m for m, _ in mods]
@@ -1368,6 +1370,27 @@ def _target_cost(f: str, sel, durations: dict) -> float:
     return sum(known) if known else DEFAULT_FILE_COST_S
 
 
+BVT_MANIFEST = "backend/tests/bvt_manifest.txt"
+
+
+def _bvt_files(repo: Path, warnings: list) -> list[str]:
+    """The CI BVT test files (``tests/bvt_manifest.txt``, parsed as ci.yml does: ``#``
+    comments and blanks dropped, one ``tests/``-relative path per line), repo-relative.
+    A listed file that is missing is warned (CI fails on it too)."""
+    text = _read_text(repo / BVT_MANIFEST)
+    out = []
+    for line in (text or "").splitlines():
+        name = line.split("#", 1)[0].strip()
+        if not name:
+            continue
+        f = f"backend/tests/{name}"
+        if (repo / f).is_file():
+            out.append(f)
+        else:
+            warnings.append(f"bvt_manifest.txt lists a missing file: {name} (CI fails on it)")
+    return list(dict.fromkeys(out))
+
+
 def _cost_bins(items: list, workers: int, durations: dict) -> list[tuple[int, list[str]]]:
     """Pack non-serial targets into shards of about one cost share each, in priority order.
 
@@ -1387,6 +1410,7 @@ def _cost_bins(items: list, workers: int, durations: dict) -> list[tuple[int, li
         if sel is not None:
             rest = set(sel) - set(out_n)  # the AC-lead ids run in the lead, not here
             whole.append({"rank": rank, "file": None, "args": args, "known": None,
+                          "ids": sorted(rest),
                           "cost": sum(durations.get(n, DEFAULT_TEST_COST_S) for n in rest)})
             continue
         known = [n for n in by_file.get(f, []) if not _matches_any(n, out_n)]
@@ -1396,7 +1420,10 @@ def _cost_bins(items: list, workers: int, durations: dict) -> list[tuple[int, li
     share = sum(u["cost"] for u in whole) / nbins
     units: list[dict] = []
     for u in whole:
-        chunks = _split_file(u, share, nbins, durations) if u["known"] and u["cost"] > share else None
+        if u.get("ids") and u["cost"] > share:
+            chunks = _split_ids(u, share, nbins, durations)
+        else:
+            chunks = _split_file(u, share, nbins, durations) if u["known"] and u["cost"] > share else None
         units += chunks or [{**u, "sub": 0}]
     groups: list[dict] = []
     cur: dict | None = None
@@ -1410,6 +1437,26 @@ def _cost_bins(items: list, workers: int, durations: dict) -> list[tuple[int, li
         if u["file"] is not None:
             cur["files"].add(u["file"])
     return [(g["rank"], g["args"]) for g in groups]
+
+
+def _split_ids(u: dict, share: float, nbins: int, durations: dict) -> list[dict] | None:
+    """Split one heavy nodeid-set unit (a continuation's unfinished tests of one file)
+    into chunks of about one share by test family, so the rest of a slow file spreads
+    over every worker instead of one shard. Family order is kept inside each chunk."""
+    fams: dict[str, list[str]] = {}
+    for n in u["ids"]:
+        fams.setdefault(_family(n), []).append(n)
+    n_chunks = min(int(-(-u["cost"] // share)) if share > 0 else 1, nbins, len(fams))
+    if n_chunks < 2:
+        return None
+    chunks = [[0.0, []] for _ in range(n_chunks)]
+    for fam, ids in fams.items():
+        ch = min(chunks, key=lambda x: (x[0], len(x[1])))
+        ch[0] += sum(durations.get(n, DEFAULT_TEST_COST_S) for n in ids)
+        ch[1] += ids
+    return [{"rank": u["rank"], "file": None, "known": None, "sub": i, "cost": c,
+             "args": [_backend_rel(n) for n in ids]}
+            for i, (c, ids) in enumerate(ch for ch in chunks if ch[1])]
 
 
 def _split_file(u: dict, share: float, nbins: int, durations: dict) -> list[dict] | None:
@@ -2912,16 +2959,19 @@ def _circuit_breaker_check(ev_root: Path, mode: str) -> dict | None:
         return None
     runs = [e for e in idx if isinstance(e, dict) and e.get("kind") == "run"
             and e.get("mode") in ("verify", "recheck", "regression")]
-    if len(runs) >= CIRCUIT_MAX_ROUNDS:
+    # a continuation (same inputs, only the unfinished tests: auto_recheck_of) is the
+    # same round, not a new one — a 90-file scope takes ~5 calls per round
+    rounds = [e for e in runs if not e.get("auto_recheck_of")]
+    if len(rounds) >= CIRCUIT_MAX_ROUNDS:
         return _breaker_result(
-            mode, f"{len(runs)} verify/recheck/regression rounds in this run (hard limit "
+            mode, f"{len(rounds)} verify/recheck/regression rounds in this run (hard limit "
             f"{CIRCUIT_MAX_ROUNDS}) — the build<->verify loop is not converging")
-    vr = [e for e in runs if e.get("mode") in ("verify", "recheck")]
+    vr = runs  # regression too: a continuation that stops shrinking is a stall
     sigs = [tuple(e.get("blocking_sig") or []) for e in vr[-CIRCUIT_STALL_ROUNDS:]]
     if len(sigs) >= CIRCUIT_STALL_ROUNDS and sigs[0] and all(s == sigs[0] for s in sigs):
         shown = list(sigs[0])[:5]
         return _breaker_result(
-            mode, f"{CIRCUIT_STALL_ROUNDS} consecutive verify/recheck rounds left the SAME "
+            mode, f"{CIRCUIT_STALL_ROUNDS} consecutive verify/recheck/regression calls left the SAME "
             f"blocking failure(s) unfixed ({', '.join(shown)}"
             f"{'...' if len(sigs[0]) > 5 else ''}) — re-running is not making progress")
     return None
@@ -3305,6 +3355,54 @@ def _probe_rows(ctx, ev_root: Path, refs: list[str], changed: list[str]) -> list
     return rows
 
 
+CONTEXT_REPLAY_MAX_S = 20.0  # recorded seconds of earlier same-file tests a continuation replays
+
+
+def _replay_file_context(ctx, plan: dict, prev: dict, prev_failures: list) -> None:
+    """A continuation runs a file's unfinished tests in a fresh process, without the
+    tests that ran before them in that file: one that only fails after an earlier
+    test's leftovers would pass here (red-team 2026-10-19). So, per file, replay the
+    tests that already passed earlier in it, then the unfinished ones, as ONE ordered
+    job, when that prefix costs at most CONTEXT_REPLAY_MAX_S recorded seconds. A
+    longer prefix is not replayed (it would eat the call and never finish) and the
+    tests run alone, named in a warning so the evidence says so."""
+    unfinished: dict[str, list[str]] = {}
+    for f in prev_failures:
+        n = str(f.get("nodeid") or "")
+        if ((f.get("deadline") or f.get("notrun")) and not f.get("order_dependent")
+                and n.startswith("backend/") and "::" in n and not f.get("nodeid_truncated")):
+            unfinished.setdefault(n.split("::")[0], []).append(n)
+    if not unfinished:
+        return
+    order = [r["nodeid"] for r in prev.get("results") or []
+             if isinstance(r, dict) and isinstance(r.get("nodeid"), str)]
+    passed = {r["nodeid"] for r in prev.get("results") or []
+              if isinstance(r, dict) and r.get("outcome") == "passed"}
+    alone = 0
+    for file, ids in unfinished.items():
+        first = min((order.index(n) for n in ids if n in order), default=None)
+        pre = [n for n in order[:first or 0] if n.split("::")[0] == file and n in passed]
+        if not pre:
+            continue
+        cost = sum(ctx.durations.get(n, DEFAULT_TEST_COST_S) for n in pre)
+        if cost > CONTEXT_REPLAY_MAX_S or len(pre) + len(ids) > PREFIX_KEEP_ARGS:
+            alone += len(ids)
+            continue
+        sel = plan["targets"].get(file)
+        if isinstance(sel, (set, list)):
+            rest = [n for n in sel if n not in set(ids)]
+            if rest:
+                plan["targets"][file] = type(sel)(rest)
+            else:
+                plan["targets"].pop(file, None)
+        plan.setdefault("ordered", []).append([_backend_rel(n) for n in pre + ids])
+    if alone:
+        ctx.warnings.append(
+            f"{alone} unfinished test(s) continued without replaying the earlier tests of "
+            f"their file (that prefix records over {CONTEXT_REPLAY_MAX_S:g}s): an order "
+            "dependence on those earlier tests would not show in this call")
+
+
 def _od_context_args(repo: Path, f: dict) -> list[str] | None:
     """Ordered backend-relative shard args that reproduce an ``order_dependent``
     failure ``f``'s context: its recorded ``prefix``, else ``[culprit, own arg]``.
@@ -3380,6 +3478,7 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                 plan["rechecked"] += 1
             else:
                 lost.append(n or "<no nodeid>")
+        _replay_file_context(ctx, plan, prev, prev_failures)
         before = prev.get("changed_files") if isinstance(prev.get("changed_files"), dict) else {}
         scope = [f for f in changed if before.get(f) != _file_digest(ctx.repo / f)]
         if plan["base_mode"] == "regression":
@@ -3426,6 +3525,11 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
         names = list(mods)
         plan["smoke"] = {m: mods[m] for m in names[:SMOKE_CAP]}
         plan["skipped"] += [f"import::{m}" for m in names[SMOKE_CAP:]]
+        # L3: the CI BVT, run here because the pipeline stops at a local commit and never
+        # sees CI. Same manifest CI reads; lowest priority, never cut.
+        plan["bvt"] = [f for f in _bvt_files(ctx.repo, ctx.warnings) if f not in plan["targets"]]
+        for f in plan["bvt"]:
+            _add_target(plan["targets"], f, None)
     # A desktop failure being rechecked reruns the run's desktop files even if none
     # changed since: the failure is the reason to run, not a digest change.
     plan["desktop"] = [f for f in (changed if plan.get("desktop_recheck") else scope)
@@ -3499,6 +3603,14 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
             and f.get("nodeid") not in in_ctx
             and (new.get(f.get("nodeid")) or {}).get("outcome") not in _FAIL}
     new = {n: r for n, r in new.items() if n not in held}
+    # A shard that never started is recorded under a FILE-level placeholder; once the
+    # recheck reports that file's tests, the placeholder is answered (it used to stay a
+    # timeout forever, so a continuation never went green).
+    answered = {n for n, r in old.items() if "::" not in n and n not in new
+                and (r.get("notrun") or r.get("outcome") == "timeout")
+                and any(k.startswith(n + "::") for k in new)}
+    old = {n: r for n, r in old.items() if n not in answered}
+    base_fails = [f for f in base_fails if f.get("nodeid") not in answered]
     results = [new.get(n, r) for n, r in old.items()] + [r for n, r in new.items() if n not in old]
     counts = {"passed": 0, "failed": 0, "errors": 0, "timeouts": 0, "skipped": 0}
     for r in results:
@@ -3518,6 +3630,10 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
     if "import_smoke" in layers:
         layers["import_smoke"]["pass"] = layers["import_smoke"].get("pass", 0) + gained(
             lambda n: n.startswith("import::"))
+    if "ci_bvt" in layers:
+        bvt_set = set(base.get("bvt_files") or [])
+        layers["ci_bvt"]["pass"] = layers["ci_bvt"].get("pass", 0) + gained(
+            lambda n: n.split("::")[0] in bvt_set)
     if base.get("mode") == "regression" and ac_entries:
         layers["ac_driven"] = _ac_layer(repo, ac_entries, results)
     ev = dict(base)
@@ -3681,7 +3797,9 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
         if tokens:
             tokens = _trim_tokens(tokens, jobs)
             ctx.workers = len(tokens)  # re-runs in classify_failures stay inside them too
-        main_end = ctx.deadline_at - min(20.0, deadline * 0.25)
+        # reserve for classifying real failures (HEAD baseline, prefix re-runs); a call cut
+        # by the deadline needs none of it, so keep it small: more tests per call
+        main_end = ctx.deadline_at - min(12.0, deadline * 0.15)
         _run_jobs(jobs, ctx.workers, main_end)
         results = _results_with_requeue(ctx, jobs, main_end, "main")
         if ordered:
@@ -3778,6 +3896,9 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
     failures = [{**_capped_id(r["nodeid"], refs), "classification": cls.get(r["nodeid"], "unknown"),
                  "summary": "\n".join(r["summary"][:STACK_LINES + 1]),
                  "outcome": r["outcome"], "deadline": bool(r.get("deadline")),
+                 # never started (a deadline / per-test timeout ended its shard first):
+                 # unfinished work for the next call, not a code failure
+                 **({"notrun": True} if r.get("notrun") and not r.get("runner_error") else {}),
                  **getattr(ctx, "order_dep", {}).get(r["nodeid"], {})}
                 for r in results if r["outcome"] in _FAIL]
     dl_timeouts = sum(1 for f in failures if f.get("classification") == "timeout")
@@ -3799,6 +3920,11 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
         "import_smoke": {"run": bool(smoke), "modules": len(smoke),
                          "pass": sum(r["outcome"] == "passed" for r in smoke)},
     }
+    if plan.get("bvt"):
+        bvt_set = set(plan["bvt"])
+        bvt = [r for r in results if _rfile(r) in bvt_set and not r.get("layer")]
+        layers["ci_bvt"] = {"run": True, "files": len(bvt_set), "tests": len(bvt),
+                            "pass": sum(r["outcome"] == "passed" for r in bvt)}
     ev = {"schema": 1, "mode": ns.mode, "run_id": ns.run_id, "started_at": started_at,
           "finished_at": _now_iso(), "duration_s": round(time.monotonic() - ctx.t0, 2),
           "cached": False,
@@ -3807,6 +3933,7 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
                                       for a in o if not a.startswith(_SHARD_MODIFIERS)}),
           "skipped_for_budget": plan["skipped"], "counts": counts,
           "transitive_unrun": list(plan.get("transitive_unrun") or []),
+          **({"bvt_files": list(plan["bvt"])} if plan.get("bvt") else {}),
           "results": [{k: v for k, v in r.items() if k != "_reused"} if r.get("_reused")
                       else {**_evidence_result(r, refs),
                             **({"requeued": True} if r.get("requeued") else {})}
@@ -3896,7 +4023,7 @@ def _test_output(ev: dict, path: Path) -> dict:
            "skipped_for_budget_total": len(skipped),
            "transitive_unrun_total": len(ev.get("transitive_unrun") or []),
            "evidence": str(path), "warnings": ev.get("warnings") or []}
-    unfinished = sum(1 for f in fails if f.get("deadline"))
+    unfinished = sum(1 for f in fails if f.get("deadline") or f.get("notrun"))
     if unfinished:  # cut by this call's deadline: the same command continues with them
         out.update(unfinished=unfinished, **{"continue": True})
     if ev.get("mode") in ("regression", "verify", "recheck"):
@@ -4249,6 +4376,13 @@ def execute(ns) -> tuple[dict, int]:
     deadline, dl_warn = _clamp_deadline(ns.deadline)
     if deadline is None:
         return {"error": dl_warn[0]}, 2
+    if ns.mode in TEST_MODES and deadline > SAFE_DEADLINE:
+        # it would outlive the documented alarm 110 and die before writing evidence;
+        # a scope that needs longer continues across calls instead
+        return {"error": f"--deadline {deadline:g}s is over {SAFE_DEADLINE:g}s, the most a "
+                         f"--mode {ns.mode} call may take: drop --deadline (default "
+                         f"{DEFAULT_DEADLINE:g}s); a scope that does not fit continues in the "
+                         "next call of the same command (continue: true)"}, 2
     repo, wt_err = _target_repo(ns.run_id, run_state)
     if wt_err:
         return {"error": wt_err}, 2

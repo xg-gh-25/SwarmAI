@@ -7,15 +7,16 @@ validator deferral) are driven directly with those files.
 
 Invariants:
 - outcome: nothing open → converged; open with rounds left → recheck; open and capped
-  with no verdict → root_cause; WRONG-APPROACH once → redesign; WRONG-APPROACH after a
-  redesign, or SOUND → sound. NOT RESOLVED, a blocking report and an unparsed answer
+  with no verdict → root_cause; any verdict (SOUND or WRONG-APPROACH) → sound: no
+  redesign, no 4th round (MAX_REDESIGNS = 0). NOT RESOLVED, a blocking report and an unparsed answer
   are open; a non-blocking report is not; an old-daemon row is unjudged
 - the hook parses `ROOT-CAUSE VERDICT: SOUND | WRONG-APPROACH` (most severe wins)
 - gate2-recheck: converged → no prompt; capped → writes root-cause.md (EXPERT-ID first
   line, requirement, rounds, open items) and prints its spawn; verdict present → points
   at stage-complete; never writes a round-4 re-check
-- stage-complete: root_cause → E_ROOT_CAUSE_REQUIRED; redesign → E_REDESIGN and ONE
-  persisted redesign; after a redesign, PLAN must be redone and Gate-2 must restart;
+- stage-complete: root_cause → E_ROOT_CAUSE_REQUIRED; WRONG-APPROACH → no error, the
+  verdict in the warning; a legacy run with a recorded redesign must still redo PLAN and
+  restart Gate-2;
   sound → no error, a warning; no outcome → the older checks decide (None)
 - rows before the latest redesign, outside DELIVER, of another run, or adversarial
   twins are not counted; the rule applies only from its cutover
@@ -58,7 +59,7 @@ LOW = {"severity": "LOW", "file": "a.py", "finding": "naming"}
      [], 0, "converged"),
     ({"correctness": [_row(reported=[HIGH])] * 2 + [_row(answers={"1": "NOT RESOLVED"})]},
      [], 0, "root_cause"),
-    ({"red-team": [_row(reported=[HIGH])] * 3}, [{"verdict": "WRONG-APPROACH"}], 0, "redesign"),
+    ({"red-team": [_row(reported=[HIGH])] * 3}, [{"verdict": "WRONG-APPROACH"}], 0, "sound"),
     ({"red-team": [_row(reported=[HIGH])] * 3}, [{"verdict": "WRONG-APPROACH"}], 1, "sound"),
     ({"red-team": [_row(reported=[HIGH])] * 3}, [{"verdict": "SOUND"}], 0, "sound"),
     ({"security": [_row(state="unparsed")] * 3}, [], 0, "root_cause"),
@@ -183,15 +184,17 @@ def test_stage_complete_errors_per_action(env):
     _marker(audit, 9, "root-cause", t0 + 400, verdict="WRONG-APPROACH",
             verdict_text="ROOT-CAUSE VERDICT: WRONG-APPROACH\navoid regex redaction")
     out = cli._gate2_outcome(RID, run_dir, state)
-    errs = cli._gate2_convergence_errors(RID, rf, state, out, [])
-    assert errs[0].startswith("E_REDESIGN:") and "Do not ask the user" in errs[0]
-    saved = json.loads(rf.read_text())
-    assert len(saved["redesigns"]) == 1 and "avoid regex" in saved["redesigns"][0]["root_cause_text"]
-    assert saved["interventions"][-1]["kind"] == "redesign"
-    cli._record_redesign(rf, out)                                          # idempotent
-    assert len(json.loads(rf.read_text())["redesigns"]) == 1
+    warns: list = []
+    # 再一再二不再三: WRONG-APPROACH after round 3 is recorded, not redesigned
+    assert out["action"] == "sound" and out["root_cause"] == "WRONG-APPROACH"
+    assert cli._gate2_convergence_errors(RID, rf, state, out, warns) == []
+    assert "WRONG-APPROACH" in warns[0] and "push_ready is false" in warns[0]
+    assert not json.loads(rf.read_text()).get("redesigns")
 
-    # redesign recorded, PLAN not redone yet
+    # a legacy run already sent back to PLAN still has to redo it
+    cli._record_redesign(rf, out)
+    saved = json.loads(rf.read_text())
+    assert len(saved["redesigns"]) == 1
     errs = cli._gate2_convergence_errors(RID, rf, saved, cli._gate2_outcome(RID, run_dir, saved), [])
     assert errs[0].startswith("E_REDESIGN_PENDING")
     # PLAN redone, but no Gate-2 round 1 on the new change
@@ -210,7 +213,7 @@ def test_second_miss_after_redesign_is_sound(env):
     assert out["action"] == "sound" and out["redesigns_used"] == 1
     warns = []
     assert cli._gate2_convergence_errors(RID, run_dir / "run.json", state, out, warns) == []
-    assert "SOUND (after a redesign)" in warns[0] and "push_ready is false" in warns[0]
+    assert "WRONG-APPROACH (after a redesign)" in warns[0] and "push_ready is false" in warns[0]
 
 
 def test_validator_defers_only_tool_tagged_findings_and_never_for_push_ready():

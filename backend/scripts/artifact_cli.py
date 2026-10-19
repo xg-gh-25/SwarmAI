@@ -9976,8 +9976,9 @@ def _derive_stage_fields(
                 _why = " ".join(str(_g2.get("root_cause_text") or "").split())[:400]
                 _flag = (f"[gate2] Did not converge in 3 review rounds"
                          f"{' (after one redesign)' if _g2.get('redesigns_used') else ''}; "
-                         f"root-cause review: SOUND — {_why or 'no reasons captured'}. Still open "
-                         f"({len(_open)}): " + "; ".join(_open[:12]))
+                         f"root-cause review: {_g2.get('root_cause') or 'SOUND'} — "
+                         f"{_why or 'no reasons captured'}. Still open "
+                         f"({len(_open)}): " + "; ".join(_open))
                 artifact["attention_flags"] = [f for f in artifact.get("attention_flags") or []
                                                if not (isinstance(f, str) and f.startswith("[gate2] "))] + [_flag]
         bound, reasons, ev_warns = _deliver_push_ready_bound(
@@ -10041,8 +10042,8 @@ def _untested_for_budget_flag(run_dir: "Path | None", run_id: str) -> "str | Non
     if not (trans or smoke or other):
         return None
 
-    def names(xs):
-        return ", ".join(Path(x).name for x in xs[:6]) + (f" (+{len(xs) - 6})" if len(xs) > 6 else "")
+    def names(xs):  # every path, repo-relative: REPORT §10 must show all that did not run
+        return ", ".join(xs)
     parts = []
     if trans:
         parts.append(f"{len(trans)} test file(s) reach a changed module only through other "
@@ -10051,9 +10052,9 @@ def _untested_for_budget_flag(run_dir: "Path | None", run_id: str) -> "str | Non
         parts.append(f"{len(other)} selected test file(s) were not run: {names(other)}")
     if smoke:
         parts.append(f"{len(smoke)} changed module(s) past the import-smoke cap were not "
-                     f"import-checked: {', '.join(m[len('import::'):] for m in smoke[:6])}")
+                     f"import-checked: {', '.join(m[len('import::'):] for m in smoke)}")
     return (f"{_RUNNER_FLAG_PREFIX}Not tested in this run ({ev.get('mode')}): "
-            + "; ".join(parts) + ". CI BVT or a later run covers them")
+            + "; ".join(parts))
 
 
 def _stage_boundary_fail(stage: str, errors: "list[str]", *, data=None, record=None,
@@ -11553,8 +11554,8 @@ def cmd_gate2_recheck(args, reg: ArtifactRegistry) -> None:
                           "warnings": ["Gate-2 used all 3 rounds with blocking findings open: "
                                        "no 4th round. Spawn this ONE root-cause review exactly "
                                        "as printed, then stage-complete --stage deliver (SOUND "
-                                       "→ local commit with the open items in REPORT §10; "
-                                       "WRONG-APPROACH → back to PLAN once). Do not ask the user."]},
+                                       "or WRONG-APPROACH → local commit with the verdict and "
+                                       "the open items in REPORT §10). Do not ask the user."]},
                          ensure_ascii=False))
         return
     if isinstance(g2, dict) and g2["action"] in ("sound", "redesign"):
@@ -11807,7 +11808,8 @@ def _gate2_convergence_errors(run_id: str, run_file: "Path | None", run_state: d
     if action == "sound":
         warnings.append(
             "Gate-2 did not converge in 3 rounds; the root-cause review judged the approach "
-            f"SOUND{' (after a redesign)' if out.get('redesigns_used') else ''}: "
+            f"{out.get('root_cause') or 'SOUND'}"
+            f"{' (after a redesign)' if out.get('redesigns_used') else ''}: "
             f"{sum(len(v) for v in (out.get('open') or {}).values())} open item(s) go to "
             "REPORT §10, push_ready is false, run-commit commits locally")
         return []

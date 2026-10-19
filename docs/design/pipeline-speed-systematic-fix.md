@@ -128,7 +128,7 @@ python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --
 
 ### B. 测试：范围由工具算，归类由工具判
 
-> **已部分废弃（2026-10-19）**：本节里 L2 的 40 个文件上限、按耗时截断、`skipped_for_budget` 溢出都已不再适用，以 §6 末尾「B 的修订」为准。每次调用仍是 `alarm 110` + 95 秒截止，但选中的测试一个不砍：一次跑不完，输出 `continue: true`，再跑同一条命令只补跑没跑完的。这里的 L1/L2/L3 是 TEST 阶段内部的分层，和「第 3 层 = CI BVT」不是一回事。
+> **已部分废弃（2026-10-19）**：本节里 L2 的 40 个文件上限、按耗时截断、`skipped_for_budget` 溢出都已不再适用，以 §6 末尾「B 的修订」为准。每次调用仍是 `alarm 110` + 95 秒截止，但选中的测试一个不砍：一次跑不完，输出 `continue: true`，再跑同一条命令只补跑没跑完的。现在 L3 = 本地跑 CI 的 BVT 清单 + import smoke。
 
 **实测：测试问题有两种，碎片化比范围过大更普遍**
 
@@ -151,7 +151,7 @@ python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --
    |---|---|---|
    | `tdd` | BUILD 的 RED/GREEN 循环 | 显式列出的测试文件，最多 5 个 |
    | `verify` | BUILD 结束 | 本次改动的测试 + 直接 import 了改动模块的测试 |
-   | `regression` | TEST 阶段 | L1（ac_coverage 声明的测试）+ L2（依赖范围，最多 40 个文件）+ L3（import smoke），一次调用全部跑完 |
+   | `regression` | TEST 阶段 | L1（ac_coverage 声明的测试）+ L2（全部直接依赖）+ L3（CI BVT 清单 + import smoke），跑不完就续跑 |
    | `recheck` | 修复之后（TEST、DELIVER） | 上次失败的测试 + 受本次修改影响的测试 |
 
 3. **没变就不重跑。** runner 以"测试文件 + 它 import 的源文件"的内容摘要作为缓存键。输入没变时直接返回上次结果，标记为 `cached`，耗时为 0。
@@ -481,7 +481,7 @@ E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完�
 - 只经过其他模块间接依赖改动的测试不跑，由 runner 列在 `transitive_unrun`，DELIVER 写进 REPORT §10。
 - 曾经试过按函数名缩小测试范围，四个 expert 评审后撤掉了：改名、import 重新绑定、多行 import、`getattr`、多跳调用、拼接出来的子命令都会漏选，造成假绿。
 - 完整的 import 闭包会覆盖 559 到 565 个测试文件（约 39 分钟），等于全量，所以不用。
-- 第 3 层只用 CI 的 BVT。
+- 第 3 层是 CI 的 BVT。pipeline 只做本地提交、看不到 CI，所以 `regression` 在本地跑同一份清单（`backend/tests/bvt_manifest.txt`，约 42 个文件），和 L1、L2 同一次调用、同样续跑。
 
 ## 7. 风险与对策
 
@@ -489,7 +489,7 @@ E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完�
 |---|---|
 | stage-complete 变成绕过 gate 的通道 | 内部只调用现有的 `validate_artifact_data` 和 `validate_stage_state`。现有每个 gate 的测试参数化一份，经 stage-complete 再跑一遍，必须同样拦住。 |
 | 拆文档时规则丢失 | C3 的规则 ID 保全检查不全绿就不合入。 |
-| 测试跑不完漏掉回归 | 不截断：没跑完的测试标为 `timeout`（不算通过），同一条命令续跑；只经间接依赖的测试列进 `transitive_unrun` 和 REPORT §10；CI 的 BVT 兜底。 |
+| 测试跑不完漏掉回归 | 不截断：没跑完的测试标为 `timeout`（不算通过），同一条命令续跑；只经间接依赖的测试全部列进 `transitive_unrun` 和 REPORT §10；BVT 在本地 `regression` 里跑。 |
 | 基线 worktree 和真实环境有差异 | 只用来判断失败测试的归属，不用来宣告通过；复用同一个 venv；缓存按 sha 作键。 |
 | test gate 拖慢 TDD 循环 | TDD 通过 runner 的 `tdd` 模式执行，不做选择也不分片，开销与直接跑 pytest 相当；gate 只在当前 session 有运行中的 run 时生效；deny 消息给出可以直接执行的 runner 命令。 |
 | 兄弟 skill 依赖旧命令 | 旧命令全部保留；`test_advance_continuation` 的兄弟 skill 契约不变。 |

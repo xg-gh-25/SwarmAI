@@ -11,8 +11,9 @@ One call per mode, foreground, never split; no full suite (STEERING R9).
 1. **L1+L2+L3 in one call:** `RUN --mode regression`. L1 = BUILD `ac_coverage` tests, L2 =
    every direct importer of a changed module (+ tests naming a changed script); all of
    it runs, over as many calls as it takes (`continue: true` → same command again);
-   transitive importers are listed for REPORT §10, not run. L3 =
-   import smoke; `desktop/src` changes add `vitest related` + `tsc`. Run it fresh even
+   transitive importers are listed for REPORT §10, not run. L3 = the CI BVT
+   (`tests/bvt_manifest.txt`, run locally: the run never sees CI) + import smoke;
+   `desktop/src` changes add `vitest related` + `tsc`. Run it fresh even
    if BUILD was green (post-refactor tree). Zero L2 files, non-SwarmAI stack, skips:
    `ref/test/layers.md`.
 2. **Classify** by `failures[].classification`: `regression` / `new` → fix the CODE,

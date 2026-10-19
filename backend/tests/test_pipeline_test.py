@@ -852,6 +852,8 @@ def test_not_run_tests_get_no_head_baseline_and_fail(rig, capsys, tmp_path, monk
     ev = _evidence(tmp_path, "tests/latest-verify.json")
     got = {f["nodeid"].split("::")[-1]: f["classification"] for f in ev["failures"]}
     assert got == {"test_a_dies": "unknown", "test_b": "unknown"}, got
+    # test_b never started: unfinished work for the next call, not a code failure
+    assert out.get("continue") is True and out["unfinished"] == 1, out
     sha = _git(repo, "rev-parse", "HEAD").strip()
     bpath = pt._baseline_path(tmp_path / "cache", sha)
     base = json.loads(bpath.read_text()) if bpath.exists() else {}
@@ -1662,3 +1664,71 @@ def test_a_deleted_modules_transitive_tests_are_listed(rig, tmp_path):
     sel, _, _ = pt.select_backend(repo, ["backend/core/gone2.py"], graph, 40, (), sgraph)
     assert "backend/tests/test_wrap2.py" in pt.transitive_unselected(
         repo, sgraph, graph, ["backend/core/gone2.py"], sel)
+
+
+def test_test_modes_refuse_a_deadline_that_outlives_alarm_110(rig, capsys):
+    rig()
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "300")
+    assert code == 2 and "continue" in out["error"], out
+    d, _ = pt._clamp_deadline(5000)
+    assert d == pt.MAX_DEADLINE == 575  # probe / mutation ceiling
+
+
+def test_continuations_are_one_round_for_the_circuit_breaker(tmp_path):
+    tdir = tmp_path / "tests"
+    tdir.mkdir()
+    rows = [{"kind": "run", "mode": "regression", "blocking_sig": [f"t{i}"]}
+            for i in range(3)]
+    rows += [{"kind": "run", "mode": "regression", "auto_recheck_of": "regression",
+              "blocking_sig": [f"c{i}"]} for i in range(pt.CIRCUIT_MAX_ROUNDS)]
+    (tdir / pt.RUN_INDEX).write_text(json.dumps(rows))
+    assert pt._circuit_breaker_check(tmp_path, "regression") is None
+    # the same unfinished set four calls running is a stall, regression included
+    stall = rows + [{"kind": "run", "mode": "regression", "auto_recheck_of": "regression",
+                     "blocking_sig": ["x"]}] * pt.CIRCUIT_STALL_ROUNDS
+    (tdir / pt.RUN_INDEX).write_text(json.dumps(stall))
+    assert pt._circuit_breaker_check(tmp_path, "regression")["circuit_breaker"]["tripped"]
+
+
+def test_a_continuation_replays_the_earlier_tests_of_the_file(rig, tmp_path, capsys):
+    """test_b only passes after test_a set the module state; the first call is cut at
+    test_b. The continuation must run test_a again before it (alone, test_b fails)."""
+    flag = tmp_path / "slow-once"
+    body = ("import os, time\nfrom core import mod\nSTATE = {}\n\n\n"
+            "def test_a():\n    STATE['x'] = mod.add(1, 1)\n\n\n"
+            f"def test_b():\n    if not os.path.exists({str(flag)!r}):\n"
+            f"        open({str(flag)!r}, 'w').close()\n        time.sleep(30)\n"
+            "    assert STATE.get('x') == 2\n")
+    repo = rig({"backend/tests/test_ctx.py": body},
+               run_state={"files_touched": ["backend/core/mod.py"]})
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "8")
+    assert out.get("continue") is True, out
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "8")
+    assert code == 0 and "continue" not in out, out
+    ev = _evidence(tmp_path, "tests/latest-verify.json")
+    assert "backend/tests/test_x.py" not in {r["nodeid"] for r in ev["results"]}  # placeholder answered
+
+
+def test_bvt_manifest_files_join_the_regression_scope(rig, tmp_path, capsys):
+    repo = rig({"backend/tests/test_bvt_one.py": "def test_ok():\n    assert True\n",
+                "backend/tests/bvt_manifest.txt": "# CI BVT\ntest_bvt_one.py  # pure\n\nmissing.py\n"},
+               run_state={"files_touched": ["backend/core/mod.py"]})
+    warns: list = []
+    assert pt._bvt_files(repo, warns) == ["backend/tests/test_bvt_one.py"]
+    assert "missing.py" in warns[0]
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert ev["layers"]["ci_bvt"]["files"] == 1 and ev["layers"]["ci_bvt"]["pass"] == 1, ev["layers"]
+    assert "backend/tests/test_bvt_one.py::test_ok" in {r["nodeid"] for r in ev["results"]}
+
+
+def test_a_heavy_continuation_file_spreads_over_workers():
+    ids = [f"backend/tests/test_h.py::test_{i}" for i in range(8)]
+    dur = {n: 10.0 for n in ids}
+    items = [(0, "backend/tests/test_h.py", set(ids), set(), [pt._backend_rel(n) for n in ids])]
+    bins = pt._cost_bins(items, 4, dur)
+    assert len(bins) >= 4
+    got = [a for _, args in bins for a in args]
+    assert sorted(got) == sorted(pt._backend_rel(n) for n in ids)  # each test exactly once

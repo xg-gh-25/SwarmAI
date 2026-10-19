@@ -118,8 +118,9 @@ CONVERGENCE NOT REACHED after 3 iterations:
   Next step: [what a follow-up run should change]
 ```
 then complete DELIVER with `push_ready: false` (reason recorded) and let `run-commit` commit
-locally. Gate-2's own non-convergence is handled by the tool (root-cause review: SOUND → local
-commit, WRONG-APPROACH → one redesign); push stays gated by push_ready.
+locally. Gate-2's own non-convergence is handled by the tool (one root-cause review after
+round 3; SOUND or WRONG-APPROACH → local commit, verdict + open items in REPORT §10, no
+redesign, no 4th round); push stays gated by push_ready.
 
 Per-stage feedback loops are shift-left prevention; the convergence loop is the final gate for
 issues that only emerge at the system level. Neither alone is sufficient.
