@@ -216,6 +216,8 @@
     "permission": {
       "title": "Permission Required",
       "awaiting": "Awaiting decision",
+      "timedOut": "Timed out",
+      "timesOutIn": "Times out in",
       "flagged": "Flagged:"
     },
     "queued": {

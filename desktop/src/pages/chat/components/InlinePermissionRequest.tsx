@@ -9,7 +9,10 @@
  * 1. Pending — command + reason + Deny/Approve buttons + countdown
  * 2. Approved — collapsed, green "Approved" badge
  * 3. Denied — collapsed, red "Denied" badge
- * 4. Expired — collapsed, muted "Timed out" badge
+ * 4. Expired — collapsed, muted "Timed out" badge. Display only: the card never
+ *    sends a decision on its own. The backend owns the timeout (4 h,
+ *    PERMISSION_ANSWER_TIMEOUT_SECONDS) and answers the tool call with a distinct
+ *    "审批超时" reason, so an unanswered prompt never reads as a user denial.
  *
  * @exports InlinePermissionRequest
  */
@@ -18,8 +21,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 
-/** Total timeout in milliseconds (2 hours — user may be away at lunch/meeting). */
-const TIMEOUT_MS = 7_200_000;
+/** Display timeout in ms — mirrors backend PERMISSION_ANSWER_TIMEOUT_SECONDS (4 h).
+ *  Counted from when this card mounted, so it can only run out AFTER the backend's. */
+export const TIMEOUT_MS = 14_400_000;
 /** Show countdown when remaining time <= this value (ms). */
 const COUNTDOWN_THRESHOLD_MS = 300_000;
 
@@ -52,15 +56,16 @@ export function InlinePermissionRequest({
   const { t } = useTranslation();
   const [remainingMs, setRemainingMs] = useState(TIMEOUT_MS);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const autoDeniedRef = useRef(false);
+  const [expired, setExpired] = useState(false);
   const [localDecision, setLocalDecision] = useState<'approve' | 'deny' | null>(null);
 
   const effectiveDecision = decision || localDecision;
   const command = (toolInput?.command as string) || JSON.stringify(toolInput, null, 2);
 
-  // Countdown timer — only when pending
+  // Countdown timer — only when pending. Running out only marks the card expired;
+  // it never calls onDecision (the backend answers the call with its own timeout).
   useEffect(() => {
-    if (!isPending || effectiveDecision) return;
+    if (!isPending || effectiveDecision || expired) return;
 
     const startTime = Date.now();
     timerRef.current = setInterval(() => {
@@ -68,32 +73,30 @@ export function InlinePermissionRequest({
       const remaining = Math.max(0, TIMEOUT_MS - elapsed);
       setRemainingMs(remaining);
 
-      if (remaining <= 0 && !autoDeniedRef.current) {
-        autoDeniedRef.current = true;
+      if (remaining <= 0) {
         if (timerRef.current) clearInterval(timerRef.current);
-        setLocalDecision('deny');
-        onDecision?.(requestId, 'deny');
+        setExpired(true);
       }
     }, 1000);
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isPending, effectiveDecision, requestId, onDecision]);
+  }, [isPending, effectiveDecision, expired]);
 
   const handleApprove = useCallback(() => {
-    if (!isPending || effectiveDecision) return;
+    if (!isPending || effectiveDecision || expired) return;
     if (timerRef.current) clearInterval(timerRef.current);
     setLocalDecision('approve');
     onDecision?.(requestId, 'approve');
-  }, [isPending, effectiveDecision, requestId, onDecision]);
+  }, [isPending, effectiveDecision, expired, requestId, onDecision]);
 
   const handleDeny = useCallback(() => {
-    if (!isPending || effectiveDecision) return;
+    if (!isPending || effectiveDecision || expired) return;
     if (timerRef.current) clearInterval(timerRef.current);
     setLocalDecision('deny');
     onDecision?.(requestId, 'deny');
-  }, [isPending, effectiveDecision, requestId, onDecision]);
+  }, [isPending, effectiveDecision, expired, requestId, onDecision]);
 
   const showCountdown = isPending && !effectiveDecision && remainingMs <= COUNTDOWN_THRESHOLD_MS && remainingMs > 0;
   const remainingSec = Math.ceil(remainingMs / 1000);
@@ -128,14 +131,20 @@ export function InlinePermissionRequest({
   // Read-only (History preview) with no decision recorded: the request was
   // still pending when the session ended. Render a muted, non-actionable shell
   // — never live-looking Deny/Approve buttons or a running countdown.
-  if (readOnly) {
+  // Expired (the display countdown ran out with no decision) renders the same
+  // muted shell with a "Timed out" label: no decision was sent from here.
+  if (readOnly || expired) {
     return (
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-md my-1 bg-[var(--color-hover)] border border-[var(--color-border)]">
-        <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)]">shield</span>
+        <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)]">{expired ? 'timer_off' : 'shield'}</span>
         <span className="text-sm text-[var(--color-text-muted)]">
           <code className="text-xs bg-[var(--color-bg)] px-1 py-0.5 rounded">{command.length > 60 ? command.slice(0, 60) + '...' : command}</code>
         </span>
-        <span className="ml-auto text-xs font-medium text-[var(--color-text-muted)]">{tf(t, 'chat.permission.awaiting', 'Awaiting decision')}</span>
+        <span className="ml-auto text-xs font-medium text-[var(--color-text-muted)]">
+          {expired
+            ? tf(t, 'chat.permission.timedOut', 'Timed out')
+            : tf(t, 'chat.permission.awaiting', 'Awaiting decision')}
+        </span>
       </div>
     );
   }
@@ -185,7 +194,7 @@ export function InlinePermissionRequest({
           Approve
         </button>
         <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">
-          Auto-deny in {formatRemaining(Math.ceil(remainingMs / 1000))}
+          {tf(t, 'chat.permission.timesOutIn', 'Times out in')} {formatRemaining(Math.ceil(remainingMs / 1000))}
         </span>
       </div>
     </div>
