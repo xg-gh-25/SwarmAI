@@ -800,6 +800,13 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
 }
 
 # Stage schema templates — show expected JSON shape for publish-time errors
+try:  # scripts/ on sys.path (artifact_cli, the runner) or imported as a package
+    from design_spec import (BUILD_TEMPLATE as _DS_BUILD, FINDING_TEMPLATE as _DS_FINDING,
+                             PLAN_TEMPLATE as _DS_PLAN)
+except ImportError:  # pragma: no cover - package import path
+    from scripts.design_spec import (BUILD_TEMPLATE as _DS_BUILD, FINDING_TEMPLATE as _DS_FINDING,
+                                     PLAN_TEMPLATE as _DS_PLAN)
+
 STAGE_TEMPLATES: dict[str, dict] = {
     "evaluate": {
         "recommendation": "GO",
@@ -869,6 +876,8 @@ STAGE_TEMPLATES: dict[str, dict] = {
             {"id": "X2", "kind": "test", "ref": "backend/tests/test_x.py", "expect": "pass"},
             {"id": "X3", "kind": "probe", "ref": "bash-fuzz", "expect": "no_new_findings"},
         ],
+        # Design spec (design_spec.py), REQUIRED at stage-complete for strict profiles.
+        "design": _DS_PLAN,
     },
     "build": {
         "files_changed": ["path/to/file.py"],
@@ -878,6 +887,8 @@ STAGE_TEMPLATES: dict[str, dict] = {
             {"ac": "AC1: User can login with email", "impl": "auth.py::login()",
              "test": "test_auth.py::test_login_email", "verified": True},
         ],
+        # One break test per plan invariant / failure mode (design_spec.py).
+        "break_tests": _DS_BUILD,
         "commits": ["abc1234"],
     },
     "review": {
@@ -892,6 +903,12 @@ STAGE_TEMPLATES: dict[str, dict] = {
                         "HF3: no contradictions found. HF4: all 2 HTTP calls + 1 DB query wrapped.",
         },
         "findings_count": 2,
+        # One entry per counted finding; a fixed blocking one fixes the CLASS (design_spec.py).
+        "findings": [{"severity": "HIGH", "confidence": 8, "resolved": True, "specialist": "correctness",
+                      "finding": "path/to/file.py function_name(): what is wrong. Fixed: how.",
+                      **_DS_FINDING},
+                     {"severity": "LOW", "confidence": 5, "resolved": False, "specialist": "correctness",
+                      "finding": "path/to/file.py: a nit, left as is (why)."}],
         "integration_trace": {"checked": 5, "clean": True, "details": "symbol A → caller B verified"},
         "runtime_patterns": {
             "checked": 3, "violations": 0,
@@ -924,7 +941,8 @@ STAGE_TEMPLATES: dict[str, dict] = {
             # for runs created from RED_TEAM_CUTOVER — see _red_team_gate().
             "findings": [{"severity": "MEDIUM", "confidence": 8, "resolved": True,
                           "specialist": "correctness",
-                          "finding": "path/to/file.py function_name() line N: what is wrong. Fixed: how."}],
+                          "finding": "path/to/file.py function_name() line N: what is wrong. Fixed: how.",
+                          **_DS_FINDING}],
             # Did the Red Team run (size rule or a specialist HIGH)? Strict profiles
             # BLOCK a specialist HIGH/CRITICAL without it.
             "red_team_dispatched": False,
@@ -962,6 +980,7 @@ STAGE_TEMPLATES: dict[str, dict] = {
         "cycles_run": 2,
         "progress_path": ".artifacts/runs/<RUN_ID>/PROGRESS.md",
         "review_cadence": "every cycle",
+        "break_tests": _DS_BUILD,
         "adversarial_review": {
             "spawned": True, "profile_tier": "full",
             "findings": [{"severity": "LOW", "confidence": 5, "resolved": True,

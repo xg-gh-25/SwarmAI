@@ -10022,6 +10022,14 @@ def _validate_stage_candidate(
     errors: list[str] = []
     warnings: list[str] = []
     skipped = cand_rec.get("status") == "skipped"
+    if not skipped and isinstance(artifact, dict):
+        # Think before building, break before review, fix by class (design_spec.py)
+        import design_spec
+        errors += design_spec.stage_errors(
+            stage, artifact, profile=profile, record=record_in,
+            plan=None if stage == "plan" else _stage_artifact(project, cand_run, "plan"),
+            run_created_at=_ledger_created_at(cand_run) or cand_run.get("created_at") or "",
+            warnings=warnings)
     # Judge the record AS IT WILL BE WRITTEN for carry-forward fields: a reflect
     # finalize may legitimately omit lessons seeded earlier (_CARRY_FORWARD_FIELDS).
     rec_view = dict(record_in)
@@ -12154,6 +12162,16 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
             f"stage-complete --project {project} --run-id {run_id} --stage {stage} "
             f"--data @<file with {{\"artifact\":...,\"record\":...}}>"),
     }
+    # The design the stage builds / breaks / fixes against (design_spec.py): BUILD writes
+    # a break test per invariant + failure mode; REVIEW / DELIVER fix by invariant.
+    _design = plan.get("design") if isinstance(plan.get("design"), dict) else None
+    if stage in ("build", "goal_cycle", "review", "test", "deliver") and _design:
+        out["design"] = {k: _design.get(k) for k in ("invariants", "failure_modes", "states")}
+        out["design_rule"] = (
+            "Break tests: every invariant and failure mode above needs a test that tries to "
+            "violate it (build.break_tests). Fixing a finding: name the invariant it broke "
+            "(or add the missed one in design_updates), fix the CLASS everywhere that "
+            "invariant must hold, prove it with a break test — never only the reported line.")
     if stage == "deliver":
         # Only DELIVER owns them (Gate-2 dispatches the union; run-commit's D7 checks
         # it). Listed at REVIEW they were read as REVIEW spawns (045b96b2: concurrency

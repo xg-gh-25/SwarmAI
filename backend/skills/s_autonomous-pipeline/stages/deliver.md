@@ -4,15 +4,15 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 ## Steps
 1. **Audits** (`ref/deliver/audits.md`): Fresh User + User Path Latency if user-facing; Completion Audit + AC matrix.
 2. **Stage first:** `git add` new files, unstage foreign ones, before any review (`ref/deliver/gate2-coverage.md`).
-3. **Gate-2:** spawn EVERY `experts` entry (Agent tool, ONE message), prompt = the entry's `spawn` text, exactly (nothing added: a steered round does not count). Never paste the prompt file.
-4. **Merge, Red Team, fix** (`ref/deliver/gate2-findings.md`): dedup, Shared-State Override before tiers, Red Team if source > 200 lines or any specialist HIGH (each finding's `specialist` = its EXPERT-ID; gated by the red-team marker), fix HIGH + MED conf ≥ 7, `pipeline_test.py --mode recheck`, then round 2 = `gate2-recheck` (fix-only prompts; spawn its `recheck` list; `[GATE·cli]`).
+3. **Gate-2:** spawn EVERY `experts` entry (Agent tool, ONE message), prompt = the entry's `spawn` text, exactly (a steered round does not count); never paste the prompt file.
+4. **Merge, Red Team, fix** (`ref/deliver/gate2-findings.md`): dedup, Shared-State Override before tiers, Red Team if source > 200 lines or any HIGH (`specialist` = its EXPERT-ID; red-team marker gate), fix HIGH + MED conf ≥ 7 **by class** `[GATE·validator]` (`invariant`, `root_cause`, `class_fix`, `break_test`; missed → `design_updates`), `pipeline_test.py --mode recheck`, then round 2 = `gate2-recheck` (fix-only prompts; spawn its `recheck` list; `[GATE·cli]`).
 5. **Meta-review:** one Agent call, prompt = `meta_review_spawn` exactly (no path → `spawn_prompt.py --gate meta-review --project <P> --files <changed…>`, exit 0 only; `ref/deliver/push-ready.md`).
 6. **User-Value Probe** (`ref/deliver/audits.md`) + **Doc Sync** (`ref/deliver/doc-sync.md`, warning only).
 7. **Convergence, max 3 iterations**, all 6 at once: L1 tests pass, L2 type/lint clean, L3 no regressions, L4 adversarial clean (fixes on disk), L5 DDD conformance, L6 decisions resolved.
 8. **Seed lessons** into the reflect record; write `outcome` = {`problem_before`, `result_now`, `approach[]`} (validated) + open items in `attention_flags`; REPORT.md is projected (`ref/deliver/report-and-commit.md`).
 9. **Exit** (below), then `python backend/scripts/artifact_cli.py run-commit --project <P> --run-id <R>` (local, never pushes).
 
-**Sub-agent configuration:** every spawn `run_in_background: false`; never pin a model; a failed spawn → go on with the rest (ALL rejected → `ref/deliver/gate2-dispatch.md`).
+**Sub-agent configuration:** `run_in_background: false`, never pin a model; a failed spawn → go on (ALL rejected → `ref/deliver/gate2-dispatch.md`).
 
 ## Gates
 - `[GATE·cli]` Adversarial review is NON-NEGOTIABLE: no "tests pass / simple code" exemption. <!-- R-deliver-001 -->
