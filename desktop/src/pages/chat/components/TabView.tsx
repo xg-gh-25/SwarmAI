@@ -5,10 +5,11 @@
  * control, the `WelcomeScreen` empty-state, the per-message bubble map
  * (MessageBubble / system divider / CompactNotice / ChatErrorMessage), the connection-state
  * indicators (reconnecting / resuming, the fallback spinner, the SESSION_BUSY
- * recovery spinner), the "back to latest" pill (only while streaming AND the
- * user has scrolled away). Where the viewport sits — following the bottom, or
+ * recovery spinner), the "↓ Back to latest" pill (only while streaming AND the
+ * user has scrolled away; no prefix, no spinner — the bee is the turn's one animated
+ * signal, chat turn spec v6 §6). Where the viewport sits — following the bottom, or
  * holding what the user is reading — is decided by pages/chat/scrollFocus.ts. What the
- * agent is DOING is not rendered here — it lives in each message's WorkGroup.
+ * agent is DOING is not rendered here — it lives in each message's zones (TurnZones).
  *
  * Migration Step 5.1 (this revision): TabView is now rendered ONE PER OPEN TAB
  * and kept mounted; only the active tab is visible (`display:none` otherwise).
@@ -36,8 +37,6 @@ import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useSta
 import { useTranslation } from 'react-i18next';
 import type { Message } from '../../../types';
 import { useMessageStore } from '../../../stores/useMessageStore';
-import { deriveTurnView, toolRow } from '../turnView';
-import { pathTail } from './WorkGroup';
 import {
   ANCHOR_PROPS, activationLanding, anchorChainFor, anchorDelta, isToggleClick, pickAnchor,
   REPLY_TOP_MARGIN, sentMessageId, tailErrorId,
@@ -629,26 +628,6 @@ function TabViewImpl({
   // hidden tab holds no timer and starts awake when it is shown again.
   const isResting = useStreamingRest(isStreaming && isActive, messages);
 
-  // ── Per-tab live action (Migration Step 4.1; v7.1) ─────────────────
-  // Derived from THIS tab's own messages, only while streaming. Replaces the
-  // former displayedActivity/elapsedSeconds props (now ignored).
-  // What runs now, from the same projection the live card uses — the pill repeats
-  // the card's title (one fact, once), never a step count or a second timer.
-  const liveAction = useMemo(() => {
-    if (!isStreaming) return null;
-    const last = [...messages].reverse().find((m) => m.role === 'assistant');
-    if (!last) return null;
-    const units = deriveTurnView(last.content, true).units;
-    const live = units[units.length - 1];
-    const step = live?.kind === 'process' ? live.live?.step : undefined;
-    if (!step) return null;
-    // The running tool row's own words (Codex-style verb + object, never translated);
-    // the tooltip says the whole command.
-    const row = toolRow(step.block);
-    const object = row.path ? pathTail(row.path) : row.object;
-    return { text: `${row.verb} ${object}`.trim(), title: `${row.verb} ${row.command || object}`.trim() };
-  }, [isStreaming, messages]);
-
   // Last assistant message index — used for Save-to-Memory button placement
   // and to scope streaming indicators to the final assistant bubble.
   const lastAssistantIdx = useMemo(
@@ -792,7 +771,7 @@ function TabViewImpl({
           // Connection-state indicators (reconnecting / resuming) render right
           // after the streaming assistant message, above any queued user
           // messages. What the agent is DOING lives in that message's own
-          // WorkGroup (pages/chat/turnView.ts) — the one activity surface —
+          // zones (pages/chat/turnZones.ts) — the one activity surface —
           // so there is no separate activity line here any more.
           const streamingIndicator = isLastAssistantForStreaming ? (
             <>
@@ -879,11 +858,10 @@ function TabViewImpl({
           )}
         </div>
       )}
-      {/* "Back to latest" pill — shown ONLY while streaming AND the user has
-          scrolled away from the bottom (awayFromBottom mirrors followRef). At
-          the bottom the live step is already visible in the message's
-          WorkGroup, so a pill there would repeat it. CSS sticky floats it at
-          the bottom of the viewport; click scrolls back to the live message. */}
+      {/* "↓ Back to latest" pill — shown ONLY while streaming AND the user has
+          scrolled away from the bottom (awayFromBottom mirrors followRef). It says
+          nothing else (spec v6 §6): what runs is in the message itself. CSS sticky
+          floats it at the bottom of the viewport; click scrolls back and follows. */}
       {isStreaming && lastAssistantIdx >= 0 && awayFromBottom && (
         <div data-testid="streaming-pill" className="sticky bottom-0 z-10 flex items-center justify-center py-1.5">
           <button
@@ -895,11 +873,8 @@ function TabViewImpl({
                           shadow-sm text-[var(--color-text-muted)]
                           hover:border-[var(--color-border)] hover:text-[var(--color-text-secondary)]
                           transition-colors cursor-pointer">
-            <Spinner size="sm" />
-            <span data-testid="streaming-pill-text" className="text-xs font-medium tabular-nums truncate min-w-0" title={liveAction?.title}>
-              {liveAction
-                ? tf(t, 'chat.turn.backToLatestAction', '{{action}} · back to latest', { action: liveAction.text })
-                : tf(t, 'chat.turn.backToLatestThinking', 'Thinking · back to latest')}
+            <span data-testid="streaming-pill-text" className="text-xs font-medium">
+              {tf(t, 'chat.turn.backToLatest', '↓ Back to latest')}
             </span>
           </button>
         </div>

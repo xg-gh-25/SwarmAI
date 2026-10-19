@@ -13,8 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ContentBlock } from '../../types';
 import {
-  deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, isGateBlock, groupSteps,
-  changedFiles, sectionUnits, toolCall,
+  deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, isGateBlock, toolCall,
 } from './turnView';
 import type { ToolUseContent } from '../../types';
 
@@ -488,20 +487,12 @@ describe('stepLabel — a Bash step is relabelled only when ALL of it only reads
   });
 });
 
-describe('groupSteps — adjacent reads of one file are one row', () => {
+describe('reads and thoughts — a thought splits the process', () => {
   const rd = (id: string, path = '/r/a.ts') => tu(id, `Reading ${path}`, 'Read', 'read');
   const stepsOf = (c: ContentBlock[]) => {
     const p = deriveTurnView(c, true).units[0];
     return p.kind === 'process' ? p.steps : [];
   };
-  it('merges a run of finished reads of the same file, keeps order', () => {
-    const rows = groupSteps(stepsOf([rd('a'), tr('a'), rd('b'), tr('b'), rd('c', '/r/b.ts'), tr('c'), rd('d'), tr('d')]));
-    expect(rows.map((r) => (r.kind === 'reads' ? `reads×${r.steps.length}` : 'step'))).toEqual(['reads×2', 'step', 'step']);
-  });
-  it('a failure or a pending read breaks the run', () => {
-    expect(groupSteps(stepsOf([rd('a'), tr('a', true), rd('b'), tr('b')]))).toHaveLength(2);
-    expect(groupSteps(stepsOf([rd('a'), tr('a'), rd('b')]))).toHaveLength(2);
-  });
   it('a thought splits the reads into two segments (it is not a step)', () => {
     const th = { type: 'thinking', thinking: 'hm' } as ContentBlock;
     const v = deriveTurnView([rd('a'), tr('a'), th, rd('b'), tr('b'), tx('x')], false);
@@ -559,41 +550,7 @@ describe('deriveTurnView — sub-agent steps nest under their Agent step', () =>
   });
 });
 
-describe('v7.1 — what changed, stage sections, clickable Bash paths', () => {
-  const wr = (id: string, p: string) => tu(id, `Writing to ${p}`, 'Edit', 'write');
-  const st = (stage: string, over: Record<string, unknown> = {}) => ({
-    type: 'pipeline_stage', runId: 'r', stage, status: 'completed', ordinal: 1, position: 1, total: 8,
-    profile: 'full', next: 'think', nextOrdinal: 2, gate: null, summary: null, at: '2026-10-18T00:00:00Z', ...over,
-  }) as ContentBlock;
-
-  it('changedFiles: written paths in first-touch order, failed writes excluded', () => {
-    const p = deriveTurnView([wr('a', '/r/x.ts'), tr('a'), wr('b', '/r/y.py'), tr('b', true), wr('c', '/r/x.ts'), tr('c'), tx('ok')], false)
-      .units[0];
-    expect(p.kind === 'process' && changedFiles(p.steps)).toEqual(['/r/x.ts']);
-  });
-
-  it('sectionUnits: no stage rows → the units unchanged', () => {
-    const v = deriveTurnView([tu('a', 'Running: ls'), tx('done')], false);
-    expect(sectionUnits(v.units, false).map((s) => s.kind)).toEqual(['unit', 'unit']);
-  });
-
-  it('sectionUnits: alignment stays out; work before a stage row belongs to it; the rest is the running stage', () => {
-    const v = deriveTurnView([tx('I read it as X.'), tu('a', 'Running: ls'), tr('a'), st('evaluate'),
-      tu('b', 'Running: pwd'), st('think', { ordinal: 2, position: 2, next: 'plan', nextOrdinal: 3 }), tu('c', 'Running: make')], true);
-    const secs = sectionUnits(v.units, true, v.liveStage);
-    expect(secs.map((s) => s.kind)).toEqual(['unit', 'stage', 'stage', 'liveStage']);
-    expect(secs[1].kind === 'stage' && secs[1].children.map((u) => u.kind)).toEqual(['process']);
-    expect(secs[2].kind === 'stage' && secs[2].prevAt).toBe('2026-10-18T00:00:00Z');
-    const live = secs[3];
-    expect(live.kind === 'liveStage' && [live.stage.stage, live.position]).toEqual(['plan', { n: 3, total: 8 }]);
-  });
-
-  it('sectionUnits: once the turn ends, what follows the last stage row is flat (the result)', () => {
-    const v = deriveTurnView([tu('a', 'Running: ls'), st('deliver', { next: null, nextOrdinal: null }), tx('All done.')], false);
-    expect(sectionUnits(v.units, false).map((s) => s.kind)).toEqual(['stage', 'unit']);
-  });
-
-
+describe('v7.1 — clickable Bash paths', () => {
   it.each([
     ['cd /a/repo && cat src/x.ts', '/a/repo/src/x.ts'],
     ['sed -n 1,40p /abs/b.py', '/abs/b.py'],

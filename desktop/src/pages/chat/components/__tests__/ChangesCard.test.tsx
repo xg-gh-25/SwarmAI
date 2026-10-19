@@ -8,10 +8,11 @@
  *   header dropped); a pruned diff says so; an oversized row says "File only" and
  *   the card says why; a binary row says "binary"
  * - a name opens the file in Canvas; a deleted file's name is not a button
- * - the card replaces the tool-derived "This turn changed" names it covers; one it
- *   does not cover stays a chip; a turn without turn_changes keeps them all
- * - a file that is also a product shows in the Produced card only
- * - it waits for the turn to end; the card sits before the Produced card
+ * - the code section comes only from turn_changes: no tool-derived "This turn
+ *   changed" chips, with or without turn_changes (chat turn spec v6 §8)
+ * - a file that is also a product shows in the deliverables section only
+ * - it waits for the turn to end; changes and deliverables are two sections of ONE
+ *   output card, changes first
  * - diffBar: share of adds/deletes, grey under five lines
  */
 import { describe, it, expect, vi } from 'vitest';
@@ -130,36 +131,36 @@ describe('ChangesCard', () => {
     expect(within(row('old.py')).getByTitle('/r/old.py').tagName).not.toBe('BUTTON');
   });
 
-  it('replaces the tool-derived names it covers; one it does not stays a chip', () => {
-    renderView([...WORK, CHANGES, tx('Done.')]);
-    expect(screen.queryByTestId('turn-files')).toBeNull();
+  it('no tool-derived "This turn changed" chips, with or without turn_changes', () => {
     renderView([...WORK, edit('e2', '/elsewhere/notes.txt'), tr('e2'), CHANGES, tx('Done.')]);
-    const chips = screen.getByTestId('turn-files');
-    expect(chips.textContent).toContain('notes.txt');
-    expect(chips.textContent).not.toContain('a.ts');
+    expect(screen.queryByTestId('turn-files')).toBeNull();
+    expect(screen.getAllByTestId('change-row').map((r) => r.getAttribute('data-path'))).not.toContain('/elsewhere/notes.txt');
   });
 
-  it('a file that is also a product shows in the Produced card only', () => {
+  it('a file that is also a product shows in the deliverables section only', () => {
     const product = { type: 'turn_deliverables', files: [{ path: 'src/a.ts', absolutePath: '/r/src/a.ts', kind: 'knowledge', operation: 'written' }] } as ContentBlock;
     renderView([...WORK, CHANGES, product, tx('Done.')]);
     expect(screen.getAllByTestId('change-row').map((r) => r.getAttribute('data-path'))).not.toContain('src/a.ts');
-    expect(screen.getByTestId('turn-deliverables').textContent).toContain('a.ts');
+    expect(screen.getByTestId('output-deliverables').textContent).toContain('a.ts');
   });
 
-  it('a turn without turn_changes keeps "This turn changed"', () => {
+  it('a turn without turn_changes has no code section and no chips', () => {
     renderView([...WORK, tx('Done.')]);
     expect(screen.queryByTestId('turn-changes')).toBeNull();
-    expect(screen.getByTestId('turn-files')).toBeTruthy();
+    expect(screen.queryByTestId('turn-files')).toBeNull();
   });
 
-  it('waits for the turn to end, then sits before the Produced card', () => {
+  it('waits for the turn to end, then is the first section of the one output card', () => {
     const { container, rerender } = renderView([...WORK, CHANGES, DELIV], true);
     expect(screen.queryByTestId('turn-changes')).toBeNull();
     const message: Message = { id: 'm1', role: 'assistant', content: [...WORK, CHANGES, DELIV, tx('Done.')], timestamp: 'T', isError: false };
     rerender(<ToastProvider><AssistantMessageView message={message} isStreaming={false} /></ToastProvider>);
-    const ids = Array.from(container.querySelectorAll('[data-testid]')).map((e) => e.getAttribute('data-testid'));
+    const card = screen.getByTestId('output-card');
+    expect(screen.getAllByTestId('output-card')).toHaveLength(1);
+    const ids = Array.from(card.querySelectorAll('[data-testid]')).map((e) => e.getAttribute('data-testid'));
     expect(ids.indexOf('turn-changes')).toBeGreaterThanOrEqual(0);
-    expect(ids.indexOf('turn-changes')).toBeLessThan(ids.indexOf('turn-deliverables'));
+    expect(ids.indexOf('turn-changes')).toBeLessThan(ids.indexOf('output-deliverables'));
+    expect(container.contains(card)).toBe(true);
   });
 });
 

@@ -1,7 +1,7 @@
 /**
  * tf — translate with an English fallback and `{{var}}` interpolation.
  *
- * Shared by the turn-view surfaces (WorkGroup, NextSteps, TabView pill). When
+ * Shared by the turn-view surfaces (TurnZones, NextSteps, TabView pill). When
  * `t` returns a non-string or the bare key (a test mock, a missing key), the
  * fallback itself is interpolated, so the UI never shows a raw key.
  *

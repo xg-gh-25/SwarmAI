@@ -170,14 +170,15 @@ function ChangeRow({ file }: { file: TurnChangeFile }) {
   );
 }
 
-export function ChangesCard({ block }: { block: TurnChangesContent }) {
+/** `bare`: a section of the turn's output card (TurnCards OutputCard), no frame of its own. */
+export function ChangesCard({ block, bare }: { block: TurnChangesContent; bare?: boolean }) {
   const { t } = useTranslation();
   const files = block.files;
   const sum = totals(files);
   const count = files.length + (block.omitted ?? 0);
   const anyFileOnly = files.some((f) => !f.diffable && !f.binary);
   return (
-    <section data-testid="turn-changes" className="rounded-lg border border-[var(--color-border)] overflow-hidden">
+    <section data-testid="turn-changes" className={bare ? '' : 'rounded-lg border border-[var(--color-border)] overflow-hidden'}>
       <header className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
         <span aria-hidden="true" className="material-symbols-outlined text-[16px] leading-none text-[var(--color-text-muted)]">difference</span>
         <span className="font-mono text-[13px] text-[var(--color-text)]">

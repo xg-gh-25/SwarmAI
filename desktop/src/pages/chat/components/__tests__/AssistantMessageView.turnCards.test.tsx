@@ -2,15 +2,13 @@
  * AssistantMessageView × TurnCards — the backend cards' fixed places (chat v7.1).
  *
  * What is tested (real AssistantMessageView + turnView, only leaf contexts mocked):
- * - pipeline_run: never rendered as text (no requirement card, no "Intent" label,
- *   chat display v8): it carries the run's plan for the pipeline block
- * - pipeline_attention: right after the Result divider and before the answer once
- *   the turn is over; with the DELIVER row while it streams; one item per kind;
- *   a blocking verdict is red
- * - turn_deliverables: after the answer, one tile per file (deduped across rows),
- *   middle-ellipsis names keep the extension, Open dispatches OPEN_FILE_EVENT
- *   with the absolute path, Copy copies it; a product is not repeated in
- *   "This turn changed"
+ * - pipeline_run: never rendered as text (no requirement card, no "Intent" label)
+ * - pipeline_attention: a first-level card after the answer and before the output
+ *   card (chat turn spec v6 §4/§8); one item per kind; a blocking verdict is red
+ * - turn_deliverables: the output card's deliverables section, after the answer, one
+ *   tile per file (deduped across rows), middle-ellipsis names keep the extension,
+ *   Open dispatches OPEN_FILE_EVENT with the absolute path, Copy copies it; a product
+ *   is not listed again as a changed file (turn_changes)
  * - none of the three splits a process segment or hides an unrecovered failure
  */
 import { describe, it, expect, vi } from 'vitest';
@@ -86,12 +84,12 @@ describe('pipeline_run — never rendered as text (chat display v8)', () => {
 });
 
 describe('pipeline_attention — what needs the user', () => {
-  it('leads the result: after the divider, before the answer', () => {
+  it('a first-level card after the answer, before the output card', () => {
     const { container } = renderView(PIPELINE);
     const result = screen.getByTestId('turn-result');
-    const card = within(result).getByTestId('turn-attention');
-    expect(result.textContent!.indexOf('Result')).toBeLessThan(result.textContent!.indexOf('For you to check'));
-    expect(result.textContent!.indexOf('For you to check')).toBeLessThan(result.textContent!.indexOf('Shipped'));
+    const card = screen.getByTestId('turn-attention');
+    expect(within(result).queryByTestId('turn-attention')).toBeNull();
+    expect(result.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(card.textContent).toContain('For you to check · 4');
     expect(within(card).getAllByTestId('attention-item').map((e) => e.getAttribute('data-kind')))
       .toEqual(['self_answered', 'assumption', 'gate', 'not_push_ready']);
@@ -106,18 +104,17 @@ describe('pipeline_attention — what needs the user', () => {
     expect(decided.textContent).toContain('Assumed FR-3');
     expect(card.textContent!.match(/Swarm/g)).toHaveLength(1);
     expect(screen.getAllByTestId('turn-attention')).toHaveLength(1);
-    expect(order(container, 'turn-attention', 'turn-deliverables')[0]).toBeLessThan(
-      order(container, 'turn-attention', 'turn-deliverables')[1]);
+    expect(order(container, 'turn-attention', 'output-card')[0]).toBeLessThan(
+      order(container, 'turn-attention', 'output-card')[1]);
   });
 
-  it('while streaming it stays with the DELIVER row', () => {
+  it('while streaming it shows after the work so far, and there is no RESULT yet', () => {
     const live = [...PIPELINE.slice(0, 12), tu('d', 'Bash')];
     renderView(live, true);
     const card = screen.getByTestId('turn-attention');
     expect(screen.queryByTestId('turn-result')).toBeNull();
-    // right after the deliver section, before the work that follows it
-    const rows = screen.getAllByTestId('work-group');
-    expect(card.compareDocumentPosition(rows[rows.length - 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const stages = screen.getAllByTestId('zone-stage');
+    expect(stages[stages.length - 1].compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('no name line when Swarm settled nothing', () => {
@@ -135,8 +132,8 @@ describe('pipeline_attention — what needs the user', () => {
 describe('turn_deliverables — what the turn produced', () => {
   it('one tile per file, after the answer, deduped across rows', () => {
     renderView([...PIPELINE, deliv('docs/report.md')]);
-    const card = screen.getByTestId('turn-deliverables');
-    expect(card.textContent).toContain('Produced this turn · 2');
+    const card = screen.getByTestId('output-deliverables');
+    expect(card.textContent).toContain('2 deliverables');
     expect(within(card).getAllByTestId('deliverable').map((e) => e.getAttribute('data-path')))
       .toEqual(['/ws/docs/report.md', '/ws/out/deck.pptx']);
     const result = screen.getByTestId('turn-result');
@@ -165,16 +162,17 @@ describe('turn_deliverables — what the turn produced', () => {
     expect(container).toBeTruthy();
   });
 
-  it('a product written by a step is not repeated in "This turn changed"', () => {
-    renderView([
-      wr('w', '/ws/docs/report.md'), tr('w'), wr('e', '/ws/backend/x.py'), tr('e'),
-      tx('done'), deliv('docs/report.md'),
-    ]);
-    const changed = screen.getByTestId('turn-files');
-    expect(within(changed).getAllByTestId('file-chip').map((e) => e.getAttribute('data-path'))).toEqual(['/ws/backend/x.py']);
+  it('a product is not listed again as a changed file; no "This turn changed" chips', () => {
+    const row = (path: string) => ({ path, absolutePath: `/ws/${path}`, repo: 'r', status: 'modified', added: 2, deleted: 1,
+      binary: false, diffable: true, gitRoot: '/ws', start: 'a', end: 'b' });
+    const changes = { type: 'turn_changes', files: [row('docs/report.md'), row('backend/x.py')] } as ContentBlock;
+    renderView([wr('w', '/ws/docs/report.md'), tr('w'), wr('e', '/ws/backend/x.py'), tr('e'), tx('done'), deliv('docs/report.md'), changes]);
+    expect(screen.getAllByTestId('change-row').map((e) => e.getAttribute('data-path'))).toEqual(['backend/x.py']);
+    expect(screen.queryByTestId('turn-files')).toBeNull();
+    expect(screen.queryAllByTestId('output-card')).toHaveLength(1);
   });
 
-  it('read-only preview (History): products and file chips show but do not act', () => {
+  it('read-only preview (History): products show but do not act', () => {
     const seen: unknown[] = [];
     const on = (e: Event) => seen.push((e as CustomEvent).detail);
     document.addEventListener(OPEN_FILE_EVENT, on);
@@ -186,12 +184,8 @@ describe('turn_deliverables — what the turn produced', () => {
     expect(screen.queryByText('Open in Canvas')).toBeNull();
     expect(screen.queryByText('Copy path')).toBeNull();
     fireEvent.click(tile.firstElementChild!);
-    const chips = screen.getAllByTestId('file-chip');
-    expect(chips.length).toBeGreaterThan(0);
-    chips.forEach((c) => { expect(c.tagName).toBe('SPAN'); fireEvent.click(c); });
     document.removeEventListener(OPEN_FILE_EVENT, on);
     expect(seen).toEqual([]);
-    expect(chips[0].getAttribute('title')).toBe('/ws/backend/x.py');
   });
 
   it('keeps the extension when the name is shortened', () => {

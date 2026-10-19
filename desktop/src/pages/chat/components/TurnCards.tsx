@@ -1,32 +1,24 @@
 /**
- * TurnCards — the backend-written cards of a turn (chat display v7.1).
+ * TurnCards — the backend-written cards of a turn (chat turn spec v6).
  *
  * Each has a fixed place in the turn, set by AssistantMessageView:
- * - AttentionCard    — what the run needs the user to judge (`pipeline_attention`):
- *                      right after the "Result" divider (or in place while running).
- *                      Amber, the one coloured card: colour is for exceptions. What
- *                      the assistant settled without asking (questions it answered,
- *                      assumptions) is one group under ONE "{name} decided for
- *                      you" line, so the name appears at most once per card.
- * - DeliverablesCard — the files the turn produced (`turn_deliverables`), after
- *                      the outcome: type icon or image thumbnail, name, open in
- *                      Canvas, copy path (inert in a read-only preview).
- * - PipelineSummaryCard — a finished run (`pipeline_summary`): ONE verdict line (ready
- *                      to push, or why not — the only thing that may stand out), then
- *                      the run's four documents as rows that open in the Canvas:
- *                      requirements, design spec, review (with its expert / finding
- *                      counts), report. A document the profile does not produce is a
- *                      dim row saying why. No per-row boxes: spacing groups.
- * - ChangesCard (its own file) — what the turn changed in the code repos
- *                      (`turn_changes`), before the Produced card.
+ * - AttentionCard — what the run needs the user to judge (`pipeline_attention`): a
+ *                   first-level card after the turn's zones, before the output card.
+ *                   What the assistant settled without asking (questions it answered,
+ *                   assumptions) is one group under ONE "{name} decided for you" line.
+ * - OutputCard    — the turn's ONE output card at the end: a code-changes section
+ *                   (ChangesCard, from `turn_changes`) and a deliverables section (what
+ *                   the turn produced — `turn_deliverables` tiles — and a pipeline
+ *                   run's documents, with the run's verdict). Either section alone;
+ *                   a file is in one section only.
  * All text in these blocks is model-written: rendered plain, never as markdown.
  *
- * @exports AttentionCard, DeliverablesCard, PipelineSummaryCard, middleEllipsis
+ * @exports AttentionCard, OutputCard, middleEllipsis
  */
 import { useContext, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
-  PipelineAttentionContent, PipelineAttentionItem, PipelineSummaryContent, PipelineSummaryDoc, TurnDeliverable,
+  PipelineAttentionContent, PipelineAttentionItem, PipelineSummaryContent, PipelineSummaryDoc, TurnDeliverable, TurnChangesContent,
 } from '../../../types';
 import { OPEN_FILE_EVENT, resolveImageSrc } from '../../../components/common/MarkdownRenderer';
 import { fileIcon, fileIconColor } from '../../../utils/fileUtils';
@@ -34,8 +26,8 @@ import { copyToClipboard } from '../../../utils/clipboard';
 import { tf } from '../tf';
 import { ASSISTANT_NAME } from '../assistantName';
 import { ReadOnlyContext } from '../readOnlyContext';
+import { ChangesCard } from './ChangesCard';
 
-const LABEL = 'text-[11px] tracking-wide text-[var(--color-text-muted)]';
 
 /** A verdict that blocks is red; anything else that needs a look stays amber. */
 const isBlocking = (v: string) => /BLOCK|FAIL|REJECT/i.test(v);
@@ -184,18 +176,6 @@ function DeliverableTile({ file }: { file: TurnDeliverable }) {
   );
 }
 
-export function DeliverablesCard({ files }: { files: TurnDeliverable[] }) {
-  const { t } = useTranslation();
-  return (
-    <section data-testid="turn-deliverables">
-      <div className={`mb-1.5 ${LABEL}`}>{tf(t, 'chat.turn.deliverables.title', 'Produced this turn · {{count}}', { count: files.length })}</div>
-      <ul className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(190px,1fr))]">
-        {files.map((f) => <DeliverableTile key={f.absolutePath} file={f} />)}
-      </ul>
-    </section>
-  );
-}
-
 /** Icon + what each run document holds (the backend sends the name; the words are ours). */
 const DOC_META: Record<string, { icon: string; key: string; purpose: string }> = {
   'REQUIREMENTS.md': { icon: 'checklist', key: 'chat.turn.summary.doc.requirements', purpose: 'Requirements · root cause · clarifications' },
@@ -234,24 +214,43 @@ function SummaryDocRow({ doc }: { doc: PipelineSummaryDoc }) {
   );
 }
 
-export function PipelineSummaryCard({ block }: { block: PipelineSummaryContent }) {
+/**
+ * The turn's ONE output card (chat turn spec v6 §8): a code-changes section (the
+ * backend's turn_changes rows, ChangesCard) and a deliverables section (what the turn
+ * produced, and a pipeline run's documents — listed only here). Either section alone;
+ * neither → no card. A file is in one section only (the caller drops deliverables
+ * from the changes rows).
+ */
+export function OutputCard({ changes, deliverables, summary }: {
+  changes?: TurnChangesContent; deliverables: TurnDeliverable[]; summary?: PipelineSummaryContent;
+}) {
   const { t } = useTranslation();
-  const ready = block.pushReady;
-  const verdict = ready === true
+  const docs = summary?.docs ?? [];
+  const nDeliv = deliverables.length + docs.filter((d) => !!d.absolutePath).length;
+  if (!changes && !deliverables.length && !docs.length) return null;
+  const ready = summary?.pushReady;
+  const verdict = !summary ? null : ready === true
     ? tf(t, 'chat.turn.summary.ready', 'Done · ready to push')
     : ready === false
       ? tf(t, 'chat.turn.summary.notReady', 'Done · not ready to push')
       : tf(t, 'chat.turn.summary.done', 'Done');
   return (
-    <section data-testid="pipeline-summary" aria-label={tf(t, 'chat.turn.summary.title', 'Pipeline execution summary')}>
-      <div className={`mb-1 ${LABEL}`}>{tf(t, 'chat.turn.summary.title', 'Pipeline execution summary')}</div>
-      <div data-testid="summary-verdict" className={`text-[14px] font-medium ${ready === false ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--color-text)]'}`}>
-        {verdict}
-        {ready === false && block.pushReason && <span className={`ml-1.5 font-normal ${DIM}`}>{block.pushReason}</span>}
-      </div>
-      <ul className="mt-1.5">
-        {block.docs.map((d) => <SummaryDocRow key={d.name} doc={d} />)}
-      </ul>
+    <section data-testid="output-card" className="rounded-lg border border-[var(--color-border)] overflow-hidden">
+      {changes && <ChangesCard block={changes} bare />}
+      {(deliverables.length > 0 || docs.length > 0) && (
+        <div data-testid="output-deliverables" className={`px-3 pt-2 pb-3 ${changes ? 'border-t border-[var(--color-border)]' : ''}`}>
+          <div className="mb-1.5 flex items-baseline gap-2 font-mono text-[13px] text-[var(--color-text)]">
+            {nDeliv === 1 ? tf(t, 'chat.turn.output.deliverableOne', '1 deliverable') : tf(t, 'chat.turn.output.deliverables', '{{count}} deliverables', { count: nDeliv })}
+            {verdict && <span data-testid="summary-verdict" className={`font-sans text-[12.5px] ${ready === false ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--color-text-muted)]'}`}>· {verdict}{ready === false && summary?.pushReason ? ` · ${summary.pushReason}` : ''}</span>}
+          </div>
+          {deliverables.length > 0 && (
+            <ul className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(190px,1fr))]">
+              {deliverables.map((f) => <DeliverableTile key={f.absolutePath} file={f} />)}
+            </ul>
+          )}
+          {docs.length > 0 && <ul className={deliverables.length ? 'mt-2' : ''}>{docs.map((d) => <SummaryDocRow key={d.name} doc={d} />)}</ul>}
+        </div>
+      )}
     </section>
   );
 }

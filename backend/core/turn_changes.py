@@ -26,7 +26,8 @@ Flow (one ``TurnChanges`` per turn, owned by the SessionUnit):
   base. A tree whose start snapshot failed is left off (diffing it from HEAD would
   show earlier uncommitted work as this turn's), and so is any other tree. Files
   outside the trees (SwarmWS knowledge and content) are the turn's deliverables,
-  not code changes.
+  not code changes. Bookkeeping paths inside a tree (``Knowledge/DailyActivity/``,
+  ``.context/``, ``.aidlc/deliverables/``) are left off too (``_excluded``).
 
 The block carries counts and the two tree ids, not the diff text: the card fetches
 one file's diff on demand (``diff_text``, GET /api/chat/turn-diff), so diff text
@@ -72,6 +73,19 @@ GIT_TIMEOUT_S = 30.0
 FINISH_BUDGET_S = 10.0
 # The tools whose input names the file they write (dot paths have no file_changed).
 WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+
+# Bookkeeping a turn writes alongside its work, never a code change of its own: the
+# session log, context files, and the run's committed copies of its documents (the
+# documents themselves are the turn's deliverables). Matched at the ROOT of the
+# repo-relative path only: a deeper `src/.context/x.py` is code and stays on the card
+# (matching at any depth would let a change hide from it).
+_EXCLUDED_PREFIXES = ("Knowledge/DailyActivity/", ".context/", ".aidlc/deliverables/")
+
+
+def _excluded(rel: str) -> bool:
+    """A repo-relative path the changes card leaves off (chat turn spec v6 §7.4)."""
+    rel = rel.replace(os.sep, "/")
+    return any(rel.startswith(p) for p in _EXCLUDED_PREFIXES)
 _SHA_RE = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 
 
@@ -301,7 +315,8 @@ class TurnChanges:
             await self._diff_into(loop, pool, top, paths, None)
 
     async def _diff_into(self, loop, pool, top: str, paths: list[str], start: Optional[str]) -> None:
-        rels = sorted({os.path.relpath(p, top) for p in paths if p.startswith(top + os.sep)})
+        rels = sorted({rel for rel in (os.path.relpath(p, top) for p in paths if p.startswith(top + os.sep))
+                       if not _excluded(rel)})
         if not rels:
             return
         try:

@@ -1,11 +1,11 @@
 /**
- * TabView "back to latest" pill — says what runs now (chat display v8).
+ * TabView "back to latest" pill (chat turn spec v6 §6).
  *
  * What is tested (real TabView, MessageBubble mocked): once the user has scrolled
- * away from the bottom, the pill repeats the running row's words — "Read x.ts ·
- * back to latest", its tooltip the whole command — never a step count ("step 92") or a second timer that would
- * disagree with the card's (design-judgment Surface 6: one fact, once). With no
- * step running it says "Thinking · back to latest".
+ * away from the bottom while the turn streams, the pill says only "↓ Back to latest"
+ * — never the running call, a step count, a timer or "Thinking" (what runs now is in
+ * the turn itself; the one animated signal is the bee). The same with a call running
+ * and between calls.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent } from '@testing-library/react';
@@ -57,42 +57,29 @@ describe('TabView pill — the live action, once', () => {
   });
   afterEach(() => { cleanup(); messageStoreRegistry.clear(); });
 
-  it('names the running step, with no step count and no timer', async () => {
-    messageStoreRegistry.getOrCreate('A').replace([turn([
+  const pillText = async (content: Message['content']) => {
+    messageStoreRegistry.getOrCreate('A').replace([turn(content)]);
+    const { container, getByTestId } = render(<TabView {...props(true)} />);
+    await afterActivation();
+    scrollAway(container);
+    return getByTestId('streaming-pill').textContent ?? '';
+  };
+
+  it('a call running: only "↓ Back to latest"', async () => {
+    const text = await pillText([
       { type: 'tool_use', id: 't1', name: 'Bash', summary: 'Running: ls', category: 'bash' },
       { type: 'tool_result', toolUseId: 't1', isError: false },
       { type: 'tool_use', id: 't2', name: 'Read', summary: 'Reading /r/src/x.ts', category: 'read' },
-    ])]);
-    const { container, getByTestId } = render(<TabView {...props(true)} />);
-    await afterActivation();
-    scrollAway(container);
-    const pill = getByTestId('streaming-pill');
-    expect(pill.textContent).toContain('Read /r/src/x.ts · back to latest');
-    expect(pill.textContent).not.toMatch(/step \d/);
-    expect(pill.textContent).not.toMatch(/\d+s\b/);
+    ]);
+    expect(text.trim()).toBe('↓ Back to latest');
   });
 
-  it('a long command truncates in the pill; the whole command is its tooltip', async () => {
-    const long = `npx vitest run ${'src/pages/chat/components/__tests__/x.test.tsx '.repeat(8)}`.trim();
-    messageStoreRegistry.getOrCreate('A').replace([turn([
-      { type: 'tool_use', id: 't1', name: 'Bash', summary: `Running: ${long}`, category: 'bash' },
-    ])]);
-    const { container, getByTestId } = render(<TabView {...props(true)} />);
-    await afterActivation();
-    scrollAway(container);
-    const text = getByTestId('streaming-pill-text');
-    expect(text.className).toContain('truncate');
-    expect(text.getAttribute('title')).toBe(`Ran ${long}`);
-  });
-
-  it('between steps it says Thinking', async () => {
-    messageStoreRegistry.getOrCreate('A').replace([turn([
+  it('between calls: still only "↓ Back to latest", never "Thinking"', async () => {
+    const text = await pillText([
       { type: 'tool_use', id: 't1', name: 'Bash', summary: 'Running: ls', category: 'bash' },
       { type: 'tool_result', toolUseId: 't1', isError: false },
-    ])]);
-    const { container, getByTestId } = render(<TabView {...props(true)} />);
-    await afterActivation();
-    scrollAway(container);
-    expect(getByTestId('streaming-pill').textContent).toContain('Thinking · back to latest');
+    ]);
+    expect(text.trim()).toBe('↓ Back to latest');
+    expect(text).not.toMatch(/Thinking|step \d|\d+s\b/);
   });
 });

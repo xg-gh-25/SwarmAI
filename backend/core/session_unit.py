@@ -88,6 +88,10 @@ _subprocess_executor = subprocess_executor
 from collections import deque as _deque
 
 _INTENTIONAL_KILL_WINDOW_S = 10.0
+
+#: Hang guard for ClaudeSDKClient.stop_task (one sub-agent): the control request
+#: normally answers at once; past this it is reported as not stopped.
+STOP_TASK_TIMEOUT_S = 5.0
 _recent_intentional_kills: "_deque[float]" = _deque(maxlen=32)
 
 
@@ -829,6 +833,11 @@ class SessionUnit:
         # were removed — sub-agent status streams as `subagent_progress` and
         # nests under the Agent step).
         self._active_agent_tools: dict[str, dict] = {}
+        # SDK task ids of the sub-agents running in THIS turn (joined on a running
+        # subagent_progress, left on a terminal one; cleared at every turn boundary).
+        # The allowlist for stop_task: a request-supplied id reaches the SDK only if
+        # this session reported it running (chat turn spec v6 §7.3).
+        self._live_task_ids: set[str] = set()
 
         # ── Tool-hang tracking (run_fb6e94a9) ─────────────────────
         # tool_use_id → monotonic-ish start time (time.time()) for EVERY tool
@@ -2275,6 +2284,7 @@ class SessionUnit:
         self._context_recorded_this_turn = False
         self._content_emitted = False   # Track if meaningful content is emitted
         self._active_agent_tools = {}  # Clear stale sub-agent progress on new turn
+        self._live_task_ids = set()  # an earlier turn's task ids are not stoppable
         self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
         # Gate-2 F3 (belt-and-suspenders): a fresh user turn never carries a stale
         # outstanding-tool_use guard. Gate-2 F4: drop the stale last-drained hint so
@@ -3802,6 +3812,34 @@ class SessionUnit:
 
     # ── Interactive methods (task 3.3) ─────────────────────────────
 
+    async def stop_task(self, task_id: str) -> dict:
+        """Stop ONE sub-agent of the running turn; the turn itself goes on.
+
+        Allowlisted: the SDK is called only while the turn is active (STREAMING /
+        WAITING_INPUT) and only for an id in ``_live_task_ids`` — a task this session
+        reported running in its current turn. Any other id (unknown, finished, from an
+        earlier turn) is refused without touching the SDK. Never sets the user-stop
+        flag or the stop event: self-heal eligibility and the stream are unchanged.
+        The SDK then reports the task's end (``TaskUpdatedMessage`` killed →
+        ``subagent_progress`` stopped), which the chat shows on the agent's row.
+
+        Returns ``{"stopped": bool, "reason": str}``; the reason is generic (no SDK
+        error text reaches the client).
+        """
+        if self.state not in (SessionState.STREAMING, SessionState.WAITING_INPUT):
+            return {"stopped": False, "reason": "the turn is not running"}
+        client = self._client
+        if client is None or task_id not in self._live_task_ids:
+            return {"stopped": False, "reason": "no such running agent in this turn"}
+        try:
+            await asyncio.wait_for(client.stop_task(task_id), timeout=STOP_TASK_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 — timeout or SDK error: report, keep the turn
+            logger.warning("stop_task failed session_id=%s task=%s: %s",
+                           self.session_id, task_id, type(exc).__name__)
+            return {"stopped": False, "reason": "the agent could not be stopped"}
+        logger.info("stop_task session_id=%s task=%s", self.session_id, task_id)
+        return {"stopped": True, "reason": ""}
+
     async def interrupt(self, timeout: float = 5.0, autonomous: bool = False) -> bool:
         """Interrupt active query. SDK interrupt() with kill fallback.
 
@@ -3865,6 +3903,7 @@ class SessionUnit:
         if not autonomous:
             self._user_stopped_current_turn = True
         self._active_agent_tools = {}  # Clear stale sub-agent progress on interrupt
+        self._live_task_ids = set()  # the turn is stopped: no per-agent stop after it
         self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
 
         if self._client is None:
@@ -4770,6 +4809,7 @@ class SessionUnit:
         self._client = None
         self._wrapper = None
         self._interrupted = False
+        self._live_task_ids = set()  # the subprocess is gone: so are its tasks
         # NOTE: self._retry_count is intentionally NOT reset here.
         # It is reset in send() (line ~620) and on success (line ~1672).
         self._model_name = None

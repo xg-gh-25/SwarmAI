@@ -10,11 +10,12 @@
  * - vanish = 0: across streaming frames the visible set only grows
  * - no remount: an element that showed a marker (a block, a checklist line, a thought,
  *   a row, a note) is still the same DOM node in the next frame
- * - the checklist is laid out in the first frame it appears and only changes status:
- *   its line order never changes, no line is ever inserted
+ * - the pipeline's stage list only grows: a stage appears when it starts (spec v6: no
+ *   pending stages), the order of the stages already shown never changes, none is
+ *   inserted before them
  * - the stream-end reconcile (isStreaming → false, same blocks — and the stored copy,
  *   tool results dropped): nothing vanishes or remounts at that moment; FOLD_DELAY_MS
- *   later the pipeline block and the work fold
+ *   later the stages and the work fold (their headers stay)
  * - a tab switch (a fresh mount of the stored copy) shows the same first level and the
  *   same text as the settled turn; a reconnect mid-stream (the stored copy so far
  *   replaces the live one) loses nothing
@@ -41,7 +42,7 @@ const view = (content: ContentBlock[], isStreaming: boolean) => {
 };
 const MARK = /tok[A-Z]+\d*/g;
 const marks = (el: Element) => new Set(el.textContent?.match(MARK) ?? []);
-const TRACKED = ['pipeline-block', 'checklist-line', 'work-group', 'thought', 'step-row', 'group-note', 'turn-restatement']
+const TRACKED = ['zone-thinking', 'zone-phase', 'zone-stage', 'zone-gate', 'pipeline-start', 'thought', 'tool-strip', 'turn-note', 'turn-restatement']
   .map((id) => `[data-testid="${id}"]`).join(',');
 
 interface Replay { violations: string[]; lineOrders: string[][]; final: Set<string>; container: HTMLElement; rerender: (ui: React.ReactElement) => void }
@@ -61,7 +62,7 @@ function replay(blocks: ContentBlock[]): Replay {
     for (const { el, m } of tracked) {
       if (!el.isConnected && m.size > 0) violations.push(`frame ${n}: ${el.getAttribute('data-testid')} showing ${[...m].join(' ')} remounted`);
     }
-    const lines = [...container.querySelectorAll('[data-testid="checklist-line"]')].map((l) => (l as HTMLElement).dataset.stage ?? '');
+    const lines = [...container.querySelectorAll('[data-testid="zone-stage"],[data-testid="zone-gate"]')].map((l) => (l as HTMLElement).dataset.stage ?? '');
     if (lines.length) lineOrders.push(lines);
     seen = now;
     tracked = [...container.querySelectorAll(TRACKED)].map((el) => ({ el, m: marks(el) }));
@@ -70,12 +71,17 @@ function replay(blocks: ContentBlock[]): Replay {
 }
 
 describe('turn replay — a pipeline turn', () => {
-  it('streaming: nothing vanishes, nothing remounts, the checklist only changes status', () => {
+  it('streaming: nothing vanishes, nothing remounts, the stage list only grows', () => {
     const blocks = replayTurn();
     const r = replay(blocks);
     expect(r.violations.join(' ; ')).toBe('');
     expect(r.lineOrders.length).toBeGreaterThan(0);
-    for (const order of r.lineOrders) expect(order).toEqual(FULL);
+    // each frame's stages are the previous frame's, in the same order, plus new ones at the end
+    for (let i = 1; i < r.lineOrders.length; i += 1) {
+      expect(r.lineOrders[i].slice(0, r.lineOrders[i - 1].length)).toEqual(r.lineOrders[i - 1]);
+    }
+    // only started stages, in plan order: the whole plan ran, so the last frame is FULL
+    expect(r.lineOrders[r.lineOrders.length - 1]).toEqual(FULL);
     // everything the turn says was on screen by the last streaming frame
     for (const m of ['tokRESTATE', 'tokT1', 'tokR1', 'tokS1', 'tokT3', 'tokM1', 'tokN1', 'tokANS']) expect(r.final.has(m)).toBe(true);
   });
@@ -90,7 +96,7 @@ describe('turn replay — a pipeline turn', () => {
     expect([...before].filter((m) => !at.has(m))).toEqual([]);
     expect(tracked.filter((el) => !el.isConnected).map((el) => el.getAttribute('data-testid'))).toEqual([]);
     act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
-    expect(r.container.querySelectorAll('[data-testid="checklist-line"]')).toHaveLength(0);
+    expect(r.container.querySelectorAll('[data-testid="tool-strip"]')).toHaveLength(0); // every group folded
     const after = marks(r.container);
     expect(after.has('tokANS')).toBe(true); // the answer stays
     expect(after.has('tokRESTATE')).toBe(true); // so does the restatement
@@ -109,9 +115,8 @@ describe('turn replay — a plain turn', () => {
   it('streaming: nothing vanishes and nothing remounts', () => {
     const r = replay(plain());
     expect(r.violations.join(' ; ')).toBe('');
-    // tokT0 (the thought before the restatement) is not first level: it is the work
-    // block's first item, a settled one-line "Thought" by the time that block exists
-    for (const m of ['tokRESTATE', 'tokT1', 'tokR1', 'tokS1', 'tokM1', 'tokN1', 'tokT2', 'tokANS']) expect(r.final.has(m)).toBe(true);
+    // tokT0 (the thought before the restatement) is the THINKING receipt: shown in full
+    for (const m of ['tokT0', 'tokRESTATE', 'tokT1', 'tokR1', 'tokS1', 'tokM1', 'tokN1', 'tokT2', 'tokANS']) expect(r.final.has(m)).toBe(true);
   });
 
   it('the reconcile keeps everything for FOLD_DELAY_MS, then the work folds and the answer stays', () => {
@@ -133,8 +138,10 @@ describe('turn replay — a plain turn', () => {
  *  and older turns have none — the harshest case is no tool_result blocks at all. */
 const stored = (blocks: ContentBlock[]) => blocks.filter((b) => b.type !== 'tool_result');
 /** The first level of a rendered turn, in order. */
-const firstLevel = (root: HTMLElement) => [...root.querySelectorAll('[data-testid="pipeline-block"],[data-testid="turn-restatement"],[data-testid="turn-result"],[data-testid="work-group"]:not([data-flat])')]
-  .filter((el) => !el.parentElement?.closest('[data-testid="pipeline-block"],[data-testid="work-group"]'))
+const FIRST = ['zone-thinking', 'turn-restatement', 'zone-phase', 'turn-note', 'pipeline-start', 'zone-stage', 'zone-gate', 'turn-result', 'turn-answer']
+  .map((id) => `[data-testid="${id}"]`).join(',');
+const firstLevel = (root: HTMLElement) => [...root.querySelectorAll(FIRST)]
+  .filter((el) => !el.parentElement?.closest('[data-testid="zone-stage"],[data-testid="zone-phase"]'))
   .map((el) => el.getAttribute('data-testid'));
 
 describe('turn replay — the stored copy, a tab switch, a reconnect', () => {
@@ -159,7 +166,8 @@ describe('turn replay — the stored copy, a tab switch, a reconnect', () => {
       act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
       const settled = firstLevel(r.container);
       const settledMarks = marks(r.container);
-      expect(settled).toContain(name === 'pipeline' ? 'pipeline-block' : 'work-group');
+      expect(settled).toContain(name === 'pipeline' ? 'pipeline-start' : 'zone-phase');
+      expect(settled[0]).toBe('zone-thinking'); // the receipt stays first
       expect(settled).toContain('turn-result');
       expect(settledMarks.has('tokANS')).toBe(true);
       const fresh = render(view(stored(blocks), false));

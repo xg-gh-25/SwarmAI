@@ -5,7 +5,7 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach } from 'vitest';
 import { messageStoreRegistry } from './stores/MessageStore';
-import { resetViewMemory } from './pages/chat/components/WorkGroup';
+import { resetZoneMemory } from './pages/chat/components/TurnZones';
 
 /**
  * Global teardown — destroy all MessageStores after every test.
@@ -24,7 +24,7 @@ afterEach(() => {
   messageStoreRegistry.clear();
   // The chat view's per-message memory (durations, merges) is module-level and keyed
   // by message id; test cases reuse ids, so each case starts from an empty memory.
-  resetViewMemory();
+  resetZoneMemory();
 });
 
 /**

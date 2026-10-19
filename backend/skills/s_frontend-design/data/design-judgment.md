@@ -320,137 +320,91 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
      process collapses above it.
   4. *How did it get there?* (retro) — on demand only: the user drills plan stage →
      segment → step. Nothing at this depth is in the default view.
-- **Invariants:** (1) each action is a TYPED step (tool name + args summary + status
-  + result), but a step is not its own container: adjacent steps group into one
-  segment, a finished segment folds to a single summary line, and only the LIVE work
-  is a bordered region — parallel live work (several sub-agents) shares that ONE
-  region, one row per agent. A segment folds when the next one starts or the user
-  scrolls past it, never under the reader, and folding keeps the bottom pin and the
-  scroll position (Surface 1 #1, Motion). A page of equal-weight cards is the failure
-  this invariant exists to prevent. (2) Live status per action (running / done /
-  failed / needs-you) driven by real events. (3) Human-in-the-loop affordances land
-  IN the stream, in-band (approve / stop / answer) — never a passive panel the user
-  must dig out; a needs-you step outranks the live work as the single focus, and an
-  approval shows the exact action being approved. (4) Long/nested work (sub-agents)
-  is summarized, expandable, not dumped: a sub-agent's row shows its whole task (it
-  wraps, never cut) and its time — elapsed while it runs, duration once done — and
-  opening it shows the task, its result and its own calls. Its verdict is not on the
-  row. (5) **Zero per-item chrome; the streaming item whole, a settled one a line.**
-  Labels and controls live only on GROUP headers, turn landmarks (the restatement,
-  the pipeline block, the result divider) and FOLDED lines — never on an item while
-  it is being read. The thought that is streaming is its whole text, dim italic,
-  never clamped. Once it has settled it is ONE line — "Thought", plus how long it
-  streamed when that was 5s or more ("Thought · 12s") — and that line is the control
-  that opens the text in place. No "Show all / Show less" anywhere. A label that every
-  item carries while the reader reads it tells them nothing and taxes every line. A
-  group of ONE item is that item — never a header that opens to the same line again.
-  (6) **A tool row is a verb and the call's REAL object, a step quieter than the
-  thinking around it** (Codex-style): Read `a.ts` · Search `"q"` (grep / rg / find) ·
-  List `src` · Ran `<program subcommand>` (`git log -6`, `artifact_cli.py run-update`)
-  · Edited / Wrote `b.ts` · Agent `<task>` · an MCP tool's own name and argument. The
-  object is the call's real value, never an invented file. The whole command — minus
-  only what never says what it does (a leading `cd <dir> &&` / `export` setup, a
-  timeout wrapper) — is the row's second line while it runs (and for the fold linger
-  after) or when the row is opened; a row that already says the whole command has no
-  second line. Never a category word or "inline script": the user audits what was
-  actually run. The verb comes from
-  ONE classifier, and a command that may write is never shown as a read. The row is
-  smaller and dimmer than a thought; a file name on it is never cut; a duration shows
-  only from 5s. A command's last output line is not a "result" and stays off the row;
-  an error goes one line below. **Settled calls fold:** adjacent read / search / list
-  calls are ONE "Explored" line that lists what they read and searched (each name
-  once), with a settled thought between them inside it, and opens to one row per
-  call; identical consecutive other calls are one "×N" row; a settled thought between
-  two other calls merges into the call after it (shown when that row is opened; its
-  time is the row's duration) — unless the user opened it. A running call, a failed
-  call, a call that may write and a sub-agent never join a fold. A folded WORKED line
-  says its counts and, from 5s, how long the block ran. **Nothing on screen
-  changes shape the moment the next item arrives:** a finished call joins its fold,
-  an older thought becomes its one line, a finished command loses its second line —
-  each only 2s (the fold linger) after it settled; the live block never cuts items off
-  its top, and no item remounts when its block stops being live or the turn ends.
-  Verify this by replay, not by reasoning: stream a turn into the real view one block
-  per frame with the clock frozen — anything that folds, vanishes or remounts between
-  two frames did so on the spot.
-  (7) **Two levels, by design.** FIRST level: the restatement (plain text, from ONE
-  source: the text written before any work), WORKING / WORKED blocks, the pipeline
-  block, things that need the user, and the result. SECOND level, inside a block or an opened stage, in stream order: thoughts,
-  notes written between tool calls, tool calls. A block is everything between two
-  first-level items — a thought or a note never becomes a first-level row (that
-  fragments the turn into a stack of WORKED lines), and a folded block says its size
-  in counts (steps · files changed · commands), never a title borrowed from its first
-  thought (which the body then repeats). **The first level opens with what the agent
-  says:** before any work there is no WORKING card — the streaming indicator is the
-  turn's one spinner — and thoughts written before the restatement never form a block
-  above it or above a question: they are the first items of the turn's first block of
-  work, shown once that block exists, the same live and settled. A turn with no work
-  (it thought, then answered) shows its one folded "Thought" line above the answer once
-  settled — the one shift accepted, because the first text cannot be told apart from a
-  restatement until a tool call comes, and the restatement must not move. **A pipeline turn is ONE special WORKED
-  block whose header is the run's checklist:** every planned stage and gate, in plan
-  order, from the first frame the run appears — the list comes from the backend for
-  the run's profile (the frontend keeps no gate table), so a line is never inserted;
-  only its status changes in place (✓ done · ● running · ○ pending). The header says
-  "Pipeline · <RUNNING STAGE> · k/N · duration" while live and, folded, "k/N ·
-  duration · N files changed · Gate 2 <verdict>"; the block folds the fold linger
-  after the answer starts. A stage line opens when the stage STARTS and owns
-  everything up to the next line's start; when the stage ends the same line updates
-  in place (status, duration) and nothing under it moves. A stage that runs again (a
-  gate sends it back, a goal loop re-enters) is the SAME line, marked "round N", its
-  work split by round — never a second line. A line folds its work and says it in
-  counts plus its duration — no file names, no model-written summary; a pending line
-  has nothing to open. Work before the first stage belongs to it; thoughts written
-  before the restatement join it once the turn has settled (unshown until then). A
-  direct run (a code change outside the pipeline, in its own worktree) is not a
-  pipeline: its turn has no pipeline block. Work after the last line stays under it, and a resumed turn marks the
-  stages before the run's current one done. A gate line says only its verdict, holds
-  no work and sits next to the stage it guards (GATE 1 before BUILD): the run records
-  a gate's start but not its end, so a gate that owned "start to next start" would
-  swallow the stage it guards.
+- **Invariants:** (1) **The first level is decided in ONE place by ONE rule.** A turn
+  reads `THOUGHTS → restatement → WORKED → note → WORKED → … → RESULT`. The thoughts
+  before anything was written or called are the receipt ("it got my message"): their
+  own group, in full while streaming, kept first and folded after. The text before
+  the first call is the restatement (plain text, no label, never a thought or the
+  run's stored requirement). Each note the agent writes between calls is first level,
+  between two WORKED groups, never folded — the note IS the phase boundary, so a long
+  turn folds into a readable list of phases, not one 90-step block. A thought never
+  opens or closes a group. (2) **Four kinds of group, three textures inside.** Groups:
+  `THINKING` / `THOUGHTS · N`, `WORKING` / `WORKED · N steps · N commands · time` (one
+  per phase), a pipeline stage, and `RESULT` (the only one not foldable; absent when
+  the turn made no calls). Every other group header is the toggle, opens and closes
+  in place, and states counts — never a file count (files are counted once, on the
+  output card). Inside a group: thoughts (dim italic; one line once settled, open for
+  all of it), tool calls as **light strips**, sub-agents in an **Agents panel**. Text,
+  strips and panels must never look alike. (3) **A tool call is one light strip.** A
+  fixed-width column with the tool's OWN name (Read · Edit · Bash · Grep · Agent · an
+  MCP tool's name without its `mcp__` prefix — never a translated verb, a category or
+  "Explored"), the object starting on one vertical line (a path: dim directory, the
+  file name whole; a command without its leading `cd` / `export` / timeout wrapper; a
+  heredoc cut at its marker; long ids cut), a right-aligned time column. The hover
+  is the full object, from the stored redacted display copy, so history shows the
+  whole command too. Only identical input (`Bash ×2`) or adjacent Read / Grep / Glob
+  merge. (4) **No failure marks.** A call that returned an error looks like the others
+  and shows the error when opened: most failures are the agent's own (red first, a
+  rejected submit resent) and need nothing from the user. Only what needs the user
+  becomes a first-level card in place — a question, a permission (with the exact
+  action), an escalation, a failure the agent could not resolve (what failed, what it
+  tried, the decision needed). Color and the one accent tag are for those cards only.
+  (5) **Sub-agents that run at the same time share ONE Agents panel**, placed at the
+  first spawn even when calls come between the spawns: header `⟳ N running · ✓ N
+  done · Stop all`; each row its whole task (wrapped, never cut), time, tool count, and
+  its own ✕ that stops only that agent; while running, a second line `→ <tool>`.
+  (6) **The pipeline lives inside the chat turn.** The work before the run (reading the
+  ask, calling the skill, creating the run) stays above a `Pipeline started · <profile>`
+  divider. After it, only stages that STARTED, each one group (`✓ BUILD · stats ·
+  time`, the running one `● DELIVER · stats · next: REFLECT`); no pending stages, no
+  ○, no `k/N`. A stage that runs again is the same group with `round N`; a gate is one
+  verdict row with its earlier rounds' verdicts; a run that stopped mid-way says
+  `Stopped at X`. A direct run (a code change in its own worktree) is not a pipeline:
+  none of this, and no run-summary card. (7) **The ending is RESULT → one output card →
+  chips.** One card, two sections at most: code changes (from the backend's per-turn
+  diff only — machine-written logs, context files and deliverable copies excluded) and
+  deliverables (what the turn produced, plus a run's documents — listed only there).
+  The answer never re-lists them. (8) **One animated signal** — the streaming bee; a
+  running strip, ⟳ and WORKING are static marks; no floating "Thinking" pill;
+  scrolled up shows only `↓ Back to latest`. (9) **Breathing room is two steps:** 28px
+  between zones, at most 10px inside one, 2px between strips — measured as
+  min(between) > max(inside) on real data, never eyeballed. (10) **Nothing changes
+  shape on the spot.** While a turn streams the zone list only grows: no zone already
+  shown moves, folds, vanishes or remounts when the next block arrives; a finished
+  group folds only 2s (the fold linger) after it ends. Verify by replay, not
+  reasoning: stream a turn into the real view one block per frame with the clock
+  frozen.
 - **Principles (each names the decision it serves):**
-  - **One focus at a time** — Check 4 applied across time: the live segment while
-    working, the result once done, and a step that needs the user above both. If every
-    segment is boxed, nothing reads as "now".
-  - **Progress is position in the plan, not effort spent** — the RUNNING stage says
-    "stage 4 of 8", which answers "how far along, how much left"; "92 steps" answers
-    neither.
-  - **A folded line says its size, the body says what** — a finished block or stage
-    folds to counts (steps · files changed · commands) and its duration. File names
-    and model summaries on the folded line made every line long and different and the
-    stream unscannable (XG 2026-10-19); what changed is one click down, and the
-    result section says what the turn produced.
-  - **A finding sits with the work that produced it** — text the agent writes between
-    steps is that segment's conclusion: tighter to the work above than to what follows
-    (Proximity; Part 2 #9). Interim notes are a lower tier than the final answer.
-  - **One fact, one representation** — Check 2 applied to live state: one spinner,
-    one elapsed timer, one position-in-plan. Two indicators that disagree (a turn
-    total in one place, a segment total in another) cost more trust than either
+  - **One focus at a time** — Check 4 applied across time: the live phase while
+    working, the result once done, and a card that needs the user above both.
+  - **Progress is what is running and what comes next, not effort spent** — the
+    running stage says `next: X`; an upfront list of pending stages is noise that
+    goes stale.
+  - **A folded group says its size, the body says what** — counts and time on the
+    header; file names and summaries one click down; what the turn produced is on the
+    output card.
+  - **The agent's words are first level** — a note between calls is the conclusion of
+    one phase and the plan of the next: it stands between groups, at body size.
+  - **One fact, one representation** — one spinner, one place for file counts, one
+    place for run documents. Two indicators that disagree cost more trust than either
     earns.
-  - **Color only for what needs action** — failed and needs-you get color; done gets
-    a neutral mark. When every finished step is green, the one red
-    step stops standing out.
-  - **Fold, never delete** — the process stays auditable at three depths (plan stage
-    → segment → step), Part 4's Depth applied over time: collapsed by default, never
-    removed.
-- **Anti-patterns:** raw log dump as the primary view; every finished segment a
-  bordered, filled card at equal weight (machinery outweighs the milestones and the
-  answer); a live region expanded by default into raw tool arguments (an approval
-  request is the exception — it shows the exact action); interim notes
-  styled identically to the final answer; two progress indicators whose numbers
-  disagree; a decision the agent needs routed to an async panel instead of the
-  current channel; no stop/intervene; status that lies (frontend guess vs real
-  state); a label or toggle on an item while it is being read ("Show all" under each
-  thought, a clamped live thought); a single-step group whose header opens to the
-  same step; a tool call rewritten into a category word or "inline script" (the user
-  cannot audit it); a stack of first-level WORKED rows, one per thought; a screen of
-  near-identical finished tool rows, one per call; a cut file name or sub-agent task;
-  a stage's work shown under the gate row next to it; a checklist line inserted
-  mid-run, or a second line for a stage that ran again; a thought, row or command line
-  that folds or vanishes the instant the next item arrives; a block whose items remount
-  when it stops being live; a "Working · Thinking" card above the restatement, or a
-  pipeline block for a run that is not a pipeline; a label ("Intent") on the restatement, or the run's stored
-  requirement shown as if the agent had said it; a meta-comment about the model
-  ("started without restating the ask") that the user cannot act on.
+  - **Color only for what needs action** — when every recovered failure is red, the
+    one failure that needs the user stops standing out.
+  - **Fold, never delete** — the process stays auditable (phase → strip → detail):
+    collapsed by default, never removed.
+- **Anti-patterns:** raw log dump as the primary view; a box inside a box (a lane
+  around the turn, a card around the pipeline); every finished segment a bordered
+  card at equal weight; one WORKED block for a whole turn; a note folded into a group
+  or used as a group title; a thought starting a group; tool calls that read like
+  narrative text, or text that reads like a tool call; a translated verb or category
+  ("Explored", "Ran") instead of the tool's name; a failure mark on a call the agent
+  recovered from; a sub-agent drawn as one more strip, or parallel agents split into
+  several panels; a stop button that does nothing; the pipeline swallowing the work
+  before it, a checklist of pending stages, `0/N`; a pipeline block or summary card
+  for a direct run; a file count on a group header; two cards for "what this turn
+  produced"; the same file listed in the answer, the card and a chip row; a second
+  spinner or a floating Thinking pill; zones packed tight with no breathing room; a
+  zone that folds, vanishes or remounts the instant the next item arrives.
 - **The tell:** you are giving finished work the same border and weight as the work
   in progress, or the tool rows are what the eye lands on first. Ask which of the four
   questions the user is asking right now, and give weight only to the answer to that

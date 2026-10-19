@@ -76,6 +76,7 @@ import { useAttentionQueue } from '../hooks/useAttentionQueue';
 import RefreshContextModal from '../components/modals/RefreshContextModal';
 
 import { mergeOlderMessages, toDisplayMessage } from './chat/utils';
+import { STOP_TURN_EVENT } from './chat/turnZones';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../constants/explorerEvents';
 import { CLAUDE_NATIVE_IMAGE_MIMES } from '../utils/fileClassification';
 
@@ -3147,6 +3148,22 @@ export default function ChatPage() {
       setTimeout(() => drainQueuedMessage(currentTabId), 0);
     }
   };
+  // An Agents panel's "Stop all" (chat turn spec v6 §3.2) is the Stop button: it stops
+  // the active tab's turn, whose message holds the panel.
+  const handleStopRef = useRef(handleStop);
+  handleStopRef.current = handleStop;
+  useEffect(() => {
+    // "Stop all" from an Agents panel stops the turn — only when it came from the
+    // session on screen (only the active tab's panel can be clicked, but a stray or
+    // programmatic dispatch must never stop another session).
+    const onStopTurn = (e: Event) => {
+      const from = (e as CustomEvent<{ sessionId?: string }>).detail?.sessionId;
+      if (from && from !== sessionIdRef.current) return;
+      handleStopRef.current();
+    };
+    window.addEventListener(STOP_TURN_EVENT, onStopTurn);
+    return () => window.removeEventListener(STOP_TURN_EVENT, onStopTurn);
+  }, []);
 
   // --- Context Refresh (Same-Tab Restart) ---
   const handleRefreshContext = useCallback(async () => {

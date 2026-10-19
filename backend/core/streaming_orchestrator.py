@@ -911,6 +911,22 @@ class StreamingOrchestrator:
             event["durationMs"] = usage.get("duration_ms")
         return event
 
+    _TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "stopped", "killed", "cancelled"})
+
+    def _track_live_task(self, event: dict) -> None:
+        """Keep the unit's stop_task allowlist (``_live_task_ids``) in step with the
+        sub-agent's lifecycle: a running status adds its task id, a terminal one
+        removes it. Only tasks tied to a step of this turn reach here (a task with no
+        parent emits no event), so a background task is never stoppable from the chat."""
+        task_id, status = event.get("taskId"), event.get("status")
+        if not task_id:
+            return
+        live = self._parent._live_task_ids
+        if status in self._TERMINAL_TASK_STATUSES:
+            live.discard(task_id)
+        elif status == "running":
+            live.add(task_id)
+
     @staticmethod
     def _note_subagent(last: dict, event: dict) -> None:
         """Fold one subagent_progress event into the Agent step's latest state."""
@@ -1254,7 +1270,7 @@ class StreamingOrchestrator:
         from claude_agent_sdk.types import StreamEvent, ThinkingBlock
 
         try:
-            from core.tool_summarizer import summarize_tool_use, get_tool_category, truncate_tool_result
+            from core.tool_summarizer import summarize_tool_use, get_tool_category, tool_display, truncate_tool_result
             _has_tool_summarizer = True
         except ImportError:
             _has_tool_summarizer = False
@@ -1794,6 +1810,7 @@ class StreamingOrchestrator:
                     _sa_ev = self._subagent_progress_event(message, _task_parent)
                     if _sa_ev is not None:
                         self._note_subagent(_subagent_last, _sa_ev)
+                        self._track_live_task(_sa_ev)
                         self._parent._last_progress_time = time.time()
                         _progress.on_visible(self._parent._last_progress_time)
                         yield _sa_ev
@@ -2412,12 +2429,21 @@ class StreamingOrchestrator:
                         if _has_tool_summarizer:
                             summary = summarize_tool_use(block.name, block.input)
                             category = get_tool_category(block.name)
+                            # The strip's object (redacted, ≤2000) + merge key; this
+                            # dict is both yielded and persisted, so live and history
+                            # show the same thing (chat turn spec v6 §7.1).
+                            display = tool_display(block.name, block.input)
                         else:
                             summary = f"{block.name}(...)"
                             category = "unknown"
+                            # Nothing to redact with: show no object, never raw input.
+                            _tool = block.name.split("__")
+                            display = {"tool": _tool[-1] if len(_tool) >= 3 and _tool[0].lower() == "mcp" else block.name,
+                                       "object": "", "key": ""}
                         _tu_block = {
                             "type": "tool_use", "id": block.id,
                             "name": block.name, "summary": summary, "category": category,
+                            "display": display,
                         }
                         if _am_parent is not None:
                             _tu_block["parent_tool_use_id"] = _am_parent

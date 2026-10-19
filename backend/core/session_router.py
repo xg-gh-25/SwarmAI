@@ -4355,6 +4355,20 @@ class SessionRouter:
             "subprocess_alive": unit.is_alive,
         }
 
+    async def stop_task(self, session_id: str, task_id: str) -> dict:
+        """Stop one sub-agent of a session's running turn (SessionUnit.stop_task).
+
+        ``{"status": "stopped"}`` / ``{"status": "refused", "message": …}`` (not a task
+        of this session's running turn, or the SDK did not take it) /
+        ``{"status": "not_found"}`` (no such session)."""
+        unit = self.get_unit(session_id)
+        if unit is None:
+            return {"status": "not_found"}
+        out = await unit.stop_task(task_id)
+        if out.get("stopped"):
+            return {"status": "stopped"}
+        return {"status": "refused", "message": out.get("reason") or "not stopped"}
+
     async def release_session(
         self,
         session_id: str,

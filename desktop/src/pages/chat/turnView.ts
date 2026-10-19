@@ -17,33 +17,30 @@
  * - `process`   — a run of ADJACENT tool calls; each call renders as one strip.
  * - `thought`   — a thinking passage, in its place in the stream (never promoted
  *                 out of the work: there is no intent thought, chat display v8).
- * - `note`      — text the agent wrote BETWEEN tool calls; a line of its WORKED block.
+ * - `note`      — text the agent wrote BETWEEN tool calls; a first-level zone between
+ *                 two WORKED groups (turnZones).
  * - `landmark`  — a pipeline landmark / gate verdict line. Splits the process into
- *                 segments; inside a WORKED block it is one of its lines. `blocks`
- *                 marks a gate BLOCK verdict (isGateBlock).
+ *                 segments; like a note it is a first-level text zone that closes the
+ *                 phase before it (turnZones). `blocks` marks a gate BLOCK verdict
+ *                 (isGateBlock).
  * - `stage`     — a `pipeline_stage` block: a stage the BACKEND saw start or finish
- *                 in run.json (not model text). Stays visible and splits the
- *                 process; `sectionUnits` / `pipelineChecklist` lay it onto the
- *                 run's checklist line.
+ *                 in run.json (not model text). Splits the process; `turnZones`
+ *                 (turnZones.ts) makes one stage zone per started stage.
  * - `outcome`   — text AFTER the last tool call: the answer. Rendered in full, first
- *                 level. While it streams, the block above it stays live (groupWork
- *                 `holdLiveAboveAnswer`), so that block does not fold and re-open if a
- *                 tool call follows and the text becomes a note.
+ *                 level (a note and the answer are both text zones keyed by
+ *                 textOrdinal, so text that turns from answer into note never moves).
  * - `interrupt` — a block that needs the user (question / permission / escalation).
  *                 Never folded; also splits the process.
  *
- * A second, pure pass — `groupWork` — gathers everything between two first-level
- * items (thoughts, notes, landmarks, tool calls) into one WORKING / WORKED block
- * (chat display v8). `toolCall` is a call's real tool name and command; `toolRow` is
- * what its row says (Codex-style verb + real object, `explore` for a read-only
- * read / search / list).
+ * The first level of the turn (THOUGHTS · restatement · WORKED · note · … · pipeline ·
+ * RESULT) is laid out by `turnZones` (turnZones.ts, chat turn spec v6) from these
+ * units. `toolCall` is a call's real tool name and command; `stepLabel` reads the
+ * backend summary (the path a file tool touched).
  *
  * Not units: the backend's display blocks (`pipeline_run`, `pipeline_attention`,
  * `pipeline_summary`, `turn_deliverables`, `turn_changes`) are lifted into
  * `TurnView.run / attention / summary / deliverables / changes`.
- * They have a fixed place in the turn (the pipeline block's header / before the
- * result / after it),
- * not a place in the flow, so they never split a segment or count as "later".
+ * They have a fixed place in the turn (the ending), not a place in the flow, so they never split a segment or count as "later".
  *
  * The done rule (single source): a tool_use is DONE iff it has a tool_result, OR
  * a later TEXT / thinking block follows it (the model only writes again after its
@@ -62,12 +59,10 @@
  * and ignored by everything else here, so a sub-agent's 40 reads never look
  * like the main agent's steps.
  *
- * @exports deriveTurnView, groupWork, toolCall, toolRow, stepLabel,
- *          extractNextSteps, isLandmarkText, sectionUnits, pipelineChecklist, stageCounts,
- *          isGateStage, isGateBlock,
- *          and the TurnView / TurnUnit / ProcessUnit / Step / ToolStep /
- *          ToolStatus / StepLabel / StepVerb / ToolCallView / ToolRowView / WorkGroup /
- *          WorkItem / ChecklistLine / NextStepsResult types
+ * @exports deriveTurnView, toolCall, stepLabel, displayCommand, extractNextSteps,
+ *          isLandmarkText, isGateStage, isGateBlock, isUnanswered, stripStageHeading,
+ *          and the TurnView / TurnUnit / ProcessUnit / ThoughtUnit / Step / ToolStep /
+ *          ToolStatus / StepLabel / StepVerb / ToolCallView / NextStepsResult types
  */
 import type {
   ContentBlock,
@@ -96,6 +91,9 @@ export interface ToolStep {
   index: number;
   status: ToolStatus;
   result?: ToolResultContent;
+  /** The content index of its result block, when there is one: an Agent whose result
+   *  comes after a later Agent's call ran at the same time as it (one Agents panel). */
+  resultIndex?: number;
   /** An Agent step's own sub-agent steps (tool_use blocks whose
    *  `parentToolUseId` is this step), in stream order. */
   children?: ToolStep[];
@@ -176,9 +174,22 @@ export interface TurnView {
   /** The content starts with a tool RESULT: the tail of a compacted / resumed turn.
    *  Nothing in it is how the ask was read, so it has no lead text. */
   midWork: boolean;
+  /** Where the pipeline part of the turn begins: the content index of its first
+   *  pipeline block (run or stage row) of a non-direct run, and the run's profile.
+   *  Everything before it is the chat part (turnZones, chat turn spec v6 §5).
+   *  `current`: when that first block is a run block announcing a stage already in
+   *  progress (a resumed run), that stage; null for a fresh run or a stage row. It is
+   *  fixed by the first block, so where the work before the first stage row goes never
+   *  changes while the turn streams. */
+  pipelineStart?: { index: number; profile: string | null; current: string | null };
+  /** The user pressed Stop in this view (the live `*Stopped*` marker ChatPage
+   *  appends; it is not rendered as text). */
+  stoppedMarker?: boolean;
 }
 
 const INTERRUPT_TYPES = new Set(['ask_user_question', 'cmd_permission_request', 'escalation']);
+/** The text block ChatPage appends to the live message when the user presses Stop. */
+const STOP_MARKER_RE = /^\s*---\s*\n\s*\*Stopped\*\s*$/;
 
 /** An interrupt the user has not answered yet (so the call before it has not run). */
 export function isUnanswered(b: InterruptBlock): boolean {
@@ -261,6 +272,8 @@ export function deriveTurnView(
   progress?: Record<string, SubAgentProgress>,
 ): TurnView {
   const results = buildResultMap(content);
+  const resultAt = new Map<string, number>();
+  content.forEach((b, i) => { if (b.type === 'tool_result') resultAt.set(b.toolUseId, i); });
   // Sub-agent steps by the Agent tool_use they ran under, in stream order.
   const children = new Map<string, Array<{ block: ToolUseContent; index: number }>>();
   content.forEach((b, index) => {
@@ -294,6 +307,9 @@ export function deriveTurnView(
     gatedAfter[i] = gate;
     const b = content[i];
     if (isSubAgentBlock(b) || DISPLAY_TYPES.has(b.type)) continue;
+    // The Stop marker is written by the app when the user stops the turn, not by the
+    // model: it proves nothing returned, so the call before it stays unknown (stopped).
+    if (b.type === 'text' && STOP_MARKER_RE.test(b.text || '')) continue;
     if (b.type !== 'tool_result') seen = true;
     if (b.type === 'text' || b.type === 'thinking') { seenNonTool = true; gate = false; }
     if (INTERRUPT_TYPES.has(b.type)) gate = isUnanswered(b as InterruptBlock);
@@ -329,6 +345,17 @@ export function deriveTurnView(
   const isPipelineBlock = (b: ContentBlock) => isRunBlock(b) && runProfile.get(b.runId) !== 'direct';
   // A pipeline turn: its stage headings are said by the backend rows (stripStageHeading).
   const pipelineTurn = content.some(isPipelineBlock);
+  const pipelineAt = content.findIndex(isPipelineBlock);
+  let pipelineStart: TurnView['pipelineStart'];
+  if (pipelineAt >= 0) {
+    const first = content[pipelineAt] as PipelineStageContent | PipelineRunContent;
+    pipelineStart = {
+      index: pipelineAt,
+      profile: runProfile.get(first.runId) ?? first.profile ?? null,
+      current: first.type === 'pipeline_run' ? first.current ?? null : null,
+    };
+  }
+  let stoppedMarker = false;
   let thoughts = 0;
   let texts = 0;
   let attention: PipelineAttentionContent | undefined;
@@ -395,6 +422,7 @@ export function deriveTurnView(
     if (block.type === 'text') {
       const raw = block.text || '';
       if (!raw.trim()) return;
+      if (STOP_MARKER_RE.test(raw)) { stoppedMarker = true; return; }
       const textOrdinal = texts;
       texts += 1;
       const text = pipelineTurn ? stripStageHeading(raw) : raw;
@@ -442,6 +470,7 @@ export function deriveTurnView(
                   ? 'unknown'
                   : 'done';
       const step: ToolStep = { kind: 'tool', block, index, status, result };
+      if (resultAt.has(block.id)) step.resultIndex = resultAt.get(block.id);
       const subs = children.get(block.id);
       // The sub-agent's outcome: live progress while streaming, else what its
       // Agent result kept (status, steps, duration, summary — persisted).
@@ -511,7 +540,7 @@ export function deriveTurnView(
     // other landmark (the "✦ ⑦ TEST" line the pipeline writes after each row) keeps it.
     const landmarkAfter = units.slice(stageAt + 1).some((u) => u.kind === 'landmark' && !!u.blocks);
     // The latest stage (not gate) row that started and has not ended is the one
-    // running: its own section is live (sectionUnits).
+    // running: its stage zone is live (turnZones).
     const open = [...units].reverse().find((u): u is Extract<TurnUnit, { kind: 'stage' }> =>
       u.kind === 'stage' && !isGateStage(u.block.stage));
     if (open && open.block.status === 'in_progress') {
@@ -538,7 +567,7 @@ export function deriveTurnView(
     .filter((u): u is Extract<TurnUnit, { kind: 'outcome' }> => u.kind === 'outcome')
     .map((u) => u.text)
     .join('\n\n');
-  return { units, nextSteps, copyText, run, attention, summary, deliverables, changes, liveStage, midWork };
+  return { units, nextSteps, copyText, run, attention, summary, deliverables, changes, liveStage, midWork, pipelineStart, stoppedMarker };
 }
 
 // ── Step labels ─────────────────────────────────────────────────────────────
@@ -607,6 +636,12 @@ function stripBashSetup(cmd: string, detect: boolean): string {
   }
   return rest;
 }
+/** A Bash command as a strip shows it: leading cd / export / source / set setup and a
+ *  perl-alarm / timeout wrapper removed (the display mode of stripBashSetup). */
+export function displayCommand(cmd: string): string {
+  return stripBashSetup(cmd, false);
+}
+
 /** The command split at every UNQUOTED `&&` / `||` / `|` / `;` / newline. */
 function splitSegments(cmd: string): string[] {
   const out: string[] = [];
@@ -848,49 +883,6 @@ export function toolCall(block: ToolUseContent): ToolCallView {
   return view;
 }
 
-/** What a tool row says (chat display v8, XG 2026-10-19 — Codex-style verbs): a
- *  verb + the call's REAL object, and the full command for the running / opened row.
- *  `explore`: a read, search or list that only reads — such rows merge into one
- *  "Explored" line once settled. Built on the one classifier (stepLabel / labelBash),
- *  so a command that may write is never an exploration row. */
-export interface ToolRowView {
-  verb: string;
-  object: string;
-  path?: string;
-  explore: boolean;
-  command: string;
-}
-
-const ROW_VERB: Partial<Record<StepVerb, string>> = {
-  read: 'Read', search: 'Search', list: 'List', run: 'Ran', agent: 'Agent',
-};
-const rowCache = new WeakMap<object, ToolRowView>();
-
-export function toolRow(block: ToolUseContent): ToolRowView {
-  const hit = rowCache.get(block);
-  if (hit) return hit;
-  const label = stepLabel(block);
-  const call = toolCall(block);
-  const name = block.name || 'Tool';
-  let verb = ROW_VERB[label.verb] ?? name;
-  if (label.verb === 'edit') verb = name === 'Write' || label.created ? 'Wrote' : 'Edited';
-  // An MCP call: the tool's own name (the server prefix is the tooltip), then its argument.
-  if (label.verb === 'mcp') verb = name.split('__').pop() || name;
-  const byCall = label.verb === 'tool' || label.verb === 'mcp' || label.object === name;
-  // A run says its program and subcommand ("Ran git log -6", "Ran artifact_cli.py
-  // run-update"); the whole command is the row's second line while it runs and once
-  // the row is opened (XG spec, chat display v8).
-  const view: ToolRowView = {
-    verb,
-    object: byCall ? (call.text === name ? '' : call.text) : label.object,
-    explore: label.verb === 'read' || label.verb === 'search' || label.verb === 'list',
-    command: call.text === name ? '' : call.text,
-  };
-  if (label.path) view.path = label.path;
-  rowCache.set(block, view);
-  return view;
-}
-
 /** backend tool_summarizer MAX_SUMMARY_LENGTH — a summary this long was cut. */
 const SUMMARY_CAP = 200;
 /** A file target, unless the backend truncated the summary through the path. */
@@ -1005,271 +997,6 @@ export function extractNextSteps(text: string, isStreaming: boolean): NextStepsR
   return { text, steps: [] };
 }
 
-// ── Display rows ────────────────────────────────────────────────────────────
-
-/** One row of an expanded segment: a step, or ADJACENT finished reads of one file. */
-export type StepRowItem =
-  | { kind: 'step'; step: Step }
-  | { kind: 'reads'; steps: ToolStep[] };
-
-const readKey = (s: Step): string | null => {
-  if (s.kind !== 'tool' || s.status !== 'done') return null;
-  const label = stepLabel(s.block);
-  return label.verb === 'read' ? (label.path ?? label.object) : null;
-};
-
-/** Merge runs of adjacent finished reads of the SAME file into one row. Order is
- *  kept; anything in between (another file, thinking, a failure) breaks the run. */
-export function groupSteps(steps: Step[]): StepRowItem[] {
-  const out: StepRowItem[] = [];
-  let runKey: string | null = null;
-  for (const step of steps) {
-    const key = readKey(step);
-    const prev = out[out.length - 1];
-    if (key !== null && key === runKey && prev) {
-      if (prev.kind === 'reads') prev.steps.push(step as ToolStep);
-      else out[out.length - 1] = { kind: 'reads', steps: [(prev.step as ToolStep), step as ToolStep] };
-      continue;
-    }
-    out.push({ kind: 'step', step });
-    runKey = key;
-  }
-  return out;
-}
-
-// ── What changed ────────────────────────────────────────────────────────────
-
-/** Files the given steps wrote (Write/Edit), in first-touch order, with the
- *  sub-agent steps nested under an Agent step included. Summary says EFFECT. */
-export function changedFiles(steps: Step[]): string[] {
-  const out: string[] = [];
-  const visit = (s: ToolStep) => {
-    const label = stepLabel(s.block);
-    if (label.verb === 'edit' && label.path && s.status !== 'error' && !out.includes(label.path)) out.push(label.path);
-    s.children?.forEach(visit);
-  };
-  for (const s of steps) if (s.kind === 'tool') visit(s);
-  return out;
-}
-
-/** Files changed anywhere in the turn's process units. */
-export function turnChangedFiles(units: TurnUnit[]): string[] {
-  const out: string[] = [];
-  for (const u of units) {
-    if (u.kind !== 'process') continue;
-    for (const p of changedFiles(u.steps)) if (!out.includes(p)) out.push(p);
-  }
-  return out;
-}
-
-// ── Work blocks (chat display v8) ──────────────────────────────────────────
-//
-// A turn has two levels. FIRST level: the restatement (plain text), WORKING / WORKED
-// blocks, the pipeline block, interrupts and the result. SECOND level, inside a block (or an opened
-// stage), in stream order: thoughts, notes the model wrote between tool calls,
-// landmarks and tool calls. So a block is EVERYTHING between two first-level items —
-// a thought or a note never makes a first-level row of its own. Only the last block of
-// a streaming turn is live (the WORKING card); a finished one folds to WORKED.
-
-export interface WorkGroup {
-  kind: 'group';
-  /** `grp-th-<ordinal>` when it starts with a thought, else `grp-<first process
-   *  seg-<n>>`, else `grp-txt-<ordinal>`: never changes while the block grows (a
-   *  thinking-only block keeps its id when its first tool call lands), and survives
-   *  the stream-end reconcile. */
-  id: string;
-  /** Its second-level items, in stream order. */
-  members: WorkMember[];
-  /** The last block of a streaming turn. */
-  live: boolean;
-  /** Has at least one tool call. */
-  hasTools: boolean;
-}
-
-export type LandmarkUnit = Extract<TurnUnit, { kind: 'landmark' }>;
-/** A text member: both carry `textOrdinal`. */
-export type TextUnit = NoteUnit | LandmarkUnit;
-export type WorkMember = ThoughtUnit | ProcessUnit | NoteUnit | LandmarkUnit;
-
-/** groupWork's output: blocks and the first-level units between them (a thought is
- *  always inside a block). */
-export type WorkItem = WorkGroup | Exclude<TurnUnit, ProcessUnit | ThoughtUnit>;
-
-export interface GroupWorkOptions {
-  /** A note that stays first level: the turn's opening restatement. */
-  exclude?: TurnUnit;
-  /** Units that joined a block from elsewhere (the thoughts before the restatement,
-   *  moved into the first stage once the turn settles): they do not count for the
-   *  block's id, so the block keeps the id it streamed with. */
-  joined?: ReadonlySet<TurnUnit>;
-  /** The turn's top level: the leading thoughts-only blocks join the turn's first
-   *  block of work, across the restatement and questions (never across a stage row
-   *  or the answer). Not for a stage body, where a thought keeps its place. */
-  top?: boolean;
-  /** With `top`, until the turn has settled: leading thoughts-only blocks with no
-   *  work to join yet are not shown (the first level opens with what the agent says). */
-  hideLead?: boolean;
-  /** While streaming, a block with tool calls right before the answer-so-far (the
-   *  last unit, an outcome) stays live — open, not folding. The answer stays first
-   *  level so the final answer never moves when the turn ends; if a tool call
-   *  follows, the text joins this still-open block as a note (XG 2026-10-18, option
-   *  B: the rare note moves, the common answer does not). */
-  holdLiveAboveAnswer?: boolean;
-}
-
-export function groupWork(units: TurnUnit[], isStreaming: boolean, opts: GroupWorkOptions = {}): WorkItem[] {
-  const out: WorkItem[] = [];
-  let cur: WorkGroup | null = null;
-  const member = (u: TurnUnit): u is WorkMember => {
-    if (u === opts.exclude) return false;
-    if (u.kind === 'thought') return true;
-    return u.kind === 'process' || u.kind === 'note' || u.kind === 'landmark';
-  };
-  for (const u of units) {
-    if (member(u)) {
-      if (!cur) {
-        cur = { kind: 'group', id: '', members: [], live: false, hasTools: false };
-        out.push(cur);
-      }
-      cur.members.push(u);
-      if (u.kind === 'process' && u.steps.length > 0) cur.hasTools = true;
-      continue;
-    }
-    cur = null;
-    out.push(u as Exclude<TurnUnit, ProcessUnit | ThoughtUnit>);
-  }
-  // A block's id is fixed by its START, so it never changes while the block grows: a
-  // block that starts with a thought is `th-<ordinal>` (a thinking-only block keeps
-  // its id — and its element — when its first tool call lands; a remount there would
-  // fold the thought on the spot), else its first PROCESS member's (`seg-<n>`; a note
-  // can come to stand in front of a process mid-stream), else its first text's
-  // (`txt-<textOrdinal>`). Assigned before the lead merge below, so a block that
-  // absorbs the thoughts above the restatement keeps the id it streamed with.
-  for (const g of out) {
-    if (g.kind !== 'group') continue;
-    const own = g.members.filter((m) => !opts.joined?.has(m));
-    const ms = own.length ? own : g.members;
-    const first = ms[0];
-    const p = ms.find((m): m is ProcessUnit => m.kind === 'process');
-    const text = ms.find((m): m is TextUnit => m.kind === 'note' || m.kind === 'landmark');
-    const key = first.kind === 'thought' ? `th-${first.ordinal}` : p ? p.id : `txt-${(text as TextUnit).textOrdinal}`;
-    g.id = `grp-${key}`;
-  }
-  // Thoughts the model had before writing its restatement belong with the work they
-  // led to, never in a block of their own above it: the restatement leads the turn
-  // (design-judgment Surface 6 #7). They join the first block after it, live and
-  // settled alike — while the turn streams they are not shown until that block exists
-  // (`hideLead`, below), so they never stand above the restatement and then move.
-  for (let i = 0; i + 2 < out.length; i += 1) {
-    const g = out[i];
-    const next = out[i + 2];
-    if (g.kind === 'group' && out[i + 1] === opts.exclude && next.kind === 'group'
-      && g.members.every((m) => m.kind === 'thought')) {
-      next.members.unshift(...g.members);
-      out.splice(i, 1);
-    }
-  }
-  // The turn's top level: thoughts-only blocks at its start join the first block of
-  // work, wherever it comes — after the restatement, after a question the agent asked
-  // first — so a thought block never stands above the restatement or a question,
-  // live or settled (the same rule both ways: nothing moves at the settle). The scan
-  // stops at anything else (a stage row, the answer): no work to join. Then, until
-  // the turn has settled (`hideLead`), those blocks are not shown: the streaming bee
-  // says the turn is running, and the first thing on screen is what the agent says,
-  // never a "Working · Thinking" card. Once settled they show — only in a turn with
-  // no work (it thought, then answered), as one folded "Thought" line above the
-  // answer: the first text cannot be told apart from a restatement until a tool call
-  // comes, and keeping the restatement still is the case that matters (the common one).
-  if (opts.top) {
-    const leads: WorkGroup[] = [];
-    let target: WorkGroup | undefined;
-    for (const it of out) {
-      if (it.kind === 'group') {
-        if (it.members.every((m) => m.kind === 'thought')) { leads.push(it); continue; }
-        target = it;
-        break;
-      }
-      if (it === opts.exclude || it.kind === 'interrupt') continue;
-      break;
-    }
-    if (leads.length && (target || opts.hideLead)) {
-      if (target) target.members.unshift(...leads.flatMap((g) => g.members));
-      for (const g of leads) out.splice(out.indexOf(g), 1);
-    }
-  }
-  const last = out[out.length - 1];
-  const beforeLast = out[out.length - 2];
-  if (isStreaming && last && last.kind === 'group') last.live = true;
-  else if (isStreaming && opts.holdLiveAboveAnswer && last?.kind === 'outcome'
-    && beforeLast?.kind === 'group' && beforeLast.hasTools) {
-    // The answer-so-far streams below this block: keep the block open (and its one
-    // spinner) until the turn ends or the next tool call joins it.
-    beforeLast.live = true;
-  }
-  else if (isStreaming && last?.kind === 'stage') {
-    // Streaming, and nothing has started since a stage row: an empty WORKING card
-    // holds the stage's spinner until the next item lands. (Nothing at all yet: no
-    // card — the streaming bee is the turn's one spinner.)
-    const id = `lead-${last ? last.index : 0}`;
-    const placeholder: ProcessUnit = { kind: 'process', id, steps: [], isLive: true, live: {} };
-    out.push({ kind: 'group', id: `grp-${id}`, members: [placeholder], live: true, hasTools: false });
-  }
-  return out;
-}
-
-// ── Stage sections (pipeline turns) ─────────────────────────────────────────
-//
-// Each stage row owns the work from its START to the next row's start (XG
-// 2026-10-19): the backend writes an `in_progress` block when a stage starts and a
-// `completed` / `skipped` block for the same run + stage when it ends. The start
-// block opens the section; the end block updates that section's row in place (same
-// section, same children, same React key — the row folds where it is). A finished
-// stage folds its work under its row (design-judgment Surface 6, "process folds, it
-// is not deleted").
-//
-// Older sessions have only end blocks. For them a row still takes the work before it
-// (end-based), the previous non-gate row's time is its start, and work after the last
-// row stays under that row once the turn is over.
-//
-// First level of a pipeline turn: the restatement, ONE pipeline block (its lines are
-// the stage / gate rows laid onto the run's checklist), RESULT. So notes before the
-// first stage go into the first stage — the leading text stays at the top: it is the
-// restatement — and so do thoughts before the work, once the turn has settled
-// (`keepLeadThoughts` holds them at the top until then, where groupWork's `hideLead`
-// does not show them: never a block above the restatement). Once the turn is
-// over the work after the last row stays under it; only the trailing answer (the
-// result) stays at the top.
-//
-// GATE rows (gate0 / gate1 / gate2) hold no work and say only their verdict. The run
-// records a gate's START (Gate 1's prompt hand-out) but not its END — the verdict is
-// written when the guarded stage completes — so a gate that owned "its start to the
-// next start" would swallow the stage it guards. A gate's own sub-agent is part of
-// that stage's work. A gate row sits next to the stage it guards: GATE 0 after
-// EVALUATE, GATE 1 before BUILD / GOAL CYCLE, GATE 2 before DELIVER.
-
-export type TurnSection =
-  | { kind: 'unit'; unit: TurnUnit }
-  | {
-      kind: 'stage';
-      block: PipelineStageContent;
-      children: TurnUnit[];
-      /** End-based (older sessions): the previous non-gate row's time. */
-      prevAt?: string;
-      /** When the stage started: its start block's time, else `prevAt`. */
-      startedAt?: string;
-      /** A started stage that ended: how many children it had at its end block. Work
-       *  after that is still its own (start to next start), unless the next row is
-       *  an end block with no start, which then takes it. */
-      endedAt?: number;
-    }
-  | {
-      kind: 'liveStage';
-      stage: LiveStage;
-      /** Place in the run's plan ("5 of 8"), when the previous rows say it. */
-      position?: { n: number; total: number };
-      children: TurnUnit[];
-    };
-
 /** A gate row's stage name: gate0 / gate1 / gate2. */
 export const isGateStage = (stage: string): boolean => /^gate\d$/i.test(stage);
 
@@ -1294,233 +1021,8 @@ export function stripStageHeading(text: string): string {
   return lines.slice(i).join('\n');
 }
 
-/** A stage row's counts: its tool calls, the files they changed, its shell commands. */
-export function stageCounts(units: TurnUnit[]): { steps: number; files: number; commands: number } {
-  const steps = units.flatMap((u) => (u.kind === 'process'
-    ? u.steps.filter((s): s is ToolStep => s.kind === 'tool') : []));
-  return {
-    steps: steps.length,
-    files: changedFiles(steps).length,
-    commands: steps.filter((s) => s.block.name === 'Bash').length,
-  };
-}
-
-type StageSection = Extract<TurnSection, { kind: 'stage' }>;
-
-/** Where a gate row goes: next to the stage it guards (see the header above). */
-function placeGates(out: TurnSection[]): TurnSection[] {
-  const gates = out.filter((s): s is StageSection => s.kind === 'stage' && isGateStage(s.block.stage));
-  if (!gates.length) return out;
-  const rest = out.filter((s) => !(s.kind === 'stage' && isGateStage(s.block.stage)));
-  for (const g of gates) {
-    const natural = out.indexOf(g);
-    // The stage it guards: the nearest one at or before the gate's own position.
-    const guards = g.block.stage === 'gate0' ? ['evaluate'] : g.block.stage === 'gate2' ? ['deliver'] : ['build', 'goal_cycle'];
-    let target = -1;
-    for (let k = rest.length - 1; k >= 0; k -= 1) {
-      const s = rest[k];
-      if (s.kind === 'stage' && guards.includes(s.block.stage) && s.block.runId === g.block.runId
-        && out.indexOf(s) < natural) { target = k; break; }
-    }
-    if (target < 0) {
-      // Not found: keep it where it arrived (after whatever came before it).
-      const before = out.slice(0, natural).filter((s) => rest.includes(s)).length;
-      rest.splice(before, 0, g);
-    } else {
-      rest.splice(g.block.stage === 'gate0' ? target + 1 : target, 0, g);
-    }
-  }
-  return rest;
-}
-
-export function sectionUnits(
-  units: TurnUnit[], isStreaming: boolean, liveStage?: LiveStage,
-  opts: { keepLeadText?: boolean; keepLeadThoughts?: boolean } = {},
-): TurnSection[] {
-  if (!units.some((u) => u.kind === 'stage') && !(isStreaming && liveStage)) {
-    return units.map((unit) => ({ kind: 'unit', unit }));
-  }
-  const keepLeadText = opts.keepLeadText ?? true;
-  const out: TurnSection[] = [];
-  let buffer: TurnUnit[] = [];
-  let i = 0;
-  // Before any work: the restatement stays at the top; thoughts go to the first stage
-  // — except while the turn streams and settles (`keepLeadThoughts`): they stay at the
-  // top (not shown there, groupWork `hideLead`) and join the first stage at the settle.
-  while (i < units.length && units[i].kind !== 'process' && units[i].kind !== 'stage') {
-    const u = units[i];
-    if (u.kind === 'thought' ? !opts.keepLeadThoughts : !keepLeadText) buffer.push(u);
-    else out.push({ kind: 'unit', unit: u });
-    i += 1;
-  }
-  let current: StageSection | undefined; // a section opened by a start block
-  let last: StageSection | undefined; // the latest non-gate section
-  let lastWithPosition: PipelineStageContent | undefined;
-  const same = (a: PipelineStageContent, b: PipelineStageContent) => a.stage === b.stage && a.runId === b.runId;
-  for (; i < units.length; i += 1) {
-    const u = units[i];
-    if (u.kind !== 'stage') {
-      if (current) current.children.push(u);
-      else buffer.push(u);
-      continue;
-    }
-    const block = u.block;
-    if (isGateStage(block.stage)) {
-      out.push({ kind: 'stage', block, children: [] });
-      continue;
-    }
-    if (block.position !== null) lastWithPosition = block;
-    if (block.status === 'in_progress') {
-      if (current && same(current.block, block) && current.block.status === 'in_progress') continue; // repeated start
-      // A new start: the work before it (before the first stage) is this stage's.
-      const sec: StageSection = { kind: 'stage', block, children: buffer, startedAt: block.at };
-      buffer = [];
-      out.push(sec);
-      current = sec;
-      last = sec;
-      continue;
-    }
-    const open = [...out].reverse().find((s): s is StageSection =>
-      s.kind === 'stage' && same(s.block, block) && s.block.status === 'in_progress');
-    if (open) {
-      // Its end: the same row, updated in place; work so far stays where it is.
-      open.block = block;
-      if (buffer.length) { open.children.push(...buffer); buffer = []; }
-      open.endedAt = open.children.length;
-      continue;
-    }
-    // End-based (no start block): the row takes the work before it — including the
-    // work after a started stage's end, which that stage was only holding.
-    if (current && current.endedAt !== undefined && block.status !== 'skipped') {
-      buffer = [...current.children.splice(current.endedAt), ...buffer];
-    }
-    const sec: StageSection = { kind: 'stage', block, children: buffer, prevAt: last?.block.at, startedAt: last?.block.at };
-    buffer = [];
-    out.push(sec);
-    last = sec;
-    current = undefined;
-  }
-  // The trailing answer is the result (the answer-so-far while streaming): it stays
-  // at the top, never inside a stage — a finished stage folds, and would hide it.
-  let trailing: TurnUnit[] = [];
-  // (A stage still running and streaming keeps its answer-so-far: it is open and live,
-  // and lifting it would move every between-calls note in and out of the stage.)
-  if (current && !buffer.length && !(isStreaming && current.block.status === 'in_progress')) {
-    let tail = current.children.length;
-    while (tail > 0 && current.children[tail - 1].kind === 'outcome') tail -= 1;
-    trailing = current.children.splice(tail);
-  }
-  if (buffer.length) {
-    if (isStreaming && liveStage && !current) {
-      let tail = buffer.length;
-      while (tail > 0 && buffer[tail - 1].kind === 'outcome') tail -= 1;
-      trailing = buffer.splice(tail);
-      const position = !isGateStage(liveStage.stage) && lastWithPosition && lastWithPosition.position !== null
-        ? { n: lastWithPosition.position + 1, total: lastWithPosition.total }
-        : undefined;
-      out.push({ kind: 'liveStage', stage: liveStage, position, children: buffer });
-      buffer = [];
-    } else if (!isStreaming) {
-      // The turn is over: work after the last row stays under it (a skipped row did
-      // no work: the latest row that ran); the trailing answer stays at the top.
-      const holder = [...out].reverse().find((sec): sec is StageSection => sec.kind === 'stage'
-        && !isGateStage(sec.block.stage) && sec.block.status !== 'skipped');
-      let tail = buffer.length;
-      while (tail > 0 && buffer[tail - 1].kind === 'outcome') tail -= 1;
-      if (holder) {
-        holder.children.push(...buffer.slice(0, tail));
-        buffer = buffer.slice(tail);
-      }
-    }
-    out.push(...buffer.map((unit): TurnSection => ({ kind: 'unit', unit })));
-  }
-  out.push(...trailing.map((unit): TurnSection => ({ kind: 'unit', unit })));
-  return placeGates(out);
-}
-
-// ── The run's checklist (chat display v8, XG 2026-10-19) ─────────────────────
-//
-// A pipeline turn is ONE block whose header is the run's plan as a checklist: every
-// stage and gate the profile runs (`pipeline_run.checklist`, from the backend — the
-// frontend holds no gate or profile table). Each line is present from the first frame
-// and changes only its status (pending → running → done), so no line is ever
-// inserted above one the reader has seen. A stage that runs again (a goal loop, a
-// Gate BLOCK back to PLAN) is the same line with one more round. A resumed turn's
-// stages before `current` ran in an earlier turn: done, with no work here. A gate
-// row the plan did not list sits inside the line of the stage it guards; with no
-// such line, it (like any unplanned stage) is appended at the end.
-// Two known limits, by design: when the run's PLAN changes mid-run (a profile upgrade
-// the CLI allows), the backend re-sends the checklist and the new lines appear where
-// the new plan puts them — the plan really changed, so the list says so. And lines
-// match sections by stage name, so a second run started in the same turn lays its
-// stages onto the first run's lines (as another round).
-
-type RowSection = Exclude<TurnSection, { kind: 'unit' }>;
-
-export interface ChecklistLine {
-  stage: string;
-  gate: boolean;
-  status: 'done' | 'running' | 'pending' | 'skipped';
-  /** This line's sections, oldest first: one per round. */
-  rounds: RowSection[];
-  /** Gate rows the plan did not list, shown inside this (host) line. */
-  extraGates: StageSection[];
-  /** Done in an earlier turn of the run (a resumed turn): no work here. */
-  earlier: boolean;
-}
-
-const GATE_HOSTS: Record<string, string[]> = { gate0: ['evaluate'], gate1: ['build', 'goal_cycle'], gate2: ['deliver'] };
-const sectionStage = (s: RowSection): string => (s.kind === 'stage' ? s.block.stage : s.stage.stage);
-
-export function pipelineChecklist(sections: TurnSection[], run?: PipelineRunContent): ChecklistLine[] {
-  // An older turn's run block has no checklist: its stage list is the plan.
-  const plan = run?.checklist?.length ? run.checklist : (run?.stages ?? []).map((stage) => ({ stage, gate: false }));
-  const lines: ChecklistLine[] = plan.map((c) => ({
-    stage: c.stage, gate: !!c.gate, status: 'pending', rounds: [], extraGates: [], earlier: false,
-  }));
-  const find = (stage: string) => lines.find((l) => l.stage === stage);
-  for (const sec of sections) {
-    if (sec.kind === 'unit') continue;
-    const name = sectionStage(sec);
-    const line = find(name);
-    if (line) { line.rounds.push(sec); continue; }
-    const gate = isGateStage(name);
-    const host = gate && plan.length ? lines.find((l) => (GATE_HOSTS[name] ?? []).includes(l.stage)) : undefined;
-    if (host && sec.kind === 'stage') { host.extraGates.push(sec); continue; }
-    lines.push({ stage: name, gate, status: 'pending', rounds: [sec], extraGates: [], earlier: false });
-  }
-  // The lines before the run's current one ran in an earlier turn. With no `current`
-  // (the turn's first CLI call fell between two stages), the lines before the first
-  // line this turn shows work for did — the plan runs in order.
-  const named = run?.current ? lines.findIndex((l) => l.stage === run.current) : -1;
-  const currentAt = named >= 0 ? named : lines.findIndex((l) => l.rounds.length > 0);
-  lines.forEach((l, k) => {
-    const last = l.rounds[l.rounds.length - 1];
-    if (!last) {
-      if (currentAt >= 0 && k < currentAt) { l.status = 'done'; l.earlier = true; }
-      else if (k === currentAt && named >= 0) l.status = 'running';
-      return;
-    }
-    if (last.kind === 'liveStage' || last.block.status === 'in_progress') l.status = 'running';
-    else if (last.block.status === 'skipped') l.status = 'skipped';
-    else l.status = 'done';
-  });
-  return lines;
-}
-
 // ── Notes ────────────────────────────────────────────────────────────────────
 
 export type NoteUnit = Extract<TurnUnit, { kind: 'note' }>;
 
-/** A note's first line as plain text: markdown markers, emphasis, code ticks and
- *  link targets removed ("## **Fix** the `store`" → "Fix the store"). */
-export function noteHeadline(text: string): string {
-  const first = text.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? '';
-  return first
-    .replace(/^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+/, '')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/(\*\*|__|`)/g, '')
-    .replace(/(^|\s)[*_]([^*_]+)[*_](?=\s|$|[.,:;!?])/g, '$1$2')
-    .trim();
-}
 

@@ -250,32 +250,11 @@
     },
     "turn": {
       "thinking": "思考中",
-      "readTimes": "{{count}} 次",
-      "nowUsing": "正在 {{tool}}",
       "subAgentStatus": {
         "failed": "失败",
         "stopped": "停了"
       },
-      "steps_one": "{{count}} 步",
-      "steps_other": "{{count}} 步",
-      "showAll": "还有 {{count}} 项 · 展开全部",
-      "backToLatestThinking": "思考中 · 回到最新",
-      "stage": {
-        "unfinished": "本轮未完成",
-        "skipped": "跳过了",
-        "running": "进行中",
-        "ariaDone": "Pipeline 阶段 {{stage}} 已完成",
-        "ariaSkipped": "Pipeline 阶段 {{stage}} 已跳过",
-        "ariaUnfinished": "Pipeline 阶段 {{stage}} 本轮未完成",
-        "ariaRunning": "Pipeline 阶段 {{stage}} 进行中",
-        "position": "第 {{position}}/{{total}} 阶段",
-        "round": "第 {{n}} 轮",
-        "earlier": "之前已完成",
-        "openDoc": "在 Canvas 打开 {{name}}"
-      },
-      "failedOne": "失败",
       "result": "结果",
-      "thisTurnChanged": "本轮改了",
       "attention": {
         "title": "待你确认",
         "heading": "待你确认 · {{count}} 项",
@@ -286,34 +265,11 @@
         "reason": "理由：{{text}}"
       },
       "deliverables": {
-        "title": "本轮产出 · {{count}}",
         "open": "在 Canvas 打开",
         "copyPath": "复制路径",
         "copied": "已复制"
       },
-      "backToLatestAction": "{{action}} · 回到最新",
-      "group": {
-        "working": "Working",
-        "worked": "Worked",
-        "steps_one": "{{count}} 步",
-        "steps_other": "{{count}} 步",
-        "files_one": "改了 {{count}} 个文件",
-        "files_other": "改了 {{count}} 个文件",
-        "commands_one": "{{count}} 条命令",
-        "commands_other": "{{count}} 条命令",
-        "thoughts_one": "{{count}} 条思考",
-        "thoughts_other": "{{count}} 条思考"
-      },
-      "pipeline": {
-        "label": "Pipeline",
-        "gate2": "Gate 2 {{verdict}}"
-      },
-      "explored": "浏览了",
-      "showCommand": "显示命令",
-      "thought": "思考",
-      "times": "×{{count}}",
       "summary": {
-        "title": "Pipeline 执行总结",
         "ready": "已完成 · 可以 push",
         "notReady": "已完成 · 还不能 push",
         "done": "已完成",
@@ -325,16 +281,61 @@
           "review": "Gates · 专家审查 · 每条发现的处置",
           "report": "完整运行报告"
         }
+      },
+      "backToLatest": "↓ Back to latest",
+      "changes": {
+        "binary": "binary",
+        "deleted": "deleted",
+        "fileOnly": "File only",
+        "gone": "This diff is no longer available. Open the file instead.",
+        "loading": "Loading diff…",
+        "new": "new",
+        "omitted": "{{n}} more files are not listed.",
+        "title": "{{count}} files changed",
+        "titleOne": "1 file changed",
+        "toggle": "Show diff",
+        "tooLarge": "Some changes are too large to show as a diff. Click a file name to open it.",
+        "failed": "Couldn't load the diff. Close and open the row to retry."
+      },
+      "output": {
+        "deliverableOne": "1 deliverable",
+        "deliverables": "{{count}} deliverables"
+      },
+      "zone": {
+        "agents": "Agents",
+        "commands_one": "{{count}} command",
+        "commands_other": "{{count}} commands",
+        "done": "{{count}} done",
+        "failedCall": "This call failed and the turn ended there:",
+        "needsYou": "Needs you",
+        "next": "next:",
+        "pipelineStarted": "Pipeline started",
+        "round": "round {{n}}",
+        "running": "{{count}} running",
+        "steps_one": "{{count}} step",
+        "steps_other": "{{count}} steps",
+        "stopAgent": "Stop this agent",
+        "stopAll": "Stop all",
+        "stopped": "Stopped · the last call did not finish",
+        "stoppedAt": "Stopped at {{stage}}",
+        "stoppedByYou": "Stopped by you · the last call did not finish",
+        "stoppedCall": "stopped",
+        "thinking": "Thinking",
+        "thoughtCount_one": "{{count}} thought",
+        "thoughtCount_other": "{{count}} thoughts",
+        "thoughts": "Thoughts",
+        "tools_one": "{{count}} tool",
+        "tools_other": "{{count}} tools",
+        "worked": "Worked",
+        "working": "Working",
+        "stoppedCount": "{{count}} stopped",
+        "stoppedByYouPlain": "Stopped by you"
       }
     },
     "nextSteps": {
       "label": "下一步",
       "fill": "填入输入框（快捷键 {{key}}）",
       "send": "直接发送"
-    },
-    "file": {
-      "new": "新建",
-      "changed": "改了"
     },
     "closeAnyway": "仍然关闭",
     "closeStreamingTab": "关闭标签页？",

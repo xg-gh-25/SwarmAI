@@ -420,3 +420,23 @@ async def test_turn_diff_endpoint(repo):
 
     with patch.object(tc, "diff_text", boom):
         assert client.get("/api/chat/turn-diff", params=q).status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_excludes_activity_context_and_deliverable_copies(repo):
+    """Bookkeeping copies are not code changes: DailyActivity, .context and the run's
+    committed deliverable copies stay off the card (chat turn spec v6 §7.4)."""
+    t = await _started([str(repo)])
+    skip = [repo / "Knowledge" / "DailyActivity" / "2026-10-19.md", repo / ".context" / "MEMORY.md",
+            repo / ".aidlc" / "deliverables" / "run_x" / "REPORT.md"]
+    # deeper paths with the same names are code: matching at any depth would let a
+    # change hide from the card
+    keep = [repo / "a.py", repo / "Knowledge" / "Notes" / "n.md", repo / "docs" / ".context.md",
+            repo / "src" / ".context" / "payload.py", repo / "lib" / "Knowledge" / "DailyActivity" / "x.py"]
+    for p in skip + keep:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("changed\n")
+        t.note(_fc(p))
+    rows = _rows(await t.finish())
+    assert set(rows) == {"a.py", "Knowledge/Notes/n.md", "docs/.context.md",
+                         "src/.context/payload.py", "lib/Knowledge/DailyActivity/x.py"}

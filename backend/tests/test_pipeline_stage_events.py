@@ -634,3 +634,12 @@ def test_real_run_json_rewritten_during_the_call_yields_the_new_stage(tmp_path, 
     assert [(b["stage"], b["ordinal"], b["summary"]) for b in blocks] == [
         ("think", 2, "2 options, chose A")]
     assert _clean_blocks_for_persist(blocks) == blocks
+
+
+def test_no_summary_for_direct_run():
+    """A direct run is not a pipeline: no execution-summary card (chat turn spec v6 §7.4)."""
+    state = {"status": "completed", "profile": "direct", "stages": {}, "run_dir": None}
+    assert pse.summary_block("run_x", state, "now") is None
+    full = dict(state, profile="full")
+    sb = pse.summary_block("run_x", full, "now")
+    assert sb is not None and sb["type"] == "pipeline_summary"

@@ -757,6 +757,15 @@ export const chatService = {
     return response.data;
   },
 
+  // Stop ONE sub-agent of the running turn (its SDK task id); the turn goes on.
+  // The backend refuses an id this session did not report running (chat turn spec v6 §7.3).
+  async stopTask(sessionId: string, taskId: string): Promise<{ status: string; message?: string }> {
+    const response = await api.post<{ status: string; message?: string }>(
+      `/chat/stop/${encodeURIComponent(sessionId)}/task/${encodeURIComponent(taskId)}`,
+    );
+    return response.data;
+  },
+
   // Release a session's backend slot on tab close (R6b). Best-effort, idempotent:
   // frees the concurrency slot without deleting messages, so a closed idle tab
   // doesn't hold a slot until the 12h TTL. `force` confirms closing a streaming

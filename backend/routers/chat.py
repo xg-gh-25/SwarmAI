@@ -21,7 +21,7 @@ Content validation helpers (multimodal attachment safety net):
 
 Requirements: 26.1, 26.4, 26.5, 35.1, 35.6, 8.1, 8.2, 8.3, 8.4, 8.5, 10.1, 10.2, 10.3, 10.4
 """
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 from schemas.message import ChatRequest, ChatSessionResponse, AnswerQuestionRequest
 from schemas.chat_thread import ChatThreadResponse
@@ -1184,6 +1184,21 @@ async def stop_session(session_id: str):
     else:
         # Return 200 even if session not found - client may have already finished
         return {"status": "not_found", "message": result["message"]}
+
+
+@router.post("/stop/{session_id}/task/{task_id}")
+async def stop_task(
+    session_id: str,
+    task_id: str = Path(..., pattern=r"^[A-Za-z0-9_-]{1,128}$"),
+):
+    """Stop ONE sub-agent of the session's running turn; the turn goes on.
+
+    The id must be a task this session reported running in its current turn
+    (SessionUnit.stop_task allowlist); anything else is refused without reaching
+    the SDK. The Agents panel's per-agent ✕ calls this; "Stop all" is /stop/{id}.
+    """
+    logger.info("Received stop-task request session=%s task=%s", session_id, task_id)
+    return await _get_router().stop_task(session_id, task_id)
 
 
 @router.post("/release/{session_id}")

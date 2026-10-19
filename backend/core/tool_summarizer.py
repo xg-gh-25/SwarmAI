@@ -6,6 +6,9 @@ The Claude Agent SDK manages full conversation context internally; these
 functions only transform content for the UI replay path (SSE + SQLite).
 
 - ``summarize_tool_use``       — Generates ≤200-char summary from tool name + input
+- ``tool_display``             — The ``{tool, object, key}`` display object every tool_use
+                                 carries: the call's object redacted, ≤ ``DISPLAY_MAX``
+                                 (2000), and a hash key for merging identical calls
 - ``get_tool_category``        — Returns category string for icon mapping on frontend
 - ``truncate_tool_result``     — Truncates content to configurable limit, sets flag
 - ``summarize_tool_result``    — One-line outcome of a finished call (lines/matches/output)
@@ -21,6 +24,8 @@ functions only transform content for the UI replay path (SSE + SQLite).
 - ``TRUNCATION_LIMIT``         — Effective limit (env var override or default)
 """
 
+import hashlib
+import json
 import os as _os
 import re
 import logging
@@ -64,8 +69,8 @@ except (ValueError, TypeError):
 # quotes; single-quoted ``$`` is literal and masked), ``PWD`` / ``OLDPWD`` (the
 # working directory), and a value equal to the key's own name.
 _NAMED_SECRET = re.compile(
-    r"""(?i)(?<![\w$-])(?P<key>[\w-]*?(?:password|passwd|pwd|api[_-]?key|secret[_-]?key"""
-    r"""|access[_-]?key|aws[_-]?secret|token|bearer)['"]?[^\S\n]*[=:][^\S\n]*)"""
+    r"""(?i)(?<![\w$-])(?P<key>[\w-]*?(?:password|passwd|pwd|pass|api[_-]?key|secret[_-]?key"""
+    r"""|access[_-]?key|aws[_-]?secret|secret|credentials?|token|bearer)['"]?[^\S\n]*[=:][^\S\n]*)"""
     r"""(?:(?P<q>['"])(?P<qv>[^\s'"][^\n]*?)(?:(?P=q)|(?=\n)|$)|(?P<uv>[^\s'",;]++))"""
 )
 _KEY_NAME = re.compile(r"([\w-]+)['\"]?\s*[=:]")
@@ -74,6 +79,17 @@ _KEY_NAME = re.compile(r"([\w-]+)['\"]?\s*[=:]")
 # HTTP basic auth header (what ``curl -u user:pass`` sends): the header name anchors
 # it, so prose like "Basic configuration" is untouched; the value is masked.
 _BASIC_AUTH = re.compile(r"(?i)(\bauthorization\s*:\s*basic\s+)[A-Za-z0-9+/=]{8,}")
+
+# ``scheme://user:pass@host`` for ANY scheme (postgres://, redis://, mongodb+srv://, …):
+# the password between ``user:`` and ``@`` is masked, the rest stays readable.
+_ANY_URL_CREDENTIAL = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://[^/\s:@'\"]+:)[^@\s/'\"]+(?=@)")
+
+# A secret passed as the NEXT argument of a flag (``--password hunter2``,
+# ``--token abc``); ``--flag=value`` is already covered by ``_NAMED_SECRET``.
+_SECRET_FLAG_ARG = re.compile(
+    r"(?i)(--(?:[\w-]*?)(?:password|passwd|pass|token|secret|api-?key|access-?key|credentials?)[^\S\n]+)"
+    r"(?!-)(?:'[^'\n]*'|\"[^\"\n]*\"|[^\s'\"]+)"
+)
 
 
 def _mask_named(m: re.Match) -> str:
@@ -102,6 +118,8 @@ def _mask_named(m: re.Match) -> str:
 def _redact_named(text: str) -> str:
     """Name-anchored secrets (display only — too broad for channel prose)."""
     text = _NAMED_SECRET.sub(_mask_named, text)
+    text = _ANY_URL_CREDENTIAL.sub(lambda m: m.group(1) + "[REDACTED]", text)
+    text = _SECRET_FLAG_ARG.sub(lambda m: m.group(1) + "[REDACTED]", text)
     return _BASIC_AUTH.sub(lambda m: m.group(1) + "[REDACTED]", text)
 
 # ---------------------------------------------------------------------------
@@ -385,6 +403,90 @@ def summarize_tool_use(name: str, input_data: Optional[dict]) -> str:
         summary = f"Using {name}"[:MAX_SUMMARY_LENGTH]
 
     return summary
+
+
+#: The display object's object field is cut here (chat turn spec v6 §7.1): long
+#: enough for a whole command on hover, short of a pasted file.
+DISPLAY_MAX: int = 2000
+
+# The input field that names a tool call's object, per tool family, in order of
+# preference. An Agent's object is its short task description, never its prompt.
+_OBJECT_FIELDS: list[tuple[set[str], tuple[str, ...]]] = [
+    (_BASH_NAMES, ("command",)),
+    (_READ_NAMES | _WRITE_NAMES | {"notebookedit"}, ("file_path", "notebook_path", "path")),
+    (_SEARCH_NAMES, ("pattern", "query", "path")),
+    (_WEB_FETCH_NAMES, ("url", "uri")),
+    (_WEB_SEARCH_NAMES | _TOOL_SEARCH_NAMES, ("query", "search_query", "q")),
+    (_SKILL_NAMES, ("skill", "skill_name", "skillName", "skill_folder")),
+    (_AGENT_NAMES, ("description", "task_description", "task", "name")),
+    (_LIST_DIR_NAMES, ("path", "directory")),
+]
+
+
+# A dict key whose VALUE is a secret, whatever its type (string, list, nested dict):
+# the value is replaced whole before anything is serialised, so JSON escaping, lists
+# and nesting cannot carry part of it past a text pattern.
+_SECRET_KEY = re.compile(
+    r"(?i)(pass|pwd|secret|token|auth|credential|cookie|session|api[_-]?key|apikey"
+    r"|private[_-]?key|passphrase|signature|bearer)"
+)
+_MAX_DEPTH = 6
+
+
+def _redact_args(value, depth: int = 0):
+    """Arguments with every secret-named value masked and every string redacted."""
+    if depth > _MAX_DEPTH:
+        return "[…]"
+    if isinstance(value, dict):
+        return {str(k): ("[REDACTED]" if _SECRET_KEY.search(str(k)) else _redact_args(v, depth + 1))
+                for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_args(v, depth + 1) for v in value]
+    if isinstance(value, str):
+        return redact_display(value, DISPLAY_MAX)
+    return value
+
+
+def tool_display(name: str, input_data: Optional[dict]) -> dict:
+    """The display object a ``tool_use`` block carries: ``{tool, object, key}``.
+
+    - ``tool``: the tool's own name; an MCP tool drops its ``mcp__<server>__`` prefix.
+    - ``object``: the call's object — the command, the file path, the search pattern,
+      the URL, the query, the skill, an Agent's task description; any other tool shows
+      its arguments as compact JSON, built from :func:`_redact_args` (secret-named
+      values masked whole at any depth, every string redacted) BEFORE serialising.
+      Redacted by :func:`redact_display` and cut to :data:`DISPLAY_MAX`: the chat strip
+      shows it truncated, the hover in full, live and in history alike (the block is
+      persisted as built).
+    - ``key``: 16 hex of a SHA-1 over the tool name and the REDACTED object, so calls
+      shown identically merge into one strip. Never a hash of the raw input: with the
+      redacted object beside it, that hash would confirm guesses of a masked secret.
+
+    Never raises: anything unexpected degrades to an empty object / key.
+    """
+    name = name if isinstance(name, str) else ""
+    try:
+        _server, tool = _extract_mcp_tool_name(name)
+    except Exception:  # noqa: BLE001 — a display aid never breaks the stream
+        tool = name
+    data = input_data if isinstance(input_data, dict) else {}
+    lower = name.lower()
+    obj = ""
+    try:
+        fields = next((f for names, f in _OBJECT_FIELDS if lower in names), None)
+        if fields is not None:
+            obj = next((v for v in (data.get(f) for f in fields) if isinstance(v, str) and v), "")
+            obj = redact_display(obj, DISPLAY_MAX) if obj else ""
+        elif data:
+            safe = json.dumps(_redact_args(data), sort_keys=True, ensure_ascii=False, default=str)
+            obj = redact_display(safe, DISPLAY_MAX)
+    except Exception:  # noqa: BLE001
+        obj = ""
+    try:
+        key = hashlib.sha1(f"{tool}\0{obj}".encode("utf-8", "replace")).hexdigest()[:16] if obj else ""
+    except Exception:  # noqa: BLE001
+        key = ""
+    return {"tool": tool, "object": obj, "key": key}
 
 
 def get_tool_category(name: str) -> str:

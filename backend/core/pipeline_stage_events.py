@@ -645,6 +645,8 @@ def summary_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[
     ref to open, or why the profile does not produce it). Structured fields only."""
     if not state or state.get("status") != "completed":
         return None
+    if state.get("profile") == "direct":
+        return None  # a direct run is not a pipeline: no summary card (chat turn spec v6 §7.4)
     from .run_docs import doc_status
     run_dir = state.get("run_dir")
     stages: dict = state.get("stages") or {}

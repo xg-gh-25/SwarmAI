@@ -613,6 +613,7 @@ export function applySubAgentProgress(msg: Message, event: StreamEvent): Message
   const next: SubAgentProgress = {
     ...prev,
     parentToolUseId: parent,
+    ...(event.taskId ? { taskId: event.taskId } : {}),
     status: event.status ?? prev?.status ?? 'running',
     ...(event.description ? { description: event.description } : {}),
     ...(event.lastToolName ? { lastToolName: event.lastToolName } : {}),

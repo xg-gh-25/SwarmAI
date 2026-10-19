@@ -225,6 +225,10 @@ export interface ToolUseContent {
   /** Set on a SUB-AGENT's tool call: the Agent tool_use it ran under. Such a
    *  call is not a step of the main turn; it nests under that Agent step. */
   parentToolUseId?: string;
+  /** What the chat strip shows (backend tool_summarizer.tool_display): the tool's own
+   *  name, the call's object (redacted, up to 2000 chars: the hover shows it whole)
+   *  and a key equal for calls with identical input. Absent on older history. */
+  display?: { tool: string; object: string; key: string };
 }
 
 export interface ToolResultContent {
@@ -252,6 +256,8 @@ export interface ToolResultContent {
  *  state rides the Agent result (`ToolResultContent.subagent`). */
 export interface SubAgentProgress {
   parentToolUseId: string;
+  /** The SDK task id: what POST /chat/stop/{session}/task/{taskId} stops. */
+  taskId?: string;
   status: 'running' | 'completed' | 'failed' | 'stopped' | (string & {});
   description?: string;
   lastToolName?: string;

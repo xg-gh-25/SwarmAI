@@ -250,32 +250,11 @@
     },
     "turn": {
       "thinking": "Thinking",
-      "readTimes": "{{count}}×",
-      "nowUsing": "now {{tool}}",
       "subAgentStatus": {
         "failed": "failed",
         "stopped": "stopped"
       },
-      "steps_one": "{{count}} step",
-      "steps_other": "{{count}} steps",
-      "showAll": "{{count}} more · show all",
-      "backToLatestThinking": "Thinking · back to latest",
-      "stage": {
-        "unfinished": "not finished in this turn",
-        "skipped": "skipped",
-        "running": "in progress",
-        "ariaDone": "Pipeline stage {{stage}} done",
-        "ariaSkipped": "Pipeline stage {{stage}} skipped",
-        "ariaUnfinished": "Pipeline stage {{stage}} not finished in this turn",
-        "ariaRunning": "Pipeline stage {{stage}} in progress",
-        "position": "stage {{position}} of {{total}}",
-        "round": "round {{n}}",
-        "earlier": "done earlier",
-        "openDoc": "Open {{name}} in Canvas"
-      },
-      "failedOne": "failed",
       "result": "Result",
-      "thisTurnChanged": "This turn changed",
       "attention": {
         "title": "For you to check",
         "heading": "For you to check · {{count}}",
@@ -286,34 +265,11 @@
         "reason": "Why: {{text}}"
       },
       "deliverables": {
-        "title": "Produced this turn · {{count}}",
         "open": "Open in Canvas",
         "copyPath": "Copy path",
         "copied": "Copied"
       },
-      "backToLatestAction": "{{action}} · back to latest",
-      "group": {
-        "working": "Working",
-        "worked": "Worked",
-        "steps_one": "{{count}} step",
-        "steps_other": "{{count}} steps",
-        "files_one": "{{count}} file changed",
-        "files_other": "{{count}} files changed",
-        "commands_one": "{{count}} command",
-        "commands_other": "{{count}} commands",
-        "thoughts_one": "{{count}} thought",
-        "thoughts_other": "{{count}} thoughts"
-      },
-      "pipeline": {
-        "label": "Pipeline",
-        "gate2": "Gate 2 {{verdict}}"
-      },
-      "explored": "Explored",
-      "showCommand": "Show the command",
-      "thought": "Thought",
-      "times": "×{{count}}",
       "summary": {
-        "title": "Pipeline execution summary",
         "ready": "Done · ready to push",
         "notReady": "Done · not ready to push",
         "done": "Done",
@@ -325,16 +281,61 @@
           "review": "Gates · expert reviews · how each finding was settled",
           "report": "Full run report"
         }
+      },
+      "backToLatest": "↓ Back to latest",
+      "changes": {
+        "binary": "binary",
+        "deleted": "deleted",
+        "fileOnly": "File only",
+        "gone": "This diff is no longer available. Open the file instead.",
+        "loading": "Loading diff…",
+        "new": "new",
+        "omitted": "{{n}} more files are not listed.",
+        "title": "{{count}} files changed",
+        "titleOne": "1 file changed",
+        "toggle": "Show diff",
+        "tooLarge": "Some changes are too large to show as a diff. Click a file name to open it.",
+        "failed": "Couldn't load the diff. Close and open the row to retry."
+      },
+      "output": {
+        "deliverableOne": "1 deliverable",
+        "deliverables": "{{count}} deliverables"
+      },
+      "zone": {
+        "agents": "Agents",
+        "commands_one": "{{count}} command",
+        "commands_other": "{{count}} commands",
+        "done": "{{count}} done",
+        "failedCall": "This call failed and the turn ended there:",
+        "needsYou": "Needs you",
+        "next": "next:",
+        "pipelineStarted": "Pipeline started",
+        "round": "round {{n}}",
+        "running": "{{count}} running",
+        "steps_one": "{{count}} step",
+        "steps_other": "{{count}} steps",
+        "stopAgent": "Stop this agent",
+        "stopAll": "Stop all",
+        "stopped": "Stopped · the last call did not finish",
+        "stoppedAt": "Stopped at {{stage}}",
+        "stoppedByYou": "Stopped by you · the last call did not finish",
+        "stoppedCall": "stopped",
+        "thinking": "Thinking",
+        "thoughtCount_one": "{{count}} thought",
+        "thoughtCount_other": "{{count}} thoughts",
+        "thoughts": "Thoughts",
+        "tools_one": "{{count}} tool",
+        "tools_other": "{{count}} tools",
+        "worked": "Worked",
+        "working": "Working",
+        "stoppedCount": "{{count}} stopped",
+        "stoppedByYouPlain": "Stopped by you"
       }
     },
     "nextSteps": {
       "label": "Next steps",
       "fill": "Add to input (shortcut {{key}})",
       "send": "Send now"
-    },
-    "file": {
-      "new": "new",
-      "changed": "changed"
     },
     "closeAnyway": "Close anyway",
     "closeStreamingTab": "Close tab?",
