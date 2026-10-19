@@ -6,7 +6,8 @@ under a temp app-data dir; the gate is driven through its async PreToolUse calla
 
 Invariants:
 - an expert with 3 completed rounds in the open stage is denied a 4th; the deny says
-  stop, hand the decision to the user, and lists the three options
+  stop fixing, run one root-cause review, and how each verdict is handled — and never
+  asks the user
 - 0-2 completed rounds → approve; other experts, other runs, markers before the stage
   window, and adversarial-twin markers do not count
 - a re-opened stage keeps its count (prior_windows); goal_cycle is exempt
@@ -93,8 +94,10 @@ def test_fourth_round_is_denied_with_the_handoff(env):
     assert _denied(res)
     reason = res["hookSpecificOutput"]["permissionDecisionReason"]
     assert "再一再二不再三" in reason and RID in reason and "deliver" in reason
-    for word in ("accept the remaining risk", "follow-up run", "redesign", "REPORT §10"):
+    for word in ("EXPERT-ID: root-cause", "ROOT-CAUSE VERDICT: SOUND", "WRONG-APPROACH",
+                 "REPORT §10", "push_ready false", "back to", "do not ask the user"):
         assert word in reason
+    assert "wait for the answer" not in reason
 
 
 def test_only_this_expert_run_and_stage_window_count(env):

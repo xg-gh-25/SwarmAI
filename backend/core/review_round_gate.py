@@ -3,9 +3,10 @@
 A pipeline stage gives each review expert at most ``MAX_ROUNDS`` (3) completed
 rounds: round 1 (full review), round 2 (re-check of fix 1), round 3 (re-check of
 fix 2). A spawn of an expert that has already completed 3 rounds in the CURRENT
-stage of THIS session's active run is denied, with the instruction to stop and
-hand the decision to the user (docs/design/pipeline-review-convergence.md §3,
-「N3 规则定稿」). It used to be an allowance that stage-complete checked after the
+stage of THIS session's active run is denied, with the instruction to stop fixing
+and run one fresh-context root-cause review instead: SOUND → commit locally with the
+open findings in REPORT §10 and push_ready false; WRONG-APPROACH → back to PLAN once
+(docs/design/pipeline-review-convergence.md §3, 「N3 规则定稿」). The user is not asked. It used to be an allowance that stage-complete checked after the
 rounds had run, waived by any written ``over_budget_reasons`` entry: run_d8762bc8
 ran 7 Gate-2 rounds, run_5d894e22 9 red-team rounds.
 
@@ -122,12 +123,17 @@ def _deny_reason(expert_id: str, info: dict) -> str:
         f"DENY (再一再二不再三): '{expert_id}' has already completed {info['used']} review "
         f"rounds in the {info['stage']} stage of pipeline run {info['run_id']} (round 1 "
         f"review, round 2 and round 3 re-checks). There is no round {MAX_ROUNDS + 1}, and no "
-        "reason, --force or new prompt opens one. STOP the fix loop and hand the decision to "
-        "the user in this conversation, with: (1) the blocking findings still open, each "
-        "with file:line; (2) what each fix round introduced; (3) three options — accept the "
-        "remaining risk and commit (recorded as an intervention), split the open items into "
-        "a follow-up run, or redesign (back to PLAN). Then wait for the answer. Non-blocking "
-        "findings go to REPORT §10, not into another round."
+        "reason, --force or new prompt opens one. STOP the fix loop and do not ask the user "
+        "to decide. Run ONE root-cause review instead: spawn a fresh sub-agent whose prompt "
+        "starts with `EXPERT-ID: root-cause`, give it the requirement, the PLAN, every "
+        "round's findings and what each fix introduced, and have it answer on its first line "
+        "`ROOT-CAUSE VERDICT: SOUND` (the approach is right; what is left is edge cases) or "
+        "`ROOT-CAUSE VERDICT: WRONG-APPROACH` (fixing on top of this approach will not "
+        "converge), with its reasons. SOUND: stop fixing, write every open finding with "
+        "file:line and the verdict's reasons into REPORT §10, complete DELIVER with "
+        "push_ready false and let run-commit commit locally. WRONG-APPROACH: go back to "
+        "PLAN once with the verdict, redesign around what it says to avoid, and review the "
+        "new change from round 1; a second miss is handled as SOUND."
     )
 
 
