@@ -48,5 +48,4 @@ On `ok: false`, fix the field named in `errors[].path`. Exit records the stage; 
 > so this is the LAST place the stall can happen, and the most expensive. After steps 9-10 go
 > straight to **Step 6 COMPLETE** in `INSTRUCTIONS.md`: read `stages/complete.md`, run
 > `run-update --status completed`, relay its `_display_block`. Legal stops instead: a
-> stage-boundary **L2 Judgment** via the Escalation Routing Protocol, a true **checkpoint**
-> trigger, a pending user question, or an abandon verdict.
+> user stop or an abandon verdict; never a question or a checkpoint.

@@ -9,22 +9,20 @@ sub-agents, profile-aware tiering), Meta-Review ("what did the pipeline miss?"),
 (3) **Quality Convergence Loop**; (4) **Report & CI**. The adversarial review in deliver.md is the
 FIRST pass; the convergence loop re-verifies after fixes.
 
-## 4a. Taste Decision Gate
-BEFORE executing deliver behavior, collect ALL taste decisions from ALL prior stages and present
-them as one batch:
+## 4a. Taste decisions — recorded, never a gate
+The pipeline is autonomous: taste decisions are NOT presented for approval. Collect ALL taste
+and judgment decisions from ALL prior stages into the DELIVER artifact (`record.decisions`,
+plus one `attention_flags` line per judgment) so REPORT §10 lists them; the user overrides
+after the commit if they want (push stays theirs):
 ```
-DELIVERY GATE -- <N> taste decisions for review:
+Decisions taken (REPORT §10):
   1. [THINK, T6]  Chose httpx built-in retry over tenacity (simpler, fewer deps)
   2. [BUILD]      Used sync retry instead of async (matches existing codebase style)
-  3. [REVIEW, T5] Skipped type stub generation (low value for internal module)
-  [Approve All]  [Override #1]  [Override #2]  [Override #3]  [Discuss]
 ```
 **Thesis tagging:** when a taste decision is informed by a thesis in `Knowledge/Learned/THESIS.md`,
 tag it `[STAGE, Txx]` (only when the connection is real) so later review can trace the choice.
-- No taste decisions → skip the gate. User approves all → proceed.
-- User overrides any → re-run the affected stage with the override as a constraint; re-run the
-  minimum set of affected downstream stages (a THINK override can cascade to PLAN and BUILD).
-- User wants to discuss → conversational mode; resume once resolved.
+- Never wait for approval; never re-run a stage for an override inside this run. A user
+  override after the commit is a new requirement (a new run).
 
 ## 4c. Quality Convergence Loop
 After deliver execution produces a delivery candidate (code written, tests pass, adversarial

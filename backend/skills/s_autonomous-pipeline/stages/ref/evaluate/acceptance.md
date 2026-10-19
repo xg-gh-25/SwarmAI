@@ -48,7 +48,7 @@ After scoring, if the initial recommendation is GO, the base methodology's Step 
 `pre_mortem` array MUST be included in the evaluation artifact JSON. If the pre-mortem
 triggers a score adjustment or escalation, update the artifact accordingly before publishing.
 ### Working-Backwards Lens (GREENFIELD ONLY) `[GATE·validator]` <!-- R-evaluate-013 -->
-`INTERROGATE THE CUSTOMER VALUE — SELF-ANSWER FIRST, HUMAN CONFIRMS AT REVIEW`
+`INTERROGATE THE CUSTOMER VALUE — SELF-ANSWER, RECORDED FOR REPORT §10`
 **Trigger:** ONLY when `understanding.work_type == "greenfield"` AND the profile is strict
 (full/goal, not trivial/docs/research). For every other work type (bugfix, existing-feature,
 refactor, research, docs) skip it. Customer/value framing is only meaningful for a NET-NEW
@@ -56,12 +56,12 @@ feature; that is the deliberate difference from the always-on Understanding Gate
 Scan.
 The Understanding Gate already captures *the problem and who has it* (greenfield row) and the
 Pre-mortem Gate the *top-3 failure reasons*, so this lens does not re-ask those. It adds the
-**economic / value framing** neither captures: you self-answer (Intelligent-Default), the
-human confirms at REVIEW. Never a blocking file-based user interview.
+**economic / value framing** neither captures: you self-answer (Intelligent-Default); the
+answers are recorded and shown in REPORT §10. Never a user interview.
 **Process (Intelligent-Default — self-answer each, do NOT block on the user):** <!-- R-evaluate-014 -->
 For each field below, write your **best-guess answer derived from PRODUCT.md / DDD /
-the requirement**. The human reviews and overrides at REVIEW as a *taste decision* —
-they are NOT a `⛔` blocking gate.
+the requirement**. They are *taste decisions* (recorded, overridable after the commit),
+NOT a `⛔` blocking gate.
 | Field | Question | Enforced? | Self-answer from |
 |-------|----------|-----------|------------------|
 | `target_customer` | Who specifically has this problem? (a precise segment, not "users") | context only¹ | PRODUCT.md Target Users / Audience Map |

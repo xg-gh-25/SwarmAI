@@ -258,3 +258,22 @@ def test_run_commit_has_no_force_bypass_of_d7(tmp_path, monkeypatch):
     assert r.returncode == 2 and "unrecognized arguments: --force" in r.stderr, r.stderr
     r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid], env)
     assert r.returncode == 2 and "security" in r.stderr and "--force" not in r.stderr, r.stderr
+
+
+def test_a_degraded_deliver_commits_marked_despite_missing_experts(tmp_path, monkeypatch):
+    """DELIVER already completed degraded (3 refused stage-completes): the run must not
+    end uncommitted, so D7 marks the commit instead of refusing it."""
+    import os
+    rid = "run_d7deg"
+    ws, repo, rundir = _seed_run(tmp_path, rid, ["correctness", "security"], push_ready=False)
+    st = json.loads((rundir / "run.json").read_text())
+    st["stages"][0].update(degraded={"attempts": 3, "errors": ["E_X: gate"]},
+                           push_ready_reason="DELIVER completed degraded after 3 refused attempts")
+    (rundir / "run.json").write_text(json.dumps(st))
+    audit = _audit_dir(tmp_path)
+    _write_marker(audit, "sessX", 1, "correctness", rid)  # security missing
+    env = dict(os.environ, SWARM_DATA_DIR=str(tmp_path), SWARM_WORKSPACE=str(ws))
+    r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid], env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    c = json.loads((rundir / "run.json").read_text())["commits"][0]
+    assert c["push_ready"] is False and "security" in c["push_ready_reason"]

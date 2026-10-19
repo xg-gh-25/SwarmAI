@@ -29,16 +29,15 @@ tool_result). Strict decision tree, no deviation:
 Gate-1 or Gate-2 Agent spawn REJECTED
   → retry EXACTLY ONCE (a fresh Agent call this same turn)
     → succeeds → proceed normally
-    → rejected again → CHECKPOINT, reason="gate_spawn_blocked"
-                       (resume re-enters on a fresh subprocess — the poisoning
-                        clears across the process boundary)
+    → rejected again → record `<gate>_unverified_reason` ("gate_spawn_blocked: …")
+                       and go on: the gate counts as NOT verified, DELIVER's
+                       push_ready is capped false (autonomous; never a checkpoint)
 ```
 **NEVER** fall back to self-review. "The spawn failed, so I'll review it myself" is the CLASS A
 bypass (R1/STEERING #13) this gate exists to prevent; the tree has no review-it-myself branch.
 **Retry once, not a loop:** an in-turn retry LOOP on a poisoned subprocess reuses the same poisoned
-process (STEERING #1). The only safe retry crosses a checkpoint→resume process boundary.
-`gate_spawn_blocked` is a VALID non-completion outcome (a resumable checkpoint), never scored as
-failure.
+process (STEERING #1). `gate_spawn_blocked` ends as a marked, not-push-ready commit, never a
+paused run.
 
 **Two-field enforcement (code-enforced):** the validator requires BOTH
 `adversarial_review.spawned: true` (declares the spawn happened) and

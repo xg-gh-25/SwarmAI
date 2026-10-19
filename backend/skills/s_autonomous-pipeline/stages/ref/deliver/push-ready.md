@@ -23,9 +23,8 @@ call, `run_in_background: false`, AFTER Gate-2 passes and BEFORE push-ready.
 
 - `CLEAR` → proceed.
 - `RISKS_IDENTIFIED` with a HIGH → fix before push-ready (same as an adversarial HIGH).
-  A HIGH you cannot resolve escalates as a **MID-STAGE** exit: always **checkpoint**,
-  never in-band (INSTRUCTIONS § Escalation Routing Protocol, "Mid-stage rule": blocking a
-  4h question mid-loop would freeze a half-written convergence iteration).
+  A HIGH you cannot resolve: stop, record it in `attention_flags`, complete DELIVER with
+  `push_ready: false`; `run-commit` commits locally, marked (never a checkpoint).
 - Only MED/LOW → note them in the report (§10) and proceed.
 - Record `meta_review: {"verdict": "CLEAR" | "RISKS", "risks": [...]}` (the artifact
   enum spells the prompt's `RISKS_IDENTIFIED` as `RISKS`). A risk you addressed in this

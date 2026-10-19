@@ -8,7 +8,7 @@ IMPROVEMENT.md "Known Issues" and do not trigger this protocol; `regression` / `
 `timeout` (the runner's global deadline killed the test before it finished) is NOT a
 code failure and never triggers this protocol: no fix, no revert. Re-run the same
 command unchanged — it re-runs only the unfinished tests. The same `timeout` set four
-rounds running trips the runner's circuit breaker: checkpoint, don't keep re-running.
+rounds running trips the runner's circuit breaker: stop, don't keep re-running; exit UNMET.
 ```
 Attempt 1:
   - Diagnose: which test fails and why? (timeouts carry their stack; no manual ps/kill)
@@ -33,8 +33,11 @@ Attempt 2:
   criterion flipped) → STOP (structural blocker).
 - **Revert Check**: 2 consecutive cycles ended in revert → REVERT_LIMIT (conflicting
   constraints).
-- **max_cycles** reached without DoD met → CHECKPOINT.
-- A true-trigger checkpoint (L2 Judgment, retries exhausted).
+- **max_cycles** reached without DoD met → UNMET.
+- Retries exhausted / circuit breaker → UNMET.
+Every non-SUCCESS exit continues to DELIVER (stage-complete goal_cycle with `dod_met: false`;
+it completes degraded after 3 refusals) and DELIVER records `push_ready: false` with the exit
+and what is left: a marked local commit, never a checkpoint or a hand-off.
 **Budget is NEVER a loop exit** (STEERING #2 + XG directive "budget 从来不应该是 block run
 的重要因素"). `remaining_tokens = session_budget - tokens_consumed` is report-only: surface
 it for visibility if useful, never EXIT on it. Physical context overflow is handled by SDK
@@ -44,17 +47,18 @@ Every exit records `gm.track_goal_complete(status=...)` (`ref/goal_cycle/setup.m
 All DoD criteria pass (verified by running the commands/rubrics) and the Final Quality
 Gate is clean. `gm.track_goal_complete(status="success", ...)` + velocity summary, then
 stage-complete. DELIVER → REFLECT follow as normal stages.
-## EXIT with CHECKPOINT
+## EXIT with UNMET
 Max cycles reached without DoD met (or Final Quality Gate issues persisting after 3 fix
-cycles). `gm.track_goal_complete(status="checkpoint", ...)`. Output:
+cycles). `gm.track_goal_complete(status="checkpoint", ...)` (legacy status name). Output,
+then DELIVER with push_ready false:
 ```
-Goal Loop CHECKPOINT after N cycles:
+Goal Loop UNMET after N cycles:
 - DoD criteria: X/Y met
 - Progress trend: [improving/stalled/regressing]
 - What's left: [remaining criteria with current values]
-- Recommendation: [extend cycles / adjust DoD / manual fix needed]
+- Next run should: [extend cycles / adjust DoD / a different approach]
 ```
-Creates a Radar todo for the user.
+The output goes into DELIVER `attention_flags` (REPORT §10).
 ## EXIT with STOP
 3 consecutive cycles with zero DoD progress. `gm.track_goal_complete(status="stop", ...)`.
 ```
@@ -62,7 +66,7 @@ Goal Loop STOPPED — structural blocker detected:
 - Last 3 cycles: [actions taken]
 - No criterion improved
 - Likely cause: [diagnosis]
-- Suggestion: [decompose goal / different approach / human intervention]
+- Next run should: [decompose goal / different approach]
 ```
 ## EXIT with REVERT_LIMIT
 2 consecutive cycle reverts (changes break existing tests, no progress possible).

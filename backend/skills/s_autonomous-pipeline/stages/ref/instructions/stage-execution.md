@@ -23,12 +23,10 @@ correct a wrong signal before tokens are spent against it. (Why: `stages/history
 ## 3a. Gate Check
 Before executing:
 ```
-1. Retry exhaustion?  → stage retry_count >= max_retries → CHECKPOINT
-2. Pending L2 BLOCK?  → route via the Escalation Routing Protocol (do NOT bare-checkpoint
-   without checking channel=). A pending L2 that ALREADY fell back to checkpoint (recorded in
-   run.json) stays checkpointed on resume — it is NOT re-asked in-band (the human consumes the
-   recorded decision before resuming). Only a freshly-raised boundary L2 in a desktop session is
-   in-band eligible.
+1. Retry exhaustion?  → stage retry_count >= max_retries → stop fixing, DELIVER with
+   push_ready false (never a checkpoint)
+2. Pending L2 decision? → most reversible option, recorded (`escalation.md`); a legacy run
+   resumed from an L2 checkpoint does the same instead of waiting.
 3. Pipeline cancelled? → EXIT
 ```
 Max retries per stage: evaluate 2 · think 2 · plan 2 · build 3 · review 2 · test 3 · deliver 1 ·
@@ -130,9 +128,8 @@ stage. On the new path `stage-start` returns valid examples and `stage-complete`
 ## 3f. Handle Result
 After verification:
 - **All mechanical decisions → advance** to the next stage.
-- **Taste decisions found → log them**, advance (reviewed at the delivery Taste Decision Gate).
-- **Judgment decision → route via the Escalation Routing Protocol** immediately (in-band ask if
-  `channel=direct` + header present; else fallback checkpoint — never a default bare checkpoint).
+- **Taste decisions found → log them**, advance (listed in REPORT §10, never approved).
+- **Judgment decision → most reversible option**, recorded + `[decision]` flag, advance.
 
 On the legacy path `advance` records the transition and prints `next_stage_doc` (absolute path)
 and `next_action`; on the new path `stage-complete` returns `next_stage`, `next_card` and

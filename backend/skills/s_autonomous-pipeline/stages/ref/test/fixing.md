@@ -67,5 +67,5 @@ wtf_score = 0
 --> halt if wtf_score >= 5 (judgment decision --> L2 BLOCK)
 ```
 
-On `"halt": true`: stop fixing, record the score and breakdown, and route the L2
-judgment through the Escalation Routing Protocol (INSTRUCTIONS.md).
+On `"halt": true`: stop fixing, record the score and breakdown, and finish the run not
+push-ready (DELIVER with `push_ready: false`, the halt reason in `attention_flags`).

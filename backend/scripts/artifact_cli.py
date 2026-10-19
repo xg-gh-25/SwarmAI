@@ -5118,13 +5118,29 @@ def _verdict_token(recorded: str) -> "str | None":
     return found[-1] if found else None
 
 
+def _unverified_gates(run_state: dict, record_in: "dict | None" = None) -> "list[str]":
+    """Gates this run passed on a recorded ``<gate>_unverified_reason`` (no spawn backs
+    the verdict). Each is accepted so the run goes on, never as verified: DELIVER's
+    push_ready is capped false (quality audit 2026-10-19: the reason was a free pass)."""
+    out = []
+    recs = [r for r in run_state.get("stages") or [] if isinstance(r, dict)]
+    for r in recs + ([record_in] if isinstance(record_in, dict) else []):
+        for k, v in r.items():
+            if k.endswith("_unverified_reason") and isinstance(v, str) and len(v.strip()) >= 10:
+                g = f"{r.get('stage') or 'deliver'}:{k[:-len('_unverified_reason')]}"
+                if g not in out:
+                    out.append(g)
+    return out
+
+
 def _gate_unbacked(gate: str, reason, detail: str, warnings: "list[str]", msg: str) -> "list[str]":
     """The error for a verdict no spawn backs — unless the record names why the spawn
     cannot be proven (``<gate>_unverified_reason``: e.g. a session without the audit
     hook). That override is kept in the record and warned about, never silent."""
     if isinstance(reason, str) and len(reason.strip()) >= 10:
         warnings.append(f"{gate} spawn NOT verified; accepted on the recorded "
-                        f"{gate}_unverified_reason: {reason.strip()[:200]}")
+                        f"{gate}_unverified_reason: {reason.strip()[:200]} — the run goes on "
+                        "but DELIVER's push_ready is capped false")
         return []
     return [msg + (f" ({detail})" if detail else "")
             + f" If the spawn did run but cannot be proven (no audit hook in this session, "
@@ -5566,9 +5582,16 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                        "coverage gate SKIPPED. A malformed declaration bypasses the "
                        "gate; fix it to a list[str] to enforce." % type(_required).__name__,
         }), file=sys.stderr)
+    _degraded = isinstance(deliver_rec.get("degraded"), dict)
     if isinstance(_required, list) and _required:
         _missing = _d7_missing_required_experts(_required, args.run_id)
-        if _missing:
+        if _missing and _degraded:
+            # DELIVER already gave up on its gates after 3 refusals: commit, marked,
+            # with the missing experts named (the run never ends uncommitted)
+            _not_ready_reason = (_not_ready_reason or "DELIVER degraded") + (
+                "; declared expert(s) never reviewed: " + ", ".join(_missing))
+            _not_ready_mark = {"push_ready": False, "push_ready_reason": _not_ready_reason[:500]}
+        elif _missing:
             _plain = sorted(set(_missing) & _d7_plain_marker_expert_ids(args.run_id))
             _why = ("" if not _plain else
                     " Of these, " + ", ".join(_plain) + " DID run for this run: its "
@@ -9268,7 +9291,7 @@ _DERIVED_RECORD_KEYS = frozenset({
     "stage", "name", "status", "artifact_id", "stage_doc_consumed",
     "consumed_artifacts", "token_usage", "token_cost_source", "derived_sources",
     "auto_recorded", "exit_criteria_met", "exit_contract_source", "push_ready_capped",
-    "gate2_outcome", "push_ready_lowered",
+    "gate2_outcome", "push_ready_lowered", "degraded",
 })
 # A PLAN record written by stage-complete carries this marker: its run declared an
 # exit contract through the strict path, so a missing contract at DELIVER is UNMET.
@@ -9630,6 +9653,13 @@ def _deliver_push_ready_bound(
         exit_result=eff_exit, all_test_evidence=evidence, evidence_fresh=fresh,
         honor_deferred=honor_deferred,
     )
+    # a stage that completed degraded (_degrade_after_repeated_failures) never ships
+    for rec in run_state.get("stages") or []:
+        if isinstance(rec, dict) and isinstance(rec.get("degraded"), dict) \
+                and rec.get("stage") != "deliver":
+            bound = False
+            reasons = list(reasons) + [f"degraded: {rec.get('stage')} completed after "
+                                       f"{rec['degraded'].get('attempts')} refused attempts"]
     return bound, reasons, warnings
 
 
@@ -9952,6 +9982,11 @@ def _derive_stage_fields(
             bound = False
             reasons = reasons + [f"Gate-2 not converged after 3 rounds; root-cause review: "
                                  f"SOUND — open items are in REPORT §10"]
+        _unv = _unverified_gates(run_state, record_in)
+        if _unv:  # a gate let through on a recorded reason was not verified: never ships
+            bound = False
+            reasons = reasons + ["gate(s) passed on a recorded reason, not verified: "
+                                 + ", ".join(_unv)]
         if ev_warns:
             derived["evidence_warnings"] = {"value": ev_warns, "source": "evidence/tests"}
         lowered = record_in.get("push_ready") is False
@@ -10019,6 +10054,60 @@ def _untested_for_budget_flag(run_dir: "Path | None", run_id: str) -> "str | Non
                      f"import-checked: {', '.join(m[len('import::'):] for m in smoke)}")
     return (f"{_RUNNER_FLAG_PREFIX}Not tested in this run ({ev.get('mode')}): "
             + "; ".join(parts))
+
+
+STAGE_FAIL_LIMIT = 3  # 再一再二不再三: the 3rd refused stage-complete of a stage completes it degraded
+# fix the payload, the profile or the stage order (complete the earlier stage): no bypass
+_NEVER_DEGRADE = ("Input:", "Profile violation", "Stage order violation")
+
+
+def _degrade_after_repeated_failures(run_file: Path, stage: str, errors: "list[str]",
+                                     cand_rec: dict, artifact: "dict | None",
+                                     warnings: "list[str]") -> "list[str]":
+    """The run is autonomous: a stage whose gates refuse stage-complete again and again
+    must not park the run for a human (run_925edb0e, run_82253fe2 ended uncommitted).
+    Counts refused attempts per stage in run.json ``stage_complete_failures``. On the
+    STAGE_FAIL_LIMIT-th, the stage completes DEGRADED instead: the record carries
+    ``degraded`` (attempts + the open errors), DELIVER's push_ready is capped false
+    (_deliver_push_ready_bound), the errors land in ``attention_flags`` (REPORT §10)
+    and run-commit still commits locally, marked. Input/shape and profile errors never
+    degrade (the payload must be fixed). Returns the errors still to raise."""
+    if not errors or any(str(e).startswith(_NEVER_DEGRADE) for e in errors):
+        return errors
+    from core.run_lock import update_run
+    box: dict = {}
+
+    def bump(d: dict) -> None:
+        f = d.setdefault("stage_complete_failures", {})
+        ent = f.get(stage) if isinstance(f.get(stage), dict) else {}
+        ent = {"count": int(ent.get("count") or 0) + 1, "at": _utc_now_iso(),
+               "last_errors": [str(e)[:300] for e in errors[:12]]}
+        f[stage] = ent
+        box["n"] = ent["count"]
+    try:
+        update_run(run_file, bump)
+    except Exception as e:  # noqa: BLE001 — bookkeeping must not hide the real errors
+        warnings.append(f"stage-complete failure count not recorded ({type(e).__name__})")
+        return errors
+    n = box.get("n", 0)
+    if n < STAGE_FAIL_LIMIT:
+        warnings.append(f"refused stage-complete {n}/{STAGE_FAIL_LIMIT} for {stage}: on the "
+                        f"{STAGE_FAIL_LIMIT}rd the stage completes degraded (push_ready false, "
+                        "these errors in REPORT §10) instead of stopping the run")
+        return errors
+    short = "; ".join(str(e)[:160] for e in errors[:6]) + (f" (+{len(errors) - 6})" if len(errors) > 6 else "")
+    cand_rec["degraded"] = {"attempts": n, "errors": [str(e)[:400] for e in errors[:20]]}
+    flag = f"[degraded] {stage} completed after {n} refused attempts with open gate errors: {short}"
+    if isinstance(artifact, dict):
+        artifact["attention_flags"] = [f for f in artifact.get("attention_flags") or []
+                                       if not (isinstance(f, str) and f.startswith(f"[degraded] {stage} "))] + [flag]
+    if stage == "deliver":
+        cand_rec["push_ready"] = False
+        cand_rec["push_ready_reason"] = ("DELIVER completed degraded after "
+                                         f"{n} refused attempts: {short}")[:900]
+    warnings.append(f"{stage} completed DEGRADED after {n} refused attempts (再一再二不再三): "
+                    "the open errors are recorded, push_ready is false, the run continues")
+    return []
 
 
 def _stage_boundary_fail(stage: str, errors: "list[str]", *, data=None, record=None,
@@ -10330,6 +10419,9 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         warnings += [w for w in exit_result.get("warnings") or [] if w not in warnings]
     warnings += [w for w in (derived.get("evidence_warnings") or {}).get("value") or []
                  if w not in warnings]
+    if errors and not getattr(args, "check", False):
+        errors = _degrade_after_repeated_failures(run_file, stage, errors, cand_rec, artifact,
+                                                  warnings)
     if errors:
         _stage_boundary_fail(stage, errors, data=artifact, record=record_in, warnings=warnings)
 
@@ -10381,6 +10473,8 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         _record_transcript_id(fresh)
         _set_stage_timing(fresh, stage, "completed_at", now)
         _replace_stage_record(fresh["stages"], cand_rec)
+        if isinstance(fresh.get("stage_complete_failures"), dict):
+            fresh["stage_complete_failures"].pop(stage, None)  # a new episode gets 3 tries
         if stage == "deliver":
             _require_red_team_expert(fresh, artifact)  # D7: run-commit re-checks the marker
         if status == "completed":
@@ -10489,6 +10583,8 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
         project, run_id, run_file, run_state, deliver_rec)
     not_ready = "" if push_ready else (
         str((deliver_rec or {}).get("push_ready_reason") or "").strip() or "no reason recorded")
+    degraded = isinstance((deliver_rec or {}).get("degraded"), dict)
+    not_ready_box = [not_ready]
     if not push_ready:
         warnings.append(f"deliver is not PUSH-READY ({not_ready[:400]}): landing locally "
                         "anyway; every commit is marked push_ready: false"
@@ -10540,6 +10636,12 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
                 if stale:
                     errs.append("Gate-2 expert(s) have not reviewed the current change "
                                 "(recorded at deliver stage-start): " + ", ".join(stale))
+        if errs and degraded:
+            # DELIVER completed degraded: land, marked, with these gaps in the reason
+            not_ready_box[0] = (not_ready_box[0] or "DELIVER degraded") + "; " + "; ".join(errs)
+            warnings.append("review precheck not met on a degraded DELIVER: landing marked "
+                            "push_ready false: " + "; ".join(errs))
+            return []
         return errs
 
     _requirement = str(run_state.get("requirement") or "")
@@ -10551,7 +10653,7 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
                                message=_commit_message(run_id, _requirement, _deliver_art,
                                                        not_ready or None),
                                precheck=precheck, review_not_converged=review_open,
-                               not_ready=not_ready or None)
+                               not_ready=not_ready_box)
     if landing:
         import contextlib
         import io

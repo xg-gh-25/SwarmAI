@@ -417,7 +417,7 @@ async def build_hooks(
     # ── PreToolUse: review-round gate (Agent|Task) — 再一再二不再三 ──
     # Only for a spawn whose prompt starts with EXPERT-ID, in THIS session's active run:
     # an expert with 3 completed rounds in the open stage (review + 2 re-checks) is
-    # denied a 4th, and told to stop and hand the decision to the user. Replaces the
+    # denied a 4th, and told to record the open items and continue. Replaces the
     # after-the-fact allowance that any over_budget_reasons entry waived (run_d8762bc8:
     # 7 Gate-2 rounds). goal_cycle exempt. Fail-open; operator bypass
     # SWARM_REVIEW_ROUND_GATE_FORCE=1. Only for a real app session.

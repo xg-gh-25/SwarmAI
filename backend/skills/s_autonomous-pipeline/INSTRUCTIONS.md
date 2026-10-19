@@ -33,16 +33,16 @@ Prefer the lightest profile that fits; goal only when you must iterate, not beca
 - Legacy publish / run-update / advance still work: `ref/instructions/cli-reference.md`.
 
 ## Decisions
-Classify every non-trivial decision in `record.decisions`: **Mechanical** (one right answer: do it), **Taste** (a sensible default exists: decide, disclose in ONE line, batch for the delivery Taste Decision Gate), **L2 Judgment** (ambiguous AND hard to reverse: Escalation Routing Protocol). Unsure → taste.
+Classify every non-trivial decision in `record.decisions`: **Mechanical** (do it), **Taste** (take the default, disclose in ONE line), **L2 Judgment** (ambiguous AND hard to reverse: take the most reversible option, `[decision]` attention flag). Unsure → taste.
 
-## Escalation Routing Protocol
-STAGE-BOUNDARY L2 (the stage's artifact is published, nothing half-written): `channel=direct` in your runtime header → AskUserQuestion this turn, continue the SAME run on the answer; header absent, another channel, or the 4h timeout → one-line warning in this tab + `run-checkpoint`. MID-STAGE L2 (a half-written stage: replan-fail in BUILD, meta-review HIGH in DELIVER) → always checkpoint (**Mid-stage rule**). In doubt → mid-stage. EVALUATE DEFER/REJECT ends the run (not routed); a clarification-escalate is a boundary L2. Full protocol: `ref/instructions/escalation.md`.
+## Autonomy (no human hand-off)
+The run never asks the user, never checkpoints for a decision, never waits: one requirement in → a local commit out; REPORT §10 says what was assumed, decided or left open, and push stays the user's. EVALUATE ambiguity → most conservative reading, recorded. Stuck (retries exhausted, circuit breaker, unresolved HIGH) → stop fixing, DELIVER with `push_ready: false`. A gate that refuses `stage-complete` 3 times → the tool completes the stage degraded. Spawn refused twice → `<gate>_unverified_reason`, push_ready capped. Older card text saying "checkpoint" / "ask" yields to `ref/instructions/escalation.md`.
 
 ## Checkpoint
-Only on a true trigger: L2 routed to checkpoint, retries exhausted, stuck, unexpected error. Budget or token use is NEVER a trigger (`run-checkpoint` refuses it): `run-checkpoint --project <P> --run-id <R> --stage <next> --reason "<why>"`. Details: `ref/instructions/checkpoint-and-budget.md`.
+Only when the user asks to pause. Budget or token use is NEVER a trigger (`run-checkpoint` refuses it): `run-checkpoint --project <P> --run-id <R> --stage <next> --reason "<why>"`. Details: `ref/instructions/checkpoint-and-budget.md`.
 
 <!-- R-instr-007 -->
-> **⏭️ [MUST] Continuation contract (§3f): advance is not the end of your turn.** `stage-complete` (or legacy `advance`, which prints the next card as `next_stage_doc`) only records the transition; read the next card and execute it **in the same turn**. Legal hand-backs ONLY: a stage-boundary **L2 Judgment** via the Escalation Routing Protocol, a **true checkpoint trigger** (retries exhausted, mid-stage L2, stuck; never budget), a pending user question, or an abandon verdict. Writing "proceeding to <STAGE>" and ending the turn is a stall. `next_action` is authoritative when it withholds the continue instruction.
+> **⏭️ [MUST] Continuation contract (§3f): advance is not the end of your turn.** `stage-complete` (or legacy `advance`, which prints the next card as `next_stage_doc`) only records the transition; read the next card and execute it **in the same turn**. Legal hand-backs ONLY: a user stop or a terminal verdict (abandon, DEFER/REJECT). Writing "proceeding to <STAGE>" and ending the turn is a stall. `next_action` is authoritative when it withholds the continue instruction.
 
 ## Sub-agent spawns (Rule 23)
 <!-- R-instr-037 -->
@@ -69,7 +69,7 @@ After `stages/complete.md` Step 0: **6.1** `run-update --project <P> --run-id <R
 | Step 1 INIT, briefing, resume; Step 2 PROFILE, why ≤8 stages, Profile Selection Principle, Goal Profile Orchestration | `init-and-profiles.md` |
 | Stage Feedback Loop, 3a Gate Check, 3b Load Stage Context, Upstream artifacts (Output Routing), Understanding Gate, 3c dispatch table, schema-first, 3f Handle Result | `stage-execution.md` |
 | 3e Verify Stage Output (validator, `checks_passed`, DDD checksums) | `validator.md` |
-| 3d Classify Decisions, full Escalation Routing Protocol, Mid-stage rule, Taste vs L2 | `escalation.md` |
+| 3d Classify Decisions, the autonomous disposition of every former hand-off, Taste vs L2 | `escalation.md` |
 | Checkpoint Protocol (true-trigger), Budget Tracking, `token_cost` | `checkpoint-and-budget.md` |
 | Step 4: 4a Taste Decision Gate, 4c Quality Convergence Loop / 6-Layer Push-Ready Gate, L4 verify-against-disk, 4d Report & CI | `deliver-convergence.md` |
 | Step 5 REFLECT, Step 6 completion gate + report ordering, North Star | `completion.md` |

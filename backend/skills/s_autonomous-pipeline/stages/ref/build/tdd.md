@@ -106,10 +106,9 @@ NOT retry a third time.** Instead:
 
 Rules:
 - A replan is scoped to ONE AC; don't redesign the whole feature.
-- Max 1 replan per AC. If the replan also fails → escalate (L2 BLOCK). This is a
-  **MID-STAGE exit** (inside the TDD loop): always **checkpoint**, NOT in-band, per the
-  Escalation Routing Protocol "Mid-stage rule" (INSTRUCTIONS); a 4h in-band block
-  mid-BUILD would freeze a half-written `replanned_acs` state.
+- Max 1 replan per AC. If the replan also fails → mark that AC unmet (`replanned_acs`
+  with the failure), finish the other ACs, and carry on to DELIVER, where it caps
+  push_ready and lands in REPORT §10. Never a checkpoint, never a question.
 - The replan insight flows to REFLECT as a lesson.
 
 ## TDD constraint

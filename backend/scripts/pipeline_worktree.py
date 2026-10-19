@@ -615,7 +615,7 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
                  workspace, self_repo, gen_b, requirement: str,
                  precheck=None, message: "str | None" = None,
                  review_not_converged: bool = False,
-                 not_ready: "str | None" = None) -> "dict | None":
+                 not_ready: "list | str | None" = None) -> "dict | None":
     """Deliver stage-complete landing; None when nothing to do (not isolated / not
     push-ready / already integrated). Exits with a §7.7 error on refusal.
     *precheck(review_at)* → error strings (D7 coverage, experts that have not reviewed
@@ -626,7 +626,8 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
     lands anyway, the same as run-commit in shared mode (f2ffe9c2); every landed commit
     is marked review_not_converged and push_ready itself stays false (push is gated).
     Since 2026-10-19 every completed DELIVER lands (commit-ready is not push-ready):
-    *not_ready* (the push_ready reason) marks each landed commit push_ready: false."""
+    *not_ready* (the push_ready reason; a one-item list when *precheck* may still
+    append to it) marks each landed commit push_ready: false."""
     if not is_isolated(run_state):
         return None
     _CTX.update(project=run_state.get("project"), run_id=run_id)
@@ -721,7 +722,8 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
             res["review_not_converged"] = True
         if not push_ready:
             res["push_ready"] = False
-            res["push_ready_reason"] = str(not_ready or "no reason recorded")[:500]
+            _why = not_ready[0] if isinstance(not_ready, list) and not_ready else not_ready
+            res["push_ready_reason"] = str(_why or "no reason recorded")[:500]
         landed[name] = res
         _record_landing(run_file, run_state, run_id, name, m, res)
     return {"landed": {k: {"sha": v["sha"], "files": len(v["files"]), "commit_s": v["commit_s"],

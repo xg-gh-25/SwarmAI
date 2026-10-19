@@ -10,21 +10,22 @@ Read when: you are about to checkpoint, a checkpoint was refused, you need `run-
 The `cmd_run_checkpoint` CLI command HARD-BLOCKS a checkpoint via `sys.exit(2)` when
 `should_checkpoint=false` + no true-trigger + no `--force`, and force-blocks a
 confabulation-denylist reason — code-enforced by the CLI, not a PreToolUse hook, not prose.
-**Checkpoint ONLY when a non-budget true-trigger fires** (L2 / retry / stuck / escalat / error).
+**The pipeline does not checkpoint to hand a run to a human** (autonomous since 2026-10-19:
+`escalation.md` gives every L2 / retry / stuck / error case an autonomous disposition that
+ends in a marked local commit). `run-checkpoint` is left for a user-requested pause and for a
+session that is being torn down mid-stage (so a later session can resume).
 `should_checkpoint` is ALWAYS false now (budget is never a trigger — STEERING #2), so it is NOT a
 checkpoint condition; run-budget is a consumption report, not a checkpoint decision. With 1M
 context (SESSION_BUDGET=800K) a full pipeline fits comfortably in ONE session.
 
-### When to checkpoint (follow sequentially; first YES → checkpoint, all NO → continue)
+### After each stage (follow sequentially)
 ```
 Stage complete
-  ├─ L2 BLOCK pending? ── yes → Escalation Routing: stage-boundary + channel=direct?
-  │                              ├─ yes (desktop, boundary) → IN-BAND ASK, continue SAME run
-  │                              └─ no (channel / headless / mid-stage / timeout) → CHECKPOINT
-  ├─ retries >= max_retries? ── yes → CHECKPOINT
-  ├─ unexpected error? ── yes → CHECKPOINT
+  ├─ L2 decision pending? ── yes → most reversible option, recorded (`escalation.md`), CONTINUE
+  ├─ retries >= max_retries / stuck / circuit breaker? ── yes → DELIVER with push_ready false
+  ├─ unexpected error? ── retry once with the printed fix; still failing → as stuck
   └─ otherwise → CONTINUE (next stage)
-Budget is NOT an entry: a token count never routes to CHECKPOINT.
+CHECKPOINT only when the user asked to pause. Budget is never an entry.
 ```
 **NOT valid reasons to checkpoint:** "BUILD is a big stage" (~60K tokens of 800K); "I've read a
 lot of files" (~2K per file); "context might be getting full" (SDK autocompact handles physical

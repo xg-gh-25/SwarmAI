@@ -105,8 +105,20 @@ def _run_state(root: Path, run_id: str) -> dict:
 
 
 def _snapshot(root: Path) -> dict:
+    """Every file under .artifacts; run.json without ``stage_complete_failures`` (the
+    refused-attempt counter is the one write a refused stage-complete makes)."""
     base = root / "Projects" / PROJECT / ".artifacts"
-    return {str(p.relative_to(base)): p.read_bytes() for p in base.rglob("*") if p.is_file()}
+    out = {}
+    for p in base.rglob("*"):
+        if not p.is_file() or p.name == ".lock":  # the run lock file the counter took
+            continue
+        data = p.read_bytes()
+        if p.name == "run.json":
+            d = json.loads(data)
+            d.pop("stage_complete_failures", None)
+            data = json.dumps(d, sort_keys=True).encode()
+        out[str(p.relative_to(base))] = data
+    return out
 
 
 def _call(fn, reg, capsys, **kw):
@@ -1749,3 +1761,47 @@ def test_untested_for_budget_flag_comes_from_the_newest_scope_report(tmp_path):
     assert "test_t.py" in flag and "core.x" in flag and "test_v.py" not in flag
     ev("regression", "2026-01-01T00:02:00Z", [])
     assert cli._untested_for_budget_flag(tmp_path, "run_u") is None
+
+
+# ── autonomy: a stage refused 3 times completes degraded (再一再二不再三) ──
+
+def test_third_refusal_completes_the_stage_degraded(ws, capsys):
+    root, reg = ws
+    _make_run(root, "run_deg", "direct", stages=["plan", "build"])
+    art = _tmpl("deliver")
+    art["adversarial_review"]["profile_tier"] = "skipped"
+    for n in (1, 2):
+        code, out = _complete(reg, capsys, "run_deg", "deliver", art, {})
+        assert code == 1, out
+        assert any(f"{n}/{cli.STAGE_FAIL_LIMIT}" in w for w in out["warnings"]), out["warnings"]
+        assert _run_state(root, "run_deg")["stage_complete_failures"]["deliver"]["count"] == n
+    code, out = _complete(reg, capsys, "run_deg", "deliver", art, {})
+    assert code in (0, None), out
+    st = _run_state(root, "run_deg")
+    rec = next(s for s in st["stages"] if s["stage"] == "deliver")
+    assert rec["degraded"]["attempts"] == 3 and rec["degraded"]["errors"]
+    assert rec["push_ready"] is False and "degraded" in rec["push_ready_reason"]
+    assert "deliver" not in (st.get("stage_complete_failures") or {})
+
+
+def test_input_and_order_errors_never_degrade(ws, capsys):
+    root, reg = ws
+    _make_run(root, "run_ord", "direct")  # plan never completed
+    for _ in range(4):
+        code, out = _complete(reg, capsys, "run_ord", "build", _build_artifact(),
+                              {"decisions": DECISION})
+        assert code == 1
+    assert not any(s.get("stage") == "build" for s in _run_state(root, "run_ord")["stages"])
+
+
+def test_a_model_cannot_write_degraded_itself(ws, capsys):
+    assert "degraded" in cli._DERIVED_RECORD_KEYS
+
+
+def test_an_unverified_gate_caps_push_ready():
+    st = {"stages": [{"stage": "build", "gate1_unverified_reason": "gate_spawn_blocked twice"}]}
+    assert cli._unverified_gates(st) == ["build:gate1"]
+    assert cli._unverified_gates({"stages": [{"stage": "build",
+                                              "gate1_unverified_reason": "short"}]}) == []
+    assert cli._unverified_gates({"stages": []}, {"gate2_findings_unverified_reason":
+                                                  "no audit hook here"}) == ["deliver:gate2_findings"]

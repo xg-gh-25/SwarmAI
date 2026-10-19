@@ -61,6 +61,5 @@ Then `python backend/scripts/artifact_cli.py stage-complete --project <P> --run-
 
 > **⏭️ Continuation — advance is not the end of your turn.** `stage-complete` records and
 > advances; read `next_card` and run that stage in this same turn. Legal hand-backs only:
-> a stage-boundary **L2 Judgment** (Escalation Routing Protocol), a true **checkpoint**
-> trigger (retries exhausted, mid-stage L2), a pending user question, or an abandon
-> verdict. `next_action` is AUTHORITATIVE over this prose.
+> a user stop or a terminal verdict (abandon, DEFER/REJECT); never a question or a
+> checkpoint (`ref/instructions/escalation.md`). `next_action` is AUTHORITATIVE over this prose.

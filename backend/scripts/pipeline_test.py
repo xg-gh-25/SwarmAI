@@ -2934,13 +2934,15 @@ def _blocking_sig(ev: dict) -> list[str]:
 
 
 def _breaker_result(mode: str, reason: str) -> dict:
-    """Abort payload (exit 2) when the circuit breaker trips. Points at run-checkpoint;
-    re-running is futile because the breaker re-trips on the unchanged run_index until the
-    run is checkpointed or the root cause is fixed."""
+    """Abort payload (exit 2) when the circuit breaker trips. Re-running is futile (the
+    breaker re-trips on the unchanged run_index). The run is autonomous, so the action is
+    never a checkpoint or a human: stop testing, finish the run not push-ready."""
     return {"mode": mode, "ok": False, "circuit_breaker": {"tripped": True, "reason": reason},
             "error": "circuit breaker: " + reason,
-            "action": ("run-checkpoint (true trigger: stuck / retries exhausted) and fix the root "
-                       "cause or escalate — do NOT re-run tests, the loop is not converging. "
+            "action": ("stop re-running tests and stop fixing: the loop is not converging. Go to "
+                       "DELIVER now and complete it with push_ready false, the failing tests "
+                       "and this reason in attention_flags (REPORT §10); run-commit then "
+                       "commits locally, marked. Do not checkpoint, do not ask the user. "
                        "Operator override only: SWARM_CIRCUIT_BREAKER_FORCE=1")}
 
 

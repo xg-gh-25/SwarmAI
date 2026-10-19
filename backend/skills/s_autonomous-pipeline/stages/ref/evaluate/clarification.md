@@ -17,39 +17,22 @@ pipeline builds something that technically passes but misses the real need.
 **Exit conditions:**
 - 0 ambiguities, 0 conflicts → proceed to scoring.
 - 1 ambiguity, derivable from context → resolve inline, note the assumption in the artifact.
-- ≥2 unresolvable ambiguities → **CLARIFICATION-ESCALATE** (resumable MCQ, see below; NOT a
-  terminal verdict).
-- Any constraint conflict → **CLARIFICATION-ESCALATE** with an explicit conflict description.
-## CLARIFICATION-ESCALATE is not the terminal ESCALATE (never conflate them)
-EVALUATE has two escalations and they route differently.
-- **CLARIFICATION-ESCALATE** (the exit above). The requirement is WORTH doing; it only has an
-  unanswered ambiguity. The run is NOT dead:
-  1. Publish the EVALUATE artifact with the ambiguous requirement at
-     `status: needs-clarification` plus a pending entry in `clarifications[]`.
-  2. Route through the Escalation Routing Protocol's **in-band MCQ** path: the live
-     `AskUserQuestion` substrate, each question with A–E options plus a forced
-     `X. Other (please specify)`.
-  3. On answer: write it back into `clarifications[]` (`answered_by: user`), upgrade the
-     resolved requirement's `source.kind` → `user-stated` AND `status` → `confirmed`, and
-     **continue the SAME run at the SAME stage** (no new run, no checkpoint-and-die).
-  Self-answer stays the default (recorded with `answered_by: self`); the MCQ fires only on
-  the residue that genuinely cannot be self-answered ("能自答就自答,自答不了才问").
-- **TERMINAL ESCALATE / DEFER / REJECT** (Exit Routing below + the orchestrator rule
-  "DEFER/REJECT at evaluate ends the pipeline"). A scoring verdict that the requirement should
-  NOT proceed at all. It ends the run (checkpoint for human review) and is NOT routed in-band.
-  **Never** convert a terminal verdict into an MCQ, and never convert a clarification gap into
-  a terminal checkpoint when a desktop session could just ask.
-### Background / scheduled runs (no interactive channel): current behavior vs Phase 3
-The in-band MCQ substrate (`AskUserQuestion` gate + `continue_with_answer`) is **live only for
-an interactive session**: `continue_with_answer` needs a live client in `WAITING_INPUT`, so a
-torn-down headless run CANNOT be resumed-with-an-answer today.
-- **Current behavior:** a headless clarification-escalate CHECKPOINTS (free-text reason) and
-  surfaces as a paused-run attention item. The user re-engages an **interactive** session to
-  answer, then resumes.
-- It NEVER self-guesses to keep going, and NEVER adds a timeout that truncates the wait
-  (STEERING #2: a clarification wait is not a hang).
-- **TO-BUILD (Phase 3):** a headless carrier that serializes the MCQ into the checkpoint and
-  answers on resume. There is no `awaiting-input` checkpoint state yet; do NOT claim one.
+- ≥2 unresolvable ambiguities → **CLARIFICATION-ASSUME** (below; NOT a terminal verdict).
+- Any constraint conflict → **CLARIFICATION-ASSUME** with an explicit conflict description.
+## CLARIFICATION-ASSUME: the run never waits for an answer (autonomous)
+The pipeline is fully autonomous: it never asks the user and never pauses for an answer
+(2026-10-19; it used to MCQ in a desktop tab and checkpoint headless runs, which parked them).
+- The requirement is WORTH doing and only has an ambiguity → answer it yourself:
+  1. Pick the **most conservative reading**: the one that changes the least behaviour, keeps
+     existing contracts, and is easiest to reverse (a flag, an additive change).
+  2. Record it in `clarifications[]` (`answered_by: self`, `answer` = the reading picked, the
+     alternatives in the question), keep the requirement at `status: assumed`, and add one
+     `attention_flags` line in DELIVER: "[assumption] Q… → chose …; other reading …".
+  3. Continue the SAME run. The assumption is visible in REPORT §10 and the user can
+     override it after the commit (push stays theirs).
+- A constraint conflict → keep the stricter constraint, record the conflict the same way.
+- Only when EVERY reading is unsafe or unbuildable is it a value verdict: DEFER (the run ends,
+  reason logged). Never a checkpoint, never `AskUserQuestion`.
 ## Self-Socratic Ambiguity Re-Scan (after filling the clarification output)
 `INTERROGATE THE SPEC AND YOUR OWN FRAMING — NOT THE USER`
 After filling WHO/WHAT/WHY/WHEN and noting assumptions, **re-scan THAT output** (and the ACs
@@ -96,20 +79,7 @@ unknowable, which is why this step is mechanical and validator-enforced.
 ## Exit Routing
 - **DEFER or REJECT**: the pipeline ends. Log the reason and exit. A terminal scoring verdict
   (the requirement should not proceed), NOT a clarification gap; never routed in-band.
-- **TERMINAL ESCALATE**: L2 BLOCK → checkpoint. Human review is required before the pipeline
-  can continue. A scoring verdict that the requirement is too risky or ambiguous at the value
-  level to proceed; distinct from the clarification gap below.
-- **CLARIFICATION-ESCALATE** (the ≥2-ambiguity / constraint-conflict exit): **NOT terminal.**
-  Publish the EVALUATE artifact with the ambiguous requirement at `status: needs-clarification`
-  plus a pending `clarifications[]` entry, then route through the Escalation Routing Protocol's
-  clarification-escalate path:
-  - desktop/direct → in-band MCQ (`AskUserQuestion`, forced `X. Other`) → write back
-    `clarifications[]` (`answered_by: user`) + upgrade `source.kind`→`user-stated` +
-    `status`→`confirmed` → **continue the SAME run at EVALUATE**. This half is LIVE
-    (`AskUserQuestion` gate + `continue_with_answer` on the interactive session).
-  - background/headless → checkpoint (free-text reason) + paused-run attention item, pause with
-    NO timeout (STEERING #2); the **user re-engages an interactive session to answer, then
-    resumes**.
-  The run stays alive; only the unanswerable residue reaches the user. The headless
-  serialize-MCQ-and-resume-on-answer carrier (an `awaiting-input` checkpoint state) does NOT
-  exist yet; it is Phase-3 TO-BUILD.
+- **ESCALATE** (legacy verdict): treat as DEFER with the reason logged; the pipeline does not
+  hand a run to a human.
+- **CLARIFICATION-ASSUME** (the ≥2-ambiguity / constraint-conflict exit): **NOT terminal.**
+  Self-answer with the most conservative reading (above), record it, continue the SAME run.

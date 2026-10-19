@@ -37,13 +37,11 @@ whether a statement is code-enforced, or you are planning/estimating work (Rule 
    shortcut, do the complete thing.
 7. **[GUIDE] Atomic commits.** One commit per logical change in BUILD and TEST.
 8. <!-- R-instr-023 --> **[MUST] Never loop forever.** Respect max_retries. Checkpoint on exhaustion.
-9. <!-- R-instr-024 --> **[MUST] Taste decisions batch at delivery.** Don't interrupt mid-pipeline.
-10. <!-- R-instr-025 --> **[MUST] Judgment decisions route via the Escalation Routing Protocol
-    immediately.** STAGE-BOUNDARY L2 → in-band AskUserQuestion if `channel=direct` (continue the
-    SAME run on answer), else fallback checkpoint. MID-STAGE L2 (build/deliver) → always
-    checkpoint. Never default to a bare checkpoint without checking `channel=`. (The
-    AskUserQuestion 4h block itself is [GATE·hook] `ask_question_gate`; the *routing choice* is
-    [MUST].)
+9. <!-- R-instr-024 --> **[MUST] Taste decisions are recorded, never presented for approval.** Don't interrupt.
+10. <!-- R-instr-025 --> **[MUST] Judgment decisions take the most reversible option,
+    recorded** (`record.decisions` + a `[decision]` attention flag for REPORT §10), at any
+    point in any stage. Never AskUserQuestion, never a checkpoint for a decision
+    (`escalation.md`, autonomous disposition).
 11. <!-- R-instr-026 --> **[MUST] DEFER/REJECT at evaluate ends the pipeline.**
 12. <!-- R-instr-027 --> **[GATE·cli] Always generate REPORT.md** at
     `.artifacts/runs/<RUN_ID>/REPORT.md`. `run-update --status completed` BLOCKS if REPORT.md is
