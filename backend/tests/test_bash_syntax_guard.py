@@ -140,6 +140,17 @@ class TestNoFalseKill:
             _run("python backend/scripts/x.py \\\n  --project SwarmAI \\\n  --flag")
         )
 
+    def test_equals_separator_is_not_a_syntax_error(self):
+        # 140 of 144 transcript denials (10-17..20) were `echo ===` separators: zsh
+        # expands `=word` even under -n ("===== not found"). Not a hang, not a parse
+        # error: must be approved in either shell.
+        for cmd in ("sed -n 1,5p a.md; echo ======; sed -n 1,5p b.md",
+                    "grep -n x a.ts; echo ==; grep -n y b.ts",
+                    "x=1 && echo == done"):
+            assert not _is_deny(_run(cmd)), cmd
+        # a real parse error next to a separator is still caught
+        assert _is_deny(_run('echo ===; echo "unterminated'))
+
     def test_zsh_brace_function_shell_correct(self):
         # GATE-2 HIGH (run_07fd1d8f): the Bash tool runs zsh on macOS. A one-line
         # zsh brace function `foo() { echo hi }` (no semicolon before `}`) is

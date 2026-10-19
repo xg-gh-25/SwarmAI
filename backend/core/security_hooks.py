@@ -6339,6 +6339,15 @@ def _resolve_syntax_check_shell() -> str:
 
 
 _SYNTAX_CHECK_SHELL = _resolve_syntax_check_shell()
+# zsh expands `=word` (EQUALS: the path of command `word`) even under -n, so
+# `echo ======` failed the parse check with "===== not found" and was denied as a
+# hang. It is not one: at run time it fails fast. 140 of the 144 denials found in
+# session transcripts (2026-10-17..20) were this, mostly `echo ===` separators.
+# noequals turns that expansion off for the check only; real parse errors
+# (unmatched quote, unclosed block) still exit non-zero.
+_SYNTAX_CHECK_ARGS: tuple[str, ...] = (
+    ("-n", "-o", "noequals") if os.path.basename(_SYNTAX_CHECK_SHELL) == "zsh" else ("-n",)
+)
 # A pathological command (e.g. ~1M-deep `$()` nesting) can make the parse check
 # spin a core; cap input size so it never reaches the shell. Real commands are
 # tiny; 256KB is orders of magnitude above any legit command. (Gate-2 LOW.)
@@ -6393,7 +6402,7 @@ async def bash_syntax_guard(
     try:
         proc = await asyncio.create_subprocess_exec(
             _SYNTAX_CHECK_SHELL,
-            "-n",
+            *_SYNTAX_CHECK_ARGS,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
