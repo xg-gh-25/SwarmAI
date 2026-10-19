@@ -3116,8 +3116,6 @@ def _source_repo_root() -> "str | None":
     return found
 
 
-
-
 def _pipeline_runs_root() -> str:
     """Workspace root whose Projects/*/.artifacts/runs/*/run.json hold pipeline runs.
 
@@ -6002,7 +6000,8 @@ def _numstat_lines(root: str, *extra: str) -> "dict[str, int] | None":
     return out
 
 
-def _pending_source_line_count(cwd: str, command: str) -> "int | None":
+def _pending_source_line_count(cwd: str, command: str,
+                               project_repos: bool = False) -> "int | None":
     """Changed SOURCE lines (added+removed, docs excluded) the `git commit` in
     *command* is about to record; None if uncomputable (→ caller fails open).
 
@@ -6013,14 +6012,17 @@ def _pending_source_line_count(cwd: str, command: str) -> "int | None":
     (`git commit -- backend/`) covers every numstat path under it.
 
     Scope: only a commit whose repo root (resolved from *cwd*) is the SwarmAI source
-    repo (_source_repo_root()) is counted; any other repo returns 0, so the gate never
-    fires on a user's unrelated project."""
+    repo (_source_repo_root()) is counted — or, with *project_repos* (worktree mode on),
+    any workspace project's code repo (worktree_write_gate._project_repo); any other
+    repo returns 0, so the gate never fires on a user's unrelated project."""
     root = _gate_repo_root_for(cwd)
     if root is None:
         return None
     src = _source_repo_root()
     if not src or root != src:
-        return 0
+        from core.worktree_write_gate import _project_repo
+        if not (project_repos and _project_repo(os.path.realpath(root))):
+            return 0
     pending = _pending_commit_paths(cwd, command)
     if pending is None or pending is _PENDING_CROSS_REPO:
         return None
@@ -6055,13 +6057,34 @@ def _pending_source_line_count(cwd: str, command: str) -> "int | None":
     return total
 
 
+def _direct_gate_mode(cwd: str, session_id: str) -> "tuple[bool | None, str | None]":
+    """(mode, repo root) for direct_commit_gate. mode None: exempt (worktree mode on and
+    the session has a live shared-mode run of its own — exactly worktree_write_gate rule
+    4's exemption; a paused or stale isolated run exempts nothing). True: worktree mode on and the repo is one
+    a run can isolate (run_worktree.repo_for_write) → limit 0. False: the 20-line rule
+    (mode off, or a repo no run could isolate — a Brazil package, submodules — whose
+    commits a run could not take over anyway)."""
+    from core.run_worktree import mode_enabled, repo_for_write
+    root = _gate_repo_root_for(cwd)
+    if not mode_enabled():
+        return False, root
+    from core.worktree_write_gate import _session_runs_light
+    if any(r.get("worktree_mode") == "shared" for r in _session_runs_light(session_id)):
+        return None, root
+    return (root is not None and repo_for_write(root, _pipeline_runs_root()) is not None), root
+
+
 def create_direct_commit_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse (Bash) gate on `git commit` (design §4-G1). When this
     session has NO active run of its own (C6), a commit in the SwarmAI source repo
     recording more than 20 changed SOURCE lines (docs and lockfiles excluded) is
     DENIED with a copyable `run-create --profile direct` command for the repo's
-    project. Runs of other sessions and unowned runs (no session_id) do not exempt
-    a session. Commits in other repos, docs and small changes pass. Fail-open on
+    project. With worktree mode on the limit is 0 and every project code repo counts:
+    a code change lands from a run's worktree, so a source commit in a main checkout
+    by a session with no run is exactly the write the worktree gate could not see
+    (an interpreter or formatter writing files). Runs of other sessions and unowned runs (no session_id) do not exempt
+    a session. Commits in other repos and docs pass, and so (worktree mode off, or a
+    repo no run can isolate) do changes of at most 20 lines. Fail-open on
     any error/timeout. Bypass (operator only, backend/daemon env):
     SWARM_ADVERSARIAL_GATE_FORCE=1 or SWARM_DIRECT_GATE_FORCE=1 (logged)."""
 
@@ -6097,17 +6120,29 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
             return {"decision": "approve"}  # in its own run: other gates own the commit
 
         try:
+            mode_on, _root = await asyncio.wait_for(
+                executors.run_in("subprocess", _direct_gate_mode, cwd, session_id),
+                timeout=_DIRECT_GATE_TIMEOUT,
+            )
+        except Exception:  # incl. asyncio.TimeoutError
+            logger.warning("direct_commit_gate: mode check failed — failing open", exc_info=True)
+            return {"decision": "approve"}
+        if mode_on is None:
+            return {"decision": "approve"}  # a live run of its own (any mode): exempt
+        limit = 0 if mode_on else _DIRECT_COMMIT_MAX_SOURCE_LINES
+        try:
             lines = await asyncio.wait_for(
-                executors.run_in("subprocess", _pending_source_line_count, cwd, command),
+                executors.run_in("subprocess", _pending_source_line_count, cwd, command,
+                                 mode_on),
                 timeout=_DIRECT_GATE_TIMEOUT,
             )
         except Exception:  # incl. asyncio.TimeoutError
             logger.warning("direct_commit_gate: line count failed — failing open", exc_info=True)
             return {"decision": "approve"}
-        if lines is None or lines <= _DIRECT_COMMIT_MAX_SOURCE_LINES:
+        if lines is None or lines <= limit:
             return {"decision": "approve"}
 
-        project = shlex.quote(_project_for_repo(_source_repo_root() or ""))
+        project = shlex.quote(_project_for_repo(_root or _source_repo_root() or ""))
         logger.warning("[BLOCKED] direct_commit_gate: %d source lines outside a run "
                        "(session=%s): %s", lines, session_id, command[:120])
         return {
@@ -6116,16 +6151,17 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
                     "git commit → DENY: this commit changes " + str(lines) + " source lines "
-                    "(limit " + str(_DIRECT_COMMIT_MAX_SOURCE_LINES) + ") and this session "
+                    "(limit " + str(limit) + (", worktree mode on: a code change lands from "
+                    "a run's worktree" if mode_on else "") + ") and this session "
                     "has no pipeline run. A direct fix needs an exit contract written before "
                     "verification starts (design §4-G1), so verification has an end point and "
                     "the change goes through the same runner, gates and run-commit. FIX: "
                     "create a direct run, write its contract, then let run-commit commit:\n"
                     "python backend/scripts/artifact_cli.py run-create --project "
                     + project + " --profile direct --requirement \"<one line>\"\n"
-                    "Docs (*.md, docs/, Knowledge/, .kiro/, .context/), lockfiles and "
-                    "changes of at most " + str(_DIRECT_COMMIT_MAX_SOURCE_LINES)
-                    + " source lines are exempt. Only the operator can make a deliberate "
+                    "Docs (*.md, docs/, Knowledge/, .kiro/, .context/) and lockfiles are "
+                    "exempt" + (" here" if mode_on else ", and so are changes of at most "
+                                + str(limit) + " source lines") + ". Only the operator can make a deliberate "
                     "exception, by setting SWARM_DIRECT_GATE_FORCE=1 in the backend/daemon "
                     "environment (a variable set in a Bash command has no effect); ask "
                     "the user if you believe one is warranted."

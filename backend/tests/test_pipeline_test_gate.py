@@ -835,3 +835,59 @@ def test_source_repo_root_survives_the_packaged_daemon(tmp_path, monkeypatch):
     (repo / "backend" / "core" / "security_hooks.py").unlink()
     monkeypatch.setattr(sh, "_SOURCE_ROOT_CACHE", [0.0, None])
     assert sh._source_repo_root() is None
+
+
+class TestDirectCommitGateWorktreeMode:
+    """Worktree mode on: a code change lands from a run's worktree, so ANY source commit
+    in a project code repo's main checkout by a session with no run is refused — the
+    backstop for writes the worktree gate cannot see (interpreters, formatters)."""
+
+    def test_one_source_line_is_denied(self, ws, repo, monkeypatch):
+        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+        (repo / "a.py").write_text("base = 1\n")
+        _git(repo, "add", "a.py")
+        reason = _reason(_direct("git commit -m tiny", repo))
+        assert "limit 0" in reason and "worktree mode on" in reason
+
+    def test_docs_still_pass_and_mode_off_keeps_the_20_line_limit(self, ws, repo, monkeypatch):
+        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+        (repo / "README.md").write_text(_lines(5))
+        _git(repo, "add", "README.md")
+        assert _direct("git commit -m docs", repo) == {"decision": "approve"}
+        monkeypatch.setenv("SWARM_WORKTREE_MODE", "off")
+        (repo / "a.py").write_text("base = 1\n")
+        _git(repo, "add", "a.py")
+        assert _direct("git commit -m tiny", repo) == {"decision": "approve"}
+
+    def test_a_project_code_repo_counts_a_scratch_repo_does_not(self, ws, repo, tmp_path, monkeypatch):
+        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+        other = _make_repo(tmp_path / "widget")
+        (other / "a.py").write_text("base = 1\n")
+        _git(other, "add", "a.py")
+        assert _direct("git commit -m x", other) == {"decision": "approve"}    # no project
+        (ws / "Projects" / "Widget").mkdir(parents=True)
+        assert _is_deny(_direct("git commit -m x", other))                    # project repo
+
+
+class TestDirectCommitGateWorktreeModeScope:
+    def test_only_a_shared_mode_run_exempts(self, ws, repo, monkeypatch):
+        """The same exemption as the write gate's rule 4: a paused (or stale) isolated
+        run exempts nothing, a shared-mode run keeps writing and committing main."""
+        import json as _json
+        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+        f = _seed(ws, status="paused")
+        (repo / "a.py").write_text("base = 1\n")
+        _git(repo, "add", "a.py")
+        assert _is_deny(_direct("git commit -m x", repo))
+        d = _json.loads(f.read_text())
+        f.write_text(_json.dumps({**d, "worktree_mode": "shared"}))
+        assert _direct("git commit -m x", repo) == {"decision": "approve"}
+
+    def test_a_repo_no_run_can_isolate_keeps_the_20_line_rule(self, ws, repo, monkeypatch):
+        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+        (repo / ".gitmodules").write_text("")      # submodules: repo_for_write refuses it
+        _git(repo, "add", ".gitmodules")
+        _git(repo, "commit", "-q", "-m", "mods")
+        (repo / "a.py").write_text("base = 1\n")
+        _git(repo, "add", "a.py")
+        assert _direct("git commit -m x", repo) == {"decision": "approve"}

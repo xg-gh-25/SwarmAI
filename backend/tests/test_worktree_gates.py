@@ -526,3 +526,27 @@ def test_no_run_rule_is_off_with_the_mode_off(r4, monkeypatch):
         rw._remove(rid, json.loads(r4["runs"][rid].read_text())["worktrees"][0], r4["main"],
                    merged=False)
     assert not _denied(_gate("s5")(_call("Edit", file_path=str(r4["main"] / "a.py"))))
+
+
+def test_no_run_rule_denies_git_writes_to_main_but_not_reads(r4):
+    g = _gate("s5")
+    for cmd in ("git -C {m} apply /tmp/x.patch", "cd {m} && git checkout -- a.py",
+                "git -C {m} stash pop", "git -C {m} reset --hard"):
+        assert _denied(g(_call("Bash", cwd=str(r4["ws"]), command=cmd.format(m=r4["main"])))), cmd
+    for cmd in ("git -C {m} status", "git -C {m} log -3", "git -C {m} diff",
+                "git -C {m} stash list", "git -C {ws} add -A"):
+        assert not _denied(g(_call("Bash", cwd=str(r4["ws"]),
+                                   command=cmd.format(m=r4["main"], ws=r4["ws"])))), cmd
+
+
+def test_no_run_rule_allows_git_maintenance_on_main(r4):
+    g = _gate("s5")
+    for cmd in ("git -C {m} pull --ff-only", "git -C {m} merge --abort",
+                "git -C {m} apply --check /tmp/x.patch", "git -C {m} merge --ff-only origin/main"):
+        assert not _denied(g(_call("Bash", cwd=str(r4["ws"]), command=cmd.format(m=r4["main"])))), cmd
+    v = g(_call("Bash", cwd=str(r4["ws"]), command=f"git -C {r4['main']} stash"))
+    assert _denied(v) and "other sessions' work" in v["hookSpecificOutput"]["permissionDecisionReason"]
+    for cmd in ("git -C {m} pull --ff-only --autostash", "git -c merge.autostash=true -C {m} pull --ff-only",
+                "git -C {m} pull --ff-only --rebase", "git -C {m} merge --ff-only run/run_aaaa1111",
+                "git -C {m} pull --ff-only . run/x", "git -C {m} apply --stat --apply /tmp/x.patch"):
+        assert _denied(g(_call("Bash", cwd=str(r4["ws"]), command=cmd.format(m=r4["main"])))), cmd

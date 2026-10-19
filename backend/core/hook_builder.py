@@ -303,9 +303,10 @@ async def build_hooks(
     # can ONLY learn its session via this closure, never via its context arg.
     agent_id = agent_config.get("id", "default")
     session_key = resume_session_id or agent_id or "unknown"
-    # No session context given (e.g. a prewarm): the id falls back to the agent id, which
-    # no run can ever be linked to — ``_unbound`` tells gates that would ask this session
-    # to start a run (worktree_write_gate rule 4) that it never could.
+    # No session context given: the id falls back to the agent id, which no run can ever
+    # be linked to — ``_unbound`` tells gates that would ask this session to start a run
+    # (worktree_write_gate rule 4) that it never could. (Prewarms pass their unit's own
+    # context, which adoption rewrites to the real id.)
     hook_session_context = (
         session_context if session_context is not None
         else {"sdk_session_id": resume_session_id or agent_id, "_unbound": True}

@@ -24,8 +24,10 @@ while worktree mode is off and no run worktree exists. Judgments:
    SwarmAI source; never SwarmWS; gitignored and ``.git/`` paths pass) and writes into
    any run's worktree. A direct code change goes through a run too, so it lands from its
    own worktree instead of sharing the checkout with every other session; the deny
-   prints the commands (resume the session's own run when it has one). Git
-   subcommands and writes the Bash parsers cannot see are not covered (sync-time check).
+   prints the commands (resume the session's own run when it has one). Git commands
+   that write that checkout (``_GIT_WRITES_MAIN``) are denied the same way; a write the
+   Bash parsers cannot see (an interpreter, a formatter) is stopped at commit time by
+   direct_commit_gate, which refuses any source commit there from a session with no run.
 
 Also: a hardlinked file (st_nlink > 1) in the worktree is not writable; Read / Grep
 of the main checkout gets a reminder (allow + additionalContext). Bash parsing is
@@ -266,24 +268,67 @@ def _project_repo(main: str) -> "str | None":
     return _project_for_repo(src) if src and os.path.realpath(src) == main else None
 
 
-def _no_run_verdict(p: str, nr: "_NoRun") -> "dict | None":
-    """Rule 4 (module docstring) for one write target."""
+_GIT_READ_FLAGS = frozenset({"--check", "--stat", "--numstat", "--summary",
+                             "--show-current-patch"})
+
+
+def _git_maintenance(sub: str, args: "list[str]", command: str = "") -> bool:
+    """A git command that may run in a main checkout without a run: a read-only form,
+    an abort of an operation in progress, or a fast-forward sync of the integration
+    branch (it cannot rewrite anyone's uncommitted work: git refuses an overlapping
+    fast-forward). ``stash`` / ``reset`` / ``checkout`` stay denied — in a shared
+    checkout they move or discard other sessions' work."""
+    if sub == "stash" and args[:1] in (["list"], ["show"]):
+        return True
+    if sub in ("apply", "am") and any(a in _GIT_READ_FLAGS for a in args) \
+            and "--apply" not in args:      # --apply turns applying back on
+        return True
+    if sub in ("merge", "rebase", "cherry-pick", "revert", "am") and "--abort" in args:
+        return True   # recovery: it rolls back whoever started the operation
+    if sub not in ("pull", "merge") or "--ff-only" not in args:
+        return False
+    # a fast-forward that cannot touch uncommitted work and only follows upstream:
+    # no autostash (it stashes every session's edits; also via -c or config), no
+    # rebase/squash, and no target that is a run's branch or the repo itself ('.')
+    if "autostash" in command.lower() or any(
+            a in ("-r", "--squash", "--no-ff") or a.startswith("--rebase") for a in args):
+        return False
+    pos = [a for a in args if not a.startswith("-")]
+    return not any(a == "." or a.startswith(("run/", "refs/heads/run/")) for a in pos)
+
+
+def _no_run_git_verdict(g: dict, nr: "_NoRun", command: str = "") -> "dict | None":
+    """Rule 4 for a git command that writes the work tree, index or HEAD of a project
+    repo's main checkout (``_GIT_WRITES_MAIN``, minus _git_maintenance)."""
+    sub, args = g["sub"], g["args"]
+    if sub not in _GIT_WRITES_MAIN or _git_maintenance(sub, args, command):
+        return None
+    return _no_run_verdict(os.path.join(os.path.realpath(g["dir"]), ".swarm-git-op"), nr,
+                           what=f"git {sub} in {g['dir']}")
+
+
+def _no_run_verdict(p: str, nr: "_NoRun", what: "str | None" = None) -> "dict | None":
+    """Rule 4 (module docstring) for one write target (*what* names a git command)."""
     from core.run_worktree import repo_for_write, run_for_path
     from core.security_hooks import _pipeline_runs_root
     hit = run_for_path(p)
     if hit is not None:
-        return _deny(f"{p} is inside run {hit[0]}'s worktree; this session does not own that "
-                     "run. Write only in a worktree of a run of your own.")
+        return _deny(f"{what or p} is inside run {hit[0]}'s worktree; this session does not "
+                     "own that run. Write only in a worktree of a run of your own.")
     m = repo_for_write(p, _pipeline_runs_root())
     if m is None:
         return None
     main = os.path.realpath(str(m))
     project = _project_repo(main)
-    if project is None or _ignored(main, p):
+    if project is None or (what is None and _ignored(main, p)):
         return None
-    head = (f"{p} is in the main checkout of {main}, which every session shares. With "
+    head = (f"{what or p} is in the main checkout of {main}, which every session shares. With "
             "worktree mode on, a code change — through the pipeline or direct — is made in a "
             "run's own worktree and lands from there by itself. ")
+    if what is not None:
+        head += ("In a shared checkout this git command can move or discard other sessions' "
+                 "work (read-only forms, --abort and --ff-only syncs are allowed). If it is "
+                 "part of a code change, make the change in a run: ")
     r = nr.run
     if r is not None:
         rid = shlex.quote(r["id"])
@@ -493,6 +538,8 @@ def judge(input_data: "dict[str, Any]", own: "_Own | None",
     if "git" in command:
         for g in _git_segments(command, cwd):
             v = _git_verdict(g, own)
+            if v is None and no_run is not None:
+                v = _no_run_git_verdict(g, no_run, command)
             if v is not None:
                 return v
     for p, sure in _bash_targets(command, cwd, with_raw=True):
@@ -518,7 +565,8 @@ def create_worktree_write_gate(session_context: "dict[str, Any]"):
     updates; ``sdk_session_id`` holds the app session id (read at call time). A context
     marked ``_unbound`` (hook_builder's fallback when no session context was given, e.g.
     a prewarm: its id is the agent id, no run can ever be linked to it) never gets
-    rule 4 — it could never start the run the deny asks for."""
+    rule 4 — it could never start the run the deny asks for. (Prewarms pass their unit's
+    own context now, so after adoption they are judged as the real session.)"""
     from core import executors
     cache: dict = {}
 

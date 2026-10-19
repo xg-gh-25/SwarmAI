@@ -2300,10 +2300,17 @@ class SessionRouter:
             if channel_context and channel_context.get("model"):
                 agent_config["model"] = channel_context["model"]
 
+            # The unit's stable hook context, created HERE so the hooks bind to it: on
+            # adoption the first send rewrites its sdk_session_id in place (see
+            # run_conversation), and every gate then judges the real session. Built
+            # without it, hook_builder fell back to the agent id ("default") for the
+            # unit's whole life — gates keyed by session saw the wrong session.
+            unit._hook_session_context = {"sdk_session_id": temp_session_id}
             options = await self._prompt_builder.build_options(
                 agent_config=agent_config,
                 enable_skills=True,
                 enable_mcp=True,
+                session_context=unit._hook_session_context,
                 channel_context=channel_context,
             )
 
