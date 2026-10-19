@@ -4,7 +4,7 @@ date: 2026-10-20
 created: 2026-10-20
 updated: 2026-10-20
 project: SwarmAI
-status: IMPLEMENTED — T1 66431d66；T2 由 f88dce48、T6 由 42a4aae8 + d8cbcddd 覆盖（key 不收窄到 import 闭包，见 §3）；T3-T5 d8cbcddd（§8）；§9 worker 调查；§10 熔断误判已修
+status: IMPLEMENTED + FROZEN (§11) — T1 66431d66；T2 由 f88dce48、T6 由 42a4aae8 + d8cbcddd 覆盖（key 不收窄到 import 闭包，见 §3）；T3-T5 d8cbcddd（§8）；§9 worker 调查；§10 熔断误判已修
 related: pipeline-speed-systematic-fix.md, Knowledge/Designs/2026-10-19-pipeline-deterministic-convergence.md
 author: Kiro（回放 10 个 run 的 verify 证据 + pipeline_test.py 调研）
 ---
@@ -142,3 +142,25 @@ runner 里记录的耗时是单独串行跑的 2 到 3 倍（`test_artifact_cli_
 
 break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连续 5 次调用，不拆分、不熔断、还在继续；
 把"跑完一个文件"这条撤掉，这个测试就变红。
+
+## 11. 冻结（2026-10-20，XG 批准）
+
+10-17 到 10-20 测试选择改了六版（c2e64f52、98c7e463、938475c1、87507d5e、f88dce48、1c348ba7）。
+从这一版起不再改：
+
+- **BUILD 和修复轮**：`--mode tdd --files` / `--mode prove`，只跑点名的文件。
+- **DELIVER**：最后一次改动之后跑一次全范围（`--mode regression`）：改动的测试、改动模块的直接
+  importer（`REVERSE_DEPTH = 1`）、AC 点名的测试、import smoke、CI BVT 清单。每个 run 最多
+  `FULL_SCOPE_MAX_ROUNDS = 2` 轮，续跑（`auto_recheck_of`）和缓存命中不算轮。
+- **CI**：`tests/bvt_manifest.txt`。
+
+原计划把 BVT 从 run 里拿掉、删掉 `recheck`，回放数据否定了这两条，所以没删：
+
+- 最近 31 个 run 的 regression 证据里，BVT 共 79 秒，其余测试 6,804 秒，BVT 只占约 1%。run 只落本地
+  commit，push 积压时 BVT 在 run 里是唯一跑它的地方，留着成本几乎为零。
+- 最近 3 天 107 次 `recheck` 调用里 61 次是续跑自动生成的（`auto_recheck_of`）。`recheck` 是续跑的载体，
+  删掉就要重写续跑。
+
+守卫：`backend/tests/test_test_selection_frozen.py` 固定上面的常量，以及决定"跑什么"的 7 个函数的
+源码摘要。它变红就说明有人改了冻结的设计：先要 XG 明确批准，再在本节记一条，同一个 commit 里更新摘要。
+不能为了让一个 run 变绿去改摘要。
