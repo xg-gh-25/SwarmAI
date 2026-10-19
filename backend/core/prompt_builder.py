@@ -55,6 +55,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _pipeline_expert_agents():
+    """The session's custom sub-agent types; None (SDK default) if they cannot be built,
+    so a broken definition never stops a session from starting."""
+    try:
+        from core.pipeline_expert_agent import agent_definitions
+        return agent_definitions()
+    except Exception:  # noqa: BLE001
+        logger.warning("pipeline-expert agent definition unavailable", exc_info=True)
+        return None
+
 # CLI-bundled skills turned off for every SwarmAI session (Claude Code
 # `skillOverrides`; "off" hides a skill from the model's listing and rejects a
 # Skill call by name — verified on CLI 2.1.190: init skills 66 → 65).
@@ -2501,6 +2512,9 @@ class PromptBuilder:
             effort=effort,
             max_turns=max_turns,
             env=session_env,
+            # The pipeline's review-expert sub-agent type (read-only tools, effort
+            # medium, tool-call cap): core/pipeline_expert_agent.py.
+            agents=_pipeline_expert_agents(),
         )
 
     # Canonical DDD doc set — single source: project_registry.DDD_CANONICAL_DOCS (Run 0).

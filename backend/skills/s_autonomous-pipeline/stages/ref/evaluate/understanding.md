@@ -106,7 +106,8 @@ through); let the grep find the files, don't curate them.
   It loads the gate through spawn_prompt.py (numeric-cap check), fences your text as DATA,
   writes `evidence/prompts/gate0-skeptic.md` and prints `spawn`, the 2-line prompt to spawn
   with (`EXPERT-ID: gate0-skeptic` + "read <path> first"). Use it ONLY on exit 0.
-  Spawn it with `run_in_background: false`. The Agent tool defaults to background, and a
+  Spawn it with `subagent_type: "pipeline-expert"` and `run_in_background: false`
+  (every EXPERT-ID spawn uses that agent type). The Agent tool defaults to background, and a
   background spawn ends this turn's visible stream: the user sees nothing running and no
   status until a notification arrives. Wait for the verdict in the same turn.
 > **⚠️ Caller-side rule: do the investigation YOURSELF, delegate the JUDGEMENT.** Hand the

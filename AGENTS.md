@@ -265,7 +265,14 @@ implementations in `security_hooks.py`). By category:
    run's writes in its own worktrees, denies a write into any other isolatable git repo with
    the `run-repo-add` command that gives it one, denies stash / shared-ref changes from a run
    worktree; operator-set `SWARM_WORKTREE_GATE_FORCE=1`).
-5. **Advisory / hygiene** — `inclusive_term_guard`, `design_lint_guard` (warn only),
+5. **Review-expert scope** (`core/pipeline_expert_agent.py`) — every session defines the
+   `pipeline-expert` sub-agent type (Read/Grep/Glob/Bash only, effort medium, maxTurns
+   backstop). `expert_type_gate` (Agent|Task, app sessions, main thread) denies an
+   `EXPERT-ID:` spawn of any other type; `expert_budget_gate` (Read|Grep|Glob|Bash,
+   inside a pipeline-expert) denies every call past 24 and tells the expert to report
+   now with what it did not reach marked UNCHECKED. Both fail open; operator-set
+   `SWARM_EXPERT_GATE_FORCE=1`.
+6. **Advisory / hygiene** — `inclusive_term_guard`, `design_lint_guard` (warn only),
    `image_read_dedup_guard`.
 
 Plus `can_use_tool` file-access control, workspace isolation, and error sanitization. These

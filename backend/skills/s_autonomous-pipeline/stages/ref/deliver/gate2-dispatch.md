@@ -87,7 +87,9 @@ analysis."`
   `red-team`), never the Title-case `<DOMAIN>`. A wrong value fails the
   `^EXPERT-ID: [a-z…]$` anchor read by `runtime_hooks._extract_expert_id`; the marker
   then records no expert and D7 cannot credit it.
-- Every spawn (specialists, Red Team, meta-review) uses `run_in_background: false`
+- Every spawn (specialists, Red Team, meta-review) uses `subagent_type: "pipeline-expert"`
+  (read-only tools, effort medium, a 24-call cap; `expert_type_gate` denies any other
+  type for an EXPERT-ID prompt) and `run_in_background: false`
   (`spawn_mode: "foreground"`): all specialists must finish before the merge, and a
   background spawn ends the visible chat stream. Do not pin a model.
 - A specialist that fails or times out: log it and continue with the others' results.

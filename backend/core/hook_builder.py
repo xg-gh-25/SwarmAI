@@ -429,6 +429,23 @@ async def build_hooks(
             "PreToolUse", create_review_round_gate(session_context),
             "review_round_gate", matcher="Agent|Task",
         )
+        # An EXPERT-ID spawn must use the dedicated `pipeline-expert` agent type
+        # (read-only tools, effort medium, tool-call cap): core/pipeline_expert_agent.py.
+        from core.pipeline_expert_agent import create_expert_type_gate
+        registry.register(
+            "PreToolUse", create_expert_type_gate(),
+            "expert_type_gate", matcher="Agent|Task",
+        )
+
+    # ── PreToolUse: a pipeline-expert sub-agent's tool-call cap ──
+    # Inside a `pipeline-expert` sub-agent (agent_type on the hook input), calls past
+    # EXPERT_TOOL_CAP are denied and the expert is told to write its report now. The
+    # prompts' SCOPE BUDGET was prose: the slow tail took 40-72 calls (10-12 min).
+    from core.pipeline_expert_agent import create_expert_budget_gate
+    registry.register(
+        "PreToolUse", create_expert_budget_gate(),
+        "expert_budget_gate", matcher="Read|Grep|Glob|Bash",
+    )
 
     # ── PreToolUse: pytest anti-pattern guard (Bash-scoped) ──
     # Deny pytest piped to tail/head (output swallowed by auto-backgrounding)
