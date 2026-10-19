@@ -258,6 +258,20 @@ describe('stripView', () => {
     expect(stripView(tu('a', 'sed -n 1,9p f.ts') as ToolUseContent).tool).toBe('Bash');
   });
 
+  it('Bash: env prefix, absolute interpreter paths and stdin programs are tidied', () => {
+    const o = (cmd: string) => stripView(tu('a', cmd) as ToolUseContent).object;
+    const venv = '/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/.venv/bin';
+    expect(o(`env PATH=${venv}:/usr/bin:/bin python -m pytest tests/test_x.py -q`)).toBe('python -m pytest tests/test_x.py -q');
+    expect(o(`env PATH=${venv}:/usr/bin:/bin perl -e 'alarm 90; exec @ARGV' ${venv}/python -m pytest t.py`)).toBe('python -m pytest t.py');
+    expect(o('FOO=1 BAR="a b" make test')).toBe('make test');
+    expect(o("python3 -I - <<'EOF'\nimport json, re\nfrom x import y\n\nd = json.load(open('run.json'))\nEOF")).toBe("python3 -I - <<EOF · d = json.load(open('run.json'))");
+    expect(o('cat /Users/gawan/.swarm-ai/x.json')).toBe('cat ~/.swarm-ai/x.json');
+    // code in front stays: `f=$(…)` is not a plain assignment
+    expect(o('f=$(ls -t | head -1); echo "$f"')).toBe('f=$(ls -t | head -1); echo "$f"');
+    // a file write keeps its target
+    expect(o("cat > /tmp/fix1234/e9.py <<'EOF'\nprint(1)\nEOF")).toBe("cat > /tmp/fix1234/e9.py <<'EOF' …");
+  });
+
   it('prefers the display object (full text on hover) over the 200-char summary', () => {
     const long = `echo ${'x'.repeat(400)}`;
     const v = stripView(tu('a', long.slice(0, 190), 'Bash', { tool: 'Bash', object: long, key: 'k' }) as ToolUseContent);

@@ -332,6 +332,39 @@ const cache = new WeakMap<object, StripView>();
 
 const shortIds = (s: string) => s.replace(UUID, '$1').replace(LONG_HEX, '$1');
 
+/** `env [-i] A=1 B=2 ` or plain `A=1 ` in front of a command (not `f=$(…)`: that is code). */
+const ENV_PREFIX = /^\s*(?:env(?:\s+-i)?\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"$`]*"|'[^']*'|[^\s;&|$`'"]*)\s+)+(?=[^\s;&|=])/;
+/** An interpreter given by absolute path (`/x/.venv/bin/python`) — the row shows its name. */
+const ABS_BIN = /(^|\s)\/\S*\/bin\/([\w.+-]+)(?=\s|$)/g;
+/** A home path anywhere in the command. */
+const HOME_ANY = /(^|[\s='"(])\/(?:Users|home)\/[^/\s]+\//g;
+/** An interpreter reading its program from stdin: `python3 -I -`, `node -`, `bash -s`. */
+const STDIN_PROG = /(?:^|\s)((?:python3?|node|bash|sh|ruby|perl)(?:\s+-[A-Za-z]+)*(?:\s+-)?)\s*$/;
+
+/** A Bash command as its strip shows it: the setup, env assignments and wrappers in
+ *  front stripped, absolute interpreter paths cut to their name, home paths as `~/`,
+ *  and a stdin program (`python3 - <<EOF`) shown by its first meaningful line. The
+ *  hover title keeps the raw command. */
+function tidyBash(raw: string): string {
+  let cmd = displayCommand(raw);
+  for (let guard = 0; guard < 4; guard += 1) {
+    const next = displayCommand(cmd.replace(ENV_PREFIX, ''));
+    if (next === cmd) break;
+    cmd = next;
+  }
+  cmd = cmd.replace(ABS_BIN, '$1$2').replace(HOME_ANY, '$1~/');
+  const hd = HEREDOC.exec(cmd);
+  if (!hd) return cmd;
+  const head = cmd.slice(0, hd.index);
+  const prog = STDIN_PROG.exec(head);
+  if (prog) {
+    const body = cmd.slice(hd.index + hd[0].length).split('\n').map((l) => l.trim());
+    const first = body.find((l) => l && !/^(?:import|from)\s/.test(l) && l !== hd[2] && !l.startsWith('#'));
+    return `${head.slice(0, prog.index).trimEnd()}${prog.index > 0 ? ' ' : ''}${prog[1].trim()} <<${hd[2]}${first ? ` · ${first}` : ''}`;
+  }
+  return `${cmd.slice(0, hd.index + hd[0].length)} …`;
+}
+
 export function stripView(block: ToolUseContent): StripView {
   const hit = cache.get(block);
   if (hit) return hit;
@@ -341,10 +374,7 @@ export function stripView(block: ToolUseContent): StripView {
   let object: string;
   if (name === 'Bash') {
     full = block.display?.object ?? (block.summary || '').replace(/^Running:\s*/, '');
-    let cmd = displayCommand(full);
-    const hd = HEREDOC.exec(cmd);
-    if (hd) cmd = `${cmd.slice(0, hd.index + hd[0].length)} …`;
-    object = shortIds(cmd.replace(/\s+/g, ' ').trim());
+    object = shortIds(tidyBash(full).replace(/\s+/g, ' ').trim());
   } else {
     const call = toolCall(block);
     full = block.display?.object || call.path || call.text;
