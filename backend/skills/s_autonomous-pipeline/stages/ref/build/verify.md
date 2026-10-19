@@ -20,9 +20,11 @@ the runner does not cover").
 > `ref/build/artifact.md`) + the `tdd`/`files_changed`/`ac_coverage` schema-required
 > fields. <!-- R-build-009 -->
 
-- Run **changed test files + test files that import changed modules**: `RUN --mode verify`
-  (one call; the runner picks changed tests, recent failures and transitive importers of
-  the changed modules, cap 40). This replaces the old raw
+- Run **changed test files + test files that import changed modules**: `RUN --mode verify
+  --deadline auto` under `alarm 590`, Bash `timeout` 600000 (one call; the runner picks
+  changed tests, recent real failures and EVERY direct importer of the changed modules,
+  uncapped and never cut for time; tests reaching a change only through another module
+  are listed in `transitive_unrun` and REPORT §10, not run). This replaces the old raw
   `pytest tests/test_foo.py tests/test_bar.py --timeout=60`.
 - **Widely-imported modules:** the old recipe grepped every dependent test file
   (`grep -rl "from database\|import database\|SQLiteDatabase" tests/`) and ran exactly

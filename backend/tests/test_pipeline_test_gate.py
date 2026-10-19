@@ -810,11 +810,12 @@ class TestRunAmendGate:
 
 def test_runner_alarm_longer_than_the_bash_timeout_is_denied_without_io():
     """--deadline auto runs under alarm 590: without the Bash `timeout` parameter the tool
-    kills it at 120 s and the model gets nothing. Denied with the exact value; no run
-    lookup needed (no workspace fixture)."""
+    kills it at 120 s and the model gets nothing. Shell-parsed: alarm(N), line
+    continuations and chained commands are caught; printing the text is not denied."""
     gate = sh.create_pipeline_test_gate({"sdk_session_id": SID})
-    cmd = ("perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python "
-           "backend/scripts/pipeline_test.py --project P --run-id r --mode verify --deadline auto")
+    base = ("backend/.venv/bin/python backend/scripts/pipeline_test.py --project P "
+            "--run-id r --mode verify --deadline auto")
+    cmd = "perl -e 'alarm 590; exec @ARGV' " + base
 
     def call(tmo):
         ti = {"command": cmd} if tmo is None else {"command": cmd, "timeout": tmo}
@@ -824,6 +825,11 @@ def test_runner_alarm_longer_than_the_bash_timeout_is_denied_without_io():
     assert _is_deny(res) and "600000" in _reason(res)
     assert _is_deny(call(300000))
     assert not _is_deny(call(600000))
-    # the default wrapper (alarm 110) fits the default 120 s Bash timeout
-    assert sh._runner_bash_timeout_error(RUNNER + " --mode tdd", {}) is None
-    assert sh._runner_bash_timeout_error("echo alarm 590 pipeline_test.py", {}) is None
+    f = sh._runner_bash_timeout_error
+    for c in ("perl -e 'alarm(590); exec @ARGV' " + base,
+              "perl -e 'alarm 590; exec @ARGV' \\\n  " + base.replace(" --project", " \\\n  --project"),
+              "cd /x && " + cmd, base):
+        assert f(c, {}) and not f(c, {"timeout": 600000}), c
+    assert f(RUNNER + " --mode tdd", {}) is None          # alarm 110 fits 120 s
+    assert f("printf '%s' \"" + cmd + "\"", {}) is None  # text, not executed
+    assert f("echo alarm 590 pipeline_test.py", {}) is None

@@ -51,7 +51,9 @@ candidate" to "push-ready". ALL 6 layers must pass at once; 5/6 is not push-read
 | L6 Decisions resolved | every taste/judgment decision is in the decision log |
 
 Converged in 1 iteration on a non-trivial change → scrutinize harder, not less: the
-gates may be too lenient. Not converged after 3 → checkpoint with the remaining gaps.
+gates may be too lenient. Not converged after 3 → do not checkpoint and do not ask the
+user: record the remaining gaps (REPORT §10, completion summary), push_ready false, and
+let `run-commit` commit locally (autonomous; push stays gated).
 
 ## Push-ready — binary, evaluated LAST, computed by the tool
 

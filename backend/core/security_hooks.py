@@ -4033,28 +4033,109 @@ def _test_gate_hint(hits) -> str:
 
 
 _BASH_DEFAULT_TIMEOUT_MS = 120_000
-_RUNNER_ALARM_RE = re.compile(r"\bperl\b[^|&\n]*?\balarm\s+([1-9]\d*)\b[^|&\n]*?\bpipeline_test\.py\b")
+_AUTO_RUNNER_ALARM_S = 590  # pipeline_test.AUTO_ALARM_S (--deadline auto)
+_PERL_ALARM_RE = re.compile(r"\balarm\s*\(?\s*([1-9]\d*)")
+_CMD_WRAPPERS = {"env", "nice", "nohup", "time", "command"}
+
+
+def _quoted_segments(command: str) -> "list[list[str]] | None":
+    """Per-command token lists split on ``; && || | &`` and newlines OUTSIDE quotes
+    (``_shell_segments`` re-splits a quoted ``'alarm 590; exec @ARGV'``); None when it
+    does not parse."""
+    try:
+        lx = shlex.shlex(command, posix=True, punctuation_chars=";&|\n")
+        lx.whitespace = " \t\r"
+        lx.whitespace_split = True
+        toks = list(lx)
+    except ValueError:
+        return None
+    segs: list[list[str]] = [[]]
+    for t in toks:
+        if t and set(t) <= set(";&|\n"):
+            segs.append([])
+        else:
+            segs[-1].append(t)
+    return [g for g in segs if g]
+
+
+def _runner_invocation(seg: "list[str]") -> "tuple[int | None, str | None] | None":
+    """``(outer alarm seconds or None, --deadline value or None)`` when ONE shell segment
+    actually executes ``pipeline_test.py`` (directly, via python, under a perl alarm or
+    timeout wrapper); None when it does not (``printf``/``echo`` of the text, an editor)."""
+    toks = list(seg)
+    while toks and (toks[0] in _CMD_WRAPPERS or ("=" in toks[0] and not toks[0].startswith("-")
+                                                 and toks[0].split("=", 1)[0].isidentifier())):
+        toks = toks[1:]
+    alarm = None
+    if toks and os.path.basename(toks[0]) == "perl":
+        if "-e" not in toks:
+            return None
+        k = toks.index("-e")
+        script = toks[k + 1] if k + 1 < len(toks) else ""
+        if "@ARGV" not in script:
+            return None
+        m = _PERL_ALARM_RE.search(script)
+        alarm = int(m.group(1)) if m else None
+        toks = toks[k + 2:]
+    elif toks and os.path.basename(toks[0]) in ("timeout", "gtimeout") and len(toks) > 2:
+        try:
+            alarm = int(float(toks[1].rstrip("s")))
+        except ValueError:
+            return None
+        toks = toks[2:]
+    if not toks:
+        return None
+    head = os.path.basename(toks[0])
+    if head.startswith("python"):
+        args = [t for t in toks[1:] if not t.startswith("-")][:1]
+        if not (args and args[0].endswith("pipeline_test.py")):
+            return None
+    elif not head == "pipeline_test.py":
+        return None
+    deadline = None
+    for n, t in enumerate(toks):
+        if t == "--deadline" and n + 1 < len(toks):
+            deadline = toks[n + 1]
+        elif t.startswith("--deadline="):
+            deadline = t.split("=", 1)[1]
+    return alarm, deadline
 
 
 def _runner_bash_timeout_error(command: str, tool_input: dict) -> "str | None":
-    """Deny text when a ``pipeline_test.py`` call's perl alarm outlives the Bash tool's
-    own timeout: the tool would kill the runner first and the model gets no result (the
-    runner's ``--deadline auto`` wrapper is alarm 590 and needs timeout 600000). Cheap,
-    no IO. None = fine."""
-    m = _RUNNER_ALARM_RE.search(command)
-    if not m:
+    """Deny text when an executed ``pipeline_test.py`` call would outlive the Bash tool's
+    own timeout: its outer alarm (perl ``alarm N`` / ``alarm(N)``, ``timeout N``), or,
+    with no wrapper, its ``--deadline`` (auto = 590 s). The tool would kill the runner
+    first and the model gets no result. Shell-parsed (line continuations joined), so a
+    command that only prints the text is not denied. No IO. None = fine."""
+    segs = _quoted_segments(re.sub(r"\\\r?\n", " ", command))
+    if not segs:
         return None
-    alarm = int(m.group(1))
     raw = tool_input.get("timeout")
     tmo = int(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0 \
         else _BASH_DEFAULT_TIMEOUT_MS
-    need = (alarm + 10) * 1000
-    if tmo >= need:
-        return None
-    return (f"DENY (Bash timeout shorter than the test runner's alarm): this command's "
-            f"`alarm {alarm}` needs the Bash tool `timeout` parameter set to at least {need} "
-            f"(it is {tmo}); otherwise the Bash tool kills the runner before it reports. "
-            f"Re-issue the same command with timeout: {need}.")
+    for seg in segs:
+        inv = _runner_invocation(seg)
+        if inv is None:
+            continue
+        alarm, deadline = inv
+        if alarm is None:
+            if deadline is None:
+                continue
+            if deadline.strip().lower() == "auto":
+                alarm = _AUTO_RUNNER_ALARM_S
+            else:
+                try:
+                    alarm = int(float(deadline)) + 15
+                except ValueError:
+                    continue
+        need = (alarm + 10) * 1000
+        if tmo < need:
+            return (f"DENY (Bash timeout shorter than the test runner's run time): this "
+                    f"pipeline_test.py call runs up to {alarm}s, so the Bash tool `timeout` "
+                    f"parameter must be at least {need} (it is {tmo}); otherwise the Bash "
+                    f"tool kills the runner before it reports. Re-issue the same command "
+                    f"with timeout: {need}.")
+    return None
 
 
 def create_pipeline_test_gate(session_context: dict[str, Any]):

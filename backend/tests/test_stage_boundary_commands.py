@@ -1730,21 +1730,22 @@ class TestExitEvidenceLists:
 
 
 def test_untested_for_budget_flag_comes_from_the_newest_scope_report(tmp_path):
-    """DELIVER's attention flag for test files cut for time is computed from the runner's
-    evidence (the newest of regression / verify), never written by the model."""
+    """DELIVER's attention flag for what the runner did not test (transitive importers,
+    import smoke past its cap, any skipped file) comes from the runner's evidence (the
+    newest of regression / verify), never from the model."""
     t = tmp_path / "evidence" / "tests"
     t.mkdir(parents=True)
 
-    def ev(mode, at, skipped):
+    def ev(mode, at, skipped, trans=()):
         (t / f"latest-{mode}.json").write_text(json.dumps(
             {"schema": 1, "run_id": "run_u", "mode": mode, "finished_at": at,
-             "skipped_for_budget": skipped}))
+             "skipped_for_budget": skipped, "transitive_unrun": list(trans)}))
 
     assert cli._untested_for_budget_flag(tmp_path, "run_u") is None
     ev("verify", "2026-01-01T00:01:00Z", ["backend/tests/test_v.py"])
-    ev("regression", "2026-01-01T00:02:00Z", ["backend/tests/test_a.py", "import::core.x"])
+    ev("regression", "2026-01-01T00:02:00Z", ["import::core.x"], ["backend/tests/test_t.py"])
     flag = cli._untested_for_budget_flag(tmp_path, "run_u")
-    assert flag.startswith(cli._RUNNER_FLAG_PREFIX + "1 test file(s)")
-    assert "test_a.py" in flag and "test_v.py" not in flag and "regression" in flag
+    assert flag.startswith(cli._RUNNER_FLAG_PREFIX + "Not tested in this run (regression)")
+    assert "test_t.py" in flag and "core.x" in flag and "test_v.py" not in flag
     ev("regression", "2026-01-01T00:02:00Z", [])
     assert cli._untested_for_budget_flag(tmp_path, "run_u") is None

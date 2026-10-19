@@ -107,15 +107,19 @@ push-ready and go to 4d. On the new path `stage-complete --stage deliver` comput
 from the gate results (tests, no unresolved HIGH / high-confidence MEDIUM, completion audit green,
 no regressions, no meta-review HIGH, exit contract met) — you do not declare it yourself.
 
-**Max iterations exhausted (3 without convergence):** do NOT ship. Escalate with precision:
+**Max iterations exhausted (3 without convergence):** stop fixing; the run stays autonomous, so do
+NOT checkpoint and do NOT ask the user. Record it precisely in the DELIVER artifact
+(`attention_flags`, which REPORT §10 and the completion summary list):
 ```
-CONVERGENCE FAILED after 3 iterations:
+CONVERGENCE NOT REACHED after 3 iterations:
   Remaining failures: [L3: test_foo_bar regresses, L4: race condition in async path]
   Attempted fixes: [iteration 1: ..., iteration 2: ..., iteration 3: ...]
-  Root cause hypothesis: [why this isn't converging]
-  Recommendation: [fix manually / adjust requirement / accept known limitation]
+  Root cause: [why this isn't converging — Gate-2 uses the root-cause review's verdict]
+  Next step: [what a follow-up run should change]
 ```
-then **CHECKPOINT** — the human decides (a mid-stage escalation: always checkpoint).
+then complete DELIVER with `push_ready: false` (reason recorded) and let `run-commit` commit
+locally. Gate-2's own non-convergence is handled by the tool (root-cause review: SOUND → local
+commit, WRONG-APPROACH → one redesign); push stays gated by push_ready.
 
 Per-stage feedback loops are shift-left prevention; the convergence loop is the final gate for
 issues that only emerge at the system level. Neither alone is sufficient.

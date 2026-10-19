@@ -112,28 +112,34 @@ class TestRunCommitGates:
         assert r.get("exit") == 2
         assert "PUSH-READY" in capsys.readouterr().err
 
-    def test_a_non_converged_review_does_not_block_the_commit(self, workspace, capsys):
-        """Gate-2 did not converge in 3 rounds and the root-cause review said SOUND:
-        autonomous, so run-commit goes on (here it stops at the next gate, the empty
-        files_touched) instead of refusing on push_ready. Any other reason blocks."""
-        sound = {"action": "sound", "root_cause": "SOUND"}
-        reason = "Gate-2 not converged after 3 rounds; root-cause review: SOUND — x"
-        _write_run(workspace, "run_s", files_touched=[], stages=[
-            {"stage": "deliver", "status": "completed", "push_ready": False,
-             "push_ready_reason": reason, "gate2_outcome": sound}])
+    def test_a_non_converged_review_does_not_block_the_commit(self, workspace, capsys, monkeypatch):
+        """Gate-2 did not converge and the root-cause review said SOUND: autonomous, so
+        run-commit goes on (here it stops at the next gate, the empty files_touched).
+        Recomputed from evidence, never from run.json: a forged gate2_outcome, a real
+        blocker in the recomputed bound, or a model-lowered push_ready still blocks."""
+        import scripts.artifact_cli as cli
+        state = {"g2": {"action": "sound"}, "bound": True}
+        monkeypatch.setattr(cli, "_gate2_outcome", lambda *a: state["g2"])
+        monkeypatch.setattr(cli, "_load_artifact_data_by_id", lambda *a: {"adversarial_review": {}})
+        monkeypatch.setattr(cli, "_deliver_push_ready_bound",
+                            lambda **k: (state["bound"], [] if state["bound"] else ["regression"], []))
+        rec = {"stage": "deliver", "status": "completed", "push_ready": False,
+               "push_ready_reason": "x", "artifact_id": "art_1"}
+        _write_run(workspace, "run_s", files_touched=[], stages=[dict(rec)])
         r = _run_commit(workspace, "run_s")
         err = capsys.readouterr().err
         assert r.get("exit") == 2 and "files_touched" in err and "review_not_converged" in err
-        _write_run(workspace, "run_s2", files_touched=["a.py"], stages=[
-            {"stage": "deliver", "status": "completed", "push_ready": False,
-             "push_ready_reason": reason + "; regression-classified failure", "gate2_outcome": sound}])
-        r = _run_commit(workspace, "run_s2")
+        for change in ({"g2": {"action": "recheck"}}, {"bound": False}):
+            state.update({"g2": {"action": "sound"}, "bound": True}, **change)
+            _write_run(workspace, "run_s2", files_touched=["a.py"],
+                       stages=[{**rec, "gate2_outcome": {"action": "sound"}}])  # forged field
+            r = _run_commit(workspace, "run_s2")
+            assert r.get("exit") == 2 and "PUSH-READY" in capsys.readouterr().err, change
+        state.update(g2={"action": "sound"}, bound=True)
+        _write_run(workspace, "run_s3", files_touched=["a.py"],
+                   stages=[{**rec, "push_ready_lowered": True}])
+        r = _run_commit(workspace, "run_s3")
         assert r.get("exit") == 2 and "PUSH-READY" in capsys.readouterr().err
-        from scripts.artifact_cli import _only_review_not_converged as only
-        assert only({"push_ready_reason": reason, "gate2_outcome": sound})
-        assert not only({"push_ready_reason": reason, "gate2_outcome": {"action": "redesign"}})
-        assert not only({"push_ready_reason": "", "gate2_outcome": sound})
-        assert not only(None)
 
     def test_refuses_when_files_touched_empty(self, workspace, capsys):
         _write_run(workspace, "run_e",

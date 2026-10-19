@@ -5402,26 +5402,39 @@ def _commit_message(run_id: str, requirement: str, deliver: "dict | None") -> st
     return commit_message.build(run_id, requirement, deliver)
 
 
-# push_ready reason the deliver bound adds for a SOUND root-cause verdict
-# (_derive_stage_fields); the only reason run-commit commits past push_ready=false.
-_GATE2_NOT_CONVERGED_REASON = "Gate-2 not converged after 3 rounds"
+def _only_review_not_converged(project: str, run_id: str, run_file: Path, run_state: dict,
+                               deliver_rec) -> bool:
+    """True when the ONLY thing keeping DELIVER from PUSH-READY is a Gate-2 loop that did
+    not converge in 3 rounds with a SOUND root-cause verdict. Recomputed here from
+    evidence, never read from run.json (a record field, including ``gate2_outcome`` and
+    ``push_ready_reason``, can be written through the legacy run-update path):
 
-
-def _only_review_not_converged(deliver_rec) -> bool:
-    """True when DELIVER completed, its tool-computed Gate-2 outcome is ``sound`` (no
-    convergence in 3 rounds, root-cause review: SOUND) and every push_ready reason is
-    that one. Any other reason (tests, completion audit, a model-lowered push_ready)
-    still blocks the commit."""
-    if not isinstance(deliver_rec, dict):
+    - the Gate-2 outcome from this run's SubagentStop markers is ``sound``;
+    - the push_ready upper bound recomputed from the DELIVER artifact and the test
+      evidence passes (tests, regressions, completion audit, exit contract);
+    - the model did not lower push_ready itself (``push_ready_lowered``)."""
+    if not isinstance(deliver_rec, dict) or deliver_rec.get("push_ready_lowered") is True:
         return False
-    g2 = deliver_rec.get("gate2_outcome")
+    run_dir = run_file.parent
+    try:
+        g2 = _gate2_outcome(run_id, run_dir, run_state)
+    except Exception:  # noqa: BLE001 — cannot prove the verdict: keep the commit blocked
+        return False
     if not (isinstance(g2, dict) and g2.get("action") == "sound"):
         return False
-    reason = str(deliver_rec.get("push_ready_reason") or "")
-    # the reason itself contains "; " (the join separator): strip each occurrence of it
-    rest, n = re.subn(re.escape(_GATE2_NOT_CONVERGED_REASON) + r"; root-cause review: SOUND[^;]*",
-                      "", reason)
-    return n > 0 and not rest.replace(";", "").strip()
+    import pipeline_validator as pv
+    profile = normalize_profile(run_state.get("profile"))
+    artifact = _load_artifact_data_by_id(project, deliver_rec.get("artifact_id"))
+    if not isinstance(artifact, dict):
+        return False
+    crit = _plan_exit_criteria(project, run_state, "deliver", None)
+    exit_result = pv.judge_exit_criteria(crit, run_dir, deliver_rec,
+                                         files_touched=run_state.get("files_touched"),
+                                         roots=_evidence_roots())
+    bound, _reasons, _ = _deliver_push_ready_bound(
+        project=project, run_id=run_id, run_dir=run_dir, run_state=run_state,
+        profile=profile, artifact=artifact, exit_result=exit_result)
+    return bool(bound)
 
 
 def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
@@ -5469,7 +5482,8 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     # autonomous, and a refused run-commit would hand it to a human. The root-cause
     # review said SOUND, the open items are in REPORT §10, push_ready stays false (push
     # is gated) and the commit is marked review_not_converged.
-    _review_open = (not push_ready) and _only_review_not_converged(deliver_rec)
+    _review_open = (not push_ready) and _only_review_not_converged(
+        args.project, args.run_id, run_file, run_state, deliver_rec)
     if _review_open:
         print(json.dumps({"warning": "deliver is not PUSH-READY only because Gate-2 did not "
                                      "converge in 3 rounds (root-cause review: SOUND). "
@@ -9286,6 +9300,7 @@ _DERIVED_RECORD_KEYS = frozenset({
     "stage", "name", "status", "artifact_id", "stage_doc_consumed",
     "consumed_artifacts", "token_usage", "token_cost_source", "derived_sources",
     "auto_recorded", "exit_criteria_met", "exit_contract_source", "push_ready_capped",
+    "gate2_outcome", "push_ready_lowered",
 })
 # A PLAN record written by stage-complete carries this marker: its run declared an
 # exit contract through the strict path, so a missing contract at DELIVER is UNMET.
@@ -9971,6 +9986,7 @@ def _derive_stage_fields(
             derived["evidence_warnings"] = {"value": ev_warns, "source": "evidence/tests"}
         lowered = record_in.get("push_ready") is False
         cand_rec["push_ready"] = bool(bound and not lowered)
+        cand_rec["push_ready_lowered"] = lowered  # run-commit's review-only exception reads it
         if not bound:
             cand_rec["push_ready_reason"] = "; ".join(
                 reasons + ([str(record_in.get("push_ready_reason"))] if lowered else []))
@@ -10002,9 +10018,10 @@ _RUNNER_FLAG_PREFIX = "[runner] "
 
 
 def _untested_for_budget_flag(run_dir: "Path | None", run_id: str) -> "str | None":
-    """One line naming the test files the NEWEST verify / regression report selected for
-    this change but did not run (``skipped_for_budget``, import-smoke entries excluded);
-    None when every selected file ran."""
+    """One line naming what the NEWEST verify / regression report did not run for this
+    change: test files that reach a changed module only through other modules
+    (``transitive_unrun``), and import-smoke modules past the smoke cap / any other
+    ``skipped_for_budget`` entry. None when nothing was left out."""
     if run_dir is None:
         return None
     evs = [e for e in (_read_run_evidence(run_dir, f"tests/latest-{m}.json", run_id)
@@ -10012,14 +10029,26 @@ def _untested_for_budget_flag(run_dir: "Path | None", run_id: str) -> "str | Non
     if not evs:
         return None
     ev = max(evs, key=lambda e: str(e.get("finished_at") or ""))
-    left = [f for f in ev.get("skipped_for_budget") or []
-            if isinstance(f, str) and not f.startswith("import::")]
-    if not left:
+    trans = [f for f in ev.get("transitive_unrun") or [] if isinstance(f, str)]
+    skipped = [f for f in ev.get("skipped_for_budget") or [] if isinstance(f, str)]
+    smoke = [f for f in skipped if f.startswith("import::")]
+    other = [f for f in skipped if not f.startswith("import::")]
+    if not (trans or smoke or other):
         return None
-    names = ", ".join(Path(f).name for f in left[:6]) + (f" (+{len(left) - 6})" if len(left) > 6 else "")
-    return (f"{_RUNNER_FLAG_PREFIX}{len(left)} test file(s) that import a changed module "
-            f"were not run in this run ({ev.get('mode')}, time budget): {names}. They name "
-            f"none of the changed functions; CI BVT or a later run covers them")
+
+    def names(xs):
+        return ", ".join(Path(x).name for x in xs[:6]) + (f" (+{len(xs) - 6})" if len(xs) > 6 else "")
+    parts = []
+    if trans:
+        parts.append(f"{len(trans)} test file(s) reach a changed module only through other "
+                     f"modules and were not run: {names(trans)}")
+    if other:
+        parts.append(f"{len(other)} selected test file(s) were not run: {names(other)}")
+    if smoke:
+        parts.append(f"{len(smoke)} changed module(s) past the import-smoke cap were not "
+                     f"import-checked: {', '.join(m[len('import::'):] for m in smoke[:6])}")
+    return (f"{_RUNNER_FLAG_PREFIX}Not tested in this run ({ev.get('mode')}): "
+            + "; ".join(parts) + ". CI BVT or a later run covers them")
 
 
 def _stage_boundary_fail(stage: str, errors: "list[str]", *, data=None, record=None,

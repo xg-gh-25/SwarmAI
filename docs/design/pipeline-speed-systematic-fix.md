@@ -472,6 +472,15 @@ E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完�
 
 每个 phase 走一次 pipeline run（full profile）。run ① 和 run ② 可以在两个 tab 里并行，改的文件不重叠。C 最后做，同时把执行卡里的命令换成新命令。run ① 要等 `ba1c8a22` 把它在 `artifact_cli.py` 上的改动提交之后再开始；run ② 改 `security_hooks.py`，开始前也要确认没有其他 session 正在改这个文件（目前只能人工确认，见 `parallel-session-commit-isolation.md`）。
 
+**B 的修订（2026-10-19，XG 确认）**：上文 B 节里 L2 的「40 个文件上限、溢出进 `skipped_for_budget`」和固定约 95 秒的截止时间已经废弃，现行规则如下：
+
+- L2 选**全部直接 import 改动模块的测试**，加上提到被改 `backend/scripts/*.py` 的测试，不设上限，也不按耗时裁剪。
+- 截止时间用 `--deadline auto`，按历史耗时算，最长 575 秒（外层 `alarm 590`，Bash `timeout` 600000）。
+- 只经过其他模块间接依赖改动的测试不跑，由 runner 列在 `transitive_unrun`，DELIVER 写进 REPORT §10。
+- 曾经试过按函数名缩小测试范围，四个 expert 评审后撤掉了：改名、import 重新绑定、多行 import、`getattr`、多跳调用、拼接出来的子命令都会漏选，造成假绿。
+- 完整的 import 闭包会覆盖 559 到 565 个测试文件（约 39 分钟），等于全量，所以不用。
+- 第 3 层只用 CI 的 BVT。
+
 ## 7. 风险与对策
 
 | 风险 | 对策 |

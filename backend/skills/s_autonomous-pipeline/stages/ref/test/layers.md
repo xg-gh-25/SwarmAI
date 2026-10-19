@@ -16,8 +16,10 @@ produced by the runner: `stage-complete --stage test` copies `layers` and counts
 
 All three layers run in ONE call, `RUN --mode regression` (this replaces the old
 three hand-run commands: `pytest -k <ac tests>`, `grep -rl ... | xargs pytest`, and
-`python -c "import module"`). The runner shards per file, runs in parallel under one
-~95 s deadline, kills on timeout with a faulthandler stack attached, and caches by
+`python -c "import module"`). Call it with `--deadline auto` under `alarm 590` and Bash
+`timeout` 600000. The runner shards per file, runs in parallel under one deadline sized
+to the selection (up to 575 s), kills on timeout with a faulthandler stack attached
+(each test also has its own 30 s timeout), and caches by
 input digest (unchanged inputs return `cached`, 0 s). An L2 file that passed in this
 run's last verify / regression on the same tree (same HEAD, no changed file edited
 since) is not re-run: its results are reused, counted in the layer, and listed in the
@@ -53,10 +55,12 @@ commands — `pipeline_test_gate` denies them.
 
 ### Layer 2 — dependency-scoped regression (`layers.dependency_scoped`)
 
-- Scope: tests that import (transitively, via the runner's AST reverse-import graph)
-  the changed modules, plus changed test files. Changed = run.json `files_touched` ∪
-  `git diff HEAD` ∪ untracked. Cap 40 files; the overflow is listed in
-  `skipped_for_budget`, never dropped silently. NOT the full suite.
+- Scope: EVERY test that imports a changed module directly (runner's AST import graph),
+  tests naming a changed `backend/scripts/*.py`, plus changed test files; uncapped, never
+  cut for time. Changed = run.json `files_touched` entries git reports changed (else
+  `git diff HEAD` ∪ untracked). Tests reaching a change only through another module are
+  not run: `transitive_unrun` lists them and DELIVER flags them in REPORT §10 (CI BVT and
+  later runs cover them). NOT the full suite.
 - Frontend: changed `desktop/src/**` files add `vitest related <files> --run` and
   `tsc --noEmit` inside the same call (result under `frontend` in the output).
 - Why: a change to `auth.py` can break `test_session.py`, which imports auth. AC tests

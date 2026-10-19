@@ -61,7 +61,10 @@ Different precision levels, not duplicates.
   `litmus_fail_count`). The original text also said "increment `litmus_fail_count`
   (shared counter)" at the BLOCK row; the dedicated-counter rule below is authoritative.
 - Max 2 spec BLOCKs per pipeline run before escalation. On escalation the spec findings
-  become MANDATORY fix items in the BUILD rework.
+  become MANDATORY fix items in the BUILD rework. The spec-compliance expert has at most
+  3 rounds per stage (`review_round_gate`); still BLOCK after round 3 → stop, record the
+  unmet ACs as open items (REPORT §10, completion summary), continue the run with
+  push_ready false. Never ask the user to decide (autonomous).
 - Litmus escalation (3rd `litmus_fail_count`) triggers "full review with all agents";
   spec escalation triggers "mandatory BUILD rework". Independent paths.
 

@@ -771,10 +771,9 @@ def test_selection_reverse_closure_orders_changed_recent_then_distance(rig, tmp_
     # default depth 1: direct importers only (depth 2 selected 103-463 files for 21)
     sel, skipped, _ = pt.select_backend(repo, changed, graph, 40, (), sgraph)
     assert sel == ["backend/tests/test_bdirect.py"] and skipped == []
-    # depth 2 ranks a transitive importer, but only a reached one is selected: test_a
-    # names neither val nor b.py (the change reaches it through core.a, not by name)
+    # depth 2: direct importer (distance 1) before the transitive one (core.a → core.b)
     sel, skipped, _ = pt.select_backend(repo, changed, graph, 40, (), sgraph, depth=2)
-    assert sel == ["backend/tests/test_bdirect.py"] and skipped == []
+    assert sel == ["backend/tests/test_bdirect.py", "backend/tests/test_a.py"] and skipped == []
     assert pt.select_backend(repo, changed, graph, 40)[0] == ["backend/tests/test_bdirect.py"]
     # L1: recent failures come before importers, so the cap never cuts them first
     recent = ["backend/tests/test_unrelated.py"]
@@ -783,29 +782,6 @@ def test_selection_reverse_closure_orders_changed_recent_then_distance(rig, tmp_
     # relative imports resolve against the file's package
     assert "core.b" in pt._imports_of_source("from .b import val\n", "core")
     assert pt._imports_of_source("from .b import val\n") == []
-
-
-def test_importers_naming_a_changed_function_run_first(rig, tmp_path):
-    """A hub module has many direct importers; the ones that call what changed go first,
-    so a budget cut drops the rest, not them."""
-    hub = ("def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n\n\n"
-           "LIMIT = 3\n")
-    repo = rig({"backend/core/hub.py": hub,
-                "backend/tests/test_h_alpha.py": "from core.hub import alpha\n\n\ndef test_a():\n    assert alpha()\n",
-                "backend/tests/test_h_beta.py": "from core.hub import beta\n\n\ndef test_b():\n    assert beta()\n",
-                "backend/tests/test_h_limit.py": "from core import hub\n\n\ndef test_l():\n    assert hub.LIMIT\n"})
-    _write(repo, {"backend/core/hub.py": hub.replace("return 2", "return 22").replace("LIMIT = 3", "LIMIT = 4")})
-    assert pt.changed_symbols(repo, "backend/core/hub.py") == {"beta", "LIMIT"}
-    cache = tmp_path / "cache"
-    sgraph = pt.build_source_graph(repo, cache)
-    graph = pt.build_import_graph(repo, cache, sgraph)
-    sel, skipped, _ = pt.select_backend(repo, ["backend/core/hub.py"], graph, 40, (), sgraph)
-    # only the importers the change reaches; test_h_alpha never touches beta / LIMIT
-    assert sorted(sel) == ["backend/tests/test_h_beta.py", "backend/tests/test_h_limit.py"]
-    assert skipped == []
-    # an untracked module has no diff: imports-only ranking
-    _write(repo, {"backend/core/fresh.py": "def gamma():\n    return 1\n"})
-    assert pt.changed_symbols(repo, "backend/core/fresh.py") is None
 
 
 def test_recent_failures_ignore_deadline_timeouts_and_pre_existing(tmp_path):
@@ -1081,31 +1057,6 @@ def test_verify_without_files_touched_refuses_in_a_tree_shared_with_a_live_run(r
         repo, {"files_touched": ["backend/core/mod.py"]}, RUN_ID, PROJECT, runs) is None
 
 
-def test_cut_to_budget_keeps_priority_order_and_protected_files():
-    """A selection whose recorded cost does not fit the granted workers loses its
-    low-priority tail up front, instead of every unfinished test ending as a deadline
-    timeout (run_925edb0e: 40 files, ~310 s recorded, 95 s on 1 of 4 workers)."""
-    d = {"backend/tests/a.py::t": 30.0, "backend/tests/b.py::t": 30.0,
-         "backend/tests/c.py::t": 30.0, "backend/tests/own.py::t": 50.0}
-    targets = {"backend/tests/a.py": None, "backend/tests/b.py": None,
-               "backend/tests/c.py": None, "backend/tests/own.py": None}
-    # budget = 100 s × 1 worker × 0.6 = 60 s: a + b fit, c is cut, own is protected
-    kept, cut = pt._cut_to_budget(targets, d, 1, 100.0, {"backend/tests/own.py"})
-    assert list(kept) == ["backend/tests/a.py", "backend/tests/b.py", "backend/tests/own.py"]
-    assert cut == ["backend/tests/c.py"]
-    # more workers: everything fits
-    assert pt._cut_to_budget(targets, d, 4, 100.0, set())[1] == []
-    # no history, or the first target alone over budget: nothing / only the tail is cut
-    assert pt._cut_to_budget(targets, {}, 1, 1.0, set()) == (targets, [])
-    kept, cut = pt._cut_to_budget(targets, d, 1, 1.0, set())
-    assert list(kept) == ["backend/tests/a.py"] and len(cut) == 3
-    # a nodeid-set target is costed by its own ids
-    kept, cut = pt._cut_to_budget({"backend/tests/a.py": {"backend/tests/a.py::t"},
-                                   "backend/tests/x.py": {"backend/tests/x.py::u"}},
-                                  d, 1, 100.0, set())
-    assert cut == [] and len(kept) == 2
-
-
 def test_must_run_tests_are_never_cut_and_get_more_time_instead(rig, tmp_path, capsys):
     """The scope is fixed by the change: an importer naming a changed function is never
     cut for time. When the must-run set does not fit, the runner refuses with the exact
@@ -1134,44 +1085,6 @@ def test_must_run_tests_are_never_cut_and_get_more_time_instead(rig, tmp_path, c
     assert out["bash_timeout_ms"] == (pt.AUTO_ALARM_S + 10) * 1000
     runs = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs"
     assert not (runs / RUN_ID / "evidence" / "tests" / "latest-verify.json").exists()
-
-
-def test_file_cap_never_drops_importers_naming_a_changed_symbol(rig, tmp_path):
-    files = {"backend/core/hub2.py": "def shared_thing():\n    return 1\n"}
-    for i in range(3):
-        files[f"backend/tests/test_named_{i}.py"] = (
-            "from core.hub2 import shared_thing\n\n\ndef test_n():\n    assert shared_thing()\n")
-        files[f"backend/tests/test_plain_{i}.py"] = (
-            "from core import hub2\n\n\ndef test_p():\n    assert hub2\n")
-    repo = rig(files)
-    _write(repo, {"backend/core/hub2.py": "def shared_thing():\n    return 2\n"})
-    cache = tmp_path / "cache"
-    sgraph = pt.build_source_graph(repo, cache)
-    graph = pt.build_import_graph(repo, cache, sgraph)
-    sel, skipped, _ = pt.select_backend(repo, ["backend/core/hub2.py"], graph, 2, (), sgraph)
-    assert sorted(sel) == [f"backend/tests/test_named_{i}.py" for i in range(3)]
-    assert skipped == []  # unreached importers are not selected at all
-
-
-def test_changed_symbols_add_same_file_callers_and_give_up_outside_symbols(rig):
-    src = ("import os\n\n\ndef inner_rule(x):\n    return x > 1\n\n\n"
-           "def outer_command(x):\n    return inner_rule(x)\n\n\n"
-           "class Holder:\n    def check(self, x):\n        return inner_rule(x)\n")
-    repo = rig({"backend/core/rules.py": src})
-    _write(repo, {"backend/core/rules.py": src.replace("x > 1", "x > 2")})
-    got = pt.changed_symbols(repo, "backend/core/rules.py")
-    # the changed function plus its same-file callers / referrers (one hop)
-    assert got == {"inner_rule", "outer_command", "check", "Holder"}
-    # an import line alone is ignorable (its use is in a changed symbol)...
-    _write(repo, {"backend/core/rules.py": src.replace("import os", "import sys").replace("x > 1", "x > 2")})
-    assert "inner_rule" in pt.changed_symbols(repo, "backend/core/rules.py")
-    # ...top-level code is not: cannot tell
-    _write(repo, {"backend/core/rules.py": src + "\nREGISTRY.append(inner_rule)\n"})
-    assert pt.changed_symbols(repo, "backend/core/rules.py") is None
-    # a comment line added between symbols is ignorable
-    _write(repo, {"backend/core/rules.py": src.replace("x > 1", "x > 2").replace(
-        "\n\n\ndef outer_command", "\n\n# note\ndef outer_command")})
-    assert "inner_rule" in pt.changed_symbols(repo, "backend/core/rules.py")
 
 
 def _seed_evidence(tmp_path: Path, mode: str, failures: list, finished_at: str) -> None:
@@ -1687,26 +1600,44 @@ def test_a_module_loaded_by_computed_name_is_never_served_stale(rig, capsys, tmp
     assert [f["nodeid"] for f in ev["failures"]] == ["backend/tests/test_reg.py::test_load"]
 
 
-def test_plain_names_need_the_module_and_scripts_need_the_changed_subcommand(rig, tmp_path):
-    """`create` as a bare word matched 26 of 80 tests that never call it; naming
-    artifact_cli.py pulled in 41 of 46 files for a one-subcommand change."""
-    lib = "def create(x):\n    return x\n"
-    cli_src = "def cmd_run_report(a):\n    return 1\n\n\ndef cmd_gate0_prompt(a):\n    return 2\n"
-    repo = rig({"backend/core/wtlib.py": lib, "backend/scripts/mycli.py": cli_src,
-                "backend/tests/test_q_mod.py": "from core import wtlib\n\n\ndef test_a():\n    assert wtlib.create(1)\n",
-                "backend/tests/test_q_from.py": "from core.wtlib import create\n\n\ndef test_b():\n    assert create(1)\n",
-                "backend/tests/test_q_alias.py": "import core.wtlib as wl\n\n\ndef test_c():\n    assert wl.create(1)\n",
-                "backend/tests/test_q_other.py": "import core.wtlib\n\n\ndef test_d():\n    x = {}\n    x.create = 1\n",
-                "backend/tests/test_q_sub.py": "def test_e():\n    assert ['mycli.py', 'run-report']\n",
-                "backend/tests/test_q_sub2.py": "def test_f():\n    assert ['mycli.py', 'gate0-prompt']\n"})
-    _write(repo, {"backend/core/wtlib.py": lib.replace("return x", "return x + 0"),
-                  "backend/scripts/mycli.py": cli_src.replace("return 1", "return 11")})
+def test_every_direct_importer_runs_and_transitive_ones_are_named(rig, tmp_path, capsys):
+    """Expert review 2026-10-19: name matching dropped tests that a rename, a rebound
+    import, a multi-line import or getattr dispatch would break. Every direct importer
+    runs now (no narrowing); tests reaching the change only through another module are
+    not run but listed in the evidence (``transitive_unrun``) for REPORT §10."""
+    repo = rig({"backend/core/leaf.py": "def old_name():\n    return 1\n",
+                "backend/core/facade.py": "from core.leaf import old_name\n\n\ndef api():\n    return old_name()\n",
+                "backend/tests/test_l_multi.py": ("from core.leaf import (\n    old_name,\n)\n\n\n"
+                                                  "def test_m():\n    assert old_name() == 1\n"),
+                "backend/tests/test_l_getattr.py": ("import core.leaf as lf\n\n\n"
+                                                    "def test_g():\n    assert getattr(lf, 'old' + '_name')() == 1\n"),
+                "backend/tests/test_l_facade.py": "from core.facade import api\n\n\ndef test_f():\n    assert api() == 1\n"},
+               run_state={"files_touched": ["backend/core/leaf.py"]})
+    _write(repo, {"backend/core/leaf.py": "def new_name():\n    return 1\n"})  # a rename
     cache = tmp_path / "cache"
     sgraph = pt.build_source_graph(repo, cache)
     graph = pt.build_import_graph(repo, cache, sgraph)
-    sel, _, _ = pt.select_backend(repo, ["backend/core/wtlib.py", "backend/scripts/mycli.py"],
-                                  graph, 40, (), sgraph)
-    assert {"backend/tests/test_q_mod.py", "backend/tests/test_q_from.py",
-            "backend/tests/test_q_alias.py", "backend/tests/test_q_sub.py"} <= set(sel)
-    assert "backend/tests/test_q_other.py" not in sel
-    assert "backend/tests/test_q_sub2.py" not in sel
+    sel, skipped, _ = pt.select_backend(repo, ["backend/core/leaf.py"], graph, 1, (), sgraph)
+    assert {"backend/tests/test_l_multi.py", "backend/tests/test_l_getattr.py"} <= set(sel)
+    assert skipped == [] and "backend/tests/test_l_facade.py" not in sel
+    assert pt.transitive_unselected(repo, sgraph, graph, ["backend/core/leaf.py"], sel) == [
+        "backend/tests/test_l_facade.py"]
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "auto")
+    assert code == 1 and out["counts"]["failed"] + out["counts"]["errors"] >= 2, out  # rename breaks both
+    assert out["transitive_unrun_total"] == 1
+    ev = _evidence(tmp_path, "tests/latest-verify.json")
+    assert ev["transitive_unrun"] == ["backend/tests/test_l_facade.py"]
+
+
+def test_files_touched_counts_only_where_git_sees_a_change(rig):
+    """An existing but unchanged files_touched entry must not replace the real change set."""
+    repo = rig()
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
+    got = pt.changed_files(repo, {"files_touched": ["backend/tests/test_unrelated.py"]})
+    assert "backend/core/mod.py" in got
+    assert pt.changed_files(repo, {"files_touched": ["backend/core/mod.py"]}) == ["backend/core/mod.py"]
+
+
+def test_no_duration_history_still_sizes_the_deadline():
+    t = {"backend/tests/a.py": None, "backend/tests/b.py": None}
+    assert pt._seconds_needed(t, {}, 1) == 2 * pt.DEFAULT_FILE_COST_S / pt.BUDGET_FILL

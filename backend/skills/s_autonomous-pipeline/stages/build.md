@@ -12,7 +12,7 @@ Tests go ONLY through `RUN` (`pipeline_test_gate` denies direct pytest/vitest/ts
 3. **Vertical TDD**, Change Spec order: tracer bullet (most important AC) first, then one test → one impl. Each cycle `RUN --mode tdd --files <≤5 test files>` (RED, then GREEN). `git add` your files by name; never `git commit` (DELIVER's `run-commit` is the sole commit). Code before its test → delete it, restart at RED. Fix code, not tests. A failure-path test per success-path test. Same AC fails twice → micro-replan (1 per AC, then L2 checkpoint).
 4. **After each GREEN:** path symmetry; real-data replay if it reads persisted data.
 5. **Break it yourself** `[GATE·validator]`: per plan `I<n>` / `F<n>` a test trying to violate it (kill, concurrency, retry, stale state) → `break_tests: [{targets, test, attack}]`. Experts only confirm.
-6. **VERIFY** only without a TEST stage (direct, goal): `RUN --mode verify`; fix, `RUN --mode recheck`; max 2 re-runs, then `tdd.regressions: N`. `timeout`: re-run as is.
+6. **VERIFY** only w/o TEST stage (direct, goal): `--mode verify --deadline auto`, `alarm 590`, Bash timeout 600000; fix, `recheck`; max 2, then `tdd.regressions: N`.
 7. **Wiring:** callers, interface seams, proximity scan (±50 lines), framework patterns from source.
 8. **SMOKE** every new branch in-process (import smoke for handlers/subprocess; frontend tabs/geometry/entries), **Resource Lifecycle** (release on success + failure), user-path trace per AC, wire PROBE for new frontend endpoints.
 9. **Record written files:** `python backend/scripts/artifact_cli.py run-update --project <P> --run-id <R> --files-touched '["<abs path>", ...]'` (written only, absolute, dedup-append).
