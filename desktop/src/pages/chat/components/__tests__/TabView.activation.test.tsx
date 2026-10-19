@@ -21,7 +21,8 @@
  * scrollTop 0). Unread-reply landing is in TabView.scrollFocus.test.tsx.
  *
  * jsdom has no layout; fakeScroller gives the container metrics and records
- * scrollTop writes, and real scroll events flip the mode. The pure decision
+ * scrollTop writes; a user scroll (wheel, then the scroll event) flips the mode,
+ * an engine scroll while following is pinned back. The pure decision
  * (nextFollowState) is also tested DOM-free.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -134,7 +135,7 @@ describe('TabView — activation lands at the bottom (XG 2026-08-03 choice A, 20
     const { container, rerender } = render(<TabView {...baseProps('tab-r', false)} onLoadOlder={onLoadOlder} />);
     const s = fakeScroller(scrollerOf(container));
     act(() => { rerender(<TabView {...baseProps('tab-r', true)} onLoadOlder={onLoadOlder} />); });
-    s.userScroll(0); // the engine resetting a re-shown display:none container
+    s.userScroll(0); // even a user-looking scroll in the activation frames is ignored (a re-shown display:none container)
     expect(onLoadOlder).not.toHaveBeenCalled();
     s.setHeights(2400);
     act(() => { rerender(<TabView {...baseProps('tab-r', true)} onLoadOlder={onLoadOlder} messages={[msg('m1', 'a'), msg('m2', 'b')]} />); });

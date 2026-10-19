@@ -107,6 +107,25 @@ export function isAtBottom(scrollTop: number, clientHeight: number, scrollHeight
   return scrollTop + clientHeight >= scrollHeight - BOTTOM_THRESHOLD;
 }
 
+/** How long after a wheel / touch / scroll-key event a scroll still counts as the
+ *  user's. Trackpad momentum keeps sending wheel events, so this only has to
+ *  cover the gap between the input event and the scroll it causes. */
+export const USER_SCROLL_GRACE_MS = 300;
+
+/** Keys that scroll the transcript (with focus in it or on <body>), plus Tab —
+ *  focusing an off-screen element scrolls it into view. Keys typed into a field
+ *  never count (see the document keydown listener). */
+export const SCROLL_KEYS: ReadonlySet<string> = new Set([
+  'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ', 'Tab',
+]);
+
+/** Pure: is a scroll event happening now the user's own? True while a pointer is
+ *  held on the scroller (scrollbar drag, drag-select) or within the grace window
+ *  of a wheel / touch / scroll key. Only the user's scroll may leave FOLLOW. */
+export function userScrollingNow(pointerHeld: boolean, intentUntil: number, now: number): boolean {
+  return pointerHeld || now < intentUntil;
+}
+
 /** Pure: given the prior FOLLOW state and a scroll event's metrics, compute the
  *  next follow state. `follow` is the SINGLE authoritative "stick to bottom"
  *  signal that replaces the old wasAtBottomRef + userScrolledUpRef pair and the
@@ -124,7 +143,9 @@ export function isAtBottom(scrollTop: number, clientHeight: number, scrollHeight
  *  scrollHeight with an unchanged scrollTop (e.g. Canvas opening shrinks width →
  *  content reflows taller) must NOT be misread as a user scroll-up, or it would
  *  self-suppress the very follow it should keep. Prod's handleScroll delegates
- *  here so the tested rule IS the shipped rule (no re-derivation / test-theater). */
+ *  here so the tested rule IS the shipped rule (no re-derivation / test-theater).
+ *  While following, handleScroll only gets here for a scroll the USER made
+ *  (userScrollingNow); a scroll the engine made re-pins instead. */
 export function nextFollowState(
   prev: { follow: boolean; lastScrollTop: number },
   scrollTop: number,
@@ -349,14 +370,24 @@ function TabViewImpl({
   // Into FOLLOW: the tab becomes visible (switch, close, restart; XG 2026-08-03
   // choice A, kept 2026-10-18), the user sends in this tab, scrolls back to the
   // bottom, or clicks "back to latest".
-  // Into READING: a genuine scroll up (nextFollowState), or a click that opens or
-  // closes something outside the live card. A reply that finished while the tab
-  // was hidden lands on its start when it is taller than the viewport.
-  // Every programmatic move records lastScrollTopRef, so only the user's own
-  // scrolling can change the mode (reflow-grow safe, as before).
+  // Into READING: a scroll up the USER made (wheel / trackpad, a held pointer on
+  // the scroller or its bar, a scroll key — see userScrollingNow), or a click that
+  // opens or closes something outside the live card. A reply that finished while
+  // the tab was hidden lands on its start when it is taller than the viewport.
+  // A scroll the user did not make never leaves FOLLOW: the engine moves scrollTop
+  // on its own (clamping after content shrinks, re-laying out a turn), and reading
+  // such a move as "scrolled up" stranded the view above the stream after every
+  // send (XG 2026-10-19). Programmatic moves also record lastScrollTopRef.
   const followRef = useRef(true);
   const lastScrollTopRef = useRef(0);
   const anchorRef = useRef<ScrollAnchor[]>([]);
+  // User scroll intent: a pointer held on the scroller, or a wheel / touch / scroll
+  // key within USER_SCROLL_GRACE_MS (trackpad momentum keeps sending wheel events).
+  const pointerHeldRef = useRef(false);
+  const userIntentUntilRef = useRef(0);
+  // Direction of the last wheel: >0 down, <0 up, 0 not a wheel (key, touch,
+  // pointer). Momentum after a flick DOWN must not license an upward engine move.
+  const wheelDirRef = useRef(0);
   // Render mirror of "not following", for the "back to latest" pill only — the
   // pin path reads followRef.
   const [awayFromBottom, setAwayFromBottom] = useState(false);
@@ -404,12 +435,74 @@ function TabViewImpl({
   // re-laying out a display:none container, not the user.
   const activatingRef = useRef(false);
 
+  const markUserIntent = useCallback(() => {
+    userIntentUntilRef.current = performance.now() + USER_SCROLL_GRACE_MS;
+    wheelDirRef.current = 0;
+  }, []);
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    markUserIntent();
+    wheelDirRef.current = Math.sign(e.deltaY);
+  }, [markUserIntent]);
+  const handlePointerDown = useCallback(() => {
+    pointerHeldRef.current = true;
+    wheelDirRef.current = 0; // a drag can go either way
+  }, []);
+  useEffect(() => {
+    // Released anywhere (a scrollbar drag often ends outside the scroller). A
+    // context menu, a native drag or the window losing focus may swallow the
+    // pointerup; clear on those too, or a stuck "held" would read every engine
+    // scroll as the user's again.
+    const release = () => {
+      if (!pointerHeldRef.current) return;
+      pointerHeldRef.current = false;
+      markUserIntent();
+    };
+    const drop = () => { pointerHeldRef.current = false; };
+    // Capture phase: a child stopping propagation must not leave it held.
+    window.addEventListener('pointerup', release, true);
+    window.addEventListener('pointercancel', release, true);
+    window.addEventListener('contextmenu', drop);
+    window.addEventListener('dragstart', drop);
+    window.addEventListener('blur', drop);
+    return () => {
+      window.removeEventListener('pointerup', release, true);
+      window.removeEventListener('pointercancel', release, true);
+      window.removeEventListener('contextmenu', drop);
+      window.removeEventListener('dragstart', drop);
+      window.removeEventListener('blur', drop);
+    };
+  }, [markUserIntent]);
+  useEffect(() => {
+    // Scroll keys: WebKit does not focus what a click lands on, so after clicking
+    // the transcript the keydown targets <body> and never passes through the
+    // scroller — listen on the document. Typing in a field is not scrolling.
+    if (!isActive) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (!SCROLL_KEYS.has(e.key)) return;
+      const t = e.target;
+      if (t instanceof HTMLElement && (t.isContentEditable || t.closest('input, textarea, select'))) return;
+      markUserIntent();
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [isActive, markUserIntent]);
+
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     if (activatingRef.current) {
       lastScrollTopRef.current = el.scrollTop;
       return;
+    }
+    if (followRef.current) {
+      const byUser = userScrollingNow(pointerHeldRef.current, userIntentUntilRef.current, performance.now())
+        // a wheel going down cannot be what moved the view up
+        && !(wheelDirRef.current > 0 && el.scrollTop < lastScrollTopRef.current);
+      if (!byUser) {
+        // Following, and the user did not scroll: the engine moved it. Pin again.
+        settle();
+        return;
+      }
     }
     const moved = el.scrollTop !== lastScrollTopRef.current;
     const next = nextFollowState(
@@ -421,7 +514,7 @@ function TabViewImpl({
     if (moved) anchorRef.current = next.follow ? [] : pickAnchor(el);
     setAwayFromBottom(!next.follow);
     if (el.scrollTop === 0) onLoadOlder();
-  }, [onLoadOlder]);
+  }, [onLoadOlder, settle]);
 
   // A click that opens or closes something: hold what was clicked in place.
   const handleClickCapture = useCallback((e: React.MouseEvent) => {
@@ -472,10 +565,16 @@ function TabViewImpl({
 
   // A message the user just sent in this tab, or an error that just ended its
   // turn, brings the view to the bottom.
-  const sentIdRef = useRef<string | null>(sentMessageId(messages));
+  // Keyed by id AND timestamp: a second send while busy merges into the queued
+  // bubble (same id, fresh timestamp) — it is still a send.
+  const sentKey = (msgs: Message[]) => {
+    const sid = sentMessageId(msgs);
+    return sid ? `${sid}@${msgs.find((m) => m.id === sid)?.timestamp ?? ''}` : null;
+  };
+  const sentIdRef = useRef<string | null>(sentKey(messages));
   const errorIdRef = useRef<string | null>(tailErrorId(messages));
   useLayoutEffect(() => {
-    const id = sentMessageId(messages);
+    const id = sentKey(messages);
     const err = tailErrorId(messages);
     if (isActive && ((id && id !== sentIdRef.current) || (err && err !== errorIdRef.current))) follow();
     sentIdRef.current = id;
@@ -580,6 +679,9 @@ function TabViewImpl({
     <div
       ref={containerRef}
       onScroll={handleScroll}
+      onWheel={handleWheel}
+      onTouchMove={markUserIntent}
+      onPointerDown={handlePointerDown}
       aria-hidden={!isActive}
       style={isActive ? undefined : { display: 'none' }}
       // Non-empty: `chat-scroll-gutter` (index.css) owns the overflow and the side

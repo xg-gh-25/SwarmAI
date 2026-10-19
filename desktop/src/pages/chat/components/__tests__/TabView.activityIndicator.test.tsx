@@ -53,6 +53,7 @@ function scrollTo(el: HTMLElement, top: number) {
   Object.defineProperty(el, 'scrollHeight', { configurable: true, value: 2000 });
   Object.defineProperty(el, 'clientHeight', { configurable: true, value: 500 });
   el.scrollTop = top;
+  fireEvent.wheel(el);
   fireEvent.scroll(el);
 }
 

@@ -10,6 +10,8 @@
  *   while streaming; a click inside the live card keeps following
  * - the pill click follows again
  * - an error that ends the turn brings a reading user to the bottom
+ * - only the user leaves the bottom: a scroll with no wheel / touch / held pointer /
+ *   scroll key (the engine clamping after a size change) is pinned back
  * - while its history loads, an empty tab shows a spinner, not the welcome screen
  * - activation: a reply that finished while away and is taller than the viewport
  *   lands on its start; a short one, or an already-seen one, lands at the bottom
@@ -20,6 +22,7 @@ import { messageStoreRegistry } from '../../../../stores/MessageStore';
 import type { Message } from '../../../../types';
 import { afterActivation, fakeScroller, stubRect } from './scrollTestUtils';
 import { REPLY_TOP_MARGIN } from '../../scrollFocus';
+import { USER_SCROLL_GRACE_MS } from '../TabView';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string, d?: string) => d ?? k }) }));
 vi.mock('../MessageBubble', () => ({
@@ -104,6 +107,102 @@ describe('a send brings the view back', () => {
     await afterActivation(); // the store notifies React on the next frame
     expect(getByTestId('bubble-local-2-asst')).toBeTruthy(); // it did render
     expect(s.top).toBe(1000);
+  });
+});
+
+describe('only the user leaves the bottom (XG 2026-10-19)', () => {
+  /** Move the clock past the grace window of the last user input. */
+  const pastGrace = () => {
+    const later = performance.now() + 10 * USER_SCROLL_GRACE_MS;
+    vi.spyOn(performance, 'now').mockReturnValue(later);
+  };
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('a scroll the engine makes while following is pinned back, and the pill stays hidden', async () => {
+    const { s, queryByTestId } = await mounted('F1', [msg('u0', 'user'), msg('a0')], true);
+    pastGrace();
+    s.engineScroll(s.bottom - 800); // e.g. a clamp after a turn re-lays out
+    expect(s.top).toBe(s.bottom);
+    s.setHeights(3400);
+    fireResize(); // the stream keeps growing: still following
+    expect(s.top).toBe(s.bottom);
+    expect(queryByTestId('streaming-pill')).toBeNull();
+  });
+
+  it('the same scroll with a wheel is the user reading', async () => {
+    const { s } = await mounted('F2', [msg('u0', 'user'), msg('a0')], true);
+    s.userScroll(1000);
+    s.setHeights(3400);
+    fireResize();
+    expect(s.top).toBe(1000);
+  });
+
+  it('a scroll while a pointer is held on the scroller (scrollbar drag) is the user', async () => {
+    const r = await mounted('F3', [msg('u0', 'user'), msg('a0')], true);
+    pastGrace();
+    fireEvent.pointerDown(scrollerOf(r.container));
+    r.s.engineScroll(1000);
+    fireEvent.pointerUp(window);
+    r.s.setHeights(3400);
+    fireResize();
+    expect(r.s.top).toBe(1000);
+  });
+
+  it('typing a space in the composer is not a scroll', async () => {
+    const r = await mounted('F6', [msg('u0', 'user'), msg('a0')], true);
+    pastGrace();
+    const ta = document.createElement('textarea');
+    document.body.appendChild(ta);
+    fireEvent.keyDown(ta, { key: ' ' });
+    r.s.engineScroll(1000);
+    expect(r.s.top).toBe(r.s.bottom);
+    ta.remove();
+  });
+
+  it('a held pointer cleared by a context menu does not keep counting', async () => {
+    const r = await mounted('F7', [msg('u0', 'user'), msg('a0')], true);
+    pastGrace();
+    fireEvent.pointerDown(scrollerOf(r.container));
+    fireEvent(window, new MouseEvent('contextmenu'));
+    r.s.engineScroll(1000);
+    expect(r.s.top).toBe(r.s.bottom);
+  });
+
+  it('a released pointer stops counting once the grace window passes', async () => {
+    const r = await mounted('F8', [msg('u0', 'user'), msg('a0')], true);
+    fireEvent.pointerDown(scrollerOf(r.container));
+    fireEvent.pointerUp(window);
+    pastGrace();
+    r.s.engineScroll(1000);
+    expect(r.s.top).toBe(r.s.bottom);
+  });
+
+  it('momentum from a wheel DOWN does not license an upward engine move', async () => {
+    const r = await mounted('F9', [msg('u0', 'user'), msg('a0')], true);
+    pastGrace();
+    fireEvent.wheel(scrollerOf(r.container), { deltaY: 120 });
+    r.s.engineScroll(1000);
+    expect(r.s.top).toBe(r.s.bottom);
+  });
+
+  it('a scroll key is the user', async () => {
+    const r = await mounted('F4', [msg('u0', 'user'), msg('a0')], true);
+    pastGrace();
+    fireEvent.keyDown(document.body, { key: 'PageUp' }); // WebKit: a click leaves focus on <body>
+    r.s.engineScroll(1000);
+    r.s.setHeights(3400);
+    fireResize();
+    expect(r.s.top).toBe(1000);
+  });
+
+  it('a second send merged into the queued bubble brings a reading user back', async () => {
+    const { s } = await mounted('F5', [msg('u0', 'user'), msg('a0'), msg('queued-q', 'user')], true);
+    s.userScroll(1000);
+    act(() => {
+      messageStoreRegistry.getOrCreate('F5').updateById('queued-q', (m) => ({ ...m, timestamp: 'T2' }));
+    });
+    await afterActivation();
+    expect(s.top).toBe(s.bottom);
   });
 });
 

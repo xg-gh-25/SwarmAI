@@ -3,10 +3,12 @@
  *
  * - fakeScroller: gives a scroll container real-feeling metrics — a clamped
  *   scrollTop it records every write of, settable scrollHeight / clientHeight,
- *   and `userScroll` (the user moves it, then a scroll event fires).
+ *   `userScroll` (a wheel event — the user's input — then the move and its scroll
+ *   event) and `engineScroll` (the move and scroll event with no user input, as
+ *   when the engine clamps scrollTop after content shrinks).
  * - stubRect: a mutable getBoundingClientRect for one element.
  * - afterActivation: lets the post-activation frames pass, after which TabView
- *   treats scroll events as the user's again.
+ *   handles scroll events again (a user scroll can change the mode).
  *
  * @exports fakeScroller, FakeScroller, stubRect, afterActivation
  */
@@ -18,6 +20,7 @@ export interface FakeScroller {
   readonly bottom: number;
   setHeights(scrollHeight: number, clientHeight?: number): void;
   userScroll(top: number): void;
+  engineScroll(top: number): void;
 }
 
 export function fakeScroller(el: HTMLElement, scrollHeight = 2000, clientHeight = 500): FakeScroller {
@@ -39,6 +42,13 @@ export function fakeScroller(el: HTMLElement, scrollHeight = 2000, clientHeight 
     get bottom() { return sh - ch; },
     setHeights(nextSh: number, nextCh = ch) { sh = nextSh; ch = nextCh; },
     userScroll(next: number) {
+      act(() => {
+        fireEvent.wheel(el, { deltaY: next < top ? -100 : 100 });
+        top = clamp(next);
+        fireEvent.scroll(el);
+      });
+    },
+    engineScroll(next: number) {
       act(() => {
         top = clamp(next);
         fireEvent.scroll(el);
