@@ -2577,10 +2577,15 @@ def validate_artifact_data(
             files = data.get("files_changed", [])
             smoke = tdd.get("smoke_tests", 0)
             if isinstance(files, list) and len(files) > 1 and smoke == 0:
-                errors.append(
-                    f"smoke_tests=0 but {len(files)} files changed — "
-                    f"run smoke tests with real objects"
-                )
+                msg = (f"smoke_tests=0 but {len(files)} files changed — "
+                       f"run smoke tests with real objects")
+                if profile == "direct":
+                    # a self-reported count on a small, fully specified change: shown,
+                    # not a push_ready reason (design_spec.stage_errors, direct runs)
+                    if warnings is not None:
+                        warnings.append("(direct run: form only) " + msg)
+                else:
+                    errors.append(msg)
 
     # ── REPRO gate (bug-class only) — diagnosis before build ──────────────
     # A bug-fix evaluation must carry OBSERVATION evidence, not inference. This

@@ -3980,6 +3980,7 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
             ev["reused_from"] = {**ru, "files": keep, "tests": n}
         else:
             ev.pop("reused_from", None)
+    counts["not_run"] = _not_run_count(failures)
     ev.update(results=results, counts=counts, failures=failures, runner_errors=runner_errors,
               layers=layers, finished_at=_now_iso(), cached=False,
               rechecked_from={"finished_at": base.get("finished_at"),
@@ -4245,6 +4246,15 @@ def _evidence_result(r: dict, refs=()) -> dict:
     return e
 
 
+def _not_run_count(failures) -> int:
+    """Tests a global deadline left unstarted or unfinished: unfinished work for the next
+    call, not a failure. They are inside ``counts["timeouts"]`` (every consumer that asks
+    "is anything unfinished" reads that total); ``counts["not_run"]`` says how many of
+    them are this kind, so the output does not read as that many hung tests."""
+    return sum(1 for f in failures or () if isinstance(f, dict)
+               and f.get("outcome") == "timeout" and f.get("deadline"))
+
+
 def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
     results = list(results) + list(plan.get("probe_rows") or [])
     counts = {"passed": 0, "failed": 0, "errors": 0, "timeouts": 0, "skipped": 0}
@@ -4261,6 +4271,7 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
                  **({"notrun": True} if r.get("notrun") and not r.get("runner_error") else {}),
                  **getattr(ctx, "order_dep", {}).get(r["nodeid"], {})}
                 for r in results if r["outcome"] in _FAIL]
+    counts["not_run"] = _not_run_count(failures)
     dl_timeouts = sum(1 for f in failures if f.get("classification") == "timeout")
     if dl_timeouts:
         ctx.warnings.append(

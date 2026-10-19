@@ -19,7 +19,7 @@ Invariants:
     -c wrappers, node entry points, pnpm / yarn / bun test|run|exec|dlx / bunx,
     the `pnpm exec|dlx -c` / `yarn dlx -c` shell mode (string classified like bash -c),
     git worktree add (a copy of the repo is not a hit: it runs no test),
-    ps/pgrep/kill/pkill on pytest, python -X faulthandler); approve pytest
+    kill/pkill on pytest, python -X faulthandler); approve read-only ps/pgrep listings, pytest
     --version/--help, pytest words that are only quoted / grep patterns / commit /
     echo text, pnpm|yarn|bun install / dev, and the pipeline_test.py runner. A
     leading cd / pushd across && / ; moves the directory a bare make resolves its
@@ -272,9 +272,7 @@ DENIED_COMMANDS = [
     "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['pytest', 'tests/x.py'])\nEOF",
     "python3 - <<'EOF'\nexec(open('t.py').read())  # runs pytest\nEOF",
     "python3 - <<'EOF'\nimport pipeline_test  # project module: import runs code (pytest)\nEOF",
-    # manual hang triage
-    "ps aux | grep pytest",
-    "pgrep -f pytest",
+    # manual hang triage that acts on a test process
     "pkill -f pytest",
     "kill $(pgrep -f pytest)",
     "python -X faulthandler -c 'import x'",
@@ -299,6 +297,10 @@ APPROVED_COMMANDS = [
     "python3 -c \"import pathlib; pathlib.Path('a.md').write_text('run pytest later')\"",
     "cp backend/core/x.py /tmp/x.py",
     "ps aux | grep node",
+    # a read-only listing of test processes changes nothing
+    "ps aux | grep pytest",
+    "pgrep -f pytest",
+    'ps -Ao pid,ppid,pcpu,etime,args | grep -E "pytest|pipeline_test" | grep -v grep',
     "kill 12345",
     "npm install",
     "npm run dev",

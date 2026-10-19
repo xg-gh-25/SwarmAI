@@ -5442,3 +5442,15 @@ class TestAcceptanceCoercion:
         assert isinstance(out[0]["acceptance"], list), "boundary did not coerce to list"
         assert src["requirements"][0]["acceptance"] == {"given": "g", "when": "w", "then": "t"}, \
             "original data was mutated"
+
+
+def test_direct_run_smoke_count_is_a_warning_not_an_error():
+    from scripts.pipeline_validator import validate_artifact_data
+    data = {"files_changed": ["a.py", "b.py"], "tdd": {"green_pass": True, "smoke_tests": 0},
+            "ac_coverage": []}
+    full = validate_artifact_data("build", data, "full")
+    assert any("smoke_tests=0" in e for e in full)
+    w: list = []
+    direct = validate_artifact_data("build", data, "direct", warnings=w)
+    assert not any("smoke_tests=0" in e for e in direct)
+    assert any("smoke_tests=0" in x and "direct run: form only" in x for x in w)

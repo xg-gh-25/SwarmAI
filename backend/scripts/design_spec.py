@@ -126,6 +126,14 @@ FINDING_TEMPLATE = {"invariant": "I1", "root_cause": "why the DESIGN allowed it"
                     "break_test": "backend/tests/test_x.py::test_the_class"}
 
 
+def _is_direct(profile: str) -> bool:
+    try:
+        from core.pipeline_profiles import normalize_profile
+        return normalize_profile(profile) == "direct"
+    except ImportError:   # standalone use
+        return str(profile or "").strip().lower() == "direct"
+
+
 def _tier(profile: str) -> "str | None":
     """None = exempt (relaxed profile); "light" = bugfix / direct; "full" = everything
     else, unknown profiles included (fail closed, the pipeline_profiles C3 rule)."""
@@ -519,6 +527,14 @@ def stage_errors(stage: str, artifact: dict, *, profile: str, plan: "dict | None
     else:
         errs = []
     out: list[str] = []
+    if errs and stage in ("plan", "build") and _is_direct(profile):
+        # A direct run is a small, fully specified change: its PLAN / BUILD record is a
+        # form the agent fills in about itself (a flow drawing, a state list, a break-test
+        # name, a smoke count), not a check of the code. Its gaps are shown, but they do
+        # not lower push_ready; the tests on the landed tree and the review decide.
+        if warnings is not None:
+            warnings.extend("(direct run: form only) " + e for e in errs)
+        errs = []
     for found, cut in ((errs, CUTOVER), (root_errs, ROOT_CUTOVER)):
         if found and not _enforced(run_created_at, cut):
             if warnings is not None:

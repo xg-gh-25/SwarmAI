@@ -3319,6 +3319,10 @@ _SHELL_KEYWORDS = frozenset({"!", "{", "}", "then", "do", "else", "elif", "if",
 _SHELL_INTERPRETERS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "mksh",
                                  "csh", "tcsh", "fish"})
 _TRIAGE_PROGRAMS = frozenset({"ps", "pgrep", "pkill", "kill", "killall"})
+# The ones that ACT on a test process. A read-only listing (ps / pgrep) changes nothing
+# and is how a stall is seen from outside, so it is not a test run; killing a test
+# process by hand is (the runner owns hang triage and reports stacks).
+_TRIAGE_ACTING_PROGRAMS = frozenset({"pkill", "kill", "killall"})
 _XARGS_VALUE_OPTS = frozenset({"-n", "-I", "-P", "-L", "-d", "-E", "-s", "-a"})
 _PYTEST_VALUE_OPTS = frozenset({"-c", "-p", "-k", "-m", "-o", "-W", "--ignore",
                                 "--deselect", "--rootdir", "--confcutdir", "--basetemp"})
@@ -4089,7 +4093,7 @@ def _classify_pipeline_test_command(
         )
         if triage_mention:
             for p in progs:
-                if p in _TRIAGE_PROGRAMS:
+                if p in _TRIAGE_ACTING_PROGRAMS:
                     hits.add(p + " on pytest")
     # The anchored-regex detector is independent of the segment parse; it is only
     # discounted for `pytest --version|--help` it matched one-for-one.
@@ -4104,16 +4108,54 @@ def _classify_pipeline_test_command(
     return sorted(hits), uniq
 
 
+def _worktree_root_of(rp: str, src: "str | None") -> "str | None":
+    """The root of the git worktree *rp* lies in, when that worktree belongs to the source
+    repo *src* (its ``.git`` file points into ``<src>/.git/worktrees/``). Stat-only."""
+    if not src:
+        return None
+    gitdir = os.path.join(os.path.realpath(src), ".git") + os.sep
+    d = os.path.dirname(rp)
+    while True:
+        g = os.path.join(d, ".git")
+        if os.path.isfile(g):
+            try:
+                with open(g, encoding="utf-8") as fh:
+                    target = fh.read(4096).strip()
+            except OSError:
+                return None
+            if target.startswith("gitdir:"):
+                t = os.path.realpath(target[len("gitdir:"):].strip())
+                return d if (t + os.sep).startswith(gitdir) else None
+            return None
+        if os.path.isdir(g):
+            return None   # a separate repo (or the source repo itself)
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
 def _repo_relative(path: str, cwd: str) -> str:
-    """*path* relative to the source repo root when it lives inside it (the runner is
-    run from the repo root); otherwise the path as resolved."""
+    """*path* relative to its repo root when it lives inside the source repo or a run's
+    worktree of it (the runner is run from the repo root and resolves --files against
+    the run's worktree); otherwise the path as resolved."""
     p = path if os.path.isabs(path) or not cwd else os.path.join(cwd, path)
     if not os.path.isabs(p):
         return path
     rp = os.path.realpath(p)
-    repo = _source_repo_root()
-    if repo and (rp == repo or rp.startswith(repo + os.sep)):
-        return os.path.relpath(rp, repo)
+    src = _source_repo_root()
+    roots = [src]
+    wt = _worktree_root_of(rp, src)   # an agent working in a worktree of the source repo
+    if wt:
+        roots.append(wt)
+    # This module's own checkout: when it runs from a worktree (dev, tests) its .git is a
+    # file, so _source_repo_root() skips it; in the packaged daemon it is the bundle, which
+    # no agent path lies in.
+    if _SOURCE_REPO_ROOT and _SOURCE_REPO_ROOT not in roots:
+        roots.append(_SOURCE_REPO_ROOT)
+    for repo in roots:
+        if repo and (rp == repo or rp.startswith(repo + os.sep)):
+            return os.path.relpath(rp, repo)
     return rp
 
 

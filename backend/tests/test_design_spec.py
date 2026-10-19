@@ -416,3 +416,20 @@ def test_gate0_prompt_prechecks_the_root_cause_on_new_runs(ws, capsys):
 
 
 from tests.test_stage_boundary_commands import ws  # noqa: E402,F401  (fixture)
+
+
+def test_direct_run_plan_and_build_forms_are_warnings_not_errors():
+    """A direct run's PLAN / BUILD record is a form about itself: its gaps are shown as
+    warnings and never become push_ready reasons. bugfix keeps them as errors."""
+    plan = {"design": {"flow": "flowchart TD\n  A --> B\n  B --> C", "states": []}}
+    assert ds.stage_errors("plan", plan, profile="bugfix", plan=None, run_created_at=NEW)
+    w: list = []
+    assert ds.stage_errors("plan", plan, profile="direct", plan=None, run_created_at=NEW,
+                           warnings=w) == []
+    assert any("direct run: form only" in x and "no_state_reason" in x for x in w)
+    assert any("failure branch" in x for x in w)
+    build = {"break_tests": [{"targets": ["I1"], "test": "mode:verify", "attack": "x"}]}
+    w = []
+    assert ds.stage_errors("build", build, profile="direct", plan=_plan(), run_created_at=NEW,
+                           warnings=w) == []
+    assert ds.stage_errors("build", build, profile="bugfix", plan=_plan(), run_created_at=NEW)

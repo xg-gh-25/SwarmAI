@@ -136,7 +136,8 @@ def _assert_c2(ev: dict, mode: str) -> None:
     for k in ("started_at", "finished_at", "duration_s", "cached", "selected_files",
               "skipped_for_budget", "counts", "results", "failures", "layers", "tdd_repeats"):
         assert k in ev, k
-    assert set(ev["counts"]) == {"passed", "failed", "errors", "timeouts", "skipped"}
+    assert set(ev["counts"]) == {"passed", "failed", "errors", "timeouts", "skipped", "not_run"}
+    assert ev["counts"]["not_run"] <= ev["counts"]["timeouts"]   # a part of the total
     for r in ev["results"]:
         if r["outcome"] == "passed":  # compact: nodeid + outcome (+ duration, + file if differs)
             assert {"nodeid", "outcome"} <= set(r) <= {"nodeid", "outcome", "duration", "file"}
@@ -1829,3 +1830,14 @@ def test_runner_reports_a_test_that_writes_the_repo(rig, capsys, tmp_path):
                       "--files", "backend/tests/test_writer.py")
     assert out["repo_mutations"]["left"] == ["docs/METRICS.md"]
     assert any("docs/METRICS.md" in w and "changed while" in w for w in out["warnings"])
+
+
+def test_not_run_counts_only_deadline_unfinished_tests():
+    """counts["not_run"] is the part of counts["timeouts"] a global deadline left
+    unstarted or unfinished; a per-test timeout (a real hang) is not in it."""
+    fails = [{"nodeid": "a", "outcome": "timeout", "deadline": True},
+             {"nodeid": "b", "outcome": "timeout", "deadline": True, "notrun": True},
+             {"nodeid": "c", "outcome": "timeout", "deadline": False},
+             {"nodeid": "d", "outcome": "failed", "deadline": False}]
+    assert pt._not_run_count(fails) == 2
+    assert pt._not_run_count([]) == 0 and pt._not_run_count(None) == 0
