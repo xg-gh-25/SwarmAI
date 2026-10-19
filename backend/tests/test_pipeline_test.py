@@ -1015,6 +1015,81 @@ def test_changed_files_falls_back_without_in_repo_files_touched(rig):
     assert got == ["backend/tests/test_unrelated.py"]
 
 
+def test_verify_without_files_touched_refuses_in_a_tree_shared_with_a_live_run(rig, tmp_path, capsys):
+    """run_a2f2c171: no files_touched + a sibling run editing the same checkout → the
+    fallback tested everyone's changes and 5 verify / recheck calls hit the deadline.
+    The runner now asks for files_touched first; nothing runs, no evidence is written."""
+    repo = rig()
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
+    runs = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs"
+    sib = runs / "run_sib1"
+    sib.mkdir()
+    (sib / "run.json").write_text(json.dumps({"status": "running"}), encoding="utf-8")
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert code != 0 and "run_sib1" in out["error"] and "--files-touched" in out["error"], out
+    assert f"--project {PROJECT} --run-id {RUN_ID}" in out["error"]
+    assert not (runs / RUN_ID / "evidence" / "tests" / "latest-verify.json").exists()
+    # a sibling that is not running, or whose run.json is stale, does not count
+    (sib / "run.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+    assert pt.shared_tree_scope_error(repo, {}, RUN_ID, PROJECT, runs) is None
+    (sib / "run.json").write_text(json.dumps({"status": "running"}), encoding="utf-8")
+    old = time.time() - pt.SIBLING_ACTIVE_S - 60
+    os.utime(sib / "run.json", (old, old))
+    assert pt.shared_tree_scope_error(repo, {}, RUN_ID, PROJECT, runs) is None
+    # with a live sibling, registering this run's own file lifts the refusal
+    os.utime(sib / "run.json", None)
+    assert pt.shared_tree_scope_error(repo, {}, RUN_ID, PROJECT, runs)
+    assert pt.shared_tree_scope_error(
+        repo, {"files_touched": ["backend/core/mod.py"]}, RUN_ID, PROJECT, runs) is None
+
+
+def test_cut_to_budget_keeps_priority_order_and_protected_files():
+    """A selection whose recorded cost does not fit the granted workers loses its
+    low-priority tail up front, instead of every unfinished test ending as a deadline
+    timeout (run_925edb0e: 40 files, ~310 s recorded, 95 s on 1 of 4 workers)."""
+    d = {"backend/tests/a.py::t": 30.0, "backend/tests/b.py::t": 30.0,
+         "backend/tests/c.py::t": 30.0, "backend/tests/own.py::t": 50.0}
+    targets = {"backend/tests/a.py": None, "backend/tests/b.py": None,
+               "backend/tests/c.py": None, "backend/tests/own.py": None}
+    # budget = 100 s × 1 worker × 0.6 = 60 s: a + b fit, c is cut, own is protected
+    kept, cut = pt._cut_to_budget(targets, d, 1, 100.0, {"backend/tests/own.py"})
+    assert list(kept) == ["backend/tests/a.py", "backend/tests/b.py", "backend/tests/own.py"]
+    assert cut == ["backend/tests/c.py"]
+    # more workers: everything fits
+    assert pt._cut_to_budget(targets, d, 4, 100.0, set())[1] == []
+    # no history, or the first target alone over budget: nothing / only the tail is cut
+    assert pt._cut_to_budget(targets, {}, 1, 1.0, set()) == (targets, [])
+    kept, cut = pt._cut_to_budget(targets, d, 1, 1.0, set())
+    assert list(kept) == ["backend/tests/a.py"] and len(cut) == 3
+    # a nodeid-set target is costed by its own ids
+    kept, cut = pt._cut_to_budget({"backend/tests/a.py": {"backend/tests/a.py::t"},
+                                   "backend/tests/x.py": {"backend/tests/x.py::u"}},
+                                  d, 1, 100.0, set())
+    assert cut == [] and len(kept) == 2
+
+
+def test_verify_budget_cut_is_green_listed_and_never_cached(rig, tmp_path, capsys, monkeypatch):
+    repo = rig(run_state={"files_touched": ["backend/core/mod.py"]})
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n",
+                  "backend/tests/test_y.py": ("from core.mod import add\n\n\n"
+                                              "def test_y():\n    assert add(2, 2) == 4\n")})
+    cache = tmp_path / "cache"
+    cache.mkdir(exist_ok=True)
+    now = time.time()
+    (cache / "durations.json").write_text(json.dumps({
+        "backend/tests/test_x.py::test_add": [500.0, now],
+        "backend/tests/test_y.py::test_y": [500.0, now]}))
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert code == 0, out
+    ev = _evidence(tmp_path, "tests/latest-verify.json")
+    assert ev["budget_cut"] is True and len(ev["skipped_for_budget"]) == 1
+    assert ev["skipped_for_budget"][0] not in ev["selected_files"]
+    assert ev["counts"]["timeouts"] == 0 and ev["counts"]["passed"] == 1
+    assert any("left out" in w for w in ev["warnings"])
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert out["cached"] is False, out
+
+
 def _seed_evidence(tmp_path: Path, mode: str, failures: list, finished_at: str) -> None:
     d = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs" / RUN_ID / "evidence" / "tests"
     d.mkdir(parents=True, exist_ok=True)

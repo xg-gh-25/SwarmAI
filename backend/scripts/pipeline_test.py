@@ -418,6 +418,91 @@ def _contained(base: Path, rel: str) -> Path | None:
     return p if b in p.parents else None
 
 
+def _git_changed_set(repo: Path) -> set[str]:
+    """``git diff --name-only HEAD`` ∪ untracked files."""
+    out: set[str] = set()
+    for args in (("diff", "--name-only", "HEAD"), ("ls-files", "--others", "--exclude-standard")):
+        for line in (_git(repo, *args) or "").splitlines():
+            if line.strip():
+                out.add(line.strip())
+    return out
+
+
+def _owned_files(repo: Path, run_state: dict | None,
+                 git_set: set[str]) -> tuple[set[str], set[str]]:
+    """(every normalized files_touched entry, the ones that are this repo's)."""
+    named: set[str] = set()
+    owned: set[str] = set()
+    for f in (run_state or {}).get("files_touched") or []:
+        n = _norm_path(repo, f)
+        if not n:
+            continue
+        named.add(n)
+        if n in git_set or (Path(repo) / n).exists():
+            owned.add(n)
+    return named, owned
+
+
+# A sibling run counts as live when its run.json changed within this window (the same
+# 3 h the pipeline test gate uses for "active").
+SIBLING_ACTIVE_S = 3 * 3600
+
+
+def _live_sibling_runs(runs_dir: Path, run_id: str | None) -> list[str]:
+    """Ids of OTHER runs under ``runs_dir`` with status ``running`` and run.json
+    modified within SIBLING_ACTIVE_S."""
+    cutoff = time.time() - SIBLING_ACTIVE_S
+    out: list[str] = []
+    try:
+        entries = sorted(runs_dir.iterdir())
+    except OSError:
+        return out
+    for d in entries:
+        rj = d / "run.json"
+        if d.name == run_id or not rj.is_file():
+            continue
+        try:
+            if rj.stat().st_mtime < cutoff:
+                continue
+        except OSError:
+            continue
+        st = _read_json(rj)
+        if isinstance(st, dict) and st.get("status") == "running":
+            out.append(d.name)
+    return out
+
+
+def shared_tree_scope_error(repo: Path, run_state: dict | None, run_id: str | None,
+                            project: str, runs_dir: Path) -> str | None:
+    """Refuse a verify / regression whose change set would be other runs' work.
+
+    Without a files_touched entry of this repo, ``changed_files`` falls back to the
+    whole ``git diff HEAD`` ∪ untracked set. In a main checkout another live run is
+    also editing, that set is mostly THEIR files: run_a2f2c171 (goal profile, no
+    files_touched yet) selected 70 test files from 44 changed files, half of them a
+    sibling's artifact_cli work plus a ``vitest related`` over the whole chat tree, and
+    5 verify / recheck calls in a row hit the global deadline. Registering the run's
+    own files is one call and makes the selection this run's. An isolated run (own
+    worktree) or a run with no live sibling keeps the fallback."""
+    if _WORKTREE or not run_id:
+        return None
+    git_set = _git_changed_set(repo)
+    if not git_set or _owned_files(repo, run_state, git_set)[1]:
+        return None
+    siblings = _live_sibling_runs(runs_dir, run_id)
+    if not siblings:
+        return None
+    shown = ", ".join(sorted(git_set)[:12]) + (f" (+{len(git_set) - 12} more)"
+                                               if len(git_set) > 12 else "")
+    return (f"this run has no files_touched yet, and the working tree is shared with "
+            f"{len(siblings)} other live run(s) ({', '.join(siblings[:4])}): the "
+            f"{len(git_set)} changed file(s) here ({shown}) are not all yours, and testing "
+            f"all of them does not fit the deadline. Register the files THIS run changed, "
+            f"then run the same command again: python backend/scripts/artifact_cli.py "
+            f"run-update --project {project} --run-id {run_id} "
+            f"--files-touched '[\"<path>\", ...]'")
+
+
 def changed_files(repo: Path, run_state: dict | None, warnings: list | None = None,
                   run_ref: tuple[str, str] | None = None) -> list[str]:
     """The change set a run's tests are selected for.
@@ -439,20 +524,8 @@ def changed_files(repo: Path, run_state: dict | None, warnings: list | None = No
     (missing, empty, or every entry in another repo) the change set is
     ``git diff --name-only HEAD`` ∪ untracked ∪ the normalized entries, as before.
     """
-    git_set: set[str] = set()
-    for args in (("diff", "--name-only", "HEAD"), ("ls-files", "--others", "--exclude-standard")):
-        for line in (_git(repo, *args) or "").splitlines():
-            if line.strip():
-                git_set.add(line.strip())
-    named: set[str] = set()
-    owned: set[str] = set()
-    for f in (run_state or {}).get("files_touched") or []:
-        n = _norm_path(repo, f)
-        if not n:
-            continue
-        named.add(n)
-        if n in git_set or (Path(repo) / n).exists():
-            owned.add(n)
+    git_set = _git_changed_set(repo)
+    named, owned = _owned_files(repo, run_state, git_set)
     if not owned:
         return sorted(named | git_set)
     extra = sorted(git_set - owned)
@@ -1215,6 +1288,48 @@ def _family(nid: str) -> str:
     one chunk keeps a stale history id from selecting a test a sibling chunk also runs."""
     f, _, rest = nid.partition("::")
     return f + "::" + rest.split("::")[0].split("[")[0]
+
+
+# Fraction of (seconds × workers) a selection may fill: shard start-up, collection and
+# the requeue reserve take the rest. Measured 2026-10-19: verify calls whose recorded cost
+# was over ~0.6 of the slot budget were the ones that ended with deadline timeouts.
+BUDGET_FILL = 0.6
+
+
+def _target_cost(f: str, sel, durations: dict) -> float:
+    """Recorded seconds for one target (whole file or a nodeid set)."""
+    if sel is not None:
+        return sum(durations.get(n, DEFAULT_TEST_COST_S) for n in sel)
+    known = [v for k, v in durations.items() if k.split("::")[0] == f]
+    return sum(known) if known else DEFAULT_FILE_COST_S
+
+
+def _cut_to_budget(targets: dict, durations: dict, workers: int, seconds: float,
+                   protect: set) -> tuple[dict, list[str]]:
+    """Keep targets, in priority order, while their recorded cost fits
+    ``seconds × workers × BUDGET_FILL``; return ``(kept, cut)``.
+
+    A deadline cut leaves evidence nobody can use (every unfinished test is a
+    ``timeout``, not green, and the model re-runs the same call): of 130 verify /
+    regression / recheck calls on 2026-10-18/19, 34 ended with deadline timeouts, most
+    with 40 selected files on 1-4 granted workers. Cutting the low-priority tail up
+    front gives a green-or-red answer on the files that matter, and names the rest in
+    ``skipped_for_budget``. ``protect`` (the run's own tests, AC files) and the first
+    target are never cut. No duration history = no cut."""
+    if not durations or seconds <= 0:
+        return targets, []
+    budget = seconds * max(1, workers) * BUDGET_FILL
+    kept: dict = {}
+    cut: list[str] = []
+    used = 0.0
+    for i, (f, sel) in enumerate(targets.items()):
+        c = _target_cost(f, sel, durations)
+        if i == 0 or f in protect or used + c <= budget:
+            kept[f] = sel
+            used += c
+        else:
+            cut.append(f)
+    return kept, cut
 
 
 def _cost_bins(items: list, workers: int, durations: dict) -> list[tuple[int, list[str]]]:
@@ -3185,6 +3300,11 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
     mode = ns.mode
     if mode == "tdd":
         return plan, _plan_tdd(ctx, ns, plan)
+    if mode in ("verify", "regression") and ns.run_id:
+        err = shared_tree_scope_error(ctx.repo, run_state, ns.run_id, ns.project,
+                                      ev_root.parent.parent)
+        if err:
+            return plan, err
     scope = changed
     prev_failures: list = []
     lost: list[str] = []
@@ -3452,7 +3572,9 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                         + list(plan["smoke"].values()))
     if ns.mode in ("verify", "regression") and not getattr(ns, "auto_recheck_of", None):
         prev = _read_json(ev_root / "tests" / f"latest-{ns.mode}.json")
-        if isinstance(prev, dict) and prev.get("cache_key") == key and not _cacheable(prev):
+        # a budget-cut result is complete for what it ran: nothing for a recheck to finish
+        if isinstance(prev, dict) and prev.get("cache_key") == key \
+                and not _cacheable({**prev, "budget_cut": False}):
             auto = _auto_recheck(ctx, ns, ev_root, run_state, deadline, prev)
             if auto is not None:
                 return auto
@@ -3494,6 +3616,23 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     # concurrent runs share the cores instead of oversubscribing them.
     tokens = _acquire_workers(ctx.cache, ctx.workers, ctx.warnings)
     ctx.workers = max(1, len(tokens))
+    budget_cut: list[str] = []
+    if ns.mode in REUSE_MODES and run_targets:
+        protect = set((plan.get("ac_first") or {}).keys()) | {
+            f for f in plan["changed"] if _is_backend_test(f)}
+        secs = ctx.deadline_at - min(20.0, deadline * 0.25) - time.monotonic()
+        run_targets, budget_cut = _cut_to_budget(run_targets, ctx.durations, ctx.workers,
+                                                 secs, protect)
+        if budget_cut:
+            for f in budget_cut:
+                plan["targets"].pop(f, None)
+            plan["skipped"] = list(plan["skipped"]) + budget_cut
+            plan["budget_cut"] = True
+            ctx.warnings.append(
+                f"{len(budget_cut)} lower-priority test file(s) left out: their recorded cost "
+                f"does not fit {secs:.0f}s on the {ctx.workers} worker(s) granted (other runs "
+                f"hold the rest). Listed in skipped_for_budget; this result is not cached, so "
+                f"a later call on a quieter machine runs them")
     try:
         jobs: list[_Job] = []
         fpath = ctx.cache / "results" / f"frontend-{fkey}.json"
@@ -3541,6 +3680,8 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     results += [{**r, "_reused": True} for f in reused for r in reused[f]]
     ev = _assemble(ctx, ns, plan, results, cls, started_at, repeats, key)
     ev.update(head_sha=head, tree_digest=tree)
+    if plan.get("budget_cut"):
+        ev["budget_cut"] = True  # depends on the workers granted: never served from cache
     if _cacheable(ev):
         _write_json(cpath, ev)
     wtev = _worktree_evidence(ctx)  # after the cache write: it describes THIS worktree
@@ -3702,6 +3843,7 @@ def _cacheable(ev: dict) -> bool:
     """Never cache (or trust a cached) result with a timeout, an unknown classification
     or a runner error (zero collected / abnormal shard exit)."""
     return ev.get("counts", {}).get("timeouts", 1) == 0 and not ev.get("runner_errors") \
+        and not ev.get("budget_cut") \
         and all(f.get("classification") != "unknown" for f in ev.get("failures") or [])
 
 
