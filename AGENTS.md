@@ -275,6 +275,11 @@ implementations in `security_hooks.py`). By category:
 6. **Advisory / hygiene** — `inclusive_term_guard`, `design_lint_guard` (warn only),
    `image_read_dedup_guard`.
 
+Every PreToolUse deny / ask is recorded by `HookRegistry.register` (not by the gate) in
+`~/.swarm-ai/logs/gate_decisions.jsonl`, with the full tool input; `python
+backend/scripts/gate_audit.py --samples 3` counts them per gate per day. A gate is kept,
+merged or removed on that evidence.
+
 Plus `can_use_tool` file-access control, workspace isolation, and error sanitization. These
 gates are the concrete form of "when prose fails, build a gate". When adding one, register
 it in `hook_builder.py` and update this list — don't restate it in other docs.

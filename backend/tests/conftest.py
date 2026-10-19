@@ -417,6 +417,10 @@ class MemoryWatchdogPlugin:
 # ---------------------------------------------------------------------------
 
 _test_db_fd, _test_db_path = tempfile.mkstemp(suffix=".db", prefix="swarmai_test_")
+# Gate decisions recorded by tests must not land in the user's real audit log.
+os.environ["SWARM_GATE_LOG"] = os.path.join(
+    tempfile.gettempdir(), f"swarmai_test_gate_decisions_{os.getpid()}.jsonl"
+)
 os.close(_test_db_fd)
 atexit.register(lambda: os.unlink(_test_db_path) if os.path.exists(_test_db_path) else None)
 

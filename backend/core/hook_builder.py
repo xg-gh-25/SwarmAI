@@ -43,6 +43,7 @@ from .security_hooks import (
     create_skill_access_checker,
 )
 from .design_hooks import design_lint_guard
+from .gate_decision_log import with_decision_log
 from .verdict import Disposition, from_sdk, to_sdk
 from .ask_question_manager import ask_question_manager
 from .permission_manager import PERMISSION_ANSWER_TIMEOUT_SECONDS
@@ -105,6 +106,10 @@ class HookRegistry:
                 timeout exists to stop a genuinely-hung hook (bash_syntax_guard
                 et al.), and exempting one un-bounds that protection.
         """
+        if event == "PreToolUse":
+            # Every PreToolUse deny/ask lands in gate_decisions.jsonl with the full
+            # tool input, so gates never need their own [BLOCKED] logging to be audited.
+            hook = with_decision_log(name, hook)
         self._hooks[(event, matcher)].append((name, hook, no_timeout))
 
     def build_sdk_hooks(self) -> dict[str, list]:
