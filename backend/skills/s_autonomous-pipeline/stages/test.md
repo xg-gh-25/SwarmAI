@@ -21,9 +21,9 @@ One call per mode, foreground, never split; no full suite (STEERING R9).
    log in IMPROVEMENT.md "Known Issues", do not fix or debug it here; `flaky` → fix the
    flake (passes 9/10 = FAILS); `unknown` / timeout → read the attached stack (no manual
    ps/kill/faulthandler).
-3. **Fix loop, max 20 fixes** (then checkpoint and report, whatever remains). Per fix:
+3. **Fix loop, max 20 fixes** (then stop: complete TEST with what remains, DELIVER not push-ready). Per fix:
    one atomic commit → `python backend/skills/s_autonomous-pipeline/scripts/wtf_gate.py --files-touched N --fix-count M`
-   (score ≥ 5 → halt, L2 BLOCK) → `RUN --mode recheck`. Each recheck lays its results
+   (score ≥ 5 → halt: stop fixing, finish not push-ready) → `RUN --mode recheck`. Each recheck lays its results
    over `latest-regression.json`, which `stage-complete` reads: no final regression
    re-run. Formula + table: `ref/test/fixing.md`.
 4. **Layer 4** only if EVALUATE `cross_boundary.value == true`: `ref/test/cross-boundary.md`
@@ -40,7 +40,7 @@ One call per mode, foreground, never split; no full suite (STEERING R9).
 - `[GATE·artifact_cli]` cross_boundary=true → DELIVER exits 1 without a passing
   `cross_boundary_e2e.run` record (full rule: `ref/test/cross-boundary.md`).
 - `[MUST]` WTF gate after EVERY fix, score shown even if 0. `wtf_gate.py` does NOT block
-  publish: halt-at-≥5 is an agent-obeyed L2 checkpoint, not a validator publish gate. <!-- R-test-004 -->
+  publish: halt-at-≥5 is an agent-obeyed stop (finish not push-ready), not a validator publish gate. <!-- R-test-004 -->
 - `[MUST]` BLOCKING: a single-platform compile is never a fully-green TEST result for a
   cross-platform changeset (`ref/test/cross-platform.md`).
 - `pipeline_test_gate`: runner only. `SWARM_TEST_GATE_FORCE=1` is operator-set, never yours.
@@ -61,5 +61,5 @@ Then `python backend/scripts/artifact_cli.py stage-complete --project <P> --run-
 
 > **⏭️ Continuation — advance is not the end of your turn.** `stage-complete` records and
 > advances; read `next_card` and run that stage in this same turn. Legal hand-backs only:
-> a user stop or a terminal verdict (abandon, DEFER/REJECT); never a question or a
-> checkpoint (`ref/instructions/escalation.md`). `next_action` is AUTHORITATIVE over this prose.
+> a question you cannot answer yourself, a user stop, or a terminal verdict
+> (`ref/instructions/escalation.md`). `next_action` is AUTHORITATIVE over this prose.

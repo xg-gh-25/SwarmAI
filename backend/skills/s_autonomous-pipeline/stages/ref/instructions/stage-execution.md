@@ -25,8 +25,9 @@ Before executing:
 ```
 1. Retry exhaustion?  → stage retry_count >= max_retries → stop fixing, DELIVER with
    push_ready false (never a checkpoint)
-2. Pending L2 decision? → most reversible option, recorded (`escalation.md`); a legacy run
-   resumed from an L2 checkpoint does the same instead of waiting.
+2. Pending L2 decision? → ask the user (`escalation.md`): in-band if `channel=direct`, else
+   the recorded question + checkpoint. A run resumed from a question checkpoint reads the
+   answer first.
 3. Pipeline cancelled? → EXIT
 ```
 Max retries per stage: evaluate 2 · think 2 · plan 2 · build 3 · review 2 · test 3 · deliver 1 ·
@@ -129,7 +130,7 @@ stage. On the new path `stage-start` returns valid examples and `stage-complete`
 After verification:
 - **All mechanical decisions → advance** to the next stage.
 - **Taste decisions found → log them**, advance (listed in REPORT §10, never approved).
-- **Judgment decision → most reversible option**, recorded + `[decision]` flag, advance.
+- **Judgment decision → ask the user** (`escalation.md`), then advance on the answer.
 
 On the legacy path `advance` records the transition and prints `next_stage_doc` (absolute path)
 and `next_action`; on the new path `stage-complete` returns `next_stage`, `next_card` and

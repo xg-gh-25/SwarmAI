@@ -2942,10 +2942,12 @@ def _breaker_result(mode: str, reason: str) -> dict:
     never a checkpoint or a human: stop testing, finish the run not push-ready."""
     return {"mode": mode, "ok": False, "circuit_breaker": {"tripped": True, "reason": reason},
             "error": "circuit breaker: " + reason,
-            "action": ("stop re-running tests and stop fixing: the loop is not converging. Go to "
-                       "DELIVER now and complete it with push_ready false, the failing tests "
-                       "and this reason in attention_flags (REPORT §10); run-commit then "
-                       "commits locally, marked. Do not checkpoint, do not ask the user. "
+            "action": ("stop re-running tests and stop fixing: the loop is not converging. "
+                       "Complete the CURRENT stage now with what remains (stage-complete; "
+                       "it completes degraded after 3 refusals), then DELIVER with push_ready "
+                       "false, the failing tests and this reason in attention_flags (REPORT "
+                       "§10); run-commit commits locally, marked. Do not checkpoint, do not "
+                       "ask the user. "
                        "Operator override only: SWARM_CIRCUIT_BREAKER_FORCE=1")}
 
 

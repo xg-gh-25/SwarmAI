@@ -5118,6 +5118,28 @@ def _verdict_token(recorded: str) -> "str | None":
     return found[-1] if found else None
 
 
+_GAP_MARKERS = ("NOT verified", "_unverified_reason", "completed DEGRADED")
+
+
+def _verification_gaps_of(stage: str, warnings: "list[str]", cand_rec: dict) -> "list[dict]":
+    """What this stage-complete could not verify, from the gates' own warnings (a marker
+    store that could not be read, a gate passed on a recorded reason, a degraded
+    stage). Latched into run.json ``verification_gaps``; never removed."""
+    out = []
+    for w in warnings:
+        if isinstance(w, str) and any(m in w for m in _GAP_MARKERS):
+            out.append({"stage": stage, "why": w[:300]})
+    if isinstance(cand_rec.get("degraded"), dict):
+        out.append({"stage": stage, "why": f"completed degraded after "
+                    f"{cand_rec['degraded'].get('attempts')} refused attempts"})
+    uniq, seen = [], set()
+    for g in out:
+        if g["why"] not in seen:
+            seen.add(g["why"])
+            uniq.append(g)
+    return uniq
+
+
 def _unverified_gates(run_state: dict, record_in: "dict | None" = None) -> "list[str]":
     """Gates this run passed on a recorded ``<gate>_unverified_reason`` (no spawn backs
     the verdict). Each is accepted so the run goes on, never as verified: DELIVER's
@@ -5613,9 +5635,11 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     _degraded = isinstance(deliver_rec.get("degraded"), dict)
     if isinstance(_required, list) and _required:
         _missing = _d7_missing_required_experts(_required, args.run_id)
-        if _missing and _degraded:
-            # DELIVER already gave up on its gates after 3 refusals: commit, marked,
-            # with the missing experts named (the run never ends uncommitted)
+        if _missing and (_degraded or not push_ready):
+            # A DELIVER that does not ship anyway (degraded, or not push-ready for any
+            # reason, e.g. a spawn that could not run): commit, marked, with the missing
+            # experts named — the run never ends uncommitted. Only a PUSH-READY DELIVER
+            # with an expert missing is refused (that is an inconsistency to fix).
             _not_ready_reason = (_not_ready_reason or "DELIVER degraded") + (
                 "; declared expert(s) never reviewed: " + ", ".join(_missing))
             _not_ready_mark = {"push_ready": False, "push_ready_reason": _not_ready_reason[:500]}
@@ -5769,6 +5793,7 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     if unresolved:
         warnings.append(f"{len(unresolved)} file(s) not in any git repo, skipped: {unresolved}")
 
+    _commit_failed: "list[str]" = []
     for root, files in by_repo.items():
         # Warn if the working tree has changes outside this run's files (forgotten record)
         try:
@@ -5930,6 +5955,7 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                               **({"review_not_converged": True} if _review_open else {})})
         else:
             warnings.append(f"[{root}] git commit failed: {commit.stderr.strip()[:200]}")
+            _commit_failed.append(root)
 
     # ── G1 (run_f8494370): persist committed shas to run.json.commits so the
     #    retro-analytics dashboard can trace WHICH run produced WHICH commit.
@@ -6004,6 +6030,16 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     # review deliverable is now per-file PR-review ROWS in the Canvas OUTPUTS rail,
     # emitted at COMPLETE by the `surface_run_outputs` tool (channel A). run-commit
     # only records the commits; surfacing happens on the live COMPLETE turn.
+    if _commit_failed:
+        # never report success for a commit that did not happen (autonomy audit r2):
+        # the model reads "committed" and moves on to COMPLETE with nothing landed
+        print(json.dumps({
+            "blocked": True, "committed": committed, "warnings": warnings,
+            "error": "run-commit: git commit failed in " + ", ".join(_commit_failed)
+                     + ". Read the git error above, fix it (a hook failure, a conflicted "
+                       "index, a lock file left by a crashed git), then run run-commit again.",
+        }, indent=2), file=sys.stderr)
+        sys.exit(2)
     print(json.dumps({
         "committed": committed,
         "warnings": warnings,
@@ -9681,13 +9717,29 @@ def _deliver_push_ready_bound(
         exit_result=eff_exit, all_test_evidence=evidence, evidence_fresh=fresh,
         honor_deferred=honor_deferred,
     )
-    # a stage that completed degraded (_degrade_after_repeated_failures) never ships
+    # Every path that computes push_ready comes through here (stage-complete and the
+    # legacy run-update cap), so the run-level verification latch is read here: a gap
+    # recorded once (a degraded stage, a gate passed on a reason or on an unreadable
+    # marker store) can never be erased by re-recording a stage (quality audit r2).
+    reasons = list(reasons)
+    gaps = [g for g in run_state.get("verification_gaps") or [] if isinstance(g, dict)]
     for rec in run_state.get("stages") or []:
         if isinstance(rec, dict) and isinstance(rec.get("degraded"), dict) \
                 and rec.get("stage") != "deliver":
+            gaps.append({"stage": rec.get("stage"), "why": "completed degraded after "
+                         f"{rec['degraded'].get('attempts')} refused attempts"})
+    for g in _unverified_gates(run_state):
+        gaps.append({"stage": g.split(":")[0], "why": f"{g} passed on a recorded reason"})
+    if isinstance(newest, dict) and newest.get("context_unverified"):
+        gaps.append({"stage": "test", "why": f"{len(newest['context_unverified'])} continued "
+                     "test(s) passed without the earlier tests of their file"})
+    seen = set()
+    for g in gaps:
+        key = (g.get("stage"), g.get("why"))
+        if key not in seen:
+            seen.add(key)
             bound = False
-            reasons = list(reasons) + [f"degraded: {rec.get('stage')} completed after "
-                                       f"{rec['degraded'].get('attempts')} refused attempts"]
+            reasons.append(f"unverified: {g.get('stage')}: {str(g.get('why'))[:200]}")
     return bound, reasons, warnings
 
 
@@ -10010,8 +10062,8 @@ def _derive_stage_fields(
             bound = False
             reasons = reasons + [f"Gate-2 not converged after 3 rounds; root-cause review: "
                                  f"SOUND — open items are in REPORT §10"]
-        _unv = _unverified_gates(run_state, record_in)
-        if _unv:  # a gate let through on a recorded reason was not verified: never ships
+        _unv = [g for g in _unverified_gates({"stages": []}, record_in)]
+        if _unv:  # this DELIVER's own record (not in run_state yet): same rule
             bound = False
             reasons = reasons + ["gate(s) passed on a recorded reason, not verified: "
                                  + ", ".join(_unv)]
@@ -10457,6 +10509,11 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     if errors and not getattr(args, "check", False):
         errors = _degrade_after_repeated_failures(run_file, stage, errors, cand_rec, artifact,
                                                   warnings)
+    _new_gaps = _verification_gaps_of(stage, warnings, cand_rec)
+    if stage == "deliver" and _new_gaps and cand_rec.get("push_ready"):
+        cand_rec["push_ready"] = False
+        cand_rec["push_ready_reason"] = "; ".join(
+            f"unverified: {g['why'][:200]}" for g in _new_gaps)[:900]
     if errors:
         _stage_boundary_fail(stage, errors, data=artifact, record=record_in, warnings=warnings)
 
@@ -10510,6 +10567,11 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         _replace_stage_record(fresh["stages"], cand_rec)
         if isinstance(fresh.get("stage_complete_failures"), dict):
             fresh["stage_complete_failures"].pop(stage, None)  # a new episode gets 3 tries
+        if _new_gaps:  # append-only run-level latch, read by _deliver_push_ready_bound
+            have = {(g.get("stage"), g.get("why")) for g in fresh.get("verification_gaps") or []
+                    if isinstance(g, dict)}
+            fresh["verification_gaps"] = list(fresh.get("verification_gaps") or []) + [
+                {**g, "at": now} for g in _new_gaps if (g["stage"], g["why"]) not in have]
         if stage == "deliver":
             _require_red_team_expert(fresh, artifact)  # D7: run-commit re-checks the marker
         if status == "completed":
@@ -12163,7 +12225,7 @@ def _gate2_recheck_errors(run_id: str, run_dir: "Path | None", run_state: dict,
         warnings.append("Gate-2 re-check not verified: DELIVER has no stage-start time")
         return []
     if _completed_spawns(run_id, windows[0][0], time.time() + 5) is None:
-        warnings.append("Gate-2 re-check not verified: the sub-agent marker store is unreadable")
+        warnings.append("Gate-2 re-check NOT verified: the sub-agent marker store is unreadable")
         return []
     prompts = run_dir / "evidence" / "prompts"
     man, _why = _round1_manifest(run_id, run_dir, run_state)
@@ -12494,7 +12556,7 @@ def _gate2_findings_errors(run_id: str, run_dir: "Path | None", run_state: dict,
                 unparsed.add(eid)
             by_expert.setdefault(eid, []).extend(d.get("reported") or [])
     except Exception:  # noqa: BLE001 — unprovable, never a crash
-        warnings.append("Gate-2 findings not compared with the experts' answers (marker read failed)")
+        warnings.append("Gate-2 findings NOT verified: not compared with the experts' answers (marker read failed)")
         return []
     missing: list[str] = []
     plan = (run_state.get("dispatch_plan") or {}).get("deliver") if isinstance(

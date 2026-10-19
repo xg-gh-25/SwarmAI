@@ -33,16 +33,16 @@ Prefer the lightest profile that fits; goal only when you must iterate, not beca
 - Legacy publish / run-update / advance still work: `ref/instructions/cli-reference.md`.
 
 ## Decisions
-Classify every non-trivial decision in `record.decisions`: **Mechanical** (do it), **Taste** (take the default, disclose in ONE line), **L2 Judgment** (ambiguous AND hard to reverse: take the most reversible option, `[decision]` attention flag). Unsure → taste.
+Classify every non-trivial decision in `record.decisions`: **Mechanical** (do it), **Taste** (take the default, disclose in ONE line), **L2 Judgment** (ambiguous AND hard to reverse: ask the user). Unsure between taste and L2 → taste.
 
-## Autonomy (no human hand-off)
-The run never asks the user, never checkpoints for a decision, never waits: one requirement in → a local commit out; REPORT §10 says what was assumed, decided or left open, and push stays the user's. EVALUATE ambiguity → most conservative reading, recorded. Stuck (retries exhausted, circuit breaker, unresolved HIGH) → stop fixing, DELIVER with `push_ready: false`. A gate that refuses `stage-complete` 3 times → the tool completes the stage degraded. Spawn refused twice → `<gate>_unverified_reason`, push_ready capped. Older card text saying "checkpoint" / "ask" yields to `ref/instructions/escalation.md`.
+## Human in the loop: less, not never
+Autonomy = the user intervenes less, not never. A genuinely unclear requirement or an L2 decision → ASK: `channel=direct` → AskUserQuestion now (options + your recommendation), continue the SAME run on the answer; no attended channel → record the question, `run-checkpoint`. Never push on with a guess to have something to deliver. Mechanical dead ends never wait for a human: stuck (retries exhausted, circuit breaker, unresolved HIGH) → DELIVER `push_ready: false`; a 3rd refused `stage-complete` → degraded; spawn refused twice → `<gate>_unverified_reason`. Approval prompts for dangerous/external actions always stay. Full rule: `ref/instructions/escalation.md`.
 
 ## Checkpoint
-Only when the user asks to pause. Budget or token use is NEVER a trigger (`run-checkpoint` refuses it): `run-checkpoint --project <P> --run-id <R> --stage <next> --reason "<why>"`. Details: `ref/instructions/checkpoint-and-budget.md`.
+For a question no attended channel can answer, or when the user asks to pause. Budget or token use is NEVER a trigger (`run-checkpoint` refuses it): `run-checkpoint --project <P> --run-id <R> --stage <next> --reason "<why>"`. Details: `ref/instructions/checkpoint-and-budget.md`.
 
 <!-- R-instr-007 -->
-> **⏭️ [MUST] Continuation contract (§3f): advance is not the end of your turn.** `stage-complete` (or legacy `advance`, which prints the next card as `next_stage_doc`) only records the transition; read the next card and execute it **in the same turn**. Legal hand-backs ONLY: a user stop or a terminal verdict (abandon, DEFER/REJECT). Writing "proceeding to <STAGE>" and ending the turn is a stall. `next_action` is authoritative when it withholds the continue instruction.
+> **⏭️ [MUST] Continuation contract (§3f): advance is not the end of your turn.** `stage-complete` (or legacy `advance`, which prints the next card as `next_stage_doc`) only records the transition; read the next card and execute it **in the same turn**. Legal hand-backs ONLY: a question you cannot answer yourself (`escalation.md`), a user stop, or a terminal verdict (abandon, DEFER/REJECT). Writing "proceeding to <STAGE>" and ending the turn is a stall. `next_action` is authoritative when it withholds the continue instruction.
 
 ## Sub-agent spawns (Rule 23)
 <!-- R-instr-037 -->
@@ -52,7 +52,7 @@ Only when the user asks to pause. Budget or token use is NEVER a trigger (`run-c
 - **Spawn in the FOREGROUND — every pipeline Agent tool call passes `run_in_background: false`.** A background spawn ends your visible stream and the verdict arrives outside the stage that needs it. Parallelism = several Agent calls in ONE message. `stage-start` returns `spawn_mode: "foreground"`; the run profiler flags any background spawn.
 - **State the scope budget in the prompt** (files to read, tool calls, answer length). Bound SCOPE, never the clock. Never let the budget authorize skipping a checklist item: the reviewer writes `N/A: <reason>` or `UNCHECKED: <item> — budget exhausted`.
 
-Gate-0/1/2 prompts are emitted, not composed (`spawn_prompt.py --gate <id>`, exit 0 only). A rejected gate spawn: retry once, then checkpoint `gate_spawn_blocked`; never self-review (`ref/instructions/rules-23-24.md`).
+Gate-0/1/2 prompts are emitted, not composed (`spawn_prompt.py --gate <id>`, exit 0 only). A rejected gate spawn: retry once, then record `<gate>_unverified_reason` (push_ready capped) and go on; never self-review (`ref/instructions/rules-23-24.md`).
 
 ## Output (Complete Stage Reference)
 Landmark after each stage: `## ✦ <n> STAGE` + `→ <one-line result>`; gates use `★`. Circled numbers are mandatory:

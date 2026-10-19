@@ -102,8 +102,8 @@ want to take this action"):
   uncovered domains in the gate outcome).
 - **ZERO specialists spawned (all rejected)** → this is NOT "partial results", it is a
   BLOCKED gate. Follow INSTRUCTIONS.md Rule 23: retry the spawn batch EXACTLY ONCE →
-  still all-rejected → **CHECKPOINT, reason="gate_spawn_blocked"**. Resume re-enters on
-  a fresh subprocess (the poisoning clears across the process boundary).
+  still all-rejected → record `gate2_findings_unverified_reason` ("gate_spawn_blocked: …")
+  and complete DELIVER: push_ready is capped false, run-commit commits locally, marked.
 
 **NEVER** treat an all-rejected spawn as license to self-review — that is the CLASS A
 bypass this gate exists to prevent. There is no self-review branch.

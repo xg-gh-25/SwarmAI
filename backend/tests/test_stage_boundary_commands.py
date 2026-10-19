@@ -477,6 +477,10 @@ def _clean_deliver():
     return _tmpl("deliver")
 
 
+def _green_ev():
+    return _c2("regression", "r", [{"nodeid": "a::b", "outcome": "passed"}])
+
+
 @pytest.mark.parametrize("mutate,expect_ok", [
     (lambda a: None, True),
     (lambda a: a["adversarial_review"]["findings"].append(
@@ -493,14 +497,26 @@ def _clean_deliver():
 def test_push_ready_bound_gates(mutate, expect_ok):
     art = _clean_deliver()
     mutate(art)
-    ok, reasons = pv.push_ready_upper_bound(art, "full")
+    ok, reasons = pv.push_ready_upper_bound(art, "full", test_evidence=_green_ev())
     assert ok is expect_ok, reasons
+
+
+def test_push_ready_needs_runner_evidence_not_an_artifact_claim():
+    """quality.tests_pass / test.passed are model-written: a code profile ships only on a
+    runner report (quality audit r2)."""
+    art = _clean_deliver()
+    art["quality"]["tests_pass"] = True
+    ok, reasons = pv.push_ready_upper_bound(art, "full")
+    assert ok is False and any("no runner evidence" in r for r in reasons)
+    assert pv.push_ready_upper_bound(art, "docs")[0] is True  # no code, no runner
 
 
 def test_push_ready_bound_exit_criteria_strict_only():
     unmet = {"met": False, "unmet": ["X1"]}
-    assert pv.push_ready_upper_bound(_clean_deliver(), "direct", exit_result=unmet)[0] is False
-    assert pv.push_ready_upper_bound(_clean_deliver(), "trivial", exit_result=unmet)[0] is True
+    assert pv.push_ready_upper_bound(_clean_deliver(), "direct", exit_result=unmet,
+                                     test_evidence=_green_ev())[0] is False
+    assert pv.push_ready_upper_bound(_clean_deliver(), "trivial", exit_result=unmet,
+                                     test_evidence=_green_ev())[0] is True
     failing_ev = _c2("regression", "r", [{"nodeid": "a::b", "outcome": "failed"}],
                      failures=[{"nodeid": "a::b", "classification": "new", "summary": "x"}])
     assert pv.push_ready_upper_bound(_clean_deliver(), "full", test_evidence=failing_ev)[0] is False
@@ -699,6 +715,8 @@ def _direct_run_with_manual_contract(root, reg, capsys, rid, **extra):
 def test_model_may_only_lower_push_ready_with_reason(ws, capsys):
     root, reg = ws
     _direct_run_with_manual_contract(root, reg, capsys, "run_lower")
+    _write_evidence(_run_dir(root, "run_lower"), "tests/latest-regression.json",
+                    _c2("regression", "run_lower", [{"nodeid": "a::b", "outcome": "passed"}]))
     ev = {"exit_evidence": {"X2": "opened the page"}}
     code, out = _complete(reg, capsys, "run_lower", "deliver", _clean_deliver(),
                           {**ev, "push_ready": False})
@@ -1028,6 +1046,8 @@ def test_legacy_run_update_caps_push_ready_to_the_bound(ws, capsys):
     _make_run(root, rid2, "bugfix", stages=["evaluate", "think", "plan", "build", "review", "test"])
     aid = reg.publish(project=PROJECT, artifact_type="delivery", data=_clean_deliver(),
                       producer="s_autonomous-pipeline", summary="d", run_id=rid2)
+    _write_evidence(_run_dir(root, rid2), "tests/latest-regression.json",
+                    _c2("regression", rid2, [{"nodeid": "a::b", "outcome": "passed"}]))
     sj2 = json.dumps({"stage": "deliver", "status": "completed", "stage_doc_consumed": True,
                       "push_ready": True, "artifact_id": aid})
     code, _ = _call(cli.cmd_run_update, reg, capsys, **vars(_run_update_args(rid2, stage_json=sj2)))
@@ -1820,3 +1840,31 @@ def test_a_goal_final_gate_needs_a_completed_sub_agent(monkeypatch):
     assert cli._final_gate_spawn_errors("r", run, {"adversarial_review": True}, {}, w) == []
     monkeypatch.setattr(cli, "_spawns_in_windows", lambda rid, w: None)  # store unreadable
     assert cli._final_gate_spawn_errors("r", run, {"adversarial_review": True}, {}, w) == []
+
+
+def test_a_verification_gap_is_latched_and_survives_a_legacy_rewrite(ws, capsys):
+    """A gap recorded once (here: a gate passed on a recorded reason) caps push_ready
+    through every path, including a legacy run-update that re-records the stage."""
+    root, reg = ws
+    rid = "run_latch"
+    _make_run(root, rid, "bugfix", stages=["evaluate", "think", "plan", "build", "review", "test"],
+              verification_gaps=[{"stage": "build", "why": "gate1 spawn NOT verified"}])
+    aid = reg.publish(project=PROJECT, artifact_type="delivery", data=_clean_deliver(),
+                      producer="s_autonomous-pipeline", summary="d", run_id=rid)
+    _write_evidence(_run_dir(root, rid), "tests/latest-regression.json",
+                    _c2("regression", rid, [{"nodeid": "a::b", "outcome": "passed"}]))
+    sj = json.dumps({"stage": "deliver", "status": "completed", "stage_doc_consumed": True,
+                     "push_ready": True, "artifact_id": aid})
+    code, _ = _call(cli.cmd_run_update, reg, capsys, **vars(_run_update_args(rid, stage_json=sj)))
+    assert code == 0
+    rec = cli._stage_record_of(_run_state(root, rid), "deliver")
+    assert rec["push_ready"] is False and "unverified" in rec["push_ready_reason"]
+
+
+def test_gaps_come_from_the_gates_own_warnings():
+    gaps = cli._verification_gaps_of("build", [
+        "gate1 spawn NOT verified: the sub-agent marker store is unreadable",
+        "refused stage-complete 1/3 for build", "some other note"], {})
+    assert [g["why"][:5] for g in gaps] == ["gate1"]
+    assert cli._verification_gaps_of("test", [], {"degraded": {"attempts": 3}})[0]["why"].startswith(
+        "completed degraded")

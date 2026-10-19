@@ -38,10 +38,11 @@ whether a statement is code-enforced, or you are planning/estimating work (Rule 
 7. **[GUIDE] Atomic commits.** One commit per logical change in BUILD and TEST.
 8. <!-- R-instr-023 --> **[MUST] Never loop forever.** Respect max_retries. Checkpoint on exhaustion.
 9. <!-- R-instr-024 --> **[MUST] Taste decisions are recorded, never presented for approval.** Don't interrupt.
-10. <!-- R-instr-025 --> **[MUST] Judgment decisions take the most reversible option,
-    recorded** (`record.decisions` + a `[decision]` attention flag for REPORT §10), at any
-    point in any stage. Never AskUserQuestion, never a checkpoint for a decision
-    (`escalation.md`, autonomous disposition).
+10. <!-- R-instr-025 --> **[MUST] Judgment decisions go to the user** (`escalation.md`):
+    `channel=direct` → AskUserQuestion at the point you hit it, continue the SAME run on the
+    answer; no attended channel → record the question + checkpoint. Never guess an L2 to
+    keep going; never ask a Mechanical or Taste decision. (The 4h block is [GATE·hook]
+    `ask_question_gate`; the routing is [MUST].)
 11. <!-- R-instr-026 --> **[MUST] DEFER/REJECT at evaluate ends the pipeline.**
 12. <!-- R-instr-027 --> **[GATE·cli] Always generate REPORT.md** at
     `.artifacts/runs/<RUN_ID>/REPORT.md`. `run-update --status completed` BLOCKS if REPORT.md is

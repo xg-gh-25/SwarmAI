@@ -96,9 +96,9 @@ is deliberately EMPTY; pasting it blindly would spawn with no prompt at all.
 **Spawn rejected? Fail closed (`gate_spawn_blocked`).** If the harness REJECTS the
 step-2 spawn ("user doesn't want to proceed with this tool use" / "does not want to take
 this action"), apply the spawn-rejection rule in INSTRUCTIONS (Rules, `gate_spawn_blocked`):
-retry the spawn EXACTLY ONCE → still rejected → **CHECKPOINT, reason="gate_spawn_blocked"**,
-do NOT proceed to BUILD. Resume re-enters on a fresh subprocess, which clears the
-poisoning. NEVER self-review the plan in place of the Skeptic+SSA spawn: an unverified
+retry the spawn EXACTLY ONCE → still rejected → record `gate1_unverified_reason`
+("gate_spawn_blocked: …") and proceed: Gate 1 counts as NOT verified and DELIVER's
+push_ready is capped false (autonomous; never a checkpoint). NEVER self-review the plan in place of the Skeptic+SSA spawn: an unverified
 BUILD direction is exactly what Gate 1 exists to prevent. Unlike Gate 2, Gate 1 has no
 code-enforced evidence field; this instruction is the guard, and a blocked Gate 1 is
 recoverable at Gate 2, so instruction-only is sufficient here.
@@ -110,7 +110,8 @@ recoverable at Gate 2, so instruction-only is sufficient here.
 **WARN** → show `⚠️ GATE 1: WARN` + one line per non-PASS check + `→ Acknowledged.
 Proceeding to BUILD with noted concerns.` Log the warnings and continue; no user interrupt.
 
-**BLOCK** → decide it yourself; never ask the user (the pipeline is autonomous):
+**BLOCK** → revise the plan yourself first; only a BLOCK that survives 2 revisions is a
+question for the user:
 
 ```
 🛑 GATE 1: BLOCK — direction challenge
@@ -121,8 +122,10 @@ Proceeding to BUILD with noted concerns.` Log the warnings and continue; no user
 
 - **Fix the plan:** return to PLAN, take the structural alternative (or say in the plan
   why it is wrong), re-run Gate 1. Max 2 retries.
-- **Still BLOCK after 2 retries:** proceed. Log `gate1_override: true` and put each
-  blocking finding, with why you proceeded, in the DELIVER `attention_flags` (REPORT §10).
+- **Still BLOCK after 2 retries:** the direction is genuinely contested, an L2 decision:
+  ask the user (`ref/instructions/escalation.md`) with the two directions and your
+  recommendation. Proceeding on their answer against the skeptic → `gate1_override: true`,
+  each blocking finding in the DELIVER `attention_flags` (REPORT §10).
   The override is NOT silent: it is recorded in run.json for signal-quality tracking.
 
 ## Recording
@@ -138,7 +141,7 @@ Then repeat the same `gate1_*` keys in the `record` of the build `stage-complete
 Fields:
 - `gate1_verdict`: PASS, WARN, BLOCK or SKIPPED
 - `gate1_blocking`: always `true` (the gate is active); `false` only with SKIPPED
-- `gate1_override`: `true` if the run proceeded on a BLOCK after 2 plan revisions
+- `gate1_override`: `true` if the run proceeded on a BLOCK (the user's call after 2 revisions)
 - `gate1_checks`: per-check detail for signal-quality tracking
 - `gate1_retries`: PLAN revisions attempted (0, 1 or 2)
 

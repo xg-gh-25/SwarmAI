@@ -17,7 +17,7 @@ Purpose: record the user's intent as structured requirements, score it, pick the
 - `[GATE·validator]` greenfield + strict → `working_backwards` + non-empty `pre_mortem`.
 - `[GATE·artifact_cli]` `cross_boundary=true` needs a passing TEST Layer-4 E2E before DELIVER.
 - `[MUST]` M3 skeptic, health audit, Anti-Repetition, AC filters, `pre_mortem` on GO.
-- `[MUST]` DEFER/REJECT ends the run; an ambiguity is self-answered (most conservative reading, `answered_by: self`, `status: assumed`) and the SAME run goes on; never ask, never checkpoint.
+- `[MUST]` DEFER/REJECT ends the run; self-answer every ambiguity you can; a genuine one (≥2 readings, none clearly safer) → ask the user (`ref/evaluate/clarification.md`), SAME run.
 ## Read only if (under `stages/ref/evaluate/`)
 - ambiguity, conflict, any escalation exit → `clarification.md`
 - `understanding`, `refactor`, migration, skeptic brief, "Understanding gate:" → `understanding.md`
@@ -29,4 +29,4 @@ Purpose: record the user's intent as structured requirements, score it, pick the
 ### Artifact Publish
 `python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage evaluate --data @/tmp/<R>/evaluate.json`; file shape (inline works too):
 --data '{"artifact":{"recommendation":"GO","scope":"standard","schema_version":1,"requirements":[{"id":"FR-1","statement":"<what>","work_class":"user-story","source":{"kind":"user-stated","ref":"<why>"},"status":"confirmed","acceptance":[{"given":"<g>","when":"<w>","then":"<t>"}]}],"clarifications":[]},"record":{"decisions":[]}}'
-> **⏭️ Continuation — advance is not the end of your turn.** Read `next_card` and run that stage **in this same turn**. Legal hand-backs only: a user stop or a terminal verdict (abandon, DEFER/REJECT); never a question or a checkpoint (`ref/instructions/escalation.md`). `next_action` is AUTHORITATIVE: if it withholds the continue instruction, follow it.
+> **⏭️ Continuation — advance is not the end of your turn.** Read `next_card` and run that stage **in this same turn**. Legal hand-backs only: a question you cannot answer yourself, a user stop, or a terminal verdict (`ref/instructions/escalation.md`). `next_action` is AUTHORITATIVE: if it withholds the continue instruction, follow it.

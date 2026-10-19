@@ -932,6 +932,9 @@ def _quality_line(run_state: dict, deliver: dict, test_info: dict) -> Optional[s
         parts.append("未 push-ready")
     if any(_d(c).get("forced_push_ready") is True for c in _l(run_state.get("commits"))):
         parts.append("强制提交")
+    if pr is not False and any(_d(c).get("push_ready") is False
+                               for c in _l(run_state.get("commits"))):
+        parts.append("有 commit 提交时未 push-ready")
     return ("**质量** " + " · ".join(parts)) if parts else None
 
 
@@ -1026,6 +1029,9 @@ def review_summary(run_state: Any, deliver: Any) -> dict:
         if c.get("forced_push_ready") is True:
             left.append(f"commit {_raw(c.get('sha'))[:8] or '?'} 是用 run-commit --force "
                         "绕过 push-ready 检查强制提交的")
+        elif c.get("push_ready") is False:
+            left.append(f"commit {_raw(c.get('sha'))[:8] or '?'} 提交时未 push-ready："
+                        f"{_raw(c.get('push_ready_reason')) or '原因未记录'}")
     for flag in _l(dv.get("attention_flags")):
         text = _item_text(flag)
         if text and not _item_done(flag):

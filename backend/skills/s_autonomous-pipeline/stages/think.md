@@ -59,7 +59,7 @@ It validates, publishes, records and advances. On `ok: false`, fix `errors[].pat
 
 > **⏭️ Continuation — advance is not the end of your turn.** Read `next_card` from the
 > stage-complete output and execute that stage (normally PLAN) **in this same turn**. Legal
-> hand-backs only: a user stop or a terminal verdict (abandon, DEFER/REJECT); never a
-> question or a checkpoint (`ref/instructions/escalation.md`). `next_action` is
+> hand-backs only: a question you cannot answer yourself, a user stop, or a terminal
+> verdict (`ref/instructions/escalation.md`). `next_action` is
 > AUTHORITATIVE: if it withholds the continue instruction (checkpoint due, budget unmeasured),
 > follow the payload, not this card.

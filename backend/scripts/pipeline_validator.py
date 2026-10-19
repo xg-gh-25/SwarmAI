@@ -5583,6 +5583,11 @@ def push_ready_upper_bound(
             reasons.append("tests: runner evidence records no passing test (counts.passed == 0)")
         if quality.get("tests_pass") is False:
             reasons.append("tests: quality.tests_pass is false")
+    elif str(profile or "").strip().lower() not in ("docs", "research"):
+        # a profile that changes code ships only on a runner report: an artifact field
+        # the model writes is not test evidence (quality audit r2, 2026-10-19)
+        reasons.append("tests: no runner evidence (backend/scripts/pipeline_test.py "
+                       "report) for this run")
     else:
         tests_pass = quality.get("tests_pass")
         if tests_pass is None and isinstance(test_artifact, dict):

@@ -17,22 +17,27 @@ pipeline builds something that technically passes but misses the real need.
 **Exit conditions:**
 - 0 ambiguities, 0 conflicts → proceed to scoring.
 - 1 ambiguity, derivable from context → resolve inline, note the assumption in the artifact.
-- ≥2 unresolvable ambiguities → **CLARIFICATION-ASSUME** (below; NOT a terminal verdict).
-- Any constraint conflict → **CLARIFICATION-ASSUME** with an explicit conflict description.
-## CLARIFICATION-ASSUME: the run never waits for an answer (autonomous)
-The pipeline is fully autonomous: it never asks the user and never pauses for an answer
-(2026-10-19; it used to MCQ in a desktop tab and checkpoint headless runs, which parked them).
-- The requirement is WORTH doing and only has an ambiguity → answer it yourself:
-  1. Pick the **most conservative reading**: the one that changes the least behaviour, keeps
-     existing contracts, and is easiest to reverse (a flag, an additive change).
-  2. Record it in `clarifications[]` (`answered_by: self`, `answer` = the reading picked, the
-     alternatives in the question), keep the requirement at `status: assumed`, and add one
-     `attention_flags` line in DELIVER: "[assumption] Q… → chose …; other reading …".
-  3. Continue the SAME run. The assumption is visible in REPORT §10 and the user can
-     override it after the commit (push stays theirs).
-- A constraint conflict → keep the stricter constraint, record the conflict the same way.
-- Only when EVERY reading is unsafe or unbuildable is it a value verdict: DEFER (the run ends,
-  reason logged). Never a checkpoint, never `AskUserQuestion`.
+- ≥2 unresolvable ambiguities → **CLARIFICATION-ASK** (below; NOT a terminal verdict).
+- Any constraint conflict → **CLARIFICATION-ASK** with an explicit conflict description.
+## CLARIFICATION-ASK: self-answer first, ask the residue (能自答就自答，自答不了才问)
+The requirement is WORTH doing and has an ambiguity. The run stays alive either way:
+1. **Self-answer** everything the code, DDD and the requirement settle; record each in
+   `clarifications[]` (`answered_by: self`). An ambiguity with a clearly safer reading (fewer
+   behaviour changes, existing contracts kept, easy to reverse) is self-answered too, with an
+   `[assumption]` line in DELIVER `attention_flags` (REPORT §10).
+2. **Ask the residue:** ≥2 readings that lead to different code with none clearly safer, or
+   a constraint conflict the sources do not resolve. Publish the EVALUATE artifact with the
+   requirement at `status: needs-clarification` + a pending `clarifications[]` entry, then:
+   - `channel=direct` (a human attends this tab) → `AskUserQuestion` now: A–E options + a
+     forced `X. Other`, your recommendation first. On the answer: write it back
+     (`answered_by: user`), upgrade `source.kind` → `user-stated` and `status` →
+     `confirmed`, **continue the SAME run at EVALUATE**.
+   - no attended channel (background / channel session) → do NOT call AskUserQuestion;
+     `run-checkpoint --reason "question: …"` with the question and options. The run waits
+     for the answer (no timeout: a question is not a hang, STEERING #2).
+   Never guess the residue to keep going: that is delivering for its own sake.
+- **TERMINAL ESCALATE / DEFER / REJECT** is a value verdict that the requirement should not
+  proceed at all; it ends the run and is never turned into a question.
 ## Self-Socratic Ambiguity Re-Scan (after filling the clarification output)
 `INTERROGATE THE SPEC AND YOUR OWN FRAMING — NOT THE USER`
 After filling WHO/WHAT/WHY/WHEN and noting assumptions, **re-scan THAT output** (and the ACs
@@ -79,7 +84,7 @@ unknowable, which is why this step is mechanical and validator-enforced.
 ## Exit Routing
 - **DEFER or REJECT**: the pipeline ends. Log the reason and exit. A terminal scoring verdict
   (the requirement should not proceed), NOT a clarification gap; never routed in-band.
-- **ESCALATE** (legacy verdict): treat as DEFER with the reason logged; the pipeline does not
-  hand a run to a human.
-- **CLARIFICATION-ASSUME** (the ≥2-ambiguity / constraint-conflict exit): **NOT terminal.**
-  Self-answer with the most conservative reading (above), record it, continue the SAME run.
+- **TERMINAL ESCALATE**: the requirement is too risky or ambiguous at the value level →
+  checkpoint with the reason; the user decides whether it proceeds.
+- **CLARIFICATION-ASK** (the ≥2-ambiguity / constraint-conflict exit): **NOT terminal.**
+  Self-answer what you can, ask the residue (above), continue the SAME run on the answer.

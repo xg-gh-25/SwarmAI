@@ -277,3 +277,32 @@ def test_a_degraded_deliver_commits_marked_despite_missing_experts(tmp_path, mon
     assert r.returncode == 0, r.stdout + r.stderr
     c = json.loads((rundir / "run.json").read_text())["commits"][0]
     assert c["push_ready"] is False and "security" in c["push_ready_reason"]
+
+
+def test_a_not_push_ready_deliver_commits_marked_despite_missing_experts(tmp_path):
+    """Any DELIVER that does not ship (here: push_ready false because a spawn could not
+    run) commits, marked, with the missing experts named; it no longer parks the run."""
+    import os
+    rid = "run_d7nr"
+    ws, repo, rundir = _seed_run(tmp_path, rid, ["correctness", "security"], push_ready=False)
+    audit = _audit_dir(tmp_path)
+    _write_marker(audit, "sessX", 1, "correctness", rid)  # security missing
+    env = dict(os.environ, SWARM_DATA_DIR=str(tmp_path), SWARM_WORKSPACE=str(ws))
+    r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid], env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    c = json.loads((rundir / "run.json").read_text())["commits"][0]
+    assert c["push_ready"] is False and "security" in c["push_ready_reason"]
+
+
+def test_a_failed_git_commit_is_not_reported_as_success(tmp_path):
+    import os
+    rid = "run_cfail"
+    ws, repo, rundir = _seed_run(tmp_path, rid, None)
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho refused by hook >&2\nexit 1\n")
+    hook.chmod(0o755)
+    env = dict(os.environ, SWARM_DATA_DIR=str(tmp_path), SWARM_WORKSPACE=str(ws))
+    env.pop("GIT_CONFIG_GLOBAL", None)
+    env["GIT_CONFIG_GLOBAL"] = str(tmp_path / "nogitconfig")  # no machine-wide hooksPath
+    r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid], env)
+    assert r.returncode == 2 and "git commit failed" in r.stderr, r.stdout + r.stderr

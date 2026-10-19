@@ -10,10 +10,9 @@ Read when: you are about to checkpoint, a checkpoint was refused, you need `run-
 The `cmd_run_checkpoint` CLI command HARD-BLOCKS a checkpoint via `sys.exit(2)` when
 `should_checkpoint=false` + no true-trigger + no `--force`, and force-blocks a
 confabulation-denylist reason — code-enforced by the CLI, not a PreToolUse hook, not prose.
-**The pipeline does not checkpoint to hand a run to a human** (autonomous since 2026-10-19:
-`escalation.md` gives every L2 / retry / stuck / error case an autonomous disposition that
-ends in a marked local commit). `run-checkpoint` is left for a user-requested pause and for a
-session that is being torn down mid-stage (so a later session can resume).
+**A checkpoint is for a question, never for being stuck** (`escalation.md`): a genuine
+ambiguity or L2 decision with no attended channel waits for the user's answer; retries,
+stuck loops and errors end in a marked, not-push-ready local commit instead.
 `should_checkpoint` is ALWAYS false now (budget is never a trigger — STEERING #2), so it is NOT a
 checkpoint condition; run-budget is a consumption report, not a checkpoint decision. With 1M
 context (SESSION_BUDGET=800K) a full pipeline fits comfortably in ONE session.
@@ -21,11 +20,12 @@ context (SESSION_BUDGET=800K) a full pipeline fits comfortably in ONE session.
 ### After each stage (follow sequentially)
 ```
 Stage complete
-  ├─ L2 decision pending? ── yes → most reversible option, recorded (`escalation.md`), CONTINUE
+  ├─ L2 decision / genuine ambiguity? ── yes → ASK (`escalation.md`): in-band if channel=direct,
+  │                                        else record the question → CHECKPOINT
   ├─ retries >= max_retries / stuck / circuit breaker? ── yes → DELIVER with push_ready false
   ├─ unexpected error? ── retry once with the printed fix; still failing → as stuck
   └─ otherwise → CONTINUE (next stage)
-CHECKPOINT only when the user asked to pause. Budget is never an entry.
+CHECKPOINT only for a question no attended channel can answer, or a user pause. Budget never.
 ```
 **NOT valid reasons to checkpoint:** "BUILD is a big stage" (~60K tokens of 800K); "I've read a
 lot of files" (~2K per file); "context might be getting full" (SDK autocompact handles physical

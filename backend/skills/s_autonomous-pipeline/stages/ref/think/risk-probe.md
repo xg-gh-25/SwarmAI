@@ -54,12 +54,11 @@ Scarcity: **max 3 assumptions per approach × 3 approaches = 9 probes max.**
   "I couldn't verify X — my recommendation assumes Y, override if wrong."
 - If ALL assumptions are verified → skip user interaction, proceed with the recommendation.
 
-## Escalating to a full grill (rare)
+## Many unresolved probes on a high-stakes choice (rare)
 
 If **>50% of probes are "unresolved" AND the choice is high-stakes** (judgment-class decision),
-escalate to the interactive grill protocol: ask the user ONE question at a time, give your
-recommended answer, wait for confirmation. **Max 5 questions.** A pending question awaiting the user is one of the
-card's legal hand-backs.
+ask the user ONE question at a time with your recommended answer (`escalation.md`:
+in-band if `channel=direct`, else the recorded question + checkpoint). **Max 5 questions.**
 
 ## When the probe can be skipped entirely
 
