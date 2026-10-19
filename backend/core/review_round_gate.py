@@ -4,9 +4,9 @@ A pipeline stage gives each review expert at most ``MAX_ROUNDS`` (3) completed
 rounds: round 1 (full review), round 2 (re-check of fix 1), round 3 (re-check of
 fix 2). A spawn of an expert that has already completed 3 rounds in the CURRENT
 stage of THIS session's active run is denied, with the instruction to stop fixing
-and run one fresh-context root-cause review instead: SOUND → commit locally with the
-open findings in REPORT §10 and push_ready false; WRONG-APPROACH → back to PLAN once
-(docs/design/pipeline-review-convergence.md §3, 「N3 规则定稿」). The user is not asked.
+and run one fresh-context root-cause review instead; whatever it answers, the run
+commits locally with the open findings in REPORT §10 and push_ready false (no redesign
+since 2026-10-19; docs/design/pipeline-review-convergence.md §3). The user is not asked.
 The root-cause review itself (EXPERT-ID ``root-cause``) is allowed once per cycle, and
 a recorded redesign (run.json ``redesigns``) starts a new cycle with a fresh count. It used to be an allowance that stage-complete checked after the
 rounds had run, waived by any written ``over_budget_reasons`` entry: run_d8762bc8
@@ -47,9 +47,10 @@ MAX_ROUNDS = 3
 ROOT_CAUSE_ID = "root-cause"
 _ROOT_CAUSE_DENY = (
     "DENY (再一再二不再三): the root-cause review already ran in the {stage} stage of pipeline "
-    "run {run_id}; there is one per review cycle. Apply its verdict: run `stage-complete "
-    "--stage deliver` (SOUND → local commit, open items in REPORT §10; WRONG-APPROACH → back "
-    "to PLAN once). Do not ask the user.")
+    "run {run_id}; there is one per review cycle. Do not spawn it again: run `stage-complete "
+    "--stage deliver`. Whatever it answered (SOUND, WRONG-APPROACH, or no verdict line), "
+    "the run commits locally with push_ready false and the open items in REPORT §10. "
+    "Do not ask the user.")
 _EXEMPT_STAGES = frozenset({"goal_cycle"})
 _SCAN_TIMEOUT = 3.0  # under the hook chain's 5 s per-hook cap
 

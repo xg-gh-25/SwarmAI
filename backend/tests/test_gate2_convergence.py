@@ -64,6 +64,11 @@ LOW = {"severity": "LOW", "file": "a.py", "finding": "naming"}
     ({"red-team": [_row(reported=[HIGH])] * 3}, [{"verdict": "SOUND"}], 0, "sound"),
     ({"security": [_row(state="unparsed")] * 3}, [], 0, "root_cause"),
     ({"meta-review": [_row(reported=[HIGH])] * 5}, [], 0, "none"),
+    # the root-cause review answered without a verdict line (verdict None) or on an old
+    # daemon (no verdict key): it ran, and the round gate allows only one per cycle,
+    # so the loop ends instead of asking for another root-cause review forever
+    ({"red-team": [_row(reported=[HIGH])] * 3}, [{"verdict": None}], 0, "sound"),
+    ({"red-team": [_row(reported=[HIGH])] * 3}, [{"ts": 1}], 0, "sound"),
 ])
 def test_outcome_table(rows, root, used, action):
     assert g2c.outcome(rows, root, used)["action"] == action
@@ -274,3 +279,23 @@ def test_sound_verdict_completes_deliver_with_open_items_in_report(tmp_path, mon
     assert art["adversarial_review"]["findings"][0]["deferred_by"] == cli._DEFERRED_BY
     flag = [f for f in art["attention_flags"] if f.startswith("[gate2] ")]
     assert flag and "legacy path" in flag[0] and "a.py:3" in flag[0]
+
+
+def test_root_cause_without_a_verdict_ends_the_loop(env, monkeypatch, capsys):
+    """The dead loop run_93773c32's experts found: a root-cause answer with no
+    ROOT-CAUSE VERDICT line left the outcome at root_cause, so stage-complete asked for
+    the review again, gate2-recheck handed the prompt out again, and review_round_gate
+    (one root-cause spawn per cycle) denied it. Only SWARM_REVIEW_ROUND_GATE_FORCE got out."""
+    audit, run_dir, state, t0 = env
+    _capped(audit, t0)
+    _marker(audit, 9, "root-cause", t0 + 400, verdict=None,
+            verdict_text="I think the approach is mostly fine but the race in _rounds")
+    out = cli._gate2_outcome(RID, run_dir, state)
+    assert out["action"] == "sound" and out["root_cause"] == "UNPARSED"
+    assert "race in _rounds" in out["root_cause_text"]
+    warns: list = []
+    assert cli._gate2_convergence_errors(RID, run_dir / "run.json", state, out, warns) == []
+    assert "UNPARSED" in warns[0] and "push_ready is false" in warns[0]
+    rec = _recheck(run_dir, state, monkeypatch, capsys)
+    assert rec["root_cause_verdict"] == "UNPARSED" and rec["next"].startswith("stage-complete")
+    assert rec["recheck"] == []

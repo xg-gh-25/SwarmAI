@@ -13,9 +13,12 @@ own record of the findings.
 - ``recheck``    something is open and every expert with open items has rounds left
 - ``root_cause`` an expert with open items used all MAX_ROUNDS and no root-cause
                  verdict exists yet: hand out ONE fresh-context root-cause review
-- ``sound``      the root-cause review has answered (SOUND or WRONG-APPROACH): stop;
-                 the verdict, its reasons and every open item go to REPORT §10; the code
-                 commits locally with push_ready false (再一再二不再三: no 4th round)
+- ``sound``      the root-cause review has answered: stop; the verdict (SOUND,
+                 WRONG-APPROACH, or ``UNPARSED`` when its answer carried no verdict line),
+                 its reasons and every open item go to REPORT §10; the code commits
+                 locally with push_ready false (再一再二不再三: no 4th round). An answer
+                 without a verdict still ends the loop: review_round_gate allows ONE
+                 root-cause spawn per cycle, so asking for another would never terminate
 - ``redesign``   only while ``MAX_REDESIGNS`` > 0 (it is 0 since 2026-10-19: a redesign
                  restarted the three rounds, so a run could review six times)
 
@@ -37,7 +40,7 @@ MAX_REDESIGNS = 0  # WRONG-APPROACH after round 3 is recorded, not redesigned
 ROOT_CAUSE_ID = "root-cause"
 # Spawns that are not Gate-2 review rounds of a reviewer.
 NOT_REVIEWERS = frozenset({ROOT_CAUSE_ID, "meta-review", "gate0-skeptic", "gate1-skeptic"})
-SOUND, WRONG = "SOUND", "WRONG-APPROACH"
+SOUND, WRONG, UNPARSED = "SOUND", "WRONG-APPROACH", "UNPARSED"
 
 
 def is_blocking(f: Any) -> bool:
@@ -97,10 +100,16 @@ def outcome(rows_by_expert: "dict[str, list[dict]]", root_rows: "list[dict]",
             unjudged.append(e)
         elif items:
             open_[e] = items
-    verdict = next((r.get("verdict") for r in reversed(root_rows or [])
-                    if isinstance(r, dict) and r.get("verdict") in (SOUND, WRONG)), None)
-    verdict_text = next((str(r.get("verdict_text") or "") for r in reversed(root_rows or [])
-                         if isinstance(r, dict) and r.get("verdict") in (SOUND, WRONG)), "")
+    roots = [r for r in root_rows or [] if isinstance(r, dict)]
+    verdict = next((r.get("verdict") for r in reversed(roots)
+                    if r.get("verdict") in (SOUND, WRONG)), None)
+    verdict_text = next((str(r.get("verdict_text") or "") for r in reversed(roots)
+                         if r.get("verdict") in (SOUND, WRONG)), "")
+    if verdict is None and roots:
+        # It answered, but with no verdict line: it cannot be asked again (one per
+        # cycle), so the loop ends here, fail closed (push_ready stays false).
+        verdict = UNPARSED
+        verdict_text = str(roots[-1].get("verdict_text") or "")
     capped = sorted(e for e in open_ if rounds[e] >= max_rounds)
     if not rounds:
         action = "none"

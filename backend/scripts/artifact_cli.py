@@ -10158,7 +10158,8 @@ def _derive_stage_fields(
         if isinstance(_g2, dict) and _g2["action"] == "sound":
             bound = False
             reasons = reasons + [f"Gate-2 not converged after 3 rounds; root-cause review: "
-                                 f"SOUND — open items are in REPORT §10"]
+                                 f"{_g2.get('root_cause') or 'SOUND'} — open items are in "
+                                 f"REPORT §10"]
         _unv = [g for g in _unverified_gates({"stages": []}, record_in)]
         if _unv:  # this DELIVER's own record (not in run_state yet): same rule
             bound = False

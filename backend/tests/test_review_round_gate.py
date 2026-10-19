@@ -214,7 +214,9 @@ def test_root_cause_review_runs_once_per_cycle(env):
     _marker(audit, 1, "root-cause")
     res = _spawn("root-cause")
     assert _denied(res)
-    assert "one per review cycle" in res["hookSpecificOutput"]["permissionDecisionReason"]
+    why = res["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "one per review cycle" in why and "no verdict line" in why
+    assert "back to PLAN" not in why  # no redesign since MAX_REDESIGNS = 0
 
 
 def test_a_redesign_starts_a_fresh_allowance(env):
