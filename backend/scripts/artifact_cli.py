@@ -10316,6 +10316,10 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
 
     status = "skipped" if record_in.get("status") == "skipped" else "completed"
     artifact = copy.deepcopy(artifact_in) if (artifact_in is not None and status != "skipped") else None
+    ledger_errors: list[str] = []
+    ledger_warnings: list[str] = []
+    if stage == "deliver" and artifact is not None:
+        artifact, ledger_errors, ledger_warnings = _expand_gate2_ledger(run_id, run_dir, run_state, artifact)
     cand_rec = {k: copy.deepcopy(v) for k, v in record_in.items() if k not in _DERIVED_RECORD_KEYS}
     cand_rec.update(stage=stage, status=status, stage_doc_consumed=True)
     if stage == "plan" and status == "completed":
@@ -10338,6 +10342,8 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         record_in=record_in, cand_rec=cand_rec, cand_run=cand_run,
         prev_rec=_stage_record_of(run_state, stage),
     )
+    errors = ledger_errors + errors
+    warnings = ledger_warnings + warnings
     if stage == "plan":
         errors += _replan_errors(project, run_state, profile, artifact, status)
     _unresolved = (derived.get("files_changed_unresolved") or {}).get("value")
@@ -11498,6 +11504,161 @@ def _recheck_numbering(text: str) -> "dict[str, int]":
     return out
 
 
+# ── Gate-2 findings ledger: the tool writes the record, the model only settles it ──
+# The experts' answers are already captured on their markers (`reported`, runtime_hooks
+# `_expert_answer`), and stage-complete compares adversarial_review.findings[] with
+# them (`_gate2_findings_errors`). Copying those answers by hand is pure clerical work
+# that fails on wording. `gate2-ledger` builds the list from the markers; a DELIVER
+# artifact with `adversarial_review.findings_from: "ledger"` gets its findings[] built
+# from it, the model giving only each entry's disposition and evidence.
+GATE2_DISPOSITIONS = ("fixed", "refuted", "known-issue", "unaddressed")
+_LEDGER_FIELDS = ("severity", "confidence", "path", "line", "category", "summary", "fix")
+
+
+def _gate2_ledger_entries(run_id: str, run_dir: "Path | None", run_state: dict
+                          ) -> "tuple[list[dict], list[str]] | None":
+    """(entries, experts whose answer could not be parsed) for this DELIVER review cycle,
+    from the SAME marker rows the findings check reads (`_gate2_window_rows`): one entry
+    per (specialist, `_gate2_finding_key`), the first wording with the strongest
+    severity / confidence any round gave. Ids are stable: specialist + a hash of that
+    key. None when there is no DELIVER window or the marker store is unreadable."""
+    import hashlib
+    import time
+    windows = _stage_windows((run_state.get("stage_timing") or {}).get("deliver") or {}, time.time())
+    if not windows or run_dir is None:
+        return None
+    man, _why = _round1_manifest(run_id, run_dir, run_state)
+    try:
+        rows = _gate2_window_rows(run_id, windows, _gate2_review_since(windows, man))
+    except Exception:  # noqa: BLE001 — unreadable store
+        return None
+    from core.gate2_findings import confidence_of, is_blocking, must_record, severity_rank
+    seen: dict[str, dict] = {}
+    unparsed: set[str] = set()
+    for d in rows:
+        eid = d.get("expert_id")
+        if not isinstance(eid, str) or not eid or eid in _GATE_SKEPTIC_IDS:
+            continue
+        if d.get("reported_state") == "unparsed":
+            unparsed.add(eid)
+        for r in d.get("reported") or []:
+            if not isinstance(r, dict):
+                continue
+            key = (eid, *_gate2_finding_key(r))
+            lid = f"{eid}-{hashlib.sha1(repr(key).encode('utf-8')).hexdigest()[:6]}"
+            if lid in seen:
+                # Reported again (a later round): keep the first wording, and the
+                # STRONGEST severity / confidence any round gave — never weaker than
+                # what the findings check holds the record to.
+                e = seen[lid]
+                if severity_rank(r) > severity_rank(e):
+                    e["severity"] = r.get("severity")
+                rc, ec = confidence_of(r.get("confidence")), confidence_of(e.get("confidence"))
+                if rc is not None and (ec is None or rc > ec):
+                    e["confidence"] = r.get("confidence")
+                e["blocking"] = e["blocking"] or is_blocking(r)
+                e["must_record"] = e["must_record"] or must_record(r)
+                continue
+            text = str(r.get("summary") or r.get("finding") or "")
+            path = r.get("path") or r.get("file")  # experts write either
+            e = {"id": lid, "specialist": eid}
+            e.update({k: r[k] for k in _LEDGER_FIELDS if r.get(k) is not None})
+            if path:
+                e["path"] = path
+            e["finding"] = str(r.get("finding") or text)
+            e["blocking"] = is_blocking(r)
+            e["must_record"] = must_record(r)
+            seen[lid] = e
+    entries = sorted(seen.values(), key=lambda e: (-severity_rank(e), e["specialist"], e["id"]))
+    return entries, sorted(unparsed)
+
+
+def _expand_gate2_ledger(run_id: str, run_dir: "Path | None", run_state: dict,
+                         artifact: "dict | None") -> "tuple[dict | None, list[str], list[str]]":
+    """(artifact, errors, warnings): a DELIVER artifact whose adversarial_review says
+    ``findings_from: "ledger"`` gets findings[] = every ledger entry (verbatim) with the
+    model's ``dispositions[<id>]`` merged in, then any findings[] it wrote itself (e.g.
+    meta-review risks). A disposition's other keys (evidence, test, the fix-by-class
+    fields) pass through, never over a copied field. An entry with no disposition is
+    recorded ``unaddressed`` and unresolved — never dropped. Any other artifact is
+    returned unchanged."""
+    ar = artifact.get("adversarial_review") if isinstance(artifact, dict) else None
+    if not isinstance(ar, dict) or ar.get("findings_from") != "ledger":
+        return artifact, [], []
+    got = _gate2_ledger_entries(run_id, run_dir, run_state)
+    if got is None:
+        return artifact, ["Gate-2 ledger: no DELIVER review cycle, or the marker store is "
+                          "unreadable — record adversarial_review.findings[] instead of "
+                          "findings_from: ledger"], []
+    entries, unparsed = got
+    disp = ar.get("dispositions") if isinstance(ar.get("dispositions"), dict) else {}
+    ids = {e["id"] for e in entries}
+    errors: list[str] = []
+    unknown = sorted(k for k in disp if k not in ids)
+    if unknown:
+        errors.append("Gate-2 ledger: dispositions name id(s) not in the ledger: "
+                      + ", ".join(unknown[:8]) + " — run `gate2-ledger` again and use its ids")
+    out: list[dict] = []
+    for e in entries:
+        d = disp.get(e["id"]) if isinstance(disp.get(e["id"]), dict) else {}
+        kind = str(d.get("disposition") or "unaddressed")
+        if kind not in GATE2_DISPOSITIONS:
+            errors.append(f"Gate-2 ledger: {e['id']} disposition {kind!r} is not one of "
+                          + ", ".join(GATE2_DISPOSITIONS))
+        f = {k: v for k, v in e.items() if k != "must_record"}
+        f["disposition"] = kind
+        if kind == "refuted":
+            # the recorded shape of a false positive (gate2-findings.md; design_spec's
+            # fix-by-class rule exempts it); the expert's words stay in reported_finding
+            f["reported_finding"] = f["finding"]
+            f["finding"] = "Not a bug: " + str(d.get("evidence") or "(no evidence given)")
+        f["resolved"] = bool(d["resolved"]) if "resolved" in d else kind in ("fixed", "refuted")
+        # Everything else the model settles the entry with passes through (evidence, test,
+        # and the fix-by-class fields: invariant, root_cause, class_fix, break_test, ...) —
+        # never over a field the tool copied from the expert's answer.
+        for k, v in d.items():
+            if k not in ("disposition", "resolved") and k not in e and v not in (None, ""):
+                f[k] = v
+        out.append(f)
+    own = [f for f in ar.get("findings") or [] if isinstance(f, dict)]
+    new_ar = {k: v for k, v in ar.items() if k not in ("findings_from", "dispositions")}
+    new_ar["findings"] = out + own
+    new_ar["findings_source"] = "ledger"
+    warnings = ([f"Gate-2 ledger: the answers of {', '.join(unparsed)} could not be parsed, so "
+                 "their findings are not in the ledger"] if unparsed else [])
+    open_n = sum(1 for f in out if f["disposition"] == "unaddressed")
+    if open_n:
+        warnings.append(f"Gate-2 ledger: {open_n} finding(s) have no disposition and are "
+                        "recorded unaddressed (unresolved)")
+    return {**artifact, "adversarial_review": new_ar}, errors, warnings
+
+
+def cmd_gate2_ledger(args, reg: ArtifactRegistry) -> None:
+    """Print (and write to evidence/gate2-ledger.json) the Gate-2 findings ledger."""
+    try:
+        run_file, run_state = _load_run_for_stage(args.project, args.run_id)
+    except _StageBoundaryError as e:
+        print(json.dumps({"ok": False, "error": "; ".join(e.errors)}, ensure_ascii=False))
+        sys.exit(1)
+    got = _gate2_ledger_entries(args.run_id, run_file.parent, run_state)
+    if got is None:
+        print(json.dumps({"ok": False, "error": "no DELIVER review cycle, or the marker store "
+                          "is unreadable"}, ensure_ascii=False))
+        sys.exit(1)
+    entries, unparsed = got
+    data = {"ok": True, "entries": entries, "unparsed": unparsed,
+            "dispositions": list(GATE2_DISPOSITIONS),
+            "use": ('in the DELIVER artifact: "adversarial_review": {"findings_from": "ledger", '
+                    '"dispositions": {"<id>": {"disposition": "fixed", "evidence": "..."}}}')}
+    try:
+        (run_file.parent / "evidence").mkdir(parents=True, exist_ok=True)
+        (run_file.parent / "evidence" / "gate2-ledger.json").write_text(
+            json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError as e:
+        data["warnings"] = [f"ledger file not written: {e}"]
+    print(json.dumps(data, ensure_ascii=False))
+
+
 def cmd_gate2_recheck(args, reg: ArtifactRegistry) -> None:
     """Gate-2 round 2: one prompt per specialist with a HIGH / conf≥7 MED finding that
     was fixed, carrying only the diff since round 1 and that specialist's items."""
@@ -11527,6 +11688,11 @@ def cmd_gate2_recheck(args, reg: ArtifactRegistry) -> None:
         fail(f"--findings is not valid JSON: {e}")
     if isinstance(payload, dict):
         ar = payload.get("adversarial_review") if isinstance(payload.get("adversarial_review"), dict) else payload
+        if ar.get("findings_from") == "ledger":
+            expanded, lerr, _lw = _expand_gate2_ledger(run_id, run_dir, run_state, {"adversarial_review": ar})
+            if lerr:
+                fail("; ".join(lerr))
+            ar = expanded["adversarial_review"]
         payload = ar.get("findings")
     items, dropped = _recheck_items(payload)
     # 再一再二不再三 (core/gate2_convergence): the reviewers' own answers decide whether
@@ -11615,10 +11781,70 @@ def cmd_gate2_recheck(args, reg: ArtifactRegistry) -> None:
         fail(f"re-check prompts not written: {e}")
     warnings = [] if items or dropped else [
         "no fixed HIGH / conf≥7 MED finding: no Gate-2 re-check is needed"]
+    rt = _red_team_with_recheck(run_id, run_dir, run_state, project, payload)
+    if rt.get("entry"):
+        recheck.append(rt["entry"])
+        warnings.append("a specialist HIGH requires the Red Team: it runs IN this batch (its "
+                        "first round, on the whole change), in parallel with the re-checks")
+    warnings += rt.get("warnings") or []
     print(json.dumps({"ok": True, "fix_diff": str(fix_path) if diff else None,
                       "changed_since_round1": fixed, "new_to_change_set": new,
                       "recheck": recheck, "not_rechecked": skipped,
                       "spawn_mode": "foreground", "warnings": warnings}, ensure_ascii=False))
+
+
+def _red_team_with_recheck(run_id: str, run_dir: Path, run_state: dict, project: str,
+                           findings) -> dict:
+    """{"entry": a recheck-list item for the Red Team, "warnings": [...]} when round 1
+    found a specialist HIGH, the rule is in force for this run, and the Red Team has
+    neither run nor been handed a prompt in this run — so it joins the round-2 batch
+    instead of becoming a wave of its own. Its prompt reviews the whole change (its
+    first round). {} otherwise."""
+    if not isinstance(findings, list) or not _red_team_required_now(
+            run_state, {"adversarial_review": {"findings": findings}}):
+        return {}
+    import shutil
+    import time
+    done = _d7_completed_expert_ids(run_id) or set()
+    prompts = run_dir / "evidence" / "prompts"
+    prompt = prompts / f"{_RED_TEAM_EXPERT_ID}.md"
+    if _RED_TEAM_EXPERT_ID in done:
+        return {}
+    files_touched = run_state.get("files_touched") if isinstance(run_state.get("files_touched"), list) else []
+    windows = _stage_windows((run_state.get("stage_timing") or {}).get("deliver") or {}, time.time())
+    since = _gate2_review_since(windows, _round1_manifest(run_id, run_dir, run_state)[0]) if windows else None
+    sha = _sha256_file(prompt) if prompt.is_file() else None
+    # reuse a red-team prompt only if the tools handed it out in this review cycle
+    if not (sha and sha in _ledger_shas(run_id, prompt.name, since)):
+        experts = [{"id": _RED_TEAM_EXPERT_ID, "domain": _EXPERT_DOMAINS.get(_RED_TEAM_EXPERT_ID, "Red Team"),
+                    "reason": "a specialist HIGH in round 1"}]
+        scope = _changed_files_scope(files_touched)
+        # `_write_expert_prompts` rewrites evidence/prompts/change.diff, which the round-1
+        # prompts point to: keep theirs, give the Red Team its own copy.
+        shared = prompts / "change.diff"
+        kept = shared.read_bytes() if shared.is_file() else None
+        try:
+            w = _write_expert_prompts(project=project, run_dir=run_dir, experts=experts,
+                                      files=[c["path"] for c in scope["changed_files"]] or files_touched,
+                                      requirement=str(run_state.get("requirement") or ""))
+            if shared.is_file() and prompt.is_file():
+                own = prompts / f"{_RED_TEAM_EXPERT_ID}-change.diff"
+                shutil.copyfile(shared, own)
+                prompt.write_text(prompt.read_text(encoding="utf-8").replace(str(shared), str(own)),
+                                  encoding="utf-8")
+        finally:
+            if kept is not None:
+                shared.write_bytes(kept)
+        if not prompt.is_file():
+            return {"warnings": w + ["Red Team required but its prompt could not be written: "
+                                     "spawn it by hand with spawn_prompt.py --gate gate2-adversarial"]}
+        led = _ledger_add(run_id, [prompt])
+        if led:
+            return {"warnings": w + led}
+    # (stage-complete / run-commit add `red-team` to required_experts from the deliver
+    # artifact itself — `_require_red_team_expert` — and require its marker.)
+    return {"entry": {"id": _RED_TEAM_EXPERT_ID, "prompt_path": str(prompt), "round": 1,
+                      "items": 0, "spawn": _spawn_text(_RED_TEAM_EXPERT_ID, prompt)}}
 
 
 # ── 再一再二不再三: the Gate-2 loop's own state, from what the reviewers said ──
@@ -12013,8 +12239,7 @@ def _binding_findings(reported) -> "list[dict]":
     for r in reported if isinstance(reported, list) else []:
         if not isinstance(r, dict) or not must_record(r):
             continue
-        key = (r.get("path") or "", r.get("line"), (r.get("category") or "").lower(),
-               (r.get("summary") or "")[:60] if not r.get("path") else "")
+        key = _gate2_finding_key(r)
         if key in seen:
             continue
         seen.add(key)
@@ -12082,6 +12307,43 @@ def _match_one_to_one(reported: "list[dict]", recorded: "list[dict]", eid: str) 
 _GATE_SKEPTIC_IDS = ("gate0-skeptic", "gate1-skeptic")
 
 
+def _gate2_review_since(windows: list, man) -> float:
+    """The current DELIVER review cycle's start: the latest DELIVER window for a late
+    (re-entry) round-1 snapshot, else the first window or the snapshot, whichever is later."""
+    if not isinstance(man, dict) or man.get("late"):
+        return windows[-1][0]
+    return max(windows[0][0], _iso_epoch(man.get("taken_at")) or 0.0)
+
+
+def _gate2_window_rows(run_id: str, windows: list, since: float) -> "list[dict]":
+    """This run's sub-agent marker rows inside a DELIVER window and at/after ``since``:
+    the ONE selection the Gate-2 findings check and the findings ledger both read (so
+    the ledger records exactly what the check demands). Raises when the store is
+    unreadable; the callers fail open."""
+    from config import get_app_data_dir
+    audit = get_app_data_dir() / "state" / "pipeline_agent_audit"
+    rows: list[dict] = []
+    for p in audit.glob("session_*.marker"):
+        if "_adv_" in p.name or p.stat().st_mtime < since - 60:
+            continue
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        ts = d.get("ts") if isinstance(d, dict) else None
+        if (not isinstance(d, dict) or d.get("run_id") != run_id or not isinstance(ts, (int, float))
+                or not any(lo - 5 <= ts <= hi + 5 for lo, hi in windows) or ts < since - 5):
+            continue
+        rows.append(d)
+    return sorted(rows, key=lambda d: d["ts"])
+
+
+def _gate2_finding_key(r: dict) -> tuple:
+    """A reported finding's identity — the dedup key `_binding_findings` uses."""
+    return ((r.get("path") or r.get("file") or ""), r.get("line"), (r.get("category") or "").lower(),
+            (r.get("summary") or "")[:60] if not (r.get("path") or r.get("file")) else "")
+
+
 def _gate2_findings_errors(run_id: str, run_dir: "Path | None", run_state: dict,
                            artifact: "dict | None", cand_rec: dict,
                            warnings: "list[str]") -> "list[str]":
@@ -12106,10 +12368,7 @@ def _gate2_findings_errors(run_id: str, run_dir: "Path | None", run_state: dict,
                                           f"--run-id {run_id} --stage deliver")
                 + "` and re-run round 1"]
     # the same review-cycle start as the re-check gate: earlier cycles prove nothing
-    if not isinstance(man, dict) or man.get("late"):
-        since = windows[-1][0]
-    else:
-        since = max(windows[0][0], _iso_epoch(man.get("taken_at")) or 0.0)
+    since = _gate2_review_since(windows, man)
     ar = (artifact or {}).get("adversarial_review")
     recorded = [f for f in (ar.get("findings") if isinstance(ar, dict) else None) or []
                 if isinstance(f, dict)]
@@ -12121,20 +12380,8 @@ def _gate2_findings_errors(run_id: str, run_dir: "Path | None", run_state: dict,
     strict = _gate_spawn_enforced(run_state, HANDOUT_CUTOVER)
     steered: set = set()
     try:
-        from config import get_app_data_dir
-        audit = get_app_data_dir() / "state" / "pipeline_agent_audit"
-        for p in audit.glob("session_*.marker"):
-            if "_adv_" in p.name or p.stat().st_mtime < since - 60:
-                continue
-            try:
-                d = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            eid = d.get("expert_id") if isinstance(d, dict) else None
-            ts = d.get("ts") if isinstance(d, dict) else None
-            if (not isinstance(d, dict) or d.get("run_id") != run_id or not isinstance(ts, (int, float))
-                    or not any(lo - 5 <= ts <= hi + 5 for lo, hi in windows) or ts < since - 5):
-                continue
+        for d in _gate2_window_rows(run_id, windows, since):
+            eid = d.get("expert_id")
             if "attributed_by" not in d:
                 old_daemon = True  # this daemon cannot credit "read <file>" spawns to an expert
             if not isinstance(eid, str) or not eid or eid in _GATE_SKEPTIC_IDS:
@@ -12762,6 +13009,10 @@ def main() -> None:
     p_g2r.add_argument("--findings", required=True,
                        help='the merged findings: a list, {"findings": [...]} or {"adversarial_review": {"findings": [...]}} — inline JSON, @PATH or @-')
 
+    p_g2l = sub.add_parser("gate2-ledger", help="Gate-2 findings ledger built from the experts' captured answers (single-line JSON; also evidence/gate2-ledger.json)")
+    p_g2l.add_argument("--project", required=True)
+    p_g2l.add_argument("--run-id", required=True)
+
     # run-diff — anchors + diffs inside a run's worktree (pipeline-run-worktree §6.3)
     p_run_diff = sub.add_parser("run-diff", help="Isolated run: --mark NAME records an anchor; "
                                 "otherwise print the change since --since NAME (default: base)")
@@ -12794,6 +13045,7 @@ def main() -> None:
         "stage-start": cmd_stage_start,
         "stage-complete": cmd_stage_complete,
         "gate2-recheck": cmd_gate2_recheck,
+        "gate2-ledger": cmd_gate2_ledger,
         "gate0-prompt": cmd_gate0_prompt,
         "discover": cmd_discover,
         "publish": cmd_publish,

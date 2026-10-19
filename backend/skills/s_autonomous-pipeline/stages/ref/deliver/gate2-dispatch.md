@@ -108,13 +108,19 @@ want to take this action"):
 **NEVER** treat an all-rejected spawn as license to self-review — that is the CLASS A
 bypass this gate exists to prevent. There is no self-review branch.
 
-## Red Team (conditional, sequential)
+## Red Team (conditional, never a wave of its own)
 
-Runs AFTER the specialists complete, because it takes their findings as input (adds
-roughly 30s when triggered). Dispatch ONLY IF the source changeset is > 200 lines OR any
-specialist produced a HIGH finding; otherwise skip it and say why in the gate outcome.
-(`stage-start` already lists `red-team` when the size rule fires; the HIGH rule is
-yours to apply after the merge, and the validator checks it.)
+Two triggers, two moments — and in both the Red Team runs IN a batch that already runs,
+never as an extra sequential round:
+
+- **Size** (source changeset > 200 lines): `stage-start` lists `red-team` in `experts`,
+  so it runs in round 1, in the same parallel batch as the specialists.
+- **A specialist HIGH** in round 1 (a smaller change): `gate2-recheck` adds `red-team`
+  to its `recheck` list (`"round": 1`, a prompt on the whole change) — it runs in the
+  round-2 batch, in parallel with the specialists' re-checks.
+
+Neither fired → skip it and say why in the gate outcome. Once it has run, a fixed HIGH
+does not send it again; it is counted against the same 3-round cap as every expert.
 
 **`[GATE·validator]` HIGH trigger is mechanical** (strict profiles; trivial/docs/research
 exempt): every finding records its producer in `specialist` — the reviewer's EXPERT-ID.

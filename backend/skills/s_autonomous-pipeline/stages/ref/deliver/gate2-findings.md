@@ -17,6 +17,22 @@ Never drop or downgrade one you think is a false positive: record it as reported
 true`, `finding` = "Not a bug: <evidence>": its specialist's re-check confirms or refutes
 that. Unprovable (no audit hook) → `gate2_findings_unverified_reason` in the record.
 
+**Use the ledger — do not copy the answers by hand.** `python backend/scripts/artifact_cli.py
+gate2-ledger --project <P> --run-id <R>` builds the list from the experts' captured answers
+(every round of this review cycle; also written to `evidence/gate2-ledger.json`): one entry
+per reported finding, verbatim, with a stable `id`, `specialist`, `severity`, `confidence`,
+`path`, `line`, `blocking`. In the deliver artifact write
+`"adversarial_review": {"findings_from": "ledger", "dispositions": {"<id>": {"disposition":
+"fixed" | "refuted" | "known-issue", "evidence": "...", "test": "<nodeid>"}}, ...}` —
+`stage-complete` builds `findings[]` from the ledger (so it always matches the
+answers); an entry with no disposition is recorded `unaddressed`, unresolved, never dropped.
+`refuted` is recorded as `finding` = "Not a bug: <evidence>" (the expert's words kept in
+`reported_finding`). A BLOCKING entry left `known-issue` or `unaddressed` stays unresolved and
+blocks DELIVER like any open finding — only a SOUND root-cause verdict after round 3 defers it.
+Fix-by-class fields (`invariant`, `root_cause`, `class_fix`, `break_test`) go in the disposition.
+Findings no expert produced (meta-review risks) still go in `findings[]` next to it.
+`gate2-recheck --findings` accepts the same ledger-shaped `adversarial_review`.
+
 - `NO FINDINGS` → skip that specialist. Otherwise parse each JSON line into one list.
   A bare `NO FINDINGS` from a reviewer that shows no evidence of reading the files is
   the self-review failure signature, not a clean result.
