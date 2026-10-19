@@ -9,7 +9,7 @@ Purpose: loop bounded BUILD+TEST cycles until the Definition of Done (DoD) passe
 3. **Read progress:** met criteria, gaps, last action, blockers; target the largest gap.
 4. **Pick ONE step:** 1-3 files, one gap, within `cycle_scope` (default "one test file or one module fix"). Announce `Cycle N: targeting [criterion] via [action]`.
 5. **Execute (TDD):** write the test, `RUN --mode tdd --files <tests>` RED → implement → GREEN.
-6. **Test:** `RUN --mode verify`. `regression`/`new` failure → Regression Protocol (2 fixes, each + `RUN --mode recheck`, then revert this cycle's source): `exits.md`.
+6. **Test:** `RUN --mode verify`. `regression`/`new` failure → Regression Protocol; `timeout` → re-run as is (2 fixes, each + `RUN --mode recheck`, then revert this cycle's source): `exits.md`.
 7. **Progress + mini-reflect:** append the metrics row and ONE line `**Cycle N:** <what worked> → <insight>`. No DDD write, no LLM.
 8. **Metrics:** `gm.track_cycle(...)`; `progress_delta` = criteria newly met / total (0.0 if none flipped).
 9. **Periodic REVIEW** when `cycle % review_cadence == 0`: REVIEW `git diff <last_review_commit>..HEAD`, log each finding in the Findings Ledger, re-judge every row on the total diff (`findings-ledger.md`).

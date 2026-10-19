@@ -6865,8 +6865,9 @@ def _test_counts_from_evidence(ev) -> dict | None:
     non-blocking in pipeline_test._exit_code) and ``failed`` = every other failing
     result — so ``failed`` keeps meaning "new failures", which METRICS records as
     regressions. A GLOBAL-deadline timeout (classification ``timeout`` with ``deadline``
-    set) is non-blocking in _exit_code, so it is NOT counted in ``failed``; a per-test
-    hang (``deadline`` falsey) still is. None when the evidence has no usable counts.
+    set) is unverified, not a code failure, so it is NOT counted in ``failed`` (push-ready
+    is capped separately by pipeline_validator); a per-test hang (``deadline`` falsey)
+    still is. None when the evidence has no usable counts.
 
     ``tests_reused`` (only when non-zero) = how many of ``tests_total`` passes the runner
     took from an earlier verify / regression of this run on the same tree instead of
@@ -6879,8 +6880,8 @@ def _test_counts_from_evidence(ev) -> dict | None:
     fails = [f for f in (ev.get("failures") or []) if isinstance(f, dict)]
     cls = [f.get("classification") for f in fails if f.get("outcome") != "timeout"]
     pre, flaky = cls.count("pre-existing"), cls.count("flaky")
-    # A GLOBAL-deadline timeout (classification "timeout", deadline set) is non-blocking
-    # in _exit_code, so it is a capacity signal, not a regression — drop it from failed.
+    # A GLOBAL-deadline timeout (classification "timeout", deadline set) never finished:
+    # unverified, not a regression — drop it from failed (push-ready is capped elsewhere).
     dl_to = sum(1 for f in fails if f.get("classification") == "timeout"
                 and f.get("outcome") == "timeout" and f.get("deadline"))
     out = {"tests_total": sum(ran), "failed": max(bad - pre - flaky - dl_to, 0),

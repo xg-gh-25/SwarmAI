@@ -140,7 +140,7 @@ def test_run_index_records_every_write_and_survives_pruning(tmp_path):
     idx = json.loads((t / pt.RUN_INDEX).read_text())
     assert [e["kind"] for e in idx] == ["run"] * 6 + ["overlay"]
     assert set(idx[0]) == {"kind", "mode", "finished_at", "ts", "evidence", "cached",
-                           "auto_recheck_of", "rechecked_from"}
+                           "auto_recheck_of", "rechecked_from", "blocking_sig"}
     assert idx[5]["cached"] is True and idx[6]["rechecked_from"] == "t5"
     assert idx[6]["auto_recheck_of"] == "verify" and all(isinstance(e["ts"], float) for e in idx)
     assert len({e["evidence"] for e in idx}) == 7  # each names its own timestamped file

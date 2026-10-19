@@ -27,10 +27,10 @@ half-created worktree (``git worktree remove --force`` + ``prune``) and print on
 JSON error object (exit 2). Worktrees are added with ``core.hooksPath=/dev/null``.
 
 Prints ONE compact JSON object. Exit codes:
-- 0 = green (or only pre-existing / flaky failures, or tests the GLOBAL deadline
-      killed under load — ``classification="timeout"``, non-blocking and never cached)
-- 1 = failures, a per-test hang (a ``timeout`` with ``deadline`` falsey), a selected
-      file / nodeid that collected zero tests, a shard that exited abnormally
+- 0 = green (or only pre-existing / flaky failures, none of them a timeout)
+- 1 = failures, any timeout (a GLOBAL-deadline kill is classified ``timeout``: not a
+      code failure, but unverified — re-run the same command), a selected file /
+      nodeid that collected zero tests, a shard that exited abnormally
       (``runner_errors``), or new probe findings
 - 2 = usage error, refusal, runner error, or interrupted by a signal
 
@@ -87,6 +87,8 @@ atomically (tmp + replace) under ``tests/.run_index.lock``; one object per evide
 - ``cached``: bool, a result-cache hit
 - ``auto_recheck_of``: the mode whose identical re-run became this recheck, else null
 - ``rechecked_from``: the base evidence ``finished_at`` a recheck / overlay built on, else null
+- ``blocking_sig``: sorted nodeids of the evidence's blocking failures (``_blocking_sig``);
+  the circuit breaker compares it across rounds to detect a loop making no progress
 An automatic recheck writes two entries: ``kind=run, mode=recheck, auto_recheck_of=M``
 and ``kind=overlay, mode=M``.
 
@@ -158,7 +160,15 @@ WRAPPER_ALARM_S = 110
 DEFAULT_DEADLINE = 95.0
 SAFE_DEADLINE = WRAPPER_ALARM_S - 10.0
 MAX_DEADLINE = 1800.0
-MAX_SLOTS = 2
+# Cross-run throttle: one machine-wide pool of worker tokens (``<cache>/workers/N.lock``,
+# flock) shared by every runner of every session. A runner holds as many tokens as it
+# runs workers, so concurrent runs SPLIT the cores instead of each sizing itself as if
+# alone (the old 2-slot semaphore let two runners each start 4+ workers plus a vitest
+# pool, and a third "ran anyway" after 20 s). Deadline timeouts measured 2026-10-19 on 427
+# runner calls: 8 % with no other runner overlapping, 15 % with one, 23 % with two or more.
+# Budget = cpu - WORKER_BUDGET_RESERVE: room for the model, the daemon, the IDE and the
+# always-on endpoint agents (FortiDLP / Ava / Jamf measured at 3-4 of 12 cores).
+WORKER_BUDGET_RESERVE = 4
 SLOT_WAIT_S = 20.0
 SUMMARY_LINES = 10
 STACK_LINES = 40
@@ -868,15 +878,28 @@ def _worker_count() -> int:
     return n
 
 
-MAX_WORKERS = 8       # ceiling when no other runner holds a slot
+MAX_WORKERS = 8       # ceiling when no other runner holds a worker token
 IDLE_SAMPLE_S = 0.25  # psutil.cpu_percent sampling window
 
 
-def _busy_slots(cache: Path) -> int:
-    """How many runner slots are held right now."""
+def _worker_budget() -> int:
+    """Size of the machine-wide worker-token pool: ``cpu - WORKER_BUDGET_RESERVE``, at
+    least 2. ``SWARM_TEST_WORKER_BUDGET`` (a positive integer) overrides it."""
+    raw = (os.environ.get("SWARM_TEST_WORKER_BUDGET") or "").strip()
+    if raw.isascii() and raw.isdigit() and int(raw) >= 1:
+        return int(raw)
+    return max(2, (os.cpu_count() or 2) - WORKER_BUDGET_RESERVE)
+
+
+def _token_path(cache: Path, n: int) -> Path:
+    return cache / "workers" / f"{n}.lock"
+
+
+def _busy_tokens(cache: Path) -> int:
+    """How many worker tokens other runners hold right now."""
     busy = 0
-    for n in range(MAX_SLOTS):
-        fd = _try_lock(cache / "slots" / f"{n}.lock", 0)
+    for n in range(_worker_budget()):
+        fd = _try_lock(_token_path(cache, n), 0)
         if fd is None:
             busy += 1
         else:
@@ -886,16 +909,15 @@ def _busy_slots(cache: Path) -> int:
 
 def _scale_up(base: int) -> int:
     """``base`` raised toward the cores idle right now (a fixed 4 left 8 of 12 cores
-    unused on a quiet machine). Never below ``base``: on a loaded machine fewer workers
-    only lose CPU share to other processes, they do not make the run faster. Only when
-    no runner holds a slot (two scaled runners would oversubscribe; one starting after
-    us sees our slot and stays at its base). Ceiling: ``MAX_WORKERS``, ``cpu - 2`` (room
-    for the model and the daemon), free memory (1 GB per worker, 4 GB headroom).
-    ``SWARM_TEST_MAX_WORKERS`` set, no psutil, or an unreadable slot dir = ``base``."""
+    unused on a quiet machine). Never below ``base``. Only when no other runner holds a
+    worker token; the token pool (``_acquire_workers``) caps what is actually granted.
+    Ceiling: ``MAX_WORKERS``, ``cpu - 2`` (room for the model and the daemon), free
+    memory (1 GB per worker, 4 GB headroom). ``SWARM_TEST_MAX_WORKERS`` set, no psutil,
+    or an unreadable token dir = ``base``."""
     if os.environ.get("SWARM_TEST_MAX_WORKERS"):
         return base
     try:
-        if _busy_slots(_cache_dir()):
+        if _busy_tokens(_cache_dir()):
             return base
         import psutil
         cpu = os.cpu_count() or 2
@@ -907,18 +929,49 @@ def _scale_up(base: int) -> int:
 
 
 
-def _acquire_slot(cache: Path, warnings: list):
-    """Global semaphore: at most MAX_SLOTS runner executions across sessions."""
+def _acquire_workers(cache: Path, want: int, warnings: list) -> list:
+    """Take up to ``want`` tokens from the machine-wide pool; returns their lock fds.
+
+    Takes whatever is free (at least one) instead of waiting for all ``want``: a
+    smaller share now beats idling while another runner finishes. With none free it
+    polls for SLOT_WAIT_S, then returns [] and the caller runs ONE untokened worker
+    (warned): bounded overshoot instead of eating the deadline. Release with
+    ``_release_workers``."""
+    budget, want = _worker_budget(), max(1, want)
     end = time.monotonic() + SLOT_WAIT_S
     while True:
-        for n in range(MAX_SLOTS):
-            fd = _try_lock(cache / "slots" / f"{n}.lock", 0)
+        got = []
+        for n in range(budget):
+            if len(got) >= want:
+                break
+            fd = _try_lock(_token_path(cache, n), 0)
             if fd is not None:
-                return fd
+                got.append(fd)
+        if got:
+            if len(got) < want:
+                warnings.append(f"test worker pool shared with other runs: {len(got)} of "
+                                f"{want} workers granted (pool {budget})")
+            return got
         if time.monotonic() >= end:
-            warnings.append(f"all {MAX_SLOTS} test slots busy for {SLOT_WAIT_S:.0f}s; running anyway")
-            return None
+            warnings.append(f"all {budget} test worker tokens busy for {SLOT_WAIT_S:.0f}s; "
+                            "running with 1 worker")
+            return []
         time.sleep(0.25)
+
+
+def _release_workers(fds: list) -> None:
+    for fd in fds:
+        _unlock(fd)
+
+
+def _trim_tokens(tokens: list, jobs: list) -> list:
+    """Give back the tokens the built jobs cannot use (a one-file tdd call must not hold
+    four). Demand = total job weight (a vitest job weighs its fork count). Keeps >= 1."""
+    need = max(1, sum(getattr(j, "weight", 1) for j in jobs))
+    if len(tokens) > need:
+        _release_workers(tokens[need:])
+        return tokens[:need]
+    return tokens
 
 
 # ── signal handling (M1) ────────────────────────────────────────────────────
@@ -992,6 +1045,9 @@ class _Job:
                  kind: str, **meta):
         self.name, self.argv, self.cwd, self.env, self.kind = name, argv, cwd, env, kind
         self.meta = meta
+        # Scheduling weight in _run_jobs = processes this job puts on the machine (a
+        # vitest job runs its own fork pool); every other job is one process.
+        self.weight = max(1, int(meta.pop("weight", 1) or 1))
         self.out = workdir / f"{name}.out"
         self.err = workdir / f"{name}.err"
         self.proc = None
@@ -1064,10 +1120,15 @@ def _abort(jobs: list[_Job]) -> None:
 
 
 def _run_jobs(jobs: list[_Job], workers: int, deadline_at: float) -> None:
-    """Run jobs with ``workers`` parallelism; nothing survives past ``deadline_at``."""
+    """Run jobs, in list (priority) order, with at most ``workers`` processes: each job
+    counts its ``weight`` (a vitest job its fork pool), and a job always starts when
+    nothing else runs. Nothing survives past ``deadline_at``."""
     pending, running = list(jobs), []
     while pending or running:
-        while pending and len(running) < workers and time.monotonic() < deadline_at:
+        while pending and time.monotonic() < deadline_at:
+            load = sum(getattr(r, "weight", 1) for r in running)
+            if running and load + getattr(pending[0], "weight", 1) > workers:
+                break
             j = pending.pop(0)
             j.start()
             if j.rc is None:
@@ -1776,7 +1837,8 @@ def _npx() -> list[str]:
     return [sys.executable, npx] if npx.endswith(".py") else [npx]
 
 
-def _frontend_jobs(ctx, desktop_files: list[str], with_tsc: bool) -> list[_Job]:
+def _frontend_jobs(ctx, desktop_files: list[str], with_tsc: bool,
+                   with_backend: bool = False) -> list[_Job]:
     desktop = ctx.repo / "desktop"
     env = dict(os.environ)
     rel = [f[len("desktop/"):] for f in desktop_files]
@@ -1785,13 +1847,19 @@ def _frontend_jobs(ctx, desktop_files: list[str], with_tsc: bool) -> list[_Job]:
     # run killed at the deadline still says which files passed and which never ended.
     # ``--maxWorkers``: vitest's default pool takes nearly every core while the runner
     # counts it as ONE of its workers, so with the pytest shards beside it a run put
-    # ~cpu + workers processes on the machine. Its own pool gets the runner's budget,
-    # but at least 2: with one fork a single hanging test file holds the pool until the
-    # deadline and every other file of the call is reported not-run.
+    # ~cpu + workers processes on the machine. Its pool is a SHARE of the runner's
+    # workers (half when pytest shards run beside it, the rest of the budget otherwise)
+    # and the job weighs that many in _run_jobs, so the call stays inside its tokens.
+    # At least 2 forks: with one, a single hanging test file holds the pool until the
+    # deadline and every other file of the call is reported not-run. The weight always
+    # leaves one worker for the other jobs (pytest shards, tsc) when there are two.
+    w = ctx.workers
+    forks = max(2, w // 2 if with_backend else w - (1 if with_tsc else 0))
     jobs = [_Job("vitest", [*_npx(), "vitest", "related", *rel, "--run", "--reporter=json",
                             "--reporter=default", f"--outputFile.json={out}",
-                            f"--maxWorkers={max(2, ctx.workers)}"],
-                 desktop, env, ctx.workdir, "vitest", json=out, files=desktop_files)]
+                            f"--maxWorkers={forks}"],
+                 desktop, env, ctx.workdir, "vitest", json=out, files=desktop_files,
+                 weight=min(forks, max(1, w - 1)))]
     if with_tsc:
         jobs.append(_Job("tsc", [*_npx(), "tsc", "--noEmit", "--pretty", "false", "-p", "."],
                          desktop, env, ctx.workdir, "tsc"))
@@ -2077,10 +2145,10 @@ def _ensure_worktree(ctx, sha: str, time_left: float) -> Path | None:
 def classify_failures(ctx, results: list[dict]) -> dict[str, str]:
     """nodeid → new | flaky | pre-existing | regression | timeout | unknown, within the deadline.
 
-    timeout: a GLOBAL wall-clock deadline killed the shard (``deadline=True``) — an
-    infra/capacity signal under load, not a code failure; non-blocking (``_exit_code``)
-    and never cached. A per-test hang (``deadline=False``, caught by
-    ``PER_TEST_TIMEOUT_S``) is NOT this class and keeps blocking.
+    timeout: a GLOBAL wall-clock deadline killed the shard (``deadline=True``) — the
+    test never finished, so it is unverified (still blocks ``_exit_code``) but it is NOT
+    a code failure: no HEAD baseline, no re-runs, never routed as ``new``. A per-test
+    hang (``deadline=False``, caught by ``PER_TEST_TIMEOUT_S``) is NOT this class.
 
     new: absent at HEAD. pre-existing without any re-run: an observed failure (it ran
     and failed, ``_rerun_state``) whose HEAD outcome is ``failed`` (looked up first; it
@@ -2108,11 +2176,10 @@ def classify_failures(ctx, results: list[dict]) -> dict[str, str]:
         n = r["nodeid"]
         if r["outcome"] == "timeout" and r.get("deadline"):
             # A GLOBAL wall-clock deadline killed the shard (job.killed), not a per-test
-            # hang: the scope ran out of wall time under load. That is an infra/capacity
-            # signal, never a code regression — give it its own non-blocking class so the
-            # orchestrator re-runs the scope (or lowers concurrency) instead of routing a
-            # phantom "new" failure back to BUILD. Per-test hangs (deadline falsey, caught
-            # by PER_TEST_TIMEOUT_S) fall through below and keep blocking.
+            # hang: the scope ran out of wall time. Never a code regression — its own
+            # class so the orchestrator re-runs the scope instead of routing a phantom
+            # "new" failure back to BUILD. Still unverified, so _exit_code blocks it.
+            # Per-test hangs (deadline falsey) fall through below.
             cls[n] = "timeout"
             continue
         if r.get("runner_error"):
@@ -2659,10 +2726,11 @@ def _append_run_index(tdir: Path, entry: dict) -> None:
 
 def _blocking_sig(ev: dict) -> list[str]:
     """Sorted nodeids of the BLOCKING failures in this evidence — the circuit breaker's
-    per-round fingerprint. Non-blocking failures (pre-existing / flaky / global-deadline
-    timeouts, via ``_failure_nonblocking``) are excluded, so a stable pre-existing set or a
-    load-induced deadline timeout never reads as a stall; only genuinely-blocking failures
-    that persist across rounds do."""
+    per-round fingerprint. Non-blocking failures (pre-existing / flaky, via
+    ``_failure_nonblocking``) are excluded, so a stable pre-existing set never reads as a
+    stall. Deadline timeouts are included: re-running re-runs only the unfinished tests, so
+    the set shrinks while there is progress; the SAME set N rounds running means there is
+    none (a scope that cannot finish under this load) and a human should decide."""
     return sorted(f.get("nodeid", "") for f in (ev.get("failures") or [])
                   if isinstance(f, dict) and not _failure_nonblocking(f))
 
@@ -3422,14 +3490,18 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                 + ": nothing they import or may read changed since; not re-run")
     plan["l2_file_keys"] = keys
     run_targets = {f: v for f, v in targets.items() if f not in reused}
-    slot = _acquire_slot(ctx.cache, ctx.warnings)
+    # Machine-wide worker tokens: this call runs only as many workers as it holds, so
+    # concurrent runs share the cores instead of oversubscribing them.
+    tokens = _acquire_workers(ctx.cache, ctx.workers, ctx.warnings)
+    ctx.workers = max(1, len(tokens))
     try:
         jobs: list[_Job] = []
         fpath = ctx.cache / "results" / f"frontend-{fkey}.json"
         fhit = _read_json(fpath) if fkey else None
         if fkey and not isinstance(fhit, list):
             jobs += _frontend_jobs(ctx, plan["desktop"],
-                                   ns.mode in ("verify", "regression") or bool(plan.get("desktop_tsc")))
+                                   ns.mode in ("verify", "regression") or bool(plan.get("desktop_tsc")),
+                                   with_backend=bool(run_targets or ordered))
         if plan["smoke"]:
             sj = _smoke_job(ctx, list(plan["smoke"]))
             sj.meta["files"] = plan["smoke"]
@@ -3443,6 +3515,9 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                 for k, o in enumerate(ordered)] + jobs
         jobs += _pytest_jobs(ctx, run_targets, "main", first=plan.get("ac_first"),
                              durations=ctx.durations) if run_targets else []
+        if tokens:
+            tokens = _trim_tokens(tokens, jobs)
+            ctx.workers = len(tokens)  # re-runs in classify_failures stay inside them too
         main_end = ctx.deadline_at - min(20.0, deadline * 0.25)
         _run_jobs(jobs, ctx.workers, main_end)
         results = _results_with_requeue(ctx, jobs, main_end, "main")
@@ -3461,7 +3536,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                 _write_json(fpath, fres)
         cls = classify_failures(ctx, results)
     finally:
-        _unlock(slot)
+        _release_workers(tokens)
     # Reused entries are evidence entries already (compact): _assemble keeps them as is.
     results += [{**r, "_reused": True} for f in reused for r in reused[f]]
     ev = _assemble(ctx, ns, plan, results, cls, started_at, repeats, key)
@@ -3545,9 +3620,10 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
     dl_timeouts = sum(1 for f in failures if f.get("classification") == "timeout")
     if dl_timeouts:
         ctx.warnings.append(
-            f"{dl_timeouts} test(s) hit the GLOBAL deadline under load and were NOT "
-            "verified this round (non-blocking, not cached): re-run the scope or lower "
-            "concurrency — this is a capacity signal, not a code regression")
+            f"{dl_timeouts} test(s) hit the GLOBAL deadline and were NOT verified "
+            "(classification 'timeout'): this is NOT a code failure — do not edit code for "
+            "it. Re-run the SAME command unchanged: it re-runs only the unfinished tests, "
+            "and the result is not green until they have run")
     l2 = set(plan["l2"])
     dep = [r for r in results if _rfile(r) in l2 and not r.get("layer")]
     smoke = [r for r in results if r.get("layer") == "smoke"]
@@ -3600,23 +3676,23 @@ def _copy_logs(ctx, ev_root: Path, mode: str) -> Path:
 def _failure_nonblocking(f: object) -> bool:
     """One failure the exit code accepts — the SSOT rule shared, byte-for-byte, with
     ``pipeline_validator._evidence_failure_ok``: classified pre-existing (fails at the
-    HEAD baseline too) / flaky, OR a GLOBAL wall-clock deadline timeout (classification
-    ``timeout`` with ``deadline`` set — a load/capacity signal, re-run and never cached).
-    A per-test hang (``outcome == "timeout"`` with ``deadline`` falsey) is a real defect
-    and blocks, as does every other class. Fails closed on a malformed / deadline-less
-    timeout."""
+    HEAD baseline too) or flaky, and never a timeout.
+
+    A GLOBAL-deadline timeout (classification ``timeout``) is NOT a code failure — it
+    must not send the run back to BUILD — but it is NOT verified either: the test never
+    finished, so it is not green and blocks push-ready. Re-running the same mode on the
+    unchanged tree re-runs only those tests (``_auto_recheck``), so it converges; the
+    circuit breaker bounds it. A per-test hang blocks too — a hang is never green."""
     if not isinstance(f, dict):
         return False
-    if f.get("classification") == "timeout":
-        return f.get("outcome") == "timeout" and bool(f.get("deadline"))
     return f.get("classification") in ("pre-existing", "flaky") and f.get("outcome") != "timeout"
 
 
 def _exit_code(ev: dict) -> int:
     """0 only when no runner error occurred and every failure is non-blocking
-    (``_failure_nonblocking``): pre-existing / flaky, or a GLOBAL-deadline timeout. A
-    per-test hang still blocks — a hang is never green. ``pipeline_validator`` applies
-    the identical rule so the judge and the runner never disagree."""
+    (``_failure_nonblocking``: pre-existing / flaky, never a timeout). A deadline
+    timeout is unverified, so it is not green. ``pipeline_validator`` applies the
+    identical rule so the judge and the runner never disagree."""
     if ev.get("runner_errors"):
         return 1
     return 0 if all(_failure_nonblocking(f) for f in ev.get("failures") or []) else 1
@@ -3864,6 +3940,8 @@ def run_mutations(ctx, ns, ev_root: Path, run_state: dict) -> tuple[dict, int]:
         msg = (p.stderr.strip().splitlines() or ["?"])[-1] if p is not None else "git failed"
         return {"mode": "mutation", "error": f"cannot create worktree: {msg[:200]}"}, 2
     records, base_counts = [], {}
+    tokens = _acquire_workers(ctx.cache, ctx.workers, ctx.warnings)  # cross-run throttle
+    ctx.workers = max(1, len(tokens))
     try:
         for f in changed_files(ctx.repo, run_state, ctx.warnings, (ns.project, ns.run_id)):
             # H5: both ends resolved and contained before any write / unlink.
@@ -3890,6 +3968,7 @@ def run_mutations(ctx, ns, ev_root: Path, run_state: dict) -> tuple[dict, int]:
                 continue
             records.append(_apply_and_run(ctx, wt, m, targets, base_fail, i))
     finally:
+        _release_workers(tokens)
         _remove_worktree(ctx.repo, wt)
         _PRIVATE_WT.pop(wt, None)
     ev = {"schema": 1, "run_id": ns.run_id, "at": _now_iso(), "mutations": records,

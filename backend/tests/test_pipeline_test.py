@@ -215,11 +215,11 @@ def test_tdd_rejects_more_than_five_files(rig, capsys):
 
 
 # ── deadline ────────────────────────────────────────────────────────────────
-def test_global_deadline_timeout_is_nonblocking_infra_class(rig, capsys, tmp_path):
-    # A GLOBAL wall-clock deadline kill is a capacity signal under load, NOT a regression:
-    # its own non-blocking "timeout" class (exit 0), hang stack kept, surfaced in warnings,
-    # never cached. (Was asserted as a blocking "new" failure; that drove a build-fix loop
-    # whenever a heavy shard ran out of wall time under load.)
+def test_global_deadline_timeout_is_its_own_unverified_class(rig, capsys, tmp_path):
+    # A GLOBAL wall-clock deadline kill is NOT a code failure (its own "timeout" class,
+    # never "new", so the run is not sent back to BUILD) but it is NOT verified either:
+    # exit 1, never cached, hang stack kept, and the warning says re-run, don't edit code.
+    # (As "new" it drove a build-fix loop whenever a heavy shard ran out of wall time.)
     repo = rig()
     _write(repo, {"backend/tests/test_hang.py": (
         "import time\n\n\ndef test_hang():\n    time.sleep(60)\n")})
@@ -227,7 +227,7 @@ def test_global_deadline_timeout_is_nonblocking_infra_class(rig, capsys, tmp_pat
     out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "tdd", "--deadline", "6",
                      "--files", "backend/tests/test_hang.py")
     assert time.monotonic() - t0 < 15
-    assert code == 0 and out["counts"]["timeouts"] == 1, out
+    assert code == 1 and out["counts"]["timeouts"] == 1, out
     f = out["failures"][0]
     assert f["nodeid"] == "backend/tests/test_hang.py::test_hang"
     assert f["classification"] == "timeout"
@@ -235,7 +235,8 @@ def test_global_deadline_timeout_is_nonblocking_infra_class(rig, capsys, tmp_pat
     assert "test_hang" in ev["failures"][0]["summary"].split("stack:", 1)[1]  # the stack
     assert len(ev["failures"][0]["summary"].splitlines()) <= pt.STACK_LINES + 1
     assert ev["cached"] is False
-    assert any("global deadline" in w.lower() for w in ev.get("warnings") or [])  # surfaced
+    assert any("global deadline" in w.lower() and "do not edit code" in w.lower()
+               for w in ev.get("warnings") or [])  # routed to re-run, not to BUILD
     assert not (tmp_path / "cache" / "results").exists() or not any(
         json.loads(p.read_text()).get("counts", {}).get("timeouts")
         for p in (tmp_path / "cache" / "results").glob("*.json"))  # timeouts never cached

@@ -291,21 +291,28 @@ def test_judge_and_runner_agree_on_every_classification(cls):
     assert pv._evidence_green(ev) is (pipeline_test._exit_code(ev) == 0), cls
 
 
-def test_global_deadline_timeout_accepted_and_per_test_hang_blocks(tmp_path):
-    # A GLOBAL-deadline timeout (load/capacity signal) is accepted by BOTH the runner and
-    # the judge; a per-test hang (same timeout outcome, no deadline flag) blocks in both.
+def test_global_deadline_timeout_is_unverified_in_runner_judge_and_push_ready(tmp_path):
+    # A GLOBAL-deadline timeout never finished: runner, judge and the push-ready bound all
+    # refuse it (unverified), and the push-ready reason says re-run, not edit code. It is
+    # not counted as a regression in METRICS.
     import pipeline_test
 
     dl = _verify_report([_fail("timeout", outcome="timeout")])
     dl["failures"][0]["deadline"] = True
-    assert pipeline_test._failure_nonblocking(dl["failures"][0]) is True
-    assert pipeline_test._exit_code(dl) == 0
-    assert pv._evidence_green(dl) is True
-    assert _judge(tmp_path, dl)["met"] is True
+    assert pipeline_test._failure_nonblocking(dl["failures"][0]) is False
+    assert pipeline_test._exit_code(dl) == 1
+    assert pv._evidence_green(dl) is False
+    assert _judge(tmp_path, dl)["met"] is False
+    ok, reasons = pv.push_ready_upper_bound({"quality": {"tests_pass": True}}, "full",
+                                            test_evidence=dl)
+    assert ok is False and any("never finished" in r and "do not edit code" in r
+                               for r in reasons), reasons
+    assert cli._test_counts_from_evidence(dl)["failed"] == 0  # not a regression
 
-    hang = _verify_report([_fail("unknown", outcome="timeout")])  # no deadline flag
+    hang = _verify_report([_fail("unknown", outcome="timeout")])  # per-test hang
     assert pipeline_test._exit_code(hang) == 1
     assert pv._evidence_green(hang) is False
+    assert cli._test_counts_from_evidence(hang)["failed"] == 1  # a hang IS a failure
 
 
 @pytest.mark.parametrize("failures", ACCEPTED)

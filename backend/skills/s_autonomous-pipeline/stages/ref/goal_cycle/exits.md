@@ -5,6 +5,10 @@ SUCCESS (SUCCESS → `ref/goal_cycle/final-gate.md`).
 ## Regression Protocol (card step 6 went red)
 Act on the runner's `failures[].classification`: `pre-existing` failures are logged in
 IMPROVEMENT.md "Known Issues" and do not trigger this protocol; `regression` / `new` do.
+`timeout` (the runner's global deadline killed the test before it finished) is NOT a
+code failure and never triggers this protocol: no fix, no revert. Re-run the same
+command unchanged — it re-runs only the unfinished tests. The same `timeout` set four
+rounds running trips the runner's circuit breaker: checkpoint, don't keep re-running.
 ```
 Attempt 1:
   - Diagnose: which test fails and why? (timeouts carry their stack; no manual ps/kill)

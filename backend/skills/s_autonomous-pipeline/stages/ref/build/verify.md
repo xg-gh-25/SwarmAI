@@ -43,6 +43,10 @@ the runner does not cover").
 - Track the attempt count explicitly: "VERIFY attempt 1/2", "VERIFY attempt 2/2".
 - Changed + related test files must all pass. If existing tests break, fix production
   code, NOT the existing tests. Track all files changed and test results.
+- `timeout` failures (the global deadline killed them before they finished) are not a
+  code failure: don't edit code for them and don't count them as a re-run. Re-run the
+  same command unchanged (it re-runs only the unfinished tests); they block push-ready
+  until they have run. A runner `circuit_breaker` refusal means checkpoint, not re-run.
 - `pre-existing` failures (the runner's HEAD-baseline classification) are not yours:
   note them, don't debug them here.
 

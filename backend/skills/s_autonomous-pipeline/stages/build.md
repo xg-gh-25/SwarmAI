@@ -11,7 +11,7 @@ Tests go ONLY through `RUN` (`pipeline_test_gate` denies direct pytest/vitest/ts
 2. **Before code:** read TECH.md `## Dev Commands` + `## Stack` (never assume SwarmAI's stack); apply EVALUATE `build_injection_recommendations`; API existence check, mechanism declaration, pre-change greps.
 3. **Vertical TDD**, Change Spec order: tracer bullet (most important AC) first, then one test → one impl. Each cycle `RUN --mode tdd --files <≤5 test files>` (RED, then GREEN). `git add` your files by name; never `git commit` (`run-commit` at DELIVER is the sole commit). Code before its test → delete it, restart at RED. Fix code, not tests. A failure-path test per success-path test. Same AC fails twice → micro-replan (1 per AC, then L2 checkpoint).
 4. **After each GREEN:** path symmetry; real-data replay when the change reads persisted data.
-5. **VERIFY:** `RUN --mode verify`; fix code, `RUN --mode recheck`; max 2 re-runs, then complete with `tdd.regressions: N`.
+5. **VERIFY:** `RUN --mode verify`; fix code, `RUN --mode recheck`; max 2 re-runs, then complete with `tdd.regressions: N`. `timeout` = unfinished: re-run as is, never edit code.
 6. **Wiring:** caller verification, interface seam check, proximity scan (±50 lines), source verification for framework patterns.
 7. **SMOKE** every new branch in-process (import smoke for handlers/subprocess code; frontend tabs/geometry/entries), **Resource Lifecycle** (success + failure path release), user-path trace per AC, wire PROBE for new frontend-consumed endpoints.
 8. **Record written files:** `python backend/scripts/artifact_cli.py run-update --project <P> --run-id <R> --files-touched '["<abs path>", ...]'` (written only, absolute preferred, dedup-append).

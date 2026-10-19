@@ -5300,34 +5300,27 @@ _ACCEPTED_FAILURE_CLASSES = ("pre-existing", "flaky")
 
 def _evidence_failure_ok(f: object) -> bool:
     """One failure the runner accepts as NON-blocking — the single SSOT mirror of
-    ``pipeline_test._exit_code``: classified pre-existing (fails at the HEAD baseline
-    too) or flaky, OR a GLOBAL wall-clock deadline timeout (classification ``timeout``
-    with ``deadline`` set — a load/capacity signal, re-run and never cached). A per-test
-    hang (``outcome == "timeout"`` with ``deadline`` falsey) is a real defect and blocks,
-    as does every other class. Fails closed on a malformed / deadline-less timeout."""
+    ``pipeline_test._failure_nonblocking``: classified pre-existing (fails at the HEAD
+    baseline too) or flaky, and never a timeout. A GLOBAL-deadline timeout (classification
+    ``timeout``) is not a code failure but is unverified, so it is not green and caps
+    push-ready until a re-run finishes it."""
     if not isinstance(f, dict):
         return False
-    if f.get("classification") == "timeout":
-        return f.get("outcome") == "timeout" and bool(f.get("deadline"))
     return f.get("classification") in _ACCEPTED_FAILURE_CLASSES and f.get("outcome") != "timeout"
 
 
 def _evidence_green(ev: dict) -> bool:
     """A ``mode:<m>`` report is green when something passed and every failure is one the
     runner itself accepts (``_evidence_failure_ok`` — the mirror of
-    ``pipeline_test._exit_code``). A runner error, a per-test hang, or more
-    failed/errored/timed-out results than failure records is not."""
+    ``pipeline_test._exit_code``). A runner error, any timeout, or more failed/errored
+    results than failure records is not."""
     counts = ev.get("counts") if isinstance(ev.get("counts"), dict) else {}
-    if int(counts.get("passed") or 0) <= 0:
+    if int(counts.get("passed") or 0) <= 0 or int(counts.get("timeouts") or 0) > 0:
         return False
     if ev.get("runner_errors"):
         return False
     failures = list(ev.get("failures") or [])
-    # Every failing/errored/timed-out result needs a failure record to judge; a short
-    # list hides a verdict. timeouts are counted here now, because a deadline timeout is
-    # an acceptable record rather than an automatic reject.
-    if len(failures) < int(counts.get("failed") or 0) + int(counts.get("errors") or 0) \
-            + int(counts.get("timeouts") or 0):
+    if len(failures) < int(counts.get("failed") or 0) + int(counts.get("errors") or 0):
         return False
     return all(_evidence_failure_ok(f) for f in failures)
 
@@ -5557,9 +5550,15 @@ def push_ready_upper_bound(
         bad = [f for f in (test_evidence.get("failures") or [])
                if not _evidence_failure_ok(f)]
         counts = _safe_dict(test_evidence.get("counts"))
-        if bad:
-            reasons.append(f"tests: {len(bad)} blocking failure(s) in runner evidence")
-        elif int(counts.get("passed") or 0) <= 0:
+        unverified = sum(1 for f in bad if isinstance(f, dict)
+                         and f.get("classification") == "timeout")
+        if unverified:
+            reasons.append(f"tests: {unverified} test(s) never finished (global deadline) — "
+                           "unverified; re-run the same test mode, do not edit code")
+        if len(bad) > unverified or (not bad and int(counts.get("timeouts") or 0) > 0):
+            reasons.append(f"tests: {len(bad) - unverified} non-pre-existing failure(s) "
+                           "in runner evidence")
+        elif not bad and int(counts.get("passed") or 0) <= 0:
             reasons.append("tests: runner evidence records no passing test (counts.passed == 0)")
         if quality.get("tests_pass") is False:
             reasons.append("tests: quality.tests_pass is false")
