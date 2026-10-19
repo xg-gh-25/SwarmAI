@@ -350,7 +350,7 @@ def _assert_degraded(root, rid, stage, needle):
     errs = (rec.get("degraded") or {}).get("errors") or []
     assert any(needle in e for e in errs), rec
     if stage == "deliver":
-        assert rec.get("push_ready") is False and "open gate error" in rec["push_ready_reason"]
+        assert rec.get("push_ready") is False and needle in rec["push_ready_reason"]
 
 
 @pytest.mark.parametrize("case", [
@@ -1853,7 +1853,7 @@ def test_first_refusal_completes_the_stage_degraded(ws, capsys):
     st = _run_state(root, "run_deg")
     rec = next(s for s in st["stages"] if s["stage"] == "deliver")
     assert rec["degraded"]["errors"] and "attempts" not in rec["degraded"]
-    assert rec["push_ready"] is False and "open gate error" in rec["push_ready_reason"]
+    assert rec["push_ready"] is False and "profile_tier" in rec["push_ready_reason"]
     assert "stage_complete_failures" not in st
     assert any("[degraded] deliver" in f for f in
                _artifact_on_disk(root, rec["artifact_id"]).get("attention_flags", []))

@@ -603,7 +603,21 @@ _PLAIN_REASONS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"Gate-2 .*(?:did not converge|not converged)|review_not_converged", re.I),
      "Review did not converge in 3 rounds; the open findings are listed"),
     (re.compile(r"\btests?: \d+ failed|failed test", re.I), "Tests failed"),
-    (re.compile(r"unresolved (?:HIGH|MED|CRITICAL)", re.I), "A review finding is still open"),
+    (re.compile(r"unresolved (?:HIGH|MED|CRITICAL)|unresolved blocking finding", re.I),
+     "A review finding is still open"),
+    # a review that did not run (by decision or not): what the push decision needs to know
+    (re.compile(r"no Gate-2 review|Gate-2 expert\(s\) have not reviewed|adversarial_review|"
+                r"meta_review|requires sub-agent to be actually spawned|Red Team required|"
+                r"differs from the tree recorded when the Gate-2", re.I),
+     "Not reviewed by the Gate-2 experts"),
+    (re.compile(r"no exit contract", re.I), "No exit contract (the plan was skipped)"),
+    (re.compile(r"no runner (?:evidence|report)", re.I), "No test run was recorded for the code change"),
+    (re.compile(r"no test passed", re.I), "No test was selected for the change"),
+    (re.compile(r"not tested \(the test runner", re.I), "A changed repo is not covered by the test runner"),
+    # the rest of the delivery record's paperwork: one line, the details are in REPORT §10
+    (re.compile(r"Missing required field|completion_audit|ac_verification|Schema note|"
+                r"Design spec:|plan\.design|Depth:", re.I),
+     "Some delivery record fields are empty"),
 ]
 _STAGE_PREFIX_RE = re.compile(r"^(?:unverified:\s*)?(?:(evaluate|think|plan|build|review|test|deliver|reflect|goal_cycle):\s*)?", re.I)
 
@@ -621,7 +635,7 @@ def plain_reasons(raw: object, limit: int = 4) -> list[str]:
         if text is None:
             m = _STAGE_PREFIX_RE.match(part)
             stage, rest = (m.group(1) or "").capitalize(), part[m.end():]
-            rest = re.sub(r"^completed with \d+ open gate error\(s\):\s*", "", rest)
+            rest = re.sub(r"^(?:\w+ )?completed with \d+ open gate error\(s\):\s*", "", rest, flags=re.I)
             rest = re.split(r"\s+—\s+|\s+\(", rest, maxsplit=1)[0].strip(" .:;")
             if not rest:
                 continue

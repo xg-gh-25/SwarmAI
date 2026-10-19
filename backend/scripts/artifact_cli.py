@@ -10236,7 +10236,12 @@ def _degrade_gate_errors(run_file: Path, stage: str, errors: "list[str]",
                                        if not (isinstance(f, str) and f.startswith(f"[degraded] {stage} "))] + [flag]
     if stage == "deliver":
         cand_rec["push_ready"] = False
-        cand_rec["push_ready_reason"] = f"DELIVER {short}"[:900]
+        # "; "-joined, one error per clause (the card turns each into one sentence);
+        # a reason the record already carried (e.g. lowered by the user's decision) stays
+        prev = str(cand_rec.get("push_ready_reason") or "").strip() \
+            if cand_rec.get("push_ready") is False else ""
+        cand_rec["push_ready_reason"] = "; ".join(
+            [p for p in (prev,) if p] + [" ".join(str(e).split())[:200] for e in errors])[:1500]
     warnings.append(f"{stage} degraded: {len(errors)} gate error(s) recorded as push_ready "
                     "reasons (REPORT §10), not a stop; landing is decided by the test "
                     "evidence. Re-completing the stage with the errors fixed clears it")

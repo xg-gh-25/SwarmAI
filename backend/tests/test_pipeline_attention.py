@@ -448,6 +448,22 @@ def test_plain_reasons_drop_mechanics_and_say_what_is_missing():
         assert "DEGRADED" not in r and "not a stop" not in r and "REPORT" not in r and "_" not in r
 
 
+def test_plain_reasons_for_a_run_without_review():
+    """A degraded DELIVER of a run done without Gate-2 experts: every validator error
+    collapses into the few sentences a push decision needs, one each, no field names."""
+    raw = ("no Gate-2 review by user decision (tests decide landing); Missing required field "
+           "'adversarial_review' — depth validation requires this; Missing required field "
+           "'completion_audit' — depth validation requires this; Missing required field "
+           "'ac_verification' — x; meta_review missing from deliver artifact. Run Meta-Review; "
+           "completion_audit.all_green is not true; exit criteria unmet: ['(no exit contract "
+           "declared at PLAN)']; Gate-2 expert(s) have not reviewed the current change: correctness")
+    assert pse.plain_reasons(raw) == [
+        "Not reviewed by the Gate-2 experts",
+        "Some delivery record fields are empty",
+        "No exit contract (the plan was skipped)",
+    ]
+
+
 def test_plain_reasons_keep_an_unknown_reason_as_its_first_clause():
     assert pse.plain_reasons("unverified: build: lint found 3 errors — fix them (see log)") == ["Build: lint found 3 errors"]
     assert pse.plain_reasons("") == [] and pse.plain_reasons(None) == []
