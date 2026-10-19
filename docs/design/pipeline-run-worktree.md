@@ -2,9 +2,9 @@
 title: 每个 pipeline run 一个 worktree — 隔离、集成、清理
 date: 2026-10-18
 created: 2026-10-18
-updated: 2026-10-18
+updated: 2026-10-19
 project: SwarmAI
-status: FINAL r4，P0–P2 已实现（开关默认 off，见 §16.6）— §11 三个决定 XG 2026-10-18 已确认；对抗审查（r1→r2 单人，r2→r3 四路并行，两轮外部审查，r4 XG 审查）见 §16
+status: FINAL r4，P0–P2 已实现；任意 repo、owner gate 范围、开关持久化见 §16.9（开关默认 off）— §11 三个决定 XG 2026-10-18 已确认；对抗审查（r1→r2 单人，r2→r3 四路并行，两轮外部审查，r4 XG 审查）见 §16
 related: parallel-session-commit-isolation.md（本文是其中"方案二"的完整设计，取代该草稿）; pipeline-run-budget.md; pipeline-speed-systematic-fix.md
 author: Kiro
 ---
@@ -33,7 +33,8 @@ author: Kiro
 ## 3. 总体结构
 
 ```
-plan / build / goal_cycle 的第一次 stage-start ──► 建 worktree（每个绑定的代码 repo 一个）
+plan / build / goal_cycle 的第一次 stage-start ──► 定为 isolated；bindings 里的 repo 当场建 worktree，
+   │                     其他 repo 第一次被写时经 run-repo-add 建（§16.9）
    │
    ├─ 模型在 worktree 里改代码；改动始终是"相对 base 未提交"的状态，HEAD 一直等于 base
    ├─ 写入 gate：拒绝写 main checkout、拒绝动共享 ref 和配置，提示对应的 worktree 路径
@@ -735,3 +736,54 @@ P0 的 `updatedInput` 探针按真实拓扑重跑：Bash 链（改写 hook + app
 | srcgraph 缓存不清（§8.1） | `_remove` 删掉该 worktree 路径的 `srcgraph-*.json` | 释放后缓存文件消失 |
 | deliver 先记 completed 再落地，退避中的 run 会被 24 小时规则释放（§16.7 LOW） | 每次落地尝试记 `landing_attempt_at`，24 小时规则取活动时间和它的较大者 | 有近期尝试时不释放，没有时释放 |
 | §15 的 3、4 只有单侧测试 | 两个线程同时落地：恰好一个成功，另一个 `needs_resync`、worktree 回到 base，同步后叠在上面落地；同文件冲突经 CLI 全程：冲突 → 在 worktree 里解决并 `git add` → 重跑 stage-start 同步 → 重测 → 落地 | 两个新测试 |
+
+### 16.9 任意 repo 的 worktree、owner gate 的范围、开关持久化（2026-10-19）
+
+开关从这一版起可以打开（XG 2026-10-19 指示：这是产品能力，要支持各种 repo）。三处改动：
+
+**任意 repo，写的时候才建。** 开关打开时，run 第一次进 plan / build / goal_cycle 就定为 isolated（要 hook token 证明），
+同时建好 `WT_ROOT/<run_id>/`，写入 gate 从这时开始对它生效。项目 bindings 里登记的代码 repo 照旧当场建 worktree，
+但只是提示，不再是前提。owner 往别的 git repo 的 main checkout 写文件时（Write / Edit / 能解析的 Bash 写、
+`git add` 这类改 index 的 git 命令），gate 拒绝这次写，给出一条单条命令
+`<python> <artifact_cli.py> run-repo-add --project P --run-id R --path <repo>`；这条命令在 run 锁里、凭 token 建 worktree，
+然后模型在 worktree 里的同一相对路径重做这次写。worktree 不在 gate 里建：gate 只有 3 秒，大 repo 建 worktree 要更久，
+而且"先告诉路径、后台再建"会让模型抢先写出一个普通目录、让创建失败。
+
+- **不建 worktree、照旧直接写的地方**（`run_worktree.repo_for_write`，只读文件不起 git）：不是 git repo；
+  `.git` 是文件的（linked worktree、submodule）；任何 run worktree；SwarmWS 本身；home 目录或 app data 目录本身是 repo；
+  带 `.gitmodules` 的 repo；Brazil workspace 里的 package（`<ws>/src/<Pkg>` 且 `<ws>/packageInfo` 存在）；main checkout 在
+  detached HEAD，或有 rebase / merge / cherry-pick / revert / bisect 没做完。
+- **main checkout 的位置以 git 为准**（`run_worktree.entry_main`）：worktree 在盘上时，由它自己的 git 指针推出 main，
+  再和 entry 里记下的 `main`、`git_common_dir` 对上，并确认它是那个 main 登记的 linked worktree；worktree 已经不在
+  （释放后）时用记下的 `main`，但它的 common dir 必须是记录的那个。旧 entry 没有 `main` 字段的，worktree 在盘上就从
+  git 推，不在盘上才用 bindings 当提示。改 run.json 里的 `main` 或 common dir → `worktree_invalid`。
+- **key**：`repo_name` 仍是目录名；同一个 run 里另一个同名但不同的 repo 用 `<名字>-<main 路径 sha256 前 8 位>`。
+  集成锁改成按 repo 的 common dir 分，不再按名字。测试 runner 按 entry 记下的 `main` 找自己那个 repo 的 worktree。
+- **依赖目录**：新 worktree 把 main 里已有的 `node_modules`、`.venv`、`venv`（以及 SwarmAI 的 `desktop/node_modules`）
+  软链接进来，写进 info/exclude，不算未 add 文件。SwarmAI 用 main 的 venv 跑测试、去掉 main 的 backend 导入路径的做法不变。
+- **没有 token 也没有 bindings repo 的 run 定为 shared**，并给出警告：它还没有任何东西被隔离，而没有 hook 的后台执行器
+  不能因此让所有项目的 run 都失败。有 bindings repo 的 run 仍按 §4.2 处理（两次拒绝、第三次 failed）。
+
+**owner gate 只管该管的 run。** 以前开关一开，`run_owner_gate` 对所有项目的所有 run 都要求单条命令和 token。
+重放最近 60 个会话，394 条需要 token 的命令全是 `cd … && source … && python …` 组合写法，全会被拒。现在：
+worktree_mode 已定为 `shared` 的 run，行为和开关关闭时完全一样；还没定模式的 run，只对决定模式的那次
+plan / build / goal_cycle 的 stage-start 要求单条命令和 token；isolated 的 run 照旧，并且 `run-repo-add` 也要 token。
+拒绝组合命令时，提示里直接给出同一条调用的单条写法。命令文本来自 CLI 自己写进 run.json 的 `cli`
+（`sys.executable` 和 `artifact_cli.py` 的绝对路径；打包的 daemon 不知道源码在哪）。run.json 不可信，所以只有
+`cli` 指向一个存在的 python 解释器和一个存在、且不在任何 run worktree 里的 `artifact_cli.py` 时才打印它，否则打印相对写法。
+CLI 自己输出的后续命令（`next_action`、`complete_with`）也一律是绝对路径的单条命令。
+
+残余风险（按 §7.3 的威胁模型接受）：模型能直接改 run.json，把 `isolated` 改成 `shared` 就能同时躲开写入 gate 和 owner gate。
+这在本版之前就存在（写入 gate 一直信任 `worktree_mode`），owner gate 的收窄没有多开能力：shared 的 run 不做任何 worktree 操作，
+token 在那里本来就没有要保护的东西。另一个已知缺口：gate 解析不了的 Bash 写入，进入一个还没有 worktree 的 repo 时不会被拦，
+改动留在那个 repo 的 main 里，交付时照旧按文件提交（`run_commit_isolated` 交给原来的 pathspec 提交），不会丢。
+
+**开关持久化。** `pipeline.worktree_mode` 进了 `DEFAULT_CONFIG`（默认 `off`），`PUT /api/settings` 接受并校验
+`{"worktree_mode": "on" | "off"}`；`AppConfigManager.update()` 发现 config.json 在读入后被改过（手改）时，先重新读盘再合并，
+不再用启动时的缓存覆盖手改。`mode_enabled()` 每次直接读 config.json，打开或关闭都不用重启。
+
+未做（下一个 run）：测试 runner 只会测 SwarmAI，而 run 进行期间 `pipeline_test_gate` 拦掉所有直接跑测试的命令，所以非 SwarmAI
+repo 的 run 现在没有被支持的测试路径；"worktree 里测试是否导入了 main 的代码"这项检查要挂在那条路径上，一起做。
+另外，写入 gate 用整条命令最后一个 `cd` 解析所有相对重定向（`echo > a; cd 别处` 会把 `a` 当成写在别处），会误拦；
+修它需要按段保留重定向的分词，本版不做。
+

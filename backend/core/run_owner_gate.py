@@ -58,12 +58,29 @@ def _isolated(proj, rid) -> bool:
 _WRITING = frozenset({
     "run-update", "run-commit", "run-checkpoint", "run-resume", "run-report",
     "stage-start", "stage-complete", "publish", "run-observe", "run-diff",
-    "run-surface-changes",
+    "run-surface-changes", "run-repo-add",
 })
+# The stages whose first start decides an undecided run's mode (pipeline_worktree).
+_DECIDING_STAGES = frozenset({"plan", "build", "goal_cycle"})
 _TERMINAL = frozenset({"completed", "complete", "abandoned", "failed", "cancelled"})
-TOKEN_SUBCOMMANDS = ("stage-start", "stage-complete", "run-update")
+TOKEN_SUBCOMMANDS = ("stage-start", "stage-complete", "run-update", "run-repo-add")
 _DECIDE_TIMEOUT = 4.0
+# Variables that change where / whether the CLI isolates: the gate and the CLI must agree.
+_STEERING_ENV = ("SWARM_WORKTREE_MODE", "SWARM_WORKTREE_ROOT", "SWARM_WORKTREE_LEDGER",
+                 "SWARM_DATA_DIR")
 _SUBST = ("$(", "`", "<(", ">(")
+
+
+def _opt_all(tokens: list[str], name: str) -> "list[str]":
+    """Every value given for option *name* (exact spelling) — a repeated option is
+    judged on ALL its values, since argparse acts on the last one."""
+    out = []
+    for i, t in enumerate(tokens):
+        if t == name and i + 1 < len(tokens):
+            out.append(tokens[i + 1])
+        elif t.startswith(name + "="):
+            out.append(t[len(name) + 1:])
+    return out
 
 
 def _opt(tokens: list[str], name: str) -> "str | None":
@@ -110,7 +127,9 @@ def parse_cli_calls(command: str) -> "tuple[list[dict], bool]":
         calls.append({"tool": tool, "sub": sub, "run_id": _opt(rest, "--run-id"),
                       "project": _opt(rest, "--project"), "stage": _opt(rest, "--stage"),
                       "status": _opt(rest, "--status"), "ambiguous": _ambiguous(rest),
-                      "assigns": [t.split("=", 1)[0] for t in lead if "=" in t]})
+                      "assigns": [t.split("=", 1)[0] for t in lead if "=" in t],
+                      "argv": list(rest), "run_ids": _opt_all(rest, "--run-id"),
+                      "projects": _opt_all(rest, "--project")})
     return calls, single
 
 
@@ -142,7 +161,89 @@ def _needs_token(call: dict) -> "str | None":
         return "stage-complete"
     if sub == "run-update" and call.get("status") in _TERMINAL:
         return "run-update"
+    if sub == "run-repo-add":
+        return "run-repo-add"
     return None
+
+
+def _scope(data: dict) -> "str | None":
+    """How far the gate applies to a run (§16.9): "isolated" (everything below);
+    "undecided" with the switch on (only the stage-start that decides the mode); None
+    for a run recorded shared, an ended undecided run, or the switch off and not
+    isolated — that run is treated exactly as with the switch off."""
+    from core.run_worktree import mode_enabled
+    mode = data.get("worktree_mode")
+    if mode == "isolated":
+        return "isolated"
+    if mode is None and data.get("status") not in _TERMINAL and mode_enabled():
+        return "undecided"
+    return None
+
+
+def _any_named_run_applies(call: dict) -> bool:
+    from core.run_worktree import mode_enabled
+    from core.security_hooks import _pipeline_runs_root
+    rids = call.get("run_ids") or [call.get("run_id")]
+    projs = call.get("projects") or [call.get("project")]
+    for proj in projs:
+        for rid in rids:
+            if not (rid and proj and _RUN_ID_RE.fullmatch(str(rid)) and _safe_project(str(proj))):
+                if mode_enabled():
+                    return True
+                continue
+            f = (Path(_pipeline_runs_root()) / "Projects" / proj / ".artifacts" / "runs" / rid
+                 / "run.json")
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                if mode_enabled():
+                    return True
+                continue
+            scope = _scope(d) if isinstance(d, dict) else None
+            if scope == "isolated":
+                return True
+            if scope == "undecided" and call.get("sub") == "stage-start":
+                stages = _opt_all(call.get("argv") or [], "--stage")
+                # every --stage value counts; none visible (abbreviated) → refuse
+                if not stages or any(st in _DECIDING_STAGES for st in stages):
+                    return True
+    return False
+
+
+def _dedup_last(call: dict) -> dict:
+    """The call with each repeated key option given once, at its LAST value (what argparse
+    acts on), in the position of its first occurrence."""
+    argv = list(call.get("argv") or [])
+
+    def opt(i: int) -> "tuple[str | None, str | None, int]":   # (name, value, width)
+        t = argv[i]
+        if t in _KEY_OPTS and i + 1 < len(argv):
+            return t, argv[i + 1], 2
+        n = t.split("=", 1)[0]
+        return (n, t.split("=", 1)[1], 1) if n in _KEY_OPTS and "=" in t else (None, None, 1)
+
+    last, i = {}, 0
+    while i < len(argv):
+        n, v, w = opt(i)
+        if n:
+            last[n] = v
+        i += w
+    out, done, i = [], set(), 0
+    while i < len(argv):
+        n, _v, w = opt(i)
+        if n:
+            if n not in done:
+                out += [n, last[n]]
+                done.add(n)
+        else:
+            out.append(argv[i])
+        i += w
+    return dict(call, argv=out)
+
+def _single_form(data: dict, call: dict) -> str:
+    """The same call as ONE simple command with absolute paths, for a deny message."""
+    from core.worktree_write_gate import cli_command
+    return cli_command(data.get("cli"), shlex.join(call.get("argv") or []))
 
 
 def _owner_live(owner: str) -> "bool | None":
@@ -211,19 +312,29 @@ def _decide(sid: str, command: str, tool_input: dict) -> "dict | None":
         if c["tool"] == "foreign":
             continue
         rid, proj = c.get("run_id"), c.get("project")
-        if c.get("ambiguous") and (mode_enabled() or _isolated(proj, rid)):
+        known = bool(rid and proj and _RUN_ID_RE.fullmatch(rid) and _safe_project(proj))
+        data = None
+        if known:
+            run_file = (Path(_pipeline_runs_root()) / "Projects" / proj / ".artifacts" / "runs"
+                        / rid / "run.json")
+            try:
+                data = json.loads(run_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = None
+        scope = _scope(data) if isinstance(data, dict) else None
+        applies = scope == "isolated" or (scope == "undecided" and c["tool"] == "artifact_cli"
+                                          and c["sub"] == "stage-start"
+                                          and c.get("stage") in _DECIDING_STAGES)
+        if c.get("ambiguous") and _any_named_run_applies(c):
+            # a repeated / abbreviated key option: argparse acts on another value than the
+            # one read above, so every value counts — any run the gate applies to, or one
+            # it cannot read while the switch is on, refuses the call
             return _deny("give --run-id / --project / --stage / --status exactly once and "
-                         "unabbreviated")
-        if not (rid and proj and _RUN_ID_RE.fullmatch(rid) and _safe_project(proj)):
+                         "unabbreviated, as ONE command.\nRun instead (the values argparse "
+                         f"would have used): {_single_form(data or {}, _dedup_last(c))}")
+        if data is None or not applies:
             continue
         if c["tool"] == "artifact_cli" and c["sub"] not in _WRITING:
-            continue
-        run_file = Path(_pipeline_runs_root()) / "Projects" / proj / ".artifacts" / "runs" / rid / "run.json"
-        try:
-            data = json.loads(run_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not (mode_enabled() or data.get("worktree_mode") == "isolated"):
             continue
         if c["tool"] == "artifact_cli" and c["sub"] in _TAKEOVER:
             reason = _takeover(run_file, rid, sid)
@@ -232,12 +343,18 @@ def _decide(sid: str, command: str, tool_input: dict) -> "dict | None":
         sub = _needs_token(c)
         if sub is None:
             continue
+        steer = [a for a in c["assigns"] if a in _STEERING_ENV]
+        if steer or any(e + "=" in command for e in _STEERING_ENV):
+            return _deny("do not set " + ", ".join(steer or _STEERING_ENV) + " on a pipeline "
+                         f"command; worktree mode is a setting.\nRun instead: {_single_form(data, c)}")
         if hook_token.TOKEN_ENV in c["assigns"] or hook_token.TOKEN_ENV + "=" in command:
-            return _deny(f"do not set {hook_token.TOKEN_ENV} yourself; the hook issues it")
+            return _deny(f"do not set {hook_token.TOKEN_ENV} yourself; the hook issues it.\n"
+                         f"Run instead: {_single_form(data, c)}")
         if not single or len(calls) != 1:
             return _deny("this command changes the run's worktree state: run it on its own, "
-                         "as ONE command (no `;`, `&&`, `|`, subshells or `$(...)`), so the "
-                         "hook can issue its one-time token")
+                         "as ONE command (no `cd … &&`, `source …`, `;`, `|`, redirects, "
+                         "subshells or `$(...)`), so the hook can issue its one-time token.\n"
+                         f"Run instead: {_single_form(data, c)}")
         nonce = hook_token.issue(run_file.parent, sid, rid, sub)
         if nonce is None:  # the daemon's token service is down: never run unproven
             logger.warning("run_owner_gate: hook-token service not running; %s %s denied",

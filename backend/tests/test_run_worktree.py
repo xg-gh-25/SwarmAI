@@ -498,3 +498,169 @@ def test_token_socket_is_owner_only():
     p = hook_token.socket_path(hook_token._server_port)
     assert _st.S_IMODE(os.lstat(p).st_mode) == 0o600
     assert not os.lstat(p.parent).st_mode & 0o077
+
+
+# ── per-repo isolation: keys, pinned main, dependency links, isolatable repos ──
+def _init_repo(path, hooks):
+    path.mkdir(parents=True)
+    _g(path, "init", "-q", "-b", "main")
+    for k, v in (("user.name", "T"), ("user.email", "t@example.com"), ("core.hooksPath", str(hooks))):
+        _g(path, "config", k, v)
+    (path / "f.py").write_text("f = 1\n")
+    _g(path, "add", "-A")
+    _g(path, "commit", "-q", "-m", "init")
+    return path
+
+
+def test_repo_key_is_basename_until_it_collides(env):
+    other = _init_repo(env["tmp"] / "else" / "swarmai", env["hooks"])
+    assert rw.repo_key(env["main"], []) == "swarmai"
+    taken = [{"repo_name": "swarmai", "main": str(env["main"])}]
+    assert rw.repo_key(env["main"], taken) == "swarmai"          # same repo: same key
+    k = rw.repo_key(other, taken)
+    assert k != "swarmai" and k.startswith("swarmai-") and rw.REPO_NAME_RE.fullmatch(k)
+    long = _init_repo(env["tmp"] / ("n" * 70), env["hooks"])
+    assert rw.REPO_NAME_RE.fullmatch(rw.repo_key(long, []))
+
+
+def test_create_pins_main_and_links_dependency_dirs(env):
+    (env["main"] / "desktop").mkdir()
+    (env["main"] / "desktop" / "app.ts").write_text("x\n")
+    _g(env["main"], "add", "-A")
+    _g(env["main"], "commit", "-q", "-m", "desktop")
+    (env["main"] / "desktop" / "node_modules" / "pkg").mkdir(parents=True)
+    (env["main"] / "node_modules" / "pkg").mkdir(parents=True)
+    (env["main"] / ".venv" / "bin").mkdir(parents=True)
+    e = rw.create(RUN, "swarmai", env["main"])
+    wt = rw.wt_path(RUN, "swarmai")
+    assert e["main"] == str(env["main"])
+    assert e["dep_links"] == ["desktop/node_modules"]
+    assert os.path.islink(wt / "desktop" / "node_modules")
+    assert not os.path.lexists(wt / "node_modules")     # never shared: installs would hit main
+    assert not os.path.lexists(wt / ".venv")
+    assert rw.untracked_new_files(wt, RUN) == []
+    _g(wt, "add", "-A")                                           # excluded from git too
+    assert "node_modules" not in _g(wt, "diff", "--cached", "--name-only")
+
+
+def test_entry_main_cross_checks_git_and_the_pinned_path(env):
+    e = rw.create(RUN, "swarmai", env["main"])
+    assert rw.entry_main(RUN, e) == env["main"]
+    legacy = {k: v for k, v in e.items() if k != "main"}
+    assert rw.entry_main(RUN, legacy) == env["main"]              # legacy entry: from git
+    other = _init_repo(env["tmp"] / "else" / "x", env["hooks"])
+    with pytest.raises(rw.WorktreeError) as ex:
+        rw.entry_main(RUN, dict(e, main=str(other)))
+    assert ex.value.code == "worktree_invalid"
+    with pytest.raises(rw.WorktreeError):
+        rw.entry_main(RUN, dict(e, git_common_dir=str(other / ".git")))
+
+
+def test_entry_main_of_a_released_entry_needs_matching_common_dir(env):
+    e = rw.create(RUN, "swarmai", env["main"])
+    rw._remove(RUN, e, env["main"], merged=True)
+    assert rw.entry_main(RUN, e) == env["main"]
+    other = _init_repo(env["tmp"] / "else" / "y", env["hooks"])
+    with pytest.raises(rw.WorktreeError):
+        rw.entry_main(RUN, dict(e, main=str(other)))
+
+
+def test_repo_for_write_finds_isolatable_repos_only(env):
+    ws = env["tmp"] / "SwarmWS"
+    ws.mkdir()
+    _g(ws, "init", "-q", "-b", "main")
+    assert rw.repo_for_write(env["main"] / "a.py", ws) == env["main"]
+    assert rw.repo_for_write(env["main"] / "new" / "deep.py", ws) == env["main"]
+    assert rw.repo_for_write(ws / "Projects" / "x.md", ws) is None                 # SwarmWS
+    plain = env["tmp"] / "plain"
+    plain.mkdir()
+    assert rw.repo_for_write(plain / "f", ws) is None                              # not git
+    sub = _init_repo(env["tmp"] / "sub", env["hooks"])
+    (sub / ".gitmodules").write_text("")
+    assert rw.repo_for_write(sub / "f.py", ws) is None                             # submodules
+    bws = env["tmp"] / "bws"
+    (bws / "src").mkdir(parents=True)
+    (bws / "packageInfo").write_text("")
+    pkg = _init_repo(bws / "src" / "Pkg", env["hooks"])
+    assert rw.repo_for_write(pkg / "f.py", ws) is None                             # Brazil
+    det = _init_repo(env["tmp"] / "det", env["hooks"])
+    _g(det, "checkout", "-q", "--detach")
+    assert rw.repo_for_write(det / "f.py", ws) is None                             # detached
+    reb = _init_repo(env["tmp"] / "reb", env["hooks"])
+    (reb / ".git" / "rebase-merge").mkdir()
+    assert rw.repo_for_write(reb / "f.py", ws) is None                             # mid rebase
+    e = rw.create(RUN, "swarmai", env["main"])
+    assert rw.repo_for_write(rw.wt_path(RUN, "swarmai") / "a.py", ws) is None      # a worktree
+    assert e["state"] == "active"
+
+
+def test_own_isolated_run_includes_a_run_with_no_worktree_yet(env, tmp_path):
+    ws = env["tmp"] / "ws"
+    rd = ws / "Projects" / "P" / ".artifacts" / "runs" / RUN
+    rd.mkdir(parents=True)
+    (rd / "run.json").write_text(json.dumps({
+        "id": RUN, "project": "P", "status": "running", "session_id": "s1",
+        "worktree_mode": "isolated", "worktrees": []}))
+    r = rw.own_isolated_run("s1", ws)
+    assert r is not None and r["id"] == RUN and r["worktrees"] == []
+    assert rw.own_isolated_run("s2", ws) is None
+
+
+def test_a_repo_cloned_under_the_data_dir_is_isolatable(env, monkeypatch):
+    """bindings clone into <data dir>/bindings/<project>/<repo>: those repos must get
+    worktrees; only the data dir itself (as a repo) is excluded."""
+    data = env["tmp"] / "appdata"
+    monkeypatch.setattr(rw, "_data_dir", lambda: data)
+    clone = _init_repo(data / "bindings" / "P" / "repo", env["hooks"])
+    assert rw.repo_for_write(clone / "f.py", None) == clone
+
+
+def test_landed_run_no_longer_claims_writes(env):
+    ws = env["tmp"] / "ws"
+    rd = ws / "Projects" / "P" / ".artifacts" / "runs" / RUN
+    rd.mkdir(parents=True)
+    e = rw.create(RUN, "swarmai", env["main"])
+    e["state"] = "integrated"
+    (rd / "run.json").write_text(json.dumps({
+        "id": RUN, "project": "P", "status": "running", "session_id": "s1",
+        "worktree_mode": "isolated", "worktrees": [e]}))
+    assert rw.own_isolated_run("s1", ws) is None       # REFLECT writes go in place
+
+
+def test_stamp_only_dir_is_dropped_but_nothing_else(env):
+    ws = env["tmp"] / "ws"
+    ws.mkdir()
+    rw.stamp_workspace(RUN, ws)
+    assert rw.drop_stamp_only_dir(RUN, ws) and not (rw.wt_root() / RUN).exists()
+    rw.create("run_keep1", "swarmai", env["main"], workspace=ws)
+    assert not rw.drop_stamp_only_dir("run_keep1", ws) and rw.wt_path("run_keep1", "swarmai").is_dir()
+    rw.stamp_workspace("run_gone1", ws)                # no run record → the sweep drops it
+    rw.sweep(ws, owner_active=lambda sid: False)
+    assert not (rw.wt_root() / "run_gone1").exists()
+
+
+def test_unborn_repo_is_not_isolatable(env):
+    p = env["tmp"] / "fresh"
+    p.mkdir()
+    _g(p, "init", "-q", "-b", "main")
+    assert rw.repo_for_write(p / "a.py", None) is None
+
+
+def test_paused_run_without_worktrees_claims_nothing_and_newest_run_wins(env):
+    ws = env["tmp"] / "ws"
+    for rid, status in (("run_old1", "running"), ("run_new1", "running"), ("run_p1", "paused")):
+        rd = ws / "Projects" / "P" / ".artifacts" / "runs" / rid
+        rd.mkdir(parents=True)
+        (rd / "run.json").write_text(json.dumps({
+            "id": rid, "project": "P", "status": status, "session_id": "s1",
+            "worktree_mode": "isolated", "worktrees": []}))
+        time.sleep(0.02)
+    old = ws / "Projects" / "P" / ".artifacts" / "runs" / "run_old1" / "run.json"
+    os.utime(old, (1, 1))
+    assert rw.own_isolated_run("s1", ws)["id"] == "run_new1"
+
+
+def test_adopt_records_a_worktree_left_unrecorded(env):
+    rw.create(RUN, "swarmai", env["main"])
+    e = rw.adopt(RUN, "swarmai", env["main"])
+    assert e["state"] == "active" and rw.validate(RUN, e, env["main"]) == rw.wt_path(RUN, "swarmai")

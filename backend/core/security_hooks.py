@@ -3151,7 +3151,7 @@ def _session_run_state(app_session_id: str) -> "dict[str, str] | None":
         # session's run however long BUILD has been quiet (no 3-hour window).
         from core.run_worktree import own_isolated_run, wt_root
         if wt_root().is_dir():
-            own = own_isolated_run(app_session_id, _pipeline_runs_root())
+            own = own_isolated_run(app_session_id, _pipeline_runs_root(), with_empty=False)
             if own is not None:
                 best = {"project": own["project"], "id": own["id"]}
     return best
@@ -4115,9 +4115,22 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
         suggest = [_repo_relative(f, cwd) for f in files[:5]]
         mode = "tdd" if suggest else "verify"
         runner = _pipeline_runner_command(own_run["project"], own_run["id"], mode, suggest)
-        abandon = ("python backend/scripts/artifact_cli.py run-update --project "
-                   + shlex.quote(own_run["project"]) + " --run-id "
-                   + shlex.quote(own_run["id"]) + " --status abandoned")
+        abandon_args = ("run-update --project " + shlex.quote(own_run["project"]) + " --run-id "
+                        + shlex.quote(own_run["id"]) + " --status abandoned")
+        abandon = "python backend/scripts/artifact_cli.py " + abandon_args
+        try:  # the run's recorded CLI makes both ONE absolute command (pipeline-run-worktree §16.9)
+            from core.worktree_write_gate import cli_command
+            _rf = os.path.join(_pipeline_runs_root(), "Projects", own_run["project"], ".artifacts",
+                               "runs", own_run["id"], "run.json")
+            with open(_rf, encoding="utf-8") as _fh:
+                _cli = json.load(_fh).get("cli")
+            if isinstance(_cli, dict):
+                abandon = cli_command(_cli, abandon_args)
+                _rest = runner.split("backend/scripts/pipeline_test.py ", 1)[1]
+                runner = ("perl -e 'alarm 110; exec @ARGV' "
+                          + cli_command(_cli, _rest, script="pipeline_test.py"))
+        except Exception:  # noqa: BLE001 — the relative form is still printed
+            pass
         logger.warning("[BLOCKED] pipeline_test_gate (%s) in run %s: %s",
                        ", ".join(hits), own_run["id"], command[:120])
         hint = _test_gate_hint(hits)

@@ -251,14 +251,17 @@ implementations in `security_hooks.py`). By category:
    `SWARM_AUDIT_GATE_FORCE=1`; it reads command text (an unparseable command naming the
    dir fails closed), so a path built at run time or a standalone script file is not seen.
    Per-run worktrees (`docs/design/pipeline-run-worktree.md`; off until
-   `config.json["pipeline"]["worktree_mode"] = "on"`): `run_owner_gate` (Bash, right after
-   `pipeline_test_gate`; takes a crashed owner's run over, denies while the owner is live,
+   `config.json["pipeline"]["worktree_mode"] = "on"`, a `PUT /api/settings` key): `run_owner_gate`
+   (Bash, right after `pipeline_test_gate`; applies only to isolated runs and to the stage-start
+   that decides an undecided run's mode — a run recorded `shared` is untouched; takes a crashed
+   owner's run over, denies while the owner is live,
    and issues the one-time `SWARM_HOOK_TOKEN` by rewriting a single artifact_cli command via
    `updatedInput` — no other Bash hook may set `updatedInput`; the issuance record lives only
    in daemon memory, the CLI burns it over the owner-only socket started in `main.py`) and `worktree_write_gate`
    (Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep, its own group; keeps an isolated
-   run's writes in its own worktree, denies stash / shared-ref changes from a run worktree;
-   operator-set `SWARM_WORKTREE_GATE_FORCE=1`).
+   run's writes in its own worktrees, denies a write into any other isolatable git repo with
+   the `run-repo-add` command that gives it one, denies stash / shared-ref changes from a run
+   worktree; operator-set `SWARM_WORKTREE_GATE_FORCE=1`).
 5. **Advisory / hygiene** — `inclusive_term_guard`, `design_lint_guard` (warn only),
    `image_read_dedup_guard`.
 

@@ -30,14 +30,16 @@ from core.run_lock import RunLockTimeout, acquire_for_process, atomic_write_json
 LOCKED_COMMANDS = frozenset({
     "run-update", "run-commit", "run-checkpoint", "run-resume", "run-report",
     "stage-start", "stage-complete", "publish", "run-observe", "run-diff",
-    "run-surface-changes",
+    "run-surface-changes", "run-repo-add",
 })
 WORKTREE_STAGES = ("plan", "build", "goal_cycle")
 HOOKLESS_LIMIT = 3
 TERMINAL = ("completed", "complete", "abandoned", "failed", "cancelled")
-RULE = ("This run's code lives in its own worktree: edit files under {paths} (NOT the main "
+RULE = ("This run's code lives in its own worktrees: edit files under {paths} (NOT the main "
         "checkout). New files need `git add <path>` in the worktree; do not commit there. "
-        "Run the pipeline tools with the main checkout's absolute paths.")
+        "A write into another git repo is refused once, with the `run-repo-add` command that "
+        "gives that repo a worktree too. Run the pipeline tools with the main checkout's "
+        "absolute paths, each as ONE simple command.")
 # The stage cards are written for the shared checkout and have no room left (§6.3), so
 # the steps that differ for an isolated run are overridden here, in the tool output.
 CARD_OVERRIDES = {
@@ -57,11 +59,16 @@ def _emit_fail(payload: dict, code: int = 2) -> None:
 
 
 def refuse_if_worktree_copy(script: str) -> None:
-    """A tool copy inside a run worktree must never run (it could be half-edited)."""
+    """A tool copy inside a run worktree must never run against the workspace that owns
+    that worktree (it could be half-edited, and it would write real runs). Run against
+    another workspace — a test's temp SwarmWS — it is the code under test and may run."""
     hit = rw.run_for_path(script)
     if hit is None:
         return
     rid, repo = hit
+    ws = os.environ.get("SWARM_WORKSPACE")
+    if ws and not rw.owned_by(rid, ws):
+        return
     main_hint = "<main checkout>/" + os.path.relpath(os.path.realpath(script),
                                                      str(rw.wt_path(rid, repo)))
     _emit_fail({"ok": False, "error": "this tool copy lives inside run worktree "
@@ -111,9 +118,48 @@ def apply_cancel_request(run_file: Path) -> bool:
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-def mains_for(run_state: dict, workspace, self_repo) -> "dict[str, Path]":
-    """repo_name → main checkout, re-derived from bindings (never from run.json)."""
-    return dict(rw.code_repos(workspace, str(run_state.get("project") or ""), self_repo))
+class _Mains(dict):
+    """repo key → main checkout, plus ``errors``: key → why git did not confirm it."""
+
+    def __init__(self):
+        super().__init__()
+        self.errors: "dict[str, str]" = {}
+
+
+def mains_for(run_state: dict, workspace, self_repo, run_id: str) -> "_Mains":
+    """repo key → main checkout of each worktree entry, named by GIT (rw.entry_main:
+    the worktree's own registration, cross-checked with the pinned path and the
+    recorded common dir) — never by a path from run.json alone. Bindings only name the
+    main of a legacy entry (no pinned main) whose worktree is no longer on disk."""
+    hints = dict(rw.code_repos(workspace, str(run_state.get("project") or ""), self_repo))
+    out = _Mains()
+    for e in _entries(run_state):
+        key = str(e.get("repo_name"))
+        try:
+            out[key] = rw.entry_main(run_id, e, hint=hints.get(key))
+        except rw.WorktreeError as err:
+            out.errors[key] = err.message
+    return out
+
+
+def cli_record() -> dict:
+    """This CLI's own interpreter and script: tool outputs and the gates print commands
+    from it (the packaged daemon cannot know where the source checkout is)."""
+    return {"python": sys.executable,
+            "script": os.path.realpath(os.path.join(os.path.dirname(__file__), "artifact_cli.py"))}
+
+
+def _rerun(run_state: dict, run_id: str, sub: str, stage: str, extra: str = "") -> str:
+    import shlex
+    proj = shlex.quote(str(run_state.get("project") or "<project>"))
+    return self_cmd(f"{sub} --project {proj} --run-id {run_id} --stage {stage} {extra}".strip())
+
+
+def self_cmd(args: str) -> str:
+    """``<python> <artifact_cli.py> <args>``: ONE simple command with absolute paths."""
+    import shlex
+    c = cli_record()
+    return f"{shlex.quote(c['python'])} {shlex.quote(c['script'])} {args}"
 
 
 def is_isolated(run_state: dict) -> bool:
@@ -152,16 +198,27 @@ def _validated(run_id: str, run_state: dict, mains: dict) -> "list[tuple[dict, P
             continue
         main = mains.get(e.get("repo_name"))
         if main is None:
-            raise rw.WorktreeError("worktree_invalid", f"repo {e.get('repo_name')!r} is no "
-                                   "longer a code-repo binding of this project")
+            why = getattr(mains, "errors", {}).get(e.get("repo_name"), "main checkout unknown")
+            raise rw.WorktreeError("worktree_invalid", f"repo {e.get('repo_name')!r}: {why}")
         out.append((e, rw.validate(run_id, e, main), main))
     return out
 
 
+_CTX: dict = {}   # project / run_id of the command being served (for re-run commands)
+
+
 def stage_fail(stage: str, err: "rw.WorktreeError", next_step: str) -> None:
-    """One structured stage-boundary failure carrying the worktree error code (§7.7)."""
+    """One structured stage-boundary failure carrying the worktree error code (§7.7),
+    plus the re-run commands it may ask for, each ONE absolute simple command."""
+    extra = {}
+    if _CTX.get("run_id"):
+        st = {"project": _CTX.get("project")}
+        extra = {"rerun_stage_start": _rerun(st, _CTX["run_id"], "stage-start", stage),
+                 "rerun_stage_complete": _rerun(st, _CTX["run_id"], "stage-complete", stage,
+                                                "--data @<file>")}
     _emit_fail({"ok": False, "stage": stage, "code": err.code, "error": err.message,
-                "next": next_step, **{k: v for k, v in err.data.items() if v is not None}}, 1)
+                "next": next_step, **extra,
+                **{k: v for k, v in err.data.items() if v is not None}}, 1)
 
 
 # ── stage-start (§5.1, §7.2) ─────────────────────────────────────────────────
@@ -175,11 +232,27 @@ def _persist(run_file: Path, run_state: dict, **extra) -> None:
 
 def _decide_and_create(*, run_id, stage, run_file, run_state, run_dir, workspace,
                        self_repo, extra: dict) -> str:
-    """First plan/build/goal_cycle start: decide isolated vs shared once per run."""
-    repos = rw.code_repos(workspace, str(run_state.get("project") or ""), self_repo) \
-        if rw.mode_enabled() else []
-    if not repos:
+    """First plan/build/goal_cycle start: decide isolated vs shared once per run.
+
+    Switch on → isolated (proven by the hook token). Worktrees are made for the
+    project's bindings repos now (a hint: known up front); any other repo gets one on
+    its first write (worktree_write_gate denies it and prints ``run-repo-add``, §16.9).
+    A run with no bindings repo and no token falls back to shared: it has nothing
+    isolated yet, and a hookless background executor must not fail every run."""
+    if not rw.mode_enabled():
         run_state["worktree_mode"] = "shared"
+        _persist(run_file, run_state)
+        return "shared"
+    repos = rw.code_repos(workspace, str(run_state.get("project") or ""), self_repo)
+    if not repos and not os.environ.get(hook_token.TOKEN_ENV) \
+            and not os.environ.get("SWARM_APP_SESSION_ID"):
+        # truly hookless executor (no app session): nothing isolated yet, stay shared;
+        # a hooked session whose gate failed open takes the refuse-and-retry path below
+        run_state["worktree_mode"] = "shared"
+        extra.setdefault("warnings", []).append(
+            "worktree mode is on but this command carried no hook token, so this run uses "
+            "the shared checkout (run stage-start as ONE command from a SwarmAI chat session "
+            "to isolate it)")
         _persist(run_file, run_state)
         return "shared"
     ok, why = _token(run_dir, run_state, run_id, "stage-start")
@@ -196,17 +269,18 @@ def _decide_and_create(*, run_id, stage, run_file, run_state, run_dir, workspace
                         "next": "this run is failed; start it from a SwarmAI chat session"}, 1)
         _save(run_file, lambda d: d.update(hookless_refusals=n))
         _emit_fail({"ok": False, "stage": stage, "code": "hookless_session", "error": reason,
-                    "next": "rerun this stage-start as ONE command (no `;`, `&&`, `|`); "
-                            f"after {HOOKLESS_LIMIT} refusals the run fails"}, 1)
+                    "next": "rerun this stage-start as ONE command (no `;`, `&&`, `|`): "
+                            + _rerun(run_state, run_id, "stage-start", stage)
+                            + f" — after {HOOKLESS_LIMIT} refusals the run fails"}, 1)
     created: list[dict] = []
     try:
-        for name, main in repos:
-            created.append(rw.create(run_id, name, main, workspace=workspace))
+        for _name, main in repos:
+            created.append(rw.create(run_id, rw.repo_key(main, created), main,
+                                     workspace=workspace))
     except rw.WorktreeError as err:
-        mains = dict(repos)
         for e in created:
             try:
-                rw._remove(run_id, e, mains[e["repo_name"]], merged=False)
+                rw._remove(run_id, e, Path(e["main"]), merged=False)
             except rw.WorktreeError as rm_err:  # a fresh, empty worktree: report, never rmtree
                 extra.setdefault("warnings", []).append(f"cleanup: {rm_err.message}")
         run_state["worktree_mode"] = "shared"
@@ -217,21 +291,26 @@ def _decide_and_create(*, run_id, stage, run_file, run_state, run_dir, workspace
         return "shared"
     run_state["worktrees"] = created
     run_state["worktree_mode"] = "isolated"
-    _persist(run_file, run_state)
+    rw.stamp_workspace(run_id, workspace)  # WT_ROOT/<run_id>/ also arms the write gate
+    _persist(run_file, run_state, cli=cli_record())
     return "isolated"
 
 
 def on_stage_start(*, project: str, run_id: str, stage: str, run_file: Path,
                    run_state: dict, workspace, self_repo) -> dict:
     """Extra stage-start output for the worktree (may be {}); exits on a refusal."""
+    _CTX.update(project=project, run_id=run_id)
     extra: dict = {}
     run_dir = run_file.parent
+    if run_state.get("cli") != cli_record():   # the gates print re-run commands from it
+        run_state["cli"] = cli_record()
+        _save(run_file, lambda d: d.update(cli=run_state["cli"]))
     mode = run_state.get("worktree_mode")
     if mode == "isolated" and run_state.get("status") in TERMINAL:
         # Ended by someone else (cancel, reaper): refuse work; the owner releases (§8.2).
         res = None
         ok, _why = _token(run_dir, run_state, run_id, "stage-start")
-        mains = mains_for(run_state, workspace, self_repo)
+        mains = mains_for(run_state, workspace, self_repo, run_id)
         if ok and mains:
             holder: dict = {}
 
@@ -250,10 +329,12 @@ def on_stage_start(*, project: str, run_id: str, stage: str, run_file: Path,
                                   self_repo=self_repo, extra=extra)
     if mode != "isolated":
         return extra
+    if run_state.get("status") == "running" and not _entries(run_state):
+        rw.stamp_workspace(run_id, workspace)   # re-arm the write gate (idle runs are disarmed)
     if run_state.get("worktree_released_stale"):
         extra.update(_restore_released(run_id, stage, run_file, run_state, workspace, self_repo))
     try:
-        wts = _validated(run_id, run_state, mains_for(run_state, workspace, self_repo))
+        wts = _validated(run_id, run_state, mains_for(run_state, workspace, self_repo, run_id))
     except rw.WorktreeError as err:
         stage_fail(stage, err, "the worktree no longer matches its git registration; tell the user")
     paths = [str(w) for _e, w, _m in wts]
@@ -282,8 +363,9 @@ def _restore_released(run_id: str, stage: str, run_file: Path, run_state: dict,
     ok, why = _token(run_file.parent, run_state, run_id, "stage-start")
     if not ok:
         stage_fail(stage, rw.WorktreeError("hookless_session", why),
-                   "rerun this stage-start as ONE command from the session that owns the run")
-    mains = mains_for(run_state, workspace, self_repo)
+                   "rerun this stage-start as ONE command from the session that owns the run: "
+                   + _rerun(run_state, run_id, "stage-start", stage))
+    mains = mains_for(run_state, workspace, self_repo, run_id)
     restored = []
     for e in _entries(run_state):
         if e.get("state") != "released" or not e.get("ledger"):
@@ -336,7 +418,8 @@ def _deliver_sync(run_id: str, run_file: Path, run_state: dict, wts, run_dir: Pa
     ok, why = _token(run_dir, run_state, run_id, "stage-start")
     if not ok:
         stage_fail("deliver", rw.WorktreeError("hookless_session", why),
-                   "run stage-start as ONE command from the session that owns the run")
+                   "run stage-start as ONE command from the session that owns the run: "
+                   + _rerun(run_state, run_id, "stage-start", "deliver"))
     left = {e["repo_name"]: rw.untracked_new_files(w, run_id) for e, w, _m in wts}
     left = {k: v for k, v in left.items() if v}
     if left:
@@ -405,7 +488,7 @@ def derive_files_touched(run_id: str, run_state: dict, workspace, self_repo) -> 
     outside the run's worktrees (SwarmWS docs, unbound repos). None = not isolated."""
     if not is_isolated(run_state):
         return None
-    mains = mains_for(run_state, workspace, self_repo)
+    mains = mains_for(run_state, workspace, self_repo, run_id)
     roots, derived = [], []
     for e in _entries(run_state):
         if e.get("state") != "active":
@@ -487,13 +570,14 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
     since the reviewed tree was recorded), checked before anything is committed."""
     if not is_isolated(run_state) or not push_ready:
         return None
+    _CTX.update(project=run_state.get("project"), run_id=run_id)
     run_dir = run_file.parent
     if run_state.get("worktree_released_stale"):
         stage_fail("deliver", rw.WorktreeError(
             "worktree_released", "the worktree was released to the ledger after a long idle "
             "period; nothing can land until it is rebuilt"), _NEXT["worktree_released"])
     _save(run_file, lambda d: d.update(landing_attempt_at=rw._now_iso()))
-    mains = mains_for(run_state, workspace, self_repo)
+    mains = mains_for(run_state, workspace, self_repo, run_id)
     for e in _entries(run_state):   # a crash after merge, before the record: finish it
         m = mains.get(e.get("repo_name"))
         n = rw.landed_already(run_id, e, m) if e.get("state") == "active" and m else None
@@ -512,7 +596,9 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
     ok, why = _token(run_dir, run_state, run_id, "stage-complete")
     if not ok:
         stage_fail("deliver", rw.WorktreeError("hookless_session", why),
-                   "run stage-complete as ONE command from the session that owns the run")
+                   "run stage-complete as ONE command from the session that owns the run: "
+                   + _rerun(run_state, run_id, "stage-complete", "deliver",
+                            "--data @<file>"))
     try:
         for e, w, _m in wts:
             left = rw.untracked_new_files(w, run_id)
@@ -690,9 +776,10 @@ def after_status_write(*, run_id: str, run_file: Path, workspace, self_repo) -> 
     if not is_isolated(data) or data.get("status") not in TERMINAL:
         return None
     if not any(e.get("state") in ("active", "integrated") for e in _entries(data)):
+        rw.drop_stamp_only_dir(run_id, workspace)   # never got a worktree: disarm the gate
         return None
     ok, why = _token(run_file.parent, data, run_id, "run-update")
-    mains = mains_for(data, workspace, self_repo)
+    mains = mains_for(data, workspace, self_repo, run_id)
     if not ok or not mains:
         _save(run_file, lambda d: d.update(release_requested=True))
         return {"release": "requested", "why": why or "no code-repo binding"}
@@ -716,7 +803,7 @@ def cmd_run_diff(args, run_file: Path, workspace, self_repo) -> None:
     if not is_isolated(data):
         _emit_fail({"ok": False, "error": "run-diff needs an isolated run (worktree mode); "
                     "use git diff in the main checkout"}, 2)
-    mains = mains_for(data, workspace, self_repo)
+    mains = mains_for(data, workspace, self_repo, args.run_id)
     out: dict = {"ok": True}
     try:
         for e, w, m in _validated(args.run_id, data, mains):
@@ -733,6 +820,62 @@ def cmd_run_diff(args, run_file: Path, workspace, self_repo) -> None:
             print(f"# {name}\n{text}")
         return
     print(json.dumps(out, ensure_ascii=False))
+
+
+def cmd_run_repo_add(args, run_file: Path, workspace, self_repo) -> None:
+    """``run-repo-add --path P``: give the repo containing P a worktree of this isolated
+    run (§16.9). Owner-only (hook token), under the run lock (LOCKED_COMMANDS);
+    idempotent for a repo that already has one. Prints the worktree and its main."""
+    data = json.loads(run_file.read_text("utf-8"))
+    rid = args.run_id
+    if not is_isolated(data) or data.get("status") in TERMINAL:
+        _emit_fail({"ok": False, "code": "not_isolated", "error": f"run {rid} is not a live "
+                    "isolated run (worktree mode decides at the first plan/build stage-start)"}, 2)
+    if data.get("worktree_released_stale") or any(
+            e.get("state") in ("integrated", "released") for e in _entries(data)):
+        _emit_fail({"ok": False, "code": "run_settled", "error": f"run {rid} has landed or "
+                    "released a worktree: no new worktree can join it now",
+                    "next": "if a worktree was released after a long idle period, run "
+                            + _rerun(data, rid, "stage-start", "<current stage>")
+                            + " (it restores it); after landing, write in place"}, 2)
+    main = rw.repo_for_write(args.path, workspace)
+    if main is None:
+        _emit_fail({"ok": False, "code": "not_isolatable", "error": f"{args.path} is not in a "
+                    "git repo that can get a run worktree (not a repo, SwarmWS, a submodule "
+                    "setup, a Brazil package, or a detached / mid-rebase main checkout): "
+                    "write it in place"}, 2)
+    mains = mains_for(data, workspace, self_repo, rid)
+    for e in _entries(data):
+        if e.get("state") == "active" and mains.get(e.get("repo_name")) == main:
+            print(json.dumps({"ok": True, "worktree": str(rw.wt_path(rid, e["repo_name"])),
+                              "main": str(main), "created": False}))
+            return
+    ok, why = _token(run_file.parent, data, rid, "run-repo-add")
+    if not ok:
+        import shlex
+        _emit_fail({"ok": False, "code": "hookless_session", "error": why,
+                    "next": "run it as ONE command from the session that owns the run: "
+                            + self_cmd(f"run-repo-add --project {shlex.quote(str(data.get('project')))} "
+                                       f"--run-id {rid} --path {shlex.quote(str(args.path))}")}, 1)
+    resolved = [dict(e, main=str(mains[e["repo_name"]])) if e.get("repo_name") in mains else e
+                for e in _entries(data)]
+    key = rw.repo_key(main, resolved)
+    try:
+        if rw.wt_path(rid, key).exists() and rw.is_registered(main, rid, key):
+            entry = rw.adopt(rid, key, main)   # left by a call killed before it was recorded
+        else:
+            entry = rw.create(rid, key, main, workspace=workspace)
+    except rw.WorktreeError as err:
+        _emit_fail({"ok": False, **err.as_dict()}, 1)
+
+    def m(d: dict) -> None:
+        d["worktrees"] = (d.get("worktrees") or []) + [entry]
+        d["cli"] = cli_record()
+    _save(run_file, m)
+    wt = rw.wt_path(rid, entry["repo_name"])
+    print(json.dumps({"ok": True, "worktree": str(wt), "main": str(main), "created": True,
+                      "rule": f"edit {wt}/<path> instead of {main}/<path> for this repo; "
+                              "new files need `git add` there"}))
 
 
 def sweep_for_cli(workspace) -> "dict | None":

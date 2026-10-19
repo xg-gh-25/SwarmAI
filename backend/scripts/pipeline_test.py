@@ -354,7 +354,27 @@ def _target_repo(run_id: "str | None", run_state: dict) -> "tuple[Path | None, s
     for e in run_state.get("worktrees") or []:
         if not isinstance(e, dict) or e.get("state") != "active":
             continue
-        if e.get("repo_name") != main.name:
+        # The entry OF THIS repo, as git names it (keys are not always the directory
+        # name, §16.9). An entry that claims this repo (pinned main or legacy name) but
+        # git cannot confirm is refused, never skipped: skipping would test main.
+        real_main = os.path.realpath(str(main))
+        claims = (os.path.realpath(str(e["main"])) == real_main
+                  if e.get("main") else e.get("repo_name") == main.name)
+        try:  # git's own answer counts too: a forged pinned main must not hide it
+            g = rw.main_of(rw.wt_path(run_id, str(e.get("repo_name"))))
+            claims = claims or (g is not None and os.path.realpath(str(g)) == real_main)
+        except rw.WorktreeError:
+            pass
+        try:
+            owner = rw.entry_main(run_id, e)
+        except rw.WorktreeError as exc:
+            if claims:
+                return None, f"run worktree invalid: {exc.message}"
+            continue
+        if os.path.realpath(str(owner)) != os.path.realpath(str(main)):
+            if claims:
+                return None, ("run worktree invalid: its recorded main checkout is not the "
+                              "repo git registered it under")
             continue
         try:
             wt = rw.validate(run_id, e, main)

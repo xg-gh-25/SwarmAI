@@ -126,6 +126,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # Confidence thresholds are NOT config: they live only in
         # evolution_optimizer.HIGH_CONFIDENCE / MED_CONFIDENCE (data-calibrated).
     },
+    # Pipeline-run worktrees (docs/design/pipeline-run-worktree.md §9, §16.9): "on"
+    # gives each new pipeline run its own git worktree per repo it writes. Read
+    # straight from config.json by core.run_worktree.mode_enabled (no restart).
+    "pipeline": {"worktree_mode": "off"},
 }
 
 
@@ -193,6 +197,7 @@ class AppConfigManager:
         # write must re-attempt preservation first, or the first update() after
         # a failed isolation would overwrite the very file load() refused to touch.
         self._unpreserved_corrupt: bool = False
+        self._loaded_mtime: "float | None" = None
 
     # -- public API --------------------------------------------------------
 
@@ -258,6 +263,7 @@ class AppConfigManager:
                     "running on in-memory defaults (nothing written)",
                     self._config_path, _describe_parse_error(exc),
                 )
+        self._loaded_mtime = self._file_mtime()  # incl. a defaults file written above
         # Hydrate secrets from the separate 0o600 store into the cache (never
         # from config.json). This makes SECRET_KEYS durable across restarts.
         self._load_secrets()
@@ -402,6 +408,19 @@ class AppConfigManager:
         """
         if self._cache is None or self._unpreserved_corrupt:
             self.load()  # re-reads a hand-fixed file / retries isolation
+        elif self._file_mtime() != self._loaded_mtime:
+            # config.json changed since it was read (a hand edit while the daemon runs):
+            # merge onto what is on disk, never write the stale cache over it. A file that
+            # no longer parses is refused (retryable): never isolate-and-reset here.
+            try:
+                disk = json.loads(self._config_path.read_text(encoding="utf-8"))
+                if not isinstance(disk, dict):
+                    raise ValueError("root is not a JSON object")
+            except (OSError, ValueError) as exc:
+                raise RuntimeError(f"{self._config_path} was edited and no longer parses "
+                                   f"({exc}); fix it, then retry") from exc
+            secrets = {k: v for k, v in self._cache.items() if k in SECRET_KEYS}
+            self._cache = {**DEFAULT_CONFIG, **disk, **secrets}
         if self._unpreserved_corrupt:
             raise RuntimeError(
                 f"{self._config_path} is unreadable and could not be preserved — "
@@ -411,6 +430,7 @@ class AppConfigManager:
         candidate = {**self._cache, **updates}
         self._write_to_disk(candidate)
         self._cache = candidate
+        self._loaded_mtime = self._file_mtime()
         logger.info("Config updated: %s", list(updates.keys()))
 
     def reload(self) -> None:
@@ -419,6 +439,12 @@ class AppConfigManager:
         self.load()
 
     # -- private helpers ----------------------------------------------------
+
+    def _file_mtime(self) -> "float | None":
+        try:
+            return self._config_path.stat().st_mtime_ns / 1e9
+        except OSError:
+            return None
 
     def _write_to_disk(self, data: dict[str, Any] | None = None) -> None:
         """Persist *data* (default: the current cache) to disk, stripping secret keys."""

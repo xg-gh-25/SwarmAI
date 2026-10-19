@@ -2442,10 +2442,14 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
     # Load historical calibration for budget estimate
     budget = _estimate_session_budget(args.project)
 
+    import pipeline_worktree as _pw_cli
     run_state = {
         "id": run_id,
         "project": args.project,
         "requirement": args.requirement,
+        # this CLI's own interpreter + script: the worktree gates print one-command
+        # re-runs from it (pipeline-run-worktree §16.9)
+        "cli": _pw_cli.cli_record(),
         # C3: store canonical profile if given; None stays None (profile is classified
         # after EVALUATE — "not yet set" is meaningful and must not become "full").
         "profile": normalize_profile(args.profile) if args.profile else None,
@@ -5116,8 +5120,11 @@ def _gate_verdict_spawn_errors(run_id: str, run_state: dict, stage: str, profile
         return _gate_unbacked("gate0", cand_rec.get("gate0_unverified_reason"), detail, warnings,
                               f"Gate-0: understanding.skeptic_verdict is '{verdict}' but no "
                               "gate0-skeptic sub-agent completed for this run during this EVALUATE. "
-                              "Run `artifact_cli.py gate0-prompt --data @<file>` and spawn its "
-                              "`spawn` text, record ITS verdict, then re-run stage-complete.")
+                              "Run `" + __import__("pipeline_worktree").self_cmd(
+                                  f"gate0-prompt --project {run_state.get('project')} "
+                                  f"--run-id {run_id} --data @<file>")
+                              + "` and spawn its `spawn` text, record ITS verdict, then re-run "
+                              "stage-complete.")
     if stage not in ("build", "goal_cycle"):
         return []
     legacy = cand_rec.get("gate1") if isinstance(cand_rec.get("gate1"), dict) else {}
@@ -5190,8 +5197,9 @@ def _gate0_prompt_unbound(run_id: str, run_state: dict, und, since: float,
         handout = led if isinstance(led, dict) else {}
     if not handout.get("sha"):
         return ("no Gate-0 prompt was handed out for this run: write {\"understanding\": …, "
-                "\"claims\": […]} to a file, run `artifact_cli.py gate0-prompt --project <P> "
-                "--run-id <R> --data @<file>` and spawn its `spawn` text"), None
+                "\"claims\": […]} to a file, run `" + __import__("pipeline_worktree").self_cmd(
+                    f"gate0-prompt --project {run_state.get('project')} --run-id {run_id} "
+                    "--data @<file>") + "` and spawn its `spawn` text"), None
     if handout.get("understanding_sha") != _gate0_understanding_sha(und):
         return ("the recorded understanding (" + " / ".join(_GATE0_JUDGED_FIELDS) + ") is not "
                 "the one handed to the skeptic: re-run gate0-prompt with it and spawn the "
@@ -10101,8 +10109,9 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     if isinstance(_t_open, dict) and _t_open.get("started_at") and _t_open.get("completed_at"):
         _stage_boundary_fail(stage, [
             f"Stage not open: '{stage}' already completed at {_t_open['completed_at']} and "
-            f"was not re-entered. Run `artifact_cli.py stage-start --project {project} "
-            f"--run-id {run_id} --stage {stage}` first, so the re-record is measured over "
+            f"was not re-entered. Run `" + __import__("pipeline_worktree").self_cmd(
+                f"stage-start --project {project} --run-id {run_id} --stage {stage}")
+            + "` first, so the re-record is measured over "
             f"its own window, not across the stages that ran since."])
 
     status = "skipped" if record_in.get("status") == "skipped" else "completed"
@@ -10218,7 +10227,10 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         partial = {"artifact_id": artifact_id} if artifact_id else {}
         print(json.dumps({"ok": False, "stage": stage, "code": "write_failed",
                           "error": f"{type(exc).__name__}: {exc}", "partial": partial,
-                          "hint": "re-run stage-complete; it is idempotent"},
+                          "hint": "re-run stage-complete; it is idempotent: "
+                                  + __import__("pipeline_worktree").self_cmd(
+                                      f"stage-complete --project {project} --run-id {run_id} "
+                                      f"--stage {stage} --data @<file>")},
                          default=str, ensure_ascii=False))
         sys.exit(1)
 
@@ -10230,8 +10242,9 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     if stage == "deliver":
         report_ok, report_generated = _ensure_report_before_advance(project, run_id, run_dir, reg)
         if not report_ok:
-            warnings.append("REPORT.md could not be generated — run `artifact_cli.py run-report` "
-                            "before advancing or completing")
+            warnings.append("REPORT.md could not be generated — run `" + __import__(
+                "pipeline_worktree").self_cmd(f"run-report --project {project} --run-id {run_id}")
+                + "` before advancing or completing")
         # Isolated run: land now (pipeline-run-worktree §7.4). A refusal exits here,
         # so the manifest does not advance; rerunning stage-complete retries.
         landing = _land_isolated_deliver(
@@ -10253,21 +10266,27 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
             next_card, next_action = _next_stage_continuation(project, next_stage, run_id)
         except Exception:
             next_card, next_action = None, None
+        import pipeline_worktree as _pw_next
+        _sc = _pw_next.self_cmd   # every follow-up: ONE command, absolute paths
         if not report_ok:
-            next_action = (f"REPORT.md gate: run `artifact_cli.py run-report --project {project} "
-                           f"--run-id {run_id}`, then `artifact_cli.py advance --project {project} "
-                           f"--run-id {run_id} --state {next_stage}`. " + (next_action or ""))
+            next_action = ("REPORT.md gate: run `" + _sc(f"run-report --project {project} "
+                           f"--run-id {run_id}") + "`, then `" + _sc(
+                               f"advance --project {project} --run-id {run_id} "
+                               f"--state {next_stage}") + "`. " + (next_action or ""))
         if next_action and _CONTINUATION_PHRASE not in next_action:
             next_action += f" — {_CONTINUATION_PHRASE}."
-        next_action = (f"{next_action} First run `artifact_cli.py stage-start --project "
-                       f"{project} --run-id {run_id} --stage {next_stage}`.")
+        next_action = (f"{next_action} First run, as ONE command: `" + _sc(
+            f"stage-start --project {project} --run-id {run_id} --stage {next_stage}") + "`.")
     else:
+        import pipeline_worktree as _pw_next
+        _sc = _pw_next.self_cmd
         next_action = (f"'{stage}' is the last stage of the '{profile}' profile — proceed to "
-                       f"COMPLETE: read stages/complete.md, then `run-update --project {project} "
-                       f"--run-id {run_id} --status completed`. {_CONTINUATION_PHRASE}.")
+                       "COMPLETE: read stages/complete.md, then `" + _sc(
+                           f"run-update --project {project} --run-id {run_id} --status completed")
+                       + f"`. {_CONTINUATION_PHRASE}.")
         if not report_ok:
-            next_action = (f"REPORT.md gate: run `artifact_cli.py run-report --project {project} "
-                           f"--run-id {run_id}` first. " + next_action)
+            next_action = ("REPORT.md gate: run `" + _sc(f"run-report --project {project} "
+                           f"--run-id {run_id}") + "` first. " + next_action)
     if isinstance(exit_result, dict) and exit_result.get("met") is True:
         next_action = f"{next_action} {_EXIT_MET_DIRECTIVE}"
 
@@ -11379,7 +11398,9 @@ def _gate2_recheck_errors(run_id: str, run_dir: "Path | None", run_state: dict,
     # file) from an earlier DELIVER cycle proves nothing about this cycle's fixes.
     if man is None and _why and "ledger" in _why:
         return [f"Gate-2 round 2: the round-1 snapshot (evidence/prompts/round1/manifest.json) "
-                f"is {_why}: run `stage-start --stage deliver` and re-run round 1"]
+                f"is {_why}: run `" + __import__("pipeline_worktree").self_cmd(
+                    f"stage-start --project {run_state.get('project')} --run-id {run_id} "
+                    "--stage deliver") + "` and re-run round 1"]
     if man is None:
         missing_snapshot = ("Gate-2 round 2: the round-1 snapshot (evidence/prompts/round1/"
                             f"manifest.json) is {_why}, so no re-check can be "
@@ -11625,8 +11646,10 @@ def _gate2_findings_errors(run_id: str, run_dir: "Path | None", run_state: dict,
         return []
     man, why = _round1_manifest(run_id, run_dir, run_state)
     if man is None and why and "ledger" in why:
-        return [f"Gate-2 findings: the round-1 snapshot is {why}: run `stage-start --stage "
-                "deliver` and re-run round 1"]
+        return [f"Gate-2 findings: the round-1 snapshot is {why}: run `" + __import__(
+            "pipeline_worktree").self_cmd(f"stage-start --project {run_state.get('project')} "
+                                          f"--run-id {run_id} --stage deliver")
+                + "` and re-run round 1"]
     # the same review-cycle start as the re-check gate: earlier cycles prove nothing
     if not isinstance(man, dict) or man.get("late"):
         since = windows[-1][0]
@@ -11822,8 +11845,9 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
         "artifact_example": pv.STAGE_TEMPLATES.get(stage),
         "record_example": pv.STAGE_RECORD_TEMPLATES.get(stage, {}),
         "enums": pv.STAGE_ENUMS.get(stage, {}),
-        "complete_with": (f"artifact_cli.py stage-complete --project {project} --run-id {run_id} "
-                          f"--stage {stage} --data @<file with {{\"artifact\":...,\"record\":...}}>"),
+        "complete_with": _pw.self_cmd(
+            f"stage-complete --project {project} --run-id {run_id} --stage {stage} "
+            f"--data @<file with {{\"artifact\":...,\"record\":...}}>"),
     }
     if stage == "deliver":
         # Only DELIVER owns them (Gate-2 dispatches the union; run-commit's D7 checks
@@ -11976,8 +12000,10 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
     if ledger_warn:
         if _gate_spawn_enforced(run_state, HANDOUT_CUTOVER):
             # a hand-out the ledger does not hold cannot bind any gate round later
-            _stage_boundary_fail(stage, ledger_warn + ["re-run stage-start once the audit "
-                                                       "state dir is writable"])
+            _stage_boundary_fail(stage, ledger_warn + [
+                "re-run stage-start once the audit state dir is writable: " + __import__(
+                    "pipeline_worktree").self_cmd(f"stage-start --project {project} "
+                                                  f"--run-id {run_id} --stage {stage}")])
         warnings += ledger_warn
     out["warnings"] = warnings
     print(json.dumps(_fit_stage_start(out), default=str, ensure_ascii=False))
@@ -12281,6 +12307,13 @@ def main() -> None:
     p_run_diff.add_argument("--stat", action="store_true")
     p_run_diff.add_argument("--json", action="store_true")
 
+    # run-repo-add — give another git repo a worktree of this isolated run (§16.9)
+    p_repo_add = sub.add_parser("run-repo-add", help="Isolated run: create this run's "
+                                "worktree for the git repo containing --path (owner only)")
+    p_repo_add.add_argument("--project", required=True)
+    p_repo_add.add_argument("--run-id", required=True)
+    p_repo_add.add_argument("--path", required=True)
+
     import pipeline_worktree as _pw
     _pw.refuse_if_worktree_copy(__file__)
     args = parser.parse_args()
@@ -12291,6 +12324,8 @@ def main() -> None:
     handlers = {
         "run-diff": lambda a, r: _pw.cmd_run_diff(a, _resolve_run_file(a.project, a.run_id),
                                                   _get_workspace(), _BACKEND_DIR.parent),
+        "run-repo-add": lambda a, r: _pw.cmd_run_repo_add(
+            a, _resolve_run_file(a.project, a.run_id), _get_workspace(), _BACKEND_DIR.parent),
         "stage-start": cmd_stage_start,
         "stage-complete": cmd_stage_complete,
         "gate2-recheck": cmd_gate2_recheck,

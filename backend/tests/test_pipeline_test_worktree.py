@@ -91,3 +91,44 @@ def test_deleted_module_does_not_import_from_main(repo, tmp_path):
     p = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
                        cwd=str(repo["wt"] / "backend"))
     assert p.returncode == 0  # the fallback the sitecustomize exists to remove
+
+
+def test_targets_the_entry_pinned_to_this_repo_not_a_same_named_one(repo):
+    """Keys are no longer the basename when two repos share it (§16.9): the runner
+    picks the entry whose pinned main IS its repo."""
+    other = repo["tmp"] / "else" / "swarmai"
+    other.mkdir(parents=True)
+    _g(other, "init", "-q", "-b", "main")
+    for k, v in (("user.name", "T"), ("user.email", "t@e.com"), ("core.hooksPath", str(repo["tmp"]))):
+        _g(other, "config", k, v)
+    (other / "x.py").write_text("x = 1\n")
+    _g(other, "add", "-A")
+    _g(other, "commit", "-q", "-m", "i")
+    key = rw.repo_key(other, [repo["entry"]])
+    e2 = rw.create(RID, key, other)
+    state = {"worktree_mode": "isolated", "worktrees": [e2, repo["entry"]]}
+    target, err = pt._target_repo(RID, state)
+    assert err is None and target == repo["wt"]
+    renamed = dict(repo["entry"], repo_name="swarmai")
+    assert pt._target_repo(RID, {"worktree_mode": "isolated", "worktrees": [renamed]})[0] == repo["wt"]
+
+
+def test_entry_claiming_this_repo_with_a_forged_main_is_refused(repo):
+    other = repo["tmp"] / "else2" / "elsewhere"
+    other.mkdir(parents=True)
+    _g(other, "init", "-q", "-b", "main")
+    forged = dict(repo["entry"], main=str(repo["main"]))
+    forged["git_common_dir"] = str(other / ".git")          # git disagrees with the record
+    target, err = pt._target_repo(RID, {"worktree_mode": "isolated", "worktrees": [forged]})
+    assert target is None and "invalid" in err
+
+
+def test_entry_whose_pinned_main_points_elsewhere_is_refused_not_skipped(repo):
+    """git says this worktree is this repo's; a pinned main naming another repo must
+    not make the runner skip it and test main (spec review BLOCK)."""
+    other = repo["tmp"] / "else3" / "x"
+    other.mkdir(parents=True)
+    _g(other, "init", "-q", "-b", "main")
+    forged = dict(repo["entry"], main=str(other))
+    target, err = pt._target_repo(RID, {"worktree_mode": "isolated", "worktrees": [forged]})
+    assert target is None and "invalid" in err

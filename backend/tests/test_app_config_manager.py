@@ -670,3 +670,38 @@ class TestUnpreservedCorruptStoreStaysProtected:
         entries = [e for e in read_recovery_marker(tmp_config.parent)["pending"]
                    if Path(e["isolated_path"]) == tmp_config]
         assert len(entries) == 1
+
+
+def test_update_keeps_a_hand_edit_made_after_load(mgr, tmp_config):
+    """A save after a hand edit must not write the stale startup cache over it."""
+    import os
+    import time
+    mgr.load()
+    data = json.loads(tmp_config.read_text())
+    data["pipeline"] = {"worktree_mode": "on"}
+    tmp_config.write_text(json.dumps(data))
+    st = tmp_config.stat()
+    os.utime(tmp_config, (st.st_atime, st.st_mtime + 5))   # a later edit, whatever the clock
+    time.sleep(0)
+    mgr.update({"aws_region": "eu-west-1"})
+    disk = json.loads(tmp_config.read_text())
+    assert disk["pipeline"] == {"worktree_mode": "on"} and disk["aws_region"] == "eu-west-1"
+
+
+def test_pipeline_switch_defaults_off(mgr):
+    from core.app_config_manager import DEFAULT_CONFIG
+    assert DEFAULT_CONFIG["pipeline"] == {"worktree_mode": "off"}
+    assert mgr.load()["pipeline"] == {"worktree_mode": "off"}
+
+
+def test_update_refuses_a_hand_edit_that_no_longer_parses(mgr, tmp_config):
+    import os
+    mgr.load()
+    mgr.update({"aws_region": "eu-west-1"})
+    tmp_config.write_text('{"aws_region": "x",}')
+    st = tmp_config.stat()
+    os.utime(tmp_config, (st.st_atime, st.st_mtime + 5))
+    with pytest.raises(RuntimeError):
+        mgr.update({"thinking_mode": "disabled"})
+    assert mgr.get("aws_region") == "eu-west-1"              # cache kept, nothing reset
+    assert tmp_config.read_text() == '{"aws_region": "x",}'  # the edit is left for the user

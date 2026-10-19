@@ -21,6 +21,7 @@ Key public symbols: ``WorktreeError``, ``wt_root``, ``wt_path``, ``branch_ref``,
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -43,6 +44,13 @@ STALE_DAYS = 14
 LEDGER_KEEP_DAYS = 90
 _LIVE = ("running", "paused")
 _IN_PROGRESS = ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply")
+# Dependency dirs of the main checkout made visible in a new worktree as symlinks (the
+# worktree holds tracked files only). Each link is excluded from git (info/exclude:
+# a symlink does not match a ``node_modules/`` gitignore line).
+DEP_LINKS = ("desktop/node_modules",)
+# No other dependency dir (.venv, venv, a top-level node_modules): an install or sync run
+# in the worktree would write through the link into the main checkout's environment.
+# Environments for other repos come with the multi-repo test runner.
 
 
 class WorktreeError(Exception):
@@ -94,6 +102,23 @@ def stamp_workspace(run_id: str, workspace: "str | Path") -> None:
     (d / _WS_STAMP).write_text(os.path.realpath(str(workspace)) + "\n", encoding="utf-8")
 
 
+def drop_stamp_only_dir(run_id: str, workspace: "str | Path") -> bool:
+    """Remove ``WT_ROOT/<run_id>/`` when it holds nothing but this workspace's stamp (an
+    isolated run that never got a worktree): a left-over dir keeps the write gate armed
+    for every session. Never touches a dir holding anything else."""
+    d = wt_root() / run_id
+    try:
+        if not RUN_ID_RE.fullmatch(run_id) or os.path.islink(d) or not d.is_dir():
+            return False
+        if [p.name for p in d.iterdir()] != [_WS_STAMP] or not owned_by(run_id, workspace):
+            return False
+        (d / _WS_STAMP).unlink()
+        d.rmdir()
+        return True
+    except OSError:
+        return False
+
+
 def owned_by(run_id: str, workspace: "str | Path") -> bool:
     try:
         got = (wt_root() / run_id / _WS_STAMP).read_text(encoding="utf-8").strip()
@@ -114,6 +139,22 @@ def _check_ids(run_id: str, repo_name: "str | None" = None) -> None:
 def wt_path(run_id: str, repo_name: str) -> Path:
     _check_ids(run_id, repo_name)
     return wt_root() / run_id / repo_name
+
+
+def repo_key(main: "str | Path", entries: "Iterable[dict]") -> str:
+    """The worktree key (``repo_name`` in run.json, the directory under
+    ``WT_ROOT/<run_id>/``) for *main*: its directory name, unless another entry of the
+    run already uses that name for a DIFFERENT repo — then ``<name>-<8 hex of the main
+    path>``. *entries* must carry the resolved ``main`` of each entry (an entry without
+    one counts as a different repo, so a key is never shared)."""
+    real = os.path.realpath(str(main))
+    base = re.sub(r"[^A-Za-z0-9._-]", "-", os.path.basename(real)).lstrip("._-") or "repo"
+    base = base[:55]
+    clash = any(isinstance(e, dict) and e.get("repo_name") == base
+                and os.path.realpath(str(e.get("main") or "")) != real for e in entries)
+    if not clash:
+        return base
+    return f"{base}-{hashlib.sha256(real.encode()).hexdigest()[:8]}"
 
 
 def branch_name(run_id: str) -> str:
@@ -314,16 +355,35 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _exclude_node_modules(common_dir: str) -> None:
+def _exclude_paths(common_dir: str, rels: "Iterable[str]") -> None:
+    """Add ``/<rel>`` lines to the repo's info/exclude (shared by its worktrees)."""
     f = Path(common_dir) / "info" / "exclude"
     try:
         cur = f.read_text(encoding="utf-8") if f.exists() else ""
-        if "/desktop/node_modules" not in cur.splitlines():
+        have = set(cur.splitlines())
+        add = [f"/{r}" for r in rels if f"/{r}" not in have]
+        if add:
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text(cur + ("" if cur.endswith("\n") or not cur else "\n")
-                         + "/desktop/node_modules\n", encoding="utf-8")
+                         + "\n".join(add) + "\n", encoding="utf-8")
     except OSError:
         pass  # only cosmetic: the link would show as untracked
+
+
+def _link_dependencies(main: Path, wt: Path) -> "list[str]":
+    """Symlink each DEP_LINKS dir of *main* into *wt* when the worktree lacks it (so it
+    is not tracked) → the repo-relative paths linked."""
+    linked = []
+    for rel in DEP_LINKS:
+        src, dst = main / rel, wt / rel
+        if not src.is_dir() or not dst.parent.is_dir() or os.path.lexists(dst):
+            continue
+        try:
+            os.symlink(str(src), str(dst))
+            linked.append(rel)
+        except OSError:
+            pass  # tests/builds then fail visibly; never fall back silently to main
+    return linked
 
 
 def create(run_id: str, repo_name: str, main: "str | Path",
@@ -354,15 +414,26 @@ def create(run_id: str, repo_name: str, main: "str | Path",
         shutil.rmtree(path, ignore_errors=True)
         raise WorktreeError("worktree_create_failed", (p.stderr or p.stdout).strip()[:300])
     common = _common_dir(main)
-    nm = main / "desktop" / "node_modules"
-    if nm.is_dir() and (path / "desktop").is_dir() and not (path / "desktop" / "node_modules").exists():
-        try:
-            os.symlink(str(nm), str(path / "desktop" / "node_modules"))
-        except OSError:
-            pass  # frontend tests then fail visibly; never fall back silently to main
-    _exclude_node_modules(common)
-    return {"repo_name": repo_name, "git_common_dir": common, "integration_branch": head_ref,
-            "base": head, "pre_sync_tip": None, "state": "active", "created_at": _now_iso()}
+    links = _link_dependencies(main, path)
+    _exclude_paths(common, links)
+    return {"repo_name": repo_name, "main": str(main), "git_common_dir": common,
+            "integration_branch": head_ref, "base": head, "pre_sync_tip": None,
+            "state": "active", "created_at": _now_iso(), "dep_links": links}
+
+
+def adopt(run_id: str, repo_name: str, main: "str | Path") -> dict:
+    """The entry for a worktree ``create`` made but its caller never recorded (killed
+    in between). Only an untouched one is adopted: HEAD still at main's HEAD."""
+    main = Path(os.path.realpath(str(main)))
+    path = wt_path(run_id, repo_name)
+    head_ref = _symbolic_head(main)
+    base = _rev(path, "HEAD")
+    if not head_ref or not is_registered(main, run_id, repo_name):
+        raise WorktreeError("worktree_invalid", f"{path} cannot be adopted")
+    return {"repo_name": repo_name, "main": str(main), "git_common_dir": _common_dir(main),
+            "integration_branch": head_ref, "base": base, "pre_sync_tip": None,
+            "state": "active", "created_at": _now_iso(), "dep_links": [],
+            "adopted": True}
 
 
 def validate(run_id: str, entry: dict, main: "str | Path") -> Path:
@@ -424,12 +495,12 @@ def change_tree(wt: "str | Path", run_id: str) -> str:
 
 
 def untracked_new_files(wt: "str | Path", run_id: str) -> "list[str]":
-    """Unignored, un-added new files (§6.2) — B and the node_modules link excluded."""
+    """Unignored, un-added new files (§6.2) — B and the dependency links excluded."""
     out = _out(wt, "ls-files", "--others", "--exclude-standard", "-z", timeout=60)
     b = deliverable_prefix(run_id)
     return sorted(p for p in out.split("\0")
-                  if p and not p.startswith(b) and p != "desktop/node_modules"
-                  and not p.startswith("desktop/node_modules/"))
+                  if p and not p.startswith(b)
+                  and not any(p == d or p.startswith(d + "/") for d in DEP_LINKS))
 
 
 def changed_paths(wt: "str | Path", base: str, tree: str) -> "list[str]":
@@ -634,9 +705,11 @@ def path_check(wt: "str | Path", base: str, tree: str) -> "list[str]":
     return bad
 
 
-def _integrate_lock(repo_name: str):
+def _integrate_lock(entry: dict):
+    """One lock per target REPO (its git common dir), whatever key each run gave it."""
     from core.run_lock import run_lock
-    d = wt_root() / ".integrate" / repo_name
+    common = str(entry.get("git_common_dir") or entry.get("repo_name"))
+    d = wt_root() / ".integrate" / hashlib.sha256(common.encode()).hexdigest()[:16]
     return run_lock(d, timeout=INTEGRATE_LOCK_TIMEOUT_S)
 
 
@@ -705,7 +778,7 @@ def land(run_id: str, entry: dict, main: "str | Path", message: str, expect_tree
             raise WorktreeError("run_not_live", "the run was cancelled before landing")
         from core.run_lock import RunLockTimeout
         try:
-            with _integrate_lock(entry["repo_name"]):
+            with _integrate_lock(entry):
                 t1 = time.monotonic()
                 m = git(main, "merge", "-q", "--ff-only", n, timeout=120)
                 merge_s = round(time.monotonic() - t1, 2)
@@ -749,7 +822,8 @@ def snapshot_to_ledger(run_id: str, entry: dict, main: "str | Path", reason: str
     try:
         head = _rev(wt, "HEAD")
         _out(wt, "read-tree", head, env=env)
-        _out(wt, "add", "-A", "--", ".", ":(exclude)desktop/node_modules", env=env, timeout=300)
+        _out(wt, "add", "-A", "--", ".", *(f":(exclude){d}" for d in DEP_LINKS), env=env,
+             timeout=300)
         tree = _out(wt, "write-tree", env=env).strip()
         change, unadded = None, None   # None: restore by hand (README)
         if busy_state(wt) is None and head == entry.get("base"):
@@ -860,9 +934,10 @@ def is_listed(main, path: "str | Path") -> "bool | None":
 
 def _remove(run_id: str, entry: dict, main: Path, merged: bool) -> None:
     path = _safe_to_touch(run_id, entry["repo_name"], main)
-    link = path / "desktop" / "node_modules"
-    if os.path.islink(link):
-        os.unlink(link)
+    for rel in DEP_LINKS:  # the dependency links point INTO main: drop them first
+        link = path / rel
+        if os.path.islink(link):
+            os.unlink(link)
     if path.exists():
         p = git(main, "worktree", "remove", "--force", str(path), timeout=120)
         if p.returncode != 0:
@@ -985,11 +1060,14 @@ def active_worktree_roots(workspace: "str | Path") -> "list[tuple[str, str]]":
     return out
 
 
-def own_isolated_run(session_id: str, workspace: "str | Path") -> "dict | None":
-    """The run THIS session owns that has an active, git-registered worktree (§4.2:
-    no time window). → {"project", "id", "worktrees": [(repo_name, path)]}."""
+def own_isolated_run(session_id: str, workspace: "str | Path",
+                     with_empty: bool = True) -> "dict | None":
+    """The isolated run THIS session owns (§4.2: no time window) → {"project", "id",
+    "worktrees": [(repo_name, path)], "cli"}; ``worktrees`` lists its active,
+    git-registered worktrees. *with_empty*=False: only a run that has at least one."""
     if not session_id:
         return None
+    best = None
     for f, data in _iter_runs(workspace):
         if data.get("session_id") != session_id or data.get("status") not in _LIVE:
             continue
@@ -1003,10 +1081,23 @@ def own_isolated_run(session_id: str, workspace: "str | Path") -> "dict | None":
             main = main_of(p)
             if main is not None and is_registered(main, rid, str(e.get("repo_name"))):
                 wts.append((str(e.get("repo_name")), str(p)))
-        if wts:
-            return {"project": str(data.get("project") or f.parents[3].name), "id": rid,
-                    "worktrees": wts}
-    return None
+        settled = any(isinstance(e, dict) and e.get("state") in ("integrated", "released")
+                      for e in data.get("worktrees") or [])
+        if wts or (with_empty and data.get("worktree_mode") == "isolated" and not settled
+                   and data.get("status") == "running"):
+            # with_empty: a RUNNING isolated run with no worktree yet still owns the
+            # session's writes (its repos are isolated on first write, §16.9) — until it
+            # lands or a worktree is released; a paused run never claims new repos
+            try:
+                t = f.stat().st_mtime
+            except OSError:
+                t = 0.0
+            cand = (t, {"project": str(data.get("project") or f.parents[3].name), "id": rid,
+                        "worktrees": wts, "cli": data.get("cli"), "settled": settled,
+                        "status": data.get("status")})
+            if best is None or cand[0] > best[0]:   # the session's most recent run wins
+                best = cand
+    return best[1] if best else None
 
 
 def main_of(path: "str | Path") -> "Path | None":
@@ -1016,6 +1107,97 @@ def main_of(path: "str | Path") -> "Path | None":
     except WorktreeError:
         return None
     return Path(common).parent if os.path.basename(common) == ".git" else None
+
+
+def entry_main(run_id: str, entry: dict, hint: "str | Path | None" = None) -> Path:
+    """The main checkout of a run.json worktree entry, NAMED BY GIT (§16.9: run.json is
+    untrusted, bindings are only a hint). A worktree on disk names its main through its
+    own git pointer, which must be a linked worktree of that main and agree with the
+    entry's pinned ``main`` and recorded common dir. A worktree no longer on disk (a
+    released one) uses the pinned ``main`` (legacy entries: *hint*), accepted only if
+    its git common dir is the recorded one. Raises WorktreeError 'worktree_invalid'."""
+    name = str(entry.get("repo_name")) if isinstance(entry, dict) else ""
+    wt = wt_path(run_id, name)
+    pinned = entry.get("main") or (str(hint) if hint is not None else None)
+    recorded = entry.get("git_common_dir")
+    bad = lambda why: WorktreeError("worktree_invalid", f"worktree {wt}: {why}")  # noqa: E731
+    if os.path.lexists(wt):
+        m = main_of(wt)
+        if m is None:
+            raise bad("its git pointer names no main checkout")
+        m = Path(os.path.realpath(str(m)))
+        if entry.get("main") and os.path.realpath(str(entry["main"])) != str(m):
+            raise bad("the recorded main checkout is not the one git registered it under")
+        if recorded and _common_dir(m) != recorded:
+            raise bad("git common dir differs from the recorded one")
+        if is_listed(m, wt) is not True:
+            raise bad("not a registered linked worktree of its main checkout")
+        return m
+    if not pinned:
+        raise bad("not on disk and no recorded main checkout")
+    m = Path(os.path.realpath(str(pinned)))
+    try:
+        ok = _toplevel(m) == str(m) and recorded is not None and _common_dir(m) == recorded
+    except WorktreeError:
+        ok = False
+    if not ok:
+        raise bad(f"{m} is not the repo this entry was created in")
+    return m
+
+
+_STATE_FILES = ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD",
+                "REVERT_HEAD", "BISECT_LOG")
+
+
+def _under(p: str, root: str) -> bool:
+    return p == root or p.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def repo_for_write(path: "str | Path", workspace: "str | Path | None") -> "Path | None":
+    """The main checkout a write to *path* would land in, when that repo can be isolated
+    in a run worktree (§16.9) — else None. File reads only (it runs inside the write
+    gate's time budget). Not isolatable: no git repo; a linked worktree or submodule
+    (``.git`` is a file); any run worktree; SwarmWS itself; the home dir or the app data
+    dir ITSELF as a repo (a repo cloned under it, e.g. a bindings clone, is isolated);
+    a repo with submodules; a Brazil workspace package; a main checkout
+    on a detached HEAD or with a rebase / merge / cherry-pick / revert / bisect going."""
+    p = os.path.realpath(str(path))
+    if _under(p, os.path.realpath(str(wt_root()))):
+        return None
+    cur = Path(p)
+    while not os.path.lexists(cur / ".git"):
+        if cur.parent == cur:
+            return None
+        cur = cur.parent
+    g = cur / ".git"
+    if os.path.islink(g) or not g.is_dir() or not (g / "objects").is_dir():
+        return None
+    top = str(cur)
+    if workspace is not None and top == os.path.realpath(str(workspace)):
+        return None
+    if top in (str(_home()), str(_data_dir())):
+        return None
+    if (cur / ".gitmodules").exists():
+        return None
+    if cur.parent.name == "src" and (cur.parent.parent / "packageInfo").exists():
+        return None
+    try:
+        head = (g / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not head.startswith("ref: refs/heads/"):
+        return None
+    if any(os.path.lexists(g / n) for n in _STATE_FILES):
+        return None
+    ref = head[len("ref: "):].strip()
+    if not (g / ref).is_file():          # unborn branch (no commit yet): no worktree base
+        try:
+            packed = (g / "packed-refs").read_text(encoding="utf-8")
+        except OSError:
+            packed = ""
+        if not any(line.endswith(" " + ref) for line in packed.splitlines()):
+            return None
+    return cur
 
 
 def last_activity(run_id: str, data: dict) -> "float | None":
@@ -1108,6 +1290,14 @@ def sweep(workspace: "str | Path", owner_active: "Callable[[str | None], bool]",
                     report["errors"].append(f"{rd.name}/{wd.name}: {exc.message}")
     for rid, (f, data) in runs.items():
         _sweep_run(rid, f, data, owner_active, now, report, update_run, RunLockTimeout)
+    for rd in sorted(root.iterdir()) if root.is_dir() else []:
+        rec = runs.get(rd.name)
+        try:
+            idle = rec is not None and now - rec[0].stat().st_mtime > 86400
+        except OSError:
+            idle = False
+        if rec is None or rec[1].get("status") not in _LIVE or idle:
+            drop_stamp_only_dir(rd.name, workspace)   # a stage-start re-arms an idle run
     _sweep_branches(runs, report)
     _purge_ledgers(now, report)
     return report

@@ -18,6 +18,7 @@ settings router mounted (no ``from main import app``).  A ``tmp_path``-backed
 credential probes are mocked globally to avoid real AWS / env-var side effects.
 """
 
+import json
 import pytest
 from unittest.mock import patch
 
@@ -505,3 +506,24 @@ class TestEffectiveThinkingModeExposed:
     def test_derived_fields_are_not_writable(self, client):
         client.put("/api/settings", json={"default_model": "claude-opus-5-5", "effective_thinking_mode": "disabled"})
         assert client.get("/api/settings").json()["effective_thinking_mode"] == "adaptive"
+
+
+class TestPipelineWorktreeSwitch:
+    """pipeline.worktree_mode is a first-class setting (pipeline-run-worktree §16.9)."""
+
+    def test_put_on_persists_and_is_read_back(self, client: TestClient, _isolated_config):
+        resp = client.put("/api/settings", json={"pipeline": {"worktree_mode": "on"}})
+        assert resp.status_code == 200, resp.text
+        assert client.get("/api/settings").json()["pipeline"] == {"worktree_mode": "on"}
+        disk = json.loads(_isolated_config._config_path.read_text())
+        assert disk["pipeline"] == {"worktree_mode": "on"}
+
+    def test_an_unrelated_save_keeps_the_switch(self, client: TestClient, _isolated_config):
+        client.put("/api/settings", json={"pipeline": {"worktree_mode": "on"}})
+        client.put("/api/settings", json={"aws_region": "eu-west-1"})
+        disk = json.loads(_isolated_config._config_path.read_text())
+        assert disk["pipeline"] == {"worktree_mode": "on"}
+
+    @pytest.mark.parametrize("bad", [{"worktree_mode": "yes"}, {"worktree_mode": 1}, {"other": "on"}])
+    def test_invalid_values_rejected(self, client: TestClient, bad):
+        assert client.put("/api/settings", json={"pipeline": bad}).status_code == 422

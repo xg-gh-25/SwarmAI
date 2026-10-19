@@ -234,3 +234,205 @@ def test_incidental_command_does_not_take_over(env, monkeypatch):
     c = _cmd("run-report")
     og._decide("s2", c, {"command": c})
     assert json.loads(env["runs"][RID].read_text())["session_id"] == "s1"
+
+
+# ── per-repo isolation and the owner-gate scope (§16.9) ───────────────────────
+def _set_run(env, rid=RID, **kv):
+    d = json.loads(env["runs"][rid].read_text())
+    d.update(kv)
+    env["runs"][rid].write_text(json.dumps(d))
+
+
+def _other_repo(env, name="other"):
+    p = env["ws"].parent / "elsewhere" / name
+    p.mkdir(parents=True)
+    _g(p, "init", "-q", "-b", "main")
+    for k, v in (("user.name", "T"), ("user.email", "t@e.com")):
+        _g(p, "config", k, v)
+    (p / "o.py").write_text("o = 1\n")
+    _g(p, "add", "-A")
+    _g(p, "commit", "-q", "-m", "i")
+    return p
+
+
+@pytest.fixture
+def cli_rec(env):
+    """A recorded CLI that exists on disk (the gates print only a verifiable one)."""
+    import sys
+    sc = env["ws"].parent / "src2" / "backend" / "scripts" / "artifact_cli.py"
+    sc.parent.mkdir(parents=True)
+    sc.write_text("")
+    (sc.parent / "pipeline_worktree.py").write_text("")
+    (sc.parent.parent / "core").mkdir()
+    (sc.parent.parent / "core" / "run_worktree.py").write_text("")
+    return {"python": os.path.realpath(sys.executable), "script": str(sc)}
+
+
+def test_lazy_owner_write_into_unisolated_repo_denied_with_repo_add(env, monkeypatch, cli_rec):
+    monkeypatch.setenv("SWARM_WORKSPACE", str(env["ws"]))
+    other = _other_repo(env)
+    own = wg._Own(RID, [], project="P", cli=cli_rec)
+    v = wg.judge(_call("Write", file_path=str(other / "o.py")), own)
+    assert _denied(v)
+    why = v["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "run-repo-add" in why and f"--path {other}" in why and cli_rec["python"] in why
+    calls, single = og.parse_cli_calls(why.split("Run: ", 1)[1].split("\n")[0])
+    assert single and calls[0]["sub"] == "run-repo-add"
+    v = wg.judge(_call("Bash", command=f"git -C {other} add o.py"), own)
+    assert _denied(v) and "run-repo-add" in v["hookSpecificOutput"]["permissionDecisionReason"]
+    v = wg.judge(_call("Bash", command=f"echo x > {other}/new.txt"), own)
+    assert _denied(v)
+
+
+def test_lazy_owner_writes_to_unisolatable_places_allowed(env, monkeypatch, cli_rec):
+    monkeypatch.setenv("SWARM_WORKSPACE", str(env["ws"]))
+    own = wg._Own(RID, [], project="P", cli=cli_rec)
+    plain = env["ws"].parent / "plain"
+    plain.mkdir()
+    assert wg.judge(_call("Write", file_path=str(plain / "f.txt")), own) is None
+    assert wg.judge(_call("Write", file_path=str(env["ws"] / "Projects" / "P" / "x.md")), own) is None
+    sub = _other_repo(env, "withsub")
+    (sub / ".gitmodules").write_text("")
+    assert wg.judge(_call("Write", file_path=str(sub / "o.py")), own) is None
+
+
+def test_chat_session_without_run_never_denied_in_other_repos(env, monkeypatch):
+    monkeypatch.setenv("SWARM_WORKSPACE", str(env["ws"]))
+    other = _other_repo(env)
+    assert wg.judge(_call("Write", file_path=str(other / "o.py")), None) is None
+
+
+def test_shared_run_untouched_with_switch_on(env, monkeypatch):
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+    _set_run(env, worktree_mode="shared")
+    for sub, extra in (("stage-start", "--stage plan"), ("stage-start", "--stage build"),
+                       ("stage-start", "--stage deliver"), ("stage-complete", "--stage deliver"),
+                       ("run-update", "--status completed")):
+        c = "cd /x && source .venv/bin/activate && " + _cmd(sub, extra=extra)
+        assert og._decide("s1", c, {"command": c}) is None, sub
+
+
+def test_undecided_run_enforced_only_at_worktree_stages(env, monkeypatch):
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+    _set_run(env, worktree_mode=None)
+    for st in ("evaluate", "think"):
+        c = "cd /x && " + _cmd("stage-start", extra=f"--stage {st}")
+        assert og._decide("s1", c, {"command": c}) is None, st
+    c = "cd /x && " + _cmd("stage-start", extra="--stage plan")
+    assert _denied(og._decide("s1", c, {"command": c}))
+    single = _cmd("stage-start", extra="--stage plan")
+    v = og._decide("s1", single, {"command": single})
+    assert v["hookSpecificOutput"]["updatedInput"]["command"].startswith(hook_token.TOKEN_ENV + "=")
+
+
+def test_compound_deny_prints_the_single_form(env, monkeypatch, cli_rec):
+    _set_run(env, cli=cli_rec)
+    c = "cd /x && source .venv/bin/activate && " + _cmd("stage-start", extra="--stage build")
+    v = og._decide("s1", c, {"command": c})
+    why = v["hookSpecificOutput"]["permissionDecisionReason"]
+    form = why.split("Run instead: ", 1)[1].split("\n")[0]
+    calls, single = og.parse_cli_calls(form)
+    assert single and calls[0]["sub"] == "stage-start" and form.startswith(cli_rec["python"] + " ")
+
+
+def test_forged_cli_record_is_not_printed(env):
+    _set_run(env, cli={"python": "/bin/sh", "script": "/tmp/evil.sh"})
+    c = "cd /x && " + _cmd("stage-start", extra="--stage build")
+    why = og._decide("s1", c, {"command": c})["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "evil" not in why and "/bin/sh" not in why
+
+
+def test_repo_add_needs_a_token_for_an_isolated_run(env):
+    c = _cmd("run-repo-add", extra="--path /some/repo")
+    v = og._decide("s1", c, {"command": c})
+    assert v["hookSpecificOutput"]["updatedInput"]["command"].startswith(hook_token.TOKEN_ENV + "=")
+    assert _denied(og._decide("s1", c + " && echo x", {"command": c + " && echo x"}))
+
+
+
+def test_ambiguous_options_follow_the_gate_scope(env, monkeypatch):
+    """A shared run is untouched with the switch on, ambiguity deny included."""
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+    _set_run(env, worktree_mode="shared")
+    c = _cmd("run-update", extra=f"--run-id {RID} --status running")
+    assert og._decide("s1", c, {"command": c}) is None
+    _set_run(env, worktree_mode=None)
+    c = _cmd("stage-start", extra=f"--run-id {RID} --stage evaluate")
+    assert og._decide("s1", c, {"command": c}) is None
+    c = _cmd("stage-start", extra=f"--run-id {RID} --stage plan")
+    assert _denied(og._decide("s1", c, {"command": c}))
+    c = _cmd("run-update", rid="run_nosuch", extra="--run-id run_nosuch --status x")
+    assert _denied(og._decide("s1", c, {"command": c}))     # unreadable run, switch on
+
+
+def test_undecided_compound_deny_prints_an_absolute_command(env, monkeypatch, cli_rec):
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+    _set_run(env, worktree_mode=None, cli=cli_rec)
+    c = "cd /x && " + _cmd("stage-start", extra="--stage build")
+    why = og._decide("s1", c, {"command": c})["hookSpecificOutput"]["permissionDecisionReason"]
+    form = why.split("Run instead: ", 1)[1].split("\n")[0]
+    assert form.startswith(cli_rec["python"] + " " + cli_rec["script"] + " ")
+    assert og.parse_cli_calls(form)[1]
+
+
+def test_a_repeated_run_id_is_judged_on_every_value(env, monkeypatch):
+    """argparse acts on the LAST --run-id: naming a shared run first must not let a call
+    reach an isolated run owned by another live session (spec review BLOCK)."""
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+    monkeypatch.setattr(og, "_owner_live", lambda sid: True)
+    d = json.loads(env["runs"][RID].read_text())
+    shared = dict(d, id="run_shared1", worktree_mode="shared", session_id="s1", worktrees=[])
+    rd = env["runs"][RID].parent.parent / "run_shared1"
+    rd.mkdir()
+    (rd / "run.json").write_text(json.dumps(shared))
+    c = f"{CLI} run-update --project P --run-id run_shared1 --run-id {OTHER} --status running"
+    assert _denied(og._decide("s1", c, {"command": c}))
+    c = f"{CLI} run-update --project P --run-id run_shared1 --run-id run_shared1 --status running"
+    assert og._decide("s1", c, {"command": c}) is None
+
+
+def test_owner_gate_denies_name_the_single_form(env, cli_rec):
+    _set_run(env, cli=cli_rec)
+    c = _cmd("stage-start", extra=f"--run-id {RID} --stage build")
+    why = og._decide("s1", c, {"command": c})["hookSpecificOutput"]["permissionDecisionReason"]
+    form = why.split("Run instead (the values argparse would have used): ", 1)[1].split("\n")[0]
+    calls, single = og.parse_cli_calls(form)
+    assert single and calls[0]["run_id"] == RID and not calls[0]["ambiguous"]
+    c = f"{hook_token.TOKEN_ENV}=abc " + _cmd("stage-start", extra="--stage build")
+    why = og._decide("s1", c, {"command": c})["hookSpecificOutput"]["permissionDecisionReason"]
+    form = why.split("Run instead: ", 1)[1].split("\n")[0]
+    assert og.parse_cli_calls(form)[1] and hook_token.TOKEN_ENV not in form
+
+
+def test_test_gate_deny_prints_absolute_commands_from_the_run_cli(env, monkeypatch, cli_rec):
+    import asyncio
+    from core import security_hooks as sh
+    (Path(cli_rec["script"]).parent / "pipeline_test.py").write_text("")
+    monkeypatch.setattr(sh, "_ACTIVE_RUN_GLOB_ROOT", str(env["ws"]))
+    monkeypatch.delenv("SWARM_TEST_GATE_FORCE", raising=False)
+    _set_run(env, cli=cli_rec)
+    gate = sh.create_pipeline_test_gate({"sdk_session_id": "s1"})
+    res = asyncio.run(gate({"tool_name": "Bash", "tool_input": {"command": "pytest -q"},
+                            "cwd": str(env["wt"])}, None, None))
+    why = res["hookSpecificOutput"]["permissionDecisionReason"]
+    sdir = str(Path(cli_rec["script"]).parent)
+    assert f"{sdir}/pipeline_test.py --project P --run-id {RID}" in why
+    assert f"{cli_rec['python']} {cli_rec['script']} run-update --project P --run-id {RID} --status abandoned" in why
+
+
+def test_planted_cli_pair_is_not_printed(env):
+    import sys
+    sc = env["ws"].parent / "planted" / "artifact_cli.py"
+    sc.parent.mkdir(parents=True)
+    sc.write_text("")
+    (sc.parent / "pipeline_test.py").write_text("")
+    out = wg.cli_command({"python": os.path.realpath(sys.executable), "script": str(sc)}, "x")
+    assert str(sc) not in out and out.startswith("backend/.venv/bin/python ")
+    assert og.parse_cli_calls(out)[1]                    # the fallback is a valid command
+
+
+def test_steering_env_on_a_pipeline_command_is_denied(env, monkeypatch):
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+    _set_run(env, worktree_mode=None)
+    c = "SWARM_WORKTREE_MODE=off " + _cmd("stage-start", extra="--stage build")
+    assert _denied(og._decide("s1", c, {"command": c}))
