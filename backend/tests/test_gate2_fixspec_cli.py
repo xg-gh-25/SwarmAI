@@ -543,3 +543,67 @@ def test_fixspec_prompt_is_a_bounded_registered_gate():
     text = sp.load_gate("fixspec-skeptic")
     assert sp.has_numeric_cap(text)
     assert "FIXSPEC VERDICT: PASS" in text and "FIXSPEC VERDICT: BLOCK" in text
+
+
+# ── F1-F3 of the 0ee701f0 audit ───────────────────────────────────────────────
+def test_cycle_rows_stamp_the_wave_each_answer_was_handed_out_in(env):
+    """F1: a row's round comes from the gate2-recheck batch it STARTED in."""
+    audit, run_dir, t0 = env
+    st = _state(run_dir)
+    st["gate2_waves"] = [{"at": t0 + 200, "experts": ["correctness", "red-team"]}]
+    (run_dir / "run.json").write_text(json.dumps(st))
+    _marker(audit, "c1", "correctness", t0 + 60, started_at=t0 + 10, reported=[HIGH_A], reported_state="findings")
+    _marker(audit, "r1", "red-team", t0 + 230, started_at=t0 + 205, reported=[HIGH_B], reported_state="findings")
+    _marker(audit, "c2", "correctness", t0 + 300, started_at=t0 + 204, reported=[], reported_state="no_findings")
+    by, _root, _start = cli._gate2_cycle_rows(RID, run_dir, _state(run_dir))
+    assert [d["wave"] for d in by["correctness"]] == [1, 2] and by["red-team"][0]["wave"] == 2
+    ri = cli._fixspec_round(RID, run_dir, _state(run_dir))
+    assert ri["round"] == 2 and [i["expert"] for i in ri["items"]] == ["red-team"]
+
+
+def test_an_unverified_spec_is_latched_as_a_verification_gap(env, capsys):
+    """F2: --unverified-reason used to write run.json fixspec_unverified, which nothing
+    read; push_ready reads verification_gaps."""
+    audit, run_dir, t0 = env
+    _review(audit, t0)
+    spec = {"clusters": [_cluster()]}
+    _fixspec(capsys, spec)
+    _skeptic(audit, "k1", 0, run_dir / "evidence" / "prompts" / "fixspec-skeptic-r1.md", with_verdict=False)
+    _fixspec(capsys, spec, reason="daemon predates verdict capture")
+    gaps = _state(run_dir)["verification_gaps"]
+    assert any("round 1 accepted without a skeptic verdict" in g["why"] for g in gaps)
+    _fixspec(capsys, spec, reason="daemon predates verdict capture")     # idempotent
+    assert len(_state(run_dir)["verification_gaps"]) == 1
+
+
+def test_the_status_doc_follows_a_pass_that_lands_after_the_hand_out(env, capsys):
+    """F2: the PASS arrives after the hand-out wrote fixing-spec-status.json; the next
+    command reading it rewrites it (here: the same spec resubmitted)."""
+    audit, run_dir, t0 = env
+    _review(audit, t0)
+    spec = {"clusters": [_cluster()]}
+    _fixspec(capsys, spec)
+    st = run_dir / "evidence" / "fixing-spec-status.json"
+    assert json.loads(st.read_text())["1"].startswith("not accepted")
+    _skeptic(audit, "kp", 0, run_dir / "evidence" / "prompts" / "fixspec-skeptic-r1.md", "PASS")
+    assert _fixspec(capsys, spec)["accepted"] is True
+    assert json.loads(st.read_text())["1"].startswith("accepted")
+
+
+def test_after_sound_a_new_trigger_still_fires(env, capsys):
+    """F3: SOUND settles the trigger it answered, not every later one (a reopen after it
+    still goes to root_cause, and outcome() then stops the loop)."""
+    audit, run_dir, t0 = env
+    _root_cause_after_three_submissions(audit, run_dir, capsys, t0)
+    _root(audit, "r1", "SOUND")
+    out = _fixspec(capsys, {"clusters": [_cluster(design_impact="redesign")]})
+    assert out["next"] == "root_cause" and out["trigger"].startswith("redesign_impact")
+
+
+def test_root_cause_hand_out_says_to_rerun_gate2_recheck(env, monkeypatch, capsys):
+    """F3: SOUND before the cap means recheck, so the hand-out must not say stage-complete."""
+    audit, run_dir, t0 = env
+    _root_cause_after_three_submissions(audit, run_dir, capsys, t0)
+    out = _recheck(run_dir, monkeypatch, capsys)
+    assert out.get("root_cause") is True
+    assert "run gate2-recheck again" in out["warnings"][0]

@@ -592,7 +592,14 @@ def fixing_spec_errors(spec, items, plan: "dict | None", prior_clusters,
             it = by_id.get(fid)
             if it and it.get("kind") == "recheck":
                 rv = str(c.get("revises") or "")
-                want = "" if it.get("cluster") == "refuted" else str(it.get("cluster") or "")
+                if it.get("cluster") == "refuted":
+                    # the reviewer says the refuted finding IS a bug: fix it in a new
+                    # cluster (no accepted cluster owned it, so there is nothing to revise)
+                    if rv and rv not in prior_ids:
+                        errs.append(f"Fixing spec: {tag} revises {rv}, which is no accepted "
+                                    "cluster of this cycle")
+                    continue
+                want = str(it.get("cluster") or "")
                 if not rv or rv not in prior_ids or (want and rv != want):
                     errs.append(f"Fixing spec: {tag} holds the NOT RESOLVED re-check {fid}, so it must "
                                 f"revise the cluster it re-checked ({want or 'an earlier accepted K<n>'}): "

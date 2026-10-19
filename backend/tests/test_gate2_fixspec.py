@@ -351,3 +351,33 @@ def test_round_gate_allows_three_submissions_per_round():
                                               {"used": 12, "stage": "deliver", "run_id": "r"})
     assert rg.cap_for(gc.ROOT_CAUSE_ID) == 1
     assert rg.cap_for("correctness") == gc.MAX_ROUNDS
+
+
+def test_rounds_follow_the_hand_out_wave_not_the_answer_order():
+    """F1 (run_93773c32 red-team HIGH): the Red Team joins the round-2 batch; when it
+    answered BEFORE the re-checks it was counted in round 1, round 2's spec could not
+    cover its re-check, and gate2-recheck refused every spec. ``wave`` (stamped by the
+    CLI from gate2_waves + started_at) keeps every answer of a batch in its round."""
+    rows = {"correctness": [dict(_ts(_row([HIGH_A]), 1), wave=1), dict(_ts(_row([HIGH_A]), 30), wave=2),
+                            dict(_ts(_row([]), 60), wave=3)],
+            "red-team": [dict(_ts(_row([HIGH_B]), 20), wave=2),       # answered first in its batch
+                         dict(_ts(_row([], {"1": "NOT RESOLVED"}), 50), wave=3)]}
+    order = {(e, i): r for r, e, i in fs._rounds(fs._reviewer_rows(rows))}
+    assert order[("red-team", 0)] == 2 and order[("red-team", 1)] == 3
+    assert fs.rechecked_rounds(rows) == [1, 2] and fs.round_items(rows, {})["round"] == 3
+    # an unparsed answer re-asked in the same batch stays in its round
+    reask = {"correctness": [dict(_ts(_row(state="unparsed"), 1), wave=1),
+                             dict(_ts(_row([HIGH_A]), 5), wave=1)]}
+    assert fs.round_items(reask, {})["round"] == 1
+
+
+def test_validator_a_refuted_finding_its_reviewer_confirms_is_fixed_in_a_new_cluster():
+    """F4: the reviewer answered NOT RESOLVED on a finding the spec had refuted: it is a
+    bug after all, so a NEW cluster fixes it (no accepted cluster owned it to revise)."""
+    item = {"id": "correctness-R1", "expert": "correctness", "kind": "recheck", "cluster": "refuted"}
+    spec = {"round": 2, "clusters": [_cluster("K2", ["correctness-R1"])]}
+    assert design_spec.fixing_spec_errors(spec, [item], PLAN, [], set()) == []
+    bad = {"round": 2, "clusters": [_cluster("K2", ["correctness-R1"], revises="K9")]}
+    assert any("no accepted cluster" in e for e in design_spec.fixing_spec_errors(bad, [item], PLAN, [], set()))
+    item["cluster"] = "K1"                       # a cluster's own re-check still must revise it
+    assert design_spec.fixing_spec_errors(spec, [item], PLAN, [_cluster("K1", [])], set())

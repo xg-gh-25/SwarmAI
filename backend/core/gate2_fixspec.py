@@ -14,12 +14,16 @@ specs already accepted; the CLI (``artifact_cli gate2-fixspec``) does the I/O.
   ``<expert>-recheck.map.json`` gate2-recheck wrote). An unparsed answer is NOT an item:
   it needs the reviewer to answer again (``_gate2_findings_errors`` asks for the re-spawn),
   not a fix by cause — and that re-spawn stays in its round.
-  ``round`` is the GLOBAL round (``_rounds``): the rows replayed in time order, a new
-  round starting when a reviewer that already answered in the current round answers
-  again (every reviewer answers once per batch, so a second answer is its re-check) —
-  unless that answer replaces its unparsed one (a re-ask, not a re-check). A
-  reviewer that joins late (the Red Team in round 2) is counted in the round it joined;
-  a re-check spawned by hand, outside gate2-recheck, still starts a round.
+  ``round`` is the GLOBAL round (``_rounds``). A row carrying ``wave`` (the CLI stamps
+  it: 1 + the gate2-recheck hand-outs, run.json ``gate2_waves``, at or before the
+  sub-agent's ``started_at``) belongs to the round its batch was handed out in, so the
+  order in which a batch's answers COMPLETE never moves one into another round (the
+  Red Team spawned with the round-2 re-checks used to land in round 1 when it answered
+  first, and gate2-recheck then refused every spec). Within a wave, or for rows with no
+  ``wave``, the rows replay in time order and a new round starts when a reviewer that
+  already answered in the current round answers again — unless that answer replaces
+  its unparsed one (a re-ask, not a re-check); a re-check spawned by hand, outside
+  gate2-recheck, still starts a round.
 - ``rechecked_rounds(rows_by_expert)`` → the global rounds whose final state had open
   items and that a later round followed (re-checked).
 - ``next_step(spec, accepted, items, submissions, plan)`` → ``(next, trigger)``:
@@ -64,15 +68,21 @@ def _reviewer_rows(rows_by_expert: "dict[str, list[dict]]") -> "dict[str, list[d
 
 
 def _rounds(rows: "dict[str, list[dict]]") -> "list[tuple[int, str, int]]":
-    """(global round, reviewer, row index) per row, in time order."""
-    seq = sorted(((float(_d(r).get("ts") or 0.0), e, i) for e, rs in rows.items()
-                  for i, r in enumerate(rs)), key=lambda t: (t[0], t[1], t[2]))
+    """(global round, reviewer, row index) per row: by hand-out wave, then time order."""
+    def _wave(r: Any) -> int:
+        w = _d(r).get("wave")
+        return w if isinstance(w, int) and not isinstance(w, bool) else 0
+    seq = sorted(((_wave(r), float(_d(r).get("ts") or 0.0), e, i) for e, rs in rows.items()
+                  for i, r in enumerate(rs)), key=lambda t: (t[0], t[1], t[2], t[3]))
     out: list[tuple[int, str, int]] = []
-    rnd, members = 1, set()
-    for _ts, e, i in seq:
+    rnd, members, wave = 1, set(), None
+    for w, _ts, e, i in seq:
         reask = i > 0 and _d(rows[e][i - 1]).get("reported_state") == "unparsed"
-        if e in members and not reask:
+        if wave is not None and w > wave:
+            rnd, members = rnd + 1, set()   # a new gate2-recheck batch: a new round
+        elif e in members and not reask:
             rnd, members = rnd + 1, set()
+        wave = w
         members.add(e)
         out.append((rnd, e, i))
     return out

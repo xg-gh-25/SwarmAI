@@ -95,22 +95,26 @@ report the same cause at a new site (docs/design/pipeline-anti-whack-a-mole.md �
    (`sites` = EVERY site of the cause + the search that found them), ONE `solution`,
    `reuse` (`decision` reuse | extend | refactor | replace | none-exists + `why`), `anti_patch`, `design_impact`
    (none | amend | redesign), `break_test` (path::name). A re-check item goes in a cluster
-   that `revises` the one it re-checked. More than 2 single-finding clusters need
+   that `revises` the one it re-checked; the re-check of a REFUTED finding answered NOT
+   RESOLVED is a bug after all: a new cluster, no `revises`. More than 2 single-finding clusters need
    `unrelated` reasons. Only a non-blocking finding may be `deferred`; a finding shown not to be a bug goes in
    `refuted` [{id, evidence}], not a cluster.
 3. `gate2-fixspec --data @/tmp/<R>/spec.json` validates, stores and renders FIXING_SPEC.md,
    then prints `next`: `skeptic` → spawn its `spawn` exactly (foreground); PASS → fix as the
    spec says; BLOCK → revise and submit again. `root_cause` (a reopen, a second revision of
    one cluster, >= 2 new invariants, `redesign`, or the 3rd submission of a round) → no more
-   fixing: run `gate2-recheck`, it hands out the ONE root-cause review. SOUND → run step 3
-   again: the spec goes to the skeptic (only its PASS accepts a spec); WRONG ends the loop.
+   fixing: run `gate2-recheck`, it hands out the ONE root-cause review; after it answers, run
+   `gate2-recheck` again. SOUND → run step 3 again: the spec goes to the skeptic (only its
+   PASS accepts a spec; a NEW trigger still goes to root_cause and ends the loop); WRONG or
+   no verdict line ends the loop.
 4. Record each fix by class in its disposition (`invariant`, `root_cause`, `class_fix`,
    `break_test`); a missed invariant → `design_updates`. `gate2-recheck` refuses until the
    round's spec is accepted, and DELIVER refuses a fixed finding no accepted cluster owns.
    A round-1 specialist HIGH adds the Red Team to round 2's batch (`gate2-recheck`).
 Old backend (the skeptic's stop records no `verdict`): once a skeptic round has read this
-hand-out, re-run step 3 unchanged with `--unverified-reason "<why>"`; refused on a backend
-that records verdicts, and when no round read the hand-out.
+hand-out, re-run step 3 unchanged with `--unverified-reason "<why>"` (a verification gap:
+never push-ready); refused on a backend that records verdicts, and when no round read the
+hand-out.
 
 ## Fix rules (findings that survived gating, confidence >= 5)
 

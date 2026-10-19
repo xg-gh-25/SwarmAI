@@ -607,6 +607,10 @@ def test_finding_binding_scope_and_unreadable_answers(audit, tmp_path, monkeypat
     audit("run_g", "operational", "2026-10-18T02:07:00+00:00", reported=[], reported_state="unparsed")
     e, _ = _gf(audit, tmp_path, monkeypatch, [dict(REC_HIGH, specialist="correctness-skeptic")])
     assert e and "operational's answer has neither" in e[0]
+    # the re-ask the error asks for parsed: its newest answer decides (F1, run_93773c32)
+    audit("run_g", "operational", "2026-10-18T02:08:00+00:00", reported=[], reported_state="no_findings")
+    e, _ = _gf(audit, tmp_path, monkeypatch, [dict(REC_HIGH, specialist="correctness-skeptic")])
+    assert e == []
 
 
 def test_every_dispatched_expert_must_have_answered_and_meta_review_binds(audit, tmp_path, monkeypatch):

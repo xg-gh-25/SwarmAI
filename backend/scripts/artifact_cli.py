@@ -3284,6 +3284,10 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             # whose artifact cannot be read only warns: never a self-lock on infra.
             try:
                 from core import run_docs as _rdocs
+                if _rdocs._fixing_specs(run_file.parent):
+                    # acceptance as of NOW: a skeptic PASS lands after the hand-out wrote
+                    # fixing-spec-status.json, and completion_check only re-reads it
+                    _fixspec_write_doc(run_file.parent, {**run_state, "id": args.run_id})
                 _doc_errs, _doc_warns, _doc_status = _rdocs.completion_check(
                     run_file.parent, run_state, _run_doc_experts(args.run_id))
             except Exception as _e:  # noqa: BLE001 — a crash here is a write failure
@@ -12335,7 +12339,14 @@ def cmd_gate2_fixspec(args, reg: ArtifactRegistry) -> None:
         if led:
             fail(led[0])
         fresh.setdefault("fixspec_unverified", {})[str(rnd)] = rec
+        # the run-level latch _deliver_push_ready_bound reads: never push-ready, and the
+        # reason reaches REPORT with every other verification gap
+        why = f"Gate-2 fixing spec round {rnd} accepted without a skeptic verdict: {rec['reason']}"
+        if not any(isinstance(g, dict) and g.get("why") == why for g in fresh.get("verification_gaps") or []):
+            fresh["verification_gaps"] = list(fresh.get("verification_gaps") or []) + [
+                {"stage": "deliver", "why": why, "at": now}]
         _write_run_atomic(run_file, fresh)
+        _fixspec_write_doc(run_dir, fresh)
         print(json.dumps({"ok": True, "round": rnd, "accepted": True, "next": "fix",
                           "warnings": ["fixing spec accepted WITHOUT a parsed skeptic verdict (the "
                                        "backend predates verdict capture): rebuild and restart it; "
@@ -12348,6 +12359,8 @@ def cmd_gate2_fixspec(args, reg: ArtifactRegistry) -> None:
             print(json.dumps({"ok": True, "round": rnd, "accepted": False, "next": "revise",
                               "warnings": [f"the same spec again: {why}"]}, ensure_ascii=False))
             return
+        if ok:
+            _fixspec_write_doc(run_dir, fresh)   # the PASS arrived after the hand-out wrote it
         print(json.dumps({"ok": True, "round": rnd, "accepted": ok, "next": "fix" if ok else "skeptic",
                           "prompt_path": str(prompt), "spawn": _spawn_text(FIXSPEC_SKEPTIC_ID, prompt),
                           "spawn_mode": "foreground",
@@ -12365,9 +12378,16 @@ def cmd_gate2_fixspec(args, reg: ArtifactRegistry) -> None:
         # SOUND answered the earlier trigger; the bound on skeptic BLOCKs restarts at the
         # verdict, and a trigger recorded after it makes outcome() stop the loop (sound)
         after = len([d for d in cyc_sk if d.get("verdict") == "BLOCK" and d["ts"] > sound])
-        nxt, trigger = (("root_cause", f"spec_not_agreed: {after} skeptic BLOCKs in round {rnd} "
-                         "after the root-cause review answered SOUND")
-                        if after + 1 >= MAX_SUBMISSIONS else ("skeptic", None))
+        if after + 1 >= MAX_SUBMISSIONS:
+            nxt, trigger = "root_cause", (f"spec_not_agreed: {after} skeptic BLOCKs in round {rnd} "
+                                          "after the root-cause review answered SOUND")
+        else:
+            # the other triggers still apply: only the one SOUND answered is settled
+            nxt, trigger = next_step(spec, prior, items, after + 1, plan, settled)
+            answered = (((_ledger_read(run_id) or {}).get("records") or {})
+                        .get("gate2_root_cause_request") or {}).get("trigger")
+            if nxt == "root_cause" and trigger == answered:
+                nxt, trigger = "skeptic", None
     else:
         nxt, trigger = next_step(spec, prior, items, blocks + 1, plan, settled)
     try:
@@ -12575,9 +12595,11 @@ def cmd_gate2_recheck(args, reg: ArtifactRegistry) -> None:
                                         "Gate-2 used all 3 rounds with blocking findings open: "
                                         "no 4th round. ")
                                        + "Spawn this ONE root-cause review exactly "
-                                       "as printed, then stage-complete --stage deliver (SOUND "
-                                       "or WRONG-APPROACH → local commit with the verdict and "
-                                       "the open items in REPORT §10). Do not ask the user."]},
+                                       "as printed, then run gate2-recheck again: it applies the "
+                                       "verdict (SOUND before the cap → fix as the spec says; at "
+                                       "the cap, WRONG-APPROACH or no verdict line → stage-complete "
+                                       "--stage deliver, a local commit with the open items in "
+                                       "REPORT §10). Do not ask the user."]},
                          ensure_ascii=False))
         return
     if isinstance(g2, dict) and g2["action"] in ("sound", "redesign"):
@@ -12777,6 +12799,17 @@ def _gate2_cycle_rows(run_id: str, run_dir: "Path | None", run_state: dict
         return None
     for rows in by.values():
         rows.sort(key=lambda d: d["ts"])
+    # The hand-out wave of each row (core.gate2_fixspec._rounds): 1 + the gate2-recheck
+    # batches handed out at or before the sub-agent STARTED. Started, not completed: a
+    # batch's answers finish in any order, and the Red Team that joins the round-2 batch
+    # must count in round 2 even when it answers before the re-checks.
+    waves = sorted(float(w["at"]) for w in run_state.get("gate2_waves") or []
+                   if isinstance(w, dict) and isinstance(w.get("at"), (int, float))
+                   and w["at"] >= start - 1)
+    for rows in by.values():
+        for d in rows:
+            t = d.get("started_at") if isinstance(d.get("started_at"), (int, float)) else d["ts"]
+            d["wave"] = 1 + sum(1 for a in waves if a <= float(t) + 1)
     from core.gate2_convergence import ROOT_CAUSE_ID
     root = by.pop(ROOT_CAUSE_ID, [])
     return by, root, start
@@ -13275,6 +13308,7 @@ def _gate2_findings_errors(run_id: str, run_dir: "Path | None", run_state: dict,
     seen_ids: set = set()
     old: set = set()
     unparsed: set = set()
+    latest: dict = {}   # eid → (ts, unparsed?) of its newest answer: a re-ask that parsed clears it
     old_daemon = False
     strict = _gate_spawn_enforced(run_state, HANDOUT_CUTOVER)
     steered: set = set()
@@ -13300,12 +13334,14 @@ def _gate2_findings_errors(run_id: str, run_dir: "Path | None", run_state: dict,
             if "reported" not in d:
                 old.add(eid)
                 continue
-            if d.get("reported_state") == "unparsed":
-                unparsed.add(eid)
+            _t = float(d.get("ts") or 0.0)
+            if _t >= latest.get(eid, (float("-inf"), False))[0]:
+                latest[eid] = (_t, d.get("reported_state") == "unparsed")
             by_expert.setdefault(eid, []).extend(d.get("reported") or [])
     except Exception:  # noqa: BLE001 — unprovable, never a crash
         warnings.append("Gate-2 findings NOT verified: not compared with the experts' answers (marker read failed)")
         return []
+    unparsed = {e for e, (_t, u) in latest.items() if u}
     missing: list[str] = []
     plan = (run_state.get("dispatch_plan") or {}).get("deliver") if isinstance(
         run_state.get("dispatch_plan"), dict) else None

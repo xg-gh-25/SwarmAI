@@ -26,4 +26,4 @@ Check the BUILD diff against the spec and the project's rules (conformance; bug-
 - Steps 5-6, check 14/15 wording, artifact shape → `stages/ref/review/exit.md`
 ## Exit
 `python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage review --data @/tmp/<R>/review.json` with `{"artifact": {<review>}, "record": {"decisions": [...]}}` (shape: stage-start example; no `--check` first).
-> **⏭️ Continuation contract — advance is not the end of your turn.** stage-complete advances to test; read `next_card` and run it **in this same turn**. Only Legal hand-backs only: a question you cannot answer yourself, a user stop, or a terminal verdict (`ref/instructions/escalation.md`). `next_action` is AUTHORITATIVE over this paragraph.
+> **⏭️ Continuation contract — advance is not the end of your turn.** stage-complete advances to test; read `next_card` and run it **in this same turn**. Legal hand-backs only: an L2 or unclear-requirement question (ask, or checkpoint), a user stop, or a terminal verdict (`ref/instructions/escalation.md`). `next_action` is AUTHORITATIVE over this paragraph.
