@@ -479,7 +479,6 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           : <PipelineStageRow pending={line.stage} onChoose={() => {}} />);
       }
       const last = line.rounds[line.rounds.length - 1];
-      const first = line.rounds[0];
       const children = line.rounds.flatMap(childrenOf);
       const live = isLiveSec(last);
       const rounds = line.rounds.map((sec, r) => {
