@@ -22,7 +22,8 @@ Invariants covered:
 - mutation: killed vs survived, main tree untouched, temp worktree removed
 - evidence files match the C2 / C3 shapes; tdd > 5 files rejected; repeat warning after 8
 - H1: a change two import hops away (and any changed file) invalidates the cache;
-  verify selects transitive importers, ordered changed → recent failures → distance (L1)
+  verify selects direct importers (tests naming a changed symbol first), ordered
+  changed → recent failures → importers (L1)
 - H2: a selected file / nodeid that collects zero tests exits 1 and is never cached
   (a module-level skip is not an error)
 - H3: tests that never reached a call report get no HEAD baseline (unknown, exit 1);
@@ -767,17 +768,52 @@ def test_selection_reverse_closure_orders_changed_recent_then_distance(rig, tmp_
     graph = pt.build_import_graph(repo, cache, sgraph)
     changed = pt.changed_files(repo, {})
     assert changed == ["backend/core/b.py"]
+    # default depth 1: direct importers only (depth 2 selected 103-463 files for 21)
     sel, skipped, _ = pt.select_backend(repo, changed, graph, 40, (), sgraph)
-    # direct importer (distance 1) before the transitive one (core.a → core.b)
+    assert sel == ["backend/tests/test_bdirect.py"] and skipped == []
+    # depth 2: direct importer (distance 1) before the transitive one (core.a → core.b)
+    sel, skipped, _ = pt.select_backend(repo, changed, graph, 40, (), sgraph, depth=2)
     assert sel == ["backend/tests/test_bdirect.py", "backend/tests/test_a.py"] and skipped == []
     assert pt.select_backend(repo, changed, graph, 40)[0] == ["backend/tests/test_bdirect.py"]
     # L1: recent failures come before importers, so the cap never cuts them first
     recent = ["backend/tests/test_unrelated.py"]
     sel, skipped, _ = pt.select_backend(repo, changed, graph, 1, recent, sgraph)
-    assert sel == recent and skipped == ["backend/tests/test_bdirect.py", "backend/tests/test_a.py"]
+    assert sel == recent and skipped == ["backend/tests/test_bdirect.py"]
     # relative imports resolve against the file's package
     assert "core.b" in pt._imports_of_source("from .b import val\n", "core")
     assert pt._imports_of_source("from .b import val\n") == []
+
+
+def test_importers_naming_a_changed_function_run_first(rig, tmp_path):
+    """A hub module has many direct importers; the ones that call what changed go first,
+    so a budget cut drops the rest, not them."""
+    hub = ("def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n\n\n"
+           "LIMIT = 3\n")
+    repo = rig({"backend/core/hub.py": hub,
+                "backend/tests/test_h_alpha.py": "from core.hub import alpha\n\n\ndef test_a():\n    assert alpha()\n",
+                "backend/tests/test_h_beta.py": "from core.hub import beta\n\n\ndef test_b():\n    assert beta()\n",
+                "backend/tests/test_h_limit.py": "from core import hub\n\n\ndef test_l():\n    assert hub.LIMIT\n"})
+    _write(repo, {"backend/core/hub.py": hub.replace("return 2", "return 22").replace("LIMIT = 3", "LIMIT = 4")})
+    assert pt.changed_symbols(repo, "backend/core/hub.py") == {"beta", "LIMIT"}
+    cache = tmp_path / "cache"
+    sgraph = pt.build_source_graph(repo, cache)
+    graph = pt.build_import_graph(repo, cache, sgraph)
+    sel, _, _ = pt.select_backend(repo, ["backend/core/hub.py"], graph, 40, (), sgraph)
+    assert set(sel[:2]) == {"backend/tests/test_h_beta.py", "backend/tests/test_h_limit.py"}
+    assert sel[2] == "backend/tests/test_h_alpha.py"
+    # an untracked module has no diff: imports-only ranking
+    _write(repo, {"backend/core/fresh.py": "def gamma():\n    return 1\n"})
+    assert pt.changed_symbols(repo, "backend/core/fresh.py") is None
+
+
+def test_recent_failures_ignore_deadline_timeouts_and_pre_existing(tmp_path):
+    ev_root = tmp_path / "ev"
+    (ev_root / "tests").mkdir(parents=True)
+    (ev_root / "tests" / "latest-verify.json").write_text(json.dumps({"failures": [
+        {"nodeid": "backend/tests/test_t.py::a", "outcome": "timeout", "classification": "timeout"},
+        {"nodeid": "backend/tests/test_p.py::a", "outcome": "failed", "classification": "pre-existing"},
+        {"nodeid": "backend/tests/test_r.py::a", "outcome": "failed", "classification": "regression"}]}))
+    assert pt._recent_failure_files(ev_root) == ["backend/tests/test_r.py"]
 
 
 def test_key_inputs_cover_conftest_chain_and_its_imports(rig, tmp_path):
@@ -1569,7 +1605,9 @@ def test_selection_adds_tests_that_drive_a_changed_script_by_subprocess(rig, tmp
     changed = pt.changed_files(repo, {})
     sel, _, _ = pt.select_backend(repo, changed, graph, 40, (), sgraph)
     assert "backend/tests/test_tool_cli.py" in sel
-    assert sel.index("backend/tests/test_tool_cli.py") < sel.index("backend/tests/test_a.py")  # 2 hops
+    assert "backend/tests/test_a.py" not in sel  # 2 hops: outside the default depth
+    sel_d2, _, _ = pt.select_backend(repo, changed, graph, 40, (), sgraph, depth=2)
+    assert sel_d2.index("backend/tests/test_tool_cli.py") < sel_d2.index("backend/tests/test_a.py")
     assert "backend/tests/test_names_mod.py" not in sel  # only scripts/*.py names count
     assert "backend/tests/test_names_mytool.py" not in sel  # a whole file name, not a suffix
     # without a script change the subprocess test is not selected

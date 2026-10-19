@@ -270,6 +270,24 @@ REJECTED = [
 ]
 
 
+def test_mode_verify_is_answered_by_a_regression_report(tmp_path):
+    """A profile with a TEST stage skips BUILD's verify: regression (verify's scope plus
+    L1 and L3) answers mode:verify, and the newest of the two decides."""
+    d = tmp_path / "evidence" / "tests"
+    d.mkdir(parents=True)
+    reg = {**_verify_report([]), "mode": "regression", "finished_at": "2026-01-01T00:20:00Z"}
+    (d / "latest-regression.json").write_text(json.dumps(reg))
+    assert pv.judge_exit_criteria(CRIT, tmp_path)["met"] is True
+    bad = {**_verify_report([_fail("regression")]), "finished_at": "2026-01-01T00:30:00Z"}
+    (d / "latest-verify.json").write_text(json.dumps(bad))
+    assert pv.judge_exit_criteria(CRIT, tmp_path)["met"] is False
+    # mode:regression is NOT answered by a verify report
+    crit = [{"id": "X8", "kind": "test", "ref": "mode:regression", "expect": "pass"}]
+    (d / "latest-regression.json").unlink()
+    (d / "latest-verify.json").write_text(json.dumps(_verify_report([])))
+    assert pv.judge_exit_criteria(crit, tmp_path)["met"] is False
+
+
 @pytest.mark.parametrize("failures", ACCEPTED)
 def test_mode_ref_met_when_every_failure_is_pre_existing_or_flaky(tmp_path, failures):
     res = _judge(tmp_path, _verify_report(failures))

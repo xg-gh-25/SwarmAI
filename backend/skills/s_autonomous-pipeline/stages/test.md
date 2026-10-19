@@ -9,7 +9,8 @@ Tests go ONLY through `RUN`: `pipeline_test_gate` denies direct pytest/vitest/ts
 One call per mode, foreground, never split; no full suite (STEERING R9).
 
 1. **L1+L2+L3 in one call:** `RUN --mode regression`. L1 = BUILD `ac_coverage` tests, L2 =
-   tests importing the changed modules (cap 40, overflow in `skipped_for_budget`), L3 =
+   tests importing a changed module, those naming a changed function first (cut to the
+   time budget, overflow in `skipped_for_budget`), L3 =
    import smoke; `desktop/src` changes add `vitest related` + `tsc`. Run it fresh even
    if BUILD was green (post-refactor tree). Zero L2 files, non-SwarmAI stack, skips:
    `ref/test/layers.md`.
@@ -20,9 +21,9 @@ One call per mode, foreground, never split; no full suite (STEERING R9).
    ps/kill/faulthandler).
 3. **Fix loop, max 20 fixes** (then checkpoint and report, whatever remains). Per fix:
    one atomic commit → `python backend/skills/s_autonomous-pipeline/scripts/wtf_gate.py --files-touched N --fix-count M`
-   (score ≥ 5 → halt, L2 BLOCK) → `RUN --mode recheck`. After the last fix run
-   `RUN --mode regression` once more (unchanged inputs are cached): `stage-complete`
-   derives layers from `latest-regression.json`. Formula + table: `ref/test/fixing.md`.
+   (score ≥ 5 → halt, L2 BLOCK) → `RUN --mode recheck`. Each recheck lays its results
+   over `latest-regression.json`, which `stage-complete` reads: no final regression
+   re-run. Formula + table: `ref/test/fixing.md`.
 4. **Layer 4** only if EVALUATE `cross_boundary.value == true`: `ref/test/cross-boundary.md`
    (real-wiring test + `RUN --mode mutation --mutations <spec.json>`). Otherwise record
    `"cross_boundary_e2e": {"run": false, "reason": "not a cross-boundary change"}`.

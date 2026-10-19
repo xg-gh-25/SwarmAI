@@ -8,7 +8,8 @@ structured evidence that ``stage-complete`` reads. One call per mode; zero model
 Modes:
 - ``tdd``        only the explicit ``--files`` (max 5); repeat counter per file
 - ``verify``     changed test files + recent failures + transitive importers of changed
-                 modules (reverse import closure, depth ≤ REVERSE_DEPTH; cap 40) + tests
+                 modules (direct importers, REVERSE_DEPTH; tests naming a changed symbol
+                 first; cap 40, then cut to the time budget) + tests
                  naming a changed backend/scripts/*.py file (subprocess-driven)
 - ``regression`` L1 ac_coverage tests + L2 dependency scope + L3 import smoke
 - ``recheck``    previous evidence failures + tests affected by files changed since
@@ -155,7 +156,9 @@ TDD_MAX_FILES = 5
 CAP_FILES = 40
 SMOKE_CAP = 40
 TDD_REPEAT_WARN = 8
-REVERSE_DEPTH = 2  # verify selection: test → module → changed module; deeper fans out to ~all
+# verify selection: tests that import a changed module directly. Depth 2 (test → module
+# → changed module) selected 103-463 files for 21 changed ones (run_340478c9, run_7da44b0d).
+REVERSE_DEPTH = 1
 WRAPPER_ALARM_S = 110
 DEFAULT_DEADLINE = 95.0
 SAFE_DEADLINE = WRAPPER_ALARM_S - 10.0
@@ -683,6 +686,57 @@ def _changed_module_files(repo: Path, changed: list[str]) -> list[tuple[str, str
     return out
 
 
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.M)
+# Too generic to tell one test from another when grepped as a word.
+_GENERIC_NAMES = frozenset({"main", "run", "get", "set", "update", "load", "save", "init",
+                            "__init__", "__call__", "setup", "close", "start", "stop"})
+
+
+def _changed_lines(repo: Path, f: str) -> "list[int] | None":
+    """New-side line numbers ``git diff -U0 HEAD`` touches in ``f`` (a deletion counts as
+    the line it sits at). None = no diff available (untracked, git error)."""
+    out = _git(repo, "diff", "-U0", "--no-color", "HEAD", "--", f)
+    if not out:
+        return None
+    lines: list[int] = []
+    for m in _HUNK_RE.finditer(out):
+        start, cnt = int(m.group(2)), int(m.group(3) if m.group(3) is not None else 1)
+        lines += list(range(start, start + cnt)) if cnt else [start]
+    return lines or None
+
+
+def changed_symbols(repo: Path, f: str) -> "set[str] | None":
+    """Names of the functions / classes (and module-level assignment targets) whose lines
+    ``git diff HEAD`` touches in backend module ``f``. None = cannot tell (untracked file,
+    no diff, unparsable): the caller then ranks by imports only."""
+    lines = _changed_lines(repo, f)
+    if not lines:
+        return None
+    try:
+        tree = ast.parse(_read_text(repo / f))
+    except (SyntaxError, ValueError):
+        return None
+    names: set[str] = set()
+    want = set(lines)
+
+    def visit(node, stack):
+        for ch in ast.iter_child_nodes(node):
+            if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                end = getattr(ch, "end_lineno", ch.lineno)
+                first = min([ch.lineno] + [d.lineno for d in ch.decorator_list])
+                if any(first <= ln <= end for ln in want):
+                    names.update(stack + [ch.name])
+                    visit(ch, stack + [ch.name] if isinstance(ch, ast.ClassDef) else stack)
+            elif node is tree and isinstance(ch, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                end = getattr(ch, "end_lineno", ch.lineno)
+                if any(ch.lineno <= ln <= end for ln in want):
+                    tgts = ch.targets if isinstance(ch, ast.Assign) else [ch.target]
+                    names.update(t.id for t in tgts if isinstance(t, ast.Name))
+
+    visit(tree, [])
+    return {n for n in names if len(n) >= 4 and n not in _GENERIC_NAMES}
+
+
 def _changed_modules(repo: Path, changed: list[str]) -> list[tuple[str, bool]]:
     return [(m, pkg) for _, m, pkg in _changed_module_files(repo, changed)]
 
@@ -808,6 +862,21 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
         for t in graph:
             if rank.get(t, (2, 0)) > (1, 0) and named.search(_read_text(repo / t)):
                 rank[t] = (1, 0)
+    # Within the importers, tests that name a changed function / class run first: a hub
+    # module (artifact_cli, security_hooks) has 60+ direct importers, and most of them
+    # never call the lines this run changed. The rest keep their order behind them and are
+    # the first to go when the selection does not fit the budget (_cut_to_budget).
+    syms: set[str] = set()
+    for f, _, _ in mfiles:
+        got = changed_symbols(repo, f)
+        if got:
+            syms |= got
+    if syms and rank:
+        word = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(syms))) + r")\b")
+        for t in rank:
+            hits = len(set(word.findall(_read_text(repo / t))))
+            if hits:
+                rank[t] = (0, -hits)
     rec = [f for f in dict.fromkeys(recent) if f not in changed_tests and (repo / f).is_file()]
     skip = set(changed_tests) | set(rec)
     importers = [t for t in sorted(rank, key=lambda t: (rank[t], t)) if t not in skip]
@@ -2981,6 +3050,11 @@ def _recent_failure_files(ev_root: Path) -> list[str]:
         fails = ev.get("failures") if isinstance(ev, dict) else None
         for f in fails if isinstance(fails, list) else []:
             n = str(f.get("nodeid") or "") if isinstance(f, dict) else ""
+            # A deadline timeout or a pre-existing failure says nothing about this change:
+            # counting it pulled every unfinished file to the front of the next call.
+            if isinstance(f, dict) and (f.get("outcome") == "timeout"
+                                        or f.get("classification") in ("timeout", "pre-existing")):
+                continue
             if n.startswith("backend/") and n.split("::")[0].endswith(".py"):
                 out.append(n.split("::")[0])
     return out

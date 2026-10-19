@@ -5404,10 +5404,14 @@ def _judge_test_criterion(ref: str, evidence: list[dict], stale_of=None) -> tupl
         return bool(stale_of and stale_of(ev))
     if _is_mode_ref(ref):
         mode = ref[len("mode:"):].strip()
-        idx = next((i for i, e in enumerate(evidence) if e.get("mode") == mode), None)
+        # regression runs verify's dependency scope plus L1 and L3, and a profile with a
+        # TEST stage skips BUILD's verify (one scope run per run): it answers mode:verify.
+        accept = ("verify", "regression") if mode == "verify" else (mode,)
+        idx = next((i for i, e in enumerate(evidence) if e.get("mode") in accept), None)
         if idx is None:
             return False, f"no latest-{mode}.json evidence"
         ev = evidence[idx]
+        mode = str(ev.get("mode"))  # the report that decides (regression may answer verify)
         if ev.get("unreadable"):
             return False, f"latest-{mode}.json exists but is unreadable ({ev['unreadable']})"
         newer_bad = unreadable_evidence(evidence[:idx])
