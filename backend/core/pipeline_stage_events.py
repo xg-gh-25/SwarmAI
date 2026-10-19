@@ -198,12 +198,18 @@ def read_stage_state(run_id: object) -> Optional[dict]:
             profile = data.get("profile")
             req = data.get("requirement")
             timing = data.get("stage_timing") if isinstance(data.get("stage_timing"), dict) else {}
+            commits = data.get("commits") if isinstance(data.get("commits"), list) else []
             return {"profile": profile if isinstance(profile, str) else None,
                     "stages": stages,
                     "timing": {k: v for k, v in timing.items()
                                if isinstance(k, str) and isinstance(v, dict)},
                     "status": data.get("status") if isinstance(data.get("status"), str) else None,
                     "requirement": req if isinstance(req, str) else None,
+                    # An isolated run's change lands in main at deliver stage-complete,
+                    # AFTER its deliver record is written (and the landing can still be
+                    # refused): the attention card waits for `landed` (attention_due).
+                    "isolated": data.get("worktree_mode") == "isolated",
+                    "landed": any(isinstance(c, dict) and c.get("landed") for c in commits),
                     "run_dir": str(hit.parent)}
         return None
     except Exception:  # noqa: BLE001 — a display aid must never break the stream
@@ -565,6 +571,66 @@ def _clar_answer(c: dict) -> Optional[str]:
     return None
 
 
+def attention_due(before: Optional[dict], after: Optional[dict], deliver_row_ended: bool) -> bool:
+    """When the attention card is emitted: with the DELIVER row for a shared run; for an
+    isolated run only once its change has LANDED in main (``landed`` turns true). Its
+    deliver record is written before the landing, and the landing can still be refused
+    (changed since review, main moved) — a card then would read as the end of a run
+    that is still re-reviewing."""
+    if not after:
+        return False
+    if after.get("isolated"):
+        return bool(after.get("landed")) and not (before or {}).get("landed")
+    return deliver_row_ended
+
+
+# push_ready reasons are written for the model (validator hints, pipeline mechanics).
+# The card says what is actually missing, in one plain sentence each; the raw text
+# stays in REPORT §10. Pipeline mechanics ("DEGRADED … not a stop", "landing is
+# decided by the test evidence", "degraded after N refused attempts") say nothing new.
+_REASON_NOISE_RE = re.compile(
+    r"completed DEGRADED:|not a stop|landing is decided by the test evidence"
+    r"|completed degraded after .* refused attempts", re.I)
+_PLAIN_REASONS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"design\.states is empty", re.I),
+     "The design does not say which state the change adds or touches"),
+    (re.compile(r"smoke_tests=0|SMOKE step skipped", re.I),
+     "No smoke test ran the changed code with real objects"),
+    (re.compile(r"continued test\(s\) passed without the earlier tests", re.I),
+     "Some tests passed only in a continued test call, never in one run with the rest of their file"),
+    (re.compile(r"gate\(s\) passed on a recorded reason, not verified", re.I),
+     "A review step was accepted on a written reason, not on a checked result"),
+    (re.compile(r"Gate-2 .*(?:did not converge|not converged)|review_not_converged", re.I),
+     "Review did not converge in 3 rounds; the open findings are listed"),
+    (re.compile(r"\btests?: \d+ failed|failed test", re.I), "Tests failed"),
+    (re.compile(r"unresolved (?:HIGH|MED|CRITICAL)", re.I), "A review finding is still open"),
+]
+_STAGE_PREFIX_RE = re.compile(r"^(?:unverified:\s*)?(?:(evaluate|think|plan|build|review|test|deliver|reflect|goal_cycle):\s*)?", re.I)
+
+
+def plain_reasons(raw: object, limit: int = 4) -> list[str]:
+    """``push_ready_reason`` ("; "-joined, model-facing) as at most *limit* plain,
+    de-duplicated sentences for the user. An unrecognised reason keeps its first
+    clause (before ``—`` / ``(``), prefixed with its stage."""
+    out: list[str] = []
+    for part in str(raw or "").split("; "):
+        part = " ".join(part.split())
+        if not part or _REASON_NOISE_RE.search(part):
+            continue
+        text = next((plain for rx, plain in _PLAIN_REASONS if rx.search(part)), None)
+        if text is None:
+            m = _STAGE_PREFIX_RE.match(part)
+            stage, rest = (m.group(1) or "").capitalize(), part[m.end():]
+            rest = re.sub(r"^completed with \d+ open gate error\(s\):\s*", "", rest)
+            rest = re.split(r"\s+—\s+|\s+\(", rest, maxsplit=1)[0].strip(" .:;")
+            if not rest:
+                continue
+            text = _clip(f"{stage}: {rest}" if stage else rest, 140) or ""
+        if text and text not in out:
+            out.append(text)
+    return out[:limit]
+
+
 def attention_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str, Any]]:
     """What in this run needs a human judgement, from structured fields only; None
     when nothing does. Fail-safe: an unreadable artifact just contributes nothing."""
@@ -589,8 +655,8 @@ def attention_block(run_id: str, state: Optional[dict], at: str) -> Optional[dic
     items += _gate_items(stages, deliver_art)
     deliver = stages.get("deliver") or {}
     if deliver.get("push_ready") is False:
-        reasons = [x for x in (_clip(p) for p in str(deliver.get("push_ready_reason") or "").split("; ")) if x]
-        items.append({"kind": "not_push_ready", "reasons": reasons[:4]})
+        items.append({"kind": "not_push_ready", "reasons": plain_reasons(deliver.get("push_ready_reason")),
+                      "detail": "Details: REPORT §10"})
     if not items:
         return None
     return {"type": ATTENTION_BLOCK_TYPE, "runId": run_id,

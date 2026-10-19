@@ -423,7 +423,7 @@ export type PipelineAttentionItem =
   | { kind: 'self_answered'; id: string | null; question: string | null; answer: string | null; reason: string | null }
   | { kind: 'assumption'; id: string | null; statement: string | null }
   | { kind: 'gate'; name: string; verdict: string; detail: string | null }
-  | { kind: 'not_push_ready'; reasons: string[] };
+  | { kind: 'not_push_ready'; reasons: string[]; detail?: string };
 
 /** What in a run needs the user — written by the BACKEND with the DELIVER row
  *  (pipeline_stage_events.attention_block); absent when nothing does. */

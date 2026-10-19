@@ -63,10 +63,17 @@ function AttentionRow({ item }: { item: PipelineAttentionItem }) {
   } else {
     line = (
       <>
-        <span className="text-red-500">{tf(t, 'chat.turn.attention.notPushReady', 'Not ready to push')}</span>
-        {item.reasons.length > 0 && <span className={DIM}> · {item.reasons.join(' · ')}</span>}
+        {/* Amber, not red: push_ready=false is a normal outcome (the change is
+            committed locally; only the push waits for a look). */}
+        <span className="text-amber-600 dark:text-amber-400">{tf(t, 'chat.turn.attention.notPushReady', 'Not ready to push')}</span>
+        {item.reasons.length > 0 && (
+          <ul data-testid="not-ready-reasons" className={`${DIM} list-disc pl-5`}>
+            {item.reasons.map((r, i) => <li key={i}>{r}</li>)}
+          </ul>
+        )}
       </>
     );
+    note = item.detail;
   }
   return (
     <li data-testid="attention-item" data-kind={item.kind} className="py-0.5 text-[13.5px] text-[var(--color-text)] break-words">

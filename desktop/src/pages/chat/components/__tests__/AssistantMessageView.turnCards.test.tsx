@@ -127,6 +127,18 @@ describe('pipeline_attention — what needs the user', () => {
     renderView([tu('a', 'Bash'), tr('a'), { ...ATTN, items: [] } as ContentBlock, tx('done')]);
     expect(screen.queryByTestId('turn-attention')).toBeNull();
   });
+
+  it('not ready to push is amber, one reason per line, with where the details are', () => {
+    const item = { kind: 'not_push_ready', reasons: ['No smoke test ran the changed code', 'Tests failed'], detail: 'Details: REPORT §10' };
+    renderView([tu('a', 'Bash'), tr('a'), { ...ATTN, items: [item] } as ContentBlock, tx('done')]);
+    const card = screen.getByTestId('turn-attention');
+    const label = within(card).getByText('Not ready to push');
+    expect(label.className).toContain('text-amber');
+    expect(label.className).not.toContain('text-red');
+    expect(within(within(card).getByTestId('not-ready-reasons')).getAllByRole('listitem').map((e) => e.textContent))
+      .toEqual(['No smoke test ran the changed code', 'Tests failed']);
+    expect(card.textContent).toContain('Details: REPORT §10');
+  });
 });
 
 describe('turn_deliverables — what the turn produced', () => {

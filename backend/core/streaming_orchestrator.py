@@ -371,9 +371,11 @@ class StreamingOrchestrator:
                 blocks += await executors.run_in("io", _pse.new_stage_blocks, run_id, before, after, at)
             # What needs the user rides with the DELIVER row (structured fields only).
             # Only when DELIVER ends: its start row (status in_progress) comes before
-            # Gate 2 and push_ready exist, and a card built then would be partial.
-            if any(b.get("stage") == "deliver" and b.get("status") in ("completed", "skipped")
-                   for b in blocks):
+            # Gate 2 and push_ready exist, and a card built then would be partial. An
+            # isolated run waits until its change has landed (attention_due).
+            deliver_ended = any(b.get("stage") == "deliver" and b.get("status") in ("completed", "skipped")
+                                for b in blocks)
+            if before is not None and _pse.attention_due(before, after, deliver_ended):
                 ab = await executors.run_in("io", _pse.attention_block, run_id, after, at)
                 if ab:
                     blocks.append(ab)

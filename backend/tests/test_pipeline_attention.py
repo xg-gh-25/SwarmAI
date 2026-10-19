@@ -86,7 +86,8 @@ def test_attention_items_come_from_structured_fields_only(tmp_path, monkeypatch)
     q1 = b["items"][0]
     assert (q1["answer"], q1["reason"]) == ("prompt_builder at runtime", "covers stored configs too")
     assert b["items"][5]["verdict"] == "1/3 open"
-    assert b["items"][6]["reasons"] == ["tests: 1 failed", "findings: 1 unresolved HIGH"]
+    assert b["items"][6]["reasons"] == ["Tests failed", "A review finding is still open"]
+    assert b["items"][6]["detail"] == "Details: REPORT §10"
 
 
 @pytest.mark.parametrize("verdict", ["PASS", "SUPPORTED (calibrated)", "SKIPPED", "PROCEED-WITH-FIXES",
@@ -151,6 +152,24 @@ def test_orchestrator_announces_the_run_once_and_attention_rides_deliver(monkeyp
     later = _turn(orch, monkeypatch, _ScriptedReader(_S3), "tu2")
     assert [(b["type"], b.get("stage")) for b in later] == [("pipeline_stage", "deliver"), ("pipeline_attention", None)]
     assert [i["kind"] for i in later[1]["items"]] == ["gate", "not_push_ready"]  # the WRONG-FRAME waited for DELIVER
+
+
+@pytest.mark.usefixtures("_isolated_queue")
+def test_an_isolated_run_shows_the_card_only_when_its_change_lands(monkeypatch):
+    """run_e451e4a0: deliver was recorded, the landing was refused (changed since
+    review) and the run re-reviewed for minutes under a card that read as the end."""
+    from tests.test_tool_call_leak_guard import _make_orchestrator
+    orch = _make_orchestrator()
+    s2 = {**_S2, "isolated": True, "landed": False}
+    s3 = {**_S3, "isolated": True, "landed": False}
+    s4 = {**s3, "landed": True}
+    _turn(orch, monkeypatch, _ScriptedReader(_S1, s2), "tu1")
+    refused = _turn(orch, monkeypatch, _ScriptedReader(s3), "tu2")
+    assert [b["type"] for b in refused] == ["pipeline_stage"]          # the row, no card
+    landed = _turn(orch, monkeypatch, _ScriptedReader(s4), "tu3")
+    assert [b["type"] for b in landed] == ["pipeline_attention"]       # the card, once
+    again = _turn(orch, monkeypatch, _ScriptedReader(s4), "tu4")
+    assert again == []
 
 
 @pytest.mark.usefixtures("_isolated_queue")
@@ -400,3 +419,56 @@ async def test_send_admission_resets_the_turn_products():
                 pass
     assert seen["files"] == {}
     assert seen["announced"] == set()
+
+
+# ── plain reasons + when the card is due ─────────────────────────────────────
+
+# run_e451e4a0's real push_ready_reason (2026-10-19), as the card showed it raw
+REAL = ("unverified: plan: plan completed DEGRADED: 1 gate error(s) recorded as push_ready reasons "
+        "(REPORT §10), not a stop; landing is decided by the test evidence; unverified: plan: completed "
+        "with 1 open gate error(s): Design spec: design.states is empty — give no_state_reason (>= 20 "
+        "chars: why the change adds and touches no state); unverified: build: build completed DEGRADED: "
+        "2 gate error(s) recorded as push_ready reasons (REPORT §10), not a stop; landing is decided by "
+        "the test evidence; unverified: build: completed with 2 open gate error(s): smoke_tests=0 but 2 "
+        "files changed — run smoke tests with real objects; SMOKE step skipped: build touched 2 code "
+        "files but smoke_tests=0 — runtime crashes (Attribut; unverified: plan: completed degraded after "
+        "None refused attempts; unverified: build: completed degraded after None refused attempts; "
+        "unverified: test: 15 continued test(s) passed without the earlier tests of their file; gate(s) "
+        "passed on a recorded reason, not verified: deliver:gate2_recheck, deliver:gate2_findings")
+
+
+def test_plain_reasons_drop_mechanics_and_say_what_is_missing():
+    assert pse.plain_reasons(REAL) == [
+        "The design does not say which state the change adds or touches",
+        "No smoke test ran the changed code with real objects",
+        "Some tests passed only in a continued test call, never in one run with the rest of their file",
+        "A review step was accepted on a written reason, not on a checked result",
+    ]
+    for r in pse.plain_reasons(REAL, limit=99):
+        assert "DEGRADED" not in r and "not a stop" not in r and "REPORT" not in r and "_" not in r
+
+
+def test_plain_reasons_keep_an_unknown_reason_as_its_first_clause():
+    assert pse.plain_reasons("unverified: build: lint found 3 errors — fix them (see log)") == ["Build: lint found 3 errors"]
+    assert pse.plain_reasons("") == [] and pse.plain_reasons(None) == []
+
+
+def test_attention_due_waits_for_an_isolated_run_to_land():
+    shared = {"isolated": False}
+    assert pse.attention_due(shared, shared, True) is True
+    assert pse.attention_due(shared, shared, False) is False
+    iso, landed = {"isolated": True, "landed": False}, {"isolated": True, "landed": True}
+    # deliver recorded, landing refused (changed_since_review): no card yet
+    assert pse.attention_due(iso, iso, True) is False
+    # the landing happened in this call: the card, once
+    assert pse.attention_due(iso, landed, False) is True
+    assert pse.attention_due(landed, landed, True) is False
+    assert pse.attention_due(iso, None, True) is False
+
+
+def test_read_stage_state_reports_isolation_and_landing(tmp_path, monkeypatch):
+    run = {**RUN, "worktree_mode": "isolated", "commits": [{"sha": "abc", "landed": True}]}
+    st = _state(tmp_path, monkeypatch, run)
+    assert (st["isolated"], st["landed"]) == (True, True)
+    st = _state(tmp_path / "shared", monkeypatch, RUN)
+    assert (st["isolated"], st["landed"]) == (False, False)
