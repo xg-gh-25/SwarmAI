@@ -1232,6 +1232,9 @@ def create_agent_tool_audit_hook(
                     final = last_message if isinstance(last_message, str) and last_message.strip() \
                         else (_read_subagent_final_text(transcript_path) if transcript_path else "")
                     base["verdict"] = _gate_verdict(expert_id, final)
+                    if expert_id == "root-cause":
+                        # its reasons go into REPORT §10 / the PLAN redesign verbatim
+                        base["verdict_text"] = (final or "")[:2000]
                 elif expert_id:
                     # Key present = this daemon records the expert's own findings and
                     # re-check answers (DELIVER stage-complete compares the record).
@@ -1353,10 +1356,14 @@ _GATE_VERDICT_RE = {
         r"(?!\s*\|)", re.I | re.M),
     "gate1-skeptic": re.compile(
         r"^\W*GATE\s*1\s*VERDICT\W{0,6}(PASS|WARN|PARTIAL|BLOCK)\b(?!\s*\|)", re.I | re.M),
+    # Gate-2 root-cause review after a capped, unconverged loop (core/gate2_convergence).
+    "root-cause": re.compile(
+        r"^\W*ROOT[-\s]?CAUSE\s*VERDICT\W{0,6}(SOUND|WRONG-APPROACH)\b(?!\s*\|)", re.I | re.M),
 }
 # Severity: the most severe token on the anchored lines is the skeptic's verdict.
 GATE_VERDICT_RANK = {"PASS": 0, "WARN": 1, "PARTIAL": 1, "BLOCK": 2,
-                     "SUPPORTED": 0, "UNSUPPORTED": 1, "ALREADY-SATISFIED": 1, "WRONG-FRAME": 1}
+                     "SUPPORTED": 0, "UNSUPPORTED": 1, "ALREADY-SATISFIED": 1, "WRONG-FRAME": 1,
+                     "SOUND": 0, "WRONG-APPROACH": 1}
 _GATE_ANSWER_TAIL_BYTES = 256 * 1024  # fallback transcript read; the SDK input carries the text
 
 

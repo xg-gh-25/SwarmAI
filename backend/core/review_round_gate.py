@@ -6,7 +6,9 @@ fix 2). A spawn of an expert that has already completed 3 rounds in the CURRENT
 stage of THIS session's active run is denied, with the instruction to stop fixing
 and run one fresh-context root-cause review instead: SOUND → commit locally with the
 open findings in REPORT §10 and push_ready false; WRONG-APPROACH → back to PLAN once
-(docs/design/pipeline-review-convergence.md §3, 「N3 规则定稿」). The user is not asked. It used to be an allowance that stage-complete checked after the
+(docs/design/pipeline-review-convergence.md §3, 「N3 规则定稿」). The user is not asked.
+The root-cause review itself (EXPERT-ID ``root-cause``) is allowed once per cycle, and
+a recorded redesign (run.json ``redesigns``) starts a new cycle with a fresh count. It used to be an allowance that stage-complete checked after the
 rounds had run, waived by any written ``over_budget_reasons`` entry: run_d8762bc8
 ran 7 Gate-2 rounds, run_5d894e22 9 red-team rounds.
 
@@ -34,6 +36,12 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 MAX_ROUNDS = 3
+ROOT_CAUSE_ID = "root-cause"
+_ROOT_CAUSE_DENY = (
+    "DENY (再一再二不再三): the root-cause review already ran in the {stage} stage of pipeline "
+    "run {run_id}; there is one per review cycle. Apply its verdict: run `stage-complete "
+    "--stage deliver` (SOUND → local commit, open items in REPORT §10; WRONG-APPROACH → back "
+    "to PLAN once). Do not ask the user.")
 _EXEMPT_STAGES = frozenset({"goal_cycle"})
 _SCAN_TIMEOUT = 3.0  # under the hook chain's 5 s per-hook cap
 
@@ -99,6 +107,10 @@ def rounds_used(session_id: str, expert_id: str) -> "dict | None":
     if not audit.is_dir():
         return None
     earliest = min(lo for lo, _hi in windows)
+    # A root-cause redesign starts a new review cycle with a fresh allowance.
+    redesign = max((float(r.get("ts") or 0.0) for r in state.get("redesigns") or []
+                    if isinstance(r, dict)), default=0.0)
+    floor = max(earliest, redesign)
     used = 0
     for p in audit.glob("session_*.marker"):
         if "_adv_" in p.name:
@@ -113,7 +125,7 @@ def rounds_used(session_id: str, expert_id: str) -> "dict | None":
                 or data.get("expert_id") != expert_id:
             continue
         ts = data.get("ts")
-        if isinstance(ts, (int, float)) and any(lo <= ts <= hi for lo, hi in windows):
+        if isinstance(ts, (int, float)) and ts >= floor and any(lo <= ts <= hi for lo, hi in windows):
             used += 1
     return {"run_id": own["id"], "project": own["project"], "stage": stage, "used": used}
 
@@ -161,7 +173,8 @@ def create_review_round_gate(session_context: dict[str, Any]):
         except Exception:  # noqa: BLE001 — incl. TimeoutError: the gate never blocks on itself
             logger.warning("review_round_gate: scan failed — failing open", exc_info=True)
             return {"decision": "approve"}
-        if not info or info["stage"] in _EXEMPT_STAGES or info["used"] < MAX_ROUNDS:
+        cap = 1 if expert_id == ROOT_CAUSE_ID else MAX_ROUNDS
+        if not info or info["stage"] in _EXEMPT_STAGES or info["used"] < cap:
             return {"decision": "approve"}
         if os.environ.get("SWARM_REVIEW_ROUND_GATE_FORCE") == "1":
             logger.warning("[review-round-gate] FORCE override: %s round %d in %s/%s",
@@ -169,10 +182,12 @@ def create_review_round_gate(session_context: dict[str, Any]):
             return {"decision": "approve"}
         logger.warning("[BLOCKED] review_round_gate: %s round %d in %s/%s", expert_id,
                        info["used"] + 1, info["run_id"], info["stage"])
+        reason = (_ROOT_CAUSE_DENY.format(**info) if expert_id == ROOT_CAUSE_ID
+                  else _deny_reason(expert_id, info))
         return {"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(expert_id, info),
+            "permissionDecisionReason": reason,
         }}
 
     return _gate

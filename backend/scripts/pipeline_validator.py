@@ -118,8 +118,14 @@ SEVERITY_ADVISORY = "advisory"  # failure/crash appends to warnings[] → warns
 CONFIDENCE_GATE_THRESHOLD = 7
 
 
+# A finding a SOUND root-cause verdict left open (artifact_cli sets it, the tool alone):
+# it no longer blocks DELIVER / completion, but push_ready still counts it (5576).
+DEFERRED_BY_ROOT_CAUSE = "root-cause:SOUND"
+
+
 def _blocked_findings(
     findings: object, threshold: int = CONFIDENCE_GATE_THRESHOLD,
+    honor_deferred: bool = False,
 ) -> list[dict]:
     """Return the UNRESOLVED findings that must block delivery/completion.
 
@@ -144,7 +150,9 @@ def _blocked_findings(
     if not isinstance(findings, list):
         return []
     return [f for f in findings
-            if isinstance(f, dict) and not f.get("resolved") and is_blocking(f, threshold)]
+            if isinstance(f, dict) and not f.get("resolved")
+            and not (honor_deferred and f.get("deferred_by") == DEFERRED_BY_ROOT_CAUSE)
+            and is_blocking(f, threshold)]
 
 
 # ── Gate-2 Red Team trigger (HIGH half) ──
@@ -2458,7 +2466,7 @@ def validate_artifact_data(
             # blocking findings). Shared helper = single source of truth with the
             # completion-time gate in _check_depth (R27: no divergence).
             if tier and tier != "skipped":
-                blocked = _blocked_findings(ar.get("findings", []))
+                blocked = _blocked_findings(ar.get("findings", []), honor_deferred=True)
                 if blocked:
                     errors.append(
                         f"{len(blocked)} unresolved blocking finding(s) — HIGH "
@@ -3139,7 +3147,7 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
                 # helper (single source of truth with the publish-time gate —
                 # previously these two sites had duplicated HIGH-only filters
                 # that could diverge, R27).
-                blocked = _blocked_findings(ar.get("findings", []))
+                blocked = _blocked_findings(ar.get("findings", []), honor_deferred=True)
                 if blocked:
                     errors.append(
                         f"Depth: adversarial_review has {len(blocked)} unresolved "

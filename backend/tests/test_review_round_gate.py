@@ -190,3 +190,27 @@ def test_build_hooks_registers_it_for_agent_spawns(monkeypatch):
         resume_session_id="test-sess", session_context={"sdk_session_id": "test-sess"},
         permission_manager=permission_manager))
     assert ("PreToolUse", "review_round_gate", "Agent|Task") in recorded
+
+
+def test_root_cause_review_runs_once_per_cycle(env):
+    ws, audit = env
+    _run(ws)
+    assert _spawn("root-cause") == {"decision": "approve"}
+    _marker(audit, 1, "root-cause")
+    res = _spawn("root-cause")
+    assert _denied(res)
+    assert "one per review cycle" in res["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_a_redesign_starts_a_fresh_allowance(env):
+    ws, audit = env
+    now = time.time()
+    _run(ws, started=now - 3600)
+    for i in range(3):
+        _marker(audit, i, "correctness", ts=now - 3000 + i)
+    assert _denied(_spawn())
+    d = ws / "Projects" / "SwarmAI" / ".artifacts" / "runs" / RID / "run.json"
+    st = json.loads(d.read_text())
+    st["redesigns"] = [{"ts": now - 1000}]
+    d.write_text(json.dumps(st))
+    assert _spawn() == {"decision": "approve"}

@@ -4,7 +4,7 @@ date: 2026-10-19
 created: 2026-10-19
 updated: 2026-10-19
 project: SwarmAI
-status: PROPOSED（16:06 按 XG 要求改为全自动）；实现等 run_82253fe2（Run 1 缩减后的分类器部分）合入 main 后开始
+status: IMPLEMENTED 2026-10-19（XG 16:10「直接实现，不用等」）。没有等 run_82253fe2：阻断判定在 core/gate2_convergence.is_blocking 里内联了同一条规则，core.gate2_findings 合入后会自动改用它
 related: pipeline-review-convergence.md §3「N3 规则定稿」（规则与 AC1–AC6 的出处）；c247dca3（轮数硬上限 review_round_gate，已落地）
 author: Kiro（基于 run_925edb0e worktree 里的新代码阅读）
 ---
@@ -118,6 +118,21 @@ Run 1（`run_925edb0e`）合入后提供：
 - **离线回放**（只读，不花 token）：用 `gate2_convergence` 跑 `run_d8762bc8`（7 轮）和 `run_5d894e22`（8 到 9 轮）的历史 marker，输出新规则下它们会在第几轮收敛，或者走到根因复盘；对这两个 run 实际跑一次 root-cause expert，看结论是 SOUND 还是 WRONG-APPROACH，和事后看到的情况是否一致。写进本文 §6，作为规则有效的证据。
 - **上线后**：接下来 5 个 full/bugfix run，Gate-2 轮数全部 ≤3、中位数 ≤2；根因复盘次数、两种结论的比例、重设计次数单独统计。
 
-## 6. 回放结果
+## 6. 实现记录（2026-10-19）
 
-（实现后填写）
+| 部分 | 位置 |
+|---|---|
+| 收敛判定（纯函数） | `core/gate2_convergence.py`：`outcome()` 返回 none / converged / recheck / root_cause / sound / redesign |
+| root-cause 结论解析 | `core/runtime_hooks.py`：`_GATE_VERDICT_RE["root-cause"]`，marker 里存 `verdict` 和 `verdict_text` |
+| 本周期的 marker 收集 | `artifact_cli._gate2_cycle_rows`：从 DELIVER 窗口、round-1 快照、最近一次 redesign 三者中最晚的时间点开始算 |
+| gate2-recheck | 已收敛 → 不写 prompt，下一步 meta-review；超过轮数上限 → 写 `root-cause.md`，打印它的 `spawn`；已有结论 → 指向 stage-complete |
+| stage-complete | `_gate2_convergence_errors`：E_ROOT_CAUSE_REQUIRED / E_REDESIGN（记录一次 redesign 和 intervention）/ E_REDESIGN_PENDING / E_REDESIGN_UNREVIEWED；SOUND 时不报错，只给警告 |
+| SOUND 的处理 | `_derive_stage_fields`：给未解决的阻断项打上 `deferred_by=root-cause:SOUND`（只有工具能写，模型写的会被清掉）；validator 在 DELIVER 和完成阶段跳过这些项，但 push_ready 仍然计入；push_ready 强制为 false；写一条 `[gate2]` attention flag，进入 REPORT §10 |
+| 重新设计 | run.json `redesigns[]`（每个 run 最多 1 条）；DELIVER 重新进入时重新拍 round-1 快照；`review_round_gate` 从 redesign 时间点重新计数 |
+| root-cause 次数 | `review_round_gate`：每个周期 1 次 |
+| AC6 | `_stage_budget` 不再读 `over_budget_reasons` |
+| 生效范围 | `GATE2_CONVERGENCE_CUTOVER = 2026-10-19T08:30Z`，之后创建的 run |
+
+测试：`tests/test_gate2_convergence.py`（21 个，其中 1 个走真实的 stage-complete 端到端）和 `tests/test_review_round_gate.py`（新增 2 个）。反向验证：去掉轮数上限的判断 → 10 个测试失败；去掉 deferred 的处理 → 2 个失败。
+
+尚未完成：离线回放 `run_d8762bc8` / `run_5d894e22`。这两个 run 早于 cutover，marker 里也没有 `reported_state`（旧 daemon），会被判为 unjudged，没法直接回放，要等新 daemon 上线后用真实 run 验证。

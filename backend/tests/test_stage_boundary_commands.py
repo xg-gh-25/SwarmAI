@@ -1390,7 +1390,8 @@ def test_stage_complete_refuses_a_fourth_round_without_a_reason(ws, capsys, monk
     assert "E_OVER_BUDGET" in msgs and "gate1-skeptic" in msgs and "'security'" not in msgs
 
 
-def test_stage_complete_accepts_a_fourth_round_with_a_reason_and_reports_budget(ws, capsys, monkeypatch):
+def test_stage_complete_refuses_a_fourth_round_even_with_a_reason(ws, capsys, monkeypatch):
+    """AC6 (再一再二不再三): over_budget_reasons no longer buys an extra round."""
     root, reg = ws
     _budget_run(root, "run_budget2")
     monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {
@@ -1398,12 +1399,13 @@ def test_stage_complete_accepts_a_fourth_round_with_a_reason_and_reports_budget(
     art = _plan_artifact()
     art["over_budget_reasons"] = {"gate1-skeptic": "second BLOCK on a different constraint"}
     code, out = _complete(reg, capsys, "run_budget2", "plan", art, {"decisions": DECISION})
-    assert code == 0, out
-    rec = cli._stage_record_of(_run_state(root, "run_budget2"), "plan")
-    b = rec["budget"]
+    assert code != 0
+    msgs = json.dumps(out, ensure_ascii=False)
+    assert "E_OVER_BUDGET" in msgs and "root-cause" in msgs
+    b = cli._stage_budget("run_budget2", _run_dir(root, "run_budget2"),
+                          _run_state(root, "run_budget2"), "plan", art)
     assert b["allowance_per_expert"] == 3 and b["over"] == {"gate1-skeptic": 4}
-    assert b["reasons"] == {"gate1-skeptic": "second BLOCK on a different constraint"}
-    assert b["spawns"]["unattributed"] == 1
+    assert b["missing"] == ["gate1-skeptic"] and b["reasons"] == {}
 
 
 def test_stage_budget_without_stage_start_is_reported_not_enforced(tmp_path):
