@@ -686,6 +686,19 @@ def _stub_credential_preflight(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_turn_changes(monkeypatch):
+    """No code trees for EVERY test (P7: structural guard). SessionUnit.send()
+    starts core/turn_changes, which discovers the developer's REAL bound repos and
+    runs `git add -u` on them (loose objects in their .git). A test that wants trees
+    passes them explicitly or re-patches code_roots (tests/test_turn_changes.py)."""
+    try:
+        import core.turn_changes as _tc
+        monkeypatch.setattr(_tc, "code_roots", lambda: [], raising=False)
+    except Exception:  # noqa: BLE001 — never let the isolation break a test
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _isolate_judge_telemetry(tmp_path_factory, monkeypatch):
     """Redirect judge telemetry to a temp dir for EVERY test (P7: structural guard,
     not per-test discipline). self_adversarial_judge logs each verdict to

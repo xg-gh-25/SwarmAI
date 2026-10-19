@@ -39,8 +39,8 @@
  * read / search / list).
  *
  * Not units: the backend's display blocks (`pipeline_run`, `pipeline_attention`,
- * `pipeline_summary`, `turn_deliverables`) are lifted into `TurnView.run / attention /
- * summary / deliverables`.
+ * `pipeline_summary`, `turn_deliverables`, `turn_changes`) are lifted into
+ * `TurnView.run / attention / summary / deliverables / changes`.
  * They have a fixed place in the turn (the pipeline block's header / before the
  * result / after it),
  * not a place in the flow, so they never split a segment or count as "later".
@@ -81,6 +81,7 @@ import type {
   PipelineAttentionContent,
   PipelineSummaryContent,
   TurnDeliverable,
+  TurnChangesContent,
   SubAgentProgress,
 } from '../../types';
 
@@ -166,6 +167,8 @@ export interface TurnView {
   summary?: PipelineSummaryContent;
   /** The turn's products (`turn_deliverables`), by absolute path, first-seen order. */
   deliverables: TurnDeliverable[];
+  /** The turn's code changes (the latest `turn_changes`), if the backend sent them. */
+  changes?: TurnChangesContent;
   /** Action lines lifted from a trailing ```next-steps block of the final outcome. */
   nextSteps: string[];
   /** What Copy copies: the outcome text (no process notes, no next-steps block). */
@@ -248,7 +251,7 @@ const isSubAgentBlock = (b: ContentBlock): boolean =>
 /** Backend-written display blocks that are not part of the turn's flow (the run's
  *  alignment, what needs the user, the turn's products): lifted into TurnView
  *  fields, invisible to segments, the done rule and the outcome. */
-const DISPLAY_TYPES = new Set(['pipeline_run', 'pipeline_attention', 'pipeline_summary', 'turn_deliverables']);
+const DISPLAY_TYPES = new Set(['pipeline_run', 'pipeline_attention', 'pipeline_summary', 'turn_deliverables', 'turn_changes']);
 
 /** Derive the display units for one assistant message. Pure.
  *  `progress` is the streaming message's live sub-agent status, by Agent id. */
@@ -318,6 +321,7 @@ export function deriveTurnView(
   let attention: PipelineAttentionContent | undefined;
   let summary: PipelineSummaryContent | undefined;
   const deliverables: TurnDeliverable[] = [];
+  let changes: TurnChangesContent | undefined;
   content.forEach((block, index) => {
     if (block.type === 'tool_result') return; // consumed by its tool_use
     if (isSubAgentBlock(block)) return; // nested under its Agent step below
@@ -354,6 +358,10 @@ export function deriveTurnView(
     }
     if (block.type === 'pipeline_attention') { attention = block; return; }
     if (block.type === 'pipeline_summary') { summary = block; return; }
+    if (block.type === 'turn_changes') {
+      if (Array.isArray(block.files) && block.files.length) changes = block;
+      return;
+    }
     if (block.type === 'turn_deliverables') {
       for (const f of block.files ?? []) {
         if (f?.absolutePath && !deliverables.some((d) => d.absolutePath === f.absolutePath)) deliverables.push(f);
@@ -516,7 +524,7 @@ export function deriveTurnView(
     .filter((u): u is Extract<TurnUnit, { kind: 'outcome' }> => u.kind === 'outcome')
     .map((u) => u.text)
     .join('\n\n');
-  return { units, nextSteps, copyText, run, attention, summary, deliverables, liveStage, midWork };
+  return { units, nextSteps, copyText, run, attention, summary, deliverables, changes, liveStage, midWork };
 }
 
 // ── Step labels ─────────────────────────────────────────────────────────────

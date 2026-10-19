@@ -51,6 +51,7 @@ import { PipelineStageRow } from './PipelineStageRow';
 import { PipelineBlock } from './PipelineBlock';
 import { FileChip } from './FileChip';
 import { AttentionCard, DeliverablesCard, PipelineSummaryCard } from './TurnCards';
+import { ChangesCard } from './ChangesCard';
 import { NextSteps } from './NextSteps';
 import { deriveTurnView, extractNextSteps, groupWork, isGateStage, isUnanswered, pipelineChecklist, sectionUnits, stageCounts, turnChangedFiles } from '../turnView';
 import type { NoteUnit, ProcessUnit, TurnUnit, WorkItem } from '../turnView';
@@ -284,10 +285,20 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const lastUnit = view.units[view.units.length - 1];
   const showResult = !isStreaming && hasWork && lastUnit?.kind === 'outcome';
   const isPipeline = view.units.some((u) => u.kind === 'stage');
-  // A product the turn wrote shows in the Produced card, not again as a changed file.
+  // The backend's code changes (turn_changes) are the card. A product the turn wrote
+  // shows in the Produced card, not again as a changed file. Tool-derived names the
+  // card does not cover (older history; a file outside the code repos) stay chips.
+  const changes = useMemo(() => {
+    if (isStreaming || !view.changes) return undefined;
+    const files = view.changes.files.filter(
+      (f) => !view.deliverables.some((d) => isSameFile(f.absolutePath, d.path, d.absolutePath)),
+    );
+    return files.length ? { ...view.changes, files } : undefined;
+  }, [view, isStreaming]);
   const turnFiles = useMemo(
     () => (!isStreaming && hasWork && !isPipeline ? turnChangedFiles(view.units) : [])
-      .filter((p) => !view.deliverables.some((d) => isSameFile(p, d.path, d.absolutePath))),
+      .filter((p) => !view.deliverables.some((d) => isSameFile(p, d.path, d.absolutePath)))
+      .filter((p) => !view.changes?.files.some((f) => isSameFile(p, f.path, f.absolutePath))),
     [view, isStreaming, hasWork, isPipeline],
   );
   const attentionCard = view.attention && view.attention.items.length > 0
@@ -584,6 +595,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     : view.deliverables;
   if (view.summary && !isStreaming) {
     contentBlocks.push(<div key="pipeline-summary" className="mt-4"><PipelineSummaryCard block={view.summary} /></div>);
+  }
+  if (changes) {
+    contentBlocks.push(<div key="turn-changes" className="mt-4"><ChangesCard block={changes} /></div>);
   }
   if (deliverables.length) {
     contentBlocks.push(<div key="deliverables" className="mt-4"><DeliverablesCard files={deliverables} /></div>);

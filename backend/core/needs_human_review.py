@@ -180,17 +180,22 @@ def _is_automated_job_output(rel_path: str) -> bool:
       2. Any segment ``JobResults`` — job run-logs (``Knowledge/JobResults/*``); the
          name carries the semantics.
       3. ``.jsonl`` extension — machine data-log format, not human-readable prose.
+      4. ``Knowledge/DailyActivity`` — the session hooks' activity log (XG 2026-10-19:
+         it is not a turn's product).
 
     SwarmWS-tree only: called from ``_classify_kind`` on the SwarmWS-relative path
-    for the ``repo is None`` (non-bound-worktree) case. Deliberately NOT covering
-    ``Knowledge/{DailyActivity,DailyBriefs,Signals}`` — those are also automated but
-    whether they belong on the human artifact surface is a separate decision
-    (run_d25d72be REPORT § Known Gaps), left out of this scope on purpose.
+    for the ``repo is None`` (non-bound-worktree) case. ``Knowledge/{DailyBriefs,
+    Signals}`` are also automated but still shown — whether they belong on the human
+    artifact surface is a separate decision (run_d25d72be REPORT § Known Gaps).
     """
     parts = [p for p in Path(rel_path).parts if p not in (".", "")]
     if not parts:
         return False
     if parts[0] == "Services":
+        return True
+    if parts[:2] == ["Knowledge", "DailyActivity"]:
+        # The session hooks' activity log, written in the background during a turn
+        # — not something the turn produced (XG 2026-10-19).
         return True
     if "JobResults" in parts:
         return True

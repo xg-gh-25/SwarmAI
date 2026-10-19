@@ -17,6 +17,8 @@
  *                      requirements, design spec, review (with its expert / finding
  *                      counts), report. A document the profile does not produce is a
  *                      dim row saying why. No per-row boxes: spacing groups.
+ * - ChangesCard (its own file) — what the turn changed in the code repos
+ *                      (`turn_changes`), before the Produced card.
  * All text in these blocks is model-written: rendered plain, never as markdown.
  *
  * @exports AttentionCard, DeliverablesCard, PipelineSummaryCard, middleEllipsis

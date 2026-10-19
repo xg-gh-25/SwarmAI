@@ -922,6 +922,10 @@ class SessionUnit:
         # as _turn_client_id: reset at send() admission, so a pause for a question or
         # a permission (no `result`) keeps what was produced before it.
         self._turn_files: dict = {}
+        # The turn's code changes (core/turn_changes): a start snapshot of the code
+        # trees + the files the turn wrote → ONE turn_changes block at `result`. Same
+        # lifecycle as _turn_files.
+        self._turn_changes = None
         # Pipeline runs whose alignment this turn has shown (reset per turn at send()).
         self._pipeline_runs_announced: set = set()
         # Seqs of the most recently drained pending set, surfaced to the frontend
@@ -2296,6 +2300,12 @@ class SessionUnit:
         # Same lifecycle: the products of a turn paused for a question / permission
         # ride the unit until that turn's `result` (router continuation loops).
         self._turn_files = {}
+        try:
+            from core.turn_changes import TurnChanges
+            self._turn_changes = TurnChanges.start()
+        except Exception as exc:  # noqa: BLE001 — a display aid never blocks a send
+            logger.debug("turn_changes start skipped: %s", exc)
+            self._turn_changes = None
         # Pipeline runs this turn has shown the alignment of (streaming_orchestrator
         # _pipeline_stage_events): each new turn announces a running run once more.
         self._pipeline_runs_announced = set()

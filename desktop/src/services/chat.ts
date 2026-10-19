@@ -634,6 +634,17 @@ export const chatService = {
   // messages.  Avoids refetching identical history on tab switches / restarts.
   _messageEtags: new Map<string, { etag: string; messages: ChatMessage[] }>(),
 
+  /** One file's diff on a turn's "files changed" card (core/turn_changes); null
+   *  when it is gone for good (404: the trees were pruned, or the request was
+   *  refused). Any other failure (network, 503) throws, so the card can retry. */
+  async getTurnDiff(q: { gitRoot: string; start: string; end: string; path: string }): Promise<string | null> {
+    const response = await api.get<{ diff: string }>('/chat/turn-diff', {
+      params: { git_root: q.gitRoot, start: q.start, end: q.end, path: q.path },
+      validateStatus: (s: number) => s === 200 || s === 404,
+    });
+    return response.status === 200 ? (response.data?.diff ?? null) : null;
+  },
+
   // Get messages for a session
   async getSessionMessages(sessionId: string): Promise<ChatMessage[]> {
     const cached = this._messageEtags.get(sessionId);

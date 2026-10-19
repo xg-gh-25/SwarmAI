@@ -2158,6 +2158,7 @@ class SessionRouter:
     async def _persist_stream_event(
         self, session_id: str, event: dict, pending: list[dict],
         *, label: str = "", client_id: str | None = None, files: dict | None = None,
+        changes: object | None = None,
     ) -> list[dict]:
         """Persist what one streamed event contributes to the turn's rows; return
         events to deliver BEFORE this one.
@@ -2168,20 +2169,36 @@ class SessionRouter:
           blocks are written back into ``event['content']`` (stream == DB, bug 2d).
         - ``tool_result``: compacted into ``pending`` (status + outcome only), so
           a reloaded turn shows what each step returned and which failed.
-        - ``file_changed`` of a product kind: remembered in ``files``.
+        - ``file_changed`` of a product kind: remembered in ``files``; every
+          ``file_changed``, and every Edit/Write tool path, is noted in
+          ``changes`` (core/turn_changes).
         - ``result``: the turn's products become one persisted
           ``turn_deliverables`` block, delivered just before the result (so the
-          chat shows "what this turn produced" live and after a reload).
+          chat shows "what this turn produced" live and after a reload); the
+          turn's code diff becomes one ``turn_changes`` block just before it.
         - a terminal event: any ``pending`` results get their own row.
         """
         etype = event.get("type")
-        if etype == "file_changed" and files is not None:
-            self._note_deliverable(files, event)
+        if etype == "file_changed":
+            if changes is not None:
+                try:
+                    changes.note(event)
+                except Exception as exc:  # noqa: BLE001 — a display aid
+                    logger.debug("turn_changes note failed: %s", exc)
+            if files is not None:
+                self._note_deliverable(files, event)
             return []
         if etype == "tool_result" and event.get("content"):
             pending.extend(self._compact_tool_results(event["content"]))
             return []
         if etype == "assistant" and event.get("content"):
+            if changes is not None:
+                # Edit/Write paths: a dot-directory file has no file_changed.
+                for blk in event["content"]:
+                    try:
+                        changes.note_tool(blk)
+                    except Exception as exc:  # noqa: BLE001 — a display aid
+                        logger.debug("turn_changes note_tool failed: %s", exc)
             n = len(pending)
             cleaned = await self._persist_assistant_blocks(
                 session_id, [*pending, *event["content"]], event.get("model"),
@@ -2191,6 +2208,15 @@ class SessionRouter:
             event["content"] = cleaned[n:]  # the clean is one-to-one per block
             return []
         before: list[dict] = []
+        if etype == "result" and changes is not None:
+            try:
+                cblock = await changes.finish()
+            except Exception as exc:  # noqa: BLE001 — a display aid never breaks the result
+                logger.warning("turn_changes finish failed: %s", exc)
+                cblock = None
+            if cblock:
+                pending.append(cblock)
+                before.append({"type": "assistant", "content": [cblock], "model": None})
         if etype == "result" and files:
             block = {"type": "turn_deliverables", "files": list(files.values())[:MAX_TURN_DELIVERABLES]}
             pending.append(block)
@@ -4129,7 +4155,7 @@ class SessionRouter:
                     # The unit's (reset by send() at admission): a pause for a
                     # question / permission ends this loop without a `result`, and
                     # the continuation loop finishes the same turn's products.
-                    files=self._turn_files_of(unit),
+                    files=self._turn_files_of(unit), changes=getattr(unit, "_turn_changes", None),
                 )
 
                 # Echo client_id in result event for frontend dedup (AC2)
@@ -4440,7 +4466,7 @@ class SessionRouter:
         async for event in unit.continue_with_answer(answer, tool_use_id=tool_use_id):
             # Write cleaned blocks back → stream == DB bytes (bug 2d).
             for _extra in await self._persist_stream_event(
-                session_id, event, _pending_results, label="answer", files=self._turn_files_of(unit),
+                session_id, event, _pending_results, label="answer", files=self._turn_files_of(unit), changes=getattr(unit, "_turn_changes", None),
                 # Reuse the originating turn's client_id (stashed by
                 # send_message) so this continuation row carries the SAME
                 # `{client_id}-asst` key as the turn's main-path rows — keeping
@@ -4471,7 +4497,7 @@ class SessionRouter:
         async for event in unit.continue_with_permission(request_id, allowed):
             # Write cleaned blocks back → stream == DB bytes (bug 2d).
             for _extra in await self._persist_stream_event(
-                session_id, event, _pending_results, label="permission", files=self._turn_files_of(unit),
+                session_id, event, _pending_results, label="permission", files=self._turn_files_of(unit), changes=getattr(unit, "_turn_changes", None),
                 # Reuse the originating turn's client_id (stashed by
                 # send_message) — same rationale as continue_with_answer above
                 # (run_9bbf1761): keeps the continuation row keyed to the turn.

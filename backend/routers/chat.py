@@ -713,6 +713,33 @@ async def answer_question(request: Request):
     )
 
 
+@router.get("/turn-diff")
+async def get_turn_diff(
+    git_root: str = Query(..., max_length=4096),
+    start: str = Query(..., max_length=64),
+    end: str = Query(..., max_length=64),
+    path: str = Query(..., max_length=4096),
+):
+    """One file's diff on a turn's "files changed" card (core/turn_changes).
+
+    The card's rows carry the two change trees, not the diff text, so diffs never
+    sit in the messages table (its FTS index and session recall feed prompts).
+    Only a known code tree's object store is read; ids and path are validated in
+    ``diff_text``. 404 when it is gone for good (unknown repo, bad input, pruned
+    tree), 503 on a transient failure (worth a retry). Runs on the "turn_changes"
+    pool, never on 'subprocess' (its fail-open safety gates must not wait on it)."""
+    from core import executors
+    from core.turn_changes import DiffUnavailable, diff_text
+
+    try:
+        text = await executors.run_in("turn_changes", diff_text, git_root, start, end, path)
+    except DiffUnavailable:
+        raise HTTPException(status_code=503, detail="Diff temporarily unavailable")
+    if text is None:
+        raise HTTPException(status_code=404, detail="Diff not available")
+    return {"diff": text}
+
+
 @router.get("/sessions", response_model=list[ChatSessionResponse])
 async def list_sessions(
     agent_id: str | None = None,

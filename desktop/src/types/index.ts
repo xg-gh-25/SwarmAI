@@ -445,8 +445,37 @@ export interface TurnDeliverablesContent {
   files: TurnDeliverable[];
 }
 
+/** One file a turn changed in a code repo (core/turn_changes). */
+export interface TurnChangeFile {
+  /** Repo-relative path. */
+  path: string;
+  absolutePath: string;
+  repo: string;
+  status: 'added' | 'modified' | 'deleted';
+  /** Lines; null for a binary file. */
+  added: number | null;
+  deleted: number | null;
+  binary: boolean;
+  /** False when the change is too large to offer as a diff ("file only"). */
+  diffable: boolean;
+  /** Where the diff is read on demand (GET /api/chat/turn-diff): the repo whose
+   *  object store holds the two change trees, and the trees. */
+  gitRoot: string;
+  start: string;
+  end: string;
+}
+
+/** The turn's code changes — written by the BACKEND just before `result`, from a
+ *  change-tree snapshot taken when the turn started (core/turn_changes). */
+export interface TurnChangesContent {
+  type: 'turn_changes';
+  files: TurnChangeFile[];
+  /** Files beyond the row cap that are not listed. */
+  omitted?: number;
+}
+
 export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent
-  | PipelineRunContent | PipelineAttentionContent | PipelineSummaryContent | TurnDeliverablesContent;
+  | PipelineRunContent | PipelineAttentionContent | PipelineSummaryContent | TurnDeliverablesContent | TurnChangesContent;
 
 export interface Message {
   id: string;

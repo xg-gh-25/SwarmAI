@@ -42,6 +42,10 @@ another, and MUST never touch the default pool the event loop schedules on):
   spawn       — LATENCY-SENSITIVE cold-spawn READERS only (STS preflight, resume
                 git) — isolated from the slow 'subprocess' writers so a 100s index
                 or an unbounded git-clone never delays a cold-session TTFT
+  turn_snapshot / turn_changes — core/turn_changes' per-send start snapshots and
+                its finish diffs / on-demand diffs; kept off 'subprocess' so they
+                never delay its fail-open safety gates, and apart from each other
+                so a start is never queued behind a finish
 """
 
 from __future__ import annotations
@@ -71,6 +75,13 @@ _POOL_SPECS: dict[str, int] = {
                       # (formerly unbounded) plugin git-clone can NEVER queue ahead
                       # of a cold-session TTFT read. cap=2: readers are low-concurrency.
                       # NEVER route a slow writer here — that defeats the isolation.
+    "turn_snapshot": 2,  # core/turn_changes START snapshots: a full `git add -u` per
+                      # code repo on EVERY send. Apart from the finish work below, so
+                      # a start never runs late behind another session's finish (a
+                      # late start bakes the turn's own edit into its baseline).
+    "turn_changes": 2,  # core/turn_changes finish diffs + GET /api/chat/turn-diff. Both
+                      # are kept off 'subprocess', whose fail-open safety gates
+                      # (worktree write gate, commit gates) must never wait on them.
 }
 
 _pools: dict[str, ThreadPoolExecutor] = {}

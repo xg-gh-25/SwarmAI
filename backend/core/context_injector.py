@@ -36,9 +36,10 @@ logger = logging.getLogger(__name__)
 # from the resume history. pipeline_stage rows are written by the backend from
 # run.json (core.pipeline_stage_events), not said by the assistant — keeping such a
 # row would add an empty assistant turn to the resumed prompt. pipeline_run /
-# pipeline_attention / pipeline_summary / turn_deliverables are backend-written display blocks too.
+# pipeline_attention / pipeline_summary / turn_deliverables / turn_changes are backend-written
+# display blocks too (turn_changes is the turn's file-change card: counts and tree ids).
 _TOOL_ONLY_TYPES = {"tool_use", "tool_result", "pipeline_stage", "pipeline_run", "pipeline_summary",
-                    "pipeline_attention", "turn_deliverables"}
+                    "pipeline_attention", "turn_deliverables", "turn_changes"}
 
 # ─── Section headers & preamble ─────────────────────────────────────
 
