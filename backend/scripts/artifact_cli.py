@@ -2373,6 +2373,16 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
     # Projects/<name>/ with no .project.json (a Brain-Hub-invisible pseudo-DDD) otherwise.
     _ensure_project_dir(args.project)
     rd = _run_dir(args.project, run_id)
+    # The run's birth goes into the ledger (audit dir, CLI-written) BEFORE run.json exists:
+    # which gates apply to a run is decided from it, not from run.json's created_at the
+    # orchestrator can edit. No ledger → no run (a run without one would fall back to the
+    # editable date), so the failure is reported and nothing is created.
+    _led = _ledger_add(run_id, records={"created_at": run_state["created_at"]})
+    if _led:
+        print(json.dumps({"error": "run-create refused: " + _led[0] + " — the gates of a new run "
+                                   "are keyed on it; fix the audit state dir and retry"}),
+              file=sys.stderr)
+        sys.exit(1)
     rd.mkdir(parents=True, exist_ok=True)
     run_file = rd / "run.json"
     _write_run_atomic(run_file, run_state)
@@ -2386,10 +2396,6 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
         _pw.sweep_for_cli(_get_workspace())
 
     _link_session_to_run(run_state.get("session_id"), run_id)
-    # The run's birth in the ledger (audit dir, CLI-written): which gates apply to a run is
-    # decided from this, not from run.json's created_at the orchestrator can edit.
-    for w in _ledger_add(run_id, records={"created_at": run_state["created_at"]}):
-        print(json.dumps({"warning": w}), file=sys.stderr)
     result = {"pipeline_id": run_id, "project": args.project, "file": str(run_file)}
     if abandoned > 0:
         result["auto_abandoned"] = abandoned

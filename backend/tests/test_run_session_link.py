@@ -77,6 +77,23 @@ def test_run_create_survives_a_map_write_failure(audit, ws, capsys, monkeypatch)
     assert _create(capsys, monkeypatch, "sess-fail").startswith("run_")
 
 
+def test_run_create_writes_its_birth_to_the_ledger_or_creates_nothing(audit, ws, capsys, monkeypatch):
+    """The gates of a run are keyed on the ledger's created_at (run.json's is editable), so
+    a run whose ledger write fails would fall back to the editable date: none is made."""
+    import pytest
+    root = ws
+    run_id = _create(capsys, monkeypatch, "sess-led")
+    led = cli._ledger_read(run_id)
+    run_json = next((root / "Projects").rglob(f"{run_id}/run.json"))
+    assert led["records"]["created_at"] == json.loads(run_json.read_text())["created_at"]
+    monkeypatch.setattr(cli, "_ledger_add", lambda *a, **k: ["hand-out ledger not written (OSError)"])
+    before = set((root / "Projects").rglob("run.json"))
+    with pytest.raises(SystemExit) as ex:
+        _create(capsys, monkeypatch, "sess-led2")
+    assert ex.value.code == 1 and "run-create refused" in capsys.readouterr().err
+    assert set((root / "Projects").rglob("run.json")) == before
+
+
 # ── AC4 ─────────────────────────────────────────────────────────────────────
 async def _finish_subagent(ctx, tmp_path):
     t = tmp_path / "sub.jsonl"
