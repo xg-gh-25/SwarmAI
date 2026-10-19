@@ -4,7 +4,7 @@ date: 2026-10-19
 created: 2026-10-19
 updated: 2026-10-19
 project: SwarmAI
-status: PROPOSED — 待 XG 确认；实现等 run_925edb0e（Run 1，N2 + N4）合入 main 后开始
+status: PROPOSED — 待 XG 确认；实现等 run_82253fe2（Run 1 缩减后的分类器部分）合入 main 后开始
 related: pipeline-review-convergence.md §3「N3 规则定稿」（规则与 AC1–AC6 的出处）；c247dca3（轮数硬上限 review_round_gate，已落地）
 author: Kiro（基于 run_925edb0e worktree 里的新代码阅读）
 ---
@@ -21,6 +21,9 @@ author: Kiro（基于 run_925edb0e worktree 里的新代码阅读）
 | **AC4 push_ready** | 「reviewer 没答 RESOLVED」可以被模型自己写的 `gate2_recheck_unverified_reason` 豁免 | push_ready 只在两种情况为 true：已收敛；或者有一条**人做出的**决定记录。人的决定走现有的审批对话框（PermissionManager）加一次性 hook token，模型自己写不出来 |
 
 ## 1. 依赖：Run 1 带来的东西
+
+> **2026-10-19 15:54 更新：** `run_925edb0e` 已标为 abandoned。它在 DELIVER 遇到 12 个阻断发现，又有 19 条 exit criteria 没达成，于是把范围缩成只保留唯一的阻断分类器（`core/gate2_findings.py` + 三个调用点），交给 direct run `run_82253fe2` 落地。发现台账、按改动路由这部分（N2b/N2c/N4）没有落地，完整补丁保存在 `run_925edb0e/evidence/gate2-ledger-full.patch`。
+> 对本方案的影响：本方案不依赖台账（N4），只读 marker 里的 `recheck_answers` / `reported`，这些 main 上已经有了。依赖缩小为 `is_blocking`，等 `run_82253fe2` 合入即可开始。另外，`run_925edb0e` 的 red-team 跑了 4 轮，因为 `review_round_gate` 所在的 daemon 还没重启，规则没有生效。
 
 Run 1（`run_925edb0e`）合入后提供：
 
