@@ -67,7 +67,10 @@ _GATE_IDS = ("gate0-skeptic", "gate1-skeptic", "gate2-adversarial")
 # lines, trailing newline included). Measured pre-move; never recompute these
 # from the post-move files — that would make the check circular.
 _PRE_MOVE_SHA256 = {
-    "gate0-skeptic": "75141a94d276a7cbc610f37af031fd0d0e1fb0cf69ff58da88711778cf6bbc67",  # pragma: allowlist secret
+    # gate0 INTENTIONALLY edited by 7018cd71 (root cause before design): a 5th question
+    # attacks the root cause (is its last why level a symptom? one missed prior/sibling)
+    # and WRONG-FRAME covers a symptom "root" / a missed sibling. Recomputed 2026-10-20.
+    "gate0-skeptic": "f6eaa63c591d786f13f1e45c8d9ae15ca54f3eeabd4a73503ca58694704d640f",  # pragma: allowlist secret
     # gate0/1/2 INTENTIONALLY edited for gate speed (pipeline-run-budget §11): caps cut to
     # 6 / 8 / 8 tool calls with the evidence handed in (gate1 inputs, gate2 diff file).
     # gate1 INTENTIONALLY edited: the re-check paragraph (a second round reviews the
