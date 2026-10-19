@@ -138,13 +138,16 @@ def test_deliver_instructs_lowercase_registry_id():
     """deliver.md must instruct the orchestrator to fill <EXPERT_ID> with the
     lowercase registry id (not the Title-case <DOMAIN> name). Closes the
     free-form drift gap (Gate-1 Check 6, fix a)."""
+    # The spawn text is built by the tool now (artifact_cli._spawn_text, printed as each
+    # entry's `spawn`), from the lowercase registry id stage-start dispatched; the card
+    # only says to use it unchanged (2026-10-19: a hand-written spawn could be steered).
     assert _DELIVER.exists()
     text = _DELIVER.read_text(encoding="utf-8")
-    assert "<EXPERT_ID>" in text, "deliver.md must reference the <EXPERT_ID> placeholder"
-    # the instruction must mention the registry id source (experts/code/<id>.md path)
-    assert "EXPERT_ID" in text and "registry id" in text.lower(), (
-        "deliver.md must instruct filling <EXPERT_ID> with the lowercase registry id"
-    )
+    assert "`spawn` text, exactly" in text and "meta_review_spawn" in text
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import artifact_cli as cli
+    assert cli._spawn_text("correctness", "/p.md").splitlines()[0] == "EXPERT-ID: correctness"
 
 
 # ---- 5. E2E: real transcript fixture → marker expert_id --------------------
@@ -216,3 +219,17 @@ def test_e2e_multiblock_content_array_preserves_anchor(tmp_path):
     assert head, "head read must return the joined spawn prompt"
     # The anchor must survive block-join as a line of its own → extractable.
     assert rh._extract_expert_id(head) == "correctness"
+
+
+
+def test_two_line_spawn_templates_are_classified_adversarial():
+    """The cards' two-line spawn prompts are the transcript head the SubagentStop hook
+    classifies. Without an adversarial anchor no _adv_ marker is written and the D7
+    commit gate refuses every run-commit, though the experts ran."""
+    # the templates live in artifact_cli._spawn_text (the tools print them as `spawn`)
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import artifact_cli as cli
+    for eid in ("correctness", "meta-review", "gate1-skeptic", "gate0-skeptic"):
+        head = cli._spawn_text(eid, "/p.md").replace(f"EXPERT-ID: {eid}", "EXPERT-ID: x-unregistered")
+        assert rh._is_adversarial_intent("general-purpose", "", head), eid

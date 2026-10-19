@@ -2481,8 +2481,11 @@ async def test_gate_marker_records_the_prompt_files_the_skeptic_read(tmp_path, m
     inline = {v for k, v in reads.items() if k.startswith("<inline:")}
     assert hashlib.sha256(first.encode()).hexdigest() in inline
     assert hashlib.sha256((first + "\n").encode()).hexdigest() in inline  # an exact paste of a file
-    files = {k for k in reads if not k.startswith("<inline")}
+    files = {k for k in reads if not k.startswith("<")}
     assert files == {g1.as_posix(), kn.as_posix()}  # not other.md, not ls'd, not partial
+    # the whole first message is hashed on its own too (exact spawn-text checks)
+    assert hashlib.sha256(first.encode()).hexdigest() in {v for k, v in reads.items()
+                                                          if k.startswith("<first:")}
 
 
 # ── run / expert attribution from the handed-out prompt file (2026-10-18) ──────

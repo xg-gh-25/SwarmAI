@@ -36,7 +36,7 @@ commentary or "I think this is correct" in the prompt — only raw diff + raw AC
    (`review_experts[]` `prompt_path` = `evidence/prompts/review-spec-compliance.md`:
    `backend/experts/code/spec-compliance.md` + the PLAN ACs read from the artifact at
    REVIEW entry, which satisfies step 1 + the diff + the `## Project Knowledge` block):
-   spawn `EXPERT-ID: spec-compliance` + `read <prompt_path> first; follow it.`. If the
+   spawn it with that entry's `spawn` text, unchanged. If the
    PLAN changed inside REVIEW, run stage-start again first. Returns JSON: verdict +
    coverage matrix.
 4. This REVIEW spawn does NOT count toward the run's `required_experts` (D7 credits only

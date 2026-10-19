@@ -1434,6 +1434,14 @@ def _prompt_reads(transcript_path: str) -> Optional[dict]:
                                 for t in texts for v in (t, t.rstrip("\n"), t.rstrip("\n") + "\n")}
                         for n, h in enumerate(sorted(shas)):
                             out[f"<inline:{n}>"] = h
+                        # the WHOLE first message only (an exact spawn-text check must not
+                        # match one block of a message that carries a steering block too)
+                        whole = "\n".join(blocks) if isinstance(content, list) else content
+                        if isinstance(whole, str) and whole:
+                            firsts = {hashlib.sha256(v.encode("utf-8")).hexdigest()
+                                      for v in (whole, whole.rstrip("\n"), whole.rstrip("\n") + "\n")}
+                            for n, h in enumerate(sorted(firsts)):
+                                out[f"<first:{n}>"] = h
                         continue
                 if '"tool_use"' not in line or "evidence/prompts/" not in line:
                     continue
@@ -1507,7 +1515,7 @@ def _handout_attribution(reads: Optional[dict], session_id: str, spawn_prompt: s
     home = os.path.expanduser("~")
     for path in (reads or {}):
         try:
-            if path.startswith("<inline"):
+            if path.startswith("<"):  # <inline:N> / <first:N> hashes, not files
                 continue
             named = path in spawn_prompt or (path.startswith(home + "/")
                                              and "~" + path[len(home):] in spawn_prompt)

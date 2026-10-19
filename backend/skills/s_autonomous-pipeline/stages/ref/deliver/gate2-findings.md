@@ -88,8 +88,13 @@ It diffs every changed file against the copy DELIVER stage-start kept for round 
 (`evidence/prompts/round1/`) into `fix_diff`, and returns `recheck`: one
 `<id>-recheck.md` prompt per specialist with a fixed HIGH or conf ≥ 7 MED finding,
 holding only that diff and its own items (findings marked `resolved: false` are not
-re-checked). Spawn exactly the `recheck` list in ONE message with the same 2-line prompt
-(`EXPERT-ID: <id>` + `read <prompt_path> first; follow it.`). Empty list → no re-check.
+re-checked). Spawn exactly the `recheck` list in ONE message, each with its `spawn` text unchanged.
+`[GATE·cli]` (runs created from 2026-10-19T04:00Z): every prompt file the tools hand out
+(gate0/gate1, Gate-2 experts, meta-review, re-check, the round-1 manifest) is recorded by sha
+in a ledger beside the audit markers; a gate round counts only when it read a ledger sha AND
+its first message is exactly the printed `spawn` text. A hand-edited prompt, manifest or
+round-1 copy, or a spawn with words added, does not count. NOT RESOLVED from any round sticks;
+RESOLVED counts only from an exact-spawn round. Empty list → no re-check.
 It exits 1 when such findings exist but no file changed since round 1 (the fixes are not
 on disk), and when the snapshot was first taken on a DELIVER re-entry (fixes may already
 have been in it): then re-check by re-spawning the round-1 prompts. A changed file the

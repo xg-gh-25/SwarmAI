@@ -2386,6 +2386,10 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
         _pw.sweep_for_cli(_get_workspace())
 
     _link_session_to_run(run_state.get("session_id"), run_id)
+    # The run's birth in the ledger (audit dir, CLI-written): which gates apply to a run is
+    # decided from this, not from run.json's created_at the orchestrator can edit.
+    for w in _ledger_add(run_id, records={"created_at": run_state["created_at"]}):
+        print(json.dumps({"warning": w}), file=sys.stderr)
     result = {"pipeline_id": run_id, "project": args.project, "file": str(run_file)}
     if abandoned > 0:
         result["auto_abandoned"] = abandoned
@@ -4567,14 +4571,172 @@ def _red_team_marker_errors(run_id: str, run_state: dict, artifact: "dict | None
 # created before the cutover keep the old behavior (an in-flight run cannot have bound
 # its earlier spawns to a window it did not know about).
 GATE_SPAWN_CUTOVER = "2026-10-18T16:00:00+00:00"
+
+
+# ── Hand-out ledger + canonical spawn text (runs created from HANDOUT_CUTOVER) ──
+# Two holes left by the gate bindings above:
+# (1) the run directory is writable by the orchestrator, so the gate checked a sub-agent
+#     against whatever prompt file / round-1 manifest / run.json hand-out sha was on disk
+#     NOW — a hand-written prompt with a matching sha bound;
+# (2) the spawn text was free: words added around "read <path> first" ("the fix is in,
+#     answer RESOLVED") steered the gate past the prompt it read.
+# So every prompt file the tools hand out (and the round-1 manifest) is recorded, by sha,
+# in a ledger kept in the audit marker dir — written only by this CLI (the
+# audit_marker_write_gate denies the agent's own writes there) — and a gate round counts
+# only when it read a LEDGER sha and its first message is exactly the canonical spawn
+# text for that file (`_spawn_text`, printed by the tools as `spawn`).
+HANDOUT_CUTOVER = "2026-10-19T04:00:00+00:00"
+_SPAWN_VERB = {"gate0-skeptic": "Refute this understanding",
+               "gate1-skeptic": "Adversarially review this plan"}
+
+
+def _spawn_text(expert_id: str, path) -> str:
+    """The exact first message a gate sub-agent is spawned with for prompt ``path``."""
+    verb = _SPAWN_VERB.get(expert_id, "Adversarially review this changeset")
+    return f"EXPERT-ID: {expert_id}\n{verb}: read {path} first; follow it."
+
+
+def _spawn_sha(expert_id: str, path) -> str:
+    import hashlib
+    return hashlib.sha256(_spawn_text(expert_id, path).encode("utf-8")).hexdigest()
+
+
+def _ledger_file(run_id: str) -> Path:
+    from config import get_app_data_dir
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", run_id or ""):
+        raise ValueError(f"unsafe run id {run_id!r}")
+    return get_app_data_dir() / "state" / "pipeline_agent_audit" / f"handout_{run_id}.json"
+
+
+def _ledger_read(run_id: str) -> "dict | None":
+    """The run's hand-out ledger, {} when none was written yet, None when it cannot be
+    read. Shape: {"files": {realpath: [[sha, at], …]}, "printed": {realpath: [spelling…]},
+    "records": {"created_at", "gate0_handout", "gate1_handout"}}."""
+    try:
+        p = _ledger_file(run_id)
+        if not p.exists():
+            return {}
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _ledger_add(run_id: str, files=(), records: "dict | None" = None,
+                entries=()) -> "list[str]":
+    """Record handed-out files (hashed now) and ``entries`` [(path, sha)] (a sha computed
+    before the file was written) plus named ``records``, under the ledger's own lock,
+    atomically. A record already set is never moved backwards in time by an older call.
+    Returns warnings (never raises)."""
+    import hashlib
+    try:
+        from utils.file_lock import flock_exclusive, flock_unlock
+        p = _ledger_file(run_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        now = _utc_now_iso()
+        with open(p.with_name(p.name + ".lock"), "a+") as lk:
+            flock_exclusive(lk.fileno())
+            try:
+                try:
+                    d = json.loads(p.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    d = {}
+                d = d if isinstance(d, dict) else {}
+                d.setdefault("run_id", run_id)
+                fl = d.setdefault("files", {})
+                spell = d.setdefault("printed", {})
+                todo = [(f, None) for f in files if f] + [(f, h) for f, h in entries if f and h]
+                for f, sha in todo:
+                    real = os.path.realpath(str(f))
+                    sha = sha or hashlib.sha256(Path(real).read_bytes()).hexdigest()
+                    vers = fl.setdefault(real, [])
+                    if not vers or vers[-1][0] != sha:
+                        vers.append([sha, now])  # newest last: "the current hand-out"
+                    names = spell.setdefault(real, [])
+                    if not isinstance(names, list):
+                        names = spell[real] = [names]
+                    if str(f) not in names:
+                        names.append(str(f))
+                recs = d.setdefault("records", {})
+                for k, v in (records or {}).items():
+                    if k == "created_at" and recs.get(k):
+                        continue  # the run's birth is written once
+                    recs[k] = v
+                tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+                tmp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+                os.replace(tmp, p)
+            finally:
+                flock_unlock(lk.fileno())
+        return []
+    except Exception as e:  # noqa: BLE001 — the caller fails the command for a strict run
+        return [f"hand-out ledger not written ({type(e).__name__}: {e})"]
+
+
+def _ledger_entry(run_id: str, name: str) -> "tuple[list, list[str]]":
+    """([[sha, at], …] oldest first, path spellings) for this run's prompt file ``name``
+    (``evidence/prompts/<name>``; ``round1/manifest.json`` for the snapshot)."""
+    led = _ledger_read(run_id) or {}
+    suffix = "/evidence/prompts/" + name
+    for real, vers in (led.get("files") or {}).items():
+        if real.endswith(suffix):
+            names = (led.get("printed") or {}).get(real) or []
+            names = names if isinstance(names, list) else [names]
+            out = [v if isinstance(v, list) else [v, ""] for v in (vers or [])]
+            return out, sorted({real, *map(str, names)})
+    return [], []
+
+
+def _ledger_has(run_id: str, name: str, sha: "str | None", latest: bool = False,
+                since: "float | None" = None) -> bool:
+    """``sha`` was handed out for ``name``: the newest hand-out (``latest`` — a restored
+    older copy is a replay), or any hand-out at/after ``since`` (a review cycle's start)."""
+    vers = _ledger_entry(run_id, name)[0]
+    if not sha or not vers:
+        return False
+    if latest:
+        return vers[-1][0] == sha
+    return any(v[0] == sha and (since is None or (_iso_epoch(v[1]) or 0) >= since - 5)
+               for v in vers)
+
+
+def _ledger_shas(run_id: str, name: str, since: "float | None" = None) -> "set[str]":
+    return {v[0] for v in _ledger_entry(run_id, name)[0]
+            if since is None or (_iso_epoch(v[1]) or 0) >= since - 5}
+
+
+def _spawned_exactly(row: dict, expert_id: str, run_id: str, name: str) -> bool:
+    """The round's WHOLE first message is the canonical spawn text for prompt ``name``
+    of this run (any spelling the ledger knows). ``<first:N>`` = the whole message's
+    hashes (a steering block next to the canonical one does not match); a marker from a
+    daemon that predates them falls back to the per-block ``<inline:N>`` hashes."""
+    reads = row.get("prompt_reads") if isinstance(row.get("prompt_reads"), dict) else {}
+    vals = {v for k, v in reads.items() if k.startswith("<first")}
+    if not vals:
+        vals = {v for k, v in reads.items() if k.startswith("<inline")}
+    return any(_spawn_sha(expert_id, p) in vals for p in _ledger_entry(run_id, name)[1])
+
+
+def _ledger_created_at(run_state: dict) -> "str | None":
+    """The run's created_at as run-create wrote it into the ledger (run.json's copy is
+    writable by the orchestrator: moved back before a cutover it switched gates off)."""
+    rid = run_state.get("id") or run_state.get("run_id")
+    if not isinstance(rid, str):
+        return None
+    try:
+        return ((_ledger_read(rid) or {}).get("records") or {}).get("created_at")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 GATE1_PROFILES = ("full", "bugfix")  # stages/ref/build/gate1.md: BUILD always runs Gate-1
 
 
 def _gate_spawn_enforced(run_state: dict, cutover: "str | None" = None) -> bool:
     """True for a run that started at/after the cutover (default GATE_SPAWN_CUTOVER, read
     at call time so tests can move it). ``created_at`` first, else the earliest stage
-    start; nothing parseable at all → enforced (fail-closed)."""
-    ts = _iso_epoch(run_state.get("created_at"))
+    start; nothing parseable at all → enforced (fail-closed). The ledger's created_at
+    (written by run-create) wins over run.json's."""
+    ts = _iso_epoch(_ledger_created_at(run_state) or run_state.get("created_at"))
     if ts is None:
         t = run_state.get("stage_timing") if isinstance(run_state.get("stage_timing"), dict) else {}
         starts = [_iso_epoch((v or {}).get("first_started_at") or (v or {}).get("started_at"))
@@ -4677,6 +4839,14 @@ def _gate1_prompt_unread(run_id: str, run_state: dict, since: float,
     (correctness 2026-10-18: a bound BLOCK then an unbound "PASS" round passed). None =
     binding not checked (the caller compares against every round)."""
     handout = run_state.get("gate1_handout") if isinstance(run_state.get("gate1_handout"), dict) else {}
+    strict = _gate_spawn_enforced(run_state, HANDOUT_CUTOVER)
+    if strict:
+        # the ledger's copy: run.json's sha can be removed or pointed back at a judged prompt
+        led = ((_ledger_read(run_id) or {}).get("records") or {}).get("gate1_handout")
+        handout = led if isinstance(led, dict) else {}
+        if not handout.get("sha"):
+            return ("no Gate-1 prompt hand-out is in the ledger for this run: run "
+                    "`stage-start --stage build` and spawn its `gate1_spawn`"), None
     want = handout.get("sha")
     if not want and _gate_marker_rows(run_id, "gate1-skeptic", since):
         warnings.append("gate1-skeptic prompt binding not checked: no gate1_handout.sha on record "
@@ -4685,29 +4855,45 @@ def _gate1_prompt_unread(run_id: str, run_state: dict, since: float,
     return _handout_unread(
         run_id, "gate1-skeptic", want, since, warnings,
         "the prompt stage-start handed out", "`gate1_prompt_path`",
-        "`EXPERT-ID: gate1-skeptic` + `Adversarially review this plan: read "
-        "<gate1_prompt_path> first; follow it.`")
+        "`gate1_spawn` exactly as stage-start printed it",
+        name="gate1-skeptic.md" if strict else None)
 
 
 def _handout_unread(run_id: str, expert_id: str, want: "str | None", since: float,
                     warnings: "list[str]", what: str, where: str,
-                    spawn: str) -> "tuple[str | None, list | None]":
+                    spawn: str, name: "str | None" = None) -> "tuple[str | None, list | None]":
     """(error, bound rows) for "a ``expert_id`` sub-agent of this run read the handed-out
     prompt whose sha256 is ``want``" — see ``_gate1_prompt_unread``. No rows, no sha, old
-    markers or an unreadable transcript → (None, None) (+ a warning for the last two)."""
+    markers or an unreadable transcript → (None, None) (+ a warning for the last two).
+    With ``name`` (a run under HANDOUT_CUTOVER): ``want`` must be a sha the tools handed
+    out for that file (the ledger, not whatever is on disk now), and only rounds spawned
+    with the exact ``_spawn_text`` count."""
     rows = _gate_marker_rows(run_id, expert_id, since)
     if not rows or not want:
         return None, None  # nothing to bind (store unreadable, or the escape reason was used)
+    if name is not None and not _ledger_has(run_id, name, want, latest=True):
+        return (f"{what} (sha {want[:12]}…) is not in the hand-out ledger: the prompt on record "
+                "was not written by the pipeline tools — run the tool that hands it out "
+                "again and spawn its output"), None
     if "prompt_reads" not in rows[-1]:
         warnings.append(f"{expert_id} prompt binding not checked: the backend that recorded its "
                         "spawn predates prompt-read capture; rebuild and restart it")
         return None, None
     if any(d.get("prompt_reads") is None for d in rows if "prompt_reads" in d):
-        warnings.append(f"{expert_id} prompt binding not checked for a round whose transcript "
-                        "could not be read")
-        return None, None
+        if name is None:
+            warnings.append(f"{expert_id} prompt binding not checked for a round whose transcript "
+                            "could not be read")
+            return None, None
+        # strict: an unreadable round proves nothing, it does not switch binding off
+        rows = [d for d in rows if isinstance(d.get("prompt_reads"), dict)]
     bound = [d for d in rows if isinstance(d.get("prompt_reads"), dict)
              and want in d["prompt_reads"].values()]
+    if bound and name is not None:
+        exact = [d for d in bound if _spawned_exactly(d, expert_id, run_id, name)]
+        if not exact:
+            return (f"the {expert_id} round that read {what} was not spawned with the exact "
+                    f"spawn text (nothing added, nothing changed): spawn {spawn}"), None
+        bound = exact
     if bound:
         return None, bound
     return (f"no {expert_id} sub-agent of this run read {what} "
@@ -4858,8 +5044,7 @@ def _gate_verdict_spawn_errors(run_id: str, run_state: dict, stage: str, profile
     return _gate_unbacked("gate1", cand_rec.get("gate1_unverified_reason"), detail, warnings,
                           f"Gate-1: gate1_verdict is '{verdict}' but no gate1-skeptic sub-agent "
                           "completed for this run since its prompt was handed out. Spawn it "
-                          "(2-line prompt: `EXPERT-ID: gate1-skeptic` + `Adversarially review this "
-                          "plan: read <gate1_prompt_path> first; follow it.`), record ITS verdict, "
+                          "with stage-start's `gate1_spawn` text exactly, record ITS verdict, "
                           "then re-run stage-complete.")
 
 
@@ -4890,6 +5075,11 @@ def _gate0_prompt_unbound(run_id: str, run_state: dict, und, since: float,
     """(error, bound rows) for Gate-0: the prompt gate0-prompt handed out was read by a
     gate0-skeptic round, and the recorded understanding is the one it carried."""
     handout = run_state.get("gate0_handout") if isinstance(run_state.get("gate0_handout"), dict) else {}
+    enforced = _gate_spawn_enforced(run_state, HANDOUT_CUTOVER)
+    if enforced:
+        # the ledger's copy, not run.json's: run.json is writable by the orchestrator
+        led = ((_ledger_read(run_id) or {}).get("records") or {}).get("gate0_handout")
+        handout = led if isinstance(led, dict) else {}
     if not handout.get("sha"):
         return ("no Gate-0 prompt was handed out for this run: write {\"understanding\": …, "
                 "\"claims\": […]} to a file, run `artifact_cli.py gate0-prompt --project <P> "
@@ -4901,7 +5091,8 @@ def _gate0_prompt_unbound(run_id: str, run_state: dict, und, since: float,
     err, bound = _handout_unread(
         run_id, "gate0-skeptic", handout["sha"], since, warnings,
         "the prompt gate0-prompt handed out", "`gate0_prompt_path`",
-        "`spawn` exactly as gate0-prompt printed it")
+        "`spawn` exactly as gate0-prompt printed it",
+        name="gate0-skeptic.md" if enforced else None)
     spawn_sha = handout.get("spawn_sha")
     if err or not bound or not spawn_sha:
         return err, bound
@@ -4995,12 +5186,15 @@ def cmd_gate0_prompt(args, reg: ArtifactRegistry) -> None:
         fresh = json.loads(run_file.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         fail(f"run.json unreadable: {e}")
-    spawn = f"EXPERT-ID: gate0-skeptic\nRefute this understanding: read {path} first; follow it."
+    spawn = _spawn_text("gate0-skeptic", path)
     prev = fresh.get("gate0_handout") if isinstance(fresh.get("gate0_handout"), dict) else {}
     fresh["gate0_handout"] = {"sha": sha, "understanding_sha": _gate0_understanding_sha(und),
                               "spawn_sha": hashlib.sha256(spawn.encode("utf-8")).hexdigest(),
                               "at": prev.get("at") if prev.get("sha") == sha and prev.get("at")
                               else _utc_now_iso()}
+    led_warn = _ledger_add(args.run_id, [path], {"gate0_handout": fresh["gate0_handout"]})
+    if led_warn:
+        fail(led_warn[0])
     _write_run_atomic(run_file, fresh)
     print(json.dumps({
         "ok": True, "gate0_prompt_path": path, "spawn_mode": "foreground",
@@ -10613,6 +10807,23 @@ def _gate2_round1_dir(run_dir: Path) -> Path:
     return run_dir / "evidence" / "prompts" / GATE2_ROUND1_DIR
 
 
+def _round1_manifest(run_id: str, run_dir: Path, run_state: dict) -> "tuple[dict | None, str | None]":
+    """(manifest, problem). For a run under HANDOUT_CUTOVER the manifest must be one
+    DELIVER stage-start wrote (its sha in the hand-out ledger): a hand-edited or
+    hand-made one is a problem, not a baseline."""
+    p = _gate2_round1_dir(run_dir) / "manifest.json"
+    try:
+        man = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, "missing or unreadable"
+    if not isinstance(man, dict):
+        return None, "not an object"
+    if _gate_spawn_enforced(run_state, HANDOUT_CUTOVER) and \
+            not _ledger_has(run_id, GATE2_ROUND1_DIR + "/manifest.json", _sha256_file(p), latest=True):
+        return None, "not the one DELIVER stage-start wrote (not in the hand-out ledger)"
+    return man, None
+
+
 def _sha256_file(p: Path) -> "str | None":
     import hashlib
     try:
@@ -10759,6 +10970,8 @@ def _gate2_fix_diff(run_dir: Path, scope: dict) -> "tuple[str, list[str], list[s
             if old.get("sha") == (_sha256_file(p) if p.is_file() else None):
                 continue  # unchanged since round 1
             fixed.append(rel)
+            if old.get("copy") and _sha256_file(d / old["copy"]) != old.get("sha"):
+                raise ValueError(f"round-1 copy of {rel} was changed after the snapshot")
             old_text = (_read_for_diff(d / old["copy"]) if old.get("copy")
                         else (None if old.get("sha") else ""))
         else:
@@ -10861,10 +11074,10 @@ def cmd_gate2_recheck(args, reg: ArtifactRegistry) -> None:
         fail("; ".join(e.errors))
     run_dir = run_file.parent
     prompts = run_dir / "evidence" / "prompts"
-    try:
-        man = json.loads((_gate2_round1_dir(run_dir) / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        fail("no Gate-2 round-1 snapshot: run `stage-start --stage deliver` before round 1")
+    man, why = _round1_manifest(run_id, run_dir, run_state)
+    if man is None:
+        fail(f"no usable Gate-2 round-1 snapshot ({why}): run `stage-start --stage deliver` "
+             "before round 1")
     if man.get("late"):
         fail("the round-1 snapshot was taken on a DELIVER re-entry, after fixes may have "
              "landed: re-check by re-spawning the round-1 prompts (`experts[].prompt_path`)")
@@ -10916,7 +11129,11 @@ def cmd_gate2_recheck(args, reg: ArtifactRegistry) -> None:
                     + _recheck_block(its) + "\n")
             out_p = prompts / f"{sid}-recheck.md"
             out_p.write_text(text, encoding="utf-8")
-            recheck.append({"id": sid, "prompt_path": str(out_p), "items": len(its)})
+            recheck.append({"id": sid, "prompt_path": str(out_p), "items": len(its),
+                            "spawn": _spawn_text(sid, out_p)})
+            led = _ledger_add(run_id, [out_p])
+            if led:
+                fail(led[0])
     except OSError as e:
         fail(f"re-check prompts not written: {e}")
     warnings = [] if items or dropped else [
@@ -10959,25 +11176,26 @@ def _gate2_recheck_errors(run_id: str, run_dir: "Path | None", run_state: dict,
         warnings.append("Gate-2 re-check not verified: the sub-agent marker store is unreadable")
         return []
     prompts = run_dir / "evidence" / "prompts"
-    try:
-        man = json.loads((_gate2_round1_dir(run_dir) / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        man = None
-    man = man if isinstance(man, dict) else None
+    man, _why = _round1_manifest(run_id, run_dir, run_state)
     # This review cycle starts at its round-1 snapshot: a re-check (or a recheck prompt
     # file) from an earlier DELIVER cycle proves nothing about this cycle's fixes.
+    if man is None and _why and "ledger" in _why:
+        return [f"Gate-2 round 2: the round-1 snapshot (evidence/prompts/round1/manifest.json) "
+                f"is {_why}: run `stage-start --stage deliver` and re-run round 1"]
     if man is None:
         missing_snapshot = ("Gate-2 round 2: the round-1 snapshot (evidence/prompts/round1/"
-                            "manifest.json) is missing or unreadable, so no re-check can be "
+                            f"manifest.json) is {_why}, so no re-check can be "
                             "bound: run `stage-start --stage deliver` again before round 1")
         return _gate_unbacked("gate2_recheck", cand_rec.get("gate2_recheck_unverified_reason"),
                               "", warnings, missing_snapshot)
     late = bool(man.get("late"))  # gate2-recheck refuses: re-spawn round 1
+    strict = _gate_spawn_enforced(run_state, HANDOUT_CUTOVER)  # ledger + exact spawn text
     # A late snapshot was taken on a re-entry, possibly after round 1: count from the
     # current DELIVER window instead.
     cycle_start = (windows[-1][0] if late
                    else max(windows[0][0], _iso_epoch((man or {}).get("taken_at")) or 0.0))
     missing: list[str] = []
+    hard: list[str] = []  # tampering / steering: no unverified_reason waives it
     for d in _dropped:
         missing.append(f"a fixed {d.get('finding') or 'HIGH / MED'!r} has no specialist or "
                        "text, so nobody re-checked it (name its specialist)")
@@ -11005,21 +11223,37 @@ def _gate2_recheck_errors(run_id: str, run_dir: "Path | None", run_state: dict,
                                "(re-run gate2-recheck with these findings, spawn its list)")
                 continue
             want = _sha256_file(rp)
+            if strict and not _ledger_has(run_id, rp.name, want, latest=True):
+                hard.append(f"{sid}: {rp.name} is not the file gate2-recheck last wrote (not the "
+                            "newest hand-out in the ledger): run gate2-recheck again, spawn its "
+                            "`spawn`")
+                continue
             bound = [d for d in rows if reads(d, want)]
             if bound:
                 # The specialist's own word decides `resolved: true`, not the record. A NOT
                 # RESOLVED is sticky for this prompt: only a further fix (a new fix.diff, so
                 # a new prompt) clears it — re-spawning until one round says RESOLVED does not.
+                # Any bound round can say NOT RESOLVED; only a round spawned with the exact
+                # `spawn` text (nothing steering it) can say RESOLVED.
                 capt = [d.get("recheck_answers") for d in bound if isinstance(d.get("recheck_answers"), dict)]
                 if not capt:
                     warnings.append(f"Gate-2 re-check answers of {sid} not compared: its backend "
                                     "predates answer capture; rebuild and restart it")
                     continue
+                exact = [d for d in bound if not strict or _spawned_exactly(d, sid, run_id, rp.name)]
                 said: dict = {}
-                for ans in capt:
-                    for n, w in ans.items():
+                for d in bound:
+                    for n, w in (d.get("recheck_answers") or {}).items():
+                        if w == "NOT RESOLVED":
+                            said[n] = w
+                for d in exact:
+                    for n, w in (d.get("recheck_answers") or {}).items():
                         if said.get(n) != "NOT RESOLVED":
                             said[n] = w
+                if strict and not exact:
+                    hard.append(f"{sid}: its re-check round was not spawned with the exact "
+                                f"`spawn` text gate2-recheck printed: {_spawn_text(sid, rp)!r}")
+                    continue
                 bad = [n for n in ns if said.get(str(n)) != "RESOLVED"]
                 if bad:
                     missing.append(
@@ -11034,15 +11268,19 @@ def _gate2_recheck_errors(run_id: str, run_dir: "Path | None", run_state: dict,
                                 "rebuild and restart it")
                 continue
             missing.append(f"{sid}: no sub-agent of this run read {rp.name} as gate2-recheck "
-                           "last wrote it (spawn `EXPERT-ID: " + sid + "` + `read <prompt_path> "
-                           "first; follow it.`)")
+                           f"last wrote it (spawn exactly {_spawn_text(sid, rp)!r})")
         elif not late:
             missing.append(f"{sid}: no re-check round (run `gate2-recheck --findings @file`, "
                            "spawn its `recheck` list)")
         elif r1.is_file():
             # gate2-recheck refused (late snapshot): round 1 re-spawned on its own prompt
             want = _sha256_file(r1)
+            if strict and not _ledger_has(run_id, r1.name, want, since=cycle_start):
+                hard.append(f"{sid}: {r1.name} is not a file DELIVER stage-start wrote in this cycle")
+                continue
             bound = [d for d in rows if reads(d, want)] if capturing else rows
+            if strict and capturing:
+                bound = [d for d in bound if _spawned_exactly(d, sid, run_id, r1.name)]
             if len(bound) >= 2:
                 if not capturing:
                     warnings.append(f"Gate-2 re-check of {sid} counted, not bound: its backend "
@@ -11064,9 +11302,10 @@ def _gate2_recheck_errors(run_id: str, run_dir: "Path | None", run_state: dict,
         else:
             missing.append(f"{sid}: no round-1 prompt evidence/prompts/{sid}.md, so its re-check "
                            "cannot be proven (spawn it with the gate2-adversarial prompt)")
+    hard = [f"Gate-2 round 2: {h}." for h in hard]
     if not missing:
-        return []
-    return _gate_unbacked(
+        return hard
+    return hard + _gate_unbacked(
         "gate2_recheck", cand_rec.get("gate2_recheck_unverified_reason"), "", warnings,
         "Gate-2 round 2: a fixed HIGH / conf≥7 MED finding needs its specialist to re-check "
         "the fix before DELIVER completes — " + "; ".join(missing) + ".")
@@ -11186,10 +11425,10 @@ def _gate2_findings_errors(run_id: str, run_dir: "Path | None", run_state: dict,
         warnings.append("Gate-2 findings not compared with the experts' answers: no DELIVER "
                         "window or an unreadable marker store")
         return []
-    try:
-        man = json.loads((_gate2_round1_dir(run_dir) / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        man = None
+    man, why = _round1_manifest(run_id, run_dir, run_state)
+    if man is None and why and "ledger" in why:
+        return [f"Gate-2 findings: the round-1 snapshot is {why}: run `stage-start --stage "
+                "deliver` and re-run round 1"]
     # the same review-cycle start as the re-check gate: earlier cycles prove nothing
     if not isinstance(man, dict) or man.get("late"):
         since = windows[-1][0]
@@ -11203,6 +11442,8 @@ def _gate2_findings_errors(run_id: str, run_dir: "Path | None", run_state: dict,
     old: set = set()
     unparsed: set = set()
     old_daemon = False
+    strict = _gate_spawn_enforced(run_state, HANDOUT_CUTOVER)
+    steered: set = set()
     try:
         from config import get_app_data_dir
         audit = get_app_data_dir() / "state" / "pipeline_agent_audit"
@@ -11222,7 +11463,18 @@ def _gate2_findings_errors(run_id: str, run_dir: "Path | None", run_state: dict,
                 old_daemon = True  # this daemon cannot credit "read <file>" spawns to an expert
             if not isinstance(eid, str) or not eid or eid in _GATE_SKEPTIC_IDS:
                 continue
-            seen_ids.add(eid)
+            if strict and isinstance(d.get("prompt_reads"), dict) and _ledger_entry(run_id, f"{eid}.md")[0]:
+                # counts as this expert's round 1 only when it read a round-1 prompt the
+                # tools handed out in this cycle AND was spawned with exactly its `spawn`
+                # text (an expert whose prompt the tools could not write is counted by id)
+                shas = _ledger_shas(run_id, f"{eid}.md", since)
+                if (shas & set(d["prompt_reads"].values())
+                        and _spawned_exactly(d, eid, run_id, f"{eid}.md")):
+                    seen_ids.add(eid)
+                else:
+                    steered.add(eid)
+            else:
+                seen_ids.add(eid)
             if "reported" not in d:
                 old.add(eid)
                 continue
@@ -11243,10 +11495,14 @@ def _gate2_findings_errors(run_id: str, run_dir: "Path | None", run_state: dict,
                         + ": the backend that recorded this cycle's sub-agents predates file "
                         "attribution; rebuild and restart it")
         expected = seen_ids & expected
+    hard: list[str] = []
     for eid in sorted(expected - seen_ids):
-        missing.append(f"{eid} was handed a round-1 prompt but no {eid} sub-agent of this run "
-                       "completed in this review cycle (spawn `EXPERT-ID: " + eid
-                       + "` + `read <prompt_path> first; follow it.`)")
+        if eid in steered:  # it ran, so the hook is there: steering is not "unprovable"
+            hard.append(f"Gate-2 findings: {eid}'s rounds did not read its handed-out round-1 "
+                        "prompt with the exact `spawn` text stage-start printed for it")
+        else:
+            missing.append(f"{eid} was handed a round-1 prompt but no {eid} sub-agent of this "
+                           "run completed in this review cycle (spawn exactly its `spawn`)")
     if old:
         warnings.append("Gate-2 findings of " + ", ".join(sorted(old)) + " not compared: their "
                         "backend predates answer capture; rebuild and restart it")
@@ -11259,8 +11515,8 @@ def _gate2_findings_errors(run_id: str, run_dir: "Path | None", run_state: dict,
             missing.append(f"{eid} reported [{r.get('severity')} conf {r.get('confidence')}] "
                            f"{where} {str(r.get('summary') or '')[:120]!r}")
     if not missing:
-        return []
-    return _gate_unbacked(
+        return hard
+    return hard + _gate_unbacked(
         "gate2_findings", cand_rec.get("gate2_findings_unverified_reason"), "", warnings,
         "Gate-2 findings: adversarial_review.findings[] must carry, one record each, every "
         "finding the experts reported (HIGH at conf >= 5, MED at conf >= 7) under its "
@@ -11380,6 +11636,7 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
         out["exit_criteria_default"] = pv.default_exit_criteria(
             _evaluate_work_type(project, run_state), acs if isinstance(acs, list) else None)
     warnings: list[str] = []
+    ledger_warn: list[str] = []
     # Gate-1 runs once: at build, or at the goal's FIRST cycle (not on every goal_cycle entry).
     if (stage == "build" or (stage == "goal_cycle"
                              and not (run_dir / "evidence" / "prompts" / "gate1-skeptic.md").exists())) \
@@ -11403,6 +11660,8 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
                                  "inputs); do not spawn it again")
         elif g1:
             out["gate1_prompt_path"] = g1
+            out["gate1_spawn"] = _spawn_text("gate1-skeptic", g1)
+            ledger_warn += _ledger_add(run_id, [g1])
             out["spawn_mode"] = "foreground"
             # Remember what was handed out, and the Gate-1 fields at that moment, so a
             # later entry can tell "judged this prompt" from "handed out, never judged".
@@ -11422,6 +11681,7 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
                     "gate1_fields": json.dumps(_recorded_gate1(fresh), sort_keys=True, default=str)}
                 _write_run_atomic(run_file, fresh)
                 run_state["gate1_handout"] = fresh["gate1_handout"]
+                ledger_warn += _ledger_add(run_id, records={"gate1_handout": fresh["gate1_handout"]})
     if stage in ("review", "deliver"):
         scope = _changed_files_scope(files_touched)
         experts = _dispatch_experts(profile=profile, work_type=_evaluate_work_type(project, run_state),
@@ -11439,6 +11699,10 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
             warnings += w
             out.update(paths)
             warnings += _write_review_prompts(project, run_dir, run_state, dispatched, paths)
+            for e in dispatched:
+                if e.get("prompt_path"):
+                    e["spawn"] = _spawn_text(e["id"], e["prompt_path"])
+            ledger_warn += _ledger_add(run_id, [e.get("prompt_path") for e in dispatched])
         else:
             review_ids = prior_plan.get("review") if isinstance(prior_plan.get("review"), list) else None
             # No recorded REVIEW plan (a run that predates dispatch_plan): unknown, not "REVIEW
@@ -11453,9 +11717,19 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
                 project=project, run_dir=run_dir, experts=experts,
                 files=[c["path"] for c in scope["changed_files"]] or files_touched,
                 requirement=str(run_state.get("requirement") or ""))
+            _man_before = _sha256_file(_gate2_round1_dir(run_dir) / "manifest.json")
             # a re-entry may come after round 1 and its fixes: no first snapshot then
             warnings += _snapshot_gate2_round1(run_dir, _scope_files(scope), run_state,
                                                reentry, prev_completed)
+            _man = _gate2_round1_dir(run_dir) / "manifest.json"
+            # the manifest goes into the ledger only when THIS call wrote it: one kept from
+            # an earlier entry is already there, and a hand-edited one must not get in
+            _man_new = _man.is_file() and _sha256_file(_man) != _man_before
+            ledger_warn += _ledger_add(run_id, [e.get("prompt_path") for e in experts]
+                                       + ([_man] if _man_new else []))
+            for e in experts:
+                if e.get("prompt_path"):
+                    e["spawn"] = _spawn_text(e["id"], e["prompt_path"])
             mr, w = _write_gate_prompt(
                 "meta-review", project, run_dir,
                 [c["path"] for c in scope["changed_files"]] or files_touched,
@@ -11463,6 +11737,8 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
             warnings += w
             if mr:
                 out["meta_review_prompt_path"] = mr
+                out["meta_review_spawn"] = _spawn_text("meta-review", mr)
+                ledger_warn += _ledger_add(run_id, [mr])
             # meta-review is part of DELIVER's plan (the profiler listed it as unplanned),
             # also when its prompt had to be emitted by hand
             dispatched = experts + [{"id": "meta-review"}]
@@ -11499,6 +11775,12 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
     elif _sid:
         warnings.append(f"session not linked to {run_id}: run status "
                         f"{run_state.get('status')!r}, owner session {_owner!r}")
+    if ledger_warn:
+        if _gate_spawn_enforced(run_state, HANDOUT_CUTOVER):
+            # a hand-out the ledger does not hold cannot bind any gate round later
+            _stage_boundary_fail(stage, ledger_warn + ["re-run stage-start once the audit "
+                                                       "state dir is writable"])
+        warnings += ledger_warn
     out["warnings"] = warnings
     print(json.dumps(_fit_stage_start(out), default=str, ensure_ascii=False))
 

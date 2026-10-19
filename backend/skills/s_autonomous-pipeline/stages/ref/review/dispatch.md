@@ -46,7 +46,7 @@ to apply; REVIEW uses them only through the security-owner decision above.)
   (each `review_experts[]` entry's `prompt_path`): `EXPERT-ID: <id>`, the task statement,
   the expert's `backend/experts/code/<id>.md` checklist, the PLAN acceptance criteria as
   fenced DATA, the diff to read, then the project-knowledge block. Spawn each with the
-  2-line prompt `EXPERT-ID: <id>` + `read <prompt_path> first; follow it.`, adding nothing
+  entry's `spawn` text (`EXPERT-ID: <id>` + "… read <prompt_path> first; follow it."), adding nothing
   (a prompt naming its file is how the SubagentStop marker credits the right run). Only
   when an entry has no `prompt_path` compose it by hand from the same parts, as below.
 - **Project knowledge for every fan-out agent (and spec-compliance)** — emit once, paste
