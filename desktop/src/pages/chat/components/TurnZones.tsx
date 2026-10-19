@@ -142,7 +142,7 @@ function statsMeta(t: ReturnType<typeof useTranslation>['t'], s: { steps: number
 
 // ── Thoughts ────────────────────────────────────────────────────────────────────
 
-const THOUGHT_TEXT = 'text-[12.5px] italic leading-relaxed text-[var(--color-text-dim)] whitespace-pre-wrap break-words';
+const THOUGHT_TEXT = 'text-[12.5px] italic leading-relaxed text-[var(--color-text-muted)] whitespace-pre-wrap break-words';
 
 /** A thought inside a phase: in full while it streams (and until it settles), then
  *  one line — its first line — that opens to all of it. No label. */
@@ -156,7 +156,7 @@ function PhaseThought({ unit, folded, open, onToggle }: { unit: ThoughtUnit; fol
         data-testid="thought-toggle"
         aria-expanded={open}
         onClick={() => onToggle(!open)}
-        className={`w-full text-left truncate ${THOUGHT_TEXT.replace('whitespace-pre-wrap break-words', '')} hover:text-[var(--color-text-muted)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50 rounded`}
+        className={`w-full text-left truncate ${THOUGHT_TEXT.replace('whitespace-pre-wrap break-words', '')} hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50 rounded`}
       >
         {first}
       </button>
@@ -192,7 +192,7 @@ function PathObject({ dir, file }: { dir: string; file: string }) {
   return (
     <span className="min-w-0 flex items-baseline">
       <span dir="rtl" className="min-w-0 truncate text-[var(--color-text-dim)]"><bdi dir="ltr">{dir}</bdi></span>
-      <span className="shrink-0 text-[var(--color-text-secondary)]">{file}</span>
+      <span className="shrink-0 text-[var(--color-text-muted)]">{file}</span>
     </span>
   );
 }
@@ -215,7 +215,7 @@ export function ToolStripV6({ item }: { item: StripItem }) {
     ? <span className="truncate min-w-0 text-[var(--color-text-secondary)]">{item.objects.join(', ')}</span>
     : v.dir !== undefined && v.file
       ? <PathObject dir={v.dir} file={v.file} />
-      : <span className="truncate min-w-0 text-[var(--color-text-secondary)]">{v.object}</span>;
+      : <span className="truncate min-w-0 text-[var(--color-text-dim)]">{v.object}</span>;
   return (
     <div data-testid="tool-strip" data-status={step.status} data-tool={v.tool} {...ANCHOR_PROPS}>
       <button
@@ -227,11 +227,11 @@ export function ToolStripV6({ item }: { item: StripItem }) {
           ? 'bg-amber-500/10 hover:bg-amber-500/15'
           : 'bg-[var(--color-hover)]/60 hover:bg-[var(--color-hover)]'} focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50`}
       >
-        <span data-testid="strip-tool" className={`w-[10ch] shrink-0 truncate ${running ? 'text-amber-500' : 'text-[var(--color-text-muted)]'}`}>
+        <span data-testid="strip-tool" className={`w-[10ch] shrink-0 truncate ${running ? 'text-amber-500' : 'text-[var(--color-text-dim)]'}`}>
           {v.tool}{n > 1 ? ` ×${n}` : ''}
         </span>
         {object}
-        <span data-testid="strip-time" className={`ml-auto w-[7ch] shrink-0 text-right tabular-nums ${stopped ? 'text-[var(--color-text-dim)]' : 'text-[var(--color-text-secondary)]'}`}>{time}</span>
+        <span data-testid="strip-time" className={`ml-auto w-[7ch] shrink-0 text-right tabular-nums ${stopped ? 'text-[var(--color-text-dim)]' : 'text-[var(--color-text-muted)]'}`}>{time}</span>
       </button>
       {open && (
         <div data-testid="strip-detail" className="mt-0.5 mb-1 ml-[calc(10ch+20px)] space-y-0.5 font-mono text-[11.5px] text-[var(--color-text-dim)]">
