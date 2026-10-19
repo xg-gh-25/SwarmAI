@@ -33,6 +33,7 @@ from .security_hooks import (
     create_session_link_stamper,
     create_audit_marker_write_gate,
     create_pipeline_test_gate,
+    create_run_amend_gate,
     create_direct_commit_gate,
     bash_syntax_guard,
     inclusive_term_guard,
@@ -381,6 +382,17 @@ async def build_hooks(
     registry.register(
         "PreToolUse", create_pipeline_test_gate(hook_session_context),
         "pipeline_test_gate", matcher="Bash",
+    )
+
+    # ── PreToolUse: run-amend gate (Bash-scoped) ──
+    # Only while THIS session has an active pipeline run: DENY `git commit --amend`
+    # and point at the DELIVER title + run-commit, instead of dangerous_command_gate
+    # parking an unattended run on an approval prompt (run_c5eb0858: 2 h). No run →
+    # no effect. Fail-open. Registered BEFORE dangerous_command_gate for the same
+    # reason as pipeline_test_gate: never ask a user to approve a command we deny.
+    registry.register(
+        "PreToolUse", create_run_amend_gate(hook_session_context),
+        "run_amend_gate", matcher="Bash",
     )
 
     # ── PreToolUse: run-owner gate (Bash-scoped) — pipeline-run-worktree §4.2 ──

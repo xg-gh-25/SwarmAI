@@ -16,6 +16,7 @@ Public symbols
 - ``create_session_link_stamper``            — PostToolUse: stamp this session's id into unlinked runs it created
 - ``create_audit_marker_write_gate``         — deny writes/deletes in state/pipeline_agent_audit (forged review markers)
 - ``create_pipeline_test_gate``              — in an active run, tests/builds only via pipeline_test.py
+- ``create_run_amend_gate``                  — in an active run, deny git commit --amend (no HITL prompt)
 - ``create_direct_commit_gate``              — >20 source lines committed outside a run → run-create --profile direct
 - ``create_governance_file_gate``            — Three-Layer Governance file write interception
 - ``GOVERNANCE_TIER1_PATTERNS``              — Tier 1 (Constitutional) file patterns
@@ -688,13 +689,35 @@ def _is_history_rewrite(command: str) -> bool:
     chained after a benign command is still caught. Unparseable input mentioning
     ``git`` → True (fail closed). Non-git → False.
     """
+    segments = _shell_segments(command)
+    if segments is None:
+        # Unparseable: only fail closed if a rewrite signature is literally present.
+        return bool(re.search(r"\b(rebase|reset\s+--hard|--amend|filter-branch|filter-repo)\b", command))
+    return any(_segment_is_history_rewrite(seg) for seg in segments)
+
+
+def _is_commit_amend(command: str) -> bool:
+    """Is any segment of *command* a ``git commit --amend``? Same tokenizing as
+    ``_is_history_rewrite``; unparseable input naming ``commit`` and ``--amend`` → True."""
+    segments = _shell_segments(command)
+    if segments is None:
+        return bool(re.search(r"\bcommit\b.*--amend\b", command, re.S))
+    for seg in segments:
+        sub_rest = _segment_git_subcommand(seg)
+        if sub_rest and sub_rest[0] == "commit" and any(a.startswith("--amend") for a in sub_rest[1]):
+            return True
+    return False
+
+
+def _shell_segments(command: str) -> "list[list[str]] | None":
+    """*command* tokenized (``shlex``, newlines as ``;``) and split on shell
+    separators into per-command token lists; None when it does not parse."""
     try:
         all_tokens = shlex.split(command.replace("\n", " ; ").replace("\r", " ; "))
     except ValueError:
-        # Unparseable: only fail closed if a rewrite signature is literally present.
-        return bool(re.search(r"\b(rebase|reset\s+--hard|--amend|filter-branch|filter-repo)\b", command))
+        return None
     if not all_tokens:
-        return False
+        return []
     # Re-split glued ';' (shlex leaves 'status;' fused).
     _resplit: list[str] = []
     for tok in all_tokens:
@@ -720,12 +743,12 @@ def _is_history_rewrite(command: str) -> bool:
             current.append(tok)
     if current:
         segments.append(current)
+    return segments
 
-    return any(_segment_is_history_rewrite(seg) for seg in segments)
 
-
-def _segment_is_history_rewrite(tokens: list[str]) -> bool:
-    """Judge ONE command segment (already split on shell separators)."""
+def _segment_git_subcommand(tokens: list[str]) -> "tuple[str, list[str]] | None":
+    """``(subcommand, rest)`` when ONE segment is a git command (env assignments,
+    wrappers and git global options skipped), else None."""
     _WRAPPERS = {"sudo", "env", "command", "nice", "nohup", "time"}
     i = 0
     while i < len(tokens):
@@ -738,7 +761,7 @@ def _segment_is_history_rewrite(tokens: list[str]) -> bool:
             break
     tokens = tokens[i:]
     if not tokens or tokens[0] != "git":
-        return False
+        return None
     # Skip git global options that precede the subcommand (`git -C p rebase …`).
     k = 1
     while k < len(tokens):
@@ -752,9 +775,16 @@ def _segment_is_history_rewrite(tokens: list[str]) -> bool:
         else:
             break
     if k >= len(tokens):
+        return None
+    return tokens[k], tokens[k + 1:]
+
+
+def _segment_is_history_rewrite(tokens: list[str]) -> bool:
+    """Judge ONE command segment (already split on shell separators)."""
+    sub_rest = _segment_git_subcommand(tokens)
+    if sub_rest is None:
         return False
-    sub = tokens[k]
-    rest = tokens[k + 1:]
+    sub, rest = sub_rest
     if sub in ("rebase", "filter-branch", "filter-repo", "update-ref"):
         # update-ref rewrites a ref pointer directly (can orphan commits).
         return True
@@ -4038,6 +4068,63 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
                     "backend/daemon environment (a variable set in a Bash command has "
                     "no effect)."
                     + hint
+                ),
+            }
+        }
+
+    return _gate
+
+
+def create_run_amend_gate(session_context: dict[str, Any]):
+    """Factory: PreToolUse (Bash) gate. While THIS session has an active pipeline run
+    (same ``_session_run_state`` test as pipeline_test_gate), DENY ``git commit
+    --amend`` outright instead of letting dangerous_command_gate park the run on a
+    human approval prompt (run_c5eb0858 waited 2 h on one). A run's commit message is
+    built from its DELIVER record by ``run-commit``; the deny says so. No run → no
+    effect (an interactive amend still goes through dangerous_command_gate).
+    Fail-open on any error (the command then reaches dangerous_command_gate)."""
+
+    async def _gate(
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        if input_data.get("tool_name") != "Bash":
+            return {"decision": "approve"}
+        command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
+        try:
+            if not command or not _is_commit_amend(command):
+                return {"decision": "approve"}  # cheap path: no IO for ordinary commands
+        except Exception:
+            logger.debug("run_amend_gate: classify failed — failing open", exc_info=True)
+            return {"decision": "approve"}
+        session_id = session_context.get("sdk_session_id", "") or ""
+        if not session_id:
+            return {"decision": "approve"}
+        try:
+            own_run = await asyncio.wait_for(
+                executors.run_in("subprocess", _session_run_state, session_id),
+                timeout=_RUN_SCAN_TIMEOUT,
+            )
+        except Exception:  # incl. asyncio.TimeoutError
+            logger.warning("run_amend_gate: run scan failed — failing open", exc_info=True)
+            return {"decision": "approve"}
+        if own_run is None:
+            return {"decision": "approve"}
+        logger.warning("[BLOCKED] run_amend_gate in run %s: %s", own_run["id"], command[:120])
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "DENY (git commit --amend): pipeline run " + own_run["id"]
+                    + " is active in this session, and a run never rewrites a commit by "
+                    "hand. 要改提交信息就改 deliver title 后重新跑 run-commit: run-commit "
+                    "builds the message from the DELIVER record (`title` = subject, "
+                    "`outcome` = body) and adds the trailer itself. If the commit has "
+                    "already landed, leave it as is and note the wording in the run's "
+                    "report; the user decides after the run whether to reword it. Do not "
+                    "ask the user to approve an amend."
                 ),
             }
         }

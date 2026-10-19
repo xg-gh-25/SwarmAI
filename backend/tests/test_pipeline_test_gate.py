@@ -733,9 +733,76 @@ def test_build_hooks_registers_both_gates_before_the_hitl_gate(monkeypatch):
     assert names.index("pipeline_test_gate") < names.index("pytest_command_guard")
     assert names.index("pipeline_test_gate") < names.index("dangerous_command_gate")
     assert names.index("direct_commit_gate") < names.index("dangerous_command_gate")
+    # run_amend_gate denies an amend before dangerous_command_gate could prompt for it
+    assert names.index("run_amend_gate") < names.index("dangerous_command_gate")
+    assert names.count("run_amend_gate") == 1
     assert names.count("pipeline_test_gate") == names.count("direct_commit_gate") == 1
     # session_link_gate sits right before pipeline_test_gate (test_session_link_gate.py)
     assert names.index("session_link_gate") == names.index("pipeline_test_gate") - 1
     by_name = {n: (e, m) for e, n, m in recorded}
     assert by_name["pipeline_test_gate"] == ("PreToolUse", "Bash")
     assert by_name["direct_commit_gate"] == ("PreToolUse", "Bash")
+
+
+# ── run_amend_gate ───────────────────────────────────────────────────────────
+class TestRunAmendGate:
+    """In an active run, `git commit --amend` is denied outright (no HITL prompt);
+    outside a run, and for any other commit, the gate changes nothing."""
+
+    def _gate(self, sid=SID):
+        return sh.create_run_amend_gate({"sdk_session_id": sid})
+
+    @pytest.mark.parametrize("cmd", [
+        "git commit --amend -F /tmp/m.txt",
+        "git commit --amend --no-edit",
+        "cd /repo; test -z \"$(git diff --cached)\" && git -C /repo commit --amend -m x",
+        "cat > /tmp/m.txt <<'EOF'\nfeat: x\nEOF\ngit commit --amend -F /tmp/m.txt 2>&1 | tail -3",
+        "GIT_EDITOR=true git commit --amend",
+        "git commit --amend=x 'unterminated",   # unparseable → fail closed
+    ])
+    def test_amend_in_active_run_is_denied_with_the_way_out(self, ws, cmd):
+        _seed(ws, project="SwarmAI", run_id="run_amend1")
+        res = _call(self._gate(), cmd)
+        assert _is_deny(res)
+        reason = _reason(res)
+        assert "run_amend1" in reason
+        assert "deliver title" in reason and "run-commit" in reason
+
+    @pytest.mark.parametrize("cmd", [
+        "git commit -m 'feat: x'",
+        "git commit -m 'mention --amend in text'",
+        "echo git commit --amend",
+        "git log --format=%s -1",
+        "python backend/scripts/artifact_cli.py run-commit --project SwarmAI --run-id r",
+    ])
+    def test_other_commands_pass_in_active_run(self, ws, cmd):
+        _seed(ws)
+        assert _call(self._gate(), cmd) == {"decision": "approve"}
+
+    def test_no_run_other_session_or_no_session_pass(self, ws):
+        cmd = "git commit --amend --no-edit"
+        assert _call(self._gate(), cmd) == {"decision": "approve"}          # no run
+        _seed(ws, session_id="someone-else")
+        assert _call(self._gate(), cmd) == {"decision": "approve"}          # not ours
+        _seed(ws, run_id="run_mine")
+        assert _call(self._gate(sid=""), cmd) == {"decision": "approve"}    # no session id
+        assert _call(self._gate(), cmd, tool_name="Write") == {"decision": "approve"}
+
+    def test_scan_failure_fails_open(self, ws, monkeypatch):
+        _seed(ws)
+
+        def boom(_sid):
+            raise OSError("glob failed")
+
+        monkeypatch.setattr(sh, "_session_run_state", boom)
+        assert _call(self._gate(), "git commit --amend") == {"decision": "approve"}
+
+    def test_history_rewrite_classification_unchanged(self):
+        # the shared tokenizer refactor keeps _is_history_rewrite's verdicts
+        assert sh._is_history_rewrite("git rebase -i HEAD~2")
+        assert sh._is_history_rewrite("ls && git commit --amend")
+        assert sh._is_history_rewrite("git reset --hard HEAD~1")
+        assert sh._is_history_rewrite("git rebase 'unterminated")   # unparseable → regex
+        assert not sh._is_history_rewrite("git reset -q -- a.py")
+        assert not sh._is_history_rewrite("git commit -m x")
+        assert not sh._is_history_rewrite("")
