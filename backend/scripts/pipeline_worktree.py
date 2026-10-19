@@ -61,13 +61,15 @@ def _emit_fail(payload: dict, code: int = 2) -> None:
 def refuse_if_worktree_copy(script: str) -> None:
     """A tool copy inside a run worktree must never run against the workspace that owns
     that worktree (it could be half-edited, and it would write real runs). Run against
-    another workspace — a test's temp SwarmWS — it is the code under test and may run."""
+    another workspace — a test's temp SwarmWS — it is the code under test and may run.
+    $SWARM_WORKSPACE is read as artifact_cli._get_workspace reads it (``~`` expanded), so
+    a literal "~/.swarm-ai/SwarmWS" is the owning workspace here too."""
     hit = rw.run_for_path(script)
     if hit is None:
         return
     rid, repo = hit
     ws = os.environ.get("SWARM_WORKSPACE")
-    if ws and not rw.owned_by(rid, ws):
+    if ws and not rw.owned_by(rid, Path(ws).expanduser()):
         return
     main_hint = "<main checkout>/" + os.path.relpath(os.path.realpath(script),
                                                      str(rw.wt_path(rid, repo)))

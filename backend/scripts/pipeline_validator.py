@@ -116,10 +116,6 @@ SEVERITY_ADVISORY = "advisory"  # failure/crash appends to warnings[] → warns
 # Mirrors AutoSDE's threshold-as-constant form (their value is 8; we keep 7 to
 # match the established deliver.md prose, avoiding gratuitous drift).
 CONFIDENCE_GATE_THRESHOLD = 7
-# Specialists emit "MED" (deliver.md:396) while the final schema says "MEDIUM"
-# (STAGE_TEMPLATES :397) — a real in-repo severity-string collision (MOD04). The
-# gate MUST accept both, case-insensitively, or it is dead for specialist findings.
-_MED_SEVERITIES = frozenset({"MEDIUM", "MED"})
 
 
 def _blocked_findings(
@@ -127,43 +123,28 @@ def _blocked_findings(
 ) -> list[dict]:
     """Return the UNRESOLVED findings that must block delivery/completion.
 
-    Blocking rule (the single source of truth used by BOTH the publish-time
-    gate `validate_artifact_data` and the completion-time gate `_check_depth`,
-    replacing the two previously-duplicated inline HIGH-only filters):
+    Used by BOTH the publish-time gate `validate_artifact_data` and the
+    completion-time gate `_check_depth`. The rule itself is
+    `core.gate2_findings.is_blocking`, the one classifier every Gate-2 reader calls
+    (artifact_cli's must-record and re-check readers too), so the readers cannot
+    drift apart again:
 
-    - severity HIGH or CRITICAL → always blocks (confidence-independent).
-      (CRITICAL is a live severity in the review-agent schemas + confidence_score.py
-      :133 which treats critical==high; omitting it would fail-OPEN on the single
-      MOST severe finding class — the inverse of intent. Gate-2 finding, run_7583af5f.)
-    - severity MEDIUM/MED → blocks when confidence >= `threshold`, OR when
-      confidence is MISSING (fail-closed, P7: a gate must not be dodgeable by
-      omitting a field).  confidence < threshold → note-only (not blocked),
-      matching the deliver.md:507 prose semantics.
-    - severity LOW (or anything else) → never blocks.
-    - resolved findings never block regardless of severity/confidence.
+    - severity HIGH / CRITICAL / BLOCK / BLOCKER → always blocks (confidence-independent;
+      CRITICAL omitted once fail-OPENed the most severe class, run_7583af5f);
+    - severity MEDIUM / MED → blocks at confidence >= `threshold`, or when the
+      confidence is missing or has no number in it (fail-closed, P7: a gate must not be
+      dodgeable by omitting a field); "8/10" reads as 8;
+    - LOW or anything else → never blocks;
+    - resolved findings never block.
 
-    Severity is normalized case-insensitively across {HIGH, CRITICAL, MEDIUM, MED}.
+    The classifier is imported here, not at module top: run_delivery_summary imports
+    this module for `_md_cell`, and that import must not depend on the new module.
     """
+    from core.gate2_findings import is_blocking
     if not isinstance(findings, list):
         return []
-    blocked: list[dict] = []
-    for f in findings:
-        if not isinstance(f, dict) or f.get("resolved"):
-            continue
-        sev = str(f.get("severity", "")).strip().upper()
-        if sev in ("HIGH", "CRITICAL"):
-            blocked.append(f)
-        elif sev in _MED_SEVERITIES:
-            conf = f.get("confidence")
-            if conf is None:            # fail-closed on missing confidence
-                blocked.append(f)
-            else:
-                try:
-                    if float(conf) >= threshold:
-                        blocked.append(f)
-                except (TypeError, ValueError):
-                    blocked.append(f)   # unparseable confidence → fail-closed
-    return blocked
+    return [f for f in findings
+            if isinstance(f, dict) and not f.get("resolved") and is_blocking(f, threshold)]
 
 
 # ── Gate-2 Red Team trigger (HIGH half) ──

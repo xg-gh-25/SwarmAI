@@ -11217,22 +11217,21 @@ def _gate2_fix_diff(run_dir: Path, scope: dict) -> "tuple[str, list[str], list[s
 
 
 def _recheck_items(findings) -> "tuple[dict[str, list[str]], list[dict]]":
-    """(specialist → the fixed HIGH / conf≥7 MED findings it raised, dropped). A finding
-    recorded ``resolved: false`` (accepted / noted, not fixed) needs no re-check. A merged
-    finding naming several specialists (list or comma string) goes to each. A HIGH / MED
-    finding that cannot be routed (no specialist, no text) is returned as dropped, never
-    silently skipped."""
+    """(specialist → the fixed blocking findings it raised, dropped). Blocking is
+    ``core.gate2_findings.is_blocking``: HIGH at any confidence, a MED at conf >= 7 or with
+    no / unparseable confidence (that MED used to read as conf 0 and was never
+    re-checked). A finding recorded ``resolved: false`` (accepted / noted, not fixed)
+    needs no re-check. A merged finding naming several specialists (list or comma string)
+    goes to each. A HIGH / MED finding that cannot be routed (no specialist, no text) is
+    returned as dropped, never silently skipped."""
+    from core.gate2_findings import confidence_of, is_blocking, severity_of
     out: dict[str, list[str]] = {}
     dropped: list[dict] = []
     for f in findings if isinstance(findings, list) else []:
-        if not isinstance(f, dict) or f.get("resolved") is False:
+        if not isinstance(f, dict) or f.get("resolved") is False or not is_blocking(f):
             continue
-        sev = str(f.get("severity") or "").strip().upper()
-        m = re.match(r"\s*(\d+(?:\.\d+)?)", str(f.get("confidence") or ""))
-        conf = float(m.group(1)) if m else 0.0
-        high = sev in ("HIGH", "CRITICAL", "BLOCK", "BLOCKER")
-        if not (high or (sev.startswith("MED") and conf >= 7)):
-            continue
+        high = severity_of(f) == "high"
+        conf = confidence_of(f.get("confidence"))
         raw = f.get("specialist")
         sids = raw if isinstance(raw, list) else str(raw or "").split(",")
         sids = [str(s).strip().lower() for s in sids if str(s).strip()]
@@ -11539,25 +11538,21 @@ def _gate2_recheck_errors(run_id: str, run_dir: "Path | None", run_state: dict,
 # positive is recorded as reported and settled by the specialist's re-check, not by
 # leaving it out. Escape: a recorded gate2_findings_unverified_reason.
 GATE2_FINDINGS_CUTOVER = "2026-10-18T20:00:00+00:00"
-_SEV_RANK = {"LOW": 0, "MED": 1, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 2, "BLOCK": 2, "BLOCKER": 2}
 
 
 def _conf_of(v) -> "float | None":
-    m = re.match(r"\s*(\d+(?:\.\d+)?)", str(v if v is not None else ""))
-    return float(m.group(1)) if m else None
+    from core.gate2_findings import confidence_of
+    return confidence_of(v)
 
 
 def _binding_findings(reported) -> "list[dict]":
-    """The reported findings the record must carry: HIGH at conf >= 5 (lower ones are
-    suppressed by the tiers) and MED at conf >= 7 (lower ones are noted only), each
-    fingerprint once. A missing confidence binds (fail closed)."""
+    """The reported findings the record must carry (``core.gate2_findings.must_record``:
+    a HIGH at conf >= 5 — lower ones go to the appendix / drop tiers — and a MED at
+    conf >= 7, a missing confidence binding either way), each fingerprint once."""
+    from core.gate2_findings import must_record, severity_rank
     out, seen = [], set()
     for r in reported if isinstance(reported, list) else []:
-        if not isinstance(r, dict):
-            continue
-        rank = _SEV_RANK.get(str(r.get("severity") or "").upper(), 0)
-        conf = _conf_of(r.get("confidence"))
-        if not ((rank == 2 and (conf is None or conf >= 5)) or (rank == 1 and (conf is None or conf >= 7))):
+        if not isinstance(r, dict) or not must_record(r):
             continue
         key = (r.get("path") or "", r.get("line"), (r.get("category") or "").lower(),
                (r.get("summary") or "")[:60] if not r.get("path") else "")
@@ -11565,7 +11560,7 @@ def _binding_findings(reported) -> "list[dict]":
             continue
         seen.add(key)
         out.append(r)
-    return sorted(out, key=lambda r: -_SEV_RANK.get(str(r.get("severity")).upper(), 0))
+    return sorted(out, key=lambda r: -severity_rank(r))
 
 
 def _specialists_of(f: dict) -> "set[str]":
@@ -11593,12 +11588,13 @@ def _record_covers(f: dict, r: dict, eid: str) -> bool:
     conf >= 7 stays a conf >= 7 MED (the fix + re-check threshold) or becomes a HIGH."""
     if eid not in _specialists_of(f):
         return False
-    rank_f = _SEV_RANK.get(str(f.get("severity") or "").strip().upper(), 0)
-    rank_r = _SEV_RANK.get(str(r.get("severity") or "").upper(), 0)
+    from core.gate2_findings import severity_rank
+    rank_f, rank_r = severity_rank(f), severity_rank(r)
     if rank_f < rank_r:
         return False
-    if rank_r == 1 and rank_f == 1 and _conf_of(r.get("confidence")) is not None \
-            and (_conf_of(f.get("confidence")) or 0) < 7:
+    from core.gate2_findings import is_blocking
+    # a MED that blocks as reported (conf >= 7, or none given) stays a blocking record
+    if rank_r == 1 and rank_f == 1 and is_blocking(r) and not is_blocking(f):
         return False
     text = " ".join(str(f.get(k) or "") for k in ("path", "fingerprint", "finding", "summary",
                                                    "issue", "description", "location"))
