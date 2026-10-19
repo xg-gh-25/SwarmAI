@@ -9540,11 +9540,13 @@ def _record_transcript_id(run_state: dict) -> bool:
     exactly those files instead of guessing ownership from command text. A
     different namespace from ``session_id`` (the APP session) — never stored there.
     An id that is not an SDK session id is ignored, so it can never become a path."""
-    try:
-        from core.transcript_usage import MAX_TRANSCRIPT_IDS, valid_session_id
+    sid = (os.environ.get("CLAUDE_CODE_SESSION_ID") or "").strip()
+    if not sid:
+        return False
+    try:  # import-free module: transcript_usage would load pydantic_settings (0.3 s)
+        from core.session_ids import MAX_TRANSCRIPT_IDS, valid_session_id
     except Exception:  # noqa: BLE001 — telemetry never fails a stage
         return False
-    sid = (os.environ.get("CLAUDE_CODE_SESSION_ID") or "").strip()
     if not valid_session_id(sid):
         return False
     ids = run_state.get("transcripts")

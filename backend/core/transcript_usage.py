@@ -44,15 +44,9 @@ _USAGE_KEYS = (
 )
 
 
-# A run touched by more sessions than this is not a real run (an edited run.json);
-# the cap bounds the globs a stage command can be made to do.
-MAX_TRANSCRIPT_IDS = 32
-
-
-def valid_session_id(sid) -> bool:
-    """True for an SDK session id: ``find_transcript``'s pattern matched over the
-    WHOLE string (``re.match`` with ``$`` would also take a trailing newline)."""
-    return isinstance(sid, str) and bool(_SID_RE.fullmatch(sid))
+# MAX_TRANSCRIPT_IDS / valid_session_id live in the import-free core/session_ids.py
+# (the stage commands use them on every call); re-exported here for the readers.
+from core.session_ids import MAX_TRANSCRIPT_IDS, valid_session_id  # noqa: E402,F401
 
 
 def resolve_transcripts(ids: Iterable) -> list[str]:

@@ -240,17 +240,51 @@ def _git_path(cwd, name: str) -> Path:
     return Path(p) if os.path.isabs(p) else Path(cwd) / p
 
 
+# Per-process memo for the two rev-parse answers one CLI call asks again and again
+# (a stage-start asked --git-common-dir ~10 times, 2026-10-20 profile). Only for a
+# cwd that is a repo/worktree ROOT (its own `.git`), keyed on that `.git` entry's
+# identity: removing, re-adding or re-initialising the tree changes the entry, so a
+# stale answer is never returned. A failure is never stored.
+_REV_MEMO: "dict[tuple, str]" = {}
+_REV_MEMO_MAX = 512
+
+
+def _git_marker(cwd) -> "tuple | None":
+    try:
+        st = os.stat(os.path.join(str(cwd), ".git"))
+    except OSError:
+        return None
+    return (os.path.realpath(str(cwd)), st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+def _memo(kind: str, cwd, compute) -> "str | None":
+    m = _git_marker(cwd)
+    key = (kind, *m) if m else None
+    if key is not None and key in _REV_MEMO:
+        return _REV_MEMO[key]
+    val = compute()
+    if key is not None and val:
+        if len(_REV_MEMO) >= _REV_MEMO_MAX:
+            _REV_MEMO.clear()
+        _REV_MEMO[key] = val
+    return val
+
+
 def _common_dir(cwd) -> str:
-    p = _out(cwd, "rev-parse", "--git-common-dir").strip()
-    return os.path.realpath(p if os.path.isabs(p) else os.path.join(str(cwd), p))
+    def compute() -> str:
+        p = _out(cwd, "rev-parse", "--git-common-dir").strip()
+        return os.path.realpath(p if os.path.isabs(p) else os.path.join(str(cwd), p))
+    return _memo("common", cwd, compute)
 
 
 def _toplevel(cwd) -> "str | None":
-    try:
-        p = git(cwd, "rev-parse", "--show-toplevel", timeout=10)
-    except WorktreeError:
-        return None
-    return os.path.realpath(p.stdout.strip()) if p.returncode == 0 and p.stdout.strip() else None
+    def compute() -> "str | None":
+        try:
+            p = git(cwd, "rev-parse", "--show-toplevel", timeout=10)
+        except WorktreeError:
+            return None
+        return os.path.realpath(p.stdout.strip()) if p.returncode == 0 and p.stdout.strip() else None
+    return _memo("top", cwd, compute)
 
 
 def busy_state(cwd) -> "str | None":

@@ -62,7 +62,7 @@ EMPTY_FILLER = "(retrying)"
 
 # SDK session ids are UUIDs; anything else is refused so the id can never act
 # as a glob pattern or a path component.
-_SID_RE = re.compile(r"^[0-9a-fA-F-]{8,64}$")
+from .session_ids import SID_RE as _SID_RE  # noqa: E402 — one pattern: core/session_ids.py
 
 
 def _projects_dir() -> Path:
