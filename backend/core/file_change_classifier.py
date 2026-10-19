@@ -73,6 +73,28 @@ def _clean_target(tok: str) -> str | None:
     return tok
 
 
+_REDIR_OPS = frozenset({">", ">>", "<", "<<", "<<<", ">&", "<&", "&>", "&>>", ">|"})
+
+
+def _drop_redirections(tokens: "list[str]") -> "list[str]":
+    """Remove redirections (`2>&1`, `> f`, `< f`) from a punctuation-split token list:
+    the operator, its operand and a numeric fd right before it. Their targets are found
+    by the redirect regex; left in, the sed/cp walks below read them as file arguments."""
+    out: list[str] = []
+    skip = False
+    for i, t in enumerate(tokens):
+        if skip:
+            skip = False
+            continue
+        if t in _REDIR_OPS:
+            if out and out[-1].isdigit():
+                out.pop()
+            skip = True
+            continue
+        out.append(t)
+    return out
+
+
 def parse_bash_write_targets(command: str) -> list[str]:
     """Return the files a Bash command writes — conservatively (run_cce6f4b9 restore).
 
@@ -97,8 +119,13 @@ def parse_bash_write_targets(command: str) -> list[str]:
             targets.append(t)
 
     # 2) tee / cp / mv via a best-effort token walk (shlex; bail on parse error).
+    #    punctuation_chars splits `;` `&&` `|` off their neighbours: plain shlex.split
+    #    glues them to the word (`f.py;`), so the segment walk in 3) never saw the
+    #    separator and read the NEXT command's name (`sed`) as a file argument.
     try:
-        tokens = shlex.split(command)
+        lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        tokens = _drop_redirections(list(lex))
     except ValueError:
         tokens = []  # unbalanced quotes etc → rely on the redirect regex only
     for i, tok in enumerate(tokens):

@@ -1521,14 +1521,22 @@ def _seconds_needed(targets: dict, durations: dict, workers: int) -> float:
     return cost / (max(1, workers) * BUDGET_FILL)
 
 
+def _self_command() -> str:
+    """This runner as an absolute command (interpreter + script). The session's cwd may
+    be a run worktree, which has no venv and refuses its own tool copies, so a relative
+    `backend/.venv/bin/python backend/scripts/...` printed here could not be run as-is."""
+    import shlex
+    return (f"{shlex.quote(os.path.abspath(sys.executable))} "
+            f"{shlex.quote(os.path.realpath(__file__))}")
+
+
 def _must_run_refusal(ns, deadline_s: float, n_files: int, workers: int) -> dict:
     """Error for a must-run set that does not fit the deadline: the scope is fixed by
     the change, so the time grows, not the scope shrinks. Gives the exact command."""
     d = int(min(AUTO_MAX_DEADLINE, math.ceil(deadline_s / 10.0) * 10))
     run = f" --run-id {ns.run_id}" if ns.run_id else ""
-    cmd = (f"perl -e 'alarm {AUTO_ALARM_S}; exec @ARGV' backend/.venv/bin/python "
-           f"backend/scripts/pipeline_test.py --project {ns.project}{run} --mode {ns.mode} "
-           f"--deadline auto")
+    cmd = (f"perl -e 'alarm {AUTO_ALARM_S}; exec @ARGV' {_self_command()} "
+           f"--project {ns.project}{run} --mode {ns.mode} --deadline auto")
     tmo = (AUTO_ALARM_S + 10) * 1000
     return {"mode": ns.mode, "error": (
         f"the {n_files} must-run test file(s) of this change (its own tests, AC tests, "

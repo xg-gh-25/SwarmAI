@@ -1127,6 +1127,10 @@ def test_must_run_tests_are_never_cut_and_get_more_time_instead(rig, tmp_path, c
     assert code == 2 and "never cut for time" in out["error"], out
     assert "--deadline auto" in out["next_action"] and f"--run-id {RUN_ID}" in out["next_action"]
     assert f"alarm {pt.AUTO_ALARM_S};" in out["next_action"]
+    # absolute interpreter + script: runnable from a run worktree (no venv there)
+    exec_part = out["next_action"].split("exec @ARGV' ", 1)[1].split()
+    assert os.path.isabs(exec_part[0]) and os.path.isabs(exec_part[1])
+    assert exec_part[1].endswith("backend/scripts/pipeline_test.py")
     assert out["bash_timeout_ms"] == (pt.AUTO_ALARM_S + 10) * 1000
     runs = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs"
     assert not (runs / RUN_ID / "evidence" / "tests" / "latest-verify.json").exists()

@@ -1541,7 +1541,10 @@ def _pytest_output_piped_to_pager(stripped: str) -> bool:
 # guaranteed — so the perl-alarm form is the real, always-available cap.
 # Optional runner/interpreter prefix that may sit between the wall-clock wrapper
 # and the pytest token: `python[3.x] -m `, `uv run `, `poetry run `, `pdm run `.
-_RUNNER_PREFIX = r"(?:python[\d.]*\s+-m\s+|(?:uv|poetry|pdm)\s+run\s+)?"
+# the interpreter may be given by path (`backend/.venv/bin/python`, `/abs/.venv/bin/python3`):
+# conftest requires the venv interpreter, so a bare-`python`-only cap denied the one
+# command that can actually run the tests.
+_RUNNER_PREFIX = r"(?:(?:[\w.~/-]*/)?python[\d.]*\s+-m\s+|(?:uv|poetry|pdm)\s+run\s+)?"
 _WALLCLOCK_BOUND_PYTEST_RE = re.compile(
     # gtimeout/timeout N (N>=1) wrapping pytest (optionally via a runner prefix):
     r"\bg?timeout\s+[1-9]\d*\s+" + _RUNNER_PREFIX + r"(?:py\.test|pytest)\b"

@@ -491,3 +491,89 @@ def test_isolated_land_force_records_d7_bypass(flow, monkeypatch):
     assert res["landed"]["swarmai"]["sha"] == _g(flow["main"], "rev-parse", "HEAD")
     iv = _state(f)["interventions"][-1]
     assert iv["kind"] == "d7_force_bypass" and "security" in iv["note"]
+
+
+# ── automatic landing while main keeps moving ─────────────────────────────────
+def _evidence_at_base(f, rid, wt):
+    _evidence(f, rid, wt)
+    p = f.parent / "evidence" / "tests" / "latest-verify.json"
+    d = json.loads(p.read_text())
+    d["worktree"]["swarmai"]["base"] = _g(wt, "rev-parse", "HEAD")
+    p.write_text(json.dumps(d))
+
+
+def test_land_resyncs_by_itself_when_main_moved_elsewhere(flow):
+    """main gains a commit on another file between review and landing: the landing
+    rebases, keeps the review and the tests (same patch, untouched files) and lands —
+    no stage-start round, no re-review."""
+    rid, f, wt = _prepared(flow)
+    _evidence_at_base(f, rid, wt)
+    (flow["main"] / "c.py").write_text("c = 'main'\n")
+    _g(flow["main"], "add", "c.py")
+    _g(flow["main"], "commit", "-q", "-m", "moved")
+    res = _land(flow, rid, f)
+    sha = res["landed"]["swarmai"]["sha"]
+    assert _g(flow["main"], "rev-parse", "HEAD") == sha
+    assert (flow["main"] / "a.py").read_text() == "a = 2\n"
+    assert (flow["main"] / "c.py").read_text() == "c = 'main'\n"
+
+
+def test_land_stops_when_main_moved_onto_the_runs_files(flow):
+    rid, f, wt = _prepared(flow)
+    _evidence_at_base(f, rid, wt)
+    (flow["main"] / "a.py").write_text("a = 1\nextra = 1\n")
+    _g(flow["main"], "add", "a.py")
+    _g(flow["main"], "commit", "-q", "-m", "main edits a.py")
+    head = _g(flow["main"], "rev-parse", "HEAD")
+    with pytest.raises(SystemExit):
+        _land(flow, rid, f)
+    assert _g(flow["main"], "rev-parse", "HEAD") == head
+
+
+def test_deliver_start_keeps_the_review_after_a_harmless_rebase(flow):
+    rid, f, wt = _prepared(flow)
+    _evidence_at_base(f, rid, wt)
+    rt = f.parent / "evidence" / "prompts" / "review-tree.json"
+    at = json.loads(rt.read_text())["at"]
+    (flow["main"] / "c.py").write_text("c = 'main'\n")
+    _g(flow["main"], "add", "c.py")
+    _g(flow["main"], "commit", "-q", "-m", "moved")
+    rc, out = _start(flow, rid, "deliver")
+    assert rc == 0, out
+    assert "still holds" in out["review_note"] and "still holds" in out["sync_note"]
+    rec = json.loads(rt.read_text())
+    assert rec["at"] == at and rec["trees"]["swarmai"] == rw.change_tree(wt, rid)
+
+
+def test_landing_resync_refuses_a_tree_edited_after_the_check(flow):
+    import pipeline_worktree as pw
+    rid, f, wt = _prepared(flow)
+    st = _state(f)
+    e = st["worktrees"][0]
+    checked = rw.change_tree(wt, rid)
+    (wt / "a.py").write_text("a = 'late'\n")
+    with pytest.raises(rw.WorktreeError) as ei:
+        pw._resync_for_landing(rid, f, st, f.parent, e, wt, flow["main"], checked)
+    assert ei.value.code == "changed_since_review"
+
+
+def test_landing_records_carried_uncommitted_files(flow):
+    """Another session's uncommitted hunk in a file the run changed: the landing merges
+    it, lands, and run.json + the output name the file and the backup."""
+    lines = "".join(f"l{i} = {i}\n" for i in range(1, 9))
+    (flow["main"] / "m.py").write_text(lines)
+    _g(flow["main"], "add", "m.py")
+    _g(flow["main"], "commit", "-q", "-m", "m")
+    rid, f = _create(flow)
+    assert _start(flow, rid, "plan")[0] == 0
+    wt = rw.wt_path(rid, "swarmai")
+    (wt / "m.py").write_text(lines.replace("l2 = 2", "l2 = 'run'"))
+    assert _start(flow, rid, "deliver")[0] == 0
+    _evidence_at_base(f, rid, wt)
+    (flow["main"] / "m.py").write_text(lines.replace("l7 = 7", "l7 = 'them'"))
+    res = _land(flow, rid, f)["landed"]["swarmai"]
+    assert res["carried_uncommitted"] == ["m.py"] and Path(res["carried_backup"]).is_dir()
+    assert (flow["main"] / "m.py").read_text() == \
+        lines.replace("l2 = 2", "l2 = 'run'").replace("l7 = 7", "l7 = 'them'")
+    c = _state(f)["commits"][-1]
+    assert c["carried_uncommitted"] == ["m.py"]

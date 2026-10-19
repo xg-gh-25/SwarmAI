@@ -539,6 +539,29 @@ def _patch_id(wt, a: str, b: str, run_id: str) -> str:
     return _out(wt, "patch-id", "--stable", input_text=diff).split(" ")[0].strip()
 
 
+def carries_over(wt: "str | Path", run_id: str, old_base: str, old_tree: str,
+                 new_base: str, new_tree: str) -> bool:
+    """A review or test of the change (old_base → old_tree) still holds for
+    (new_base → new_tree): every path that differs between the two trees was changed by
+    main's commits since old_base, and none of those is a path the run changed — so
+    each of the run's files is byte-identical in both trees. Main moves every few
+    minutes; without this every rebase voided the review and the tests and the landing
+    retry rebased again, a loop that never landed. Compared by blob, never by
+    ``git patch-id`` (it ignores whitespace, so a re-indent would pass). False on doubt."""
+    if not all((old_base, old_tree, new_base, new_tree)):
+        return False
+    if (old_base, old_tree) == (new_base, new_tree):
+        return True
+    try:
+        moved = {p for p in _out(wt, "diff", "--name-only", "--no-renames", "-z",
+                                 old_base, new_base).split("\0") if p}
+        differs = set(changed_paths(wt, old_tree, new_tree))
+        mine = set(changed_paths(wt, old_base, old_tree)) | set(changed_paths(wt, new_base, new_tree))
+    except WorktreeError:
+        return False
+    return differs <= moved and not (moved & mine)
+
+
 # ── sync (deliver stage-start, §7.2) ─────────────────────────────────────────
 def _unmerged(wt) -> "list[str]":
     out = _out(wt, "diff", "--name-only", "--diff-filter=U", "-z")
@@ -718,6 +741,107 @@ def _integrate_lock(entry: dict):
     return run_lock(d, timeout=INTEGRATE_LOCK_TIMEOUT_S)
 
 
+def _blob(main: Path, rev: str, rel: str) -> "bytes | None":
+    p = subprocess.run(["git", "-C", str(main), "show", f"{rev}:{rel}"], capture_output=True,
+                       timeout=60, env={**os.environ, **_GIT_ENV})
+    return p.stdout if p.returncode == 0 else None
+
+
+_LAST_CARRY_BACKUP: "dict[str, str]" = {}
+
+
+def _dirty_merge_plan(main: Path, base: str, n: str, files: "list[str]",
+                      run_id: str) -> "list[tuple[str, bytes, bytes, bytes, bytes]]":
+    """Uncommitted edits in the main checkout (another session's) to files this run
+    changes: ``git merge --ff-only`` refuses them, which blocked every landing while
+    any session worked in main. Plan instead to carry them over: per file
+    (rel, their bytes, base bytes, 3-way merge of theirs + the run's change, the run's bytes). Raises
+    WorktreeError('blocked_by_uncommitted') — touching nothing — when an edit is
+    staged, binary, a deletion, or does not merge cleanly."""
+    unstaged = {p for p in _out(main, "diff", "--name-only", "-z").split("\0") if p}
+    staged = {p for p in _out(main, "diff", "--cached", "--name-only", "-z").split("\0") if p}
+    hit = sorted((unstaged | staged) & set(files))
+    if not hit:
+        return []
+    plan, bad = [], []
+    tmp = Path(tempfile.mkdtemp(prefix="swarm-dirty-merge-"))
+    try:
+        for rel in hit:
+            cur_p = main / rel
+            base_b, new_b = _blob(main, base, rel), _blob(main, n, rel)
+            if (rel in staged or base_b is None or new_b is None or not cur_p.is_file()
+                    or cur_p.is_symlink()):
+                bad.append(rel)
+                continue
+            cur_b = cur_p.read_bytes()
+            if b"\0" in cur_b or b"\0" in base_b or b"\0" in new_b:
+                bad.append(rel)
+                continue
+            for name, data in (("cur", cur_b), ("base", base_b), ("new", new_b)):
+                (tmp / name).write_bytes(data)
+            r = subprocess.run(["git", "merge-file", "-p", str(tmp / "cur"), str(tmp / "base"),
+                                str(tmp / "new")], capture_output=True, timeout=60)
+            if r.returncode != 0:
+                bad.append(rel)
+                continue
+            plan.append((rel, cur_b, base_b, r.stdout, new_b))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if bad:
+        raise WorktreeError("blocked_by_uncommitted", "uncommitted changes in the main "
+                            "checkout overlap this run's files and cannot be merged "
+                            "automatically", files=bad)
+    # their bytes go to disk first: nothing below may lose them (STEERING #20)
+    keep = ledger_root() / run_id / "main-uncommitted" / time.strftime("%Y%m%dT%H%M%S")
+    for rel, cur_b, *_rest in plan:
+        dst = keep / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(cur_b)
+    _LAST_CARRY_BACKUP[run_id] = str(keep)
+    return plan
+
+
+def _replace_bytes(path: Path, data: bytes) -> None:
+    """Write *data* over *path* atomically (temp file + rename), keeping its mode."""
+    tmp = path.with_name(f".{path.name}.swarm-{os.getpid()}.tmp")
+    tmp.write_bytes(data)
+    try:
+        shutil.copymode(path, tmp)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+
+
+def _merge_carrying(main: Path, n: str, plan) -> subprocess.CompletedProcess:
+    """``git merge --ff-only n`` with the planned uncommitted files carried over: each
+    is set back to base (refused if it changed since planned), the merge runs, then
+    each gets the 3-way result. If the merge fails or raises, their bytes go back
+    (whether git left the file at base or already at the run's version). A file a third
+    writer changed in between is left as that writer left it; their planned bytes are
+    in the ledger copy either way."""
+    reset: "list[tuple[str, bytes, bytes, bytes, bytes]]" = []
+    m = None
+    try:
+        for item in plan:
+            rel, cur_b, base_b, _m, _n = item
+            if (main / rel).read_bytes() != cur_b:
+                raise WorktreeError("blocked_by_uncommitted", "an uncommitted file in the "
+                                    "main checkout changed while landing", files=[rel])
+            _replace_bytes(main / rel, base_b)
+            reset.append(item)
+        m = git(main, "merge", "-q", "--ff-only", n, timeout=120)
+    finally:
+        ok = m is not None and m.returncode == 0
+        for rel, cur_b, base_b, merged, new_b in reset:
+            p = main / rel
+            now = p.read_bytes() if p.is_file() else None
+            if ok and now == new_b:
+                _replace_bytes(p, merged)          # their edit + the run's change
+            elif not ok and now in (base_b, new_b):
+                _replace_bytes(p, cur_b)           # nothing landed: exactly what they had
+    return m
+
+
 def _main_busy(main: Path, entry: dict) -> "str | None":
     if _symbolic_head(main) != entry.get("integration_branch"):
         return "main checkout is not on the integration branch"
@@ -729,9 +853,13 @@ def land(run_id: str, entry: dict, main: "str | Path", message: str, expect_tree
          write_b: "Callable[[Path], list] | None" = None,
          still_live: "Callable[[], bool] | None" = None) -> dict:
     """Final commit N in the worktree (parent C == base, full git hooks) + native
-    ``git merge --ff-only N`` in the main checkout. On ANY failure the worktree goes
-    back to HEAD == base and main is untouched. Mutates *entry* on success (state
-    integrated). Returns {"sha", "files", "commit_s", "merge_s"}; raises WorktreeError
+    ``git merge --ff-only N`` in the main checkout. Uncommitted edits in main to the
+    run's files (another session's) are carried over by a clean 3-way merge (backed up
+    to the ledger first), else the landing is refused (_dirty_merge_plan). On ANY
+    failure the worktree goes back to HEAD == base, main's HEAD is unchanged and those
+    edits are back as they were. Mutates *entry* on success (state integrated). Returns
+    {"sha", "files", "commit_s", "merge_s", "carried_uncommitted", "carried_backup"};
+    raises WorktreeError
     with code changed_since_review | needs_resync | main_checkout_busy |
     blocked_by_uncommitted | busy | commit_slow | path_rejected | untracked_new_files."""
     main = Path(os.path.realpath(str(main)))
@@ -782,11 +910,16 @@ def land(run_id: str, entry: dict, main: "str | Path", message: str, expect_tree
         if still_live is not None and not still_live():
             raise WorktreeError("run_not_live", "the run was cancelled before landing")
         from core.run_lock import RunLockTimeout
+        carried: "list[str]" = []
+        carried_backup = None
         try:
             with _integrate_lock(entry):
+                plan = _dirty_merge_plan(main, base, n, files, run_id)
                 t1 = time.monotonic()
-                m = git(main, "merge", "-q", "--ff-only", n, timeout=120)
+                m = _merge_carrying(main, n, plan)
                 merge_s = round(time.monotonic() - t1, 2)
+                carried = [rel for rel, *_ in plan] if m.returncode == 0 else []
+                carried_backup = _LAST_CARRY_BACKUP.pop(run_id, None) if carried else None
         except RunLockTimeout as exc:
             raise WorktreeError("busy", "another run is landing into this repo") from exc
         if m.returncode != 0:
@@ -805,7 +938,8 @@ def land(run_id: str, entry: dict, main: "str | Path", message: str, expect_tree
         raise
     entry.update(state="integrated", integrated={"sha": n, "at": _now_iso()}, base=n)
     return {"sha": n, "files": files + [p for p in b_paths if p not in files],
-            "commit_s": commit_s, "merge_s": merge_s}
+            "commit_s": commit_s, "merge_s": merge_s, "carried_uncommitted": carried,
+            "carried_backup": carried_backup}
 
 
 # ── release, snapshot, ledger (§8.1) ─────────────────────────────────────────

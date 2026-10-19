@@ -438,7 +438,9 @@ def _deliver_sync(run_id: str, run_file: Path, run_state: dict, wts, run_dir: Pa
         out["main_checkout_overlap_note"] = (
             "the main checkout has uncommitted changes to these files, made after this run "
             "started — maybe writes the gate could not see, maybe another session's work. "
-            "REPORT ONLY: do not move, copy or restore them; the user decides.")
+            "Do not move, copy or restore them yourself: landing merges them with the run's "
+            "change when that merges cleanly (their bytes are backed up first, and the "
+            "landing output names the files), and refuses otherwise.")
     rebased_any, changed_any, rd_files = False, False, []
     for e, w, m in wts:
         old_base = e.get("base")
@@ -463,19 +465,38 @@ def _deliver_sync(run_id: str, run_file: Path, run_state: dict, wts, run_dir: Pa
                 f.write_text(text, encoding="utf-8")
                 rd_files.append(str(f))
     _persist(run_file, run_state)
-    # The reviewed tree, and WHEN it was recorded: landing requires every Gate-2 expert
-    # to have completed after that moment. Rewritten only when the tree changed, so a
-    # stage-start rerun with no new code never asks for a re-review, and one WITH new
-    # code (a post-review fix) always does.
+    # The reviewed tree + base, and WHEN it was recorded: landing requires every Gate-2
+    # expert to have completed after that moment. A new tree gets a new moment (a
+    # post-review fix always asks for a re-review) — unless it only carries the same
+    # change onto a moved base (rw.carries_over: the run's files byte-identical, main's
+    # new commits elsewhere), which keeps the moment; a stage-start rerun with no new
+    # code changes nothing.
     import time as _time
     trees = {e["repo_name"]: rw.change_tree(w, run_id) for e, w, _m in wts}
+    bases = {e["repo_name"]: e.get("base") for e, _w, _m in wts}
     rt = run_dir / "evidence" / "prompts" / "review-tree.json"
     rt.parent.mkdir(parents=True, exist_ok=True)
-    if _review_record(run_dir).get("trees") != trees:
-        atomic_write_json(rt, {"run_id": run_id, "trees": trees, "at": _time.time()})
-        out["review_note"] = ("the change differs from the last reviewed tree: every Gate-2 "
-                              "expert must review it (again) before stage-complete")
-    if rebased_any:
+    rec = _review_record(run_dir)
+    if rec.get("trees") != trees:
+        if _review_carries(run_id, rec, wts, trees):
+            # a rebase that left the run's own patch alone, onto commits touching none
+            # of its files: the review and its timestamp still hold
+            atomic_write_json(rt, {"run_id": run_id, "trees": trees, "bases": bases,
+                                   "at": rec.get("at")})
+            out["review_note"] = ("rebased with the run's patch unchanged: the Gate-2 "
+                                  "review still holds")
+        else:
+            atomic_write_json(rt, {"run_id": run_id, "trees": trees, "bases": bases,
+                                   "at": _time.time()})
+            out["review_note"] = ("the change differs from the last reviewed tree: every "
+                                  "Gate-2 expert must review it (again) before stage-complete")
+    elif rec.get("bases") != bases:
+        atomic_write_json(rt, {**rec, "bases": bases})
+    if rebased_any and not changed_any and _tests_carry(run_id, run_dir, wts):
+        out["sync_note"] = ("the integration branch moved and the change was rebased onto it; "
+                            "the run's patch and files are untouched, so the last test run "
+                            "still holds")
+    elif rebased_any:
         out["sync_note"] = ("the integration branch moved and the change was rebased onto it: "
                             "rerun the pipeline test runner (verify) before stage-complete")
     if changed_any:
@@ -519,10 +540,6 @@ def _review_record(run_dir: Path) -> dict:
         return {}
 
 
-def _review_trees(run_dir: Path) -> dict:
-    return _review_record(run_dir).get("trees") or {}
-
-
 def _evidence_worktree(run_dir: Path, run_id: str) -> "tuple[bool, dict | None]":
     """(any evidence, its worktree block) of the NEWEST runner report of this run."""
     import pipeline_validator as pv
@@ -533,10 +550,39 @@ def _evidence_worktree(run_dir: Path, run_id: str) -> "tuple[bool, dict | None]"
     return True, (ev[0].get("worktree") if isinstance(ev[0].get("worktree"), dict) else None)
 
 
+def _review_carries(run_id: str, rec: dict, wts, trees: dict) -> bool:
+    """The recorded review (tree + base per repo) still holds for the current trees."""
+    rt, rb = rec.get("trees") or {}, rec.get("bases") or {}
+    if not rec.get("at"):
+        return False
+    for e, w, _m in wts:
+        name = e["repo_name"]
+        if not rw.carries_over(w, run_id, rb.get(name), rt.get(name), e.get("base"), trees[name]):
+            return False
+    return True
+
+
+def _tests_carry(run_id: str, run_dir: Path, wts) -> bool:
+    """The newest test evidence still holds for every repo it tested."""
+    have_ev, ev = _evidence_worktree(run_dir, run_id)
+    if not have_ev or not ev:
+        return False
+    for e, w, _m in wts:
+        t = ev.get(e["repo_name"])
+        if not isinstance(t, dict):
+            continue
+        if t.get("untracked") or not rw.carries_over(
+                w, run_id, t.get("base"), t.get("tree"), e.get("base"), rw.change_tree(w, run_id)):
+            return False
+    return True
+
+
 def _check_bound_trees(run_id: str, run_dir: Path, wts) -> None:
-    """§7.3: the tree to land == the reviewed tree == the tested tree, and the tests
-    ran with no un-added file in the worktree."""
-    reviewed = _review_trees(run_dir)
+    """§7.3: the tree to land == the reviewed tree == the tested tree — or carries the
+    same change onto a moved base (rw.carries_over) — and the tests ran with no
+    un-added file in the worktree."""
+    rec = _review_record(run_dir)
+    reviewed, rbases = rec.get("trees") or {}, rec.get("bases") or {}
     have_ev, ev = _evidence_worktree(run_dir, run_id)
     if have_ev and ev is None:
         raise rw.WorktreeError("changed_since_review", "the latest test evidence records no "
@@ -545,13 +591,15 @@ def _check_bound_trees(run_id: str, run_dir: Path, wts) -> None:
     for e, w, _m in wts:
         name = e["repo_name"]
         now = rw.change_tree(w, run_id)
-        if reviewed.get(name) != now:
+        if reviewed.get(name) != now and not rw.carries_over(
+                w, run_id, rbases.get(name), reviewed.get(name), e.get("base"), now):
             raise rw.WorktreeError("changed_since_review", f"{name}: the change differs from "
                                    "the tree recorded when Gate-2 prompts were written")
         tested = (ev or {}).get(name) if isinstance((ev or {}).get(name), dict) else None
         if tested is None:
             continue  # not the runner's target repo (multi-repo): the review binds it
-        if tested.get("tree") != now:
+        if tested.get("tree") != now and not rw.carries_over(
+                w, run_id, tested.get("base"), tested.get("tree"), e.get("base"), now):
             raise rw.WorktreeError("changed_since_review", f"{name}: the latest test evidence "
                                    "was produced on a different tree — rerun the test runner")
         if tested.get("untracked"):
@@ -637,19 +685,72 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
                                                      "noop": True})
             _persist(run_file, run_state)
             continue
-        try:
-            res = rw.land(run_id, e, m, msg, tree, still_live=lambda: _still_live(run_file),
-                          write_b=(lambda wt, _f=files: gen_b(wt, _f)) if name == b_repo else None)
-        except rw.WorktreeError as err:
-            _persist(run_file, run_state, **({"integration": "partial"} if landed else {}))
-            nxt = _NEXT.get(err.code, "tell the user")
-            if landed:
-                nxt = f"{', '.join(landed)} already landed; for {name}: {nxt}"
-            stage_fail("deliver", err, nxt)
+        res, resyncs = None, 0
+        while res is None:
+            try:
+                res = rw.land(run_id, e, m, msg, tree, still_live=lambda: _still_live(run_file),
+                              write_b=(lambda wt, _f=files: gen_b(wt, _f)) if name == b_repo else None)
+            except rw.WorktreeError as err:
+                if err.code == "needs_resync" and resyncs < LAND_RESYNC_TRIES:
+                    resyncs += 1
+                    try:
+                        tree = _resync_for_landing(run_id, run_file, run_state, run_dir, e, w, m,
+                                                   tree)
+                    except rw.WorktreeError as err2:
+                        err = err2
+                    else:
+                        files = rw.changed_paths(w, e["base"], tree)
+                        continue
+                _persist(run_file, run_state, **({"integration": "partial"} if landed else {}))
+                nxt = _NEXT.get(err.code, "tell the user")
+                if landed:
+                    nxt = f"{', '.join(landed)} already landed; for {name}: {nxt}"
+                stage_fail("deliver", err, nxt)
+        if resyncs:
+            res["resyncs"] = resyncs
         landed[name] = res
         _record_landing(run_file, run_state, run_id, name, m, res)
     return {"landed": {k: {"sha": v["sha"], "files": len(v["files"]), "commit_s": v["commit_s"],
-                           "merge_s": v["merge_s"]} for k, v in landed.items()}}
+                           "merge_s": v["merge_s"],
+                           **({"carried_uncommitted": v["carried_uncommitted"],
+                               "carried_backup": v.get("carried_backup")}
+                              if v.get("carried_uncommitted") else {}),
+                           **({"resyncs": v["resyncs"]} if v.get("resyncs") else {})}
+                       for k, v in landed.items()}}
+
+
+LAND_RESYNC_TRIES = 5   # main moves every few minutes; each try is one rebase + ff
+
+
+def _resync_for_landing(run_id: str, run_file: Path, run_state: dict, run_dir: Path,
+                        e: dict, w: Path, m: Path, checked_tree: str) -> str:
+    """The integration branch moved between the checks and the merge: rebase onto it
+    and land without a new round, when the review and the tests still hold (the run's
+    files are byte-identical and main's new commits touch none of them —
+    rw.carries_over). *checked_tree* is the tree the review/test check accepted: the
+    worktree must still hold exactly it, so nothing edited after the check can ride
+    along. Returns the new change tree. Raises WorktreeError: 'conflict' from the
+    rebase, or 'changed_since_review' (retest / re-review via deliver stage-start)."""
+    old_base = e.get("base")
+    if rw.change_tree(w, run_id) != checked_tree:
+        raise rw.WorktreeError("changed_since_review", "the worktree changed after the "
+                               "review and test check")
+    res = rw.sync(run_id, e, m)
+    _persist(run_file, run_state)
+    new_tree = rw.change_tree(w, run_id)
+    if res.get("status") == "noop":
+        if new_tree != checked_tree:
+            raise rw.WorktreeError("changed_since_review", "the worktree changed after the "
+                                   "review and test check")
+        return new_tree
+    if not rw.carries_over(w, run_id, old_base, checked_tree, e.get("base"), new_tree):
+        raise rw.WorktreeError("changed_since_review", "the integration branch moved onto "
+                               "this run's files: the review and tests must be redone")
+    rec = _review_record(run_dir)
+    rec.setdefault("trees", {})[e["repo_name"]] = new_tree
+    rec.setdefault("bases", {})[e["repo_name"]] = e.get("base")
+    atomic_write_json(run_dir / "evidence" / "prompts" / "review-tree.json", rec)
+    return new_tree
 
 
 def _still_live(run_file: Path) -> bool:
@@ -694,8 +795,15 @@ def _record_landing(run_file: Path, run_state: dict, run_id: str, name: str, mai
         d["worktrees"] = run_state.get("worktrees") or []
         commits = d.get("commits") or []
         if not any(isinstance(c, dict) and c.get("sha") == res["sha"][:12] for c in commits):
-            commits.append({"repo": str(main), "sha": res["sha"][:12], "files": res["files"],
-                            "landed": True, "commit_s": res["commit_s"], "merge_s": res["merge_s"]})
+            c = {"repo": str(main), "sha": res["sha"][:12], "files": res["files"],
+                 "landed": True, "commit_s": res["commit_s"], "merge_s": res["merge_s"]}
+            if res.get("carried_uncommitted"):
+                # another session's uncommitted edits, merged in place (backup kept)
+                c["carried_uncommitted"] = res["carried_uncommitted"]
+                c["carried_backup"] = res.get("carried_backup")
+            if res.get("resyncs"):
+                c["resyncs"] = res["resyncs"]
+            commits.append(c)
         d["commits"] = commits
         ft = d.get("files_touched") or []
         ft = [str(main) + os.sep + f[len(wt_prefix):] if isinstance(f, str)

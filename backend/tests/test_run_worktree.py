@@ -691,3 +691,114 @@ def test_release_unintegrated_with_dependency_link_snapshots(env):
     tree = _g(main, "ls-tree", "-r", "--name-only", meta["tree"]).splitlines()
     assert "a.py" in tree
     assert not any(p.startswith("desktop/node_modules") for p in tree)
+
+
+# ── carry-over after a rebase, uncommitted main edits (auto-landing) ──────────
+_LINES = "".join(f"l{i} = {i}\n" for i in range(1, 9))
+
+
+def _multi(env):
+    _commit_main(env["main"], "m.py", _LINES, msg="multi-line file")
+
+
+def test_carries_over_only_for_same_patch_on_untouched_files(env):
+    _multi(env)
+    e, wt, t = _ready(env, edit=("m.py", _LINES.replace("l2 = 2", "l2 = 'run'")))
+    b0 = e["base"]
+    _commit_main(env["main"], "b.py", "b = 9\n")             # main moves elsewhere
+    assert rw.sync(RUN, e, env["main"])["status"] == "rebased"
+    t1 = rw.change_tree(wt, RUN)
+    assert t1 != t and rw.carries_over(wt, RUN, b0, t, e["base"], t1)
+    b1 = e["base"]
+    # main touches the run's file (another hunk: the rebase is clean, the patch the same)
+    _commit_main(env["main"], "m.py", _LINES.replace("l8 = 8", "l8 = 'main'"))
+    assert rw.sync(RUN, e, env["main"])["status"] == "rebased"
+    t2 = rw.change_tree(wt, RUN)
+    assert not rw.carries_over(wt, RUN, b1, t1, e["base"], t2)
+    (wt / "a.py").write_text("a = 5\n")                      # and a changed patch
+    assert not rw.carries_over(wt, RUN, b0, t, e["base"], rw.change_tree(wt, RUN))
+    assert not rw.carries_over(wt, RUN, None, t, e["base"], t1)
+
+
+def test_land_carries_another_sessions_uncommitted_edit_in_the_same_file(env):
+    """Another session edits a different hunk of a file the run changed: the landing
+    merges it in place instead of blocking — HEAD gets the run's change only, the
+    working file keeps both, and their bytes were saved before anything was touched."""
+    _multi(env)
+    e, wt, t = _ready(env, edit=("m.py", _LINES.replace("l2 = 2", "l2 = 'run'")))
+    theirs = _LINES.replace("l7 = 7", "l7 = 'them'")
+    (env["main"] / "m.py").write_text(theirs)
+    res = rw.land(RUN, e, env["main"], "m", t)
+    assert res["carried_uncommitted"] == ["m.py"]
+    assert _g(env["main"], "show", "HEAD:m.py") + "\n" == _LINES.replace("l2 = 2", "l2 = 'run'")
+    both = _LINES.replace("l2 = 2", "l2 = 'run'").replace("l7 = 7", "l7 = 'them'")
+    assert (env["main"] / "m.py").read_text() == both
+    assert _g(env["main"], "diff", "--name-only") == "m.py"
+    kept = list((rw.ledger_root() / RUN / "main-uncommitted").rglob("m.py"))
+    assert kept and kept[0].read_text() == theirs
+
+
+@pytest.mark.parametrize("case", ["conflict", "staged"])
+def test_land_still_blocks_an_uncommitted_edit_it_cannot_merge(env, case):
+    _multi(env)
+    e, wt, t = _ready(env, edit=("m.py", _LINES.replace("l2 = 2", "l2 = 'run'")))
+    theirs = _LINES.replace("l2 = 2", "l2 = 'them'" if case == "conflict" else "l2 = 2") \
+        .replace("l8 = 8", "l8 = 'x'")
+    (env["main"] / "m.py").write_text(theirs)
+    if case == "staged":
+        _g(env["main"], "add", "m.py")
+    before = _g(env["main"], "rev-parse", "HEAD")
+    with pytest.raises(rw.WorktreeError) as ei:
+        rw.land(RUN, e, env["main"], "m", t)
+    assert ei.value.code == "blocked_by_uncommitted"
+    assert _g(env["main"], "rev-parse", "HEAD") == before
+    assert (env["main"] / "m.py").read_text() == theirs
+    assert _g(wt, "rev-parse", "HEAD") == e["base"]
+
+
+def test_land_puts_their_bytes_back_when_the_merge_fails(env, monkeypatch):
+    _multi(env)
+    e, wt, t = _ready(env, edit=("m.py", _LINES.replace("l2 = 2", "l2 = 'run'")))
+    theirs = _LINES.replace("l7 = 7", "l7 = 'them'")
+    (env["main"] / "m.py").write_text(theirs)
+    real = rw.git
+
+    def boom(cwd, *args, **kw):
+        if args[:1] == ("merge",):
+            raise rw.WorktreeError("git_timeout", "simulated")
+        return real(cwd, *args, **kw)
+    monkeypatch.setattr(rw, "git", boom)
+    with pytest.raises(rw.WorktreeError):
+        rw.land(RUN, e, env["main"], "m", t)
+    assert (env["main"] / "m.py").read_text() == theirs
+
+
+def test_carries_over_refuses_a_whitespace_only_change(env):
+    """`git patch-id --stable` ignores whitespace: a re-indent after review must not
+    count as the same change (Gate-2 HIGH)."""
+    src = "def f(x):\n    if x:\n        return 1\n    return 2\n"
+    _commit_main(env["main"], "w.py", src, msg="w")
+    e, wt, t = _ready(env, edit=("w.py", src.replace("return 2", "return 3")))
+    (wt / "w.py").write_text(src.replace("return 2", "return 3").replace("        return 1", "    return 1"))
+    t2 = rw.change_tree(wt, RUN)
+    assert not rw.carries_over(wt, RUN, e["base"], t, e["base"], t2)
+
+
+def test_land_restores_their_bytes_when_git_fails_after_checkout(env, monkeypatch):
+    """git can update the file and then fail (a ref lock): their bytes still go back."""
+    _multi(env)
+    run_v = _LINES.replace("l2 = 2", "l2 = 'run'")
+    e, wt, t = _ready(env, edit=("m.py", run_v))
+    theirs = _LINES.replace("l7 = 7", "l7 = 'them'")
+    (env["main"] / "m.py").write_text(theirs)
+    real = rw.git
+
+    def half(cwd, *args, **kw):
+        if args[:1] == ("merge",):
+            (env["main"] / "m.py").write_text(run_v)
+            return subprocess.CompletedProcess(args, 1, "", "fatal: cannot lock ref")
+        return real(cwd, *args, **kw)
+    monkeypatch.setattr(rw, "git", half)
+    with pytest.raises(rw.WorktreeError):
+        rw.land(RUN, e, env["main"], "m", t)
+    assert (env["main"] / "m.py").read_text() == theirs

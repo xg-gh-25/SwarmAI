@@ -53,3 +53,19 @@ def test_mv_multi_source_or_dir_dest_rejected():
 # retired — the git-based needs_human_review is now the sole surfacing authority
 # (its allowlist + bookkeeping behavior is covered by needs_human_review_test.py,
 # incl. test_memory_md_is_knowledge + test_artifacts_report / .context cases).
+
+
+def test_chained_sed_in_place_never_reads_the_next_command_as_a_file():
+    """`sed -i '' ... f; sed -i '' ... g` — the `;` glued to f hid the separator, so
+    the second `sed` was read as an edited file (and the worktree gate denied a write
+    to <main>/sed)."""
+    from core.file_change_classifier import parse_bash_write_targets
+    cmd = ("sed -i '' 's|a|b|' /x/wt/f.py; sed -i '' 's|c|d|' /x/wt/g.md; "
+           "grep -rn x /x/wt/f.py && sed -i 's/e/f/' /x/wt/h.txt")
+    assert parse_bash_write_targets(cmd) == ["/x/wt/f.py", "/x/wt/g.md", "/x/wt/h.txt"]
+
+
+def test_redirect_operands_are_not_file_arguments():
+    from core.file_change_classifier import parse_bash_write_targets
+    assert parse_bash_write_targets("sed -i 's/a/b/' f.py 2>&1") == ["f.py"]
+    assert parse_bash_write_targets("sed -i 's/a/b/' f.py 2>/dev/null") == ["f.py"]

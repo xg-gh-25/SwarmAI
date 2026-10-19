@@ -468,3 +468,11 @@ class TestPagerScopedToPytestSegment:
 
     def test_pager_behind_command_option_denied(self):
         assert _is_deny(_run(f"{_CAPPED} | command -p head -3"))
+
+
+def test_venv_interpreter_by_path_is_a_wrapped_run():
+    """conftest requires the venv interpreter; the cap must accept it by path."""
+    assert not _is_deny(_run("perl -e 'alarm 90; exec @ARGV' backend/.venv/bin/python -m pytest "
+                             "tests/foo.py --timeout=60 > /tmp/t.txt 2>&1"))
+    assert not _is_deny(_run("gtimeout 90 /abs/backend/.venv/bin/python3 -m pytest tests/"))
+    assert _is_deny(_run("backend/.venv/bin/python -m pytest tests/foo.py --timeout=60"))
