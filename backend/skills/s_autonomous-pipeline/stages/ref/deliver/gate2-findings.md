@@ -125,8 +125,10 @@ hand-out.
 - MED: fix if confidence >= 7, otherwise note it with a recommendation.
 - LOW: note in the report only.
 
-Re-run affected tests after any fix through the runner only:
-`perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode recheck`.
+After the round's fixes, run only the tests they affect, through the runner:
+`perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode tdd --files <≤5 test files>`
+(`--mode prove` for break tests). The full-scope regression runs once, after the LAST
+fix (`stages/deliver.md` 4b), never per round.
 Record every finding in `adversarial_review.findings[]`; `stage-complete` derives
 `findings_total` / `findings_fixed` / `findings_remaining` from that list. For a resolved
 HIGH/CRITICAL finding add a `disk_check` (`{"file": "<ABSOLUTE path>", "must_contain":

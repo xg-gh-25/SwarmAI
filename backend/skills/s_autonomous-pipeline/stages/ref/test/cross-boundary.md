@@ -57,7 +57,7 @@ through the actual boundary** the change crosses.
   it with L1 (`ac_coverage` refs resolve `.py` files only). Frontend Layer-4 test: the
   regression call's `vitest related` picks it up when it imports a changed file.
   Written during TEST: `RUN --mode tdd --files <test_file>` (max 5; backend or
-  `desktop/`) until green, then the final `RUN --mode regression`.
+  `desktop/`) until green; the one regression at DELIVER runs it again with everything else.
 - Backend mutation-verify, ONE call (replaces reverting the line by hand and
   re-running): write `/tmp/<R>/mutations.json`
 

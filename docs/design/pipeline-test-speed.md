@@ -105,3 +105,19 @@ T2-T6 都在 `pipeline_test.py` 里，而 run_600db8ac（break test 两头跑）
 
 用 profiler 看接下来 5 个 run：每次 verify 的调用次数中位数 <= 2，没有不收敛的 verify，
 测试总耗时比本文 §1 的基线降一半。
+
+## 7. 2026-10-20 追加：全范围测试每个 run 只跑一次（已实施）
+
+XG 定的规则，代码已落地（`pipeline_test.py` 的 `_full_scope_refusal`、`artifact_cli._deliver_push_ready_bound`）：
+
+- verify / regression / recheck 只在 DELIVER 跑：在最后一次改动之后跑一次 `--mode regression`。BUILD、REVIEW、TEST
+  里 runner 直接拒绝，并提示改用 `--mode tdd --files` 或 `--mode prove`。默认退出条件不再自动加 `mode:verify`；
+  已声明的 `mode:` 条件只在 DELIVER 判。
+- 一个 run 最多 2 轮全范围（第一轮红了、修完再跑一次）。deadline 没跑完的续跑、缓存命中都不算一轮。goal run 不受限。
+- push_ready 必须有一份 verify / regression 报告，而且在最后一次改动之后；只有 tdd 是绿的不算。纯文档改动不需要。
+- 不再偷偷重跑：输入没变、测试都跑完了但结果不能缓存（有失败、单测超时），结果照原样报告，不再执行。续跑只补
+  deadline 留下没跑的测试，跑过并失败的不重跑。
+- rebase：`pipeline_worktree._tests_carry` 已经是"本 run 的文件没变、main 的新提交没碰到它们就沿用测试结果"，不变。
+
+对本文的影响：T2 的 A 层原本是"每次 verify 都跑"，现在 verify 每个 run 只跑一次，A/B 分层的收益主要剩在那一次上；
+T6（按文件缓存）和 T3-T5（续跑有进展）仍然有用，因为那一次 regression 可能要续跑。

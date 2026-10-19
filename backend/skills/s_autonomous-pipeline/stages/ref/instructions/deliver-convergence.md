@@ -33,7 +33,7 @@ list, not checked as a stage by the validator. It is an internal sub-loop of DEL
 ### The 6-Layer Push-Ready Gate — ALL 6 must pass simultaneously (5/6 is not push-ready)
 | Layer | Checks | How to verify |
 |-------|--------|---------------|
-| L1 Tests Pass | all new + existing tests green | `pipeline_test.py --mode recheck` (or `regression`) green |
+| L1 Tests Pass | all new + existing tests green | the one `pipeline_test.py --mode regression` after the last fix is green |
 | L2 Type-Safe | no type errors, linter clean | type checker + linter via `pipeline_test.py` (if configured) |
 | L3 No Regressions | pre-existing tests still pass | `pipeline_test.py --mode regression` (pre-existing failures classified by the HEAD baseline) |
 | L4 Adversarial Clean | no critical/medium findings from deliver.md's review | all findings fixed or explicitly accepted, verified on disk (below) |

@@ -1,6 +1,6 @@
 # TEST ref — classifying failures, the fix loop, the WTF gate
 
-Read when the regression run is red, or before scoring a fix.
+Read when the one full-scope regression (DELIVER) or a tdd run is red, or before scoring a fix.
 
 `RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`
 
@@ -34,11 +34,14 @@ Rules that hold across all classes:
    (`ref/instructions/fixing-findings.md`).
 2. Score the pass with the WTF gate (below). Score ≥ 5 → halt: stop fixing, finish not
    push-ready.
-3. `RUN --mode recheck` once for the whole pass: the previous failures + tests affected by
-   files changed since that evidence. Still red → the next pass starts again at step 1.
-4. After the last fix: `RUN --mode regression` once more. Unchanged inputs return
-   `cached`; `stage-complete` reads `latest-regression.json`, and DELIVER's push_ready
-   bound rejects test evidence older than the last edit.
+3. Check the pass with the tests it affects only: `RUN --mode tdd --files <the failing
+   test files, ≤5>` (or `--mode prove` for break tests), never a full-scope run. Still
+   red → the next pass starts again at step 1.
+4. After the last fix: ONE more `RUN --mode regression` (the runner allows two full-scope
+   rounds per run). Re-running it on unchanged code is refused as a no-op: the result
+   stands as reported (it never re-runs a failed test for a lucky pass); `continue: true`
+   only continues tests the deadline left unrun. DELIVER's push_ready bound rejects a
+   full-scope report older than the last edit.
 5. Unfixed issues at the end: document each with its diagnosis in
    `exit_evidence.unfixed`.
 

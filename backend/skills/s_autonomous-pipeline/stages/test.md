@@ -1,6 +1,6 @@
 # TEST — execution card
 
-Purpose: fresh runner evidence for the post-BUILD tree; fix what this change broke; record it.
+Purpose: the checks the one full-scope run does not make (cross-boundary wiring, mutation, platforms); record them.
 
 **Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage test`
 
@@ -8,24 +8,15 @@ Purpose: fresh runner evidence for the post-BUILD tree; fix what this change bro
 Tests go ONLY through `RUN`: `pipeline_test_gate` denies direct pytest/vitest/tsc/eslint/vite build.
 One call per mode, foreground, never split; no full suite (STEERING R9).
 
-1. **L1+L2+L3 in one call:** `RUN --mode regression`. L1 = BUILD `ac_coverage` tests, L2 =
-   every direct importer of a changed module (+ tests naming a changed script); all of
-   it runs, over as many calls as it takes (`continue: true` → same command again);
-   transitive importers are listed for REPORT §10, not run. L3 = the CI BVT
-   (`tests/bvt_manifest.txt`, run locally: the run never sees CI) + import smoke;
-   `desktop/src` changes add `vitest related` + `tsc`. Run it fresh even
-   if BUILD was green (post-refactor tree). Zero L2 files, non-SwarmAI stack, skips:
-   `ref/test/layers.md`.
-2. **Classify** by `failures[].classification`: `regression` / `new` → fix the CODE,
-   never the test expectation (that changes the spec → back to PLAN); `pre-existing` →
-   log in IMPROVEMENT.md "Known Issues", do not fix or debug it here; `flaky` → fix the
-   flake (passes 9/10 = FAILS); `unknown` / timeout → read the attached stack (no manual
-   ps/kill/faulthandler).
-3. **Fix loop, max 20 fixes** (then stop: complete TEST with what remains, DELIVER not push-ready). Group the run's
-   failures by cause, ONE fixing spec, fix it in one pass (`ref/instructions/fixing-findings.md`) → `python backend/skills/s_autonomous-pipeline/scripts/wtf_gate.py --files-touched N --fix-count M`
-   (score ≥ 5 → halt: stop fixing, finish not push-ready) → `RUN --mode recheck`. Each recheck lays its results
-   over `latest-regression.json`, which `stage-complete` reads: no final regression
-   re-run. Formula + table: `ref/test/fixing.md`.
+1. **No full-scope run here.** verify / regression / recheck run ONCE per run, at DELIVER
+   after the last change (`stages/deliver.md` 4b): landing reads only that report, so a
+   regression here was never used. The runner refuses them in TEST. L1 (AC tests), L2
+   (direct importers) and L3 (CI BVT + import smoke) all run in that one regression.
+2. **A test you need now** (a cross-boundary or platform check below, or a fix): run only
+   the tests it affects, `RUN --mode tdd --files <≤5 test files>`, or `RUN --mode prove`
+   for break tests. Red → classify, one fixing spec, fix in one pass (`ref/test/fixing.md`).
+3. **WTF gate** after each fix pass: `python backend/skills/s_autonomous-pipeline/scripts/wtf_gate.py --files-touched N --fix-count M`
+   (score ≥ 5 → halt: stop fixing, finish not push-ready).
 4. **Layer 4** only if EVALUATE `cross_boundary.value == true`: `ref/test/cross-boundary.md`
    (real-wiring test + `RUN --mode mutation --mutations <spec.json>`). Otherwise record
    `"cross_boundary_e2e": {"run": false, "reason": "not a cross-boundary change"}`.
@@ -35,8 +26,8 @@ One call per mode, foreground, never split; no full suite (STEERING R9).
    stop verifying and exit.
 
 **Gates**
-- `[GATE·validator]` artifact needs `passed` + `layers.ac_driven`; layers and
-  `regressions` come from runner evidence. <!-- R-test-001 -->
+- `[GATE·validator]` layers (`ac_driven` …) and `regressions` come from the DELIVER
+  regression's runner evidence, judged by the push_ready bound. <!-- R-test-001 -->
 - `[GATE·artifact_cli]` cross_boundary=true → DELIVER exits 1 without a passing
   `cross_boundary_e2e.run` record (full rule: `ref/test/cross-boundary.md`).
 - `[MUST]` WTF gate after EVERY fix, score shown even if 0. `wtf_gate.py` does NOT block

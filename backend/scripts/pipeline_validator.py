@@ -4346,14 +4346,12 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             if artifact_data and not is_relaxed_profile(profile):
                 layers = artifact_data.get("layers", {})
                 if not isinstance(layers, dict) or not layers:
-                    test_layers_ok = False
-                    msg = ("TEST artifact missing 'layers' — 3-layer test strategy "
-                           "(ac_driven, dependency_scoped, import_smoke) not evidenced. "
-                           "Run AC-driven tests from BUILD ac_coverage before advancing.")
-                    if profile in _block_profiles:
-                        errors.append(msg)
-                    else:
-                        warnings.append(msg)
+                    # The layers come from the ONE full-scope run, a regression at DELIVER
+                    # after the last change (XG 2026-10-20); TEST runs none, so they are
+                    # judged there (push_ready bound), not here.
+                    warnings.append("TEST: no regression evidence yet — layers (ac_driven, "
+                                    "dependency_scoped, import_smoke, ci_bvt) come from the "
+                                    "one --mode regression run at DELIVER")
                 else:
                     ac_driven = layers.get("ac_driven", {})
                     if not isinstance(ac_driven, dict) or not ac_driven.get("run"):
@@ -5194,8 +5192,7 @@ def default_exit_criteria(work_type: str | None, acceptance_criteria=None) -> li
     if wt == "refactor":
         return [
             {"id": "X1", "kind": "test", "ref": "<each touched test file>", "expect": "pass"},
-            {"id": "X2", "kind": "test", "ref": "mode:verify", "expect": "pass"},
-            {"id": "X3", "kind": "mutation", "ref": "<mutation spec>", "expect": "all_killed"},
+            {"id": "X2", "kind": "mutation", "ref": "<mutation spec>", "expect": "all_killed"},
         ]
     if wt in ("docs", "research"):
         return [{"id": "X1", "kind": "manual", "expect": "done",
@@ -5204,7 +5201,8 @@ def default_exit_criteria(work_type: str | None, acceptance_criteria=None) -> li
     out = [{"id": f"X{i + 1}", "kind": "test", "expect": "pass",
             "ref": f"<test proving {_extract_ac_id(str(a)) or f'AC{i + 1}'}>"}
            for i, a in enumerate(acs[:10])]
-    out.append({"id": f"X{len(out) + 1}", "kind": "test", "ref": "mode:verify", "expect": "pass"})
+    # No `mode:verify` criterion: the one full-scope run at DELIVER is required by the
+    # push_ready bound for every code change, not per contract (XG 2026-10-20).
     return out
 
 
@@ -5491,8 +5489,8 @@ def _judge_test_criterion(ref: str, evidence: list[dict], stale_of=None) -> tupl
         return bool(stale_of and stale_of(ev))
     if _is_mode_ref(ref):
         mode = ref[len("mode:"):].strip()
-        # regression runs verify's dependency scope plus L1 and L3, and a profile with a
-        # TEST stage skips BUILD's verify (one scope run per run): it answers mode:verify.
+        # regression runs verify's dependency scope plus L1 and L3 (the one full-scope run
+        # at DELIVER is a regression): it answers mode:verify.
         accept = ("verify", "regression") if mode == "verify" else (mode,)
         idx = next((i for i, e in enumerate(evidence) if e.get("mode") in accept), None)
         if idx is None:

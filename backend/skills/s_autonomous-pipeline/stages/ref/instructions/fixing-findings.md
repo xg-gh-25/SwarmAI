@@ -21,7 +21,8 @@ review's findings go through the same four steps:
    the whole cluster (prefer reusing or removing over adding a guard), and the
    `break_test` that proves the class. Every blocking finding is in exactly one cluster.
 4. **Fix the whole spec in one pass, then re-verify once.** Implement every cluster, run
-   the tests once (`RUN --mode recheck` / `regression`), and send the next review round the
+   the tests it affects once (`RUN --mode tdd --files` / `prove`; the full-scope
+   regression runs once, after the LAST fix, at DELIVER), and send the next review round the
    spec plus the fix diff: the re-check asks "is this class closed at every site in
    scope", not "is this one line changed".
 

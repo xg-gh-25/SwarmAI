@@ -52,9 +52,9 @@ The defaults are templates with `<...>` refs you must replace.
 | work_type | default |
 |-----------|---------|
 | bugfix | X1 test: one regression test per counter-example · X2 test: each touched test file · X3 probe: one round, `no_new_findings` |
-| refactor | X1 test: each touched test file · X2 test `mode:verify` · X3 mutation `all_killed` |
+| refactor | X1 test: each touched test file · X2 mutation `all_killed` |
 | docs / research | X1 manual `done`: what a reader checks to confirm the deliverable |
-| anything else | one `test` criterion per AC (up to 10) + a final `mode:verify` test |
+| anything else | one `test` criterion per AC (up to 10) |
 
 For a gate or parser fix the usual contract is: every red-team counter-example as a regression
 test, the gate's test file green, one probe round with no new findings.

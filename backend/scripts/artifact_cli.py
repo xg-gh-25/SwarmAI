@@ -9836,6 +9836,20 @@ def _deliver_push_ready_bound(
     # recorded once (a degraded stage, a gate passed on a reason or on an unreadable
     # marker store) can never be erased by re-recording a stage (quality audit r2).
     reasons = list(reasons)
+    # The ONE full-scope run (XG 2026-10-20): verify / regression on the final code, at
+    # DELIVER after the last change. Fix rounds use tdd / prove, so a green tdd is the
+    # newest report and must not stand in for it. Docs-only changes need none.
+    _ft = [f for f in run_state.get("files_touched") or [] if isinstance(f, str)]
+    if _ft and not pv.docs_only_paths(_ft):
+        scope = next((e for e in evidence if e.get("mode") in ("verify", "regression")), None)
+        if scope is None:
+            bound = False
+            reasons.append("tests: no full-scope run (verify / regression) on the final code: "
+                           "run --mode regression once at DELIVER after the last change")
+        elif pv.evidence_freshness(scope, _ft, _evidence_roots())["status"] == "stale":
+            bound = False
+            reasons.append(f"tests: latest-{scope.get('mode')}.json predates later edits: run "
+                           "--mode regression once more on the final code")
     gaps = [g for g in run_state.get("verification_gaps") or [] if isinstance(g, dict)]
     for rec in run_state.get("stages") or []:
         if isinstance(rec, dict) and isinstance(rec.get("degraded"), dict) \
@@ -10139,6 +10153,12 @@ def _derive_stage_fields(
     exit_result = None
     if stage in ("build", "test", "deliver") and not skipped:
         crit = _plan_exit_criteria(project, run_state, stage, artifact)
+        if stage != "deliver" and isinstance(crit, list):
+            # A whole-scope criterion (`mode:verify` / `mode:regression`) is met by the one
+            # full-scope run at DELIVER; judging it earlier only prompted a scope run whose
+            # result landing never reads.
+            crit = [c for c in crit if not (isinstance(c, dict)
+                    and str(c.get("ref") or "").startswith("mode:"))] or None
         exit_result = pv.judge_exit_criteria(
             crit, run_dir, cand_rec, files_touched=run_state.get("files_touched"),
             roots=_evidence_roots())

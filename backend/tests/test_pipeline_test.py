@@ -1171,9 +1171,10 @@ def test_overlay_evidence_replaces_rechecked_results_by_nodeid(tmp_path):
     assert (ev["changed_files"], ev["head_sha"], ev["tree_digest"]) == ({"backend/core/mod.py": "d2"}, "h2", "t2")
 
 
-def test_identical_verify_after_a_timeout_runs_a_recheck_and_overlays(rig, capsys, tmp_path, monkeypatch):
-    """The second verify on unchanged inputs re-runs only what failed and writes the
-    result back into latest-verify.json, instead of re-running everything."""
+def test_identical_verify_after_a_hang_is_not_rerun_the_result_stands(rig, capsys, tmp_path, monkeypatch):
+    """A test that RAN and hung (its own per-test timeout) failed. The same verify on
+    unchanged inputs does not run it again for a lucky pass (XG 2026-10-20): the result
+    stands as reported, and nothing is launched."""
     monkeypatch.setattr(pt, "PER_TEST_TIMEOUT_S", 2)
     repo = rig()
     marker = tmp_path / "hung_once"
@@ -1182,16 +1183,18 @@ def test_identical_verify_after_a_timeout_runs_a_recheck_and_overlays(rig, capsy
         f"    m = pathlib.Path({str(marker)!r})\n"
         "    if not m.exists():\n        m.write_text('x')\n        time.sleep(20)\n\n\n"
         "def test_fine():\n    assert True\n")})
-    _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    _, first_code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
     first = _evidence(tmp_path, "tests/latest-verify.json")
-    assert first["counts"]["timeouts"] >= 1
+    assert first["counts"]["timeouts"] >= 1 and first_code != 0
+
+    def boom(*a, **k):
+        raise AssertionError("an unchanged, finished result must not be re-run")
+    monkeypatch.setattr(pt, "_run_jobs", boom)
     out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert code == first_code, out
+    assert any("result stands" in w for w in out.get("warnings") or []), out
     ev = _evidence(tmp_path, "tests/latest-verify.json")
-    assert "rechecked_from" in ev, ev.keys()
-    assert any("ran a recheck" in w for w in ev["warnings"])
-    outcome = {r["nodeid"].split("::")[-1]: r["outcome"] for r in ev["results"]}
-    assert outcome["test_hangs_first_time"] == "passed" and outcome["test_fine"] == "passed"
-    assert code == 0, out
+    assert "rechecked_from" not in ev and ev["counts"] == first["counts"]
 
 
 def test_dead_shard_rest_is_requeued_and_gets_a_real_verdict(rig, capsys, tmp_path):
@@ -1308,27 +1311,6 @@ def test_recheck_that_skipped_tests_for_budget_does_not_overlay(rig, capsys, tmp
     assert not out.get("overlaid_onto"), out
     assert any("NOT laid" in w for w in out["warnings"]), out["warnings"]
     assert "rechecked_from" not in _evidence(tmp_path, "tests/latest-regression.json")
-
-
-def test_auto_recheck_builds_on_the_mode_being_rerun(rig, capsys, tmp_path, monkeypatch):
-    """regression times out → a newer green verify → regression again on the same tree:
-    the automatic recheck must re-run the REGRESSION's failures and update its evidence,
-    not inherit the verify's green."""
-    monkeypatch.setattr(pt, "PER_TEST_TIMEOUT_S", 2)
-    repo = rig()
-    marker = tmp_path / "hung_once"
-    _write(repo, {"backend/tests/test_once.py": (
-        "import pathlib, time\n\n\ndef test_hangs_first_time():\n"
-        f"    m = pathlib.Path({str(marker)!r})\n"
-        "    if not m.exists():\n        m.write_text('x')\n        time.sleep(20)\n")})
-    _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
-    assert _evidence(tmp_path, "tests/latest-regression.json")["counts"]["timeouts"] >= 1
-    _run(capsys, "--run-id", RUN_ID, "--mode", "verify")             # newer, green
-    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
-    ev = _evidence(tmp_path, "tests/latest-regression.json")
-    assert ev.get("rechecked_from", {}).get("auto") is True, ev.keys()
-    assert {r["nodeid"].split("::")[-1]: r["outcome"] for r in ev["results"]}["test_hangs_first_time"] == "passed"
-    assert code == 0, out
 
 
 def test_recheck_after_a_recheck_still_overlays_onto_the_regression(rig, capsys, tmp_path):

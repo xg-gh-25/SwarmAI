@@ -246,6 +246,9 @@ class TestDirectProfileFlow:
         assert built["files_changed"] == ["backend/a.py", "backend/tests/test_x.py"]  # from files_touched
         assert out["derived"]["files_changed"]["source"] == "run.json files_touched"
 
+        # the ONE full-scope run, at DELIVER after the last change: push_ready needs it
+        _write_evidence(rd, "tests/latest-regression.json", _c2("regression", rid, [
+            {"nodeid": "tests/test_x.py::test_a", "outcome": "passed", "file": "tests/test_x.py"}]))
         deliver = _tmpl("deliver")
         deliver["adversarial_review"]["findings_total"] = 99  # model value — overridden
         deliver["adversarial_review"]["findings"] = [
@@ -808,7 +811,9 @@ class TestExitCriteria:
         bug = pv.default_exit_criteria("bugfix")
         assert [c["kind"] for c in bug] == ["test", "test", "probe"]
         feat = pv.default_exit_criteria("greenfield", ["AC1: a", "AC2: b"])
-        assert feat[-1]["ref"] == "mode:verify" and len(feat) == 3
+        # no `mode:verify`: the one full-scope run at DELIVER is required by the
+        # push_ready bound for every code change, not per contract (XG 2026-10-20)
+        assert len(feat) == 2 and not any(c["ref"].startswith("mode:") for c in feat)
         # defaults are templates: the structure check refuses them until filled in
         assert pv.validate_exit_criteria(bug, required=True)
 

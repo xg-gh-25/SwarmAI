@@ -23,7 +23,7 @@ whether a statement is code-enforced, or you are planning/estimating work (Rule 
    rule is BLOCKING — read the stage's execution card (and `stages/ref/` files when the card's
    condition holds); `run-update` refuses a stage whose stage-json lacks `stage_doc_consumed: true`
    (exit 1); `stage-complete` sets the flag for you, so reading the card is still on you.
-3. <!-- R-instr-020 --> **[MUST] TDD is mandatory in BUILD.** RED → GREEN → VERIFY → SMOKE → TRACE
+3. <!-- R-instr-020 --> **[MUST] TDD is mandatory in BUILD.** RED → GREEN → SMOKE → TRACE
    → PROBE. Fix code, not tests. Changing tests = changing the spec. (The `tdd` fields are
    [GATE·validator] at publish — but "did you *actually* RED-first / fix code not tests" is
    discipline, not code-checked.)

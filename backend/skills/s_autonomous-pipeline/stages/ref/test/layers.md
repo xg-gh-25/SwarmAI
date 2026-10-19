@@ -11,10 +11,11 @@ or the project's stack is not one the runner covers.
 
 The `layers` block (+ `passed`) is a REQUIRED test-artifact field: the validator BLOCKS
 if it is absent. Presence is code-checked. Layer content (which tests ran) is now
-produced by the runner: `stage-complete --stage test` copies `layers` and counts
-`regressions` from `evidence/tests/latest-regression.json`. Do not hand-copy numbers.
+produced by the runner from `evidence/tests/latest-regression.json`; DELIVER's push_ready
+bound judges them. Do not hand-copy numbers.
 
-All three layers run in ONE call, `RUN --mode regression` (this replaces the old
+All three layers run in ONE call, `RUN --mode regression`, ONCE per run: at DELIVER after
+the last change (the runner refuses a full-scope run in BUILD / REVIEW / TEST) (this replaces the old
 three hand-run commands: `pytest -k <ac tests>`, `grep -rl ... | xargs pytest`, and
 `python -c "import module"`). The runner shards per file, runs in parallel under one
 95 s deadline per call (a selection that does not fit continues in the next call of the

@@ -1,56 +1,30 @@
-# BUILD ref — VERIFY and wiring checks (callers, interface seams, proximity, sources)
+# BUILD ref — tests in BUILD, and wiring checks (callers, interface seams, proximity, sources)
 
-Read when running VERIFY, when VERIFY is red, or before SMOKE when the changeset adds
-public symbols, cross-module interfaces, changed function bodies or framework-specific
-patterns. `RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`.
+Read before SMOKE when the changeset adds public symbols, cross-module interfaces, changed
+function bodies or framework-specific patterns. `RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`.
 
-## Step 3: VERIFY — targeted tests, zero regressions
+## Step 3: tests in BUILD — tdd only
 
-**Resolve THIS project's test command first** from TECH.md `## Dev Commands` (and
-`## Stack`). SwarmAI repo → the runner modes below. Any other stack or repo → TECH.md's
-command via `RUN --mode probe --name <stack>-verify -- <argv>` (`go test ./...`,
-`mvn test`, `cargo test`, `npm test`…; see `stages/ref/test/layers.md` "Stacks and repos
-the runner does not cover").
+The change's whole dependency scope (`--mode verify` / `regression` / `recheck`: changed
+tests, every direct importer, CI BVT) runs ONCE per run, at DELIVER after the last change
+(`stages/deliver.md` 4b). Landing reads only that report, so a scope run in BUILD was never
+used; the runner refuses it here. `[MUST]` <!-- R-build-008 -->
 
-**VERIFY rules (BLOCKING):** `[MUST]` <!-- R-build-008 -->
+> These BUILD-step "BLOCKING" labels (1.5 API-check, 1.7 Mechanism-decl, 3.6 Interface-seam)
+> are discipline, `[MUST]`. The only code-enforced BUILD gate is the AC Coverage Matrix
+> (Check 8f, `[GATE·validator]`, in `ref/build/artifact.md`) + the `tdd`/`files_changed`/
+> `ac_coverage` schema-required fields. <!-- R-build-009 -->
 
-> These BUILD-step "BLOCKING" labels (1.5 API-check, 1.7 Mechanism-decl, 3 VERIFY,
-> 3.6 Interface-seam) are TDD/verification DISCIPLINE — `[MUST]`, behavioral. The only
-> code-enforced BUILD gate is the AC Coverage Matrix (Check 8f, `[GATE·validator]`, in
-> `ref/build/artifact.md`) + the `tdd`/`files_changed`/`ac_coverage` schema-required
-> fields. <!-- R-build-009 -->
-
-- Run **changed test files + test files that import changed modules**: `RUN --mode verify`
-  (`continue: true` in the output → run the same command again; the runner picks
-  changed tests, this run's recent real failures and EVERY direct importer of the changed modules,
-  uncapped and never cut for time; tests reaching a change only through another module
-  are listed in `transitive_unrun` and REPORT §10, not run). This replaces the old raw
-  `pytest tests/test_foo.py tests/test_bar.py --timeout=60`.
-- **Widely-imported modules:** the old recipe grepped every dependent test file
-  (`grep -rl "from database\|import database\|SQLiteDatabase" tests/`) and ran exactly
-  those. `--mode verify` builds that reverse-import set itself; do not hand-grep and do
-  not run the full suite instead.
-- **SwarmAI-SELF:** **NEVER run SwarmAI's full suite (`SWARMAI_SUITE=1`) as an agent**:
-  known pytest-xdist deadlocks cause infinite hangs; the full suite is human-only. Other
-  projects have their own full-suite policy in TECH.md/STEERING; don't assume xdist.
-- Unsure which tests to re-run (the old `pytest --lf --timeout=60`)? `RUN --mode recheck`
-  (last failures + tests affected by files changed since). Other runners: the
-  equivalent last-failed/filtered command as a probe.
-- **NEVER** pipe a test run through `| tail` (or `| head`); it hides pass/fail status.
-  The runner prints one JSON object; read it whole.
-- All pass → continue. Tests fail → fix production code, then re-run **only failing
-  tests** (`RUN --mode recheck`).
-- **Max 2 VERIFY re-runs total.** Still failing after 2: complete BUILD with
-  `"regressions": N` in `tdd` and advance to REVIEW anyway.
-- Track the attempt count explicitly: "VERIFY attempt 1/2", "VERIFY attempt 2/2".
-- Changed + related test files must all pass. If existing tests break, fix production
-  code, NOT the existing tests. Track all files changed and test results.
-- `timeout` failures (the global deadline killed them before they finished) are not a
-  code failure: don't edit code for them and don't count them as a re-run. Re-run the
-  same command unchanged (it re-runs only the unfinished tests); they block push-ready
-  until they have run. A runner `circuit_breaker` refusal means checkpoint, not re-run.
-- `pre-existing` failures (the runner's HEAD-baseline classification) are not yours:
-  note them, don't debug them here.
+- BUILD's evidence is the tdd runs: `RUN --mode tdd --files <≤5 test files>` for the
+  tests your change touches (RED, then GREEN). Batch a slice's tests into one call.
+- **Resolve THIS project's test command first** from TECH.md `## Dev Commands` (and
+  `## Stack`). SwarmAI repo → the runner. Any other stack → TECH.md's command via
+  `RUN --mode probe --name <stack>-tdd -- <argv>` (`stages/ref/test/layers.md`).
+- **NEVER run SwarmAI's full suite (`SWARMAI_SUITE=1`) as an agent**; never pipe a test run
+  through `| tail` / `| head` (the runner prints one JSON object; read it whole).
+- A failing existing test: fix production code, NOT the test. `timeout` (the call's
+  deadline) is not a code failure: run the same command again (`continue: true`).
+- `pre-existing` failures (the runner's HEAD-baseline classification) are not yours.
 
 ## Step 3.5: Caller verification (new public functions)
 

@@ -42,7 +42,7 @@ candidate" to "push-ready". ALL 6 layers must pass at once; 5/6 is not push-read
 
 | Layer | Passes when |
 |---|---|
-| L1 Tests pass | runner evidence green (`pipeline_test.py --mode recheck` after fixes) |
+| L1 Tests pass | the one `pipeline_test.py --mode regression` on the final code is green |
 | L2 Type-safe | type checker + linter clean (if configured) |
 | L3 No regressions | pre-existing tests still pass (TEST's regression evidence) |
 | L4 Adversarial clean | every HIGH / conf≥7 MED fixed or explicitly accepted, each fix confirmed ON DISK (`disk_check`) |

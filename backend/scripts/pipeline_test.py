@@ -3012,6 +3012,67 @@ def _blocking_sig(ev: dict) -> list[str]:
                   if isinstance(f, dict) and not _failure_nonblocking(f))
 
 
+# Full-scope runs (verify / regression / recheck: the change's whole dependency scope)
+# happen ONCE per run, at DELIVER, after the last change (XG 2026-10-20). Landing reads
+# only the latest scope report on the final code, so a scope run in BUILD or TEST was
+# never used. Fix rounds run the affected tests (tdd) or break tests (prove). A second
+# round is allowed only when the first one was red and the code was fixed; continuing
+# the tests a deadline left unrun is the same round. A goal run keeps its own loop.
+FULL_SCOPE_MODES = ("verify", "regression", "recheck")
+FULL_SCOPE_STAGES = ("deliver",)
+FULL_SCOPE_MAX_ROUNDS = 2
+
+
+def _unfinished(f: dict) -> bool:
+    """A failure entry for a test that never ran to an outcome (deadline / not run)."""
+    return bool(f.get("deadline") or f.get("notrun")) and not f.get("order_dependent")
+
+
+def _unfinished_failures(ev: dict) -> list:
+    return [f for f in ev.get("failures") or [] if isinstance(f, dict) and _unfinished(f)]
+
+
+def _open_stage(run_state: dict) -> "str | None":
+    """The stage open now: started and not completed (the latest-started if several)."""
+    best = None
+    for stage, t in (run_state.get("stage_timing") or {}).items():
+        if not isinstance(t, dict) or t.get("completed_at") or not t.get("started_at"):
+            continue
+        if best is None or str(t["started_at"]) > best[0]:
+            best = (str(t["started_at"]), stage)
+    return best[1] if best else None
+
+
+def _full_scope_refusal(ev_root: Path, mode: str, run_state: dict) -> "dict | None":
+    """Refuse a NEW full-scope round outside DELIVER, or past FULL_SCOPE_MAX_ROUNDS.
+    Operator override: SWARM_FULL_SCOPE_FORCE=1."""
+    if mode not in FULL_SCOPE_MODES or os.environ.get("SWARM_FULL_SCOPE_FORCE") == "1":
+        return None
+    if str(run_state.get("profile") or "").strip().lower() == "goal":
+        return None
+    stage = _open_stage(run_state)
+    if stage is None:
+        return None  # no stage open: not a pipeline stage call (manual use, a test rig)
+    narrow = ("for a fix, run the tests it affects: `--mode tdd --files <test files>` "
+              "(or `--mode prove` for break tests)")
+    if stage not in FULL_SCOPE_STAGES:
+        return {"mode": mode, "ok": False, "full_scope": {"refused": True, "stage": stage},
+                "error": (f"--mode {mode} runs the change's whole dependency scope, and that "
+                          f"runs once per run, at DELIVER after the last change (landing reads "
+                          f"only that report). Not in {stage}: {narrow}.")}
+    idx = _read_json(ev_root / "tests" / RUN_INDEX)
+    rounds = [e for e in idx if isinstance(e, dict) and e.get("kind") == "run"
+              and e.get("mode") in FULL_SCOPE_MODES and not e.get("auto_recheck_of")
+              and not e.get("cached")] if isinstance(idx, list) else []
+    if len(rounds) >= FULL_SCOPE_MAX_ROUNDS:
+        return {"mode": mode, "ok": False, "full_scope": {"refused": True, "rounds": len(rounds)},
+                "error": (f"{len(rounds)} full-scope rounds already ran in this run (limit "
+                          f"{FULL_SCOPE_MAX_ROUNDS}): stop fixing, complete DELIVER with "
+                          "push_ready false and the failing tests named in attention_flags "
+                          "(REPORT §10). Operator override only: SWARM_FULL_SCOPE_FORCE=1")}
+    return None
+
+
 def _breaker_result(mode: str, reason: str) -> dict:
     """Abort payload (exit 2) when the circuit breaker trips. Re-running is futile (the
     breaker re-trips on the unchanged run_index). The run is autonomous, so the action is
@@ -3593,6 +3654,13 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
         if not prev:
             return plan, "recheck needs previous verify or regression evidence; run --mode verify first"
         prev_failures = [f for f in prev.get("failures") or [] if isinstance(f, dict)]
+        if auto_of:
+            # A continuation runs only what the deadline left unrun; a test that ran
+            # and failed keeps its result (the overlay leaves base entries it did not
+            # re-run), never re-run on unchanged code for a lucky pass.
+            prev_failures = [f for f in prev_failures if _unfinished(f)
+                             or ("::" not in str(f.get("nodeid") or "")
+                                 and f.get("classification") == "timeout")]
         plan["base_mode"], plan["base_finished_at"] = prev.get("mode"), prev.get("finished_at")
         for f in prev_failures:
             n = str(f.get("nodeid") or "")
@@ -3698,11 +3766,10 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
 # ── test-mode execution ─────────────────────────────────────────────────────
 def _auto_recheck(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
                   prev: dict) -> "tuple[dict, int] | None":
-    """Same inputs as the last ``ns.mode`` run (same cache key) and that result was not
-    cacheable (a timeout, an unknown classification or a runner error): re-running all
-    of it would spend the budget on tests that already passed. Run a recheck — only
-    the failed and not-run tests — and overlay it onto the ``ns.mode`` evidence, the
-    file the TEST stage reads. Returns None — run the full mode instead — when the
+    """Same inputs as the last ``ns.mode`` run (same cache key) and the deadline left
+    tests unrun: CONTINUE it. A recheck runs only those unrun tests and is overlaid onto
+    the ``ns.mode`` evidence; tests that ran and failed keep their result (never re-run
+    on unchanged code). The caller reports a finished non-cacheable result as it stands. Returns None — run the full mode instead — when the
     recheck cannot re-target every failure, skipped tests for budget, or did not land
     on THIS mode's evidence."""
     note = (f"inputs identical to the last {ns.mode}, whose result was not cacheable: "
@@ -3876,9 +3943,22 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     if ns.mode in ("verify", "regression") and not getattr(ns, "auto_recheck_of", None):
         prev = _read_json(ev_root / "tests" / f"latest-{ns.mode}.json")
         if isinstance(prev, dict) and prev.get("cache_key") == key and not _cacheable(prev):
+            if not _unfinished_failures(prev):
+                # Same inputs, every test finished: the result stands. Re-running the
+                # failed tests on unchanged code would only hunt for a lucky pass.
+                ev = dict(prev)
+                ev["warnings"] = list(ctx.warnings) + [
+                    f"inputs are unchanged since the last {ns.mode} and every test finished: "
+                    "its result stands as reported (not re-run). Fix the code, then run again"]
+                return _test_output(ev, ev_root / "tests" / f"latest-{ns.mode}.json"), _exit_code(ev)
+            # Tests that never got to run before the deadline: continue only those.
             auto = _auto_recheck(ctx, ns, ev_root, run_state, deadline, prev)
             if auto is not None:
                 return auto
+    if ns.run_id and not getattr(ns, "auto_recheck_of", None):
+        refused = _full_scope_refusal(ev_root, ns.mode, run_state)
+        if refused is not None:
+            return refused, 2
     idx_info = {"auto_recheck_of": getattr(ns, "auto_recheck_of", None),
                 "rechecked_from": plan.get("base_finished_at") if ns.mode == "recheck" else None}
     fmode = ns.mode + ("+tsc" if plan.get("desktop_tsc") else "")

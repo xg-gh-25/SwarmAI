@@ -12,7 +12,7 @@ Tests go ONLY through `RUN` (`pipeline_test_gate` denies direct pytest/vitest/ts
 3. **Vertical TDD**, Change Spec order: tracer bullet (most important AC) first, then one test → one impl. Each cycle `RUN --mode tdd --files <≤5 test files>` (RED, then GREEN). `git add` your files by name; never `git commit` (DELIVER's `run-commit` is the sole commit). Code before its test → delete it, restart at RED. Fix code, not tests. A failure-path test per success-path test. Same AC fails twice → micro-replan (1 per AC, then mark it unmet, go on).
 4. **After each GREEN:** path symmetry; real-data replay if it reads stored data.
 5. **Break it yourself** `[GATE·validator]`: per plan `I<n>` / `F<n>` a test trying to violate it (kill, concurrency, retry, stale state) → `break_tests: [{targets, test, attack}]`. Experts only confirm.
-6. **VERIFY** only w/o TEST stage (direct, goal): `RUN --mode verify`; fix, `RUN --mode recheck`; max 2, then `tdd.regressions: N`.
+6. **No full-scope run:** verify / regression / recheck run once, at DELIVER after the last change (refused here); BUILD evidence = tdd.
 7. **Wiring:** callers, interface seams, proximity scan (±50 lines), framework patterns from source.
 8. **SMOKE** every new branch in-process (import smoke for handlers/subprocess; frontend tabs/geometry/entries), **Resource Lifecycle** (release on success + failure), user-path trace per AC, wire PROBE for new frontend endpoints.
 9. **Record written files:** `python backend/scripts/artifact_cli.py run-update --project <P> --run-id <R> --files-touched '["<abs path>", ...]'` (written only, absolute, dedup-append).
@@ -21,14 +21,14 @@ Tests go ONLY through `RUN` (`pipeline_test_gate` denies direct pytest/vitest/ts
 **Gates**
 - `[GATE·validator]` Check 8f BLOCKS a missing/incomplete `ac_coverage`; `files_changed`, `tdd.green_pass`, `tdd.smoke_tests` are schema-required.
 - `[GATE·validator]` `break_tests` must target every plan `I<n>` / `F<n>` (step 5).
-- `[MUST]` Gate 1, slice ban, API check, mechanism, replay, VERIFY, seams, import smoke, pre-greps: discipline.
+- `[MUST]` Gate 1, slice ban, API check, mechanism, replay, seams, import smoke, pre-greps: discipline.
 - `[GATE·hook]` `active_run_commit_gate` denies `git commit` of run files; `pipeline_test_gate` runner only (`SWARM_TEST_GATE_FORCE=1` is operator-set, never yours).
 
 **Read only if**
 - Profile runs Gate 1, or a verdict/rejected spawn/record → `stages/ref/build/gate1.md`
 - First RED, a cycle keeps failing, mocks, recording files → `stages/ref/build/tdd.md`
 - Calling another module / OS mechanism, shared or stateful code, persisted data → `stages/ref/build/pre-checks.md`
-- VERIFY, new public symbols/interfaces, changed bodies, framework patterns → `stages/ref/build/verify.md`
+- Tests in BUILD, new public symbols/interfaces, changed bodies, framework patterns → `ref/build/verify.md`
 - New branches, resources, frontend, endpoint → `stages/ref/build/smoke.md`
 - Writing build.json, or stage-complete rejects it → `stages/ref/build/artifact.md`
 

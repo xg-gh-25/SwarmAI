@@ -57,7 +57,7 @@ Recommended: `commits`, `diff_summary`.
  "record": {"decisions": [{"description": "...", "classification": "taste", "reasoning": "..."}],
             "gate1_verdict": "PASS", "gate1_blocking": true, "gate1_override": false,
             "gate1_retries": 0, "gate1_checks": {...}, "replanned_acs": [],
-            "exit_evidence": {"verify": "VERIFY attempt 1/2 green"}}}
+            "exit_evidence": {"tdd": "slice tests green (tdd)"}}}
 ```
 
 - `files_changed`: list every file this run changed, including files written by a Bash
@@ -72,7 +72,7 @@ Recommended: `commits`, `diff_summary`.
   `dropped_from_declared`. A file a script writes after BUILD (a
   REVIEW, TEST or Gate-2 fix) is recorded with `run-update --files-touched <path>`.
 - `commits` stays empty: BUILD stages, `run-commit` at DELIVER is the sole commit point.
-- `regressions` = failures left after the 2 VERIFY re-runs (`ref/build/verify.md`).
+- `regressions` = failing tests your tdd runs left (the full scope runs at DELIVER).
 - Check 8 (semantic depth) WARNs when `smoke_tests` is 0 with more than one file changed.
 - `gate1_*` and `replanned_acs` go in `record` because `stage-complete` replaces the
   build stage record (only `artifact_id`, `adversarial_review`, `lessons` carry forward).
