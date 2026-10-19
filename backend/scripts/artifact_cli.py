@@ -5344,6 +5344,28 @@ def _commit_message(run_id: str, requirement: str, deliver: "dict | None") -> st
     return commit_message.build(run_id, requirement, deliver)
 
 
+# push_ready reason the deliver bound adds for a SOUND root-cause verdict
+# (_derive_stage_fields); the only reason run-commit commits past push_ready=false.
+_GATE2_NOT_CONVERGED_REASON = "Gate-2 not converged after 3 rounds"
+
+
+def _only_review_not_converged(deliver_rec) -> bool:
+    """True when DELIVER completed, its tool-computed Gate-2 outcome is ``sound`` (no
+    convergence in 3 rounds, root-cause review: SOUND) and every push_ready reason is
+    that one. Any other reason (tests, completion audit, a model-lowered push_ready)
+    still blocks the commit."""
+    if not isinstance(deliver_rec, dict):
+        return False
+    g2 = deliver_rec.get("gate2_outcome")
+    if not (isinstance(g2, dict) and g2.get("action") == "sound"):
+        return False
+    reason = str(deliver_rec.get("push_ready_reason") or "")
+    # the reason itself contains "; " (the join separator): strip each occurrence of it
+    rest, n = re.subn(re.escape(_GATE2_NOT_CONVERGED_REASON) + r"; root-cause review: SOUND[^;]*",
+                      "", reason)
+    return n > 0 and not rest.replace(";", "").strip()
+
+
 def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     """Auto local-commit THIS run's files after PUSH-READY (A1, run_76932250).
 
@@ -5385,6 +5407,18 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
         None,
     )
     push_ready = bool(deliver_rec and deliver_rec.get("push_ready", False))
+    # A review loop that did not converge in 3 rounds never blocks the commit: the run is
+    # autonomous, and a refused run-commit would hand it to a human. The root-cause
+    # review said SOUND, the open items are in REPORT §10, push_ready stays false (push
+    # is gated) and the commit is marked review_not_converged.
+    _review_open = (not push_ready) and _only_review_not_converged(deliver_rec)
+    if _review_open:
+        print(json.dumps({"warning": "deliver is not PUSH-READY only because Gate-2 did not "
+                                     "converge in 3 rounds (root-cause review: SOUND). "
+                                     "Committing locally; the commit is marked "
+                                     "review_not_converged and the open items are in REPORT §10."}),
+              file=sys.stderr)
+        push_ready = True  # for the commit gate only; the record keeps push_ready false
     # A forced commit past this gate is recorded (commits[].forced_push_ready + a
     # push_ready_force_bypass intervention) so it never reads as a qualified commit
     # in run.json, the REPORT or the chat completion summary.
@@ -5784,7 +5818,8 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
             sha = subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"],
                                  capture_output=True, text=True, timeout=10).stdout.strip()
             committed.append({"repo": root, "sha": sha, "files": staged.splitlines(),
-                              **({"forced_push_ready": True} if _forced_push_ready else {})})
+                              **({"forced_push_ready": True} if _forced_push_ready else {}),
+                              **({"review_not_converged": True} if _review_open else {})})
         else:
             warnings.append(f"[{root}] git commit failed: {commit.stderr.strip()[:200]}")
 
