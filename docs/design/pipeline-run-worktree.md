@@ -382,7 +382,7 @@ worktree 里重放真实 commit 的 diff，用真实的 git-defender hook（`/us
 | `rebase`（11 文件的 commit 换 base） | — | 1.44 s |
 | `merge --ff-only`（另一个 checkout 里） | 4–11 文件 | 0.27–0.35 s |
 
-最慢 2.3 秒，离 600 秒差两个数量级；AGENTS.md 的"约 600 秒"已按实测更新（912b31c0）。外部审查在临时 repo 里的独立测量
+最慢 2.3 秒，离 600 秒差两个数量级；AGENTS.md 的"约 600 秒"已按实测更新（37569fdf）。外部审查在临时 repo 里的独立测量
 结论相同（4 个大 core 文件的 commit ≤ 1 秒，ff-only merge < 1 秒）。所以**默认、也是唯一的落地路径是前台**：
 
 - stage-complete 里同步做完第 1–7 步。最终 commit 带 300 秒超时；超时就终止它、worktree `reset --soft C`，返回
