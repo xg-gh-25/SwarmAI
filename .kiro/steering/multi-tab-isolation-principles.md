@@ -44,7 +44,7 @@ parallel. Tabs MUST NOT interfere with each other at any layer.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## The 8 Isolation Principles
+## The 9 Isolation Principles
 
 ### Principle 1: Tab-Scoped State Mutations
 
@@ -159,6 +159,24 @@ frontend: never overwrite a tab's `sessionId` (in `tabMapRef` or `open_tabs.json
 different value after `session_start`. The backend side of this contract (app ID vs SDK
 ID, resume, identity persistence) is in `session-identity-and-backend-isolation.md`.
 
+### Principle 9: One Writer per Message — the Newest Stream Only
+
+A reconnect or resend opens a SECOND stream handler for the same reply, with the SAME
+generation, so the generation guard cannot tell them apart; if the old one still
+delivers, every delta lands twice (the doubled thought/paragraph, `1e570b29`).
+
+1. **Only the tab's newest handler writes content.** Each handler gets a monotonic token
+   (`streamHandlerSeq`); the tab records it as `latestStreamHandler`. A handler whose
+   token is not the tab's latest drops content events (`text_*`, `thinking_*`,
+   `assistant`, `tool_result`); control events still pass.
+2. **A duplicate never wins the reconcile.** The DB reconcile keeps the LONGER side, and a
+   doubled local copy is always longer. Before comparing lengths (and when streamed
+   content is confirmed), `collapseAdjacentDuplicateBlocks` merges ADJACENT, IDENTICAL
+   text / thinking blocks of at least 20 chars into one. Short repeats ("Done.") and
+   non-adjacent repeats are left alone: they can be real.
+3. Every collapse logs `[stream-dup]`. Seeing it after a fix means another writer
+   still doubles content — find that writer; never widen the collapse to hide it.
+
 ## Regression Prevention Checklist
 
 When modifying chat tab code, verify:
@@ -173,6 +191,8 @@ When modifying chat tab code, verify:
 - [ ] Error/complete handlers use `capturedTabId`, not `activeTabIdRef.current`
 - [ ] Permission state lives in `tabState.pendingPermissionRequestId`; the React mirror is set only if `isActiveTab`
 - [ ] Message writes go through the tab's MessageStore, never a raw `setMessages`-only write
+- [ ] A new stream handler (reconnect/resend/retry) stamps `latestStreamHandler`; content from a superseded handler is dropped
+- [ ] Any "longer side wins" merge collapses adjacent identical blocks (>= 20 chars) first
 - [ ] Tests cover multi-tab scenarios (at least 2 tabs with concurrent streaming)
 
 ## Tab Persistence Safety
