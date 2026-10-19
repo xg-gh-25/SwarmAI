@@ -14,9 +14,19 @@ For an ``artifact_cli`` / ``pipeline_test`` command that writes run state with
   command to ``SWARM_HOOK_TOKEN=<token> <command>`` via ``updatedInput``. The CLI burns
   it through the daemon's socket — proof the hook really ran (an environment variable
   is inherited by a hookless ``claude --print --bare`` child).
+- **after approval** (``AFTER_APPROVAL``: ``run-claim-main``): a command the user must
+  approve first (dangerous_command_gate, which may wait hours) gets its token only
+  AFTER that approval, so the token's TTL is not spent waiting for the user. The gate
+  is registered twice: ``phase="check"`` before the approval gate (every check and
+  deny, so the user is never asked to approve a command this gate refuses; no token
+  for these commands) and ``phase="approved"`` right after it (the same checks, then
+  the token, for these commands only). For a claim the check phase also refuses a
+  session that does not own the run and dry-runs ``run_worktree.plan_claim`` (the CLI's
+  own planner), so the user is only asked about a claim that will run.
 
 Fail-open on its own errors (never blocks a command because the gate broke).
-Public: ``create_run_owner_gate``, ``parse_cli_calls``, ``TOKEN_SUBCOMMANDS``.
+Public: ``create_run_owner_gate``, ``parse_cli_calls``, ``TOKEN_SUBCOMMANDS``,
+``AFTER_APPROVAL``.
 """
 from __future__ import annotations
 
@@ -58,12 +68,16 @@ def _isolated(proj, rid) -> bool:
 _WRITING = frozenset({
     "run-update", "run-commit", "run-checkpoint", "run-resume", "run-report",
     "stage-start", "stage-complete", "publish", "run-observe", "run-diff",
-    "run-surface-changes", "run-repo-add",
+    "run-surface-changes", "run-repo-add", "run-claim-main",
 })
 # The stages whose first start decides an undecided run's mode (pipeline_worktree).
 _DECIDING_STAGES = frozenset({"plan", "build", "goal_cycle"})
 _TERMINAL = frozenset({"completed", "complete", "abandoned", "failed", "cancelled"})
-TOKEN_SUBCOMMANDS = ("stage-start", "stage-complete", "run-update", "run-repo-add")
+TOKEN_SUBCOMMANDS = ("stage-start", "stage-complete", "run-update", "run-repo-add",
+                     "run-claim-main")
+# Token subcommands the user approves first: their token is issued by the
+# phase="approved" registration, after dangerous_command_gate (module docstring).
+AFTER_APPROVAL = frozenset({"run-claim-main"})
 _DECIDE_TIMEOUT = 4.0
 # Variables that change where / whether the CLI isolates: the gate and the CLI must agree.
 _STEERING_ENV = ("SWARM_WORKTREE_MODE", "SWARM_WORKTREE_ROOT", "SWARM_WORKTREE_LEDGER",
@@ -161,8 +175,8 @@ def _needs_token(call: dict) -> "str | None":
         return "stage-complete"
     if sub == "run-update" and call.get("status") in _TERMINAL:
         return "run-update"
-    if sub == "run-repo-add":
-        return "run-repo-add"
+    if sub in ("run-repo-add", "run-claim-main"):
+        return sub
     return None
 
 
@@ -302,7 +316,48 @@ def _takeover(run_file: Path, run_id: str, sid: str) -> "str | None":
     return holder.get("deny")
 
 
-def _decide(sid: str, command: str, tool_input: dict) -> "dict | None":
+def _claim_files(argv: "list[str]") -> "tuple[list[str], str]":
+    """(--files values, --resolve) of a run-claim-main argv (argparse nargs='+')."""
+    files, resolve, i = [], "merge", 0
+    while i < len(argv):
+        t = argv[i]
+        if t == "--files":
+            i += 1
+            while i < len(argv) and not argv[i].startswith("--"):
+                files.append(argv[i])
+                i += 1
+            continue
+        if t == "--resolve" and i + 1 < len(argv):
+            resolve = argv[i + 1]
+        elif t.startswith("--resolve="):
+            resolve = t.split("=", 1)[1]
+        i += 1
+    return files, resolve
+
+
+def _claim_refusal(sid: str, rid: str, data: dict, c: dict) -> "str | None":
+    """Why a run-claim-main would fail, judged BEFORE the user is asked to approve it:
+    another session's run, or a refusal of the CLI's own planner (run_worktree.plan_claim
+    dry run against the run's active worktrees). None: ask the user."""
+    from core import run_worktree as rw
+    owner = data.get("session_id")
+    if owner and owner != sid:
+        return (f"run {rid} belongs to session {owner}; only that session can claim "
+                "main-checkout edits into it")
+    files, resolve = _claim_files(c.get("argv") or [])
+    active = [(e, Path(os.path.realpath(str(e.get("main"))))) for e in rw.active_entries(data)
+              if e.get("main")]
+    if not files or not active:
+        return None   # the CLI reports these (argparse / not_isolated)
+    try:
+        rw.plan_claim(rid, active, files, resolve if resolve in rw.CLAIM_RESOLVES else "merge")
+    except rw.WorktreeError as err:
+        return f"this claim would be refused ({err.code}): {err.message}"[:1200]
+    return None
+
+
+def _decide(sid: str, command: str, tool_input: dict,
+            phase: str = "check") -> "dict | None":
     from core import hook_token
     from core.run_worktree import mode_enabled
     from core.security_hooks import _pipeline_runs_root
@@ -336,6 +391,9 @@ def _decide(sid: str, command: str, tool_input: dict) -> "dict | None":
             continue
         if c["tool"] == "artifact_cli" and c["sub"] not in _WRITING:
             continue
+        late = _needs_token(c) in AFTER_APPROVAL
+        if phase == "approved" and not late:
+            continue   # the check phase already handled it
         if c["tool"] == "artifact_cli" and c["sub"] in _TAKEOVER:
             reason = _takeover(run_file, rid, sid)
             if reason:
@@ -355,6 +413,11 @@ def _decide(sid: str, command: str, tool_input: dict) -> "dict | None":
                          "as ONE command (no `cd … &&`, `source …`, `;`, `|`, redirects, "
                          "subshells or `$(...)`), so the hook can issue its one-time token.\n"
                          f"Run instead: {_single_form(data, c)}")
+        if late and phase != "approved":
+            why = _claim_refusal(sid, rid, data, c)
+            if why:
+                return _deny(why)
+            continue   # token after the user's approval (phase="approved")
         nonce = hook_token.issue(run_file.parent, sid, rid, sub)
         if nonce is None:  # the daemon's token service is down: never run unproven
             logger.warning("run_owner_gate: hook-token service not running; %s %s denied",
@@ -368,9 +431,13 @@ def _decide(sid: str, command: str, tool_input: dict) -> "dict | None":
                                    "updatedInput": {**tool_input, "command": rewrite}}}
 
 
-def create_run_owner_gate(session_context: "dict[str, Any]"):
+def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check"):
     """Factory: the PreToolUse (Bash) gate (module docstring). session_context is the
-    mutable dict SessionUnit updates; ``sdk_session_id`` is the app session id."""
+    mutable dict SessionUnit updates; ``sdk_session_id`` is the app session id.
+    *phase*: "check" (before dangerous_command_gate) or "approved" (right after it:
+    issues the token of the ``AFTER_APPROVAL`` commands only)."""
+    if phase not in ("check", "approved"):
+        raise ValueError(f"phase must be 'check' or 'approved', not {phase!r}")
     from core import executors
 
     async def _gate(input_data: "dict[str, Any]", tool_use_id: "str | None",
@@ -382,12 +449,21 @@ def create_run_owner_gate(session_context: "dict[str, Any]"):
         if not isinstance(command, str) or (
                 "artifact_cli" not in command and "pipeline_test" not in command):
             return {"decision": "approve"}  # cheap path: no IO
+        if phase == "approved" and not any(c in command for c in AFTER_APPROVAL):
+            return {"decision": "approve"}  # nothing of this phase in the command
+        if phase == "approved":
+            from core.security_hooks import _is_main_claim, consume_claim_approval
+            if _is_main_claim(command) and not consume_claim_approval(tool_use_id, command):
+                return _deny("this claim was not approved by the user (no approval was "
+                             "recorded for this command); rerun it as ONE command so the "
+                             "user is asked")
         sid = str(session_context.get("sdk_session_id") or "")
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", sid):
             return {"decision": "approve"}
         try:
             res = await asyncio.wait_for(
-                executors.run_in("subprocess", _decide, sid, command, dict(tool_input)),
+                executors.run_in("subprocess", _decide, sid, command, dict(tool_input),
+                                 phase),
                 timeout=_DECIDE_TIMEOUT)
         except Exception:  # incl. TimeoutError — fail-open, never block a command
             logger.warning("run_owner_gate: decision failed — failing open", exc_info=True)

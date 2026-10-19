@@ -14011,6 +14011,18 @@ def main() -> None:
     p_repo_add.add_argument("--run-id", required=True)
     p_repo_add.add_argument("--path", required=True)
 
+    # run-claim-main — move this session's uncommitted main-checkout edits into the run
+    p_claim = sub.add_parser("run-claim-main", help="Isolated run: move the listed "
+                             "uncommitted main-checkout edits into this run's worktree "
+                             "(owner only; the user approves each claim)")
+    p_claim.add_argument("--project", required=True)
+    p_claim.add_argument("--run-id", required=True)
+    p_claim.add_argument("--files", nargs="+", required=True,
+                         help="absolute paths, or paths relative to the repo root (a run "
+                              "with several repos takes absolute paths only)")
+    from core.run_worktree import CLAIM_RESOLVES
+    p_claim.add_argument("--resolve", choices=CLAIM_RESOLVES, default="merge")
+
     import pipeline_worktree as _pw
     _pw.refuse_if_worktree_copy(__file__)
     args = parser.parse_args()
@@ -14022,6 +14034,8 @@ def main() -> None:
         "run-diff": lambda a, r: _pw.cmd_run_diff(a, _resolve_run_file(a.project, a.run_id),
                                                   _get_workspace(), _BACKEND_DIR.parent),
         "run-repo-add": lambda a, r: _pw.cmd_run_repo_add(
+            a, _resolve_run_file(a.project, a.run_id), _get_workspace(), _BACKEND_DIR.parent),
+        "run-claim-main": lambda a, r: _pw.cmd_run_claim_main(
             a, _resolve_run_file(a.project, a.run_id), _get_workspace(), _BACKEND_DIR.parent),
         "stage-start": cmd_stage_start,
         "stage-complete": cmd_stage_complete,

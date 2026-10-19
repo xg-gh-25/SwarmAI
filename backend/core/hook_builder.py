@@ -405,7 +405,9 @@ async def build_hooks(
     # owner is live), and issue the one-time hook token for commands that change
     # worktree state by rewriting them via updatedInput. Fail-open; the token proves
     # to the CLI that THIS hook ran (an env var would be inherited by a hookless
-    # child). No other Bash hook may set updatedInput (the chain merge is last-wins).
+    # child). No other Bash hook may set updatedInput (the chain merge is last-wins);
+    # its approved-phase twin after dangerous_command_gate rewrites only the commands
+    # this phase skips (run_owner_gate.AFTER_APPROVAL), so one command gets one token.
     # Only for a real app session: the fallback id may be an agent id.
     if session_context is not None:
         from core.run_owner_gate import create_run_owner_gate
@@ -525,6 +527,18 @@ async def build_hooks(
     #       dead; it was never the real ceiling). run_1141ea02.
     registry.register("PreToolUse", gate, "dangerous_command_gate", matcher="Bash", no_timeout=True)
     logger.info(f"Dangerous command gate attached for session_key: {session_key}")
+
+    # ── PreToolUse: run-owner gate, approved phase (Bash-scoped) ──
+    # A command the user approves first (run-claim-main) gets its one-time hook token
+    # HERE, after the approval above, not in the check phase registered earlier: the
+    # approval can wait hours and the token lives 120s (hook_token.TOKEN_TTL_SECONDS).
+    # Must stay directly after dangerous_command_gate.
+    if session_context is not None:
+        from core.run_owner_gate import create_run_owner_gate
+        registry.register(
+            "PreToolUse", create_run_owner_gate(session_context, phase="approved"),
+            "run_owner_gate_approved", matcher="Bash",
+        )
 
     # ── PreToolUse: adversarial-commit gate (Bash-scoped) ────
     # R1 structural backstop: DENY `git commit` when NO sub-agent ran this session
@@ -649,11 +663,25 @@ async def build_hooks(
     # app id into every running run with no session_id that the call created (or that
     # it names by run id), so a run stays linked even when SWARM_APP_SESSION_ID was
     # stripped inside interpreter code or a script (security_hooks section comment).
-    # Never overwrites an existing session_id. Solo in its (PostToolUse, "Bash")
-    # group, so it bounds itself (_STAMP_TIMEOUT); fail-safe, returns {}.
+    # Never overwrites an existing session_id. Bounds itself (_STAMP_TIMEOUT); chained
+    # with main_dirty_reporter in the (PostToolUse, "Bash") group, so the chain's 5s
+    # per-hook timeout applies too; fail-safe, returns {}.
     if session_link_stamper is not None:
         registry.register(
             "PostToolUse", session_link_stamper, "session_link_stamper", matcher="Bash",
+        )
+
+    # ── PostToolUse: main-checkout edit reporter (Bash-scoped) ──
+    # Only while THIS session owns an isolated run with an active worktree: after each
+    # Bash call, report main-checkout files of the run's repos that changed since the
+    # last call (an interpreter script's write the worktree gate cannot parse), with
+    # the user-approved run-claim-main command. Reports only, never moves anything;
+    # bounds itself (3s) and fails open. Chained with the stamper (5s per hook).
+    if session_context is not None:
+        from core.main_dirty_scan import create_main_dirty_reporter
+        registry.register(
+            "PostToolUse", create_main_dirty_reporter(session_context),
+            "main_dirty_reporter", matcher="Bash",
         )
 
     # ── PostCompact: capture the compaction summary ──────────

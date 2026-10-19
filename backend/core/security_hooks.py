@@ -26,12 +26,14 @@ Public symbols
 import asyncio
 import fnmatch
 import functools
+import hashlib
 import json
 import logging
 import os
 import re
 import shlex
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -236,6 +238,69 @@ _IRREVERSIBLE_FALLBACK_RE = re.compile(
     r"|gh\s+api\b[^\n;|&]*?(?:-X\s*(?:DELETE|PATCH|PUT)|--method[ =]\s*(?:DELETE|PATCH|PUT)|visibility=)",
     re.IGNORECASE,
 )
+
+
+_CLAIM_CALL_RE = re.compile(r"\bclaim_main\s*\(")
+# a python interpreter word: only a command that runs one can CALL claim_main(
+_PYTHON_RE = re.compile(r"(?:^|[\s;&|(`'\"/=])python[0-9.]*(?:\s|$|[;&|)`'\"])")
+
+
+_CLAIM_APPROVALS: "dict[tuple[str, str], float]" = {}
+_CLAIM_APPROVAL_TTL = 120.0
+
+
+def _claim_key(tool_use_id: "str | None", command: str) -> "tuple[str, str]":
+    return (str(tool_use_id or ""), hashlib.sha256(command.encode()).hexdigest())
+
+
+def record_claim_approval(tool_use_id: "str | None", command: str) -> None:
+    """dangerous_command_gate: the user approved THIS claim command (this tool call)."""
+    now = time.monotonic()
+    for k, t in list(_CLAIM_APPROVALS.items()):
+        if now - t > _CLAIM_APPROVAL_TTL:
+            _CLAIM_APPROVALS.pop(k, None)
+    _CLAIM_APPROVALS[_claim_key(tool_use_id, command)] = now
+
+
+def consume_claim_approval(tool_use_id: "str | None", command: str) -> bool:
+    """run_owner_gate (phase approved): was this exact command approved by the user for
+    this tool call? One use. Position after the approval gate is not proof: a hook that
+    raises is skipped by the chain, so without this record a crash in the approval gate
+    would hand the claim its token unapproved."""
+    t = _CLAIM_APPROVALS.pop(_claim_key(tool_use_id, command), None)
+    return t is not None and time.monotonic() - t <= _CLAIM_APPROVAL_TTL
+
+
+def _is_main_claim(command: str) -> bool:
+    """Fail-closed predicate: does this command claim main-checkout edits into a run?
+
+    ``run-claim-main`` (run_worktree.claim_main) moves files out of the main checkout,
+    possibly another session's edit, so it never runs on the agent's word alone: True
+    sends it through the approval flow below, independent of dangerous_commands.json
+    (a glob there would never reach an install whose file predates the command). It
+    matches the two ways to RUN it, whatever prefix or wrapper (``cd … &&``, ``env``):
+    a shell token equal to ``run-claim-main`` (the CLI subcommand), or a CALL of the
+    function, ``claim_main(`` (``python -c``, a heredoc). A name that only mentions it —
+    ``grep claim_main``, ``tests/test_run_claim_main.py``, a commit message — is not a
+    claim (each match costs the user a prompt, and a headless agent a deny). On a parse
+    error the raw text is searched the same way."""
+    if "claim" not in command:
+        return False
+    if _CLAIM_CALL_RE.search(command) and _PYTHON_RE.search(command):
+        # a call, in a command that runs python (`python -c`, a heredoc fed to python);
+        # the same text in `grep "def claim_main("` or a commit message is a mention
+        return True
+    if "run-claim-main" not in command:
+        return False
+    # the CLI subcommand: exactly the calls run_owner_gate would issue a token for (a
+    # python running artifact_cli.py with that subcommand); `grep run-claim-main` is a
+    # mention, and any other wrapper (`bash -c "…"`) gets no token, so the CLI refuses it
+    from core.run_owner_gate import parse_cli_calls
+    calls, _single = parse_cli_calls(command)
+    if not calls and _gate_shell_segments(command, []) is None:
+        return True   # unparseable: fail closed
+    return any(c.get("tool") == "artifact_cli" and c.get("sub") == "run-claim-main"
+               for c in calls)
 
 
 def _is_irreversible_external_op(command: str) -> bool:
@@ -1083,6 +1148,7 @@ def create_dangerous_command_gate(
             or _is_dangerous_rm(command)
             or _is_irreversible_external_op(command)
             or _targets_irreplaceable_store(command)  # rm/mv of DDD/Library/.context (run_a456640f)
+            or _is_main_claim(command)  # moves main-checkout edits into a run (run_3b9b1515)
         )
         # DoD1: local history-rewrite (rebase / reset --hard / commit --amend /
         # filter-*) is dangerous ONLY when a SIBLING live session could lose work
@@ -1116,8 +1182,10 @@ def create_dangerous_command_gate(
                 }
             }
 
-        # Check session approvals
-        if permission_mgr.is_command_approved(session_key, command):
+        # Check session approvals. A claim is asked every time: the same command text
+        # can name a path another session has written since it was approved.
+        if not _is_main_claim(command) and permission_mgr.is_command_approved(session_key,
+                                                                               command):
             logger.info("[APPROVED] Session-approved command: %s", command[:50])
             return {"decision": "approve"}
 
@@ -1170,6 +1238,8 @@ def create_dangerous_command_gate(
 
         if decision == "approve":
             permission_mgr.approve_command(session_key, command)
+            if _is_main_claim(command):
+                record_claim_approval(tool_use_id, command)
             return {"decision": "approve"}
 
         # Distinguish an explicit user denial from a timeout (fix #2/#3). Both

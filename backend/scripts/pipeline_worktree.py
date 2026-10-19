@@ -13,6 +13,8 @@ Key public symbols:
 - ``completion_block`` / ``after_status_write`` — completion gate + release (§8.2, §8.4).
 - ``reap_note`` — what a non-owner terminal writer records (``release_requested``).
 - ``cmd_run_diff`` — ``run-diff --mark/--since`` (§6.3).
+- ``cmd_run_claim_main`` / ``claim_command`` — move this session's uncommitted
+  main-checkout edits into the run (user-approved; ``run_worktree.claim_main``).
 - ``sweep_for_cli`` — run-create's sweep (only this session's own runs).
 """
 from __future__ import annotations
@@ -30,7 +32,7 @@ from core.run_lock import RunLockTimeout, acquire_for_process, atomic_write_json
 LOCKED_COMMANDS = frozenset({
     "run-update", "run-commit", "run-checkpoint", "run-resume", "run-report",
     "stage-start", "stage-complete", "publish", "run-observe", "run-diff",
-    "run-surface-changes", "run-repo-add",
+    "run-surface-changes", "run-repo-add", "run-claim-main",
 })
 WORKTREE_STAGES = ("plan", "build", "goal_cycle")
 HOOKLESS_LIMIT = 3
@@ -164,6 +166,53 @@ def self_cmd(args: str) -> str:
     return f"{shlex.quote(c['python'])} {shlex.quote(c['script'])} {args}"
 
 
+CLAIM_RULE = ("Claim only files THIS session wrote (another session's edits stay where they "
+              "are); the user approves each claim. A file that does not merge with the "
+              "run's change takes --resolve keep-worktree or --resolve take-main.")
+
+
+def claim_command(run_state: dict, run_id: str, files, resolve: "str | None" = None) -> str:
+    """The one ``run-claim-main`` command for *files*: a single command of the absolute
+    CLI. Callers pass absolute file paths, so a run with several repos routes each file
+    to the repo that holds it (rw.plan_claim refuses a relative one there)."""
+    return self_cmd(rw.claim_args(str(run_state.get("project") or ""), run_id, files, resolve))
+
+
+def _main_uncommitted(run_state: dict, run_id: str, created: "list[dict]", extra: dict,
+                      run_dir: Path) -> None:
+    """At worktree creation (stage-start or run-repo-add): report each new repo's
+    uncommitted main-checkout changes (they stay in main; one the run's own session
+    wrote must be claimed, not left behind), and record them as the post-tool
+    reporter's baseline (main_dirty_scan), so only later changes are reported again."""
+    from core import main_dirty_scan
+    found: dict = {}
+    files: "list[str]" = []
+    for e in created:
+        main = os.path.realpath(str(e["main"]))
+        try:
+            rows = rw.main_dirty(main)
+        except rw.WorktreeError as err:
+            extra.setdefault("warnings", []).append(
+                f"could not list uncommitted changes in {main}: {err.message}")
+            continue
+        main_dirty_scan.record_baseline(run_dir, main, rows)
+        if rows:
+            shown = rows[:main_dirty_scan.MAX_LISTED]
+            found[e["repo_name"]] = [{"path": r["path"], "status": r["status"]} for r in shown]
+            if len(rows) > len(shown):
+                extra.setdefault("main_uncommitted_more", {})[e["repo_name"]] = (
+                    f"+{len(rows) - len(shown)} more: `git -C {main} status`")
+            files += [os.path.join(main, r["path"]) for r in shown]
+    if found:
+        extra["main_uncommitted"] = found
+        # the files are listed, never pre-filled into the command: nothing proves which
+        # are this session's, so the agent names the ones it wrote (and the user approves)
+        extra["claim_hint"] = (f"{len(files)} uncommitted change(s) stay in the main checkout "
+                               f"(not proven to be this session's): {', '.join(files)}. "
+                               + CLAIM_RULE + " Claim, naming only the files this session "
+                               "wrote: " + claim_command(run_state, run_id, []))
+
+
 def is_isolated(run_state: dict) -> bool:
     return run_state.get("worktree_mode") == "isolated"
 
@@ -295,6 +344,7 @@ def _decide_and_create(*, run_id, stage, run_file, run_state, run_dir, workspace
     run_state["worktree_mode"] = "isolated"
     rw.stamp_workspace(run_id, workspace)  # WT_ROOT/<run_id>/ also arms the write gate
     _persist(run_file, run_state, cli=cli_record())
+    _main_uncommitted(run_state, run_id, created, extra, run_dir)
     return "isolated"
 
 
@@ -383,15 +433,18 @@ def _restore_released(run_id: str, stage: str, run_file: Path, run_state: dict,
             stage_fail(stage, err, "tell the user: restore it by hand from the ledger README "
                                    f"({e.get('ledger')}), or abandon this run")
         run_state["worktrees"][run_state["worktrees"].index(e)] = new
-        restored.append(name)
+        restored.append(dict(new, main=str(mains[name])))
         _persist(run_file, run_state)
     run_state.pop("worktree_released_stale", None)
     _save(run_file, lambda d: d.pop("worktree_released_stale", None))
-    return {"worktree_restored": restored,
-            "restore_note": "this run's worktree was released after a long idle period and "
-                            "has been rebuilt from its ledger snapshot (un-added files are "
-                            "still un-added); rerun the test runner before deliver"} \
-        if restored else {}
+    if not restored:
+        return {}
+    out = {"worktree_restored": [e["repo_name"] for e in restored],
+           "restore_note": "this run's worktree was released after a long idle period and "
+                           "has been rebuilt from its ledger snapshot (un-added files are "
+                           "still un-added); rerun the test runner before deliver"}
+    _main_uncommitted(run_state, run_id, restored, out, run_file.parent)
+    return out
 
 
 def _main_overlap(run_id: str, entry: dict, wt: Path, main: Path, since: str) -> "list[str]":
@@ -713,6 +766,20 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
                         continue
                 _persist(run_file, run_state, **({"integration": "partial"} if landed else {}))
                 nxt = _NEXT.get(err.code, "tell the user")
+                if err.code == "blocked_by_uncommitted" and err.data.get("files"):
+                    nxt = (f"if this session wrote {', '.join(err.data['files'])} in the main "
+                           "checkout, claim it into the run, then rerun stage-complete: "
+                           + claim_command(run_state, run_id,
+                                           [os.path.join(str(m), f) for f in err.data["files"]])
+                           + " (add --resolve keep-worktree to keep the run's version, or "
+                           "--resolve take-main to take main's). After keep-worktree the "
+                           "reviewed code is unchanged: rerun stage-complete. When the claim "
+                           "changed the worktree (its output lists worktree_changed), that "
+                           "code is untested and unreviewed: rerun the test runner (--mode "
+                           "verify), then "
+                           + _rerun(run_state, run_id, "stage-start", "deliver")
+                           + ", then stage-complete. " + CLAIM_RULE
+                           + " Otherwise: " + nxt)
                 if landed:
                     nxt = f"{', '.join(landed)} already landed; for {name}: {nxt}"
                 stage_fail("deliver", err, nxt)
@@ -1006,9 +1073,82 @@ def cmd_run_repo_add(args, run_file: Path, workspace, self_repo) -> None:
         d["cli"] = cli_record()
     _save(run_file, m)
     wt = rw.wt_path(rid, entry["repo_name"])
-    print(json.dumps({"ok": True, "worktree": str(wt), "main": str(main), "created": True,
-                      "rule": f"edit {wt}/<path> instead of {main}/<path> for this repo; "
-                              "new files need `git add` there"}))
+    out = {"ok": True, "worktree": str(wt), "main": str(main), "created": True,
+           "rule": f"edit {wt}/<path> instead of {main}/<path> for this repo; "
+                   "new files need `git add` there"}
+    _main_uncommitted(data, rid, [dict(entry, main=str(main))], out, run_file.parent)
+    print(json.dumps(out))
+
+
+def cmd_run_claim_main(args, run_file: Path, workspace, self_repo) -> None:
+    """``run-claim-main --files P... [--resolve R]``: move uncommitted main-checkout edits
+    of the run's repos into its worktree (rw.claim_main). Owner-only (hook token), under
+    the run lock (LOCKED_COMMANDS); dangerous_command_gate asks the user first, and the
+    owner gate's check phase dry-runs the same rw.plan_claim before it asks. Every repo
+    is planned before any file moves; records ``claimed`` on each entry."""
+    data = json.loads(run_file.read_text("utf-8"))
+    rid = args.run_id
+    if not is_isolated(data) or data.get("status") in TERMINAL:
+        _emit_fail({"ok": False, "code": "not_isolated", "error": f"run {rid} is not a live "
+                    "isolated run: its edits are in the main checkout already"}, 2)
+    mains = mains_for(data, workspace, self_repo, rid)
+    active = [(e, mains[e["repo_name"]]) for e in _entries(data)
+              if e.get("state") == "active" and e.get("repo_name") in mains]
+    if not active:
+        _emit_fail({"ok": False, "code": "not_isolated", "error": f"run {rid} has no active "
+                    "worktree to claim into", "next": "a repo gets one with run-repo-add"}, 2)
+    try:
+        # read-only plan of every repo first (rw.plan_claim, the approval hook's planner
+        # too): a refusal moves nothing, and an input error costs no token
+        plan = rw.plan_claim(rid, active, args.files, args.resolve)
+    except rw.WorktreeError as err:
+        nxt = ({"next": "give absolute paths: " + claim_command(
+                    data, rid, ["<main checkout>/" + f for f in err.data.get("files") or []],
+                    args.resolve if args.resolve != "merge" else None)}
+               if err.data.get("relative") else {})
+        _emit_fail({"ok": False, **err.as_dict(), **nxt}, 1)
+    ok, why = _token(run_file.parent, data, rid, "run-claim-main")
+    if not ok:
+        _emit_fail({"ok": False, "code": "hookless_session", "error": why,
+                    "next": "run it as ONE command from the session that owns the run: "
+                            + claim_command(data, rid, args.files, args.resolve)}, 1)
+    out: dict = {"ok": True, "claimed": {}, "main_left": {}, "backup": {},
+                 "worktree_changed": {}}
+    for entry, main, files in plan:
+        name = entry["repo_name"]
+        try:
+            res = rw.claim_main(rid, entry, main, files, resolve=args.resolve)
+        except rw.WorktreeError as err:
+            _emit_fail({"ok": False, **err.as_dict(), **({"claimed": out["claimed"]}
+                                                       if out["claimed"] else {})}, 1)
+
+        def m(d: dict, _n=name, _r=res) -> None:
+            for e in d.get("worktrees") or []:
+                if isinstance(e, dict) and e.get("repo_name") == _n:
+                    e.setdefault("claimed", []).append(
+                        {"at": rw._now_iso(), "files": _r["claimed"], "backup": _r["backup"],
+                         "main_left": _r["main_left"], "resolve": args.resolve})
+        _save(run_file, m)
+        out["claimed"][name], out["backup"][name] = res["claimed"], res["backup"]
+        if res["main_left"]:
+            out["main_left"][name] = res["main_left"]
+        if res["worktree_changed"]:
+            out["worktree_changed"][name] = res["worktree_changed"]
+        if res.get("error"):   # stopped mid-claim: what moved is recorded above
+            out.update(ok=False, code="claim_interrupted", error=res["error"],
+                       next="nothing after the failing file was touched; rerun the claim "
+                            "for the files under main_left once the main checkout is free")
+            _emit_fail(out, 1)
+    if out["main_left"]:
+        out["warning"] = ("main_left: these files changed in the main checkout while being "
+                          "claimed, so they stayed there and the worktree was not changed; "
+                          "someone else is writing them")
+    if out["worktree_changed"]:
+        out["next"] = ("the worktree changed: this code is untested and unreviewed. If this "
+                       "run already started DELIVER, rerun the test runner (--mode verify), "
+                       "then " + _rerun(data, rid, "stage-start", "deliver")
+                       + ", then stage-complete; otherwise continue the current stage")
+    print(json.dumps(out, ensure_ascii=False))
 
 
 def sweep_for_cli(workspace) -> "dict | None":
