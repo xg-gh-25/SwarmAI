@@ -4245,6 +4245,11 @@ def _verify_run_shas(shas: list[str], by_repo: "dict[str, list[str]]",
 # (fail-loud) rather than silently committing without the audit projection. Kept opaque so
 # a legitimate warning cannot accidentally begin with it.
 _FAILLOUD_SENTINEL = "⛔FAILLOUD⛔ deliverable B:"
+# The report's §9 Lessons is still a placeholder: run-commit ran before the lessons
+# were seeded. Callers REFUSE the commit on it (nothing staged yet): committing the
+# code now and B later is what split 15 runs into a code commit + a REPORT-only
+# commit with the same subject — one delivery must be ONE commit (code + B).
+_ORDERING_SENTINEL = "⛔ORDER⛔ deliverable B:"
 
 
 def _generate_review_deliverable(
@@ -4435,13 +4440,17 @@ def _generate_review_deliverable(
         # channel as the no-REPORT guard above); fix the ordering + re-run run-commit.
         if _report_section9_is_degenerate(report_content):
             return [], [
-                f"deliverable B skipped: ledger A's REPORT.md §9 Lessons is a DEGENERATE "
-                f"placeholder (no real reflect lessons) at run-commit time — freezing it "
-                f"into git-committed B would be permanent A/B drift the completion gate "
-                f"cannot see. The DELIVER ordering (seed lessons into the reflect record "
-                f"→ run-report → run-commit) was violated: run-commit ran before §9 was "
-                f"populated. Seed the lessons, re-run run-report, then re-run run-commit "
-                f"to produce a correct review deliverable."
+                f"{_ORDERING_SENTINEL} ledger A's REPORT.md §9 Lessons is still a "
+                f"placeholder (no reflect lessons seeded), so the review deliverable "
+                f"cannot be built and the code would land without it. Seed the lessons, "
+                f"refresh the report, then run run-commit again (one commit, code + B):\n"
+                f"  python backend/scripts/artifact_cli.py run-update --project {project} "
+                f"--run-id {run_id} --stage-json '{{\"stage\":\"reflect\",\"status\":"
+                f"\"recorded\",\"lessons\":[\"[pitfall] ...\"]}}'\n"
+                f"  python backend/scripts/artifact_cli.py run-report --project {project} "
+                f"--run-id {run_id} --force\n"
+                f"No cross-transferable lesson → one honest '[note] no cross-transferable "
+                f"lesson — <why>' (≥ 20 chars)."
             ]
         # B is a reviewer-facing PROJECTION of ledger A — NOT a verbatim copy.
         # Keep only the whitelist sections; re-render §8 from the LIVE staging set
@@ -5270,6 +5279,16 @@ def cmd_gate0_prompt(args, reg: ArtifactRegistry) -> None:
     if not (isinstance(und.get("claim"), str) and und["claim"].strip()
             and isinstance(und.get("evidence"), str) and und["evidence"].strip()):
         fail("understanding needs a non-empty `claim` and `evidence` (the skeptic attacks them)")
+    # Run EVALUATE's own understanding checks (M1 solution language, M2 hedges) BEFORE
+    # handing out a prompt. Otherwise the skeptic attacks a claim stage-complete will
+    # reject, the reworded claim needs a second prompt and a second skeptic, and the
+    # third round trips E_OVER_BUDGET (run_925edb0e: 3 Gate-0 rounds, 2 of them wording).
+    import pipeline_validator as pv
+    und_errs = pv._check_understanding_gate({"understanding": und},
+                                            str(_state.get("profile") or "full"))
+    if und_errs:
+        fail("fix the understanding before spawning the skeptic (stage-complete applies "
+             "the same check): " + " | ".join(und_errs))
     if claims is not None and not (isinstance(claims, list)
                                    and all(isinstance(c, str) and c.strip() for c in claims)):
         fail("`claims` must be a list of non-empty strings")
@@ -5551,6 +5570,19 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                     "run_id": args.run_id,
                 }), file=sys.stderr)
                 sys.exit(2)
+            # Lessons not seeded yet: refuse now (nothing staged), so code and B land
+            # together on the retry instead of code now and a REPORT-only commit later.
+            # --force does not bypass it: the fix is one run-update, never a skip.
+            if any(w.startswith(_ORDERING_SENTINEL) for w in warnings_b):
+                print(json.dumps({
+                    "blocked": True,
+                    "error": "COMMIT REFUSED — the review deliverable (REPORT.md) is not "
+                             "ready, and a run's code and its report go in ONE commit.",
+                    "next_action": [w[len(_ORDERING_SENTINEL):].strip() for w in warnings_b
+                                    if w.startswith(_ORDERING_SENTINEL)][0],
+                    "run_id": args.run_id,
+                }, ensure_ascii=False), file=sys.stderr)
+                sys.exit(2)
             if _b_paths:
                 # Append B's files to the target repo's staging list so the EXISTING
                 # pathspec `git add -- <path>` loop stages them — never `git add -A`.
@@ -5663,6 +5695,26 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                                  "--", *real_files],
                                 capture_output=True, text=True, timeout=10,
                                 env=_LITERAL_GIT_ENV()).stdout.strip()
+        # Never a REPORT-only commit: when this run's source is already committed and
+        # only B changed (a repeat run-commit, e.g. after REFLECT refreshed the report),
+        # committing B alone splits one delivery across two SHAs with the same subject.
+        # Unstage B, put a tracked B back to its committed bytes, and fall through to
+        # the already-committed crediting below. (--sha is the exception: the code was
+        # committed by hand outside run-commit, so B can only follow it.)
+        _b_rel = {os.path.relpath(p, root) for p in _b_paths} if not sha_commits else set()
+        if staged and _b_rel and set(staged.splitlines()) <= _b_rel:
+            _only_b = sorted(set(staged.splitlines()))
+            subprocess.run(["git", "-C", root, "reset", "-q", "--", *_only_b],
+                           capture_output=True, text=True, timeout=10, env=_LITERAL_GIT_ENV())
+            _tracked_b = [p for p in _only_b if _path_is_tracked(p, root)]
+            if _tracked_b:
+                subprocess.run(["git", "-C", root, "checkout", "--", *_tracked_b],
+                               capture_output=True, text=True, timeout=10,
+                               env=_LITERAL_GIT_ENV())
+            warnings.append(
+                f"[{root}] only the review deliverable changed — not committed on its own "
+                f"(code and REPORT.md belong to one commit); left as committed: {_only_b}")
+            staged = ""
         if not staged:
             # FIX B (run_c526d393): nothing staged = this run's files were ALREADY
             # committed per-cycle (BUILD.md:428 "commit after each green cycle").
@@ -10211,6 +10263,10 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
         if loud:
             raise WorktreeError("deliverable_failed", "the review deliverable (B) could not be "
                                 "generated: " + "; ".join(loud)[:300])
+        order = [w for w in warns if w.startswith(_ORDERING_SENTINEL)]
+        if order:  # land code + B together, never code now and B later
+            raise WorktreeError("deliverable_not_ready",
+                                order[0][len(_ORDERING_SENTINEL):].strip()[:900])
         warnings.extend(warns)
         return [os.path.relpath(p, str(wt)) for p in paths]
 

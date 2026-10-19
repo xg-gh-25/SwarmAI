@@ -128,7 +128,8 @@ def _write_run(ws_root, rid, files, created="2026-07-04T00:00:00+00:00"):
     d.mkdir(parents=True, exist_ok=True)
     state = {"id": rid, "project": "TestProject", "requirement": "Fix the thing",
              "profile": "bugfix", "status": "running", "created_at": created,
-             "stages": [{"stage": "deliver", "status": "completed", "push_ready": True}],
+             "stages": [{"stage": "deliver", "status": "completed", "push_ready": True},
+                        {"stage": "reflect", "status": "recorded", "lessons": ["[pitfall] a durable lesson long enough to count"]}],
              "files_touched": files}
     (d / "run.json").write_text(json.dumps(state), encoding="utf-8")
     return d / "run.json"

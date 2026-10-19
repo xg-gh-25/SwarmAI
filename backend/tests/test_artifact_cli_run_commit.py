@@ -36,6 +36,20 @@ def _write_run(workspace, run_id, *, status="running", profile="bugfix",
     return run_dir / "run.json"
 
 
+# A delivered run: PUSH-READY deliver + seeded reflect lessons. run-commit refuses
+# until the lessons exist, so code and REPORT.md land in ONE commit.
+_DELIVERED = [
+    {"stage": "deliver", "status": "completed", "push_ready": True},
+    {"stage": "reflect", "status": "recorded",
+     "lessons": ["[pitfall] a durable lesson long enough to count"]},
+]
+
+
+def _src(files):
+    """A commit's files minus this run's review deliverable (which rides along)."""
+    return [f for f in files if not f.startswith(".aidlc/deliverables/")]
+
+
 def _run_update(workspace, run_id, **kw):
     from scripts.artifact_cli import cmd_run_update
     from unittest.mock import patch
@@ -100,7 +114,7 @@ class TestRunCommitGates:
 
     def test_refuses_when_files_touched_empty(self, workspace, capsys):
         _write_run(workspace, "run_e",
-                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   stages=_DELIVERED,
                    files_touched=[])
         r = _run_commit(workspace, "run_e")
         assert r.get("exit") == 2
@@ -139,7 +153,7 @@ class TestRunCommitPathspecOnly:
         (repo / "parallel.py").write_text("v2 — OTHER session, must NOT be committed\n")
 
         _write_run(workspace, "run_g",
-                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   stages=_DELIVERED,
                    files_touched=[str(repo / "mine.py")])
         _run_commit(workspace, "run_g")
 
@@ -152,7 +166,9 @@ class TestRunCommitPathspecOnly:
         assert "mine.py" not in status, "this run's file must be committed (clean)"
         # the last commit touched ONLY mine.py
         last = self._git(repo, "show", "--name-only", "--format=", "HEAD").stdout.strip()
-        assert last == "mine.py", f"commit should contain only mine.py, got: {last!r}"
+        # this run's file + its review deliverable, in the SAME commit
+        assert last.splitlines() == [".aidlc/deliverables/run_g/REPORT.md", "mine.py"], \
+            f"commit should contain only mine.py and its REPORT.md, got: {last!r}"
 
     def test_commit_ignores_pre_staged_foreign_file(self, workspace, tmp_path, capsys):
         """#1d (run_dd8411f6): the FOREIGN file is pre-STAGED into the index
@@ -178,7 +194,7 @@ class TestRunCommitPathspecOnly:
         self._git(repo, "add", "--", "parallel.py")  # ← pre-staged into the index
 
         _write_run(workspace, "run_prestage",
-                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   stages=_DELIVERED,
                    files_touched=[str(repo / "mine.py")])
         _run_commit(workspace, "run_prestage")
 
@@ -186,7 +202,9 @@ class TestRunCommitPathspecOnly:
         assert result["pushed"] is False
         # The HEAD commit must contain ONLY mine.py — NOT the pre-staged parallel.py
         last = self._git(repo, "show", "--name-only", "--format=", "HEAD").stdout.strip()
-        assert last == "mine.py", f"commit must contain only mine.py, got: {last!r}"
+        # this run's file + its review deliverable, in the SAME commit
+        assert last.splitlines() == [".aidlc/deliverables/run_prestage/REPORT.md", "mine.py"], \
+            f"commit must contain only mine.py and its REPORT.md, got: {last!r}"
         # parallel.py must remain STAGED (still in the index, uncommitted)
         staged = self._git(repo, "diff", "--cached", "--name-only").stdout
         assert "parallel.py" in staged, "parallel session's pre-staged file must stay staged, not committed"
@@ -212,7 +230,7 @@ class TestRunCommitPathspecOnly:
         (repo / "parallel.py").write_text("v2 other\n")
 
         _write_run(workspace, "run_w",
-                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   stages=_DELIVERED,
                    files_touched=[str(repo / "mine.py")])  # absolute path
         _run_commit(workspace, "run_w")
         result = json.loads(capsys.readouterr().out)
@@ -231,7 +249,7 @@ class TestRunCommitPathspecOnly:
         self._git(repo, "commit", "-qm", "base")
         (repo / "f.py").write_text("b\n")
         _write_run(workspace, "run_h",
-                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   stages=_DELIVERED,
                    files_touched=[str(repo / "f.py")])
         _run_commit(workspace, "run_h")
         result = json.loads(capsys.readouterr().out)
@@ -271,7 +289,7 @@ class TestRunCommitPersistsCommits:
     def test_commits_persisted_to_run_json(self, workspace, tmp_path, capsys):
         repo = self._setup_repo(tmp_path, "prepo")
         rf = _write_run(workspace, "run_p",
-                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        stages=_DELIVERED,
                         files_touched=[str(repo / "f.py")])
         _run_commit(workspace, "run_p")
         result = json.loads(capsys.readouterr().out)
@@ -282,12 +300,12 @@ class TestRunCommitPersistsCommits:
         assert "commits" in data, "run.json must persist commits[] after run-commit"
         assert len(data["commits"]) == 1
         assert data["commits"][0]["sha"] == expected_sha
-        assert data["commits"][0]["files"] == ["f.py"]
+        assert _src(data["commits"][0]["files"]) == ["f.py"]
 
     def test_commits_dedup_across_calls(self, workspace, tmp_path, capsys):
         repo = self._setup_repo(tmp_path, "prepo2")
         rf = _write_run(workspace, "run_q",
-                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        stages=_DELIVERED,
                         files_touched=[str(repo / "f.py")])
         _run_commit(workspace, "run_q")
         capsys.readouterr()
@@ -302,7 +320,7 @@ class TestRunCommitPersistsCommits:
         # run_state but BEFORE it writes back. The fresh re-read must preserve it.
         repo = self._setup_repo(tmp_path, "prepo3")
         rf = _write_run(workspace, "run_r",
-                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        stages=_DELIVERED,
                         files_touched=[str(repo / "f.py")])
         from unittest.mock import patch
         from scripts import artifact_cli as ac
@@ -363,7 +381,7 @@ class TestRunCommitAlreadyCommitted:
         expected_sha = self._git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
 
         rf = _write_run(workspace, "run_ab",
-                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        stages=_DELIVERED,
                         files_touched=[str(repo / "f.py")])
         _run_commit(workspace, "run_ab")
         data = json.loads(rf.read_text())
@@ -386,7 +404,7 @@ class TestRunCommitAlreadyCommitted:
                    "GIT_COMMITTER_DATE": "2020-01-01T00:00:00"}
         self._git(repo, "commit", "-qm", "ancient\n\nRun: run_ab2", env=env_old)
         rf = _write_run(workspace, "run_ab2",
-                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        stages=_DELIVERED,
                         files_touched=[str(repo / "f.py")])
         _run_commit(workspace, "run_ab2")
         data = json.loads(rf.read_text())
@@ -492,7 +510,7 @@ class TestRunCommitGhostPathRobustness:
         # commit → commits[] empty. Post-fix: real.py commits, ghost dropped.
         repo = self._setup_repo(tmp_path, "ghostrepo")
         rf = _write_run(workspace, "run_ghost",
-                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        stages=_DELIVERED,
                         files_touched=[str(repo / "real.py"), str(repo / "ghost.py")])
         _run_commit(workspace, "run_ghost")
         result = json.loads(capsys.readouterr().out)
@@ -500,7 +518,7 @@ class TestRunCommitGhostPathRobustness:
             f"real.py must commit despite the ghost path: {result}"
         data = json.loads(rf.read_text())
         assert data.get("commits"), "commits[] must be populated (the Canvas surface source)"
-        assert data["commits"][0]["files"] == ["real.py"], \
+        assert _src(data["commits"][0]["files"]) == ["real.py"], \
             f"only the real file committed, ghost dropped: {data['commits']}"
         # real.py is now clean (committed); the repo has no dangling ghost
         status = self._git(repo, "status", "--porcelain").stdout
@@ -539,7 +557,7 @@ class TestRunCommitGhostPathRobustness:
         # commits[] stays empty (honest), a WARN fires, and it does NOT crash.
         repo = self._setup_repo(tmp_path, "allghostrepo")
         rf = _write_run(workspace, "run_allghost",
-                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        stages=_DELIVERED,
                         files_touched=[str(repo / "nope1.py"), str(repo / "nope2.py")])
         cap = _run_commit(workspace, "run_allghost")
         assert cap.get("exit") in (None, 0), "must exit cleanly, not crash"
@@ -673,7 +691,7 @@ class TestAutoCommitCarriesProjectTrailer:
     ):
         repo = self._repo_with_change(tmp_path, "trailerrepo")
         _write_run(workspace, "run_tr",
-                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   stages=_DELIVERED,
                    files_touched=[str(repo / "f.py")])
         _run_commit(workspace, "run_tr")
         assert json.loads(capsys.readouterr().out)["committed"], "nothing was committed"
@@ -698,7 +716,7 @@ class TestAutoCommitCarriesProjectTrailer:
 
         repo = self._repo_with_change(tmp_path, "citrailerrepo")
         _write_run(workspace, "run_ci",
-                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   stages=_DELIVERED,
                    files_touched=[str(repo / "f.py")])
         _run_commit(workspace, "run_ci")
         capsys.readouterr()
@@ -867,7 +885,7 @@ class TestReviewDeliverableCheckin:
         run_id = "run_wsonly"
         run_file = _write_run(
             workspace, run_id,
-            stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+            stages=_DELIVERED,
             files_touched=[str(wsfile)],
         )
         (run_file.parent / "REPORT.md").write_text("# Report\n")
@@ -946,7 +964,7 @@ class TestRunCommitTrackedDeletion:
     def test_tracked_deletions_are_committed(self, workspace, tmp_path, capsys):
         repo = self._setup(tmp_path)
         rf = _write_run(workspace, "run_del",
-                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        stages=_DELIVERED,
                         files_touched=[str(repo / "keep.py"), str(repo / "pkg" / "gone.py"),
                                        str(repo / "pkg" / "old" / "only.py"),
                                        str(repo / "never_existed.py")])
@@ -983,17 +1001,17 @@ class TestRunCommitTrackedDeletion:
         monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "no_data_dir"))
         (repo / "unrelated_untracked.py").write_text("another session's work\n")
         rf = _write_run(workspace, "run_magic",
-                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        stages=_DELIVERED,
                         files_touched=[str(repo / "keep.py"), ":/", "pkg/*.py",
                                        str(repo / "*.py")])
         _run_commit(workspace, "run_magic")
         result = json.loads(capsys.readouterr().out)
         committed = self._git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
-        assert committed == ["keep.py"], f"only the real recorded file may commit: {committed}"
+        assert _src(committed) == ["keep.py"], f"only the real recorded file may commit: {committed}"
         status = self._git(repo, "status", "--porcelain").stdout
         assert "unrelated_untracked.py" in status, "an unrelated file must stay untouched"
         assert "pkg/gone.py" in status, "a deletion NOT recorded by this run must stay uncommitted"
-        assert json.loads(rf.read_text())["commits"][0]["files"] == ["keep.py"]
+        assert _src(json.loads(rf.read_text())["commits"][0]["files"]) == ["keep.py"]
 
 
     def test_recorded_directory_is_not_a_tracked_file(self, workspace, tmp_path, capsys,
@@ -1019,11 +1037,11 @@ class TestRunCommitTrackedDeletion:
         monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "no_data_dir"))
         (repo / "unrelated_untracked.py").write_text("another session's work\n")
         _write_run(workspace, "run_dir",
-                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   stages=_DELIVERED,
                    files_touched=[str(repo / "keep.py"), str(repo), str(repo / "pkg")])
         _run_commit(workspace, "run_dir")
         committed = self._git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
-        assert committed == ["keep.py"], committed
+        assert _src(committed) == ["keep.py"], committed
         assert "unrelated_untracked.py" in self._git(repo, "status", "--porcelain").stdout
 
 
@@ -1035,11 +1053,11 @@ class TestRunCommitTrackedDeletion:
         (repo / "pkg" / "gone.py").mkdir()          # tracked path is now a directory
         (repo / "pkg" / "gone.py" / "inner.py").write_text("x\n")
         _write_run(workspace, "run_dirswap",
-                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   stages=_DELIVERED,
                    files_touched=[str(repo / "keep.py"), str(repo / "pkg" / "gone.py")])
         _run_commit(workspace, "run_dirswap")
         committed = self._git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
-        assert committed == ["keep.py"], committed
+        assert _src(committed) == ["keep.py"], committed
 
 
 class TestForcedCommitIsRecorded:
@@ -1069,7 +1087,7 @@ class TestForcedCommitIsRecorded:
         repo = self._repo(tmp_path)
         rf = _write_run(workspace, "run_force1",
                         stages=[{"stage": "deliver", "status": "completed", "push_ready": False,
-                                 "push_ready_reason": "regression not clean"}],
+                                 "push_ready_reason": "regression not clean"}, _DELIVERED[1]],
                         files_touched=[str(repo / "f.py")])
         _run_commit(workspace, "run_force1", force=True)
         out = capsys.readouterr()
@@ -1082,7 +1100,7 @@ class TestForcedCommitIsRecorded:
     def test_qualified_commit_carries_no_force_mark(self, workspace, tmp_path, capsys):
         repo = self._repo(tmp_path)
         rf = _write_run(workspace, "run_force2",
-                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        stages=_DELIVERED,
                         files_touched=[str(repo / "f.py")])
         _run_commit(workspace, "run_force2", force=True)
         capsys.readouterr()
@@ -1139,3 +1157,61 @@ def test_explicit_push_ready_does_not_inherit_a_stale_reason(workspace, monkeypa
     rec = next(s for s in json.loads(rf.read_text())["stages"] if s["stage"] == "deliver")
     assert rec["push_ready"] is True
     assert "push_ready_reason" not in rec and "push_ready_capped" not in rec
+
+
+class TestOneDeliveryOneCommit:
+    """A run's code and its review deliverable (REPORT.md) land in ONE commit.
+
+    15 runs split into a code commit plus a REPORT-only commit with the same subject:
+    run-commit at DELIVER skipped B because the reflect lessons were not seeded, then a
+    later run-commit committed B alone. Now the first call refuses (nothing staged,
+    exact fix in the error, --force does not bypass), and a repeat call never commits
+    B on its own."""
+
+    def _git(self, repo, *a):
+        return subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True)
+
+    def _repo(self, tmp_path):
+        repo = tmp_path / "onerepo"
+        repo.mkdir()
+        for args in (("init", "-q"), ("config", "user.email", "t@t.co"),
+                     ("config", "user.name", "t")):
+            self._git(repo, *args)
+        (repo / "f.py").write_text("v1\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "base")
+        (repo / "f.py").write_text("v2\n")
+        return repo
+
+    @pytest.mark.parametrize("force", [False, True])
+    def test_no_lessons_refuses_and_commits_nothing(self, workspace, tmp_path, capsys, force):
+        repo = self._repo(tmp_path)
+        _write_run(workspace, "run_nolessons",
+                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   files_touched=[str(repo / "f.py")])
+        r = _run_commit(workspace, "run_nolessons", force=force)
+        err = capsys.readouterr().err
+        assert r.get("exit") == 2
+        assert "ONE commit" in err and "run-update" in err and "run-report" in err
+        assert self._git(repo, "rev-list", "--count", "HEAD").stdout.strip() == "1"
+        assert self._git(repo, "diff", "--cached", "--name-only").stdout == ""
+        assert not (repo / ".aidlc" / "deliverables" / "run_nolessons" / "REPORT.md").exists()
+
+    def test_code_and_report_share_one_sha_and_repeat_adds_none(self, workspace, tmp_path, capsys):
+        repo = self._repo(tmp_path)
+        rf = _write_run(workspace, "run_one", stages=_DELIVERED,
+                        files_touched=[str(repo / "f.py")])
+        _run_commit(workspace, "run_one")
+        capsys.readouterr()
+        files = self._git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
+        assert files == [".aidlc/deliverables/run_one/REPORT.md", "f.py"]
+        head = self._git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        # REFLECT refreshes ledger A's report; a repeat run-commit must not commit B alone.
+        report_a = rf.parent / "REPORT.md"
+        report_a.write_text(report_a.read_text() + "\nrefreshed after REFLECT\n")
+        _run_commit(workspace, "run_one")
+        out = json.loads(capsys.readouterr().out)
+        assert self._git(repo, "rev-parse", "HEAD").stdout.strip() == head, "no REPORT-only commit"
+        assert self._git(repo, "status", "--porcelain").stdout == "", "B restored to its commit"
+        assert any("not committed on its own" in w for w in out["warnings"]), out["warnings"]

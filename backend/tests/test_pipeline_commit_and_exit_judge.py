@@ -155,7 +155,8 @@ class TestRunCommitUsesTheBuilder:
         self._git(repo, "add", "-A")
         self._git(repo, "commit", "-qm", "base")
         (repo / "f.py").write_text("v2\n")
-        _write_run(ws, "run_msg", stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+        _write_run(ws, "run_msg", stages=[{"stage": "deliver", "status": "completed", "push_ready": True},
+                                          {"stage": "reflect", "status": "recorded", "lessons": ["[pitfall] a durable lesson long enough to count"]}],
                    files_touched=[str(repo / "f.py")])
         with patch.object(cli, "_load_stage_artifacts", return_value={"deliver": _deliver()}):
             _run_commit(ws, "run_msg")

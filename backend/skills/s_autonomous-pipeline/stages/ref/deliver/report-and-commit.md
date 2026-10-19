@@ -45,8 +45,11 @@ auto-generates it from the ledger and warns (non-blocking) that it did — your 
 ordering slipped and was recovered. If that generation FAILS (corrupt/unreadable
 ledger), the commit is BLOCKED (exit 2, "COMMIT BLOCKED"); nothing was staged, so no data
 is lost. On a transient fault, diagnose and re-run `run-report` + `run-commit`; there is
-no auto-retry by design. §9 content quality is still gated: never-seeded lessons give a
-degenerate §9 and B is SKIPPED-with-warning.
+no auto-retry by design. Never-seeded lessons (a placeholder §9) REFUSE the commit too
+(exit 2, "COMMIT REFUSED", `--force` does not bypass): nothing is staged, and the error
+carries the `run-update` (seed `reflect.lessons`) + `run-report --force` to run before
+`run-commit` again. A repeat `run-commit` whose code is already committed never commits
+REPORT.md on its own — one delivery is one commit, code + B (Agent Delivery Unit).
 
 Report location: `Projects/<P>/.artifacts/runs/<R>/REPORT.md`. Sections (rendered, not
 typed): TL;DR · §1 Requirement · §4.6 需求溯源审计 · §2 Evaluation · §3 Methodology · §4

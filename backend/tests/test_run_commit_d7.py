@@ -162,7 +162,8 @@ def _seed_run(tmp_path, rid, required_experts, *, push_ready=True, files=None):
     state = {
         "id": rid, "project": "SwarmAI", "status": "paused", "profile": "full",
         "requirement": "D7 test run", "files_touched": files,
-        "stages": [{"stage": "deliver", "status": "completed", "push_ready": push_ready}],
+        "stages": [{"stage": "deliver", "status": "completed", "push_ready": push_ready},
+                   {"stage": "reflect", "status": "recorded", "lessons": ["[pitfall] a durable lesson long enough to count"]}],
     }
     if required_experts is not None:
         state["required_experts"] = required_experts
