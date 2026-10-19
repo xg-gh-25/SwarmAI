@@ -4,7 +4,7 @@ date: 2026-10-19
 created: 2026-10-19
 updated: 2026-10-19
 project: SwarmAI
-status: v2 已确认（XG 2026-10-19 05:32「正好泡一下 Run 1：N2 + N4」）。Run 1 = run_925edb0e 实施中；N3 提到 Run 2（XG 2026-10-19 14:23）
+status: v2 已确认（XG 2026-10-19 05:32「正好泡一下 Run 1：N2 + N4」）；N3 于 16:06 修订为全自动（不收敛 → 根因复盘，不交给人）。Run 1 = run_925edb0e 实施中；N3 提到 Run 2（XG 2026-10-19 14:23）
 related: pipeline-speed-systematic-fix.md（A–G，大部分已落地）；parallel-session-commit-isolation.md（worktree 隔离，单独决定）
 ---
 # Pipeline 评审收敛：修复循环的系统化方案
@@ -19,7 +19,7 @@ related: pipeline-speed-systematic-fix.md（A–G，大部分已落地）；para
 |---|---|---|
 | N1 行为基线 | 修复把 HEAD 原本正确的行为改坏了，或者匹配范围多了/少了，几轮之后才由 reviewer 碰巧发现 | 第一次修复之前，工具先冻结一个可执行的基线：AC 测试、每个反例的回归测试，以及（对替换行为的改动）HEAD 和改动后的版本在同一个输入语料上的差分。每次修复都必须保持基线全绿。修复的 hunk 由工具反向变异，对应的测试必须变红。两个条件都满足后才生成复核 prompt |
 | N2 复核看改动，不看严重度 | LOW 级修复、没给置信度的风险修复不进复核，后来引出阻断问题；「是否阻断」有两套判定 | 只要有修复改动的代码，就要交给负责该区域的 reviewer。非阻断问题不在循环里修，记进 REPORT §10 和完成总结。「阻断」只保留一个判定函数，所有读者共用 |
-| N3 终止规则 | 补丁循环没有终点，`over_budget_reasons` 只记理由、照样继续 | 一轮复核没有新的阻断发现，就判定为收敛（沿用 G2 的语义）。第 3 轮还没收敛，就在当前对话里交给 XG 决定，附上未解决条目和每次修复引出了什么 |
+| N3 终止规则 | 补丁循环没有终点，`over_budget_reasons` 只记理由、照样继续 | 一轮复核没有新的阻断发现，就判定为收敛（沿用 G2 的语义）。第 3 轮还没收敛，由系统做根因复盘：方案对 → 剩余项进 REPORT、本地 commit；方案根上错了 → 自动退回 PLAN 重设计一次。不交给人 |
 | N4 发现台账 | 模型从 reviewer 的回答里手抄 findings；recheck 会把已经 RESOLVED 的 reviewer 也重派 | 台账由工具从 hook 已捕获的回答直接生成，合并重复条目。路由规则：只派还有待复核条目、或者负责区域被新修复改过的 reviewer |
 | N5 一套引擎 | REVIEW 的 spec-compliance 也会多轮不收敛 | REVIEW 的复核共用 N1–N4 |
 
@@ -134,45 +134,46 @@ v1 认为根因是「修复只对着触发它的那一处验证，没检查其�
 
 - 一轮复核里，所有被派出的 reviewer 都没有新的阻断发现 → 收敛，不再派下一轮。
 - red-team 每一轮找到的新形状，同时追加进 N1 的语料。之后同类形状由基线自动拦住，不用等下一轮人工复核。
-- 第 3 轮仍未收敛时，`gate2-recheck` 不再生成补丁复核，而是在当前对话里交给 XG 决定，选项是接受剩余风险、缩小范围或重设计。同时附上：
-  - 未解决的条目；
-  - 每次修复引出了哪些新发现；
-  - 当前的基线状态。
-  
-  这一步替代 `over_budget_reasons`。
+- 第 3 轮仍未收敛时，`gate2-recheck` 不再生成补丁复核，改为根因复盘（见下方「N3 规则定稿」）。这一步替代 `over_budget_reasons`。
 
-#### N3 规则定稿：再一再二不再三（XG 2026-10-19 14:58）
+#### N3 规则定稿：再一再二不再三，不收敛就查根因（XG 2026-10-19 14:58 / 16:06 修订）
 
-目标是**快速质量收敛**，不是把 reviewer 的意见磨到零。一次 review 找全，一次一起修；最多修两次，第三次交给人。
+目标是**自动、快速地收敛质量**，整个过程不需要人介入。一次 review 把问题找全，一次把阻断项全部修掉；最多修两次。第 3 轮还没收敛，不交给人，而是由系统自己回头查：**是不是根上就有问题**。
 
 | 轮 | 做什么 | 结束条件 |
 |---|---|---|
-| 第 1 轮 | 全量评审：所有声明的 expert 并行，一次交出全部发现 | — |
-| 修复 ① | 一次修掉第 1 轮的**全部阻断项**（`is_blocking`，N2）；非阻断项记进 REPORT §10，不进循环 | — |
-| 第 2 轮 | 只复核修复 ① 改到的 hunk（N2 路由） | 没有新的阻断项 → **收敛** |
+| 第 1 轮 | 全量评审：所有声明的 expert 并行，一次交出全部发现 | 没有阻断项 → 收敛 |
+| 修复 ① | 一次修掉第 1 轮的**全部阻断项**（`is_blocking`）；非阻断项记进 REPORT §10，不进循环 | — |
+| 第 2 轮 | 只复核修复 ① 改到的 hunk | 没有新的阻断项 → **收敛** |
 | 修复 ② | 一次修掉第 2 轮的全部阻断项 | — |
-| 第 3 轮 | 复核修复 ② | 没有新的阻断项 → 收敛；**还有 → 停，交给 XG**，不存在修复 ③ |
+| 第 3 轮 | 复核修复 ② | 没有新的阻断项 → 收敛；**还有 → 根因复盘**，不存在修复 ③ |
+| 根因复盘 | 派一个 fresh-context 的 root-cause expert，只读需求、PLAN、三轮发现、每轮修复引出了什么。回答一个问题：这些问题是**方案根上错了**，还是**方案对、只剩边角问题** | 见下 |
+
+根因复盘有两种结论，都由系统自动处理：
+
+- **方案对，只剩边角问题**：不再修。剩下的阻断项和非阻断项全部写进 REPORT §10，附上 root-cause expert 的理由，和代码一起 **commit（本地）**。这一轮的 `push_ready` 为 false，原因写成「Gate-2 第 3 轮剩 N 个阻断项，根因复盘判定为方案外的边角问题」。push 仍然由 push 前检查把关。
+- **方案根上错了**：自动退回 PLAN，带着根因结论重新设计，而不是在错的方案上继续打补丁。重新设计后，评审重新获得 3 轮额度。**每个 run 只能重新设计一次。** 第二次设计还是不收敛，就按上一条处理：本地 commit，问题写进 REPORT，`push_ready` 为 false，run 结束。
 
 规则：
 
-1. **复核轮的范围就是修复的 hunk。** 复核轮里 reviewer 报的、落在修复之外的新发现，不触发下一轮：非阻断项记进 REPORT §10；阻断项（含 red-team 的新攻击形状）直接列进交给 XG 的清单，由人决定是不是这次要修。这一条只限制「谁能让循环继续」，不降低任何发现的级别，也不丢弃任何发现。
-2. **交给 XG 时**附上：未解决的阻断项、每次修复引出了什么新发现、修复前后的对比。选项三个：接受剩余风险并提交（记为 intervention）、缩小范围（把未解决项拆成后续 run）、重设计（回 PLAN）。
+1. **复核轮的范围就是修复的 hunk。** 复核轮里落在修复之外的新发现不会让循环继续：非阻断项记进 REPORT §10；阻断项也记进 REPORT §10，并作为根因复盘的输入。不降级、不丢弃任何发现。
+2. **人不在循环里。** 不弹审批框，不等人回复。人看到的是结果：完成总结和 REPORT 里写明收敛了没有、剩下什么、根因复盘的结论、是否重新设计过。
 3. **没有逃生口。** 删掉 `over_budget_reasons`；`--force` 不能让 `gate2-recheck` 生成第 4 轮。
-4. **REVIEW 阶段用同一个计数**（spec-compliance 在 `run_d8762bc8` 复查了 4 次）：同样最多 3 轮，第 3 轮不过就交给 XG。原 N5 里的其余部分（共用 N1 基线等）留在 Run 4。
+4. **REVIEW 阶段用同一个计数**：spec-compliance 同样最多 3 轮，不收敛同样走根因复盘。
 
 验收标准（Run 2 的 exit criteria）：
 
 > 实现方案、关键决定和风险见 `pipeline-review-n3-implementation.md`。
 
-> **已先落地（2026-10-19，不等 Run 1）：轮数上限本身。** `core/review_round_gate.py`（PreToolUse，Agent|Task）在派 sub-agent 之前数这个 expert 在当前 stage 已完成的轮数，第 4 轮直接拒绝，拒绝文本就是上面的交给 XG 的要求；REVIEW 和 DELIVER 同样适用（AC5 的上限部分）。`ROUNDS_PER_EXPERT` 从 2 改为 3，reviewer prompt 改成「第 3 轮是最后一轮」。它不碰 Run 1 在改的 recheck 代码。下面 AC1–AC4、AC6 仍由 Run 2 实现。
+> **已先落地（c247dca3）：轮数上限本身。** `core/review_round_gate.py` 在派 sub-agent 之前数这个 expert 在当前 stage 已完成的轮数，第 4 轮直接拒绝。拒绝文本要改成「去做根因复盘」，原来是「交给 XG」，这部分随 Run 2 一起改。
 
-- AC1 `gate2-recheck`：第 3 轮复核完仍有阻断项时，不输出复核 prompt，返回 `escalate` 和上面的清单；退出码非 0 且 `--force` 无效。
+- AC1 `gate2-recheck`：第 3 轮复核完仍有阻断项时，不输出复核 prompt，改为输出 root-cause expert 的 prompt（需求、PLAN、三轮发现、每轮修复引出的新发现），返回 `root_cause: true`；`--force` 无效。
 - AC2 某一轮所有派出的 reviewer 都没有新的阻断项 → `converged: true`，下一步就是 meta-review，不再派复核。
-- AC3 复核轮里落在修复 hunk 之外的发现，不计入「继续循环」的判断，但出现在 REPORT §10 / 完成总结或交给 XG 的清单里，一条不少（测试比对条目总数）。
-- AC4 deliver `stage-complete` 只在两种情况下给 `push_ready: true`：已收敛；或者 XG 的决定已记录为 intervention。
-- AC5 REVIEW 的 spec-compliance 复查同样在第 3 轮后交给 XG。
+- AC3 每一条发现（含修复范围外的）最终都出现在 REPORT §10 / 完成总结里，一条不少（测试比对条目总数）。
+- AC4 root-cause 结论由 hook 从 expert 原话里解析（`ROOT-CAUSE VERDICT: SOUND | WRONG-APPROACH`），模型不能自己写。SOUND → 本地 commit、剩余项进 REPORT、`push_ready: false`；WRONG-APPROACH → 自动退回 PLAN，一个 run 只能退一次；第二次仍不收敛 → 和 SOUND 一样处理并结束。
+- AC5 REVIEW 的 spec-compliance 同样在第 3 轮后走根因复盘。
 - AC6 `over_budget_reasons` 不再被读取；旧 run.json 里有这个字段不报错。
-- 上线后验证：用 profiler 看接下来 5 个 full/bugfix run，Gate-2 轮数 100% ≤ 3，中位数 ≤ 2；交给 XG 的次数单独统计。
+- 上线后验证：接下来 5 个 full/bugfix run，Gate-2 轮数 100% ≤ 3（重新设计后最多再 3 轮），中位数 ≤ 2；根因复盘次数、两种结论各占多少、重新设计次数单独统计。
 
 ### N4 发现台账
 
@@ -202,7 +203,7 @@ spec-compliance 判定「AC 未满足」时，同样适用 N1 的基线和反向
 ## 5. 实施顺序
 
 1. **Run 1（full）：N2 + N4。** 统一阻断判定、台账生成与合并、按改动路由、非阻断项记进 REPORT §10。（run_925edb0e）
-2. **Run 2（full）：N3（含 REVIEW 的同一轮数上限）。** 规则和验收标准见 §3「N3 规则定稿」。终止规则：一轮复核没有新的阻断发现就收敛；第 3 轮仍未收敛就交给 XG 决定，替代 `over_budget_reasons`。先于 N1，因为墙钟时间的收益主要来自轮数（§3 N4「路由」），而 N2 + N4 不减轮数；`run_d8762bc8` 的 7 轮 Gate-2 只有 N3 能截住。N3 和 Run 1 改同一段 recheck 代码（`artifact_cli.py` / `pipeline_validator.py`），所以等 Run 1 落到 main 后再开，不并行。
+2. **Run 2（full）：N3（含 REVIEW 的同一轮数上限）。** 规则和验收标准见 §3「N3 规则定稿」。终止规则：一轮复核没有新的阻断发现就收敛；第 3 轮仍未收敛就自动做根因复盘，替代 `over_budget_reasons`。先于 N1，因为墙钟时间的收益主要来自轮数（§3 N4「路由」），而 N2 + N4 不减轮数；`run_d8762bc8` 的 7 轮 Gate-2 只有 N3 能截住。N3 和 Run 1 改同一段 recheck 代码（`artifact_cli.py` / `pipeline_validator.py`），所以等 Run 1 落到 main 后再开，不并行。
 3. **N1 回放（只读，research profile）→ Run 3（full）：N1。** 基线冻结、HEAD 差分 probe、反向变异。
 4. **Run 4（full）：N5。** REVIEW 接入同一套引擎。
 
@@ -213,7 +214,7 @@ spec-compliance 判定「AC 未满足」时，同样适用 N1 的基线和反向
 | HEAD 差分语料覆盖不到真正的缺陷形状 | 语料包含真实使用样本，reviewer 的每个反例都自动追加进去；先用 §4 的回放校准 |
 | 有意改变的行为被差分判成退化 | PLAN 里逐条声明有意改变；未声明的差异就是阻断项 |
 | 非阻断项写进 REPORT 后没人看 | 由工具写进 REPORT §10，同时列在完成总结的遗留项里，和代码在同一个 commit；不进 SwarmAI ToDo 列表 |
-| 终止规则让一个本来能收敛的循环提前停下 | 第 3 轮只是交给 XG 决定，不会自动放弃；XG 可以选择继续 |
+| 终止规则让一个本来能收敛的循环提前停下 | 第 3 轮后先做根因复盘；方案根上错了会自动重设计一次，重新拿到 3 轮额度。剩余项和理由全部写进 REPORT，push_ready 为 false，push 前还有一道检查 |
 | 合并条目时把两个不同的问题并成一个 | 合并结果写在 prompt 里，reviewer 可以要求拆开 |
 
 ## 7. 明确不做
