@@ -22,13 +22,31 @@ its design is thought through (skills/s_autonomous-pipeline/stages/ref/plan/desi
    ``root_cause``, the ``class_fix`` (where the invariant is now enforced for every
    instance, not the one line reported) and the ``break_test`` that proves the class.
 
+Before them, two root-cause checks at the intent → requirement end (``ROOT_CUTOVER``):
+
+0a. **EVALUATE root cause** (``root_cause_errors``). ``understanding.root_cause`` carries a
+    ``why_chain`` (>= 3 levels ``W<n>`` "X because Y", each with evidence) that ends at a
+    DESIGN level (``root_layer``) and names the ``missed_invariant``; and ``recurrence``:
+    where it searched (>= 2 sources), ``prior_instances`` and ``siblings`` (``C<n>``: the
+    same shape elsewhere). The profile follows from it: ``bugfix`` (a smallest-diff patch)
+    is only legal when the root is a ``code-line`` with no prior instance and no sibling —
+    anything else is whack-a-mole and must run ``full``.
+0b. **THINK solution class** (``solution_errors``). ``solution_class`` says whether the
+    recommendation is ``systemic`` or a ``patch``: which ``W<n>`` it addresses (the deepest,
+    or why not), how it covers every sibling ``C<n>`` (or why one is excluded), and the
+    ``structural_change`` (none / refactor / redesign) — a design-level root with none needs
+    a reason. A ``patch`` is legal only as a declared P0 stop-the-bleeding with a follow-up
+    root-fix. ``alternatives`` needs >= 2 entries, >= 1 of them ``targets_root: true``.
+    PLAN then names the ``root_invariant`` (the ``I<n>`` that encodes the missed invariant).
+
 Profiles: full / goal need the whole spec; bugfix / direct need ``flow``, ``states``,
 ``invariants`` and ``failure_modes``; trivial / docs / research are exempt. Runs created
 before ``CUTOVER`` (the ledger date, not run.json's writable copy) get warnings instead
 of errors; a run with no readable date is judged. Findings recorded as "Not a bug: …"
 and a ``skipped`` adversarial tier carry nothing to fix by class.
 
-Public: ``CUTOVER``, ``PLAN_TEMPLATE``, ``BUILD_TEMPLATE``, ``FINDING_TEMPLATE``,
+Public: ``CUTOVER``, ``ROOT_CUTOVER``, ``ROOT_TEMPLATE``, ``SOLUTION_TEMPLATE``,
+``root_cause_errors``, ``solution_errors``, ``PLAN_TEMPLATE``, ``BUILD_TEMPLATE``, ``FINDING_TEMPLATE``,
 ``plan_errors``, ``build_errors``, ``finding_errors``, ``stage_errors``.
 """
 from __future__ import annotations
@@ -37,6 +55,11 @@ import re
 from datetime import datetime, timezone
 
 CUTOVER = "2026-10-19T08:30:00Z"
+ROOT_CUTOVER = "2026-10-19T10:00:00Z"
+ROOT_LAYERS = ("code-line", "module-design", "contract", "architecture", "process", "user-need")
+_DESIGN_LAYERS = frozenset({"module-design", "contract", "architecture"})
+_W_ID = re.compile(r"^W\d+$")
+_C_ID = re.compile(r"^C\d+$")
 _LIGHT = frozenset({"bugfix", "direct"})
 _MERMAID = re.compile(r"\b(graph|flowchart|sequenceDiagram|stateDiagram(?:-v2)?)\b")
 _ARROW = re.compile(r"-->|->>|-\.->|==>|--x|-x")
@@ -45,7 +68,32 @@ _FM_ID = re.compile(r"^F\d+$")
 _TEST_REF = re.compile(r"^[\w./-]+\.(py|ts|tsx|js|jsx)::[\w\[\]\-.:]+$")
 _MIN = 15
 
+ROOT_TEMPLATE = {
+    "why_chain": [
+        {"id": "W1", "because": "the symptom: X happens because Y (what the code does)",
+         "evidence": "file.py:120 / command output / log count"},
+        {"id": "W2", "because": "Y happens because the module does Z for every caller",
+         "evidence": "file.py:88 + grep of the 3 callers"},
+        {"id": "W3", "because": "Z was designed without the rule that ... must hold",
+         "evidence": "design doc / git log -S of the commit that chose it"}],
+    "root_layer": "module-design",
+    "missed_invariant": "the rule whose absence lets the whole class happen",
+    "recurrence": {
+        "searched": ["git log -S'<pattern>' --oneline", "IMPROVEMENT.md What Failed", "grep -rn '<shape>'"],
+        "prior_instances": ["commit abc123: the same symptom patched in file.py:130"],
+        "siblings": [{"id": "C1", "where": "other.py:40", "shape": "does the same Z without the rule"}]},
+}
+SOLUTION_TEMPLATE = {
+    "verdict": "systemic",
+    "addresses": "W3",
+    "why_root": "fixes the design level every instance comes from, not the reported one",
+    "covers": [{"id": "C1", "how": "other.py moves onto the same enforced path"}],
+    "structural_change": "refactor",
+    "structural_reason": "the rule must live in one place every caller goes through",
+}
+
 PLAN_TEMPLATE = {
+    "root_invariant": "I1",
     "user_workflow": ["1. who does what today, one line per step", "2. what they do after the change, step by step"],
     "architecture": "flowchart LR\n  A[component] -->|data| B[component]\n  B --> C[store]",
     "flow": "flowchart TD\n  S[start] --> C{check}\n  C -->|ok| D[do]\n  C -->|fail| E[refuse + message]",
@@ -81,14 +129,14 @@ def _tier(profile: str) -> "str | None":
     return "light" if p in _LIGHT else "full"
 
 
-def _enforced(run_created_at: "str | None") -> bool:
+def _enforced(run_created_at: "str | None", cutover: str = CUTOVER) -> bool:
     """True from CUTOVER on. A missing or unreadable date is judged, never exempted:
     the caller passes the LEDGER created_at (run.json's copy is writable)."""
     if not run_created_at:
         return True
     try:
         ts = datetime.fromisoformat(str(run_created_at).strip().replace("Z", "+00:00"))
-        cut = datetime.fromisoformat(CUTOVER.replace("Z", "+00:00"))
+        cut = datetime.fromisoformat(cutover.replace("Z", "+00:00"))
     except ValueError:
         return True   # an unreadable timestamp is judged, never exempted
     if ts.tzinfo is None:
@@ -110,6 +158,148 @@ def _list(v) -> list:
 
 def _ids(items, rx) -> "list[str]":
     return [str(i.get("id")) for i in _list(items) if isinstance(i, dict) and rx.match(str(i.get("id") or ""))]
+
+
+def _root(evaluate) -> "dict | None":
+    und = evaluate.get("understanding") if isinstance(evaluate, dict) else None
+    rc = und.get("root_cause") if isinstance(und, dict) else None
+    return rc if isinstance(rc, dict) else None
+
+
+def root_cause_errors(evaluate: dict, profile: str) -> "list[str]":
+    """EVALUATE root cause (module docstring, 0a)."""
+    if _tier(profile) is None:
+        return []
+    rc = _root(evaluate)
+    if rc is None:
+        return ["Root cause: understanding.root_cause is missing — dig to the root before "
+                "THINK: why_chain (>= 3 levels W<n>, each with evidence), root_layer, "
+                "missed_invariant, recurrence (template: design_spec.ROOT_TEMPLATE, rules: "
+                "stages/ref/plan/design-spec.md §0)"]
+    errs: list[str] = []
+    wc = rc.get("why_chain")
+    good = [w for w in _list(wc) if isinstance(w, dict) and _W_ID.match(str(w.get("id") or ""))
+            and _text(w.get("because"), 15) and _text(w.get("evidence"), 8)]
+    if len(good) < 3 or len(good) != len(_list(wc)) or not isinstance(wc, list):
+        errs.append("Root cause: why_chain needs >= 3 levels, each {id: W<n>, because (>= 15 "
+                    "chars: X because Y), evidence (an observation)} — the first is the symptom, "
+                    "the last is where the design let it happen")
+    layer = str(rc.get("root_layer") or "")
+    if layer not in ROOT_LAYERS:
+        errs.append(f"Root cause: root_layer must be one of {', '.join(ROOT_LAYERS)} (got {layer!r})")
+    if not _text(rc.get("missed_invariant"), 15):
+        errs.append("Root cause: missed_invariant (>= 15 chars) — the rule whose absence lets "
+                    "this whole class happen; PLAN encodes it as design.root_invariant")
+    rec = rc.get("recurrence") if isinstance(rc.get("recurrence"), dict) else None
+    if rec is None:
+        errs.append("Root cause: recurrence is missing — search for the same symptom before "
+                    "(git log, IMPROVEMENT What Failed, EVOLUTION) and the same shape elsewhere "
+                    "(grep): {searched, prior_instances, siblings}")
+        prior, sib = [], []
+    else:
+        if len([x for x in _list(rec.get("searched")) if _text(x, 8)]) < 2:
+            errs.append("Root cause: recurrence.searched must name >= 2 searches actually run "
+                        "(the command / the store), not a claim that none exist")
+        prior = [x for x in _list(rec.get("prior_instances")) if _text(x, 8)]
+        sib = _list(rec.get("siblings"))
+        if not isinstance(rec.get("prior_instances"), list) or not isinstance(rec.get("siblings"), list):
+            errs.append("Root cause: recurrence.prior_instances and recurrence.siblings must be "
+                        "lists ([] when the search found none)")
+        bad = [x for x in sib if not (isinstance(x, dict) and _C_ID.match(str(x.get("id") or ""))
+                                      and _text(x.get("where"), 3))]
+        if bad:
+            errs.append("Root cause: each sibling is {id: C<n>, where, shape} — the same shape "
+                        "somewhere else, which a point fix would leave standing")
+    return errs + _bugfix_rule_errors(rc, profile)
+
+
+def _bugfix_rule_errors(rc: dict, profile: str) -> "list[str]":
+    """bugfix is a smallest-diff patch: legal only for a code-line root with no prior
+    instance and no sibling. Checked at EVALUATE, THINK and PLAN against the CURRENT
+    profile, so a `--profile bugfix` switched after EVALUATE is caught too."""
+    try:
+        from core.pipeline_profiles import normalize_profile
+        prof = normalize_profile(profile)
+    except ImportError:
+        prof = str(profile or "").strip().lower()
+    if prof != "bugfix":
+        return []
+    layer = str(rc.get("root_layer") or "")
+    rec = rc.get("recurrence") if isinstance(rc.get("recurrence"), dict) else {}
+    prior = [x for x in _list(rec.get("prior_instances")) if _text(x, 8)]
+    sib = _list(rec.get("siblings"))
+    if layer == "code-line" and not prior and not sib:
+        return []
+    why = (f"root_layer is {layer!r}" if layer != "code-line" else
+           f"{len(prior)} prior instance(s) and {len(sib)} sibling(s)")
+    return [f"Root cause: profile bugfix is a smallest-diff patch, but {why} — fixing one "
+            "instance is whack-a-mole. Run the class fix as full: "
+            "`artifact_cli.py run-update --project <P> --run-id <R> --profile full`"]
+
+
+def solution_errors(think: dict, evaluate: "dict | None", profile: str) -> "list[str]":
+    """THINK solution class (module docstring, 0b)."""
+    if _tier(profile) is None or not isinstance(think, dict):
+        return []
+    rc = _root(evaluate)
+    if rc is None:
+        # A strict run reaching THINK without one (EVALUATE ran under a relaxed profile and
+        # was upgraded since). Older runs only get this as a warning (ROOT_CUTOVER).
+        return ["Solution class: EVALUATE recorded no understanding.root_cause, so there is "
+                "no root to fix — re-enter EVALUATE (`stage-start --stage evaluate`), record "
+                "root_cause, then THINK"]
+    errs: list[str] = _bugfix_rule_errors(rc, profile)
+    alts = think.get("alternatives")
+    if not (isinstance(alts, list) and len([a for a in alts if isinstance(a, dict)]) >= 2):
+        errs.append("Solution class: think.alternatives needs >= 2 approaches")
+    elif not any(isinstance(a, dict) and a.get("targets_root") is True for a in alts):
+        errs.append("Solution class: no alternative has targets_root: true — at least one "
+                    "approach must fix the root (the last why_chain level), not the symptom")
+    sc = think.get("solution_class")
+    if not isinstance(sc, dict):
+        return errs + ["Solution class: think.solution_class is missing — is the recommendation "
+                       "a systemic fix or a patch? (template: design_spec.SOLUTION_TEMPLATE)"]
+    w_ids = _ids(rc.get("why_chain"), _W_ID)
+    deepest = w_ids[-1] if w_ids else None
+    verdict = str(sc.get("verdict") or "")
+    if verdict == "patch":
+        if not (_text(sc.get("p0_reason"), 20) and _text(sc.get("follow_up"), 10)):
+            errs.append("Solution class: a patch is legal only as a declared P0 stop-the-"
+                        "bleeding: p0_reason (>= 20 chars) + follow_up (the root-fix run / ToDo)")
+        return errs
+    if verdict != "systemic":
+        return errs + [f"Solution class: verdict must be 'systemic' or 'patch' (got {verdict!r})"]
+    addr = str(sc.get("addresses") or "")
+    if addr not in w_ids:
+        errs.append(f"Solution class: addresses must name a why_chain level ({', '.join(w_ids)}), "
+                    f"got {addr!r}")
+    elif addr != deepest and not _text(sc.get("why_not_deepest"), 20):
+        errs.append(f"Solution class: addresses {addr}, not the root {deepest} — fix the root, "
+                    "or say why_not_deepest (>= 20 chars)")
+    if not _text(sc.get("why_root"), 20):
+        errs.append("Solution class: why_root (>= 20 chars) — why this removes the class, not "
+                    "one instance")
+    rec = rc.get("recurrence") if isinstance(rc.get("recurrence"), dict) else {}
+    sib = {str(x.get("id")) for x in _list(rec.get("siblings")) if isinstance(x, dict) and x.get("id")}
+    covered = {str(c.get("id")) for c in _list(sc.get("covers")) if isinstance(c, dict)
+               and (_text(c.get("how"), 10) or _text(c.get("excluded"), 15))}
+    miss = sorted(sib - covered)
+    if miss:
+        errs.append("Solution class: covers leaves sibling(s) " + ", ".join(miss) + " standing — "
+                    "each needs {id, how} or {id, excluded: <why>}; a fix that leaves the same "
+                    "shape elsewhere is whack-a-mole")
+    st = str(sc.get("structural_change") or "")
+    if st not in ("none", "refactor", "redesign"):
+        errs.append("Solution class: structural_change must be none / refactor / redesign")
+    elif not _text(sc.get("structural_reason"), 15):
+        errs.append("Solution class: structural_reason (>= 15 chars) — why this structural change "
+                    "(or none) is the right size")
+    elif (st == "none" and str(rc.get("root_layer")) in _DESIGN_LAYERS
+          and not _text(sc.get("structural_reason"), 40)):
+        errs.append(f"Solution class: the root is at {rc.get('root_layer')} but structural_change "
+                    "is none — refactor / redesign it, or explain in structural_reason (>= 40 "
+                    "chars) how a non-structural change removes a design-level cause")
+    return errs
 
 
 def plan_errors(plan: dict, profile: str) -> "list[str]":
@@ -261,17 +451,39 @@ def finding_errors(findings, plan: "dict | None", design_updates, profile: str,
     return errs
 
 
+def _root_invariant_errors(plan: dict, evaluate: "dict | None", profile: str) -> "list[str]":
+    """PLAN encodes EVALUATE's missed invariant (module docstring, 0b)."""
+    if _tier(profile) is None or _root(evaluate) is None:
+        return []   # missing upstream root cause: THINK already refused it
+    errs = _bugfix_rule_errors(_root(evaluate), profile)
+    d = plan.get("design") if isinstance(plan.get("design"), dict) else {}
+    ri = str(d.get("root_invariant") or "")
+    if ri not in _ids(d.get("invariants"), _INV_ID):
+        errs.append("Design spec: design.root_invariant must name the I<n> that encodes "
+                    "EVALUATE's root_cause.missed_invariant (got " + repr(ri) + ") — the plan "
+                    "fixes the root, so the root's rule is one of its invariants")
+    return errs
+
+
 def stage_errors(stage: str, artifact: dict, *, profile: str, plan: "dict | None",
                  record: "dict | None" = None, run_created_at: "str | None" = None,
-                 warnings: "list[str] | None" = None) -> "list[str]":
+                 warnings: "list[str] | None" = None,
+                 evaluate: "dict | None" = None) -> "list[str]":
     """All design-spec errors for one stage-complete candidate. Runs created before
-    CUTOVER get them as warnings (appended to *warnings*) instead."""
+    the matching cutover get them as warnings (appended to *warnings*) instead."""
     if not isinstance(artifact, dict):
         return []
     rec = record if isinstance(record, dict) else {}
     updates = artifact.get("design_updates") or rec.get("design_updates")
-    if stage == "plan":
-        errs = plan_errors(artifact, profile)
+    root_errs: list[str] = []
+    if stage == "evaluate":
+        root_errs = root_cause_errors(artifact, profile)
+        errs = []
+    elif stage == "think":
+        root_errs = solution_errors(artifact, evaluate, profile)
+        errs = []
+    elif stage == "plan":
+        errs = plan_errors(artifact, profile) + _root_invariant_errors(artifact, evaluate, profile)
     elif stage == "build":
         errs = build_errors(artifact, plan, profile)
     elif stage == "review":
@@ -294,8 +506,11 @@ def stage_errors(stage: str, artifact: dict, *, profile: str, plan: "dict | None
             errs = build_errors(artifact, plan, profile) + errs
     else:
         errs = []
-    if errs and not _enforced(run_created_at):
-        if warnings is not None:
-            warnings.extend("(not enforced for this run) " + e for e in errs)
-        return []
-    return errs
+    out: list[str] = []
+    for found, cut in ((errs, CUTOVER), (root_errs, ROOT_CUTOVER)):
+        if found and not _enforced(run_created_at, cut):
+            if warnings is not None:
+                warnings.extend("(not enforced for this run) " + e for e in found)
+        else:
+            out += found
+    return out

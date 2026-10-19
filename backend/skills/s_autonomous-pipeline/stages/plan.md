@@ -7,12 +7,12 @@ Turn the chosen alternative into a design BUILD can execute with zero project co
 ## Steps
 
 1. **Pick + spike.** Take the chosen alternative; read the code it touches. Needs uncommitted deps or API changes → judgment decision.
-2. **Design spec** `[GATE·validator]` (`ref/plan/design-spec.md`): `design` = `user_workflow`, mermaid `architecture` + `flow` (with a failure branch), `states` (`created_by`, `removed_by`, `crosses`), `invariants` `I<n>`, `failure_modes` `F<n>`. Can't fill it → not thought through, don't plan code.
+2. **Design spec** `[GATE·validator]` (`ref/plan/design-spec.md`): `design` = `user_workflow`, mermaid `architecture` + `flow` (with a failure branch), `states` (`created_by`, `removed_by`, `crosses`), `invariants` `I<n>` (`root_invariant` = EVALUATE's missed one), `failure_modes` `F<n>`. Can't fill it → don't plan code.
 3. **File discovery** `[MUST]`: seed files → grep every importer/caller → categorize MODIFY / TEST / VERIFY / IRRELEVANT → read all MODIFY+VERIFY. Code contradicts the approach → back to THINK. <!-- R-plan-001 -->
 4. **Change spec** `[MUST]`: dependency-ordered atomic sub-changes, one file + one function/class/endpoint each, each with `Depends on`/`AC`/`Current`/`Target`/`Verify` (trivial profile: last three optional when self-explanatory). <!-- R-plan-003 -->
 5. **Test strategy** `[MUST]`: one row per AC (how, mock boundary, inputs). No row → AC too vague, rewrite it. <!-- R-plan-009 -->
-6. **Boundaries** `[MUST]`: Always / Ask First / Never tiers. <!-- R-plan-004 -->
-7. **Success criteria** `[MUST]`: each verifiable by a test, command output or visual check. <!-- R-plan-007 -->
+6. **Boundaries** `[MUST]`: Always / Ask First / Never. <!-- R-plan-004 -->
+7. **Success criteria** `[MUST]`: each checkable by a test, command output or visual check. <!-- R-plan-007 -->
 8. **Security boundaries**: only when `cross_boundary.value == true` (Gates).
 9. **Required experts**: `python backend/scripts/artifact_cli.py run-update --project <P> --run-id <R> --add-required-expert <id>` per `backend/experts/code/` domain touched (endpoint ⇒ `security`, async ⇒ `concurrency`, state machine ⇒ `state-machine`). Append-only, never `spec-compliance`.
 10. **Impact projection**: only if the project has `code_intel.db`.

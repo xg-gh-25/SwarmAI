@@ -44,8 +44,10 @@ itself asks to *restructure*: "de-patch / stop patching X", "make X sustainable 
 maintainable", "root-fix the architecture", "unify the N copies", "remove the whole class of
 Y". Behavior is preserved but the STRUCTURE is the deliverable.
 - Do **NOT** classify `refactor` merely because a change touches >1 file or renames things. A
-  bounded feature or a symptom-fix with a known root cause is `existing-feature` / `bugfix` and
-  gets the default (patch-tolerant) rigor.
+  bounded feature is `existing-feature`; a bug is `bugfix`. Neither is patch-tolerant: every
+  strict run records `root_cause` (why chain to the design level + recurrence search) and THINK
+  declares `solution_class` (`ref/plan/design-spec.md` §0). A design-level root forces the
+  `full` profile, and THINK must refactor / redesign or say why not, even when the work_type is not `refactor`.
 - Unsure between `bugfix` and `refactor`? Ask: *did the user ask me to fix a behavior, or to
   fix the structure?* Structure → `refactor`.
 - **`refactor` is a WORK_TYPE, not a profile.** It routes to the **`full`** profile (identical

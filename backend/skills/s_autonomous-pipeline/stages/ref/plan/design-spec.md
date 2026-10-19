@@ -1,20 +1,78 @@
-# Design spec — think it through, break it yourself, fix by class
+# Design spec — find the root, fix the class, think it through, break it yourself
 
-Three validator gates (`backend/scripts/design_spec.py`) that close one failure: code starts
-before the design is thought through, review then finds the holes one by one, and each hole
-gets a one-line patch that leaves the class open. The result is round after round of
-review → fix → review that never converges.
+Five validator gates (`backend/scripts/design_spec.py`) that close one failure: the run
+reads the surface, picks a one-instance fix, starts coding before the design is thought
+through, review then finds the holes one by one, and each hole gets a one-line patch that
+leaves the class open — whack-a-mole, round after round.
 
 | Gate | Stage | Field | Checked by |
 |------|-------|-------|------------|
-| Design spec | PLAN | `artifact.design` | `plan_errors` |
-| Break tests | BUILD | `artifact.break_tests` | `build_errors` |
+| Root cause | EVALUATE | `understanding.root_cause` | `root_cause_errors` |
+| Solution class | THINK | `solution_class`, `alternatives` | `solution_errors` |
+| Design spec | PLAN | `artifact.design` (+ `root_invariant`) | `plan_errors` |
+| Break tests | BUILD / goal_cycle | `break_tests` | `build_errors` |
 | Fix by class | REVIEW + DELIVER | each fixed blocking finding + `design_updates` | `finding_errors` |
 
+The chain: the root's **missed invariant** (EVALUATE) → the fix that restores it for the whole
+class (THINK) → the invariant `I<n>` the design enforces (PLAN `root_invariant`) → the test that
+tries to break it (BUILD) → every review finding measured against the invariants (REVIEW /
+DELIVER).
+
 **Who it applies to:** full / goal (and any unknown profile — fail closed) need the whole spec.
-bugfix / direct need `flow`, `states`, `invariants`, `failure_modes`. trivial / docs / research
-are exempt. Runs created before `design_spec.CUTOVER` (the ledger's date, not run.json's
-writable copy) get warnings, not errors; a run with no readable date is judged.
+bugfix / direct need `flow`, `states`, `invariants`, `failure_modes` (and the root cause).
+trivial / docs / research are exempt. Runs created before the cutover (`CUTOVER` for §1–3,
+`ROOT_CUTOVER` for §0; the ledger's date, not run.json's writable copy) get warnings, not
+errors; a run with no readable date is judged.
+
+## 0. EVALUATE — dig to the root; THINK — fix the class
+
+Do not stop at the surface. The symptom is where you start, not what you fix.
+
+```json
+"understanding": {"...": "...", "root_cause": {
+  "why_chain": [
+    {"id": "W1", "because": "the symptom: X happens because Y", "evidence": "file.py:120"},
+    {"id": "W2", "because": "Y happens because the module does Z for every caller", "evidence": "grep: 3 callers"},
+    {"id": "W3", "because": "Z was designed without the rule that ... must hold", "evidence": "git log -S of the choice"}],
+  "root_layer": "module-design",
+  "missed_invariant": "the rule whose absence lets the whole class happen",
+  "recurrence": {"searched": ["git log -S'<pattern>'", "IMPROVEMENT.md What Failed", "grep -rn '<shape>'"],
+                 "prior_instances": ["abc123: the same symptom patched at file.py:130"],
+                 "siblings": [{"id": "C1", "where": "other.py:40", "shape": "same Z, no rule"}]}}}
+```
+
+- **why_chain**: ≥ 3 levels `W<n>`, each "X because Y" with an observation. Keep asking *why*
+  until the answer is a design decision or a missing rule ("nothing enforces Y"), not a line
+  of code ("the code does X" is still a symptom).
+- **root_layer**: `code-line` · `module-design` · `contract` · `architecture` · `process` ·
+  `user-need` (for a feature: the real problem behind the request).
+- **recurrence**: ≥ 2 searches actually run (git log, IMPROVEMENT "What Failed", EVOLUTION,
+  grep for the same shape). `prior_instances` = the same symptom fixed before; `siblings`
+  `C<n>` = the same shape elsewhere. Either one non-empty means this is a **class**.
+- **Profile**: `bugfix` (a smallest-diff fix) only when `root_layer == code-line` with no prior
+  instance and no sibling. Anything else is whack-a-mole as a bugfix — run `full`.
+- The Gate-0 skeptic gets the root cause and attacks it: is the last level the root or another
+  symptom, and is there an instance the search missed? (`WRONG-FRAME` sends you back.)
+
+THINK then declares what kind of fix the recommendation is:
+
+```json
+"alternatives": [{"...": "..."}, {"constraint": "QUALITY", "what": "...", "targets_root": true}],
+"solution_class": {"verdict": "systemic", "addresses": "W3",
+  "why_root": "removes the cause every instance comes from",
+  "covers": [{"id": "C1", "how": "other.py moves onto the enforced path"}],
+  "structural_change": "refactor", "structural_reason": "the rule must live in one place"}
+```
+
+- ≥ 2 `alternatives`, ≥ 1 with `targets_root: true`.
+- `addresses` = the deepest `W<n>`, or `why_not_deepest` (≥ 20 chars).
+- `covers` every sibling `C<n>`: `{id, how}` or `{id, excluded: <why>}`.
+- `structural_change` none / refactor / redesign + `structural_reason`. When the root is at
+  `module-design` / `contract` / `architecture`, `none` needs a ≥ 40-char reason: if the design
+  is the cause, refactor or redesign — don't patch around it.
+- `verdict: "patch"` is legal only as a declared P0 stop-the-bleeding: `p0_reason` + a
+  `follow_up` (the root-fix run / ToDo). An undeclared patch does not pass.
+- PLAN `design.root_invariant` names the `I<n>` that encodes `missed_invariant`.
 
 ## 1. PLAN — `design`
 

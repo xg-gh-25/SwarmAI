@@ -5182,6 +5182,8 @@ def _gate0_understanding_sha(und) -> "str | None":
     if not isinstance(und, dict):
         return None
     view = {k: str(und.get(k) if und.get(k) is not None else "").strip() for k in _GATE0_JUDGED_FIELDS}
+    if und.get("root_cause") not in (None, "", {}):   # judged too (design_spec 0a); absent → old sha
+        view["root_cause"] = json.dumps(und["root_cause"], sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(json.dumps(view, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -5201,7 +5203,7 @@ def _gate0_prompt_unbound(run_id: str, run_state: dict, und, since: float,
                     f"gate0-prompt --project {run_state.get('project')} --run-id {run_id} "
                     "--data @<file>") + "` and spawn its `spawn` text"), None
     if handout.get("understanding_sha") != _gate0_understanding_sha(und):
-        return ("the recorded understanding (" + " / ".join(_GATE0_JUDGED_FIELDS) + ") is not "
+        return ("the recorded understanding (" + " / ".join(_GATE0_JUDGED_FIELDS + ("root_cause",)) + ") is not "
                 "the one handed to the skeptic: re-run gate0-prompt with it and spawn the "
                 "skeptic again"), None
     err, bound = _handout_unread(
@@ -5246,11 +5248,17 @@ def _write_gate0_prompt(run_dir: Path, und: dict, claims: "list[str]") -> "tuple
     sections = [("Claim (the present state)", und.get("claim")),
                 ("Evidence", und.get("evidence")),
                 ("Alternative the orchestrator considered", und.get("alternative_considered"))]
+    if isinstance(und.get("root_cause"), dict):   # question 4: is this the root?
+        rc = und["root_cause"]   # recurrence first: question 4 checks that search
+        rc = {**({"recurrence": rc["recurrence"]} if "recurrence" in rc else {}), **rc}
+        sections.append(("Root cause (why chain + recurrence search)",
+                         json.dumps(rc, indent=1, ensure_ascii=False)))
     if claims:
         sections.append(("Claims to refute", "\n".join(f"{i}. {c}" for i, c in enumerate(claims, 1))))
     for head, body in sections:
         if str(body or "").strip():
-            text += f"\n### {head}\n{_fence(_prompt_data(str(body), 3000))}\n"
+            cap = 8000 if head.startswith("Root cause") else 3000
+            text += f"\n### {head}\n{_fence(_prompt_data(str(body), cap))}\n"
     try:
         d = run_dir / "evidence" / "prompts"
         d.mkdir(parents=True, exist_ok=True)
@@ -5294,6 +5302,11 @@ def cmd_gate0_prompt(args, reg: ArtifactRegistry) -> None:
     import pipeline_validator as pv
     und_errs = pv._check_understanding_gate({"understanding": und},
                                             str(_state.get("profile") or "full"))
+    import design_spec   # the root cause too, once enforced (the gate0 sha binds it)
+    if design_spec._enforced(_ledger_created_at(_state) or _state.get("created_at") or "",
+                             design_spec.ROOT_CUTOVER):
+        und_errs += design_spec.root_cause_errors({"understanding": und},
+                                                  str(_state.get("profile") or "full"))
     if und_errs:
         fail("fix the understanding before spawning the skeptic (stage-complete applies "
              "the same check): " + " | ".join(und_errs))
@@ -10028,6 +10041,7 @@ def _validate_stage_candidate(
         errors += design_spec.stage_errors(
             stage, artifact, profile=profile, record=record_in,
             plan=None if stage == "plan" else _stage_artifact(project, cand_run, "plan"),
+            evaluate=None if stage == "evaluate" else _stage_artifact(project, cand_run, "evaluate"),
             run_created_at=_ledger_created_at(cand_run) or cand_run.get("created_at") or "",
             warnings=warnings)
     # Judge the record AS IT WILL BE WRITTEN for carry-forward fields: a reflect

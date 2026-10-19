@@ -17,7 +17,7 @@ digraph profile_selection {
   research [label="RESEARCH", shape=box];
   q2 [label="≤1 file, config/const\nonly, no logic?", shape=diamond];
   trivial [label="TRIVIAL", shape=box];
-  q3 [label="Clear bug with\nknown root cause?", shape=diamond];
+  q3 [label="Bug whose root_cause is ONE code line,\nno prior instance, no sibling?", shape=diamond];
   bugfix [label="BUGFIX", shape=box];
   q4 [label="ITERATIVE goal? (metric/threshold,\nbulk sweep, or N-unknown convergence —\nNOT merely 'a test will pass')", shape=diamond];
   goal [label="GOAL", shape=box];
@@ -41,8 +41,10 @@ NEVER a goal indicator):
 - Iterative convergence: "Investigate and fix" where the number of changes is unknown upfront
 ## Goal vs full: what is NOT a goal
 **NOT goal (route to bugfix/trivial/full):** a single bounded change whose "done" is "the
-feature exists and its test passes", even though that test exits 0. One known fix → bugfix
-(clear root cause), trivial (≤1 file, no logic) or full (multi-file feature).
+feature exists and its test passes", even though that test exits 0. One code-line root with
+no prior instance and no sibling → bugfix (validator-checked against `root_cause`: a design-level
+root, a prior instance or a sibling is a class problem, and a one-instance fix of it is
+whack-a-mole → full), trivial (≤1 file, no logic) or full (multi-file feature).
 **Decision heuristic (goal vs full ONLY, after the size/bug gates ruled out
 trivial/bugfix/docs/research):** does "done" require *iterating toward a moving target* whose
 number of steps you can't predict upfront (a metric to reach, an open-ended set to sweep)?

@@ -8,6 +8,10 @@
    (or adds the missed one in ``design_updates``), a root cause, a class fix and a break
    test; non-blocking and unresolved findings are not judged.
 
+0. EVALUATE ``root_cause`` (``root_cause_errors``) incl. the bugfix-profile rule, THINK
+   ``solution_class`` (``solution_errors``) and PLAN ``root_invariant``, plus the Gate-0
+   prompt / sha carrying the root cause.
+
 Plus ``stage_errors`` routing (plan / build / review / deliver / goal_cycle), the CUTOVER
 grandfathering (errors become warnings for older runs, an unreadable timestamp is judged)
 and the wiring through ``artifact_cli._validate_stage_candidate``.
@@ -26,6 +30,19 @@ import design_spec as ds  # noqa: E402
 
 NEW = "2099-01-01T00:00:00Z"
 OLD = "2020-01-01T00:00:00Z"
+
+
+def _eval(**over):
+    rc = copy.deepcopy(ds.ROOT_TEMPLATE)
+    rc.update(over)
+    return {"understanding": {"claim": "x", "root_cause": rc}}
+
+
+def _think(**over):
+    sc = copy.deepcopy(ds.SOLUTION_TEMPLATE)
+    sc.update(over)
+    return {"alternatives": [{"what": "patch the line"}, {"what": "fix the rule", "targets_root": True}],
+            "solution_class": sc}
 
 
 def _plan(**over):
@@ -229,9 +246,9 @@ def test_published_templates_pass_their_own_design_gates():
     import pipeline_validator as pv
     T = pv.STAGE_TEMPLATES
     plan = {"design": T["plan"]["design"]}
-    for stage in ("plan", "build", "review", "deliver", "goal_cycle"):
+    for stage in ("evaluate", "think", "plan", "build", "review", "deliver", "goal_cycle"):
         assert ds.stage_errors(stage, T[stage], profile="full" if stage != "goal_cycle" else "goal",
-                               plan=plan, run_created_at=NEW) == [], stage
+                               plan=plan, evaluate=T["evaluate"], run_created_at=NEW) == [], stage
 
 
 # ── wiring through artifact_cli ──────────────────────────────────────────────
@@ -250,3 +267,152 @@ def test_validate_stage_candidate_runs_the_design_gate(monkeypatch):
         cand_run={"created_at": OLD, "stages": []})
     assert not any(e.startswith("Design spec") for e in errs)
     assert any("Design spec" in w for w in warns)
+
+
+# ── 0. EVALUATE root cause / THINK solution class ────────────────────────────
+
+def test_root_template_passes_and_missing_root_blocks():
+    assert ds.root_cause_errors(_eval(), "full") == []
+    assert ds.root_cause_errors({"understanding": {"claim": "x"}}, "full")
+    assert ds.root_cause_errors({}, "docs") == []
+
+
+def test_shallow_why_chain_is_rejected():
+    two = ds.ROOT_TEMPLATE["why_chain"][:2]
+    assert any("why_chain" in e for e in ds.root_cause_errors(_eval(why_chain=two), "full"))
+    no_ev = [dict(w, evidence="") for w in ds.ROOT_TEMPLATE["why_chain"]]
+    assert any("why_chain" in e for e in ds.root_cause_errors(_eval(why_chain=no_ev), "full"))
+
+
+def test_recurrence_must_be_searched():
+    errs = ds.root_cause_errors(_eval(recurrence={"searched": ["grep -rn x ."],
+                                                  "prior_instances": [], "siblings": []}), "full")
+    assert any("searched" in e for e in errs)
+    assert any("recurrence is missing" in e for e in ds.root_cause_errors(_eval(recurrence=None), "full"))
+    errs = ds.root_cause_errors(_eval(root_layer="somewhere", missed_invariant=""), "full")
+    assert any("root_layer" in e for e in errs) and any("missed_invariant" in e for e in errs)
+
+
+def test_bugfix_profile_only_for_an_isolated_code_line_root():
+    clean = {"searched": ["git log -S'x'", "grep -rn x backend"], "prior_instances": [], "siblings": []}
+    assert ds.root_cause_errors(_eval(root_layer="code-line", recurrence=clean), "bugfix") == []
+    for over in ({"root_layer": "module-design", "recurrence": clean},          # design-level root
+                 {"root_layer": "code-line"}):                                  # template has a prior + a sibling
+        errs = ds.root_cause_errors(_eval(**over), "bugfix")
+        assert any("whack-a-mole" in e and "--profile full" in e for e in errs), over
+    assert ds.root_cause_errors(_eval(root_layer="code-line"), "full") == []
+
+
+def test_solution_class_template_passes_and_binds_to_the_root():
+    assert ds.solution_errors(_think(), _eval(), "full") == []
+    assert ds.solution_errors({}, {"understanding": {}}, "full"), "no root upstream on a strict run → refused"
+    assert ds.solution_errors({}, {"understanding": {}}, "research") == []
+    assert any("solution_class is missing" in e
+               for e in ds.solution_errors({"alternatives": _think()["alternatives"]}, _eval(), "full"))
+
+
+def test_alternatives_must_include_a_root_fix():
+    th = _think()
+    th["alternatives"] = [{"what": "a"}, {"what": "b"}]
+    assert any("targets_root" in e for e in ds.solution_errors(th, _eval(), "full"))
+    th["alternatives"] = [{"what": "a", "targets_root": True}]
+    assert any(">= 2" in e for e in ds.solution_errors(th, _eval(), "full"))
+
+
+def test_systemic_fix_must_address_the_deepest_level_and_every_sibling():
+    errs = ds.solution_errors(_think(addresses="W1"), _eval(), "full")
+    assert any("not the root W3" in e for e in errs)
+    assert ds.solution_errors(_think(addresses="W1", why_not_deepest="W3 is an external API we do not own"),
+                              _eval(), "full") == []
+    assert any("C1" in e for e in ds.solution_errors(_think(covers=[]), _eval(), "full"))
+    assert ds.solution_errors(_think(covers=[{"id": "C1", "excluded": "dead code, deleted in this run"}]),
+                              _eval(), "full") == []
+
+
+def test_design_level_root_needs_a_structural_change_or_a_real_reason():
+    errs = ds.solution_errors(_think(structural_change="none", structural_reason="not needed here"),
+                              _eval(), "full")
+    assert any("refactor / redesign it" in e for e in errs)
+    long = "the rule already lives in one module; only its one caller skips it and is moved"
+    assert ds.solution_errors(_think(structural_change="none", structural_reason=long), _eval(), "full") == []
+
+
+def test_patch_only_as_declared_p0_with_follow_up():
+    p = {"verdict": "patch"}
+    assert any("P0" in e for e in ds.solution_errors(_think(**p), _eval(), "full"))
+    ok = _think(verdict="patch", p0_reason="prod is losing user data every minute right now",
+                follow_up="ToDo: root-fix run for W3")
+    assert ds.solution_errors(ok, _eval(), "full") == []
+    assert any("verdict" in e for e in ds.solution_errors(_think(verdict="maybe"), _eval(), "full"))
+
+
+def test_plan_must_encode_the_missed_invariant():
+    assert ds.stage_errors("plan", _plan(), profile="full", plan=None, evaluate=_eval(),
+                           run_created_at=NEW) == []
+    bad = _plan(root_invariant="I7")
+    errs = ds.stage_errors("plan", bad, profile="full", plan=None, evaluate=_eval(), run_created_at=NEW)
+    assert any("root_invariant" in e for e in errs)
+    assert ds.stage_errors("plan", bad, profile="full", plan=None, evaluate={}, run_created_at=NEW) == []
+
+
+def test_root_gates_have_their_own_cutover():
+    between = "2026-10-19T09:00:00Z"   # after CUTOVER, before ROOT_CUTOVER
+    w: list[str] = []
+    assert ds.stage_errors("evaluate", {}, profile="full", plan=None, run_created_at=between, warnings=w) == []
+    assert w and "Root cause" in w[0]
+    assert ds.stage_errors("evaluate", {}, profile="full", plan=None, run_created_at=NEW)
+    assert ds.stage_errors("think", {}, profile="full", plan=None, evaluate=_eval(), run_created_at=NEW)
+
+
+def test_gate0_prompt_and_sha_carry_the_root_cause(tmp_path, monkeypatch):
+    import artifact_cli
+    und = {"work_type": "bugfix", "claim": "the CLI drops the flag", "evidence": "cli.py:10",
+           "evidence_kind": "code-trace"}
+    old = artifact_cli._gate0_understanding_sha(und)
+    assert artifact_cli._gate0_understanding_sha(dict(und, root_cause=None)) == old, \
+        "an absent root_cause keeps the pre-change sha (in-flight handouts stay bound)"
+    with_rc = dict(und, root_cause=ds.ROOT_TEMPLATE)
+    assert artifact_cli._gate0_understanding_sha(with_rc) != old
+    path, err = artifact_cli._write_gate0_prompt(tmp_path, with_rc, [])
+    assert path and not err
+    text = Path(path).read_text(encoding="utf-8")
+    assert "Root cause (why chain + recurrence search)" in text and "missed_invariant" in text
+    assert "5 questions" in text and "is its last why_chain level the ROOT" in text
+
+
+# ── review round 2: re-checked bugfix rule, missing upstream root, gate0 pre-check ──
+
+def test_bugfix_switched_after_evaluate_is_caught_at_think_and_plan():
+    errs = ds.solution_errors(_think(), _eval(), "bugfix")
+    assert any("whack-a-mole" in e for e in errs)
+    errs = ds.stage_errors("plan", _plan(), profile="bugfix", plan=None, evaluate=_eval(), run_created_at=NEW)
+    assert any("whack-a-mole" in e for e in errs)
+
+
+def test_strict_think_without_an_upstream_root_cause_is_refused():
+    errs = ds.stage_errors("think", _think(), profile="full", plan=None, evaluate={"understanding": {}},
+                           run_created_at=NEW)
+    assert any("no understanding.root_cause" in e for e in errs)
+    w: list[str] = []
+    assert ds.stage_errors("think", _think(), profile="full", plan=None, evaluate=None,
+                           run_created_at=OLD, warnings=w) == [] and w
+
+
+def test_gate0_prompt_prechecks_the_root_cause_on_new_runs(ws, capsys):
+    import json as _json
+    import artifact_cli as cli
+    from tests.test_stage_boundary_commands import PROJECT, _call, _make_run
+    root, reg = ws
+    _make_run(root, "run_rc_new", "bugfix", created_at=NEW)
+    _make_run(root, "run_rc_old", "bugfix")                      # fixture default: before the cutover
+    und = {"work_type": "bugfix", "claim": "the CLI drops the flag on retry",
+           "evidence": "cli.py:10 returns before the flag is copied", "evidence_kind": "code-trace",
+           "root_cause": ds.ROOT_TEMPLATE}                        # module-design root under bugfix
+    data = _json.dumps({"understanding": und})
+    code, out = _call(cli.cmd_gate0_prompt, reg, capsys, project=PROJECT, run_id="run_rc_new", data=data)
+    assert code == 1 and "whack-a-mole" in out["error"]
+    code, out = _call(cli.cmd_gate0_prompt, reg, capsys, project=PROJECT, run_id="run_rc_old", data=data)
+    assert code == 0 and out["ok"], out
+
+
+from tests.test_stage_boundary_commands import ws  # noqa: E402,F401  (fixture)

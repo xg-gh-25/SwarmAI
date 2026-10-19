@@ -802,10 +802,12 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
 # Stage schema templates — show expected JSON shape for publish-time errors
 try:  # scripts/ on sys.path (artifact_cli, the runner) or imported as a package
     from design_spec import (BUILD_TEMPLATE as _DS_BUILD, FINDING_TEMPLATE as _DS_FINDING,
-                             PLAN_TEMPLATE as _DS_PLAN)
+                             PLAN_TEMPLATE as _DS_PLAN, ROOT_TEMPLATE as _DS_ROOT,
+                             SOLUTION_TEMPLATE as _DS_SOLUTION)
 except ImportError:  # pragma: no cover - package import path
     from scripts.design_spec import (BUILD_TEMPLATE as _DS_BUILD, FINDING_TEMPLATE as _DS_FINDING,
-                                     PLAN_TEMPLATE as _DS_PLAN)
+                                     PLAN_TEMPLATE as _DS_PLAN, ROOT_TEMPLATE as _DS_ROOT,
+                                     SOLUTION_TEMPLATE as _DS_SOLUTION)
 
 STAGE_TEMPLATES: dict[str, dict] = {
     "evaluate": {
@@ -823,6 +825,8 @@ STAGE_TEMPLATES: dict[str, dict] = {
             "evidence_kind": "code-trace",
             "skeptic_verdict": "SUPPORTED",
             "alternative_considered": "The simplest competing framing, and why it loses",
+            # Root cause (design_spec.py 0a): dig to the design level, search for the class.
+            "root_cause": _DS_ROOT,
         },
         # Self-Socratic ambiguity scan (strict profiles): re-scan the filled
         # clarification output for residual ambiguity; every hit must be resolved.
@@ -852,7 +856,11 @@ STAGE_TEMPLATES: dict[str, dict] = {
     },
     "think": {
         "key_findings": ["finding 1", "finding 2"],
-        "alternatives": [{"constraint": "SIMPLICITY", "what": "...", "effort": "S"}],
+        "alternatives": [{"constraint": "SIMPLICITY", "what": "...", "effort": "S"},
+                         {"constraint": "QUALITY", "what": "fix the root for every caller", "effort": "M",
+                          "targets_root": True}],
+        # Systemic fix or declared P0 patch (design_spec.py 0b).
+        "solution_class": _DS_SOLUTION,
         "recommendation": "Approach X because...",
         "ambiguity_scan": {
             "scanned_fields": ["recommendation", "risk_probe.verification"],
