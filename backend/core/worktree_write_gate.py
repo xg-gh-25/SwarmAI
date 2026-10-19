@@ -29,6 +29,10 @@ while worktree mode is off and no run worktree exists. Judgments:
    Bash parsers cannot see (an interpreter, a formatter) is stopped at commit time by
    direct_commit_gate, which refuses any source commit there from a session with no run.
 
+A file-write deny of rule 1 or 4 whose target is already an uncommitted change in the
+main checkout (an untracked leftover, a stray edit) adds the ``run-claim-main`` route:
+the worktree is made from HEAD and does not have that file (``_claim_note``).
+
 Also: a hardlinked file (st_nlink > 1) in the worktree is not writable; Read / Grep
 of the main checkout gets a reminder (allow + additionalContext). Bash parsing is
 fixed at today's parsers — gaps are caught by the sync-time check (§7.2), not by
@@ -40,12 +44,16 @@ import asyncio
 import logging
 import os
 import shlex
+import threading
 import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _GATE_TIMEOUT = 3.0
+_NOTE_CAP = 1.0      # most a deny hint's git call may take
+_NOTE_MARGIN = 0.5   # gate budget kept back for the rest of the judgment
+_TL = threading.local()   # .deadline: monotonic end of this judgment's gate budget
 _OWN_TTL = 5.0
 MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep"
 _PATH_KEYS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
@@ -107,7 +115,7 @@ class _Own:
 
     def repo_add_command(self, main: str) -> str:
         args = (f"run-repo-add --project {shlex.quote(str(self.project or '<project>'))} "
-                f"--run-id {self.id} --path {shlex.quote(main)}")
+                f"--run-id {shlex.quote(str(self.id))} --path {shlex.quote(main)}")
         return cli_command(self.cli, args)
 
 
@@ -169,8 +177,11 @@ def _file_verdict(p: str, own: "_Own | None") -> "dict | None":
     if own is not None:
         m = own.main_hit(p)
         if m is not None:
+            from core.run_worktree import claim_args
+            note = _claim_note(own.mains[m[0]], p, cli_command(
+                own.cli, claim_args(own.project or "", own.id, [p])), "")
             return _deny(f"this session's run {own.id} works in its own worktree; do not "
-                         f"write the main checkout. Use {m[1]} instead of {p}.")
+                         f"write the main checkout. Use {m[1]} instead of {p}." + note)
         repo = own.unisolated_repo(p)
         if repo is not None:
             return _repo_add_deny(own, repo, p)
@@ -242,6 +253,26 @@ def _session_runs_light(sid: str) -> "list[dict]":
                             "project": str(d.get("project") or ""), "status": d.get("status"),
                             "worktree_mode": d.get("worktree_mode"), "cli": d.get("cli")}))
     return [r for _t, r in sorted(out, key=lambda x: x[0], reverse=True)]
+
+
+def _with_deadline(deadline: float, fn, *args):
+    """Run *fn* with ``_TL.deadline`` set on this thread, cleared afterwards (also when
+    *fn* raises), so a pooled thread never carries one judgment's budget into the next."""
+    _TL.deadline = deadline
+    try:
+        return fn(*args)
+    finally:
+        _TL.deadline = None
+
+
+def _budget_left(cap: float) -> float:
+    """Seconds the optional deny hint (``_claim_note``) may spend on git: *cap*, or less
+    when the gate's deadline (``_TL.deadline``, set by ``_decide_by``) minus
+    ``_NOTE_MARGIN`` is nearer, so the hint can never push the judgment past
+    ``_GATE_TIMEOUT``. Only the hint is budgeted: the checks a deny depends on keep their
+    own fixed timeouts, and a short budget drops the hint, never the deny."""
+    deadline = getattr(_TL, "deadline", None)
+    return cap if deadline is None else min(cap, deadline - time.monotonic() - _NOTE_MARGIN)
 
 
 def _ignored(main: str, p: str) -> bool:
@@ -329,8 +360,12 @@ def _no_run_verdict(p: str, nr: "_NoRun", what: "str | None" = None) -> "dict | 
         head += ("In a shared checkout this git command can move or discard other sessions' "
                  "work (read-only forms, --abort and --ff-only syncs are allowed). If it is "
                  "part of a code change, make the change in a run: ")
+    from core.run_worktree import claim_args
     r = nr.run
     if r is not None:
+        note = "" if what is not None else _claim_note(main, p, cli_command(
+            r.get("cli"), claim_args(r["project"] or project, r["id"], [p])),
+            " once the worktree exists")
         rid = shlex.quote(r["id"])
         nxt = ("resume it: " + cli_command(r.get("cli"), f"run-resume --project "
                                            f"{shlex.quote(r['project'] or project)} --run-id {rid}")
@@ -341,16 +376,51 @@ def _no_run_verdict(p: str, nr: "_NoRun", what: "str | None" = None) -> "dict | 
                                      f"--path {shlex.quote(main)}"))
         return _deny(head + f"This session's run {r['id']} ({r.get('status')}) has no worktree "
                      f"for this repo yet: {nxt}\nThen make this change at the same relative "
-                     "path under the worktree it prints.")
+                     "path under the worktree it prints." + note)
     cli = _latest_cli()
     pq = shlex.quote(project)
     create = cli_command(cli, f"run-create --project {pq} --profile direct --requirement "
                               "'<what you are changing and how to tell it is done>'")
     start = cli_command(cli, f"stage-start --project {pq} --run-id <run_id> --stage plan")
+    note = "" if what is not None else _claim_note(main, p, cli_command(
+        cli, claim_args(project, "<run_id>", [p])), " after stage-start")
     return _deny(head + "Start a run (each as ONE simple command; `--profile direct` for a "
                  "small, fully specified change, otherwise leave --profile out):\n"
                  f"Run: {create}\nThen: {start}\nand make this change at the same relative "
-                 "path under the worktree stage-start prints.")
+                 "path under the worktree stage-start prints." + note)
+
+
+def _claim_note(main: str, p: str, claim: str, when: str) -> str:
+    """The deny's extra line when *p* is already an uncommitted change in the main
+    checkout *main* (untracked, modified, deleted, ...): the worktree is made from HEAD,
+    so it does not have that version and "the same change in the worktree" cannot reach
+    it — the way is ``run-claim-main`` (the user approves), then edit or delete it in
+    the worktree. '' for a clean path, a directory (claim takes files only), a path
+    outside *main*, or when git cannot tell in time. The git call gets what is left of
+    the gate's budget (``_TL.deadline``) minus ``_NOTE_MARGIN``, at most ``_NOTE_CAP``,
+    and is skipped below 0.2s: a hint must never push the judgment past the budget,
+    where the gate fails open and the deny itself is lost."""
+    from core.run_worktree import git
+    rel = os.path.relpath(p, main)
+    if rel == "." or rel.startswith(".." + os.sep) or rel == ".." or os.path.isdir(p):
+        return ""
+    if getattr(_TL, "no_note", False):
+        return ""            # a pass whose deny is re-judged afresh: its note is discarded
+    budget = _budget_left(_NOTE_CAP)
+    if budget < 0.2:
+        return ""
+    try:
+        r = git(main, "status", "--porcelain=v1", "-z", "--untracked-files=all",
+                "--no-renames", "--", ":(literal)" + rel, timeout=budget,
+                env={"GIT_OPTIONAL_LOCKS": "0"})
+    except Exception:   # noqa: BLE001 — a hint only; the deny stands without it
+        return ""
+    if r.returncode != 0 or not r.stdout.strip("\0"):
+        return ""
+    return (f"\n{p} is already an uncommitted change in the main checkout, so the worktree "
+            "does not have it. If this session wrote it, move it into the run first"
+            f"{when} (the user approves): {claim}\nthen edit or delete it in the worktree. "
+            "If another session wrote it, leave it alone.")
 
 
 def _repo_add_deny(own: "_Own", repo: str, what: str) -> dict:
@@ -597,11 +667,21 @@ def create_worktree_write_gate(session_context: "dict[str, Any]"):
             cache.clear()
             cache[sid] = (time.monotonic(), own, nr)
             return judge(input_data, own, no_run=nr)
-        v = judge(input_data, hit[1], no_run=hit[2])
+        # a cached deny is judged again afresh below: no hint in this pass (it would be
+        # thrown away after spending the shared budget)
+        _TL.no_note = True
+        try:
+            v = judge(input_data, hit[1], no_run=hit[2])
+        finally:
+            _TL.no_note = False
         if v is not None and v.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
             cache.pop(sid, None)  # e.g. run-repo-add just added a worktree: judge afresh
             return _decide(sid, input_data)
         return v
+
+    def _decide_by(deadline: float, sid: str, input_data: dict) -> "dict | None":
+        # the deadline counts from submission, so time queued in the executor is spent too
+        return _with_deadline(deadline, _decide, sid, input_data)
 
     async def _gate(input_data: "dict[str, Any]", tool_use_id: "str | None",
                     context: Any) -> "dict[str, Any]":
@@ -618,7 +698,8 @@ def create_worktree_write_gate(session_context: "dict[str, Any]"):
         sid = str(session_context.get("sdk_session_id") or "")
         try:
             v = await asyncio.wait_for(
-                executors.run_in("subprocess", _decide, sid, input_data), timeout=_GATE_TIMEOUT)
+                executors.run_in("subprocess", _decide_by, time.monotonic() + _GATE_TIMEOUT,
+                                 sid, input_data), timeout=_GATE_TIMEOUT)
         except Exception:  # incl. TimeoutError — fail-open, the sync check is the backstop
             logger.warning("worktree_write_gate: judgment failed — failing open", exc_info=True)
             return {}

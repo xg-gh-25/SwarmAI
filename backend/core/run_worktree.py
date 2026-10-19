@@ -1083,8 +1083,12 @@ def claim_args(project: str, run_id: str, files: "Iterable[str]",
     import shlex
     names = " ".join(shlex.quote(str(f)) for f in files) or "<path ...>"
     tail = f" --resolve {resolve}" if resolve else ""
+    # run_id may come from a run.json any session can write: quote it like every other
+    # value, so a hint an agent copies can never carry a shell command (the placeholder
+    # stays bare)
+    rid = run_id if run_id == "<run_id>" else shlex.quote(str(run_id))
     return (f"run-claim-main --project {shlex.quote(str(project or '<project>'))} "
-            f"--run-id {run_id} --files {names}{tail}")
+            f"--run-id {rid} --files {names}{tail}")
 
 
 def _abs_claim_path(f: str) -> str:
