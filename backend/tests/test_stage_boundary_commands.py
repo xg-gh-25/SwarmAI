@@ -2099,3 +2099,31 @@ def test_docs_only_deliver_needs_no_adversarial_review(ws, capsys):
     _make_run(root, "run_docs_unknown", "direct", stages=["plan", "build"])
     code, out = _complete(reg, capsys, "run_docs_unknown", "deliver", art, {}, check=True)
     assert any(e["code"] == "E_ADVERSARIAL_TIER" for e in out["errors"]), out
+
+
+# ── a direct run may start at BUILD or DELIVER (no PLAN / BUILD paperwork) ──
+
+def test_direct_run_starting_late_records_the_earlier_stages_skipped(ws, capsys):
+    root, reg = ws
+    _make_run(root, "run_late", "direct")
+    code, out = _start(reg, capsys, "run_late", "build")
+    assert code in (0, None), out
+    recs = {r["stage"]: r for r in _run_state(root, "run_late")["stages"]}
+    assert recs["plan"]["status"] == "skipped" and "started at build" in recs["plan"]["skip_reason"]
+    code, out = _start(reg, capsys, "run_late", "deliver")
+    assert code in (0, None), out
+    recs = {r["stage"]: r for r in _run_state(root, "run_late")["stages"]}
+    assert recs["build"]["status"] == "skipped" and recs["plan"]["status"] == "skipped"
+    import pipeline_validator as pv
+    assert pv._check_stage_order("deliver", "direct", _run_state(root, "run_late")["stages"])
+
+
+def test_late_start_keeps_a_finished_stage_and_other_profiles(ws, capsys):
+    root, reg = ws
+    _make_run(root, "run_late2", "direct", stages=["plan"])
+    _start(reg, capsys, "run_late2", "deliver")
+    recs = {r["stage"]: r for r in _run_state(root, "run_late2")["stages"]}
+    assert recs["plan"]["status"] == "completed" and recs["build"]["status"] == "skipped"
+    _make_run(root, "run_full_late", "full")
+    _start(reg, capsys, "run_full_late", "build")
+    assert _run_state(root, "run_full_late")["stages"] == []   # only direct starts late

@@ -34,7 +34,10 @@ omit `--profile` and let EVALUATE pick:
   session lifecycle or cross-session state.
 direct still runs Gate 1 and Gate 2, `pipeline_test.py` and `run-commit`; it only skips
 EVALUATE, THINK, REVIEW and TEST. If BUILD finds the change is bigger or riskier than
-expected, say so in one line and checkpoint instead of stretching direct. With worktree
+expected, say so in one line and checkpoint instead of stretching direct. A direct run
+may also start late: `stage-start --stage build` opens the worktree and records PLAN skipped;
+when the change and its tests are done, `stage-start --stage deliver` records BUILD skipped
+and DELIVER lands it on the tests (no exit contract: not push-ready). With worktree
 mode on, the worktree write gate denies a session's file writes to a project code repo's
 main checkout unless one of its runs isolates them, and prints the commands: a code change
 made outside the pipeline starts a run too (`--profile direct` when the criteria above

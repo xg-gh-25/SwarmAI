@@ -3123,8 +3123,8 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 #   • pipeline_test_gate (B3): while the session HAS an active run, every test/build
 #     command goes through backend/scripts/pipeline_test.py (one entry point, scoped
 #     by mode, cached, hang-safe). Direct pytest / vitest / tsc / eslint / vite build /
-#     npm|pnpm|yarn|bun build|test, make test*, code-copy baselines (git archive, git worktree add, rsync / cp -r
-#     of the repo or backend/) and manual hang triage (ps / pgrep / kill / pkill aimed
+#     npm|pnpm|yarn|bun build|test, make test*, `git worktree add`, inline / stdin python
+#     that names a test runner AND can run code, and manual hang triage (ps / pgrep / kill / pkill aimed
 #     at pytest, python -X faulthandler) are DENIED with a copyable runner command.
 #     A session with no active run is never affected.
 #   • direct_commit_gate (G1): a session with NO active run of its own that commits
@@ -3525,6 +3525,33 @@ def _mentions_test_runner(text: str) -> bool:
     return bool(_PYTEST_TOKEN_RE.search(text) or re.search(r"\bvitest\b", text))
 
 
+# Modules inline / stdin code may import and still be unable to start a process or load
+# other code: text, files, data. Anything else (subprocess, os, pty, runpy, importlib,
+# pytest, a project module whose import runs code, ...) counts as able to run tests.
+_INERT_IMPORTS = frozenset({"pathlib", "json", "re", "textwrap", "difflib", "string",
+                            "collections", "itertools", "functools", "typing", "math",
+                            "datetime", "time", "hashlib", "base64", "unicodedata",
+                            "dataclasses", "enum", "copy", "pprint", "fnmatch", "glob",
+                            "shlex", "tomllib", "csv", "io", "__future__"})
+_IMPORT_RE = re.compile(r"\bimport\s+([\w.]+(?:\s*,\s*[\w.]+)*)|\bfrom\s+([\w.]+)\s+import\b")
+_DYNAMIC_RE = re.compile(r"\b(?:exec|eval|compile|__import__|getattr|globals|breakpoint|"
+                         r"open_code)\s*\(|__builtins__|__loader__|__spec__")
+
+
+def _code_can_execute(text: str) -> bool:
+    """True when python code in *text* could start a process or load other code: an
+    import outside _INERT_IMPORTS, or a dynamic-execution primitive. Judges what the
+    code can DO, not what it names, so an edit script that only writes text naming the
+    test runner is not a test run. Fail-closed on anything it does not recognise."""
+    if _DYNAMIC_RE.search(text):
+        return True
+    for many, one in _IMPORT_RE.findall(text):
+        for name in (many.split(",") if many else [one]):
+            if name.strip().split(".")[0] not in _INERT_IMPORTS:
+                return True
+    return False
+
+
 def _classify_coverage(args: list[str], hits: set, files: list) -> None:
     """`coverage run [opts] (-m pytest | pytest-script) ...` → the pytest it wraps."""
     if not args or args[0] != "run":
@@ -3575,7 +3602,8 @@ def _classify_python(args: list[str], hits: set, files: list) -> None:
             hits.add("_py_stdin")
             return
         if a.startswith("-") and not a.startswith("--") and a.endswith("c"):
-            if i + 1 < len(args) and _mentions_test_runner(args[i + 1]):
+            if i + 1 < len(args) and _mentions_test_runner(args[i + 1]) \
+                    and _code_can_execute(args[i + 1]):
                 hits.add("python -c pytest")
             return  # inline code
         if a in ("--version", "-V", "-VV", "--help", "-h"):
@@ -3902,69 +3930,6 @@ def _git_subcommand_args(tokens: list[str]) -> list[str]:
     return tokens[k:]
 
 
-def _is_repo_copy_source(src: str, cwd: str) -> bool:
-    """True iff a copy SOURCE is the repo root or its backend/ directory.
-
-    Resolved against the Bash call's cwd (never the daemon's cwd). A trailing `/`,
-    `/.` or `/*` is ignored. Any source whose last component is `backend` also
-    counts, which covers another checkout or a worktree of this repo."""
-    s = src
-    while s.endswith(("/", "/.", "/*")) and len(s) > 1:
-        s = s[:-2] if s.endswith(("/.", "/*")) else s[:-1]
-    if os.path.basename(s) == "backend":
-        return True
-    s = os.path.expanduser(s)
-    if not os.path.isabs(s):
-        if not cwd:
-            return False
-        s = os.path.join(cwd, s)
-    repo = _source_repo_root()
-    if not repo:
-        return False
-    rp = os.path.realpath(s)
-    return rp in (repo, os.path.join(repo, "backend"))
-
-
-_CP_VALUE_OPTS = frozenset({"-t", "--target-directory", "-S", "--suffix"})
-_RSYNC_VALUE_OPTS = frozenset({
-    "-e", "--rsh", "--exclude", "--include", "--filter", "-f", "--exclude-from",
-    "--include-from", "--files-from", "--chmod", "--chown", "--rsync-path",
-    "--log-file", "--partial-dir", "--temp-dir", "-T", "--compare-dest",
-    "--copy-dest", "--link-dest",
-})
-
-
-def _copy_of_repo(prog: str, args: list[str], cwd: str) -> bool:
-    """`rsync ...` or a recursive `cp` (-r/-R/-a/--recursive/--archive) whose
-    SOURCE is the repo or backend/ (see _is_repo_copy_source)."""
-    value_opts = _CP_VALUE_OPTS if prog == "cp" else _RSYNC_VALUE_OPTS
-    recursive = prog == "rsync"
-    target_given = False
-    positional: list[str] = []
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a == "--":
-            positional.extend(args[i + 1:])
-            break
-        if a in value_opts:
-            target_given = target_given or a in ("-t", "--target-directory")
-            i += 2
-            continue
-        if a.startswith("--"):
-            recursive = recursive or a in ("--recursive", "--archive")
-            target_given = target_given or a.startswith("--target-directory=")
-        elif a.startswith("-") and len(a) > 1:
-            recursive = recursive or (prog == "cp" and bool(set(a[1:]) & set("rRa")))
-        else:
-            positional.append(a)
-        i += 1
-    if not recursive:
-        return False
-    sources = positional if target_given else positional[:-1]
-    return any(_is_repo_copy_source(s, cwd) for s in sources)
-
-
 def _classify_test_segment(
     tokens: list[str], cwd: str, depth: int, hits: set, files: list,
     chain_dir: "str | None" = None,
@@ -4020,16 +3985,13 @@ def _classify_test_segment(
     elif w in _JS_PM_VALUE_OPTS:
         _classify_js_pm(w, args, cwd, depth, hits, files, chain_dir)
     elif w == "git":
+        # `git archive` and cp / rsync copies are not hits: a copy runs no test, and any
+        # test run on it is itself denied here. `git worktree add` registers a worktree.
         sub = _git_subcommand_args(t)
-        if sub and sub[0] == "archive":
-            hits.add("git archive")
-        elif sub and sub[0] == "worktree":
+        if sub and sub[0] == "worktree":
             rest = [a for a in sub[1:] if not a.startswith("-")]
             if rest and rest[0] == "add":
                 hits.add("git worktree add")
-    elif w in ("cp", "rsync"):
-        if _copy_of_repo(w, args, cwd):
-            hits.add(w + " of the repo")
     return w
 
 
@@ -4135,7 +4097,7 @@ def _classify_pipeline_test_command(
         hits.add("pytest")
     if "_py_stdin" in hits:
         hits.discard("_py_stdin")
-        if _mentions_test_runner(command):
+        if _mentions_test_runner(command) and _code_can_execute(command):
             hits.add("python stdin pytest")
     seen: set = set()
     uniq = [f for f in files if not (f in seen or seen.add(f))]
@@ -4168,15 +4130,14 @@ def _pipeline_runner_command(project: str, run_id: str, mode: str, files: list[s
 
 
 def _test_gate_hint(hits) -> str:
-    """Extra advice for a deny whose only reason is stdin code naming the runner.
-    The check stays fail-closed (any mention denies — a narrower check kept being
-    bypassable); the usual false deny is an edit script that only WRITES text naming
-    the runner, and writing the code to a file and running that file avoids it."""
+    """Extra advice for a deny whose only reason is stdin code naming the runner. Such
+    code is denied only when it can also run something (_code_can_execute): an import
+    outside the inert set, or exec / eval / __import__ and the like."""
     if "python stdin pytest" not in hits:
         return ""
-    return ("\nIf this stdin code only WRITES text that names the test runner (an edit "
-            "script), save the edit script to a file and run it. Running tests still goes "
-            "through the runner above, never through a script.")
+    return ("\nThis stdin code names the test runner AND can run code (an import beyond "
+            "pathlib / json / re / text modules, or exec / eval). An edit script needs "
+            "neither: use pathlib only. Running tests goes through the runner above.")
 
 
 def create_pipeline_test_gate(session_context: dict[str, Any]):

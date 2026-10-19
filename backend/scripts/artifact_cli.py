@@ -13561,6 +13561,40 @@ def _fit_stage_start(out: dict) -> dict:
     return out
 
 
+def _skip_direct_stages_before(run_file: Path, run_state: dict, stage: str) -> None:
+    """A direct run may start at BUILD or DELIVER: every earlier direct stage with no
+    finished record is recorded ``skipped`` (with its reason), so the stage order holds
+    and no PLAN / BUILD paperwork is written for work that is already done. A skipped
+    PLAN leaves no exit contract, which keeps the run not push-ready (the bound requires
+    one for ``direct``); the change still lands on its tests."""
+    from core.pipeline_profiles import FINISHED_STATUSES
+    stages = _get_profile_stages("direct")
+    earlier = stages[:stages.index(stage)]
+    done = {r.get("stage") for r in run_state.get("stages") or [] if isinstance(r, dict)
+            and (r.get("status") in FINISHED_STATUSES or r.get("status") == "skipped")}
+    todo = [s for s in earlier if s not in done]
+    if not todo:
+        return
+    now = _utc_now_iso()
+
+    def skip(d: dict) -> None:
+        recs = d.setdefault("stages", [])
+        have = {r.get("stage") for r in recs if isinstance(r, dict)
+                and (r.get("status") in FINISHED_STATUSES or r.get("status") == "skipped")}
+        for s_ in todo:
+            if s_ in have:
+                continue
+            recs[:] = [r for r in recs if not (isinstance(r, dict) and r.get("stage") == s_)]
+            recs.append({"stage": s_, "status": "skipped", "stage_doc_consumed": True,
+                         "skip_reason": f"direct run started at {stage}: no separate {s_} "
+                                        "record for work done in the worktree",
+                         "skipped_at": now})
+    from core.run_lock import update_run
+    update_run(run_file, skip)
+    fresh = json.loads(run_file.read_text(encoding="utf-8"))
+    run_state["stages"] = fresh.get("stages") or []
+
+
 def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
     """The ONE entry of a stage: record stage_timing.started_at and return, in one
     compact JSON line (target ≤ 8 KB), everything the stage needs to begin —
@@ -13576,6 +13610,8 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
         _stage_boundary_fail(stage, [f"Profile violation: '{stage}' is not in the '{profile}' "
                                      f"profile. Expected stages: {_get_profile_stages(profile)}"])
     run_dir = run_file.parent
+    if profile == "direct" and stage in ("build", "deliver"):
+        _skip_direct_stages_before(run_file, run_state, stage)
 
     # C4 started_at — idempotent re-entry keeps the original start; a re-start
     # after the stage completed begins a new window.

@@ -18,7 +18,7 @@ Invariants:
     python -c / stdin code running pytest, coverage run, make test*, bash -o/--long
     -c wrappers, node entry points, pnpm / yarn / bun test|run|exec|dlx / bunx,
     the `pnpm exec|dlx -c` / `yarn dlx -c` shell mode (string classified like bash -c),
-    git archive, git worktree add, rsync / cp -r of the repo or backend/,
+    git worktree add (a copy of the repo is not a hit: it runs no test),
     ps/pgrep/kill/pkill on pytest, python -X faulthandler); approve pytest
     --version/--help, pytest words that are only quoted / grep patterns / commit /
     echo text, pnpm|yarn|bun install / dev, and the pipeline_test.py runner. A
@@ -266,13 +266,12 @@ DENIED_COMMANDS = [
     "node ./node_modules/eslint/bin/eslint.js src",
     "node node_modules/typescript/bin/tsc --noEmit",
     "cd ../desktop && npx eslint src",
-    # code-copy baselines
-    "git archive HEAD -o /tmp/base.tar",
+    # a registered worktree outside the run
     "git -C . worktree add /tmp/base HEAD",
-    "rsync -a backend/ /tmp/base",
-    "cp -r backend /tmp/base",
-    "cp -R . /tmp/base",
-    "cp -a " + str(REPO) + " /tmp/base",
+    # stdin / -c code that names the runner AND can run code
+    "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['pytest', 'tests/x.py'])\nEOF",
+    "python3 - <<'EOF'\nexec(open('t.py').read())  # runs pytest\nEOF",
+    "python3 - <<'EOF'\nimport pipeline_test  # project module: import runs code (pytest)\nEOF",
     # manual hang triage
     "ps aux | grep pytest",
     "pgrep -f pytest",
@@ -289,6 +288,15 @@ APPROVED_COMMANDS = [
     'git commit -m "fix pytest gate; run vitest after npm run build"',
     "ls backend/tests | grep test_pytest",
     "cp -r /tmp/a /tmp/b",
+    # copies run no test: the test run on a copy is what is gated
+    "git archive HEAD -o /tmp/base.tar",
+    "rsync -a backend/ /tmp/base",
+    "cp -r backend /tmp/base",
+    "cp -a " + str(REPO) + " /tmp/base",
+    # an edit script that only WRITES text naming the runner (pathlib / text modules)
+    "python3 -I - <<'EOF'\nfrom pathlib import Path\nimport re, json\n"
+    "p = Path('x.md'); p.write_text(p.read_text().replace('pytest -q', 'pytest -x'))\nEOF",
+    "python3 -c \"import pathlib; pathlib.Path('a.md').write_text('run pytest later')\"",
     "cp backend/core/x.py /tmp/x.py",
     "ps aux | grep node",
     "kill 12345",
