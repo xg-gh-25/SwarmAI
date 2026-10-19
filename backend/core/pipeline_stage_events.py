@@ -65,7 +65,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from .pipeline_profiles import get_profile_stages, profile_gates
+from .pipeline_profiles import FINISHED_STATUSES, get_profile_stages, profile_gates
 from .project_registry import get_swarmws
 
 logger = logging.getLogger(__name__)
@@ -83,10 +83,10 @@ STAGE_ORDINALS: dict[str, int] = {
     "reflect": 10, "goal_cycle": 5,
 }
 
-# Terminal statuses, normalized: "complete" is a legacy spelling found in real
-# run.json records and is shown (and compared) as "completed".
-_TERMINAL: dict[str, str] = {"completed": "completed", "complete": "completed",
-                             "skipped": "skipped"}
+# Terminal statuses, normalized: "complete" and "done" are legacy spellings found in
+# real run.json records and are shown (and compared) as "completed"
+# (pipeline_profiles.FINISHED_STATUSES, the one set every reader shares).
+_TERMINAL: dict[str, str] = {**{s: "completed" for s in FINISHED_STATUSES}, "skipped": "skipped"}
 SUMMARY_MAX = 160
 
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")

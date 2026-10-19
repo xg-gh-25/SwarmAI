@@ -41,6 +41,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
+from .pipeline_profiles import FINISHED_STATUSES as _DONE  # one "finished" set for every reader
+
 logger = logging.getLogger(__name__)
 
 #: (file name, source stage, one-line purpose). REPORT.md has no source stage: it is
@@ -138,6 +140,7 @@ def doc_status(run_dir: Any, profile: Optional[str], run_state: Optional[dict] =
     profile, or the run recorded that stage as skipped) or required but missing."""
     req = set(required_docs(profile))
     recs = _records(run_state) if isinstance(run_state, dict) else {}
+    arts: Optional[dict] = None   # loaded once, only when a finished stage lacks its file
     out: list[dict] = []
     for name, stage, purpose in DOCS:
         p = Path(str(run_dir)) / name if run_dir else None
@@ -149,7 +152,17 @@ def doc_status(run_dir: Any, profile: Optional[str], run_state: Optional[dict] =
         elif not required:
             reason = f"skipped: profile '{profile}' has no {stage} stage"
         elif not exists:
-            reason = "missing" if stage is None else f"missing: {stage} has not completed"
+            done = str(_d(recs.get(stage)).get("status") or "") in _DONE if stage else False
+            if stage is None:
+                reason = "missing"
+            elif not done:
+                reason = f"missing: {stage} has not completed"
+            else:
+                # the same split completion_check makes: artifact readable or not
+                if arts is None:
+                    arts = load_stage_artifacts(run_dir, run_state) if run_dir and run_state else {}
+                reason = (f"not generated: {stage} completed before run documents existed, or the write failed"
+                          if stage in arts else f"not generated: the {stage} artifact could not be read")
         else:
             reason = None
         out.append({"name": name, "purpose": purpose, "path": str(p) if p else None,
@@ -588,7 +601,7 @@ def completion_check(run_dir: Any, run_state: dict,
         if not d["required"] or d["exists"] or stage is None:
             continue
         rec = _d(recs.get(stage))
-        if str(rec.get("status") or "") not in ("completed", "complete"):
+        if str(rec.get("status") or "") not in _DONE:
             warnings.append(f"{d['name']}: the {stage} stage is not completed, so it has no document")
         elif stage in arts:
             errors.append(f"{d['name']} could not be written although the {stage} artifact "

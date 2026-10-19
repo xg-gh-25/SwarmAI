@@ -296,3 +296,41 @@ def test_model_text_cannot_open_a_fence_and_refuted_open_findings_count_once():
         {"specialist": "security", "severity": "HIGH", "resolved": False, "finding": "Not a bug: scoped"}]}}
     md = rd.render_review({"id": "r"}, {}, {}, {}, deliver)
     assert "| security | 1 | 1 | 0 | 1 | 0 |" in md
+
+
+def test_doc_status_tells_not_generated_from_not_completed(tmp_path):
+    run_dir, state = _run(tmp_path, {"evaluate": EVAL})          # completed, no document written
+    state["stages"].append({"stage": "plan", "status": "in_progress"})
+    st = {d["name"]: d for d in rd.doc_status(run_dir, "full", state)}
+    assert st["REQUIREMENTS.md"]["reason"].startswith("not generated: evaluate completed")
+    assert st["DESIGN_SPEC.md"]["reason"] == "missing: plan has not completed"
+    state["stages"][0]["status"] = "done"                       # the third finished spelling
+    st = {d["name"]: d for d in rd.doc_status(run_dir, "full", state)}
+    assert st["REQUIREMENTS.md"]["reason"].startswith("not generated: evaluate completed")
+    state["stages"][0].pop("artifact_id")                       # finished, artifact unreadable
+    st = {d["name"]: d for d in rd.doc_status(run_dir, "full", state)}
+    assert st["REQUIREMENTS.md"]["reason"] == "not generated: the evaluate artifact could not be read"
+
+
+def test_completion_check_counts_done_as_finished(tmp_path, monkeypatch):
+    """I2: completion_check and doc_status share one finished-status set — a 'done' stage
+    whose document cannot be written is a write failure (error), not an unfinished stage."""
+    run_dir, state = _run(tmp_path, {"evaluate": EVAL})
+    state["stages"][0]["status"] = "done"
+
+    def boom(path, text):
+        raise OSError("disk full")
+    monkeypatch.setattr(rd, "_atomic_write", boom)
+    errs, warns, _ = rd.completion_check(run_dir, state)
+    assert any("REQUIREMENTS.md could not be written" in e for e in errs)
+    assert not any("REQUIREMENTS.md: the evaluate stage is not completed" in w for w in warns)
+
+
+def test_every_reader_shares_one_finished_status_set():
+    """I2 across the system: the stage rows / summary count and the documents agree."""
+    from core.pipeline_profiles import FINISHED_STATUSES
+    assert rd._DONE is FINISHED_STATUSES
+    assert {s for s, v in pse._TERMINAL.items() if v == "completed"} == set(FINISHED_STATUSES)
+    st = {"status": "completed", "profile": "full", "run_dir": None,
+          "stages": {"evaluate": {"stage": "evaluate", "status": "done"}}}
+    assert pse.summary_block("run_d1", st, "now")["stagesDone"] == 1

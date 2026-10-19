@@ -46,6 +46,13 @@ _RELAXED_PROFILES: frozenset[str] = frozenset({"trivial", "docs", "research"})
 # rank-4 alias of "full" (same stage set). Keep this the ONLY place aliases live.
 _PROFILE_ALIASES: dict[str, str] = {"standard": "full"}
 
+#: Stage-record statuses that mean the stage FINISHED. Real run.json files carry all
+#: three spellings ("complete" and "done" are legacy). run_docs and
+#: pipeline_stage_events read it; other readers still hard-code their own tuple
+#: (pipeline_validator, run_worktree, ddd_cultivation, clean_foreign_run_stubs) and
+#: should move onto it — a new "is this stage done" check must use this set.
+FINISHED_STATUSES: frozenset[str] = frozenset({"completed", "complete", "done"})
+
 
 def normalize_profile(profile: str | None) -> str:
     """Canonicalize a raw profile value to its comparison key — the C3 SSOT.
