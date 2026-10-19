@@ -8,8 +8,9 @@ structured evidence that ``stage-complete`` reads. One call per mode; zero model
 Modes:
 - ``tdd``        only the explicit ``--files`` (max 5); repeat counter per file
 - ``verify``     changed test files + recent failures + transitive importers of changed
-                 modules (direct importers, REVERSE_DEPTH; tests naming a changed symbol
-                 first; cap 40, then cut to the time budget) + tests
+                 modules that the change reaches (they name a changed symbol or a same-file
+                 caller of one; every importer of a module whose change cannot be told);
+                 all of it runs, ``--deadline auto`` sizes the time to it) + tests
                  naming a changed backend/scripts/*.py file (subprocess-driven)
 - ``regression`` L1 ac_coverage tests + L2 dependency scope + L3 import smoke
 - ``recheck``    previous evidence failures + tests affected by files changed since
@@ -156,13 +157,19 @@ TDD_MAX_FILES = 5
 CAP_FILES = 40
 SMOKE_CAP = 40
 TDD_REPEAT_WARN = 8
-# verify selection: tests that import a changed module directly. Depth 2 (test → module
+# verify selection: tests that import a changed module directly (then only those the
+# change reaches, ``affected_importers``). Depth 2 (test → module
 # → changed module) selected 103-463 files for 21 changed ones (run_340478c9, run_7da44b0d).
 REVERSE_DEPTH = 1
 WRAPPER_ALARM_S = 110
 DEFAULT_DEADLINE = 95.0
 SAFE_DEADLINE = WRAPPER_ALARM_S - 10.0
 MAX_DEADLINE = 1800.0
+# --deadline auto (verify / regression): the runner sizes the deadline to the must-run
+# set. One Bash call is capped at 600 s (Claude Code's BASH_MAX_TIMEOUT), so the wrapper
+# is alarm 590 and the deadline at most 575. Hangs stay bounded by the per-test timeout.
+AUTO_ALARM_S = 590
+AUTO_MAX_DEADLINE = 575.0
 # Cross-run throttle: one machine-wide pool of worker tokens (``<cache>/workers/N.lock``,
 # flock) shared by every runner of every session. A runner holds as many tokens as it
 # runs workers, so concurrent runs SPLIT the cores instead of each sizing itself as if
@@ -706,35 +713,153 @@ def _changed_lines(repo: Path, f: str) -> "list[int] | None":
 
 
 def changed_symbols(repo: Path, f: str) -> "set[str] | None":
-    """Names of the functions / classes (and module-level assignment targets) whose lines
-    ``git diff HEAD`` touches in backend module ``f``. None = cannot tell (untracked file,
-    no diff, unparsable): the caller then ranks by imports only."""
+    """Names a test must mention to be affected by this diff of backend module ``f``:
+    the functions / classes (and module-level assignment targets) whose lines
+    ``git diff HEAD`` touches, plus every function / class in the same file that calls
+    or references one of them (one hop: ``_binding_findings`` changed →
+    ``cmd_stage_complete``, which calls it, counts too).
+
+    None = cannot tell, and the caller falls back to every direct importer: untracked
+    file, no diff, unparsable, a changed line outside any def / class / assignment that
+    is not blank, a comment or the module docstring (an import, a top-level call), or
+    only names too generic to grep for."""
     lines = _changed_lines(repo, f)
     if not lines:
         return None
+    text = _read_text(repo / f)
     try:
-        tree = ast.parse(_read_text(repo / f))
+        tree = ast.parse(text)
     except (SyntaxError, ValueError):
         return None
+    src = text.splitlines()
     names: set[str] = set()
     want = set(lines)
+    covered: set[int] = set()
+    doc = tree.body[0] if tree.body and isinstance(tree.body[0], ast.Expr) \
+        and isinstance(getattr(tree.body[0], "value", None), ast.Constant) \
+        and isinstance(tree.body[0].value.value, str) else None
+    if doc is not None:
+        covered |= set(range(doc.lineno, getattr(doc, "end_lineno", doc.lineno) + 1))
+    defs: list = []  # every def / class node, any depth
 
     def visit(node, stack):
         for ch in ast.iter_child_nodes(node):
             if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                defs.append(ch)
                 end = getattr(ch, "end_lineno", ch.lineno)
                 first = min([ch.lineno] + [d.lineno for d in ch.decorator_list])
-                if any(first <= ln <= end for ln in want):
+                span = set(range(first, end + 1))
+                if span & want:
+                    covered.update(span)
                     names.update(stack + [ch.name])
-                    visit(ch, stack + [ch.name] if isinstance(ch, ast.ClassDef) else stack)
+                visit(ch, stack + [ch.name] if isinstance(ch, ast.ClassDef) else stack)
             elif node is tree and isinstance(ch, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
                 end = getattr(ch, "end_lineno", ch.lineno)
-                if any(ch.lineno <= ln <= end for ln in want):
+                span = set(range(ch.lineno, end + 1))
+                if span & want:
+                    covered.update(span)
                     tgts = ch.targets if isinstance(ch, ast.Assign) else [ch.target]
                     names.update(t.id for t in tgts if isinstance(t, ast.Name))
 
     visit(tree, [])
-    return {n for n in names if len(n) >= 4 and n not in _GENERIC_NAMES}
+    imports = set()
+    for n in tree.body:  # a top-level import only matters where it is used, and the use
+        if isinstance(n, (ast.Import, ast.ImportFrom)):  # is in a changed symbol
+            imports |= set(range(n.lineno, getattr(n, "end_lineno", n.lineno) + 1))
+    for ln in want - covered - imports:
+        body = src[ln - 1].strip() if 0 < ln <= len(src) else ""
+        if body and not body.startswith("#"):
+            return None  # a change outside any symbol: top-level code
+    changed = set(names)
+    for d in defs:  # one hop: same-file callers / referrers of a changed symbol
+        if d.name in changed:
+            continue
+        for n in ast.walk(d):
+            ref = n.id if isinstance(n, ast.Name) else n.attr if isinstance(n, ast.Attribute) else None
+            if ref in changed:
+                names.add(d.name)
+                break
+    out = {n for n in names if len(n) >= 4 and n not in _GENERIC_NAMES}
+    return out or None
+
+
+def _script_name_re(repo: Path, changed: list[str]) -> "re.Pattern | None":
+    """Whole-file-name pattern of the changed ``backend/scripts/*.py`` files: a test that
+    names one drives that script by subprocess (no import edge reaches it)."""
+    scripts = [Path(f).name for f in changed if f.startswith("backend/scripts/")
+               and f.endswith(".py") and (repo / f).is_file()]
+    if not scripts:
+        return None
+    # a whole file name: "x_test.py" must not match inside "test_x_test.py"
+    return re.compile(r"(?<![\w.-])(?:" + "|".join(map(re.escape, scripts)) + r")\b")
+
+
+_PLAIN_NAME_RE = re.compile(r"[a-z][a-z0-9]{0,11}")
+
+
+def _symbol_patterns(module: str, syms: set[str]) -> list:
+    """Regex a test must match to reach ``syms`` of ``module``. A distinctive name
+    (an underscore, a capital, or 13+ chars) matches as a word. A plain short name
+    (``create``, ``sweep``, ``land``) matches only qualified by the module
+    (``run_worktree.create``, ``rw.create`` after ``import ... as rw``) or imported by
+    name from it: as a bare word it matched 26 of 80 tests that never call it."""
+    leaf = module.rsplit(".", 1)[-1]
+    plain = sorted(n for n in syms if _PLAIN_NAME_RE.fullmatch(n))
+    distinct = sorted(n for n in syms if n not in plain)
+    alts = []
+    if distinct:
+        alts.append(r"\b(?:" + "|".join(map(re.escape, distinct)) + r")\b")
+    if plain:
+        p = "|".join(map(re.escape, plain))
+        alts.append(r"\b" + re.escape(leaf) + r"\.(?:" + p + r")\b")
+        alts.append(r"(?m)^\s*from\s+[\w.]*\b" + re.escape(leaf) + r"\s+import\b[^\n]*\b(?:"
+                    + p + r")\b")
+        alts.append(r"(?s)import\s+[\w.]*\b" + re.escape(leaf) + r"\s+as\s+(\w+)"
+                    r"(?=.*\b\1\.(?:" + p + r")\b)")
+    return [re.compile(a) for a in alts]
+
+
+def affected_importers(repo: Path, changed: list[str], tests: list[str],
+                       graph: dict[str, list[str]]) -> set[str]:
+    """The tests among ``tests`` this change reaches, decided per changed module:
+    a module whose changed symbols are known (``changed_symbols``, same-file callers
+    included) reaches the tests that use one of them (``_symbol_patterns``); a module
+    whose change cannot be told (new file, top-level code changed) reaches every test
+    importing it. A test naming a changed script's file name (subprocess-driven) is
+    reached too."""
+    pats: list = []
+    blind: list[tuple[str, bool]] = []
+    blind_scripts: list[str] = []
+    subs: set[str] = set()
+    for f, m, pkg in _changed_module_files(repo, changed):
+        got = changed_symbols(repo, f)
+        if got is None:
+            blind.append((m, pkg))
+            if f.startswith("backend/scripts/"):
+                blind_scripts.append(f)
+        else:
+            pats += _symbol_patterns(m, got)
+            if f.startswith("backend/scripts/"):
+                # a subprocess test reaches a changed cmd_<x> through its subcommand
+                subs |= {n[4:].replace("_", "-") for n in got if n.startswith("cmd_")}
+    # A test naming a script's file drives it by subprocess. When the script's change is
+    # known, only the changed subcommands count: naming artifact_cli.py alone pulled in
+    # 41 of 46 selected files for a change to one subcommand (run_925edb0e).
+    named = _script_name_re(repo, blind_scripts)
+    if named is not None:
+        pats.append(named)
+    if subs:
+        pats.append(re.compile(r"(?<![\w-])(?:" + "|".join(map(re.escape, sorted(subs)))
+                               + r")(?![\w-])"))
+    out: set[str] = set()
+    for t in tests:
+        if any(_imports_module(graph.get(t) or [], m, pkg) for m, pkg in blind):
+            out.add(t)
+            continue
+        body = _read_text(repo / t)
+        if any(p.search(body) for p in pats):
+            out.add(t)
+    return out
 
 
 def _changed_modules(repo: Path, changed: list[str]) -> list[tuple[str, bool]]:
@@ -851,64 +976,32 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
             d = dist.get(t)
             if d is not None and d >= 1 and t not in rank:
                 rank[t] = (d, 0)  # direct importers by name already hold (1, -n)
-    # A changed CLI script is often driven by subprocess (``[python, SCRIPTS /
-    # "artifact_cli.py", ...]``): no import edge reaches that test, yet it exercises the
-    # script directly. A test naming the script's file name ranks as a direct importer.
-    scripts = [Path(f).name for f in changed if f.startswith("backend/scripts/")
-               and f.endswith(".py") and (repo / f).is_file()]
-    if scripts:
-        # a whole file name: "x_test.py" must not match inside "test_x_test.py"
-        named = re.compile(r"(?<![\w.-])(?:" + "|".join(map(re.escape, scripts)) + r")\b")
+    named = _script_name_re(repo, changed)
+    if named is not None:
         for t in graph:
             if rank.get(t, (2, 0)) > (1, 0) and named.search(_read_text(repo / t)):
                 rank[t] = (1, 0)
-    # Within the importers, tests that name a changed function / class run first: a hub
-    # module (artifact_cli, security_hooks) has 60+ direct importers, and most of them
-    # never call the lines this run changed. The rest keep their order behind them and are
-    # the first to go when the selection does not fit the budget (_cut_to_budget).
-    for t, hits in symbol_hits(repo, [f for f, _, _ in mfiles], list(rank)).items():
-        rank[t] = (0, -hits)
     rec = [f for f in dict.fromkeys(recent) if f not in changed_tests and (repo / f).is_file()]
     skip = set(changed_tests) | set(rec)
-    importers = [t for t in sorted(rank, key=lambda t: (rank[t], t)) if t not in skip]
-    # The must-run part (changed tests, recent real failures, importers naming a changed
-    # symbol) is never cut by the file cap: the cap only bounds the rest.
-    head = changed_tests + rec + [t for t in importers if rank[t][0] == 0]
-    rest = [t for t in importers if rank[t][0] != 0]
-    room = max(0, cap - len(head))
-    return head + rest[:room], rest[room:], [m for m, _ in mods]
-
-
-def symbol_hits(repo: Path, module_files: list[str], tests: list[str]) -> dict[str, int]:
-    """test → how many distinct changed symbols (``changed_symbols``) of
-    ``module_files`` its source names as a whole word; tests naming none are absent."""
-    syms: set[str] = set()
-    for f in module_files:
-        got = changed_symbols(repo, f)
-        if got:
-            syms |= got
-    if not syms:
-        return {}
-    word = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(syms))) + r")\b")
-    out: dict[str, int] = {}
-    for t in tests:
-        n = len(set(word.findall(_read_text(repo / t))))
-        if n:
-            out[t] = n
-    return out
+    # Only the importers this change reaches (they name a changed symbol, a caller of
+    # one in the same file, or a changed script): a hub module such as artifact_cli has
+    # 60+ direct importers and most never touch what changed. The scope is fixed by the
+    # change, never by machine load. When a changed module's symbols cannot be told
+    # (imports / top-level code changed, new file), every direct importer counts and the
+    # file cap bounds them, overflow in skipped.
+    hit = affected_importers(repo, changed, [t for t in rank if t not in skip], graph)
+    importers = [t for t in sorted(rank, key=lambda t: (rank[t], t)) if t in hit]
+    # ``cap`` is kept for callers' signature; the reached set is the scope, uncapped.
+    del cap
+    return changed_tests + rec + importers, [], [m for m, _ in mods]
 
 
 def must_run_files(repo: Path, plan: dict) -> set[str]:
-    """The part of a verify / regression selection that is never cut for time: the run's
-    own test files, its AC test files, and selected importers that name a changed
-    function / class / constant. Deterministic for a given change: it does not depend
-    on machine load or workers granted."""
-    changed = plan.get("changed") or []
-    own = {f for f in changed if _is_backend_test(f)}
-    ac = set(plan.get("ac_files") or []) | set((plan.get("ac_first") or {}).keys())
-    mods = [f for f, _, _ in _changed_module_files(repo, changed)]
-    sel = [f for f in plan.get("targets") or {} if f not in own]
-    return own | ac | set(symbol_hits(repo, mods, sel))
+    """Every selected target: since ``select_backend`` selects only what this change
+    reaches (plus the run's own, AC and recent-failure tests), the whole selection is
+    must-run and nothing is cut for time. Fixed by the change, not by machine load."""
+    return set(plan.get("targets") or {}) | set(plan.get("ac_files") or []) \
+        | set((plan.get("ac_first") or {}).keys())
 
 
 # ── per-test event stream (survives a killed or os._exit()-ed shard) ────────
@@ -1411,16 +1504,22 @@ def _seconds_needed(targets: dict, durations: dict, workers: int) -> float:
 def _must_run_refusal(ns, deadline_s: float, n_files: int, workers: int) -> dict:
     """Error for a must-run set that does not fit the deadline: the scope is fixed by
     the change, so the time grows, not the scope shrinks. Gives the exact command."""
-    d = int(min(MAX_DEADLINE, math.ceil(deadline_s / 10.0) * 10))
+    d = int(min(AUTO_MAX_DEADLINE, math.ceil(deadline_s / 10.0) * 10))
     run = f" --run-id {ns.run_id}" if ns.run_id else ""
-    cmd = (f"perl -e 'alarm {d + 15}; exec @ARGV' backend/.venv/bin/python "
+    cmd = (f"perl -e 'alarm {AUTO_ALARM_S}; exec @ARGV' backend/.venv/bin/python "
            f"backend/scripts/pipeline_test.py --project {ns.project}{run} --mode {ns.mode} "
-           f"--deadline {d}")
+           f"--deadline auto")
+    tmo = (AUTO_ALARM_S + 10) * 1000
     return {"mode": ns.mode, "error": (
         f"the {n_files} must-run test file(s) of this change (its own tests, AC tests, "
-        f"tests naming a changed symbol) need about {d}s on the {workers} worker(s) "
+        f"tests reaching a changed symbol) need about {d}s on the {workers} worker(s) "
         f"granted, more than this call's deadline. They are never cut for time. Run "
-        f"exactly: {cmd}"), "next_action": cmd}
+        f"exactly this, with the Bash tool timeout set to {tmo}: {cmd}"),
+        "next_action": cmd, "bash_timeout_ms": tmo}
+
+
+def _is_auto(raw) -> bool:
+    return isinstance(raw, str) and raw.strip().lower() == "auto"
 
 
 def _cut_to_budget(targets: dict, durations: dict, workers: int, seconds: float,
@@ -3747,7 +3846,18 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
         secs = ctx.deadline_at - reserve - time.monotonic()
         must = {f: v for f, v in run_targets.items() if f in protect}
         need = _seconds_needed(must, ctx.durations, ctx.workers)
-        if need > secs:
+        if _is_auto(ns.deadline):
+            # size the deadline to the must-run set (+ the reserve and start-up), never
+            # below the default; the tail beyond it is cut below as before
+            want = max(DEFAULT_DEADLINE, (time.monotonic() - ctx.t0) + need + reserve + 15)
+            ctx.deadline_at = ctx.t0 + min(AUTO_MAX_DEADLINE, want)
+            secs = ctx.deadline_at - reserve - time.monotonic()
+            if need > secs:
+                ctx.warnings.append(
+                    f"the must-run tests need about {need:.0f}s on {ctx.workers} worker(s), over "
+                    f"the {AUTO_MAX_DEADLINE:g}s a single call allows: some will be reported "
+                    f"'timeout'; re-run the same command and the runner finishes only those")
+        elif need > secs:
             _release_workers(tokens)
             return _must_run_refusal(ns, need + reserve + 5, len(must), ctx.workers), 2
         run_targets, budget_cut = _cut_to_budget(run_targets, ctx.durations, ctx.workers,
@@ -4297,12 +4407,21 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--files", nargs="+", default=[])
     p.add_argument("--name")
     p.add_argument("--mutations")
-    p.add_argument("--deadline", type=float, default=DEFAULT_DEADLINE)
+    p.add_argument("--deadline", default=DEFAULT_DEADLINE,
+                   help="seconds, or 'auto' (verify / regression: sized to the must-run set, "
+                        f"up to {AUTO_MAX_DEADLINE:g}s; wrap in alarm {AUTO_ALARM_S} and give "
+                        f"the Bash call timeout {(AUTO_ALARM_S + 10) * 1000})")
     p.add_argument("--json", action="store_true", help="accepted for clarity; output is always JSON")
     return p
 
 
 def _clamp_deadline(raw) -> tuple[float | None, list[str]]:
+    if isinstance(raw, str) and raw.strip().lower() == "auto":
+        return AUTO_MAX_DEADLINE, []  # ceiling; _run_test_mode sizes it to the must-run set
+    return _clamp_seconds(raw)
+
+
+def _clamp_seconds(raw) -> tuple[float | None, list[str]]:
     """(deadline, warnings). Default 95 s fits ``alarm 110``; above SAFE_DEADLINE warns,
     above MAX_DEADLINE clamps; a non-finite value → (None, [error])."""
     import math

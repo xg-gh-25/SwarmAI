@@ -168,23 +168,23 @@ def test_selection_picks_direct_importers_not_unrelated(rig, tmp_path):
     # files_touched from run.json joins the change set (abs or repo-relative)
     assert "backend/tests/test_unrelated.py" in pt.changed_files(
         repo, {"files_touched": [str(repo / "backend/tests/test_unrelated.py")]})
-    # cap: overflow is reported, never dropped
+    # no file cap: the reached set is the scope (time grows, scope does not shrink)
     sel1, skipped1, _ = pt.select_backend(repo, changed, graph, 1)
-    assert len(sel1) == 1 and len(skipped1) == 1 and set(sel1 + skipped1) == set(sel)
+    assert set(sel1) == set(sel) and skipped1 == []
 
 
 def test_verify_runs_scope_reports_budget_overflow_and_writes_c2(rig, capsys, monkeypatch, tmp_path):
     repo = rig({"backend/tests/test_y.py": (
         "import core.mod\n\n\ndef test_y():\n    assert core.mod.add(0, 0) == 0\n")})
     _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
-    monkeypatch.setattr(pt, "CAP_FILES", 1)
+    monkeypatch.setattr(pt, "CAP_FILES", 1)  # no longer bounds the reached set
     out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--json")
     assert code == 0, out
-    assert out["counts"]["passed"] == 1 and out["skipped_for_budget_total"] == 1
+    assert out["counts"]["passed"] == 2 and out["skipped_for_budget_total"] == 0
     ev = _evidence(tmp_path, "tests/latest-verify.json")
     _assert_c2(ev, "verify")
-    assert len(ev["selected_files"]) == 1 and len(ev["skipped_for_budget"]) == 1
-    assert ev["layers"]["dependency_scoped"] == {"run": True, "tests": 1, "pass": 1}
+    assert len(ev["selected_files"]) == 2 and ev["skipped_for_budget"] == []
+    assert ev["layers"]["dependency_scoped"] == {"run": True, "tests": 2, "pass": 2}
     assert Path(out["evidence"]).is_file() and Path(out["evidence"]).name.startswith("verify-")
 
 
@@ -771,14 +771,15 @@ def test_selection_reverse_closure_orders_changed_recent_then_distance(rig, tmp_
     # default depth 1: direct importers only (depth 2 selected 103-463 files for 21)
     sel, skipped, _ = pt.select_backend(repo, changed, graph, 40, (), sgraph)
     assert sel == ["backend/tests/test_bdirect.py"] and skipped == []
-    # depth 2: direct importer (distance 1) before the transitive one (core.a → core.b)
+    # depth 2 ranks a transitive importer, but only a reached one is selected: test_a
+    # names neither val nor b.py (the change reaches it through core.a, not by name)
     sel, skipped, _ = pt.select_backend(repo, changed, graph, 40, (), sgraph, depth=2)
-    assert sel == ["backend/tests/test_bdirect.py", "backend/tests/test_a.py"] and skipped == []
+    assert sel == ["backend/tests/test_bdirect.py"] and skipped == []
     assert pt.select_backend(repo, changed, graph, 40)[0] == ["backend/tests/test_bdirect.py"]
     # L1: recent failures come before importers, so the cap never cuts them first
     recent = ["backend/tests/test_unrelated.py"]
     sel, skipped, _ = pt.select_backend(repo, changed, graph, 1, recent, sgraph)
-    assert sel == recent and skipped == ["backend/tests/test_bdirect.py"]
+    assert sel == recent + ["backend/tests/test_bdirect.py"] and skipped == []
     # relative imports resolve against the file's package
     assert "core.b" in pt._imports_of_source("from .b import val\n", "core")
     assert pt._imports_of_source("from .b import val\n") == []
@@ -798,9 +799,10 @@ def test_importers_naming_a_changed_function_run_first(rig, tmp_path):
     cache = tmp_path / "cache"
     sgraph = pt.build_source_graph(repo, cache)
     graph = pt.build_import_graph(repo, cache, sgraph)
-    sel, _, _ = pt.select_backend(repo, ["backend/core/hub.py"], graph, 40, (), sgraph)
-    assert set(sel[:2]) == {"backend/tests/test_h_beta.py", "backend/tests/test_h_limit.py"}
-    assert sel[2] == "backend/tests/test_h_alpha.py"
+    sel, skipped, _ = pt.select_backend(repo, ["backend/core/hub.py"], graph, 40, (), sgraph)
+    # only the importers the change reaches; test_h_alpha never touches beta / LIMIT
+    assert sorted(sel) == ["backend/tests/test_h_beta.py", "backend/tests/test_h_limit.py"]
+    assert skipped == []
     # an untracked module has no diff: imports-only ranking
     _write(repo, {"backend/core/fresh.py": "def gamma():\n    return 1\n"})
     assert pt.changed_symbols(repo, "backend/core/fresh.py") is None
@@ -1104,28 +1106,6 @@ def test_cut_to_budget_keeps_priority_order_and_protected_files():
     assert cut == [] and len(kept) == 2
 
 
-def test_verify_budget_cut_is_green_listed_and_never_cached(rig, tmp_path, capsys, monkeypatch):
-    repo = rig(run_state={"files_touched": ["backend/core/mod.py"]})
-    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n",
-                  "backend/tests/test_y.py": ("from core.mod import add\n\n\n"
-                                              "def test_y():\n    assert add(2, 2) == 4\n")})
-    cache = tmp_path / "cache"
-    cache.mkdir(exist_ok=True)
-    now = time.time()
-    (cache / "durations.json").write_text(json.dumps({
-        "backend/tests/test_x.py::test_add": [500.0, now],
-        "backend/tests/test_y.py::test_y": [500.0, now]}))
-    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
-    assert code == 0, out
-    ev = _evidence(tmp_path, "tests/latest-verify.json")
-    assert ev["budget_cut"] is True and len(ev["skipped_for_budget"]) == 1
-    assert ev["skipped_for_budget"][0] not in ev["selected_files"]
-    assert ev["counts"]["timeouts"] == 0 and ev["counts"]["passed"] == 1
-    assert any("left out" in w for w in ev["warnings"])
-    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
-    assert out["cached"] is False, out
-
-
 def test_must_run_tests_are_never_cut_and_get_more_time_instead(rig, tmp_path, capsys):
     """The scope is fixed by the change: an importer naming a changed function is never
     cut for time. When the must-run set does not fit, the runner refuses with the exact
@@ -1145,9 +1125,9 @@ def test_must_run_tests_are_never_cut_and_get_more_time_instead(rig, tmp_path, c
         {"backend/tests/test_calc_uses.py::test_t": [500.0, time.time()]}))
     out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
     assert code == 2 and "never cut for time" in out["error"], out
-    assert "--deadline" in out["next_action"] and f"--run-id {RUN_ID}" in out["next_action"]
-    d = int(out["next_action"].split("--deadline ")[1].split()[0])
-    assert d >= 500 / pt.BUDGET_FILL and f"alarm {d + 15};" in out["next_action"]
+    assert "--deadline auto" in out["next_action"] and f"--run-id {RUN_ID}" in out["next_action"]
+    assert f"alarm {pt.AUTO_ALARM_S};" in out["next_action"]
+    assert out["bash_timeout_ms"] == (pt.AUTO_ALARM_S + 10) * 1000
     runs = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs"
     assert not (runs / RUN_ID / "evidence" / "tests" / "latest-verify.json").exists()
 
@@ -1166,7 +1146,28 @@ def test_file_cap_never_drops_importers_naming_a_changed_symbol(rig, tmp_path):
     graph = pt.build_import_graph(repo, cache, sgraph)
     sel, skipped, _ = pt.select_backend(repo, ["backend/core/hub2.py"], graph, 2, (), sgraph)
     assert sorted(sel) == [f"backend/tests/test_named_{i}.py" for i in range(3)]
-    assert sorted(skipped) == [f"backend/tests/test_plain_{i}.py" for i in range(3)]
+    assert skipped == []  # unreached importers are not selected at all
+
+
+def test_changed_symbols_add_same_file_callers_and_give_up_outside_symbols(rig):
+    src = ("import os\n\n\ndef inner_rule(x):\n    return x > 1\n\n\n"
+           "def outer_command(x):\n    return inner_rule(x)\n\n\n"
+           "class Holder:\n    def check(self, x):\n        return inner_rule(x)\n")
+    repo = rig({"backend/core/rules.py": src})
+    _write(repo, {"backend/core/rules.py": src.replace("x > 1", "x > 2")})
+    got = pt.changed_symbols(repo, "backend/core/rules.py")
+    # the changed function plus its same-file callers / referrers (one hop)
+    assert got == {"inner_rule", "outer_command", "check", "Holder"}
+    # an import line alone is ignorable (its use is in a changed symbol)...
+    _write(repo, {"backend/core/rules.py": src.replace("import os", "import sys").replace("x > 1", "x > 2")})
+    assert "inner_rule" in pt.changed_symbols(repo, "backend/core/rules.py")
+    # ...top-level code is not: cannot tell
+    _write(repo, {"backend/core/rules.py": src + "\nREGISTRY.append(inner_rule)\n"})
+    assert pt.changed_symbols(repo, "backend/core/rules.py") is None
+    # a comment line added between symbols is ignorable
+    _write(repo, {"backend/core/rules.py": src.replace("x > 1", "x > 2").replace(
+        "\n\n\ndef outer_command", "\n\n# note\ndef outer_command")})
+    assert "inner_rule" in pt.changed_symbols(repo, "backend/core/rules.py")
 
 
 def _seed_evidence(tmp_path: Path, mode: str, failures: list, finished_at: str) -> None:
@@ -1405,7 +1406,9 @@ def test_recheck_retargets_a_failed_vitest_test(rig, capsys, tmp_path, monkeypat
 def test_recheck_that_skipped_tests_for_budget_does_not_overlay(rig, capsys, tmp_path, monkeypatch):
     """Overlaying a recheck that could not run every selected test would keep stale
     passes from the old tree; it must leave the regression evidence alone."""
-    monkeypatch.setattr(pt, "CAP_FILES", 0)
+    real = pt.select_backend
+    monkeypatch.setattr(pt, "select_backend",  # every selected file overflows
+                        lambda *a, **k: (lambda r: ([], r[0] + r[1], r[2]))(real(*a, **k)))
     repo = rig()
     _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
     _seed_evidence(tmp_path, "regression", [
@@ -1650,7 +1653,7 @@ def test_selection_adds_tests_that_drive_a_changed_script_by_subprocess(rig, tmp
     assert "backend/tests/test_tool_cli.py" in sel
     assert "backend/tests/test_a.py" not in sel  # 2 hops: outside the default depth
     sel_d2, _, _ = pt.select_backend(repo, changed, graph, 40, (), sgraph, depth=2)
-    assert sel_d2.index("backend/tests/test_tool_cli.py") < sel_d2.index("backend/tests/test_a.py")
+    assert "backend/tests/test_tool_cli.py" in sel_d2
     assert "backend/tests/test_names_mod.py" not in sel  # only scripts/*.py names count
     assert "backend/tests/test_names_mytool.py" not in sel  # a whole file name, not a suffix
     # without a script change the subprocess test is not selected
@@ -1678,3 +1681,28 @@ def test_a_module_loaded_by_computed_name_is_never_served_stale(rig, capsys, tmp
     ev = _evidence(tmp_path, "tests/latest-regression.json")
     assert "reused_from" not in ev
     assert [f["nodeid"] for f in ev["failures"]] == ["backend/tests/test_reg.py::test_load"]
+
+
+def test_plain_names_need_the_module_and_scripts_need_the_changed_subcommand(rig, tmp_path):
+    """`create` as a bare word matched 26 of 80 tests that never call it; naming
+    artifact_cli.py pulled in 41 of 46 files for a one-subcommand change."""
+    lib = "def create(x):\n    return x\n"
+    cli_src = "def cmd_run_report(a):\n    return 1\n\n\ndef cmd_gate0_prompt(a):\n    return 2\n"
+    repo = rig({"backend/core/wtlib.py": lib, "backend/scripts/mycli.py": cli_src,
+                "backend/tests/test_q_mod.py": "from core import wtlib\n\n\ndef test_a():\n    assert wtlib.create(1)\n",
+                "backend/tests/test_q_from.py": "from core.wtlib import create\n\n\ndef test_b():\n    assert create(1)\n",
+                "backend/tests/test_q_alias.py": "import core.wtlib as wl\n\n\ndef test_c():\n    assert wl.create(1)\n",
+                "backend/tests/test_q_other.py": "import core.wtlib\n\n\ndef test_d():\n    x = {}\n    x.create = 1\n",
+                "backend/tests/test_q_sub.py": "def test_e():\n    assert ['mycli.py', 'run-report']\n",
+                "backend/tests/test_q_sub2.py": "def test_f():\n    assert ['mycli.py', 'gate0-prompt']\n"})
+    _write(repo, {"backend/core/wtlib.py": lib.replace("return x", "return x + 0"),
+                  "backend/scripts/mycli.py": cli_src.replace("return 1", "return 11")})
+    cache = tmp_path / "cache"
+    sgraph = pt.build_source_graph(repo, cache)
+    graph = pt.build_import_graph(repo, cache, sgraph)
+    sel, _, _ = pt.select_backend(repo, ["backend/core/wtlib.py", "backend/scripts/mycli.py"],
+                                  graph, 40, (), sgraph)
+    assert {"backend/tests/test_q_mod.py", "backend/tests/test_q_from.py",
+            "backend/tests/test_q_alias.py", "backend/tests/test_q_sub.py"} <= set(sel)
+    assert "backend/tests/test_q_other.py" not in sel
+    assert "backend/tests/test_q_sub2.py" not in sel

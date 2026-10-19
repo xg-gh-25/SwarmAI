@@ -4029,6 +4029,31 @@ def _test_gate_hint(hits) -> str:
             "through the runner above, never through a script.")
 
 
+_BASH_DEFAULT_TIMEOUT_MS = 120_000
+_RUNNER_ALARM_RE = re.compile(r"\bperl\b[^|&\n]*?\balarm\s+([1-9]\d*)\b[^|&\n]*?\bpipeline_test\.py\b")
+
+
+def _runner_bash_timeout_error(command: str, tool_input: dict) -> "str | None":
+    """Deny text when a ``pipeline_test.py`` call's perl alarm outlives the Bash tool's
+    own timeout: the tool would kill the runner first and the model gets no result (the
+    runner's ``--deadline auto`` wrapper is alarm 590 and needs timeout 600000). Cheap,
+    no IO. None = fine."""
+    m = _RUNNER_ALARM_RE.search(command)
+    if not m:
+        return None
+    alarm = int(m.group(1))
+    raw = tool_input.get("timeout")
+    tmo = int(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0 \
+        else _BASH_DEFAULT_TIMEOUT_MS
+    need = (alarm + 10) * 1000
+    if tmo >= need:
+        return None
+    return (f"DENY (Bash timeout shorter than the test runner's alarm): this command's "
+            f"`alarm {alarm}` needs the Bash tool `timeout` parameter set to at least {need} "
+            f"(it is {tmo}); otherwise the Bash tool kills the runner before it reports. "
+            f"Re-issue the same command with timeout: {need}.")
+
+
 def create_pipeline_test_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse (Bash) gate (design §4-B3). While THIS session has an
     active run (C6: own session_id, status running, activity within
@@ -4051,6 +4076,15 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
         if not command:
             return {"decision": "approve"}
         cwd = input_data.get("cwd", "") or ""
+        try:
+            short = _runner_bash_timeout_error(command, input_data.get("tool_input") or {})
+        except Exception:
+            logger.debug("pipeline_test_gate: timeout check failed — failing open", exc_info=True)
+            short = None
+        if short:
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                           "permissionDecision": "deny",
+                                           "permissionDecisionReason": short}}
         try:
             hits, files = _classify_pipeline_test_command(command, cwd)
         except Exception:

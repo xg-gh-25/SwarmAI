@@ -806,3 +806,24 @@ class TestRunAmendGate:
         assert not sh._is_history_rewrite("git reset -q -- a.py")
         assert not sh._is_history_rewrite("git commit -m x")
         assert not sh._is_history_rewrite("")
+
+
+def test_runner_alarm_longer_than_the_bash_timeout_is_denied_without_io():
+    """--deadline auto runs under alarm 590: without the Bash `timeout` parameter the tool
+    kills it at 120 s and the model gets nothing. Denied with the exact value; no run
+    lookup needed (no workspace fixture)."""
+    gate = sh.create_pipeline_test_gate({"sdk_session_id": SID})
+    cmd = ("perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python "
+           "backend/scripts/pipeline_test.py --project P --run-id r --mode verify --deadline auto")
+
+    def call(tmo):
+        ti = {"command": cmd} if tmo is None else {"command": cmd, "timeout": tmo}
+        return asyncio.run(gate({"tool_name": "Bash", "tool_input": ti, "cwd": REPO}, None, None))
+
+    res = call(None)
+    assert _is_deny(res) and "600000" in _reason(res)
+    assert _is_deny(call(300000))
+    assert not _is_deny(call(600000))
+    # the default wrapper (alarm 110) fits the default 120 s Bash timeout
+    assert sh._runner_bash_timeout_error(RUNNER + " --mode tdd", {}) is None
+    assert sh._runner_bash_timeout_error("echo alarm 590 pipeline_test.py", {}) is None
