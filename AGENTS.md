@@ -212,7 +212,10 @@ implementations in `security_hooks.py`). By category:
    the last 3h: tests, lint, typecheck, builds, repo-copy baselines and manual pytest hang
    triage must go through `backend/scripts/pipeline_test.py`; the deny carries the
    filled-in runner command and the `run-update --status abandoned` escape; operator-set
-   `SWARM_TEST_GATE_FORCE=1` in the backend env bypasses, logged), `run_amend_gate`
+   `SWARM_TEST_GATE_FORCE=1` in the backend env bypasses, logged; separately, in every
+   session, run or not, it denies running `pipeline_test.py` inside a for/while/until loop
+   or twice in one Bash call, since each call is capped at `alarm 110` and a continuation is
+   a new call), `run_amend_gate`
    (registered right after `pipeline_test_gate`; same active-run test: denies
    `git commit --amend` outright with "改 deliver title 后重新跑 run-commit" instead of
    letting `dangerous_command_gate` park the run on an approval prompt; fails open).

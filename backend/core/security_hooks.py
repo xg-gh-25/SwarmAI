@@ -709,6 +709,40 @@ def _is_commit_amend(command: str) -> bool:
     return False
 
 
+_PY_INTERPRETER_RE = re.compile(r"(?:^|/)python[\d.]*$")
+
+
+def _runner_loop_kind(command: str) -> "str | None":
+    """Does *command* run ``pipeline_test.py`` more than once in ONE Bash call?
+    ``"loop"`` when a ``for``/``while``/``until`` segment sits beside a runner call,
+    ``"repeat"`` when two segments run it, else None. One call is capped at
+    ``alarm 110`` to stay under the Bash tool's 120 s default; a loop of continuations
+    in one call is the retired long-call design again (run_bd60daff 2026-10-19: a
+    ``for i in 1 2 3 4 5`` loop with a 600 s Bash timeout). Quote-aware (a ``for`` in
+    ``python3 -c "..."`` is not a loop); a script name that is only read (grep, sed)
+    is not a run. Unparseable → None (fail-open)."""
+    segments = _shell_segments(command)
+    if not segments:
+        return None
+    runs = 0
+    looped = False
+    for seg in segments:
+        if seg and seg[0] in ("for", "while", "until"):
+            looped = True
+        seen_py = False
+        for tok in seg:
+            if _PY_INTERPRETER_RE.search(tok):
+                seen_py = True
+            elif seen_py and tok.endswith("pipeline_test.py"):
+                runs += 1
+                break
+    if runs and looped:
+        return "loop"
+    if runs >= 2:
+        return "repeat"
+    return None
+
+
 def _shell_segments(command: str) -> "list[list[str]] | None":
     """*command* tokenized (``shlex``, newlines as ``;``) and split on shell
     separators into per-command token lists; None when it does not parse."""
@@ -4097,6 +4131,30 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
         if not command:
             return {"decision": "approve"}
         cwd = input_data.get("cwd", "") or ""
+        try:
+            loop_kind = _runner_loop_kind(command)
+        except Exception:
+            logger.debug("pipeline_test_gate: loop check failed — failing open", exc_info=True)
+            loop_kind = None
+        if loop_kind:
+            # Run-independent and IO-free: one runner call per Bash call, always.
+            logger.warning("[BLOCKED] pipeline_test_gate (runner %s): %s", loop_kind, command[:120])
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        "DENY (runner " + loop_kind + "): run backend/scripts/pipeline_test.py "
+                        "ONCE per Bash call, never in a for/while/until loop or chained "
+                        "twice. Each call is capped (perl alarm 110, under the Bash tool's "
+                        "120 s default); a loop of calls in one Bash call is a multi-minute "
+                        "call you cannot see into or stop. When the output says continue: "
+                        "true, make a new Bash call with the SAME command: it runs only the "
+                        "unfinished tests. Read each call's failures before the next one. "
+                        "Do not raise the Bash timeout to fit a loop."
+                    ),
+                }
+            }
         try:
             hits, files = _classify_pipeline_test_command(command, cwd)
         except Exception:

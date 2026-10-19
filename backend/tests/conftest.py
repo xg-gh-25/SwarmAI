@@ -699,6 +699,23 @@ def _isolate_turn_changes(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_ai_docs_refresh(monkeypatch):
+    """No test rewrites the repo's own docs (P7: structural guard). ContextHealthHook
+    ._deep_check step 9 calls scripts.refresh_ai_docs.refresh(), which writes the REAL
+    docs/CODEBASE_METRICS.md / AGENTS.md of the checkout under test. In a pipeline run
+    that changed the worktree mid-verify, so the next continuation call saw a new cache
+    key and restarted all its files (run_bd60daff, 2026-10-19). Tests of the refresh
+    itself call its helpers, or the script in a subprocess, not refresh()."""
+    try:
+        import scripts.refresh_ai_docs as _rad
+        monkeypatch.setattr(_rad, "refresh",
+                            lambda *a, **k: {"files_updated": [], "warnings": []},
+                            raising=False)
+    except Exception:  # noqa: BLE001 — never let the isolation break a test
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _isolate_judge_telemetry(tmp_path_factory, monkeypatch):
     """Redirect judge telemetry to a temp dir for EVERY test (P7: structural guard,
     not per-test discipline). self_adversarial_judge logs each verdict to

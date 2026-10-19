@@ -891,3 +891,70 @@ class TestDirectCommitGateWorktreeModeScope:
         (repo / "a.py").write_text("base = 1\n")
         _git(repo, "add", "a.py")
         assert _direct("git commit -m x", repo) == {"decision": "approve"}
+
+
+# ── One runner call per Bash call (run_bd60daff 2026-10-19) ───────────────────
+
+_PY = "/repo/backend/.venv/bin/python"
+_RT = "/repo/backend/scripts/pipeline_test.py --project SwarmAI --run-id run_x --mode verify"
+# The loop actually issued in run_bd60daff (shape kept, paths shortened).
+_LOOP_SEEN = (
+    "cd /wt && for i in 1 2 3 4 5; do perl -e 'alarm 110; exec @ARGV' " + _PY + " " + _RT
+    + " > /tmp/v3.json 2>/tmp/v3.err; c=$(python3 -c \"import json;d=json.load(open("
+    "'/tmp/v3.json'));print(d.get('continue'))\"); echo \"iter $i: $c\"; case \"$c\" in "
+    "True*) ;; *) break;; esac; done"
+)
+# A single call followed by a python -c report whose quoted body has `for ... in`.
+_SINGLE_WITH_PY_FOR = (
+    "perl -e 'alarm 110; exec @ARGV' " + _PY + " " + _RT + " > /tmp/v2.json; echo rc=$?; "
+    "python3 -c \"\nimport json;d=json.load(open('/tmp/v2.json'))\n"
+    "for f in d.get('failures',[])[:40]: print(f.get('nodeid'))\n\""
+)
+
+
+class TestRunnerLoopKind:
+    @pytest.mark.parametrize("command,kind", [
+        (_LOOP_SEEN, "loop"),
+        ("while true; do " + _PY + " " + _RT + "; done", "loop"),
+        ("until false; do python3 " + _RT + " || break; done", "loop"),
+        (_PY + " " + _RT + " && " + _PY + " " + _RT, "repeat"),
+        (_PY + " " + _RT + "; python " + _RT, "repeat"),
+    ])
+    def test_flags_multiple_runner_calls(self, command, kind):
+        assert sh._runner_loop_kind(command) == kind
+
+    @pytest.mark.parametrize("command", [
+        _SINGLE_WITH_PY_FOR,
+        "perl -e 'alarm 110; exec @ARGV' " + _PY + " " + _RT,
+        # reading the script is not running it
+        "grep -n desktop_tsc /repo/backend/scripts/pipeline_test.py; sed -n 1,9p /repo/backend/scripts/pipeline_test.py",
+        "for f in a b; do echo $f; done; grep -n x /repo/backend/scripts/pipeline_test.py",
+        "for f in a b; do echo $f; done",
+        "echo 'unterminated",
+    ])
+    def test_single_or_no_runner_call_is_fine(self, command):
+        assert sh._runner_loop_kind(command) is None
+
+
+class TestPipelineTestGateRunnerLoop:
+    def test_loop_denied_in_an_active_run(self, ws):
+        _seed(ws)
+        res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}), _LOOP_SEEN, timeout=600000)
+        assert _is_deny(res)
+        why = _reason(res)
+        assert "runner loop" in why and "SAME command" in why and "continue: true" in why
+
+    def test_loop_denied_without_a_run(self, ws):
+        """IO-free and run-independent: the 120 s cap holds for every caller."""
+        res = _call(sh.create_pipeline_test_gate({}), _LOOP_SEEN)
+        assert _is_deny(res) and "runner loop" in _reason(res)
+
+    def test_repeat_denied(self, ws):
+        res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}),
+                    _PY + " " + _RT + " && " + _PY + " " + _RT)
+        assert _is_deny(res) and "runner repeat" in _reason(res)
+
+    def test_single_runner_call_still_approved(self, ws):
+        _seed(ws)
+        res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}), _SINGLE_WITH_PY_FOR)
+        assert not _is_deny(res)
