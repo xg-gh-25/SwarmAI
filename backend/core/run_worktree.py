@@ -370,6 +370,11 @@ def _exclude_paths(common_dir: str, rels: "Iterable[str]") -> None:
         pass  # only cosmetic: the link would show as untracked
 
 
+def _ignored(wt: Path, rel: str) -> bool:
+    """git ignores *rel* in *wt* (.gitignore or info/exclude)."""
+    return git(wt, "check-ignore", "-q", "--no-index", "--", rel).returncode == 0
+
+
 def _link_dependencies(main: Path, wt: Path) -> "list[str]":
     """Symlink each DEP_LINKS dir of *main* into *wt* when the worktree lacks it (so it
     is not tracked) → the repo-relative paths linked."""
@@ -822,8 +827,13 @@ def snapshot_to_ledger(run_id: str, entry: dict, main: "str | Path", reason: str
     try:
         head = _rev(wt, "HEAD")
         _out(wt, "read-tree", head, env=env)
-        _out(wt, "add", "-A", "--", ".", *(f":(exclude){d}" for d in DEP_LINKS), env=env,
-             timeout=300)
+        # A dependency link already ignored (info/exclude) must NOT be named again:
+        # git refuses `add` when a pathspec — even an :(exclude) one — names an ignored
+        # path ("paths are ignored", rc=1), and the whole snapshot then failed. Only a
+        # link git would otherwise pick up is excluded explicitly.
+        _out(wt, "add", "-A", "--", ".", *(f":(exclude){d}" for d in DEP_LINKS
+                                            if os.path.lexists(wt / d) and not _ignored(wt, d)),
+             env=env, timeout=300)
         tree = _out(wt, "write-tree", env=env).strip()
         change, unadded = None, None   # None: restore by hand (README)
         if busy_state(wt) is None and head == entry.get("base"):

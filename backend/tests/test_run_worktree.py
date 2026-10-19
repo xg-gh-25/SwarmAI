@@ -664,3 +664,30 @@ def test_adopt_records_a_worktree_left_unrecorded(env):
     rw.create(RUN, "swarmai", env["main"])
     e = rw.adopt(RUN, "swarmai", env["main"])
     assert e["state"] == "active" and rw.validate(RUN, e, env["main"]) == rw.wt_path(RUN, "swarmai")
+
+
+def test_release_unintegrated_with_dependency_link_snapshots(env):
+    """A worktree carrying the desktop/node_modules link (already in info/exclude)
+    releases with a ledger snapshot: naming the ignored link in an :(exclude)
+    pathspec made `git add` fail ("paths are ignored") and the release kept the
+    worktree forever."""
+    main = env["main"]
+    (main / "desktop").mkdir()
+    (main / "desktop" / "package.json").write_text("{}\n")
+    (main / ".gitignore").write_text("node_modules/\n")
+    _g(main, "add", "-A")
+    _g(main, "commit", "-q", "-m", "desktop")
+    (main / "desktop" / "node_modules" / "dep").mkdir(parents=True)
+    (main / "desktop" / "node_modules" / "dep" / "index.js").write_text("x\n")
+    e = rw.create(RUN, "swarmai", main)
+    wt = rw.wt_path(RUN, "swarmai")
+    assert (wt / "desktop" / "node_modules").is_symlink()
+    (wt / "a.py").write_text("a = 'wip'\n")
+    res = rw.release(RUN, {"worktrees": [e]}, {"swarmai": main}, "cancelled")
+    assert res[0]["ok"], res
+    assert not wt.exists()
+    assert (main / "desktop" / "node_modules" / "dep" / "index.js").exists()
+    meta = json.loads((Path(res[0]["ledger"]) / "meta.json").read_text())
+    tree = _g(main, "ls-tree", "-r", "--name-only", meta["tree"]).splitlines()
+    assert "a.py" in tree
+    assert not any(p.startswith("desktop/node_modules") for p in tree)
