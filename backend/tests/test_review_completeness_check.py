@@ -87,10 +87,10 @@ def test_large_changeset_no_findings_count_blocks(run_dir, monkeypatch):
     review_art = _make_review_artifact(findings_count=None, integration_trace_checked=3)
 
     stages = [
-        {"name": "evaluate", "status": "completed", "artifact_id": "art_eval"},
-        {"name": "plan", "status": "completed", "artifact_id": "art_plan"},
-        {"name": "build", "status": "completed", "artifact_id": "art_build"},
-        {"name": "review", "status": "completed", "artifact_id": "art_review"},
+        {"stage": "evaluate", "status": "completed", "artifact_id": "art_eval"},
+        {"stage": "plan", "status": "completed", "artifact_id": "art_plan"},
+        {"stage": "build", "status": "completed", "artifact_id": "art_build"},
+        {"stage": "review", "status": "completed", "artifact_id": "art_review"},
     ]
     run_data = _make_run(stages)
     _write_run_and_artifacts(run_dir, run_data, build_art, review_art)
@@ -115,10 +115,10 @@ def test_large_changeset_zero_findings_warns(run_dir, monkeypatch):
     review_art = _make_review_artifact(findings_count=0, integration_trace_checked=3)
 
     stages = [
-        {"name": "evaluate", "status": "completed", "artifact_id": "art_eval"},
-        {"name": "plan", "status": "completed", "artifact_id": "art_plan"},
-        {"name": "build", "status": "completed", "artifact_id": "art_build"},
-        {"name": "review", "status": "completed", "artifact_id": "art_review"},
+        {"stage": "evaluate", "status": "completed", "artifact_id": "art_eval"},
+        {"stage": "plan", "status": "completed", "artifact_id": "art_plan"},
+        {"stage": "build", "status": "completed", "artifact_id": "art_build"},
+        {"stage": "review", "status": "completed", "artifact_id": "art_review"},
     ]
     run_data = _make_run(stages)
     _write_run_and_artifacts(run_dir, run_data, build_art, review_art)
@@ -141,10 +141,10 @@ def test_large_changeset_no_review_artifact_blocks(run_dir, monkeypatch):
     )
 
     stages = [
-        {"name": "evaluate", "status": "completed", "artifact_id": "art_eval"},
-        {"name": "plan", "status": "completed", "artifact_id": "art_plan"},
-        {"name": "build", "status": "completed", "artifact_id": "art_build"},
-        {"name": "review", "status": "completed"},  # NO artifact_id
+        {"stage": "evaluate", "status": "completed", "artifact_id": "art_eval"},
+        {"stage": "plan", "status": "completed", "artifact_id": "art_plan"},
+        {"stage": "build", "status": "completed", "artifact_id": "art_build"},
+        {"stage": "review", "status": "completed"},  # NO artifact_id
     ]
     run_data = _make_run(stages)
     _write_run_and_artifacts(run_dir, run_data, build_art, None)
@@ -165,10 +165,10 @@ def test_small_changeset_no_findings_ok(run_dir, monkeypatch):
     review_art = _make_review_artifact(findings_count=0, integration_trace_checked=1)
 
     stages = [
-        {"name": "evaluate", "status": "completed", "artifact_id": "art_eval"},
-        {"name": "plan", "status": "completed", "artifact_id": "art_plan"},
-        {"name": "build", "status": "completed", "artifact_id": "art_build"},
-        {"name": "review", "status": "completed", "artifact_id": "art_review"},
+        {"stage": "evaluate", "status": "completed", "artifact_id": "art_eval"},
+        {"stage": "plan", "status": "completed", "artifact_id": "art_plan"},
+        {"stage": "build", "status": "completed", "artifact_id": "art_build"},
+        {"stage": "review", "status": "completed", "artifact_id": "art_review"},
     ]
     run_data = _make_run(stages)
     _write_run_and_artifacts(run_dir, run_data, build_art, review_art)
@@ -176,6 +176,7 @@ def test_small_changeset_no_findings_ok(run_dir, monkeypatch):
     result = pv.validate("TestProj", "run_test", "review")
     # Small changeset — no completeness check fires
     completeness_errors = [e for e in result["errors"] if "findings_count" in e or "skipped" in e]
+    assert not any("No stage record" in e for e in result["errors"]), result["errors"]
     assert len(completeness_errors) == 0, f"Unexpected completeness error: {completeness_errors}"
 
 
@@ -192,10 +193,10 @@ def test_large_changeset_with_findings_passes(run_dir, monkeypatch):
     review_art = _make_review_artifact(findings_count=3, integration_trace_checked=5)
 
     stages = [
-        {"name": "evaluate", "status": "completed", "artifact_id": "art_eval"},
-        {"name": "plan", "status": "completed", "artifact_id": "art_plan"},
-        {"name": "build", "status": "completed", "artifact_id": "art_build"},
-        {"name": "review", "status": "completed", "artifact_id": "art_review"},
+        {"stage": "evaluate", "status": "completed", "artifact_id": "art_eval"},
+        {"stage": "plan", "status": "completed", "artifact_id": "art_plan"},
+        {"stage": "build", "status": "completed", "artifact_id": "art_build"},
+        {"stage": "review", "status": "completed", "artifact_id": "art_review"},
     ]
     run_data = _make_run(stages)
     _write_run_and_artifacts(run_dir, run_data, build_art, review_art)
@@ -203,5 +204,6 @@ def test_large_changeset_with_findings_passes(run_dir, monkeypatch):
     result = pv.validate("TestProj", "run_test", "review")
     completeness_errors = [e for e in result["errors"] if "findings_count" in e or "skipped" in e]
     completeness_warnings = [w for w in result["warnings"] if "0 findings" in w]
+    assert not any("No stage record" in e for e in result["errors"]), result["errors"]
     assert len(completeness_errors) == 0, f"Unexpected error: {completeness_errors}"
     assert len(completeness_warnings) == 0, f"Unexpected warning: {completeness_warnings}"
