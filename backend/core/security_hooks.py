@@ -3248,6 +3248,16 @@ def _run_activity_time(path: str, data: dict) -> float:
     return t
 
 
+def _recorded_run_cli(project: str, run_id: str) -> "dict | None":
+    """The ``cli`` block a run recorded in its run.json (sync: called via the
+    subprocess pool from the async pipeline_test_gate, never on the event loop)."""
+    path = os.path.join(_pipeline_runs_root(), "Projects", project, ".artifacts",
+                        "runs", run_id, "run.json")
+    with open(path, encoding="utf-8") as fh:
+        cli = json.load(fh).get("cli")
+    return cli if isinstance(cli, dict) else None
+
+
 def _session_run_state(app_session_id: str) -> "dict[str, str] | None":
     """C6 scan → ``{"project", "id"}`` of THIS session's active run, else None.
 
@@ -4260,10 +4270,11 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
         abandon = "python backend/scripts/artifact_cli.py " + abandon_args
         try:  # the run's recorded CLI makes both ONE absolute command (pipeline-run-worktree §16.9)
             from core.worktree_write_gate import cli_command
-            _rf = os.path.join(_pipeline_runs_root(), "Projects", own_run["project"], ".artifacts",
-                               "runs", own_run["id"], "run.json")
-            with open(_rf, encoding="utf-8") as _fh:
-                _cli = json.load(_fh).get("cli")
+            _cli = await asyncio.wait_for(
+                executors.run_in("subprocess", _recorded_run_cli,
+                                 own_run["project"], own_run["id"]),
+                timeout=_RUN_SCAN_TIMEOUT,
+            )
             if isinstance(_cli, dict):
                 abandon = cli_command(_cli, abandon_args)
                 _rest = runner.split("backend/scripts/pipeline_test.py ", 1)[1]
