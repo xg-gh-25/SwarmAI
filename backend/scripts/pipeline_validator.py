@@ -118,6 +118,16 @@ SEVERITY_ADVISORY = "advisory"  # failure/crash appends to warnings[] → warns
 CONFIDENCE_GATE_THRESHOLD = 7
 
 
+def model_verdicts_decide(convergence: "str | None") -> bool:
+    """Whether a model's verdict may be a DELIVER error for a run of this Gate-2 flow
+    (run.json ``convergence``). False only for ``"deterministic"``: there gate2-next's
+    ledger and the tests decide, and a model finding that is not proven only lowers
+    push_ready (Knowledge/Designs/2026-10-19-pipeline-deterministic-convergence.md
+    §2.5). The one definition of the mode: artifact_cli._deterministic asks it too.
+    Anything else (no key, "legacy", a typo) keeps the legacy checks."""
+    return convergence != "deterministic"
+
+
 # A finding a SOUND root-cause verdict left open (artifact_cli sets it, the tool alone):
 # it no longer blocks DELIVER / completion, but push_ready still counts it (5576).
 DEFERRED_BY_ROOT_CAUSE = "root-cause:SOUND"
@@ -2338,6 +2348,7 @@ def _outcome_shape_errors(outcome) -> list[str]:
 def validate_artifact_data(
     stage: str, data: dict, profile: str = "full", repo_root: str | None = None,
     *, run_created_at: str | None = None, warnings: list[str] | None = None,
+    convergence: str | None = None,
 ) -> list[str]:
     """Public API: validate artifact data against stage schema.
 
@@ -2359,8 +2370,14 @@ def validate_artifact_data(
                  Runs created before RED_TEAM_CUTOVER, and None (no run known),
                  get the Red Team HIGH rule as a warning instead of an error.
         warnings: optional list that receives those grandfathered warnings.
+        convergence: run.json `convergence` of that run. "deterministic" turns off
+                 the DELIVER checks that judge a model's verdict (an unresolved
+                 adversarial finding, the Red Team HIGH rule, meta_review and the
+                 convergence block): gate2-next's ledger and the tests decide there
+                 (model_verdicts_decide). None = the legacy checks.
     """
     errors: list[str] = []
+    verdicts_decide = model_verdicts_decide(convergence)
 
     # C3: canonicalize the profile ONCE at entry so every strict/relaxed decision
     # below compares against the SSOT value — a variant ("Full") or alias ("standard")
@@ -2493,7 +2510,10 @@ def validate_artifact_data(
             # blocking findings). Shared helper = single source of truth with the
             # completion-time gate in _check_depth (R27: no divergence).
             if tier and tier != "skipped":
-                blocked = _blocked_findings(ar.get("findings", []), honor_deferred=True)
+                # Not in the deterministic flow (model_verdicts_decide); the disk
+                # check below is no model verdict and always runs.
+                blocked = _blocked_findings(ar.get("findings", []), honor_deferred=True) \
+                    if verdicts_decide else []
                 if blocked:
                     errors.append(
                         f"{len(blocked)} unresolved blocking finding(s) — HIGH "
@@ -2516,9 +2536,11 @@ def validate_artifact_data(
             # Gate-2 Red Team trigger (HIGH half): a specialist HIGH/CRITICAL
             # requires the Red Team to have run. Strict profiles only; shared
             # helper with the completion-time gate in _check_depth (R27).
-            # Grandfathered (warning only) for runs before RED_TEAM_CUTOVER.
-            errors.extend(_red_team_gate(ar, profile, run_created_at=run_created_at,
-                                         warnings=warnings))
+            # Grandfathered (warning only) for runs before RED_TEAM_CUTOVER. Off in
+            # the deterministic flow: a finding's severity is a model verdict there.
+            if verdicts_decide:
+                errors.extend(_red_team_gate(ar, profile, run_created_at=run_created_at,
+                                             warnings=warnings))
 
         # --- Three-Layer Governance: Full deliver ceremony enforcement ---
         # For full/bugfix profiles, ALL deliver sub-steps must have evidence.
@@ -2550,9 +2572,10 @@ def validate_artifact_data(
                     f"Fix gaps before declaring push-ready."
                 )
 
-            # Check: meta_review must exist (verdict CLEAR or risks addressed)
+            # Check: meta_review must exist (verdict CLEAR or risks addressed).
+            # The deterministic flow runs no meta-review and no convergence loop.
             mr = data.get("meta_review")
-            if not mr and not data.get("meta_review_verdict"):
+            if verdicts_decide and not mr and not data.get("meta_review_verdict"):
                 errors.append(
                     "meta_review missing from deliver artifact. "
                     "Run Meta-Review (pipeline blind spot analysis) before declaring done."
@@ -2560,7 +2583,9 @@ def validate_artifact_data(
 
             # Check: convergence evidence (iterations + all_pass)
             conv = data.get("convergence")
-            if not isinstance(conv, dict):
+            if not verdicts_decide:
+                pass
+            elif not isinstance(conv, dict):
                 errors.append(
                     "convergence missing from deliver artifact. "
                     "Run Quality Convergence Loop (6-layer gate) before declaring done."
@@ -3108,13 +3133,18 @@ def _extract_section(text: str, heading: str) -> str:
 
 def _check_depth(stage: str, artifact_data: dict, profile: str,
                  run_id: str = "", *, run_created_at: str | None = None,
-                 warnings: list[str] | None = None) -> list[str]:
+                 warnings: list[str] | None = None,
+                 convergence: str | None = None) -> list[str]:
     """Layer 2: validate field values, not just existence.
 
     Catches hollow artifacts where fields exist but content indicates
-    the quality gate was not actually executed.
+    the quality gate was not actually executed. ``convergence`` = the run's
+    run.json value: "deterministic" skips the two checks that judge a model's
+    verdict (unresolved findings, the Red Team HIGH rule), as validate_artifact_data
+    does at publish (model_verdicts_decide).
     """
     errors: list[str] = []
+    verdicts_decide = model_verdicts_decide(convergence)
 
     # C3: canonicalize once at entry (SSOT) so the adversarial-enforcement gates
     # below can't be skipped by a variant/alias profile value.
@@ -3178,8 +3208,9 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
                 # confidence >= threshold, via the shared _blocked_findings
                 # helper (single source of truth with the publish-time gate —
                 # previously these two sites had duplicated HIGH-only filters
-                # that could diverge, R27).
-                blocked = _blocked_findings(ar.get("findings", []), honor_deferred=True)
+                # that could diverge, R27). Not in the deterministic flow.
+                blocked = _blocked_findings(ar.get("findings", []), honor_deferred=True) \
+                    if verdicts_decide else []
                 if blocked:
                     errors.append(
                         f"Depth: adversarial_review has {len(blocked)} unresolved "
@@ -3202,8 +3233,9 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
             # as validate_artifact_data (R27), so a red_team_dispatched patched away
             # after publish still blocks `run-update --status completed`. Runs
             # created before RED_TEAM_CUTOVER (or no run) get a warning instead.
-            errors.extend(_red_team_gate(ar, profile, run_created_at=run_created_at,
-                                         warnings=warnings, prefix="Depth: "))
+            if verdicts_decide:
+                errors.extend(_red_team_gate(ar, profile, run_created_at=run_created_at,
+                                             warnings=warnings, prefix="Depth: "))
 
             # Two-field (spawned + evidence) enforcement at COMPLETION time.
             # Mirrors validate_artifact_data:423-445 (publish-time), closing the
@@ -4418,7 +4450,8 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
         if artifact_data and stage in ("review", "deliver", "build", "test"):
             depth_errors = _check_depth(stage, artifact_data, profile, run_id=run_id,
                                         run_created_at=run.get("created_at") or "",
-                                        warnings=warnings)
+                                        warnings=warnings,
+                                        convergence=run.get("convergence"))
             errors.extend(depth_errors)
             if not depth_errors:
                 checks_passed += 1

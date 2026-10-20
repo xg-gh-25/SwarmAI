@@ -724,6 +724,8 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
         # The named run's created_at decides whether the Red Team HIGH rule blocks
         # (RED_TEAM_CUTOVER). No run / unreadable run → None → warning only.
         _pub_created_at = None
+        _pub_convergence = None  # the named run's Gate-2 flow (None: legacy checks)
+        _pub_run, _pub_run_dir = None, None  # the named run, for the ledger projection
         _pub_warnings: "list[str]" = []
         _explicit_run_id = getattr(args, "run_id", None)
         try:
@@ -745,6 +747,8 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
                     _pub_profile = _own.get("profile", "full") or "full"
                     if isinstance(_own, dict):
                         _pub_created_at = _own.get("created_at") or ""
+                        _pub_convergence = _own.get("convergence")
+                        _pub_run, _pub_run_dir = _own, _own_file.parent
                 except (FileNotFoundError, json.JSONDecodeError, OSError):
                     pass  # unknown/typo'd run id → "full" (strict, safe)
             # No explicit --run-id → default to "full" (strictest), NEVER read a
@@ -755,9 +759,14 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
             # named run's real profile.
         except Exception:
             pass  # Default to "full" if can't determine profile
+        if stage == "deliver" and _pub_run is not None:
+            # same door rule as stage-complete: a deterministic run's findings are the
+            # ledger's (I2), whichever command publishes the DELIVER artifact
+            _project_ledger_review(_explicit_run_id, _pub_run_dir, _pub_run, data)
         errors = validate_artifact_data(stage, data, profile=_pub_profile,
                                         run_created_at=_pub_created_at,
-                                        warnings=_pub_warnings)
+                                        warnings=_pub_warnings,
+                                        convergence=_pub_convergence)
         for _w in _pub_warnings:
             print(json.dumps({"warning": _w}), file=sys.stderr)
         if errors:
@@ -2409,7 +2418,9 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
         # after EVALUATE — "not yet set" is meaningful and must not become "full").
         "profile": normalize_profile(args.profile) if args.profile else None,
         "status": "running",
-        # Opt-in Gate-2 flow (deterministic convergence step 3a): None = the legacy flow.
+        # Opt-in Gate-2 flow (deterministic convergence step 3a/3b): no key = the legacy
+        # flow. Not the default yet: proofs are still files the agent can write, and a
+        # shared (non-isolated) run gets no snapshot, so it could never be push-ready.
         **({"convergence": "deterministic"}
            if getattr(args, "convergence", None) == "deterministic" else {}),
         "stages": [],
@@ -4612,6 +4623,8 @@ def _red_team_required_now(run_state: dict, artifact: "dict | None") -> bool:
     import pipeline_validator as pv
     if not isinstance(artifact, dict) or not isinstance(run_state, dict):
         return False
+    if _deterministic(run_state):
+        return False  # a finding's severity is a model verdict: the ledger decides there
     if not pv._red_team_enforced(run_state.get("created_at") or ""):
         return False
     return bool(pv._red_team_triggered(artifact.get("adversarial_review"),
@@ -10031,6 +10044,10 @@ def _derive_stage_fields(
                 derived["files_changed_unresolved"] = {
                     "value": [str(f) for f in declared][:20],
                     "source": "declared files_changed, none is a file on disk or a tracked deletion"}
+        if stage == "deliver":
+            _ledger = _project_ledger_review(run_id, run_dir, run_state, artifact)
+            if _ledger is not None:
+                derived["adversarial_review"] = _ledger
         ar = artifact.get("adversarial_review")
         if stage in ("deliver", "goal_cycle") and isinstance(ar, dict) \
                 and isinstance(ar.get("findings"), list):
@@ -10099,7 +10116,9 @@ def _derive_stage_fields(
         # 再一再二不再三: the loop's own state. `deferred_by` is tool-only: drop any the
         # record carries, then set it on the findings a SOUND root-cause verdict leaves open
         # (they stop blocking DELIVER / completion, never push_ready).
-        _g2 = _gate2_outcome(run_id, run_dir, run_state)
+        # the legacy convergence verdict over reviewer answers; gate2-next decides a
+        # deterministic run
+        _g2 = None if _deterministic(run_state) else _gate2_outcome(run_id, run_dir, run_state)
         _ar = artifact.get("adversarial_review") if isinstance(artifact, dict) else None
         _fs = _ar.get("findings") if isinstance(_ar, dict) and isinstance(_ar.get("findings"), list) else []
         for _f in _fs:
@@ -10348,7 +10367,8 @@ def _validate_stage_candidate(
     if artifact is not None:
         errors += pv.validate_artifact_data(stage, artifact, profile=profile,
                                             run_created_at=cand_run.get("created_at") or "",
-                                            warnings=warnings)
+                                            warnings=warnings,
+                                            convergence=cand_run.get("convergence"))
     if stage == "deliver":
         errors += _red_team_marker_errors(run_id, cand_run, artifact, errors, warnings)
         try:
@@ -10556,7 +10576,9 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     artifact = copy.deepcopy(artifact_in) if (artifact_in is not None and status != "skipped") else None
     ledger_errors: list[str] = []
     ledger_warnings: list[str] = []
-    if stage == "deliver" and artifact is not None:
+    if stage == "deliver" and artifact is not None and not _deterministic(run_state):
+        # legacy ledger expansion; a deterministic run's findings are projected from
+        # gate2-next in _derive_stage_fields
         artifact, ledger_errors, ledger_warnings = _expand_gate2_ledger(run_id, run_dir, run_state, artifact)
     cand_rec = {k: copy.deepcopy(v) for k, v in record_in.items() if k not in _DERIVED_RECORD_KEYS}
     cand_rec.update(stage=stage, status=status, stage_doc_consumed=True)
@@ -12098,7 +12120,10 @@ def _expand_gate2_ledger(run_id: str, run_dir: "Path | None", run_state: dict,
 # (core.gate2_replay), and prints the ONE next step. Two review rounds at most; a
 # finding closes only by a valid proof; what is not proven lowers push_ready.
 def _deterministic(run_state) -> bool:
-    return isinstance(run_state, dict) and run_state.get("convergence") == "deterministic"
+    """The run uses the deterministic Gate-2 flow (pipeline_validator.
+    model_verdicts_decide is the one definition of the mode)."""
+    import pipeline_validator as pv
+    return isinstance(run_state, dict) and not pv.model_verdicts_decide(run_state.get("convergence"))
 
 
 def _refuse_legacy_gate2(args, name: str) -> None:
@@ -12145,13 +12170,50 @@ def _take_proof_snapshot(run_id: str, run_dir: Path, run_state: dict, label: str
         if code == 0 or out.get("error") else {"error": f"snapshot exit {code}"}
 
 
+def _gate2_round_roster(run_id: str, run_state: dict, events: list) -> list:
+    """The Gate-2 reviewers of this run's deterministic ledger. Before the first fix it
+    is the current DELIVER dispatch. After it, the roster is frozen to the experts whose
+    round-1 prompt (``evidence/prompts/<id>.md``) the hand-out ledger records before
+    that fix: a DELIVER re-entry re-computes the dispatch from the grown diff (e.g. the
+    Red Team above 200 lines), and an expert added then would hold round 1 open while
+    the replay drops every later fix and answer as out of order, a dead end. An expert
+    that reviewed round 1 but left the dispatch stays, so its findings do not vanish.
+    The hand-out ledger is written by the CLI in the protected store; unreadable → the
+    current dispatch (today's behaviour)."""
+    from core.gate2_convergence import NOT_REVIEWERS
+    # meta-review / root-cause run after a round and are not Gate-2 reviewers
+    def reviewer(e) -> bool:
+        return isinstance(e, str) and e not in NOT_REVIEWERS and e not in _NOT_IN_WAVE
+    now = [e for e in ((run_state.get("dispatch_plan") or {}).get("deliver") or [])
+           if reviewer(e)]
+    fixes = [float(e.get("ts") or 0) for e in events if e.get("kind") == "fixed"]
+    if not fixes:
+        return now
+    led = _ledger_read(run_id)
+    if not isinstance(led, dict):
+        return now
+    first_fix = min(fixes)
+    seen: dict = {}
+    for real, vers in (led.get("files") or {}).items():
+        m = re.search(r"/evidence/prompts/([a-z0-9][a-z0-9-]*)\.md$", str(real))
+        if not m or m.group(1).endswith("-delta") or m.group(1).startswith("review-"):
+            continue
+        first = min([_iso_epoch(v[1]) or 0 for v in vers or [] if isinstance(v, list)
+                     and len(v) > 1] or [0])
+        if first and first < first_fix and reviewer(m.group(1)):
+            seen[m.group(1)] = first
+    if not seen:
+        return now
+    frozen = [e for e in now if e in seen]
+    return frozen + sorted((e for e in seen if e not in frozen), key=lambda e: (seen[e], e))
+
+
 def _gate2_v2_inputs(run_id: str, run_dir: Path, run_state: dict):
     """(roster, rows, events, proofs, prove_calls) for core.gate2_replay.replay."""
     import time
-    from core.gate2_convergence import NOT_REVIEWERS
-    # meta-review / root-cause run after a round and are not Gate-2 reviewers
-    roster = [e for e in ((run_state.get("dispatch_plan") or {}).get("deliver") or [])
-              if isinstance(e, str) and e not in NOT_REVIEWERS and e not in _NOT_IN_WAVE]
+    events = [e for e in ((run_state.get("gate2_v2") or {}).get("events") or [])
+              if isinstance(e, dict)]
+    roster = _gate2_round_roster(run_id, run_state, events)
     windows = _stage_windows((run_state.get("stage_timing") or {}).get("deliver") or {},
                              time.time())
     rows: list = []
@@ -12160,8 +12222,6 @@ def _gate2_v2_inputs(run_id: str, run_dir: Path, run_state: dict):
         # events, snapshots and proofs are run-scoped, so a re-entered DELIVER continues
         # the same ledger (main moving re-runs tests, never the experts).
         rows = _gate2_window_rows(run_id, windows, min(lo for lo, _hi in windows))
-    events = [e for e in ((run_state.get("gate2_v2") or {}).get("events") or [])
-              if isinstance(e, dict)]
     pdir = run_dir / "evidence" / "proofs"
     proofs = _merged_proofs(pdir)
     last_fix = max([float(e.get("ts") or 0) for e in events if e.get("kind") == "fixed"],
@@ -12279,6 +12339,70 @@ def _gate2_next_view(run_id: str, run_dir: Path, run_state: dict) -> dict:
     return {"ok": True, "convergence": "deterministic", "next": nxt, "findings": findings,
             "notes": notes[:30], "notes_total": len(notes), "spawns": len(state["spawns"]),
             "push_ready_reasons": reasons, "warnings": warnings}
+
+
+def _project_ledger_review(run_id: str, run_dir: Path, run_state: dict,
+                           artifact: "dict | None") -> "dict | None":
+    """Deterministic flow: the DELIVER artifact's adversarial_review is a projection of
+    the gate2-next ledger (_gate2_next_view), whatever the model wrote (I2). Each
+    finding carries its expert, round, file, claim, ledger state and break test, and is
+    ``resolved`` only when proven; the state and the test are also in the finding text
+    so REPORT shows them beside the claim; ``severity`` / ``confidence`` are the expert's
+    own, looked up from its answer for display and metrics. No deterministic DELIVER gate
+    blocks on them; pipeline_validator.push_ready_upper_bound reads them and adds an
+    unresolved-HIGH reason, which only repeats the ledger's not-proven reason for the same
+    finding. ``spawned`` = some expert answered and the
+    ledger was rebuilt. A ledger that cannot be rebuilt projects no findings, names the
+    error and claims no spawn; on a strict profile the validator's spawned check then
+    completes DELIVER degraded (push_ready false, the error in REPORT section 10), and
+    _deliver_push_ready_bound lowers push_ready for the same cause. Landing stays on
+    the tests either way.
+    Returns the derived-field entry, None for a legacy run (nothing is touched)."""
+    if not _deterministic(run_state) or not isinstance(artifact, dict):
+        return None
+    ar = artifact.get("adversarial_review")
+    ar = dict(ar) if isinstance(ar, dict) else {}
+    ar.pop("findings_from", None)  # the legacy gate2-ledger expansion does not run here
+    try:
+        view = _gate2_next_view(run_id, Path(run_dir), run_state)
+        err = None if view.get("ok") else str(view.get("error") or "ledger not rebuilt")
+    except Exception as exc:  # noqa: BLE001 — an unreadable ledger proves nothing
+        view, err = {}, f"{type(exc).__name__}: {exc}"
+    reported: dict = {}  # finding id -> the expert's own severity / confidence
+    if err is None:
+        try:
+            from core.gate2_findings import entry_id
+            for row in _gate2_v2_inputs(run_id, Path(run_dir), run_state)[1]:
+                for r in (row.get("reported") or []) if isinstance(row, dict) else []:
+                    if isinstance(r, dict):
+                        reported.setdefault(entry_id(row.get("expert_id"), r), r)
+        except Exception:  # noqa: BLE001 — display only: a finding then shows no severity
+            reported = {}
+    rows = []
+    for f in view.get("findings") or []:
+        if not isinstance(f, dict):
+            continue
+        state, test = f.get("state"), f.get("test")
+        src = reported.get(f.get("id")) or reported.get(
+            re.sub(r"-R\d+$", "", str(f.get("id") or ""))) or {}
+        rows.append({"id": f.get("id"), "specialist": f.get("expert"), "round": f.get("round"),
+                     "severity": src.get("severity"), "confidence": src.get("confidence"),
+                     "file": f.get("file"),
+                     "description": f"{f.get('claim') or ''} [{state}"
+                                    + (f"; test: {test}" if test else "") + "]",
+                     "ledger_state": state, "break_test": test,
+                     "resolved": state == "proven"})
+    proven = sum(1 for r in rows if r["resolved"])
+    roster = (run_state.get("dispatch_plan") or {}).get("deliver") or []
+    ar.update(findings=rows, profile_tier="full",
+              spawned=bool(view.get("spawns")) and err is None,
+              red_team_dispatched=_RED_TEAM_EXPERT_ID in roster,
+              evidence=(f"gate2-next ledger: {len(rows)} finding(s), {proven} proven, "
+                        f"{view.get('spawns') or 0} expert spawn(s)") if err is None
+              else f"gate2-next ledger not rebuilt ({err})")
+    artifact["adversarial_review"] = ar
+    return {"value": {"findings": len(rows), "proven": proven, "error": err},
+            "source": "gate2-next ledger (expert answers + declared events + prove evidence)"}
 
 
 def cmd_gate2_next(args, reg: ArtifactRegistry) -> None:
@@ -14154,9 +14278,12 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
             out["gate2_flow"] = {
                 "convergence": "deterministic", "snapshot_R1": snap,
                 "next": _cli_cmd(f"gate2-next --project {project} --run-id {run_id}"),
-                "rule": "spawn the R1 experts above in ONE message, then follow gate2-next: "
-                        "it says when to fix, when to spawn R2 (once, on the fix only) and "
-                        "what to prove; findings close only by a valid break-test proof"}
+                "rule": ("a re-entered DELIVER: spawn nothing from the expert list above; run "
+                         "gate2-next and do only what it says (main moving re-runs tests, "
+                         "never the experts)") if snap.get("already") else
+                        ("spawn the R1 experts above in ONE message, then follow gate2-next: "
+                         "it says when to fix, when to spawn R2 (once, on the fix only) and "
+                         "what to prove; findings close only by a valid break-test proof")}
     warnings += _wt_out.pop("warnings", [])
     out.update(_wt_out)
     # The session entering a stage is working on THIS run: point its session->run map
@@ -14261,7 +14388,8 @@ def main() -> None:
     p_run_create.add_argument("--profile", default=None, help="Pipeline profile: full/trivial/research/docs/bugfix/goal/direct")
     p_run_create.add_argument("--convergence", default=None, choices=("legacy", "deterministic"),
                               help="Gate-2 flow: deterministic = gate2-next (models find, "
-                                   "tests decide); default legacy")
+                                   "tests decide); default legacy (gate2-ledger / gate2-fixspec / "
+                                   "gate2-recheck)")
     p_run_create.add_argument("--intent", default=None,
                               help="The user's original words (fallback when the session's message cannot be read)")
 
