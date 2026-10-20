@@ -178,6 +178,9 @@ def _tmpl(stage: str) -> dict:
 
 def _plan_artifact(**over) -> dict:
     a = _tmpl("plan")
+    # the template shows a sample consumer (K1 load_x); these fixture runs change no
+    # shared contract, so they say so instead of carrying the sample
+    a["implementation_constraints"] = {"no_contract_change_reason": "fixture run: no shared contract changes"}
     a["acceptance_criteria"] = ["AC1: X works for a valid input"]
     a["exit_criteria"] = [
         {"id": "X1", "kind": "test", "ref": "backend/tests/test_x.py::test_a", "expect": "pass"},

@@ -19,11 +19,13 @@ needs zero context from the quality reviewers; and finding "AC #3 not implemente
 cheaper than finding "AC #3 has a race condition". <!-- R-review-004 -->
 
 **Why a FRESH sub-agent, not inline self-assessment:** you wrote this code in BUILD; your
-BUILD confidence pollutes spec judgment. A fresh sub-agent sees only the diff + ACs.
+BUILD confidence pollutes spec judgment. A fresh sub-agent sees only the diff, the ACs and
+the user's requirement (so a part no AC carries is still seen).
 **Mechanical enforcement:** the `spec_compliance` artifact MUST include
 `spawned_as_subagent: true`. Inline self-assessment does NOT count — the Agent tool call
 must be verifiable in the conversation. Do NOT put BUILD confidence ratings, progress
-commentary or "I think this is correct" in the prompt — only raw diff + raw ACs.
+commentary or "I think this is correct" in the prompt — only raw diff, raw ACs and the
+requirement (stage-start writes all three into the prompt).
 
 ## Process
 1. **Extract ACs** from the PLAN artifact (authoritative source):

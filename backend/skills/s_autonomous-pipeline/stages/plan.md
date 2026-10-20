@@ -8,7 +8,7 @@ Turn the chosen alternative into a design BUILD can execute with zero project co
 
 1. **Pick + spike.** Take the chosen alternative; read the code it touches. Needs uncommitted deps or API changes → judgment decision.
 2. **Design spec** `[GATE·validator]` (`ref/plan/design-spec.md`): `design` = `user_workflow`, mermaid `architecture` + `flow` (with a failure branch), `states` (`created_by`, `removed_by`, `crosses`), `invariants` `I<n>` (`root_invariant` = EVALUATE's missed one), `failure_modes` `F<n>`. Can't fill it → don't plan code.
-3. **File discovery** `[MUST]`: seed files → grep every importer/caller → categorize MODIFY / TEST / VERIFY / IRRELEVANT → read all MODIFY+VERIFY. Code contradicts the approach → back to THINK. <!-- R-plan-001 -->
+3. **File discovery** `[MUST]`: seed files → grep every importer/caller → categorize MODIFY / TEST / VERIFY / IRRELEVANT → read all MODIFY+VERIFY. Code contradicts the approach → back to THINK. Changed contracts → `implementation_constraints` (`ref/plan/consumers.md`). <!-- R-plan-001 -->
 4. **Change spec** `[MUST]`: dependency-ordered atomic sub-changes, one file + one function/class/endpoint each, each with `Depends on`/`AC`/`Current`/`Target`/`Verify` (trivial profile: last three optional when self-explanatory). <!-- R-plan-003 -->
 5. **Test strategy** `[MUST]`: one row per AC (how, mock boundary, inputs). No row → AC too vague, rewrite it. <!-- R-plan-009 -->
 6. **Boundaries** `[MUST]`: Always / Ask First / Never. <!-- R-plan-004 -->

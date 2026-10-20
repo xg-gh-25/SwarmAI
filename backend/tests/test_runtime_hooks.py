@@ -2637,3 +2637,47 @@ async def test_a_gate2_expert_marker_carries_its_answer(tmp_path, monkeypatch):
                            if "_adv_" not in p.name).read_text())
     assert data["reported_state"] == "findings" and data["reported"][0]["path"] == "a.py"
     assert data["recheck_answers"] == {} and "verdict" not in data
+
+
+# ── finding text fields + the Gate-1 answer reach the marker ────────────────────
+def test_finding_row_keeps_fix_exploit_and_evidence_bounded():
+    import core.runtime_hooks as rh
+    row = rh._finding_row({"severity": "HIGH", "confidence": 8, "path": "a.py", "summary": "s",
+                           "fix": "migrate reader b", "exploit": "x" * 5000, "evidence": "a.py:3"})
+    assert row["fix"] == "migrate reader b" and row["evidence"] == "a.py:3"
+    assert len(row["exploit"]) <= rh._FINDING_TEXT_MAX
+    plain = rh._finding_row({"severity": "LOW", "path": "a.py", "summary": "s"})
+    assert set(plain) == {"severity", "confidence", "path", "line", "category", "summary"}
+    odd = rh._finding_row({"severity": "MED", "summary": "s", "fix": {"not": "text"}, "exploit": 5})
+    assert odd["fix"] == '{"not": "text"}' and "exploit" not in odd   # a number is no text
+
+
+@pytest.mark.asyncio
+async def test_gate1_marker_keeps_the_skeptic_text(tmp_path, monkeypatch):
+    import core.runtime_hooks as rh
+    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+    transcript = tmp_path / "sub.jsonl"
+    _gate_transcript(transcript, "EXPERT-ID: gate1-skeptic",
+                     "GATE 1 VERDICT: WARN\n  2. Failure Pattern: WARN. normalize paths first")
+    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-g1"})
+    await hook({"agent_id": "a-6", "agent_transcript_path": str(transcript), "agent_type": "x"},
+               None, MagicMock())
+    data = json.loads(next(p for p in tmp_path.glob("session_sess-g1_*.marker")
+                           if "_adv_" not in p.name).read_text())
+    assert data["verdict"] == "WARN"
+    assert "normalize paths first" in data["verdict_text"]
+
+
+def test_expert_answer_counts_a_finding_once_whatever_its_fix_text():
+    """fix / evidence are payload, not identity."""
+    import core.runtime_hooks as rh
+    a = '{"severity":"HIGH","confidence":8,"path":"a.py","line":3,"category":"c","summary":"x","fix":"one"}'
+    b = '{"severity":"HIGH","confidence":8,"path":"a.py","line":3,"category":"c","summary":"x","fix":"two"}'
+    ans = rh._expert_answer(f"```\n{a}\n```\n{b}\n")
+    assert len(ans["reported"]) == 1 and ans["reported"][0]["fix"] == "one"
+
+
+def test_finding_row_keeps_structured_evidence_as_json():
+    import core.runtime_hooks as rh
+    row = rh._finding_row({"severity": "MED", "summary": "s", "evidence": ["a.py:3", "b.py:9"]})
+    assert row["evidence"] == '["a.py:3", "b.py:9"]'

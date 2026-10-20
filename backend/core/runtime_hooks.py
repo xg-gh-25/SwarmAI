@@ -1235,8 +1235,10 @@ def create_agent_tool_audit_hook(
                     final = last_message if isinstance(last_message, str) and last_message.strip() \
                         else (_read_subagent_final_text(transcript_path) if transcript_path else "")
                     base["verdict"] = _gate_verdict(expert_id, final)
-                    if expert_id == "root-cause":
-                        # its reasons go into REPORT §10 / the PLAN redesign verbatim
+                    if expert_id in ("root-cause", "gate1-skeptic"):
+                        # root-cause: its reasons go into REPORT §10 / the PLAN redesign
+                        # verbatim; gate1-skeptic: its BLOCK / WARN points go into the
+                        # build record and REVIEW.md (artifact_cli._gate1_points)
                         base["verdict_text"] = (final or "")[:2000]
                 elif expert_id:
                     # Key present = this daemon records the expert's own findings and
@@ -1610,16 +1612,37 @@ _RECHECK_LINE_RE = re.compile(r"^\W*(?:item\s+)?R(\d{1,3})\b([^\n]{0,200})", re.
 _CODE_BLOCK_RE = re.compile(r"```[\w-]*\n([\s\S]*?)```")
 
 
+# A finding's own text fields kept on the marker row besides the six the gates count on
+# (the Gate-2 ledger keeps only its own MODEL_FIELDS). Bounded; a list / dict value is
+# kept as its JSON text. They are payload, not identity: _expert_answer de-duplicates
+# on the six.
+_FINDING_TEXT_FIELDS = ("fix", "exploit", "evidence")
+_FINDING_TEXT_MAX = 600
+
+
 def _finding_row(d: dict) -> Optional[dict]:
     sev = str(d.get("severity") or "").strip()
     if not _SEV_TOKEN.match(sev):
         return None
     line = d.get("line")
-    return {"severity": sev.upper(), "confidence": d.get("confidence"),
-            "path": str(d.get("path") or "")[:300],
-            "line": line if isinstance(line, int) and not isinstance(line, bool) else None,
-            "category": str(d.get("category") or "")[:80],
-            "summary": str(d.get("summary") or d.get("description") or "")[:240]}
+    row = {"severity": sev.upper(), "confidence": d.get("confidence"),
+           "path": str(d.get("path") or "")[:300],
+           "line": line if isinstance(line, int) and not isinstance(line, bool) else None,
+           "category": str(d.get("category") or "")[:80],
+           "summary": str(d.get("summary") or d.get("description") or "")[:240]}
+    for k in _FINDING_TEXT_FIELDS:
+        v = d.get(k)
+        if isinstance(v, (list, dict)) and v:
+            try:
+                v = json.dumps(v, ensure_ascii=False)
+            except (TypeError, ValueError):
+                v = None
+        if isinstance(v, str) and v.strip():
+            row[k] = v.strip()[:_FINDING_TEXT_MAX]
+    return row
+
+
+_FINDING_IDENTITY = ("severity", "confidence", "path", "line", "category", "summary")
 
 
 def _rows_of(obj) -> list:
@@ -1662,8 +1685,11 @@ def _expert_answer(final_text: str) -> dict:
         except (ValueError, TypeError):
             continue
     uniq: list = []
-    for r in rows:
-        if r not in uniq:
+    seen: set = set()
+    for r in rows:   # the same finding twice (fenced and inline) with other fix text is one
+        key = tuple(repr(r.get(k)) for k in _FINDING_IDENTITY)
+        if key not in seen:
+            seen.add(key)
             uniq.append(r)
     answers: dict = {}
     for n, rest in _RECHECK_LINE_RE.findall(text):

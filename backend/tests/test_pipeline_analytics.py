@@ -6,7 +6,8 @@ Covers the three Run-C hardening changes to the ALREADY-EXISTING aggregator:
   2. Time bound: _load_all_metrics skips run dirs older than 90 days (file mtime,
      RP30 no-op-path scaling).
   3. Additive-only schema: analyze_all_runs still emits the keys the EVALUATE/BUILD
-     stages consume (high_risk_shapes / stage_estimates / build_injection_recommendations).
+     stages consume (high_risk_shapes / stage_estimates); the chronic-RP BUILD key is
+     gone (its input rp_violations was never written by any run).
 
 Method: pure-function tests on hand-built dicts (gating) + real-fs tmp dirs (mtime).
 No mocks of the functions under change (RP47).
@@ -114,7 +115,12 @@ class TestAdditiveSchema:
         # the consumer read-paths (evaluate.md:425/435/440, build.md:64) must resolve
         assert "high_risk_shapes" in dims["abandon_patterns"]
         assert "stage_estimates" in dims["estimation_accuracy"]
-        assert "adversarial_value" in dims  # build_injection_recommendations lives here
+        assert "adversarial_value" in dims
+        # the whole key set, pinned: the deleted chronic-RP BUILD key cannot come back
+        assert set(dims["adversarial_value"]) == {
+            "runs_analyzed", "review_findings_total", "adversarial_findings_total",
+            "adversarial_high_total", "adversarial_hit_rate", "review_adversarial_gap_ratio",
+            "chronic_violations"}
 
 
 class TestReportPathOption:

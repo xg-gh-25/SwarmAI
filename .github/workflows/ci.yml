@@ -49,6 +49,9 @@ jobs:
       - name: Lint expert corpus (D3 admission — spawn_as/domain/scope, no memory)
         run: python scripts/lint_experts.py
 
+      - name: Lint (value, problem) loaders — the problem value is never dropped
+        run: python scripts/lint_problem_values.py
+
       - name: Build BVT test list
         id: test-list
         working-directory: ./backend

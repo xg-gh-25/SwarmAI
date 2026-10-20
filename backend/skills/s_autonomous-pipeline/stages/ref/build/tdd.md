@@ -32,14 +32,6 @@ RIGHT (vertical):    test1→impl1 (tracer bullet, proves the path end-to-end)
                      test2→impl2 (responds to what you learned)  test3→impl3 ...
 ```
 
-## Chronic pattern reminder (Meta-Intelligence L3)
-
-If the EVALUATE artifact carries `build_injection_recommendations` (from
-pipeline_intelligence.json), each is an RP pattern adversarial review keeps catching in
-similar changesets (e.g. RP3 useEffect cleanup releases ALL resources, RP12 callbacks in
-`useCallback` with correct deps, RP35 any `to_thread()` >5s needs a dedicated executor).
-Add each to this BUILD's checklist and verify compliance before advancing. None → skip.
-
 ## Step 1: RED→GREEN tracer bullet
 
 1. Read the acceptance criteria (PLAN design_doc, else the evaluation artifact).

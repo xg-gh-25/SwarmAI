@@ -896,6 +896,15 @@ STAGE_TEMPLATES: dict[str, dict] = {
         ],
         # Design spec (design_spec.py), REQUIRED at stage-complete for strict profiles.
         "design": _DS_PLAN,
+        # Changed contracts + the pattern that finds their readers (design_spec.
+        # constraints_errors; checked against the diff by scripts/consumers_gate.py), or
+        # no_contract_change_reason instead of consumers. Rules: stages/ref/plan/consumers.md
+        "implementation_constraints": {"consumers": [
+            {"id": "K1", "contract": "load_x now returns (value, problem)",
+             "pattern": "load_x\\(", "paths": ["backend"],
+             "readers": [{"at": "backend/a.py::read_a", "status": "migrated"},
+                         {"at": "backend/b.py::log_b", "status": "unaffected",
+                          "reason": "only logs the call, never reads the value"}]}]},
     },
     "build": {
         "files_changed": ["path/to/file.py"],

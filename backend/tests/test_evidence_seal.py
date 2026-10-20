@@ -221,8 +221,8 @@ def test_the_parsed_bytes_are_the_checked_bytes(env, monkeypatch):
             return json.dumps({"schema": 1, "mode": "regression", "counts": {"failed": 0}})
         return real_read_text(self, *a, **k)
     monkeypatch.setattr(Path, "read_text", swapped)
-    data, _ = pv._load_evidence_json(p)
-    assert data is not None and data["counts"] == {"failed": 3}
+    data, problem = pv._load_evidence_json(p)
+    assert problem is None and data is not None and data["counts"] == {"failed": 3}
 
 
 def test_a_write_after_the_store_vanished_warns(env, capsys):

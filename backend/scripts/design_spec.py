@@ -48,7 +48,15 @@ and a ``skipped`` adversarial tier carry nothing to fix by class.
 Public: ``CUTOVER``, ``ROOT_CUTOVER``, ``ROOT_TEMPLATE``, ``SOLUTION_TEMPLATE``,
 ``root_cause_errors``, ``solution_errors``, ``PLAN_TEMPLATE``, ``BUILD_TEMPLATE``, ``FINDING_TEMPLATE``,
 ``plan_errors``, ``build_errors``, ``finding_errors``, ``stage_errors``,
-``FIXSPEC_TEMPLATE``, ``fixing_spec_errors``.
+``FIXSPEC_TEMPLATE``, ``fixing_spec_errors``, ``constraints_errors``,
+``requirement_parts``, ``requirement_part_errors``.
+
+5. Contract readers and requirement parts (from ``CONSTRAINTS_CUTOVER``):
+   PLAN ``implementation_constraints`` declares each changed contract with the git-grep
+   pattern that finds its readers, or ``no_contract_change_reason``
+   (``constraints_errors``; checked against the diff by ``scripts/consumers_gate.py``);
+   EVALUATE maps every numbered part ``(1)``..``(n)`` of the raw requirement to a
+   requirement's ``parts`` or a ``ruled_out`` entry (``requirement_part_errors``).
 
 4. FIXING_SPEC (docs/design/pipeline-anti-whack-a-mole.md §7.3): between a Gate-2 round
    with blocking findings and any fix, ONE spec groups the round's open items by cause —
@@ -68,6 +76,9 @@ from datetime import datetime, timezone
 
 CUTOVER = "2026-10-19T08:30:00Z"
 ROOT_CUTOVER = "2026-10-19T10:00:00Z"
+# implementation_constraints (PLAN) and the requirement-part trace (EVALUATE): runs
+# created before this get them as warnings.
+CONSTRAINTS_CUTOVER = "2026-10-20T08:00:00Z"
 ROOT_LAYERS = ("code-line", "module-design", "contract", "architecture", "process", "user-need")
 _DESIGN_LAYERS = frozenset({"module-design", "contract", "architecture"})
 _W_ID = re.compile(r"^W\d+$")
@@ -77,6 +88,8 @@ _MERMAID = re.compile(r"\b(graph|flowchart|sequenceDiagram|stateDiagram(?:-v2)?)
 _ARROW = re.compile(r"-->|->>|-\.->|==>|--x|-x")
 _INV_ID = re.compile(r"^I\d+$")
 _FM_ID = re.compile(r"^F\d+$")
+_K_ID = re.compile(r"^K\d+$")
+_PART = re.compile(r"(?<![\w(])\((\d{1,2})\)")
 _TEST_REF = re.compile(r"^[\w./-]+\.(py|ts|tsx|js|jsx)::[\w\[\]\-.:]+$")
 _MIN = 15
 
@@ -389,6 +402,89 @@ def plan_errors(plan: dict, profile: str) -> "list[str]":
     return errs
 
 
+def constraints_errors(plan: dict, profile: str) -> "list[str]":
+    """PLAN ``implementation_constraints`` (stages/ref/plan/consumers.md): every changed
+    contract with the git-grep pattern that finds its readers (checked against the diff
+    by scripts/consumers_gate.py at BUILD and before each Gate-2 re-check), or a reason
+    the change alters no shared contract."""
+    if _tier(profile) is None:
+        return []
+    ic = plan.get("implementation_constraints") if isinstance(plan, dict) else None
+    if not isinstance(ic, dict):
+        return ["Constraints: plan.implementation_constraints is missing — declare each changed "
+                "contract under consumers [{id, contract, pattern, paths, readers}] or give "
+                "no_contract_change_reason (stages/ref/plan/consumers.md)"]
+    consumers = ic.get("consumers")
+    if consumers in (None, []):
+        if _text(ic.get("no_contract_change_reason"), 20):
+            return []
+        return ["Constraints: implementation_constraints needs consumers or a "
+                "no_contract_change_reason (>= 20 chars)"]
+    if not isinstance(consumers, list):
+        return ["Constraints: implementation_constraints.consumers must be a list"]
+    from consumers_gate import root_path as _root_path   # one rule for PLAN and the gate
+    errs: list[str] = []
+    for c in consumers:
+        if not isinstance(c, dict):
+            errs.append("Constraints: each consumer must be an object")
+            continue
+        cid = str(c.get("id") or "")
+        if not _K_ID.match(cid):
+            errs.append(f"Constraints: consumer id {cid!r} must be K<n>")
+        if not _text(c.get("contract"), 10):
+            errs.append(f"Constraints: {cid}: 'contract' (>= 10 chars) says what changed")
+        pat = c.get("pattern")
+        if not (isinstance(pat, str) and pat.strip() and len(pat) <= 500):
+            errs.append(f"Constraints: {cid}: 'pattern' must be a git grep -E regex (1-500 chars)")
+        paths = c.get("paths")
+        if not (isinstance(paths, list) and paths and all(_root_path(p) for p in paths)):
+            errs.append(f"Constraints: {cid}: 'paths' must list tree roots ('.', 'backend', "
+                        "'desktop'), never the files you expect: the search finds the readers")
+        readers = c.get("readers", [])
+        if not isinstance(readers, list):
+            errs.append(f"Constraints: {cid}: 'readers' must be a list")
+            continue
+        for r in readers:
+            at = r.get("at") if isinstance(r, dict) else None
+            st = r.get("status") if isinstance(r, dict) else None
+            if not _text(at, 3) or st not in ("migrated", "unaffected"):
+                errs.append(f"Constraints: {cid}: reader {r!r} needs 'at' (path::function) and "
+                            "status migrated | unaffected")
+            elif st == "unaffected" and not _text(r.get("reason"), 10):
+                errs.append(f"Constraints: {cid}: reader {at} is unaffected — give a reason (>= 10 chars)")
+    return errs
+
+
+def requirement_parts(requirement: "str | None") -> "list[int]":
+    """The numbered parts of a raw requirement: ``(1)``..``(n)`` exactly, n >= 2; any
+    other set of parenthesised numbers (a year, ``(2)`` and ``(5)``) is prose: []."""
+    found = sorted({int(m) for m in _PART.findall(str(requirement or ""))})
+    return found if len(found) >= 2 and found == list(range(1, len(found) + 1)) else []
+
+
+def requirement_part_errors(requirement: "str | None", evaluate: "dict | None") -> "list[str]":
+    """EVALUATE: every numbered part of the raw requirement is carried by a requirement
+    (``requirements[].parts``) or ruled out (a ``ruled_out`` entry starting ``(n)``) —
+    a part dropped here is invisible to every later gate that judges against the ACs."""
+    parts = requirement_parts(requirement)
+    if not parts:
+        return []
+    ev = evaluate if isinstance(evaluate, dict) else {}
+    mapped: set[int] = set()
+    for r in ev.get("requirements") or []:
+        if isinstance(r, dict) and isinstance(r.get("parts"), list):
+            mapped |= {p for p in r["parts"] if isinstance(p, int) and not isinstance(p, bool)}
+    ruled = ev.get("ruled_out")
+    ruled_items = ruled if isinstance(ruled, list) else ([ruled] if isinstance(ruled, str) else [])
+    for item in ruled_items:
+        for m in re.finditer(r"(?:^|[;\n]\s*)\((\d{1,2})\)", str(item)):
+            mapped.add(int(m.group(1)))
+    missing = [p for p in parts if p not in mapped]
+    return [f"Requirement trace: part ({p}) of the requirement is in no requirements[].parts "
+            f"and not ruled out — carry it in a requirement or add '({p}) <why not>' to ruled_out"
+            for p in missing]
+
+
 def build_errors(build: dict, plan: "dict | None", profile: str) -> "list[str]":
     """BUILD break tests (module docstring, 2)."""
     if _tier(profile) is None or not isinstance(plan, dict):
@@ -488,7 +584,8 @@ def _root_invariant_errors(plan: dict, evaluate: "dict | None", profile: str) ->
 def stage_errors(stage: str, artifact: dict, *, profile: str, plan: "dict | None",
                  record: "dict | None" = None, run_created_at: "str | None" = None,
                  warnings: "list[str] | None" = None,
-                 evaluate: "dict | None" = None) -> "list[str]":
+                 evaluate: "dict | None" = None,
+                 requirement: "str | None" = None) -> "list[str]":
     """All design-spec errors for one stage-complete candidate. Runs created before
     the matching cutover get them as warnings (appended to *warnings*) instead."""
     if not isinstance(artifact, dict):
@@ -496,14 +593,18 @@ def stage_errors(stage: str, artifact: dict, *, profile: str, plan: "dict | None
     rec = record if isinstance(record, dict) else {}
     updates = artifact.get("design_updates") or rec.get("design_updates")
     root_errs: list[str] = []
+    cons_errs: list[str] = []   # judged by CONSTRAINTS_CUTOVER
     if stage == "evaluate":
         root_errs = root_cause_errors(artifact, profile)
+        if _tier(profile) is not None:
+            cons_errs = requirement_part_errors(requirement, artifact)
         errs = []
     elif stage == "think":
         root_errs = solution_errors(artifact, evaluate, profile)
         errs = []
     elif stage == "plan":
         errs = plan_errors(artifact, profile) + _root_invariant_errors(artifact, evaluate, profile)
+        cons_errs = constraints_errors(artifact, profile)
     elif stage == "build":
         errs = build_errors(artifact, plan, profile)
     elif stage == "review":
@@ -527,6 +628,10 @@ def stage_errors(stage: str, artifact: dict, *, profile: str, plan: "dict | None
     else:
         errs = []
     out: list[str] = []
+    if cons_errs and stage == "plan" and _is_direct(profile):
+        if warnings is not None:
+            warnings.extend("(direct run: form only) " + e for e in cons_errs)
+        cons_errs = []
     if errs and stage in ("plan", "build") and _is_direct(profile):
         # A direct run is a small, fully specified change: its PLAN / BUILD record is a
         # form the agent fills in about itself (a flow drawing, a state list, a break-test
@@ -535,7 +640,7 @@ def stage_errors(stage: str, artifact: dict, *, profile: str, plan: "dict | None
         if warnings is not None:
             warnings.extend("(direct run: form only) " + e for e in errs)
         errs = []
-    for found, cut in ((errs, CUTOVER), (root_errs, ROOT_CUTOVER)):
+    for found, cut in ((errs, CUTOVER), (root_errs, ROOT_CUTOVER), (cons_errs, CONSTRAINTS_CUTOVER)):
         if found and not _enforced(run_created_at, cut):
             if warnings is not None:
                 warnings.extend("(not enforced for this run) " + e for e in found)

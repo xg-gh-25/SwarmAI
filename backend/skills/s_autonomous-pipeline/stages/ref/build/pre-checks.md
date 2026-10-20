@@ -53,8 +53,9 @@ behavior (dict, list, pathlib basic ops, string formatting).
 ## Pre-Change Checks `[MUST]` <!-- R-build-012 -->
 
 > The "BLOCKING" grep-before-you-change rules in this section are agent-discipline
-> `[MUST]` (no validator enforces them) — they encode R27 (grep all consumers) at BUILD
-> time. <!-- R-build-013 -->
+> `[MUST]` — they encode R27 (grep all consumers) at BUILD time. For a contract the PLAN
+> declared in `implementation_constraints.consumers` the consumers gate enforces it
+> (`ref/plan/consumers.md`); the rest stays discipline. <!-- R-build-013 -->
 
 ### When splitting a variable into multiple categories
 

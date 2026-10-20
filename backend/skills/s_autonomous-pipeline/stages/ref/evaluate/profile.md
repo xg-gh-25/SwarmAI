@@ -70,8 +70,6 @@ cat pipeline_intelligence.json 2>/dev/null | python3 -c "import sys,json; d=json
 - **A2. Budget calibration:** if `dimensions.estimation_accuracy.stage_estimates` exists, use
   those values instead of the default budget estimates (calibrated from actual historical
   consumption across all completed runs).
-- **A3. Chronic RP injection:** if `dimensions.adversarial_value.build_injection_recommendations`
-  is non-empty, note the patterns for injection into the BUILD stage preamble later.
 **Skip intelligence if** the file doesn't exist, is >30 days old (stale), or confidence < 0.7
 for a recommendation. Intelligence is advisory only: never override explicit user intent.
 ## Goal Mode Detection

@@ -17,7 +17,7 @@ exactly what its `next.action` says, then run `gate2-next` again:
 | `next.action` | Do |
 |---|---|
 | `spawn` | spawn every `next.spawns[].spawn` text exactly, all in ONE message (Agent tool, `run_in_background: false`). R1 reviews the full change; R2 reviews only the fix since R1. |
-| `fix` | for each listed finding: write a break test and register it, `gate2-next … --test <id>=<nodeid>`, or declare it, `--declare <id>=untestable:<reason>`. Fix by cause: the spec covers sibling sites, and break tests cover the class. Run the affected tests with `--mode tdd --files …`, then declare the pass done: `gate2-next … --fixed <pass>`. |
+| `fix` | for each listed finding: write a break test and register it, `gate2-next … --test <id>=<nodeid>`, or declare it, `--declare <id>=untestable:<reason>`. Fix by cause: the spec covers sibling sites, and break tests cover the class. Run the affected tests with `--mode tdd --files …`, then declare the pass done: `gate2-next … --fixed <pass>`. A fix that leaves a plan-declared reader neither changed nor declared is refused here, before the re-check (`ref/plan/consumers.md`). |
 | `prove` | run each printed `pipeline_test.py --mode prove` command, one per Bash call; `continue: true` → the same command again. |
 | `done` | no more experts in this run. Go to deliver.md step 4b (the one full-scope regression run), then step 6 and on. |
 

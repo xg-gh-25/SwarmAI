@@ -534,3 +534,65 @@ def test_a_not_ready_summary_carries_its_plain_reasons(monkeypatch, tmp_path):
     assert sb["pushReasons"][0] == {"code": "tests_not_final", "text": "The tests did not run on the final code"}
     stages["deliver"]["push_ready"] = True
     assert pse.summary_block("run_d1", dict(base, status="completed"), "now")["pushReasons"] == []
+
+
+# ── the plan sections the committed document did not show before ──────────────
+PLAN_SECTIONS = {
+    "security_boundaries": [
+        {"boundary": "agent pattern → git grep", "trust_assumption": "no shell",
+         "enforcement": "backend/scripts/consumers_gate.py:120"},
+        {"boundary": "file-writing tool", "trust_assumption": "confined", "escalate": True,
+         "reason": "no confinement yet"}],
+    "boundaries": {"always": ["fence model text"], "ask_first": ["CI changes"],
+                   "never": ["fail open silently"]},
+    "success_criteria": ["lint exits 0 on the tree"],
+    "design_doc": {"test_strategy": [{"ac": "AC7", "how": "temp git repo", "mock": "none",
+                                      "inputs": "py files"}]},
+    "implementation_constraints": {"consumers": [
+        {"id": "K1", "contract": "read_index may be unusable", "pattern": "read_index\\(",
+         "paths": ["backend"], "readers": [
+             {"at": "backend/a.py::f", "status": "migrated"},
+             {"at": "backend/b.py::g", "status": "unaffected", "reason": "logs only"}]}]},
+}
+
+
+def test_design_spec_renders_boundaries_tests_success_and_consumers():
+    md = rd.render_design_spec({"id": "run_d2"}, {}, {**PLAN, **PLAN_SECTIONS})
+    for needle in ("## Security Boundaries", "agent pattern → git grep", "consumers_gate.py:120",
+                   "escalate: no confinement yet", "## Boundaries", "**Never:** fail open silently",
+                   "## Test Strategy", "| AC7 | temp git repo |", "## Success Criteria",
+                   "lint exits 0 on the tree", "## Contract readers", "| K1 |", "read_index\\(",
+                   "backend/b.py::g", "unaffected — logs only"):
+        assert needle in md, needle
+
+
+def test_design_spec_renders_no_contract_change_reason():
+    md = rd.render_design_spec({"id": "r"}, {}, {"implementation_constraints": {
+        "no_contract_change_reason": "adds a module nothing reads yet"}})
+    assert "**No contract change:** adds a module nothing reads yet" in md
+
+
+def test_design_spec_omits_absent_sections():
+    md = rd.render_design_spec({"id": "r"}, {}, PLAN)
+    for title in ("## Security Boundaries", "## Boundaries", "## Test Strategy",
+                  "## Success Criteria", "## Contract readers"):
+        assert title not in md
+
+
+@pytest.mark.parametrize("bad", [
+    {"security_boundaries": 5, "boundaries": "x", "success_criteria": {"a": 1},
+     "implementation_constraints": {"consumers": "x"}, "design_doc": {"test_strategy": 7}},
+    {"security_boundaries": [None, 3, {"boundary": ["x"]}], "boundaries": {"never": "x"},
+     "implementation_constraints": {"consumers": [None, {"readers": "x"}, {"readers": [1]}]}},
+])
+def test_new_sections_never_raise_on_odd_shapes(bad):
+    rd.render_design_spec({"id": "r"}, {}, bad)
+
+
+def test_review_doc_shows_the_gate1_points():
+    recs = {"build": {"gate1_verdict": "WARN",
+                      "gate1_points": ["2. Failure Pattern: WARN. normalize paths first",
+                                       "3. Simplicity: WARN. reuse check_migration_class"]}}
+    md = rd.render_review({"id": "r"}, {}, recs, {}, {})
+    assert "Gate 1 — plan skeptic | WARN" in md
+    assert "normalize paths first" in md and "reuse check_migration_class" in md

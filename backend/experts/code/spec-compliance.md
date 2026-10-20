@@ -17,9 +17,12 @@ what the spec says?"
 
 ## Your Inputs
 
-1. **Acceptance Criteria** — from PLAN stage (provided below)
-2. **Code diff** — actual changes made in BUILD
-3. **Implementer's commit messages** — their self-description of what they did
+1. **Requirement** — the user's words (the run's refinement fenced as data). Name any
+   part of it that no acceptance criterion carries: a part dropped at EVALUATE is
+   invisible to a check that reads only the ACs.
+2. **Acceptance Criteria** — from PLAN stage (provided below)
+3. **Code diff** — actual changes made in BUILD
+4. **Implementer's commit messages** — their self-description of what they did
 
 ## CRITICAL: Do Not Trust the Builder's Self-Assessment
 

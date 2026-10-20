@@ -48,7 +48,8 @@ def _think(**over):
 def _plan(**over):
     d = copy.deepcopy(ds.PLAN_TEMPLATE)
     d.update(over)
-    return {"design": d}
+    return {"design": d, "implementation_constraints": {
+        "no_contract_change_reason": "test plan: changes no shared contract"}}
 
 
 def _good_finding(**over):
@@ -433,3 +434,101 @@ def test_direct_run_plan_and_build_forms_are_warnings_not_errors():
     assert ds.stage_errors("build", build, profile="direct", plan=_plan(), run_created_at=NEW,
                            warnings=w) == []
     assert ds.stage_errors("build", build, profile="bugfix", plan=_plan(), run_created_at=NEW)
+
+
+# ── 5. implementation_constraints + requirement parts ──────────────────────────
+
+def _consumer(**over):
+    c = {"id": "K1", "contract": "read_index may return an unusable value",
+         "pattern": r"read_index\(", "paths": ["backend"],
+         "readers": [{"at": "backend/a.py::f", "status": "migrated"},
+                     {"at": "backend/b.py::g", "status": "unaffected", "reason": "only logs the value"}]}
+    c.update(over)
+    return c
+
+
+def test_constraints_accept_consumers_or_a_reason():
+    assert ds.constraints_errors({"implementation_constraints": {"consumers": [_consumer()]}}, "full") == []
+    assert ds.constraints_errors({"implementation_constraints": {
+        "no_contract_change_reason": "adds a new module, no existing reader"}}, "full") == []
+
+
+def test_constraints_missing_is_refused_on_strict_profiles():
+    errs = ds.constraints_errors({"design": {}}, "full")
+    assert errs and "implementation_constraints" in errs[0]
+    assert ds.constraints_errors({"design": {}}, "trivial") == []
+
+
+def test_constraints_bad_consumer_shapes():
+    bad = [
+        _consumer(id="X1"),
+        _consumer(pattern=""),
+        _consumer(paths=["backend/core/x.py"]),
+        _consumer(paths=["/abs"]),
+        _consumer(paths=["../up"]),
+        _consumer(readers=[{"at": "backend/a.py::f", "status": "done"}]),
+        _consumer(readers=[{"at": "backend/a.py::f", "status": "unaffected", "reason": "x"}]),
+        _consumer(readers="nope"),
+    ]
+    for c in bad:
+        errs = ds.constraints_errors({"implementation_constraints": {"consumers": [c]}}, "full")
+        assert errs, c
+
+
+def test_constraints_cutover_and_direct_downgrade():
+    plan = {"design": copy.deepcopy(ds.PLAN_TEMPLATE)}
+    w: list = []
+    assert ds.stage_errors("plan", plan, profile="full", plan=None, evaluate={},
+                           run_created_at="2026-10-20T06:00:00Z", warnings=w) == []
+    assert any("implementation_constraints" in x for x in w)
+    assert any("implementation_constraints" in e for e in
+               ds.stage_errors("plan", plan, profile="full", plan=None, evaluate={}, run_created_at=NEW))
+    w = []
+    assert ds.stage_errors("plan", plan, profile="direct", plan=None, run_created_at=NEW,
+                           warnings=w) == []
+    assert any("implementation_constraints" in x for x in w)
+
+
+REQ_6238 = ("Make the deterministic Gate-2 flow the one a real run follows: (1) stages/deliver.md "
+            "documents the branch; (2) run-create defaults to deterministic; (3) close the 3a "
+            "known issue that a hand-written prove file can close a finding.")
+
+
+def _ev_parts(*parts_lists, ruled_out=None):
+    reqs = [{"id": f"FR-{i}", "statement": "x", "parts": p} for i, p in enumerate(parts_lists, 1)]
+    ev = {"requirements": reqs}
+    if ruled_out is not None:
+        ev["ruled_out"] = ruled_out
+    return ev
+
+
+def test_requirement_part_missing_from_requirements_is_named():
+    errs = ds.requirement_part_errors(REQ_6238, _ev_parts([1], [2]))
+    assert len(errs) == 1 and "(3)" in errs[0]
+
+
+def test_requirement_parts_all_mapped_or_ruled_out():
+    assert ds.requirement_part_errors(REQ_6238, _ev_parts([1], [2, 3])) == []
+    assert ds.requirement_part_errors(REQ_6238, _ev_parts([1], [2], ruled_out=[
+        "(3) proof authorship moves to the next run"])) == []
+    assert ds.requirement_part_errors(REQ_6238, _ev_parts([1], [2], ruled_out=
+        "(3) proof authorship moves to the next run")) == []
+
+
+def test_requirement_part_parser_ignores_non_sequences():
+    """F5: parenthesised numbers that are not exactly 1..n (n >= 2) are prose, not parts."""
+    for text in ("released in (2026) and fixed", "see (2) and (5)", "only (1) here",
+                 "items (17) and (24)", "no numbers at all"):
+        assert ds.requirement_part_errors(text, {"requirements": []}) == [], text
+
+
+def test_requirement_parts_wired_into_evaluate_stage_errors():
+    ev = {**_eval(), **_ev_parts([1], [2])}
+    errs = ds.stage_errors("evaluate", ev, profile="full", plan=None, run_created_at=NEW,
+                           requirement=REQ_6238)
+    assert any("(3)" in e for e in errs)
+    w: list = []
+    assert not any("(3)" in e for e in ds.stage_errors(
+        "evaluate", ev, profile="full", plan=None, run_created_at="2026-10-20T06:00:00Z",
+        requirement=REQ_6238, warnings=w))
+    assert any("(3)" in x for x in w)

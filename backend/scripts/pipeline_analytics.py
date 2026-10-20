@@ -622,7 +622,6 @@ def analyze_adversarial_value(metrics: list[dict]) -> dict:
         "adversarial_hit_rate": _safe_pct(runs_with_adversarial, n),
         "review_adversarial_gap_ratio": gap_ratio,
         "chronic_violations": chronic,
-        "build_injection_recommendations": [v["pattern"] for v in chronic[:5]],
     }
 
 

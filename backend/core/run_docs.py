@@ -468,9 +468,71 @@ def render_design_spec(run_state: dict, think: dict, plan: dict) -> str:
             lines.append(f"| {_cell(e.get('id'), 8)} | {_cell(e.get('kind'), 12)} | "
                          f"{_cell(e.get('ref'), 200)} | {_cell(e.get('expect'), 20)} |")
         lines.append("")
+    lines += _plan_sections(pl, dd)
     if len(lines) <= len(_header("Design Spec", run_state)):
         lines += ["_No design recorded._", ""]
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _code_cell(v: Any, n: int = 200) -> str:
+    """A regex / path for a table cell as inline code: shown byte for byte (no backslash
+    doubling), unable to close its code span or the cell."""
+    return "`" + _t(v, n).replace("`", "'").replace("|", "\\|") + "`"
+
+
+def _plan_sections(pl: dict, dd: dict) -> list[str]:
+    """The plan's security boundaries, boundaries, test strategy, success criteria and
+    contract readers: fields the validator judges that the committed
+    document used to leave out. Each may sit at the plan's top level or in design_doc."""
+    def pick(key):
+        v = pl.get(key)
+        return v if v not in (None, [], {}) else dd.get(key)
+    out: list[str] = []
+    sb = [b for b in _l(pick("security_boundaries")) if isinstance(b, dict)]
+    if sb:
+        out += ["## Security Boundaries", "", "| Boundary | Trust assumption | Enforced at |",
+                "|---|---|---|"]
+        for b in sb[:20]:
+            where = (_cell(b.get("enforcement"), 160) if b.get("enforcement")
+                     else f"escalate: {_cell(b.get('reason'), 200)}" if b.get("escalate") else "—")
+            out.append(f"| {_cell(b.get('boundary'), 160)} | {_cell(b.get('trust_assumption'), 200)} | {where} |")
+        out.append("")
+    bd = _d(pick("boundaries"))
+    rows = [(label, _l(bd.get(k))) for k, label in (("always", "Always"), ("ask_first", "Ask first"),
+                                                    ("never", "Never"))]
+    if any(items for _, items in rows):
+        out += ["## Boundaries", ""]
+        out += [f"- **{label}:** " + "; ".join(_t(x, 200) for x in items[:15] if _t(x))
+                for label, items in rows if items]
+        out.append("")
+    ts = [t for t in _l(pick("test_strategy")) if isinstance(t, dict)]
+    if ts:
+        out += ["## Test Strategy", "", "| AC | How | Mock boundary | Inputs |", "|---|---|---|---|"]
+        for t in ts[:30]:
+            out.append(f"| {_cell(t.get('ac'), 20)} | {_cell(t.get('how'), 300)} | "
+                       f"{_cell(t.get('mock'), 120)} | {_cell(t.get('inputs'), 120)} |")
+        out.append("")
+    sc = _l(pick("success_criteria"))
+    if sc:
+        out += ["## Success Criteria", ""] + _bullets(sc, 20) + [""]
+    ic = _d(pick("implementation_constraints"))
+    cons = [c for c in _l(ic.get("consumers")) if isinstance(c, dict)]
+    if cons:
+        out += ["## Contract readers", "",
+                "| ID | Contract | Pattern | Paths | Readers |", "|---|---|---|---|---|"]
+        for c in cons[:20]:
+            readers = "; ".join(
+                f"{_cell(r.get('at'), 160)} {_cell(r.get('status'), 12)}"
+                + (f" — {_cell(r.get('reason'), 160)}" if r.get("reason") else "")
+                for r in _l(c.get("readers"))[:30] if isinstance(r, dict))
+            out.append(f"| {_cell(c.get('id'), 8)} | {_cell(c.get('contract'), 200)} | "
+                       f"{_code_cell(c.get('pattern'))} | "
+                       f"{_cell(', '.join(_t(p, 60) for p in _l(c.get('paths'))[:8]), 120)} | "
+                       f"{readers or '—'} |")
+        out.append("")
+    elif _t(ic.get("no_contract_change_reason")):
+        out += [f"**No contract change:** {_t(ic.get('no_contract_change_reason'), 400)}", ""]
+    return out
 
 
 # ── REVIEW.md ─────────────────────────────────────────────────────────────────
@@ -535,7 +597,10 @@ def render_review(run_state: dict, evaluate: dict, records: dict, review: dict,
     rows = [
         ("Gate 0 — understanding skeptic", und.get("skeptic_verdict") or "—",
          "framing: is the claim observed, is the root the root"),
-        ("Gate 1 — plan skeptic", build.get("gate1_verdict") or "—", "plan before BUILD"),
+        # the skeptic's own BLOCK / WARN points, captured by the hook, in its row
+        ("Gate 1 — plan skeptic", build.get("gate1_verdict") or "—",
+         "; ".join(_t(p, 200) for p in _l(build.get("gate1_points"))[:10] if _t(p))
+         or "plan before BUILD"),
         ("REVIEW — spec + conformance", _review_verdict(rv), f"{_t(rv.get('findings_count'), 6) or 0} finding(s)"),
         ("Gate 2 — adversarial experts", (f"{ar.get('profile_tier') or '?'} · "
                                            f"{len(gate2)} finding(s), {open_n} open") if ar else "—",
@@ -546,7 +611,8 @@ def render_review(run_state: dict, evaluate: dict, records: dict, review: dict,
          _t(deliver_rec.get("push_ready_reason"), 200)),
     ]
     lines += ["## Gates", "", "| Gate | Verdict | Notes |", "|---|---|---|"]
-    lines += [f"| {_cell(a, 60)} | {_cell(b, 80)} | {_cell(c, 240)} |" for a, b, c in rows]
+    lines += [f"| {_cell(a, 60)} | {_cell(b, 80)} | {_cell(c, 900 if a.startswith('Gate 1') else 240)} |"
+              for a, b, c in rows]
     lines.append("")
 
     # Experts

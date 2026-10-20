@@ -68,3 +68,4 @@ test_silent_except_baseline.py
 test_tool_risk.py
 test_tool_summary_fixture.py
 test_tscc_security_scan.py
+test_lint_problem_values.py   # scripts/lint_problem_values.py: banned shapes, pinned scope, clean tree

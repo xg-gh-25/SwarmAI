@@ -32,6 +32,15 @@ Emitted next to the free-text `acceptance_criteria` (both coexist: strangler):
 ]
 ```
 (One literal per enum in the real artifact.)
+## Numbered parts → `parts` `[GATE·validator]`
+
+When the raw requirement numbers its parts `(1)`..`(n)` (n >= 2, exactly that sequence),
+every part must be carried by a requirement (`"parts": [3]` on it) or ruled out (a
+`ruled_out` entry starting `(3) <why not now>`). `design_spec.requirement_part_errors`
+refuses EVALUATE otherwise (runs from `CONSTRAINTS_CUTOVER`): a part dropped here is
+invisible to every later gate that judges against the ACs. Other parenthesised numbers
+(a year, `(2)` and `(5)`) are prose and are ignored.
+
 ## Field rules (`_check_clarifications` WARNs on each)
 - **Canonical fields (SSOT §4.1 + the §4.6.1 audit render = 问题/选项/回答/答者):** `qid`,
   `question`, `options?`, `answer`, `answered_by`. **`answer` is the AUDIT ANCHOR** (what was

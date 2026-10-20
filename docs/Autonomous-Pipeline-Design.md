@@ -611,7 +611,6 @@ A per-project knowledge base that accumulates across pipeline runs:
 | `abandon_patterns` | Task shapes that historically fail | EVALUATE: detect high-risk shapes early |
 | `estimation_accuracy` | Predicted vs actual effort | EVALUATE: calibrate budget estimates |
 | `adversarial_value` | Which specialist findings were real vs false positive | DELIVER: weight specialist confidence |
-| `build_injection_recommendations` | Chronic RP patterns for this project | BUILD: inject as mental checklist preamble |
 
 ### Learning Feedback Loop
 
