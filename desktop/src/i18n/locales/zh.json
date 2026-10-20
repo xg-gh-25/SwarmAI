@@ -279,8 +279,11 @@
           "requirements": "需求 · 根因 · 澄清",
           "design": "方案 · 架构与流程 · 不变量",
           "review": "Gates · 专家审查 · 每条发现的处置",
-          "report": "完整运行报告"
-        }
+          "report": "完整运行报告",
+          "fixing": "修复 · 每条发现及其 break test"
+        },
+        "abandoned": "已关闭 · 未落地",
+        "failed": "失败"
       },
       "backToLatest": "↓ Back to latest",
       "changes": {
@@ -330,6 +333,13 @@
         "working": "Working",
         "stoppedCount": "{{count}} stopped",
         "stoppedByYouPlain": "Stopped by you"
+      },
+      "doc": {
+        "expand": "展开全文",
+        "collapse": "收起",
+        "open": "打开",
+        "loading": "读取中…",
+        "failed": "读取不到这份文档"
       }
     },
     "nextSteps": {

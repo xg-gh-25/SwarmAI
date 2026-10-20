@@ -135,6 +135,9 @@ export type TurnUnit =
   /** Text the model wrote between tool calls — shown in the stream, in order. */
   | { kind: 'note'; text: string; index: number; textOrdinal: number }
   | { kind: 'stage'; block: PipelineStageContent; index: number }
+  /** A direct run's completed stage: not a pipeline turn, so no stage groups — the
+   *  stage's summary and documents stand in the stream where it completed. */
+  | { kind: 'stageResult'; block: PipelineStageContent; index: number }
   /** A thinking passage. `ordinal` = its place among the turn's thoughts (a stable
    *  key); `live` = it is still streaming. */
   | ThoughtUnit
@@ -365,7 +368,17 @@ export function deriveTurnView(
   content.forEach((block, index) => {
     if (block.type === 'tool_result') return; // consumed by its tool_use
     if (isSubAgentBlock(block)) return; // nested under its Agent step below
-    if (isRunBlock(block) && !isPipelineBlock(block)) return; // a direct run (above)
+    if (isRunBlock(block) && !isPipelineBlock(block)) {
+      // A direct run (above) has no stage groups, but what it produced is shown: each
+      // completed stage's summary and documents (its end summary is lifted below, for
+      // every profile).
+      if (block.type === 'pipeline_stage' && block.status === 'completed' && !isGateStage(block.stage)
+               && (block.summary || block.docs?.length || block.doc)) {
+        seg = null;
+        units.push({ kind: 'stageResult', block, index });
+      }
+      return;
+    }
     if (block.type === 'pipeline_run') {
       // …unless the turn itself starts that stage (the block is written from the state
       // AFTER the call that announced it, so `current` may be a stage this very call

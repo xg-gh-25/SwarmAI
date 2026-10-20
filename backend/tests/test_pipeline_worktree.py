@@ -724,3 +724,36 @@ def test_a_red_cleared_by_a_fix_recheck_past_the_cap_lands_not_push_ready(flow):
     assert res["landed"]["swarmai"]["sha"] == _g(flow["main"], "rev-parse", "HEAD")
     c = _state(f)["commits"][-1]
     assert c["push_ready"] is False and "completed by a recheck" in c["push_ready_reason"]
+
+
+def test_a_stage_without_a_summary_gets_one_from_its_artifact(flow, tmp_path):
+    """XG 2026-10-20: every completed stage shows a summary. The model's own words win;
+    without them the line is built from the stage artifact."""
+    rid, f = _create(flow)
+    assert _start(flow, rid, "plan")[0] == 0
+    data = tmp_path / "plan.json"
+    data.write_text(json.dumps({"artifact": {
+        "approach": "one owner builds args", "change_spec": [{"id": "S1"}, {"id": "S2"}],
+        "exit_criteria": [{"id": "X1", "kind": "test", "ref": "backend/tests/t.py", "expect": "pass"}]}}))
+    rc, out = cli("stage-complete", "--project", "P", "--run-id", rid, "--stage", "plan",
+                  "--data", f"@{data}", token_for="stage-complete", run=rid, flow=flow)
+    assert rc == 0, out
+    rec = [s for s in _state(f)["stages"] if s["stage"] == "plan"][-1]
+    assert rec["summary"] == "one owner builds args · 2 changes · 1 exit criterion"
+    assert rec["derived_sources"]["summary"] == "stage artifact"
+    assert _start(flow, rid, "build", token=False)[0] == 0, "build stage did not open"
+    data.write_text(json.dumps({"artifact": {"files_changed": ["a.py"]},
+                                "record": {"summary": "my own words"}}))
+    rc, out = cli("stage-complete", "--project", "P", "--run-id", rid, "--stage", "build",
+                  "--data", f"@{data}", token_for="stage-complete", run=rid, flow=flow)
+    rec = [s for s in _state(f)["stages"] if s["stage"] == "build"]
+    assert rec and rec[-1]["summary"] == "my own words", out
+
+
+def test_an_abandoned_run_still_hands_back_its_report(flow):
+    rid, f = _create(flow)
+    assert _start(flow, rid, "plan")[0] == 0
+    rc, out = cli("run-update", "--project", "P", "--run-id", rid, "--status", "abandoned",
+                  "--reason", "stopped by the user", token_for="run-update", run=rid, flow=flow)
+    assert rc == 0, out
+    assert (f.parent / "REPORT.md").is_file() and out.get("report") == str(f.parent / "REPORT.md")

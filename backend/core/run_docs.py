@@ -172,7 +172,92 @@ def doc_status(run_dir: Any, profile: Optional[str], run_state: Optional[dict] =
             reason = None
         out.append({"name": name, "purpose": purpose, "path": str(p) if p else None,
                     "exists": exists, "required": required, "reason": reason})
+    # FIXING_SPEC.md exists only when Gate-2 had something to fix: listed for every run,
+    # required only once written (or once a fix was declared), so its absence says why.
+    fp = Path(str(run_dir)) / FIXING_SPEC_DOC if run_dir else None
+    f_exists = bool(fp and fp.is_file())
+    fixing = f_exists or bool(run_dir and (_fixing_specs(run_dir) or _gate2_fix_passes(run_state)))
+    out.insert(len(out) - 1, {
+        "name": FIXING_SPEC_DOC, "purpose": FIXING_SPEC_PURPOSE,
+        "path": str(fp) if fp else None, "exists": f_exists, "required": fixing,
+        "reason": None if f_exists else ("missing" if fixing else "skipped: Gate-2 had nothing to fix")})
     return out
+
+
+# ── the stage summary + a document excerpt (what the chat shows per stage) ─────
+
+def _cnt(v: Any, word: str, plural: Optional[str] = None) -> Optional[str]:
+    """"3 files" / "1 file" for a list or a number; None when there is nothing to count."""
+    n = len(v) if isinstance(v, list) else v if isinstance(v, int) and not isinstance(v, bool) else None
+    if n is None:
+        return None
+    return f"{n} {word if n == 1 else (plural or word + 's')}"
+
+
+def stage_summary(stage: str, artifact: Any, record: Any = None) -> Optional[str]:
+    """One line saying what a completed stage produced, from its artifact by code (the
+    model's own ``summary`` wins; this fills the row when it gave none). None when the
+    artifact holds nothing to say."""
+    a, r = _d(artifact), _d(record)
+    parts: list = []
+    if stage == "evaluate":
+        parts = [_t(a.get("recommendation"), 20), a.get("scope") and f"scope {_t(a.get('scope'), 20)}",
+                 _cnt(a.get("requirements"), "requirement"),
+                 _cnt(a.get("acceptance_criteria"), "acceptance criterion", "acceptance criteria")]
+    elif stage == "think":
+        parts = [_t(a.get("recommendation"), 110), _cnt(a.get("alternatives"), "alternative") and
+                 f"{_cnt(a.get('alternatives'), 'alternative')} weighed"]
+    elif stage == "plan":
+        parts = [_t(a.get("approach"), 100), _cnt(a.get("change_spec"), "change"),
+                 _cnt(a.get("exit_criteria"), "exit criterion", "exit criteria")]
+    elif stage in ("build", "goal_cycle"):
+        tdd = _d(a.get("tdd"))
+        green = tdd.get("green_pass")
+        written = _cnt(tdd.get("tests_generated"), "test")
+        parts = [_cnt(a.get("files_changed"), "file") and f"{_cnt(a.get('files_changed'), 'file')} changed",
+                 written and f"{written} written",
+                 "tests green" if green is True else "tests red" if green is False else None,
+                 _cnt(a.get("break_tests"), "break test")]
+    elif stage == "review":
+        ok = a.get("approved")
+        parts = ["approved" if ok is True else "not approved" if ok is False else None,
+                 _cnt(a.get("findings_count"), "finding"),
+                 _cnt(a.get("open_items"), "open item")]
+    elif stage == "test":
+        parts = [_cnt(a.get("tests_total"), "test"),
+                 a.get("failed") is not None and f"{_t(a.get('failed'), 8)} failed",
+                 _cnt(a.get("regressions"), "regression")]
+    elif stage == "deliver":
+        ar = _d(a.get("adversarial_review"))
+        tot, fixed = ar.get("findings_total"), ar.get("findings_fixed")
+        # push-readiness is left out: later checks still lower it after this line is
+        # written; the run's summary card states the settled value
+        parts = [_t(a.get("title"), 90),
+                 tot is not None and f"{_t(fixed, 6) or 0}/{_t(tot, 6)} findings fixed"]
+    elif stage == "reflect":
+        parts = [_cnt(a.get("lessons") if isinstance(a.get("lessons"), list) else r.get("lessons"), "lesson")]
+    text = " · ".join(str(x) for x in parts if x)
+    return text or None
+
+
+def doc_excerpt(path: Any, max_chars: int = 500) -> Optional[str]:
+    """The first section of a run document (after its generated header): what a chat
+    card shows before the reader expands the full text. None when unreadable or empty."""
+    try:
+        text = Path(str(path)).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, TypeError):
+        return None
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines) if ln.startswith("## ")), None)
+    if start is None:
+        body = [ln for ln in lines if ln.strip() and not ln.startswith("# ")]
+    else:
+        end = next((j for j in range(start + 1, len(lines)) if lines[j].startswith("## ")), len(lines))
+        body = [ln for ln in lines[start:end] if ln.strip()]
+    out = "\n".join(body).strip()
+    if not out:
+        return None
+    return out if len(out) <= max_chars else out[: max_chars - 1].rstrip() + "…"
 
 
 # ── REQUIREMENTS.md ───────────────────────────────────────────────────────────
@@ -413,7 +498,8 @@ def _experts_from(findings: list, required: list, extra: list) -> list[str]:
 
 
 def render_review(run_state: dict, evaluate: dict, records: dict, review: dict,
-                  deliver: dict, experts: Optional[list] = None) -> str:
+                  deliver: dict, experts: Optional[list] = None,
+                  gate2_view: Optional[dict] = None) -> str:
     rs, ev, rv, dl = _d(run_state), _d(evaluate), _d(review), _d(deliver)
     recs = _d(records)
     und = _d(ev.get("understanding"))
@@ -461,7 +547,7 @@ def render_review(run_state: dict, evaluate: dict, records: dict, review: dict,
         if ar.get("evidence"):
             lines += [f"_Dispatch:_ {_t(ar.get('evidence'), 400)}", ""]
 
-    if gate2:
+    if gate2 and not gate2_view:  # deterministic runs: the ledger below is the table
         lines += ["## Gate 2 findings", ""] + _findings_table(gate2) + [""]
         cls = [f for f in gate2 if f.get("resolved") and (f.get("root_cause") or f.get("class_fix"))]
         if cls:
@@ -474,6 +560,8 @@ def render_review(run_state: dict, evaluate: dict, records: dict, review: dict,
                         lines.append(f"  - {label}: {_t(f.get(key), 300)}")
             lines.append("")
 
+    if gate2_view:
+        lines += render_gate2_section(gate2_view)
     rv_find = [f for f in _l(rv.get("findings")) if isinstance(f, dict)]
     if rv_find:
         lines += ["## REVIEW findings", ""] + _findings_table(rv_find) + [""]
@@ -554,7 +642,8 @@ def _atomic_write(path: Path, text: str) -> None:
         raise
 
 
-def _render(name: str, run_state: dict, arts: dict, experts: Optional[list]) -> Optional[str]:
+def _render(name: str, run_state: dict, arts: dict, experts: Optional[list],
+            gate2_view: Optional[dict] = None) -> Optional[str]:
     if name == "REQUIREMENTS.md":
         return render_requirements(run_state, arts["evaluate"]) if "evaluate" in arts else None
     if name == "DESIGN_SPEC.md":
@@ -564,7 +653,7 @@ def _render(name: str, run_state: dict, arts: dict, experts: Optional[list]) -> 
         if "deliver" not in arts:
             return None
         return render_review(run_state, arts.get("evaluate", {}), _records(run_state),
-                             arts.get("review", {}), arts["deliver"], experts)
+                             arts.get("review", {}), arts["deliver"], experts, gate2_view)
     return None
 
 
@@ -577,7 +666,8 @@ def write_stage_doc(run_dir: Any, run_state: dict, stage: str,
         return None
     try:
         arts = load_stage_artifacts(run_dir, run_state)
-        text = _render(name, run_state, arts, experts)
+        text = _render(name, run_state, arts, experts,
+                       _gate2_view(run_dir) if name == "REVIEW.md" else None)
         if text is None:
             return None
         path = Path(str(run_dir)) / name
@@ -590,6 +680,95 @@ def write_stage_doc(run_dir: Any, run_state: dict, stage: str,
 
 # ── FIXING_SPEC.md ────────────────────────────────────────────────────────────
 FIXING_SPEC_DOC = "FIXING_SPEC.md"
+FIXING_SPEC_PURPOSE = "修复规格 · 每条 finding 的修复与 break test"
+GATE2_VIEW = "gate2-v2.json"   # evidence/: the deterministic Gate-2 ledger (gate2-next)
+
+
+def _gate2_view(run_dir: Any) -> dict:
+    """The deterministic Gate-2 view gate2-next last wrote ({} when the run has none)."""
+    try:
+        d = json.loads((Path(str(run_dir)) / "evidence" / GATE2_VIEW).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return d if isinstance(d, dict) and d.get("convergence") == "deterministic" else {}
+
+
+def _gate2_fix_passes(run_state: Any) -> "list[int]":
+    """The fix passes declared to gate2-next (run.json gate2_v2.events, kind fixed)."""
+    ev = _l(_d(_d(run_state).get("gate2_v2")).get("events"))
+    return sorted({int(e["pass"]) for e in ev if isinstance(e, dict) and e.get("kind") == "fixed"
+                   and str(e.get("pass", "")).isdigit()})
+
+
+def _gate2_rows(findings: list) -> list[str]:
+    rows = ["| Finding | Round | Expert | State | Break test | Claim |", "|---|---|---|---|---|---|"]
+    for f in findings[:_MAX_ITEMS]:
+        f = _d(f)
+        rows.append(f"| {_cell(f.get('id'), 40)} | R{_t(f.get('round'), 3)} | {_cell(f.get('expert'), 30)} "
+                    f"| {_cell(f.get('state'), 20)} | {_cell(f.get('test') or '—', 120)} | {_cell(f.get('claim'), 240)} |")
+    return rows
+
+
+def render_gate2_section(view: dict) -> list[str]:
+    """The deterministic Gate-2 ledger as REVIEW.md lines: findings and how each closed
+    (only a break-test proof closes one), notes, and what lowers push_ready."""
+    v = _d(view)
+    findings = [f for f in _l(v.get("findings")) if isinstance(f, dict)]
+    states: dict[str, int] = {}
+    for f in findings:
+        states[str(f.get("state") or "?")] = states.get(str(f.get("state") or "?"), 0) + 1
+    lines = ["## Gate 2 — deterministic ledger", "",
+             f"{len(findings)} finding(s): " + (", ".join(f"{n} {k}" for k, n in sorted(states.items())) or "none")
+             + f" · {_t(v.get('spawns'), 6) or 0} expert spawn(s) · next: {_t(_d(v.get('next')).get('action'), 20) or '—'}", ""]
+    if findings:
+        lines += _gate2_rows(findings) + [""]
+    notes = [n for n in _l(v.get("notes")) if isinstance(n, dict)]
+    if notes:
+        lines += ["### Notes (do not block)", ""]
+        lines += [f"- {_t(n.get('severity'), 10)} {_t(n.get('expert'), 30)}: {_t(n.get('claim'), 300)}" for n in notes[:20]]
+        lines.append("")
+    reasons = [str(x) for x in _l(v.get("push_ready_reasons")) if x]
+    if reasons:
+        lines += ["### Lowers push_ready", ""] + _bullets(reasons, 20) + [""]
+    return lines
+
+
+def render_gate2_fixing(run_state: dict, view: dict, passes: "list[int]") -> str:
+    """FIXING_SPEC.md for the deterministic Gate-2 flow: per declared fix pass, the
+    findings it fixed, the break test registered for each, and where each stands."""
+    lines = _header("FIXING_SPEC — Gate-2 fixes and their break tests", run_state)
+    findings = [f for f in _l(_d(view).get("findings")) if isinstance(f, dict)]
+    for n in passes:
+        mine = [f for f in findings if str(f.get("round")) == str(n)]
+        lines += [f"## Fix pass {n} (round {n} findings)", ""]
+        lines += (_gate2_rows(mine) if mine else ["_No finding of this round._"]) + [""]
+    later = [f for f in findings if str(f.get("round")) not in {str(n) for n in passes}]
+    if later:
+        lines += ["## Not in a fix pass yet", ""] + _gate2_rows(later) + [""]
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_gate2_docs(run_dir: Any, run_state: dict, view: dict) -> "list[str]":
+    """After a gate2-next call: FIXING_SPEC.md once a fix pass is declared, REVIEW.md
+    once Gate-2 is done (DELIVER's stage-complete rewrites it with the stage artifact).
+    The paths written. Never raises."""
+    out: list[str] = []
+    try:
+        passes = _gate2_fix_passes(run_state)
+        if passes:
+            path = Path(str(run_dir)) / FIXING_SPEC_DOC
+            _atomic_write(path, render_gate2_fixing(run_state, view, passes))
+            out.append(str(path))
+        if _d(_d(view).get("next")).get("action") == "done":
+            arts = load_stage_artifacts(run_dir, run_state)
+            text = render_review(run_state, arts.get("evaluate", {}), _records(run_state),
+                                 arts.get("review", {}), arts.get("deliver", {}), None, view)
+            path = Path(str(run_dir)) / "REVIEW.md"
+            _atomic_write(path, text)
+            out.append(str(path))
+    except Exception as e:  # noqa: BLE001 — a document must never fail a command
+        logger.warning("run_docs: Gate-2 documents for %r not written: %s", _d(run_state).get("id"), e)
+    return out
 
 
 def _fixing_specs(run_dir: Any) -> "list[tuple[int, dict]]":
@@ -694,12 +873,17 @@ def completion_check(run_dir: Any, run_state: dict,
         else:
             warnings.append(f"{d['name']}: the {stage} artifact could not be read, so its "
                             "document is missing")
-    if _fixing_specs(run_dir):
-        p = write_fixing_spec(run_dir, run_state)
+    if _fixing_specs(run_dir) or _gate2_fix_passes(run_state):
+        if _fixing_specs(run_dir):
+            p = write_fixing_spec(run_dir, run_state)
+        else:
+            view = _gate2_view(run_dir)
+            p = write_gate2_docs(run_dir, run_state, {**view, "next": {}})[:1] and str(
+                Path(str(run_dir)) / FIXING_SPEC_DOC)
         exists = bool(p) or (Path(str(run_dir)) / FIXING_SPEC_DOC).is_file()
-        status.append({"name": FIXING_SPEC_DOC, "purpose": "修复规格 · 按根因分组",
-                       "path": str(Path(str(run_dir)) / FIXING_SPEC_DOC), "exists": exists,
-                       "required": True, "reason": None if exists else "missing"})
+        for d in status:   # doc_status lists it already: record the write's outcome
+            if d["name"] == FIXING_SPEC_DOC:
+                d.update(exists=exists, required=True, reason=None if exists else "missing")
         if not exists:
             errors.append(f"{FIXING_SPEC_DOC} could not be written although a fixing spec exists "
                           "(core/run_docs.py)")

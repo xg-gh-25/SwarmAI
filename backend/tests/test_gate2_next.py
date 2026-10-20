@@ -151,6 +151,9 @@ def test_gate2_next_walks_the_deterministic_flow(env, capsys):
                 declare=[f"{B_ID}=untestable:only under real load"], fixed=1)
     assert snaps == ["R2"]
     assert out["next"]["action"] == "spawn" and out["next"]["round"] == 2
+    # the declared fix pass is a document now (XG 2026-10-20: every stage hands one back)
+    assert out["documents"] == [str(run_dir / "FIXING_SPEC.md")]
+    assert A_ID in (run_dir / "FIXING_SPEC.md").read_text() and not (run_dir / "REVIEW.md").exists()
     assert "Round 2" in out["next"]["spawns"][0]["spawn"] and "s1s1" in out["next"]["spawns"][0]["spawn"]
     now = time.time()
     _marker(audit, 3, "correctness", now + 1, [])
@@ -165,6 +168,8 @@ def test_gate2_next_walks_the_deterministic_flow(env, capsys):
     out = _next(capsys)
     assert out["next"]["action"] == "done"
     assert out["push_ready_reasons"] == [f"gate2: {B_ID} untestable: races on write"]
+    assert str(run_dir / "REVIEW.md") in out["documents"]
+    assert "## Gate 2 — deterministic ledger" in (run_dir / "REVIEW.md").read_text()
     assert json.loads((run_dir / "evidence" / "gate2-v2.json").read_text())["next"]["action"] == "done"
     assert len(json.loads((run_dir / "run.json").read_text())["gate2_v2"]["events"]) == 3
 

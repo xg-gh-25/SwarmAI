@@ -45,7 +45,7 @@
  */
 import type { InterruptBlock, ProcessUnit, ThoughtUnit, ToolStep, TurnUnit, TurnView } from './turnView';
 import { displayCommand, isGateStage, isUnanswered, toolCall } from './turnView';
-import type { PipelineStageContent, ToolUseContent } from '../../types';
+import type { PipelineDocRef, PipelineStageContent, ToolUseContent } from '../../types';
 
 export type PhaseMember = ProcessUnit | ThoughtUnit;
 
@@ -64,6 +64,9 @@ export interface StageZone {
   /** ISO times from the backend rows (the latest round's start, its end). */
   startedAt?: string;
   endedAt?: string;
+  /** What the completed stage produced: its one-line summary and its documents. */
+  summary?: string | null;
+  docs?: PipelineDocRef[];
   body: Zone[];
 }
 
@@ -74,6 +77,7 @@ export type Zone =
   | { kind: 'needs'; id: string; block: InterruptBlock }
   | { kind: 'failure'; id: string; step: ToolStep }
   | { kind: 'pipelineStart'; id: string; profile: string | null }
+  | { kind: 'stageResult'; id: string; block: PipelineStageContent }
   | StageZone
   | { kind: 'gate'; id: string; stage: string; verdict: string; earlier: string[] }
   | { kind: 'stopped'; id: string; byUser: boolean; unfinished: boolean };
@@ -82,6 +86,12 @@ const firstIndex = (u: TurnUnit): number => (u.kind === 'process' ? (u.steps[0]?
 
 /** A phase's id: its first member's ordinal key. */
 const memberKey = (m: PhaseMember) => (m.kind === 'thought' ? `th-${m.ordinal}` : m.id);
+
+/** A completed stage row's documents (`docs`, else the older single `doc`). */
+export function stageDocs(row: PipelineStageContent): PipelineDocRef[] {
+  if (row.docs?.length) return row.docs;
+  return row.doc ? [row.doc] : [];
+}
 
 /**
  * Lays one run of units out as zones (the chat part, or one stage's body): notes,
@@ -115,6 +125,11 @@ function layOut(units: TurnUnit[], hasCalls: boolean, resultOrdinal: number | nu
       continue;
     }
     if (u.kind === 'stage') continue; // the caller splits on stage rows
+    if (u.kind === 'stageResult') {
+      close();
+      out.push({ kind: 'stageResult', id: `sr-${u.block.stage}-${u.index}`, block: u.block });
+      continue;
+    }
     // note / landmark / outcome: first-level text
     close();
     const restatement = restatementAllowed && !seenCall && !out.some((z) => z.kind === 'text');
@@ -228,7 +243,11 @@ function pipelineZones(units: TurnUnit[], view: TurnView, hasCalls: boolean, isS
     }
     if (row) {
       if (row.status === 'in_progress') { z.status = 'running'; z.startedAt = row.at; }
-      else { z.status = row.status === 'skipped' ? 'skipped' : 'done'; z.endedAt = row.at; z.startedAt ??= undefined; }
+      else {
+        z.status = row.status === 'skipped' ? 'skipped' : 'done'; z.endedAt = row.at; z.startedAt ??= undefined;
+        z.summary = row.summary ?? null;
+        z.docs = stageDocs(row);
+      }
       const at = plan.indexOf(stage);
       z.next = row.next ?? (at >= 0 ? plan[at + 1] ?? null : null);
     }

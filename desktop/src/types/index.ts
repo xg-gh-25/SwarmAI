@@ -360,8 +360,10 @@ export interface PipelineStageContent {
   /** ISO time of the transition (an `in_progress` block: when the stage started). */
   at: string;
   /** The run document this stage wrote (REQUIREMENTS / DESIGN_SPEC / REVIEW,
-   *  backend/core/run_docs.py) — on a completed row only. */
+   *  backend/core/run_docs.py) — on a completed row only. Kept for older rows: `docs`
+   *  lists every document (DELIVER: REVIEW, FIXING_SPEC, REPORT). */
   doc?: PipelineDocRef | null;
+  docs?: PipelineDocRef[] | null;
 }
 
 /** A run document on disk: `path` workspace-relative, `absolutePath` to open it. */
@@ -369,6 +371,8 @@ export interface PipelineDocRef {
   name: string;
   path: string;
   absolutePath: string;
+  /** The document's first section (run_docs.doc_excerpt): what the card shows folded. */
+  excerpt?: string;
 }
 
 /** One of a finished run's four documents (pipeline_stage_events.summary_block). */
@@ -385,12 +389,14 @@ export interface PipelineSummaryDoc {
   stat?: { experts: number; findings: number; settled: number };
 }
 
-/** A pipeline run's execution summary — written by the BACKEND once, when run.json
- *  turns completed: push-readiness and the run's four documents. */
+/** A run's execution summary — written by the BACKEND once, when run.json reaches an
+ *  end status (a direct run too): how it ended, push-readiness, the run's documents. */
 export interface PipelineSummaryContent {
   type: 'pipeline_summary';
   runId: string;
   profile: string | null;
+  /** How the run ended: completed, abandoned, cancelled or failed (older blocks: absent). */
+  status?: string | null;
   pushReady: boolean | null;
   pushReason: string | null;
   stagesDone: number;

@@ -24,6 +24,7 @@ import { OPEN_FILE_EVENT, resolveImageSrc } from '../../../components/common/Mar
 import { fileIcon, fileIconColor } from '../../../utils/fileUtils';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { tf } from '../tf';
+import { docMeta } from '../runDocMeta';
 import { ASSISTANT_NAME } from '../assistantName';
 import { ReadOnlyContext } from '../readOnlyContext';
 import { ChangesCard } from './ChangesCard';
@@ -183,19 +184,11 @@ function DeliverableTile({ file }: { file: TurnDeliverable }) {
   );
 }
 
-/** Icon + what each run document holds (the backend sends the name; the words are ours). */
-const DOC_META: Record<string, { icon: string; key: string; purpose: string }> = {
-  'REQUIREMENTS.md': { icon: 'checklist', key: 'chat.turn.summary.doc.requirements', purpose: 'Requirements · root cause · clarifications' },
-  'DESIGN_SPEC.md': { icon: 'architecture', key: 'chat.turn.summary.doc.design', purpose: 'Approach · architecture & flow · invariants' },
-  'REVIEW.md': { icon: 'verified_user', key: 'chat.turn.summary.doc.review', purpose: 'Gates · expert reviews · how each finding was settled' },
-  'REPORT.md': { icon: 'summarize', key: 'chat.turn.summary.doc.report', purpose: 'Full run report' },
-};
-
 function SummaryDocRow({ doc }: { doc: PipelineSummaryDoc }) {
   const { t } = useTranslation();
   const readOnly = useContext(ReadOnlyContext);
-  const meta = DOC_META[doc.name] ?? { icon: 'description', key: '', purpose: doc.purpose ?? '' };
-  const purpose = meta.key ? tf(t, meta.key, meta.purpose) : meta.purpose;
+  const meta = docMeta(t, doc.name, doc.purpose);
+  const purpose = meta.purpose;
   const there = !!doc.absolutePath;
   const stat = doc.stat
     ? tf(t, 'chat.turn.summary.reviewStat', '{{experts}} experts · {{findings}} findings · {{settled}} settled', doc.stat)
@@ -236,7 +229,11 @@ export function OutputCard({ changes, deliverables, summary }: {
   const nDeliv = deliverables.length + docs.filter((d) => !!d.absolutePath).length;
   if (!changes && !deliverables.length && !docs.length) return null;
   const ready = summary?.pushReady;
-  const verdict = !summary ? null : ready === true
+  const ended = summary?.status;
+  const verdict = !summary ? null
+    : ended === 'abandoned' || ended === 'cancelled' ? tf(t, 'chat.turn.summary.abandoned', 'Closed without landing')
+    : ended === 'failed' ? tf(t, 'chat.turn.summary.failed', 'Failed')
+    : ready === true
     ? tf(t, 'chat.turn.summary.ready', 'Done · ready to push')
     : ready === false
       ? tf(t, 'chat.turn.summary.notReady', 'Done · not ready to push')

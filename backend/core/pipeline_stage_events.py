@@ -680,6 +680,11 @@ def attention_block(run_id: str, state: Optional[dict], at: str) -> Optional[dic
 # ── Run documents (core/run_docs.py): per-stage products + the completion summary ──
 
 SUMMARY_BLOCK_TYPE = "pipeline_summary"
+#: run.json statuses that end a run: each gets the summary card, however it ended.
+#: Same set as artifact_cli._TERMINAL_STATUSES ('complete' = the old 'completed').
+RUN_END_STATUSES = ("completed", "complete", "abandoned", "failed", "cancelled")
+#: the documents a stage row carries (DELIVER also writes FIXING_SPEC and REPORT).
+_ROW_DOCS = {"deliver": ("REVIEW.md", "FIXING_SPEC.md", "REPORT.md")}
 
 
 def _doc_ref(run_dir: Optional[str], name: str) -> Optional[dict[str, str]]:
@@ -696,14 +701,20 @@ def _doc_ref(run_dir: Optional[str], name: str) -> Optional[dict[str, str]]:
             rel = str(p.resolve().relative_to(ws))
         except ValueError:
             rel = str(p)
-        return {"name": name, "path": rel, "absolutePath": str(p.resolve())}
+        from .run_docs import doc_excerpt
+        ref = {"name": name, "path": rel, "absolutePath": str(p.resolve())}
+        ex = doc_excerpt(p)
+        if ex:
+            ref["excerpt"] = ex
+        return ref
     except Exception:  # noqa: BLE001 — a display aid must never break the stream
         return None
 
 
 def attach_stage_docs(blocks: list[dict], state: Optional[dict]) -> list[dict[str, str]]:
-    """Give each COMPLETED stage row whose stage writes a run document (REQUIREMENTS /
-    DESIGN_SPEC / REVIEW) a ``doc`` ref, and return those refs: the orchestrator
+    """Give each COMPLETED stage row the run documents its stage wrote (REQUIREMENTS /
+    DESIGN_SPEC; DELIVER: REVIEW, FIXING_SPEC, REPORT) as ``docs`` refs with an excerpt
+    (``doc`` keeps the first, for older readers), and return them all: the orchestrator
     surfaces each as a knowledge file (Canvas). Mutates ``blocks`` in place."""
     from .run_docs import doc_for_stage
     out: list[dict[str, str]] = []
@@ -711,22 +722,23 @@ def attach_stage_docs(blocks: list[dict], state: Optional[dict]) -> list[dict[st
     for b in blocks:
         if b.get("type") != BLOCK_TYPE or b.get("status") != "completed":
             continue
-        name = doc_for_stage(str(b.get("stage") or ""))
-        ref = _doc_ref(run_dir, name) if name else None
-        if ref:
-            b["doc"] = ref
-            out.append(ref)
+        stage = str(b.get("stage") or "")
+        names = _ROW_DOCS.get(stage) or tuple(n for n in (doc_for_stage(stage),) if n)
+        refs = [r for r in (_doc_ref(run_dir, n) for n in names) if r]
+        if refs:
+            b["docs"] = refs
+            b["doc"] = refs[0]
+            out.extend(refs)
     return out
 
 
 def summary_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str, Any]]:
-    """The run's execution summary for the chat, written once when run.json turns
-    ``completed``: whether it is ready to push, and its four documents (each with a
-    ref to open, or why the profile does not produce it). Structured fields only."""
-    if not state or state.get("status") != "completed":
+    """The run's execution summary for the chat, written once when run.json reaches an
+    end status (RUN_END_STATUSES, a direct run included): how it ended, whether it is
+    ready to push, and its documents (each with a ref to open, or why it does not
+    exist). Structured fields only."""
+    if not state or state.get("status") not in RUN_END_STATUSES:
         return None
-    if state.get("profile") == "direct":
-        return None  # a direct run is not a pipeline: no summary card (chat turn spec v6 §7.4)
     from .run_docs import doc_status
     run_dir = state.get("run_dir")
     stages: dict = state.get("stages") or {}
@@ -752,6 +764,7 @@ def summary_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[
         docs.append(entry)
     push = deliver.get("push_ready")
     return {"type": SUMMARY_BLOCK_TYPE, "runId": run_id, "profile": state.get("profile"),
+            "status": "completed" if state.get("status") == "complete" else state.get("status"),
             "pushReady": push if isinstance(push, bool) else None,
             "pushReason": _clip(deliver.get("push_ready_reason"), 200),
             "stagesDone": sum(1 for r in stages.values() if isinstance(r, dict)

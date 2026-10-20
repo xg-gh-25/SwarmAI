@@ -279,8 +279,11 @@
           "requirements": "Requirements · root cause · clarifications",
           "design": "Approach · architecture & flow · invariants",
           "review": "Gates · expert reviews · how each finding was settled",
-          "report": "Full run report"
-        }
+          "report": "Full run report",
+          "fixing": "Fixes · each finding with its break test"
+        },
+        "abandoned": "Closed without landing",
+        "failed": "Failed"
       },
       "backToLatest": "↓ Back to latest",
       "changes": {
@@ -330,6 +333,13 @@
         "working": "Working",
         "stoppedCount": "{{count}} stopped",
         "stoppedByYouPlain": "Stopped by you"
+      },
+      "doc": {
+        "expand": "Show full text",
+        "collapse": "Collapse",
+        "open": "Open",
+        "loading": "Loading…",
+        "failed": "Could not read this document"
       }
     },
     "nextSteps": {

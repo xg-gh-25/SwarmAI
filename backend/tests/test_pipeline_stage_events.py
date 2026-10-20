@@ -636,10 +636,18 @@ def test_real_run_json_rewritten_during_the_call_yields_the_new_stage(tmp_path, 
     assert _clean_blocks_for_persist(blocks) == blocks
 
 
-def test_no_summary_for_direct_run():
-    """A direct run is not a pipeline: no execution-summary card (chat turn spec v6 §7.4)."""
-    state = {"status": "completed", "profile": "direct", "stages": {}, "run_dir": None}
-    assert pse.summary_block("run_x", state, "now") is None
-    full = dict(state, profile="full")
+def test_every_ended_run_gets_a_summary_direct_and_abandoned_included():
+    """XG 2026-10-20: the result lists the run's documents for every run that ends —
+    a direct run, and one that ended abandoned or failed. A run still going has none."""
+    for status in ("completed", "abandoned", "failed", "cancelled", "complete"):
+        state = {"status": status, "profile": "direct", "stages": {}, "run_dir": None}
+        sb = pse.summary_block("run_x", state, "now")
+        assert sb and sb["status"] == ("completed" if status == "complete" else status)
+        assert [d["name"] for d in sb["docs"]] == [
+            "REQUIREMENTS.md", "DESIGN_SPEC.md", "REVIEW.md", "FIXING_SPEC.md", "REPORT.md"]
+    for status in ("running", "paused"):
+        state = {"status": status, "profile": "direct", "stages": {}, "run_dir": None}
+        assert pse.summary_block("run_x", state, "now") is None
+    full = dict(state, profile="full", status="completed")
     sb = pse.summary_block("run_x", full, "now")
     assert sb is not None and sb["type"] == "pipeline_summary"

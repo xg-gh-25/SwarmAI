@@ -3760,6 +3760,15 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         result["run_documents"] = run_docs_status
         if run_docs_warnings:
             result["run_documents_warnings"] = run_docs_warnings
+    if args.status in ("abandoned", "failed", "cancelled"):
+        # A run that ends without completing still hands back its report (the chat's
+        # summary card lists it); best-effort, never undoes the status already written.
+        try:
+            _ok, _gen = _ensure_report_before_advance(args.project, args.run_id, run_file.parent, reg)
+            if _gen:
+                result["report"] = str(run_file.parent / "REPORT.md")
+        except Exception as _e:  # noqa: BLE001 — the status change stands
+            result.setdefault("warnings", []).append(f"REPORT.md not generated: {type(_e).__name__}: {_e}")
     if args.status == "completed":
         result["reminder"] = (
             "⚠️ OUTPUT COMPLETION SUMMARY TO CHAT (Step 6.2 — MANDATORY). "
@@ -10181,6 +10190,17 @@ def _derive_stage_fields(
         budget = _stage_budget(run_id, run_dir, run_state, stage, artifact)
         cand_rec["budget"] = {k: v for k, v in budget.items() if k != "missing"}
         derived["budget"] = {"value": budget, "source": "SubagentStop markers + evidence/tests"}
+    if not skipped and not str(cand_rec.get("summary") or "").strip():
+        # The chat's stage row says what the stage produced: from the artifact, by code,
+        # when the model gave no summary (core/run_docs.stage_summary).
+        try:
+            from core import run_docs as _rd
+            _sum = _rd.stage_summary(stage, artifact, cand_rec)
+        except Exception:  # noqa: BLE001 — a display line never fails a stage
+            _sum = None
+        if _sum:
+            cand_rec["summary"] = _sum
+            derived["summary"] = {"value": _sum, "source": "stage artifact"}
 
     cand_rec["derived_sources"] = {k: v.get("source") for k, v in derived.items()}
     return derived, exit_result
@@ -12482,6 +12502,12 @@ def cmd_gate2_next(args, reg: ArtifactRegistry) -> None:
             json.dumps(view, ensure_ascii=False, indent=1), encoding="utf-8")
     except OSError as e:
         view.setdefault("warnings", []).append(f"evidence/gate2-v2.json not written: {e}")
+    if view.get("ok"):
+        # FIXING_SPEC.md once a fix pass is declared, REVIEW.md once Gate-2 is done
+        from core import run_docs as _rd
+        docs = _rd.write_gate2_docs(run_file.parent, {**run_state, "id": args.run_id}, view)
+        if docs:
+            view["documents"] = docs
     print(json.dumps(view, ensure_ascii=False))
     if not view.get("ok"):
         sys.exit(1)

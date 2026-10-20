@@ -379,12 +379,14 @@ class StreamingOrchestrator:
                 ab = await executors.run_in("io", _pse.attention_block, run_id, after, at)
                 if ab:
                     blocks.append(ab)
-            # The stage's run document (REQUIREMENTS / DESIGN_SPEC / REVIEW) rides on its
+            # The stage's run documents (REQUIREMENTS / DESIGN_SPEC / REVIEW, FIXING_SPEC, REPORT) ride on its
             # row and opens in the Canvas as a knowledge file (core/run_docs.py).
             docs = await executors.run_in("io", _pse.attach_stage_docs, blocks, after)
-            # The run's execution summary, once, when run.json turns completed.
-            if (before is not None and before.get("status") != "completed"
-                    and after.get("status") == "completed"):
+            # The run's execution summary, once, when run.json first reaches an end
+            # status (however it ended; a direct run too). failed -> abandoned is not
+            # a second ending.
+            if (before is not None and before.get("status") not in _pse.RUN_END_STATUSES
+                    and after.get("status") in _pse.RUN_END_STATUSES):
                 sb = await executors.run_in("io", _pse.summary_block, run_id, after, at)
                 if sb:
                     blocks.append(sb)

@@ -38,6 +38,7 @@ import { tf } from '../tf';
 import type { ThoughtUnit, ToolStep } from '../turnView';
 import { STOP_TURN_EVENT, agentBatches, mergeStrips, stripView, zoneStats } from '../turnZones';
 import type { PhaseMember, StageZone, StripItem, Zone } from '../turnZones';
+import { StageResult } from './StageDocs';
 
 /** Between two zones (spec §9.3): clearly more than anything inside a zone. */
 export const ZONE_GAP = 'mt-5';
@@ -513,6 +514,12 @@ export function StageGroup({ zone, ctx, mustOpen }: { zone: StageZone; ctx: Zone
         <GroupHeader testid="stage-toggle" open={open} onToggle={() => ctx.choose(zone.id, !open)} mark={mark} label={label} meta={meta}
           labelClass={zone.status === 'running' ? 'text-[var(--color-text)]' : undefined} />
       </div>
+      {zone.status === 'done' && (zone.summary || zone.docs?.length) ? (
+        // what the stage produced stays visible when its work is folded
+        <div className={`${INNER_GAP} ml-[22px]`}>
+          <StageResult summary={zone.summary} docs={zone.docs} renderText={ctx.renderText} />
+        </div>
+      ) : null}
       {open && zone.body.length > 0 && (
         <div className={`${INNER_GAP} ml-[22px] space-y-3`}>
           {zone.body.map((z) => <BodyZone key={z.id} zone={z} ctx={ctx} />)}
@@ -528,7 +535,25 @@ function BodyZone({ zone, ctx }: { zone: Zone; ctx: ZoneContext }) {
   if (zone.kind === 'phase') return <PhaseBody members={zone.members} live={zone.live} ctx={ctx} />;
   if (zone.kind === 'text') return <div data-testid="zone-note" className="text-[14px]" {...ANCHOR_PROPS}>{ctx.renderText(zone.text, `${zone.id}-b`)}</div>;
   if (zone.kind === 'needs' || zone.kind === 'failure') return <>{ctx.renderNeeds(zone)}</>;
+  if (zone.kind === 'stageResult') return <StageResultRow zone={zone} ctx={ctx} />;
   return null;
+}
+
+/** A direct run's completed stage (no stage groups there): its name, summary, documents. */
+function StageResultRow({ zone, ctx }: { zone: Extract<Zone, { kind: 'stageResult' }>; ctx: ZoneContext }) {
+  const b = zone.block;
+  const docs = b.docs?.length ? b.docs : b.doc ? [b.doc] : [];
+  return (
+    <div data-testid="zone-stage-result" data-stage={b.stage} {...ANCHOR_PROPS}>
+      <div className="flex items-center gap-2 min-w-0">
+        <span aria-hidden="true" className={`${MARK_COL} text-[12px] text-[var(--color-text-dim)]`}>✓</span>
+        <span className={`${TAG} text-[var(--color-text-secondary)]`}>{stageName(b.stage)}</span>
+      </div>
+      <div className={`${INNER_GAP} ml-[22px]`}>
+        <StageResult summary={b.summary} docs={docs} renderText={ctx.renderText} />
+      </div>
+    </div>
+  );
 }
 
 // ── The list ────────────────────────────────────────────────────────────────────
@@ -581,6 +606,7 @@ export function TurnZoneList({ zones, ctx, hasOpenQuestionIn }: {
             );
             break;
           case 'stage': el = <StageGroup zone={z} ctx={ctx} mustOpen={hasOpenQuestionIn(z)} />; break;
+          case 'stageResult': el = <StageResultRow zone={z} ctx={ctx} />; break;
           case 'gate': el = <GateRow zone={z} />; break;
           case 'stopped':
             el = (

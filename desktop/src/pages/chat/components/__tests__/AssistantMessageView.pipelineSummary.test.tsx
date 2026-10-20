@@ -8,8 +8,11 @@
  *   section line, then one row per document; a present row opens the Canvas
  *   (OPEN_FILE_EVENT with the absolute path), a skipped one says why; REVIEW.md
  *   carries its counts
- * - a run document is listed once: not again as a deliverable tile, never on a stage
- * - not shown while the turn streams; a direct run (no pipeline part) shows none
+ * - a run document is listed once in the output card (not again as a deliverable tile)
+ * - not shown while the turn streams; a direct run shows its summary too, and an
+ *   abandoned run says it closed without landing (XG 2026-10-20)
+ * - a completed stage shows its summary line and a card per document it wrote: the
+ *   first section folded, "Show full text" reads the file and renders it in place
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
@@ -18,10 +21,14 @@ import { deriveTurnView } from '../../turnView';
 import { ToastProvider } from '../../../../contexts/ToastContext';
 import { OPEN_FILE_EVENT } from '../../../../components/common/MarkdownRenderer';
 import type { Message, ContentBlock } from '../../../../types';
+import api from '../../../../services/api';
+
+const apiGet = vi.mocked(api.get);
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (_key: string, fallback: unknown) => fallback }),
 }));
+vi.mock('../../../../services/api', () => ({ default: { get: vi.fn() } }));
 vi.mock('../../../../contexts/HealthContext', () => ({
   useHealth: () => ({
     health: { status: 'connected', lastCheckedAt: null, consecutiveFailures: 0 },
@@ -111,19 +118,80 @@ describe('pipeline_summary', () => {
     expect(screen.queryByTestId('summary-doc')).toBeNull();
   });
 
-  it('a direct run has no run documents in the turn', () => {
+  it('a direct run shows its summary and each completed stage result, but no stage groups', () => {
     const direct = TURN({ ...(SUMMARY(true) as object), profile: 'direct' } as ContentBlock)
       .map((b) => (b.type === 'pipeline_run' || b.type === 'pipeline_stage' ? { ...b, profile: 'direct' } as ContentBlock : b));
     renderView(direct);
-    expect(screen.queryByTestId('summary-doc')).toBeNull();
+    expect(screen.getAllByTestId('summary-doc').length).toBe(4);
     expect(screen.queryByTestId('pipeline-start')).toBeNull();
+    const rows = screen.getAllByTestId('zone-stage-result');
+    expect(rows.map((r) => r.getAttribute('data-stage'))).toEqual(['evaluate']);
+    expect(within(rows[0]).getByTestId('stage-doc').getAttribute('data-name')).toBe('REQUIREMENTS.md');
+  });
+
+  it('an abandoned run says it closed without landing', () => {
+    renderView(TURN({ ...(SUMMARY(false) as object), status: 'abandoned' } as ContentBlock));
+    expect(screen.getByTestId('summary-verdict').textContent).toContain('Closed without landing');
+  });
+
+  it('a cancelled run reads the same way', () => {
+    renderView(TURN({ ...(SUMMARY(false) as object), status: 'cancelled' } as ContentBlock));
+    expect(screen.getByTestId('summary-verdict').textContent).toContain('Closed without landing');
   });
 });
 
-describe('stage rows carry no document link', () => {
-  it('the documents are only in the output card', () => {
-    renderView(TURN(SUMMARY(true)));
-    expect(screen.queryByTestId('stage-doc')).toBeNull();
-    expect(screen.getAllByTestId('summary-doc').map((r) => r.getAttribute('data-name'))).toContain('REQUIREMENTS.md');
+describe('a completed stage shows what it produced', () => {
+  const withExcerpt = (summary: string | null) => [
+    tx('Running the pipeline.'), tu('a'), tr('a'), RUN,
+    { ...(stage('evaluate', 'completed') as object), summary,
+      docs: [{ ...DOC, excerpt: '## Requirements\nShip the cards.' }] } as ContentBlock,
+    tu('b'), tr('b'), stage('deliver', 'in_progress'),
+  ];
+
+  it('a document on its stage card is not repeated as a deliverable tile', () => {
+    const tiles = { type: 'turn_deliverables', files: [
+      { path: 'REQUIREMENTS.md', absolutePath: DOC.absolutePath, kind: 'knowledge', operation: 'written' },
+      { path: 'deck.pptx', absolutePath: '/ws/out/deck.pptx', kind: 'content', operation: 'written' },
+    ] } as ContentBlock;
+    renderView([...withExcerpt(null).slice(0, -1), stage('deliver', 'completed'), tiles], false);
+    const paths = screen.getAllByTestId('deliverable').map((d) => d.getAttribute('data-path'));
+    expect(paths).toEqual(['/ws/out/deck.pptx']);
+  });
+
+  it('"Open" sends the document to the Canvas (the event the Canvas listens to)', async () => {
+    const { OPEN_FILE_EVENT: STAGE_EVENT } = await import('../StageDocs');
+    expect(STAGE_EVENT).toBe(OPEN_FILE_EVENT);
+    renderView(withExcerpt(null), false);
+    const seen: string[] = [];
+    const on = (e: Event) => seen.push((e as CustomEvent).detail.path);
+    document.addEventListener(OPEN_FILE_EVENT, on);
+    fireEvent.click(screen.getByTestId('stage-doc-open'));
+    document.removeEventListener(OPEN_FILE_EVENT, on);
+    expect(seen).toEqual([DOC.absolutePath]);
+  });
+
+  it('its summary line and a document card with the first section folded', () => {
+    renderView(withExcerpt('GO · 3 acceptance criteria'), false);
+    expect(screen.getByTestId('stage-summary').textContent).toBe('GO · 3 acceptance criteria');
+    const card = screen.getByTestId('stage-doc');
+    expect(card.getAttribute('data-name')).toBe('REQUIREMENTS.md');
+    const ex = within(card).getByTestId('stage-doc-excerpt').textContent ?? '';
+    expect(ex).toContain('Ship the cards.');
+    expect(ex).not.toContain('## Requirements');
+  });
+
+  it('"Show full text" reads the file and renders it in place; a read failure says so', async () => {
+    apiGet.mockResolvedValueOnce({ data: { encoding: 'utf-8', content: 'FULL BODY TEXT' } } as never);
+    renderView(withExcerpt(null), false);
+    fireEvent.click(screen.getByTestId('stage-doc-toggle'));
+    expect(await screen.findByText('FULL BODY TEXT')).toBeTruthy();
+    expect(apiGet).toHaveBeenCalledWith('/workspace/file', { params: { path: DOC.absolutePath } });
+    expect(screen.queryByTestId('stage-doc-excerpt')).toBeNull();
+    fireEvent.click(screen.getByTestId('stage-doc-toggle'));
+    expect(screen.getByTestId('stage-doc-excerpt')).toBeTruthy();
+    apiGet.mockRejectedValueOnce(new Error('gone'));
+    renderView(withExcerpt(null), false);
+    fireEvent.click(screen.getAllByTestId('stage-doc-toggle')[1]);
+    expect(await screen.findByText('Could not read this document')).toBeTruthy();
   });
 });

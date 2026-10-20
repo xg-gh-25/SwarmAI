@@ -296,10 +296,14 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   };
   // The ending (spec §8): one output card. Code changes come only from turn_changes;
   // a deliverable is not listed again as a changed file; a pipeline run's documents are
-  // in the deliverables section only (a direct run has no summary).
-  const summary = !isStreaming && view.pipelineStart ? view.summary : undefined;
+  // in the deliverables section only. A direct run has its summary too (XG 2026-10-20).
+  const summary = !isStreaming ? view.summary : undefined;
   const summaryDocs = summary?.docs ?? [];
-  const deliverables = view.deliverables.filter((d) => !summaryDocs.some((x) => x.absolutePath === d.absolutePath));
+  // A document already shown as a card on its stage row is not a deliverable tile too.
+  const stageDocPaths = new Set(message.content.flatMap((b) => (b.type === 'pipeline_stage'
+    ? [...(b.docs ?? []), ...(b.doc ? [b.doc] : [])].map((d) => d.absolutePath) : [])));
+  const deliverables = view.deliverables.filter((d) => !stageDocPaths.has(d.absolutePath)
+    && !summaryDocs.some((x) => x.absolutePath === d.absolutePath));
   const changes = useMemo(() => {
     if (isStreaming || !view.changes) return undefined;
     const files = view.changes.files.filter(

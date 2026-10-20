@@ -160,7 +160,7 @@ def test_write_stage_doc_by_stage(tmp_path):
 def test_completion_check_errors_only_on_a_failed_write(tmp_path, monkeypatch):
     run_dir, state = _run(tmp_path, {"evaluate": EVAL, "think": THINK, "plan": PLAN, "deliver": DELIVER})
     errs, warns, status = rd.completion_check(run_dir, state)
-    assert errs == [] and all(d["exists"] for d in status if d["name"] != "REPORT.md")
+    assert errs == [] and all(d["exists"] for d in status if d["name"] != "REPORT.md" and d["required"])
 
     def boom(path, text):
         raise OSError("disk full")
@@ -197,8 +197,10 @@ def test_attach_stage_docs_and_summary_block(tmp_path, monkeypatch):
     sb = pse.summary_block("run_d1", st, "now")
     assert sb["type"] == "pipeline_summary" and sb["pushReady"] is False and sb["pushReason"] == "X1 unmet"
     docs = {d["name"]: d for d in sb["docs"]}
-    assert set(docs) == {"REQUIREMENTS.md", "DESIGN_SPEC.md", "REVIEW.md", "REPORT.md"}
-    assert all(d["absolutePath"] for d in docs.values())
+    assert set(docs) == {"REQUIREMENTS.md", "DESIGN_SPEC.md", "REVIEW.md", "FIXING_SPEC.md", "REPORT.md"}
+    assert all(d["absolutePath"] for n, d in docs.items() if n != "FIXING_SPEC.md")
+    assert docs["FIXING_SPEC.md"]["absolutePath"] is None and not docs["FIXING_SPEC.md"]["required"]
+    assert docs["FIXING_SPEC.md"]["reason"] == "skipped: Gate-2 had nothing to fix"
     assert docs["REVIEW.md"]["stat"] == {"experts": 2, "findings": 3, "settled": 2}
     assert pse.summary_block("run_d1", dict(st, status="running"), "now") is None
 
@@ -334,3 +336,133 @@ def test_every_reader_shares_one_finished_status_set():
     st = {"status": "completed", "profile": "full", "run_dir": None,
           "stages": {"evaluate": {"stage": "evaluate", "status": "done"}}}
     assert pse.summary_block("run_d1", st, "now")["stagesDone"] == 1
+
+
+# ── what each stage shows in the chat (XG 2026-10-20) ───────────────────────────
+
+def test_every_stage_gets_a_summary_from_its_artifact():
+    """A completed stage's row says what it produced even when the model wrote no
+    summary: the line is built from the artifact by code."""
+    assert rd.stage_summary("evaluate", EVAL) == "GO · scope standard · 1 requirement · 1 acceptance criterion"
+    assert rd.stage_summary("think", THINK) == "QUALITY · 2 alternatives weighed"
+    assert rd.stage_summary("plan", PLAN) == "move arg building into one function · 1 exit criterion"
+    build = {"files_changed": ["a.py", "b.py"], "tdd": {"green_pass": True, "tests_generated": 3},
+             "break_tests": [{"test": "t.py::x"}]}
+    assert rd.stage_summary("build", build) == "2 files changed · 3 tests written · tests green · 1 break test"
+    assert rd.stage_summary("review", {"approved": False, "findings_count": 4, "open_items": ["x"]}) \
+        == "not approved · 4 findings · 1 open item"
+    assert rd.stage_summary("test", {"tests_total": 120, "failed": 0, "regressions": 0}) \
+        == "120 tests · 0 failed · 0 regressions"
+    deliver = {"title": "Keep the flag", "adversarial_review": {"findings_total": 3, "findings_fixed": 2}}
+    assert rd.stage_summary("deliver", deliver, {"push_ready": False}) \
+        == "Keep the flag · 2/3 findings fixed"  # push-readiness: the summary card
+    assert rd.stage_summary("reflect", {}, {"lessons": ["a", "b"]}) == "2 lessons"
+    assert rd.stage_summary("build", {}) is None and rd.stage_summary("nope", EVAL) is None
+
+
+def test_a_document_excerpt_is_its_first_section_not_the_generated_header(tmp_path):
+    run_dir, state = _run(tmp_path, {"evaluate": EVAL})
+    rd.write_all(run_dir, state)
+    ex = rd.doc_excerpt(run_dir / "REQUIREMENTS.md")
+    assert ex.startswith("## ") and "**Run**" not in ex and "Generated from" not in ex
+    assert "\n## " not in ex                                      # one section only
+    (run_dir / "big.md").write_text("# T\n\n## S\n" + "word " * 500)
+    cut = rd.doc_excerpt(run_dir / "big.md", max_chars=100)
+    assert len(cut) == 100 and cut.endswith("…")
+    assert rd.doc_excerpt(run_dir / "missing.md") is None
+
+
+def test_the_deliver_row_carries_review_fixing_spec_and_report_with_excerpts(tmp_path, monkeypatch):
+    monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+    run_dir, state = _run(tmp_path, {"deliver": DELIVER})
+    for name in ("REVIEW.md", "FIXING_SPEC.md", "REPORT.md"):
+        (run_dir / name).write_text(f"# {name}\n\n## First\n{name} body\n\n## Second\nmore\n")
+    blocks = [{"type": "pipeline_stage", "stage": "deliver", "status": "completed"}]
+    refs = pse.attach_stage_docs(blocks, {"run_dir": str(run_dir)})
+    assert [r["name"] for r in refs] == ["REVIEW.md", "FIXING_SPEC.md", "REPORT.md"]
+    assert [d["name"] for d in blocks[0]["docs"]] == ["REVIEW.md", "FIXING_SPEC.md", "REPORT.md"]
+    assert blocks[0]["doc"]["name"] == "REVIEW.md"
+    assert blocks[0]["docs"][1]["excerpt"] == "## First\nFIXING_SPEC.md body"
+
+
+_VIEW = {"ok": True, "convergence": "deterministic", "spawns": 5,
+         "next": {"action": "done"},
+         "findings": [{"id": "security-1", "round": 1, "expert": "security", "state": "proven",
+                       "test": "backend/tests/t.py::test_a", "claim": "flag lost"},
+                      {"id": "correctness-R2-nooutput", "round": 2, "expert": "correctness",
+                       "state": "open", "test": None, "claim": "no usable output"}],
+         "notes": [{"severity": "LOW", "expert": "correctness", "claim": "stale comment"}],
+         "push_ready_reasons": ["gate2: correctness-R2-nooutput open"]}
+
+
+def test_deterministic_gate2_writes_fixing_spec_on_a_fix_and_review_when_done(tmp_path):
+    run_dir, state = _run(tmp_path, {"deliver": None})
+    (run_dir / "evidence").mkdir()
+    (run_dir / "evidence" / rd.GATE2_VIEW).write_text(json.dumps(_VIEW))
+    st = dict(state, gate2_v2={"events": [{"kind": "fixed", "pass": 1}]})
+    # a fix declared, Gate-2 not done: FIXING_SPEC only
+    written = rd.write_gate2_docs(run_dir, st, dict(_VIEW, next={"action": "spawn"}))
+    assert [Path(p).name for p in written] == ["FIXING_SPEC.md"]
+    fix = (run_dir / "FIXING_SPEC.md").read_text()
+    assert "## Fix pass 1" in fix and "security-1" in fix and "backend/tests/t.py::test_a" in fix
+    assert "## Not in a fix pass yet" in fix and "correctness-R2-nooutput" in fix
+    assert not (run_dir / "REVIEW.md").exists()
+    # done: REVIEW with the ledger
+    written = rd.write_gate2_docs(run_dir, st, _VIEW)
+    assert [Path(p).name for p in written] == ["FIXING_SPEC.md", "REVIEW.md"]
+    review = (run_dir / "REVIEW.md").read_text()
+    assert "## Gate 2 — deterministic ledger" in review and "1 open, 1 proven" in review
+    assert "stale comment" in review and "Lowers push_ready" in review
+    # no fix declared: no FIXING_SPEC
+    other = tmp_path / "o"
+    other.mkdir()
+    assert rd.write_gate2_docs(other, state, dict(_VIEW, next={"action": "spawn"})) == []
+
+
+def test_fixing_spec_is_listed_for_every_run_and_required_once_a_fix_was_declared(tmp_path):
+    run_dir, state = _run(tmp_path, {"evaluate": EVAL})
+    names = [d["name"] for d in rd.doc_status(run_dir, "full", state)]
+    assert names == ["REQUIREMENTS.md", "DESIGN_SPEC.md", "REVIEW.md", "FIXING_SPEC.md", "REPORT.md"]
+    fx = next(d for d in rd.doc_status(run_dir, "full", state) if d["name"] == "FIXING_SPEC.md")
+    assert fx["required"] is False and fx["reason"] == "skipped: Gate-2 had nothing to fix"
+    st = dict(state, gate2_v2={"events": [{"kind": "fixed", "pass": 1}]})
+    fx = next(d for d in rd.doc_status(run_dir, "full", st) if d["name"] == "FIXING_SPEC.md")
+    assert fx["required"] is True and fx["reason"] == "missing"
+
+
+def test_deliver_stage_review_keeps_the_deterministic_ledger(tmp_path):
+    run_dir, state = _run(tmp_path, {"deliver": DELIVER})
+    (run_dir / "evidence").mkdir()
+    (run_dir / "evidence" / rd.GATE2_VIEW).write_text(json.dumps(_VIEW))
+    rd.write_stage_doc(run_dir, state, "deliver")
+    review = (run_dir / "REVIEW.md").read_text()
+    # one findings table: the ledger replaces the legacy one, the findings are not listed twice
+    assert "## Gate 2 — deterministic ledger" in review and "## Gate 2 findings" not in review
+
+
+class TestRunEndSummary:
+    def test_a_direct_run_that_is_abandoned_gets_the_summary_card(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+        run_dir, state = _run(tmp_path, {"deliver": DELIVER}, profile="direct")
+        (run_dir / "REPORT.md").write_text("# r\n\n## TL;DR\nwhat happened\n")
+        stages = {r["stage"]: r for r in state["stages"]}
+        base = {"profile": "direct", "stages": stages, "timing": {}, "run_dir": str(run_dir)}
+        events = TestOrchestratorEmitsDocs()._drive(monkeypatch, dict(base, status="running"),
+                                                    dict(base, status="abandoned"))
+        sums = [b for e in events if e.get("type") == "assistant" for b in e.get("content") or []
+                if isinstance(b, dict) and b.get("type") == "pipeline_summary"]
+        assert len(sums) == 1 and sums[0]["status"] == "abandoned" and sums[0]["profile"] == "direct"
+        report = next(d for d in sums[0]["docs"] if d["name"] == "REPORT.md")
+        assert report["absolutePath"]
+
+    def test_a_second_ending_gives_no_second_card(self, monkeypatch, tmp_path):
+        """failed -> abandoned is the same run ending once: one summary card."""
+        monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+        run_dir, state = _run(tmp_path, {"deliver": DELIVER}, profile="direct")
+        stages = {r["stage"]: r for r in state["stages"]}
+        base = {"profile": "direct", "stages": stages, "timing": {}, "run_dir": str(run_dir)}
+        events = TestOrchestratorEmitsDocs()._drive(monkeypatch, dict(base, status="failed"),
+                                                    dict(base, status="abandoned"))
+        sums = [b for e in events if e.get("type") == "assistant" for b in e.get("content") or []
+                if isinstance(b, dict) and b.get("type") == "pipeline_summary"]
+        assert sums == []
