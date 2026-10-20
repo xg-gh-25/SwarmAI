@@ -1879,3 +1879,53 @@ def test_past_the_cap_a_fix_recheck_clears_the_red_and_is_counted(rig, capsys, t
     _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
     out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
     assert code == 2 and out["full_scope"]["fix_rechecks"] == 1 and "does not land" in out["error"]
+
+
+FAKE_NPX_SLOW_RELATED = """import json, sys, time
+from pathlib import Path
+
+args = sys.argv[1:]
+if args[0] == "vitest":
+    out = next(a.split("=", 1)[1] for a in args if a.startswith("--outputFile"))
+    skip = {args[i + 1] for i, a in enumerate(args) if a == "--exclude"}
+    # "related" of a file every test imports: the whole set, minus --exclude
+    files = sorted(str(p.relative_to(Path.cwd())) for p in (Path.cwd() / "src").rglob("*.test.ts"))
+    files = [f for f in files if f not in skip]
+    results = []
+    for f in files:
+        time.sleep(1.5)
+        print(" \\u2713 " + f + " (1 test) 3ms", flush=True)
+        results.append({"name": str(Path.cwd() / f), "assertionResults": [
+            {"fullName": "works", "status": "passed", "failureMessages": []}]})
+    Path(out).write_text(json.dumps({"testResults": results}))
+sys.exit(0)
+"""
+
+
+def test_a_large_frontend_set_finishes_across_continuation_calls(rig, tmp_path, capsys, monkeypatch):
+    """XG 2026-10-20 (run_0b56a214): a change to a file every desktop test imports made
+    vitest's related set the whole suite; each continuation re-ran it from the start, was
+    cut at the deadline again and never finished. A continuation now leaves out the test
+    files that already have a result, so the set finishes across calls."""
+    tests = {f"desktop/src/t{i}.test.ts": "test('works', () => {})\n" for i in range(4)}
+    repo = rig({**tests, "desktop/src/setup.ts": "export const x = 1\n"})
+    # a changed source every test imports, and a changed test file (it is requested
+    # from vitest by name, so an excluded one must not be asked for again)
+    _write(repo, {"desktop/src/setup.ts": "export const x = 2\n",
+                  "desktop/src/t0.test.ts": "test('works again', () => {})\n"})
+    npx = tmp_path / "npx.py"
+    npx.write_text(FAKE_NPX_SLOW_RELATED)
+    monkeypatch.setenv("SWARM_TEST_NPX", str(npx))
+    monkeypatch.setenv("SWARM_TEST_MAX_WORKERS", "2")  # tsc beside vitest, as in a real run
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "4")
+    calls = 1
+    for _ in range(5):
+        if not out.get("continue"):
+            break
+        out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "4")
+        calls += 1
+    assert calls >= 2, out              # one 4 s call cannot hold 4 x 1.5 s
+    assert "continue" not in out and code == 0, out
+    ev = _evidence(tmp_path, "tests/latest-verify.json")
+    passed = {r.get("file") or r["nodeid"].split("::")[0] for r in ev["results"] if r["outcome"] == "passed"}
+    assert set(tests) <= passed, (passed, out)

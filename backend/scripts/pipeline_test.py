@@ -96,6 +96,8 @@ atomically (tmp + replace) under ``tests/.run_index.lock``; one object per evide
 - ``blocking_sig``: sorted nodeids of the evidence's blocking failures (``_blocking_sig``);
   the circuit breaker compares it across rounds to detect a loop making no progress
 - ``unfinished``: tests the deadline left unrun; a continuation's progress (T5)
+- ``unfinished_files`` / ``desktop_done``: files with unrun tests / desktop test files with a
+  result — progress too (vitest reports its unrun rest as ONE placeholder, not a count)
 - ``fix`` (a manual recheck only): true when it ran on code changed since the report it
   rechecks; the fix budget past the full-scope cap counts these (_full_scope_refusal)
 An automatic recheck writes two entries: ``kind=run, mode=recheck, auto_recheck_of=M``
@@ -2147,10 +2149,16 @@ def _npx() -> list[str]:
 
 
 def _frontend_jobs(ctx, desktop_files: list[str], with_tsc: bool,
-                   with_backend: bool = False) -> list[_Job]:
+                   with_backend: bool = False, exclude: "list[str] | None" = None) -> list[_Job]:
+    """``exclude``: desktop test files a continuation already has results for (run
+    only the rest of the related set: one call cannot hold a large set, and re-running
+    it whole every call never finishes)."""
     desktop = ctx.repo / "desktop"
     env = dict(os.environ)
     rel = [f[len("desktop/"):] for f in desktop_files]
+    skip = [a for f in exclude or () for a in ("--exclude", f[len("desktop/"):])]
+    if skip:
+        skip.append("--passWithNoTests")  # every related file already has a result
     out = ctx.workdir / "vitest.json"
     # The default reporter streams one status line per finished file to stdout, so a
     # run killed at the deadline still says which files passed and which never ended.
@@ -2166,8 +2174,10 @@ def _frontend_jobs(ctx, desktop_files: list[str], with_tsc: bool,
     forks = max(2, w // 2 if with_backend else w - (1 if with_tsc else 0))
     jobs = [_Job("vitest", [*_npx(), "vitest", "related", *rel, "--run", "--reporter=json",
                             "--reporter=default", f"--outputFile.json={out}",
-                            f"--maxWorkers={forks}"],
-                 desktop, env, ctx.workdir, "vitest", json=out, files=desktop_files,
+                            f"--maxWorkers={forks}", *skip],
+                 desktop, env, ctx.workdir, "vitest", json=out,
+                 # an excluded file has its result already: not requested from this job
+                 files=[f for f in desktop_files if f not in set(exclude or ())],
                  weight=min(forks, max(1, w - 1)))]
     if with_tsc:
         jobs.append(_Job("tsc", [*_npx(), "tsc", "--noEmit", "--pretty", "false", "-p", "."],
@@ -3074,7 +3084,8 @@ def _write_evidence(ev_root: Path, mode: str, ev: dict, kind: str = "run",
             **({"fix": bool(fix)} if fix is not None else {}),
             "unfinished": len(_unfinished_failures(ev)),
             "unfinished_files": len({str(f.get("nodeid") or "").split("::")[0]
-                                     for f in _unfinished_failures(ev)})})
+                                     for f in _unfinished_failures(ev)}),
+            "desktop_done": len(_desktop_done(ev))})
     except OSError:  # bookkeeping only; never fails the evidence write
         pass
     try:
@@ -3172,6 +3183,21 @@ def _continuation_series(ev_root: Path, mode: str) -> "list[int]":
     return [e["unfinished"] for e in _continuation_rows(ev_root, mode)]
 
 
+def _desktop_done(ev: dict) -> "set[str]":
+    """Desktop test files with a result (not a deadline timeout) in ``ev``: what a vitest
+    continuation leaves out of the related set, and how its progress is counted (vitest
+    reports one ``desktop::vitest`` placeholder for the unrun rest, not a count)."""
+    return {str(_rfile(r)) for r in list(ev.get("results") or []) + list(ev.get("failures") or [])
+            if isinstance(r, dict) and r.get("outcome") != "timeout"
+            and str(_rfile(r)).startswith("desktop/src/") and _DESKTOP_TEST_RE.search(str(_rfile(r)))}
+
+
+def _continuation_desktop_series(ev_root: Path, mode: str) -> "list[int | None]":
+    """Desktop test files with a result, aligned with _continuation_series."""
+    return [e.get("desktop_done") if isinstance(e.get("desktop_done"), int) else None
+            for e in _continuation_rows(ev_root, mode)]
+
+
 def _continuation_file_series(ev_root: Path, mode: str) -> "list[int | None]":
     """Unfinished FILE counts, aligned with _continuation_series (None for a row written
     before the run index recorded them)."""
@@ -3179,7 +3205,8 @@ def _continuation_file_series(ev_root: Path, mode: str) -> "list[int | None]":
             for e in _continuation_rows(ev_root, mode)]
 
 
-def _stalled_calls(series: "list[int]", files: "list[int | None] | None" = None) -> int:
+def _stalled_calls(series: "list[int]", files: "list[int | None] | None" = None,
+                   desktop: "list[int | None] | None" = None) -> int:
     """Trailing calls in a row that made no progress. A call made progress when it cut the
     unfinished test count by at least STALL_SHRINK, OR (with ``files``, aligned) finished
     at least one more file while the test count fell. The second clause matters for a very
@@ -3187,12 +3214,15 @@ def _stalled_calls(series: "list[int]", files: "list[int | None] | None" = None)
     under 10% each time but steady; judged by share alone it split, then tripped the
     breaker on a scope that a dozen more calls would finish (design §10)."""
     files = files if files is not None and len(files) == len(series) else [None] * len(series)
+    desktop = desktop if desktop is not None and len(desktop) == len(series) else [None] * len(series)
     n = 0
-    pairs = list(zip(series[:-1], series[1:], files[:-1], files[1:]))
-    for a, b, fa, fb in reversed(pairs):
+    pairs = list(zip(series[:-1], series[1:], files[:-1], files[1:], desktop[:-1], desktop[1:]))
+    for a, b, fa, fb, da, db in reversed(pairs):
         shrank = a > 0 and b <= a * (1 - STALL_SHRINK)
         finished_a_file = fa is not None and fb is not None and fb < fa and b < a
-        if a > 0 and not (shrank or finished_a_file):
+        # a vitest continuation: more desktop test files have a result than before
+        more_desktop = da is not None and db is not None and db > da
+        if a > 0 and not (shrank or finished_a_file or more_desktop):
             n += 1
         else:
             break
@@ -3328,7 +3358,8 @@ def _circuit_breaker_check(ev_root: Path, mode: str, profile: str = "") -> dict 
             f"{CIRCUIT_MAX_ROUNDS}) — the build<->verify loop is not converging")
     if mode in ("verify", "regression"):
         stalled = _stalled_calls(_continuation_series(ev_root, mode),
-                                 _continuation_file_series(ev_root, mode))
+                                 _continuation_file_series(ev_root, mode),
+                                 _continuation_desktop_series(ev_root, mode))
         if stalled >= STALL_TRIP_AFTER:
             return _breaker_result(
                 mode, f"{stalled} continuation calls in a row cut the count of unfinished "
@@ -3956,7 +3987,8 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
             else:
                 lost.append(n or "<no nodeid>")
         stalled = (_stalled_calls(_continuation_series(ev_root, auto_of),
-                                  _continuation_file_series(ev_root, auto_of)) if auto_of else 0)
+                                  _continuation_file_series(ev_root, auto_of),
+                                  _continuation_desktop_series(ev_root, auto_of)) if auto_of else 0)
         split = bool(auto_of) and stalled >= STALL_SPLIT_AFTER
         _replay_file_context(ctx, plan, prev, prev_failures, no_replay=split)
         if split:
@@ -4011,6 +4043,11 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                        if f.startswith("desktop/src/") and (ctx.repo / f).is_file()]
     # AC-named desktop tests run in the same vitest job (and so join its cache key).
     plan["desktop"] += [f for f in plan.get("ac_desktop", []) if f not in plan["desktop"]]
+    if mode == "recheck" and getattr(ns, "auto_recheck_of", None) and plan["desktop"] and prev:
+        # A continuation runs only what the deadline left unrun (as for backend tests):
+        # every desktop test file with a result in the report it continues stays out
+        # of the related set; the overlay keeps those results.
+        plan["desktop_done"] = sorted(_desktop_done(prev))
     if mode == "recheck" and plan.get("desktop_recheck") and not plan["desktop"]:
         lost.append("desktop:: (no desktop/src file in this run's change set)")
     if mode == "recheck" and lost and getattr(ns, "auto_recheck_of", None):
@@ -4083,6 +4120,12 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
     answered = {n for n, r in old.items() if "::" not in n and n not in new
                 and (r.get("notrun") or r.get("outcome") == "timeout")
                 and any(k.startswith(n + "::") for k in new)}
+    if re_ev.get("vitest_finished") and "desktop::vitest" not in new:
+        # the vitest job of the recheck ran its (rest of the) related set to the end
+        answered |= {n for n, r in old.items() if n == "desktop::vitest"
+                     and (r.get("notrun") or r.get("outcome") == "timeout")}
+        answered |= {f.get("nodeid") for f in base_fails if f.get("nodeid") == "desktop::vitest"
+                     and f.get("outcome") == "timeout"}
     old = {n: r for n, r in old.items() if n not in answered}
     base_fails = [f for f in base_fails if f.get("nodeid") not in answered]
     results = [new.get(n, r) for n, r in old.items()] + [r for n, r in new.items() if n not in old]
@@ -4220,7 +4263,9 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                      plan["explicit"] + [json.dumps(plan["ac_entries"]),
                                          json.dumps(plan.get("probe_rows") or []),
                                          json.dumps(plan["skipped"])]
-                     + ([json.dumps(ordered)] if ordered else []),
+                     + ([json.dumps(ordered)] if ordered else [])
+                     # a continuation that leaves desktop files out is not the same run
+                     + ([json.dumps(plan["desktop_done"])] if plan.get("desktop_done") else []),
                      inputs, head)
     tree = _tree_digest(inputs, changed_in, list(targets) + list(ord_files)
                         + list(plan["smoke"].values()))
@@ -4297,6 +4342,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     # concurrent runs share the cores instead of oversubscribing them.
     tokens = _acquire_workers(ctx.cache, ctx.workers, ctx.warnings)
     ctx.workers = max(1, len(tokens))
+    vitest_finished = False
     try:
         jobs: list[_Job] = []
         fpath = ctx.cache / "results" / f"frontend-{fkey}.json"
@@ -4304,7 +4350,8 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
         if fkey and not isinstance(fhit, list):
             jobs += _frontend_jobs(ctx, plan["desktop"],
                                    ns.mode in ("verify", "regression") or bool(plan.get("desktop_tsc")),
-                                   with_backend=bool(run_targets or ordered))
+                                   with_backend=bool(run_targets or ordered),
+                                   exclude=plan.get("desktop_done"))
         if plan["smoke"]:
             sj = _smoke_job(ctx, list(plan["smoke"]))
             sj.meta["files"] = plan["smoke"]
@@ -4332,6 +4379,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
         # by the deadline needs none of it, so keep it small: more tests per call
         main_end = ctx.deadline_at - min(12.0, deadline * 0.15)
         _run_jobs(jobs, ctx.workers, main_end)
+        vitest_finished = any(j.kind == "vitest" and j.started and not j.killed for j in jobs)
         results = _results_with_requeue(ctx, jobs, main_end, "main")
         if ordered:
             results = _dedupe_results(results)
@@ -4344,7 +4392,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
             fres = [r for r in results if r.get("layer") in ("vitest", "tsc")]
             # Cache only an all-green frontend result: a failure (flaky or real) is
             # always re-run, never served from frontend-{fkey}.json.
-            if fres and not any(r["outcome"] in _FAIL for r in fres):
+            if fres and not any(r["outcome"] in _FAIL for r in fres) and not plan.get("desktop_done"):
                 _write_json(fpath, fres)
         cls = classify_failures(ctx, results)
     finally:
@@ -4354,6 +4402,8 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     results += [{**r, "_reused": True} for f in reused for r in reused[f]]
     ev = _assemble(ctx, ns, plan, results, cls, started_at, repeats, key)
     ev.update(head_sha=head, tree_digest=tree)
+    if vitest_finished:
+        ev["vitest_finished"] = True  # _overlay_evidence: the unrun-rest placeholder is answered
     if mutated:
         ev["repo_mutations"] = mutated
     if bvt_keys:
