@@ -76,5 +76,9 @@ documents are written by code (`backend/core/run_docs.py`; never hand-write one)
    instead, verbatim, from
    `python backend/scripts/artifact_cli.py run-summary --project <P> --run-id <R>`.
 4. Add the next steps the user would type next, in a ```next-steps block (none if there
-   is no real one), then **STOP**. The stage-by-stage view, decisions and lessons live
-   in REPORT.md, which the card links to.
+   is no real one), then **STOP**. Every line must be understandable when shown alone
+   with no chat history: name the action's object and restate what each choice means.
+   Never use “这个/上述/第 N 项”, bare “A/B”, or a bare “Run N”; use a real `run_<id>`
+   plus its plain-language task when a run must be named. If it cannot fit as a
+   self-contained short action, omit it. The stage-by-stage view, decisions and lessons
+   live in REPORT.md, which the card links to.

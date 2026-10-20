@@ -959,6 +959,39 @@ const NEXT_FENCE = '```next-steps';
 const MAX_NEXT_STEPS = 3;
 /** A chip must show exactly what one click sends — so lines are short... */
 const MAX_STEP_CHARS = 120;
+/** High-confidence unresolved references that force the user to scroll up and
+ * map internal working context. The model contract is the primary fix (AGENT
+ * R18); this parser rejects ONLY shapes whose whole line is opaque. It must not
+ * infer semantics from a keyword appearing inside an otherwise named action:
+ * "发布第 2 版 OAuth schema" and "Run 4 targeted tests" are self-contained. */
+const ZH_DEICTIC_RE = /(?:这个|那个|这些|那些|上述|上面|前面|前述|该项|此项|该|此)(.*)$/i;
+const ZH_GENERIC_TAIL_RE = /^\s*(?:(?:问题|方案|修改|改动|内容|选项|步骤|工作|任务|版本|计划|做法|run)\s*)?(?:(?:再|并|继续|做|修复|修改|改|合并|部署|重跑|处理|确认|执行|采用|应用|完成|一下|吧|即可|了)\s*)*[。.!！]?\s*$/i;
+const EN_DEICTIC_RE = /\b(?:this|that|the\s+above|the\s+previous|above|previous)\b(.*)$/i;
+const EN_GENERIC_TAIL_RE = /^\s*(?:(?:issue|change|plan|option|item|run|version|approach|task|work|step)\s*)?(?:(?:now|next|instead|please|again)\s*)*[.!]?\s*$/i;
+const OPAQUE_ZH_ORDINAL_RE = /^(?:请\s*)?(?:(?:处理|继续|完成|修复|修改|合并|查看|确认|执行|部署|重跑|做)\s*)?第\s*(?:\d+|[一二三四五六七八九十百]+)\s*(?:项|个|步|条|种|版)\s*(?:(?:选|选择)\s*(?:方案|选项)?\s*[A-Z](?:\s*(?:\/|还是|或)\s*[A-Z])?)?\s*(?:吧|即可)?[。.!！]?$/i;
+const OPAQUE_ZH_CHOICE_RE = /^(?:请\s*)?(?:选|选择|采用|确认|用)\s*(?:方案|选项)?\s*[A-Z](?:\s*(?:\/|还是|或)\s*[A-Z])?\s*(?:吧|即可)?[。.!！]?$/i;
+const OPAQUE_DEICTIC_RUN_RE = /^(?:这个|那个|上述|上面|前面|前述|该|此)\s*Run\s*#?\s*\d+\b/i;
+const OPAQUE_RUN_RE = /^(?:请\s*|please\s+)?(?:(?:继续|处理|修复|修改|合并|查看|确认|执行|部署|重跑|continue|handle|process|fix|merge|review|confirm|execute|deploy|rerun)\s+)?Run\s*#?\s*\d+\s*(?:again|next|再|并|继续|修|改|合|处理|确认)?\s*[。.!！]?$/i;
+const OPAQUE_EN_ITEM_RE = /^(?:please\s+)?(?:(?:do|handle|process|continue|complete|fix|review|use|apply|merge|deploy|rerun)\s+)?(?:item|step|option|version)\s*#?\s*\d+\s*(?:again|next|please)?[.!]?$/i;
+const OPAQUE_EN_CHOICE_RE = /^(?:please\s+)?(?:choose|pick|select|use)\s+(?:(?:option|approach|plan)\s+)?[A-Z](?:\s*(?:\/|or)\s*[A-Z])?\s*(?:please)?[.!]?$/i;
+
+function hasOpaqueDeicticTail(step: string, marker: RegExp, genericTail: RegExp): boolean {
+  const match = marker.exec(step);
+  return match !== null && genericTail.test(match[1] ?? '');
+}
+
+export function isSelfContainedNextStep(step: string): boolean {
+  return !(
+    hasOpaqueDeicticTail(step, ZH_DEICTIC_RE, ZH_GENERIC_TAIL_RE)
+    || hasOpaqueDeicticTail(step, EN_DEICTIC_RE, EN_GENERIC_TAIL_RE)
+    || OPAQUE_ZH_ORDINAL_RE.test(step)
+    || OPAQUE_ZH_CHOICE_RE.test(step)
+    || OPAQUE_DEICTIC_RUN_RE.test(step)
+    || OPAQUE_RUN_RE.test(step)
+    || OPAQUE_EN_ITEM_RE.test(step)
+    || OPAQUE_EN_CHOICE_RE.test(step)
+  );
+}
 /** ...and carry nothing invisible that could hide text: C0/C1 controls, private
  *  use, line/paragraph separators, soft hyphen, bidi marks/overrides/isolates,
  *  zero-width space / word joiners / BOM, TAG characters and variation selectors
@@ -980,7 +1013,7 @@ function parseStepLines(body: string): string[] {
   return body
     .split('\n')
     .map((l) => l.replace(INVISIBLE_RE, '').replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').trim())
-    .filter((l) => l.length > 0 && l !== '```')
+    .filter((l) => l.length > 0 && l !== '```' && isSelfContainedNextStep(l))
     .slice(0, MAX_NEXT_STEPS)
     .map((l) => (l.length > MAX_STEP_CHARS ? `${l.slice(0, MAX_STEP_CHARS - 1)}…` : l));
 }

@@ -3945,8 +3945,10 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             "The chat shows this run's summary card (result, what to check, documents): "
             "do NOT paste or retype a summary. Reply with at most one line saying only "
             "what the card does not, then a ```next-steps block if a real next step "
-            "exists. In a channel session (no cards), relay `run-summary`'s "
-            "_display_block instead."
+            "exists. Every step must stand alone without chat history: name the object "
+            "and restate each choice; never use internal shorthand such as 'this', "
+            "'item 4', bare 'A/B', or bare 'Run 4'. In a channel session (no cards), "
+            "relay `run-summary`'s _display_block instead."
         )
 
     # ── Auto-emit budget info on stage-json update (LL07 fix) ──────────

@@ -13,7 +13,8 @@
 import { describe, it, expect } from 'vitest';
 import type { ContentBlock } from '../../types';
 import {
-  deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, isGateBlock, toolCall,
+  deriveTurnView, stepLabel, extractNextSteps, isSelfContainedNextStep,
+  isLandmarkText, isGateBlock, toolCall,
 } from './turnView';
 import type { ToolUseContent } from '../../types';
 
@@ -248,9 +249,63 @@ describe('extractNextSteps — trailing ```next-steps block (AC6)', () => {
     expect(r.steps).toEqual(['起 pipeline：过程折叠', '先只改 label 文案']);
   });
 
+  it('drops opaque internal references that make the user scroll up to map context', () => {
+    const r = extractNextSteps(
+      'Done.\n```next-steps\n第 4 项选 A 还是 B\n这个 Run 4 再并入一处口径修正\n选择方案 A：保留 Chat inline 执行，同时增加后台 Worker\n继续 run_7044cde6 的后台 Pipeline 实现\n```',
+      false,
+    );
+    expect(r.text).toBe('Done.');
+    expect(r.steps).toEqual([
+      '选择方案 A：保留 Chat inline 执行，同时增加后台 Worker',
+      '继续 run_7044cde6 的后台 Pipeline 实现',
+    ]);
+  });
+
   it('caps at 3 steps and strips list bullets', () => {
     const r = extractNextSteps('x\n```next-steps\n- a\n2. b\n* c\nd\n```', false);
     expect(r.steps).toEqual(['a', 'b', 'c']);
+  });
+
+  it.each([
+    '发布第 2 版 OAuth API schema',
+    '执行第一个登录回归测试',
+    'Run 4 targeted tests for OAuth refresh',
+    '将 OAuth API 第 2 版再部署到 staging',
+    '完成 OAuth 登录的第 2 版修改',
+    '把支付 API 第 3 版并入 release 分支',
+    '修复这个 OAuth 登录超时问题',
+    '选择方案 A：保留 Chat inline 执行，同时增加后台 Worker',
+    'Choose B: keep the existing session owner',
+    '继续 run_7044cde6 的后台 Pipeline 实现',
+  ])('keeps a named, self-contained action: %s', (step) => {
+    expect(isSelfContainedNextStep(step)).toBe(true);
+  });
+
+  it.each([
+    '第 4 项选 A 还是 B',
+    '处理第 4 项',
+    'Do item 4',
+    '继续 Run 4',
+    'Run 4 again',
+    '这个 Run 4 再并入一处口径修正',
+    '修复这个问题',
+    '继续上述方案',
+    '合并前述修改',
+    '选 A',
+    '选择选项 D',
+    'Fix this',
+    'Apply the above change',
+    'Continue that run',
+    'Do this',
+    'Deploy this',
+    'Continue with this',
+    'Proceed with the above plan',
+    '部署这个',
+    '重跑这个',
+    '继续做这个',
+    'Choose B',
+  ])('drops an unresolved internal reference: %s', (step) => {
+    expect(isSelfContainedNextStep(step)).toBe(false);
   });
 
   it('no block → text unchanged, no steps', () => {

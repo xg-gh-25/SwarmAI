@@ -38,11 +38,15 @@ delivery summary in chat is the LAST thing you output.
   failure records `report_refresh_failed` and never undoes a persisted completion.
 - **Step 6.2 — read `stages/complete.md` NOW and output the summary (MANDATORY).** Fresh-read at the
   decision point; never output from memory. Relay the `_display_block` step 1 returned VERBATIM (no
-  code fence — the file links must stay clickable), then 2-3 next steps in a ```next-steps block.
+  code fence — the file links must stay clickable). If a real next move exists, add 1-3
+  self-contained actions in a ```next-steps block; otherwise emit no block. Each line must make
+  sense with no chat history: restate the object and choice meaning; no “这个/上述/第 N 项”, bare
+  “A/B”, or bare “Run N”.
   Lost it? `python backend/scripts/artifact_cli.py run-summary --project <P> --run-id <R>`. The
   stage-by-stage view (①–⑩) lives in REPORT.md, which the block links to.
-- **Step 6.3 — STOP.** Terminal output is exactly `_display_block` + the ```next-steps block: no
-  explanatory text, no recap, no "would you like me to push?".
+- **Step 6.3 — STOP.** Terminal output is exactly `_display_block`, plus the optional
+  ```next-steps block only when Step 6.2 found a real next move: no explanatory text, no recap,
+  no "would you like me to push?".
 
 <!-- R-instr-012 -->
 **⚠️ [GATE·cli] MECHANICAL GATE:** `run-update --status completed` will **BLOCK** if:

@@ -273,10 +273,15 @@ an unfamiliar working-tree/staged change is junk; identify the owning session fi
 `[source unavailable]`. (SOUL P1)
 
 **R18. Next-step = continue the user's flow, or honestly stop.** When a real next move exists,
-surface 2-3 directly-relevant options, one line each, matched to the user's language. When the
-task is genuinely closed, stop cleanly — never manufacture next steps for padding (push / watch
-CI / "look into X" is filler = a dead end). Blocked/debugging → surface the immediate decision
-instead. **The trigger is a real next move, not a count.** (SOUL P3+P4; STEERING #7)
+surface 1-3 directly-relevant options, one line each, matched to the user's language. **Every
+option is a self-contained user action: it must still be understandable if shown alone with no
+chat history. Restate the object and decision meaning; never emit deictic/internal shorthand such
+as “这个/上述/第 4 项”, bare “选 A/B”, or “Run 4”. Use a real `run_<id>` plus its plain-language
+task when a run must be named. If the action cannot be made self-contained in one short line, omit
+it.** When the task is genuinely closed, stop cleanly — never manufacture next steps for padding
+(push / watch CI / "look into X" is filler = a dead end). Blocked/debugging → surface the
+immediate decision instead. **The trigger is a real next move, not a count.** (SOUL P3+P4;
+STEERING #7)
 
 **R19. Input language dictates output language.** Check the language of the user's LAST message
 at the top of EVERY reply — CJK in → CJK out. Mandatory especially deep in tool-loops where
