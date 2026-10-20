@@ -402,9 +402,24 @@ class TestSixSectionScaffold:
             )
 
     @pytest.mark.asyncio
-    async def test_internal_ddd_gets_internal_skills_and_gate(self, tmp_path: Path):
+    async def test_internal_ddd_gets_internal_skills_and_gate(self, tmp_path: Path, monkeypatch):
         """An internal DDD (Brazil/CRUX-bound) gets the 3 internal toolchain skills
-        + the no_git_push gate COPIED IN, on top of the 3 native skills (D5)."""
+        + the no_git_push gate COPIED IN, on top of the 3 native skills (D5).
+        The internal skills and gate are gitignored, so the test supplies its own
+        source dirs (a clean checkout or run worktree has none)."""
+        import core.swarm_workspace_manager as swm
+        src = tmp_path / "skills-src"
+        for skill in INTERNAL_DDD_SKILLS:
+            (src / skill).mkdir(parents=True)
+            (src / skill / "SKILL.md").write_text(f"# {skill}\n", encoding="utf-8")
+            (src / skill / "__pycache__").mkdir()
+            (src / skill / "__pycache__" / "x.pyc").write_bytes(b"x")
+        monkeypatch.setattr(swm, "INTERNAL_SKILLS_SRC", src)
+        gates = tmp_path / "gates-src"
+        gates.mkdir()
+        for gate_file in ("no_git_push.py", "test_no_git_push.py"):
+            (gates / gate_file).write_text(f"# {gate_file}\n", encoding="utf-8")
+        monkeypatch.setattr(swm, "INTERNAL_GATES_SRC", gates)
         ws = tmp_path / "ws"
         (ws / "Projects").mkdir(parents=True)
         pdir = ws / "Projects" / "IntProj"
@@ -418,6 +433,7 @@ class TestSixSectionScaffold:
             assert (pdir / "4-capabilities" / skill / "SKILL.md").exists(), (
                 f"internal DDD must carry skill '{skill}'"
             )
+        assert not (pdir / "4-capabilities" / INTERNAL_DDD_SKILLS[0] / "__pycache__").exists()
         # the no_git_push gate + its test copied in (③ 3-gates/ moat seed)
         assert (pdir / "3-gates" / "no_git_push.py").exists(), \
             "internal DDD must get the no_git_push gate"

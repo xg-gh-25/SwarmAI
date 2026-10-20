@@ -694,6 +694,11 @@ INTERNAL_DDD_SKILLS: tuple[str, ...] = (
     "s_internal-crux-cr",
     "s_internal-crux-review",
 )
+# Where those skills and the no_git_push gate are copied from. Both are gitignored
+# (internal), so a clean checkout or a run worktree has none and the copy is skipped;
+# tests point these at their own directories.
+INTERNAL_SKILLS_SRC = Path(__file__).parent.parent / "skills"
+INTERNAL_GATES_SRC = Path(__file__).parent.parent / "templates" / "ddd-gates"
 
 
 def _load_ddd_native_skill_templates() -> dict[str, dict[str, str]]:
@@ -1479,9 +1484,8 @@ class SwarmWorkspaceManager:
             # the gate from an internal reference. only-if-absent.
             if internal:
                 import shutil
-                native_skills_src = Path(__file__).parent.parent / "skills"
                 for skill_name in INTERNAL_DDD_SKILLS:
-                    src = native_skills_src / skill_name
+                    src = INTERNAL_SKILLS_SRC / skill_name
                     dst = skills_root / skill_name
                     if src.is_dir() and not dst.exists():
                         # ignore build/cache junk so a DDD never ships bytecode
@@ -1491,9 +1495,8 @@ class SwarmWorkspaceManager:
                 # ③ gate: no_git_push (+ test) — copy from the bundled internal
                 # gate reference if present; the gate is pure-stdlib + portable.
                 gates_root = ddd_write_path(project_dir, "gates")
-                gate_src_dir = Path(__file__).parent.parent / "templates" / "ddd-gates"
                 for gate_file in ("no_git_push.py", "test_no_git_push.py"):
-                    gsrc = gate_src_dir / gate_file
+                    gsrc = INTERNAL_GATES_SRC / gate_file
                     gdst = gates_root / gate_file
                     if gsrc.exists() and not gdst.exists():
                         gdst.parent.mkdir(parents=True, exist_ok=True)
