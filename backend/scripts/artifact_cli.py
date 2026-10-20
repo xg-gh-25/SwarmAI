@@ -2444,6 +2444,16 @@ def _normalize_files_touched_arg(value):
     return json.dumps(vals)
 
 
+def _convergence_for(args) -> "str | None":
+    """run-create's Gate-2 flow: the explicit --convergence, else deterministic for a
+    direct run, else none (legacy)."""
+    asked = getattr(args, "convergence", None)
+    if asked:
+        return asked
+    prof = getattr(args, "profile", None)
+    return "deterministic" if prof and normalize_profile(prof) == "direct" else None
+
+
 def cmd_run_create(args, reg: ArtifactRegistry) -> None:
     """Create a new pipeline run state file."""
     from datetime import datetime, timezone
@@ -2470,11 +2480,13 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
         # after EVALUATE — "not yet set" is meaningful and must not become "full").
         "profile": normalize_profile(args.profile) if args.profile else None,
         "status": "running",
-        # Opt-in Gate-2 flow (deterministic convergence step 3a/3b): no key = the legacy
-        # flow. Not the default yet: proofs are still files the agent can write, and a
-        # shared (non-isolated) run gets no snapshot, so it could never be push-ready.
+        # Gate-2 flow (deterministic convergence step 3a/3b). A direct run gets it by
+        # default (XG 2026-10-20: findings closed by runner-sealed break tests, no
+        # reviewed-tree binding); other profiles opt in. `--convergence legacy` opts
+        # out; a run that ends up shared falls back to legacy (pipeline_worktree._shared:
+        # no round snapshot without its own worktree).
         **({"convergence": "deterministic"}
-           if getattr(args, "convergence", None) == "deterministic" else {}),
+           if _convergence_for(args) == "deterministic" else {}),
         "stages": [],
         "taste_decisions": [],
         "budget": budget,

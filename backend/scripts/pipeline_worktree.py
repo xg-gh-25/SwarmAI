@@ -734,13 +734,16 @@ def _is_self_repo(main, self_repo) -> bool:
 
 
 def _check_bound_trees(run_id: str, run_dir: Path, wts, self_repo=None,
-                       untested_ok: bool = False) -> "list[str]":
+                       untested_ok: bool = False, review_bound: bool = True) -> "list[str]":
     """§7.3: in the repo the runner tests (*self_repo*), the tree to land == the tested
     tree — or carries the same change onto a moved base (rw.carries_over) — and the tests
     ran with no un-added file. Raises on a test-binding failure: the test result does not
     apply to what would land. Returned as push_ready reasons, never a refusal: a tree that
     differs from the one recorded when the Gate-2 prompts were written (a review is a
-    finder, not a judge), and a repo the runner does not test (it has no way to)."""
+    finder, not a judge), and a repo the runner does not test (it has no way to).
+    ``review_bound=False`` (convergence=deterministic) drops the reviewed-tree reason: a
+    finding there is closed by its break test, and R2 reviews the fix, so code that
+    changed after a review is expected, not a gap."""
     soft: "list[str]" = []
     rec = _review_record(run_dir)
     reviewed, rbases = rec.get("trees") or {}, rec.get("bases") or {}
@@ -752,7 +755,7 @@ def _check_bound_trees(run_id: str, run_dir: Path, wts, self_repo=None,
     for e, w, m in wts:
         name = e["repo_name"]
         now = rw.change_tree(w, run_id)
-        if reviewed.get(name) != now and not rw.carries_over(
+        if review_bound and reviewed.get(name) != now and not rw.carries_over(
                 w, run_id, rbases.get(name), reviewed.get(name), e.get("base"), now):
             soft.append(f"{name}: the change differs from the tree recorded when the Gate-2 "
                         "prompts were written (the landed code was not all reviewed)")
@@ -847,7 +850,8 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
                                             needs_report=_tested_repo and not _docs)
         if red:   # the ONE landing gate: the runner's evidence
             raise rw.WorktreeError("tests_not_green", "; ".join(red)[:900])
-        soft += _check_bound_trees(run_id, run_dir, wts, self_repo, untested_ok=_docs)
+        soft += _check_bound_trees(run_id, run_dir, wts, self_repo, untested_ok=_docs,
+                                   review_bound=run_state.get("convergence") != "deterministic")
         soft += _fix_recheck_gap(run_dir, run_id) if _tested_repo and not _docs else []
         soft += precheck(float(_review_record(run_dir).get("at") or 0)) if precheck else []
     except rw.WorktreeError as err:

@@ -276,16 +276,37 @@ def test_land_refuses_evidence_with_untracked_files(flow):
     assert _state(f)["worktrees"][0]["state"] == "active"
 
 
+def _set_convergence(f, value):
+    st = _state(f)
+    st.pop("convergence", None)
+    if value:
+        st["convergence"] = value
+    f.write_text(json.dumps(st))
+
+
 def test_a_change_after_review_lands_marked_not_push_ready(flow):
     """One landing decision: tests on the landed tree decide; a change the Gate-2 prompts
-    did not see only marks the commit push_ready false."""
+    did not see only marks the commit push_ready false (legacy Gate-2 flow)."""
     rid, f, wt = _prepared(flow)
+    _set_convergence(f, None)
     (wt / "a.py").write_text("a = 'after review'\n")
     _evidence(f, rid, wt)
     res = _land(flow, rid, f)
     assert res["landed"]["swarmai"]["sha"] == _g(flow["main"], "rev-parse", "HEAD")
     c = _state(f)["commits"][-1]
     assert c["push_ready"] is False and "not all reviewed" in c["push_ready_reason"]
+
+
+def test_deterministic_run_has_no_reviewed_tree_gap(flow):
+    """convergence=deterministic (a direct run's default): a finding is closed by its
+    break test and R2 reviews the fix, so code changed after a review is no gap."""
+    rid, f, wt = _prepared(flow)
+    assert _state(f)["convergence"] == "deterministic"   # the direct default
+    (wt / "a.py").write_text("a = 'after review'\n")
+    _evidence(f, rid, wt)
+    _land(flow, rid, f)
+    c = _state(f)["commits"][-1]
+    assert "not all reviewed" not in str(c.get("push_ready_reason") or ""), c
 
 
 def test_an_old_verify_is_not_rebound_by_a_newer_tdd_run(flow):
@@ -785,3 +806,18 @@ def test_an_abandoned_run_still_hands_back_its_report(flow):
                   "--reason", "stopped by the user", token_for="run-update", run=rid, flow=flow)
     assert rc == 0, out
     assert (f.parent / "REPORT.md").is_file() and out.get("report") == str(f.parent / "REPORT.md")
+
+
+def test_run_create_defaults_direct_to_deterministic_convergence(flow):
+    """XG 2026-10-20: a direct run gets the deterministic Gate-2 flow unless it opts
+    out with --convergence legacy; other profiles keep the legacy default."""
+    rid, f = _create(flow)
+    assert _state(f).get("convergence") == "deterministic"
+    rc, out = cli("run-create", "--project", "P", "--requirement", "y", "--profile",
+                  "direct", "--convergence", "legacy")
+    assert rc == 0, out
+    runs = flow["ws"] / "Projects" / "P" / ".artifacts" / "runs"
+    assert "convergence" not in _state(runs / out["pipeline_id"] / "run.json")
+    rc, out = cli("run-create", "--project", "P", "--requirement", "z", "--profile", "full")
+    assert rc == 0, out
+    assert "convergence" not in _state(runs / out["pipeline_id"] / "run.json")
