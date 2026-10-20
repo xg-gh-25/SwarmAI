@@ -4,6 +4,7 @@ import clsx from 'clsx';
 import type { OpenTab } from '../types';
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { TabStatusIndicator } from './TabStatusIndicator';
+import { TabNoticeDot } from './TabNoticeBar';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 
@@ -122,6 +123,9 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
 
       {/* Tab status indicator (streaming, error, etc.) — skip for unread since we show dot */}
       {status && status !== 'complete_unread' && <TabStatusIndicator status={status} />}
+
+      {/* Background tab with an in-tab warning/error notice */}
+      <TabNoticeDot tabId={tab.id} sessionId={tab.sessionId} isActive={isActive} />
 
       {/* Truncated title */}
       <span className="truncate text-xs" title={tab.title}>

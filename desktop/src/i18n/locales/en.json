@@ -415,6 +415,11 @@
       "threads_one": "{{count}} thread",
       "threads_other": "{{count}} threads",
       "context": "{{count}} context"
+    },
+    "notice": {
+      "dismiss": "Dismiss",
+      "dotError": "This tab has an error",
+      "dotWarning": "This tab has a warning"
     }
   },
   "tasks": {

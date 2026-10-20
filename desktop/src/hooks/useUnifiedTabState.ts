@@ -35,6 +35,7 @@ import {
 } from '../services/tabPersistence';
 import api from '../services/api';
 import { messageStoreRegistry } from '../stores/MessageStore';
+import { tabNoticeStore } from '../stores/tabNoticeStore';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -141,9 +142,10 @@ export interface UnifiedTab {
   /** The sessionId contextMeasuredAt was recorded for: ordering only applies
    *  within one session (a tab that loads an older session accepts its value). */
   contextMeasuredFor?: string;
-  /** The critical-context toast was already raised for this tab's current
-   *  critical episode (reset when the tab leaves critical). */
-  criticalToastShown?: boolean;
+  /** The session (`''` = none yet) whose current critical-context episode
+   *  already raised this tab's in-tab notice; cleared when the tab leaves
+   *  critical. A different session starts a new episode. */
+  criticalNoticeFor?: string;
   /** Per-tab compaction guard event from backend (null = no active guard event). */
   compactionGuard: CompactionGuardEvent | null;
   /** Per-tab system prompt metadata delivered via SSE (null = not yet received). */
@@ -262,12 +264,16 @@ export interface UnifiedTab {
    *  loop once the backend transitions past the answered question (no longer
    *  waiting_input, or a different pending toolUseId). */
   _answeredToolUseId?: string;
-  /** Root-1 SSOT Phase 3 (AC5): toolUseId of a re-surfaced question for which a
-   *  discovery toast was raised because no assistant bubble existed to host the
-   *  inline form (no-host path). Tracked so the toast can be RETIRED when the
-   *  question later gets a host (inline form takes over) or is abandoned (backend
-   *  leaves waiting_input) — otherwise the persistent toast leaks forever. */
+  /** Root-1 SSOT Phase 3 (AC5): id of the in-tab notice raised for a re-surfaced
+   *  question that no assistant bubble could host (no-host path). Tracked so the
+   *  notice can be RETIRED when the question later gets a host (inline form
+   *  takes over) or is abandoned (backend leaves waiting_input). (Field name
+   *  kept from when this was a toast.) */
   _pendingQuestionToastId?: string;
+  /** Write token of this tab's current "still working" notice. The complete
+   *  handler retracts exactly that notice at turn end (token-checked, so a late
+   *  [DONE] from an older turn cannot remove a newer turn's notice). */
+  _stillWorkingNoticeToken?: number;
   /** Root-1 SSOT Phase 3 (AC4): the last_drained_seqs the tab observed on the
    *  previous reconcile poll — compared against the current poll to detect a
    *  server drain and retire the local optimistic queue mirror. */
@@ -602,6 +608,8 @@ export function useUnifiedTabState(
       const keys = [...map.keys()];
       const closedIndex = keys.indexOf(tabId);
       map.delete(tabId);
+      // In-tab notices and their timers die with the tab.
+      tabNoticeStore.clearTab(tabId);
 
       if (map.size === 0) {
         // Auto-create a new tab when closing the last one

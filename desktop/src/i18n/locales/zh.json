@@ -415,6 +415,11 @@
       "threads_one": "{{count}} 个待续话题",
       "threads_other": "{{count}} 个待续话题",
       "context": "{{count}} 条上下文"
+    },
+    "notice": {
+      "dismiss": "关闭",
+      "dotError": "此标签页有错误",
+      "dotWarning": "此标签页有警告"
     }
   },
   "tasks": {

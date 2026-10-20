@@ -13,8 +13,8 @@
  * @exports toContextWarning          — snapshot → display ContextWarning (null = empty ring)
  * @exports isNewerSnapshot           — measuredAt ordering (newest wins)
  * @exports snapshotFromEvent         — typed StreamEvent → ContextUsageSnapshot
- * @exports criticalToastAction       — the critical toast as a projection of the
- *                                      ACTIVE tab's level (raise / dismiss / none)
+ *                                      (the critical-context notice is raised per
+ *                                      tab in useChatStreamingLifecycle.applyContextUsage)
  * @exports useContextUsageRefresh    — read the backend value when the active tab or
  *                                      its session changes, when its turn ends, and
  *                                      when the window regains focus
@@ -78,18 +78,6 @@ export function snapshotFromEvent(e: StreamEvent): ContextUsageSnapshot {
     basis: e.basis,
     measuredAt: e.measuredAt,
   };
-}
-
-/** The persistent critical toast mirrors the ACTIVE tab's level: raise it once
- *  per critical episode of that tab (a dismissed toast must not come back on
- *  every API call), dismiss it whenever the active tab is not critical (so it
- *  never sits over a green ring, including after a tab switch). */
-export function criticalToastAction(
-  level: ContextWarning['level'] | null,
-  alreadyShownThisEpisode: boolean,
-): 'raise' | 'dismiss' | 'none' {
-  if (level === 'critical') return alreadyShownThisEpisode ? 'none' : 'raise';
-  return 'dismiss';
 }
 
 type StaleListener = (sessionId: string) => void;

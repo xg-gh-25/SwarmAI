@@ -62,8 +62,8 @@ import { isOt01DiagEnabled } from '../utils/diagFlags';
 import { dispatchUiCommand } from '../utils/uiCommands';
 import type { UnifiedTab } from './useUnifiedTabState';
 import { type TabStatus } from './useUnifiedTabState';
-import { useToast } from '../contexts/ToastContext';
-import { toContextWarning, isNewerSnapshot, criticalToastAction, snapshotFromEvent, onContextUsageStale, type ContextUsageSnapshot } from './contextUsage';
+import { tabNoticeStore } from '../stores/tabNoticeStore';
+import { toContextWarning, isNewerSnapshot, snapshotFromEvent, onContextUsageStale, type ContextUsageSnapshot } from './contextUsage';
 
 // ---------------------------------------------------------------------------
 // Reconnection constants
@@ -76,6 +76,19 @@ import { toContextWarning, isNewerSnapshot, criticalToastAction, snapshotFromEve
  *  error, no resend needed. Outages LONGER than this fall through to the
  *  auto-resend safety net (RESEND_MAX_ATTEMPTS, fired on swarm:backend-recovered). */
 const RECONNECT_MAX_ATTEMPTS = 9;
+
+/** In-tab notice id for the critical-context warning (one per tab). */
+export const CONTEXT_CRITICAL_NOTICE_ID = 'context-critical';
+/** In-tab notice id for "automatic recovery stopped" (one per tab). */
+export const RECOVERY_EXHAUSTED_NOTICE_ID = 'recovery-exhausted';
+/** In-tab notice id for the long-turn "still working" heartbeat (one per tab). */
+export const STILL_WORKING_NOTICE_ID = 'still-working';
+/** The still-working notice clears itself after this long without a refresh. */
+export const STILL_WORKING_NOTICE_MS = 8000;
+/** In-tab notice id for the MCP health warning (one per tab). */
+export const MCP_HEALTH_NOTICE_ID = 'mcp-health';
+/** In-tab notice id for "the connection was lost after a self-heal attempt". */
+export const CONNECTION_LOST_NOTICE_ID = 'connection-lost';
 
 /** Maximum number of auto-resends on backend-recovered for a single swallowed-question
  *  episode. The ~65s connection-phase reconnect budget covers a normal redeploy; this
@@ -1015,13 +1028,9 @@ export interface ChatStreamingLifecycleDeps {
   activeTabIdRef: React.RefObject<string | null>;
   /** Callback to drain a queued message after a stream completes or is stopped. */
   onDrainQueue?: (tabId: string) => void;
-  /** Callback to switch the active tab — used by the cross-tab AskUserQuestion
-   *  toast so the user can click straight to the tab that is asking. */
-  onSelectTab?: (tabId: string) => void;
-  /** Callback to start a fresh session for a tab — used by the
-   *  recovery_exhausted toast's "Start fresh session" action when automatic
-   *  recovery has given up. Clears the tab to a new session (history preserved
-   *  server-side). */
+  /** Callback to reset ONE tab (by id) to a fresh session — the
+   *  recovery_exhausted notice's "Start fresh session" action when automatic
+   *  recovery has given up (history preserved server-side). */
   onStartFresh?: (tabId: string) => void;
   /** Callback fired when a tab binds its own backend session (session_start),
    *  for ANY tab — active OR background. Lets the owner (ChatPage) backfill a
@@ -1044,13 +1053,12 @@ export function useChatStreamingLifecycle(
     updateTabStatus,
     tabMapRef,
     activeTabIdRef,
-    onSelectTab,
     onStartFresh,
     onTabSessionBound,
   } = deps;
 
-  // --- Toast for reconnection notifications ---
-  const { addToast, removeToast } = useToast();
+  // Tab/session notices go to the per-tab notice store (stores/tabNoticeStore),
+  // never to the app-wide toast stack: this hook only handles tab-scoped events.
 
   // --- Core chat state ---
   const [messages, setMessages] = useState<Message[]>([]);
@@ -1398,12 +1406,11 @@ export function useChatStreamingLifecycle(
                   { toolUseId: pqPayload.toolUseId, questions: pqPayload.questions },
                   { isActive, sessionId: mirrorSid },
                 );
-                // The inline form now hosts the question — retire any no-host
-                // discovery toast we raised on an earlier poll (else it coexists
-                // with the form). surfacePendingQuestion raises its OWN bg-tab
-                // toast, so only clear the no-host one we tracked here.
+                // The inline form now hosts the question — retire the no-host
+                // in-tab notice we raised on an earlier poll (else it coexists
+                // with the form).
                 if (tabState._pendingQuestionToastId) {
-                  removeToast(tabState._pendingQuestionToastId);
+                  tabNoticeStore.dismiss(tabId, tabState._pendingQuestionToastId);
                   tabState._pendingQuestionToastId = undefined;
                 }
                 anyCleared = true;
@@ -1411,21 +1418,17 @@ export function useChatStreamingLifecycle(
                 // No assistant bubble to host the block (question's SSE was lost
                 // before any assistant content). surfacePendingQuestion needs a
                 // host message, so we can't render the form inline — but the user
-                // must still be able to DISCOVER the pending question. Raise the
-                // persistent "Swarm is asking" toast (idempotent via stable id)
-                // so the tab is not a silent dead-end every 15s poll. Track its id
-                // so it can be retired when the form takes over or the question is
-                // abandoned (else the persistent toast leaks forever).
-                const askTabTitle = tabMapRef.current.get(tabId)?.title ?? 'another tab';
-                const toastId = `ask-uq-${pqPayload.toolUseId}`;
-                addToast({
+                // must still be able to DISCOVER the pending question. Raise a
+                // persistent notice IN THAT TAB (idempotent via stable id; the
+                // tab header also shows waiting_input). Track its id so it can be
+                // retired when the form takes over or the question is abandoned.
+                const noticeId = `ask-uq-${pqPayload.toolUseId}`;
+                tabNoticeStore.post(tabState, mirrorSid, {
+                  id: noticeId,
                   severity: 'info',
-                  message: `Swarm is asking a question in "${askTabTitle}".`,
-                  id: toastId,
-                  autoDismiss: false,
-                  action: onSelectTab ? { label: 'Go to tab', onClick: () => onSelectTab(tabId) } : undefined,
+                  message: 'Swarm is asking a question in this session.',
                 });
-                tabState._pendingQuestionToastId = toastId;
+                tabState._pendingQuestionToastId = noticeId;
               }
             } else if (
               !mirrorState.waitingInput &&
@@ -1437,11 +1440,11 @@ export function useChatStreamingLifecycle(
               // tool_use resolved. The loop must CLEAR stale questions, not only
               // ADD them, or a dismissed/answered question lingers as a phantom
               // un-answerable prompt. Clear the ref (all tabs) + React state (active)
-              // + any leaked no-host discovery toast.
+              // + any leaked no-host discovery notice.
               tabState.pendingQuestion = null;
               tabState._answeredToolUseId = undefined;
               if (tabState._pendingQuestionToastId) {
-                removeToast(tabState._pendingQuestionToastId);
+                tabNoticeStore.dismiss(tabId, tabState._pendingQuestionToastId);
                 tabState._pendingQuestionToastId = undefined;
               }
               if (tabId === activeTabIdRef.current) setPendingQuestion(null);
@@ -1733,7 +1736,7 @@ export function useChatStreamingLifecycle(
   // --- Compaction guard (delivered via SSE compaction_guard event) ---
   const [compactionGuard, setCompactionGuard] = useState<CompactionGuardEvent | null>(null);
 
-  // Compaction notice is emitted directly via addToast at the event site (see the
+  // Compaction notice is appended as a system message at the event site (see the
   // context_compacted branch) — no React-state slot, so none is declared here.
 
   // --- Context usage: ONE apply path for backend snapshots (SSE + GET) ---
@@ -1760,49 +1763,31 @@ export function useChatStreamingLifecycle(
         tabState.contextMeasuredAt = raw.measuredAt;
         tabState.contextMeasuredFor = tabState.sessionId;
       }
-      // A tab leaving critical ends its critical episode: the next one toasts.
-      if (next?.level !== 'critical') tabState.criticalToastShown = false;
+      // Critical context is a notice IN THIS TAB, raised once per critical
+      // episode of this tab's CURRENT session and retracted when it leaves
+      // critical. Keyed by the explicit tabId of this snapshot — never by "the
+      // active tab" — so a tab switch cannot move it, and a notice the user
+      // dismissed stays dismissed until the episode ends (or the session changes).
+      const episodeKey = tabState.sessionId ?? '';
+      if (next?.level === 'critical') {
+        if (tabState.criticalNoticeFor !== episodeKey && tabId) {
+          tabNoticeStore.post(tabState, tabState.sessionId, {
+            id: CONTEXT_CRITICAL_NOTICE_ID,
+            severity: 'error',
+            message: next.message,
+          });
+          tabState.criticalNoticeFor = episodeKey;
+        }
+      } else {
+        tabState.criticalNoticeFor = undefined;
+        if (tabId) tabNoticeStore.dismiss(tabId, CONTEXT_CRITICAL_NOTICE_ID);
+      }
     }
     // One snapshot per API call: skip the re-render when nothing visible changed.
     if (!unchanged && (tabId === null || tabId === activeTabIdRef.current)) {
       setContextWarning(next);
     }
   }, [tabMapRef, activeTabIdRef]);
-
-  // The persistent critical toast is a projection of the ACTIVE tab's level
-  // (contextUsage.criticalToastAction): raised once per critical episode of the
-  // tab the user is looking at, dismissed whenever that tab is not critical —
-  // so it follows tab switches and compactions and never sits over a green
-  // ring. Acts only when the (tab, level) pair changes, not per snapshot.
-  const lastToastKeyRef = useRef<string>('');
-  const lastToastTabRef = useRef<string | null>(null);
-  useEffect(() => {
-    const tabId = activeTabIdRef.current;
-    const level = contextWarning?.level ?? null;
-    const key = `${tabId ?? ''}:${level ?? ''}`;
-    if (key === lastToastKeyRef.current) return;
-    lastToastKeyRef.current = key;
-    // Leaving a tab ends "already shown" for it: only STAYING on a critical tab
-    // (where the user may have dismissed the toast) suppresses a re-raise.
-    if (lastToastTabRef.current && lastToastTabRef.current !== tabId) {
-      const left = tabMapRef.current.get(lastToastTabRef.current);
-      if (left) left.criticalToastShown = false;
-    }
-    lastToastTabRef.current = tabId;
-    const tab = tabId ? tabMapRef.current.get(tabId) : undefined;
-    const action = criticalToastAction(level, tab?.criticalToastShown ?? false);
-    if (action === 'raise' && contextWarning) {
-      addToast({
-        severity: 'error',
-        message: contextWarning.message,
-        autoDismiss: false,
-        id: 'context-warning-critical',
-      });
-      if (tab) tab.criticalToastShown = true;
-    } else if (action === 'dismiss') {
-      removeToast('context-warning-critical');
-    }
-  }, [contextWarning, addToast, removeToast, activeTabIdRef, tabMapRef]);
 
   /** Read the backend snapshot for a tab's session (tab activation, app
    *  restart, after compact/refresh). Fire-and-forget for callers: never
@@ -2099,24 +2084,15 @@ export function useChatStreamingLifecycle(
       // _applyMerge carries forward local-only interactive blocks (PART 1).
       scheduleTurnEndReconcile(tabState?.sessionId ?? opts.sessionId, tabId);
 
-      // (6) Background tab → "go answer" toast (action, not auto-dismiss); persist
-      if (!isActive) {
-        const bgTabTitle = tabMapRef.current.get(tabId)?.title ?? 'another tab';
-        addToast({
-          severity: 'info',
-          message: `Swarm is asking a question in "${bgTabTitle}".`,
-          id: `ask-uq-${pq.toolUseId}`,
-          autoDismiss: false,
-          action: onSelectTab ? { label: 'Go to tab', onClick: () => onSelectTab(tabId) } : undefined,
-        });
-      }
+      // (6) Background tab: the tab header's waiting_input indicator is the
+      //     signal (no top-right toast — that would float over another tab).
       const persistSessionId = tabState?.sessionId ?? opts.sessionId;
       if (persistSessionId && tabState) {
         persistPendingState(persistSessionId, tabState.messages, pq);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refs + stable setters
-    [dispatch, setMessages, setPendingQuestion, setSessionId, setIsStreaming, incrementStreamGen, updateTabStatus, addToast, onSelectTab, scheduleTurnEndReconcile],
+    [dispatch, setMessages, setPendingQuestion, setSessionId, setIsStreaming, incrementStreamGen, updateTabStatus, scheduleTurnEndReconcile],
   );
 
   // Derive streaming activity for spinner label
@@ -2436,28 +2412,23 @@ export function useChatStreamingLifecycle(
         // run_d8dce02a). Handle-before-guard mirrors how file_changed-class
         // side-channel events must bypass the cross-turn-bleed guard.
         if (event.type === 'recovery_exhausted') {
-          // Only actionable for a real, still-open tab: handleNewChat clears
-          // the ACTIVE tab, so a 'Start fresh' on a closed/unknown tab would
-          // wipe the wrong live tab (adversarial #3/#4). Require capturedTabId
-          // to still exist before offering the action.
-          const rexTabId = capturedTabId;
-          const tabStillOpen = !!rexTabId && tabMapRef.current.has(rexTabId);
-          const rexToastId = `recovery-exhausted-${rexTabId ?? 'global'}`;
+          // In-tab notice on the tab this handler belongs to. Dropped when the
+          // tab is closed, or when a newer handler (a new send / reconnect)
+          // owns the tab — a stale stream's signal must not land on the new turn.
+          const rexTab = capturedTabId ? tabMapRef.current.get(capturedTabId) : undefined;
+          if (!rexTab || (rexTab.latestStreamHandler !== undefined && rexTab.latestStreamHandler !== handlerToken)) {
+            return;
+          }
           const msg = event.message
             ?? 'Automatic recovery for this session has stopped. Start a fresh session to continue.';
-          addToast({
+          tabNoticeStore.post(rexTab, rexTab.sessionId, {
+            id: RECOVERY_EXHAUSTED_NOTICE_ID,
             severity: 'warning',
             message: msg,
-            id: rexToastId,
-            autoDismiss: false,
-            action: (tabStillOpen && onStartFresh)
-              ? {
-                  label: 'Start fresh session',
-                  onClick: () => {
-                    removeToast(rexToastId);
-                    onStartFresh(rexTabId);
-                  },
-                }
+            // The bar re-checks tab + session at click time, then hands us the
+            // notice's own tabId (never the active tab).
+            action: onStartFresh
+              ? { label: 'Start fresh session', run: (tabId) => onStartFresh(tabId) }
               : undefined,
           });
           return; // side-channel handled; never falls through to stream logic
@@ -2477,16 +2448,20 @@ export function useChatStreamingLifecycle(
         if (event.type === 'still_working') {
           // The 90s force-end watchdog is already reset at the TOP of this
           // handler for every event, so no touch() is needed here. This block
-          // just surfaces the long-turn "still working" notice in-tab.
-          // isActiveTab is derived further down; this side-channel runs early,
-          // so compare against the live active-tab ref directly.
-          if (capturedTabId === activeTabIdRef.current && event.message) {
-            addToast({
+          // surfaces the long-turn "still working" notice in THIS tab (any
+          // tab, active or not — the notice lives with the tab, so it can never
+          // show over another chat). Same id → replaces in place; auto-dismiss;
+          // retracted at turn end by the complete handler.
+          const swTab = capturedTabId ? tabMapRef.current.get(capturedTabId) : undefined;
+          if (swTab && event.message
+            && (swTab.latestStreamHandler === undefined || swTab.latestStreamHandler === handlerToken)) {
+            const token = tabNoticeStore.post(swTab, swTab.sessionId, {
+              id: STILL_WORKING_NOTICE_ID,
               severity: 'info',
               message: event.message,
-              id: `still-working-${capturedTabId ?? 'global'}`,
-              autoDismiss: true,
+              autoDismissMs: STILL_WORKING_NOTICE_MS,
             });
+            if (token !== null) swTab._stillWorkingNoticeToken = token;
           }
           return; // side-channel handled; never falls through to stream logic
         }
@@ -2656,30 +2631,17 @@ export function useChatStreamingLifecycle(
           }
 
           // If we were reconnecting, the stream has successfully resumed.
-          // Clear reconnection state and fire a success toast.
+          // Clear reconnection state. No notice: the tab's "Reconnecting…"
+          // indicator disappearing IS the success signal (a top-right toast
+          // here used to float over whichever tab was active).
           if (tabState.isReconnecting) {
             console.log(`[Reconnect] Tab ${capturedTabId}: reconnection succeeded`);
-            // Distinguish a GENUINE network reconnect (disconnect-catch path,
-            // which sets reconnectionAttempt > 0) from a backend-initiated
-            // leak-recovery (the `reconnecting` SSE event, which leaves
-            // reconnectionAttempt at 0). The genuine reconnect earns a success
-            // toast; the leak-recovery is a silent system self-heal the user did
-            // not initiate — the spinner appearing then clearing is feedback
-            // enough, a toast per leak would just trade one annoyance for another.
-            const wasGenuineReconnect = (tabState.reconnectionAttempt ?? 0) > 0;
             tabState.isReconnecting = false;
             tabState.reconnectionAttempt = 0;
             // Clear disconnect timeout — recovery happened before it fired
             if (tabState._disconnectTimeoutId) {
               clearTimeout(tabState._disconnectTimeoutId);
               tabState._disconnectTimeoutId = undefined;
-            }
-            if (wasGenuineReconnect) {
-              addToast({
-                severity: 'info',
-                message: 'Stream reconnected successfully.',
-                id: `reconnect-success-${capturedTabId}`,
-              });
             }
           }
           // Clear "Resuming session..." indicator once data arrives
@@ -2885,13 +2847,16 @@ export function useChatStreamingLifecycle(
             // GUI28 backstop: a session_start means this tab spawned a fresh
             // subprocess and is streaming again — any stale recovery_exhausted
             // toast for this tab is now obsolete. Clear it even if the user
-            // recovered by some path other than the toast's own action.
-            removeToast(`recovery-exhausted-${capturedTabId}`);
+            // recovered by some path other than the notice's own action.
+            if (capturedTabId) tabNoticeStore.dismiss(capturedTabId, RECOVERY_EXHAUSTED_NOTICE_ID);
           }
         } else if (event.type === 'session_cleared' && event.newSessionId) {
           // SDK compaction: session ID changed but conversation continues.
           // CRITICAL: Do NOT clear messages — only append placeholder if needed.
           if (tabState) {
+            // Same conversation under a new id: carry this tab's notices over
+            // (otherwise the session filter would drop them as another session's).
+            if (capturedTabId) tabNoticeStore.renameSession(capturedTabId, tabState.sessionId, event.newSessionId);
             tabState.sessionId = event.newSessionId;
           }
 
@@ -3440,11 +3405,10 @@ export function useChatStreamingLifecycle(
                     // already cleared on the original send). Warn so the user can
                     // re-attach rather than silently losing the file.
                     if (retryPayloadHasAttachments(event.retryPayload)) {
-                      addToast({
+                      tabNoticeStore.post(tabState, tabState.sessionId, {
+                        id: 'requeue-attach',
                         severity: 'warning',
                         message: 'Your message text was recovered, but an attachment could not be — please re-attach it.',
-                        id: `requeue-attach-${capturedTabId ?? 'global'}`,
-                        autoDismiss: true,
                       });
                     }
                   }
@@ -3938,20 +3902,23 @@ export function useChatStreamingLifecycle(
           }
         }
         // MCP health warning — backend emits once per session if configured
-        // MCPs failed to connect. Show a toast notification so the user knows.
+        // MCPs failed to connect. Shown in THIS tab: it describes the tools
+        // this session can use, not the app.
         else if (event.type === 'mcp_health_warning') {
           const msg = event.message ?? 'Some MCP servers failed to load.';
-          addToast({
-            severity: 'warning',
-            message: msg,
-            id: `mcp-health-${capturedTabId ?? 'global'}`,
-          });
+          if (tabState) {
+            tabNoticeStore.post(tabState, tabState.sessionId, {
+              id: MCP_HEALTH_NOTICE_ID,
+              severity: 'warning',
+              message: msg,
+            });
+          }
         }
         // Telemetry events (agent_activity, tool_invocation, etc.) are no
         // longer processed — TSCC fetches metadata from the endpoint instead.
       };
     },
-    [queryClient, setIsStreaming, incrementStreamGen, updateTabStatus, addToast, applyContextUsage], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
+    [queryClient, setIsStreaming, incrementStreamGen, updateTabStatus, applyContextUsage], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
   );
 
   const createErrorHandler = useCallback(
@@ -4082,6 +4049,9 @@ export function useChatStreamingLifecycle(
           );
           // Keep isStreaming = true (spinner stays, looks like thinking)
           // Don't show error toast yet
+          // The session this grace window is for: the expiry notice is dropped
+          // if the tab has moved to another session by then.
+          const graceSessionId = tabState.sessionId;
           // Set a timeout — if backend doesn't reconnect, consult authoritative
           // state and only THEN decide error-vs-still-working (OT01 honest signal).
           setTimeout(async () => {
@@ -4163,7 +4133,13 @@ export function useChatStreamingLifecycle(
             // _recover_streaming_on_disconnect already transitions STREAMING→IDLE
             // and leaves the subprocess alive; the 15s reconcile loop drains any
             // queued message.
-            addToast({ severity: 'warning', message: 'Connection lost after self-heal attempt. Send your message again to continue.', autoDismiss: true });
+            // In-tab error on the tab whose stream was lost (this timer can fire
+            // while another tab is active — it must never land there).
+            tabNoticeStore.post(tab2, graceSessionId, {
+              id: CONNECTION_LOST_NOTICE_ID,
+              severity: 'error',
+              message: 'Connection lost after self-heal attempt. Send your message again to continue.',
+            });
           }, HEAL_GRACE_PERIOD_MS);
           return; // Don't show error — heal grace in progress
         }
@@ -4336,7 +4312,7 @@ export function useChatStreamingLifecycle(
         }
       };
     },
-    [setIsStreaming, incrementStreamGen, addToast, updateTabStatus], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
+    [setIsStreaming, incrementStreamGen, updateTabStatus], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
   );
 
   /**
@@ -4428,6 +4404,13 @@ export function useChatStreamingLifecycle(
         // Clear resume indicator + sessionStorage (not part of streaming flag).
         tabState.isResuming = false;
         if (tabState._resumeTimeoutId) { clearTimeout(tabState._resumeTimeoutId); tabState._resumeTimeoutId = undefined; }
+        // The turn is over: retract ITS "still working" notice. Token-checked,
+        // and only reached by the live completer (gen guard above), so a late
+        // [DONE] of an older turn can never remove a newer turn's notice.
+        if (capturedTabId && tabState._stillWorkingNoticeToken !== undefined) {
+          tabNoticeStore.dismiss(capturedTabId, STILL_WORKING_NOTICE_ID, tabState._stillWorkingNoticeToken);
+          tabState._stillWorkingNoticeToken = undefined;
+        }
         if (tabState.sessionId) {
           removePendingState(tabState.sessionId);
         }

@@ -1297,18 +1297,19 @@ const _registry = new Map<string, MessageStore>();
 // point so the ~8 getOrCreate callsites don't each need to pass liveness — the
 // per-tab watchdog gate (Gate-1 Finding 1) is fed from ONE authority (AC4).
 let _defaultIsBackendLive: (() => StallLiveness) | undefined;
-let _defaultOnAffordance: (() => void) | undefined;
+let _defaultOnAffordance: ((tabId: string) => void) | undefined;
 
 export const messageStoreRegistry = {
   /** Wire the loop-independent liveness verdict once (from ChatPage's health
    *  ref). Applies to all currently-registered stores AND is inherited by any
    *  store created afterwards. Idempotent — safe to call on every render with a
    *  fresh stable closure. */
-  setDefaultLiveness(isBackendLive: () => StallLiveness, onAffordance?: () => void): void {
+  setDefaultLiveness(isBackendLive: () => StallLiveness, onAffordance?: (tabId: string) => void): void {
     _defaultIsBackendLive = isBackendLive;
     _defaultOnAffordance = onAffordance;
-    for (const store of _registry.values()) {
-      store.setLiveness(isBackendLive, onAffordance);
+    // Each store's affordance is bound to ITS tab, so the hint lands on that tab.
+    for (const [tabId, store] of _registry.entries()) {
+      store.setLiveness(isBackendLive, onAffordance ? () => onAffordance(tabId) : undefined);
     }
   },
 
@@ -1319,7 +1320,8 @@ export const messageStoreRegistry = {
       store = new MessageStore(options);
       // Inherit the registry default liveness unless the caller supplied its own.
       if (_defaultIsBackendLive && !options?.isBackendLive) {
-        store.setLiveness(_defaultIsBackendLive, _defaultOnAffordance);
+        const onAff = _defaultOnAffordance;
+        store.setLiveness(_defaultIsBackendLive, onAff ? () => onAff(tabId) : undefined);
       }
       _registry.set(tabId, store);
     }

@@ -13,6 +13,7 @@
  * @module streamingTestUtils
  */
 
+import { tabNoticeStore } from '../../stores/tabNoticeStore';
 import { vi } from 'vitest';
 import type { UnifiedTab, TabStatus } from '../../hooks/useUnifiedTabState';
 import type { ChatStreamingLifecycleDeps } from '../../hooks/useChatStreamingLifecycle';
@@ -117,6 +118,8 @@ export function makeToolUse(name: string, id?: string): ContentBlock {
  *  would leak into a later test that reuses the same tabId, silently flipping the
  *  surface/stream handlers from the no-store branch to the store branch. */
 export function resetTestState(): void {
+  // In-tab notices live in a module singleton keyed by tabId: drop every tab's.
+  for (const id of testTabMap.keys()) tabNoticeStore.clearTab(id);
   testTabMap.clear();
   testActiveTabIdRef.current = null;
   messageStoreRegistry.clear();

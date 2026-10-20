@@ -76,7 +76,9 @@ import {
   STORAGE_KEY_PREFIX,
   PERSISTED_STATE_VERSION,
   RECONCILE_TAIL,
+  RECOVERY_EXHAUSTED_NOTICE_ID,
 } from '../hooks/useChatStreamingLifecycle';
+import { tabNoticeStore } from '../stores/tabNoticeStore';
 import { MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
 // UnifiedTab type removed — not directly referenced in tests
 import type { TabStatus } from '../hooks/useUnifiedTabState';
@@ -384,7 +386,7 @@ describe('useChatStreamingLifecycle', () => {
     });
   });
 
-  describe('recovery_exhausted toast (run_d8dce02a)', () => {
+  describe('recovery_exhausted in-tab notice (run_d8dce02a)', () => {
     // Adversarial #1 (CRITICAL): recovery_exhausted is yielded AFTER the turn's
     // `result` event, which bumps streamGen. If it were handled after the
     // generation guard it would be discarded as stale and the toast would never
@@ -422,13 +424,13 @@ describe('useChatStreamingLifecycle', () => {
         });
       });
 
-      // The toast MUST be raised despite the generation bump.
-      expect(mockAddToast).toHaveBeenCalledTimes(1);
-      const toast = mockAddToast.mock.calls[0][0];
-      expect(toast.severity).toBe('warning');
-      expect(toast.autoDismiss).toBe(false);
-      expect(toast.id).toBe('recovery-exhausted-tab-1');
-      expect(toast.action?.label).toBe('Start fresh session');
+      // The notice MUST be raised despite the generation bump — on THIS tab,
+      // never as a top-right toast.
+      expect(mockAddToast).not.toHaveBeenCalled();
+      const notice = tabNoticeStore.getSnapshot('tab-1').find((n) => n.id === RECOVERY_EXHAUSTED_NOTICE_ID);
+      expect(notice?.severity).toBe('warning');
+      expect(notice?.autoDismissMs).toBeUndefined();
+      expect(notice?.action?.label).toBe('Start fresh session');
     });
 
     it('action triggers onStartFresh for the tab', () => {
@@ -441,14 +443,14 @@ describe('useChatStreamingLifecycle', () => {
       act(() => {
         handler({ type: 'recovery_exhausted', sessionId: 's', message: 'x' });
       });
-      const toast = mockAddToast.mock.calls.at(-1)![0];
-      act(() => { toast.action!.onClick(); });
+      const notice = tabNoticeStore.getSnapshot('tab-1').find((n) => n.id === RECOVERY_EXHAUSTED_NOTICE_ID)!;
+      act(() => { notice.action!.run(notice.tabId, notice.sessionId); });
       expect(onStartFresh).toHaveBeenCalledWith('tab-1');
     });
 
-    it('offers NO action when the tab is no longer open (would clear the wrong tab)', () => {
-      // Adversarial #3/#4: a toast outliving its tab must not offer an action
-      // that clears the now-active tab.
+    it('raises nothing when the tab is no longer open (would clear the wrong tab)', () => {
+      // Adversarial #3/#4: a notice for a closed tab must not exist at all —
+      // nothing can then clear the now-active tab.
       const onStartFresh = vi.fn();
       const { result } = renderHook(() =>
         useChatStreamingLifecycle({ ...createMockDeps(), onStartFresh }),
@@ -458,8 +460,17 @@ describe('useChatStreamingLifecycle', () => {
       act(() => {
         handler({ type: 'recovery_exhausted', sessionId: 's', message: 'x' });
       });
-      const toast = mockAddToast.mock.calls.at(-1)![0];
-      expect(toast.action).toBeUndefined();
+      expect(tabNoticeStore.getSnapshot('tab-gone')).toHaveLength(0);
+      expect(mockAddToast).not.toHaveBeenCalled();
+    });
+
+    it('a superseded stream handler raises nothing on the tab', () => {
+      const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+      act(() => { initTestTab('tab-sup'); });
+      const oldHandler = result.current.createStreamHandler('m1', 'tab-sup');
+      result.current.createStreamHandler('m2', 'tab-sup'); // reconnect / new send
+      act(() => { oldHandler({ type: 'recovery_exhausted', sessionId: 's', message: 'x' }); });
+      expect(tabNoticeStore.getSnapshot('tab-sup')).toHaveLength(0);
     });
   });
 
@@ -3398,14 +3409,13 @@ describe('Fix 8: Tab status indicators', () => {
       expect(testTabMap.get('tab-s')?.status).toBe('waiting_input');
     });
 
-    it('cross-tab ask_user_question toast is persistent and actionable (jump-to-tab)', () => {
-      // A question arriving on a NON-active tab toasts the user to switch tabs.
-      // Regression: that toast must NOT auto-dismiss (it is an action, not an
-      // info ping) and MUST carry a clickable action that selects the asking tab.
-      const onSelectTab = vi.fn();
+    it('a background-tab ask_user_question raises no top-right toast; the tab header shows waiting_input', () => {
+      // A question arriving on a NON-active tab must not float over the active
+      // chat as a toast. The asking tab's header indicator (waiting_input) is
+      // the cross-tab signal.
       const msgId = 'msg-xtab-auq';
       const { result } = renderHook(() =>
-        useChatStreamingLifecycle({ ...createMockDeps(), onSelectTab }),
+        useChatStreamingLifecycle(createMockDeps()),
       );
 
       act(() => {
@@ -3418,7 +3428,7 @@ describe('Fix 8: Tab status indicators', () => {
       });
 
       // Handler bound to the BACKGROUND tab while 'tab-active' is active →
-      // isActiveTab is false → the cross-tab toast branch fires.
+      // isActiveTab is false.
       const handler = result.current.createStreamHandler(msgId, 'tab-bg');
 
       act(() => {
@@ -3435,18 +3445,8 @@ describe('Fix 8: Tab status indicators', () => {
         });
       });
 
-      const auqToast = mockAddToast.mock.calls
-        .map((c) => c[0])
-        .find((t) => typeof t.id === 'string' && t.id.startsWith('ask-uq-'));
-
-      expect(auqToast).toBeDefined();
-      // AC1: persistent — never auto-dismiss an actionable "go answer" prompt
-      expect(auqToast.autoDismiss).not.toBe(true);
-      // AC2: clickable action that jumps to the asking tab
-      expect(auqToast.action).toBeDefined();
-      expect(typeof auqToast.action.onClick).toBe('function');
-      auqToast.action.onClick();
-      expect(onSelectTab).toHaveBeenCalledWith('tab-bg');
+      expect(mockAddToast.mock.calls.filter((c) => String(c[0]?.id ?? '').startsWith('ask-uq-'))).toHaveLength(0);
+      expect(testTabMap.get('tab-bg')!.status).toBe('waiting_input');
     });
 
     it('error event sets status to error', () => {
@@ -4071,7 +4071,7 @@ describe('TabStatusIndicator component', () => {
       expect(reconnectToasts.length).toBe(0);
     });
 
-    it('a GENUINE network reconnect (reconnectionAttempt>0) still fires the success toast', () => {
+    it('a GENUINE network reconnect clears the spinner without any toast (the spinner going away is the signal)', () => {
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
@@ -4092,10 +4092,8 @@ describe('TabStatusIndicator component', () => {
         handler({ type: 'assistant', content: [{ type: 'text', text: 'back' }] } as StreamEvent);
       });
       expect(testTabMap.get('tab-reconn3')?.isReconnecting).toBe(false);
-      const reconnectToasts = mockAddToast.mock.calls.filter(
-        (c) => String((c[0] as { id?: string })?.id ?? '').startsWith('reconnect-success'),
-      );
-      expect(reconnectToasts.length).toBe(1);
+      expect(testTabMap.get('tab-reconn3')?.reconnectionAttempt).toBe(0);
+      expect(mockAddToast).not.toHaveBeenCalled();
     });
   });
 });

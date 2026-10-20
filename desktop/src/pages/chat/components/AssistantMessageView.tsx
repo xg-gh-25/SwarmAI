@@ -32,7 +32,7 @@
  *            3.1, 3.2, 3.3, 3.4, 3.5, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6
  */
 
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import clsx from 'clsx';
 import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
@@ -53,7 +53,6 @@ import { StreamingBee } from './StreamingBee';
 import { useMemorySave } from '../../../hooks/useMemorySave';
 import { chatService } from '../../../services/chat';
 import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
-import { useToast } from '../../../contexts/ToastContext';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { isOt01DiagEnabled } from '../../../utils/diagFlags';
 import { useLinger } from '../../../hooks/useLinger';
@@ -135,7 +134,16 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const chooseProcess = useCallback((id: string, open: boolean) => {
     setProcessChoice((prev) => new Map(prev).set(id, open));
   }, []);
-  const { addToast } = useToast();
+  // Result of this message's own actions (Compact / Save), shown under the
+  // message — it belongs to this chat, not to the app-wide toast stack.
+  const [actionNote, setActionNote] = useState<{ severity: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const noteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showNote = useCallback((severity: 'success' | 'error' | 'info', text: string) => {
+    if (noteTimerRef.current) clearTimeout(noteTimerRef.current);
+    setActionNote({ severity, text });
+    noteTimerRef.current = setTimeout(() => setActionNote(null), 4000);
+  }, []);
+  useEffect(() => () => { if (noteTimerRef.current) clearTimeout(noteTimerRef.current); }, []);
 
   // Per-session memory save state
   const { statusMap, toastMap, save: saveMemory, reset: resetMemory } = useMemorySave();
@@ -151,23 +159,15 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     try {
       const result = await chatService.compactSession(sessionId);
       setCompactStatus('done');
-      addToast({
-        severity: 'success',
-        message: result.status === 'compacted'
-          ? tf(t, 'chat.message.compactDone', 'Context compacted successfully')
-          : result.message,
-        autoDismiss: true,
-      });
+      showNote('success', result.status === 'compacted'
+        ? tf(t, 'chat.message.compactDone', 'Context compacted successfully')
+        : result.message);
       setTimeout(() => setCompactStatus('idle'), 3000);
     } catch {
       setCompactStatus('idle');
-      addToast({
-        severity: 'error',
-        message: tf(t, 'chat.message.compactFailed', 'Failed to compact session'),
-        autoDismiss: true,
-      });
+      showNote('error', tf(t, 'chat.message.compactFailed', 'Failed to compact session'));
     }
-  }, [sessionId, compactStatus, addToast, t]);
+  }, [sessionId, compactStatus, showNote, t]);
 
   // The ONE display projection of this turn (pages/chat/turnView.ts): ordered
   // units (process segments / landmarks / outcome / interrupts), the single
@@ -207,13 +207,13 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     }
   }, [sessionId, memorySaveStatus, saveMemory]);
 
-  // Fire toast when memory save completes (replaces inline <Toast> JSX)
+  // Show the memory-save result under this message when it completes.
   useEffect(() => {
     if (!isLastAssistant || !sessionId || !memoryToastMessage) return;
     const severity = memorySaveStatus === 'saved' ? 'success' : memorySaveStatus === 'error' ? 'error' : 'info';
-    addToast({ severity, message: memoryToastMessage, autoDismiss: true, durationMs: 4000 });
+    showNote(severity, memoryToastMessage);
     resetMemory(sessionId);
-  }, [memoryToastMessage, isLastAssistant, sessionId, memorySaveStatus, addToast, resetMemory]);
+  }, [memoryToastMessage, isLastAssistant, sessionId, memorySaveStatus, showNote, resetMemory]);
 
   // Compact button visibility: only on last assistant, not streaming, with active warning
   const showCompactButton = isLastAssistant
@@ -475,6 +475,22 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               {tf(t, 'chat.message.continue', 'Continue')}
             </button>
           )}
+        </div>
+      )}
+
+      {/* Result of this message's Compact / Save action (always visible, not hover-gated). */}
+      {actionNote && (
+        <div
+          role={actionNote.severity === 'error' ? 'alert' : 'status'}
+          data-testid="message-action-note"
+          className={clsx(
+            'mt-1 text-xs',
+            actionNote.severity === 'error' ? 'text-[var(--color-error,#ef4444)]'
+              : actionNote.severity === 'success' ? 'text-[var(--color-success,#22c55e)]'
+              : 'text-[var(--color-text-muted)]',
+          )}
+        >
+          {actionNote.text}
         </div>
       )}
 

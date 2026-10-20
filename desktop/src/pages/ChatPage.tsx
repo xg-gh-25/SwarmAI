@@ -56,6 +56,9 @@ import { useContextUsageRefresh } from '../hooks/contextUsage';
 import { shouldQueueSend } from '../hooks/streaming-guards';
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView, AlertsPill } from './chat/components';
+import { TabNoticeBar } from './chat/components/TabNoticeBar';
+import { resetTabToNewSession as resetTabById } from './chat/resetTab';
+import { tabNoticeStore, type NoticeTarget } from '../stores/tabNoticeStore';
 // HistoryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 // parseWorkPacket still used by ChatPage's dispatch (linked_context → work packet);
 // ToDoOverlay itself retired (M4): migrated to the OverlayHost registry.
@@ -132,7 +135,7 @@ export default function ChatPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { addToast, removeToast } = useToast();
+  const { addToast } = useToast();
   const { health } = useHealth();
   const { setActiveSessionMeta } = useSessionMeta();
   const { isLimited, getRemainingSeconds } = useRateLimiter();
@@ -161,27 +164,29 @@ export default function ChatPage() {
   // turn-liveness cap (ALIVE_REARM_CAP_MS), the terminators re-arm (never auto-kill
   // a live backend) — but daemon-liveness ≠ the SDK subprocess is still producing.
   // Without a VISIBLE signal the user is stranded on a silent spinner (the inverse
-  // of the interrupt bug). Surface a keyed, non-dismissing toast pointing at Stop.
-  // addToast via a ref so the callback stays stable (no re-arm churn).
-  const addToastRef = useRef(addToast);
-  addToastRef.current = addToast;
-  const onStreamAffordanceRef = useRef(() => {
-    addToastRef.current({
+  // of the interrupt bug). Surface a keyed in-tab notice pointing at Stop, on the
+  // tab whose stream went silent (never a top-right toast over another tab).
+  const onStreamAffordanceRef = useRef((tabId: string | null | undefined) => {
+    const tab = tabId ? tabMapRef.current.get(tabId) : undefined;
+    tabNoticeStore.post(tab, tab?.sessionId, {
+      id: 'stream-still-working',
       severity: 'info',
       message: 'Still working — the backend is alive but this turn has been silent for a while. Press Stop if it looks stuck.',
-      id: 'stream-still-working',
-      autoDismiss: true,
+      autoDismissMs: 8000,
     });
   });
-  const streamLiveness = useMemo(
-    () => ({ isBackendLive: isBackendLiveRef.current, onAffordance: onStreamAffordanceRef.current }),
+  /** Liveness options for one tab's stream: the affordance is bound to that tab. */
+  const streamLivenessFor = useCallback(
+    (tabId: string | null | undefined) => ({
+      isBackendLive: isBackendLiveRef.current,
+      onAffordance: () => onStreamAffordanceRef.current(tabId),
+    }),
     [],
   );
   // Feed the registry once so every per-tab MessageStore watchdog consults the
-  // SAME verdict AND surfaces the SAME affordance (AC4/AC8). Stable closures →
-  // safe to run on every render.
+  // SAME verdict; the registry binds the affordance to each store's own tabId.
   useEffect(() => {
-    messageStoreRegistry.setDefaultLiveness(isBackendLiveRef.current, onStreamAffordanceRef.current);
+    messageStoreRegistry.setDefaultLiveness(isBackendLiveRef.current, (tabId) => onStreamAffordanceRef.current(tabId));
   }, []);
   /** Per-tab draft text storage — NOT serialized to open_tabs.json to avoid large text writes. */
   const inputValueMapRef = useRef<Map<string, string>>(new Map());
@@ -368,7 +373,6 @@ export default function ChatPage() {
     tabMapRef,
     activeTabIdRef,
     onDrainQueue: (tabId: string) => drainQueueRef.current(tabId),
-    onSelectTab: (tabId: string) => selectTab(tabId),
     onStartFresh: (tabId: string) => startFreshRef.current(tabId),
     // Backfill a dispatched ToDo's session_id the moment its tab binds a session
     // — fires for BACKGROUND tabs too (the active-only effect misses those).
@@ -916,6 +920,25 @@ export default function ChatPage() {
     setPendingQuestion(null);
   }, [activeTabIdRef]);
 
+  /** Reset ONE tab, named by id, to a new session (history stays server-side).
+   *  Unlike handleNewChat it never resolves "the active tab": the tab's store and
+   *  tabMapRef entry are reset directly, and the React mirrors are touched only
+   *  when that tab is the active one at this moment. */
+  const resetTabToNewSession = useCallback((tabId: string) => {
+    const { isActive } = resetTabById(tabMapRef.current, tabId, activeTabIdRef.current, updateTabState);
+    if (isActive) {
+      setMessages([]);
+      setSessionId(undefined);
+      setPendingQuestion(null);
+    }
+  }, [tabMapRef, updateTabState, activeTabIdRef, setMessages, setSessionId, setPendingQuestion]);
+
+  /** Live tab lookup for the notice bar (render-time session + click-time re-check). */
+  const getNoticeTarget = useCallback(
+    (tabId: string): NoticeTarget | undefined => tabMapRef.current.get(tabId),
+    [tabMapRef],
+  );
+
 
   // Handle new session - creates new tab with "New Session" title (Req 2.2, 2.3)
   // Fix 6: Save current tab state before creating new tab, initialize new tab in per-tab map
@@ -1130,10 +1153,7 @@ export default function ChatPage() {
     // Destroy MessageStore for this tab (cleanup timers, listeners, prevent leak)
     messageStoreRegistry.destroy(tabId);
 
-    // GUI28: clear any persistent recovery_exhausted toast for this tab — else
-    // it outlives the tab and its "Start fresh" action would clear the WRONG
-    // (now-active) tab (adversarial #3/#4, run_d8dce02a).
-    removeToast(`recovery-exhausted-${tabId}`);
+    // (This tab's in-tab notices are dropped by closeTab → tabNoticeStore.clearTab.)
 
     // Let closeTab handle map deletion + auto-create of last tab.
     // closeTab also aborts the tab's in-flight stream (abortController.abort),
@@ -1168,7 +1188,7 @@ export default function ChatPage() {
         setIsExpanded(false);
       }
     }
-  }, [closeTab, clearPendingStreamTab, tabMapRef, activeTabIdRef, setMessages, setSessionId, setPendingQuestion, setContextWarning, setPendingPermissionRequestId, setIsExpanded, removeToast]);
+  }, [closeTab, clearPendingStreamTab, tabMapRef, activeTabIdRef, setMessages, setSessionId, setPendingQuestion, setContextWarning, setPendingPermissionRequestId, setIsExpanded]);
 
   // Handle tab close - removes tab, handles last-tab case (Req 3.3)
   // R6b: ANY close releases the backend slot. Idle tab → release silently.
@@ -2383,7 +2403,7 @@ export default function ChatPage() {
       createErrorHandler(assistantMessageId, activeTabIdRef.current ?? undefined),
       createCompleteHandler(activeTabIdRef.current ?? undefined),
       createDisconnectHandler(activeTabIdRef.current ?? undefined),
-      streamLiveness,
+      streamLivenessFor(activeTabIdRef.current),
     );
 
     // P2 one-shot: an attached terminal rides exactly ONE turn, then clears so
@@ -2423,7 +2443,7 @@ export default function ChatPage() {
           createErrorHandler(assistantMessageId, capturedTabIdForRetry),
           createCompleteHandler(capturedTabIdForRetry),
           createDisconnectHandler(capturedTabIdForRetry),
-          streamLiveness,
+          streamLivenessFor(capturedTabIdForRetry),
         );
       };
 
@@ -2589,7 +2609,7 @@ export default function ChatPage() {
         createErrorHandler(assistantMessageId, tabId),
         createCompleteHandler(tabId),
         createDisconnectHandler(tabId),
-        streamLiveness,
+        streamLivenessFor(tabId),
       );
 
       // P2 one-shot: clear attached terminal on the drain path too, so a
@@ -2623,12 +2643,11 @@ export default function ChatPage() {
   // Must be assigned after drainQueuedMessage is defined (circular dep with hook).
   drainQueueRef.current = drainQueuedMessage;
 
-  // Bridge the recovery_exhausted "Start fresh session" action. Switch to the
-  // target tab first (the toast may belong to a non-active tab), then clear it
-  // to a new session via handleNewChat (operates on the active tab).
+  // Bridge the recovery_exhausted "Start fresh session" action. It resets the
+  // tab the notice belongs to BY ID — the old select-then-clear-active order
+  // could clear the wrong tab when the active tab changed in between.
   startFreshRef.current = (tabId: string) => {
-    selectTab(tabId);
-    handleNewChat();
+    resetTabToNewSession(tabId);
   };
 
   // Cancel a queued message: remove from chat, restore text + attachments to input.
@@ -2677,9 +2696,8 @@ export default function ChatPage() {
       return;
     }
 
-    // Clear the cross-tab "Swarm is asking…" toast (if one was raised because
-    // the question arrived on a background tab) now that it's been answered.
-    removeToast(`ask-uq-${toolUseId}`);
+    // Retire this tab's no-host "Swarm is asking" notice now that it's answered.
+    if (tabId) tabNoticeStore.dismiss(tabId, `ask-uq-${toolUseId}`);
 
     // Root-1 SSOT Phase 3 (AC5 answer-in-flight guard): record the answered
     // toolUseId so the reconcile-loop re-surface does NOT re-inject this same
@@ -2764,7 +2782,7 @@ export default function ChatPage() {
       createErrorHandler(assistantMessageId, tabId),
       createCompleteHandler(tabId),
       createDisconnectHandler(tabId),
-      streamLiveness,
+      streamLivenessFor(tabId),
     );
 
     // Store abort function in the tab map for per-tab stop isolation.
@@ -2781,7 +2799,7 @@ export default function ChatPage() {
           createErrorHandler(assistantMessageId, capturedTabIdForRetry),
           createCompleteHandler(capturedTabIdForRetry),
           createDisconnectHandler(capturedTabIdForRetry),
-          streamLiveness,
+          streamLivenessFor(capturedTabIdForRetry),
         );
       };
       updateTabState(tabId, {
@@ -2848,7 +2866,7 @@ export default function ChatPage() {
       createErrorHandler(assistantMessageId, tabId),
       createCompleteHandler(tabId),
       createDisconnectHandler(tabId),
-      streamLiveness,
+      streamLivenessFor(tabId),
     );
 
     // Store abort function
@@ -3003,7 +3021,7 @@ export default function ChatPage() {
       (error) => { createErrorHandler(assistantMessageId, capturedTabId)(error); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); },
       () => { createCompleteHandler(capturedTabId)(); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); },
       createDisconnectHandler(capturedTabId),
-      streamLiveness,
+      streamLivenessFor(capturedTabId),
     );
 
     // Store abort function in the tab map for per-tab stop isolation.
@@ -3169,13 +3187,17 @@ export default function ChatPage() {
   // --- Context Refresh (Same-Tab Restart) ---
   const handleRefreshContext = useCallback(async () => {
     if (!sessionId || isStreaming) return;
+    // The tab + session this refresh is for, captured now: a failure must land
+    // on this tab even if the user switches tabs while the request runs.
+    const refreshTabId = activeTabIdRef.current;
+    const refreshSessionId = refreshTabId ? tabMapRef.current.get(refreshTabId)?.sessionId : undefined;
     setIsRefreshing(true);
     try {
       await chatService.refreshSession(sessionId);
       // Append a system separator (refresh- prefix → NOT a resume boundary, so
       // it does not dim prior messages). Route through the MessageStore — a
       // setMessages-only write would be clobbered by the store→React sync.
-      insertOptimisticMessages(activeTabIdRef.current, [
+      insertOptimisticMessages(refreshTabId, [
         {
           id: `refresh-${Date.now()}`,
           role: 'system' as const,
@@ -3185,12 +3207,21 @@ export default function ChatPage() {
       ]);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Refresh failed';
-      addToast({ severity: 'warning', message: msg.includes('active') ? 'Cannot refresh while the AI is busy. Stop or answer first.' : `Refresh failed: ${msg}`, autoDismiss: true });
+      tabNoticeStore.post(
+        refreshTabId ? tabMapRef.current.get(refreshTabId) : undefined,
+        refreshSessionId,
+        {
+          id: 'refresh-failed',
+          severity: 'warning',
+          message: msg.includes('active') ? 'Cannot refresh while the AI is busy. Stop or answer first.' : `Refresh failed: ${msg}`,
+          autoDismissMs: 8000,
+        },
+      );
     } finally {
       setIsRefreshing(false);
       setShowRefreshModal(false);
     }
-  }, [sessionId, isStreaming, addToast, insertOptimisticMessages, activeTabIdRef]);
+  }, [sessionId, isStreaming, insertOptimisticMessages, activeTabIdRef, tabMapRef]);
 
 
   // Handle agent save
@@ -3400,6 +3431,11 @@ export default function ChatPage() {
                 );
               })}
 
+              {/* This tab's own notices (tab/session-scoped; system-level
+                  notices stay in the top-right toast stack). The bar reads the
+                  tab's session from tabMapRef itself. */}
+              <TabNoticeBar tabId={activeTabId} getTab={getNoticeTarget} />
+
               {/* Rate limit countdown indicator */}
               {isLimited('/chat') && chatRateLimitCountdown > 0 && (
                 <div className="chat-gutter py-2">
@@ -3422,7 +3458,12 @@ export default function ChatPage() {
                 selectedAgentId={selectedAgentId}
                 attachments={attachments}
                 onAddFiles={addFiles}
-                onCaptureError={(msg) => addToast({ severity: 'error', message: msg, autoDismiss: true })}
+                onCaptureError={(msg) => {
+                  // Screenshot capture runs from the shared input; the error is
+                  // shown on the tab that is active when it fails.
+                  const tab = activeTabIdRef.current ? tabMapRef.current.get(activeTabIdRef.current) : undefined;
+                  tabNoticeStore.post(tab, tab?.sessionId, { id: 'capture-failed', severity: 'error', message: msg, autoDismissMs: 8000 });
+                }}
                 onRemoveFile={removeAttachment}
                 isProcessingFiles={isProcessingFiles}
                 fileError={fileError}

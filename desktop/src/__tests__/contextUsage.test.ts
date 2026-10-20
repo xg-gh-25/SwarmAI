@@ -8,8 +8,8 @@
  * - The lifecycle hook's single apply path: a ``context_warning`` SSE snapshot
  *   and a GET result both go through it; an older snapshot never replaces a
  *   newer one; ``context_compacted`` no longer empties the ring (the backend
- *   pushes the post-compact snapshot); the critical toast fires only on the
- *   transition into critical.
+ *   pushes the post-compact snapshot); the critical warning is an in-tab notice
+ *   on the snapshot's own tab, raised once per critical episode.
  * - ``refreshContextUsage`` and the end-to-end staleness wiring: a successful
  *   ``chatService.compactSession`` → notifier → the hook's real subscription →
  *   ``GET /chat/sessions/{id}/context-usage`` → tab state (only HTTP mocked).
@@ -20,14 +20,14 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import {
   toContextWarning,
   isNewerSnapshot,
-  criticalToastAction,
   snapshotFromEvent,
   notifyContextUsageStale,
   onContextUsageStale,
   useContextUsageRefresh,
   type ContextUsageSnapshot,
 } from '../hooks/contextUsage';
-import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
+import { useChatStreamingLifecycle, CONTEXT_CRITICAL_NOTICE_ID } from '../hooks/useChatStreamingLifecycle';
+import { tabNoticeStore } from '../stores/tabNoticeStore';
 import { getContextRingColor } from '../pages/chat/components/ContextUsageRing';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import { chatService } from '../services/chat';
@@ -38,7 +38,6 @@ import {
   initTestTab,
   makeMessage,
   resetTestState,
-  testActiveTabIdRef,
 } from './helpers/streamingTestUtils';
 
 const mockAddToast = vi.hoisted(() => vi.fn());
@@ -72,13 +71,6 @@ describe('contextUsage helpers', () => {
     expect(isNewerSnapshot(100, snap({ measuredAt: 100 }))).toBe(true);
     expect(isNewerSnapshot(200, snap({ measuredAt: 100 }))).toBe(false);
     expect(isNewerSnapshot(200, snap({ measuredAt: undefined }))).toBe(true);
-  });
-
-  it('critical toast is a projection of the active tab level', () => {
-    expect(criticalToastAction('critical', false)).toBe('raise');
-    expect(criticalToastAction('critical', true)).toBe('none');
-    expect(criticalToastAction('warn', true)).toBe('dismiss');
-    expect(criticalToastAction(null, false)).toBe('dismiss');
   });
 
   it('snapshotFromEvent narrows a stream event without losing provenance', () => {
@@ -149,6 +141,7 @@ describe('contextUsage helpers', () => {
 describe('lifecycle hook applies backend snapshots', () => {
   beforeEach(() => {
     resetTestState();
+    for (const id of ['tab-d', 'tab-bg', 'tab-fg', 'tab-ep']) tabNoticeStore.clearTab(id);
     mockAddToast.mockClear();
     mockRemoveToast.mockClear();
     vi.restoreAllMocks();
@@ -195,49 +188,41 @@ describe('lifecycle hook applies backend snapshots', () => {
     expect(result.current.contextWarning?.pct).toBe(4);
   });
 
-  it('critical toast fires once on the transition, not per snapshot', () => {
+  // The critical warning is an in-tab notice of the tab the snapshot is for —
+  // never a top-right toast, never routed through "the active tab".
+  const critical = (tabId: string) =>
+    tabNoticeStore.getSnapshot(tabId).filter((n) => n.id === CONTEXT_CRITICAL_NOTICE_ID);
+
+  it('critical notice is raised once per episode, not per snapshot', () => {
     const { handler } = setup('tab-d');
     act(() => { handler(snap({ level: 'critical', pct: 86, measuredAt: 1 }) as never); });
+    const first = critical('tab-d')[0];
+    act(() => { tabNoticeStore.dismiss('tab-d', CONTEXT_CRITICAL_NOTICE_ID); });
     act(() => { handler(snap({ level: 'critical', pct: 87, measuredAt: 2 }) as never); });
     act(() => { handler(snap({ level: 'critical', pct: 88, measuredAt: 3 }) as never); });
-    const critical = mockAddToast.mock.calls.filter((c) => c[0]?.id === 'context-warning-critical');
-    expect(critical).toHaveLength(1);
+    expect(first).toBeDefined();
+    expect(critical('tab-d')).toHaveLength(0); // the user's dismiss sticks for the episode
+    expect(mockAddToast).not.toHaveBeenCalled();
   });
 
-  it('a critical background tab raises no toast; the active tab leaving critical dismisses it', () => {
+  it('a critical background tab gets the notice on ITS tab only; leaving critical retracts it', () => {
     const bg = setup('tab-bg', 'sess-bg');
-    const fg = setup('tab-fg', 'sess-fg'); // initTestTab makes this the active tab
+    setup('tab-fg', 'sess-fg'); // initTestTab makes this the active tab
     act(() => { bg.handler(snap({ level: 'critical', pct: 90, measuredAt: 1 }) as never); });
-    expect(mockAddToast.mock.calls.filter((c) => c[0]?.id === 'context-warning-critical')).toHaveLength(0);
-    act(() => { fg.handler(snap({ level: 'critical', pct: 91, measuredAt: 1 }) as never); });
-    expect(mockAddToast.mock.calls.filter((c) => c[0]?.id === 'context-warning-critical')).toHaveLength(1);
-    act(() => { fg.handler(snap({ level: 'ok', pct: 4, basis: 'post_compact', measuredAt: 2 }) as never); });
-    expect(mockRemoveToast).toHaveBeenCalledWith('context-warning-critical');
+    expect(critical('tab-bg')).toHaveLength(1);
+    expect(critical('tab-bg')[0].sessionId).toBe('sess-bg');
+    expect(critical('tab-fg')).toHaveLength(0);
+    act(() => { bg.handler(snap({ level: 'ok', pct: 4, basis: 'post_compact', measuredAt: 2 }) as never); });
+    expect(critical('tab-bg')).toHaveLength(0);
   });
 
-  it('switching TO a tab that went critical in the background raises the toast; switching away dismisses it', () => {
-    const bg = setup('tab-bg2', 'sess-bg2');
-    setup('tab-fg2', 'sess-fg2'); // active
-    act(() => { bg.handler(snap({ level: 'critical', pct: 90, measuredAt: 1 }) as never); });
-    expect(mockAddToast.mock.calls.filter((c) => c[0]?.id === 'context-warning-critical')).toHaveLength(0);
-    // ChatPage's tab switch mirrors the tab's state into React state:
-    act(() => {
-      testActiveTabIdRef.current = 'tab-bg2';
-      bg.result.current.setContextWarning(testTabMap.get('tab-bg2')!.contextWarning);
-    });
-    expect(mockAddToast.mock.calls.filter((c) => c[0]?.id === 'context-warning-critical')).toHaveLength(1);
-    mockRemoveToast.mockClear();
-    act(() => {
-      testActiveTabIdRef.current = 'tab-fg2';
-      bg.result.current.setContextWarning(null);
-    });
-    expect(mockRemoveToast).toHaveBeenCalledWith('context-warning-critical');
-    // ...and coming back to the still-critical tab raises it again.
-    act(() => {
-      testActiveTabIdRef.current = 'tab-bg2';
-      bg.result.current.setContextWarning(testTabMap.get('tab-bg2')!.contextWarning);
-    });
-    expect(mockAddToast.mock.calls.filter((c) => c[0]?.id === 'context-warning-critical')).toHaveLength(2);
+  it('a new critical episode after leaving critical raises the notice again', () => {
+    const { handler } = setup('tab-ep', 'sess-ep');
+    act(() => { handler(snap({ level: 'critical', pct: 90, measuredAt: 1 }) as never); });
+    act(() => { tabNoticeStore.dismiss('tab-ep', CONTEXT_CRITICAL_NOTICE_ID); });
+    act(() => { handler(snap({ level: 'ok', pct: 10, measuredAt: 2 }) as never); });
+    act(() => { handler(snap({ level: 'critical', pct: 91, measuredAt: 3 }) as never); });
+    expect(critical('tab-ep')).toHaveLength(1);
   });
 
   it('a GET answered after a newer SSE snapshot does not roll the ring back', async () => {
