@@ -93,6 +93,7 @@ XG 定的规则，代码已落地（`pipeline_test.py` 的 `_full_scope_refusal`
   里 runner 直接拒绝，并提示改用 `--mode tdd --files` 或 `--mode prove`。默认退出条件不再自动加 `mode:verify`；
   已声明的 `mode:` 条件只在 DELIVER 判。
 - 一个 run 最多 2 轮全范围（第一轮红了、修完再跑一次）。deadline 没跑完的续跑、缓存命中都不算一轮。goal run 不受限。
+  2 轮之后修复由 `--mode recheck` 判定（§11 2026-10-20 第二条）。
 - push_ready 必须有一份 verify / regression 报告，而且在最后一次改动之后；只有 tdd 是绿的不算。纯文档改动不需要。
 - 不再偷偷重跑：输入没变、测试都跑完了但结果不能缓存（有失败、单测超时），结果照原样报告，不再执行。续跑只补
   deadline 留下没跑的测试，跑过并失败的不重跑。
@@ -169,3 +170,15 @@ break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连�
 
 - 2026-10-20 `_full_scope_refusal`：`SWARM_FULL_SCOPE_FORCE=1` 改成 `SWARM_GATE_FORCE=full_scope`（FORCE 开关合并，
   见 AGENTS.md "Security Architecture"）。选择逻辑没变，只换了摘要。
+- 2026-10-20 `_full_scope_refusal`（XG："先修上限与落地检查的死锁"）：上限和落地检查互相锁死。落地检查读
+  每一份 latest-<mode> 报告，旧的红只能靠重跑同一个 mode 清掉；第 2 轮全范围红了、修好以后，第 3 轮被上限拒绝，
+  这个红就永远留在报告里，改动永远落不了地（run_30760ed4：修复只改了一行，tdd 已绿）。改动：
+  - 上限只数 verify / regression。手动 `--mode recheck` 不算一轮全范围：它重跑上一份报告里红的、没跑完的
+    测试，以及上一轮之后改过的文件的 importer（选法和 regression 相同，`REVERSE_DEPTH = 1`），叠加回
+    latest-regression.json。2 轮之后修复就靠它判定。
+  - recheck 也有上限：代码相对上一份报告有改动的 recheck（修复型），每个 run 最多 `RECHECK_MAX_FIXES = 3`
+    次；代码没变的 recheck 只是把剩下的跑完，不计数，由熔断器兜底。用完还红：不落地，点名是哪些测试。
+  - 叠加后的报告记录 recheck 的 worktree tree（原来只换了 changed_files / head_sha / tree_digest），否则
+    落地检查会以"测试产生于另一棵 tree"拒绝。修复型 recheck 落地后 push_ready 为 false：没重跑的那部分
+    范围不是在最终代码上跑的，由人决定 push。
+  选择逻辑（`_plan`、`select_backend`）没变。

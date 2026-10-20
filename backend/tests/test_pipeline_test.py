@@ -1167,7 +1167,8 @@ def test_overlay_evidence_replaces_rechecked_results_by_nodeid(tmp_path):
     assert ev["counts"]["passed"] == 3 and ev["counts"]["timeouts"] == 0
     assert ev["failures"] == [] and ev["mode"] == "regression"
     assert ev["layers"]["dependency_scoped"]["pass"] == 2 and ev["layers"]["import_smoke"]["pass"] == 1
-    assert ev["rechecked_from"] == {"finished_at": "t0", "rechecked": 2, "auto": False}
+    assert ev["rechecked_from"] == {"finished_at": "t0", "rechecked": 2, "auto": False,
+                                 "fix": True}
     # staleness checks compare against the tree the recheck saw, not the base's
     assert (ev["changed_files"], ev["head_sha"], ev["tree_digest"]) == ({"backend/core/mod.py": "d2"}, "h2", "t2")
 
@@ -1841,3 +1842,40 @@ def test_not_run_counts_only_deadline_unfinished_tests():
              {"nodeid": "d", "outcome": "failed", "deadline": False}]
     assert pt._not_run_count(fails) == 2
     assert pt._not_run_count([]) == 0 and pt._not_run_count(None) == 0
+
+
+def test_past_the_cap_a_fix_recheck_clears_the_red_and_is_counted(rig, capsys, tmp_path, monkeypatch):
+    """The cap / landing deadlock end to end (XG 2026-10-20): the last full round is red,
+    no new round is allowed, and a recheck on the fixed code clears the red in
+    latest-regression.json. The runner itself marks that recheck a fix in the run index
+    (that is what the fix budget counts); a recheck on unchanged code is not refused by
+    the budget; past the budget a recheck on changed code is refused."""
+    state = {"profile": "full", "stage_timing": {
+        "deliver": {"started_at": "2026-10-20T01:00:00+00:00"}}}
+    repo = rig(run_state=state)
+    broken = {"backend/core/mod.py": "def add(a, b):\n    return a - b\n"}
+    _write(repo, broken)
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    assert code != 0 and out["failures"], out
+    idx_path = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs" / RUN_ID \
+        / "evidence" / "tests" / pt.RUN_INDEX
+    idx = json.loads(idx_path.read_text())
+    idx.append({"kind": "run", "mode": "regression", "auto_recheck_of": None, "cached": False})
+    idx_path.write_text(json.dumps(idx))                       # the cap is reached
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return a * b\n"})
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    assert code == 2 and out["full_scope"]["refused"] and "--mode recheck" in out["error"]
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return a + b  # fixed\n"})
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
+    assert code == 0, out
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert ev["failures"] == [] and ev["rechecked_from"]["fix"] is True
+    rows = [e for e in json.loads(idx_path.read_text()) if e.get("mode") == "recheck"]
+    assert rows[-1]["fix"] is True and rows[-1]["kind"] == "run"
+    monkeypatch.setattr(pt, "RECHECK_MAX_FIXES", 1)
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
+    assert not (out.get("full_scope") or {}).get("fix_rechecks"), out   # unchanged code
+    assert _evidence(tmp_path, "tests/latest-regression.json")["rechecked_from"].get("fix") is True
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
+    assert code == 2 and out["full_scope"]["fix_rechecks"] == 1 and "does not land" in out["error"]

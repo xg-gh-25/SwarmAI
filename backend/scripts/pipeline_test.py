@@ -96,6 +96,8 @@ atomically (tmp + replace) under ``tests/.run_index.lock``; one object per evide
 - ``blocking_sig``: sorted nodeids of the evidence's blocking failures (``_blocking_sig``);
   the circuit breaker compares it across rounds to detect a loop making no progress
 - ``unfinished``: tests the deadline left unrun; a continuation's progress (T5)
+- ``fix`` (a manual recheck only): true when it ran on code changed since the report it
+  rechecks; the fix budget past the full-scope cap counts these (_full_scope_refusal)
 An automatic recheck writes two entries: ``kind=run, mode=recheck, auto_recheck_of=M``
 and ``kind=overlay, mode=M``.
 
@@ -2962,7 +2964,7 @@ class _Ctx:
 
 def _write_evidence(ev_root: Path, mode: str, ev: dict, kind: str = "run",
                     auto_recheck_of: str | None = None,
-                    rechecked_from: str | None = None) -> Path:
+                    rechecked_from: str | None = None, fix: bool | None = None) -> Path:
     tdir = ev_root / "tests"
     stamp = _stamp()
     path, n = tdir / f"{mode}-{stamp}.json", 1
@@ -2977,6 +2979,7 @@ def _write_evidence(ev_root: Path, mode: str, ev: dict, kind: str = "run",
             "ts": round(time.time(), 3), "evidence": path.name,
             "cached": bool(ev.get("cached")), "auto_recheck_of": auto_recheck_of,
             "rechecked_from": rechecked_from, "blocking_sig": _blocking_sig(ev),
+            **({"fix": bool(fix)} if fix is not None else {}),
             "unfinished": len(_unfinished_failures(ev)),
             "unfinished_files": len({str(f.get("nodeid") or "").split("::")[0]
                                      for f in _unfinished_failures(ev)})})
@@ -3017,15 +3020,21 @@ def _blocking_sig(ev: dict) -> list[str]:
                   if isinstance(f, dict) and not _failure_nonblocking(f))
 
 
-# Full-scope runs (verify / regression / recheck: the change's whole dependency scope)
-# happen ONCE per run, at DELIVER, after the last change (XG 2026-10-20). Landing reads
-# only the latest scope report on the final code, so a scope run in BUILD or TEST was
-# never used. Fix rounds run the affected tests (tdd) or break tests (prove). A second
-# round is allowed only when the first one was red and the code was fixed; continuing
-# the tests a deadline left unrun is the same round. A goal run keeps its own loop.
+# Full-scope runs (verify / regression: the change's whole dependency scope) happen at
+# DELIVER only, after the last change (XG 2026-10-20), at most FULL_SCOPE_MAX_ROUNDS per
+# run: landing reads the latest scope report on the final code, so a scope run in BUILD
+# or TEST was never used. Fix rounds run the affected tests (tdd) or break tests (prove).
+# Continuing the tests a deadline left unrun is the same round. A recheck (also DELIVER
+# only) is not a round: it re-runs the reds of the latest report and the tests of the
+# files changed since, and is how a fix is judged once the rounds are used up; at most
+# RECHECK_MAX_FIXES rechecks on changed code per run. A goal run keeps its own loop.
 FULL_SCOPE_MODES = ("verify", "regression", "recheck")
 FULL_SCOPE_STAGES = ("deliver",)
 FULL_SCOPE_MAX_ROUNDS = 2
+# A recheck on changed code is a fix: this many per run, before or after the round cap
+# (design: each red test gets three fix attempts). A recheck on unchanged code only
+# finishes what was left and is not counted.
+RECHECK_MAX_FIXES = 3
 
 
 def _unfinished(f: dict) -> bool:
@@ -3105,8 +3114,19 @@ def _open_stage(run_state: dict) -> "str | None":
     return best[1] if best else None
 
 
-def _full_scope_refusal(ev_root: Path, mode: str, run_state: dict) -> "dict | None":
-    """Refuse a NEW full-scope round outside DELIVER, or past FULL_SCOPE_MAX_ROUNDS.
+def _is_fix_recheck(base: dict, current: dict) -> bool:
+    """A recheck runs on CHANGED code (a fix) when the change set's file digests differ
+    from those of the report it rechecks; a report with no digests counts as changed."""
+    before = base.get("changed_files") if isinstance(base, dict) else None
+    return not isinstance(before, dict) or not before or dict(before) != dict(current)
+
+
+def _full_scope_refusal(ev_root: Path, mode: str, run_state: dict,
+                        fix: bool = True) -> "dict | None":
+    """Refuse a full-scope call outside DELIVER; a NEW verify / regression round past
+    FULL_SCOPE_MAX_ROUNDS; a recheck on changed code (*fix*) past RECHECK_MAX_FIXES.
+    A recheck is not a full-scope round: past the cap it is how a fix is judged, so the
+    cap never locks against the landing check (which reads the overlaid report).
     Operator override: SWARM_GATE_FORCE=full_scope."""
     if mode not in FULL_SCOPE_MODES or force_enabled("full_scope"):
         return None
@@ -3123,15 +3143,33 @@ def _full_scope_refusal(ev_root: Path, mode: str, run_state: dict) -> "dict | No
                           f"runs once per run, at DELIVER after the last change (landing reads "
                           f"only that report). Not in {stage}: {narrow}.")}
     idx = _read_json(ev_root / "tests" / RUN_INDEX)
-    rounds = [e for e in idx if isinstance(e, dict) and e.get("kind") == "run"
-              and e.get("mode") in FULL_SCOPE_MODES and not e.get("auto_recheck_of")
-              and not e.get("cached")] if isinstance(idx, list) else []
+    own = [e for e in idx if isinstance(e, dict) and e.get("kind") == "run"
+           and not e.get("auto_recheck_of") and not e.get("cached")] \
+        if isinstance(idx, list) else []
+    if mode == "recheck":
+        if not fix:
+            return None  # unchanged code: it finishes the last report, it is not a fix
+        fixes = [e for e in own if e.get("mode") == "recheck" and e.get("fix", True)]
+        if len(fixes) >= RECHECK_MAX_FIXES:
+            return {"mode": mode, "ok": False,
+                    "full_scope": {"refused": True, "fix_rechecks": len(fixes)},
+                    "error": (f"{len(fixes)} rechecks on changed code already ran in this run "
+                              f"(limit {RECHECK_MAX_FIXES}): stop fixing. The change does not "
+                              "land while a test in latest-regression.json is red or "
+                              "unfinished: complete DELIVER with those tests named in "
+                              "attention_flags (REPORT §10); the code stays in the run's "
+                              "worktree. Operator override only: SWARM_GATE_FORCE=full_scope")}
+        return None
+    rounds = [e for e in own if e.get("mode") in ("verify", "regression")]
     if len(rounds) >= FULL_SCOPE_MAX_ROUNDS:
         return {"mode": mode, "ok": False, "full_scope": {"refused": True, "rounds": len(rounds)},
                 "error": (f"{len(rounds)} full-scope rounds already ran in this run (limit "
-                          f"{FULL_SCOPE_MAX_ROUNDS}): stop fixing, complete DELIVER with "
-                          "push_ready false and the failing tests named in attention_flags "
-                          "(REPORT §10). Operator override only: SWARM_GATE_FORCE=full_scope")}
+                          f"{FULL_SCOPE_MAX_ROUNDS}): no new round. Fix the failing tests, "
+                          "then run `--mode recheck`: it re-runs the failing and unfinished "
+                          "tests of the last report and the tests of every file changed "
+                          "since, on the current code, and updates latest-regression.json "
+                          f"(at most {RECHECK_MAX_FIXES} rechecks on changed code). "
+                          "Operator override only: SWARM_GATE_FORCE=full_scope")}
     return None
 
 
@@ -3963,7 +4001,15 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
     # The tree the merged evidence describes is the RECHECK's: it re-selected tests for
     # every file changed since the base (an overlay with budget skips is never made), so
     # its file digests, HEAD and tree digest are the ones staleness checks must compare.
-    for k in ("changed_files", "head_sha", "tree_digest"):
+    # Sticky: once a recheck on changed code is laid over this report, a later overlay on
+    # the same code (finishing what a deadline left) keeps the mark. Only a fresh verify /
+    # regression, which never goes through here, writes a report without it.
+    prior = base.get("rechecked_from") if isinstance(base.get("rechecked_from"), dict) else {}
+    fix = bool(prior.get("fix")) or (_is_fix_recheck(base, re_ev.get("changed_files") or {})
+                                    if isinstance(re_ev.get("changed_files"), dict) else False)
+    # worktree too: the landing check binds the change to it. Left at the base's tree,
+    # a green recheck on fixed code was refused as "produced on a different tree".
+    for k in ("changed_files", "head_sha", "tree_digest", "worktree"):
         if re_ev.get(k) is not None:
             ev[k] = re_ev[k]
     if isinstance(base.get("l2_file_keys"), dict):
@@ -3986,6 +4032,7 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
               layers=layers, finished_at=_now_iso(), cached=False,
               rechecked_from={"finished_at": base.get("finished_at"),
                               "rechecked": len(new), "auto": auto,
+                              **({"fix": True} if fix else {}),
                               **({"held_order_dependent": sorted(held)} if held else {})})
     return ev
 
@@ -4069,12 +4116,18 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
             auto = _auto_recheck(ctx, ns, ev_root, run_state, deadline, prev)
             if auto is not None:
                 return auto
+    fix = None
+    if ns.mode == "recheck" and not getattr(ns, "auto_recheck_of", None):
+        fix = _is_fix_recheck(_read_json(ev_root / "tests" / f"latest-{plan.get('base_mode')}.json"),
+                              _digest_map(ctx.repo, plan["changed"]))
     if ns.run_id and not getattr(ns, "auto_recheck_of", None):
-        refused = _full_scope_refusal(ev_root, ns.mode, run_state)
+        refused = _full_scope_refusal(ev_root, ns.mode, run_state,
+                                      fix=True if fix is None else fix)
         if refused is not None:
             return refused, 2
     idx_info = {"auto_recheck_of": getattr(ns, "auto_recheck_of", None),
-                "rechecked_from": plan.get("base_finished_at") if ns.mode == "recheck" else None}
+                "rechecked_from": plan.get("base_finished_at") if ns.mode == "recheck" else None,
+                "fix": fix}
     fmode = ns.mode + ("+tsc" if plan.get("desktop_tsc") else "")
     fkey = _frontend_key(ctx, fmode, plan["desktop"], plan["changed"]) if plan["desktop"] else ""
     cpath = ctx.cache / "results" / f"{key}{fkey[:16]}.json"

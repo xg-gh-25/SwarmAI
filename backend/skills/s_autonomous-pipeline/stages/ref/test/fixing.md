@@ -38,7 +38,11 @@ Rules that hold across all classes:
    test files, ≤5>` (or `--mode prove` for break tests), never a full-scope run. Still
    red → the next pass starts again at step 1.
 4. After the last fix: ONE more `RUN --mode regression` (the runner allows two full-scope
-   rounds per run). Re-running it on unchanged code is refused as a no-op: the result
+   rounds per run). Past those two, a fix is judged by `RUN --mode recheck`: it re-runs
+   the red and unfinished tests of latest-regression.json and the tests of every file
+   changed since, on the current code, and updates that report (at most three rechecks
+   on changed code per run; then the change does not land while a test is red; landing on a
+   recheck of changed code sets push_ready false). Re-running on unchanged code is refused as a no-op: the result
    stands as reported (it never re-runs a failed test for a lucky pass); `continue: true`
    only continues tests the deadline left unrun. DELIVER's push_ready bound rejects a
    full-scope report older than the last edit.

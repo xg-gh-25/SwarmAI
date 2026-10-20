@@ -687,6 +687,20 @@ def _tests_carry(run_id: str, run_dir: Path, wts) -> bool:
     return True
 
 
+def _fix_recheck_gap(run_dir: Path, run_id: str) -> "list[str]":
+    """push_ready reason when the binding report was completed by a recheck on CHANGED
+    code (pipeline_test._overlay_evidence keeps the mark until a fresh verify /
+    regression): its re-run tests ran on the final code, the rest of the scope did not. That lands (local, reversible);
+    it is not a full run on the final code, so the human decides the push."""
+    rep = _binding_report(run_dir, run_id) or {}
+    rf = rep.get("rechecked_from") if isinstance(rep.get("rechecked_from"), dict) else {}
+    if not rf.get("fix"):
+        return []
+    return [f"tests: latest-{rep.get('mode')}.json was completed by a recheck on changed "
+            "code: its failing / unfinished tests and the tests of the files changed since "
+            "were re-run on the final code, the rest of the scope was not re-run"]
+
+
 def _is_self_repo(main, self_repo) -> bool:
     """The repo the test runner tests (this source repo): its change must be tested."""
     try:
@@ -810,6 +824,7 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
         if red:   # the ONE landing gate: the runner's evidence
             raise rw.WorktreeError("tests_not_green", "; ".join(red)[:900])
         soft += _check_bound_trees(run_id, run_dir, wts, self_repo, untested_ok=_docs)
+        soft += _fix_recheck_gap(run_dir, run_id) if _tested_repo and not _docs else []
         soft += precheck(float(_review_record(run_dir).get("at") or 0)) if precheck else []
     except rw.WorktreeError as err:
         stage_fail("deliver", err, _NEXT.get(err.code, "rerun deliver stage-start"))

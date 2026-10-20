@@ -695,3 +695,32 @@ def test_landing_records_carried_uncommitted_files(flow):
         lines.replace("l2 = 2", "l2 = 'run'").replace("l7 = 7", "l7 = 'them'")
     c = _state(f)["commits"][-1]
     assert c["carried_uncommitted"] == ["m.py"]
+
+
+def test_a_red_cleared_by_a_fix_recheck_past_the_cap_lands_not_push_ready(flow):
+    """The cap / landing deadlock (XG 2026-10-20): the last full-scope report is red,
+    the fix changes the tree, and no new full round is allowed. The recheck overlay on
+    the fixed code must clear the red AND bind the fixed tree, so the change lands, with
+    push_ready false (the rest of the scope did not re-run on the final code)."""
+    import pipeline_test as pt
+    rid, f, wt = _prepared(flow)
+    red, ok = "backend/tests/test_a.py::t_red", "backend/tests/test_a.py::t_ok"
+    base = {"schema": 1, "mode": "regression", "run_id": rid,
+            "finished_at": "2099-01-01T00:00:00+00:00", "counts": {"passed": 1, "failed": 1},
+            "results": [{"nodeid": red, "outcome": "failed", "file": "backend/tests/test_a.py"},
+                        {"nodeid": ok, "outcome": "passed", "file": "backend/tests/test_a.py"}],
+            "failures": [{"nodeid": red, "classification": "regression", "outcome": "failed"}],
+            "runner_errors": [], "layers": {}, "changed_files": {"a.py": "d1"},
+            "worktree": {"swarmai": {"tree": rw.change_tree(wt, rid), "untracked": []}}}
+    (wt / "a.py").write_text("a = 'fixed'\n")
+    re_ev = {"results": [{"nodeid": red, "outcome": "passed", "file": "backend/tests/test_a.py"}],
+             "failures": [], "runner_errors": [], "changed_files": {"a.py": "d2"},
+             "worktree": {"swarmai": {"tree": rw.change_tree(wt, rid), "untracked": []}}}
+    d = f.parent / "evidence" / "tests"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "latest-regression.json").write_text(json.dumps(
+        pt._overlay_evidence(Path("."), base, re_ev, [])))
+    res = _land(flow, rid, f)
+    assert res["landed"]["swarmai"]["sha"] == _g(flow["main"], "rev-parse", "HEAD")
+    c = _state(f)["commits"][-1]
+    assert c["push_ready"] is False and "completed by a recheck" in c["push_ready_reason"]

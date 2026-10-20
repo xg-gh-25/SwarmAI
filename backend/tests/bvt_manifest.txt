@@ -42,7 +42,6 @@ test_ddd_canonical_docs_single_source.py
 test_deliver_template_drift.py
 test_diff_parser.py
 test_distill_write_targets.py
-test_entry_refs.py
 test_escalation_ladder.py
 test_executor_ram_gate.py
 test_file_change_classifier.py

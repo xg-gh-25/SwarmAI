@@ -8,7 +8,10 @@ What is tested:
   stands as reported (no silent second try for a lucky pass);
 - a continuation re-targets only tests the deadline left unrun, never a failed one;
 - DELIVER's push_ready bound needs a verify / regression report on the final code: none,
-  or one older than the last edit, caps push_ready (a green tdd does not stand in).
+  or one older than the last edit, caps push_ready (a green tdd does not stand in);
+- the cap and the landing check never lock each other: past the cap a fix is judged by
+  ``--mode recheck`` (at most RECHECK_MAX_FIXES rechecks on changed code), and the
+  overlay hands the landing check the tree the recheck ran on (push_ready false).
 """
 from __future__ import annotations
 
@@ -132,3 +135,114 @@ def test_whole_scope_criteria_are_judged_at_deliver_only():
     for wt in ("feature", "refactor", "bugfix", None):
         assert not any(str(c.get("ref", "")).startswith("mode:")
                        for c in pv.default_exit_criteria(wt, ["AC1"])), wt
+
+
+# ── the cap and the landing check never lock each other (XG 2026-10-20) ───────
+_RUN = {"kind": "run", "mode": "regression", "auto_recheck_of": None, "cached": False}
+_FIX = {"kind": "run", "mode": "recheck", "auto_recheck_of": None, "cached": False, "fix": True}
+_SAME = {**_FIX, "fix": False}
+
+
+def test_after_the_cap_a_fix_is_judged_by_recheck_not_another_full_round(tmp_path):
+    """Two full rounds ran and the second was red: a third regression stays refused,
+    and its message names the way forward, a recheck. The recheck runs (it is not a
+    full-scope round), so the red can be cleared on the fixed code."""
+    ev = _index(tmp_path, [_RUN, _RUN])
+    out = pt._full_scope_refusal(ev, "regression", _state("deliver"))
+    assert out and out["full_scope"]["refused"] and "--mode recheck" in out["error"]
+    assert pt._full_scope_refusal(ev, "recheck", _state("deliver"), fix=True) is None
+
+
+def test_a_manual_recheck_does_not_use_up_a_full_scope_round(tmp_path):
+    ev = _index(tmp_path, [_RUN, _FIX])
+    assert pt._full_scope_refusal(ev, "regression", _state("deliver")) is None
+
+
+def test_fix_rechecks_are_bounded_and_the_stop_names_its_reason(tmp_path):
+    rows = [_RUN, _RUN] + [_FIX] * pt.RECHECK_MAX_FIXES
+    ev = _index(tmp_path, rows)
+    out = pt._full_scope_refusal(ev, "recheck", _state("deliver"), fix=True)
+    assert out and out["full_scope"]["refused"]
+    assert out["full_scope"]["fix_rechecks"] == pt.RECHECK_MAX_FIXES
+    assert "does not land" in out["error"] and "push_ready false" not in out["error"]
+    # one fewer: still allowed
+    ev = _index(tmp_path, rows[:-1])
+    assert pt._full_scope_refusal(ev, "recheck", _state("deliver"), fix=True) is None
+
+
+def test_a_recheck_on_unchanged_code_is_a_continuation_not_a_fix(tmp_path):
+    """Same code as the report it rechecks: it only finishes what was left; it is
+    never refused by the fix budget and does not use it up."""
+    rows = [_RUN, _RUN] + [_FIX] * pt.RECHECK_MAX_FIXES + [_SAME] * 5
+    ev = _index(tmp_path, rows)
+    assert pt._full_scope_refusal(ev, "recheck", _state("deliver"), fix=False) is None
+    ev = _index(tmp_path, [_RUN, _RUN] + [_SAME] * 9)
+    assert pt._full_scope_refusal(ev, "recheck", _state("deliver"), fix=True) is None
+
+
+def test_an_old_index_row_without_the_fix_flag_counts_as_a_fix(tmp_path):
+    legacy = {k: v for k, v in _FIX.items() if k != "fix"}
+    ev = _index(tmp_path, [_RUN, _RUN] + [legacy] * pt.RECHECK_MAX_FIXES)
+    assert pt._full_scope_refusal(ev, "recheck", _state("deliver"), fix=True)
+
+
+def test_rechecks_stay_deliver_only(tmp_path):
+    out = pt._full_scope_refusal(_index(tmp_path, []), "recheck", _state("build"), fix=True)
+    assert out and "DELIVER" in out["error"]
+
+
+def test_is_fix_recheck_compares_the_code_with_the_report_it_rechecks():
+    base = {"changed_files": {"backend/a.py": "d1", "backend/b.py": "e1"}}
+    assert pt._is_fix_recheck(base, {"backend/a.py": "d1", "backend/b.py": "e1"}) is False
+    assert pt._is_fix_recheck(base, {"backend/a.py": "d2", "backend/b.py": "e1"}) is True
+    assert pt._is_fix_recheck(base, {"backend/a.py": "d1"}) is True          # b reverted
+    assert pt._is_fix_recheck(base, {**base["changed_files"], "backend/c.py": "f"}) is True
+    assert pt._is_fix_recheck({}, {"backend/a.py": "d1"}) is True             # unknown base
+
+
+def test_overlay_on_changed_code_records_the_recheck_tree():
+    """The landing check binds the change to the tree in the binding report's worktree
+    block. A recheck on fixed code must hand it the tree it ran on, else the green
+    overlay is refused as 'produced on a different tree' forever (the second lock)."""
+    base = {"mode": "regression", "finished_at": "t0", "results": [], "failures": [],
+            "runner_errors": [], "layers": {}, "changed_files": {"backend/a.py": "d1"},
+            "worktree": {"swarmai": {"tree": "T1", "base": "B", "untracked": []}}}
+    re_ev = {"results": [], "failures": [], "runner_errors": [],
+             "changed_files": {"backend/a.py": "d2"},
+             "worktree": {"swarmai": {"tree": "T2", "base": "B", "untracked": []}}}
+    ev = pt._overlay_evidence(Path("."), base, re_ev, [])
+    assert ev["worktree"]["swarmai"]["tree"] == "T2"
+    assert ev["rechecked_from"]["fix"] is True
+    same = {**re_ev, "changed_files": {"backend/a.py": "d1"},
+            "worktree": {"swarmai": {"tree": "T1", "base": "B", "untracked": []}}}
+    ev = pt._overlay_evidence(Path("."), base, same, [], auto=True)
+    assert ev["worktree"]["swarmai"]["tree"] == "T1" and "fix" not in ev["rechecked_from"]
+
+
+def test_landing_on_a_fix_recheck_lands_with_push_ready_false(tmp_path, monkeypatch):
+    import pipeline_worktree as pw
+    rep = {"mode": "regression", "rechecked_from": {"finished_at": "t0", "rechecked": 3,
+                                                    "auto": False, "fix": True}}
+    monkeypatch.setattr(pw, "_binding_report", lambda _d, _r: rep)
+    soft = pw._fix_recheck_gap(tmp_path, "r")
+    assert soft and "recheck" in soft[0] and "not re-run" in soft[0]
+    rep["rechecked_from"].pop("fix")
+    assert pw._fix_recheck_gap(tmp_path, "r") == []
+
+
+def test_the_fix_mark_survives_a_later_recheck_on_unchanged_code(tmp_path, monkeypatch):
+    """A fix recheck that hits the deadline is finished by a recheck on the same code.
+    That overlay must keep rechecked_from.fix, or the landing loses its push_ready
+    reason while most of the scope still ran only on the pre-fix code."""
+    import pipeline_worktree as pw
+    base = {"mode": "regression", "finished_at": "t0", "results": [], "failures": [],
+            "runner_errors": [], "layers": {}, "changed_files": {"backend/a.py": "d1"},
+            "worktree": {"swarmai": {"tree": "T1", "base": "B", "untracked": []}}}
+    fixed = {"results": [], "failures": [], "runner_errors": [],
+             "changed_files": {"backend/a.py": "d2"},
+             "worktree": {"swarmai": {"tree": "T2", "base": "B", "untracked": []}}}
+    first = pt._overlay_evidence(Path("."), base, fixed, [])
+    finish = pt._overlay_evidence(Path("."), first, dict(fixed), [])      # same code
+    assert finish["rechecked_from"].get("fix") is True
+    monkeypatch.setattr(pw, "_binding_report", lambda _d, _r: finish)
+    assert pw._fix_recheck_gap(tmp_path, "r")

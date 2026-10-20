@@ -33,7 +33,7 @@ DIGESTS = {
     "select_backend": "17de9e87ad89ab7c",
     "transitive_unselected": "b1acd1e5cfa8521f",
     "_bvt_files": "c275cb940b06a3a9",
-    "_full_scope_refusal": "fcc429f6c3fcac9b",  # 10-20: force switch renamed only (§11)
+    "_full_scope_refusal": "b94c97c4dc3e3355",  # 10-20: recheck judges a fix past the cap (§11)
     "_smoke_modules": "1ea6c7b77910e927",
     "_recent_failure_files": "7173dd3412333fa3",
     "_plan": "307335d80a43f01d",
@@ -50,6 +50,7 @@ def test_modes_frozen():
     assert pt.FULL_SCOPE_MODES == ("verify", "regression", "recheck")
     assert pt.FULL_SCOPE_STAGES == ("deliver",)
     assert pt.FULL_SCOPE_MAX_ROUNDS == 2
+    assert pt.RECHECK_MAX_FIXES == 3
     assert pt.REVERSE_DEPTH == 1
 
 
