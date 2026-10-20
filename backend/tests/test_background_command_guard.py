@@ -168,3 +168,65 @@ async def test_non_bash_tool_ignored():
         {"tool_name": "Read", "tool_input": {"file_path": "x"}}, None, None,
     )
     assert result == {"decision": "approve"}
+
+
+# ── a detach keyword is text only when every segment is a text program (_bg_keyword_is_text)
+# A grep for the keywords, or a requirement text naming them, was denied as
+# backgrounding three times in one session.
+@pytest.mark.parametrize("command", [
+    'grep -n "def _is_background\\|setsid\\|nohup" core/security_hooks.py | head -20',
+    "grep -n 'nohup' tests/x.py",
+    "grep -rn setsid backend/core",
+    'python artifact_cli.py run-create --requirement "names nohup / setsid / disown in text"',
+    "echo nohup",
+    "git log --grep=setsid",
+    "cat > /tmp/x.py <<'EOF'\nimport os  # nohup setsid\nEOF",
+])
+def test_a_named_detach_keyword_is_data(command):
+    assert _is_backgrounded(command, {"command": command}) is False
+
+
+@pytest.mark.parametrize("command", [
+    "/usr/bin/nohup ./long.sh",
+    "sudo -u bob nohup ./x",
+    "env A=1 setsid ./w",
+    "timeout 60 nohup ./x",
+    "cd /tmp && nohup ./x",
+    "echo hi | nohup cat",
+    "xargs -n 1 nohup ./x < list",
+    "find . -name '*.sh' -exec setsid {} \\;",
+    "bash -c 'nohup ./x'",
+    'sh -lc "setsid ./w"',
+    'eval "nohup ./x"',
+    "bash <<'EOF'\nnohup ./x\nEOF",
+    "echo 'nohup ./x' | sh",
+    'nohup ./x "unterminated',
+    # Gate-2 probes: each was approved by the first version of this change.
+    'echo "$(setsid -f sleep 999)"',
+    'ls "$(setsid -f sleep 999)"',
+    'X="$(nohup ./a)"',
+    "printf %s \"$(nohup ./x)\"",
+    "nohup grep -r x /",
+    "sudo nohup echo hi",
+    'env -i bash -c "setsid -f sleep 999"',
+    'sudo -u bob bash -c "nohup sleep 999 &"',
+    'find . -maxdepth 0 -exec sh -c "setsid -f sleep 999" \\;',
+    'su -c "setsid -f sleep 999"',
+    "script -q -c 'setsid -f sleep 9' /dev/null",
+    "ssh h 'nohup sleep 999 &'",
+    "docker exec c sh -c 'nohup sleep 999 &'",
+    "echo 'nohup ./x &' | env -i bash",
+    'echo "setsid -f sleep 9" | xargs -I{} sh -c {}',
+    'fish -c "setsid -f sleep 9"',
+    "python3 -c \"import os; os.system('nohup sleep 999')\"",
+    "python3 - <<'EOF'\nimport subprocess\nsubprocess.Popen(['setsid', '-f', 'x'])\nEOF",
+    "node -e \"require('child_process').exec('nohup sleep 9')\"",
+    "echo 'nohup sleep 999 &' > /tmp/x.sh; bash /tmp/x.sh",
+    "grep -n setsid f && python3 x.py",
+    "rg --pre ./run.sh setsid",
+    "git -c core.pager=x log --grep=setsid",
+    "echo `setsid -f sleep 9`",
+    'python artifact_cli.py run-create --requirement "$(setsid -f sleep 9)"',
+])
+def test_a_detach_keyword_that_runs_is_still_caught(command):
+    assert _is_backgrounded(command, {"command": command}) is True

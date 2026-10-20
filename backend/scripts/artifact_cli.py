@@ -10789,6 +10789,9 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         cand_rec["push_ready"] = False
         cand_rec["push_ready_reason"] = "; ".join(
             f"unverified: {g['why'][:200]}" for g in _new_gaps)[:900]
+    if stage == "deliver":
+        # the two steps above can lower push_ready after derived was computed
+        _sync_derived_push_ready(derived, cand_rec)
     if errors:
         _stage_boundary_fail(stage, errors, data=artifact, record=record_in, warnings=warnings)
 
@@ -10890,6 +10893,16 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
             if _refused.code not in (0, None):
                 _reopen_after_refused_landing(run_file)
             raise
+        if landing:
+            # landing can lower the DELIVER record again (a precheck / deliverable gap)
+            try:
+                _final = next((r for r in json.loads(run_file.read_text(encoding="utf-8"))
+                               .get("stages") or [] if isinstance(r, dict)
+                               and r.get("stage") == "deliver"), None)
+            except (OSError, ValueError):
+                _final = None
+            if _final is not None:
+                _sync_derived_push_ready(derived, _final)
     if next_stage:
         from core.artifact_registry import PIPELINE_STATES
         behind = _manifest_ahead_of(reg, project, profile, next_stage)
@@ -10939,6 +10952,19 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         **({"doc": stage_doc} if stage_doc else {}),
         "warnings": warnings,
     }, default=str, ensure_ascii=False))
+
+
+def _sync_derived_push_ready(derived: dict, rec: dict) -> None:
+    """Make ``derived.push_ready`` in the stage-complete payload say what the DELIVER
+    record *rec* says. Steps after the gate check (degrade, unverified gaps, landing)
+    only ever lower the record, so this only ever lowers the payload, never raises it."""
+    dp = derived.get("push_ready")
+    if not isinstance(dp, dict) or not dp.get("value") or rec.get("push_ready"):
+        return
+    dp["value"] = False
+    dp["reasons"] = list(dp.get("reasons") or []) + [
+        str(rec.get("push_ready_reason") or "lowered after the gate check")[:600]]
+    dp["source"] = str(dp.get("source") or "gates") + " + degraded"
 
 
 def _reopen_after_refused_landing(run_file: Path) -> None:

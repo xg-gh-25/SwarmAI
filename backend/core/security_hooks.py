@@ -1699,6 +1699,17 @@ def create_external_approval_gate(
 # detached work belongs on the daemon job system, not a background shell.
 
 _BG_KEYWORD_RE = re.compile(r"\b(?:nohup|disown|setsid)\b")
+# Programs that never run their arguments or their stdin. When a detach keyword
+# appears in a command, EVERY segment must be one of these (or a read-only git
+# subcommand, or the pipeline CLI) for the keyword to count as text: anything else
+# (a wrapper, a shell, an interpreter, find/xargs/ssh/su ...) may run it.
+_BG_TEXT_PROGRAMS = frozenset({
+    "grep", "egrep", "fgrep", "rg", "ag", "echo", "printf",
+    "head", "tail", "wc", "sort", "uniq", "cut", "tr", "cat", "less", "column", "nl",
+    "ls", "cd", "pwd", "true", "mkdir",
+})
+_BG_GIT_TEXT_SUBCOMMANDS = frozenset({"log", "commit", "grep", "show", "diff", "status", "blame"})
+_BG_PYTHONS = re.compile(r"^python(?:3(?:\.\d+)?)?$")
 # A heredoc body is DATA piped to a program's stdin — any `&` inside it is never a
 # shell control operator (it's Python bitwise-and, an unquoted URL query, etc.).
 # Matches `<<[-]?['"]?WORD` then the body up to the terminator, which MUST be its
@@ -1742,7 +1753,8 @@ def _is_backgrounded(command: str, tool_input: dict[str, Any]) -> bool:
     Shell detection strips every NON-backgrounding use of ``&`` — heredoc bodies
     (DATA, not shell), logical-AND (``&&``), redirects (``&>``/``&>>``), fd-dups
     (``2>&1``), and quoted literals — so any ``&`` left over is a backgrounding
-    control operator (``cmd &`` or ``cmd & next``). Plus nohup/disown/setsid.
+    control operator (``cmd &`` or ``cmd & next``). Plus a detach keyword anywhere,
+    unless every segment is a text-only program (_bg_keyword_is_text).
 
     Heredoc bodies are stripped FIRST, BEFORE the quote strips: a quoted heredoc
     delimiter (``<<'EOF'`` / ``<<"EOF"``, the common expansion-suppressing form)
@@ -1760,7 +1772,7 @@ def _is_backgrounded(command: str, tool_input: dict[str, Any]) -> bool:
     """
     if tool_input.get("run_in_background") is True:
         return True
-    if _BG_KEYWORD_RE.search(command):
+    if _BG_KEYWORD_RE.search(command) and not _bg_keyword_is_text(command):
         return True
     # Strip heredoc bodies (DATA) FIRST — but skip on a pathological opener count
     # (ReDoS guard, fail-safe: unstripped body-& only over-DENYs, never fail-opens).
@@ -1774,6 +1786,40 @@ def _is_backgrounded(command: str, tool_input: dict[str, Any]) -> bool:
     s = re.sub(r"&>>?", "", s)            # &> / &>> redirect
     s = re.sub(r"\d*>&\d*", "", s)        # 2>&1 / >&2 fd dup
     return "&" in s                        # any remaining & = backgrounding
+
+
+def _bg_segment_is_text(seg: list[str]) -> bool:
+    """True when *seg* is a program that never runs its arguments or stdin."""
+    name = os.path.basename(seg[0])
+    if name in _BG_TEXT_PROGRAMS:
+        return not (name == "rg" and any(t.startswith("--pre") for t in seg))
+    if name == "git":
+        return len(seg) > 1 and seg[1] in _BG_GIT_TEXT_SUBCOMMANDS
+    # The pipeline CLI takes requirement / summary texts that may name a keyword.
+    return bool(_BG_PYTHONS.match(name)) and len(seg) > 1 and (
+        os.path.basename(seg[1]) == "artifact_cli.py")
+
+
+def _bg_keyword_is_text(command: str) -> bool:
+    """True when the detach keywords in *command* can only be text: the command
+    parses, has no backtick and no substitution inside a token, and every segment is
+    a text-only program (_bg_segment_is_text). Fail closed otherwise, so a keyword
+    reached through a wrapper (``env -i``, ``sudo -u``, ``nohup grep``), shell or
+    interpreter code (``bash -c``, ``python -c``, ``node -e``, a heredoc a shell
+    reads), or a program that runs its arguments (``find -exec``, ``xargs``,
+    ``su -c``, ``ssh``) is still denied. A heredoc body written by ``cat > f`` is
+    not a segment, so its text does not count."""
+    if "`" in command:
+        return False
+    segments = _gate_shell_segments(command)
+    if not segments:
+        return False
+    for seg in segments:
+        if not _bg_segment_is_text(seg):
+            return False
+        if any(m in t for t in seg for m in ("$(", "<(", ">(")):
+            return False
+    return True
 
 
 async def background_command_guard(

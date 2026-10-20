@@ -177,10 +177,30 @@ def doc_status(run_dir: Any, profile: Optional[str], run_state: Optional[dict] =
     fp = Path(str(run_dir)) / FIXING_SPEC_DOC if run_dir else None
     f_exists = bool(fp and fp.is_file())
     fixing = f_exists or bool(run_dir and (_fixing_specs(run_dir) or _gate2_fix_passes(run_state)))
+    if f_exists:
+        f_reason = None
+    elif fixing:
+        f_reason = "missing"
+    else:
+        # no fixing spec or fix pass: either nothing was found, or DELIVER records
+        # findings fixed straight from the review (a direct run's one fix pass)
+        if arts is None:
+            arts = load_stage_artifacts(run_dir, run_state) if run_dir and run_state else {}
+        ar = _d(_d(arts.get("deliver")).get("adversarial_review"))
+        try:
+            n_fixed = int(ar.get("findings_fixed") or 0)
+        except (TypeError, ValueError):
+            n_fixed = 0
+        _fs = ar.get("findings")
+        resolved = [f for f in (_fs if isinstance(_fs, list) else [])
+                    if isinstance(f, dict) and _finding_status(f).startswith("fixed")]
+        n_fixed = max(n_fixed, len(resolved))
+        f_reason = (f"not written: {n_fixed} Gate-2 finding(s) were fixed without a fixing spec"
+                    if n_fixed > 0 else "skipped: Gate-2 had nothing to fix")
     out.insert(len(out) - 1, {
         "name": FIXING_SPEC_DOC, "purpose": FIXING_SPEC_PURPOSE,
         "path": str(fp) if fp else None, "exists": f_exists, "required": fixing,
-        "reason": None if f_exists else ("missing" if fixing else "skipped: Gate-2 had nothing to fix")})
+        "reason": f_reason})
     return out
 
 

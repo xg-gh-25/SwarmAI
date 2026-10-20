@@ -200,7 +200,9 @@ def test_attach_stage_docs_and_summary_block(tmp_path, monkeypatch):
     assert set(docs) == {"REQUIREMENTS.md", "DESIGN_SPEC.md", "REVIEW.md", "FIXING_SPEC.md", "REPORT.md"}
     assert all(d["absolutePath"] for n, d in docs.items() if n != "FIXING_SPEC.md")
     assert docs["FIXING_SPEC.md"]["absolutePath"] is None and not docs["FIXING_SPEC.md"]["required"]
-    assert docs["FIXING_SPEC.md"]["reason"] == "skipped: Gate-2 had nothing to fix"
+    # DELIVER fixed one HIGH straight from the review, with no fixing spec
+    assert docs["FIXING_SPEC.md"]["reason"] == \
+        "not written: 1 Gate-2 finding(s) were fixed without a fixing spec"
     assert docs["REVIEW.md"]["stat"] == {"experts": 2, "findings": 3, "settled": 2}
     assert pse.summary_block("run_d1", dict(st, status="running"), "now") is None
 
@@ -428,6 +430,28 @@ def test_fixing_spec_is_listed_for_every_run_and_required_once_a_fix_was_declare
     st = dict(state, gate2_v2={"events": [{"kind": "fixed", "pass": 1}]})
     fx = next(d for d in rd.doc_status(run_dir, "full", st) if d["name"] == "FIXING_SPEC.md")
     assert fx["required"] is True and fx["reason"] == "missing"
+
+
+def test_fixing_spec_reason_counts_fixes_made_without_a_spec(tmp_path):
+    """A direct run fixes Gate-2 findings in one pass with no fixing spec: the reason
+    must not say Gate-2 had nothing to fix."""
+    deliver = {"adversarial_review": {"findings_total": 13, "findings_fixed": 13, "findings": []}}
+    run_dir, state = _run(tmp_path, {"deliver": deliver}, profile="direct")
+    fx = next(d for d in rd.doc_status(run_dir, "direct", state) if d["name"] == "FIXING_SPEC.md")
+    assert fx["required"] is False
+    assert fx["reason"] == "not written: 13 Gate-2 finding(s) were fixed without a fixing spec"
+    clean = tmp_path / "c"
+    clean.mkdir()
+    run_dir, state = _run(clean, {"deliver": {"adversarial_review": {"findings_fixed": 0, "findings": [
+        {"resolved": True, "finding": "Not a bug: scoped"}]}}}, profile="direct")
+    fx = next(d for d in rd.doc_status(run_dir, "direct", state) if d["name"] == "FIXING_SPEC.md")
+    assert fx["reason"] == "skipped: Gate-2 had nothing to fix"
+    refuted = tmp_path / "r"
+    refuted.mkdir()
+    run_dir, state = _run(refuted, {"deliver": {"adversarial_review": {"findings_fixed": 0, "findings": [
+        {"resolved": True, "disposition": "refuted", "finding": "guard bypass"}]}}}, profile="direct")
+    fx = next(d for d in rd.doc_status(run_dir, "direct", state) if d["name"] == "FIXING_SPEC.md")
+    assert fx["reason"] == "skipped: Gate-2 had nothing to fix"
 
 
 def test_deliver_stage_review_keeps_the_deterministic_ledger(tmp_path):

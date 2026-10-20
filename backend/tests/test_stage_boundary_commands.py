@@ -369,6 +369,9 @@ def test_gate_error_completes_degraded_first_try(ws, capsys, case):
     assert any(f"{stage} degraded:" in w for w in out["warnings"]), out["warnings"]
     rec_ = next(r for r in _run_state(root, rid)["stages"] if r.get("stage") == stage)
     assert rec_.get("degraded", {}).get("errors"), rec_
+    if stage == "deliver":   # one answer: the payload says what the record says
+        assert out["derived"]["push_ready"]["value"] is False, out["derived"]["push_ready"]
+        assert rec_["push_ready"] is False
 
 
 @pytest.mark.parametrize("case", [_case_stage_order, _case_bad_decision],
@@ -2157,3 +2160,41 @@ def test_a_docs_profile_run_editing_code_is_not_push_ready():
     ok, reasons = pv.push_ready_upper_bound(art, "docs", docs_only=pv.docs_only_paths(
         ["backend/scripts/catalog.py", "README.md"]))
     assert ok is False and any("no runner evidence" in r for r in reasons)
+
+
+def test_deliver_payload_push_ready_matches_a_degraded_record(ws, capsys, monkeypatch):
+    """The only gap is fix-by-class (a resolved HIGH with no invariant / root_cause /
+    class_fix): the push-ready bound is true when derived is computed, then the gap
+    degrades the stage. The payload must report the record's push_ready (one DELIVER
+    once said derived true while its own warning said not PUSH-READY)."""
+    root, reg = ws
+    rid = "run_pr_sync"
+    # after design_spec.CUTOVER, so fix by class is enforced (not a warning)
+    _direct_run_with_manual_contract(root, reg, capsys, rid, created_at="2026-10-20T00:00:00+00:00")
+    _write_evidence(_run_dir(root, rid), "tests/latest-regression.json",
+                    _c2("regression", rid, [{"nodeid": "a::b", "outcome": "passed"}]))
+    _rt_markers(root, monkeypatch, rid, ["red-team"])
+    art = _clean_deliver()
+    art["adversarial_review"]["findings"] = [_specialist_high(who="red-team")]
+    code, out = _complete(reg, capsys, rid, "deliver", art,
+                          {"exit_evidence": {"X2": "opened the page"}})
+    assert code in (0, None) and out["ok"] is True, out
+    rec = cli._stage_record_of(_run_state(root, rid), "deliver")
+    assert rec["push_ready"] is False and "Fix by class" in rec["push_ready_reason"], rec
+    assert out["derived"]["push_ready"]["value"] is False, out["derived"]["push_ready"]
+
+
+def test_sync_derived_push_ready_only_lowers():
+    """The payload's push_ready follows the final DELIVER record (degrade, gaps,
+    landing all lower it after the gate check) and is never raised by it."""
+    import artifact_cli as cli
+    d = {"push_ready": {"value": True, "reasons": [], "source": "gates"}}
+    cli._sync_derived_push_ready(d, {"push_ready": False, "push_ready_reason": "precheck: no review"})
+    assert d["push_ready"]["value"] is False
+    assert d["push_ready"]["reasons"] == ["precheck: no review"]
+    up = {"push_ready": {"value": False, "reasons": ["x"], "source": "gates"}}
+    cli._sync_derived_push_ready(up, {"push_ready": True})
+    assert up["push_ready"] == {"value": False, "reasons": ["x"], "source": "gates"}
+    same = {"push_ready": {"value": True, "reasons": [], "source": "gates"}}
+    cli._sync_derived_push_ready(same, {"push_ready": True})
+    assert same["push_ready"]["value"] is True
