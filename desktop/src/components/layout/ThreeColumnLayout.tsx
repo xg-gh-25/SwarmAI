@@ -139,7 +139,7 @@ function TopBar() {
   return (
     <div
       onMouseDown={handleMouseDown}
-      className="h-10 bg-[var(--color-bg-chrome)] border-b border-[var(--color-border)] flex-shrink-0 select-none cursor-default flex items-center"
+      className="h-7 bg-[var(--color-bg-chrome)] border-b border-[var(--color-border)] flex-shrink-0 select-none cursor-default flex items-center"
       data-tauri-drag-region
       data-testid="top-bar"
     >

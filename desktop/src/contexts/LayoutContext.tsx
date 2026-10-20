@@ -190,9 +190,9 @@ export const LAYOUT_CONSTANTS = {
   LEFT_SIDEBAR_WIDTH: 150,
   // Card-detail panel (A11, run_a4ea7a83): the fullscreen overlay floats INSIDE
   // the chat area, so it must clear the chat content's top edge. That edge is a
-  // constant: TopBar (h-10 = 40px) + ChatHeader/SessionTabBar (h-10 = 40px) = 80.
+  // constant: TopBar (h-7 = 28px) + ChatHeader/SessionTabBar (h-10 = 40px) = 68.
   // The tab bar is fixed-height (overflow-x-auto, never wraps), so this does NOT
   // vary with tab count. If either bar's height changes, update this in lockstep.
-  CHAT_CONTENT_TOP: 80,
+  CHAT_CONTENT_TOP: 68,
   STORAGE_KEYS,
 } as const;

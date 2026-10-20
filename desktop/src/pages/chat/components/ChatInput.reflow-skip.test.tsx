@@ -80,20 +80,26 @@ describe('heightMeasureUnchanged (reflow-skip predicate)', () => {
 // Mutation check: drop the padding terms (return only rows*lineHeight) → the
 // "includes vertical padding" case goes RED.
 // ─────────────────────────────────────────────────────────────────────────────
-describe('computeCollapsedMinHeight (3-row default-height, border-box)', () => {
-  it('is rows*lineHeight + top + bottom padding (default 3 rows)', () => {
+describe('computeCollapsedMinHeight (border-box)', () => {
+  it('default (empty-input) rows is 2 → 2*lineHeight + top + bottom padding', () => {
+    // Round-1 convergence: the empty composer floor dropped 3→2 rows.
+    // 2 * 20 + 8 + 8 = 56 (the py-2 = 8px top/bottom case).
+    expect(computeCollapsedMinHeight(20, 8, 8)).toBe(56);
+  });
+
+  it('is rows*lineHeight + top + bottom padding (explicit 3 rows)', () => {
     // 3 * 20 + 8 + 8 = 76 (the py-2 = 8px top/bottom case)
-    expect(computeCollapsedMinHeight(20, 8, 8)).toBe(76);
+    expect(computeCollapsedMinHeight(20, 8, 8, 3)).toBe(76);
   });
 
   it('scales with the real computed line-height (theme-agnostic)', () => {
     // 3 * 24 + 8 + 8 = 88
-    expect(computeCollapsedMinHeight(24, 8, 8)).toBe(88);
+    expect(computeCollapsedMinHeight(24, 8, 8, 3)).toBe(88);
   });
 
   it('includes vertical padding (border-box) — not just rows*lineHeight', () => {
     // If the fix dropped padding, this would be 60, not 76 — the collapse-by-padding bug.
-    expect(computeCollapsedMinHeight(20, 8, 8)).toBeGreaterThan(20 * 3);
+    expect(computeCollapsedMinHeight(20, 8, 8, 3)).toBeGreaterThan(20 * 3);
   });
 
   it('honors an explicit rows argument', () => {
@@ -103,7 +109,7 @@ describe('computeCollapsedMinHeight (3-row default-height, border-box)', () => {
 
   it('rounds a fractional line-height to a whole px', () => {
     // 3 * 20.5 = 61.5 → round → 62, + 0 padding
-    expect(computeCollapsedMinHeight(20.5, 0, 0)).toBe(62);
+    expect(computeCollapsedMinHeight(20.5, 0, 0, 3)).toBe(62);
   });
 });
 

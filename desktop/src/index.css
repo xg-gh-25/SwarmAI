@@ -179,7 +179,7 @@
 }
 
 @theme {
-  --font-family-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-family-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-family-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 
   /* Primary colors (unchanged for both themes) */
@@ -262,9 +262,9 @@ html, body {
 
 /* Base styles */
 html {
-  font-size: 13px; /* Matches mockup — tighter, more information-dense */
+  font-size: 13px; /* Dense UI chrome; content surfaces set their own reading size. */
   font-family: var(--font-family-sans);
-  letter-spacing: -0.01em;
+  letter-spacing: normal;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -427,8 +427,6 @@ body {
 .a10-card:hover {
   background: var(--color-card);
   border-color: var(--color-border-strong, var(--color-border));
-  transform: translateX(3px);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 6px 16px rgba(0, 0, 0, 0.4);
 }
 .a10-card--active {
   background: color-mix(in srgb, var(--ac) 14%, transparent);
@@ -493,12 +491,11 @@ body {
   padding: 8px 9px 8px;
   border-radius: 14px;
   background: linear-gradient(180deg,
-    color-mix(in srgb, var(--cz) 16%, transparent),
-    color-mix(in srgb, var(--cz) 7%, transparent) 60%,
-    color-mix(in srgb, var(--cz) 3%, transparent));
-  border: 1px solid color-mix(in srgb, var(--cz) 38%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--cz) 6%, transparent) inset,
-    0 6px 22px color-mix(in srgb, var(--cz) 18%, transparent);
+    color-mix(in srgb, var(--cz) 11%, transparent),
+    color-mix(in srgb, var(--cz) 5%, transparent) 60%,
+    color-mix(in srgb, var(--cz) 2%, transparent));
+  border: 1px solid color-mix(in srgb, var(--cz) 28%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--cz) 5%, transparent) inset;
 }
 /* Right-edge accent spine — matches .a10-group::after geometry so cognition reads
    as part of the same nav family, tinted in the cognition green (--cz). */
@@ -544,7 +541,6 @@ body {
 }
 .a10-newbrain:hover {
   background: color-mix(in srgb, var(--ac) 12%, transparent);
-  transform: translateX(3px);
 }
 /* Active — the launcher overlay is open (parity with A10Card active highlight,
    since New Brain is a bespoke button, not an A10Card — its `isActive` is inert). */
@@ -860,18 +856,12 @@ body {
 }
 
 /* ── Canvas frame line (ONE knob) ──────────────────────────────────────────
-   Every solid hairline that outlines the Canvas — the OUTPUTS nav-bar bottom
-   border, the collapsed rail's left border, and the spout's two tinted edges —
-   reads from THIS token, so the frame's brightness is a one-line change instead
-   of three drifting call sites.
-   Why a mix and not an alpha: these hairlines sit on three different surfaces
-   (nav-bar gradient, rail gradient, chat background), and an alpha would render
-   a different brightness on each. Mixing INTO --color-card keeps the line opaque
-   and identical everywhere, and stays theme- + accent-correct automatically
-   (--color-primary follows [data-accent], --color-card follows .dark).
-   Raise the percentage to make the frame louder, lower it to make it quieter. */
+   Every solid hairline that outlines the Canvas uses the neutral border token.
+   Accent colour remains reserved for active controls and semantic file status,
+   so choosing an orange accent does not turn the whole review surface into a
+   persistent warning frame. */
 :root {
-  --canvas-edge: color-mix(in srgb, var(--color-primary) 40%, var(--color-card));
+  --canvas-edge: var(--color-border);
 }
 
 /* Canvas ← chat spout: a 45°-rotated square "beak" overhanging the Canvas's
@@ -1157,4 +1147,45 @@ body {
 }
 .animate-shake {
   animation: shake 0.3s ease-in-out;
+}
+
+/* ── Content reading typography (round-1 convergence) ──────────────────────
+   The whole app runs at 13px for dense chrome, but PROSE (assistant answers,
+   Canvas documents) is read, not scanned, so it gets a larger reading size and
+   a looser line-height. Scoped to `.markdown-content` — the MarkdownRenderer
+   root — so tool strips, nav, metadata and UI labels (none of which are
+   markdown-content) keep the 13px chrome scale. This is a readability layer,
+   NOT a layout change: it never alters width, spacing of non-prose, or any
+   interactive element. CJK + Latin share one looser line-height here, which is
+   what makes mixed Chinese/English paragraphs sit evenly.
+
+   `rem`-based so it tracks the 13px root: 1.08rem ≈ 14px body, 1.05 line-height
+   step. Element rules mirror MarkdownRenderer's Tailwind sizes but one reading
+   step up; headings stay proportional so a Canvas report reads as a document. */
+.markdown-content {
+  font-size: 1.08rem;      /* ≈14px at the 13px root */
+  line-height: 1.65;
+}
+.markdown-content p,
+.markdown-content li {
+  line-height: 1.65;
+}
+.markdown-content h1 {
+  font-size: 1.38rem;      /* ≈18px */
+  line-height: 1.35;
+}
+.markdown-content h2 {
+  font-size: 1.18rem;      /* ≈15.3px */
+  line-height: 1.4;
+}
+.markdown-content h3 {
+  font-size: 1.08rem;
+  line-height: 1.45;
+}
+/* Code stays monospace at its own compact size — reading-size scaling is for
+   prose, not code. Inline + block code opt out of the bump. */
+.markdown-content code,
+.markdown-content pre {
+  font-size: 0.96rem;      /* ≈12.5px */
+  line-height: 1.55;
 }

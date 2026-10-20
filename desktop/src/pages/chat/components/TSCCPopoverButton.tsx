@@ -10,7 +10,7 @@
  *   transform-origin is bottom-right. It is bounded to a SAFE region so it can
  *   never overlap the chrome or leave the window:
  *     - left  edge ≥ LEFT_NAV (150px) + margin  → never covers the left nav
- *     - top   edge ≥ CHAT_TOP (80px)  + margin  → never covers the chat tab bar
+ *     - top   edge ≥ CHAT_TOP (68px)  + margin  → never covers the chat tab bar
  *     - right/bottom clamped inside the window   → never overflows the app window
  *   The panel's width/height are the min of its preferred size and the space
  *   actually available in that safe region, so content scrolls INSIDE rather
@@ -31,10 +31,10 @@ export interface TSCCPopoverButtonProps {
 }
 
 // Safe-bound constants — mirror LayoutContext (LEFT_SIDEBAR_WIDTH=150,
-// CHAT_CONTENT_TOP=80). Kept as local consts to avoid a cross-module import;
+// CHAT_CONTENT_TOP=68). Kept as local consts to avoid a cross-module import;
 // if the layout constants change, update here.
 const LEFT_NAV_RIGHT = 150;
-const CHAT_TOP = 80;
+const CHAT_TOP = 68;
 const MARGIN = 12; // breathing room from each chrome edge
 // Responsive-LARGE: the panel fills most of the safe region (bounded by the
 // left-nav on the left and the tab-bar on top) rather than a small fixed box —

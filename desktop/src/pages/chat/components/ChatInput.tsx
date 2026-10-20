@@ -154,8 +154,10 @@ interface ChatInputProps {
 const MAX_ROWS = 20;
 /** Default (empty-input) visible rows. The single source of truth for both the
  *  `rows={DEFAULT_ROWS}` attribute (JS-autogrow path minimum) and the field-sizing
- *  branch's computed `minHeight` (run_17d708f4). */
-const DEFAULT_ROWS = 3;
+ *  branch's computed `minHeight` (run_17d708f4). Round-1 UI convergence: dropped
+ *  3→2 so the resting composer is a smaller fraction of the chat column; the
+ *  textarea still auto-grows per keystroke, this only sets the empty-state floor. */
+const DEFAULT_ROWS = 2;
 /** Fallback collapsed minHeight (px) before the mount effect measures the real
  *  computed line-height + padding: DEFAULT_ROWS*20 + py-2 (8+8). Safe because Tailwind
  *  preflight loads before React paints; the mount effect overwrites it with the
