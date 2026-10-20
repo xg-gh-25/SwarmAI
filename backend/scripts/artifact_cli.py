@@ -1507,6 +1507,40 @@ def _run_tokens(data: dict) -> int:
     return sum(s.get("token_cost", 0) or 0 for s in data.get("stages", []) or [])
 
 
+# Spend stop-line (XG-approved 2026-10-20 as the STEERING #2 exception: "token 止损线：
+# 超过阈值还没进 DELIVER，就停下来问你"). 10-18..10-20, 52 % of all run tokens went to runs
+# later abandoned. On 159 runs since 10-13, a run past 1.5 M tokens before DELIVER was
+# 1 of 105 completed runs but 5 of 54 abandoned ones. It truncates nothing: stage-start
+# before DELIVER stops once per line and the user decides; the next line doubles the
+# approved spend. Code-measured, never a model's own reason to pause.
+SPEND_STOP_TOKENS = 1_500_000
+_MIN_APPROVAL_CHARS = 10
+
+
+def _spend_stop_check(run_state: dict, approval: "str | None", now: str) -> "list[str]":
+    """[] when the run may go on (under its line, or the user's approval is recorded
+    now in ``spend_approvals``); else the one error stage-start prints."""
+    tokens = _run_tokens(run_state)
+    levels = [int(a.get("level") or 0) for a in run_state.get("spend_approvals") or []
+              if isinstance(a, dict)]
+    line = max(levels) * 2 if levels else SPEND_STOP_TOKENS
+    if tokens < line:
+        return []
+    if approval and len(approval.strip()) >= _MIN_APPROVAL_CHARS:
+        # level = the spend approved, so the next line is double what was approved
+        run_state.setdefault("spend_approvals", []).append(
+            {"level": max(line, tokens), "tokens": tokens, "approval": approval.strip()[:500],
+             "at": now})
+        return []
+    return [f"Spend stop-line: this run has used {tokens:,} tokens before DELIVER (line "
+            f"{line:,}). Going on is the user's decision, not yours: ask them "
+            "(AskUserQuestion on a direct channel, otherwise run-checkpoint --reason 'L2 "
+            "user decision: spend stop-line reached, continue or stop?') whether to continue "
+            "or stop. To continue, re-run this stage-start with --spend-approved '<the user's "
+            f"own words>' (the next line is {max(line, tokens) * 2:,}). To stop: run-update "
+            "--status abandoned --reason '<why>'."]
+
+
 # Crash auto-checkpoint stamps this exact reason; an INTENTIONAL pause carries a
 # real decision reason instead (e.g. "Gate 1 BLOCK", "DELIVERED ...", "ROOT CAUSE
 # FALSIFIED"). This string is the primary zombie discriminator.
@@ -2675,6 +2709,23 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 "from": _old_status, "to": args.status,
                 "reason": args.reason, "at": now,
             })
+
+        # ── A run that ends without completing says why (XG 2026-10-20) ──────────
+        # 21 of 21 runs abandoned 10-18..10-20 recorded no abandon_reason, so nobody
+        # could tell a wrong requirement from a run the pipeline itself wore out.
+        if args.status in ("abandoned", "failed", "cancelled") and _old_status != args.status:
+            _end_why = (getattr(args, "reason", None) or "").strip()
+            if len(_end_why) < _MIN_APPROVAL_CHARS:
+                print(json.dumps({
+                    "blocked": True,
+                    "error": (f"--status {args.status} needs --reason '<why>' (at least "
+                              f"{_MIN_APPROVAL_CHARS} characters): what made the run stop "
+                              "(wrong requirement, superseded by run_..., user stop, a gate "
+                              "that cannot pass and which one)."),
+                    "pipeline_id": args.run_id,
+                }), file=sys.stderr)
+                sys.exit(2)
+            run_state["abandon_reason" if args.status == "abandoned" else "end_reason"] = _end_why
 
         # ── Single choke-point for the paused transition (COE10 dual-write guard) ──
         # run-update --status paused is the OTHER door to a pause; it MUST honor the
@@ -14226,6 +14277,14 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
     if stage not in _get_profile_stages(profile):
         _stage_boundary_fail(stage, [f"Profile violation: '{stage}' is not in the '{profile}' "
                                      f"profile. Expected stages: {_get_profile_stages(profile)}"])
+    # Before DELIVER only (the XG-approved scope, STEERING #2): a run that reached
+    # DELIVER finishes its landing; this asks while stopping still saves the spend.
+    _spend = ([] if stage in ("deliver", "reflect") else
+              _spend_stop_check(run_state, getattr(args, "spend_approved", None), _utc_now_iso()))
+    if _spend:
+        _stage_boundary_fail(stage, _spend)
+    if getattr(args, "spend_approved", None) and run_state.get("spend_approvals"):
+        _write_run_atomic(run_file, run_state)  # the approval is on record before the stage
     run_dir = run_file.parent
     if profile == "direct" and stage in ("build", "deliver"):
         _skip_direct_stages_before(run_file, run_state, stage)
@@ -14606,7 +14665,9 @@ def main() -> None:
     # C1: revive a TERMINAL run (completed/failed/cancelled/abandoned) back to
     # running/paused — requires BOTH --force and --reason (auditable override).
     p_run_update.add_argument("--force", action="store_true", help="Override the C1 terminal-revival guard (requires --reason)")
-    p_run_update.add_argument("--reason", default=None, help="Audit reason for a --force terminal revival")
+    p_run_update.add_argument("--reason", default=None,
+                              help="Why: required to end a run as abandoned / failed / "
+                                   "cancelled; also the audit reason for a --force revival")
 
     # run-get
     p_run_get = sub.add_parser("run-get", help="Get pipeline run state")
@@ -14765,6 +14826,9 @@ def main() -> None:
     p_stage_start.add_argument("--project", required=True)
     p_stage_start.add_argument("--run-id", required=True)
     p_stage_start.add_argument("--stage", required=True)
+    p_stage_start.add_argument("--spend-approved", default=None,
+                               help="The user's own words approving spend past the run's "
+                                    "spend stop-line (recorded in spend_approvals)")
     p_stage_complete = sub.add_parser("stage-complete", help="Leave a stage: validate EVERYTHING, then publish + record + advance in one call")
     p_stage_complete.add_argument("--project", required=True)
     p_stage_complete.add_argument("--run-id", required=True)

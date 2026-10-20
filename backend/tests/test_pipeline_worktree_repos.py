@@ -87,7 +87,7 @@ def test_terminal_run_without_worktrees_disarms_the_gate(flow):
     assert _start(flow, rid, "plan")[0] == 0
     assert (rw.wt_root() / rid).is_dir()
     rc, _ = cli("run-update", "--project", "P", "--run-id", rid, "--status", "abandoned",
-                token_for="run-update", run=rid, flow=flow)
+                "--reason", "test teardown of the run", token_for="run-update", run=rid, flow=flow)
     assert rc == 0 and not (rw.wt_root() / rid).exists()
 
 

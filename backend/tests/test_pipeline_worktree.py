@@ -303,7 +303,7 @@ def test_land_refuses_without_runner_evidence_and_on_red_tests(flow):
 def test_terminal_update_releases_with_token(flow):
     rid, f, wt = _prepared(flow)
     rc, out = cli("run-update", "--project", "P", "--run-id", rid, "--status", "abandoned",
-                  token_for="run-update", run=rid, flow=flow)
+                  "--reason", "test teardown of the run", token_for="run-update", run=rid, flow=flow)
     assert rc == 0, out
     st = _state(f)
     assert st["worktrees"][0]["state"] == "released" and st["worktrees"][0]["ledger"]
@@ -312,7 +312,8 @@ def test_terminal_update_releases_with_token(flow):
 
 def test_terminal_update_without_token_only_requests_release(flow):
     rid, f, wt = _prepared(flow)
-    rc, out = cli("run-update", "--project", "P", "--run-id", rid, "--status", "abandoned")
+    rc, out = cli("run-update", "--project", "P", "--run-id", rid, "--status", "abandoned",
+                  "--reason", "test teardown of the run")
     assert rc == 0, out
     assert _state(f)["release_requested"] is True and wt.exists()
 

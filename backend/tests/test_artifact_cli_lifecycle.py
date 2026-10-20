@@ -2285,13 +2285,15 @@ class TestTerminalStatusTransitionGuard:
         # would be a different code path; use a terminal-source check instead):
         _create_run(workspace, "TestProject", "run_t5", "running")
         # running→failed is a terminal transition FROM a live run → always allowed
-        self._run_update(workspace, monkeypatch, self._args(workspace, "run_t5", "failed"))
+        self._run_update(workspace, monkeypatch, self._args(workspace, "run_t5", "failed",
+                                                          reason="ended by the test fixture"))
         assert _read_run(workspace / "Projects" / "TestProject" / ".artifacts" / "runs"
                          / "run_t5" / "run.json")["status"] == "failed"
 
     def test_running_to_cancelled_allowed(self, workspace, monkeypatch):
         _create_run(workspace, "TestProject", "run_t6", "running")
-        self._run_update(workspace, monkeypatch, self._args(workspace, "run_t6", "cancelled"))
+        self._run_update(workspace, monkeypatch, self._args(workspace, "run_t6", "cancelled",
+                                                          reason="ended by the test fixture"))
         assert _read_run(workspace / "Projects" / "TestProject" / ".artifacts" / "runs"
                          / "run_t6" / "run.json")["status"] == "cancelled"
 

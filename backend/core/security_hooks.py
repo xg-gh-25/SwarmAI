@@ -4266,7 +4266,7 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
         mode = "tdd" if suggest else "verify"
         runner = _pipeline_runner_command(own_run["project"], own_run["id"], mode, suggest)
         abandon_args = ("run-update --project " + shlex.quote(own_run["project"]) + " --run-id "
-                        + shlex.quote(own_run["id"]) + " --status abandoned")
+                        + shlex.quote(own_run["id"]) + " --status abandoned --reason '<why>'")
         abandon = "python backend/scripts/artifact_cli.py " + abandon_args
         try:  # the run's recorded CLI makes both ONE absolute command (pipeline-run-worktree §16.9)
             from core.worktree_write_gate import cli_command

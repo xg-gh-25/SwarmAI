@@ -89,6 +89,14 @@ the prior attempt, THINK skip explored alternatives, and PLAN reuse file discove
 unchanged). Stale runs (>2h) are auto-marked abandoned with reason `session_crash` by
 `cleanup-orphans`.
 
+**Ending a run:** `run-update --status abandoned|failed|cancelled` is refused without
+`--reason '<why>'` (≥ 10 chars), stored as `abandon_reason` / `end_reason`.
+
+**Spend stop-line** (the one XG-approved exception to STEERING #2): `stage-start` of a stage
+before DELIVER refuses once a run's recorded tokens reach `SPEND_STOP_TOKENS` (1.5 M); the user
+decides, never the agent. Continue with `--spend-approved '<the user's words>'` (recorded in
+`spend_approvals`; the next line is twice the approved spend) or end the run with a reason.
+
 ## Background Execution (v3)
 Pipelines can run as background jobs via the Swarm Job System, decoupled from chat sessions:
 ```bash

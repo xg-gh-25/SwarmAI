@@ -208,7 +208,7 @@ class TestRunUpdate:
         # by test_runupdate_paused_blocked_without_force + _allowed_with_force.
         _run_cli(workspace, "run-update",
                  "--project", "TestProject", "--run-id", run_id,
-                 "--status", "cancelled")
+                 "--status", "cancelled", "--reason", "smoke test of the status write")
         state = _run_cli(workspace, "run-get",
                          "--project", "TestProject", "--run-id", run_id)
         assert state["status"] == "cancelled"
