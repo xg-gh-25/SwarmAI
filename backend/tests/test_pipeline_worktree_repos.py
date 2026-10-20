@@ -106,12 +106,12 @@ def test_repo_add_creates_pinned_worktree_and_lands_it(flow):
     assert rc2 == 0 and out2["worktree"] == str(wt) and len(_state(f)["worktrees"]) == 1
     (wt / "o.py").write_text("o = 2\n")
     assert _start(flow, rid, "deliver")[0] == 0
-    tests_dir = f.parent / "evidence" / "tests"   # the landing gate reads runner evidence
-    tests_dir.mkdir(parents=True, exist_ok=True)
-    (tests_dir / "latest-verify.json").write_text(json.dumps({
+    import pipeline_test  # the landing gate reads runner evidence, sealed by its writer
+    tests_dir = f.parent / "evidence" / "tests"
+    pipeline_test._write_json(tests_dir / "latest-verify.json", {
         "schema": 1, "mode": "verify", "run_id": rid, "finished_at": "2099-01-01T00:00:00+00:00",
         "counts": {"passed": 1}, "results": [], "failures": [],
-        "worktree": {e["repo_name"]: {"tree": rw.change_tree(wt, rid), "untracked": []}}}))
+        "worktree": {e["repo_name"]: {"tree": rw.change_tree(wt, rid), "untracked": []}}})
     res = _land(flow, rid, f)
     assert list(res["landed"]) == [e["repo_name"]]
     assert (other / "o.py").read_text() == "o = 2\n"

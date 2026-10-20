@@ -5256,20 +5256,30 @@ def _load_evidence_json(path: Path) -> tuple[dict | None, str | None]:
     """Read one evidence JSON file → ``(data, problem)``.
 
     ``(dict, None)`` readable · ``(None, None)`` absent · ``(None, reason)`` the file
-    EXISTS but cannot be used (too large, unreadable, not JSON, not an object).
+    EXISTS but cannot be used (too large, unreadable, not JSON, not an object, or a
+    runner report whose seal rejects it: core.evidence_seal).
     Callers must not treat the third case as "no evidence": a report that exists
     but cannot be read is a failure to verify, never a pass by omission.
     """
     try:
         if not path.exists():
             # A dangling symlink is a report that is there but cannot be read.
-            return (None, "dangling symlink") if path.is_symlink() else (None, None)
+            if path.is_symlink():
+                return None, "dangling symlink"
+            from core import evidence_seal  # a sealed report that was removed is no absence
+            gone = evidence_seal.sealed_missing(path)
+            return (None, gone) if gone else (None, None)
         if not path.is_file():
             return None, "not a regular file"
         size = path.stat().st_size
         if size > _EVIDENCE_MAX_BYTES:
             return None, f"{size} bytes exceeds the {_EVIDENCE_MAX_BYTES}-byte evidence cap"
-        data = json.loads(path.read_text(encoding="utf-8"))
+        # one read: the bytes the runner's seal is checked against are the bytes parsed
+        from core import evidence_seal
+        raw, ok, why = evidence_seal.read_checked(path)
+        if not ok:
+            return None, why  # a runner report someone else wrote or changed
+        data = json.loads(raw.decode("utf-8"))
     except OSError as exc:
         return None, f"unreadable: {exc.__class__.__name__}"
     except (ValueError, RecursionError):

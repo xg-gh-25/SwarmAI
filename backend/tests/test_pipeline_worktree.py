@@ -195,13 +195,22 @@ def test_run_diff_mark_and_since(flow):
     assert rc == 0 and "+a = 3" in out["diff"]["swarmai"] and "-a = 2" in out["diff"]["swarmai"]
 
 
+def _runner_write(path, data):
+    """Evidence as the test runner writes it (sealed: core.evidence_seal)."""
+    import pipeline_test as _runner
+    _runner._write_json(path, data)
+
+
 def _evidence(f, rid, wt, untracked=()):
+    """The runner's verify report, written through the runner's own writer: runs made
+    by run-create seal their evidence (core.evidence_seal), so a hand-written report
+    would not count."""
+    import pipeline_test
     d = f.parent / "evidence" / "tests"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "latest-verify.json").write_text(json.dumps({
+    pipeline_test._write_json(d / "latest-verify.json", {
         "schema": 1, "mode": "verify", "run_id": rid, "finished_at": "2099-01-01T00:00:00+00:00",
         "counts": {"passed": 1}, "results": [], "failures": [],
-        "worktree": {"swarmai": {"tree": rw.change_tree(wt, rid), "untracked": list(untracked)}}}))
+        "worktree": {"swarmai": {"tree": rw.change_tree(wt, rid), "untracked": list(untracked)}}})
 
 
 def _land(flow, rid, f):
@@ -269,7 +278,7 @@ def test_an_old_verify_is_not_rebound_by_a_newer_tdd_run(flow):
     tdd = json.loads((d / "latest-verify.json").read_text())
     tdd.update(mode="tdd", finished_at="2099-01-02T00:00:00+00:00",
                worktree={"swarmai": {"tree": rw.change_tree(wt, rid), "untracked": []}})
-    (d / "latest-tdd.json").write_text(json.dumps(tdd))
+    _runner_write(d / "latest-tdd.json", tdd)
     with pytest.raises(SystemExit):
         _land(flow, rid, f)
     assert _state(f)["worktrees"][0]["state"] == "active"
@@ -284,7 +293,7 @@ def test_land_refuses_without_runner_evidence_and_on_red_tests(flow):
     p = f.parent / "evidence" / "tests" / "latest-verify.json"
     ev = json.loads(p.read_text())
     ev["failures"] = [{"nodeid": "t::x", "classification": "regression", "outcome": "failed"}]
-    p.write_text(json.dumps(ev))
+    _runner_write(p, ev)
     with pytest.raises(SystemExit):           # a test the change broke
         _land(flow, rid, f)
     assert _state(f)["worktrees"][0]["state"] == "active"
@@ -617,7 +626,7 @@ def _evidence_at_base(f, rid, wt):
     p = f.parent / "evidence" / "tests" / "latest-verify.json"
     d = json.loads(p.read_text())
     d["worktree"]["swarmai"]["base"] = _g(wt, "rev-parse", "HEAD")
-    p.write_text(json.dumps(d))
+    _runner_write(p, d)
 
 
 def test_land_resyncs_by_itself_when_main_moved_elsewhere(flow):
@@ -717,9 +726,7 @@ def test_a_red_cleared_by_a_fix_recheck_past_the_cap_lands_not_push_ready(flow):
              "failures": [], "runner_errors": [], "changed_files": {"a.py": "d2"},
              "worktree": {"swarmai": {"tree": rw.change_tree(wt, rid), "untracked": []}}}
     d = f.parent / "evidence" / "tests"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "latest-regression.json").write_text(json.dumps(
-        pt._overlay_evidence(Path("."), base, re_ev, [])))
+    _runner_write(d / "latest-regression.json", pt._overlay_evidence(Path("."), base, re_ev, []))
     res = _land(flow, rid, f)
     assert res["landed"]["swarmai"]["sha"] == _g(flow["main"], "rev-parse", "HEAD")
     c = _state(f)["commits"][-1]

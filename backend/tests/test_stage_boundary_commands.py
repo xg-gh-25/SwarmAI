@@ -151,9 +151,9 @@ def _artifact_on_disk(root: Path, artifact_id: str) -> dict:
 
 
 def _write_evidence(run_dir: Path, rel: str, data: dict) -> None:
-    p = run_dir / "evidence" / rel
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data), encoding="utf-8")
+    """Through the runner's writer: runs made by run-create seal their evidence."""
+    import pipeline_test
+    pipeline_test._write_json(run_dir / "evidence" / rel, data)
 
 
 def _c2(mode, run_id, results, failures=(), layers=None, finished="2026-01-01T00:10:00+00:00"):

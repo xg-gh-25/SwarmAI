@@ -785,8 +785,10 @@ def runner_executions(run_dir: "Path | None") -> dict:
     by_mode: collections.Counter = collections.Counter()
     named: set = set()
     try:
-        index = json.loads((tdir / "run_index.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        from core import evidence_seal
+        raw, ok, _why = evidence_seal.read_checked(tdir / "run_index.json")
+        index = json.loads(raw.decode("utf-8")) if ok else []  # not the runner's index
+    except (OSError, ValueError, ImportError):
         index = []
     for e in index if isinstance(index, list) else []:
         if not isinstance(e, dict):
@@ -802,8 +804,11 @@ def runner_executions(run_dir: "Path | None") -> dict:
         if not m or f.name in named or not f.is_file():
             continue
         try:
-            ev = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            from core import evidence_seal
+            raw, ok, _why = evidence_seal.read_checked(f)
+            # a report the seal rejects still counts as an execution, never as an overlay
+            ev = json.loads(raw.decode("utf-8")) if ok else {"mode": m.group(1)}
+        except (OSError, ValueError, ImportError):
             continue
         if not isinstance(ev, dict) or _is_overlay(ev):
             continue

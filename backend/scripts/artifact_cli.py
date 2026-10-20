@@ -2443,7 +2443,13 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
     # which gates apply to a run is decided from it, not from run.json's created_at the
     # orchestrator can edit. No ledger → no run (a run without one would fall back to the
     # editable date), so the failure is reported and nothing is created.
-    _led = _ledger_add(run_id, records={"created_at": run_state["created_at"]})
+    # evidence_seal: the runner's reports for this run count only when sealed; recorded
+    # in the ledger too, so a seal store that later goes missing reads as unsealed.
+    _led = _ledger_add(run_id, records={"created_at": run_state["created_at"],
+                                        "evidence_seal": True})
+    if not _led:
+        from core import evidence_seal as _es
+        _led = _es.enable(run_id)
     if _led:
         print(json.dumps({"error": "run-create refused: " + _led[0] + " — the gates of a new run "
                                    "are keyed on it; fix the audit state dir and retry"}),
@@ -9921,7 +9927,11 @@ def _read_run_index(tdir: Path) -> "list | None":
     """pipeline_test.py's append-only ``tests/run_index.json`` (a JSON list), or None
     when absent / unreadable (the caller then falls back to counting evidence files)."""
     try:
-        data = json.loads((tdir / "run_index.json").read_text(encoding="utf-8"))
+        from core import evidence_seal
+        raw, ok, _why = evidence_seal.read_checked(tdir / "run_index.json")
+        if not ok:
+            return None  # not the runner's index (core.evidence_seal)
+        data = json.loads(raw.decode("utf-8"))
     except (OSError, ValueError):
         return None
     return data if isinstance(data, list) else None
@@ -9976,10 +9986,11 @@ def _stage_budget(run_id: str, run_dir: Path, run_state: dict, stage: str,
         mode = p.name.split("-", 1)[0]
         if mode == "latest" or not _in_windows(p.stat().st_mtime, windows):
             continue
-        try:
-            rf = json.loads(p.read_text(encoding="utf-8")).get("rechecked_from")
-        except (OSError, ValueError, AttributeError):
-            rf = None
+        import pipeline_validator as _pvb
+        ev, _bad = _pvb._load_evidence_json(p)
+        # a report the seal rejects still counts as a test run (fail closed for the
+        # budget); only a sealed one can claim to be an overlay
+        rf = (ev or {}).get("rechecked_from")
         if isinstance(rf, dict):
             auto += bool(rf.get("auto"))  # an overlay write, not another test run
             continue
@@ -12259,8 +12270,12 @@ def _gate2_v2_inputs(run_id: str, run_dir: Path, run_state: dict):
     proofs = _merged_proofs(pdir)
     last_fix = max([float(e.get("ts") or 0) for e in events if e.get("kind") == "fixed"],
                    default=0.0)
+    import pipeline_validator as pv
+    # only the runner's own prove calls count (core.evidence_seal): a touched file must
+    # not move the ledger into, or out of, the prove phase
     prove_calls = sum(1 for f in pdir.glob("prove-R*-*.json")
-                      if last_fix and f.stat().st_mtime > last_fix) if pdir.is_dir() else 0
+                      if last_fix and f.stat().st_mtime > last_fix
+                      and pv._load_evidence_json(f)[0] is not None) if pdir.is_dir() else 0
     return roster, rows, events, proofs, prove_calls
 
 
@@ -12270,20 +12285,20 @@ def _merged_proofs(pdir: Path) -> dict:
     last call's). A newer finished verdict replaces an older one; a pending row (cut by
     the deadline) only fills a nodeid no call finished. A call on another snapshot than
     the round's recorded one is not evidence for this round."""
-    try:
-        snaps = json.loads((pdir / "snapshots.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        snaps = {}
+    import pipeline_validator as pv
+    # through the evidence loader: a snapshot list or a proof the runner did not seal
+    # is not evidence (core.evidence_seal)
+    snaps, bad = pv._load_evidence_json(pdir / "snapshots.json")
+    if bad:
+        return {}  # a snapshot list the runner did not write: no round has a proof
+    snaps = snaps or {}
     proofs: dict = {}
     for rnd in ("R1", "R2"):
         want = (snaps.get(rnd) or {}).get("sha") if isinstance(snaps, dict) else None
         merged: dict = {}
         for f in sorted(pdir.glob(f"prove-{rnd}-*.json"), key=lambda f: (f.stat().st_mtime,
                                                                        f.name)):
-            try:
-                d = json.loads(f.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
+            d = pv._load_evidence_json(f)[0]
             if not isinstance(d, dict) or (want and d.get("snapshot") != want):
                 continue
             for r in d.get("proofs") or []:
@@ -12316,12 +12331,8 @@ def _gate2_next_view(run_id: str, run_dir: Path, run_state: dict) -> dict:
                for r in fl.not_proven(state)]
     # an ignored answer or event is input the ledger could not use: never push-ready
     reasons += [f"gate2: {w}" for w in warnings]
-    snaps = {}
-    try:
-        snaps = json.loads((run_dir / "evidence" / "proofs" / "snapshots.json")
-                           .read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        pass
+    import pipeline_validator as _pv
+    snaps = _pv._load_evidence_json(run_dir / "evidence" / "proofs" / "snapshots.json")[0] or {}
     project = run_state.get("project") or "<P>"
     base = f"--project {project} --run-id {run_id}"
     kind = act["action"]

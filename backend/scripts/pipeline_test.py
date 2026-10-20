@@ -239,18 +239,37 @@ def _file_digest(path: Path, limit: int = 8 * 1024 * 1024) -> str:
 
 
 def _read_json(path: Path):
+    """A JSON file, or None. A run's evidence file that its seal rejects (written or
+    changed by someone other than this runner: core.evidence_seal) reads as None, so
+    a forged report is never merged into, or re-sealed by, a later call."""
+    from core import evidence_seal
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        raw, ok, _why = evidence_seal.read_checked(path)
+        return json.loads(raw.decode("utf-8")) if ok else None
     except (OSError, ValueError):
         return None
 
 
+def _index_read(path: Path):
+    """(data, tampered) for an append-only counter file (run_index.json, tdd_index.json).
+    ``tampered`` names why the runner's seal rejects the file. A rejected index is never
+    read as "no history" (that would reset every cap counted from it) and never
+    re-sealed (that would make the edited content the runner's): the callers refuse."""
+    data = _read_json(path)
+    if data is not None or not path.exists():
+        return data, None
+    from core import evidence_seal
+    ok, why = evidence_seal.check(path)
+    return None, (None if ok else f"{path.parent.name}/{path.name} is not the runner's ({why})")
+
+
 def _write_json(path: Path, data) -> None:
-    """Atomic write (tmp + replace) so a concurrent reader never sees half a file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    """Atomic write (tmp + replace) so a concurrent reader never sees half a file; a
+    run's evidence file is sealed under the same lock (core.evidence_seal)."""
+    from core import evidence_seal
+    warn = evidence_seal.write_sealed(path, json.dumps(data, indent=1))
+    if warn:
+        print(json.dumps({"warning": warn}), file=sys.stderr)
 
 
 def _lines(text: str) -> list[str]:
@@ -3010,7 +3029,11 @@ def _append_run_index(tdir: Path, entry: dict) -> None:
     still appends (like the tdd index): a lost record would under-count the budget."""
     fd = _try_lock(tdir / ".run_index.lock", 5)
     try:
-        cur = _read_json(tdir / RUN_INDEX)
+        cur, tampered = _index_read(tdir / RUN_INDEX)
+        if tampered:  # never re-seal an index the runner did not write; the caps refuse
+            print(json.dumps({"warning": tampered + ": this run is not recorded"}),
+                  file=sys.stderr)
+            return
         cur = [e for e in cur if isinstance(e, dict)] if isinstance(cur, list) else []
         cur.append(entry)
         _write_json(tdir / RUN_INDEX, cur)
@@ -3067,7 +3090,7 @@ def _continuation_rows(ev_root: Path, mode: str) -> "list[dict]":
     """Run-index rows of the current round of ``mode``: its first run, then each
     continuation's merged result (kind=overlay), oldest first; only rows with an int
     ``unfinished``."""
-    idx = _read_json(ev_root / "tests" / RUN_INDEX)
+    idx, _tampered = _index_read(ev_root / "tests" / RUN_INDEX)  # breaker refuses it
     if not isinstance(idx, list):
         return []
     rows = [e for e in idx if isinstance(e, dict)]
@@ -3151,7 +3174,11 @@ def _full_scope_refusal(ev_root: Path, mode: str, run_state: dict,
                 "error": (f"--mode {mode} runs the change's whole dependency scope, and that "
                           f"runs once per run, at DELIVER after the last change (landing reads "
                           f"only that report). Not in {stage}: {narrow}.")}
-    idx = _read_json(ev_root / "tests" / RUN_INDEX)
+    idx, tampered = _index_read(ev_root / "tests" / RUN_INDEX)
+    if tampered:
+        return {"mode": mode, "ok": False, "full_scope": {"refused": True, "tampered": True},
+                "error": f"{tampered}: the run's full-scope rounds cannot be counted, so "
+                         "none is allowed. Operator override only: SWARM_GATE_FORCE=full_scope"}
     own = [e for e in idx if isinstance(e, dict) and e.get("kind") == "run"
            and not e.get("auto_recheck_of") and not e.get("cached")] \
         if isinstance(idx, list) else []
@@ -3207,8 +3234,12 @@ def _circuit_breaker_check(ev_root: Path, mode: str, profile: str = "") -> dict 
     (GOAL_TDD_MAX): the goal loop's stop rule, enforced here instead of by the card."""
     if force_enabled("circuit_breaker"):
         return None
+    if mode in ("tdd", "verify", "recheck", "regression"):
+        _idx, tampered = _index_read(ev_root / "tests" / RUN_INDEX)
+        if tampered:
+            return _breaker_result(mode, tampered + ": the rounds of this run cannot be counted")
     if mode == "tdd" and profile == "goal":
-        idx = _read_json(ev_root / "tests" / RUN_INDEX)
+        idx, _t = _index_read(ev_root / "tests" / RUN_INDEX)
         n = sum(1 for e in idx if isinstance(e, dict) and e.get("mode") == "tdd") \
             if isinstance(idx, list) else 0
         if n >= GOAL_TDD_MAX:
@@ -3219,7 +3250,7 @@ def _circuit_breaker_check(ev_root: Path, mode: str, profile: str = "") -> dict 
         return None
     if mode not in ("verify", "recheck", "regression"):
         return None
-    idx = _read_json(ev_root / "tests" / RUN_INDEX)
+    idx, _t = _index_read(ev_root / "tests" / RUN_INDEX)
     if not isinstance(idx, list):
         return None
     runs = [e for e in idx if isinstance(e, dict) and e.get("kind") == "run"
@@ -3356,7 +3387,10 @@ def _bump_tdd(ev_root: Path, files: list[str]) -> dict[str, int]:
     idx = ev_root / "tests" / "tdd_index.json"
     fd = _try_lock(ev_root / "tests" / ".tdd_index.lock", 5)
     try:
-        data = _read_json(idx)
+        data, tampered = _index_read(idx)
+        if tampered:  # a display counter: never re-seal it, report no repeats
+            print(json.dumps({"warning": tampered}), file=sys.stderr)
+            return {}
         data = data if isinstance(data, dict) else {}
         for f in files:
             data[f] = int(data.get(f, 0) or 0) + 1
