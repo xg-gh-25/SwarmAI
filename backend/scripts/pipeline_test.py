@@ -2858,6 +2858,70 @@ def _resolve_ref(repo: Path, ref: str) -> tuple[str, str | None] | None:
     return None
 
 
+def _ac_name_status(repo: Path, nodeid: str) -> str:
+    """Is the test a ``file.py::name[::name]`` nodeid names defined in its file?
+    "present", "missing", or "unknown" when a static read cannot tell: the file does
+    not parse, the name may come from an import (``from x import test_a`` / ``*``), or
+    a method may be inherited (its class has bases). Only "missing" is acted on. A
+    parametrized ``name[id]`` is judged by ``name``."""
+    import ast
+    file, _, rest = nodeid.partition("::")
+    parts = [re.sub(r"\[.*\]$", "", p) for p in rest.split("::") if p]
+    if not parts:
+        return "present"
+    try:
+        tree = ast.parse((repo / file).read_text(encoding="utf-8"))
+    except (OSError, ValueError, SyntaxError):
+        return "unknown"
+
+    def flat(body) -> list:
+        # a name defined under a module-level if / try / with still exists
+        out = []
+        for n in body:
+            out.append(n)
+            if isinstance(n, (ast.If, ast.Try, ast.With)) or type(n).__name__ == "TryStar":
+                for part in ("body", "orelse", "finalbody"):
+                    out += flat(getattr(n, part, None) or [])
+                for h in getattr(n, "handlers", None) or []:
+                    out += flat(h.body)
+        return out
+
+    def names(body) -> "tuple[dict, bool]":
+        defs: dict = {}
+        imported = False
+        for n in flat(body):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                defs[n.name] = n
+            elif isinstance(n, (ast.Assign, ast.AnnAssign)):
+                for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
+                    if isinstance(t, ast.Name):
+                        defs[t.id] = n
+            elif isinstance(n, (ast.Import, ast.ImportFrom)):
+                for a in n.names:
+                    if a.name == "*":
+                        imported = True
+                    else:
+                        defs[a.asname or a.name.split(".")[0]] = None   # None: imported
+        return defs, imported
+    body = tree.body
+    for i, name in enumerate(parts):
+        defs, star = names(body)
+        if name not in defs:
+            return "unknown" if star else "missing"
+        node = defs[name]
+        if node is None:
+            return "unknown"   # imported: defined elsewhere
+        if i + 1 < len(parts):
+            if not isinstance(node, ast.ClassDef):
+                return "missing"
+            if node.bases or node.keywords:
+                inner, _ = names(node.body)
+                if parts[i + 1] not in inner:
+                    return "unknown"   # may be inherited
+            body = node.body
+    return "present"
+
+
 def _ref_matches(r: dict, file: str, nodeid: str | None) -> bool:
     """Does result / evidence entry ``r`` match a resolved ref? A whole-file ref
     (``nodeid`` None) compares the entry's file, which a compact pass omits (``_rfile``)."""
@@ -3798,6 +3862,44 @@ def _od_context_args(repo: Path, f: dict) -> list[str] | None:
     return list(pre)
 
 
+def _plan_ac_refs(ctx, plan: dict) -> "tuple[list[str], list[str]]":
+    """Regression L1: turn the BUILD ac_coverage refs (``plan["ac_entries"]``) into
+    targets. Fills ``plan`` targets / ac_first / ac_files / ac_desktop and
+    ``ac_refs_missing``; returns (ac_files, probe refs)."""
+    ac_files: list[str] = []
+    ac_desktop: list[str] = []
+    probe_refs: list[str] = []
+    for refs in plan["ac_entries"]:
+        for ref in refs:
+            if ref.startswith(PROBE_REF_PREFIX):
+                probe_refs.append(ref)
+                continue
+            drv = _resolve_desktop_ref(ctx.repo, ref, ctx.warnings)
+            if drv is not None:  # desktop: vitest file list only, never a pytest target
+                if drv[0]:
+                    ac_desktop.append(drv[0])
+                continue
+            rv = _resolve_ref(ctx.repo, ref)
+            if rv is None or (rv[1] is not None
+                              and _ac_name_status(ctx.repo, rv[1]) == "missing"):
+                # a stale BUILD ref (a renamed / deleted test) is a bookkeeping gap,
+                # never a pytest target: as a nodeid pytest would report it as a runner
+                # error and block landing. Recorded, so push_ready names it.
+                ctx.warnings.append(f"ac_coverage test ref not found: {ref}"
+                                    + ("" if rv is None else " (no such test in its file: "
+                                                             "renamed or deleted?)"))
+                if ".py" in ref:   # a test ref, not a stray word of a free-text field
+                    plan.setdefault("ac_refs_missing", []).append(ref)
+                continue
+            _add_target(plan["targets"], *rv)
+            ac_files.append(rv[0])
+            if rv[1] is not None:
+                plan.setdefault("ac_first", {}).setdefault(rv[0], set()).add(rv[1])
+    plan["ac_files"] = list(dict.fromkeys(ac_files))  # L1: never reused (_reusable)
+    plan["ac_desktop"] = list(dict.fromkeys(ac_desktop))
+    return ac_files, probe_refs
+
+
 def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
           sgraph: dict | None = None) -> tuple[dict, str | None]:
     plan = {"targets": {}, "skipped": [], "smoke": {}, "ac_entries": [], "l2": [],
@@ -3889,29 +3991,7 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
         plan["transitive_unrun"] = transitive_unselected(ctx.repo, sgraph, graph, scope, sel)
     if mode == "regression":
         plan["ac_entries"] = _ac_entries(ns.project, run_state)
-        ac_files: list[str] = []
-        ac_desktop: list[str] = []
-        probe_refs: list[str] = []
-        for refs in plan["ac_entries"]:
-            for ref in refs:
-                if ref.startswith(PROBE_REF_PREFIX):
-                    probe_refs.append(ref)
-                    continue
-                drv = _resolve_desktop_ref(ctx.repo, ref, ctx.warnings)
-                if drv is not None:  # desktop: vitest file list only, never a pytest target
-                    if drv[0]:
-                        ac_desktop.append(drv[0])
-                    continue
-                rv = _resolve_ref(ctx.repo, ref)
-                if rv is None:
-                    ctx.warnings.append(f"ac_coverage test ref not found: {ref}")
-                    continue
-                _add_target(plan["targets"], *rv)
-                ac_files.append(rv[0])
-                if rv[1] is not None:
-                    plan.setdefault("ac_first", {}).setdefault(rv[0], set()).add(rv[1])
-        plan["ac_files"] = list(dict.fromkeys(ac_files))  # L1: never reused (_reusable)
-        plan["ac_desktop"] = list(dict.fromkeys(ac_desktop))
+        ac_files, probe_refs = _plan_ac_refs(ctx, plan)
         plan["probe_rows"] = _probe_rows(ctx, ev_root, probe_refs, changed)
         # AC targets first in priority order (a whole-file AC ref is not split out).
         plan["targets"] = {**{f: plan["targets"][f] for f in dict.fromkeys(ac_files)},
@@ -4404,6 +4484,8 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
           **({"bvt_files": list(plan["bvt"])} if plan.get("bvt") else {}),
           **({"context_unverified": sorted(set(plan["context_unverified"]))}
              if plan.get("context_unverified") else {}),
+          **({"ac_refs_missing": list(dict.fromkeys(plan["ac_refs_missing"]))}
+             if plan.get("ac_refs_missing") else {}),
           **({"context_replayed": sorted(set(plan["context_replayed"]))}
              if plan.get("context_replayed") else {}),
           "results": [{k: v for k, v in r.items() if k != "_reused"} if r.get("_reused")
