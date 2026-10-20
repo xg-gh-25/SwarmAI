@@ -182,3 +182,9 @@ break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连�
     落地检查会以"测试产生于另一棵 tree"拒绝。修复型 recheck 落地后 push_ready 为 false：没重跑的那部分
     范围不是在最终代码上跑的，由人决定 push。
   选择逻辑（`_plan`、`select_backend`）没变。
+- 2026-10-20 `select_backend`（XG 事后批准，b41e7adb / run_8c89f1dd 未经批准就改了，冻结守卫红着落了地）：
+  改了 `backend/context/` 下的文件时，加选 `_CONTEXT_SUITES`（`test_context_templates.py`、
+  `test_context_directory_loader.py`）。这些上下文源文件没有 importer，原来改了它们一个测试都选不到。
+- 2026-10-20 `_full_scope_refusal`（XG 事后批准，2c05cfbc / run_2702d56e 同样未经批准）：run 的
+  `tests/.run_index` 读出来被篡改时，数不清已跑几轮全范围，就一轮都不放行（运维用
+  `SWARM_GATE_FORCE=full_scope` 覆盖）。只是防护，跑哪些测试没变。

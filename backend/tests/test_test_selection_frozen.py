@@ -30,10 +30,10 @@ FROZEN_FUNCTIONS = (
 )
 
 DIGESTS = {
-    "select_backend": "17de9e87ad89ab7c",
+    "select_backend": "7a8ad119e42f5b27",  # 10-20: backend/context/ suites (b41e7adb, §11)
     "transitive_unselected": "b1acd1e5cfa8521f",
     "_bvt_files": "c275cb940b06a3a9",
-    "_full_scope_refusal": "b94c97c4dc3e3355",  # 10-20: recheck judges a fix past the cap (§11)
+    "_full_scope_refusal": "0e054d7718481d65",  # 10-20: recheck past the cap; tampered index refused (2c05cfbc, §11)
     "_smoke_modules": "1ea6c7b77910e927",
     "_recent_failure_files": "7173dd3412333fa3",
     "_plan": "307335d80a43f01d",
