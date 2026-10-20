@@ -275,4 +275,14 @@ describe('AC9 — one signal; a stopped turn says so', () => {
     expect(screen.getByTestId('strip-time').textContent).toBe('stopped');
     expect(screen.queryByTestId('turn-result')).toBeNull();
   });
+
+  it('a stop the backend explained says why (core/turn_notice)', () => {
+    const n = (reason: string, cause?: string) => ({ type: 'turn_notice', reason, ...(cause ? { cause } : {}) }) as ContentBlock;
+    const { unmount } = render(view([tx('go'), bash('a', 'make'), tr('a'), bash('b', 'make'), n('restarted', 'stalled')], false));
+    expect(screen.getByTestId('turn-stopped').textContent)
+      .toBe('Stopped · the AI process was restarted because it stopped responding (for example while the computer slept); the call it was running was lost');
+    unmount();
+    render(view([tx('go'), bash('a', 'make'), tr('a'), bash('b', 'make'), n('superseded')], false));
+    expect(screen.getByTestId('turn-stopped').textContent).toBe('Stopped · your newer message continued the conversation');
+  });
 });

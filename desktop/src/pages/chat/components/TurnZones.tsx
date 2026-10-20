@@ -63,6 +63,22 @@ const sinceIso = (a?: string, b?: string): number | undefined => {
 // remount shows the same times. Bounded: the least recently used scopes are dropped
 // (the live message is used on every render, so it is never the one dropped).
 const spans = new Map<string, Map<string, { start: number; end?: number }>>();
+/** The stopped line when the backend said why (core/turn_notice). */
+const CAUSE_TEXT: Record<string, string> = {
+  stalled: 'it stopped responding (for example while the computer slept)',
+  oom: 'it ran out of memory',
+  timeout: 'it timed out',
+};
+function stoppedNoticeText(t: Parameters<typeof tf>[0], n: { reason: string; cause?: string }): string {
+  if (n.reason === 'superseded') {
+    return tf(t, 'chat.turn.zone.stoppedSuperseded', 'Stopped · your newer message continued the conversation');
+  }
+  const cause = n.cause ? CAUSE_TEXT[n.cause] ?? n.cause : null;
+  return cause
+    ? tf(t, 'chat.turn.zone.stoppedRestartedCause', 'Stopped · the AI process was restarted because {{cause}}; the call it was running was lost', { cause })
+    : tf(t, 'chat.turn.zone.stoppedRestarted', 'Stopped · the AI process was restarted; the call it was running was lost');
+}
+
 const SPAN_SCOPES = 200;
 function useSpanSeconds(scope: string, id: string, live: boolean): number | undefined {
   let mem = spans.get(scope);
@@ -615,7 +631,9 @@ export function TurnZoneList({ zones, ctx, hasOpenQuestionIn }: {
                   ? tf(t, 'chat.turn.zone.stoppedByYouPlain', 'Stopped by you')
                   : z.byUser
                     ? tf(t, 'chat.turn.zone.stoppedByYou', 'Stopped by you · the last call did not finish')
-                    : tf(t, 'chat.turn.zone.stopped', 'Stopped · the last call did not finish')}
+                    : z.notice
+                      ? stoppedNoticeText(t, z.notice)
+                      : tf(t, 'chat.turn.zone.stopped', 'Stopped · the last call did not finish')}
               </div>
             );
             break;

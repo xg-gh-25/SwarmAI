@@ -3569,6 +3569,19 @@ class SessionUnit:
         _t_lock = _t_cfg0 = _t_cfg1 = _t_w0 = _t_w1 = None
         async with _spawn_lock:
             _t_lock = time.perf_counter()
+            # One subprocess per unit (2026-10-20, a878efb9): a retry in its backoff
+            # and the user's next send both found the unit COLD and both queued
+            # here; each spawned a CLI, the second overwrote self._client and the
+            # first became an orphan that kept streaming into the same chat and
+            # run. Whoever gets the lock second finds the first one's client and
+            # uses it: a stale retry then bails on _send_generation (retry_manager).
+            if self._client is not None:
+                logger.warning(
+                    "session_unit.spawn_skipped_live_client session_id=%s pid=%s — "
+                    "another path already spawned this unit's subprocess; reusing it",
+                    self.session_id, self.pid,
+                )
+                return
             async with _env_lock:
                 if config is not None:
                     _t_cfg0 = time.perf_counter()
@@ -5295,6 +5308,8 @@ class SessionUnit:
             self._consecutive_unstick_timeouts,
         )
         await self._arm_recovery_checkpoint("stuck_streaming")
+        # read by the retry's turn_notice: this -9 is the stall watchdog, not a crash
+        self._last_unstick_at = time.monotonic()
         await self._crash_to_cold_async(clear_identity=False)
 
     async def force_unstick_waiting_input(self) -> None:

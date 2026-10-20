@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 from model_registry import DEFAULT_CONTEXT_WINDOW
 
+from .turn_notice import turn_notice_event
+
 if TYPE_CHECKING:
     from .session_unit import SessionUnit
 
@@ -245,6 +247,26 @@ class RetryManager:
                 "_fallthrough_tb": traceback.format_exc(),
             }
 
+    def _restart_cause(self, failure_type) -> str:
+        """'stalled' when the stall watchdog killed the process in the last minute
+        (force_unstick_streaming), else the classified failure ('oom', 'timeout', ...)."""
+        at = getattr(self._parent, "_last_unstick_at", None)
+        if isinstance(at, (int, float)) and time.monotonic() - at < 60:
+            return "stalled"
+        return getattr(failure_type, "value", None) or "crash"
+
+    def _superseded(self, gen_at_entry: int) -> bool:
+        """A newer send() owns the unit: this retry yields to it (logged once)."""
+        now = getattr(self._parent, "_send_generation", 0)
+        if now == gen_at_entry:
+            return False
+        logger.info(
+            "session_unit.retry_superseded session_id=%s gen=%s->%s — a newer "
+            "message resumes the conversation; this retry stops",
+            self._parent.session_id, gen_at_entry, now,
+        )
+        return True
+
     async def _retry_with_resume(
         self,
         query_content: Any,
@@ -282,6 +304,10 @@ class RetryManager:
         from core.session_unit import SessionState
 
         error_str = initial_error_str
+        # The send this retry belongs to. A user message sent during the backoff
+        # starts a newer send (send() bumps _send_generation): that send resumes
+        # the conversation, so this retry must not spawn or stream (a878efb9).
+        gen_at_entry = getattr(self._parent, "_send_generation", 0)
         # Capture SDK session ID before cleanup for --resume
         resume_session_id = self._parent._sdk_session_id
         _consecutive_timeouts = 0
@@ -480,6 +506,9 @@ class RetryManager:
                 "message": f"Reconnecting (attempt {self._parent._retry_count}/{self._parent.MAX_RETRY_ATTEMPTS})...",
                 "code": "RETRY_SPAWN",
             }
+            if self._parent._retry_count == 1:
+                # the call the process was running is lost: say why, once per turn
+                yield turn_notice_event("restarted", self._restart_cause(failure_type))
 
             await self._parent._crash_to_cold_async()
 
@@ -489,6 +518,11 @@ class RetryManager:
                 self._parent._hook_session_context.pop("_stop_info", None)
 
             await asyncio.sleep(backoff)
+
+            if self._superseded(gen_at_entry):
+                yield turn_notice_event("superseded")
+                yield {"_abort": True}
+                return
 
             # Re-check spawn budget after backoff. Retries bypass
             # session_router._acquire_slot(), so we must re-enforce the OOM
@@ -582,6 +616,12 @@ class RetryManager:
                     )
                     yield {"_abort": True}
                     return
+
+            if self._superseded(gen_at_entry):
+                # the newer send spawned first (or is streaming on this subprocess)
+                yield turn_notice_event("superseded")
+                yield {"_abort": True}
+                return
 
             self._parent._active_agent_tools = {}  # Clear ghost entries from crashed attempt
             self._parent._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)

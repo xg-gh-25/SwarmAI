@@ -134,6 +134,32 @@ describe('turnZones — RESULT and stopped', () => {
   it('history that kept no results is not judged stopped', () => {
     expect(kinds(zones([tx('go'), tu('a'), tu('b')]))).not.toContain('stopped');
   });
+
+  // the backend says why a call did not finish (core/turn_notice, 2026-10-20)
+  const notice = (reason: string, cause?: string): ContentBlock =>
+    ({ type: 'turn_notice', reason, ...(cause ? { cause } : {}) }) as ContentBlock;
+
+  it('a call lost in a restart the turn recovered from does not stop the turn', () => {
+    const zs = zones([tx('go'), tu('a'), tr('a'), tu('b'), notice('restarted', 'stalled'), tu('c'), tr('c'), tx('done')]);
+    expect(kinds(zs)).not.toContain('stopped');
+  });
+
+  it('a restart with nothing after it stops the turn with its reason', () => {
+    const zs = zones([tx('go'), tu('a'), tr('a'), tu('b'), notice('restarted', 'stalled')]);
+    expect(zs.at(-1)).toMatchObject({ kind: 'stopped', byUser: false, notice: { reason: 'restarted', cause: 'stalled' } });
+  });
+
+  it('a hand-over to a newer message stops the turn with that reason', () => {
+    const zs = zones([tx('go'), tu('a'), tr('a'), tu('b'), notice('superseded')]);
+    expect(zs.at(-1)).toMatchObject({ kind: 'stopped', notice: { reason: 'superseded' } });
+  });
+
+  it('a call cut after the notice keeps the unexplained stop line', () => {
+    const zs = zones([tx('go'), tu('a'), tr('a'), notice('restarted', 'oom'), tu('b'), tr('b'), tu('c')]);
+    const last = zs.at(-1) as Extract<Zone, { kind: 'stopped' }>;
+    expect(last.kind).toBe('stopped');
+    expect(last.notice).toBeUndefined();
+  });
 });
 
 describe('turnZones — a pipeline turn', () => {

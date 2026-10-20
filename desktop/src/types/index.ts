@@ -495,8 +495,21 @@ export interface TurnChangesContent {
   omitted?: number;
 }
 
+/** Why a turn's last call did not finish — written by the BACKEND when it restarts
+ *  the AI process mid-turn or a newer message takes over (core/turn_notice). */
+export interface TurnNoticeContent {
+  type: 'turn_notice';
+  /** restarted: the process was restarted, the call it ran was lost.
+   *  superseded: a newer message resumed the conversation. */
+  reason: 'restarted' | 'superseded' | string;
+  /** For restarted: stalled / oom / timeout / ... */
+  cause?: string;
+  at?: string;
+}
+
 export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent
-  | PipelineRunContent | PipelineAttentionContent | PipelineSummaryContent | TurnDeliverablesContent | TurnChangesContent;
+  | PipelineRunContent | PipelineAttentionContent | PipelineSummaryContent | TurnDeliverablesContent | TurnChangesContent
+  | TurnNoticeContent;
 
 export interface Message {
   id: string;

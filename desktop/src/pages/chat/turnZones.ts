@@ -80,7 +80,10 @@ export type Zone =
   | { kind: 'stageResult'; id: string; block: PipelineStageContent }
   | StageZone
   | { kind: 'gate'; id: string; stage: string; verdict: string; earlier: string[] }
-  | { kind: 'stopped'; id: string; byUser: boolean; unfinished: boolean };
+  | { kind: 'stopped'; id: string; byUser: boolean; unfinished: boolean;
+      /** The backend's reason (turn_notice), when it restarted the process or a
+       *  newer message took over; absent = the reason is not known. */
+      notice?: { reason: string; cause?: string } };
 
 const firstIndex = (u: TurnUnit): number => (u.kind === 'process' ? (u.steps[0]?.index ?? -1) : u.index);
 
@@ -162,8 +165,16 @@ export function turnZones(view: TurnView, isStreaming: boolean): Zone[] {
   // The turn ended on a call that never finished. Without the user's Stop marker this
   // is only judged where the turn kept results (older history has none at all).
   const hasResults = units.some((u) => u.kind === 'process' && u.steps.some((s) => s.resultIndex !== undefined));
-  const unfinished = !isStreaming && units.some((u) => u.kind === 'process' && u.steps.some((s) => s.status === 'unknown'));
-  const stopped = !!view.stoppedMarker || (unfinished && hasResults);
+  // A call started before a backend turn_notice was lost by that restart / hand-over:
+  // the notice accounts for it, so it alone does not make the turn "stopped".
+  const notice = view.notice;
+  const lost = (s: ToolStep) => !!notice && s.index < notice.index;
+  const unfinished = !isStreaming && units.some((u) => u.kind === 'process' && u.steps.some((s) => s.status === 'unknown' && !lost(s)));
+  // the notice ended the turn: a hand-over, or a restart with nothing after it
+  const lastIndex = Math.max(-1, ...units.map((u) => (u.kind === 'process' ? (u.steps[u.steps.length - 1]?.index ?? -1) : firstIndex(u))));
+  const noticeEnds = !isStreaming && !!notice && !unfinished
+    && (notice.reason === 'superseded' || lastIndex < notice.index);
+  const stopped = !!view.stoppedMarker || (unfinished && hasResults) || noticeEnds;
 
   // RESULT: the first text after the last call, once the turn ended, with nothing still
   // waiting for the user after it, in a turn that did not stop.
@@ -207,7 +218,8 @@ export function turnZones(view: TurnView, isStreaming: boolean): Zone[] {
   }
 
   if (stopped) {
-    zones.push({ kind: 'stopped', id: 'stopped', byUser: !!view.stoppedMarker, unfinished });
+    zones.push({ kind: 'stopped', id: 'stopped', byUser: !!view.stoppedMarker, unfinished,
+      ...(noticeEnds && notice ? { notice: { reason: notice.reason, cause: notice.cause } } : {}) });
   }
   markLive(zones, isStreaming);
   return zones;
