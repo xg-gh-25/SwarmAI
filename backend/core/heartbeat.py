@@ -77,8 +77,10 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 from config import get_app_data_dir
@@ -104,6 +106,9 @@ HEARTBEAT_PATH: Path = get_app_data_dir() / "heartbeat"
 # large loop_age until the first bump, which is correct (pre-yield startup).
 # ---------------------------------------------------------------------------
 _last_loop_tick: float = 0.0
+# Thread ident of the asyncio loop, recorded by bump_loop_tick (which runs ON the
+# loop). Lets the writer thread dump the loop thread's stack during starvation.
+_loop_thread_id: int | None = None
 
 # ---------------------------------------------------------------------------
 # Observability: log a loop-STARVATION event to the daemon log (run_69198f8c).
@@ -142,8 +147,54 @@ def bump_loop_tick() -> None:
     thread is wedged, this stops being called → ``loop_age`` grows in the
     heartbeat file → the watchdog can tell a genuine deadlock from mere busyness.
     """
-    global _last_loop_tick
+    global _last_loop_tick, _loop_thread_id
     _last_loop_tick = time.monotonic()
+    _loop_thread_id = threading.get_ident()
+
+
+# Stack frames kept per thread in a starvation dump (innermost last). Enough to
+# reach the offending call from asyncio's run loop; bounded so one dump stays a
+# few KB of log, not the whole interpreter.
+_STACK_DUMP_MAX_FRAMES: int = 30
+# Frames whose innermost function is one of these are idle waits (a pool worker
+# blocked on its queue, a sleeping thread): left out of the "other threads" list.
+_IDLE_LEAF_FUNCS = frozenset({
+    "wait", "_wait_for_tstate_lock", "get", "select", "poll", "control",
+    "_worker", "sleep", "accept", "recv", "recv_into", "readline", "read",
+})
+
+
+def _format_starvation_stacks(frames: dict | None = None) -> str:
+    """Where the loop thread is while the loop is starved, plus busy threads.
+
+    Called from the heartbeat writer thread only (never the loop). The loop
+    thread's stack is always included: it names the call that keeps the loop
+    from scheduling. Other threads are listed only when their innermost frame is
+    not an idle wait, since a thread holding the GIL (pure-Python CPU work in a
+    pool) starves the loop as surely as a blocking call on it. ``frames`` is
+    injectable for tests; defaults to ``sys._current_frames()``. Never raises.
+    """
+    try:
+        frames = sys._current_frames() if frames is None else frames
+        names = {t.ident: t.name for t in threading.enumerate()}
+        me = threading.get_ident()
+        parts: list[str] = []
+        loop_frame = frames.get(_loop_thread_id) if _loop_thread_id else None
+        if loop_frame is not None:
+            stack = "".join(traceback.format_stack(loop_frame)[-_STACK_DUMP_MAX_FRAMES:])
+            parts.append(f"loop thread ({names.get(_loop_thread_id, '?')}):\n{stack}")
+        else:
+            parts.append("loop thread: not found")
+        for tid, frame in frames.items():
+            if tid in (me, _loop_thread_id):
+                continue
+            if frame.f_code.co_name in _IDLE_LEAF_FUNCS:
+                continue
+            stack = "".join(traceback.format_stack(frame)[-8:])
+            parts.append(f"busy thread {names.get(tid, tid)}:\n{stack}")
+        return "\n".join(parts)
+    except Exception as exc:  # pragma: no cover - observability must never break
+        return f"stack capture failed: {exc!r}"
 
 
 def _write_heartbeat_once() -> None:
@@ -180,8 +231,9 @@ def _write_heartbeat_once() -> None:
             logger.warning(
                 "event-loop starvation: loop_age=%.1fs (>=%.1fs threshold) — "
                 "the asyncio loop has not scheduled for this long; an on-loop SSE "
-                "heartbeat cannot be emitted while this persists (pid=%d)",
+                "heartbeat cannot be emitted while this persists (pid=%d)\n%s",
                 loop_age, _LOOP_AGE_LOG_THRESHOLD_S, os.getpid(),
+                _format_starvation_stacks(),
             )
     else:
         _loop_age_was_over = False

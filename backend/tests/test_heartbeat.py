@@ -209,3 +209,58 @@ def test_startup_sentinel_does_not_swallow_first_real_stall(caplog):
     assert any("event-loop starvation" in r.getMessage() for r in caplog.records), (
         "first real stall after a startup sentinel must still fire (rising-edge intact)"
     )
+
+
+# ── Starvation stack dump: the log names the call that blocks the loop ──
+
+def _blocking_call_on_loop_thread(ready: threading.Event, release: threading.Event):
+    """Stands in for the unknown sync call that starves the asyncio loop."""
+    heartbeat.bump_loop_tick()  # runs "on the loop": records its thread id
+    ready.set()
+    release.wait(5)
+
+
+def test_starvation_log_includes_the_blocked_loop_thread_stack(caplog):
+    """The warning carries the loop thread's stack, so the offending function is
+    named. Before this, 177 starvations (max 16.7s) had no location at all."""
+    _reset_starvation_log_state()
+    ready, release = threading.Event(), threading.Event()
+    t = threading.Thread(target=_blocking_call_on_loop_thread, args=(ready, release),
+                         name="fake-loop", daemon=True)
+    t.start()
+    assert ready.wait(2)
+    try:
+        heartbeat._last_loop_tick = time.monotonic() - (heartbeat._LOOP_AGE_LOG_THRESHOLD_S + 1.0)
+        with caplog.at_level("WARNING", logger="core.heartbeat"):
+            heartbeat._write_heartbeat_once()
+    finally:
+        release.set()
+        t.join(2)
+    msgs = [r.getMessage() for r in caplog.records if "event-loop starvation" in r.getMessage()]
+    assert msgs, "a real stall must log"
+    assert "loop thread (fake-loop)" in msgs[0]
+    assert "_blocking_call_on_loop_thread" in msgs[0]
+
+
+def test_stack_dump_lists_busy_threads_and_skips_idle_ones():
+    """A GIL-holding worker starves the loop too: a non-idle thread is listed,
+    a thread parked in Event.wait is not."""
+    stop = threading.Event()
+
+    def spin_cpu():
+        while not stop.is_set():
+            sum(range(1000))
+
+    busy = threading.Thread(target=spin_cpu, name="busy-worker", daemon=True)
+    idle = threading.Thread(target=stop.wait, name="idle-worker", daemon=True)
+    busy.start(); idle.start()
+    try:
+        time.sleep(0.05)
+        heartbeat._loop_thread_id = None
+        out = heartbeat._format_starvation_stacks()
+    finally:
+        stop.set()
+        busy.join(2); idle.join(2)
+    assert "busy thread busy-worker" in out
+    assert "idle-worker" not in out
+    assert "loop thread: not found" in out
