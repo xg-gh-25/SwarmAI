@@ -2409,6 +2409,9 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
         # after EVALUATE — "not yet set" is meaningful and must not become "full").
         "profile": normalize_profile(args.profile) if args.profile else None,
         "status": "running",
+        # Opt-in Gate-2 flow (deterministic convergence step 3a): None = the legacy flow.
+        **({"convergence": "deterministic"}
+           if getattr(args, "convergence", None) == "deterministic" else {}),
         "stages": [],
         "taste_decisions": [],
         "budget": budget,
@@ -9769,6 +9772,14 @@ def _deliver_push_ready_bound(
             bound = False
             reasons.append(f"tests: latest-{scope.get('mode')}.json predates later edits: run "
                            "--mode regression once more on the final code")
+    if _deterministic(run_state):
+        try:
+            _g2 = _gate2_next_view(run_id, run_dir, run_state)
+        except Exception as exc:  # noqa: BLE001 — an unreadable ledger is not a proof
+            _g2 = {"push_ready_reasons": [f"gate2: ledger not rebuilt ({type(exc).__name__})"]}
+        for r in _g2.get("push_ready_reasons") or []:
+            bound = False
+            reasons.append(r)
     gaps = [g for g in run_state.get("verification_gaps") or [] if isinstance(g, dict)]
     for rec in run_state.get("stages") or []:
         if isinstance(rec, dict) and isinstance(rec.get("degraded"), dict) \
@@ -10344,15 +10355,21 @@ def _validate_stage_candidate(
             _rd = _resolve_run_file(project, run_id).parent
         except (Exception, SystemExit):  # noqa: BLE001 — no run dir: cannot be proven
             _rd = None
-        errors += _gate2_findings_errors(run_id, _rd, cand_run, artifact, cand_rec, warnings)
-        errors += _fixspec_errors(run_id, _rd, cand_run, artifact, warnings)
-        _conv = _gate2_convergence_errors(
-            run_id, (_rd / "run.json") if _rd is not None else None, cand_run,
-            _gate2_outcome(run_id, _rd, cand_run), warnings)
-        if _conv is None:
-            errors += _gate2_recheck_errors(run_id, _rd, cand_run, artifact, cand_rec, warnings)
-        else:  # converged-by-verdict, root-cause pending, or redesign: the loop rule decides
-            errors += _conv
+        if _deterministic(cand_run):
+            # gate2-next owns Gate-2: findings close by proofs, the open ones are
+            # push_ready reasons (_deliver_push_ready_bound); no model answer is checked here.
+            pass
+        else:
+            errors += _gate2_findings_errors(run_id, _rd, cand_run, artifact, cand_rec, warnings)
+            errors += _fixspec_errors(run_id, _rd, cand_run, artifact, warnings)
+            _conv = _gate2_convergence_errors(
+                run_id, (_rd / "run.json") if _rd is not None else None, cand_run,
+                _gate2_outcome(run_id, _rd, cand_run), warnings)
+            if _conv is None:
+                errors += _gate2_recheck_errors(run_id, _rd, cand_run, artifact, cand_rec,
+                                                warnings)
+            else:  # converged-by-verdict, root-cause pending, or redesign: the loop rule decides
+                errors += _conv
     if stage in ("evaluate", "build", "goal_cycle"):
         errors += _gate_verdict_spawn_errors(run_id, cand_run, stage, profile, artifact,
                                              cand_rec, warnings, prev_rec)
@@ -12074,6 +12091,278 @@ def _expand_gate2_ledger(run_id: str, run_dir: "Path | None", run_state: dict,
     return {**artifact, "adversarial_review": new_ar}, errors, warnings
 
 
+# ── Gate-2, convergence = deterministic (step 3a of Knowledge/Designs/2026-10-19-
+# pipeline-deterministic-convergence.md): models find, tests decide ─────────────
+# gate2-next rebuilds the finding ledger from the captured expert answers, the
+# author's declared events (run.json gate2_v2.events) and the runner's prove evidence
+# (core.gate2_replay), and prints the ONE next step. Two review rounds at most; a
+# finding closes only by a valid proof; what is not proven lowers push_ready.
+def _deterministic(run_state) -> bool:
+    return isinstance(run_state, dict) and run_state.get("convergence") == "deterministic"
+
+
+def _refuse_legacy_gate2(args, name: str) -> None:
+    """The legacy Gate-2 commands do not run in the deterministic flow."""
+    try:
+        _run_file, run_state = _load_run_for_stage(args.project, args.run_id)
+    except _StageBoundaryError:
+        return  # the command reports the run error itself
+    if _deterministic(run_state):
+        print(json.dumps({"ok": False, "error": (
+            f"{name} is the legacy Gate-2 flow; this run uses convergence=deterministic: run "
+            + _cli_cmd(f"gate2-next --project {args.project} --run-id {args.run_id}"))},
+            ensure_ascii=False))
+        sys.exit(1)
+
+
+def _cli_cmd(rest: str) -> str:
+    return f"{sys.executable} {Path(__file__).resolve()} {rest}"
+
+
+def _run_worktree_path(run_id: str, run_state: dict) -> "Path | None":
+    from core import run_worktree as rw
+    for e in run_state.get("worktrees") or []:
+        if isinstance(e, dict) and e.get("state") == "active" and e.get("repo_name"):
+            try:
+                return rw.wt_path(run_id, str(e["repo_name"]))
+            except rw.WorktreeError:
+                return None
+    return None
+
+
+def _take_proof_snapshot(run_id: str, run_dir: Path, run_state: dict, label: str) -> dict:
+    """Round ``label``'s snapshot through the runner's own writer (pipeline_test.
+    run_snapshot: taken once per round, recorded in evidence/proofs/snapshots.json)."""
+    from types import SimpleNamespace
+    wt = _run_worktree_path(run_id, run_state)
+    if wt is None:
+        return {"error": "no active run worktree: the deterministic flow needs an isolated run"}
+    import pipeline_test as _pt
+    out, code = _pt.run_snapshot(SimpleNamespace(repo=wt, warnings=[]),
+                                 SimpleNamespace(run_id=run_id, round=label),
+                                 run_dir / "evidence")
+    return {k: out.get(k) for k in ("sha", "already", "error", "warnings") if out.get(k)} \
+        if code == 0 or out.get("error") else {"error": f"snapshot exit {code}"}
+
+
+def _gate2_v2_inputs(run_id: str, run_dir: Path, run_state: dict):
+    """(roster, rows, events, proofs, prove_calls) for core.gate2_replay.replay."""
+    import time
+    from core.gate2_convergence import NOT_REVIEWERS
+    # meta-review / root-cause run after a round and are not Gate-2 reviewers
+    roster = [e for e in ((run_state.get("dispatch_plan") or {}).get("deliver") or [])
+              if isinstance(e, str) and e not in NOT_REVIEWERS and e not in _NOT_IN_WAVE]
+    windows = _stage_windows((run_state.get("stage_timing") or {}).get("deliver") or {},
+                             time.time())
+    rows: list = []
+    if windows and roster:
+        # The whole run's DELIVER windows, not the legacy round-1 manifest's cycle: the
+        # events, snapshots and proofs are run-scoped, so a re-entered DELIVER continues
+        # the same ledger (main moving re-runs tests, never the experts).
+        rows = _gate2_window_rows(run_id, windows, min(lo for lo, _hi in windows))
+    events = [e for e in ((run_state.get("gate2_v2") or {}).get("events") or [])
+              if isinstance(e, dict)]
+    pdir = run_dir / "evidence" / "proofs"
+    proofs = _merged_proofs(pdir)
+    last_fix = max([float(e.get("ts") or 0) for e in events if e.get("kind") == "fixed"],
+                   default=0.0)
+    prove_calls = sum(1 for f in pdir.glob("prove-R*-*.json")
+                      if last_fix and f.stat().st_mtime > last_fix) if pdir.is_dir() else 0
+    return roster, rows, events, proofs, prove_calls
+
+
+def _merged_proofs(pdir: Path) -> dict:
+    """{round: {nodeid: {old, new}}} merged over EVERY prove call of the round, oldest
+    first (each call writes only its own nodeids, and latest-prove-<R>.json only the
+    last call's). A newer finished verdict replaces an older one; a pending row (cut by
+    the deadline) only fills a nodeid no call finished. A call on another snapshot than
+    the round's recorded one is not evidence for this round."""
+    try:
+        snaps = json.loads((pdir / "snapshots.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        snaps = {}
+    proofs: dict = {}
+    for rnd in ("R1", "R2"):
+        want = (snaps.get(rnd) or {}).get("sha") if isinstance(snaps, dict) else None
+        merged: dict = {}
+        for f in sorted(pdir.glob(f"prove-{rnd}-*.json"), key=lambda f: (f.stat().st_mtime,
+                                                                       f.name)):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(d, dict) or (want and d.get("snapshot") != want):
+                continue
+            for r in d.get("proofs") or []:
+                if not isinstance(r, dict) or not isinstance(r.get("nodeid"), str):
+                    continue
+                done = r.get("verdict") != "pending"
+                if done or r["nodeid"] not in merged or not merged[r["nodeid"]][1]:
+                    merged[r["nodeid"]] = ({"old": r.get("old") or [], "new": r.get("new")},
+                                           done)
+        if merged:
+            proofs[rnd] = {k: v for k, (v, _d) in merged.items()}
+    return proofs
+
+
+def _gate2_next_view(run_id: str, run_dir: Path, run_state: dict) -> dict:
+    """The rebuilt ledger and its next step, as gate2-next prints it."""
+    from core import finding_ledger as fl
+    from core import gate2_replay
+    roster, rows, events, proofs, prove_calls = _gate2_v2_inputs(run_id, run_dir, run_state)
+    if not roster:
+        return {"ok": False, "error": "no DELIVER expert roster yet: run stage-start --stage "
+                                      "deliver first", "push_ready_reasons":
+                ["gate2: no review ran (no DELIVER roster)"]}
+    state, notes, warnings = gate2_replay.replay(roster, rows, events, proofs, prove_calls)
+    act = fl.next_action(state)
+    findings = [{"id": f["id"], "round": f.get("round"), "expert": f.get("expert"),
+                 "state": fl.finding_state(f), "test": f.get("test"), "file": f.get("file"),
+                 "claim": (f.get("claim") or "")[:200]} for f in state["findings"]]
+    reasons = [f"gate2: {r['id']} {r['state']}: {(r.get('claim') or '')[:120]}"
+               for r in fl.not_proven(state)]
+    # an ignored answer or event is input the ledger could not use: never push-ready
+    reasons += [f"gate2: {w}" for w in warnings]
+    snaps = {}
+    try:
+        snaps = json.loads((run_dir / "evidence" / "proofs" / "snapshots.json")
+                           .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    project = run_state.get("project") or "<P>"
+    base = f"--project {project} --run-id {run_id}"
+    kind = act["action"]
+    if kind == "spawn":
+        rnd = act["round"]
+        prompts = run_dir / "evidence" / "prompts"
+        spawns = []
+        for e in act["experts"]:
+            text = _spawn_text(e, prompts / f"{e}.md")
+            if rnd == 2:
+                s1 = (snaps.get("R1") or {}).get("sha", "<R1 snapshot>")
+                wt = _run_worktree_path(run_id, run_state)
+                text += (f"\nRound 2: review ONLY the fix made since round 1: `git -C {wt} diff "
+                         f"{s1}`. Report only problems in that diff.")
+            spawns.append({"id": e, "spawn": text})
+        nxt = {"action": "spawn", "round": rnd, "spawns": spawns,
+               "rule": "all in ONE message (Agent tool, run_in_background false); then run "
+                       "gate2-next again"}
+        reasons.append(f"gate2: not finished (R{rnd} review not answered)")
+    elif kind == "fix":
+        p = act["pass"]
+        nxt = {"action": "fix", "pass": p,
+               "findings": [f for f in findings if f["id"] in act["findings"]],
+               "rule": "for each finding: write a break test (FAILs on the defect by an "
+                       "assertion, PASSes on the fix) and register it, or declare it "
+                       "untestable with a reason; fix by cause; run the affected tests with "
+                       "--mode tdd; then declare the pass done",
+               "register": _cli_cmd(f"gate2-next {base} --test <id>=<nodeid> "
+                                    "[--declare <id>=untestable:<reason>]"),
+               "done": _cli_cmd(f"gate2-next {base} --fixed {p}")}
+        reasons.append(f"gate2: not finished (fix {p} not declared)")
+    elif kind == "prove":
+        by = {}
+        for f in state["findings"]:
+            if f["id"] in act["findings"] and f.get("test"):
+                by.setdefault(f"R{f['round']}", []).append(f["test"])
+        nxt = {"action": "prove", "commands": [
+            f"{sys.executable} {Path(__file__).resolve().parent / 'pipeline_test.py'} {base} "
+            f"--mode prove --round {r} --files {' '.join(sorted(set(ids)))}"
+            for r, ids in sorted(by.items())],
+            "rule": "one command per Bash call; continue: true → the same command; then "
+                    "run gate2-next again"}
+    else:
+        nxt = {"action": "done",
+               "rule": "Gate-2 is finished: no more experts in this run. Run the ONE "
+                       "full-scope --mode regression on the final code, then stage-complete "
+                       "--stage deliver; the findings not proven lower push_ready"}
+    return {"ok": True, "convergence": "deterministic", "next": nxt, "findings": findings,
+            "notes": notes[:30], "notes_total": len(notes), "spawns": len(state["spawns"]),
+            "push_ready_reasons": reasons, "warnings": warnings}
+
+
+def cmd_gate2_next(args, reg: ArtifactRegistry) -> None:
+    """Declare events (--fixed / --test / --declare), then print the rebuilt Gate-2
+    ledger and its next step. Writes evidence/gate2-v2.json. One JSON line."""
+    import time
+    try:
+        run_file, run_state = _load_run_for_stage(args.project, args.run_id)
+    except _StageBoundaryError as e:
+        print(json.dumps({"ok": False, "error": "; ".join(e.errors)}, ensure_ascii=False))
+        sys.exit(1)
+    if not _deterministic(run_state):
+        print(json.dumps({"ok": False, "error": "this run uses the legacy Gate-2 flow "
+                          "(gate2-ledger / gate2-fixspec / gate2-recheck); gate2-next needs "
+                          "run-create --convergence deterministic"}, ensure_ascii=False))
+        sys.exit(1)
+    try:
+        before = _gate2_next_view(args.run_id, run_file.parent, run_state)
+    except Exception as exc:  # noqa: BLE001 — e.g. the marker store is unreadable
+        print(json.dumps({"ok": False, "error": f"Gate-2 ledger not rebuilt: "
+                          f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
+        sys.exit(1)
+    if args.fixed is not None:
+        nx = before.get("next") or {}
+        if nx.get("action") != "fix" or nx.get("pass") != int(args.fixed):
+            print(json.dumps({"ok": False, "error": (
+                f"--fixed {args.fixed} refused: the next Gate-2 step is "
+                f"{nx.get('action') or 'unknown'}"
+                + (f" pass {nx.get('pass')}" if nx.get("action") == "fix" else "")
+                + " (a fix pass is declared only after every expert of the round answered)"),
+                "next": nx}, ensure_ascii=False))
+            sys.exit(2)
+    now = time.time()
+    new: list = []
+    wt = _run_worktree_path(args.run_id, run_state)
+    for spec in args.test or []:
+        fid, sep, nodeid = spec.partition("=")
+        if not sep or not fid or "::" not in nodeid:
+            print(json.dumps({"ok": False, "error": f"--test wants <id>=<test nodeid>: {spec}"}))
+            sys.exit(2)
+        if wt is not None:
+            # the same form the runner writes into its prove evidence, or no proof matches
+            from types import SimpleNamespace
+            import pipeline_test as _pt
+            ids, err = _pt._prove_ids(SimpleNamespace(repo=wt), [nodeid])
+            if err:
+                print(json.dumps({"ok": False, "error": f"--test {spec}: {err}"},
+                                 ensure_ascii=False))
+                sys.exit(2)
+            nodeid = ids[0]
+        new.append({"kind": "test", "finding": fid, "test": nodeid.strip(), "ts": now})
+    for spec in args.declare or []:
+        fid, sep, rest = spec.partition("=")
+        what, sep2, reason = rest.partition(":")
+        if not sep or not sep2 or what not in ("untestable", "not_reproduced") or not reason.strip():
+            print(json.dumps({"ok": False, "error": "--declare wants <id>=untestable:<reason> "
+                                                   f"or <id>=not_reproduced:<reason>: {spec}"}))
+            sys.exit(2)
+        new.append({"kind": "declare", "finding": fid, "declared": what,
+                    "reason": reason.strip()[:300], "ts": now})
+    if args.fixed is not None:
+        new.append({"kind": "fixed", "pass": int(args.fixed), "ts": now + 0.001})
+    if new:
+        fresh = json.loads(run_file.read_text(encoding="utf-8"))
+        g = fresh.get("gate2_v2") if isinstance(fresh.get("gate2_v2"), dict) else {}
+        g["events"] = list(g.get("events") or []) + new
+        fresh["gate2_v2"] = g
+        _write_run_atomic(run_file, fresh)
+        run_state = fresh
+    view = _gate2_next_view(args.run_id, run_file.parent, run_state)
+    if args.fixed is not None and int(args.fixed) == 1 and view.get("ok"):
+        # R2 reviews fix 1, and its findings are proven against the code after it
+        view["snapshot_R2"] = _take_proof_snapshot(args.run_id, run_file.parent, run_state, "R2")
+    try:
+        (run_file.parent / "evidence").mkdir(exist_ok=True)  # the run dir exists
+        (run_file.parent / "evidence" / "gate2-v2.json").write_text(
+            json.dumps(view, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError as e:
+        view.setdefault("warnings", []).append(f"evidence/gate2-v2.json not written: {e}")
+    print(json.dumps(view, ensure_ascii=False))
+    if not view.get("ok"):
+        sys.exit(1)
+
+
 def cmd_gate2_ledger(args, reg: ArtifactRegistry) -> None:
     """Print (and write to evidence/gate2-ledger.json) the Gate-2 findings ledger."""
     try:
@@ -12401,6 +12690,7 @@ def cmd_gate2_fixspec(args, reg: ArtifactRegistry) -> None:
     record the early root-cause trigger (gate2-recheck then hands that review out).
     ``--unverified-reason``: accept the spec already handed out on a backend that records
     no skeptic verdicts (never on one that does). One JSON line."""
+    _refuse_legacy_gate2(args, "gate2-fixspec")
     import hashlib
     import time
     from core.gate2_fixspec import FIXSPEC_SKEPTIC_ID, next_step
@@ -12701,6 +12991,7 @@ def _fixspec_recheck_check(run_id: str, run_dir: Path, run_state: dict
 def cmd_gate2_recheck(args, reg: ArtifactRegistry) -> None:
     """Gate-2 round 2: one prompt per specialist with a HIGH / conf≥7 MED finding that
     was fixed, carrying only the diff since round 1 and that specialist's items."""
+    _refuse_legacy_gate2(args, "gate2-recheck")
     import hashlib
     project, run_id = args.project, args.run_id
 
@@ -13858,6 +14149,14 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
         out["spawn_mode"] = "foreground"
         scope["changed_files"] = scope["changed_files"][:60]
         out.update(scope)
+        if stage == "deliver" and _deterministic(run_state):
+            snap = _take_proof_snapshot(run_id, run_file.parent, run_state, "R1")
+            out["gate2_flow"] = {
+                "convergence": "deterministic", "snapshot_R1": snap,
+                "next": _cli_cmd(f"gate2-next --project {project} --run-id {run_id}"),
+                "rule": "spawn the R1 experts above in ONE message, then follow gate2-next: "
+                        "it says when to fix, when to spawn R2 (once, on the fix only) and "
+                        "what to prove; findings close only by a valid break-test proof"}
     warnings += _wt_out.pop("warnings", [])
     out.update(_wt_out)
     # The session entering a stage is working on THIS run: point its session->run map
@@ -13960,6 +14259,9 @@ def main() -> None:
     p_run_create.add_argument("--project", required=True)
     p_run_create.add_argument("--requirement", required=True, help="Requirement text")
     p_run_create.add_argument("--profile", default=None, help="Pipeline profile: full/trivial/research/docs/bugfix/goal/direct")
+    p_run_create.add_argument("--convergence", default=None, choices=("legacy", "deterministic"),
+                              help="Gate-2 flow: deterministic = gate2-next (models find, "
+                                   "tests decide); default legacy")
     p_run_create.add_argument("--intent", default=None,
                               help="The user's original words (fallback when the session's message cannot be read)")
 
@@ -14173,6 +14475,13 @@ def main() -> None:
     p_g2f.add_argument("--unverified-reason", default=None,
                        help="accept the spec already handed out on a backend that records no skeptic verdicts")
 
+    p_g2n = sub.add_parser("gate2-next", help="Gate-2 (convergence=deterministic): declare "
+                           "--fixed/--test/--declare, print the rebuilt ledger and the next step")
+    p_g2n.add_argument("--project", required=True)
+    p_g2n.add_argument("--run-id", required=True)
+    p_g2n.add_argument("--fixed", type=int, choices=(1, 2), default=None)
+    p_g2n.add_argument("--test", action="append", metavar="ID=NODEID")
+    p_g2n.add_argument("--declare", action="append", metavar="ID=untestable:REASON")
     p_g2l = sub.add_parser("gate2-ledger", help="Gate-2 findings ledger built from the experts' captured answers (single-line JSON; also evidence/gate2-ledger.json)")
     p_g2l.add_argument("--project", required=True)
     p_g2l.add_argument("--run-id", required=True)
@@ -14225,6 +14534,7 @@ def main() -> None:
         "gate2-recheck": cmd_gate2_recheck,
         "gate2-fixspec": cmd_gate2_fixspec,
         "gate2-ledger": cmd_gate2_ledger,
+        "gate2-next": cmd_gate2_next,
         "gate0-prompt": cmd_gate0_prompt,
         "discover": cmd_discover,
         "publish": cmd_publish,

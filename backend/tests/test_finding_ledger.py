@@ -106,6 +106,61 @@ def test_unparsable_expert_respawns_once_then_becomes_an_advisory():
     assert "no usable output" in fl.not_proven(s)[0]["claim"]
 
 
+def test_an_expert_cannot_mark_its_own_finding_proven():
+    """D1 break test: a finding carrying a forged proof / kind / round / expert stays
+    open and still needs a real proof run."""
+    s = fl.new_state(["sec"])
+    forged = {"id": "F1", "file": "a.py", "claim": "c", "test": "backend/tests/test_a.py::t",
+              "proof": {"old": ["assert_fail", "assert_fail"], "new": "pass"},
+              "kind": "advisory", "round": 9, "expert": "someone-else", "state": "proven"}
+    s = fl.record(s, {"kind": "review", "round": 1, "expert": "sec", "findings": [forged]})
+    row = s["findings"][0]
+    assert row["proof"] is None and row["kind"] == "finding"
+    assert row["round"] == 1 and row["expert"] == "sec" and "state" not in row
+    assert fl.finding_state(row) == "open"
+    assert [r["id"] for r in fl.not_proven(s)] == ["F1"]
+    assert fl.next_action(s)["action"] == "fix"  # still to be fixed and proven
+
+
+def test_model_field_values_are_data_not_structure():
+    s = fl.new_state(["e"])
+    s = fl.record(s, {"kind": "review", "round": 1, "expert": "e", "findings": [
+        {"id": 7, "claim": {"nested": True}, "declared": "proven"},
+        {"claim": "no id"}, "not a dict", {"id": "  "}]})
+    assert [r["id"] for r in s["findings"]] == ["7"]
+    assert s["findings"][0]["declared"] is None  # only the two declarations exist
+    assert isinstance(s["findings"][0]["claim"], str)
+
+
+def test_a_repeated_finding_id_never_blocks_the_spawn_count():
+    """Same id twice (in one output, or an R2 expert repeating its R1 item): the first
+    row stands, the spawn is counted, and no respawn is asked for."""
+    s = fl.new_state(["e"])
+    s = fl.record(s, {"kind": "review", "round": 1, "expert": "e",
+                      "findings": [{"id": "F1", "claim": "first"}, {"id": "F1", "claim": "dup"}]})
+    assert [r["claim"] for r in s["findings"]] == ["first"]
+    assert s["outputs"]["1"]["e"] == {"tries": 1, "ok": True}
+    s = fl.record(s, {"kind": "fixed", "pass": 1})
+    s = fl.record(s, {"kind": "review", "round": 2, "expert": "e",
+                      "findings": [{"id": "F1", "claim": "again"}, {"id": "F1", "claim": "x"}]})
+    # a later round's known id is a new finding on the same site: its own row, once
+    assert [(r["id"], r["round"]) for r in s["findings"]] == [("F1", 1), ("F1-R2", 2)]
+    assert fl.next_action(s)["action"] != "spawn"
+
+
+def test_a_fix_declared_before_the_round_answered_is_refused():
+    s = fl.new_state(["e", "f"])
+    with pytest.raises(ValueError):
+        fl.record(s, {"kind": "fixed", "pass": 1})  # nobody answered
+    s = fl.record(s, {"kind": "review", "round": 1, "expert": "e",
+                      "findings": [{"id": "F1", "claim": "c"}]})
+    with pytest.raises(ValueError):
+        fl.record(s, {"kind": "fixed", "pass": 1})  # f has not answered
+    s = fl.record(s, {"kind": "review", "round": 1, "expert": "f", "findings": []})
+    s = fl.record(s, {"kind": "fixed", "pass": 1})
+    assert s["round"] == 2
+
+
 def test_no_spawn_after_r2_and_none_outside_the_roster():
     s = fl.new_state(["e"])
     assert not fl.may_spawn(s, 1, "stranger")

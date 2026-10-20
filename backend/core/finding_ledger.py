@@ -280,6 +280,26 @@ def next_action(state: dict) -> dict:
     raise ValueError(f"unknown phase {phase!r}")
 
 
+# What a model may say about a finding. Everything else on the row (round, expert, kind,
+# proof) is the ledger's: an expert that sends ``proof`` or ``kind`` must not be able to
+# mark its own finding proven or turn it into something else (D1).
+MODEL_FIELDS = ("id", "file", "claim", "test", "declared", "reason")
+_DECLARATIONS = ("untestable", "not_reproduced")
+
+
+def _finding_row(f, rnd: int, expert: str) -> "dict | None":
+    """A ledger row from a model's finding dict: only MODEL_FIELDS are read, as strings;
+    a finding with no usable id is dropped."""
+    if not isinstance(f, dict):
+        return None
+    vals = {k: (str(f[k]) if f.get(k) is not None else None) for k in MODEL_FIELDS}
+    if not vals["id"] or not vals["id"].strip():
+        return None
+    if vals["declared"] not in _DECLARATIONS:
+        vals["declared"] = None
+    return {**vals, "round": rnd, "expert": expert, "kind": "finding", "proof": None}
+
+
 def _new_test_set(s: dict) -> None:
     s["phase"] = "test"
     s["tests"] = {"continuations": 0}
@@ -290,7 +310,10 @@ def record(state: dict, event: dict) -> dict:
 
     - ``{"kind": "review", "round", "expert", "findings": [...] | None}`` — None =
       the output could not be parsed. Each finding: {id, file, claim, test?, declared?,
-      reason?}. Refused (ValueError) when the spawn was over budget.
+      reason?}; only these fields are read (``MODEL_FIELDS``), anything else the model
+      sends is ignored; a known id keeps its first row within a round and becomes
+      ``<id>-R<round>`` in a later one. Refused (ValueError) when the
+      spawn was over budget.
     - ``{"kind": "fixed", "pass"}`` — fix pass done (a code change)
     - ``{"kind": "declare", "finding", "declared", "reason"}`` / ``{"kind": "test",
       "finding", "test"}`` — author declarations / a break test for a finding
@@ -324,15 +347,30 @@ def record(state: dict, event: dict) -> dict:
             return s
         out["ok"] = True
         for f in fs:
-            row = {"round": rnd, "expert": e, "kind": "finding", "test": None,
-                   "declared": None, "reason": None, "proof": None, **f}
-            if any(x["id"] == row["id"] for x in s["findings"]):
-                raise ValueError(f"duplicate finding id {row['id']}")
+            row = _finding_row(f, rnd, e)
+            if row is None:
+                continue
+            # A known id from an EARLIER round is a new finding on the same site (R2
+            # reviews the fix, which edits the R1 line): it gets its own row. A known id
+            # in the same round is a repeat: the first row stands. Never an error:
+            # raising here would leave this spawn uncounted, and next_action would ask
+            # for it forever.
+            known = next((x for x in s["findings"] if x["id"] == row["id"]), None)
+            if known is not None and known.get("round") != rnd:
+                row["id"] = f"{row['id']}-R{rnd}"
+                known = next((x for x in s["findings"] if x["id"] == row["id"]), None)
+            if known is not None:
+                continue
             s["findings"].append(row)
         return s
     if k == "fixed":
-        if s["phase"] != "review" or int(event["pass"]) != s["fix_passes"] + 1:
-            raise ValueError("fix pass out of order")
+        # Only when the ledger asks for exactly this pass: every expert of the round has
+        # answered and the round has findings. A fix declared early would turn the late
+        # R1 answers into R2 rows, or drop them as over budget.
+        act = next_action(s)
+        if act.get("action") != "fix" or int(event["pass"]) != act.get("pass"):
+            raise ValueError(f"fix pass {event['pass']} out of order: the next step is "
+                             f"{act.get('action')}")
         s["fix_passes"] += 1
         if s["round"] < BUDGETS["gate2_rounds"]:
             s["round"] += 1
