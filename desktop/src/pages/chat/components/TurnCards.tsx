@@ -69,7 +69,11 @@ function AttentionRow({ item }: { item: PipelineAttentionItem }) {
         <span className="text-amber-600 dark:text-amber-400">{tf(t, 'chat.turn.attention.notPushReady', 'Not ready to push')}</span>
         {item.reasons.length > 0 && (
           <ul data-testid="not-ready-reasons" className={`${DIM} list-disc pl-5`}>
-            {item.reasons.map((r, i) => <li key={i}>{r}</li>)}
+            {/* one sentence per cause, in the UI language when the backend named the cause */}
+            {item.reasons.map((r, i) => {
+              const code = item.reasonCodes?.[i];
+              return <li key={i}>{code ? tf(t, `chat.turn.attention.reasonCode.${code}`, r) : r}</li>;
+            })}
           </ul>
         )}
       </>
@@ -214,6 +218,62 @@ function SummaryDocRow({ doc }: { doc: PipelineSummaryDoc }) {
   );
 }
 
+/** How a run ended, in one line: the one thing the summary makes stand out. */
+export function runVerdict(t: Parameters<typeof tf>[0], summary: PipelineSummaryContent): { text: string; tone: 'ok' | 'warn' | 'muted' } {
+  const ended = summary.status;
+  if (ended === 'abandoned' || ended === 'cancelled') return { text: tf(t, 'chat.turn.summary.abandoned', 'Closed without landing'), tone: 'muted' };
+  if (ended === 'failed') return { text: tf(t, 'chat.turn.summary.failed', 'Failed'), tone: 'warn' };
+  if (summary.pushReady === true) return { text: tf(t, 'chat.turn.summary.ready', 'Done · ready to push'), tone: 'ok' };
+  if (summary.pushReady === false) return { text: tf(t, 'chat.turn.summary.notReady', 'Done · not ready to push'), tone: 'warn' };
+  return { text: tf(t, 'chat.turn.summary.done', 'Done'), tone: 'muted' };
+}
+
+/**
+ * A finished run's result, verdict first (XG 2026-10-20: one summary, from code): how
+ * it ended and where it landed, then what was asked and what changed (before → now).
+ * What to check is the attention card right below; when the turn has none (a landing
+ * that was refused never sends it), the reasons it would show are listed here
+ * (`showReasons`). The documents are in the output card. Model-written text (intent,
+ * outcome): rendered plain.
+ */
+export function RunResult({ summary, showReasons = false }: { summary: PipelineSummaryContent; showReasons?: boolean }) {
+  const { t } = useTranslation();
+  const v = runVerdict(t, summary);
+  const tone = v.tone === 'warn' ? 'text-amber-600 dark:text-amber-400' : v.tone === 'ok' ? 'text-[var(--color-text)]' : 'text-[var(--color-text-secondary)]';
+  const label = 'shrink-0 w-12 text-[12px] text-[var(--color-text-muted)]';
+  return (
+    <section data-testid="run-result" aria-label={tf(t, 'chat.turn.runResult.title', 'Run result')} className="space-y-1">
+      <div data-testid="summary-verdict" className={`text-[14px] font-medium ${tone}`}>
+        {v.text}
+        {summary.landedSha && (
+          <span className="ml-2 font-mono text-[12.5px] font-normal text-[var(--color-text-muted)]">
+            {tf(t, 'chat.turn.runResult.landed', 'on main · {{sha}}', { sha: summary.landedSha.slice(0, 8) })}
+          </span>
+        )}
+      </div>
+      {summary.intent && (
+        <div data-testid="run-intent" className="flex gap-2 text-[13px] text-[var(--color-text-secondary)] min-w-0">
+          <span className={label}>{tf(t, 'chat.turn.runResult.asked', 'Asked')}</span>
+          <span className="min-w-0 break-words">{summary.intent}</span>
+        </div>
+      )}
+      {summary.solved && (
+        <div data-testid="run-solved" className="space-y-0.5 text-[13px] text-[var(--color-text-secondary)]">
+          <div className="flex gap-2 min-w-0"><span className={label}>{tf(t, 'chat.turn.runResult.before', 'Before')}</span><span className="min-w-0 break-words">{summary.solved.before}</span></div>
+          <div className="flex gap-2 min-w-0"><span className={label}>{tf(t, 'chat.turn.runResult.now', 'Now')}</span><span className="min-w-0 break-words text-[var(--color-text)]">{summary.solved.now}</span></div>
+        </div>
+      )}
+      {showReasons && summary.pushReady === false && (summary.pushReasons?.length ?? 0) > 0 && (
+        <ul data-testid="run-reasons" className={`${DIM} list-disc pl-5`}>
+          {summary.pushReasons!.map((r, i) => (
+            <li key={i}>{r.code ? tf(t, `chat.turn.attention.reasonCode.${r.code}`, r.text) : r.text}</li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 /**
  * The turn's ONE output card (chat turn spec v6 §8): a code-changes section (the
  * backend's turn_changes rows, ChangesCard) and a deliverables section (what the turn
@@ -228,16 +288,6 @@ export function OutputCard({ changes, deliverables, summary }: {
   const docs = summary?.docs ?? [];
   const nDeliv = deliverables.length + docs.filter((d) => !!d.absolutePath).length;
   if (!changes && !deliverables.length && !docs.length) return null;
-  const ready = summary?.pushReady;
-  const ended = summary?.status;
-  const verdict = !summary ? null
-    : ended === 'abandoned' || ended === 'cancelled' ? tf(t, 'chat.turn.summary.abandoned', 'Closed without landing')
-    : ended === 'failed' ? tf(t, 'chat.turn.summary.failed', 'Failed')
-    : ready === true
-    ? tf(t, 'chat.turn.summary.ready', 'Done · ready to push')
-    : ready === false
-      ? tf(t, 'chat.turn.summary.notReady', 'Done · not ready to push')
-      : tf(t, 'chat.turn.summary.done', 'Done');
   return (
     <section data-testid="output-card" className="rounded-lg border border-[var(--color-border)] overflow-hidden">
       {changes && <ChangesCard block={changes} bare />}
@@ -245,7 +295,6 @@ export function OutputCard({ changes, deliverables, summary }: {
         <div data-testid="output-deliverables" className={`px-3 pt-2 pb-3 ${changes ? 'border-t border-[var(--color-border)]' : ''}`}>
           <div className="mb-1.5 flex items-baseline gap-2 font-mono text-[13px] text-[var(--color-text)]">
             {nDeliv === 1 ? tf(t, 'chat.turn.output.deliverableOne', '1 deliverable') : tf(t, 'chat.turn.output.deliverables', '{{count}} deliverables', { count: nDeliv })}
-            {verdict && <span data-testid="summary-verdict" className={`font-sans text-[12.5px] ${ready === false ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--color-text-muted)]'}`}>· {verdict}{ready === false && summary?.pushReason ? ` · ${summary.pushReason}` : ''}</span>}
           </div>
           {deliverables.length > 0 && (
             <ul className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(190px,1fr))]">

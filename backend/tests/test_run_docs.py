@@ -466,3 +466,47 @@ class TestRunEndSummary:
         sums = [b for e in events if e.get("type") == "assistant" for b in e.get("content") or []
                 if isinstance(b, dict) and b.get("type") == "pipeline_summary"]
         assert sums == []
+
+
+# ── one run summary, verdict first (XG 2026-10-20) ──────────────────────────────
+
+def test_the_summary_card_carries_what_was_asked_what_changed_and_where_it_landed(monkeypatch, tmp_path):
+    monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+    deliver = dict(DELIVER, outcome={"problem_before": "原来卡片看不懂", "result_now": "现在一张卡结论先行",
+                                     "approach": ["x"]})
+    run_dir, state = _run(tmp_path, {"deliver": deliver}, profile="direct")
+    stages = {r["stage"]: r for r in state["stages"]}
+    sb = pse.summary_block("run_d1", {"status": "completed", "profile": "direct", "stages": stages,
+                                      "run_dir": str(run_dir), "requirement": "keep the flag",
+                                      "landed_shas": ["5d941e20aa11bb22"]}, "now")
+    assert sb["intent"] == "keep the flag"
+    assert sb["solved"] == {"before": "原来卡片看不懂", "now": "现在一张卡结论先行"}
+    assert sb["landedSha"] == "5d941e20aa11"
+    # half an outcome is not a before/after; no landing, no sha
+    run_dir2 = tmp_path / "two"
+    run_dir2.mkdir()
+    sb = pse.summary_block("run_d1", {"status": "abandoned", "profile": "direct", "stages": {},
+                                      "run_dir": str(run_dir2)}, "now")
+    assert sb["solved"] is None and sb["landedSha"] is None and sb["intent"] is None
+
+
+def test_read_stage_state_lists_the_landed_commits(monkeypatch, tmp_path):
+    monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+    run_dir, state = _run(tmp_path, {"deliver": DELIVER})
+    state["commits"] = [{"sha": "aaa111", "landed": False}, {"sha": "bbb222", "landed": True}]
+    (run_dir / "run.json").write_text(json.dumps(state))
+    assert pse.read_stage_state("run_d1")["landed_shas"] == ["bbb222"]
+
+
+def test_a_not_ready_summary_carries_its_plain_reasons(monkeypatch, tmp_path):
+    """A refused landing sends no attention card: the summary says why itself."""
+    monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+    run_dir, state = _run(tmp_path, {"deliver": DELIVER}, profile="direct")
+    stages = {r["stage"]: r for r in state["stages"]}
+    stages["deliver"] = dict(stages["deliver"], push_ready=False,
+                             push_ready_reason="test evidence predates later edits (['a.py']); x: y")
+    base = {"profile": "direct", "stages": stages, "run_dir": str(run_dir)}
+    sb = pse.summary_block("run_d1", dict(base, status="completed"), "now")
+    assert sb["pushReasons"][0] == {"code": "tests_not_final", "text": "The tests did not run on the final code"}
+    stages["deliver"]["push_ready"] = True
+    assert pse.summary_block("run_d1", dict(base, status="completed"), "now")["pushReasons"] == []

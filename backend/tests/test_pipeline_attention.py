@@ -488,3 +488,49 @@ def test_read_stage_state_reports_isolation_and_landing(tmp_path, monkeypatch):
     assert (st["isolated"], st["landed"]) == (True, True)
     st = _state(tmp_path / "shared", monkeypatch, RUN)
     assert (st["isolated"], st["landed"]) == (False, False)
+
+
+# ── one sentence per cause, with a code for the UI language (XG 2026-10-20) ──
+
+def test_the_same_cause_repeated_by_three_records_is_said_once():
+    """The screenshot case: one skipped review, repeated by the push_ready reason, the
+    commit's reason and the degraded DELIVER, each with a different prefix."""
+    err = "adversarial_review.profile_tier='skipped' but profile='direct' requires full adversarial review."
+    raw = "; ".join([err, f"unverified: deliver: completed with 5 open gate error(s): {err}",
+                     f"DELIVER completed with 5 open gate error(s): {err}"])
+    assert pse.plain_reason_items(raw) == [("not_reviewed", "Not reviewed by the Gate-2 experts")]
+
+
+def test_a_findings_record_that_lacks_a_field_is_not_called_unreviewed():
+    raw = ("Fix by class: adversarial_review.findings[1] (correctness, HIGH) names no invariant; "
+           "Gate-2 findings: adversarial_review.findings[] must carry, one record each, every finding")
+    assert pse.plain_reason_items(raw) == [("records_incomplete", "Some delivery record fields are empty")]
+
+
+def test_every_known_cause_has_a_code_and_unknown_ones_none():
+    items = pse.plain_reason_items("test evidence predates later edits (['a.py']); gate2: correctness-1 open: x; "
+                                   "unverified: build: lint found 3 errors — fix them")
+    assert items == [("tests_not_final", "The tests did not run on the final code"),
+                     ("finding_open", "A review finding is still open"),
+                     (None, "Build: lint found 3 errors")]
+
+
+def test_the_not_ready_item_carries_the_codes_beside_the_sentences(tmp_path):
+    state = {"stages": {"deliver": {"stage": "deliver", "status": "completed", "push_ready": False,
+                                    "push_ready_reason": "tests: only tdd; unverified: build: lint failed"}},
+             "run_dir": str(tmp_path)}
+    item = next(i for i in pse.attention_block("run_x", state, "now")["items"] if i["kind"] == "not_push_ready")
+    # "only tdd evidence" = the tests did not cover the change's scope, not stale code
+    assert item["reasons"] == ["The tests did not cover everything the change touches", "Build: lint failed"]
+    assert item["reasonCodes"] == ["tests_scope_partial", None]
+
+
+def test_every_reason_code_has_words_in_every_locale():
+    """The chat looks a code up as chat.turn.attention.reasonCode.<code>: a code the
+    locales do not have falls back to English in every language."""
+    codes = {code for _rx, code, _plain in pse._PLAIN_REASONS}
+    locales = Path(__file__).resolve().parents[2] / "desktop" / "src" / "i18n" / "locales"
+    for name in ("en.json", "zh.json"):
+        have = set(json.loads((locales / name).read_text(encoding="utf-8"))
+                   ["chat"]["turn"]["attention"]["reasonCode"])
+        assert codes <= have, (name, sorted(codes - have))

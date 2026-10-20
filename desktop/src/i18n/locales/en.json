@@ -262,7 +262,24 @@
         "notPushReady": "Not ready to push",
         "more": "+{{count}} more in the run report",
         "decidedFor": "{{name}} decided for you · {{count}}",
-        "reason": "Why: {{text}}"
+        "reason": "Why: {{text}}",
+        "reasonCode": {
+          "design_states": "The design does not say which state the change adds or touches",
+          "no_smoke": "No smoke test ran the changed code with real objects",
+          "continued_tests": "Some tests passed only in a continued test call, never in one run with the rest of their file",
+          "gate_on_reason": "A review step was accepted on a written reason, not on a checked result",
+          "review_not_converged": "Review did not converge in 3 rounds; the open findings are listed",
+          "tests_failed": "Tests failed",
+          "finding_open": "A review finding is still open",
+          "tests_not_final": "The tests did not run on the final code",
+          "records_incomplete": "Some delivery record fields are empty",
+          "not_reviewed": "Not reviewed by the Gate-2 experts",
+          "no_exit_contract": "No exit contract (the plan was skipped)",
+          "no_test_run": "No test run was recorded for the code change",
+          "no_test_selected": "No test was selected for the change",
+          "repo_not_tested": "A changed repo is not covered by the test runner",
+          "tests_scope_partial": "The tests did not cover everything the change touches"
+        }
       },
       "deliverables": {
         "open": "Open in Canvas",
@@ -340,6 +357,13 @@
         "open": "Open",
         "loading": "Loading…",
         "failed": "Could not read this document"
+      },
+      "runResult": {
+        "title": "Run result",
+        "landed": "on main · {{sha}}",
+        "asked": "Asked",
+        "before": "Before",
+        "now": "Now"
       }
     },
     "nextSteps": {

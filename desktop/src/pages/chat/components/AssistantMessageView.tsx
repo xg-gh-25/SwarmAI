@@ -37,7 +37,7 @@ import clsx from 'clsx';
 import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
-import { AttentionCard, OutputCard } from './TurnCards';
+import { AttentionCard, OutputCard, RunResult } from './TurnCards';
 import { NextSteps } from './NextSteps';
 import { TurnZoneList, ZONE_GAP } from './TurnZones';
 import type { ZoneContext } from './TurnZones';
@@ -319,7 +319,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const contentBlocks: React.ReactNode[] = [
     <TurnZoneList key="zones" zones={zones} ctx={ctx} hasOpenQuestionIn={(z) => hasOpenQuestion(z.body)} />,
   ];
-  if (attentionCard) contentBlocks.push(<div key="attention" className={zones.length ? ZONE_GAP : ''}>{attentionCard}</div>);
+  // A finished run: its verdict first, then what to check, then what it produced.
+  if (summary) contentBlocks.push(<div key="result" className={zones.length ? ZONE_GAP : ''}><RunResult summary={summary} showReasons={!attentionCard} /></div>);
+  if (attentionCard) contentBlocks.push(<div key="attention" className={zones.length || summary ? ZONE_GAP : ''}>{attentionCard}</div>);
   if (!isStreaming && (changes || deliverables.length || summaryDocs.length)) {
     contentBlocks.push(
       <div key="output" className={hasResult ? 'mt-5' : ZONE_GAP}>

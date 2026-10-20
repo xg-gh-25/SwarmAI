@@ -2345,6 +2345,24 @@ def _outcome_shape_errors(outcome) -> list[str]:
     return errs
 
 
+_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+
+
+def outcome_language_errors(outcome, requirement) -> list[str]:
+    """The run summary shows ``outcome`` to the user: it is written in the user's
+    language. Decided by a character count, not a judgment: a requirement with CJK
+    text and an outcome (problem_before + result_now) with none is refused. Absent or
+    malformed outcomes are left to :func:`_outcome_shape_errors`."""
+    if not isinstance(outcome, dict) or not isinstance(requirement, str):
+        return []
+    text = " ".join(str(outcome.get(k) or "") for k in ("problem_before", "result_now"))
+    if text.strip() and _CJK_RE.search(requirement) and not _CJK_RE.search(text):
+        return ["outcome.problem_before / result_now are shown to the user in the run summary: "
+                "write them in the language of the requirement (it is Chinese / CJK; the "
+                "outcome has no CJK text)"]
+    return []
+
+
 def validate_artifact_data(
     stage: str, data: dict, profile: str = "full", repo_root: str | None = None,
     *, run_created_at: str | None = None, warnings: list[str] | None = None,

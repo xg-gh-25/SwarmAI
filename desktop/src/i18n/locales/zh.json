@@ -262,7 +262,24 @@
         "notPushReady": "还不能 push",
         "more": "其余 {{count}} 项见 run 报告",
         "decidedFor": "{{name}} 替你定了 · {{count}}",
-        "reason": "理由：{{text}}"
+        "reason": "理由：{{text}}",
+        "reasonCode": {
+          "design_states": "设计没有写明这次改动新增或涉及哪些状态",
+          "no_smoke": "没有用真实对象跑过改动代码的冒烟测试",
+          "continued_tests": "有些测试只在续跑中通过，没有和同文件其余测试一起跑过",
+          "gate_on_reason": "有一步审查是凭书面理由通过的，没有经过检查结果",
+          "review_not_converged": "审查 3 轮内没有收敛，未解决的发现已列出",
+          "tests_failed": "有测试失败",
+          "finding_open": "还有审查发现没有被证明修好",
+          "tests_not_final": "测试不是在最终代码上跑的",
+          "records_incomplete": "交付记录有字段没填（不影响代码）",
+          "not_reviewed": "这次改动没有经过 Gate-2 专家审查",
+          "no_exit_contract": "没有退出条件（跳过了计划阶段）",
+          "no_test_run": "改动代码没有测试运行记录",
+          "no_test_selected": "这次改动没有选中任何测试",
+          "repo_not_tested": "有一个改动的仓库不在测试范围内",
+          "tests_scope_partial": "测试没有覆盖改动影响到的全部范围"
+        }
       },
       "deliverables": {
         "open": "在 Canvas 打开",
@@ -340,6 +357,13 @@
         "open": "打开",
         "loading": "读取中…",
         "failed": "读取不到这份文档"
+      },
+      "runResult": {
+        "title": "运行结果",
+        "landed": "已落 main · {{sha}}",
+        "asked": "你要的",
+        "before": "原来",
+        "now": "现在"
       }
     },
     "nextSteps": {

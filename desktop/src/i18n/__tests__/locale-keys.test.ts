@@ -90,7 +90,7 @@ describe('locale keys', () => {
 
   it('no dead chat.turn / chat.file keys (dynamic families excepted)', () => {
     const all = sources().join('\n');
-    const dynamic = /^chat\.turn\.(subAgentStatus)\./;
+    const dynamic = /^chat\.turn\.(subAgentStatus|attention\.reasonCode)\./; // reasonCode: backend cause codes (pipeline_stage_events._PLAIN_REASONS)
     const dead = [...new Set(Object.keys(EN).map((k) => k.replace(/_(one|other)$/, '')))]
       .filter((k) => /^chat\.(turn|file)\./.test(k) && !dynamic.test(k))
       .filter((k) => !all.includes(`'${k}'`) && !all.includes(`"${k}"`) && !all.includes(`\`${k}\``));

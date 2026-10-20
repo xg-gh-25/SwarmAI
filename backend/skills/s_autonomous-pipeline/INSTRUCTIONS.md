@@ -63,7 +63,7 @@ After ①, relay EVALUATE's `_display_block` (the requirement understanding); ne
 **Suppress CLI JSON** (one-line `art_xxxx ✓`), EXEMPT `next_action` / `next_stage_doc` / `next_card`: read them, they carry the continuation. No text before tool calls, no prose between stages. Phase headers, gate blocks, token targets: `ref/instructions/progress-display.md`.
 
 ## Step 6 COMPLETE
-After `stages/complete.md` Step 0: **6.1** `run-update --project <P> --run-id <R> --status completed` (BLOCKS on incomplete stages, missing lessons, REPORT.md <500 bytes, unsurfaced outputs). **6.2** Read `stages/complete.md` fresh, relay `_display_block` verbatim plus a ```next-steps block. **6.3** STOP.
+After `stages/complete.md` Step 0: **6.1** `run-update --project <P> --run-id <R> --status completed` (BLOCKS on incomplete stages, missing lessons, REPORT.md <500 bytes, unsurfaced outputs). **6.2** Read `stages/complete.md` fresh: the chat's summary card shows the result (no pasted summary; one line at most), plus a ```next-steps block. **6.3** STOP.
 
 ## Where things live (`stages/ref/instructions/`)
 | Concept | File |

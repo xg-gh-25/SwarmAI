@@ -210,6 +210,8 @@ def read_stage_state(run_id: object) -> Optional[dict]:
                     # refused): the attention card waits for `landed` (attention_due).
                     "isolated": data.get("worktree_mode") == "isolated",
                     "landed": any(isinstance(c, dict) and c.get("landed") for c in commits),
+                    "landed_shas": [str(c.get("sha")) for c in commits if isinstance(c, dict)
+                                    and c.get("landed") and isinstance(c.get("sha"), str)],
                     "run_dir": str(hit.parent)}
         return None
     except Exception:  # noqa: BLE001 — a display aid must never break the stream
@@ -591,58 +593,77 @@ def attention_due(before: Optional[dict], after: Optional[dict], deliver_row_end
 _REASON_NOISE_RE = re.compile(
     r"completed DEGRADED:|not a stop|landing is decided by the test evidence"
     r"|completed degraded after .* refused attempts", re.I)
-_PLAIN_REASONS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"design\.states is empty", re.I),
+#: (pattern, code, sentence). The code lets the chat say it in the UI language
+#: (chat.turn.attention.reason.<code>); the sentence is the English fallback.
+_PLAIN_REASONS: list[tuple[re.Pattern, str, str]] = [
+    (re.compile(r"design\.states is empty", re.I), "design_states",
      "The design does not say which state the change adds or touches"),
-    (re.compile(r"smoke_tests=0|SMOKE step skipped", re.I),
+    (re.compile(r"smoke_tests=0|SMOKE step skipped", re.I), "no_smoke",
      "No smoke test ran the changed code with real objects"),
-    (re.compile(r"continued test\(s\) passed without the earlier tests", re.I),
+    (re.compile(r"continued test\(s\) passed without the earlier tests", re.I), "continued_tests",
      "Some tests passed only in a continued test call, never in one run with the rest of their file"),
-    (re.compile(r"gate\(s\) passed on a recorded reason, not verified", re.I),
+    (re.compile(r"gate\(s\) passed on a recorded reason, not verified", re.I), "gate_on_reason",
      "A review step was accepted on a written reason, not on a checked result"),
-    (re.compile(r"Gate-2 .*(?:did not converge|not converged)|review_not_converged", re.I),
+    (re.compile(r"Gate-2 .*(?:did not converge|not converged)|review_not_converged", re.I), "review_not_converged",
      "Review did not converge in 3 rounds; the open findings are listed"),
-    (re.compile(r"\btests?: \d+ failed|failed test", re.I), "Tests failed"),
-    (re.compile(r"unresolved (?:HIGH|MED|CRITICAL)|unresolved blocking finding", re.I),
-     "A review finding is still open"),
+    (re.compile(r"\btests?: \d+ failed|failed test", re.I), "tests_failed", "Tests failed"),
+    (re.compile(r"unresolved (?:HIGH|MED|CRITICAL)|unresolved blocking finding|^gate2: \S+ open:", re.I),
+     "finding_open", "A review finding is still open"),
+    (re.compile(r"test evidence predates later edits|tests ran on another tree", re.I),
+     "tests_not_final", "The tests did not run on the final code"),
+    (re.compile(r"tests: only \S+ evidence|only tdd", re.I), "tests_scope_partial",
+     "The tests did not cover everything the change touches"),
+    # a finding's record lacks a field (Fix by class / one record per finding): paperwork,
+    # not a missing review — matched before the review pattern below, which also says
+    # "adversarial_review"
+    (re.compile(r"^Fix by class:|findings\[\] must carry", re.I), "records_incomplete",
+     "Some delivery record fields are empty"),
     # a review that did not run (by decision or not): what the push decision needs to know
     (re.compile(r"no Gate-2 review|Gate-2 expert\(s\) have not reviewed|adversarial_review|"
                 r"meta_review|requires sub-agent to be actually spawned|Red Team required|"
-                r"differs from the tree recorded when the Gate-2", re.I),
+                r"differs from the tree recorded when the Gate-2", re.I), "not_reviewed",
      "Not reviewed by the Gate-2 experts"),
-    (re.compile(r"no exit contract", re.I), "No exit contract (the plan was skipped)"),
-    (re.compile(r"no runner (?:evidence|report)", re.I), "No test run was recorded for the code change"),
-    (re.compile(r"no test passed", re.I), "No test was selected for the change"),
-    (re.compile(r"not tested \(the test runner", re.I), "A changed repo is not covered by the test runner"),
+    (re.compile(r"no exit contract", re.I), "no_exit_contract", "No exit contract (the plan was skipped)"),
+    (re.compile(r"no runner (?:evidence|report)", re.I), "no_test_run", "No test run was recorded for the code change"),
+    (re.compile(r"no test passed", re.I), "no_test_selected", "No test was selected for the change"),
+    (re.compile(r"not tested \(the test runner", re.I), "repo_not_tested",
+     "A changed repo is not covered by the test runner"),
     # the rest of the delivery record's paperwork: one line, the details are in REPORT §10
     (re.compile(r"Missing required field|completion_audit|ac_verification|Schema note|"
-                r"Design spec:|plan\.design|Depth:", re.I),
+                r"Design spec:|plan\.design|Depth:", re.I), "records_incomplete",
      "Some delivery record fields are empty"),
 ]
 _STAGE_PREFIX_RE = re.compile(r"^(?:unverified:\s*)?(?:(evaluate|think|plan|build|review|test|deliver|reflect|goal_cycle):\s*)?", re.I)
 
 
-def plain_reasons(raw: object, limit: int = 4) -> list[str]:
+def plain_reason_items(raw: object, limit: int = 4) -> list[tuple[Optional[str], str]]:
     """``push_ready_reason`` ("; "-joined, model-facing) as at most *limit* plain,
-    de-duplicated sentences for the user. An unrecognised reason keeps its first
-    clause (before ``—`` / ``(``), prefixed with its stage."""
-    out: list[str] = []
+    de-duplicated ``(code, sentence)`` pairs for the user: one per CAUSE, so the same
+    validator error repeated by the deliver record, the commit and the degraded
+    stage says it once. An unrecognised reason keeps its first clause (before ``—``
+    / ``(``), prefixed with its stage, and has no code."""
+    out: list[tuple[Optional[str], str]] = []
     for part in str(raw or "").split("; "):
         part = " ".join(part.split())
         if not part or _REASON_NOISE_RE.search(part):
             continue
-        text = next((plain for rx, plain in _PLAIN_REASONS if rx.search(part)), None)
-        if text is None:
-            m = _STAGE_PREFIX_RE.match(part)
-            stage, rest = (m.group(1) or "").capitalize(), part[m.end():]
-            rest = re.sub(r"^(?:\w+ )?completed with \d+ open gate error\(s\):\s*", "", rest, flags=re.I)
-            rest = re.split(r"\s+—\s+|\s+\(", rest, maxsplit=1)[0].strip(" .:;")
+        m = _STAGE_PREFIX_RE.match(part)
+        body = re.sub(r"^(?:\w+ )?completed with \d+ open gate error\(s\):\s*", "", part[m.end():], flags=re.I)
+        hit = next(((code, plain) for rx, code, plain in _PLAIN_REASONS if rx.search(body)), None)
+        if hit is None:
+            stage = (m.group(1) or "").capitalize()
+            rest = re.split(r"\s+—\s+|\s+\(", body, maxsplit=1)[0].strip(" .:;")
             if not rest:
                 continue
-            text = _clip(f"{stage}: {rest}" if stage else rest, 140) or ""
-        if text and text not in out:
-            out.append(text)
+            hit = (None, _clip(f"{stage}: {rest}" if stage else rest, 140) or "")
+        if hit[1] and all(hit[1] != t for _c, t in out):
+            out.append(hit)
     return out[:limit]
+
+
+def plain_reasons(raw: object, limit: int = 4) -> list[str]:
+    """The sentences of :func:`plain_reason_items`."""
+    return [t for _c, t in plain_reason_items(raw, limit)]
 
 
 def attention_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str, Any]]:
@@ -669,8 +690,9 @@ def attention_block(run_id: str, state: Optional[dict], at: str) -> Optional[dic
     items += _gate_items(stages, deliver_art)
     deliver = stages.get("deliver") or {}
     if deliver.get("push_ready") is False:
-        items.append({"kind": "not_push_ready", "reasons": plain_reasons(deliver.get("push_ready_reason")),
-                      "detail": "Details: REPORT §10"})
+        pairs = plain_reason_items(deliver.get("push_ready_reason"))
+        items.append({"kind": "not_push_ready", "reasons": [t for _c, t in pairs],
+                      "reasonCodes": [c for c, _t in pairs], "detail": "Details: REPORT §10"})
     if not items:
         return None
     return {"type": ATTENTION_BLOCK_TYPE, "runId": run_id,
@@ -763,10 +785,20 @@ def summary_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[
                              "settled": sum(1 for f in findings if f.get("resolved"))}
         docs.append(entry)
     push = deliver.get("push_ready")
+    outcome = deliver_art.get("outcome") if isinstance(deliver_art.get("outcome"), dict) else {}
+    before, now = _clip(outcome.get("problem_before"), 300), _clip(outcome.get("result_now"), 300)
+    landed = state.get("landed_shas") or []
     return {"type": SUMMARY_BLOCK_TYPE, "runId": run_id, "profile": state.get("profile"),
+            # the verdict line and its context (the attention card says what to check)
+            "intent": _clip(state.get("requirement"), 200),
+            "solved": {"before": before, "now": now} if before and now else None,
+            "landedSha": str(landed[-1])[:12] if landed else None,
             "status": "completed" if state.get("status") == "complete" else state.get("status"),
             "pushReady": push if isinstance(push, bool) else None,
             "pushReason": _clip(deliver.get("push_ready_reason"), 200),
+            # the same plain causes as the attention card, for a turn that has none
+            "pushReasons": [{"code": c, "text": t} for c, t in
+                            plain_reason_items(deliver.get("push_ready_reason"))] if push is False else [],
             "stagesDone": sum(1 for r in stages.values() if isinstance(r, dict)
                               and _TERMINAL.get(str(r.get("status") or "")) == "completed"),
             "docs": docs, "at": at}

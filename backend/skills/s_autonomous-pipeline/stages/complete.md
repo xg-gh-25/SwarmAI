@@ -1,7 +1,7 @@
 # COMPLETE Stage — Exec Card
 
-Terminal output of every run: surface the run's changes, complete the run, relay the
-code-rendered `_display_block` verbatim, add one ```next-steps block, STOP. Read this
+Terminal output of every run: surface the run's changes, complete the run, let the
+chat's summary card speak (at most one line of your own), add one ```next-steps block, STOP. Read this
 card fresh at INSTRUCTIONS Step 6 (never from memory). Run-status gate details stay in
 INSTRUCTIONS Step 6. Why this card exists: `stages/history/complete.md`.
 
@@ -58,24 +58,23 @@ run (no source commits) is exempt — skip step 2, still do step 1.
 
 ---
 
-## Output the delivery summary to chat (MANDATORY — never skip) `[MUST]`
+## The run's result in the chat (MANDATORY) `[MUST]`
 <!-- R-complete-003 -->
 
-The summary is RENDERED BY CODE from recorded data (intent in the user's words, final
-requirements, real token cost, runtime, added/modified files as Canvas links, quality,
-and the **pipeline execution products** as Canvas links: REQUIREMENTS.md, DESIGN_SPEC.md,
-REVIEW.md, REPORT.md). Design: `docs/design/pipeline-speed-systematic-fix.md` §4-E.
-Those four documents are written by code too (`backend/core/run_docs.py`: each when its
-stage completes, all again at completion — never hand-write one); completion BLOCKS if a
-required one cannot be written, and the chat shows the same set as a summary card.
+The desktop chat shows the result itself, RENDERED BY CODE from recorded data when
+run.json reaches an end status (`backend/core/pipeline_stage_events.py`): the **summary
+card** (verdict first: landed or not, ready to push or not; what was asked; before → now;
+the run documents REQUIREMENTS / DESIGN_SPEC / REVIEW / FIXING_SPEC / REPORT) and the
+**attention card** (what the user should check, one plain sentence per cause). The
+documents are written by code (`backend/core/run_docs.py`; never hand-write one).
 
-1. `python backend/scripts/artifact_cli.py run-update --project <P> --run-id <R> --status completed`
-   returns it as `_display_block`. Lost it? Re-render:
+1. `python backend/scripts/artifact_cli.py run-update --project <P> --run-id <R> --status completed`.
+2. Do **NOT** paste, retype or restate a summary: a second summary beside the card is
+   the noise this card replaced. Write at most ONE line, and only what the cards do not
+   say (e.g. a decision the user must make now).
+3. A channel session (Slack etc.) has no cards: relay the code-rendered markdown block
+   instead, verbatim, from
    `python backend/scripts/artifact_cli.py run-summary --project <P> --run-id <R>`.
-2. Output `_display_block` **VERBATIM** — no retyping, no reformatting, no code fence
-   around it (a fenced block makes the file links unclickable).
-3. Add 2-3 next steps the user would type next, in a ```next-steps block (rendered as
-   clickable chips).
-4. **STOP** — nothing after the ```next-steps block (no recap, no "shall I push?"). The
-   stage-by-stage view (①–⑩), decisions and lessons live in REPORT.md, which the
-   summary links to.
+4. Add the next steps the user would type next, in a ```next-steps block (none if there
+   is no real one), then **STOP**. The stage-by-stage view, decisions and lessons live
+   in REPORT.md, which the card links to.

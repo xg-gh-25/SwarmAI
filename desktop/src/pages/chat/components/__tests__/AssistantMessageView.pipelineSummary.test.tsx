@@ -84,7 +84,7 @@ describe('pipeline_summary', () => {
   it('renders the verdict and one row per document; a row opens the Canvas', () => {
     renderView(TURN(SUMMARY(true)));
     const card = screen.getByTestId('output-deliverables');
-    expect(within(card).getByTestId('summary-verdict').textContent).toBe('· Done · ready to push');
+    expect(screen.getByTestId('summary-verdict').textContent).toBe('Done · ready to push');
     const rows = within(card).getAllByTestId('summary-doc');
     expect(rows.map((r) => r.getAttribute('data-name'))).toEqual(['REQUIREMENTS.md', 'DESIGN_SPEC.md', 'REVIEW.md', 'REPORT.md']);
     expect(rows[1].getAttribute('data-present')).toBe('false');
@@ -99,11 +99,45 @@ describe('pipeline_summary', () => {
     expect(within(rows[1]).queryByRole('button')).toBeNull();
   });
 
-  it('a run not ready to push says so, with why', () => {
+  it('a run not ready to push says so; the raw model-facing reason is not shown', () => {
     renderView(TURN(SUMMARY(false)));
     const v = screen.getByTestId('summary-verdict');
     expect(v.textContent).toContain('Done · not ready to push');
-    expect(v.textContent).toContain('X1 unmet');
+    expect(screen.queryByText(/X1 unmet/)).toBeNull();
+  });
+
+  it('the result comes first: verdict and where it landed, what was asked, before → now', () => {
+    const sum = { ...(SUMMARY(true) as object), intent: '修 main 上 3 个红测试', landedSha: '5d941e20aa11',
+      solved: { before: '原来 3 个测试一直红', now: '现在 5 个全过' } } as ContentBlock;
+    const attn = { type: 'pipeline_attention', runId: 'run_s', at: 'T', more: 0,
+      items: [{ kind: 'not_push_ready', reasons: ['Tests failed'], reasonCodes: ['tests_failed'] }] } as ContentBlock;
+    renderView([...TURN(sum), attn]);
+    const result = screen.getByTestId('run-result');
+    expect(within(result).getByTestId('summary-verdict').textContent).toBe('Done · ready to push' + 'on main · 5d941e20');
+    expect(within(result).getByTestId('run-intent').textContent).toContain('修 main 上 3 个红测试');
+    expect(within(result).getByTestId('run-solved').textContent).toContain('原来 3 个测试一直红');
+    expect(within(result).getByTestId('run-solved').textContent).toContain('现在 5 个全过');
+    const order = [result, screen.getByTestId('turn-attention'), screen.getByTestId('output-card')];
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
+  it('without an attention card in the turn, the summary says why it is not ready', () => {
+    const sum = { ...(SUMMARY(false) as object),
+      pushReasons: [{ code: 'tests_not_final', text: 'The tests did not run on the final code' }] } as ContentBlock;
+    renderView(TURN(sum));
+    expect(screen.getByTestId('run-reasons').textContent).toContain('The tests did not run on the final code');
+    const attn = { type: 'pipeline_attention', runId: 'run_s', at: 'T', more: 0,
+      items: [{ kind: 'not_push_ready', reasons: ['x'] }] } as ContentBlock;
+    renderView([...TURN(sum), attn]);
+    expect(screen.getAllByTestId('run-result')[1].querySelector('[data-testid="run-reasons"]')).toBeNull();
+  });
+
+  it('a run with nothing recorded beyond its ending shows only the verdict', () => {
+    renderView(TURN(SUMMARY(true)));
+    expect(screen.queryByTestId('run-intent')).toBeNull();
+    expect(screen.queryByTestId('run-solved')).toBeNull();
   });
 
   it('a document in the summary is not repeated as a deliverable tile', () => {

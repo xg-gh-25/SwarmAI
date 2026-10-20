@@ -3838,14 +3838,16 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             result["report_refresh_failed"] = f"SystemExit: {e.code}"
         # §4-D: persist the run's speed profile (best-effort, read-only scan).
         _try_write_speed_profile(args.project, args.run_id)
-        # §4-E: the chat delivery summary, rendered by code from recorded data.
-        # The agent relays `_display_block` verbatim (stages/complete.md). It is a
-        # result KEY so stdout stays one JSON object; never fails the completion.
-        result["_display_block"] = _delivery_summary_for(args.project, args.run_id)
+        # The desktop chat shows the run's result itself (pipeline_summary +
+        # pipeline_attention cards, core/pipeline_stage_events.py): the agent does not
+        # paste a summary. A channel session has no card renderer: `run-summary`
+        # prints the §4-E markdown block for it (stages/complete.md).
         result["reminder"] = (
-            "⚠️ OUTPUT COMPLETION SUMMARY TO CHAT (Step 6.2 — MANDATORY): relay "
-            "`_display_block` VERBATIM, then add 2-3 next steps in a ```next-steps "
-            "block. Do not retype or reformat the block."
+            "The chat shows this run's summary card (result, what to check, documents): "
+            "do NOT paste or retype a summary. Reply with at most one line saying only "
+            "what the card does not, then a ```next-steps block if a real next step "
+            "exists. In a channel session (no cards), relay `run-summary`'s "
+            "_display_block instead."
         )
 
     # ── Auto-emit budget info on stage-json update (LL07 fix) ──────────
@@ -10400,6 +10402,8 @@ def _validate_stage_candidate(
                                             run_created_at=cand_run.get("created_at") or "",
                                             warnings=warnings,
                                             convergence=cand_run.get("convergence"))
+        if stage == "deliver" and isinstance(artifact, dict):
+            errors += pv.outcome_language_errors(artifact.get("outcome"), cand_run.get("requirement"))
     if stage == "deliver":
         errors += _red_team_marker_errors(run_id, cand_run, artifact, errors, warnings)
         try:
@@ -11091,10 +11095,18 @@ def _small_change(scope: dict) -> "str | None":
     """The reason a change is too small to review, else None: at most SMALL_CHANGE_LINES
     non-test source lines, no new code file, no sensitive path (auth / data / infra /
     config, the REVIEW fan-out pattern) and no governed context source (backend/context/:
-    a few lines there are a few lines of every session's system prompt). Docs-only
+    a few lines there are a few lines of every session's system prompt). A test-only
+    change is small under the same line count, taken over its test lines. Docs-only
     changes have their own rule."""
     src = [c for c in scope.get("changed_files", []) if not c.get("is_test")]
-    if not src or _is_docs_only(scope):
+    if not src:
+        # tests only: small by the same line rule, counted over the test lines
+        tests = [c for c in scope.get("changed_files", []) if c.get("is_test")]
+        n = sum(int(c.get("added") or 0) + int(c.get("removed") or 0) for c in tests)
+        if tests and n <= SMALL_CHANGE_LINES:
+            return f"test-only change, {n} line(s) <= {SMALL_CHANGE_LINES}"
+        return None
+    if _is_docs_only(scope):
         return None
     lines = (scope.get("source_insertions", scope.get("diff_insertions", 0))
              + scope.get("source_deletions", scope.get("diff_deletions", 0)))
@@ -11122,6 +11134,9 @@ def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "lis
     """deliver.md "Step 1: Scope Detection" as code: tier default ∪ file-pattern
     triggers ∪ run.json required_experts; refactor rule; bugfix default
     correctness+security; <50 changed source lines → none unless required; a change
+    that is not small (``_small_change``) but got no one by those rules gets correctness
+    (+ security on a sensitive path) on a strict profile without a REVIEW stage (direct),
+    so a review the validator asks for always has a reviewer; a change
     with no code file (``_is_docs_only``) → none unless required; a governed context
     source (backend/context/) → security at any size and on any profile. The tier follows the
     profile and the risky paths touched, never a line count alone (the former >100
@@ -11173,6 +11188,17 @@ def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "lis
     for e in required if isinstance(required, list) else []:
         if isinstance(e, str) and e.strip():
             add(e.strip(), "run.json required_experts")
+    if (not picked and not _is_docs_only(scope) and not is_relaxed_profile(profile)
+            and "review" not in _get_profile_stages(profile)):
+        # Not small enough to waive (_small_change above), yet no size or file rule
+        # picked anyone, and no REVIEW stage reviewed it (with one, REVIEW's fan-out
+        # owns the small sensitive change): the validator asks for a review, so one
+        # is sent (a test-only change over the line rule, a few sensitive lines).
+        add("correctness", "not small enough to skip review")
+        sens = next((c["path"] for c in scope.get("changed_files", [])
+                     if _REVIEW_SENSITIVE_RE.search(_rel(c))), None)
+        if sens:
+            add("security", f"sensitive path: {sens}")
     return [{"id": e, "domain": _EXPERT_DOMAINS.get(e, e.replace("-", " ").title()),
              "reason": why} for e, why in picked.items()]
 
