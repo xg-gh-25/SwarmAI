@@ -49,6 +49,7 @@ from schemas.pipeline_run import (
 # analytics endpoint reuses it (never a 3rd run.json parser — run_0f03fa9d split-brain).
 from scripts.artifact_cli import (
     _CRASH_ZOMBIE_REASON,
+    _completion_verdict,
     _effective_analytics_status,
     _extract_run_metrics,
     _is_garbage_run,
@@ -576,6 +577,7 @@ async def pipeline_analytics(
             updated_at=raw.get("updated_at", ""),
             pause_kind=pause_kind,
             checkpoint_reason=reason,
+            verified=(_completion_verdict(raw)[0] if eff_status == "completed" else None),
         )
         by_project.setdefault(project, []).append(summary)
 

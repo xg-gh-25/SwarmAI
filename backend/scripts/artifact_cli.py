@@ -1658,6 +1658,24 @@ def _is_garbage_run(raw: dict) -> bool:
     return not _delivered_by_stages(raw)
 
 
+def _completion_verdict(run_state: dict) -> "tuple[bool | None, list[str]]":
+    """Was a run's delivery VERIFIED → (verified, reasons). ``completed`` only says the
+    stages ended; 12 of 35 runs completed 10-18..10-20 landed code Gate-2 had not
+    reviewed, or tests that did not cover it, under the same status. The one signal
+    that already sums every gate and the test evidence is DELIVER's push_ready, so a
+    completed run is verified iff its last completed deliver record is push_ready.
+    None: the run has no completed deliver (research / docs / not finished)."""
+    recs = [s for s in run_state.get("stages") or [] if isinstance(s, dict)
+            and s.get("stage") == "deliver" and s.get("status") == "completed"]
+    if not recs:
+        return None, []
+    rec = recs[-1]
+    if rec.get("push_ready") is True:
+        return True, []
+    why = str(rec.get("push_ready_reason") or "push_ready is false")
+    return False, [r.strip() for r in why.split("; ") if r.strip()][:10]
+
+
 def _effective_analytics_status(raw: dict) -> str:
     """The status a run should be COUNTED AS in analytics rollups — corrects the
     mislabeled-done class. A run whose stages show a completed reflect/deliver has
@@ -3796,6 +3814,13 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     # Atomic (temp + os.replace): the daemon reads run.json off-loop while CLI
     # subprocesses write it, and a torn read silently drops the surface marker.
     # Under the command's run lock (pipeline-run-worktree §4.1).
+    if _generate_metrics_after_merge:  # this call completed the run: say if it is verified
+        _verified, _unv_why = _completion_verdict(run_state)
+        run_state["verified"] = _verified
+        if _unv_why:
+            run_state["unverified_reasons"] = _unv_why
+        else:
+            run_state.pop("unverified_reasons", None)
     _write_run_atomic(run_file, run_state)
     _wt_release = None
     if args.status in _TERMINAL_STATUSES:
@@ -3811,6 +3836,10 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         _try_generate_metrics(args.project, args.run_id, run_state, reg)
 
     result = {"pipeline_id": args.run_id, "updated": True}
+    if _generate_metrics_after_merge:
+        result["verified"] = run_state.get("verified")
+        if run_state.get("unverified_reasons"):
+            result["unverified_reasons"] = run_state["unverified_reasons"]
     if _wt_release:
         result["worktree"] = _wt_release
     if run_docs_status is not None:
@@ -6996,6 +7025,8 @@ def _status_entry(state: dict, project_name: str) -> dict:
         # (superseded_by_<id>). Present-but-None for non-abandoned runs, mirroring
         # the `checkpoint` key above (additive contract — never removes a key).
         "abandon_reason": state.get("abandon_reason"),
+        # completed ≠ verified (_completion_verdict): None when not applicable.
+        "verified": (_completion_verdict(state)[0] if display_status == "completed" else None),
         "created_at": state.get("created_at", ""),
         "updated_at": state.get("updated_at", ""),
     }
@@ -8990,9 +9021,14 @@ def cmd_run_analytics(args, reg: ArtifactRegistry) -> None:
     def _safe_avg(lst: list) -> float:
         return round(sum(lst) / len(lst), 1) if lst else 0
 
+    _verdicts = [_completion_verdict(r)[0] for r in runs if isinstance(r, dict)]
     analytics = {
         "project": args.project,
         "runs_analyzed": n,
+        # completed ≠ verified: verified = DELIVER push_ready (_completion_verdict)
+        "verification": {"verified": sum(1 for v in _verdicts if v is True),
+                         "unverified": sum(1 for v in _verdicts if v is False),
+                         "not_applicable": sum(1 for v in _verdicts if v is None)},
         "profiles": profile_counts,
         # Token analytics
         "tokens": {

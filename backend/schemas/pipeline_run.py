@@ -116,6 +116,12 @@ class PipelineRunSummary(BaseModel):
     updated_at: str = ""
     pause_kind: Optional[str] = None
     checkpoint_reason: Optional[str] = None
+    verified: Optional[bool] = Field(
+        None,
+        description=("completed runs only: True when DELIVER was push-ready (every gate and "
+                     "the test evidence held on the final code), False when it completed "
+                     "unverified; None when not applicable (artifact_cli._completion_verdict)."),
+    )
     report_path: Optional[str] = Field(
         None,
         description=(

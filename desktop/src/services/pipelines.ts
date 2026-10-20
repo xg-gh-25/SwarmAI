@@ -79,6 +79,9 @@ export interface PipelineRunSummary {
   updatedAt: string;
   pauseKind: 'crash_residue' | 'decision' | null;
   checkpointReason: string | null;
+  /** Completed runs only: false = completed but DELIVER was not push-ready (a gate or the
+   *  test evidence did not hold on the final code); null = not applicable. */
+  verified: boolean | null;
   /** Workspace-relative REPORT.md path if the run has a report, else null. The row's
    *  report button dispatches swarm:open-file{path} to render it in Canvas. Presence
    *  IS "has a report" — no separate bool (run_929024a8). */
@@ -165,6 +168,7 @@ function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
     updatedAt: (r.updated_at as string) ?? '',
     pauseKind: (r.pause_kind as PipelineRunSummary['pauseKind']) ?? null,
     checkpointReason: (r.checkpoint_reason as string | null) ?? null,
+    verified: typeof r.verified === 'boolean' ? r.verified : null,
     reportPath: (r.report_path as string | null) ?? null,
   };
 }

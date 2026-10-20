@@ -223,6 +223,8 @@ class TestRunUpdate:
                          "--project", "TestProject", "--run-id", run_id)
         assert state["status"] == "completed"
         assert state["completed_at"] is not None
+        # completed ≠ verified: this deliver record carries no push_ready (test_completion_verdict)
+        assert state["verified"] is False and state["unverified_reasons"]
 
     def test_completion_gate_blocks_without_all_stages(self, workspace, run_id):
         """ALL profile stages must be done or explicitly skipped before completion."""

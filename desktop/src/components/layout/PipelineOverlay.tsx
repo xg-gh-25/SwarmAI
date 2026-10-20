@@ -336,8 +336,10 @@ function Stat({ label, value, sub, accent, onClick, active, testid }: {
  *  status: abandoned OR paused-decision → needs you (rose); paused-crash-residue is a
  *  finished zombie → shows "paused" faint; else the raw status. Kept consistent with
  *  statusDot's colors so the pill and any dot never disagree (Gate-1 #5 label table). */
-function statusPill(s: string, pauseKind: string | null): { label: string; dot: string; text: string } {
+function statusPill(s: string, pauseKind: string | null, verified: boolean | null = null): { label: string; dot: string; text: string } {
   if (s === 'abandoned' || pauseKind === 'decision') return { label: 'needs you', dot: 'bg-rose-500', text: 'text-rose-500' };
+  // completed ≠ verified: DELIVER was not push-ready on the final code (backend _completion_verdict)
+  if (s === 'completed' && verified === false) return { label: 'unverified', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
   if (s === 'completed') return { label: 'completed', dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400' };
   if (s === 'running') return { label: 'running', dot: 'bg-sky-500', text: 'text-sky-600 dark:text-sky-400' };
   if (s === 'paused') return { label: 'paused', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
@@ -350,7 +352,7 @@ function statusPill(s: string, pauseKind: string | null): { label: string; dot: 
 function RunRow({ r, onOpenRun, close, showProject }: {
   r: PipelineRunSummary; onOpenRun: (id: string) => void; close: () => void; showProject?: string;
 }) {
-  const pill = statusPill(r.status, r.pauseKind);
+  const pill = statusPill(r.status, r.pauseKind, r.verified);
   return (
     <div
       data-testid={`pipeline-run-${r.id}`}
