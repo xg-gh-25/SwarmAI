@@ -639,7 +639,7 @@ function A10Group({ label, tint, dimCards, children }: { label: string; tint: st
   return (
     <div className={`a10-group relative pb-1.5${dimCards ? ' a10-group--dim' : ''}`} style={{ '--gc': tint } as CSSProperties}>
       <div
-        className="flex items-center gap-2 px-1 pt-2 pb-1 text-[8.5px] font-bold font-mono uppercase tracking-[0.18em]"
+        className="flex items-center gap-2 px-1 pt-2 pb-1 text-[10px] font-semibold font-mono uppercase tracking-[0.12em]"
         style={{ color: tint }}
         data-testid="navgroup-label"
       >
