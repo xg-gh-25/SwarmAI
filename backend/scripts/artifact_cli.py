@@ -9818,8 +9818,26 @@ def _deliver_push_ready_bound(
     for g in _unverified_gates(run_state):
         gaps.append({"stage": g.split(":")[0], "why": f"{g} passed on a recorded reason"})
     if isinstance(newest, dict) and newest.get("context_unverified"):
-        gaps.append({"stage": "test", "why": f"{len(newest['context_unverified'])} continued "
-                     "test(s) passed without the earlier tests of their file"})
+        # Only a test file THIS run changed must pass in its own file context: its new
+        # or edited tests are the change. Another file's tests passed for real, only
+        # run alone because their file outgrows one call; that order risk predates the
+        # run, so it is shown (REPORT §10, warnings) but does not cap push_ready. Before
+        # this split every run with a slow test file was never push-ready (18 runs
+        # 10-18..10-20, e.g. run_303ec2d2: 186 such tests, no other reason).
+        ctx = sorted({str(n) for n in newest["context_unverified"]})
+
+        def _changed_by_run(nodeid: str) -> bool:  # nodeids are repo-relative, _ft absolute
+            p = nodeid.split("::")[0]
+            return any(f == p or f.endswith("/" + p) for f in _ft)
+        mine = [n for n in ctx if _changed_by_run(n)]
+        if mine:
+            gaps.append({"stage": "test", "why": f"{len(mine)} continued test(s) passed "
+                         "without the earlier tests of their file, in test file(s) this run "
+                         "changed: " + ", ".join(sorted({n.split('::')[0] for n in mine}))})
+        if len(ctx) > len(mine):
+            warnings.append(f"{len(ctx) - len(mine)} continued test(s) passed without the "
+                            "earlier tests of their file (test files this run did not "
+                            "change: shown, not a push blocker)")
     seen = set()
     for g in gaps:
         key = (g.get("stage"), g.get("why"))
