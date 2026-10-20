@@ -44,12 +44,13 @@ _RELAXED_PROFILES: frozenset[str] = frozenset({"trivial", "research"})
 # Profiles that can no longer be chosen, with what to do instead. Their stage lists
 # stay readable (_LEGACY_PROFILE_STAGES) so an old run still shows its own stages.
 # "docs" (removed 2026-10-20): it walked five stages for a text change while a direct
-# run starts at DELIVER, and its relaxed rigor followed the profile NAME, so a "docs"
+# run needs three, and its relaxed rigor followed the profile NAME, so a "docs"
 # run that edited code could ship with no tests and no review.
 REMOVED_PROFILES: dict[str, str] = {
     "docs": ("the docs profile was removed. Documents outside a code repo (SwarmWS "
              "Knowledge / DDD) need no run: edit them directly. Documents in a code repo: "
-             "`run-create --profile direct`, `stage-start --stage build`, edit, "
+             "`run-create --profile direct`, `stage-start --stage plan` (exit criteria), "
+             "`stage-start --stage build`, edit, "
              "`stage-start --stage deliver`, stage-complete (a documentation-only diff gets "
              "no expert and needs no test run)."),
 }

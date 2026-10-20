@@ -95,8 +95,28 @@ def _state(f):
 
 
 def _start(flow, rid, stage, token=True):
+    if stage in ("build", "deliver"):
+        _plan_done(flow, rid)
     return cli("stage-start", "--project", "P", "--run-id", rid, "--stage", stage,
                token_for="stage-start" if token else None, run=rid, flow=flow)
+
+
+def _plan_done(flow, rid):
+    """These tests are about worktrees, not PLAN: a direct run must finish PLAN before
+    BUILD / DELIVER start (artifact_cli._direct_plan_missing), so a started PLAN is
+    recorded completed here instead of writing an exit contract in every test."""
+    f = flow["ws"] / "Projects" / "P" / ".artifacts" / "runs" / rid / "run.json"
+    if not f.exists():
+        return
+    st = _state(f)
+    recs = [r for r in st.get("stages") or [] if isinstance(r, dict) and r.get("stage") == "plan"]
+    if recs and recs[-1].get("status") in ("completed", "skipped"):
+        return
+    if recs:
+        recs[-1]["status"] = "completed"
+    else:
+        st.setdefault("stages", []).append({"stage": "plan", "status": "completed"})
+    f.write_text(json.dumps(st))
 
 
 def test_first_plan_start_creates_validated_worktree(flow):

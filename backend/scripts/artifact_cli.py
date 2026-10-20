@@ -2812,9 +2812,9 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 "full": {"deliver", "reflect"},
                 "bugfix": {"deliver", "reflect"},
                 "goal": {"goal_cycle", "deliver", "reflect"},
-                # direct (C7): plan carries the exit contract; deliver is the
-                # quality gate — non-skippable exactly like bugfix's deliver.
-                "direct": {"deliver"},
+                # direct (C7): plan carries the exit contract (never skipped, XG
+                # 2026-10-20); deliver is the quality gate, like bugfix's deliver.
+                "direct": {"plan", "deliver"},
             }
             non_skippable = _NON_SKIPPABLE.get(profile, set())
 
@@ -14509,34 +14509,47 @@ def _fit_stage_start(out: dict) -> dict:
     return out
 
 
-def _skip_direct_stages_before(run_file: Path, run_state: dict, stage: str) -> None:
-    """A direct run may start at BUILD or DELIVER: every earlier direct stage with no
-    finished record is recorded ``skipped`` (with its reason), so the stage order holds
-    and no PLAN / BUILD paperwork is written for work that is already done. A skipped
-    PLAN leaves no exit contract, which keeps the run not push-ready (the bound requires
-    one for ``direct``); the change still lands on its tests."""
+def _direct_plan_missing(run_state: dict, stage: str) -> "list[str]":
+    """A direct run always goes through PLAN (XG 2026-10-20): BUILD / DELIVER refuse to
+    start until PLAN has finished, because PLAN is where the run writes down what it
+    must deliver (the exit contract: 1-5 acceptance criteria taken from the
+    requirement, each naming the test that checks it). Code already written in the
+    worktree stays; the criteria are written for it. A PLAN recorded ``skipped`` by the
+    former late-start path (runs created before this rule) is accepted as it is."""
     from core.pipeline_profiles import FINISHED_STATUSES
-    stages = _get_profile_stages("direct")
-    earlier = stages[:stages.index(stage)]
-    done = {r.get("stage") for r in run_state.get("stages") or [] if isinstance(r, dict)
-            and (r.get("status") in FINISHED_STATUSES or r.get("status") == "skipped")}
-    todo = [s for s in earlier if s not in done]
-    if not todo:
+    if stage == "plan":
+        return []
+    plan = [r for r in run_state.get("stages") or []
+            if isinstance(r, dict) and r.get("stage") == "plan"]
+    if any(r.get("status") in FINISHED_STATUSES or r.get("status") == "skipped" for r in plan):
+        return []
+    return [f"a direct run starts at PLAN, never at {stage.upper()}: run `stage-start "
+            "--stage plan`, write exit_criteria (1-5 acceptance criteria from the "
+            "requirement, each with the test that checks it; code already in the worktree "
+            "counts), `stage-complete --stage plan`, then start " + stage.upper()]
+
+
+def _skip_direct_build(run_file: Path, run_state: dict) -> None:
+    """DELIVER after a finished PLAN with no BUILD record: BUILD is recorded
+    ``skipped`` (the code was written before the run, or BUILD's record would only
+    repeat it). PLAN is never skipped (``_direct_plan_missing``)."""
+    from core.pipeline_profiles import FINISHED_STATUSES
+    recs = [r for r in run_state.get("stages") or [] if isinstance(r, dict)]
+    if any(r.get("stage") == "build" and (r.get("status") in FINISHED_STATUSES
+                                          or r.get("status") == "skipped") for r in recs):
         return
     now = _utc_now_iso()
 
     def skip(d: dict) -> None:
-        recs = d.setdefault("stages", [])
-        have = {r.get("stage") for r in recs if isinstance(r, dict)
-                and (r.get("status") in FINISHED_STATUSES or r.get("status") == "skipped")}
-        for s_ in todo:
-            if s_ in have:
-                continue
-            recs[:] = [r for r in recs if not (isinstance(r, dict) and r.get("stage") == s_)]
-            recs.append({"stage": s_, "status": "skipped", "stage_doc_consumed": True,
-                         "skip_reason": f"direct run started at {stage}: no separate {s_} "
-                                        "record for work done in the worktree",
-                         "skipped_at": now})
+        rs = d.setdefault("stages", [])
+        if any(isinstance(r, dict) and r.get("stage") == "build" and (
+                r.get("status") in FINISHED_STATUSES or r.get("status") == "skipped") for r in rs):
+            return
+        rs[:] = [r for r in rs if not (isinstance(r, dict) and r.get("stage") == "build")]
+        rs.append({"stage": "build", "status": "skipped", "stage_doc_consumed": True,
+                   "skip_reason": "direct run went from PLAN to DELIVER: no separate build "
+                                  "record for work done in the worktree",
+                   "skipped_at": now})
     from core.run_lock import update_run
     update_run(run_file, skip)
     fresh = json.loads(run_file.read_text(encoding="utf-8"))
@@ -14567,7 +14580,11 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
         _write_run_atomic(run_file, run_state)  # the approval is on record before the stage
     run_dir = run_file.parent
     if profile == "direct" and stage in ("build", "deliver"):
-        _skip_direct_stages_before(run_file, run_state, stage)
+        _missing = _direct_plan_missing(run_state, stage)
+        if _missing:
+            _stage_boundary_fail(stage, _missing)
+        if stage == "deliver":
+            _skip_direct_build(run_file, run_state)
 
     # C4 started_at — idempotent re-entry keeps the original start; a re-start
     # after the stage completed begins a new window.

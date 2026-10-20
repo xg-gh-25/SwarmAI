@@ -388,8 +388,11 @@ commit, a commit made there picks up another session's staged files, and an unco
 there blocks a run's `merge --ff-only` landing. All three happened on 2026-10-19.
 
 - **SwarmAI app sessions** are enforced: with worktree mode on, `worktree_write_gate` denies a
-  write to the main checkout and prints the `run-create --profile direct` command. A small
-  change (< 50 non-test source lines) dispatches no Gate-2 expert, only meta-review.
+  write to the main checkout and prints the `run-create --profile direct` command. A direct
+  run always goes plan -> build -> deliver: PLAN writes the exit contract (1-5 acceptance
+  criteria, each with its test) and is never skipped; BUILD may be skipped once PLAN is
+  done. A small change (at most 20 non-test source lines, no new code file, no sensitive
+  path: `SMALL_CHANGE_LINES` in `artifact_cli.py`) gets no Gate-2 expert and no meta-review.
 - **Every other agent** (Claude Code, Kiro, Kiro Crew, Cursor, Codex) is not seen by that
   hook. Nothing enforces this for you; do it yourself:
 

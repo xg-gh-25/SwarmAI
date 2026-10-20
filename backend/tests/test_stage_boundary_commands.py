@@ -2119,32 +2119,51 @@ def test_docs_only_deliver_needs_no_adversarial_review(ws, capsys):
     assert any(e["code"] == "E_ADVERSARIAL_TIER" for e in out["errors"]), out
 
 
-# ── a direct run may start at BUILD or DELIVER (no PLAN / BUILD paperwork) ──
+# ── a direct run always goes through PLAN (XG 2026-10-20); BUILD may be skipped ──
 
-def test_direct_run_starting_late_records_the_earlier_stages_skipped(ws, capsys):
+def test_direct_run_refuses_build_or_deliver_before_plan(ws, capsys):
     root, reg = ws
-    _make_run(root, "run_late", "direct")
-    code, out = _start(reg, capsys, "run_late", "build")
-    assert code in (0, None), out
-    recs = {r["stage"]: r for r in _run_state(root, "run_late")["stages"]}
-    assert recs["plan"]["status"] == "skipped" and "started at build" in recs["plan"]["skip_reason"]
-    code, out = _start(reg, capsys, "run_late", "deliver")
-    assert code in (0, None), out
-    recs = {r["stage"]: r for r in _run_state(root, "run_late")["stages"]}
-    assert recs["build"]["status"] == "skipped" and recs["plan"]["status"] == "skipped"
-    import pipeline_validator as pv
-    assert pv._check_stage_order("deliver", "direct", _run_state(root, "run_late")["stages"])
+    _make_run(root, "run_noplan", "direct")
+    for stage in ("build", "deliver"):
+        code, out = _start(reg, capsys, "run_noplan", stage)
+        assert code == 1, out
+        assert "starts at PLAN" in json.dumps(out), out
+    assert _run_state(root, "run_noplan")["stages"] == []   # nothing recorded skipped
 
 
-def test_late_start_keeps_a_finished_stage_and_other_profiles(ws, capsys):
+def test_direct_plan_with_only_exit_criteria_completes(ws, capsys):
+    """PLAN of a direct run needs only the exit contract: no design, no file discovery."""
+    root, reg = ws
+    _make_run(root, "run_min_plan", "direct")
+    plan = {"exit_criteria": [{"id": "X1", "kind": "test",
+                               "ref": "backend/tests/test_x.py::test_a", "expect": "pass"}]}
+    code, out = _complete(reg, capsys, "run_min_plan", "plan", plan, {"decisions": DECISION})
+    assert code == 0, out
+    code, out = _start(reg, capsys, "run_min_plan", "build")
+    assert code in (0, None), out
+
+
+def test_direct_deliver_after_plan_records_build_skipped(ws, capsys):
     root, reg = ws
     _make_run(root, "run_late2", "direct", stages=["plan"])
-    _start(reg, capsys, "run_late2", "deliver")
+    code, out = _start(reg, capsys, "run_late2", "deliver")
+    assert code in (0, None), out
     recs = {r["stage"]: r for r in _run_state(root, "run_late2")["stages"]}
     assert recs["plan"]["status"] == "completed" and recs["build"]["status"] == "skipped"
+    import pipeline_validator as pv
+    assert pv._check_stage_order("deliver", "direct", _run_state(root, "run_late2")["stages"])
     _make_run(root, "run_full_late", "full")
     _start(reg, capsys, "run_full_late", "build")
-    assert _run_state(root, "run_full_late")["stages"] == []   # only direct starts late
+    assert _run_state(root, "run_full_late")["stages"] == []   # only direct is touched
+
+
+def test_direct_run_with_a_legacy_skipped_plan_still_starts(ws, capsys):
+    """A run created before the rule, whose PLAN the old late-start path recorded skipped."""
+    root, reg = ws
+    _make_run(root, "run_legacy_skip", "direct",
+              stages=[{"stage": "plan", "status": "skipped", "skip_reason": "old"}])
+    code, out = _start(reg, capsys, "run_legacy_skip", "deliver")
+    assert code in (0, None), out
 
 
 def test_run_update_refuses_the_removed_docs_profile(ws, capsys):

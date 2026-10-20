@@ -4,6 +4,8 @@ Turn the chosen alternative into a design BUILD can execute with zero project co
 
 **Enter**: `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage plan` (upstream ACs, `cross_boundary`, `exit_criteria_default`, valid examples).
 
+**`direct` profile**: PLAN is mandatory (BUILD / DELIVER refuse to start before it) and is only step 11: 1-5 `exit_criteria` taken from the requirement, each with the test that checks it (`manual` when no test can). Steps 1-10 are not required; code already in the worktree counts.
+
 ## Steps
 
 1. **Pick + spike.** Take the chosen alternative; read the code it touches. Needs uncommitted deps or API changes → judgment decision.
