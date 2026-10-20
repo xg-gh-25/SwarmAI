@@ -240,26 +240,43 @@ def _git_path(cwd, name: str) -> Path:
     return Path(p) if os.path.isabs(p) else Path(cwd) / p
 
 
-# Per-process memo for the two rev-parse answers one CLI call asks again and again
-# (a stage-start asked --git-common-dir ~10 times, 2026-10-20 profile). Only for a
-# cwd that is a repo/worktree ROOT (its own `.git`), keyed on that `.git` entry's
-# identity: removing, re-adding or re-initialising the tree changes the entry, so a
-# stale answer is never returned. A failure is never stored.
-_REV_MEMO: "dict[tuple, str]" = {}
+# Per-process memo for the read-only answers one CLI call asks again and again (a
+# stage-start ran --show-toplevel, --git-common-dir, symbolic-ref HEAD and worktree
+# list several times each). Every key names the files the answer is read from, by
+# identity (inode, mtime, size): git rewrites them by lock + rename, so any change
+# gives a new key and a stale answer is never returned. A failure is never stored.
+_REV_MEMO: "dict[tuple, object]" = {}
 _REV_MEMO_MAX = 512
 
 
-def _git_marker(cwd) -> "tuple | None":
+def _stat_key(path) -> "tuple | None":
     try:
-        st = os.stat(os.path.join(str(cwd), ".git"))
+        st = os.stat(path)
     except OSError:
         return None
-    return (os.path.realpath(str(cwd)), st.st_ino, st.st_mtime_ns, st.st_size)
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
 
 
-def _memo(kind: str, cwd, compute) -> "str | None":
-    m = _git_marker(cwd)
-    key = (kind, *m) if m else None
+def _git_marker(cwd) -> "tuple | None":
+    """Identity of a repo/worktree ROOT's own `.git` entry, None for any other cwd.
+    A `.git` FILE (linked worktree) is keyed on the file itself. A `.git` DIRECTORY is
+    keyed on its inode plus `config` (core.worktree / core.bare) and `commondir`, the
+    only things inside it that the root answers depend on. Not on the directory's
+    mtime: that moves with every index.lock git takes, so the memo missed after any
+    git write in the main checkout."""
+    dot = os.path.join(str(cwd), ".git")
+    try:
+        st = os.stat(dot)
+    except OSError:
+        return None
+    real = os.path.realpath(str(cwd))
+    if os.path.isdir(dot):
+        return (real, "dir", st.st_ino, _stat_key(os.path.join(dot, "config")),
+                _stat_key(os.path.join(dot, "commondir")))
+    return (real, "file", st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+def _memo_get(key, compute):
     if key is not None and key in _REV_MEMO:
         return _REV_MEMO[key]
     val = compute()
@@ -268,6 +285,18 @@ def _memo(kind: str, cwd, compute) -> "str | None":
             _REV_MEMO.clear()
         _REV_MEMO[key] = val
     return val
+
+
+def _files_refs(common) -> bool:
+    """True when the repo keeps refs as files. A reftable repo (git >= 2.45) leaves
+    HEAD as a fixed stub and keeps the real HEAD in reftable/, so no HEAD file stat
+    can tell a branch switch: HEAD-derived answers are not memoised there."""
+    return not os.path.isdir(os.path.join(str(common), "reftable"))
+
+
+def _memo(kind: str, cwd, compute) -> "str | None":
+    m = _git_marker(cwd)
+    return _memo_get((kind, *m) if m else None, compute)
 
 
 def _common_dir(cwd) -> str:
@@ -288,16 +317,33 @@ def _toplevel(cwd) -> "str | None":
 
 
 def busy_state(cwd) -> "str | None":
-    """Name of an in-progress merge / rebase / cherry-pick / revert, else None."""
-    for name in _IN_PROGRESS:
-        if _git_path(cwd, name).exists():
+    """Name of an in-progress merge / rebase / cherry-pick / revert, else None.
+    One rev-parse resolves every name (it prints one path per --git-path)."""
+    args = [a for name in _IN_PROGRESS for a in ("--git-path", name)]
+    paths = _out(cwd, "rev-parse", *args).splitlines()
+    if len(paths) != len(_IN_PROGRESS):
+        raise WorktreeError("git_failed", "git rev-parse --git-path returned "
+                            f"{len(paths)} paths for {len(_IN_PROGRESS)} names")
+    for name, p in zip(_IN_PROGRESS, paths):
+        p = p.strip()
+        if (Path(p) if os.path.isabs(p) else Path(cwd) / p).exists():
             return name
     return None
 
 
 def _symbolic_head(cwd) -> "str | None":
-    p = git(cwd, "symbolic-ref", "-q", "HEAD", timeout=10)
-    return p.stdout.strip() if p.returncode == 0 else None
+    def compute() -> "str | None":
+        p = git(cwd, "symbolic-ref", "-q", "HEAD", timeout=10)
+        return p.stdout.strip() if p.returncode == 0 else None
+    # Memoised only for a main checkout (`.git` directory) that keeps refs as files:
+    # the answer is then the content of .git/HEAD. A detached HEAD (None) is never
+    # stored.
+    m = _git_marker(cwd)
+    key = None
+    if m and m[1] == "dir" and _files_refs(os.path.join(str(cwd), ".git")):
+        hk = _stat_key(os.path.join(str(cwd), ".git", "HEAD"))
+        key = ("head", *m, hk) if hk else None
+    return _memo_get(key, compute)
 
 
 # ── switch and bindings ──────────────────────────────────────────────────────
@@ -349,21 +395,44 @@ def code_repos(workspace: "str | Path", project: str, self_repo: "str | Path") -
     return sorted(out)
 
 
+def _worktree_list_key(main) -> "tuple | None":
+    """Identity of every file `git worktree list` reads a path or branch from: the
+    common dir's HEAD and config, and each admin dir's HEAD and gitdir. None when the
+    main checkout is not a root with its own `.git` directory, or the repo uses
+    reftable (no memo then)."""
+    m = _git_marker(main)
+    common = os.path.join(str(main), ".git")
+    if not m or m[1] != "dir" or not _files_refs(common):
+        return None
+    parts: list = [m, _stat_key(os.path.join(common, "HEAD"))]
+    root = os.path.join(common, "worktrees")
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        names = []
+    for n in names:
+        d = os.path.join(root, n)
+        parts.append((n, _stat_key(os.path.join(d, "HEAD")), _stat_key(os.path.join(d, "gitdir"))))
+    return ("wtlist", *parts)
+
+
 def _worktree_list(main: "str | Path") -> "list[dict]":
-    """`git worktree list --porcelain` → [{path, head, branch}]."""
-    items, cur = [], {}
-    for line in _out(main, "worktree", "list", "--porcelain").splitlines() + [""]:
-        if not line:
-            if cur:
-                items.append(cur)
-            cur = {}
-        elif line.startswith("worktree "):
-            cur["path"] = os.path.realpath(line[9:])
-        elif line.startswith("HEAD "):
-            cur["head"] = line[5:]
-        elif line.startswith("branch "):
-            cur["branch"] = line[7:]
-    return items
+    """`git worktree list --porcelain` → [{path, branch}] (no branch: detached).
+    Memoised on the files those two fields are read from; a commit on a branch moves
+    no such file and changes neither field."""
+    def compute() -> "tuple":
+        items, cur = [], {}
+        for line in _out(main, "worktree", "list", "--porcelain").splitlines() + [""]:
+            if not line:
+                if cur:
+                    items.append(cur)
+                cur = {}
+            elif line.startswith("worktree "):
+                cur["path"] = os.path.realpath(line[9:])
+            elif line.startswith("branch "):
+                cur["branch"] = line[7:]
+        return tuple(tuple(sorted(c.items())) for c in items)
+    return [dict(c) for c in (_memo_get(_worktree_list_key(main), compute) or ())]
 
 
 def is_registered(main, run_id: str, repo_name: str) -> bool:
