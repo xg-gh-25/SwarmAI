@@ -711,8 +711,11 @@ export interface CompactionGuardEvent {
 // (XG: "不能用toast ... 针对当前session 做的"). `message` (COMPACT_NOTICE_TEXT) is a
 // fixed backend constant; the frontend is a pure projection of it.
 
+/** Pre-first-token step of a turn (backend core/turn_phase.py). */
+export type TurnPhase = 'preparing' | 'starting' | 'waiting';
+
 export interface StreamEvent {
-  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacting' | 'context_compacted' | 'compaction_guard' | 'mcp_health_warning' | 'recovery_exhausted' | 'still_working' | (string & {});
+  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacting' | 'context_compacted' | 'compaction_guard' | 'mcp_health_warning' | 'recovery_exhausted' | 'still_working' | 'turn_phase' | (string & {});
   content?: ContentBlock[];
   model?: string;
   sessionId?: string;
@@ -790,7 +793,9 @@ export interface StreamEvent {
   // context_compacting is emitted LIVE when the CLI starts (phase 'started') or
   // fails (phase 'failed'); context_compacted when it finishes, with sizes.
   trigger?: 'manual' | 'auto';
-  phase?: 'started' | 'failed';
+  /** context_compacting: 'started' | 'failed'. turn_phase (backend core/turn_phase.py):
+   *  the pre-first-token step — 'preparing' | 'starting' | 'waiting'. */
+  phase?: 'started' | 'failed' | TurnPhase;
   preTokens?: number;
   postTokens?: number;
   /** context_compacted: the stored compaction record (snake_case wire shape,

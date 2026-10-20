@@ -30,6 +30,7 @@ from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from .session_unit import SessionState, SessionUnit
+from .turn_phase import PREPARING as TURN_PHASE_PREPARING, turn_phase_event
 
 if TYPE_CHECKING:
     from .prompt_builder import PromptBuilder
@@ -3554,6 +3555,10 @@ class SessionRouter:
                 }
             yield error_event
             return
+
+        # Pre-first-token phase for the UI (core/turn_phase.py): the slot is held,
+        # prompt build / DB reads / recall run next. Display only.
+        yield turn_phase_event(TURN_PHASE_PREPARING)
 
         # Build query content
         query_content: Any

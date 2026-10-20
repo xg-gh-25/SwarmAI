@@ -2266,6 +2266,7 @@ export default function ChatPage() {
       activeTabForGuard.isReconnecting = false;
       activeTabForGuard.reconnectionAttempt = 0;
       activeTabForGuard.isResuming = false;
+      activeTabForGuard.turnPhase = undefined;
       // A genuine new stream is starting — the post-disconnect uncertainty is
       // resolved (this send opens a fresh SSE connection / session).
       activeTabForGuard._postDisconnectUncertain = false;
@@ -3379,6 +3380,7 @@ export default function ChatPage() {
                     contextWarning={active ? contextWarning : (ts?.contextWarning ?? null)}
                     isReconnecting={ts?.isReconnecting}
                     isResuming={ts?.isResuming}
+                    turnPhase={ts?.turnPhase}
                     isWaitingForBusy={active ? isWaitingForBusy : false}
                     isBackendOffline={health.status === 'disconnected'}
                     onCancelBusyWait={cancelBusyWait}

@@ -38,6 +38,11 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 from .compaction_guard import EscalationLevel
 from .retry_manager import RetryManager
 from .streaming_orchestrator import StreamingOrchestrator
+from .turn_phase import (
+    STARTING as TURN_PHASE_STARTING,
+    WAITING as TURN_PHASE_WAITING,
+    turn_phase_event,
+)
 from .session_healing import (
     CHANNEL_WRAP_BUFFER,
     CHANNEL_WRAP_UP_PROMPT,
@@ -2369,6 +2374,7 @@ class SessionUnit:
         if self.state == SessionState.IDLE and self._client is None:
             self._transition(SessionState.COLD)
         if self.state == SessionState.COLD:
+            yield turn_phase_event(TURN_PHASE_STARTING)
             async for event in self._ensure_spawned(options, config):
                 if event.get("_abort"):
                     return  # spawn failed after retries
@@ -2529,6 +2535,8 @@ class SessionUnit:
 
         try:
             self._leak_restart_eligible = not self._leak_restart_done
+            # Pre-first-token phase for the UI: the query goes to the model now.
+            yield turn_phase_event(TURN_PHASE_WAITING)
             try:
                 async for event in self._streaming_orchestrator.stream_query(query_content):
                     if _capturing_wrapup_turn:

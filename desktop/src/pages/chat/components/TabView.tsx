@@ -35,7 +35,7 @@
  */
 import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { Message } from '../../../types';
+import type { Message, TurnPhase } from '../../../types';
 import { useMessageStore } from '../../../stores/useMessageStore';
 import {
   ANCHOR_PROPS, activationLanding, anchorChainFor, anchorDelta, isToggleClick, pickAnchor,
@@ -50,6 +50,7 @@ import { resolvePendingToolUseId } from '../utils';
 import { MessageBubble } from './MessageBubble';
 import { WelcomeScreen } from './WelcomeScreen';
 import { CompactNotice } from './CompactNotice';
+import { TurnPhaseLine } from './TurnPhaseLine';
 import { tf } from '../tf';
 import { useStreamingRest } from '../../../hooks/useStreamingRest';
 
@@ -189,6 +190,8 @@ export interface TabViewProps {
   /** Reconnection / resume flags for the streaming indicator. */
   isReconnecting?: boolean;
   isResuming?: boolean;
+  /** Pre-first-token step (backend turn_phase) and when it began. */
+  turnPhase?: { phase: TurnPhase; since: number };
   /** SESSION_BUSY recovery polling flag (shows a waiting spinner). */
   isWaitingForBusy: boolean;
   /** True when the backend health check reports disconnected. Used to make the
@@ -259,6 +262,7 @@ function TabViewImpl({
   contextWarning,
   isReconnecting,
   isResuming,
+  turnPhase,
   isWaitingForBusy,
   isBackendOffline,
   onCancelBusyWait,
@@ -780,6 +784,9 @@ function TabViewImpl({
                   <Spinner size="sm" />
                   <span className="text-sm">{t('chat.reconnecting', 'Reconnecting...')}</span>
                 </div>
+              )}
+              {turnPhase && !isReconnecting && !isResuming && (
+                <TurnPhaseLine phase={turnPhase.phase} since={turnPhase.since} />
               )}
               {isResuming && (
                 <div className="flex items-center gap-2 text-[var(--color-text-muted)]">

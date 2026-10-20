@@ -992,3 +992,51 @@ class TestHookConsecutiveFailureAlert:
         executor._record_hook_result("test_hook", False, "err3")
         executor._record_hook_result("test_hook", False, "err4")
         assert executor._hook_stats["test_hook"]["consecutive_failures"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Pre-first-token phases (core/turn_phase.py): the UI says which step it is in
+# ---------------------------------------------------------------------------
+
+def _phases(events: list[dict]) -> list[str]:
+    return [e["phase"] for e in events if e.get("type") == "turn_phase"]
+
+
+class TestTurnPhases:
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_cold_send_reports_preparing_starting_waiting_before_first_token(
+        self, async_client, _reset_session_infrastructure
+    ):
+        with patch(
+            "core.claude_environment._ClaudeClientWrapper",
+            side_effect=lambda options: FakeClientWrapper(options=options),
+        ), patch(
+            "core.session_unit._spawn_lock", asyncio.Lock()
+        ), patch(
+            "core.claude_environment._env_lock", asyncio.Lock()
+        ), patch(
+            "core.resource_monitor.resource_monitor.spawn_budget",
+            return_value=MagicMock(can_spawn=True),
+        ):
+            response = await async_client.post(
+                "/api/chat/stream",
+                json={"agent_id": "default", "message": "Hello"},
+            )
+        events = parse_sse_body(response.text)
+        types = event_types(events)
+        assert _phases(events) == ["preparing", "starting", "waiting"], types
+        last_phase = max(i for i, t in enumerate(types) if t == "turn_phase")
+        assert last_phase < types.index("text_delta"), types
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_warm_send_skips_starting(self, _reset_session_infrastructure):
+        from core.session_unit import SessionUnit, SessionState
+
+        unit = SessionUnit(session_id="test-warm-phase", agent_id="default")
+        unit._transition(SessionState.IDLE)
+        unit._client = FakeSDKClient()
+        unit._wrapper = MagicMock()
+        unit._sdk_session_id = "sdk-session-warm"
+        unit._last_turn_clean = True
+        events = [e async for e in unit.send(query_content="hi", options=_make_real_options())]
+        assert _phases(events) == ["waiting"]

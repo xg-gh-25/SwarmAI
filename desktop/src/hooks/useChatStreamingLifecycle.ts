@@ -2604,6 +2604,25 @@ export function useChatStreamingLifecycle(
         // The null case only occurs for the first tab before initTabState fires.
         const isActiveTab = capturedTabId === null || capturedTabId === activeTabIdRef.current;
 
+        // ── Pre-first-token phase (backend core/turn_phase.py) ──
+        // turn_phase says which step the turn is in before the first token
+        // (preparing → starting on a cold spawn → waiting for the model). It is
+        // display-only: handled and returned HERE, before the hasReceivedData
+        // block below, so it never counts as stream data (that flag gates the
+        // connection-phase silent retry). Any later event other than liveness
+        // pings clears it, so a phase cannot outlive the wait it describes.
+        if (event.type === 'turn_phase') {
+          if (tabState && capturedTabId && (event.phase === 'preparing' || event.phase === 'starting' || event.phase === 'waiting')) {
+            tabState.turnPhase = { phase: event.phase, since: Date.now() };
+            updateTabStatus(capturedTabId, 'streaming'); // re-render to show it
+          }
+          return;
+        }
+        if (tabState?.turnPhase && event.type !== 'heartbeat' && event.type !== 'session_start') {
+          tabState.turnPhase = undefined;
+          if (capturedTabId) updateTabStatus(capturedTabId, 'streaming'); // drop the line now
+        }
+
         // Mark that we've received data — used by reconnection logic AND the
         // post-stop silent-retry to distinguish connection-phase vs mid-stream
         // failures. Control/lifecycle events (session_start, session_resuming,

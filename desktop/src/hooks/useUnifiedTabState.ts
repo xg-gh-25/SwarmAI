@@ -24,7 +24,7 @@
  */
 
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
-import type { Message, UnifiedAttachment, ContentBlock, SystemPromptMetadata, CompactionGuardEvent } from '../types/index';
+import type { Message, UnifiedAttachment, ContentBlock, SystemPromptMetadata, CompactionGuardEvent, TurnPhase } from '../types/index';
 import type { PendingQuestion, OpenTab } from '../pages/chat/types';
 import type { ContextWarning } from './useChatStreamingLifecycle';
 import { INITIAL_STATE, type StreamingState } from './streaming-machine';
@@ -154,6 +154,9 @@ export interface UnifiedTab {
   isReconnecting?: boolean;
   /** True while PATH A cold-start resume is in progress (subprocess killed, re-spawning). */
   isResuming?: boolean;
+  /** Pre-first-token step from the backend `turn_phase` event and when it began
+   *  (runtime-only, never serialized). Cleared by the first other stream event. */
+  turnPhase?: { phase: TurnPhase; since: number };
   /** Current reconnection attempt number (0 = not reconnecting). */
   reconnectionAttempt?: number;
   /** Set to true on the first non-heartbeat SSE event — used to distinguish connection-phase vs mid-stream failures. */
