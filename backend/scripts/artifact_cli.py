@@ -11079,7 +11079,9 @@ SMALL_CHANGE_LINES = 20
 def _small_change(scope: dict) -> "str | None":
     """The reason a change is too small to review, else None: at most SMALL_CHANGE_LINES
     non-test source lines, no new code file, no sensitive path (auth / data / infra /
-    config, the REVIEW fan-out pattern). Docs-only changes have their own rule."""
+    config, the REVIEW fan-out pattern) and no governed context source (backend/context/:
+    a few lines there are a few lines of every session's system prompt). Docs-only
+    changes have their own rule."""
     src = [c for c in scope.get("changed_files", []) if not c.get("is_test")]
     if not src or _is_docs_only(scope):
         return None
@@ -11090,7 +11092,8 @@ def _small_change(scope: dict) -> "str | None":
     if any(c.get("status") == "A" and Path(c["path"]).suffix in (".py", ".ts", ".tsx", ".js", ".rs")
            for c in src):
         return None
-    if any(_REVIEW_SENSITIVE_RE.search(_rel(c)) for c in src):
+    if any(_REVIEW_SENSITIVE_RE.search(_rel(c)) or _GOVERNED_CONTEXT_RE.search(_rel(c))
+           for c in src):
         return None
     return f"{lines} non-test source line(s) <= {SMALL_CHANGE_LINES}, no new code file, no sensitive path"
 
@@ -11108,7 +11111,8 @@ def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "lis
     """deliver.md "Step 1: Scope Detection" as code: tier default ∪ file-pattern
     triggers ∪ run.json required_experts; refactor rule; bugfix default
     correctness+security; <50 changed source lines → none unless required; a change
-    with no code file (``_is_docs_only``) → none unless required. The tier follows the
+    with no code file (``_is_docs_only``) → none unless required; a governed context
+    source (backend/context/) → security at any size and on any profile. The tier follows the
     profile and the risky paths touched, never a line count alone (the former >100
     insertions → full-tier override is gone). An expert's findings only lower
     push_ready; landing is decided by the tests (pipeline_validator.landing_test_errors).
@@ -11149,6 +11153,12 @@ def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "lis
                 add("integration", f"new code file: {new_code}")
         if total > 200 and not is_relaxed_profile(profile):
             add("red-team", f"changeset {total} lines > 200 (also: any specialist HIGH)")
+    # A governed context source becomes every later session's system prompt: whatever
+    # its size, the security lens (RP65 instruction channel, RP70 persistent poisoning,
+    # a weakened control) reviews it. The meta-review follows from a non-empty plan.
+    ctx = next((_rel(c) for c in changed if _GOVERNED_CONTEXT_RE.search(_rel(c))), None)
+    if ctx:
+        add("security", f"governed system-prompt source: {ctx}")
     for e in required if isinstance(required, list) else []:
         if isinstance(e, str) and e.strip():
             add(e.strip(), "run.json required_experts")
@@ -11162,6 +11172,9 @@ _REVIEW_SENSITIVE_RE = re.compile(
     r"quer(y|ies)|migration|schema|routers/|handler|infra|deploy|launchd|systemd|"
     r"config|settings|security|user_input|file_access)", re.I)
 _FRONTEND_RE = re.compile(r"(^|/)desktop/|\.(tsx|jsx|css|scss|vue|svelte)$", re.I)
+# The governed sources of every session's system prompt (SOUL, AGENT, STEERING,
+# SECURITY-BASELINE, ...): never a small change, always a security review.
+_GOVERNED_CONTEXT_RE = re.compile(r"(^|/)backend/context/")
 
 
 def _review_fanout_applies(scope: dict) -> "str | None":

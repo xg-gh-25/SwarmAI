@@ -41,6 +41,24 @@ def test_small_change_rule():
     assert cli._small_change(_scope(3, "docs/readme.md")) is None  # docs: own rule
 
 
+def test_governed_context_change_gets_security_and_meta_review_at_any_size():
+    """A 3-line edit to a system-prompt source is not small: security reviews it, and
+    the non-empty plan brings the meta-review (stage-start's rule)."""
+    for path in ("backend/context/STEERING.md", "backend/context/SOUL.md",
+                 "/Users/u/.swarm-ai/worktrees/run_x/swarmai/backend/context/AGENT.md"):
+        s = _scope(3, path)
+        assert cli._small_change(s) is None, path
+        assert not cli._is_docs_only(s), path
+        ids = {e["id"] for e in cli._dispatch_experts(profile="direct", work_type=None,
+                                                      scope=s, required=[])}
+        assert ids == {"security"}, (path, ids)
+    # plain docs and an unrelated small code edit keep their rules
+    assert cli._dispatch_experts(profile="direct", work_type=None,
+                                 scope=_scope(80, "docs/readme.md"), required=[]) == []
+    assert cli._dispatch_experts(profile="direct", work_type=None, scope=_scope(4),
+                                 required=[]) == []
+
+
 def test_small_change_dispatches_nobody_even_declared_experts():
     out = cli._dispatch_experts(profile="full", work_type="feature", scope=_scope(4),
                                 required=["correctness", "security"])
