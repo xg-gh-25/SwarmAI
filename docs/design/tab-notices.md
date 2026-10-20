@@ -74,4 +74,7 @@ the active tab via React state, which could be a different tab by then.
   tab untouched.
 - `__tests__/contextUsage.test.ts`, `__tests__/useChatStreamingLifecycle.test.ts`:
   notices land on the event's own tab; superseded handlers raise nothing.
-- `__tests__/noTabScopedToasts.test.ts`: the regression guard.
+- `__tests__/noTabScopedToasts.test.ts`: the regression guard. It bans `addToast(` in
+  `useChatStreamingLifecycle.ts`, `ChatPage.tsx` and `pages/chat/**` outright. The chat
+  page's system-level toasts (opening / landing in a tab failed) are named raisers in
+  `hooks/useSystemToasts.ts`; a new one is added there, so there is no allowlist.

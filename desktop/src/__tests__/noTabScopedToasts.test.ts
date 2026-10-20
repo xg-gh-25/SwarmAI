@@ -6,9 +6,9 @@
  * (stores/tabNoticeStore). This test greps the tab-scoped sources for
  * `addToast(` so a regression fails CI instead of relying on a comment.
  *
- * ChatPage.tsx still owns a few system-level toasts (tab limit / memory
- * pressure — the action of opening a tab failed, so no tab owns it yet); those
- * are listed by message so a NEW addToast there must be justified here.
+ * The chat page's few system-level toasts (opening / landing in a tab failed,
+ * so no tab owns the message yet) go through hooks/useSystemToasts.ts by name;
+ * ChatPage.tsx itself never calls addToast( — no allowlist to maintain.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -26,23 +26,12 @@ function walk(dir: string): string[] {
 
 const TAB_SCOPED = [
   join(SRC, 'hooks/useChatStreamingLifecycle.ts'),
+  join(SRC, 'pages/ChatPage.tsx'),
   ...walk(join(SRC, 'pages/chat')),
 ];
 
 describe('tab-scoped code does not raise app-wide toasts', () => {
   it.each(TAB_SCOPED.map((p) => [p.slice(SRC.length + 1), p]))('%s has no addToast(', (_name, path) => {
     expect(readFileSync(path, 'utf8')).not.toMatch(/\baddToast\s*\(/);
-  });
-
-  it('ChatPage.tsx only raises the listed system-level toasts', () => {
-    const src = readFileSync(join(SRC, 'pages/ChatPage.tsx'), 'utf8');
-    const calls = src.match(/\baddToast\s*\(\s*\{[^}]*\}/g) ?? [];
-    const allowed = [
-      /Memory usage is high/,
-      /Could not open a new tab/,
-      /addToast\(\{\s*severity: 'warning', message, autoDismiss: true \}/, // tab-limit message built above
-    ];
-    const unexpected = calls.filter((c) => !allowed.some((re) => re.test(c)));
-    expect(unexpected).toEqual([]);
   });
 });

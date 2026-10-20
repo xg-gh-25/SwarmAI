@@ -36,7 +36,7 @@ import { pluginsService } from '../services/plugins';
 import { workspaceService } from '../services/workspace';
 import { tasksService } from '../services/tasks';
 import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary } from '../components/common';
-import { useToast } from '../contexts/ToastContext';
+import { useSystemToasts } from '../hooks/useSystemToasts';
 import { useHealth } from '../contexts/HealthContext';
 import { deriveBackendLiveness } from '../hooks/useHealthMonitor';
 import { useSessionMeta } from '../contexts/LayoutContext';
@@ -135,7 +135,9 @@ export default function ChatPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { addToast } = useToast();
+  // System-level toasts only (opening/landing in a tab failed); tab/session
+  // events go to that tab's notices (stores/tabNoticeStore).
+  const systemToasts = useSystemToasts();
   const { health } = useHealth();
   const { setActiveSessionMeta } = useSessionMeta();
   const { isLimited, getRemainingSeconds } = useRateLimiter();
@@ -946,7 +948,7 @@ export default function ChatPage() {
   const handleNewSession = useCallback(() => {
     if (!selectedAgentId) return;
     if (tabMapRef.current.size >= maxTabsInfo.chatMax) {
-      addToast({ severity: 'info', message: 'Memory usage is high. Close an idle tab or quit other apps to free memory, then try again.', autoDismiss: true });
+      systemToasts.tabLimitReached();
       return;
     }
     // Save current React state into the active tab's map entry before switching.
@@ -969,7 +971,7 @@ export default function ChatPage() {
     setContextWarning(null);
     setIsStreaming(false, newTab!.id); // New tab is not streaming
     setIsExpanded(false); // New tab always starts in compact mode
-  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setIsStreaming, setContextWarning, maxTabsInfo.chatMax, addToast]);
+  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setIsStreaming, setContextWarning, maxTabsInfo.chatMax, systemToasts]);
 
   // Handle tab selection - switches active tab and loads session messages (Req 1.6)
   // Fix 6: Save current tab state, restore target tab state from per-tab map
@@ -1274,8 +1276,8 @@ export default function ChatPage() {
     } else { // cap
       message = `All ${maxTabsInfo.chatMax} tab(s) are busy — close a tab (or wait for one to finish), then ${verb}.`;
     }
-    addToast({ severity: 'warning', message, autoDismiss: true });
-  }, [addToast, maxTabsInfo.chatMax]);
+    systemToasts.promptCannotLand(message);
+  }, [systemToasts, maxTabsInfo.chatMax]);
 
   const activeTabHasDraft = useCallback((): boolean =>
     inputValueRef.current.trim().length > 0 || attachmentsRef.current.length > 0,
@@ -1304,13 +1306,13 @@ export default function ChatPage() {
       // newtab
       const newTab = addTab(selectedAgentId || 'default');
       if (!newTab) {
-        addToast({ severity: 'warning', message: 'Could not open a new tab — all tabs are busy.', autoDismiss: true });
+        systemToasts.allTabsBusy();
         return null;
       }
       initTabState(newTab.id, []);
       return newTab.id;
     },
-    [initTabState, updateTabState, setSessionId, setMessages, addTab, selectedAgentId, addToast],
+    [initTabState, updateTabState, setSessionId, setMessages, addTab, selectedAgentId, systemToasts],
   );
 
   const handleDispatchTodo = useCallback((todo: ToDo): boolean => {
@@ -1420,7 +1422,7 @@ export default function ChatPage() {
       const newTab = addTab(session.agentId || selectedAgentId || 'default');
       if (!newTab) {
         // Race: cap reached between decision and addTab → treat as busy.
-        addToast({ severity: 'warning', message: 'Could not open a new tab — all tabs are busy.', autoDismiss: true });
+        systemToasts.allTabsBusy();
         return false;
       }
       targetTabId = newTab.id;
@@ -1452,7 +1454,7 @@ export default function ChatPage() {
       selectTab(targetTabId); // activeTabId change → sync effect loads the session
     }
     return true;
-  }, [tabsSnapshot, tabMapRef, maxTabsInfo.chatMax, landingToast, addToast, handleTabSelect, updateTabSessionId,
+  }, [tabsSnapshot, tabMapRef, maxTabsInfo.chatMax, landingToast, systemToasts, handleTabSelect, updateTabSessionId,
       addTab, initTabState, selectTab, updateTabState, activeTabIdRef, messagesRef, sessionIdRef, pendingQuestion,
       selectedAgentId, loadSessionMessages]);
 
