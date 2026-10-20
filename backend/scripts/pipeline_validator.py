@@ -5450,11 +5450,13 @@ def evidence_regression_modes(evidence: list | None) -> list[str]:
 
 
 # A path with one of these suffixes runs no code. Agent-behaviour prose (experts,
-# skills, agent definitions: their frontmatter drives classification and tool grants)
-# and dependency manifests are code for this purpose.
+# skills, agent definitions: their frontmatter drives classification and tool grants;
+# backend/context/: the governed sources of every session's system prompt) and
+# dependency manifests are code for this purpose.
 _NON_CODE_SUFFIXES = frozenset({".md", ".mdx", ".txt", ".rst", ".adoc", ".png", ".jpg",
                                 ".jpeg", ".gif", ".webp", ".pdf"})
-_CODE_PROSE_RE = re.compile(r"(^|/)(experts|skills|agents|\.claude)/|(^|/)(requirements|constraints)[^/]*\.txt$")
+_CODE_PROSE_RE = re.compile(r"(^|/)(experts|skills|agents|\.claude)/|(^|/)backend/context/"
+                            r"|(^|/)(requirements|constraints)[^/]*\.txt$")
 
 
 def docs_only_paths(paths) -> bool:

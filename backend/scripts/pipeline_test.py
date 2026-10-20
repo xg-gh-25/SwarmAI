@@ -864,6 +864,12 @@ _DOC_LINT_SUITES = (
     "backend/tests/test_lint_experts.py",
     "backend/tests/test_check_rule_preservation.py",
 )
+# The suites that read the governed context sources (backend/context/): a change there
+# has no importers either.
+_CONTEXT_SUITES = (
+    "backend/tests/test_context_templates.py",
+    "backend/tests/test_context_directory_loader.py",
+)
 
 
 def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
@@ -886,6 +892,9 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
     # with regression green): select those suites as direct when one changed.
     if any(f.startswith(("backend/skills/", "backend/experts/")) for f in changed):
         changed_tests += [t for t in _DOC_LINT_SUITES
+                          if t not in changed_tests and (repo / t).is_file()]
+    if any(f.startswith("backend/context/") for f in changed):
+        changed_tests += [t for t in _CONTEXT_SUITES
                           if t not in changed_tests and (repo / t).is_file()]
     mfiles = _changed_module_files(repo, changed, include_deleted=True)
     mods = [(m, pkg) for _, m, pkg in mfiles]

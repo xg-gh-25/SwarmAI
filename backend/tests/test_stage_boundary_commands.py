@@ -922,7 +922,7 @@ def test_dispatch_rules(profile, work_type, ins, dels, required, expect):
 @pytest.mark.parametrize("required,expect", [([], set()), (["security"], {"security"})])
 def test_docs_only_change_dispatches_no_expert(required, expect):
     # 400 lines of prose: no code runs, so no Gate-2 expert (unless run.json requires one)
-    scope = {"changed_files": [{"path": "backend/context/SOUL.md", "status": "M", "added": 400,
+    scope = {"changed_files": [{"path": "docs/design/notes.md", "status": "M", "added": 400,
                                 "removed": 0}, {"path": "docs/a.md", "status": "A", "added": 50,
                                                 "removed": 0}],
              "diff_insertions": 450, "diff_deletions": 0}
@@ -933,6 +933,9 @@ def test_docs_only_change_dispatches_no_expert(required, expect):
     scope["changed_files"].append({"path": "backend/x.py", "status": "M", "added": 1, "removed": 0})
     assert not cli._is_docs_only(scope)
     assert not cli._is_docs_only({"changed_files": []})
+    # a governed system-prompt source is not documentation: it gets a meta-review
+    assert not cli._is_docs_only({"changed_files": [
+        {"path": "backend/context/SOUL.md", "status": "M", "added": 400, "removed": 0}]})
 
 
 def test_stage_start_rejects_off_profile_stage(ws, capsys):
@@ -1974,11 +1977,16 @@ def test_landing_needs_a_runner_report_unless_the_diff_is_docs(ws):
 
 def test_docs_only_paths_is_judged_on_the_diff():
     import pipeline_validator as pv
-    assert pv.docs_only_paths(["backend/context/SOUL.md", "docs/a.md", "img/x.png"])
+    assert pv.docs_only_paths(["docs/a.md", "img/x.png", "README.md", "docs/context/a.md"])
     assert not pv.docs_only_paths([])
+    # backend/context/ holds the governed sources of every session's system prompt:
+    # agent-behaviour prose, reviewed like skills and experts (also by absolute path).
     for code in ("backend/x.py", "backend/requirements.txt", "backend/experts/code/c.md",
                  "backend/skills/s_x/SKILL.md", ".claude/agents/a.md", "Makefile",
-                 "desktop/icon.svg", "backend/tests/conftest.py"):
+                 "desktop/icon.svg", "backend/tests/conftest.py",
+                 "backend/context/SOUL.md", "backend/context/STEERING.md",
+                 "backend/context/SECURITY-BASELINE.md",
+                 "/Users/u/.swarm-ai/worktrees/run_x/swarmai/backend/context/AGENT.md"):
         assert not pv.docs_only_paths(["docs/a.md", code]), code
 
 
@@ -1988,6 +1996,8 @@ def test_is_docs_only_counts_tests_and_rename_sources():
     assert not cli._is_docs_only({"changed_files": [
         {"path": "docs/x.md", "from": "backend/x.py", "status": "R"}]})  # code renamed away
     assert cli._is_docs_only({"changed_files": [{"path": "docs/x.md", "status": "M"}]})
+    assert not cli._is_docs_only({"changed_files": [                     # governed prompt source
+        {"path": "backend/context/STEERING.md", "status": "M"}]})
 
 
 def test_landing_green_and_pre_existing_failures_land(ws):

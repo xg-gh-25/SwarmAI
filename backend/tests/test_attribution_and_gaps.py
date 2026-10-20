@@ -356,6 +356,13 @@ def test_select_backend_no_lint_suites_for_unrelated_change():
     import pipeline_test as pt
     sel, _skipped, _ = pt.select_backend(REPO, ["docs/CODEBASE_METRICS.md"], {}, 200)
     assert not (_LINT_SUITES & set(sel))
+    assert not (set(pt._CONTEXT_SUITES) & set(sel))
+
+
+def test_select_backend_adds_context_suites_for_a_governed_context_change():
+    import pipeline_test as pt
+    sel, _skipped, _ = pt.select_backend(REPO, ["backend/context/STEERING.md"], {}, 200)
+    assert set(pt._CONTEXT_SUITES) <= set(sel), sel
 
 
 # ── AC7 ──────────────────────────────────────────────────────────────────────
