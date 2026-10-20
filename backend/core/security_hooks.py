@@ -752,28 +752,322 @@ def _is_history_rewrite(command: str) -> bool:
     - ``git commit --amend`` (rewrites the tip commit)
     - ``git filter-branch`` / ``git filter-repo`` (history rewriters)
 
-    Token-aware (``shlex``), segment-split on shell separators so a rewrite op
-    chained after a benign command is still caught. Unparseable input mentioning
-    ``git`` → True (fail closed). Non-git → False.
+    Token-aware, segment-split on shell separators so a rewrite op chained after a
+    benign command is still caught. A heredoc / here-string body is judged by what
+    reads it (_executed_bodies): a shell runs it as commands, an interpreter as code,
+    any other program (``cat > f``, ``git commit -F -``) only receives data, so the
+    word "rebase" in a file being written is not a rewrite. Unparseable input → the
+    rewrite signature searched in the text with its terminated heredoc bodies removed
+    (fail closed). Non-git → False.
     """
-    segments = _shell_segments(command)
-    if segments is None:
-        # Unparseable: only fail closed if a rewrite signature is literally present.
-        return bool(re.search(r"\b(rebase|reset\s+--hard|--amend|filter-branch|filter-repo)\b", command))
-    return any(_segment_is_history_rewrite(seg) for seg in segments)
+    return _judge_with_bodies(command, _segment_is_history_rewrite, _REWRITE_SIG_RE, 0)
+
+
+def _segment_is_commit_amend(seg: list[str]) -> bool:
+    sub_rest = _segment_git_subcommand(seg)
+    return bool(sub_rest and sub_rest[0] == "commit"
+                and any(a.startswith("--amend") for a in sub_rest[1]))
 
 
 def _is_commit_amend(command: str) -> bool:
-    """Is any segment of *command* a ``git commit --amend``? Same tokenizing as
-    ``_is_history_rewrite``; unparseable input naming ``commit`` and ``--amend`` → True."""
-    segments = _shell_segments(command)
+    """Is any segment of *command* a ``git commit --amend``? Same tokenizing and
+    heredoc rule as ``_is_history_rewrite``; unparseable input naming ``commit`` and
+    ``--amend`` → True."""
+    return _judge_with_bodies(command, _segment_is_commit_amend, _AMEND_SIG_RE, 0)
+
+
+_REWRITE_SIG_RE = re.compile(r"\b(rebase|reset\s+--hard|--amend|filter-branch|filter-repo)\b")
+_AMEND_SIG_RE = re.compile(r"\bcommit\b.*--amend\b", re.S)
+_STDIN_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+# Script operands that are stdin itself.
+_STDIN_PATHS = frozenset({"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"})
+# Shell long options that take a value.
+_SHELL_VALUE_OPTS = frozenset({"--rcfile", "--init-file"})
+_STDIN_INTERPRETER_RE = re.compile(r"^(?:python[\d.]*|perl|ruby|node|php)$")
+_BODY_DEPTH = 3
+
+
+def _reads_script_from_stdin(prog: list[str]) -> "str | None":
+    """'shell' / 'python' / 'code' when the program of a segment (wrappers already
+    unwrapped) runs a script it reads from stdin, else None. A shell does so with
+    ``-s``, with no script operand, or with a stdin path as the script (_STDIN_PATHS);
+    option values (``-o pipefail``, bundled ``-euo pipefail``, ``--rcfile f``) are not
+    operands; ``-c`` is inline code. ``source`` / ``.`` read stdin only through a stdin
+    path. An interpreter with no script / inline code / module, or a stdin path."""
+    if not prog:
+        return None
+    name = os.path.basename(prog[0])
+    if name in ("source", "."):
+        ops = [a for a in prog[1:] if not a.startswith("-")]
+        return "shell" if ops and ops[0] in _STDIN_PATHS else None
+    if name in _STDIN_SHELLS:
+        i = 1
+        while i < len(prog):
+            a = prog[i]
+            if a == "--":
+                i += 1
+                break
+            if a in _SHELL_VALUE_OPTS:
+                i += 2
+                continue
+            if a.startswith("--"):
+                i += 1
+                continue
+            if len(a) > 1 and a[0] in "-+":
+                letters = a[1:]
+                if "c" in letters:
+                    return None              # inline code
+                if "s" in letters:
+                    return "shell"           # script from stdin, operands are its args
+                i += 2 if letters[-1] in "oO" else 1
+                continue
+            break
+        if i >= len(prog):
+            return "shell"
+        return "shell" if prog[i] in _STDIN_PATHS else None
+    if name.startswith("python") and _STDIN_INTERPRETER_RE.match(name):
+        kind, inline = "python", ("-c", "-m")
+    elif _STDIN_INTERPRETER_RE.match(name):
+        kind, inline = "code", ("-e", "-E", "-p", "-r")
+    else:
+        return None
+    i = 1
+    while i < len(prog):
+        a = prog[i]
+        if a in _STDIN_PATHS:
+            return kind
+        if a in inline:
+            return None          # inline code / a module: no script read from stdin
+        if kind == "python" and a in ("-W", "-X"):
+            i += 2
+            continue
+        if a.startswith("-"):
+            i += 1
+            continue
+        return None              # a script operand: stdin is that script's data
+    return kind
+
+
+def _executed_bodies(command: str, segments: "list[list[str]]") -> "list[tuple[str, str]]":
+    """(kind, body) for the heredoc / here-string bodies of *command* when some segment
+    runs a script read from stdin ('shell' or 'code', _reads_script_from_stdin). Which
+    body feeds which segment is not tracked, so every body is taken with every kind
+    present: over-collecting only makes the caller stricter. No such segment → []
+    (the bodies are data: ``cat > f <<EOF``, ``git commit -F - <<EOF``)."""
+    kinds = {k for k in (_reads_script_from_stdin(_unwrap_program(seg)) for seg in segments) if k}
+    if not kinds:
+        return []
+    return [(k, b) for b in _stdin_bodies(command) for k in sorted(kinds)]
+
+
+def _judge_with_bodies(command: str, seg_pred, sig_re, depth: int) -> bool:
+    """True when *seg_pred* holds for a segment of *command*, or for a segment of a
+    heredoc body a shell runs, or *sig_re* matches a body an interpreter runs and that
+    code can execute something (_code_can_execute; non-python interpreters count as
+    able). Unparseable → *sig_re* on the text with terminated heredoc bodies removed."""
+    segments = _gate_shell_segments(command)
     if segments is None:
-        return bool(re.search(r"\bcommit\b.*--amend\b", command, re.S))
-    for seg in segments:
-        sub_rest = _segment_git_subcommand(seg)
-        if sub_rest and sub_rest[0] == "commit" and any(a.startswith("--amend") for a in sub_rest[1]):
+        return bool(sig_re.search(_normalize_newlines_quote_aware(command)))
+    if any(seg_pred(seg) for seg in segments):
+        return True
+    for kind, body in _executed_bodies(command, segments):
+        if kind == "shell":
+            if depth >= _BODY_DEPTH or _judge_with_bodies(body, seg_pred, sig_re, depth + 1):
+                return True
+        elif sig_re.search(body) and (kind != "python" or _code_can_execute(body)):
             return True
     return False
+
+
+_GIT_RETARGET_RE = re.compile(r"\bGIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE)\b")
+
+
+def _rewrite_is_branch_local(seg: list[str]) -> bool:
+    """True when the rewrite in *seg* only moves the CURRENT branch: ``reset``,
+    ``commit --amend``, or a ``rebase`` with at most one positional (the upstream) and
+    no ``--update-refs``. ``filter-branch`` / ``filter-repo`` / ``update-ref`` /
+    ``branch -f|-D|-M`` / ``checkout -B`` and a rebase naming a branch can move refs a
+    worktree shares with its main checkout and the other runs: never local."""
+    sub_rest = _segment_git_subcommand(seg)
+    if sub_rest is None:
+        return False
+    sub, rest = sub_rest
+    if sub in ("reset", "commit"):
+        return True
+    if sub != "rebase":
+        return False
+    positional = 0
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a.startswith("--update-refs"):
+            return False
+        if a in ("--onto", "-s", "--strategy", "-X", "--strategy-option", "-x", "--exec"):
+            i += 2
+            continue
+        if not a.startswith("-"):
+            positional += 1
+        i += 1
+    return positional <= 1
+
+
+def _rewrite_dirs(command: str, cwd: str) -> "list[str] | None":
+    """The directory each git history rewrite of *command* runs in ("" = unknown or not
+    exemptible), following ``cd X &&`` chains and ``git -C``. A rewrite that is not
+    branch-local (_rewrite_is_branch_local) gets "". None (cannot tell) when the
+    command does not parse; when a heredoc body a shell / interpreter runs holds a
+    rewrite; when it names GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR / GIT_INDEX_FILE
+    (an assignment, ``env`` or ``export`` retargets git); or when it has a backtick or
+    an ``eval`` / ``source`` / ``.`` (a directory change not followed)."""
+    seps: list[str] = []
+    segments = _gate_shell_segments(command, seps)
+    if segments is None:
+        return None
+    if "`" in command or _GIT_RETARGET_RE.search(_normalize_newlines_quote_aware(command)):
+        return None
+    if any((_unwrap_program(seg) or [""])[0] in ("eval", "source", ".") for seg in segments):
+        return None
+    if _executed_bodies(command, segments) and _judge_with_bodies(
+            command, lambda seg: False, _REWRITE_SIG_RE, 0):
+        return None
+    out: list[str] = []
+    cur = cwd or ""
+    stack: list[str] = []
+    pending: "str | None" = None
+    for seg, sep in zip(segments, seps):
+        k = 0
+        while k < len(sep):
+            op = sep[k:k + 2] if sep[k:k + 2] in ("&&", "||") else sep[k]
+            k += len(op)
+            if op == "(":
+                stack.append(cur)
+            elif op == ")":
+                cur = stack.pop() if stack else ""
+            elif pending is not None:
+                # only `cd X && …` is known to run in X: after `;` a failed cd leaves
+                # the old directory
+                cur = pending if op == "&&" else ""
+            pending = None
+        if _segment_is_history_rewrite(seg):
+            out.append(_git_dir_of(seg, cur) if _rewrite_is_branch_local(seg) else "")
+        pending = _cd_segment_target(seg, cur)
+    return out
+
+
+def _git_dir_of(seg: list[str], cur: str) -> str:
+    """The directory a git segment runs in: *cur*, moved by each ``-C DIR``."""
+    tokens = _skip_leading_wrappers(seg)
+    if not tokens or tokens[0] != "git":
+        return cur
+    d = cur
+    i = 1
+    while i < len(tokens) and tokens[i].startswith("-"):
+        t = tokens[i]
+        if t == "-C" and i + 1 < len(tokens):
+            d = _resolve_dir(d, tokens[i + 1]) if d or os.path.isabs(
+                os.path.expanduser(tokens[i + 1])) else ""
+            i += 2
+            continue
+        if t.startswith("-C") and len(t) > 2:
+            d = _resolve_dir(d, t[2:])
+        elif t in ("-c", "--namespace", "--git-dir", "--work-tree"):
+            if t in ("--git-dir", "--work-tree"):
+                return ""          # another repo than the directory says
+            i += 2
+            continue
+        elif t.startswith(("--git-dir=", "--work-tree=")):
+            return ""
+        i += 1
+    return d
+
+
+def _under_any(path: str, roots: "list[str]") -> bool:
+    real = os.path.realpath(path)
+    for r in roots:
+        rr = os.path.realpath(r)
+        if real == rr or real.startswith(rr.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def _temp_roots() -> "list[str]":
+    import tempfile
+    return [tempfile.gettempdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"]
+
+
+def _repo_store_of(d: str) -> "str | None":
+    """Where the repo containing *d* keeps its objects: the ``.git`` dir, or for a
+    linked worktree the ``gitdir:`` its ``.git`` file names. None: no repo found or
+    the pointer cannot be read."""
+    cur = os.path.realpath(d)
+    while True:
+        g = os.path.join(cur, ".git")
+        if os.path.isdir(g):
+            return g
+        if os.path.isfile(g):
+            try:
+                line = open(g, encoding="utf-8").read().strip()
+            except OSError:
+                return None
+            if not line.startswith("gitdir:"):
+                return None
+            p = line[len("gitdir:"):].strip()
+            return os.path.realpath(p if os.path.isabs(p) else os.path.join(cur, p))
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return ""
+        cur = parent
+
+
+def _own_run_worktree(d: str, sid: str) -> "bool | None":
+    """None when *d* is not inside a run worktree; else whether the run's run.json
+    names *sid* as its session (unreadable or no sid → False)."""
+    try:
+        from core.run_worktree import run_for_path
+        hit = run_for_path(d)
+    except Exception:  # noqa: BLE001 — no worktree root: not a run worktree
+        return None
+    if hit is None:
+        return None
+    if not sid:
+        return False
+    try:
+        import glob
+        import json as _json
+        pattern = os.path.join(_pipeline_runs_root(), "Projects", "*", ".artifacts", "runs",
+                               hit[0], "run.json")
+        for f in glob.glob(pattern)[:4]:
+            data = _json.loads(open(f, encoding="utf-8").read())
+            if data.get("session_id") == sid:
+                return True
+    except Exception:  # noqa: BLE001 — cannot tell whose run it is: not scratch
+        return False
+    return False
+
+
+def _scratch_dir(d: str, sid: str = "") -> bool:
+    """A directory whose history no other session shares: inside THIS session's own
+    run worktree (another run's worktree stays gated), or a temp directory whose repo
+    store is in a temp directory too (a temp worktree of a shared repo is not scratch)."""
+    if not d:
+        return False
+    own = _own_run_worktree(d, sid)
+    if own is not None:
+        return own               # another session's run worktree is never scratch
+    roots = _temp_roots()
+    if not _under_any(d, roots):
+        return False
+    store = _repo_store_of(d)
+    return store == "" or (store is not None and _under_any(store, roots))
+
+
+def _rewrites_only_scratch(command: str, cwd: str, sid: str = "") -> bool:
+    """True when every history rewrite in *command* is branch-local and runs in a
+    scratch directory (_scratch_dir): this session's own run worktree or a temp repo,
+    where no sibling session's work can be lost. Unknown, not branch-local, or
+    unparseable → False (the gate applies)."""
+    dirs = _rewrite_dirs(command, cwd)
+    return bool(dirs) and all(_scratch_dir(d, sid) for d in dirs)
 
 
 _PY_INTERPRETER_RE = re.compile(r"(?:^|/)python[\d.]*$")
@@ -787,12 +1081,35 @@ def _runner_loop_kind(command: str) -> "str | None":
     in one call is the retired long-call design again (run_bd60daff 2026-10-19: a
     ``for i in 1 2 3 4 5`` loop with a 600 s Bash timeout). Quote-aware (a ``for`` in
     ``python3 -c "..."`` is not a loop); a script name that is only read (grep, sed)
-    is not a run. Unparseable → None (fail-open)."""
-    segments = _shell_segments(command)
+    is not a run. A heredoc body is not shell text (a ``for`` in a file being written,
+    or in python an edit script runs, is not a shell loop) unless a shell runs it.
+    Unparseable → None (fail-open)."""
+    counted = _runner_counts(command, 0)
+    if counted is None:
+        return None
+    runs, looped = counted
+    if runs and looped:
+        return "loop"
+    if runs >= 2:
+        return "repeat"
+    return None
+
+
+def _runner_counts(command: str, depth: int) -> "tuple[int, bool] | None":
+    """(runner calls, any shell loop) of *command*, the heredoc bodies a shell runs
+    included; None when it does not parse."""
+    segments = _gate_shell_segments(command)
     if not segments:
         return None
     runs = 0
     looped = False
+    if depth < _BODY_DEPTH:
+        for kind, body in _executed_bodies(command, segments):
+            if kind == "shell":
+                inner = _runner_counts(body, depth + 1)
+                if inner:
+                    runs += inner[0]
+                    looped = looped or inner[1]
     for seg in segments:
         if seg and seg[0] in ("for", "while", "until"):
             looped = True
@@ -803,48 +1120,7 @@ def _runner_loop_kind(command: str) -> "str | None":
             elif seen_py and tok.endswith("pipeline_test.py"):
                 runs += 1
                 break
-    if runs and looped:
-        return "loop"
-    if runs >= 2:
-        return "repeat"
-    return None
-
-
-def _shell_segments(command: str) -> "list[list[str]] | None":
-    """*command* tokenized (``shlex``, newlines as ``;``) and split on shell
-    separators into per-command token lists; None when it does not parse."""
-    try:
-        all_tokens = shlex.split(command.replace("\n", " ; ").replace("\r", " ; "))
-    except ValueError:
-        return None
-    if not all_tokens:
-        return []
-    # Re-split glued ';' (shlex leaves 'status;' fused).
-    _resplit: list[str] = []
-    for tok in all_tokens:
-        if ";" in tok and tok != ";":
-            for idx, p in enumerate(tok.split(";")):
-                if p:
-                    _resplit.append(p)
-                if idx < len(tok.split(";")) - 1:
-                    _resplit.append(";")
-        else:
-            _resplit.append(tok)
-    all_tokens = _resplit
-
-    _SEPARATORS = {";", "&&", "||", "|", "&"}
-    segments: list[list[str]] = []
-    current: list[str] = []
-    for tok in all_tokens:
-        if tok in _SEPARATORS:
-            if current:
-                segments.append(current)
-            current = []
-        else:
-            current.append(tok)
-    if current:
-        segments.append(current)
-    return segments
+    return runs, looped
 
 
 def _segment_git_subcommand(tokens: list[str]) -> "tuple[str, list[str]] | None":
@@ -1157,7 +1433,11 @@ def create_dangerous_command_gate(
         # on the shared tree. Solo session → a local rewrite affects only its own
         # history, not gated. Registry unavailable → fail-safe stringent (these
         # ops are irreversible; s_workspace-git already requires asking first).
-        if not is_dangerous and _is_history_rewrite(command):
+        if not is_dangerous and _is_history_rewrite(command) and not _rewrites_only_scratch(
+                command, str(input_data.get("cwd") or ""),
+                str(session_context.get("sdk_session_id") or "")):   # run.json's namespace
+            # A rewrite inside a run's own worktree or a temp repo touches no history
+            # another session shares (each run has its own branch): not gated.
             # Use the app-level session_id (the _units key), NOT session_key —
             # session_key is resume_session_id/agent_id, a different namespace, so
             # a solo session would never self-match → falsely gated (Gate-2 BUG A).
@@ -1608,6 +1888,31 @@ def _fallback_pipes_to_pager(stripped: str) -> bool:
     return first_pipe != -1 and bool(_PAGER_WORD_RE.search(stripped, first_pipe + 1))
 
 
+_SUBST_SPAN_RE = re.compile(r"\$\(([^()`]*)\)|`([^`]*)`")
+
+
+def _drop_pytest_free_substitutions(text: str) -> str:
+    """*text* with every innermost ``$(…)`` / backtick span that names no pytest token
+    replaced by a placeholder word, repeated until none is left (nested spans go from
+    the inside out). A span that names pytest or a pager (tail / head), or ``$((…))``
+    arithmetic, stays."""
+    for _ in range(32):
+        changed = False
+
+        def sub(m):
+            nonlocal changed
+            inner = m.group(1) if m.group(1) is not None else m.group(2)
+            if _PYTEST_TOKEN_RE.search(inner) or _PAGER_WORD_RE.search(inner):
+                return m.group(0)        # pytest inside, or the pager itself (`| $(which tail)`)
+            changed = True
+            return "_"
+        new = _SUBST_SPAN_RE.sub(sub, text)
+        if not changed:
+            return text
+        text = new
+    return text
+
+
 def _pytest_output_piped_to_pager(stripped: str) -> bool:
     """True iff pytest's own output feeds tail/head (on a quote-stripped command).
 
@@ -1619,7 +1924,11 @@ def _pytest_output_piped_to_pager(stripped: str) -> bool:
     line (or is followed by a comment) can all carry pytest's output across what
     looks like a separator, so any such command falls back to
     _fallback_pipes_to_pager (fail-closed, stricter than the old whole-string check).
+    A ``$(…)`` / backtick substitution with no pytest token inside is dropped first
+    (``c=$(awk … | sed …)``): its output can never be pytest's, so it neither forces the
+    fallback nor lends it a pipe.
     """
+    stripped = _drop_pytest_free_substitutions(stripped)
     if (
         _SHELL_GROUPING_CHARS & set(stripped)
         or _UNSPLITTABLE_PIPE_RE.search(stripped)
@@ -3547,8 +3856,8 @@ _INERT_IMPORTS = frozenset({"pathlib", "json", "re", "textwrap", "difflib", "str
                             "dataclasses", "enum", "copy", "pprint", "fnmatch", "glob",
                             "shlex", "tomllib", "csv", "io", "__future__"})
 _IMPORT_RE = re.compile(r"\bimport\s+([\w.]+(?:\s*,\s*[\w.]+)*)|\bfrom\s+([\w.]+)\s+import\b")
-_DYNAMIC_RE = re.compile(r"\b(?:exec|eval|compile|__import__|getattr|globals|breakpoint|"
-                         r"open_code)\s*\(|__builtins__|__loader__|__spec__")
+_DYNAMIC_RE = re.compile(r"(?<![.\w])(?:exec|eval|compile|__import__|getattr|globals|"
+                         r"breakpoint|open_code)\s*\(|__builtins__|__loader__|__spec__")
 
 
 def _code_can_execute(text: str) -> bool:

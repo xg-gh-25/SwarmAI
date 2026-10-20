@@ -9,9 +9,13 @@ For an ``artifact_cli`` / ``pipeline_test`` command that writes run state with
   ``session_history[]``, session→run map rewritten); if it is, DENY.
 - **token**: for the commands that may change worktree state (every stage-start: it
   creates, rebuilds from the ledger or syncs the worktree; stage-complete of deliver;
-  run-update to a terminal status) the command must be ONE simple command; the gate
-  issues a token (recorded only in the daemon, ``core.hook_token``) and rewrites the
-  command to ``SWARM_HOOK_TOKEN=<token> <command>`` via ``updatedInput``. The CLI burns
+  run-update to a terminal status) the CLI call must be the FIRST simple command
+  (_token_binding): output plumbing may follow it (``| tail``, ``> f; python3 -c …``),
+  and quoted-delimiter ``cat > FILE <<'EOF'`` writes may precede it; the gate issues a
+  token (recorded only in the daemon, ``core.hook_token``) and puts
+  ``SWARM_HOOK_TOKEN=<token>`` right before the CLI call via ``updatedInput``. An
+  assignment prefix binds to that one simple command only, so nothing before or after
+  it in the line receives the token. The CLI burns
   it through the daemon's socket — proof the hook really ran (an environment variable
   is inherited by a hookless ``claude --print --bare`` child).
 - **after approval** (``AFTER_APPROVAL``: ``run-claim-main``): a command the user must
@@ -254,6 +258,52 @@ def _dedup_last(call: dict) -> dict:
         i += w
     return dict(call, argv=out)
 
+_HEREDOC_WRITE_RE = re.compile(
+    r"[ \t]*cat[ \t]*>>?[ \t]*(?P<path>[^\s;&|<>()$`'\"\\]+)[ \t]*<<(?P<dash>-?)[ \t]*"
+    r"(?P<q>['\"])(?P<delim>[A-Za-z_]\w*)(?P=q)[ \t]*\n")
+
+
+def _token_binding(command: str) -> "tuple[str, str] | None":
+    """(prefix, rest) such that ``prefix + TOKEN=… + rest`` hands the token to the CLI
+    call that starts *rest* and to nothing else, or None. *prefix* is zero or more
+    ``cat >[>] FILE <<'DELIM'`` … ``DELIM`` writes (a quoted delimiter: the body is
+    literal, nothing in it runs); *rest* starts with the CLI call — no subshell or
+    substitution anywhere in it — and may continue with any output plumbing."""
+    from core.security_hooks import _gate_shell_segments
+    i = 0
+    while True:
+        m = _HEREDOC_WRITE_RE.match(command, i)
+        if not m:
+            break
+        j = m.end()
+        lines_end = None
+        while j <= len(command):
+            nl = command.find("\n", j)
+            line = command[j:] if nl == -1 else command[j:nl]
+            if (line.lstrip("\t") if m.group("dash") else line) == m.group("delim"):
+                lines_end = len(command) if nl == -1 else nl + 1
+                break
+            if nl == -1:
+                break
+            j = nl + 1
+        if lines_end is None:
+            return None          # unterminated heredoc: the CLI is not where it looks
+        if os.path.basename(m.group("path")) in _SCRIPTS:
+            return None          # it would rewrite the script that gets the token
+        i = lines_end
+    head, rest = command[:i], command[i:]
+    stripped = rest.lstrip()
+    head += rest[:len(rest) - len(stripped)]
+    rest = stripped
+    if not rest or any(x in rest for x in _SUBST):
+        return None
+    seps: list[str] = []
+    segs = _gate_shell_segments(rest, seps)
+    if not segs or seps[0] != "" or not any(os.path.basename(t) in _SCRIPTS for t in segs[0]):
+        return None
+    return head, rest
+
+
 def _single_form(data: dict, call: dict) -> str:
     """The same call as ONE simple command with absolute paths, for a deny message."""
     from core.worktree_write_gate import cli_command
@@ -408,11 +458,16 @@ def _decide(sid: str, command: str, tool_input: dict,
         if hook_token.TOKEN_ENV in c["assigns"] or hook_token.TOKEN_ENV + "=" in command:
             return _deny(f"do not set {hook_token.TOKEN_ENV} yourself; the hook issues it.\n"
                          f"Run instead: {_single_form(data, c)}")
-        if not single or len(calls) != 1:
-            return _deny("this command changes the run's worktree state: run it on its own, "
-                         "as ONE command (no `cd … &&`, `source …`, `;`, `|`, redirects, "
-                         "subshells or `$(...)`), so the hook can issue its one-time token.\n"
-                         f"Run instead: {_single_form(data, c)}")
+        binding = _token_binding(command)
+        first = parse_cli_calls(binding[1])[0][:1] if binding else []
+        if (binding is None or not first or first[0].get("sub") != c.get("sub")
+                or first[0].get("run_id") != c.get("run_id")
+                or sum(1 for x in calls if x["tool"] != "foreign" and _needs_token(x)) != 1):
+            return _deny("this command changes the run's worktree state: it must be the FIRST "
+                         "command of the line (output may be piped or redirected after it; "
+                         "only `cat > FILE <<'EOF'` writes may come before it; no `cd … &&`, "
+                         "`source …`, subshells or `$(...)`), so the hook can hand it its "
+                         f"one-time token.\nRun instead: {_single_form(data, c)}")
         if late and phase != "approved":
             why = _claim_refusal(sid, rid, data, c)
             if why:
@@ -424,7 +479,8 @@ def _decide(sid: str, command: str, tool_input: dict,
                            rid, sub)
             return _deny("the SwarmAI backend's hook-token service is not running, so this "
                          "worktree command cannot be proven; tell the user (restart SwarmAI)")
-        rewrite = f"{hook_token.TOKEN_ENV}={shlex.quote(nonce)} {command}"
+        head, rest = binding
+        rewrite = f"{head}{hook_token.TOKEN_ENV}={shlex.quote(nonce)} {rest}"
     if rewrite is None:
         return None
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",

@@ -161,12 +161,33 @@ def test_token_issued_by_rewriting_single_command(env):
 
 
 @pytest.mark.parametrize("c", [
-    _cmd("stage-start", extra="--stage deliver") + " && echo done",
     "cd /x && " + _cmd("stage-complete", extra="--stage deliver --data @f"),
-    _cmd("stage-start", extra="--stage build") + " | tail -1",
+    "echo hi; " + _cmd("stage-start", extra="--stage build"),
+    _cmd("stage-start", extra="--stage build") + " --x $(cat f)",
+    _cmd("stage-start", extra="--stage build") + "; " + _cmd("stage-start", extra="--stage deliver"),
 ])
 def test_compound_token_command_denied(env, c):
+    """Anything that runs before the CLI, a substitution, or a second token command."""
     assert _denied(og._decide("s1", c, {"command": c}))
+
+
+@pytest.mark.parametrize("tail", [" && echo done", " | tail -1", " > /tmp/o.json; cat /tmp/o.json"])
+def test_output_plumbing_after_the_token_command_is_allowed(env, tail):
+    """The token goes right before the CLI call; an assignment prefix binds to that one
+    simple command, so the plumbing after it never sees the token."""
+    c = _cmd("stage-start", extra="--stage build") + tail
+    v = og._decide("s1", c, {"command": c})
+    new = v["hookSpecificOutput"]["updatedInput"]["command"]
+    assert new.startswith(hook_token.TOKEN_ENV + "=") and new.endswith(c)
+    assert new.count(hook_token.TOKEN_ENV + "=") == 1
+
+
+def test_a_quoted_heredoc_write_before_the_token_command_is_allowed(env):
+    head = "cat > /tmp/deliver.json <<'EOF'\n{\"t\": \"it's $(not run)\"}\nEOF\n"
+    c = head + _cmd("stage-complete", extra="--stage deliver --data @/tmp/deliver.json")
+    v = og._decide("s1", c, {"command": c})
+    new = v["hookSpecificOutput"]["updatedInput"]["command"]
+    assert new.startswith(head + hook_token.TOKEN_ENV + "=")
 
 
 @pytest.mark.skipif(not hook_token.oracle_supported(), reason="file mode (no AF_UNIX)")
@@ -346,7 +367,7 @@ def test_repo_add_needs_a_token_for_an_isolated_run(env):
     c = _cmd("run-repo-add", extra="--path /some/repo")
     v = og._decide("s1", c, {"command": c})
     assert v["hookSpecificOutput"]["updatedInput"]["command"].startswith(hook_token.TOKEN_ENV + "=")
-    assert _denied(og._decide("s1", c + " && echo x", {"command": c + " && echo x"}))
+    assert _denied(og._decide("s1", "echo x && " + c, {"command": "echo x && " + c}))
 
 
 
