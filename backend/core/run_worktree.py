@@ -667,6 +667,19 @@ def snapshot_commit(wt: "str | Path", run_id: str, label: str) -> dict:
     return {"sha": sha, "tree": tree, "base": head, "ref": ref}
 
 
+def change_patch_id(wt: "str | Path", base: str, tree: str) -> str:
+    """The stable patch-id of the change *base* -> *tree* ("" for no change). Two change
+    sets with the same patch-id carry the same edits, also on different bases: a rebase
+    that applied cleanly keeps it, any edit to the run's own change moves it, whitespace
+    (Python indentation) and binary content included (``--verbatim``, ``--binary``)."""
+    diff = _out(wt, "diff-tree", "-p", "--binary", "--no-renames", "--full-index", base, tree,
+                timeout=120)
+    if not diff.strip():
+        return ""
+    out = _out(wt, "patch-id", "--verbatim", input_text=diff).split()
+    return out[0] if out else ""
+
+
 def drop_snapshots(cwd: "str | Path", run_id: str) -> "list[str]":
     """Delete every ``refs/swarm/snapshots/<run_id>/*`` ref; returns the deleted refs."""
     _check_ids(run_id)

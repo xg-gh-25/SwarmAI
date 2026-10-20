@@ -10369,7 +10369,10 @@ def _validate_stage_candidate(
     errors: list[str] = []
     warnings: list[str] = []
     skipped = cand_rec.get("status") == "skipped"
-    if not skipped and isinstance(artifact, dict):
+    # A deterministic DELIVER's findings are closed by the ledger's proofs (gate2-next),
+    # not by fix-by-class fields on a projected list: only the ledger and tests judge it.
+    if not skipped and isinstance(artifact, dict) and not (
+            stage == "deliver" and _deterministic(cand_run)):
         # Think before building, break before review, fix by class (design_spec.py)
         import design_spec
         errors += design_spec.stage_errors(
@@ -10905,18 +10908,10 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
             if missing:
                 errs.append("declared expert(s) with no adversarial review this run: "
                             + ", ".join(missing))
-        plan = run_state.get("dispatch_plan") if isinstance(run_state.get("dispatch_plan"), dict) else {}
-        ids = [i for i in (plan.get("deliver") or []) if isinstance(i, str)]
-        if ids and review_at:
-            import time as _time
-            done = _completed_spawns(run_id, review_at, _time.time() + 60)
-            if done is None:
-                warnings.append("Gate-2 re-review NOT verified: marker store unreadable")
-            else:
-                stale = [i for i in ids if not (done.get("by_expert") or {}).get(i)]
-                if stale:
-                    errs.append("Gate-2 expert(s) have not reviewed the current change "
-                                "(recorded at deliver stage-start): " + ", ".join(stale))
+        stale = _stale_gate2_reviewers(run_id, run_state, review_at, warnings)
+        if stale:
+            errs.append("Gate-2 expert(s) have not reviewed the current change "
+                        "(recorded at deliver stage-start): " + ", ".join(stale))
         if errs:
             # A review that did not run (or predates the change) is recorded, never a stop:
             # land_deliver marks every commit push_ready false with these gaps.
@@ -12225,6 +12220,78 @@ def _run_worktree_path(run_id: str, run_state: dict) -> "Path | None":
     return None
 
 
+def _stale_gate2_reviewers(run_id: str, run_state: dict, review_at: float,
+                           warnings: "list[str]") -> "list[str]":
+    """run-commit precheck: the DELIVER experts with no completed answer since the
+    reviewed tree was recorded (a post-review edit needs a re-review). A deterministic
+    run is not asked: a fix after round 1 is re-reviewed by R2 on the fix, and an
+    unanswered R2 is a gate2-next push_ready reason (the ledger judges, not a marker
+    count). Marker store unreadable: [] with a warning (the D7 fail-open contract)."""
+    if _deterministic(run_state):
+        return []
+    plan = run_state.get("dispatch_plan") if isinstance(run_state.get("dispatch_plan"), dict) else {}
+    ids = [i for i in (plan.get("deliver") or []) if isinstance(i, str)]
+    if not (ids and review_at):
+        return []
+    import time as _time
+    done = _completed_spawns(run_id, review_at, _time.time() + 60)
+    if done is None:
+        warnings.append("Gate-2 re-review NOT verified: marker store unreadable")
+        return []
+    return [i for i in ids if not (done.get("by_expert") or {}).get(i)]
+
+
+def _gate2_unreviewed_drift(run_id: str, run_state: dict, snaps: dict,
+                            action: str) -> "str | None":
+    """Deterministic flow: the push_ready reason when the run's change is not the one
+    Gate-2 last accepted. Accepted points are runner snapshots: R1 (round 1 reviews it),
+    R2 (taken at --fixed 1; round 2 reviews the fix up to it) and F2 (taken at --fixed 2;
+    fix 2 is proven, never reviewed, by design). An edit after the latest of them (a
+    loop-back to BUILD, an edit after done) was seen by no expert and declared as no fix.
+    Compared by patch-id, so main moving (a clean rebase) is not a change. Not asked
+    while a round or a fix is pending (spawn / fix / fix_red): the code is meant to
+    move then, and the ledger already names the step as not finished."""
+    if action in ("spawn", "fix", "fix_red") or not isinstance(snaps, dict):
+        return None
+    label = next((l for l in ("F2", "R2", "R1") if isinstance(snaps.get(l), dict)), None)
+    if label is None:
+        return ("gate2: no R1 snapshot: the change cannot be compared with what Gate-2 "
+                "reviewed") if action in ("prove", "done", "sync", "run_tests", "land") else None
+    snap = snaps[label]
+    if not (snap.get("tree") and snap.get("base")):
+        return None   # a snapshot record without its tree: nothing to compare against
+    wt = _run_worktree_path(run_id, run_state)
+    if wt is None:
+        return f"gate2: the change could not be compared with the {label} snapshot (no run worktree)"
+    from core import run_worktree as rw
+    try:
+        head, tree = rw._rev(wt, "HEAD"), rw.change_tree(wt, run_id)
+        # a new file not yet `git add`ed is not in the tree, but run-commit stages it:
+        # the set of such files must also be the one the snapshot saw
+        new_files = sorted(rw.untracked_new_files(wt, run_id))
+        same_new = new_files == sorted(snap.get("untracked") or [])
+        if same_new and (head, tree) == (snap["base"], snap["tree"]):
+            return None
+        if same_new and rw.change_patch_id(wt, head, tree) == rw.change_patch_id(
+                wt, snap["base"], snap["tree"]):
+            return None
+    except rw.WorktreeError as err:
+        return f"gate2: the change could not be compared with the {label} snapshot ({err.message[:120]})"
+    # Gate-2 has at most two rounds: nothing re-reviews it in this run, so this is a
+    # named stop for push_ready (landing is still decided by the tests)
+    return (f"gate2: the change differs from the {label} snapshot Gate-2 last accepted "
+            "(an edit after the last review round or declared fix): not reviewed, and no "
+            "review round is left in this run")
+
+
+def _det_r1_taken(run_dir: Path) -> bool:
+    """The runner recorded this run's R1 proof snapshot (a sealed snapshots.json with
+    an R1 entry): a DELIVER start after it is a re-entry of the deterministic flow."""
+    import pipeline_validator as _pv
+    snaps = _pv._load_evidence_json(run_dir / "evidence" / "proofs" / "snapshots.json")[0]
+    return isinstance(snaps, dict) and isinstance(snaps.get("R1"), dict)
+
+
 def _take_proof_snapshot(run_id: str, run_dir: Path, run_state: dict, label: str) -> dict:
     """Round ``label``'s snapshot through the runner's own writer (pipeline_test.
     run_snapshot: taken once per round, recorded in evidence/proofs/snapshots.json)."""
@@ -12357,8 +12424,24 @@ def _gate2_next_view(run_id: str, run_dir: Path, run_state: dict) -> dict:
                for r in fl.not_proven(state)]
     # an ignored answer or event is input the ledger could not use: never push-ready
     reasons += [f"gate2: {w}" for w in warnings]
+    # an expert a re-entry added after the roster froze (the grown diff now asks for it)
+    # is not dispatched: R2 reviews the fix only. Named, so its review is not silently lost.
+    from core.gate2_convergence import NOT_REVIEWERS
+    late = [e for e in ((run_state.get("dispatch_plan") or {}).get("deliver") or [])
+            if isinstance(e, str) and e not in roster and e not in NOT_REVIEWERS
+            and e not in _NOT_IN_WAVE]
+    reasons += [f"gate2: {e} joined DELIVER after round 1 was fixed: not reviewed" for e in late]
     import pipeline_validator as _pv
-    snaps = _pv._load_evidence_json(run_dir / "evidence" / "proofs" / "snapshots.json")[0] or {}
+    snaps, snaps_bad = _pv._load_evidence_json(run_dir / "evidence" / "proofs" / "snapshots.json")
+    snaps = snaps or {}
+    if snaps_bad is not None:
+        # present but unusable (a forged, edited or removed sealed file): nothing can be
+        # compared, so nothing counts as accepted
+        reasons.append(f"gate2: snapshots.json unusable ({snaps_bad}): the change cannot be "
+                       "compared with what Gate-2 accepted")
+    drift = _gate2_unreviewed_drift(run_id, run_state, snaps, act["action"])
+    if drift:
+        reasons.append(drift)
     project = run_state.get("project") or "<P>"
     base = f"--project {project} --run-id {run_id}"
     kind = act["action"]
@@ -12546,6 +12629,12 @@ def cmd_gate2_next(args, reg: ArtifactRegistry) -> None:
     if args.fixed is not None and int(args.fixed) == 1 and view.get("ok"):
         # R2 reviews fix 1, and its findings are proven against the code after it
         view["snapshot_R2"] = _take_proof_snapshot(args.run_id, run_file.parent, run_state, "R2")
+    elif args.fixed is not None and int(args.fixed) == 2 and view.get("ok"):
+        # fix 2 is proven, never reviewed: the code it ends on is what Gate-2 accepts.
+        # The view is rebuilt after it: built before, it compares fix 2 with R2.
+        snap_f2 = _take_proof_snapshot(args.run_id, run_file.parent, run_state, "F2")
+        view = {**_gate2_next_view(args.run_id, run_file.parent, run_state),
+                "snapshot_F2": snap_f2}
     try:
         (run_file.parent / "evidence").mkdir(exist_ok=True)  # the run dir exists
         (run_file.parent / "evidence" / "gate2-v2.json").write_text(
@@ -14286,9 +14375,13 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
                 project=project, run_dir=run_dir, experts=experts,
                 files=[c["path"] for c in scope["changed_files"]] or files_touched,
                 requirement=str(run_state.get("requirement") or ""))
+            # A deterministic run whose R1 proof snapshot exists is re-entering: gate2-next
+            # owns every spawn from here (its ledger says who reviews what), so no legacy
+            # delta prompt and no spawn text are handed out from this list.
+            _det_re = _deterministic(run_state) and _det_r1_taken(run_dir)
             # Before the round-1 snapshot may be retaken: experts that already reviewed this
             # change re-review only what changed since (XG 2026-10-20).
-            _rd = _reentry_delta(run_id, run_dir, run_state, scope, experts)
+            _rd = None if _det_re else _reentry_delta(run_id, run_dir, run_state, scope, experts)
             if _rd:
                 out["gate2_reentry"] = _rd
                 ledger_warn += _ledger_add(run_id, _rd.pop("paths", []))
@@ -14309,7 +14402,7 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
             ledger_warn += _ledger_add(run_id, [e.get("prompt_path") for e in experts]
                                        + ([_man] if _man_new else []))
             for e in experts:
-                if e.get("prompt_path"):
+                if e.get("prompt_path") and not _det_re:
                     e["spawn"] = _spawn_text(e["id"], e["prompt_path"])
             _small = _small_change(scope)
             if (_is_docs_only(scope) or _small) and not experts:
@@ -14325,7 +14418,8 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
             warnings += w
             if mr:
                 out["meta_review_prompt_path"] = mr
-                out["meta_review_spawn"] = _spawn_text("meta-review", mr)
+                if not _det_re:
+                    out["meta_review_spawn"] = _spawn_text("meta-review", mr)
                 ledger_warn += _ledger_add(run_id, [mr])
             # meta-review is part of DELIVER's plan (the profiler listed it as unplanned),
             # also when its prompt had to be emitted by hand

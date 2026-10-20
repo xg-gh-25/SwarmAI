@@ -281,6 +281,24 @@ def _persist(run_file: Path, run_state: dict, **extra) -> None:
     _save(run_file, m)
 
 
+def _shared(run_state: dict, reason: str) -> dict:
+    """The fields a run gets when it uses the shared checkout. A run that asked for the
+    deterministic Gate-2 flow becomes legacy: that flow proves findings on round
+    snapshots of the run's own worktree, which a shared checkout does not have, so it
+    could never close a finding (convergence_fallback records why)."""
+    out = {"worktree_mode": "shared"}
+    if run_state.get("convergence") == "deterministic":
+        out.update(convergence="legacy",
+                   convergence_fallback=f"deterministic needs an isolated run: {reason}")
+    return out
+
+
+def _warn_fallback(extra: dict, fields: dict) -> None:
+    if fields.get("convergence_fallback"):
+        extra.setdefault("warnings", []).append(
+            "this run uses the legacy Gate-2 flow: " + fields["convergence_fallback"])
+
+
 def _decide_and_create(*, run_id, stage, run_file, run_state, run_dir, workspace,
                        self_repo, extra: dict) -> str:
     """First plan/build/goal_cycle start: decide isolated vs shared once per run.
@@ -291,20 +309,24 @@ def _decide_and_create(*, run_id, stage, run_file, run_state, run_dir, workspace
     A run with no bindings repo and no token falls back to shared: it has nothing
     isolated yet, and a hookless background executor must not fail every run."""
     if not rw.mode_enabled():
-        run_state["worktree_mode"] = "shared"
-        _persist(run_file, run_state)
+        _sh = _shared(run_state, "worktree mode is off")
+        run_state.update(_sh)
+        _warn_fallback(extra, _sh)
+        _persist(run_file, run_state, **_sh)
         return "shared"
     repos = rw.code_repos(workspace, str(run_state.get("project") or ""), self_repo)
     if not repos and not os.environ.get(hook_token.TOKEN_ENV) \
             and not os.environ.get("SWARM_APP_SESSION_ID"):
         # truly hookless executor (no app session): nothing isolated yet, stay shared;
         # a hooked session whose gate failed open takes the refuse-and-retry path below
-        run_state["worktree_mode"] = "shared"
+        _sh = _shared(run_state, "no hook token (hookless executor)")
+        run_state.update(_sh)
+        _warn_fallback(extra, _sh)
         extra.setdefault("warnings", []).append(
             "worktree mode is on but this command carried no hook token, so this run uses "
             "the shared checkout (run stage-start as ONE command from a SwarmAI chat session "
             "to isolate it)")
-        _persist(run_file, run_state)
+        _persist(run_file, run_state, **_sh)
         return "shared"
     ok, why = _token(run_dir, run_state, run_id, "stage-start")
     if not ok:
@@ -315,7 +337,7 @@ def _decide_and_create(*, run_id, stage, run_file, run_state, run_dir, workspace
         reason = f"isolated run needs a session with hooks ({why})"
         if n >= HOOKLESS_LIMIT:
             _save(run_file, lambda d: d.update(status="failed", fail_reason=reason,
-                                               worktree_mode="shared", hookless_refusals=n))
+                                               hookless_refusals=n, **_shared(d, reason)))
             _emit_fail({"ok": False, "stage": stage, "code": "hookless_session", "error": reason,
                         "next": "this run is failed; start it from a SwarmAI chat session"}, 1)
         _save(run_file, lambda d: d.update(hookless_refusals=n))
@@ -334,11 +356,13 @@ def _decide_and_create(*, run_id, stage, run_file, run_state, run_dir, workspace
                 rw._remove(run_id, e, Path(e["main"]), merged=False)
             except rw.WorktreeError as rm_err:  # a fresh, empty worktree: report, never rmtree
                 extra.setdefault("warnings", []).append(f"cleanup: {rm_err.message}")
-        run_state["worktree_mode"] = "shared"
+        _sh = _shared(run_state, f"worktree not created ({err.code})")
+        run_state.update(_sh)
+        _warn_fallback(extra, _sh)
         extra.setdefault("warnings", []).append(
             f"worktree not created ({err.code}: {err.message}); this run uses the shared "
             "main checkout as before")
-        _persist(run_file, run_state)
+        _persist(run_file, run_state, **_sh)
         return "shared"
     run_state["worktrees"] = created
     run_state["worktree_mode"] = "isolated"

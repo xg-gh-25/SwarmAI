@@ -24,6 +24,13 @@ exactly what its `next.action` says, then run `gate2-next` again:
 There are at most two review rounds and two fix passes, and `gate2-next` counts them:
 answers to a third round are ignored, and a `--fixed` before the round has answered is refused.
 
+A re-entered DELIVER (`gate2_flow.snapshot_R1.already`) hands out no spawn text of its
+own: `gate2-next` alone says who reviews. The reviewers are frozen at the first fix; an
+expert the grown diff adds later (e.g. the Red Team) is not spawned and is named as a
+push_ready reason. The flow needs the run's own worktree: a run that ends up on the shared
+checkout is switched to the legacy flow at its first stage-start (run.json
+`convergence_fallback` says why).
+
 ## What does not apply here
 - `gate2-fixspec` and `gate2-recheck` refuse in this flow, and `gate2-ledger` is not used:
   the ledger is rebuilt by `gate2-next` from the experts' answers, your declared events and
@@ -32,7 +39,8 @@ answers to a third round are ignored, and a `--fixed` before the round has answe
   (step 5) and the convergence loop (step 7) do not run, and the DELIVER artifact needs no
   `meta_review` or `convergence` block.
 - Do not write `adversarial_review.findings`: stage-complete fills them from the ledger,
-  each with its state and break test (resolved only when proven).
+  each with its state and break test (resolved only when proven). The fix-by-class fields
+  and run-commit's marker re-review check do not apply: a fix is re-reviewed by R2.
 
 ## push_ready
 The tool bound is lowered by every finding that is not proven (`invalid_test`,
