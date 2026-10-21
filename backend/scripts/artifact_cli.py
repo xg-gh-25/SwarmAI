@@ -2425,11 +2425,16 @@ def _link_session_to_run(session_id: "str | None", run_id: str) -> None:
               file=sys.stderr)
 
 
-# One files_touched entry that is really several paths: a file name with an
-# extension, whitespace, then another path start (`/abs`, `~/`, `dir/`). A single
-# path with a space in a directory name (`Visual Studio Code.app/x.js`) has no
-# extension right before its space.
-_JOINED_PATHS_RE = re.compile(r"\.\w+\s+(?:/|~/|[\w.-]+/)")
+def _joined_paths(entry: str) -> bool:
+    """True when *entry* is several existing paths joined by whitespace: the whole
+    string is not a path, and every whitespace-separated part is one (relative to
+    the current directory, or absolute). Decided by the file system, not by the
+    shape of the string, so a single path with a space in it (that exists) and an
+    entry whose parts do not exist are both stored as they are."""
+    parts = entry.split()
+    if len(parts) < 2 or os.path.exists(os.path.expanduser(entry)):
+        return False
+    return all(os.path.exists(os.path.expanduser(x)) for x in parts)
 
 
 def _normalize_files_touched_arg(value):
@@ -3785,11 +3790,11 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         # space-separated list) are stored as one bogus path that run-commit cannot
         # stage; agents then rewrote run.json by hand to split it (2026-10-14..21).
         # Refuse it here, the one place a malformed argument is reported.
-        joined = [e for e in incoming if isinstance(e, str) and _JOINED_PATHS_RE.search(e.strip())]
+        joined = [e for e in incoming if isinstance(e, str) and _joined_paths(e.strip())]
         if joined:
             print(json.dumps({"error": "--files-touched: an entry holds several paths joined by "
-                              "spaces; pass each path as its own argument (unquoted $FILES, "
-                              "or a JSON array)", "entries": joined[:5]}), file=sys.stderr)
+                              "spaces; pass each path as its own quoted argument, or a JSON "
+                              "array", "entries": joined[:5]}), file=sys.stderr)
             sys.exit(1)
         # NOTE: the helper dedups on the STRIPPED string. The prior inline loop
         # compared the RAW entry against `seen` while appending the stripped form, so

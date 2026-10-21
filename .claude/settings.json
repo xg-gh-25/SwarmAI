@@ -6,9 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/reject-pytest-tail.sh",
+            "command": "bash backend/scripts/pytest-full-suite-guard.sh",
             "timeout": 5,
-            "statusMessage": "Checking pytest safety..."
+            "statusMessage": "Checking for a full test suite run..."
           }
         ]
       },

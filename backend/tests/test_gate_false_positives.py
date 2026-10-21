@@ -14,7 +14,6 @@ What is tested:
   unless a shell runs it;
 - run owner token (run_owner_gate._token_binding): the CLI call may be followed by
   output plumbing and preceded by quoted ``cat > FILE <<'EOF'`` writes;
-- pytest pipe guard: only a pipe carrying pytest's own output counts;
 - python code judgment (_code_can_execute): ``re.compile(`` is a method, not the builtin.
 """
 from __future__ import annotations

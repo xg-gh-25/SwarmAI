@@ -110,10 +110,10 @@ Example DoD for "coverage to 90%":
 dod_criteria:
   - type: command
     name: "Backend coverage ≥ 90%"
-    check: "cd backend && python -m pytest --cov=. --cov-fail-under=90 -q 2>&1 | tail -5"
+    check: "cd backend && perl -e 'alarm 100; exec @ARGV' .venv/bin/python -m pytest --cov=. --cov-fail-under=90 -q 2>&1 | tail -5"
   - type: command
     name: "No test regressions"
-    check: "cd backend && python -m pytest --timeout=120 -q"
+    check: "cd backend && perl -e 'alarm 100; exec @ARGV' .venv/bin/python -m pytest --timeout=60 -q"
 ```
 
 ---

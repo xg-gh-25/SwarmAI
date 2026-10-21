@@ -116,7 +116,7 @@ How much context does a cold-resumed session start with?
 
 > **Note:** This table records the early ramp only. Test count has grown well past this range since — see the current figure in the [Snapshot History](#snapshot-history) table below (run the command to reproduce live).
 
-**Evidence:** `cd backend && .venv/bin/python -m pytest --co -q 2>/dev/null | tail -1`
+**Evidence:** `cd backend && perl -e 'alarm 100; exec @ARGV' .venv/bin/python -m pytest --co -q 2>/dev/null | tail -1`
 
 ---
 

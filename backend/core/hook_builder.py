@@ -419,8 +419,8 @@ async def build_hooks(
     # pytest/vitest/tsc/eslint/vite build/npm build|test|lint|typecheck/make test*,
     # repo-copy baselines and manual pytest hang triage, and hand back a filled-in
     # pipeline_test.py command. No run → no effect. Then pytest_command_guard, in every
-    # session: pytest piped to tail/head, or without a wall-clock cap, is denied (R9,
-    # run_6af22b0d). One group so the test-command rules are judged in one place.
+    # session: a pytest run whose wall-clock cap does not end it before the call's Bash
+    # timeout is denied (R9, run_6af22b0d). One group so the test-command rules are judged in one place.
     # Fail-open; operator bypass SWARM_GATE_FORCE=pipeline_test_gate (logged). Registered
     # BEFORE dangerous_command_gate: a user must never be asked to approve a command
     # this gate would then deny.

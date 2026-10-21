@@ -1922,23 +1922,48 @@ _BASH_TIMEOUT_DEFAULT_MS = 120_000
 _CAP_MARGIN_S = 10
 
 
+_BASH_TIMEOUT_MAX_MS = 600_000  # the CLI clamps a call's timeout to this
+
+
 def _bash_call_timeout_s(tool_input: dict) -> int:
-    """The timeout of this Bash call, seconds: its `timeout` input, else the CLI default."""
+    """The timeout of this Bash call, seconds: its `timeout` input, else
+    BASH_DEFAULT_TIMEOUT_MS, else 120s; clamped to the CLI's 600s maximum. A value
+    that is not a positive whole number (a bool, a float string, garbage) is not
+    trusted and the default applies, so a malformed input can only shorten the limit."""
     for raw in (tool_input.get("timeout"), os.environ.get("BASH_DEFAULT_TIMEOUT_MS")):
-        try:
-            ms = int(raw)
-        except (TypeError, ValueError):
+        if isinstance(raw, bool):
+            continue
+        if isinstance(raw, int):
+            ms = raw
+        elif isinstance(raw, str) and raw.strip().isdigit():
+            ms = int(raw.strip())
+        else:
             continue
         if ms > 0:
-            return ms // 1000
+            return min(ms, _BASH_TIMEOUT_MAX_MS) // 1000
     return _BASH_TIMEOUT_DEFAULT_MS // 1000
 
 
-def _pytest_cap_s(command: str) -> "int | None":
-    """The shortest wall-clock cap bound to a pytest invocation in *command*, or None."""
+def _pytest_run_time_s(command: str) -> "int | None":
+    """How long the pytest runs in *command* can take: the SUM of their caps (runs
+    in one call follow each other), or None when any run has no cap of its own.
+
+    Every pytest invocation (`_PYTEST_INVOCATION_RE`) must have a cap bound to it
+    (`_WALLCLOCK_BOUND_PYTEST_RE`): one capped run does not cover a second uncapped
+    one (`gtimeout 1 pytest a; pytest b`). Both are counted on the raw text, so a
+    quoted decoy (`echo 'gtimeout 1 pytest x'; pytest b`) adds one invocation AND
+    one cap and the real run is still uncovered."""
     caps = [int(m.group("timeout") or m.group("alarm"))
             for m in _WALLCLOCK_BOUND_PYTEST_RE.finditer(command)]
-    return min(caps) if caps else None
+    runs = sum(1 for _ in _PYTEST_INVOCATION_RE.finditer(command))
+    if not caps or len(caps) < runs:
+        return None
+    return sum(caps)
+
+
+# `tail -f` / `-F` / `--follow` never exits, so a capped run piped into it still
+# outlives the call.
+_FOLLOW_RE = re.compile(r"\btail\b[^|;&\n]*\s(?:-[a-zA-Z]*[fF][a-zA-Z]*|--follow\b)")
 
 
 # A bare pytest TOKEN at a word boundary (just "is the word pytest present").
@@ -2041,31 +2066,47 @@ async def pytest_command_guard(
     ):
         return {"decision": "approve"}
 
-    # One rule: the run must carry a wall-clock cap that ends it before the Bash
-    # call's own timeout. Checked on the RAW command (NOT quote-stripped): the perl
-    # cap carries `alarm N` / `exec @ARGV` INSIDE its single-quoted -e arg.
-    # A pipe into tail/head is fine once the run ends in time (it was denied
-    # before because an uncapped run got moved to the background: the cap is what
-    # prevents that, and with no cap the deny below fires anyway).
-    limit = _bash_call_timeout_s(input_data.get("tool_input", {}) or {}) - _CAP_MARGIN_S
-    cap = _pytest_cap_s(command)
-    if cap is None or cap > limit:
-        logger.warning("[BLOCKED] pytest cap %s > %ss: %s", cap, limit, command[:80])
-        n = max(1, min(limit, 100))
-        why = ("has no wall-clock cap" if cap is None else
-               f"is capped at {cap}s, which outlives this call's {limit + _CAP_MARGIN_S}s "
-               "Bash timeout")
+    # One rule: every run carries a wall-clock cap, and together they end before the
+    # Bash call's own timeout. Checked on the RAW command (NOT quote-stripped): the
+    # perl cap carries `alarm N` / `exec @ARGV` INSIDE its single-quoted -e arg.
+    # A pipe into tail/head is fine once the runs end in time (it was denied before
+    # because an uncapped run got moved to the background); `tail -f` is not, it
+    # never ends. Accepted residual: `pytest … | tail` reports tail's exit status;
+    # pytest's own summary line is still in the output.
+    timeout = _bash_call_timeout_s(input_data.get("tool_input", {}) or {})
+    limit = timeout - _CAP_MARGIN_S
+    total = _pytest_run_time_s(command)
+    follow = bool(_FOLLOW_RE.search(command))
+    if total is None or total > limit or follow:
+        logger.warning("[BLOCKED] pytest runs %s > %ss (follow=%s): %s", total, limit,
+                       follow, command[:80])
+        if follow:
+            why = "pipes into `tail -f`, which never exits"
+        elif total is None:
+            why = ("has a pytest run with no wall-clock cap of its own"
+                   if _WALLCLOCK_BOUND_PYTEST_RE.search(command) else "has no wall-clock cap")
+        else:
+            why = (f"is capped at {total}s in total, which outlives this call's "
+                   f"{timeout}s Bash timeout")
+        if limit < 1:
+            how = (f"This call's Bash timeout is {timeout}s, too short to leave the "
+                   f"{_CAP_MARGIN_S}s margin a run needs: omit the call's `timeout` "
+                   "(120s default) or raise it.")
+        else:
+            n = min(limit, 100)
+            how = ("Run it as: "
+                   f"`perl -e 'alarm {n}; exec @ARGV' python -m pytest <tests> "
+                   f"--timeout=60 -q` (one cap per pytest run, at most {limit}s for all "
+                   f"runs in the call together; redirecting to a file is fine). If it "
+                   f"cannot finish in {limit}s, run fewer tests.")
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
-                    f"This pytest run {why}. A command still running when the Bash "
+                    f"This pytest command {why}. A command still running when the Bash "
                     "timeout fires is moved to the background and the call returns no "
-                    "output. A per-test --timeout does not cap the run. Run it as: "
-                    f"`perl -e 'alarm {n}; exec @ARGV' python -m pytest <tests> "
-                    f"--timeout=60 -q` (redirecting to a file is fine; cap at most "
-                    f"{limit}s). If it cannot finish in {limit}s, run fewer tests."
+                    "output. A per-test --timeout does not cap the run. " + how
                 ),
             }
         }

@@ -84,6 +84,33 @@ class TestCapAgainstBashTimeout:
         b = _deny_reason(_run("pytest tests/foo.py > /tmp/t 2>&1"))
         assert a == b
 
+    # review cc5376f0 (2026-10-21)
+    def test_every_run_needs_its_own_cap(self):
+        assert _is_deny(_run("gtimeout 1 pytest tests/a.py; pytest tests/b.py"))
+        assert _is_deny(_run("echo 'gtimeout 1 pytest fake.py'; pytest tests/b.py"))
+        assert "no wall-clock cap of its own" in _deny_reason(
+            _run("gtimeout 1 pytest tests/a.py; pytest tests/b.py"))
+
+    def test_caps_of_several_runs_add_up(self):
+        assert _is_deny(_run("gtimeout 1 pytest tests/a.py; gtimeout 999999 pytest tests/b.py"))
+        assert _is_deny(_run("gtimeout 60 pytest tests/a.py && gtimeout 60 pytest tests/b.py"))
+        assert not _is_deny(_run("gtimeout 50 pytest tests/a.py && gtimeout 50 pytest tests/b.py"))
+
+    def test_tail_follow_denied(self):
+        for pager in ("tail -f /etc/hosts", "tail -F x", "tail --follow x", "tail -nf 5"):
+            assert _is_deny(_run(f"gtimeout 50 pytest tests/a.py | {pager}")), pager
+
+    def test_malformed_or_huge_timeout_input_is_not_trusted(self):
+        cmd = "perl -e 'alarm 700; exec @ARGV' python -m pytest tests/"
+        assert _is_deny(_run(cmd, timeout_ms="999999999"))   # clamped to the 600s CLI max
+        assert _is_deny(_run(cmd, timeout_ms=True))
+        assert _is_deny(_run("gtimeout 200 pytest tests/", timeout_ms="300000.5"))
+        assert not _is_deny(_run("gtimeout 200 pytest tests/", timeout_ms="300000"))
+
+    def test_too_short_call_timeout_says_raise_it(self):
+        reason = _deny_reason(_run("gtimeout 1 pytest tests/a.py", timeout_ms=5000))
+        assert "too short" in reason and "alarm" not in reason
+
 
 class TestPytestNoWallClock:
     """AC2 (UPGRADED to DENY, XG-approved direct): pytest WITHOUT a wall-clock
