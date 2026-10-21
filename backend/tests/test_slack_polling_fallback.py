@@ -303,9 +303,29 @@ class TestSocketModeRecovery:
                 finally:
                     adapter._loop.close()
 
+    def test_reconnect_probe_runs_off_event_loop(self, adapter):
+        """App() (auth.test over HTTP), the 10s connect join and handler.close()
+        thread joins are blocking: they must run in a worker thread, never on the
+        event loop (a 3.6s starvation stack was caught in close())."""
+        import threading
+        adapter._connection_mode = "polling"
+        adapter._loop = asyncio.new_event_loop()
+        adapter._stopped = False
+        seen: list[int] = []
 
-# ---------------------------------------------------------------------------
-# AC6: Existing behavior unchanged
+        def _app(*a, **k):
+            seen.append(threading.get_ident())
+            return MagicMock()
+
+        with patch("channels.adapters.slack.SocketModeHandler", return_value=MagicMock()):
+            with patch("channels.adapters.slack.App", side_effect=_app):
+                try:
+                    loop_thread = threading.get_ident()
+                    adapter._loop.run_until_complete(adapter._try_socket_mode_reconnect())
+                finally:
+                    adapter._loop.close()
+        assert seen, "App() was not constructed"
+        assert all(t != loop_thread for t in seen)
 # ---------------------------------------------------------------------------
 
 class TestTransportErrorHandling:

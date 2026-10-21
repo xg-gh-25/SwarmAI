@@ -116,9 +116,16 @@ async def run_job(req: RunJobRequest):
             )
 
         all_job_ids = {j.id for j in jobs}
-        result = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
-        # Reconciled save preserves events hooks emitted during the run.
-        save_state_reconciled(state)
+
+        def _run_and_save():
+            r = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
+            # Reconciled save preserves events hooks emitted during the run.
+            save_state_reconciled(state)
+            return r
+
+        # A job runs LLM calls / scripts for seconds to minutes: a worker thread,
+        # never the event loop (on the loop, Run now froze /health for the whole job).
+        result = await asyncio.to_thread(_run_and_save)
 
         return RunJobResponse(
             job_id=result.job_id,

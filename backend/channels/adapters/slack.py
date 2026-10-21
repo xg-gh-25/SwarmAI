@@ -1584,7 +1584,11 @@ class SlackChannelAdapter(ChannelAdapter):
             "Channel %s: attempting Socket Mode reconnect...",
             self.channel_id,
         )
-        try:
+
+        def _probe():
+            """Blocking part (App() runs auth.test over HTTP, connect is joined for up
+            to 10s, close() joins threads): runs in a worker thread, never on the
+            event loop. Returns the new bolt app if Socket Mode connects, else None."""
             bolt_app = App(token=self._bot_token)
             self._register_handlers(bolt_app)
             handler = SocketModeHandler(bolt_app, self._app_token)
@@ -1603,17 +1607,25 @@ class SlackChannelAdapter(ChannelAdapter):
             t.start()
             t.join(timeout=10.0)
 
-            if connected[0]:
+            if not connected[0]:
+                try:
+                    handler.close()
+                except Exception:
+                    pass
+                return None
+            handler.close()  # close the test connection
+            # Close old handler to release resources (sockets, threads)
+            if self._handler is not None:
+                try:
+                    self._handler.close()
+                except Exception:
+                    pass
+            return bolt_app
+
+        try:
+            bolt_app = await asyncio.to_thread(_probe)
+            if bolt_app is not None:
                 # Socket Mode works — switch back
-                handler.close()  # close the test connection
-
-                # Close old handler to release resources (sockets, threads)
-                if self._handler is not None:
-                    try:
-                        self._handler.close()
-                    except Exception:
-                        pass
-
                 self._bolt_app = bolt_app
                 self._handler = SocketModeHandler(bolt_app, self._app_token)
                 self._connection_mode = "socket"
@@ -1634,10 +1646,6 @@ class SlackChannelAdapter(ChannelAdapter):
                 )
                 return True
             else:
-                try:
-                    handler.close()
-                except Exception:
-                    pass
                 return False
         except Exception:
             logger.debug(

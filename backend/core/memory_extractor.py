@@ -490,6 +490,7 @@ async def extract_and_save(
     # classified it for the manual-save UX (the judge decides admit/reject, not re-route).
     try:
         from core.ingestion_gate import admit_memory_lesson
+        from core import executors as _executors
         gated: dict[str, list[str]] = {}
         _dropped = 0
         for key, section_header in _SECTION_MAP.items():
@@ -500,7 +501,9 @@ async def extract_and_save(
                 # and _SECTION_MAP[key] is its correct type-section (decisions→Decisions
                 # etc.). The judge's job here is ADMIT/REJECT only — re-routing to the
                 # judge's section would BREAK the extraction bucket→section consistency.
-                verdict, _sec, reason, distilled = admit_memory_lesson(entry)
+                # One blocking Bedrock call per entry: the llm pool, never the loop.
+                verdict, _sec, reason, distilled = await _executors.run_in(
+                    "llm", admit_memory_lesson, entry)
                 if verdict == "auto":
                     # ROOT-FIX (capture-vs-distill): write the DISTILLED rule when the
                     # gate rewrote a shape-dirty entry; fail-open → distilled=None keeps
