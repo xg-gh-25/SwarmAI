@@ -364,6 +364,10 @@ class TestPreservationNonRetriableCrashCleanup:
         unit._transition(SessionState.IDLE)
         unit._client = MagicMock()
         unit._wrapper = MagicMock()
+        # The subprocess has already crashed.  Keep pid=None so this cleanup-only
+        # test does not start the live-process watchdog or depend on an ambient
+        # asyncio loop when it enters STREAMING.
+        unit._wrapper.pid = None
         unit._sdk_session_id = session_id_value
 
         # Simulate non-retriable crash: STREAMING → DEAD → cleanup → COLD
@@ -630,6 +634,9 @@ class TestPreservationRetryLoopResumeCapture:
         unit._sdk_session_id = session_id_value
         unit._client = MagicMock()
         unit._wrapper = MagicMock()
+        # Retry cleanup runs after subprocess death.  A missing PID prevents this
+        # identity-only test from starting the unrelated PID watchdog.
+        unit._wrapper.pid = None
 
         # Capture BEFORE cleanup (this is what the retry loop does)
         resume_session_id = unit._sdk_session_id

@@ -437,6 +437,7 @@ _schema_initialized = False
 
 _TABLES_TO_CLEAR = [
     "channel_messages", "channel_sessions", "channels",
+    "hive_instances", "hive_accounts",
     "chat_messages", "thread_summaries", "chat_threads",
     "todos", "tasks", "messages", "sessions",
     "workspace_mcps", "workspace_knowledgebases", "workspace_audit_log",

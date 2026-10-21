@@ -1,6 +1,37 @@
 """Tests for Hive cloud instance management API."""
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from httpx import AsyncClient, ASGITransport
+
+
+@pytest.fixture(autouse=True)
+async def _isolate_background_provisioning(monkeypatch):
+    """Keep API tests from launching real deploys past their test event loop.
+
+    The create endpoint intentionally schedules provisioning in the background.
+    These tests cover request/DB behavior, not AWS provisioning, so a real
+    ``HiveProvisioner.deploy`` can outlive the test and retain a SQLite write
+    lock while the suite-wide reset fixture starts the next test.
+    """
+    from routers import hive as hive_router
+
+    provisioner = MagicMock()
+    provisioner.deploy = AsyncMock(return_value=None)
+    provisioner.cleanup = AsyncMock(return_value=None)
+    monkeypatch.setattr(hive_router, "_provisioner", provisioner)
+
+    yield
+
+    tasks = [
+        task
+        for task in asyncio.all_tasks()
+        if task is not asyncio.current_task()
+        and task.get_name().startswith(("hive-deploy-", "hive-retry-"))
+    ]
+    if tasks:
+        await asyncio.gather(*tasks)
 
 
 @pytest.fixture
