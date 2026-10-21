@@ -98,7 +98,24 @@ function useSpanSeconds(scope: string, id: string, live: boolean): number | unde
   return s?.end !== undefined ? Math.round((s.end - s.start) / 1000) : undefined;
 }
 /** Forget every view's spans (tests). */
-export function resetZoneMemory(): void { spans.clear(); }
+export function resetZoneMemory(): void { spans.clear(); calls.clear(); }
+
+// How long each call ran, as this view saw it: from the first render that saw it
+// running to the first render that saw it finished. History carries no call timing, so
+// a call this app never saw running has none (its strip shows no time). Bounded: the
+// oldest calls are dropped.
+const calls = new Map<string, { start: number; end?: number }>();
+const CALL_MEMORY = 5000;
+function callSeconds(id: string, running: boolean): number | undefined {
+  const now = Date.now();
+  const seen = calls.get(id);
+  if (running && !seen) {
+    calls.set(id, { start: now });
+    if (calls.size > CALL_MEMORY) calls.delete(calls.keys().next().value as string);
+  } else if (!running && seen && seen.end === undefined) seen.end = now;
+  const s = calls.get(id);
+  return s?.end !== undefined ? Math.round((s.end - s.start) / 1000) : undefined;
+}
 
 /** Ids that have SETTLED: done, and held done for FOLD_DELAY_MS (or done when first
  *  seen). Only a settled call joins a merge and only a settled thought folds to one
@@ -230,14 +247,19 @@ export function ToolStripV6({ item }: { item: StripItem }) {
   const elapsed = usePendingToolElapsed(step.block.id, running);
   const stopped = step.status === 'unknown';
   const detail = n > 1 || !!step.result?.outcome;
+  // finished: the time this view saw it run, summed over a merge (spec §3.1)
+  const ran = item.steps.map((s) => callSeconds(s.block.id, s.status === 'pending'));
+  const known = ran.filter((s): s is number => s !== undefined);
+  const total = known.length ? known.reduce((a, b) => a + b, 0) : undefined;
   const time = running
     ? (elapsed !== null && elapsed >= MIN_SECONDS ? fmt(elapsed) : '')
-    : stopped ? tf(t, 'chat.turn.zone.stoppedCall', 'stopped') : '';
+    : stopped ? tf(t, 'chat.turn.zone.stoppedCall', 'stopped')
+      : total !== undefined && total >= MIN_SECONDS ? fmt(total) : '';
   const object = n > 1 && item.objects.length > 1
     ? <span className="truncate min-w-0 text-[var(--color-text-secondary)]">{item.objects.join(', ')}</span>
     : v.dir !== undefined && v.file
       ? <PathObject dir={v.dir} file={v.file} />
-      : <span className="truncate min-w-0 text-[var(--color-text-dim)]">{v.object}</span>;
+      : <span className="truncate min-w-0 text-[var(--color-text-muted)]">{v.object}</span>;
   return (
     <div data-testid="tool-strip" data-status={step.status} data-tool={v.tool} {...ANCHOR_PROPS}>
       <button

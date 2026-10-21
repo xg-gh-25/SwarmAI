@@ -366,26 +366,60 @@ const shortIds = (s: string) => s.replace(UUID, '$1').replace(LONG_HEX, '$1');
 /** `env [-i] A=1 B=2 ` or plain `A=1 ` in front of a command (not `f=$(…)`: that is code). */
 const ENV_PREFIX = /^\s*(?:env(?:\s+-i)?\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"$`]*"|'[^']*'|[^\s;&|$`'"]*)\s+)+(?=[^\s;&|=])/;
 /** An interpreter given by absolute path (`/x/.venv/bin/python`) — the row shows its name. */
-const ABS_BIN = /(^|\s)\/\S*\/bin\/([\w.+-]+)(?=\s|$)/g;
+const ABS_BIN = /(^|\s)~?\/\S*\/bin\/([\w.+-]+)(?=\s|$)/g;
 /** A home path anywhere in the command. */
 const HOME_ANY = /(^|[\s='"(])\/(?:Users|home)\/[^/\s]+\//g;
 /** An interpreter reading its program from stdin: `python3 -I -`, `node -`, `bash -s`. */
 const STDIN_PROG = /(?:^|\s)((?:python3?|node|bash|sh|ruby|perl)(?:\s+-[A-Za-z]+)*(?:\s+-)?)\s*$/;
+/** A leading plain assignment statement (`B=~/x/backend;`): no code in the value. */
+const ASSIGN_STMT = /^\s*([A-Za-z_][A-Za-z0-9_]*)=("[^"$`]*"|'[^']*'|[^\s;&|$`'"]*)\s*(?:;|&&|\n)\s*/;
+/** The perl-alarm / timeout wrapper at the start of a LATER segment (`git add x; perl …`). */
+const INNER_WRAPPER = /((?:;|&&|\|\||\n)\s*)(?:perl\s+-e\s+'alarm\s+\d+;\s*exec\s+@ARGV'\s+|g?timeout\s+\d+[smh]?\s+)/g;
+/** `python3 -I -c "<program>"`: the program, possibly cut by the 200-char summary. */
+const PY_C = /(?:^|\s)(python3?(?:\s+-[A-Za-z]+)*\s+-c)\s+(["'])([\s\S]*)$/;
+
+/** Leading `X=value;` statements removed and every later `$X` / `${X}` replaced by
+ *  its value, so `B=~/r/backend; $B/.venv/bin/python $B/s.py` reads as the command. */
+function inlineAssignments(cmd: string): string {
+  const vars = new Map<string, string>();
+  let rest = cmd;
+  for (let guard = 0; guard < 6; guard += 1) {
+    const m = ASSIGN_STMT.exec(rest);
+    if (!m) break;
+    vars.set(m[1], m[2].replace(/^(["'])(.*)\1$/, '$2'));
+    rest = rest.slice(m[0].length);
+  }
+  if (!vars.size || !rest.trim()) return cmd;
+  return rest.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (all, name: string) => vars.get(name) ?? all);
+}
+
+/** A `python -c` program shown by its first statement that is not an import. */
+function pythonC(cmd: string): string {
+  const m = PY_C.exec(cmd);
+  if (!m) return cmd;
+  const quote = m[2];
+  const end = m[3].indexOf(quote);
+  const body = end >= 0 ? m[3].slice(0, end) : m[3];
+  const first = body.split(/[;\n]/).map((s) => s.trim()).find((s) => s && !/^(?:import|from)\s/.test(s));
+  const head = cmd.slice(0, m.index + (m[0].length - m[0].trimStart().length));
+  return `${head}${m[1]}${first ? ` · ${first}` : ''}`;
+}
 
 /** A Bash command as its strip shows it: the setup, env assignments and wrappers in
- *  front stripped, absolute interpreter paths cut to their name, home paths as `~/`,
- *  and a stdin program (`python3 - <<EOF`) shown by its first meaningful line. The
- *  hover title keeps the raw command. */
+ *  front stripped (and a wrapper opening any later segment), leading `X=…;` assignments
+ *  inlined, absolute interpreter paths cut to their name, home paths as `~/`, a
+ *  `python -c` program and a stdin program (`python3 - <<EOF`) shown by their first
+ *  meaningful line. The hover title keeps the raw command. */
 function tidyBash(raw: string): string {
   let cmd = displayCommand(raw);
   for (let guard = 0; guard < 4; guard += 1) {
-    const next = displayCommand(cmd.replace(ENV_PREFIX, ''));
+    const next = displayCommand(inlineAssignments(cmd.replace(ENV_PREFIX, '')));
     if (next === cmd) break;
     cmd = next;
   }
-  cmd = cmd.replace(ABS_BIN, '$1$2').replace(HOME_ANY, '$1~/');
+  cmd = cmd.replace(INNER_WRAPPER, '$1').replace(ABS_BIN, '$1$2').replace(HOME_ANY, '$1~/');
   const hd = HEREDOC.exec(cmd);
-  if (!hd) return cmd;
+  if (!hd) return pythonC(cmd);
   const head = cmd.slice(0, hd.index);
   const prog = STDIN_PROG.exec(head);
   if (prog) {

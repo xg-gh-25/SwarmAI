@@ -298,6 +298,24 @@ describe('stripView', () => {
     expect(o("cat > /tmp/fix1234/e9.py <<'EOF'\nprint(1)\nEOF")).toBe("cat > /tmp/fix1234/e9.py <<'EOF' …");
   });
 
+  it('Bash: leading assignments inlined, later wrappers removed, python -c by its first statement', () => {
+    const o = (cmd: string) => stripView(tu('a', cmd) as ToolUseContent).object;
+    // the commands from the 2026-10-21 screenshot
+    expect(o('B=~/Desktop/SwarmAI-Workspace/swarmai/backend; $B/.venv/bin/python $B/scripts/artifact_cli.py stage-start --project SwarmAI'))
+      .toBe('python ~/Desktop/SwarmAI-Workspace/swarmai/backend/scripts/artifact_cli.py stage-start --project SwarmAI');
+    expect(o("git add backend/core/r.py; perl -e 'alarm 110; exec @ARGV' python ~/x/pipeline_test.py --mode tdd"))
+      .toBe('git add backend/core/r.py; python ~/x/pipeline_test.py --mode tdd');
+    expect(o(`python3 -I -c " import json;d=json.load(open('/tmp/run_333ffbf8/build-start2.json')) print(sorted(d.keys()))"`))
+      .toBe("python3 -I -c · d=json.load(open('/tmp/run_333ffbf8/build-start2.json')) print(sorted(d.keys()))");
+    // cut by the 200-char summary: no closing quote
+    expect(o(`R=~/runs/run_1; python3 -I -c " import json;d=json.load(open('$R/run.j`))
+      .toBe("python3 -I -c · d=json.load(open('~/runs/run_1/run.j");
+    // an assignment with code in it is part of what ran
+    expect(o('f=$(ls -t | head -1); echo "$f"')).toBe('f=$(ls -t | head -1); echo "$f"');
+    // an assignment with nothing after it stays
+    expect(o('X=1;')).toBe('X=1;');
+  });
+
   it('prefers the display object (full text on hover) over the 200-char summary', () => {
     const long = `echo ${'x'.repeat(400)}`;
     const v = stripView(tu('a', long.slice(0, 190), 'Bash', { tool: 'Bash', object: long, key: 'k' }) as ToolUseContent);

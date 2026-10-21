@@ -146,6 +146,23 @@ describe('AC3 — groups toggle; headers count steps and commands only', () => {
 });
 
 describe('AC4 — one light strip per call', () => {
+  it('a finished call shows the time this view saw it run (>= 5s), a short one none', () => {
+    vi.useFakeTimers();
+    const start = [tx('go'), bash('slow', 'make'), bash('quick', 'ls')];
+    const r = render(view([tx('go'), bash('slow', 'make')], true));
+    act(() => { vi.advanceTimersByTime(7000); });
+    r.rerender(view([...start.slice(0, 2), tr('slow'), bash('quick', 'ls')], true));
+    act(() => { vi.advanceTimersByTime(1000); });
+    r.rerender(view([...start.slice(0, 2), tr('slow'), bash('quick', 'ls'), tr('quick')], true));
+    const times = screen.getAllByTestId('strip-time').map((e) => e.textContent);
+    expect(times).toEqual(['7s', '']);
+  });
+
+  it('a call from history (never seen running) shows no time', () => {
+    render(view([tx('go'), bash('old', 'make'), tr('old'), tx('done')], false));
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    expect(screen.getByTestId('strip-time').textContent).toBe('');
+  });
   it('the tool’s own name, the display object as the hover, no red for a failed call', () => {
     const mcp = { type: 'tool_use', id: 'm', name: 'mcp__srv__email_search', summary: 'MCP: email_search — q',
       category: 'mcp', display: { tool: 'email_search', object: 'q=launch', key: 'k1' } } as ContentBlock;
