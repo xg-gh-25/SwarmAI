@@ -12,10 +12,10 @@
  *   verdict row (GateRow) with its earlier rounds' verdicts.
  * - `RESULT`: the label over the turn's answer text (a text zone with `result`); not
  *   foldable.
- * Inside a group, in stream order: thoughts (one line, the first line of the text, open
- * for all of it), light strips (one call each; `Read ×N` / `Bash ×N` merges) and Agents
- * panels (one per batch of sub-agents that ran at the same time). The notes the agent
- * wrote between calls are never inside a group: they are zones of their own.
+ * Inside a group, in stream order: thoughts (one row in the strip column, `✻ Thought`,
+ * the first line, open for all of it), light strips (one call each; `Read ×N` /
+ * `Bash ×N` merges), the text the agent wrote between calls (as written, where it was
+ * written) and Agents panels (one per batch of sub-agents that ran at the same time).
  *
  * Strips carry no failure mark and no red: a call that returned an error looks like the
  * others and shows its error when opened. Only what needs the user is a card. The one
@@ -183,23 +183,29 @@ function statsMeta(t: ReturnType<typeof useTranslation>['t'], s: { steps: number
 
 const THOUGHT_TEXT = 'text-[12.5px] italic leading-relaxed text-[var(--color-text-muted)] whitespace-pre-wrap break-words';
 
-/** A thought inside a phase: in full while it streams (and until it settles), then
- *  one line — its first line — that opens to all of it. No label. */
-function PhaseThought({ unit, folded, open, onToggle }: { unit: ThoughtUnit; folded: boolean; open: boolean; onToggle: (o: boolean) => void }) {
-  if (!folded || unit.live) return <div data-testid="thought" data-live={unit.live ? 'true' : 'false'} className={THOUGHT_TEXT}>{unit.text}</div>;
+/** A thought inside a phase: one row in the strip column, `✻ Thought`, its first line
+ *  and how long it ran; the row opens to all of it. It never takes more than one line
+ *  while it streams, so the strips around it keep their place. */
+function PhaseThought({ unit, scope, open, onToggle }: { unit: ThoughtUnit; scope: string; open: boolean; onToggle: (o: boolean) => void }) {
+  const { t } = useTranslation();
   const first = unit.text.trim().split('\n')[0];
+  const seconds = callSeconds(`${scope}:th-${unit.ordinal}`, unit.live);
   return (
-    <div data-testid="thought" data-folded={open ? 'false' : 'true'}>
+    <div data-testid="thought" data-live={unit.live ? 'true' : 'false'} data-folded={open ? 'false' : 'true'} {...ANCHOR_PROPS}>
       <button
         type="button"
         data-testid="thought-toggle"
         aria-expanded={open}
         onClick={() => onToggle(!open)}
-        className={`w-full text-left truncate ${THOUGHT_TEXT.replace('whitespace-pre-wrap break-words', '')} hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50 rounded`}
+        className="w-full flex items-center gap-3 min-w-0 pl-2 pr-3 py-[3px] rounded-[6px] text-left hover:bg-[var(--color-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
       >
-        {first}
+        <span className="w-[10ch] shrink-0 truncate font-mono text-[12px] text-[var(--color-text-dim)]">✻ {tf(t, 'chat.turn.zone.thought', 'Thought')}</span>
+        <span className="truncate min-w-0 text-[12.5px] italic text-[var(--color-text-muted)]">{first}</span>
+        <span className="ml-auto w-[7ch] shrink-0 text-right font-mono text-[12px] tabular-nums text-[var(--color-text-muted)]">
+          {seconds !== undefined && seconds >= MIN_SECONDS ? fmt(seconds) : ''}
+        </span>
       </button>
-      {open && <div data-testid="thought-text" className={`${THOUGHT_TEXT} mt-0.5`}>{unit.text}</div>}
+      {open && <div data-testid="thought-text" className={`${THOUGHT_TEXT} mt-0.5 mb-1 ml-[calc(10ch+20px)]`}>{unit.text}</div>}
     </div>
   );
 }
@@ -426,10 +432,11 @@ export interface ZoneContext {
 
 type BodyItem =
   | { key: string; thought: ThoughtUnit }
+  | { key: string; text: string }
   | { key: string; strips: StripItem[] }
   | { key: string; agents: ToolStep[] };
 
-/** A phase's members as body items in stream order: thoughts, runs of strips, panels. */
+/** A phase's members as body items in stream order: thoughts, text, runs of strips, panels. */
 function bodyItems(members: PhaseMember[], settled: (id: string) => boolean): BodyItem[] {
   const out: BodyItem[] = [];
   const allSteps = members.flatMap((m) => (m.kind === 'process' ? m.steps : []));
@@ -437,6 +444,7 @@ function bodyItems(members: PhaseMember[], settled: (id: string) => boolean): Bo
   const panels = new Map<string, Extract<BodyItem, { agents: ToolStep[] }>>();
   for (const m of members) {
     if (m.kind === 'thought') { out.push({ key: `th-${m.ordinal}`, thought: m }); continue; }
+    if (m.kind === 'text') { out.push({ key: `tx-${m.textOrdinal}`, text: m.text }); continue; }
     let run: ToolStep[] = [];
     const flush = () => {
       if (run.length) out.push({ key: `strips-${run[0].block.id}`, strips: mergeStrips(run, settled) });
@@ -463,31 +471,34 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
   const lingering = useLinger(live);
   const active = live || lingering;
   const steps = members.flatMap((m) => (m.kind === 'process' ? m.steps : []));
-  const thoughts = members.filter((m): m is ThoughtUnit => m.kind === 'thought');
-  const tracked = [
-    ...steps.map((s) => ({ id: s.block.id, done: s.status !== 'pending' })),
-    // a thought settles once it stopped streaming AND something came after it
-    ...thoughts.map((th) => ({ id: `th-${th.ordinal}`, done: !th.live && members[members.length - 1] !== th })),
-  ];
-  const settled = useSettled(tracked, active);
+  const settled = useSettled(steps.map((s) => ({ id: s.block.id, done: s.status !== 'pending' })), active);
   const items = bodyItems(members, settled);
+  // Adjacent thoughts and strips share one column (strip spacing); text and an Agents
+  // panel stand between columns.
+  const blocks: Array<{ key: string; column?: BodyItem[]; item?: BodyItem }> = [];
+  for (const it of items) {
+    const inColumn = 'thought' in it || 'strips' in it;
+    const prev = blocks[blocks.length - 1];
+    if (inColumn && prev?.column) prev.column.push(it);
+    else if (inColumn) blocks.push({ key: `col-${it.key}`, column: [it] });
+    else blocks.push({ key: it.key, item: it });
+  }
+  const columnRow = (it: BodyItem) => {
+    if ('thought' in it) {
+      const k = `th-${it.thought.ordinal}`;
+      return <PhaseThought key={it.key} unit={it.thought} scope={ctx.scope} open={ctx.choice(k) === true} onToggle={(o) => ctx.choose(k, o)} />;
+    }
+    if ('strips' in it) return it.strips.map((s) => <ToolStripV6 key={s.key} item={s} />);
+    return null;
+  };
   return (
     <div data-testid="phase-body" className="space-y-2">
-      {items.map((it) => {
-        if ('thought' in it) {
-          const k = `th-${it.thought.ordinal}`;
-          return (
-            <PhaseThought
-              key={it.key}
-              unit={it.thought}
-              folded={!active || settled(k)}
-              open={ctx.choice(k) === true}
-              onToggle={(o) => ctx.choose(k, o)}
-            />
-          );
-        }
-        if ('agents' in it) return <AgentsPanel key={it.key} agents={it.agents} sessionId={ctx.sessionId} readOnly={ctx.readOnly} />;
-        return <div key={it.key} className="space-y-[2px]">{it.strips.map((s) => <ToolStripV6 key={s.key} item={s} />)}</div>;
+      {blocks.map((b) => {
+        if (b.column) return <div key={b.key} className="space-y-[2px]">{b.column.map(columnRow)}</div>;
+        const it = b.item!;
+        if ('text' in it) return <div key={b.key} data-testid="phase-text" className="text-[14px]" {...ANCHOR_PROPS}>{ctx.renderText(it.text, `${it.key}-b`)}</div>;
+        if ('agents' in it) return <AgentsPanel key={b.key} agents={it.agents} sessionId={ctx.sessionId} readOnly={ctx.readOnly} />;
+        return null;
       })}
     </div>
   );

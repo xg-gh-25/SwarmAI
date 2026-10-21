@@ -6,8 +6,9 @@
  * contexts and the chat service mocked):
  * - AC1 the first thoughts are the THINKING receipt: full text while streaming, kept
  *   first after the turn as `THOUGHTS · N`, folded FOLD_DELAY_MS later
- * - AC2 THOUGHTS → restatement → WORKED → note → WORKED → RESULT: a note between calls
- *   is first level, never inside a group; a thought between calls stays in its group
+ * - AC2 THOUGHTS → restatement → WORKED → RESULT: a note between calls stays inside
+ *   its group where it was written (it never splits one); a thought between calls is
+ *   one `✻ Thought` row in the strip column
  * - AC3 every group but RESULT toggles from its header; headers count steps and
  *   commands, never files; a turn with no calls has no RESULT label
  * - AC4 one light strip per call: the tool's own name (MCP prefix dropped), the
@@ -90,15 +91,18 @@ describe('AC1 — the first thoughts are the receipt', () => {
   });
 });
 
-describe('AC2 — notes are the phase boundaries', () => {
+describe('AC2 — notes stay in their group', () => {
   const turn = [th('look'), tx('I read it as X.'), bash('a', 'cat a.ts'), tr('a'), th('so the store writes'),
     bash('b', 'grep -rn foo src'), tr('b'), tx('Build is green, now the review.'), bash('c', 'make test'), tr('c'), tx('All done.')];
 
-  it('THOUGHTS → restatement → WORKED → note → WORKED → RESULT', () => {
+  it('THOUGHTS → restatement → WORKED → RESULT; the note is inside WORKED', () => {
     const { container } = render(view(turn, false));
-    expect(firstLevel(container)).toEqual(['zone-thinking', 'turn-restatement', 'zone-phase', 'turn-note', 'zone-phase', 'turn-result']);
-    expect(screen.getByTestId('turn-note').closest('[data-testid="zone-phase"]')).toBeNull();
+    expect(firstLevel(container)).toEqual(['zone-thinking', 'turn-restatement', 'zone-phase', 'turn-result']);
     expect(screen.getByTestId('turn-result').textContent).toContain('Result');
+    const phase = screen.getByTestId('zone-phase');
+    fireEvent.click(within(phase).getByTestId('group-toggle'));
+    const note = within(screen.getByTestId('zone-phase')).getByTestId('phase-text');
+    expect(note.textContent).toContain('Build is green, now the review.');
   });
 
   it('a thought between calls stays inside its group', () => {
@@ -106,6 +110,20 @@ describe('AC2 — notes are the phase boundaries', () => {
     const first = screen.getAllByTestId('zone-phase')[0];
     fireEvent.click(within(first).getByTestId('group-toggle'));
     expect(within(screen.getAllByTestId('zone-phase')[0]).getByText(/so the store writes/)).toBeTruthy();
+  });
+
+  it('a thought is one ✻ Thought row in the strips’ column, also while it streams; it opens to all of it', () => {
+    const blocks = [tx('go'), bash('a', 'cat a.ts'), tr('a'), th('first line\nsecond line'), bash('b', 'make'), tr('b')];
+    render(view(blocks, true));
+    const thought = screen.getByTestId('thought');
+    expect(thought.textContent).toContain('✻ Thought');
+    expect(thought.textContent).toContain('first line');
+    expect(thought.textContent).not.toContain('second line');
+    // the same column as the strips around it: no gap breaks the strips apart
+    const column = thought.parentElement!;
+    expect(within(column).getAllByTestId('tool-strip')).toHaveLength(2);
+    fireEvent.click(within(thought).getByTestId('thought-toggle'));
+    expect(screen.getByTestId('thought-text').textContent).toContain('second line');
   });
 });
 

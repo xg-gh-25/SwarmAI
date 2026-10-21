@@ -3,19 +3,20 @@
  * Knowledge/Designs/2026-10-19-chat-turn-display-spec.md), and the tool strips inside it.
  *
  * `turnZones(view, isStreaming)` lays `deriveTurnView`'s units out as the zones the
- * turn reads in: THOUGHTS → restatement → WORKED → note → WORKED → … → RESULT, with a
- * pipeline part (`pipelineStart` divider + one zone per started stage / gate) when the
- * turn ran a pipeline. ONE rule decides the first level, for a chat turn and for the work
- * before a run alike: a note the agent wrote between calls, a question / permission /
- * escalation, an unrecovered final failure and the pipeline divider close the current
- * phase. A thought never opens or closes one: it belongs to the work around it.
+ * turn reads in: THOUGHTS → restatement → WORKED → … → RESULT, with a pipeline part
+ * (`pipelineStart` divider + one zone per started stage / gate) when the turn ran a
+ * pipeline. ONE rule decides the first level, for a chat turn and for the work before a
+ * run alike: a question / permission / escalation, an unrecovered final failure and the
+ * pipeline divider close the current phase. The text the agent wrote between calls
+ * stays in the phase, in stream order, as written; so does a thought.
  *
  * Zone kinds:
  * - `thinking`      — the thoughts before anything was written or called (the receipt).
- * - `text`          — the restatement (before the first call), a note (between calls,
- *                     first level, never folded) or the answer; `result` marks the final
- *                     answer of a turn that had calls, once it has ended.
- * - `phase`         — one WORKING / WORKED group: consecutive calls and thoughts.
+ * - `text`          — the restatement (before the first call), text with no phase open
+ *                     (after a question, before any call) or the answer; `result` marks
+ *                     the final answer of a turn that had calls, once it has ended.
+ * - `phase`         — one WORKING / WORKED group: calls, thoughts and the text between
+ *                     them, in stream order.
  * - `needs`         — a question / permission / escalation, in place.
  * - `failure`       — the turn's final call failed and nothing followed it.
  * - `pipelineStart` — `Pipeline started · <profile>`; everything after it is stage zones.
@@ -41,13 +42,16 @@
  * from the backend display object, else the summary); `mergeStrips` merges adjacent
  * calls of one tool with identical input, or adjacent Read / Grep / Glob.
  *
- * @exports turnZones, stripView, mergeStrips, zoneStats, Zone, PhaseMember, StripView, StripItem
+ * @exports turnZones, stripView, mergeStrips, zoneStats, Zone, PhaseMember, PhaseText, StripView, StripItem
  */
 import type { InterruptBlock, ProcessUnit, ThoughtUnit, ToolStep, TurnUnit, TurnView } from './turnView';
 import { displayCommand, isGateStage, isUnanswered, toolCall } from './turnView';
 import type { PipelineDocRef, PipelineStageContent, ToolUseContent } from '../../types';
 
-export type PhaseMember = ProcessUnit | ThoughtUnit;
+/** What the agent wrote between calls, in the phase, where it was written. */
+export interface PhaseText { kind: 'text'; text: string; textOrdinal: number }
+
+export type PhaseMember = ProcessUnit | ThoughtUnit | PhaseText;
 
 export interface StageZone {
   kind: 'stage';
@@ -88,7 +92,7 @@ export type Zone =
 const firstIndex = (u: TurnUnit): number => (u.kind === 'process' ? (u.steps[0]?.index ?? -1) : u.index);
 
 /** A phase's id: its first member's ordinal key. */
-const memberKey = (m: PhaseMember) => (m.kind === 'thought' ? `th-${m.ordinal}` : m.id);
+const memberKey = (m: PhaseMember) => (m.kind === 'thought' ? `th-${m.ordinal}` : m.kind === 'text' ? `tx-${m.textOrdinal}` : m.id);
 
 /** A completed stage row's documents (`docs`, else the older single `doc`). */
 export function stageDocs(row: PipelineStageContent): PipelineDocRef[] {
@@ -97,10 +101,13 @@ export function stageDocs(row: PipelineStageContent): PipelineDocRef[] {
 }
 
 /**
- * Lays one run of units out as zones (the chat part, or one stage's body): notes,
- * needs and failures close the open phase; calls and thoughts join it.
+ * Lays one run of units out as zones (the chat part, or one stage's body): needs and
+ * failures close the open phase; calls, thoughts and the text written between calls
+ * join it, in stream order. While the turn streams, the latest text after a call
+ * joins it too (it cannot be told from a note yet); once the turn ended, the text
+ * after the last call is the answer, on the first level.
  */
-function layOut(units: TurnUnit[], hasCalls: boolean, resultOrdinal: number | null, restatementAllowed: boolean): Zone[] {
+function layOut(units: TurnUnit[], hasCalls: boolean, resultOrdinal: number | null, restatementAllowed: boolean, isStreaming = false): Zone[] {
   const out: Zone[] = [];
   let phase: Extract<Zone, { kind: 'phase' }> | null = null;
   let seenCall = false;
@@ -133,7 +140,11 @@ function layOut(units: TurnUnit[], hasCalls: boolean, resultOrdinal: number | nu
       out.push({ kind: 'stageResult', id: `sr-${u.block.stage}-${u.index}`, block: u.block });
       continue;
     }
-    // note / landmark / outcome: first-level text
+    // note / landmark / outcome. Text written after a call stays in the open phase.
+    if (phase && seenCall && (u.kind !== 'outcome' || isStreaming)) {
+      (phase as Extract<Zone, { kind: 'phase' }>).members.push({ kind: 'text', text: u.text, textOrdinal: u.textOrdinal });
+      continue;
+    }
     close();
     const restatement = restatementAllowed && !seenCall && !out.some((z) => z.kind === 'text');
     const answer = u.kind === 'outcome';
@@ -210,7 +221,7 @@ export function turnZones(view: TurnView, isStreaming: boolean): Zone[] {
     }
     (firstIndex(u) < start ? chat : pipe).push(u);
   }
-  zones.push(...layOut(chat, hasCalls, resultOrdinal, !view.midWork));
+  zones.push(...layOut(chat, hasCalls, resultOrdinal, !view.midWork, isStreaming));
 
   if (start !== undefined) {
     zones.push({ kind: 'pipelineStart', id: 'pipeline-start', profile: view.pipelineStart?.profile ?? view.run?.profile ?? null });
@@ -237,7 +248,7 @@ function pipelineZones(units: TurnUnit[], view: TurnView, hasCalls: boolean, isS
   // fresh run's work stands below the divider, before the first stage, for good.
   const held: TurnUnit[] = [];
   const flushHeld = () => {
-    if (held.length) { out.push(...layOut(held, hasCalls, resultOrdinal, false)); held.length = 0; }
+    if (held.length) { out.push(...layOut(held, hasCalls, resultOrdinal, false, isStreaming)); held.length = 0; }
   };
 
   const openStage = (stage: string, row?: PipelineStageContent): StageZone => {
@@ -307,7 +318,7 @@ function pipelineZones(units: TurnUnit[], view: TurnView, hasCalls: boolean, isS
   // ended inside a running stage says `Stopped at X`.
   const last = current;
   for (const z of stages.values()) {
-    z.body = layOut(bodyUnits.get(z) ?? [], hasCalls, resultOrdinal, false);
+    z.body = layOut(bodyUnits.get(z) ?? [], hasCalls, resultOrdinal, false, isStreaming);
     if (z === last) {
       if (isStreaming) { z.live = true; markLive(z.body, true); }
       else if (z.status === 'running') z.stoppedHere = true;

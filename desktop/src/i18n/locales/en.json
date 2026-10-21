@@ -345,6 +345,7 @@
         "stoppedByYou": "Stopped by you · the last call did not finish",
         "stoppedCall": "stopped",
         "thinking": "Thinking",
+        "thought": "Thought",
         "thoughtCount_one": "{{count}} thought",
         "thoughtCount_other": "{{count}} thoughts",
         "thoughts": "Thoughts",

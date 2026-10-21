@@ -4,8 +4,10 @@
  *
  * What is tested (pure projection over deriveTurnView):
  * - the lead thoughts are their own THINKING zone; the text before the first call is
- *   the restatement; every note between calls closes the phase and stands between two
- *   phases; a thought between calls stays inside its phase (never starts one)
+ *   the restatement; the text written between calls stays in the phase, in stream
+ *   order (it never closes one); a thought between calls stays inside its phase too;
+ *   while streaming the latest text after a call is in the phase, once the turn ended
+ *   the text after the last call is the first-level answer
  * - questions / permissions and an unrecovered final failure are first-level needs zones
  * - a Q&A turn (no calls) has no RESULT; a turn with calls marks its final text RESULT
  *   once it has ended
@@ -59,22 +61,22 @@ const zones = (content: ContentBlock[], streaming = false): Zone[] => turnZones(
 const kinds = (zs: Zone[]) => zs.map((z) => z.kind);
 
 describe('turnZones — a chat turn', () => {
-  it('THOUGHTS → restatement → WORKED → note → WORKED → RESULT', () => {
+  it('THOUGHTS → restatement → WORKED (calls, thoughts and notes in order) → RESULT', () => {
     const zs = zones([th('look'), tx('I read it as X.'), tu('a'), tr('a'), th('mid'), tu('b'), tr('b'),
       tx('Step one done.'), tu('c'), tr('c'), tx('The answer.')]);
-    expect(kinds(zs)).toEqual(['thinking', 'text', 'phase', 'text', 'phase', 'text']);
-    const [, restate, p1, note, , answer] = zs;
+    expect(kinds(zs)).toEqual(['thinking', 'text', 'phase', 'text']);
+    const [, restate, p1, answer] = zs;
     expect(restate.kind === 'text' && restate.role).toBe('restatement');
-    expect(note.kind === 'text' && note.role).toBe('note');
     expect(answer.kind === 'text' && answer.result).toBe(true);
-    // the thought between two calls stays in the phase
-    expect(p1.kind === 'phase' && p1.members.map((m) => m.kind)).toEqual(['process', 'thought', 'process']);
+    // the thought and the note between calls stay in the phase, where they were written
+    expect(p1.kind === 'phase' && p1.members.map((m) => m.kind)).toEqual(['process', 'thought', 'process', 'text', 'process']);
+    expect(p1.kind === 'phase' && p1.members[3]).toMatchObject({ kind: 'text', text: 'Step one done.' });
   });
 
-  it('a thought right after a note opens the next phase with it (thoughts never stand alone between)', () => {
+  it('a note and the thought after it stay in the one phase, in order', () => {
     const zs = zones([tx('go'), tu('a'), tr('a'), tx('next.'), th('hmm'), tu('b'), tr('b'), tx('done')]);
-    expect(kinds(zs)).toEqual(['text', 'phase', 'text', 'phase', 'text']);
-    expect(zs[3].kind === 'phase' && zs[3].members.map((m) => m.kind)).toEqual(['thought', 'process']);
+    expect(kinds(zs)).toEqual(['text', 'phase', 'text']);
+    expect(zs[1].kind === 'phase' && zs[1].members.map((m) => m.kind)).toEqual(['process', 'text', 'thought', 'process']);
   });
 
   it('a Q&A turn: THOUGHTS then the answer, no RESULT', () => {
@@ -87,13 +89,20 @@ describe('turnZones — a chat turn', () => {
     const zs = zones([tx('go'), tu('a'), tr('a'), tu('b')], true);
     expect(kinds(zs)).toEqual(['text', 'phase']);
     expect(zs[1].kind === 'phase' && zs[1].live).toBe(true);
+    // the latest text after a call streams in the open phase (it may still be a note)
     const z2 = zones([tx('go'), tu('a'), tr('a'), tx('answer so')], true);
-    expect(z2[2].kind === 'text' && z2[2].result).toBe(false);
+    expect(kinds(z2)).toEqual(['text', 'phase']);
+    expect(z2[1]).toMatchObject({ kind: 'phase', live: true });
+    expect(z2[1].kind === 'phase' && z2[1].members.at(-1)).toMatchObject({ kind: 'text', text: 'answer so' });
+    // the turn ended: that text is the first-level RESULT
+    const z3 = zones([tx('go'), tu('a'), tr('a'), tx('answer so')], false);
+    expect(z3.at(-1)).toMatchObject({ kind: 'text', result: true });
   });
 
-  it('no empty WORKING: a note just written while streaming is the last zone', () => {
+  it('a note just written while streaming stays in the live phase (the phase does not close)', () => {
     const zs = zones([tx('go'), tu('a'), tr('a'), tx('next.')], true);
-    expect(kinds(zs)).toEqual(['text', 'phase', 'text']);
+    expect(kinds(zs)).toEqual(['text', 'phase']);
+    expect(zs[1]).toMatchObject({ kind: 'phase', live: true });
   });
 
   it('an interrupt and an unrecovered final failure are needs zones', () => {
@@ -212,7 +221,7 @@ describe('turnZones — a pipeline turn', () => {
     const live = zones(blocks, true);
     const dv = live.find((z): z is Extract<Zone, { kind: 'stage' }> => z.kind === 'stage');
     expect(dv?.live).toBe(true);
-    expect(dv?.body.some((z) => z.kind === 'text')).toBe(true);
+    expect(dv?.body.some((z) => z.kind === 'phase' && z.members.some((m) => m.kind === 'text' && m.text === 'Delivered.'))).toBe(true);
     const done = zones(blocks, false);
     expect(done.at(-1)).toMatchObject({ kind: 'text', result: true });
   });
