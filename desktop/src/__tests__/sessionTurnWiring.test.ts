@@ -76,6 +76,7 @@ describe('session turn wiring', () => {
     const bubble = lastAssistant('t1')!;
     expect(bubble.id).toBe('local-sub-I');
     expect(bubble.metadata?.client_id).toBe('injected-q-asst');
+    expect(bubble.metadata?.turn_source).toBe('injected');
     act(() => { fake.emit(env('I', 2, text('done in background'))); });
     expect(JSON.stringify(lastAssistant('t1')!.content)).toContain('done in background');
     act(() => { fake.emit(env('I', 3, { type: 'result' })); });

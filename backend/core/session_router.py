@@ -3159,7 +3159,7 @@ class SessionRouter:
             finished = _bg.take_unannounced() if isinstance(_bg, BackgroundAgents) else []
             if finished:
                 block = {"type": "background_finished", "agents": [
-                    {k: a[k] for k in ("toolUseId", "description", "status", "durationMs") if k in a}
+                    {k: a[k] for k in ("toolUseId", "description", "status", "durationMs", "toolUses", "summary") if k in a}
                     for a in finished]}
                 event0 = {"type": "assistant", "content": [block], "model": None}
                 try:

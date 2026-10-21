@@ -4680,7 +4680,10 @@ export function useChatStreamingLifecycle(
       || (!continuation && !!cid && m.metadata?.client_id === cid)));
     store.appendMany([{
       id, role: 'assistant', content: [], timestamp: new Date().toISOString(),
-      ...(cid ? { metadata: { client_id: cid } } : {}),
+      metadata: {
+        ...(cid ? { client_id: cid } : {}),
+        ...(source ? { turn_source: source } : {}),
+      },
     } as Message]);
     const handlers = turnHandlersOf(tab);
     // A drained turn delivers the message the tab shows as queued: the backend

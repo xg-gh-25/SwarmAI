@@ -13,6 +13,8 @@ import { backgroundAgentsStore } from '../../../../stores/backgroundAgentsStore'
 import { afterActivation } from './scrollTestUtils';
 import type { Message } from '../../../../types';
 
+import { FOCUS_AGENT_EVENT } from '../../agentFocus';
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (k: string, d?: unknown, o?: { count?: number }) =>
     (typeof d === 'string' ? d.replace('{{count}}', String(o?.count ?? '')) : k) }),
@@ -39,15 +41,19 @@ const props = {
 };
 
 describe('TabView — background agents line', () => {
-  let scrolled: Element[] = [];
+  let focused: string[] = [];
+  const onFocus = (event: Event) => focused.push((event as CustomEvent<{ toolUseId: string }>).detail.toolUseId);
   beforeEach(() => {
-    scrolled = [];
-    (Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = function (this: Element) { scrolled.push(this); };
+    focused = [];
+    window.addEventListener(FOCUS_AGENT_EVENT, onFocus);
     messageStoreRegistry.clear();
     backgroundAgentsStore.reset();
     messageStoreRegistry.getOrCreate('A').replace([{ id: 'a1', role: 'assistant', timestamp: new Date().toISOString(), content: [] }]);
   });
-  afterEach(() => { cleanup(); messageStoreRegistry.clear(); backgroundAgentsStore.reset(); });
+  afterEach(() => {
+    window.removeEventListener(FOCUS_AGENT_EVENT, onFocus);
+    cleanup(); messageStoreRegistry.clear(); backgroundAgentsStore.reset();
+  });
 
   it('shows while one runs (no turn streaming), goes when it ends; click scrolls to its row', async () => {
     const { queryByTestId } = render(<TabView {...props} />);
@@ -57,9 +63,28 @@ describe('TabView — background agents line', () => {
     const line = queryByTestId('background-agents-line')!;
     expect(line.textContent).toContain('1 background agent running');
     fireEvent.click(line.querySelector('button')!);
-    expect(scrolled.map((e) => e.getAttribute('data-agent-id'))).toEqual(['ag1']);
+    expect(focused).toEqual(['ag1']);
     act(() => { backgroundAgentsStore.apply('s1', [{ toolUseId: 'ag1', status: 'completed' }]); });
     expect(queryByTestId('background-agents-line')).toBeNull();
+  });
+
+  it('does not paint an empty injected placeholder before its first background-finished block', async () => {
+    const store = messageStoreRegistry.getOrCreate('A');
+    store.replace([
+      { id: 'old', role: 'assistant', timestamp: new Date().toISOString(), content: [{ type: 'text', text: 'old' }] },
+      { id: 'injected', role: 'assistant', timestamp: new Date().toISOString(), content: [], metadata: { turn_source: 'injected' } },
+    ] as Message[]);
+    const { queryByTestId } = render(<TabView {...props} isStreaming />);
+    await afterActivation();
+    expect(queryByTestId('bubble-old')).not.toBeNull();
+    expect(queryByTestId('bubble-injected')).toBeNull();
+
+    act(() => { store.updateLast((message) => ({
+      ...message,
+      content: [{ type: 'background_finished', agents: [{ toolUseId: 'ag1', status: 'completed' }] }],
+    })); });
+    await afterActivation();
+    expect(queryByTestId('bubble-injected')).not.toBeNull();
   });
 
   it('another session’s agents do not show', async () => {

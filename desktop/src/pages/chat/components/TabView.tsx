@@ -55,6 +55,7 @@ import { CompactNotice } from './CompactNotice';
 import { TurnPhaseLine } from './TurnPhaseLine';
 import { tf } from '../tf';
 import { useStreamingRest } from '../../../hooks/useStreamingRest';
+import { focusAgent } from '../agentFocus';
 
 /** Bottom-proximity threshold (px): within this of the bottom counts as "at
  *  bottom" for both auto-scroll and the resize re-pin. */
@@ -769,6 +770,14 @@ function TabViewImpl({
               />
             );
           }
+          // A CLI-injected turn is announced by an empty placeholder before its
+          // first persisted block arrives. Rendering that placeholder flashes a
+          // bare Swarm header + bee for one frame, then replaces it with the
+          // background-agent handoff. Keep it in the store for routing, but do
+          // not paint it until the first real block arrives.
+          if (msg.role === 'assistant'
+            && msg.content.length === 0
+            && msg.metadata?.turn_source === 'injected') return null;
           // Only pass isStreaming to the last assistant message.
           // Use lastAssistantIdx (not messages.length-1) so queued
           // user messages appended after the streaming assistant
@@ -876,11 +885,7 @@ function TabViewImpl({
         <div data-testid="background-agents-line" className="sticky bottom-0 z-10 flex justify-center py-1">
           <button
             type="button"
-            onClick={() => {
-              const id = bgRunning[0].toolUseId;
-              const row = containerRef.current?.querySelector(`[data-agent-id="${CSS.escape(id)}"]`);
-              row?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-            }}
+            onClick={() => focusAgent(bgRunning[0].toolUseId, sessionId)}
             title={bgRunning.map((a) => a.description).filter(Boolean).join('\n')}
             className="px-2.5 py-0.5 rounded-full text-[12px] text-[var(--color-text-muted)] bg-[var(--color-bg-primary)]/95 border border-[var(--color-border-subtle)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
           >

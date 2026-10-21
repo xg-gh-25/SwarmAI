@@ -29,7 +29,7 @@
  *
  * @exports TurnZoneList, ToolStripV6, AgentsPanel, PhaseBody, ZONE_GAP, RESULT_GAP
  */
-import { useContext, useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FOLD_DELAY_MS, useLinger } from '../../../hooks/useLinger';
@@ -312,11 +312,13 @@ const bgView = (s: ToolStep, agents: BackgroundAgent[], loaded: boolean): BgView
   agentStatus(agents, loaded, s.block.id, s.progress?.status, s.progress);
 const inBackground = (bg: BgView) => bg?.status === 'running';
 
-function AgentRow({ step, sessionId, readOnly }: { step: ToolStep; sessionId?: string; readOnly?: boolean }) {
+function AgentRow({ step, sessionId, readOnly, focused }: { step: ToolStep; sessionId?: string; readOnly?: boolean; focused?: boolean }) {
   const { t } = useTranslation();
   const { agents: bgAgents, loaded: bgLoaded } = useBackgroundAgents(sessionId);
   const bg = bgView(step, bgAgents, bgLoaded);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(!!focused);
+  const expanded = open || !!focused;
+  useLayoutEffect(() => { if (focused) setOpen(true); }, [focused]);
   const [stopping, setStopping] = useState(false);
   const p = step.progress;
   const running = step.status === 'pending' && (p?.status === undefined || p.status === 'running');
@@ -357,7 +359,7 @@ function AgentRow({ step, sessionId, readOnly }: { step: ToolStep; sessionId?: s
         <button
           type="button"
           data-testid="agent-toggle"
-          aria-expanded={open}
+          aria-expanded={expanded}
           onClick={() => setOpen((o) => !o)}
           className="flex-1 flex items-start gap-2 min-w-0 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
         >
@@ -384,7 +386,7 @@ function AgentRow({ step, sessionId, readOnly }: { step: ToolStep; sessionId?: s
       {running && p?.lastToolName && (
         <div data-testid="agent-now" className="ml-6 font-mono text-[11.5px] text-purple-400">→ {p.lastToolName}</div>
       )}
-      {open && (
+      {expanded && (
         <div data-testid="agent-detail" className="ml-6 mt-1 mb-1 space-y-1">
           <div className="text-[12px] text-[var(--color-text-muted)] whitespace-pre-wrap break-words">{stripView(step.block).full}</div>
           {(step.children?.length ?? 0) > 0 && (
@@ -403,9 +405,17 @@ function AgentRow({ step, sessionId, readOnly }: { step: ToolStep; sessionId?: s
   );
 }
 
-export function AgentsPanel({ agents, sessionId, readOnly }: { agents: ToolStep[]; sessionId?: string; readOnly?: boolean }) {
+export function AgentsPanel({ agents, sessionId, readOnly, focusedAgentId }: {
+  agents: ToolStep[];
+  sessionId?: string;
+  readOnly?: boolean;
+  focusedAgentId?: string;
+}) {
   const { t } = useTranslation();
+  const focused = agents.some((agent) => agent.block.id === focusedAgentId);
   const [open, setOpen] = useState(true);
+  const expanded = open || focused;
+  useLayoutEffect(() => { if (focused) setOpen(true); }, [focused]);
   const isRunning = (s: ToolStep) => s.status === 'pending' && (s.progress?.status === undefined || s.progress.status === 'running');
   const { agents: bgAgents, loaded: bgLoaded } = useBackgroundAgents(sessionId);
   const bgOf = (s: ToolStep) => bgView(s, bgAgents, bgLoaded);
@@ -429,7 +439,7 @@ export function AgentsPanel({ agents, sessionId, readOnly }: { agents: ToolStep[
   return (
     <section data-testid="agents-panel" className="rounded-[10px] border border-purple-400/25 bg-purple-500/[0.06] px-2.5 py-1.5" {...ANCHOR_PROPS}>
       <div className="flex items-center gap-2 min-w-0">
-        <GroupHeader testid="agents-toggle" open={open} onToggle={() => setOpen((o) => !o)} label={tf(t, 'chat.turn.zone.agents', 'Agents')} meta={meta} labelClass="text-purple-400" />
+        <GroupHeader testid="agents-toggle" open={expanded} onToggle={() => setOpen((o) => !o)} label={tf(t, 'chat.turn.zone.agents', 'Agents')} meta={meta} labelClass="text-purple-400" />
         {running > 0 && !readOnly && (
           <button
             type="button"
@@ -441,9 +451,9 @@ export function AgentsPanel({ agents, sessionId, readOnly }: { agents: ToolStep[
           </button>
         )}
       </div>
-      {open && (
+      {expanded && (
         <div className="mt-1.5 space-y-1.5">
-          {agents.map((a) => <AgentRow key={`ag-${a.block.id}`} step={a} sessionId={sessionId} readOnly={readOnly} />)}
+          {agents.map((a) => <AgentRow key={`ag-${a.block.id}`} step={a} sessionId={sessionId} readOnly={readOnly} focused={a.block.id === focusedAgentId} />)}
         </div>
       )}
     </section>
@@ -461,6 +471,8 @@ export interface ZoneContext {
   readOnly?: boolean;
   choice: (id: string) => boolean | undefined;
   choose: (id: string, open: boolean) => void;
+  /** Agent row requested from a later background-completion card. */
+  focusedAgentId?: string;
   /** The agent's text (a note, an answer) and a needs block, rendered by the message. */
   renderText: (text: string, key: string) => ReactNode;
   renderNeeds: (zone: Extract<Zone, { kind: 'needs' | 'failure' }>) => ReactNode;
@@ -574,7 +586,7 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
     return blocks.map((b) => {
       if (b.column) return <div key={b.key} className="space-y-[2px]">{b.column.map(columnRow)}</div>;
       const it = b.item!;
-      if ('agents' in it) return <AgentsPanel key={b.key} agents={it.agents} sessionId={ctx.sessionId} readOnly={ctx.readOnly} />;
+      if ('agents' in it) return <AgentsPanel key={b.key} agents={it.agents} sessionId={ctx.sessionId} readOnly={ctx.readOnly} focusedAgentId={ctx.focusedAgentId} />;
       return null;
     });
   };

@@ -514,7 +514,15 @@ export interface TurnNoticeContent {
  *  (backend core/background_agents.py): which ones, how they ended. */
 export interface BackgroundFinishedContent {
   type: 'background_finished';
-  agents: Array<{ toolUseId?: string; description?: string; status: string; durationMs?: number }>;
+  agents: Array<{
+    toolUseId?: string;
+    description?: string;
+    status: string;
+    durationMs?: number;
+    toolUses?: number;
+    /** The same terminal summary persisted onto the original Agent result. */
+    summary?: string;
+  }>;
 }
 
 export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent

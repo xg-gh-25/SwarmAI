@@ -100,18 +100,31 @@ async def test_cli_initiated_turn_reaches_the_events_subscriber_over_http(hub, m
         yield {"type": "result", "session_id": "S1"}
 
     unit._read_formatted_response = frames
+    from core.background_agents import BackgroundAgents
+    unit.background_agents = BackgroundAgents()
+    unit.background_agents.launch("ag1", "Background status display test")
+    unit.background_agents.task_finished(
+        "task-1", "completed", tool_use_id="ag1", summary="The stored state matches the code.",
+        usage={"duration_ms": 45000, "tool_uses": 3},
+    )
 
     async def act():
         await r.run_injected_turn(unit, object())
 
-    got = await _sse_frames(app, "/api/chat/events", 6, act)
+    got = await _sse_frames(app, "/api/chat/events", 7, act)
     assert got[0]["type"] == "events_hello"
     turn = got[1:]
-    assert [f["type"] for f in turn] == ["turn_start", "session_start", "assistant", "result", "turn_end"]
-    assert [f["eventSeq"] for f in turn] == [1, 2, 3, 4, 5]
+    assert [f["type"] for f in turn] == ["turn_start", "assistant", "session_start", "assistant", "result", "turn_end"]
+    assert [f["eventSeq"] for f in turn] == [1, 2, 3, 4, 5, 6]
     assert {f["sessionId"] for f in turn} == {"S1"} and len({f["turnId"] for f in turn}) == 1
     assert turn[0]["source"] == "injected" and turn[0]["turnClientId"].endswith("-asst")
-    assert turn[2]["content"][0]["text"] == "background job done"
+    finished = turn[1]["content"][0]
+    assert finished == {"type": "background_finished", "agents": [{
+        "toolUseId": "ag1", "description": "Background status display test",
+        "status": "completed", "durationMs": 45000, "toolUses": 3,
+        "summary": "The stored state matches the code.",
+    }]}
+    assert turn[3]["content"][0]["text"] == "background job done"
 
 
 async def test_reconnect_with_cursor_replays_over_http(hub):

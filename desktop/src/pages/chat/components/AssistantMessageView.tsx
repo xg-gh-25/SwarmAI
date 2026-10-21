@@ -32,7 +32,7 @@
  *            3.1, 3.2, 3.3, 3.4, 3.5, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6
  */
 
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
 import clsx from 'clsx';
 import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
@@ -43,8 +43,11 @@ import { TurnZoneList, ZONE_GAP } from './TurnZones';
 import type { ZoneContext } from './TurnZones';
 import { deriveTurnView, extractNextSteps } from '../turnView';
 import type { TurnView } from '../turnView';
-import { hasOpenQuestion, stripView, turnZones } from '../turnZones';
-import type { Zone } from '../turnZones';
+import { hasOpenQuestion, phaseSegments, stripView, turnZones } from '../turnZones';
+import type { PhaseMember, Zone } from '../turnZones';
+import { ANCHOR_PROPS } from '../scrollFocus';
+import { FOCUS_AGENT_EVENT, focusAgent } from '../agentFocus';
+import type { FocusAgentDetail } from '../agentFocus';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 import { ASSISTANT_NAME } from '../assistantName';
@@ -60,32 +63,104 @@ import { useLinger } from '../../../hooks/useLinger';
 
 /** A step's file path (absolute, or relative to wherever the tool ran) names the
  *  deliverable at `rel` / `abs`. */
-/** The line at the top of a turn the CLI started because background agents finished:
- *  one per agent, how it ended and how long it ran. */
-function BackgroundFinishedLine({ agents }: { agents: NonNullable<TurnView['backgroundFinished']> }) {
+/** The compact handoff at the top of a turn the CLI started because background
+ *  agents finished. It shares the Agents panel's visual language without taking
+ *  the result's visual weight. Its shape is stable from the first persisted block:
+ *  no mount animation and no content-dependent header replacement. */
+function BackgroundFinishedCard({ agents, sessionId }: {
+  agents: NonNullable<TurnView['backgroundFinished']>;
+  sessionId?: string;
+}) {
   const { t } = useTranslation();
+  const [openResults, setOpenResults] = useState<ReadonlySet<string>>(new Set());
   const fmtS = (ms?: number) => {
     if (ms === undefined) return '';
     const s = Math.round(ms / 1000);
     return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
   };
+  const toggleResult = (key: string) => {
+    setOpenResults((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
   return (
-    <div data-testid="background-finished" className="space-y-0.5 text-[12.5px] text-[var(--color-text-muted)]">
+    <div data-testid="background-finished" className="space-y-1.5">
       {agents.map((a, i) => {
+        const key = a.toolUseId ?? `background-${i}`;
+        const description = a.description || tf(t, 'chat.turn.bgAgent', 'Background agent');
         const how = a.status === 'completed' ? tf(t, 'chat.turn.bgFinished', 'finished')
           : a.status === 'failed' ? tf(t, 'chat.turn.bgFailed', 'failed')
             : tf(t, 'chat.turn.bgStopped', 'stopped');
+        const mark = a.status === 'completed' ? '✓' : a.status === 'failed' ? '✕' : '■';
         const time = fmtS(a.durationMs);
+        const meta = [how, time, a.toolUses ? tf(t, 'chat.turn.zone.tools', a.toolUses === 1 ? '{{count}} tool' : '{{count}} tools', { count: a.toolUses }) : '']
+          .filter(Boolean).join(' · ');
+        const result = a.summary?.trim() ?? '';
+        const resultOpen = openResults.has(key);
         return (
-          <div key={a.toolUseId ?? i} className="flex items-baseline gap-1.5 min-w-0">
-            <span aria-hidden="true">↘</span>
-            <span className="truncate min-w-0 text-[var(--color-text-secondary)]">{a.description || tf(t, 'chat.turn.bgAgent', 'Background agent')}</span>
-            <span className="shrink-0">{how}{time ? ` · ${time}` : ''}</span>
-          </div>
+          <section key={key} data-testid="background-finished-card"
+            className="rounded-[10px] border border-purple-400/20 bg-purple-500/[0.04] px-2.5 py-1.5"
+            {...ANCHOR_PROPS}>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.08em] text-purple-400">
+                {tf(t, 'chat.turn.bgAgentLabel', 'Agent')}
+              </span>
+              <span aria-hidden="true" className="w-[12px] shrink-0 text-[12px] text-purple-400">{mark}</span>
+              {a.toolUseId ? (
+                <button type="button" data-testid="background-finished-origin"
+                  onClick={() => focusAgent(a.toolUseId!, sessionId)}
+                  title={tf(t, 'chat.turn.viewOriginalAgent', 'View original agent')}
+                  aria-label={tf(t, 'chat.turn.viewOriginalAgentNamed', 'View original agent: {{name}}', { name: description })}
+                  className="min-w-0 flex-1 truncate text-left text-[12.5px] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
+                  <span aria-hidden="true" className="mr-1 text-[var(--color-text-dim)]">↖</span>{description}
+                </button>
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--color-text-secondary)]">{description}</span>
+              )}
+              <span className="shrink-0 text-[12px] tabular-nums text-[var(--color-text-dim)]">{meta}</span>
+            </div>
+            {result && (
+              <div className="ml-[52px] mt-1">
+                <button type="button" data-testid="background-finished-result-toggle"
+                  aria-expanded={resultOpen} onClick={() => toggleResult(key)}
+                  className="flex items-center gap-1 rounded text-[12px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
+                  <span aria-hidden="true">{resultOpen ? '▾' : '▸'}</span>
+                  {tf(t, 'chat.turn.bgResult', 'Result')}
+                </button>
+                {resultOpen && (
+                  <div data-testid="background-finished-result" className="mt-1 whitespace-pre-wrap break-words text-[12px] text-[var(--color-text-muted)]">
+                    {result}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
         );
       })}
     </div>
   );
+}
+
+const phaseMemberHasAgent = (member: PhaseMember, toolUseId: string): boolean =>
+  member.kind === 'process' && member.steps.some((step) => step.block.id === toolUseId);
+
+/** The fold keys that must be open before an Agent row can exist in the DOM. */
+function agentFocusKeys(zones: Zone[], toolUseId: string): string[] {
+  for (const zone of zones) {
+    if (zone.kind === 'phase') {
+      const { lead, segments } = phaseSegments(zone.members);
+      if (lead.some((member) => phaseMemberHasAgent(member, toolUseId))) return [zone.id];
+      const segment = segments.find((candidate) => candidate.members.some((member) => phaseMemberHasAgent(member, toolUseId)));
+      if (segment) return [zone.id, `seg-tx-${segment.note.textOrdinal}`];
+    }
+    if (zone.kind === 'stage') {
+      const nested = agentFocusKeys(zone.body, toolUseId);
+      if (nested.length) return [zone.id, ...nested];
+    }
+  }
+  return [];
 }
 
 function isSameFile(p: string, rel: string, abs: string): boolean {
@@ -158,6 +233,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // streams AND across the stream-end reconcile that drops live-only tool_result
   // blocks. Lifted here so it survives remounts. No entry = automatic.
   const [processChoice, setProcessChoice] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const [focusedAgentId, setFocusedAgentId] = useState<string>();
+  const messageRef = useRef<HTMLDivElement | null>(null);
   // True for FOLD_DELAY_MS after the turn stops streaming (the work keeps its layout).
   const settling = useLinger(!!isStreaming);
   const chooseProcess = useCallback((id: string, open: boolean) => {
@@ -293,6 +370,38 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // pipeline · RESULT); TurnZoneList renders it with the two spacing steps. Every zone
   // keys by an id that only grows while streaming and survives the reconcile.
   const zones = useMemo(() => turnZones(view, !!isStreaming), [view, isStreaming]);
+
+  useEffect(() => {
+    const onFocusAgent = (event: Event) => {
+      const detail = (event as CustomEvent<FocusAgentDetail>).detail;
+      if (!detail?.toolUseId || (detail.sessionId && sessionId && detail.sessionId !== sessionId)) return;
+      const keys = agentFocusKeys(zones, detail.toolUseId);
+      if (!keys.length) return;
+      setFocusedAgentId(detail.toolUseId);
+      setProcessChoice((prev) => {
+        const next = new Map(prev);
+        keys.forEach((key) => next.set(key, true));
+        return next;
+      });
+    };
+    window.addEventListener(FOCUS_AGENT_EVENT, onFocusAgent);
+    return () => window.removeEventListener(FOCUS_AGENT_EVENT, onFocusAgent);
+  }, [zones, sessionId]);
+
+  useLayoutEffect(() => {
+    if (!focusedAgentId) return;
+    const row = [...(messageRef.current?.querySelectorAll<HTMLElement>('[data-agent-id]') ?? [])]
+      .find((candidate) => candidate.dataset.agentId === focusedAgentId);
+    if (row) {
+      // Every fold, including the Agents panel and row, is open in this commit.
+      // Scroll before paint; release the temporary focus on the next frame after
+      // their layout effects have persisted that open state.
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+    const raf = requestAnimationFrame(() => setFocusedAgentId(undefined));
+    return () => cancelAnimationFrame(raf);
+  }, [focusedAgentId]);
+
   // The view memory's key must survive the stream-end reconcile, which swaps the live
   // bubble's client id for the DB row's id; the row carries the client id in its
   // metadata, so the client id is the key on both sides. Two rows sharing a client id
@@ -320,6 +429,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     readOnly,
     choice: (id) => processChoice.get(id),
     choose: chooseProcess,
+    focusedAgentId,
     renderText: (text, key) => <div className="text-[14px]">{renderBlock({ type: 'text', text }, key)}</div>,
     renderNeeds,
   };
@@ -348,7 +458,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const contentBlocks: React.ReactNode[] = [];
   // A turn the CLI started to answer background agents that finished: say which, first.
   if (view.backgroundFinished?.length) {
-    contentBlocks.push(<BackgroundFinishedLine key="bg-finished" agents={view.backgroundFinished} />);
+    contentBlocks.push(<BackgroundFinishedCard key="bg-finished" agents={view.backgroundFinished} sessionId={sessionId} />);
   }
   const zoneList = <TurnZoneList key="zones" zones={zones} ctx={ctx} hasOpenQuestionIn={(z) => hasOpenQuestion(z.body)} />;
   contentBlocks.push(view.backgroundFinished?.length ? <div key="zones" className="mt-2">{zoneList}</div> : zoneList);
@@ -370,7 +480,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 
   return (
     <ReadOnlyContext.Provider value={!!readOnly}>
-    <div className="group/msg min-w-0 flex gap-2.5 items-start">
+    <div ref={messageRef} className="group/msg min-w-0 flex gap-2.5 items-start">
       {/* Agent avatar — 24px bronze gradient circle matching mockup & nav logo */}
       <div
         className="w-6 h-6 rounded-[6px] flex items-center justify-center flex-shrink-0 mt-0.5 text-[13px]"

@@ -342,14 +342,51 @@ describe('AC5 — the Agents panel', () => {
     });
   });
 
-  it('a turn the CLI started for finished background agents says which, first', () => {
-    const fin = { type: 'background_finished', agents: [{ toolUseId: 'g1', description: 'Measure REFLECT', status: 'completed', durationMs: 252000 }] } as ContentBlock;
+  it('a turn the CLI started for finished background agents begins with a stable Agent card and folded result', () => {
+    const fin = { type: 'background_finished', agents: [{
+      toolUseId: 'g1', description: 'Measure REFLECT', status: 'completed', durationMs: 252000,
+      toolUses: 3, summary: 'The stored state matches the code.',
+    }] } as ContentBlock;
     const { container } = render(view([fin, tx('Here is what it found.')], false));
-    const line = screen.getByTestId('background-finished');
-    expect(line.textContent).toContain('Measure REFLECT');
-    expect(line.textContent).toContain('finished · 4m 12s');
+    const card = screen.getByTestId('background-finished-card');
+    expect(card.className).toContain('border-purple-400/20');
+    expect(card.textContent).toContain('Agent');
+    expect(card.textContent).toContain('Measure REFLECT');
+    expect(card.textContent).toContain('finished · 4m 12s');
+    expect(screen.queryByTestId('background-finished-result')).toBeNull();
+    fireEvent.click(screen.getByTestId('background-finished-result-toggle'));
+    expect(screen.getByTestId('background-finished-result').textContent).toBe('The stored state matches the code.');
     // it comes before the turn's text
     expect(container.textContent!.indexOf('Measure REFLECT')).toBeLessThan(container.textContent!.indexOf('Here is what it found.'));
+  });
+
+  it('the completion card opens every folded ancestor, opens the original Agent row, then scrolls once', () => {
+    const scrollIntoView = vi.fn();
+    (Element.prototype as unknown as { scrollIntoView: typeof scrollIntoView }).scrollIntoView = scrollIntoView;
+    const source: Message = {
+      id: 'source', role: 'assistant', timestamp: '2026-10-19T10:00:00+08:00',
+      content: [tx('I will inspect it.'), bash('a', 'cat state.py'), tr('a'), tx('Delegating the check.'), agent('g1', 'Measure REFLECT'), tr('g1'), tx('Waiting for it.')],
+    };
+    const finished: Message = {
+      id: 'finished', role: 'assistant', timestamp: '2026-10-19T10:01:00+08:00',
+      content: [{ type: 'background_finished', agents: [{ toolUseId: 'g1', description: 'Measure REFLECT', status: 'completed', summary: 'Done.' }] } as ContentBlock, tx('Here is what it found.')],
+    };
+    render(<ToastProvider>
+      <AssistantMessageView message={source} viewKey="source" sessionId="s1" />
+      <AssistantMessageView message={finished} viewKey="finished" sessionId="s1" isLastAssistant />
+    </ToastProvider>);
+    const sourcePhase = screen.getByTestId('zone-phase');
+    const phaseToggle = within(sourcePhase).getByTestId('group-toggle');
+    if (phaseToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(phaseToggle);
+    const segmentToggle = screen.getByTestId('segment-toggle');
+    if (segmentToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(segmentToggle);
+    fireEvent.click(screen.getByTestId('agents-toggle'));
+    expect(screen.queryByTestId('agent-row')).toBeNull();
+    fireEvent.click(screen.getByTestId('background-finished-origin'));
+    expect(screen.getByTestId('agent-row').dataset.agentId).toBe('g1');
+    expect(screen.getByTestId('agent-detail')).toBeTruthy();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center', behavior: 'smooth' });
   });
 
   it('calls of an agent started in an earlier turn get a stand-in Agent step, not hidden', () => {
