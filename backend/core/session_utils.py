@@ -45,6 +45,8 @@ class FailureType(Enum):
     - API_ERROR   → standard exponential backoff
     - TIMEOUT     → exponential backoff, abandon --resume after 2x
     - ZOMBIE      → near-zero backoff (deterministic poison, respawn at once)
+    - KILLED      → standard backoff, never the OOM cooldown (a SIGKILL with no
+                    memory pressure: killed from outside)
     - UNKNOWN     → standard exponential backoff (conservative)
     """
 
@@ -53,7 +55,22 @@ class FailureType(Enum):
     API_ERROR = "api_error"
     TIMEOUT = "timeout"
     ZOMBIE = "zombie"
+    #: SIGKILL from outside the app with no memory pressure: not an OOM (no OOM
+    #: counter, no global cooldown), and the user is not told it ran out of memory.
+    KILLED = "killed"
     UNKNOWN = "unknown"
+
+
+def _memory_pressure() -> "tuple[Optional[str], Optional[float]]":
+    """(pressure level ok/warning/critical, percent used) of the host now, or
+    (None, None) when it cannot be read (then a SIGKILL stays OOM). Tests patch it."""
+    try:
+        from .resource_monitor import resource_monitor
+        mem = resource_monitor.system_memory()
+        return mem.pressure_level, round(float(mem.percent_used), 1)
+    except Exception as exc:  # noqa: BLE001 — unknown pressure
+        logger.debug("classify_failure: memory pressure unreadable: %s", exc)
+        return None, None
 
 
 def classify_failure(
@@ -85,7 +102,8 @@ def classify_failure(
     Priority order:
     1. Zombie / app-initiated recycle SIGKILL → ZOMBIE (fast respawn)
     2. Hook-captured ``_last_notification`` with rate limit info → RATE_LIMIT
-    3. OOM string patterns + memory pressure heuristic → OOM
+    3. SIGKILL patterns: OOM under memory pressure (or jetsam), else KILLED;
+       memory pressure heuristic → OOM
     4. Timeout string patterns → TIMEOUT
     5. API error string patterns → API_ERROR
     6. Fallback → UNKNOWN
@@ -146,6 +164,17 @@ def classify_failure(
     ]
     if any(p in error_lower for p in oom_patterns):
         metadata["pattern_matched"] = True
+        # A SIGKILL is OOM only with evidence of memory pressure (or jetsam named):
+        # three CLIs killed at once at 72% memory were reported as "ran out of
+        # memory" (2026-10-21 16:45) — someone else's kill. Unknown pressure keeps OOM.
+        level, pct = _memory_pressure()
+        if level is not None:
+            metadata["pressure_level"] = level
+            metadata["percent_used"] = pct
+        sigkill_only = any(p in error_lower for p in (
+            "exit code -9", "exit code: -9", "exit code=-9", "sigkill", "signal 9", "killed by signal"))
+        if level == "ok" and sigkill_only and "jetsam" not in error_lower:
+            return FailureType.KILLED, metadata
         return FailureType.OOM, metadata
 
     # Memory pressure fallback (process died + system under pressure)

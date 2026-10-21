@@ -25,6 +25,19 @@ describe('backgroundAgentsStore', () => {
     expect(n).toBe(2);
   });
 
+  it('an unchanged snapshot or envelope notifies nobody (polled every 3s while streaming)', () => {
+    const s = createBackgroundAgentsStore();
+    let n = 0;
+    s.subscribe(() => { n += 1; });
+    const snap = { a: [{ toolUseId: 'x', status: 'running' }] };
+    s.applySnapshot(snap);
+    s.applySnapshot({ a: [{ toolUseId: 'x', status: 'running' }] });
+    s.apply('a', [{ toolUseId: 'x', status: 'running' }]);
+    expect(n).toBe(1);
+    s.apply('a', [{ toolUseId: 'x', status: 'completed' }]);
+    expect(n).toBe(2);
+  });
+
   it('agentStatus: only background launches; live, else lost once loaded, else running', () => {
     const live = [{ toolUseId: 'x', description: '', status: 'completed' as const, durationMs: 7 }];
     expect(agentStatus(live, true, 'x', 'completed')).toBeNull(); // a foreground agent

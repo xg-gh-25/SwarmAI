@@ -1108,18 +1108,24 @@ export default function ChatPage() {
       const loadedTabId = tabId; // capture for closure
       setIsLoadingHistory(true);
       try {
-        const sessionMessages = await chatService.getSessionMessages(tab.sessionId);
+        // The latest page only, like every other open path: a long session is
+        // tens of MB (97df0539: 12,136 rows / 19.6MB); older pages load on scroll.
+        const sessionMessages = await chatService.getSessionMessagesPaginated(tab.sessionId, INITIAL_MESSAGE_LOAD_LIMIT);
         // Async guard: only apply if user hasn't switched away during the load
         if (activeTabIdRef.current !== loadedTabId) return;
         // Phase guard: streaming may have started during the async fetch
         const tabAfterFetch = tabMapRef.current.get(loadedTabId);
         if (tabAfterFetch?.isStreaming) return;
         const formattedMessages: Message[] = sessionMessages.map(toDisplayMessage);
-        setMessages(formattedMessages);
-        setSessionId(tab.sessionId);
-        // Initialize the tab in the per-tab map now that we have data
+        // Initialize the tab in the per-tab map now that we have data; the tab's
+        // MessageStore is the writer (seedFromLoad), React mirrors it
         initTabState(loadedTabId, formattedMessages);
         updateTabState(loadedTabId, { sessionId: tab.sessionId });
+        const loadedStore = messageStoreRegistry.getOrCreate(loadedTabId);
+        loadedStore.seedFromLoad(formattedMessages);
+        setMessages(loadedStore.messages);
+        setSessionId(tab.sessionId);
+        setHasMoreMessages(sessionMessages.length === INITIAL_MESSAGE_LOAD_LIMIT);
       } catch (error) {
         console.error('Failed to load session messages:', error);
       } finally {

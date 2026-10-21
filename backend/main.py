@@ -106,11 +106,26 @@ file_handler = RotatingFileHandler(
 file_handler.setLevel(log_level)
 file_handler.setFormatter(logging.Formatter(log_format))
 
-# Configure root logger
+# Configure root logger. Records go through a queue: the writes (file + console,
+# flush and the rotation check) run on one listener thread, never on the caller's.
+# Measured 2026-10-21: logging flush / shouldRollover on the asyncio loop thread
+# stalled it 4-5s at a time under disk load (the SSE heartbeat stops meanwhile).
+# The format is applied by the real handlers on the listener thread; the record is
+# prepared (message rendered, exc_info formatted) by QueueHandler at the call site.
+import atexit as _atexit
+import queue as _queue
+from logging.handlers import QueueHandler as _QueueHandler, QueueListener as _QueueListener
+
+_log_queue: "_queue.SimpleQueue" = _queue.SimpleQueue()
+_queue_handler = _QueueHandler(_log_queue)
+_queue_handler.setLevel(min(console_level, log_level))
+_log_listener = _QueueListener(_log_queue, console_handler, file_handler, respect_handler_level=True)
+_log_listener.start()
+_atexit.register(_log_listener.stop)  # drains what is queued at exit
 logging.basicConfig(
     level=log_level,
     format=log_format,
-    handlers=[console_handler, file_handler]
+    handlers=[_queue_handler]
 )
 logger = logging.getLogger(__name__)
 logger.info(f"Log file: {log_file}")

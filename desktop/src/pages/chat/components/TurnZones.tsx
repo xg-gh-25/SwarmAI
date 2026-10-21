@@ -72,6 +72,7 @@ const spans = new Map<string, Map<string, { start: number; end?: number }>>();
 const CAUSE_TEXT: Record<string, string> = {
   stalled: 'it stopped responding (for example while the computer slept)',
   oom: 'it ran out of memory',
+  killed: 'something outside SwarmAI killed it (the computer was not short of memory)',
   timeout: 'it timed out',
   disconnected: 'the chat lost its connection to it',
 };

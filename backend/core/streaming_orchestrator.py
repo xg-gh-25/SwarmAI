@@ -117,6 +117,22 @@ class StreamingCallbacks(Protocol):
 # ═══════════════════════════════════════════════════════════════════
 
 
+_TRANSIENT_API_ERROR_RE = __import__("re").compile(
+    r"^\s*API Error:\s*(?:5\d\d|429)\b|overloaded|is unable to process your request|service.?unavailable",
+    __import__("re").IGNORECASE)
+
+
+async def _api_error_wait(seconds: float) -> None:
+    """The backoff before an API-error continuation (a hook for tests)."""
+    await asyncio.sleep(seconds)
+
+
+def _is_transient_api_error_text(text: Any) -> bool:
+    """The CLI's error line for a transient model-service failure (5xx, 429,
+    overloaded), e.g. "API Error: 503 Bedrock is unable to process your request"."""
+    return isinstance(text, str) and bool(_TRANSIENT_API_ERROR_RE.search(text[:300]))
+
+
 async def write_user_message(
     unit: Any, content: Any, *, kind: str, session_id: Optional[str] = None,
 ) -> Any:
@@ -210,6 +226,15 @@ class StreamingOrchestrator:
     # in-process retries allowed without a real tool_use: one corrective
     # message recovered ~90% of leaks in past transcripts, two ≈99%.
     _MAX_LEAK_CONTINUATIONS = 2
+    # A transient API error (Bedrock 5xx / 429 / overloaded) that ends a turn the
+    # model was already working on: continue it on the same CLI after a short wait,
+    # instead of ending it with an error the user has to answer with "continue".
+    _MAX_API_ERROR_CONTINUATIONS = 2
+    _API_ERROR_BACKOFF_S = (5.0, 15.0)
+    _API_ERROR_CONTINUATION_PROMPT = (
+        "The last model request failed with a temporary server error, so your "
+        "previous step was not completed. Continue the task from where you stopped."
+    )
     # Descriptive only — it MUST NOT contain tool-call markup (that markup in
     # context is what primes the leak). Modeled on the CLI's own message for
     # the stop_reason=tool_use shape, which reliably gets a real tool_use.
@@ -1436,6 +1461,12 @@ class StreamingOrchestrator:
         # Consecutive continuations that produced no real tool_use. Bounds the
         # retry so a model that keeps leaking cannot loop.
         _leak_continuations = 0
+        # Transient API errors continued in-process this turn (bounded), and the
+        # CLI's synthetic "API Error: ..." text of the current one (not shown).
+        _api_error_continuations = 0
+        _api_error_text: Optional[str] = None
+        # whether the model had produced anything before that error line
+        _api_error_after_content = False
         # True once a main-thread text block carried the glitch-prefix shape
         # ("core 跑测试…"). The word is stripped from what is shown/persisted,
         # but the CLI's in-memory history keeps it and the model copies it, so
@@ -2231,8 +2262,18 @@ class StreamingOrchestrator:
                 # stamped so the UI nests them under that step; its text/thinking
                 # (only with forward_subagent_text) is not the main reply.
                 _am_parent = getattr(message, "parent_tool_use_id", None)
+                _synthetic = getattr(message, "model", None) == "<synthetic>" and _am_parent is None
                 for block in message.content:
                     if _am_parent is not None and isinstance(block, (TextBlock, ThinkingBlock)):
+                        continue
+                    if (_synthetic and isinstance(block, TextBlock)
+                            and _is_transient_api_error_text(block.text)
+                            and self._parent._content_emitted
+                            and _api_error_continuations < self._MAX_API_ERROR_CONTINUATIONS):
+                        # the CLI's own "API Error: 503 ..." line after real work:
+                        # the result below continues the turn; not a reply
+                        _api_error_text = block.text
+                        _api_error_after_content = True
                         continue
                     if isinstance(block, TextBlock):
                         # ── Tool-call XML leak guard (strip, never terminate) ──
@@ -2863,6 +2904,45 @@ class StreamingOrchestrator:
                         getattr(message, "result", "")
                         or getattr(message, "error", "")
                     )
+                    # ── Transient API error mid-turn → continue on the SAME CLI ──
+                    # The model was already working (content emitted) when a
+                    # request failed with 5xx / 429 / overloaded. The conversation
+                    # is intact in the CLI; wait briefly and ask it to go on, like
+                    # the leak continuation. A turn that produced nothing yet takes
+                    # the respawn retry below; a user Stop is respected.
+                    _api_err = _api_error_text if _api_error_after_content else None
+                    if (
+                        _api_err
+                        and _api_error_continuations < self._MAX_API_ERROR_CONTINUATIONS
+                        and not self._parent._interrupted
+                        and not getattr(self._parent, "_user_stopped_current_turn", False)
+                        and self._parent._client is not None
+                    ):
+                        _wait = self._API_ERROR_BACKOFF_S[min(_api_error_continuations, len(self._API_ERROR_BACKOFF_S) - 1)]
+                        _api_error_continuations += 1
+                        _api_error_text = None
+                        _api_error_after_content = False
+                        logger.warning(
+                            "session_unit.api_error_continue session_id=%s attempt=%d/%d "
+                            "wait=%.0fs error=%.120s — continuing the turn in-process",
+                            self._parent.session_id, _api_error_continuations,
+                            self._MAX_API_ERROR_CONTINUATIONS, _wait, _api_err,
+                        )
+                        self._record_token_usage_bg(message, getattr(message, "usage", None) or {})
+                        yield {"type": "reconnecting", "reason": "api_error",
+                               "message": "The model service had a temporary error; continuing",
+                               "attempt": _api_error_continuations, "delay": _wait}
+                        await _api_error_wait(_wait)
+                        if not (self._parent._interrupted
+                                or getattr(self._parent, "_user_stopped_current_turn", False)
+                                or self._parent._client is None):
+                            await write_user_message(
+                                self._parent, self._API_ERROR_CONTINUATION_PROMPT, kind="api_retry")
+                            response_iter = self._turn_iter()
+                            is_first_message = True
+                            continue
+                    if _api_error_text and not error_text:
+                        error_text = _api_error_text
 
                     from .session_utils import (
                         _is_retriable_error,

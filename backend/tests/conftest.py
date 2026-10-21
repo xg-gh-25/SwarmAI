@@ -830,6 +830,16 @@ def _stub_credential_preflight(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_memory_pressure(monkeypatch):
+    """Host memory pressure is "unknown" for EVERY test (P7: structural guard).
+    classify_failure reads it to tell an OOM SIGKILL from someone else's kill; the
+    real value (this laptop runs at ~70-85%) would make "-9 is OOM" host-dependent.
+    A test of that rule patches core.session_utils._memory_pressure itself."""
+    import core.session_utils as _su
+    monkeypatch.setattr(_su, "_memory_pressure", lambda: (None, None))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_turn_changes(monkeypatch):
     """No code trees for EVERY test (P7: structural guard). SessionUnit.send()
     starts core/turn_changes, which discovers the developer's REAL bound repos and

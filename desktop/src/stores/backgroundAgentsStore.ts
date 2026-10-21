@@ -52,6 +52,9 @@ function toAgent(raw: unknown): BackgroundAgent | null {
   };
 }
 
+const same = (a: BackgroundAgent[], b: BackgroundAgent[]) =>
+  a.length === b.length && a.every((x, i) => JSON.stringify(x) === JSON.stringify(b[i]));
+
 export function createBackgroundAgentsStore() {
   let state: State = { bySession: new Map(), loaded: false };
   const listeners = new Set<() => void>();
@@ -60,8 +63,10 @@ export function createBackgroundAgentsStore() {
   return {
     /** One session's agents, from a live `background_agents` envelope. */
     apply(sessionId: string, raw: unknown) {
+      const next = list(raw);
+      if (same(state.bySession.get(sessionId) ?? EMPTY, next)) return;
       const bySession = new Map(state.bySession);
-      bySession.set(sessionId, list(raw));
+      bySession.set(sessionId, next);
       state = { ...state, bySession };
       emit();
     },
@@ -69,6 +74,11 @@ export function createBackgroundAgentsStore() {
     applySnapshot(map: Record<string, unknown>) {
       const bySession = new Map<string, BackgroundAgent[]>();
       for (const [sid, raw] of Object.entries(map)) bySession.set(sid, list(raw));
+      // every streaming-state read (3s while streaming) lands here: only a real
+      // change notifies, so the Agent rows and the tab line do not re-render for nothing
+      const unchanged = state.loaded && bySession.size === state.bySession.size
+        && [...bySession].every(([sid, a]) => same(state.bySession.get(sid) ?? EMPTY, a));
+      if (unchanged) return;
       state = { bySession, loaded: true };
       emit();
     },

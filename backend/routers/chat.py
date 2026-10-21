@@ -831,7 +831,8 @@ def _bg_snapshot(unit) -> list:
     reg = getattr(unit, "background_agents", None)
     try:
         return reg.snapshot() if isinstance(reg, BackgroundAgents) else []
-    except Exception:  # noqa: BLE001 — a display aid
+    except Exception as exc:  # noqa: BLE001 — a display aid
+        logger.debug("streaming-state: background agents snapshot failed: %s", exc)
         return []
 
 

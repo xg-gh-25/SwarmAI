@@ -27,6 +27,27 @@ class TestClassifyFailure:
         ft, meta = classify_failure("Command failed with exit code -9")
         assert ft == FailureType.OOM
 
+    @pytest.mark.parametrize("level,expect", [("ok", FailureType.KILLED), ("warning", FailureType.OOM),
+                                              ("critical", FailureType.OOM), (None, FailureType.OOM)])
+    def test_sigkill_is_oom_only_under_memory_pressure(self, monkeypatch, level, expect):
+        # 2026-10-21 16:45: three CLIs SIGKILLed at once at 72% memory were told
+        # "it ran out of memory". With no pressure it is someone else's kill.
+        import core.session_utils as su
+        monkeypatch.setattr(su, "_memory_pressure", lambda: (level, 72.0 if level else None))
+        ft, meta = classify_failure("Command failed with exit code -9")
+        assert ft == expect
+        if level:
+            assert meta["pressure_level"] == level
+
+    def test_jetsam_named_stays_oom_without_pressure(self, monkeypatch):
+        import core.session_utils as su
+        monkeypatch.setattr(su, "_memory_pressure", lambda: ("ok", 50.0))
+        assert classify_failure("jetsam killed the process exit code -9")[0] == FailureType.OOM
+        assert classify_failure("Cannot write to terminated process")[0] == FailureType.OOM
+
+    def test_killed_gets_a_normal_backoff_not_the_oom_cooldown(self):
+        assert compute_backoff(FailureType.KILLED, {}, 1) < compute_backoff(FailureType.OOM, {}, 1)
+
     def test_oom_sigkill(self):
         ft, _ = classify_failure("Process received SIGKILL")
         assert ft == FailureType.OOM
