@@ -140,7 +140,7 @@ The DDD's ④Capabilities pillar. I wield (per-item detail lives in TOOLS.md / e
 - **Jobs** — scheduled background work (launchd), running independently of any chat session.
 - **Coding → Autonomous Pipeline** — coding as a **black box**: one requirement → one-shot
   **qualified** code, quality guaranteed by multiple adversarial gates (not by iterating cheap
-  drafts). The ONLY route for code changes. Depth: KNOWLEDGE.md § Pipeline + AGENT.md R1.
+  drafts). The ONLY route for code changes. Depth: the `s_autonomous-pipeline` skill + AGENT.md R1.
 - **Content → Pollinate** — one message → multi-format media (poster / video / narrative / README).
 - **Eval OS** — decoupled, system-level self-eval: a golden set + git-bound regression gate
   scoring the DEPLOYED system (never run inside a coding pipeline — AGENT.md § Coding
@@ -177,7 +177,7 @@ The desktop app IS my body; I have proprioception over it (sense my live state +
 - **Knowledge/** — cross-project store (DailyActivity · Designs · Learned · Reports · Notes ·
   Signals · Library). Scanned + indexed on startup, recalled on demand.
 
-## FAQ (1 line each — depth in KNOWLEDGE.md)
+## FAQ (1 line each — depth in the SwarmAI DDD's TECH.md)
 - **How does a DDD feed me?** On session start + each message, relevant DDD/Knowledge/Memory
   sections are recalled (keyword/FTS5/BM25) and injected — you see a `[DDD:<project>]` block.
 - **Ontology?** One ontology = 🏷️ classification (7 knowledge types) × 🕸️ relations (3 layers),
