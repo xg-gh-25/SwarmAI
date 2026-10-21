@@ -16,7 +16,7 @@
  * @exports resolveImageSrc — local-only image src resolver (remote images dropped)
  */
 /* eslint-disable react-refresh/only-export-components */
-import { useEffect, useRef, useState, useMemo, memo } from 'react';
+import { useContext, useEffect, useLayoutEffect, useRef, useState, useMemo, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { PluggableList } from 'unified';
 import remarkGfm from 'remark-gfm';
@@ -28,6 +28,7 @@ import mermaid from 'mermaid';
 import hljs from 'highlight.js';
 import { getApiBaseUrl } from '../../services/tauri';
 import { useTheme } from '../../contexts/ThemeContext';
+import { MarkdownLiveContext } from './markdownLive';
 import { copyToClipboard } from '../../utils/clipboard';
 import { openExternal } from '../../utils/openExternal';
 import { fileIcon, fileIconColor } from '../../utils/fileUtils';
@@ -273,6 +274,8 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
   const containerRef = useRef<HTMLDivElement>(null);
   const { resolvedTheme } = useTheme();
   const cacheKey = `${resolvedTheme}|${chart}`;
+  // Still streaming: a source that does not parse yet is unfinished, not broken.
+  const live = useContext(MarkdownLiveContext);
   const [svg, setSvg] = useState<string>(() => mermaidSvgCache.get(cacheKey) ?? '');
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -332,13 +335,17 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
         setSvg(renderedSvg);
         setError(null);
       } catch (err) {
+        // Mid-stream the source is usually just incomplete: keep the last good
+        // diagram (or the loading line) instead of flashing the error box on every
+        // chunk. The stream's end re-runs this with `live` false and reports it then.
+        if (live) return;
         console.error('Mermaid rendering error:', err);
         setError(err instanceof Error ? err.message : 'Failed to render diagram');
       }
     };
 
     renderDiagram();
-  }, [chart, cacheKey]);
+  }, [chart, cacheKey, live]);
 
   // Download as SVG
   const handleDownloadSvg = () => {
@@ -529,6 +536,9 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
 });
 
 // Code block component with syntax highlighting and copy button
+// Above this a re-highlight could cost a visible frame; such a block recolours at idle.
+const SYNC_HIGHLIGHT_MAX_CHARS = 20_000;
+
 const CodeBlock = memo(function CodeBlock({
   language,
   children,
@@ -552,7 +562,12 @@ const CodeBlock = memo(function CodeBlock({
   // covers environments without rIC (jsdom/older Safari). The scheduled handle is
   // cancelled on re-run/unmount so a fast content change never double-highlights
   // or fires against a torn-down node.
-  useEffect(() => {
+  // An UPDATE (a streamed block growing) is recoloured before paint: React rewrites the
+  // block's text as plain, and an idle-time highlight would let that plain frame show
+  // between two coloured ones, five times a second. The first paint stays deferred
+  // (the long-session rationale above), as does any block too big to colour per frame.
+  const highlightedRef = useRef(false);
+  useLayoutEffect(() => {
     if (isMermaid || !language) return;
     const run = () => {
       const el = codeRef.current;
@@ -560,10 +575,15 @@ const CodeBlock = memo(function CodeBlock({
       el.removeAttribute('data-highlighted'); // reset previous highlighting
       try {
         hljs.highlightElement(el);
+        highlightedRef.current = true;
       } catch (err) {
         console.error('Highlight error:', err);
       }
     };
+    if (highlightedRef.current && children.length <= SYNC_HIGHLIGHT_MAX_CHARS) {
+      run();
+      return;
+    }
     const ric = (window as unknown as {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
       cancelIdleCallback?: (h: number) => void;

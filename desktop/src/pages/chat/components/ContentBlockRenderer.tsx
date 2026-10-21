@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 import type { ContentBlock, EscalationContent } from '../../../types';
 import { MarkdownRenderer, AskUserQuestion } from '../../../components/common';
+import { MarkdownLiveContext } from '../../../components/common/markdownLive';
 import { InlinePermissionRequest } from './InlinePermissionRequest';
 import { EscalationBlock } from './EscalationBlock';
 
@@ -89,7 +90,11 @@ function StreamingMarkdownText({ text, live = true }: { text: string; live?: boo
   // Resting: the full final text at once, from the SAME component instance, so the
   // stream's end re-renders the markdown in place instead of remounting it (a remount
   // re-runs mermaid and code highlighting, which reads as a flash).
-  return <MarkdownRenderer content={live ? throttledText : text} />;
+  return (
+    <MarkdownLiveContext.Provider value={live}>
+      <MarkdownRenderer content={live ? throttledText : text} />
+    </MarkdownLiveContext.Provider>
+  );
 }
 
 /**
