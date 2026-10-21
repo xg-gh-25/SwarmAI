@@ -9,9 +9,12 @@ For an ``artifact_cli`` / ``pipeline_test`` command that writes run state with
   ``session_history[]``, session→run map rewritten); if it is, DENY.
 - **token**: for the commands that may change worktree state (every stage-start: it
   creates, rebuilds from the ledger or syncs the worktree; stage-complete of deliver;
-  run-update to a terminal status) the CLI call must be the FIRST simple command
+  run-update to a terminal status) the CLI call must be a top-level simple command
   (_token_binding): output plumbing may follow it (``| tail``, ``> f; python3 -c …``),
-  and quoted-delimiter ``cat > FILE <<'EOF'`` writes may precede it; the gate issues a
+  and ``&&`` / ``;`` / newline-joined commands may precede it when each runs python or
+  a simple file tool (_PREFIX_PROGRAMS), none names the CLI scripts, there is no
+  substitution or subshell, and after a ``cd`` the CLI uses absolute paths
+  (docs/design/pipeline-gate-expert-simplification.md G2); the gate issues a
   token (recorded only in the daemon, ``core.hook_token``) and puts
   ``SWARM_HOOK_TOKEN=<token>`` right before the CLI call via ``updatedInput``. An
   assignment prefix binds to that one simple command only, so nothing before or after
@@ -258,40 +261,158 @@ def _dedup_last(call: dict) -> dict:
         i += w
     return dict(call, argv=out)
 
-_HEREDOC_WRITE_RE = re.compile(
-    r"[ \t]*cat[ \t]*>>?[ \t]*(?P<path>[^\s;&|<>()$`'\"\\]+)[ \t]*<<(?P<dash>-?)[ \t]*"
-    r"(?P<q>['\"])(?P<delim>[A-Za-z_]\w*)(?P=q)[ \t]*\n")
+# Programs a segment BEFORE the token-carrying CLI call may run
+# (docs/design/pipeline-gate-expert-simplification.md G2). Shell builtins that change
+# how the next command is found or what it inherits (alias, function definitions,
+# source / ., eval, export, set, trap, declare, hash, enable, builtin, command, a bare
+# assignment) are not on it, so they are refused. A python script can still do anything,
+# but so can the same script run in the previous Bash call: requiring the CLI to be the
+# first command never closed that, it only cost a turn (31 denies in 2 days).
+_PREFIX_PROGRAMS = frozenset({
+    "cat", "echo", "printf", "mkdir", "cp", "mv", "ls", "grep", "sed", "jq", "head",
+    "tail", "test", "[", "true", "cd", "touch", "tee", "wc", "sort", "diff",
+})
+_DELIM_RE = re.compile(r"<<(?P<dash>-?)[ \t]*(?P<q>['\"]?)(?P<delim>[A-Za-z_]\w*)(?P=q)")
+
+
+def _top_spans(command: str) -> "tuple[list[tuple[int, int]], list[tuple[int, int, bool]]] | None":
+    """Quote- and heredoc-aware split of *command* at top-level ``&&`` / ``;`` /
+    newline. Returns (spans as (start, end) offsets, heredoc bodies as (start, end,
+    quoted)), or None when the text cannot be read (unterminated quote or heredoc, a
+    background ``&``, or a subshell / group bracket outside quotes)."""
+    spans, bodies, pending = [], [], []
+    i, n, start = 0, len(command), 0
+    q = None
+    while i < n:
+        c = command[i]
+        if q == "'":
+            if c == "'":
+                q = None
+            i += 1
+            continue
+        if q == '"':
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                q = None
+            i += 1
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if c in ("'", '"'):
+            q = c
+            i += 1
+            continue
+        if command.startswith("<<", i) and not command.startswith("<<<", i):
+            m = _DELIM_RE.match(command, i)
+            if not m:
+                return None
+            pending.append((m.group("delim"), bool(m.group("dash")), bool(m.group("q"))))
+            i = m.end()
+            continue
+        if c == "\n":
+            spans.append((start, i))
+            i += 1
+            for delim, dash, quoted in pending:
+                b0 = i
+                while True:
+                    if i > n:
+                        return None
+                    nl = command.find("\n", i)
+                    line = command[i:] if nl == -1 else command[i:nl]
+                    if (line.lstrip("\t") if dash else line) == delim:
+                        bodies.append((b0, i, quoted))
+                        i = n if nl == -1 else nl + 1
+                        break
+                    if nl == -1:
+                        return None
+                    i = nl + 1
+            pending = []
+            start = i
+            continue
+        if command.startswith("&&", i):
+            spans.append((start, i))
+            i += 2
+            start = i
+            continue
+        if command.startswith("||", i):
+            i += 2
+            continue
+        if c == "&":
+            if command.startswith("&>", i) or (i and command[i - 1] in "<>"):
+                i += 1
+                continue
+            return None
+        if c in "(){}":
+            return None
+        if c == ";":
+            spans.append((start, i))
+            i += 1
+            start = i
+            continue
+        i += 1
+    if q or pending:
+        return None
+    spans.append((start, n))
+    return spans, bodies
+
+
+def _prefix_ok(prefix: str, bodies: "list[tuple[int, int, bool]]") -> bool:
+    """Every simple command of *prefix* runs an allowed program (_PREFIX_PROGRAMS or a
+    python interpreter), no substitution appears outside a quoted heredoc body, and
+    nothing in it names the CLI scripts (so no write to them is visible)."""
+    from core.security_hooks import _PY_INTERP_RE, _gate_shell_segments, _unwrap_program
+    if any(os.path.basename(x) in prefix or x in prefix for x in _SCRIPTS):
+        return False
+    visible, k = [], 0
+    for b0, b1, quoted in sorted(bodies):
+        if b0 >= len(prefix):
+            break
+        if quoted:
+            visible.append(prefix[k:b0])
+            k = min(b1, len(prefix))
+    visible.append(prefix[k:])
+    if any(x in "".join(visible) for x in _SUBST):
+        return False
+    segs = _gate_shell_segments(prefix)
+    if segs is None:
+        return False
+    for seg in segs:
+        if not seg:
+            continue
+        prog = _unwrap_program(seg)
+        if not prog:
+            return False   # a bare assignment changes what later commands inherit
+        base = os.path.basename(prog[0])
+        if base not in _PREFIX_PROGRAMS and _PY_INTERP_RE.match(base) is None:
+            return False
+    return True
 
 
 def _token_binding(command: str) -> "tuple[str, str] | None":
     """(prefix, rest) such that ``prefix + TOKEN=… + rest`` hands the token to the CLI
-    call that starts *rest* and to nothing else, or None. *prefix* is zero or more
-    ``cat >[>] FILE <<'DELIM'`` … ``DELIM`` writes (a quoted delimiter: the body is
-    literal, nothing in it runs); *rest* starts with the CLI call — no subshell or
-    substitution anywhere in it — and may continue with any output plumbing."""
-    from core.security_hooks import _gate_shell_segments
-    i = 0
-    while True:
-        m = _HEREDOC_WRITE_RE.match(command, i)
-        if not m:
+    call that starts *rest* and to nothing else, or None.
+
+    *rest* starts with the CLI call — no subshell or substitution anywhere in it — and
+    may continue with any output plumbing. *prefix* is zero or more top-level ``&&`` /
+    ``;`` / newline-separated commands before it, each passing _prefix_ok. After a
+    ``cd`` the CLI's interpreter and script must be absolute paths (the ``cd`` must not
+    change which script runs)."""
+    from core.security_hooks import _gate_shell_segments, _unwrap_program
+    parsed = _top_spans(command)
+    if parsed is None:
+        return None
+    spans, bodies = parsed
+    cli_at = None
+    for s0, s1 in spans:
+        if any(c["tool"] != "foreign" for c in parse_cli_calls(command[s0:s1])[0]):
+            cli_at = s0
             break
-        j = m.end()
-        lines_end = None
-        while j <= len(command):
-            nl = command.find("\n", j)
-            line = command[j:] if nl == -1 else command[j:nl]
-            if (line.lstrip("\t") if m.group("dash") else line) == m.group("delim"):
-                lines_end = len(command) if nl == -1 else nl + 1
-                break
-            if nl == -1:
-                break
-            j = nl + 1
-        if lines_end is None:
-            return None          # unterminated heredoc: the CLI is not where it looks
-        if os.path.basename(m.group("path")) in _SCRIPTS:
-            return None          # it would rewrite the script that gets the token
-        i = lines_end
-    head, rest = command[:i], command[i:]
+    if cli_at is None:
+        return None
+    head, rest = command[:cli_at], command[cli_at:]
     stripped = rest.lstrip()
     head += rest[:len(rest) - len(stripped)]
     rest = stripped
@@ -301,6 +422,22 @@ def _token_binding(command: str) -> "tuple[str, str] | None":
     segs = _gate_shell_segments(rest, seps)
     if not segs or seps[0] != "" or not any(os.path.basename(t) in _SCRIPTS for t in segs[0]):
         return None
+    if head.strip():
+        if not _prefix_ok(head, bodies):
+            return None
+        prog = _unwrap_program(segs[0])
+        script = next((t for t in prog[1:] if os.path.basename(t) in _SCRIPTS), "")
+        # nothing before the CLI may name the directory its script is loaded from (a
+        # glob or a directory target writes into it without naming the script)
+        sdir = os.path.dirname(script)
+        dirs = {d for d in (sdir, os.path.realpath(sdir) if sdir else "") if d}
+        if any(d in head for d in dirs):
+            return None
+        pre = _gate_shell_segments(head) or []
+        if not any(_unwrap_program(x)[:1] == ["cd"] for x in pre if x):
+            return head, rest
+        if not (prog and os.path.isabs(prog[0]) and os.path.isabs(script)):
+            return None
     return head, rest
 
 
@@ -463,11 +600,14 @@ def _decide(sid: str, command: str, tool_input: dict,
         if (binding is None or not first or first[0].get("sub") != c.get("sub")
                 or first[0].get("run_id") != c.get("run_id")
                 or sum(1 for x in calls if x["tool"] != "foreign" and _needs_token(x)) != 1):
-            return _deny("this command changes the run's worktree state: it must be the FIRST "
-                         "command of the line (output may be piped or redirected after it; "
-                         "only `cat > FILE <<'EOF'` writes may come before it; no `cd … &&`, "
-                         "`source …`, subshells or `$(...)`), so the hook can hand it its "
-                         f"one-time token.\nRun instead: {_single_form(data, c)}")
+            return _deny("this command changes the run's worktree state, so the hook hands "
+                         "it a one-time token. Commands before it (joined by `&&`, `;` or a "
+                         "newline) may only run python or simple file tools (cat, cp, mkdir, "
+                         "sed, jq, cd, ...), must not name artifact_cli.py / pipeline_test.py, "
+                         "and after a `cd` the CLI needs absolute paths. No `source`, `eval`, "
+                         "`export`, `trap`, functions, subshells or `$(...)`; output may be "
+                         "piped or redirected after it. Only one such CLI call per line."
+                         f"\nRun instead: {_single_form(data, c)}")
         if late and phase != "approved":
             why = _claim_refusal(sid, rid, data, c)
             if why:

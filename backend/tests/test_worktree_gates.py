@@ -162,13 +162,23 @@ def test_token_issued_by_rewriting_single_command(env):
 
 @pytest.mark.parametrize("c", [
     "cd /x && " + _cmd("stage-complete", extra="--stage deliver --data @f"),
-    "echo hi; " + _cmd("stage-start", extra="--stage build"),
+    "source env.sh; " + _cmd("stage-start", extra="--stage build"),
     _cmd("stage-start", extra="--stage build") + " --x $(cat f)",
     _cmd("stage-start", extra="--stage build") + "; " + _cmd("stage-start", extra="--stage deliver"),
 ])
 def test_compound_token_command_denied(env, c):
-    """Anything that runs before the CLI, a substitution, or a second token command."""
+    """A refused step before the CLI (source; a cd with a PATH-looked-up interpreter),
+    a substitution, or a second token command."""
     assert _denied(og._decide("s1", c, {"command": c}))
+
+
+def test_a_preparation_step_before_the_token_command_is_allowed(env):
+    """G2: the token goes right before the CLI call, after the step that prepares it."""
+    head = "python3 -I /tmp/fix_plan.py && "
+    tail = _cmd("stage-start", extra="--stage build")
+    c = head + tail
+    new = og._decide("s1", c, {"command": c})["hookSpecificOutput"]["updatedInput"]["command"]
+    assert new.startswith(head + hook_token.TOKEN_ENV + "=") and new.endswith(tail)
 
 
 @pytest.mark.parametrize("tail", [" && echo done", " | tail -1", " > /tmp/o.json; cat /tmp/o.json"])
@@ -367,7 +377,7 @@ def test_repo_add_needs_a_token_for_an_isolated_run(env):
     c = _cmd("run-repo-add", extra="--path /some/repo")
     v = og._decide("s1", c, {"command": c})
     assert v["hookSpecificOutput"]["updatedInput"]["command"].startswith(hook_token.TOKEN_ENV + "=")
-    assert _denied(og._decide("s1", "echo x && " + c, {"command": "echo x && " + c}))
+    assert _denied(og._decide("s1", "eval x && " + c, {"command": "eval x && " + c}))
 
 
 
