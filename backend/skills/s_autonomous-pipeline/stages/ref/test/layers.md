@@ -29,7 +29,7 @@ evidence's `reused_from` with a warning. Editing any changed file re-runs them a
 The old base methodology pointer (`backend/skills/s_qa/INSTRUCTIONS.md`: detect the
 framework, run scoped tests, fix failures with atomic commits) still describes the
 method; inside a pipeline run the runner IS that method. Do not run s_qa's raw
-commands — `pipeline_test_gate` denies them.
+commands — their results are no evidence.
 
 ### Layer 1 — AC-driven verification (`layers.ac_driven`)
 

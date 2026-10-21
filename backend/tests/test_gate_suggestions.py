@@ -126,11 +126,12 @@ def test_pytest_guard_suggestion_passes_the_chain(ws):
     assert _chain(s + " | tail -5") == []
 
 
-def test_pipeline_test_gate_suggestions_pass_the_chain(ws):
+def test_direct_pytest_in_a_run_passes_the_chain(ws):
+    # G1 (pipeline-gate-expert-simplification): a capped direct pytest in an active run
+    # is approved (with a note); no hook of the chain refuses it.
     _seed_run(ws)
     hits = _chain("perl -e 'alarm 100; exec @ARGV' python -m pytest backend/tests/test_a.py -q")
-    assert any("pipeline test runner" in r for _, r in hits)
-    _assert_suggestions_pass(hits)
+    assert hits == []
 
 
 def test_the_strict_manager_sees_an_approval_request(ws):

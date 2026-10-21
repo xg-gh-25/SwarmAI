@@ -208,12 +208,11 @@ implementations in `security_hooks.py`). By category:
 2. **Hang prevention (Bash)** — `background_command_guard` (default-deny backgrounding),
    `bash_syntax_guard` (`bash -n` parse check), and the `test_command_gate` group
    (`compose_gates`, registered before `dangerous_command_gate`), whose members run in order:
-   `pipeline_test_gate` (only while this session's own run is running with activity in the
-   last 3h: tests, lint, typecheck, builds, repo-copy baselines and manual pytest hang triage
-   must go through `backend/scripts/pipeline_test.py`; the deny carries the filled-in runner
-   command and the `run-update --status abandoned` escape; separately, in every session, it
-   denies running `pipeline_test.py` inside a for/while/until loop or twice in one Bash call,
-   since each call is capped at `alarm 110` and a continuation is a new call), then
+   `pipeline_test_gate` (in every session it denies running `pipeline_test.py` inside a
+   for/while/until loop or twice in one Bash call, since each call is capped at `alarm 110`
+   and a continuation is a new call; while this session's own run is active, a direct test,
+   lint, typecheck or build command is allowed with a note naming the runner command,
+   because landing and push_ready read only the runner's results), then
    `pytest_command_guard` (every session: denies a pytest run whose wall-clock cap does
    not end it at least 10s before the call's Bash timeout, 120s by default: a command still
    running then is moved to the background and returns nothing).

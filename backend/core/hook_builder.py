@@ -421,7 +421,8 @@ async def build_hooks(
     # pipeline_test.py command. No run → no effect. Then pytest_command_guard, in every
     # session: a pytest run whose wall-clock cap does not end it before the call's Bash
     # timeout is denied (R9, run_6af22b0d). One group so the test-command rules are judged in one place.
-    # Fail-open; operator bypass SWARM_GATE_FORCE=pipeline_test_gate (logged). Registered
+    # Fail-open. pipeline_test_gate denies only runner loops/repeats; a direct test
+    # command in an active run is approved with a note. Registered
     # BEFORE dangerous_command_gate: a user must never be asked to approve a command
     # this gate would then deny.
     registry.register(

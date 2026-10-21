@@ -5,7 +5,7 @@ Implement the PLAN test-first (vertical RED→GREEN), break its design yourself,
 **Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage build` (ACs, change spec, exit criteria, `files_touched`, valid examples).
 
 `RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`; `continue: true` → same command again.
-Tests go ONLY through `RUN` (`pipeline_test_gate` denies direct pytest/vitest/tsc/eslint/`npm run build*`). Never the full suite, never `| tail`.
+Tests go ONLY through `RUN` (a direct pytest/vitest/tsc/eslint/`npm run build*` runs but is no evidence). Never the full suite, never `| tail`.
 
 1. **Gate 1 Skeptic+SSA** (full, bugfix, goal first cycle; skip trivial/research): stage-start returns `gate1_prompt_path` (6 inputs filled), or `gate1_verdict` if this plan was judged (no respawn). Spawn ONE sub-agent, prompt = `gate1_spawn` exactly (neither key → `spawn_prompt.py --gate gate1-skeptic`, exit 0 only), `run_in_background: false` (hides the stream). BLOCK → one replan for ALL its checks + rerun ≤2×, then ask the user (`ref/build/gate1.md`). Spawn rejected → retry once, then `gate1_unverified_reason` + go on; never self-review.
 2. **Before code:** read TECH.md `## Dev Commands` + `## Stack` (never assume SwarmAI's); meet `implementation_constraints` (`ref/plan/consumers.md`); API check, mechanism declaration, pre-change greps.
@@ -22,7 +22,7 @@ Tests go ONLY through `RUN` (`pipeline_test_gate` denies direct pytest/vitest/ts
 - `[GATE·validator]` Check 8f BLOCKS a missing/incomplete `ac_coverage`; `files_changed`, `tdd.green_pass`, `tdd.smoke_tests` are schema-required.
 - `[GATE·validator]` `break_tests` must target every plan `I<n>` / `F<n>` (step 5).
 - `[MUST]` Gate 1, slice ban, API check, mechanism, replay, seams, import smoke, pre-greps: discipline.
-- `[GATE·hook]` `active_run_commit_gate` denies `git commit` of run files; `pipeline_test_gate` runner only (its bypass is operator-set, never yours).
+- `[GATE·hook]` `active_run_commit_gate` denies `git commit` of run files; only runner results count as test evidence.
 
 **Read only if**
 - Profile runs Gate 1, or a verdict/rejected spawn/record → `stages/ref/build/gate1.md`

@@ -19,7 +19,7 @@ REFLECT adds new rows to the Resource Lifecycle table here (old "BUILD Step 4").
     > Rust `cargo check`, TS `tsc --noEmit` + node import, Java compile + main). Do NOT skip
     > the technique because the example is in another language. During a run the compile
     > or typecheck steps go through `RUN --mode probe --name smoke-<x> -- <argv>`
-    > (`pipeline_test_gate` denies a raw `tsc`).
+    > (a raw `tsc` is no evidence).
 
     Example (SwarmAI-self), new config-gated code in prompt_builder.py, run as
     `backend/.venv/bin/python -c "..."` from `backend/`: `from core.prompt_builder import
@@ -64,7 +64,7 @@ Rules:
      CSS transition → build the frontend, relaunch the .app and exercise it (open
      Canvas/overlay, resize the window, drag the radar, switch tabs, watch a stream land at
      the bottom). The build is `cd desktop && npm run build:all`; during a run
-     `pipeline_test_gate` denies it raw, so wrap it:
+     a raw build is no evidence, so wrap it:
      `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode probe --name frontend-build --deadline 575 -- <wrapper>` with the Bash tool timeout 600000 (a build probe cannot be split across calls)
      where `<wrapper>` runs the build and prints `{"findings": [...]}` (one finding per
      error). A daemon-only restart does NOT embed frontend changes.

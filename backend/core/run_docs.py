@@ -846,6 +846,9 @@ def render_gate2_section(view: dict) -> list[str]:
     reasons = [str(x) for x in _l(v.get("push_ready_reasons")) if x]
     if reasons:
         lines += ["### Lowers push_ready", ""] + _bullets(reasons, 20) + [""]
+    residual = [str(x) for x in _l(v.get("residual_risks")) if x]
+    if residual:
+        lines += ["### Residual risk (does not lower push_ready)", ""] + _bullets(residual, 20) + [""]
     return lines
 
 

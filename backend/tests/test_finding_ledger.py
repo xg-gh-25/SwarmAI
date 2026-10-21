@@ -350,7 +350,9 @@ def test_worst_case_variant_b_lands_with_push_ready_false():
     assert proven == ["F1", "F6"]
     assert w.prove_calls == 2 and w.x_fixes == 2 and w.syncs == [True, False]
     ok, reasons = fl.push_ready(s)
-    assert not ok and len(reasons) == 5
+    # E5: security's no-output row is residual risk, not a push_ready reason
+    assert not ok and len(reasons) == 4
+    assert [r["id"] for r in fl.residual(s)] == ["security-R1-nooutput"]
 
 
 def test_worst_case_variant_a_stops_on_the_red_test():
@@ -466,6 +468,20 @@ def test_every_random_world_terminates_within_budget(seed):
     if s["result"]["state"] == "landed":
         assert s["tests"]["status"] == "green"
         assert s["result"]["push_ready"] == all(
-            fl.finding_state(f) == "proven" for f in s["findings"])
+            fl.finding_state(f) == "proven" for f in s["findings"]
+            if not (f.get("kind") == "advisory"
+                    and f.get("expert") not in fl.NO_OUTPUT_BLOCKS))
     else:
         assert s["result"]["reason"] and s["result"]["artifact"]
+
+
+def test_correctness_no_output_still_lowers_push_ready():
+    # E5: no correctness review = no review; another expert's silence is residual risk.
+    s = fl.new_state(["correctness", "security"])
+    for e in ("correctness", "security"):
+        for _ in range(1 + fl.BUDGETS["unparsable_respawns"]):
+            s = fl.record(s, {"kind": "review", "round": 1, "expert": e, "findings": None})
+    s["phase"] = "landed"
+    ok, reasons = fl.push_ready(s)
+    assert not ok and reasons == ["correctness-R1-nooutput: open"]
+    assert [r["id"] for r in fl.residual(s)] == ["security-R1-nooutput"]

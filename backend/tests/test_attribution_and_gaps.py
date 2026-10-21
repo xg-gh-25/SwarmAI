@@ -323,22 +323,14 @@ def test_review_warns_when_selected_rp_has_no_verdict():
 
 
 # ── AC5 ──────────────────────────────────────────────────────────────────────
-def test_stdin_gate_judges_what_the_code_can_do():
-    """cee0e33b: stdin code is a test run only when it names a runner AND can run code
-    (an import beyond pathlib / json / re / text modules, or exec / eval)."""
+def test_stdin_code_is_not_classified():
+    """G1 (pipeline-gate-expert-simplification): stdin python is not a test-run hit,
+    whatever it imports: in practice it was an edit script naming pytest."""
     from core.security_hooks import _classify_pipeline_test_command
     edit = "python3 - <<'EOF'\nopen('/tmp/x.md','w').write('run pytest here')\nEOF"
-    assert _classify_pipeline_test_command(edit)[0] == []          # text only: allowed
+    assert _classify_pipeline_test_command(edit)[0] == []
     run = "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['pytest', '-q'])\nEOF"
-    assert "python stdin pytest" in _classify_pipeline_test_command(run)[0]
-
-
-def test_stdin_deny_message_names_the_pathlib_workaround():
-    from core.security_hooks import _test_gate_hint
-    hint = _test_gate_hint(["python stdin pytest"])
-    assert "use pathlib only" in hint
-    assert "runner above" in hint and "not a script file" not in hint
-    assert _test_gate_hint(["pytest"]) == ""
+    assert _classify_pipeline_test_command(run)[0] == []
 
 
 # ── AC6 ──────────────────────────────────────────────────────────────────────

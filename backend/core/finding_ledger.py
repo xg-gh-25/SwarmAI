@@ -19,7 +19,8 @@ Public surface:
   applies what happened and returns a new state (the input is never mutated).
 - ``landing_blockers(state)`` — the complete list of what blocks a LOCAL commit
   (§2.5). Not-proven findings are never on it.
-- ``push_ready(state)`` / ``not_proven(state)`` — what the human sees before push.
+- ``push_ready(state)`` / ``not_proven(state)`` / ``push_blocking(state)`` /
+  ``residual(state)`` — what the human sees before push.
 
 Flow of the state machine (phase order):
 
@@ -456,11 +457,35 @@ def stop(state: dict, action: dict) -> dict:
     return s
 
 
+# An expert whose output stayed unparsable after its respawn leaves an advisory row.
+# Only correctness's silence lowers push_ready (no correctness review = no review);
+# any other expert's is a coverage gap REPORT lists as residual risk
+# (docs/design/pipeline-gate-expert-simplification.md E5).
+NO_OUTPUT_BLOCKS = frozenset({"correctness"})
+
+
+def push_blocking(state: dict) -> "list[dict]":
+    """The ``not_proven`` rows that lower push_ready: every one except the no-output
+    advisory row of an expert outside ``NO_OUTPUT_BLOCKS``."""
+    return [r for r in not_proven(state) if not _residual_only(r, state)]
+
+
+def residual(state: dict) -> "list[dict]":
+    """The ``not_proven`` rows that do NOT lower push_ready (REPORT: residual risk)."""
+    return [r for r in not_proven(state) if _residual_only(r, state)]
+
+
+def _residual_only(r: dict, state: dict) -> bool:
+    row = next((f for f in state.get("findings") or [] if f.get("id") == r["id"]), {})
+    return row.get("kind") == "advisory" and r.get("expert") not in NO_OUTPUT_BLOCKS
+
+
 def push_ready(state: dict) -> "tuple[bool, list[str]]":
-    """(ready, reasons). Ready only when landed and every finding is proven."""
+    """(ready, reasons). Ready only when landed and every ``push_blocking`` row is
+    proven (``residual`` rows are listed, not blocking)."""
     reasons = []
     if state.get("phase") != "landed":
         reasons.append("not landed")
-    for r in not_proven(state):
+    for r in push_blocking(state):
         reasons.append(f"{r['id']}: {r['state']}")
     return not reasons, reasons

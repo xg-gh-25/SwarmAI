@@ -19,7 +19,7 @@ related: pipeline-review-convergence.md（N1–N5，本文收窄其轮数）；p
 |---|---|---|---|---|
 | G1 | `pipeline_test_gate` | 在 run 内直接跑 pytest/vitest/tsc 一律 deny，改道到 runner；heredoc 里出现 `pytest` 字样也 deny | 只保留"runner 不许放进循环、不许一次调用跑两遍"的 deny。直接跑测试改为放行并附一句提示 | 低：落地只认 runner 的证据，直接跑的结果本来就不算数 |
 | G2 | `run_owner_gate` 的"必须是第一条命令" | 发 token 的 CLI 调用前面不能有任何命令 | CLI 调用可以在 `&&`/`;` 链的任意位置，前面的段不能有函数定义、alias、`source`/`.`、`eval`、对 CLI 脚本的写入 | 中：需要 security expert 复核 §5.2 的论证 |
-| G3 | `audit_marker_write_gate` | `cd` 进审计目录或只读的 glob 也 deny | 只读命令放行 | 低 |
+| G3 | `audit_marker_write_gate` | `cd` 进审计目录或只读的 glob 也 deny | **不改**（实施时撤回，见 G3） | — |
 | G4 | gate 治理 | 加 gate 不需要证据 | 新 gate 要引用真实事故 | 无 |
 | E0 | 两套 Gate-2 并存 | legacy（3 轮 + meta-review + root-cause）和 deterministic（finding ledger，2 轮）同时在用 | 只留 finding ledger 这一套 | 中：迁移量最大 |
 | E1 | Gate-2 名单 | 最多 7 个 specialist，按文件模式触发 | 默认只派 correctness；有明显安全风险时才加 security + red-team。其他 lens 并进 correctness 的检查清单 | 中：部分 MEDIUM 可能漏 |
@@ -144,14 +144,13 @@ token 前缀仍然只加在 CLI 那一条简单命令上，其他段拿不到。
 
 **测试**：`tests/test_run_owner_gate*.py` 增加"前置 python 准备脚本 + CLI"放行、"前置函数定义/alias/eval"拒绝、"前置重定向写 CLI 脚本"拒绝。
 
-### G3 `audit_marker_write_gate`：只读放行
+### G3 `audit_marker_write_gate`：撤回，不改
 
-**现在**（`security_hooks.py` `create_audit_marker_write_gate`，约 6152 行起）：`cd` 进 `state/pipeline_agent_audit`、或 python 代码里出现该目录名就 deny。4 次 deny 全是只读。
+实施 P1 时读了这个 gate 的设计注释（`security_hooks.py` 里 `_AUDIT_WRITE_VERBS` 上方），两处"只读也拒绝"都是有意的：
+- `cd` 进审计目录被拒，是因为 Bash 工具在调用之间保留 cwd，下一次调用里一个相对路径的 `> m.marker` 就看不出写的是审计目录；
+- 解释器代码只要提到目录名就拒，是因为在程序文本里区分读和写是一场正则的军备竞赛。
 
-**改成**：
-- `cd` 不再算写入；只有之后的段里出现写操作（重定向、`rm`/`mv`/`cp`/`touch`/`tee`/`sed -i`/`truncate`、解释器的写调用）才 deny。
-- python 代码里出现目录名时，只有同时出现 `open(...,'w'|'a'|'x')`、`write_text`、`write_bytes`、`unlink`、`rename`、`replace`、`rmtree`、`shutil.` 才 deny。
-- 无法解析的命令仍 fail-closed（不变）。
+这个 gate 守的是 D7、Red Team、Gate-0/1 和 `adversarial_commit_gate` 共同依赖的证据，不能 force。2 天只有 4 次误伤，放宽换来的很少，所以撤回。读审计目录用绝对路径（`ls <abs>`、`cat <abs>`）本来就放行。
 
 ### G4 gate 治理
 
@@ -263,7 +262,6 @@ spec-compliance 的"AC 是否真的实现"由 correctness 的检查清单承担�
 |---|---|---|
 | G1 | 模型直接跑 pytest 却以为测试过了 | 落地和 push_ready 只认 runner 证据（`landing_test_errors`、`_deliver_push_ready_bound`）；放行时的提示明确说"不计入" |
 | G2 | 同一行里前置命令改写 CLI 脚本后再拿 token | 见 5.2；跨调用的同类攻击本来就存在，本改动不扩大攻击面 |
-| G3 | 只读识别有漏洞，把写操作当只读 | 写操作关键词列表；无法解析的命令仍 fail-closed |
 | E1 | performance、api-contract、operational 类 MEDIUM | 并入 correctness 清单；api-contract 的前后端字段问题由 TS 编译和 `toCamelCase` 测试兜一部分 |
 | E2 gate1 | 计划层面的错误（方向错、漏需求） | gate0 在 bugfix 和多读法时仍派；PLAN 的 AC↔测试由 validator 检查；correctness 检查"每条 AC 是否实现" |
 | E2 meta-review | 修复引入的新问题 | E4 的 R2 只看修复 diff，正对这个问题 |
@@ -286,7 +284,7 @@ G2 放宽后，前置段仍禁止函数定义、alias、`source`、`eval`、`PAT
 
 | 期 | 内容 | 主要文件 | 预计改动 |
 |---|---|---|---|
-| P1 | G1、G3、E5 的"无输出不压低"部分 | `security_hooks.py`、`finding_ledger.py`、对应测试 | 约 300 行（删多于加） |
+| P1 | G1、E5 的"无输出不压低"部分（G3 撤回） | `security_hooks.py`、`finding_ledger.py`、对应测试 | 约 300 行（删多于加） |
 | P2 | G2 | `run_owner_gate.py`、对应测试 | 约 100 行；需要 security expert |
 | P3 | E0、E1、E2、E4、E5 余下部分 | `artifact_cli.py`、`finding_ledger.py`、`gate2_*`、`review_round_gate.py`、`pipeline_validator.py`、`backend/experts/code/*.md`、`stages/deliver.md`、`stages/ref/deliver/*.md`、`stages/build.md` | 大：预计删除 3000+ 行代码和 40KB+ 文档 |
 | P4 | E3 | `stages/review.md`、`stages/ref/review/*`、`_review_dispatch` | 中 |
@@ -314,7 +312,7 @@ G2 放宽后，前置段仍禁止函数定义、alias、`source`、`eval`、`PAT
 
 ## 8. 回滚
 
-- G1、G3：deny 分支改为放行是一个函数内的改动，回滚即 revert 对应提交。
+- G1：deny 分支改为放行是一个函数内的改动，回滚即 revert 对应提交。
 - G2：同上，revert 对应提交。
 - E0–E5：P3 期间 `--convergence legacy` 先保留为隐藏选项，落地两周、指标达标后再删除 legacy 代码。删除提交单独做，方便 revert。
 - 删除的 expert 文档文件保留在 `backend/experts/code/`，只改为"已并入"说明，恢复时改回 `_dispatch_experts` 即可。

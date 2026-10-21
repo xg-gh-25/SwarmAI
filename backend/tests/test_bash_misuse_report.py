@@ -127,7 +127,7 @@ def test_every_gate_pattern_matches_a_real_deny_text():
     source = "".join(f.read_text(encoding="utf-8") for f in core.glob("*.py"))
     samples = {
         "pytest_command_guard": "This pytest command",
-        "pipeline_test_gate": "is active in this session, so tests and builds go through",
+        "pipeline_test_gate": "DENY (runner ",
         "run_owner_gate": "DENY (run owner gate)",
         "worktree_write_gate": "DENY (worktree gate)",
         "audit_marker_write_gate": "this writes, moves or deletes files in",

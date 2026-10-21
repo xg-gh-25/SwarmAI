@@ -425,7 +425,7 @@ def test_owner_gate_denies_name_the_single_form(env, cli_rec):
     assert og.parse_cli_calls(form)[1] and hook_token.TOKEN_ENV not in form
 
 
-def test_test_gate_deny_prints_absolute_commands_from_the_run_cli(env, monkeypatch, cli_rec):
+def test_test_gate_note_prints_absolute_commands_from_the_run_cli(env, monkeypatch, cli_rec):
     import asyncio
     from core import security_hooks as sh
     (Path(cli_rec["script"]).parent / "pipeline_test.py").write_text("")
@@ -435,10 +435,10 @@ def test_test_gate_deny_prints_absolute_commands_from_the_run_cli(env, monkeypat
     gate = sh.create_pipeline_test_gate({"sdk_session_id": "s1"})
     res = asyncio.run(gate({"tool_name": "Bash", "tool_input": {"command": "pytest -q"},
                             "cwd": str(env["wt"])}, None, None))
-    why = res["hookSpecificOutput"]["permissionDecisionReason"]
+    assert res["decision"] == "approve"   # G1: a note, not a deny
+    why = res["additionalContext"]
     sdir = str(Path(cli_rec["script"]).parent)
     assert f"{sdir}/pipeline_test.py --project P --run-id {RID}" in why
-    assert f"{cli_rec['python']} {cli_rec['script']} run-update --project P --run-id {RID} --status abandoned" in why
 
 
 def test_planted_cli_pair_is_not_printed(env):

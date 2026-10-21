@@ -49,7 +49,7 @@ RIGHT (vertical):    test1→impl1 (tracer bullet, proves the path end-to-end)
 
 - SwarmAI repo: `RUN --mode tdd --files <test files>`: only the listed files, max 5
   (backend `backend/tests/test_*.py` or `desktop/` tests). This replaces raw
-  `pytest <file>` / `npx vitest run <file>`, which `pipeline_test_gate` denies during a
+  `pytest <file>` / `npx vitest run <file>`, which count as no evidence during a
   run. Unchanged inputs return the cached result at 0 s.
 - More than 8 tdd runs of one file prints a reminder: batch the edits, then re-run. It
   never blocks; TDD iteration is legitimate.

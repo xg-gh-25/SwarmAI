@@ -13022,7 +13022,7 @@ def _gate2_next_view(run_id: str, run_dir: Path, run_state: dict) -> dict:
                  "state": fl.finding_state(f), "test": f.get("test"), "file": f.get("file"),
                  "claim": (f.get("claim") or "")[:200]} for f in state["findings"]]
     reasons = [f"gate2: {r['id']} {r['state']}: {(r.get('claim') or '')[:120]}"
-               for r in fl.not_proven(state)]
+               for r in fl.push_blocking(state)]
     # an ignored answer or event is input the ledger could not use: never push-ready
     reasons += [f"gate2: {w}" for w in warnings]
     # an expert a re-entry added after the roster froze (the grown diff now asks for it)
@@ -13092,7 +13092,10 @@ def _gate2_next_view(run_id: str, run_dir: Path, run_state: dict) -> dict:
                        "--stage deliver; the findings not proven lower push_ready"}
     return {"ok": True, "convergence": "deterministic", "next": nxt, "findings": findings,
             "notes": notes[:30], "notes_total": len(notes), "spawns": len(state["spawns"]),
-            "push_ready_reasons": reasons, "warnings": warnings}
+            "push_ready_reasons": reasons, "warnings": warnings,
+            # not proven, not blocking (an expert other than correctness gave no output)
+            "residual_risks": [f"{r['id']}: {(r.get('claim') or '')[:120]}"
+                               for r in fl.residual(state)]}
 
 
 def _project_ledger_review(run_id: str, run_dir: Path, run_state: dict,

@@ -3899,8 +3899,9 @@ def _classify_python(args: list[str], hits: set, files: list) -> None:
     """Classify a python[3.x] invocation: `-m pytest`, `-m coverage run ...`, a pytest
     or coverage script, `-X faulthandler`, or inline code. `-c CODE` is a hit when
     CODE names pytest / vitest (`import pytest; pytest.main([...])`). Code read from
-    stdin (`-` or no script at all) adds the internal "_py_stdin" marker; the caller
-    decides from the whole command text (heredoc body / piped producer). Any other
+    stdin (`-` or no script at all) is not classified: in practice it is an edit script
+    whose text happens to name pytest (docs/design/pipeline-gate-expert-simplification.md
+    G1). Any other
     script, including backend/scripts/pipeline_test.py, is not a direct test run."""
     i = 0
     while i < len(args):
@@ -3923,8 +3924,7 @@ def _classify_python(args: list[str], hits: set, files: list) -> None:
             i += 2
             continue
         if a == "-":
-            hits.add("_py_stdin")
-            return
+            return  # code from stdin: an edit script far more often than a test run
         if a.startswith("-") and not a.startswith("--") and a.endswith("c"):
             if i + 1 < len(args) and _mentions_test_runner(args[i + 1]) \
                     and _code_can_execute(args[i + 1]):
@@ -3941,7 +3941,7 @@ def _classify_python(args: list[str], hits: set, files: list) -> None:
         elif base == "coverage":
             _classify_coverage(args[i + 1:], hits, files)
         return
-    hits.add("_py_stdin")  # no script, module or -c: python reads code from stdin
+    # no script, module or -c: python reads code from stdin, not classified
 
 
 def _classify_npm(args: list[str], hits: set) -> None:
@@ -4419,10 +4419,6 @@ def _classify_pipeline_test_command(
     # discounted for `pytest --version|--help` it matched one-for-one.
     if regex_pytest and regex_pytest > info_runs:
         hits.add("pytest")
-    if "_py_stdin" in hits:
-        hits.discard("_py_stdin")
-        if _mentions_test_runner(command) and _code_can_execute(command):
-            hits.add("python stdin pytest")
     seen: set = set()
     uniq = [f for f in files if not (f in seen or seen.add(f))]
     return sorted(hits), uniq
@@ -4491,27 +4487,20 @@ def _pipeline_runner_command(project: str, run_id: str, mode: str, files: list[s
     return " ".join(parts)
 
 
-def _test_gate_hint(hits) -> str:
-    """Extra advice for a deny whose only reason is stdin code naming the runner. Such
-    code is denied only when it can also run something (_code_can_execute): an import
-    outside the inert set, or exec / eval / __import__ and the like."""
-    if "python stdin pytest" not in hits:
-        return ""
-    return ("\nThis stdin code names the test runner AND can run code (an import beyond "
-            "pathlib / json / re / text modules, or exec / eval). An edit script needs "
-            "neither: use pathlib only. Running tests goes through the runner above.")
-
-
 def create_pipeline_test_gate(session_context: dict[str, Any]):
-    """Factory: PreToolUse (Bash) gate (design §4-B3). While THIS session has an
-    active run (C6: own session_id, status running, activity within
-    _RUN_ACTIVE_WINDOW_SECONDS), DENY direct test/lint/typecheck/build commands
-    (_classify_pipeline_test_command), code-copy baselines and manual pytest hang
-    triage, pointing at the pipeline_test.py runner and at the run-update
-    --status abandoned escape for a dead run. Inactive → approve everything.
-    SWARM_GATE_FORCE=pipeline_test_gate in the backend process env approves (logged; the deny
-    text tells the model only the operator can set it). Fail-open on any error.
-    session_context is the mutable dict SessionUnit updates (read at call time)."""
+    """Factory: PreToolUse (Bash) gate (design §4-B3, narrowed by
+    docs/design/pipeline-gate-expert-simplification.md G1).
+
+    - Always (run-independent): DENY backend/scripts/pipeline_test.py in a
+      for/while/until loop or twice in one Bash call (_runner_loop_kind).
+    - While THIS session has an active run (C6: own session_id, status running,
+      activity within _RUN_ACTIVE_WINDOW_SECONDS): a direct test/lint/typecheck/build
+      command (_classify_pipeline_test_command) is APPROVED with an additionalContext
+      note naming the runner command. Landing and push_ready read only the runner's
+      evidence, so a direct run cannot qualify a run; denying it only cost turns.
+
+    Fail-open on any error. session_context is the mutable dict SessionUnit updates
+    (read at call time)."""
 
     async def _gate(
         input_data: dict[str, Any],
@@ -4570,16 +4559,10 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
         if own_run is None:
             return {"decision": "approve"}  # not in a pipeline run → no effect
 
-        if force_enabled("pipeline_test_gate", input_data):
-            return {"decision": "approve"}
-
         suggest = [_repo_relative(f, cwd) for f in files[:5]]
         mode = "tdd" if suggest else "verify"
         runner = _pipeline_runner_command(own_run["project"], own_run["id"], mode, suggest)
-        abandon_args = ("run-update --project " + shlex.quote(own_run["project"]) + " --run-id "
-                        + shlex.quote(own_run["id"]) + " --status abandoned --reason '<why>'")
-        abandon = "python backend/scripts/artifact_cli.py " + abandon_args
-        try:  # the run's recorded CLI makes both ONE absolute command (pipeline-run-worktree §16.9)
+        try:  # the run's recorded CLI makes it ONE absolute command (pipeline-run-worktree §16.9)
             from core.worktree_write_gate import cli_command
             _cli = await asyncio.wait_for(
                 executors.run_in("subprocess", _recorded_run_cli,
@@ -4587,40 +4570,24 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
                 timeout=_RUN_SCAN_TIMEOUT,
             )
             if isinstance(_cli, dict):
-                abandon = cli_command(_cli, abandon_args)
                 _rest = runner.split("backend/scripts/pipeline_test.py ", 1)[1]
                 runner = ("perl -e 'alarm 110; exec @ARGV' "
                           + cli_command(_cli, _rest, script="pipeline_test.py"))
         except Exception:  # noqa: BLE001 — the relative form is still printed
             logger.debug("_gate: suppressed exception on a fail-safe path", exc_info=True)
-            pass
-        logger.warning("[BLOCKED] pipeline_test_gate (%s) in run %s: %s",
-                       ", ".join(hits), own_run["id"], command[:120])
-        hint = _test_gate_hint(hits)
+        logger.info("pipeline_test_gate: direct %s in run %s (allowed, not evidence)",
+                    ", ".join(hits), own_run["id"])
         return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    "DENY (" + ", ".join(hits) + "): pipeline run " + own_run["id"]
-                    + " is active in this session, so tests and builds go through the "
-                    "pipeline test runner only (one entry point, scoped by mode, cached, "
-                    "hang-safe; design §4-B3). Run this from the repo root instead:\n"
-                    + runner + "\n"
-                    "Modes: tdd = up to 5 explicit test files (RED/GREEN), verify = end of "
-                    "BUILD, regression = TEST stage, recheck = after a fix. The runner "
-                    "reports hangs with stacks and keeps a HEAD baseline, so do not "
-                    "ps/kill/faulthandler by hand or copy the repo for a baseline.\n"
-                    "If this run is no longer being worked on, close it first (then "
-                    "this gate no longer applies):\n"
-                    + abandon + "\n"
-                    "If the runner itself is broken, tell the user. Only the operator "
-                    "can bypass this gate, by setting SWARM_GATE_FORCE=pipeline_test_gate in the "
-                    "backend/daemon environment (a variable set in a Bash command has "
-                    "no effect)."
-                    + hint
-                ),
-            }
+            "decision": "approve",
+            "additionalContext": (
+                "Note (" + ", ".join(hits) + "): pipeline run " + own_run["id"]
+                + " is active in this session. This direct run is allowed, but landing "
+                "and push_ready read only the pipeline test runner's results, so it does "
+                "not count as evidence. To record evidence, run from the repo root:\n"
+                + runner + "\n"
+                "Modes: tdd = up to 5 explicit test files, verify = end of BUILD, "
+                "regression = TEST stage, recheck = after a fix."
+            ),
         }
 
     return _gate

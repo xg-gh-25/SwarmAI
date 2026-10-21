@@ -92,6 +92,16 @@ def _reason(res):
     return res["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def _is_note(res):
+    """G1 (pipeline-gate-expert-simplification): a direct test command is approved with
+    a note naming the runner, never denied."""
+    return res.get("decision") == "approve" and "pipeline_test.py" in (res.get("additionalContext") or "")
+
+
+def _note(res):
+    return res["additionalContext"]
+
+
 # ── C6 active-run detection ──────────────────────────────────────────────────
 class TestSessionRunState:
     def test_running_run_of_this_session_matches(self, ws):
@@ -156,7 +166,7 @@ class TestSessionRunState:
 
 
 # ── pipeline_test_gate ───────────────────────────────────────────────────────
-DENIED_COMMANDS = [
+NOTED_COMMANDS = [
     # direct test / build
     "pytest tests/test_x.py",
     "cd backend && .venv/bin/python -m pytest tests/test_x.py -q",
@@ -180,8 +190,6 @@ DENIED_COMMANDS = [
     "\"import pytest,sys; sys.exit(pytest.main(['tests/test_x.py']))\"",
     "python3 -uc 'import pytest; pytest.main()'",
     "python -c 'import subprocess; subprocess.run([\"npx\", \"vitest\", \"run\"])'",
-    "python - <<'EOF'\nimport pytest\npytest.main(['tests/test_x.py'])\nEOF",
-    "echo 'import pytest; pytest.main()' | python3",
     # M1: coverage wrappers
     "coverage run -m pytest tests/test_x.py",
     "perl -e 'alarm 90; exec @ARGV' .venv/bin/python -m coverage run -m pytest tests/test_x.py",
@@ -268,10 +276,6 @@ DENIED_COMMANDS = [
     "cd ../desktop && npx eslint src",
     # a registered worktree outside the run
     "git -C . worktree add /tmp/base HEAD",
-    # stdin / -c code that names the runner AND can run code
-    "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['pytest', 'tests/x.py'])\nEOF",
-    "python3 - <<'EOF'\nexec(open('t.py').read())  # runs pytest\nEOF",
-    "python3 - <<'EOF'\nimport pipeline_test  # project module: import runs code (pytest)\nEOF",
     # manual hang triage that acts on a test process
     "pkill -f pytest",
     "kill $(pgrep -f pytest)",
@@ -318,6 +322,10 @@ APPROVED_COMMANDS = [
     "python --version",
     "echo 'print(1)' | python3",
     "python - <<'EOF'\nprint('hello')\nEOF",
+    # G1: stdin code is not classified (it was almost always an edit script)
+    "python - <<'EOF'\nimport pytest\npytest.main(['tests/test_x.py'])\nEOF",
+    "echo 'import pytest; pytest.main()' | python3",
+    "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['pytest', 'tests/x.py'])\nEOF",
     # shells, make and npm targets that are not tests
     "bash -o pipefail -c 'git status | cat'",
     "make help",
@@ -363,12 +371,12 @@ RUNNER = ("perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python "
 
 
 class TestPipelineTestGateActive:
-    @pytest.mark.parametrize("command", DENIED_COMMANDS)
-    def test_denies_each_family(self, ws, command):
+    @pytest.mark.parametrize("command", NOTED_COMMANDS)
+    def test_notes_each_family(self, ws, command):
         _seed(ws)
         res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}), command)
-        assert _is_deny(res), command
-        assert "pipeline_test.py" in _reason(res)
+        assert _is_note(res), command
+        assert "not count as evidence" in _note(res)
 
     @pytest.mark.parametrize("command", APPROVED_COMMANDS)
     def test_approves_non_test_commands_and_mentions(self, ws, command):
@@ -386,25 +394,25 @@ class TestPipelineTestGateActive:
         res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}), command)
         assert res == {"decision": "approve"}
 
-    def test_runner_plus_raw_pytest_is_denied(self, ws):
+    def test_runner_plus_raw_pytest_gets_the_note(self, ws):
         _seed(ws)
         res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}),
                     RUNNER + " --mode verify && pytest tests/test_x.py")
-        assert _is_deny(res) and "pipeline test runner only" in _reason(res)
+        assert _is_note(res)
 
     def test_bare_make_uses_the_makefile_default_goal(self, ws):
         # backend/Makefile's first target is `test`, so a bare `make` there runs tests.
         _seed(ws)
         gate = sh.create_pipeline_test_gate({"sdk_session_id": SID})
-        assert _is_deny(_call(gate, "make", cwd=os.path.join(REPO, "backend")))
-        assert _is_deny(_call(gate, "make -C backend", cwd=REPO))
+        assert _is_note(_call(gate, "make", cwd=os.path.join(REPO, "backend")))
+        assert _is_note(_call(gate, "make -C backend", cwd=REPO))
 
     def test_bare_make_with_non_test_default_goal_is_approved(self, ws, tmp_path):
         _seed(ws)
         (tmp_path / "Makefile").write_text(".PHONY: all\nall:\n\techo hi\ntest:\n\tpytest\n")
         gate = sh.create_pipeline_test_gate({"sdk_session_id": SID})
         assert _call(gate, "make", cwd=str(tmp_path)) == {"decision": "approve"}
-        assert _is_deny(_call(gate, "make test", cwd=str(tmp_path)))
+        assert _is_note(_call(gate, "make test", cwd=str(tmp_path)))
 
     def test_cd_chain_resolves_the_makefile_directory(self, ws, tmp_path, monkeypatch):
         # sub/ defaults to `check` (gated), other/ to `all` (not gated); the hook cwd
@@ -421,7 +429,7 @@ class TestPipelineTestGateActive:
                     "cd other && cd ../sub && make", "cd " + here + "/sub && make",
                     "cd ~/sub && make", "cd other; (cd ../sub && make)",
                     "cd sub && bash -c 'make -j2'"]:
-            assert _is_deny(_call(gate, cmd, cwd=here)), cmd
+            assert _is_note(_call(gate, cmd, cwd=here)), cmd
         for cmd in ["make", "cd other && make", "cd sub/../other && make",
                     "(cd sub) && make", "cd sub | make", "cd sub || make",
                     "cd $D && make", "pushd -n sub && make",
@@ -429,13 +437,7 @@ class TestPipelineTestGateActive:
             assert _call(gate, cmd, cwd=here) == {"decision": "approve"}, cmd
         # an explicit gated target is denied wherever make runs, known dir or not
         for cmd in ["cd other && make test", "cd $D && make test", "cd sub || make check"]:
-            assert _is_deny(_call(gate, cmd, cwd=here)), cmd
-
-    def test_force_env_approves(self, ws, monkeypatch):
-        _seed(ws)
-        monkeypatch.setenv("SWARM_GATE_FORCE", "pipeline_test_gate")
-        res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}), "pytest tests/test_x.py")
-        assert res == {"decision": "approve"}
+            assert _is_note(_call(gate, cmd, cwd=here)), cmd
 
     def test_non_bash_tool_is_approved(self, ws):
         _seed(ws)
@@ -475,12 +477,12 @@ class TestPipelineTestGateInactive:
         assert _call(gate, "pytest tests/test_x.py") == {"decision": "approve"}
 
 
-class TestPipelineTestGateDenyText:
+class TestPipelineTestGateNoteText:
     def _deny(self, ws, command, cwd=REPO):
         _seed(ws)
         res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}), command, cwd=cwd)
-        assert _is_deny(res), command
-        return _reason(res)
+        assert _is_note(res), command
+        return _note(res)
 
     def test_pytest_with_files_suggests_tdd_with_those_files(self, ws):
         reason = self._deny(
@@ -511,22 +513,7 @@ class TestPipelineTestGateDenyText:
     def test_real_project_and_run_id_are_filled_and_quoted(self, ws):
         _seed(ws, project="Agent DLC", run_id="run_9f")
         res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}), "pytest -q")
-        reason = _reason(res)
-        assert "--project 'Agent DLC' --run-id run_9f --mode verify" in reason
-        assert ("artifact_cli.py run-update --project 'Agent DLC' --run-id run_9f "
-                "--status abandoned") in reason
-
-    def test_deny_names_the_abandon_escape(self, ws):
-        reason = self._deny(ws, "pytest -q")
-        assert ("python backend/scripts/artifact_cli.py run-update --project SwarmAI "
-                "--run-id run_abc123 --status abandoned") in reason
-
-    def test_force_env_is_described_as_operator_only(self, ws):
-        # L1: the model must not be told it can set the bypass itself.
-        reason = self._deny(ws, "pytest -q")
-        assert "SWARM_GATE_FORCE=pipeline_test_gate bypasses" not in reason
-        assert "operator" in reason
-        assert "backend/daemon environment" in reason
+        assert "--project 'Agent DLC' --run-id run_9f --mode verify" in _note(res)
 
 
 # ── direct_commit_gate ───────────────────────────────────────────────────────

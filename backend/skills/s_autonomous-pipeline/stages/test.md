@@ -5,7 +5,7 @@ Purpose: the checks the one full-scope run does not make (cross-boundary wiring,
 **Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage test`
 
 `RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`; output `continue: true` → run the same command again.
-Tests go ONLY through `RUN`: `pipeline_test_gate` denies direct pytest/vitest/tsc/eslint/vite build.
+Tests go ONLY through `RUN`: a direct pytest/vitest/tsc/eslint/vite build runs but is no evidence.
 One call per mode, foreground, never split; no full suite (STEERING R9).
 
 1. **No full-scope run here.** verify / regression / recheck run ONCE per run, at DELIVER
@@ -34,7 +34,7 @@ One call per mode, foreground, never split; no full suite (STEERING R9).
   publish: halt-at-≥5 is an agent-obeyed stop (finish not push-ready), not a validator publish gate. <!-- R-test-004 -->
 - `[MUST]` BLOCKING: a single-platform compile is never a fully-green TEST result for a
   cross-platform changeset (`ref/test/cross-platform.md`).
-- `pipeline_test_gate`: runner only. Its bypass is operator-set, never yours.
+- Only runner results count as test evidence.
 
 **Read only if:** layer detail / skip records / other stacks → `ref/test/layers.md`;
 fixing, WTF formula, regression table → `ref/test/fixing.md`; cross-boundary →
