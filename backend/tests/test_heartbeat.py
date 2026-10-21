@@ -12,6 +12,7 @@ backend can't be misread as dead. These tests assert:
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 
@@ -264,6 +265,90 @@ def test_stack_dump_lists_busy_threads_and_skips_idle_ones():
     assert "busy thread busy-worker" in out
     assert "idle-worker" not in out
     assert "loop thread: not found" in out
+
+
+def test_stack_dump_skips_threads_blocked_in_c_level_waits():
+    """aiosqlite's worker parks in ``SimpleQueue.get()``, a C call with no
+    Python frame of its own: its caller is the innermost frame. The 10-21 log
+    listed 788 such idle workers as busy. Same for ``sock.recv`` and a bare
+    ``sleep``. A CPU loop that keeps calling ``dict.get`` must stay listed."""
+    import queue
+    import socket
+
+    stop = threading.Event()
+    a, b = socket.socketpair()
+    sq: "queue.SimpleQueue[int]" = queue.SimpleQueue()
+
+    def sq_waiter():
+        sq.get()
+
+    def recv_waiter():
+        try:
+            a.recv(10)
+        except OSError:
+            pass
+
+    def sleeper():
+        while not stop.is_set():
+            time.sleep(0.05)
+
+    def hot_dict_get():
+        d = {1: 2}
+        while not stop.is_set():
+            d.get(1)
+
+    ts = [threading.Thread(target=f, name=f.__name__, daemon=True)
+          for f in (sq_waiter, recv_waiter, sleeper, hot_dict_get)]
+    for t in ts:
+        t.start()
+    try:
+        time.sleep(0.1)
+        heartbeat._loop_thread_id = None
+        out = heartbeat._format_starvation_stacks()
+    finally:
+        stop.set(); sq.put(0); b.send(b"x")
+        for t in ts:
+            t.join(2)
+        a.close(); b.close()
+    assert "sq_waiter" not in out
+    assert "recv_waiter" not in out
+    assert "sleeper" not in out
+    assert "busy thread hot_dict_get" in out
+
+
+def test_pending_c_wait_needs_a_blocking_receiver_not_just_a_name():
+    """Read from bytecode (the frozen build ships no source): a frame parked in
+    ``SimpleQueue.get()`` is a C wait; a frame calling ``dict.get`` is not,
+    though the method name is the same."""
+    import queue
+    sq: "queue.SimpleQueue[int]" = queue.SimpleQueue()
+    seen = {}
+
+    def waiter():
+        seen["frame"] = sys._getframe()
+        sq.get()
+
+    t = threading.Thread(target=waiter, daemon=True)
+    t.start()
+    try:
+        time.sleep(0.05)
+        assert heartbeat._pending_c_wait(seen["frame"]) is True
+    finally:
+        sq.put(0); t.join(2)
+
+    captured = {}
+
+    class Probe(dict):
+        def get(self, k, default=None):  # Python-level stand-in for dict.get
+            captured["caller"] = sys._getframe(1)
+            return super().get(k, default)
+
+    def hot(d):
+        return d.get(1)
+
+    hot(Probe())
+    # The caller frame is suspended on CALL get with a dict receiver.
+    assert heartbeat._pending_c_wait(captured["caller"]) is False
 
 
 # ── Battery status in the starvation log (10-21 10:47 freeze was a 3% battery) ──

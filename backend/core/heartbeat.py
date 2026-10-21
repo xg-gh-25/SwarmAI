@@ -74,13 +74,18 @@ Key public symbols:
 from __future__ import annotations
 
 import asyncio
+import dis
+import inspect
 import json
 import logging
 import os
+import queue
+import socket
 import sys
 import threading
 import time
 import traceback
+import types
 from pathlib import Path
 
 from config import get_app_data_dir
@@ -162,6 +167,76 @@ _IDLE_LEAF_FUNCS = frozenset({
     "wait", "_wait_for_tstate_lock", "get", "select", "poll", "control",
     "_worker", "sleep", "accept", "recv", "recv_into", "readline", "read",
 })
+# A wait implemented in C has no Python frame of its own: a thread blocked in
+# ``SimpleQueue.get()`` (aiosqlite's worker) or ``sock.recv()`` shows its CALLER
+# as the innermost frame, so the name test above misses it. Such a frame is
+# suspended on a CALL. :func:`_pending_c_wait` reads the call from bytecode
+# (the frozen build ships no .py source) and resolves its receiver statically
+# from the frame's locals/globals, then requires BOTH a waiting method name and
+# a receiver of a known blocking C type. The type check is what keeps a CPU
+# loop calling ``dict.get`` listed: name alone cannot tell the two apart, and
+# a second sample cannot either, since a GIL-holding loop always yields at the
+# same instruction.
+_CALL_NAME_OPS = frozenset({"LOAD_ATTR", "LOAD_METHOD"})
+_BASE_OPS = frozenset({"LOAD_FAST", "LOAD_FAST_CHECK", "LOAD_DEREF",
+                       "LOAD_GLOBAL", "LOAD_NAME"})
+_BLOCKING_C_TYPES: tuple = (queue.SimpleQueue, socket.socket,
+                            type(threading.Lock()), type(threading.RLock()))
+_BLOCKING_C_MODULES = frozenset({"time", "select", "_socket", "socket"})
+_MISSING = object()
+
+
+def _static_lookup(frame, op: str, name: str):
+    """Value of a base name in ``frame`` without running any code, or _MISSING."""
+    if op in ("LOAD_GLOBAL", "LOAD_NAME"):
+        g = frame.f_globals
+        if name in g:
+            return g[name]
+        b = g.get("__builtins__")
+        b = b if isinstance(b, dict) else getattr(b, "__dict__", {})
+        return b.get(name, _MISSING)
+    return frame.f_locals.get(name, _MISSING)
+
+
+def _pending_c_wait(frame) -> bool:
+    """True when ``frame`` is suspended in a blocking C call. Never raises."""
+    try:
+        instrs = list(dis.get_instructions(frame.f_code))
+        idx = next((i for i, ins in enumerate(instrs)
+                    if ins.offset == frame.f_lasti), None)
+        if idx is None or not instrs[idx].opname.startswith("CALL"):
+            return False
+        # The callee: the nearest attribute load with a waiting name. Argument
+        # loads may sit between it and the CALL (``q.get(timeout=self.t)``).
+        j = next((k for k in range(idx - 1, -1, -1)
+                  if instrs[k].opname in _CALL_NAME_OPS
+                  and instrs[k].argval in _IDLE_LEAF_FUNCS), None)
+        if j is None:
+            return False
+        chain: list[str] = []
+        k = j - 1
+        while k >= 0 and instrs[k].opname in _CALL_NAME_OPS:
+            chain.append(instrs[k].argval)
+            k -= 1
+        if k < 0 or instrs[k].opname not in _BASE_OPS:
+            return False
+        obj = _static_lookup(frame, instrs[k].opname, instrs[k].argval)
+        for attr in reversed(chain):
+            if obj is _MISSING:
+                return False
+            obj = inspect.getattr_static(obj, attr, _MISSING)
+        if obj is _MISSING:
+            return False
+        if isinstance(obj, types.ModuleType):
+            return obj.__name__ in _BLOCKING_C_MODULES
+        return issubclass(type(obj), _BLOCKING_C_TYPES)
+    except Exception:  # pragma: no cover - observability must never break
+        return False
+
+
+def _is_idle_frame(frame) -> bool:
+    """True when the thread whose innermost frame is ``frame`` is waiting."""
+    return frame.f_code.co_name in _IDLE_LEAF_FUNCS or _pending_c_wait(frame)
 
 
 def _format_starvation_stacks(frames: dict | None = None) -> str:
@@ -169,10 +244,11 @@ def _format_starvation_stacks(frames: dict | None = None) -> str:
 
     Called from the heartbeat writer thread only (never the loop). The loop
     thread's stack is always included: it names the call that keeps the loop
-    from scheduling. Other threads are listed only when their innermost frame is
-    not an idle wait, since a thread holding the GIL (pure-Python CPU work in a
-    pool) starves the loop as surely as a blocking call on it. ``frames`` is
-    injectable for tests; defaults to ``sys._current_frames()``. Never raises.
+    from scheduling. Other threads are listed only when they are not waiting
+    (:func:`_is_idle_frame`), since a thread holding the GIL (pure-Python CPU
+    work in a pool) starves the loop as surely as a blocking call on it.
+    ``frames`` is injectable for tests; defaults to ``sys._current_frames()``.
+    Never raises.
     """
     try:
         frames = sys._current_frames() if frames is None else frames
@@ -188,7 +264,7 @@ def _format_starvation_stacks(frames: dict | None = None) -> str:
         for tid, frame in frames.items():
             if tid in (me, _loop_thread_id):
                 continue
-            if frame.f_code.co_name in _IDLE_LEAF_FUNCS:
+            if _is_idle_frame(frame):
                 continue
             stack = "".join(traceback.format_stack(frame)[-8:])
             parts.append(f"busy thread {names.get(tid, tid)}:\n{stack}")
