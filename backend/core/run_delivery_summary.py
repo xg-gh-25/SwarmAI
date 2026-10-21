@@ -62,10 +62,7 @@ MAX_INTENT = 200
 _GIT_TIMEOUT = 15
 _LOCAL_FMT = "%Y-%m-%dT%H:%M:%S"
 
-_META_PREFIXES = (
-    "## Current UI State", "<task-notification", "[RESUMED CONVERSATION HISTORY",
-    "## Recalled Knowledge", "## Task Continuation", "[Request interrupted",
-)
+from .injected_blocks import META_PREFIXES as _META_PREFIXES  # noqa: E402 — one set of shapes
 _ACKS = {"继续", "continue", "go", "go on", "yes", "ok", "okay", "好", "好的", "y", "是",
          "对", "嗯", "行", "可以", "收到", "开始", "开始吧", "继续吧", "proceed", "next", "lgtm",
          # Resume-class control words: a run created right after one of these must

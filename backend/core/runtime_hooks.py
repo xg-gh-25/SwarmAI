@@ -321,8 +321,11 @@ def create_user_correction_detector(
     sid = ctx.get("sdk_session_id", "unknown")
 
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
-        prompt = _extract_field(input_data, "prompt", "")
-        if not prompt:
+        from core.injected_blocks import strip_injected_blocks
+        # Only what the user typed: a recalled or resumed block quoting an old
+        # "that's wrong" is history, not a correction made now.
+        prompt = strip_injected_blocks(_extract_field(input_data, "prompt", ""))
+        if not prompt or not isinstance(prompt, str):
             return {}
 
         # Two tiers of match (adversarial MED, run_e681a61d):
@@ -535,28 +538,6 @@ _DEFAULT_CHECKPOINT_PATH = str(
 _DEFAULT_CHECKPOINT_INTERVAL = 10
 
 
-def _get_recent_git_commits(workspace_dir: str, since_ts: float) -> list[str]:
-    """Get recent git commits since a timestamp. Returns list of oneline strings.
-
-    Subprocess with 2s timeout — never blocks the agent. Returns empty on any error.
-    """
-    from datetime import datetime, timezone
-
-    try:
-        since_str = datetime.fromtimestamp(since_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-        result = subprocess.run(
-            ["git", "log", "--oneline", "-5", f"--since={since_str}"],
-            capture_output=True, text=True, timeout=2,
-            cwd=workspace_dir,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip().split("\n")[:5]
-    except Exception:
-        logger.debug("_get_recent_git_commits: suppressed exception on a fail-safe path", exc_info=True)
-        pass
-    return []
-
-
 def create_session_checkpoint(
     session_context: Optional[dict] = None,
     checkpoint_path: Optional[str] = None,
@@ -567,11 +548,17 @@ def create_session_checkpoint(
 
     Every ``interval`` tool calls:
     1. Overwrites checkpoint JSON with current session state (crash recovery).
-    2. Appends a content snapshot to today's DailyActivity (mid-session memory).
+    2. Upserts this session's ONE checkpoint block in today's DailyActivity
+       (mid-session memory) when the touched-file list grew.
 
-    On crash, ``recover_crash_checkpoint()`` reads the JSON and writes to
-    DailyActivity on next startup.  For normal sessions, the DailyActivity
-    append ensures content is captured even if post-session hooks don't fire.
+    On crash, ``recover_crash_checkpoint()`` reads the JSON and replaces the same
+    block on next startup.  For normal sessions, the block ensures content is
+    captured even if post-session hooks don't fire.
+
+    No git activity: the workspace's own commits are the auto-commit hook's
+    snapshots, not work, and the post-session summary records the real commits
+    from the source repos (DailyActivityExtractionHook._capture_git_activity).
+    ``git_commits`` stays in the JSON as ``[]`` for readers of its shape.
     """
     path = checkpoint_path or _DEFAULT_CHECKPOINT_PATH
     ctx = session_context or {}
@@ -596,10 +583,8 @@ def create_session_checkpoint(
         session_id = ctx.get("sdk_session_id", "unknown")
         files = sorted(ctx.get("_files_touched", set()))
         corrections = ctx.get("_corrections_count", 0)
-        start_ts = ctx.get(start_ts_key, time.time())
 
-        # Fetch recent git commits (2s timeout, never blocks)
-        git_commits = _get_recent_git_commits(ws, start_ts)
+        git_commits: list[str] = []  # see the docstring: workspace commits are not work
 
         # 1. Write checkpoint JSON (crash recovery)
         # Enrich with observation data if available
@@ -653,37 +638,26 @@ def create_session_checkpoint(
         except Exception:
             logger.exception("Failed to write session checkpoint to %s", path)
 
-        # 2. Append content snapshot to DailyActivity (mid-session memory)
-        # Only write if new files or commits since last checkpoint.
-        # Track both file count AND commit count to prevent redundant writes
-        # when git_commits is non-empty but unchanged since last checkpoint.
+        # 2. Upsert this session's checkpoint block in DailyActivity (mid-session
+        # memory) — only when the touched-file list grew since the last one.
         last_file_count = ctx.get(last_da_count_key, 0)
-        last_commit_count = ctx.get("_last_da_commit_count", 0)
-        has_new_files = len(files) > last_file_count
-        has_new_commits = len(git_commits) > last_commit_count
-        if not has_new_files and not has_new_commits:
+        if len(files) <= last_file_count:
             return {}
 
         try:
             from datetime import datetime as dt
+            from core.daily_activity_writer import upsert_session_block
             now = dt.now()
-            da_dir = Path(ws) / "Knowledge" / "DailyActivity"
-            da_dir.mkdir(parents=True, exist_ok=True)
-            da_file = da_dir / f"{now.strftime('%Y-%m-%d')}.md"
+            da_file = Path(ws) / "Knowledge" / "DailyActivity" / f"{now.strftime('%Y-%m-%d')}.md"
 
             # Build content-capped entry (target < 1KB)
             lines = [
-                f"\n## {now.strftime('%H:%M')} | {session_id[:8]} | 📸 Mid-session checkpoint\n",
+                f"## {now.strftime('%H:%M')} | {session_id[:8]} | 📸 Mid-session checkpoint\n",
             ]
-            if files:
-                file_summary = ", ".join(f"`{Path(f).name}`" for f in files[:10])
-                if len(files) > 10:
-                    file_summary += f" (+{len(files) - 10} more)"
-                lines.append(f"**Files:** {file_summary}\n")
-            if git_commits:
-                lines.append("**Git activity:**\n")
-                for c in git_commits[:3]:
-                    lines.append(f"- `{c[:72]}`\n")
+            file_summary = ", ".join(f"`{Path(f).name}`" for f in files[:10])
+            if len(files) > 10:
+                file_summary += f" (+{len(files) - 10} more)"
+            lines.append(f"**Files:** {file_summary}\n")
             if corrections:
                 lines.append(f"**Corrections:** {corrections}\n")
 
@@ -692,26 +666,12 @@ def create_session_checkpoint(
             if len(entry.encode("utf-8")) > 1024:
                 entry = entry[:1000] + "\n...(truncated)\n"
 
-            # Concurrency note: we use plain open("a") instead of locked_write.py.
-            # Our entries are <1KB (hard-capped above), and on macOS/APFS small
-            # appends (<4KB) to a single file are effectively atomic at the
-            # filesystem level.  These hooks are observe-only and crash-safe by
-            # design — a torn write loses one checkpoint entry, which is
-            # acceptable for mid-session snapshots.
-            # OFF-LOOP (run_a1f4c2d8): the append goes to a thread; the atomicity
-            # reasoning above is unchanged (still one plain open("a") of a <1KB entry).
-            def _append_da(_f=da_file, _e=entry) -> None:
-                with open(_f, "a", encoding="utf-8") as f:
-                    f.write(_e)
-
-            await asyncio.to_thread(_append_da)
+            # OFF-LOOP (run_a1f4c2d8): the locked read-modify-write goes to a thread.
+            await asyncio.to_thread(upsert_session_block, da_file, session_id,
+                                    "checkpoint", entry)
 
             ctx[last_da_count_key] = len(files)
-            ctx["_last_da_commit_count"] = len(git_commits)
-            logger.debug(
-                "Mid-session checkpoint written to DailyActivity: %d files, %d commits",
-                len(files), len(git_commits),
-            )
+            logger.debug("Mid-session checkpoint upserted in DailyActivity: %d files", len(files))
         except Exception:
             logger.debug("Failed to write mid-session checkpoint to DailyActivity", exc_info=True)
 
@@ -2058,51 +2018,20 @@ def create_post_compact_injection(
 # hook, and they are ENGLISH prose — classifying the COMBINED string mis-flips R19
 # (verified live 2026-08-10: "你给我说中文" + the UI-state block → weight 0.17 < 0.30
 # → wrongly "en"). R19 must reflect the USER's language, so these blocks are stripped
-# before classification. Three known injectors (adversarial run abc8551392a864ff2):
-#   1. UI-state PREFIX (session_router._prefix_ui_state_onto_query): `{block}\n\n{user}`
-#      — leading, header in _INJECTED_LEADING_HEADERS, single-\n internally.
-#   2. wrap-up APPEND (session_unit.send): `{user}\n\n---\n\n{WRAP_UP_PROMPT}` — trailing.
-#   3. heal-continuation PREPEND (session_unit.send): `{continuation}\n\n---\n\n{user}`.
-# (2)+(3) are delimited by the system's own `\n\n---\n\n` separator and carry a
-# recognizable header/marker — split on that and drop segments that ARE a system block.
-_INJECTED_LEADING_HEADERS = ("## Current UI State", "## Currently Open File")
-_SYSTEM_BLOCK_MARKERS = (
-    "## Current UI State", "## Currently Open File",  # UI-state
-    "## Task Continuation",                            # heal-continuation
-    "SYSTEM NOTE",                                      # wrap-up prompts
-)
-_INJECT_DELIM = "\n\n---\n\n"
-
-
+# before classification. The injectors and their exact shapes (resume history,
+# recall, UI state, task notifications, wrap-up / heal-continuation segments) are
+# listed in core.injected_blocks, which the builders import their strings from.
 def _strip_injected_prefix(prompt: str) -> str:
-    """Return ONLY the user's own text, with system-injected blocks removed, so
-    language classification reflects the USER's language — not the English UI-state /
-    wrap-up / heal-continuation prose the router+session layer glue onto the query.
+    """The user's own text for LANGUAGE classification (core.injected_blocks).
 
-    Fail-safe by construction: non-str input returns unchanged; if stripping would
-    remove everything (a prompt that is ALL system blocks, or a real user message
-    that merely starts with one of these headers), the ORIGINAL prompt is returned
-    rather than an empty string — never drop real user content on a false match."""
-    if not isinstance(prompt, str):
-        return prompt  # multimodal list / non-str → not our concern (leave as-is)
-
-    # Split on the system's own block delimiter and drop whole segments that ARE a
-    # known system block; from surviving segments, strip a leading UI-state header
-    # block (prepended with only `\n\n`, no `---`).
-    kept: list[str] = []
-    for seg in prompt.split(_INJECT_DELIM):
-        s = seg.lstrip()
-        if s.startswith(_SYSTEM_BLOCK_MARKERS) and not s.startswith(_INJECTED_LEADING_HEADERS):
-            continue  # a pure system block (heal-continuation / wrap-up) → drop
-        if s.startswith(_INJECTED_LEADING_HEADERS):
-            # UI-state block leads this segment; the FIRST blank line is the seam to
-            # the user text (the block itself is single-\n-joined internally).
-            seam = s.find("\n\n")
-            seg = s[seam + 2:] if seam != -1 else ""
-        kept.append(seg)
-
-    user = _INJECT_DELIM.join(kept).strip()
-    return user if user else prompt  # never return empty — fail back to the original
+    Same stripping as every other prompt reader, plus one fail-safe the
+    language check needs: if stripping would leave nothing (a prompt that is all
+    system blocks), the ORIGINAL prompt is returned so a language is still read.
+    Capture hooks call ``strip_injected_blocks`` directly and capture nothing then.
+    """
+    from core.injected_blocks import strip_injected_blocks
+    user = strip_injected_blocks(prompt)
+    return user if user else prompt
 
 
 def _classify_message_language(prompt: str) -> Optional[str]:
@@ -2110,9 +2039,9 @@ def _classify_message_language(prompt: str) -> Optional[str]:
     text, or None when ambiguous (too short / symbol-only) — in which case NO
     language reminder is injected (silence beats a wrong flip).
 
-    Strips any system-injected UI-state prefix FIRST (see _strip_injected_prefix):
-    R19 must reflect the USER's language, not the English proprioception block the
-    session router prepends to the query.
+    Strips every system-injected block FIRST (see _strip_injected_prefix /
+    core.injected_blocks): R19 must reflect the USER's language, not the English
+    resume / recall / UI-state / terminal blocks the session router prepends.
 
     REUSES the single canonical full-range CJK detector
     ``ContextDirectoryLoader._CJK_RE`` (the ONE object, imported — NOT copied:
@@ -2269,8 +2198,12 @@ def create_high_signal_capture(
     captured_key = "_high_signal_captured"
 
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
-        prompt = _extract_field(input_data, "prompt", "")
-        if not prompt or len(prompt) < 10:
+        from core.injected_blocks import strip_injected_blocks
+        # Match on what the user TYPED: a resumed-history, recall or UI-state block
+        # glued onto the query is system text, and capturing it (as before) filled
+        # DailyActivity with the system's own preambles.
+        prompt = strip_injected_blocks(_extract_field(input_data, "prompt", ""))
+        if not isinstance(prompt, str) or len(prompt) < 10:
             return {}
 
         if not _HIGH_SIGNAL_PATTERNS.search(prompt):
@@ -2284,32 +2217,18 @@ def create_high_signal_capture(
             return {}
         ctx[captured_key].add(sig)
 
-        # Append to today's DailyActivity
+        # Append to today's DailyActivity as ONE line, under the day file's lock
+        # (core.daily_activity_writer.append_daily_text): a multi-line capture used to
+        # carry '## ' lines into the file and nothing serialized it with the writers.
         try:
             from datetime import datetime
+            from core.daily_activity_writer import append_daily_text
             now = datetime.now()
-
-            entry = (
-                f"\n**🔔 High-signal capture** ({now.strftime('%H:%M')}): "
-                f"{prompt[:500]}\n"
-            )
-
-            # OFF-LOOP (run_a1f4c2d8): mkdir + append in ONE thread hop. This fires on a
-            # UserPromptSubmit hook — i.e. the instant the user hits send — so blocking
-            # here directly delays the turn the user is waiting on.
-            # Concurrency note (unchanged): plain open("a") is safe here — entries are
-            # well under 4KB (macOS/APFS atomic append threshold).  These are
-            # observe-only hooks; a torn write loses one signal entry, which is
-            # acceptable.  locked_write.py is not needed for this use case.
-            def _append_signal() -> None:
-                da_dir = Path(ws) / "Knowledge" / "DailyActivity"
-                da_dir.mkdir(parents=True, exist_ok=True)
-                da_file = da_dir / f"{now.strftime('%Y-%m-%d')}.md"
-                with open(da_file, "a", encoding="utf-8") as f:
-                    f.write(entry)
-
-            await asyncio.to_thread(_append_signal)
-
+            one_line = " ".join(prompt[:500].split())
+            entry = f"\n**🔔 High-signal capture** ({now.strftime('%H:%M')}): {one_line}\n"
+            da_file = Path(ws) / "Knowledge" / "DailyActivity" / f"{now.strftime('%Y-%m-%d')}.md"
+            # OFF-LOOP (run_a1f4c2d8): fires the instant the user hits send.
+            await asyncio.to_thread(append_daily_text, da_file, entry)
             logger.debug("High-signal captured to DailyActivity: %.80s", prompt)
         except Exception:
             logger.exception("Failed to write high-signal to DailyActivity")

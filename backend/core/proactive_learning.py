@@ -80,8 +80,10 @@ class LearningState:
     # Dedup guard: "stem:sessions_count" of the DailyActivity file last
     # processed by update_learning_from_activity(). Prevents re-counting
     # the same deliverables across multiple session starts within the same
-    # day.  Previous mtime-based guard was unreliable because DailyActivity
-    # is append-only — mtime changes every session, causing double-counting.
+    # day.  Previous mtime-based guard was unreliable because the file changes
+    # on every write — mtime changes every session, causing double-counting.
+    # sessions_count grows only when a session's FIRST summary is added (a
+    # re-summary replaces its block), so this key changes exactly on a new session.
     #
     # NOTE: Two tabs racing on the same DailyActivity file could both pass
     # the dedup check before either writes back, causing one observation to
@@ -323,8 +325,8 @@ def classify_work_type(text: str) -> str:
 def extract_deliverables(daily_dir: Path) -> list[str]:
     """Extract **Delivered:** lines from ALL sessions in the most recent DailyActivity file.
 
-    DailyActivity files are append-only with multiple sessions per day.
-    Each session has its own **Delivered:** section. We collect from all of them
+    A DailyActivity file holds one current summary block per session (a
+    re-summary replaces the session's block). Each has its own **Delivered:** section. We collect from all of them
     so the learning loop sees the full day's work, not just the first session.
     """
     if not daily_dir.is_dir():

@@ -36,7 +36,7 @@ from core.ddd_entry_lifecycle import (
 )
 _VALID_TYPES_SET = frozenset(_VALID_TYPES)
 from core.ddd_paths import ddd_path
-from core.daily_activity_writer import parse_frontmatter, write_frontmatter, read_jsonl_sidecar
+from core.daily_activity_writer import parse_frontmatter, read_jsonl_sidecar
 from core.memory_index import extract_body_without_index
 from scripts.locked_write import LockedWriteError
 from hooks.evolution_maintenance_hook import _append_changelog
@@ -799,12 +799,16 @@ class DistillationTriggerHook:
         # Mark files as distilled AFTER all writes succeed.
         # Previous ordering (mark inside loop, write after) could lose entries:
         # if batch writes failed, already-marked files wouldn't be re-extracted.
+        # The mark is written onto the file's CURRENT body under the day file's lock
+        # (set_daily_frontmatter): writing the body read at extraction time would
+        # drop every block a session wrote since.
+        from core.daily_activity_writer import set_daily_frontmatter
         for da_file, fm, body in extracted_files:
             try:
-                fm["distilled"] = True
-                fm["distilled_date"] = date.today().isoformat()
-                new_content = write_frontmatter(fm, body)
-                da_file.write_text(new_content, encoding="utf-8")
+                set_daily_frontmatter(da_file, {
+                    "distilled": True,
+                    "distilled_date": date.today().isoformat(),
+                })
             except Exception as exc:
                 logger.warning("Failed to mark %s as distilled: %s", da_file.name, exc)
                 # Non-fatal: file will be re-processed next time, but dedup

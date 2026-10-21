@@ -83,8 +83,10 @@ def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
     """Recover session data from an orphaned checkpoint file.
 
     Called at startup (before any session hook runs).  If a checkpoint
-    file exists from a prior crashed session, appends its data to today's
-    DailyActivity and deletes the checkpoint.
+    file exists from a prior crashed session, writes its data as that
+    session's checkpoint block in today's DailyActivity — replacing the
+    block the live checkpoint hook already wrote, never adding a second one —
+    and deletes the checkpoint.
 
     Returns True if a checkpoint was recovered, False otherwise.
     """
@@ -111,7 +113,7 @@ def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
         corrections_count = data.get("corrections_count", 0)
 
         entry = (
-            f"\n## {crash_time} | {session_id[:8]} | ⚠️ Recovered from crash checkpoint\n"
+            f"## {crash_time} | {session_id[:8]} | ⚠️ Recovered from crash checkpoint\n"
             f"**What happened:** Session crashed or was evicted after {tool_count} tool calls.\n"
         )
         if files_touched:
@@ -125,15 +127,12 @@ def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
         if corrections_count:
             entry += f"**Corrections:** {corrections_count}\n"
 
-        # Append to today's DailyActivity
+        # Upsert the session's checkpoint block in today's DailyActivity
+        from core.daily_activity_writer import upsert_session_block
         ws = workspace_dir or SWARMWS
         today = datetime.now().strftime("%Y-%m-%d")
-        da_dir = ws / "Knowledge" / "DailyActivity"
-        da_dir.mkdir(parents=True, exist_ok=True)
-        da_file = da_dir / f"{today}.md"
-
-        with open(da_file, "a", encoding="utf-8") as f:
-            f.write(entry)
+        da_file = ws / "Knowledge" / "DailyActivity" / f"{today}.md"
+        upsert_session_block(da_file, session_id, "checkpoint", entry)
 
         checkpoint_path.unlink(missing_ok=True)
         logger.info(

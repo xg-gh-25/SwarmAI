@@ -9,13 +9,26 @@ Handles two output formats per day:
    "for pipeline" view — consumed directly by ``DistillationTriggerHook``
    without regex re-parsing.
 
-Both files are written atomically with ``fcntl.flock``.  The sidecar is
-best-effort — if it fails, the markdown is still written and the legacy
-regex extraction path in distillation still works.
+Identity rule (run_1ec5ea9d): a session has ONE current block per kind
+(``summary``, ``checkpoint``) in a day file. Every producer writes through
+``upsert_session_block``, which removes that session's old marked block
+(``<!-- da:<kind>:<session_id> -->`` … ``<!-- /da -->``) and appends the new one
+at the END of the file, so the newest write is always last (the prompt injects
+the file's tail). Other text is never changed apart from the blank lines around
+a removed block and the frontmatter's ``sessions_count`` / ``has_coe``. The
+JSONL sidecar keeps one record per session (latest wins). Every writer of a day
+file — this module, the capture hooks, crash recovery, distillation's
+"distilled" mark, the weekly memory-health note — takes the ONE hidden
+``.DailyActivity.lock`` of the directory (``_day_lock``) and writes through a
+temp file + rename, so a crash mid-write cannot truncate the day.
+The sidecar is best-effort — if it fails, the markdown is still written.
 
 Key public symbols:
 
-- ``write_daily_activity``  — Append a session entry to today's file + sidecar.
+- ``write_daily_activity``  — Upsert a session's summary in today's file + sidecar.
+- ``upsert_session_block``  — The one way to write a session's block (any kind).
+- ``append_daily_text``     — Append session-less text (captures, job notes) under the lock.
+- ``set_daily_frontmatter`` — Update frontmatter keys of a day file under the lock.
 - ``read_jsonl_sidecar``    — Read structured session data from JSONL sidecar.
 - ``parse_frontmatter``     — Parse YAML frontmatter from file content.
 - ``write_frontmatter``     — Serialize frontmatter dict + body to string.
@@ -26,10 +39,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import stat
+import tempfile
 from datetime import date, datetime
 from pathlib import Path
 
-from utils.file_lock import flock_exclusive, flock_unlock
+from utils.file_lock import md_lock
 from typing import Any
 
 from .session_hooks import HookContext
@@ -252,40 +268,175 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
     return "\n".join(lines)
 
 
-def _atomic_read_modify_write(file_path: Path, summary: StructuredSummary, context: HookContext) -> None:
-    """Atomic read-modify-write with fcntl.flock for concurrency safety."""
+_END_MARKER = "<!-- /da -->"
+
+
+def _day_lock(path: Path):
+    """The ONE lock every DailyActivity write takes: a hidden ``.DailyActivity.lock``
+    per directory (dot-file: library_health skips it, nothing accumulates per day).
+    Never nested — a holder only reads and rewrites one file."""
+    return md_lock(Path(path).parent / ".DailyActivity")
+
+
+def _start_marker(kind: str, session_id: str) -> str:
+    return f"<!-- da:{kind}:{session_id} -->"
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` via a temp file + rename (caller holds md_lock)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        mode = 0o644
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.chmod(tmp, mode)  # mkstemp creates 0600; keep the day file's mode
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _line_starts(content: str, needle: str, start: int = 0) -> "list[int]":
+    """Positions where ``needle`` occupies a whole line of ``content``."""
+    out = []
+    i = content.find(needle, start)
+    while i != -1:
+        end = i + len(needle)
+        if (i == 0 or content[i - 1] == "\n") and (end == len(content) or content[end] == "\n"):
+            out.append(i)
+        i = content.find(needle, i + 1)
+    return out
+
+
+def has_session_summary(content: str, session_id: str) -> bool:
+    """True if ``content`` (a day file) already holds this session's summary block."""
+    return bool(session_id) and _start_marker("summary", session_id) in content
+
+
+def _find_block(content: str, kind: str, session_id: str) -> "tuple[int, int] | None":
+    """Span (start, end) of this session's last COMPLETE block of ``kind``, or None.
+
+    Markers count only as whole lines. A start marker counts only if its end
+    marker follows before any other da block starts, so a broken pair (hand
+    edit) is never stretched over other text — it is left alone and a fresh
+    block is appended instead.
+    """
+    start = _start_marker(kind, session_id)
+    ends = _line_starts(content, _END_MARKER)
+    best = None
+    for i in _line_starts(content, start):
+        j = next((e for e in ends if e > i), None)
+        nxt = content.find("\n<!-- da:", i + len(start))
+        if j is not None and (nxt == -1 or j < nxt):
+            best = (i, j + len(_END_MARKER))
+    return best
+
+
+def _neutralize_markers(text: str) -> str:
+    """Block text may quote the markers (sessions about this feature do); quoted
+    copies must never be read as a block boundary."""
+    return text.replace("<!-- da:", "<!-- da-quoted:").replace(_END_MARKER, "<!-- /da-quoted -->")
+
+
+def _split_frontmatter(content: str) -> "tuple[str, str]":
+    """(frontmatter text incl. its closing '---' line, rest) — byte-exact."""
+    if not content.startswith("---"):
+        return "", content
+    end = content.find("---", 3)
+    if end == -1:
+        return "", content
+    cut = end + 3
+    if content[cut:cut + 1] == "\n":
+        cut += 1
+    return content[:cut], content[cut:]
+
+
+def upsert_session_block(
+    file_path: Path, session_id: str, kind: str, text: str, *,
+    count_session: bool = False, has_coe: bool = False,
+) -> bool:
+    """Write ``text`` as this session's one block of ``kind`` in ``file_path``.
+
+    Removes the existing marked block for (kind, session_id) and appends the new
+    one at the end (the newest write is always last), or appends a new block. ``count_session`` adds 1 to the frontmatter's
+    ``sessions_count`` when a NEW block is appended (summaries only), so a
+    session re-summarized N times still counts once. Returns True when a new
+    block was appended. Holds the day file's md_lock for the whole read-write.
+    """
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)  # md_lock's sidecar lives there
+    text = _neutralize_markers(text)
+    if not session_id or session_id == "unknown":
+        # No identity to key on: a shared placeholder would make every id-less
+        # session overwrite the others' block, so append it like a capture.
+        append_daily_text(file_path, "\n" + text.strip("\n") + "\n")
+        return True
+    block = f"{_start_marker(kind, session_id)}\n{text.strip(chr(10))}\n{_END_MARKER}"
+    with _day_lock(file_path):
+        content = file_path.read_text(encoding="utf-8") if file_path.exists() else ""
+        span = _find_block(content, kind, session_id)
+        appended = span is None
+        if span is not None:
+            # MOVE, not in place: the prompt injects the file's tail as "newest", so a
+            # session's latest write must be last (prompt_builder._truncate_daily_content).
+            before = content[:span[0]].rstrip("\n")
+            after = content[span[1]:].lstrip("\n")
+            content = before + ("\n\n" + after if after.strip() else "")
+        content = (content.rstrip("\n") + "\n\n" + block + "\n") if content.strip() else block + "\n"
+        fm_text, body = _split_frontmatter(content)
+        if not fm_text:
+            fm = {"date": date.today().isoformat(),
+                  "sessions_count": 1 if (count_session and appended) else 0,
+                  "distilled": False}
+            if has_coe:
+                fm["has_coe"] = True
+            content = write_frontmatter(fm, body)
+        elif (count_session and appended) or (has_coe and "has_coe" not in fm_text):
+            fm, _ = parse_frontmatter(content)
+            if count_session and appended:
+                fm["sessions_count"] = int(fm.get("sessions_count", 0) or 0) + 1
+            if has_coe:
+                fm["has_coe"] = True
+            content = write_frontmatter(fm, body)
+        _atomic_write(file_path, content)
+    return appended
+
+
+def append_daily_text(file_path: Path, text: str) -> None:
+    """Append session-less text (a capture line, a job note) under the day file's lock."""
+    file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
+    with _day_lock(file_path):
+        content = file_path.read_text(encoding="utf-8") if file_path.exists() else ""
+        if not content.strip():
+            content = write_frontmatter(
+                {"date": date.today().isoformat(), "sessions_count": 0, "distilled": False}, "")
+        sep = "" if content.endswith("\n") or not content else "\n"
+        _atomic_write(file_path, content + sep + text)
 
-    # Open or create the file
-    with open(file_path, "a+") as fh:
-        flock_exclusive(fh)
-        try:
-            fh.seek(0)
-            content = fh.read()
 
-            if not content.strip():
-                # New file — create with frontmatter
-                today = date.today().isoformat()
-                fm: dict[str, Any] = {"date": today, "sessions_count": 1, "distilled": False}
-                if summary.coe_signal:
-                    fm["has_coe"] = True
-                new_content = write_frontmatter(fm, _format_session_entry(summary, context))
-            else:
-                # Existing file — parse, increment, append
-                fm, body = parse_frontmatter(content)
-                fm["sessions_count"] = fm.get("sessions_count", 0) + 1
-                if summary.coe_signal:
-                    fm["has_coe"] = True
-                new_body = body.rstrip("\n") + "\n\n" + _format_session_entry(summary, context)
-                new_content = write_frontmatter(fm, new_body)
+def set_daily_frontmatter(file_path: Path, updates: dict[str, Any]) -> None:
+    """Set frontmatter keys of a day file, keeping its CURRENT body (under the lock)."""
+    file_path = Path(file_path)
+    with _day_lock(file_path):
+        if not file_path.exists():
+            return
+        fm, body = parse_frontmatter(file_path.read_text(encoding="utf-8"))
+        fm.update(updates)
+        _atomic_write(file_path, write_frontmatter(fm, body))
 
-            # Truncate and rewrite
-            fh.seek(0)
-            fh.truncate()
-            fh.write(new_content)
-            fh.flush()
-        finally:
-            flock_unlock(fh)
+
+def _atomic_read_modify_write(file_path: Path, summary: StructuredSummary, context: HookContext) -> None:
+    """Upsert this session's summary block (one per session per day)."""
+    upsert_session_block(
+        file_path, context.session_id or "unknown", "summary",
+        _format_session_entry(summary, context),
+        count_session=True, has_coe=bool(summary.coe_signal),
+    )
 
 
 def _summary_to_jsonl_record(summary: StructuredSummary, context: HookContext) -> dict[str, Any]:
@@ -340,21 +491,36 @@ def _summary_to_jsonl_record(summary: StructuredSummary, context: HookContext) -
 
 
 def _write_jsonl_sidecar(jsonl_path: Path, record: dict[str, Any]) -> None:
-    """Append one JSON line to the JSONL sidecar file.
+    """Upsert ``record`` into the JSONL sidecar: one line per session_id, latest wins.
 
-    Uses fcntl.flock for concurrency safety (multiple sessions can close
-    on the same day).  The file is created if it doesn't exist.
+    Lines that do not parse, or carry another session_id, are kept as they are.
+    Written under the sidecar's md_lock through a temp file + rename.
     """
+    jsonl_path = Path(jsonl_path)
     jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
-
-    with open(jsonl_path, "a") as fh:
-        flock_exclusive(fh)
-        try:
-            fh.write(line)
-            fh.flush()
-        finally:
-            flock_unlock(fh)
+    line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+    key_field = "session_id"
+    sid = record.get(key_field)
+    if not sid or sid == "unknown":
+        sid = None  # no identity: append, never replace another id-less record
+    with _day_lock(jsonl_path):
+        old = jsonl_path.read_text(encoding="utf-8").splitlines() if jsonl_path.exists() else []
+        out: list[str] = []
+        replaced = False
+        for raw in old:
+            try:
+                same = sid is not None and json.loads(raw).get(key_field) == sid
+            except (ValueError, AttributeError):
+                same = False
+            if same:
+                if not replaced:
+                    out.append(line)
+                    replaced = True
+                continue
+            out.append(raw)
+        if not replaced:
+            out.append(line)
+        _atomic_write(jsonl_path, "\n".join(out) + "\n")
 
 
 def read_jsonl_sidecar(jsonl_path: Path) -> list[dict[str, Any]]:
@@ -440,14 +606,17 @@ async def write_daily_activity(
     context: HookContext,
     workspace_path: Path | None = None,
 ) -> Path:
-    """Append a session entry to today's DailyActivity file + JSONL sidecar.
+    """Upsert this session's summary in today's DailyActivity file + JSONL sidecar.
 
     Writes two files:
-    1. ``YYYY-MM-DD.md`` — human-readable markdown (always written)
-    2. ``YYYY-MM-DD.jsonl`` — structured sidecar (best-effort, non-blocking)
+    1. ``YYYY-MM-DD.md`` — the session's one summary block (always written)
+    2. ``YYYY-MM-DD.jsonl`` — the session's one record (best-effort, non-blocking)
 
-    Creates files with YAML frontmatter if they don't exist.
-    Uses atomic read-modify-write with ``fcntl.flock``.
+    A session summarized again (the post-session hook can run more than once)
+    replaces its block and record instead of adding another. A session past the
+    hook's message window keeps only its latest window's summary here; the earlier
+    one was already read by distillation (it runs at every session close) and the
+    transcript keeps every message.
 
     Returns the path to the written markdown file.
     """

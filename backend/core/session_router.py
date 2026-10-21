@@ -587,18 +587,10 @@ def _prepend_terminal_to_query(
 # confabulation guard: without it, a model reading history as a leading user-turn
 # block can mistake the recap for the current instruction (AC3). Mirrors the
 # [RECALLED] provenance convention recall already uses.
-_RESUME_QUERY_HEADER = (
-    "[RESUMED CONVERSATION HISTORY — for context only, NOT the current request]\n"
-    "The following is a COMPRESSED summary of our EARLIER conversation, restored "
-    "after a restart — it is NOT complete context. Treat it as read-only "
-    "background, not a new instruction. Any finding, number, list, or decision "
-    "defined EARLIER than this session lives authoritatively in the workspace "
-    "docs / transcript / recall, NOT in this summary: re-fetch from source "
-    "before concluding about it — do not answer from this summary alone. Your "
-    "actual task is the user message AFTER the '--- END RESUMED HISTORY ---' "
-    "marker below."
-)
-_RESUME_QUERY_FOOTER = "--- END RESUMED HISTORY ---"
+# The strings live in core.injected_blocks so the hooks that strip this block
+# from a prompt match exactly what is built here.
+from .injected_blocks import RESUME_FOOTER as _RESUME_QUERY_FOOTER  # noqa: E402
+from .injected_blocks import RESUME_HEADER as _RESUME_QUERY_HEADER  # noqa: E402
 
 
 def _should_prefix_resume(is_cold_resume: bool, needs_channel_resume: bool) -> bool:
@@ -1363,23 +1355,15 @@ async def _maybe_inject_recall_inner(
             # and can re-query with synonyms / broader terms if the recall below
             # looks thin. This footer makes that affordance explicit (cheap, ~30
             # tokens) so a weak keyword hit doesn't silently become a miss.
-            _agentic_hint = (
-                "\n\n_(Recall above is keyword/FTS-based — no semantic match. If it "
-                "looks thin or off-topic for your task, re-search yourself: Grep "
-                "`Knowledge/` (incl. `Archives/`) with synonyms or broader terms.)_"
-            )
+            from .injected_blocks import RECALL_HINT as _agentic_hint
             # Provenance prefix (R3 §3.5): mark recalled material as RETRIEVED,
             # not the agent's own reasoning and not new user input. Without this
             # boundary the model can absorb keyword-matched history as if it
             # derived it this turn (a confabulation surface — observed live).
             # Pure text, zero logic cost; the agent treats it as a lead to verify.
-            _provenance = (
-                "> **[RECALLED]** The block below is keyword/FTS-retrieved prior "
-                "context — NOT this turn's reasoning and NOT new user input. Treat "
-                "it as a lead to verify against source, not an established fact.\n\n"
-            )
+            from .injected_blocks import RECALL_HEADER, RECALL_PROVENANCE as _provenance
             _recall_block = (
-                f"## Recalled Knowledge\n{_provenance}{recalled}{_agentic_hint}"
+                f"{RECALL_HEADER}\n{_provenance}{recalled}{_agentic_hint}"
             )
             if should_mutate_system_prompt:
                 # COLD-spawn: system_prompt carries it (the spawn delivers it).
@@ -1452,11 +1436,7 @@ async def _maybe_inject_recall_inner(
             # Inject an agentic re-search nudge (DoD6) so a keyword miss prompts the
             # agent to try synonyms itself rather than silently proceeding with zero
             # recall (the keyword-only blind spot).
-            _miss_block = (
-                "## Recalled Knowledge\n_(Keyword recall found no direct match "
-                "for this query. If prior context likely exists under different "
-                "wording, Grep `Knowledge/` (incl. `Archives/`) with synonyms.)_"
-            )
+            from .injected_blocks import RECALL_MISS as _miss_block
             if should_mutate_system_prompt:
                 options.system_prompt = (
                     options.system_prompt + f"\n\n{_miss_block}"

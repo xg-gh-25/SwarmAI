@@ -503,3 +503,23 @@ class TestFullPipeline:
         assert isinstance(summary, StructuredSummary)
         assert summary.decisions == []
         assert summary.files_modified == []
+
+
+class TestFilesModifiedAreRealPaths:
+    """run_1ec5ea9d AC4: names come from the SSOT bash write-target parser."""
+
+    def test_dev_null_sed_and_dirs_never_become_files(self, pipeline):
+        msgs = [
+            _tool_use("Bash", "Running: grep -c x a.py 2>/dev/null > /tmp/x/out.txt", "bash"),
+            _tool_use("Bash", "Running: sed -n 's/a/b/' f.py > /tmp/y.md", "bash"),
+            _tool_use("Bash", "Running: cp a.py /tmp/", "bash"),
+        ]
+        files = pipeline._extract_files_modified(msgs)
+        assert "/tmp/x/out.txt" in files and "/tmp/y.md" in files
+        assert not any(f.endswith("null") or f.endswith("/") for f in files)
+
+    def test_target_at_a_cut_summary_is_dropped(self, pipeline):
+        from core.tool_summarizer import MAX_SUMMARY_LENGTH
+        cmd = "echo " + "x" * (MAX_SUMMARY_LENGTH - 40) + " > /tmp/run_abc/evidence/pro"
+        summary = ("Running: " + cmd)[:MAX_SUMMARY_LENGTH]
+        assert pipeline._extract_files_modified([_tool_use("Bash", summary, "bash")]) == []

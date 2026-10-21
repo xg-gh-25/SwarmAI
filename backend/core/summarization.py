@@ -31,6 +31,7 @@ from typing import Any
 
 # Single source of truth for the 7-type schema (P8: never hardcode a second copy).
 from core.ddd_entry_lifecycle import VALID_TYPES as _VALID_TYPES
+from core.tool_summarizer import MAX_SUMMARY_LENGTH
 VALID_TYPE_SET = frozenset(_VALID_TYPES)
 
 logger = logging.getLogger(__name__)
@@ -217,6 +218,32 @@ Empty array if no external signals influenced this session (most sessions are pu
 
 # Max chars of conversation to send to LLM for enrichment
 _ENRICHMENT_MAX_CHARS = 25_000
+
+
+def _bash_written_files(cmd: str, *, truncated: bool) -> list[str]:
+    """Files a Bash command writes, by the SSOT parser the file tracker uses
+    (core.file_change_classifier.parse_bash_write_targets): /dev/null, fd dups,
+    quoted text and heredoc bodies never count. Directory targets (``cp a /tmp/``)
+    are not files. When the command was cut (a stored summary is capped), a
+    target that runs to the cut is a fragment, so it is dropped.
+    """
+    if not cmd:
+        return []
+    from core.file_change_classifier import parse_bash_write_targets
+    try:
+        targets = parse_bash_write_targets(cmd)
+    except Exception:  # noqa: BLE001 — the parser is best-effort; no files is safe
+        logger.debug("_bash_written_files: parse failed", exc_info=True)
+        return []
+    tail = cmd.rstrip()
+    out = []
+    for t in targets:
+        if not t or t.endswith("/"):
+            continue
+        if truncated and tail.endswith(t):
+            continue
+        out.append(t)
+    return out
 
 
 class SummarizationPipeline:
@@ -459,15 +486,14 @@ class SummarizationPipeline:
                     continue
 
                 if category == "bash" and summary:
-                    # Summary format: "Running: command..."
+                    # Summary format: "Running: command..." (cut at MAX_SUMMARY_LENGTH)
                     cmd = summary.removeprefix("Running: ").strip()
-                    if any(w in cmd for w in (">", "mv ", "cp ", "mkdir ", "tee ")):
-                        for token in cmd.split():
-                            if "/" in token and not token.startswith("-"):
-                                clean = token.strip("'\">;|&")
-                                if clean and clean not in seen and len(clean) > 3:
-                                    seen.add(clean)
-                                    files.append(clean)
+                    # Redaction runs before the cut and can shorten the text, so a cut
+                    # summary may sit a little under the cap: treat "near the cap" as cut.
+                    for path in _bash_written_files(cmd, truncated=len(summary) >= MAX_SUMMARY_LENGTH - 30):
+                        if path not in seen:
+                            seen.add(path)
+                            files.append(path)
                     continue
 
                 # Path 2: Raw format (direct SDK messages, fallback)
@@ -479,14 +505,10 @@ class SummarizationPipeline:
                                 seen.add(val)
                                 files.append(val)
                 elif tool_name == "Bash" and isinstance(inp, dict):
-                    cmd = inp.get("command", "")
-                    if any(w in cmd for w in (">", "mv ", "cp ", "mkdir ", "tee ")):
-                        for token in cmd.split():
-                            if "/" in token and not token.startswith("-"):
-                                clean = token.strip("'\">;|&")
-                                if clean and clean not in seen and len(clean) > 3:
-                                    seen.add(clean)
-                                    files.append(clean)
+                    for path in _bash_written_files(inp.get("command", "") or "", truncated=False):
+                        if path not in seen:
+                            seen.add(path)
+                            files.append(path)
         return files
 
     # Keep backward compatibility — old callers may use _extract_files

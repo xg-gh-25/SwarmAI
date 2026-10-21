@@ -1077,11 +1077,9 @@ def _write_summary_to_daily(report: dict, actions: list[str]) -> None:
         summary_text += "No maintenance actions needed.\n"
 
     try:
-        if daily_path.exists():
-            with daily_path.open("a", encoding="utf-8") as f:
-                f.write(summary_text)
-        else:
-            daily_path.write_text(f"---\ndate: \"{today}\"\n---\n{summary_text}", encoding="utf-8")
+        # Same lock and atomic write as every other DailyActivity writer.
+        from core.daily_activity_writer import append_daily_text
+        append_daily_text(daily_path, summary_text)
     except Exception as e:
         logger.warning("Failed to write maintenance summary: %s", e)
 

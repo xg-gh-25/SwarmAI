@@ -1794,8 +1794,11 @@ class LifecycleManager:
                 if not sid:
                     continue
 
-                # Skip if already mentioned in today's DailyActivity
-                if sid in da_content:
+                # Skip only if today's DailyActivity already holds this session's
+                # SUMMARY. Its checkpoint / crash-recovery block carries the full id
+                # too, and that session still needs its post-session hooks.
+                from core.daily_activity_writer import has_session_summary
+                if has_session_summary(da_content, sid):
                     continue
 
                 msg_count = await db.messages.count_by_session(sid)

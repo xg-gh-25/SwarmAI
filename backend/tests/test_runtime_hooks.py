@@ -2757,3 +2757,112 @@ def test_head_and_tail_keeps_a_long_last_line():
         assert out.startswith("GATE 1 VERDICT: BLOCK")
         assert "- K1: BLOCK." in out and len(out) <= 2010
     assert rh._head_and_tail("short", 2000) == "short"
+
+
+# ---------------------------------------------------------------------------
+# run_1ec5ea9d: one checkpoint block per session, no workspace git, user text only
+# ---------------------------------------------------------------------------
+
+def _today_file(ws):
+    from datetime import datetime
+    return ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
+
+
+class TestCheckpointIsOneBlockPerSession:
+
+    @pytest.mark.asyncio
+    async def test_repeated_checkpoints_replace_one_block(self, tmp_path, session_context):
+        from core.runtime_hooks import create_session_checkpoint
+        ws = tmp_path / "SwarmWS"
+        session_context["sdk_session_id"] = "upsert-sess-0001"
+        hook = create_session_checkpoint(session_context, checkpoint_path=str(tmp_path / "c.json"),
+                                         interval=2, workspace_dir=str(ws))
+        for i in range(6):
+            session_context.setdefault("_files_touched", set()).add(f"/src/f{i}.py")
+            await hook({}, None, MagicMock())
+        text = _today_file(ws).read_text()
+        assert text.count("Mid-session checkpoint") == 1
+        assert "`f5.py`" in text
+
+    @pytest.mark.asyncio
+    async def test_workspace_commits_are_not_listed(self, tmp_path, session_context):
+        import subprocess
+        from core.runtime_hooks import create_session_checkpoint
+        ws = tmp_path / "SwarmWS"
+        ws.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
+        (ws / "a.txt").write_text("x")
+        subprocess.run(["git", "add", "."], cwd=ws, check=True)
+        subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=n", "commit", "-qm",
+                        "chore: chore (3), framework (1)"], cwd=ws, check=True)
+        session_context["_files_touched"] = {"/src/x.py"}
+        hook = create_session_checkpoint(session_context, checkpoint_path=str(tmp_path / "c.json"),
+                                         interval=1, workspace_dir=str(ws))
+        await hook({}, None, MagicMock())
+        text = _today_file(ws).read_text()
+        assert "Git activity" not in text and "chore: chore" not in text
+        assert json.loads((tmp_path / "c.json").read_text())["git_commits"] == []
+
+    @pytest.mark.asyncio
+    async def test_crash_recovery_replaces_the_sessions_checkpoint_block(self, tmp_path):
+        import unittest.mock as mock
+        from core.runtime_hooks import create_session_checkpoint
+        from hooks.daily_activity_hook import recover_crash_checkpoint
+        ws = tmp_path / "SwarmWS"
+        ctx = {"sdk_session_id": "crash-same-0001", "_files_touched": {"/src/a.py"}}
+        hook = create_session_checkpoint(ctx, checkpoint_path=str(tmp_path / "c.json"),
+                                         interval=1, workspace_dir=str(ws))
+        await hook({}, None, MagicMock())
+        state = tmp_path / "state"
+        state.mkdir()
+        (state / "session_checkpoint.json").write_text(json.dumps({
+            "session_id": "crash-same-0001", "ts": time.time(), "tool_count": 9,
+            "files_touched": ["/src/a.py"]}))
+        with mock.patch("hooks.daily_activity_hook.STATE_DIR", state):
+            assert recover_crash_checkpoint(workspace_dir=ws) is True
+        text = _today_file(ws).read_text()
+        assert text.count("| crash-sa |") == 1
+        assert "Recovered from crash checkpoint" in text
+        assert "Mid-session checkpoint" not in text
+
+
+class TestHooksSeeOnlyUserText:
+
+    def _prompt(self, user):
+        from core.injected_blocks import (RECALL_HEADER, RECALL_HINT, RECALL_PROVENANCE,
+                                          RESUME_FOOTER, RESUME_HEADER)
+        resume = f"{RESUME_HEADER}\n\nUser: I decided to use rebase\nAssistant: ok\n\n{RESUME_FOOTER}"
+        recall = f"{RECALL_HEADER}\n{RECALL_PROVENANCE}- [decision] we decided X{RECALL_HINT}"
+        ui = ("## Current UI State\nThis is what you are currently showing the user in the app:\n"
+              "- Open file: `a.md`")
+        return f"{resume}\n\n{recall}\n\n{ui}\n\n{user}"
+
+    @pytest.mark.asyncio
+    async def test_high_signal_ignores_injected_blocks(self, tmp_path, session_context):
+        from core.runtime_hooks import create_high_signal_capture
+        ws = tmp_path / "SwarmWS"
+        hook = create_high_signal_capture(session_context, workspace_dir=str(ws))
+        await hook({"prompt": self._prompt("继续")}, None, MagicMock())
+        assert not _today_file(ws).exists()
+
+    @pytest.mark.asyncio
+    async def test_high_signal_captures_user_text_on_one_line(self, tmp_path, session_context):
+        from core.runtime_hooks import create_high_signal_capture
+        ws = tmp_path / "SwarmWS"
+        hook = create_high_signal_capture(session_context, workspace_dir=str(ws))
+        await hook({"prompt": self._prompt("I decided to ship weekly\n## not a header")},
+                   None, MagicMock())
+        text = _today_file(ws).read_text()
+        assert "I decided to ship weekly ## not a header" in text
+        assert "use rebase" not in text and "RESUMED" not in text
+        assert "\n## not a header" not in text
+
+    @pytest.mark.asyncio
+    async def test_correction_detector_ignores_quoted_history(self, corrections_file, session_context):
+        from core.runtime_hooks import create_user_correction_detector
+        from core.injected_blocks import RESUME_FOOTER, RESUME_HEADER
+        hook = create_user_correction_detector(corrections_path=str(corrections_file),
+                                               session_context=session_context)
+        prompt = f"{RESUME_HEADER}\n\nUser: 不对，你理解错了\n\n{RESUME_FOOTER}\n\n继续"
+        await hook({"prompt": prompt}, None, MagicMock())
+        assert not corrections_file.exists() or corrections_file.read_text().strip() == ""
