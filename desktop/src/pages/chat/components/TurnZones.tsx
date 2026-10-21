@@ -156,7 +156,8 @@ function GroupHeader({ testid, open, onToggle, mark, label, meta, labelClass }: 
 function statsMeta(t: ReturnType<typeof useTranslation>['t'], s: { steps: number; commands: number }, seconds?: number): string[] {
   return [
     s.steps > 0 && tf(t, 'chat.turn.zone.steps', s.steps === 1 ? '{{count}} step' : '{{count}} steps', { count: s.steps }),
-    s.commands > 0 && tf(t, 'chat.turn.zone.commands', s.commands === 1 ? '{{count}} command' : '{{count}} commands', { count: s.commands }),
+    // every step a Bash command: the count is already said once
+    s.commands > 0 && s.commands !== s.steps && tf(t, 'chat.turn.zone.commands', s.commands === 1 ? '{{count}} command' : '{{count}} commands', { count: s.commands }),
     seconds !== undefined && seconds >= MIN_SECONDS && fmt(seconds),
   ].filter((x): x is string => !!x);
 }

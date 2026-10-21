@@ -118,13 +118,24 @@ describe('AC3 — groups toggle; headers count steps and commands only', () => {
     act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
     const phase = screen.getByTestId('zone-phase');
     const header = within(phase).getByTestId('group-toggle');
-    expect(header.textContent).toMatch(/Worked.*2 steps.*2 commands/);
+    expect(header.textContent).toMatch(/Worked.*2 steps/);
+    // every step is a Bash command: the same number is not said twice
+    expect(header.textContent).not.toMatch(/command/);
     expect(header.textContent).not.toMatch(/file/);
     expect(within(phase).queryByTestId('tool-strip')).toBeNull();
     fireEvent.click(header);
     expect(within(screen.getByTestId('zone-phase')).getAllByTestId('tool-strip')).toHaveLength(2);
     fireEvent.click(within(screen.getByTestId('zone-phase')).getByTestId('group-toggle'));
     expect(within(screen.getByTestId('zone-phase')).queryByTestId('tool-strip')).toBeNull();
+  });
+
+  it('steps and commands both show when not every step is a command', () => {
+    vi.useFakeTimers();
+    const blocks = [tx('I read it as X.'), bash('a', 'ls'), tr('a'), agent('g', 'look around'), tr('g'), tx('Done.')];
+    const r = render(view(blocks, true));
+    r.rerender(view(blocks, false));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    expect(within(screen.getByTestId('zone-phase')).getByTestId('group-toggle').textContent).toMatch(/2 steps.*1 command/);
   });
 
   it('a turn with no calls has no RESULT label', () => {
