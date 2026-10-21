@@ -6669,6 +6669,44 @@ _SYNTAX_CHECK_MAX_CMD_BYTES = 256 * 1024
 _BASH_SYNTAX_CHECK_TIMEOUT_S = 1.0
 
 
+# Fast path (F3, 2026-10-21): a command can only be parse-incomplete through an
+# open quote / backtick / substitution / brace / bracket / heredoc / compound
+# keyword, or a trailing operator or backslash. A command with none of these is
+# complete: approve it without starting a shell (most Bash calls: ls, git status,
+# a path-only grep).
+_SYNTAX_RISK_CHARS = frozenset("'\"`(){}[]\\")
+_SYNTAX_KEYWORDS = frozenset({"if", "then", "elif", "else", "fi", "for", "while", "until",
+                              "do", "done", "case", "esac", "select", "function", "repeat",
+                              "coproc", "time", "!"})
+_SYNTAX_TRAILING = ("|", "&&", "||", "\\")
+
+
+def _syntax_cannot_be_incomplete(command: str) -> bool:
+    if any(c in _SYNTAX_RISK_CHARS for c in command) or "<<" in command:
+        return False
+    if command.rstrip().endswith(_SYNTAX_TRAILING):
+        return False
+    words = re.split(r"[\s;&|]+", command)
+    return not any(w in _SYNTAX_KEYWORDS for w in words)
+
+
+# Verdicts of commands already parsed: (exit code, stderr) by sha1 of the command.
+_SYNTAX_VERDICTS: "dict[bytes, tuple[int, bytes]]" = {}
+_SYNTAX_VERDICTS_MAX = 512
+
+
+def _run_syntax_check(cmd_bytes: bytes) -> "tuple[int | None, bytes]":
+    """``<shell> -n`` on *cmd_bytes* (blocking: run in a pool) → (exit code, stderr);
+    (None, b"") when it exceeds _BASH_SYNTAX_CHECK_TIMEOUT_S (subprocess.run kills
+    the child)."""
+    try:
+        r = subprocess.run([_SYNTAX_CHECK_SHELL, *_SYNTAX_CHECK_ARGS], input=cmd_bytes,
+                           capture_output=True, timeout=_BASH_SYNTAX_CHECK_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None, b""
+    return r.returncode, r.stderr
+
+
 async def bash_syntax_guard(
     input_data: dict[str, Any],
     tool_use_id: str | None,
@@ -6711,45 +6749,40 @@ async def bash_syntax_guard(
         )
         return {"decision": "approve"}
 
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            _SYNTAX_CHECK_SHELL,
-            *_SYNTAX_CHECK_ARGS,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+    if _syntax_cannot_be_incomplete(command):
+        return {"decision": "approve"}
+    key = hashlib.sha1(cmd_bytes).digest()
+    cached = _SYNTAX_VERDICTS.get(key)
+    if cached is not None:
+        rc, stderr = cached
+    else:
         try:
-            _, stderr = await asyncio.wait_for(
-                proc.communicate(input=cmd_bytes),
-                timeout=_BASH_SYNTAX_CHECK_TIMEOUT_S,
+            # fork/exec of this ~300MB, ~50-thread process took up to 3.2s on the
+            # event loop thread (2026-10-21 stack): run it in the gate pool
+            from core import executors
+            rc, stderr = await executors.run_in("gate", _run_syntax_check, cmd_bytes)
+        except Exception as e:  # noqa: BLE001
+            # shell missing / spawn failure / anything unexpected → FAIL-OPEN. Never
+            # block a real command on the guard's own infra failure. (GC19: log the
+            # exception type, don't swallow silently.)
+            logger.warning(
+                "[bash_syntax_guard] parse check failed (%s: %s) — failing open",
+                type(e).__name__,
+                e,
             )
-        except asyncio.TimeoutError:
-            # Cancellable cap fired — kill the subprocess (no zombie) and fail-open.
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:  # noqa: BLE001 — best-effort reap; never block on it
-                logger.debug("bash_syntax_guard: suppressed exception on a fail-safe path", exc_info=True)
-                pass
+            return {"decision": "approve"}
+        if rc is None:
             logger.warning(
                 "[bash_syntax_guard] %s -n exceeded %.1fs — failing open",
                 _SYNTAX_CHECK_SHELL, _BASH_SYNTAX_CHECK_TIMEOUT_S,
             )
             return {"decision": "approve"}
-    except Exception as e:  # noqa: BLE001
-        # shell missing / spawn failure / anything unexpected → FAIL-OPEN. Never
-        # block a real command on the guard's own infra failure. (GC19: log the
-        # exception type, don't swallow silently.)
-        logger.warning(
-            "[bash_syntax_guard] parse check failed (%s: %s) — failing open",
-            type(e).__name__,
-            e,
-        )
-        return {"decision": "approve"}
+        if len(_SYNTAX_VERDICTS) >= _SYNTAX_VERDICTS_MAX:
+            _SYNTAX_VERDICTS.clear()
+        _SYNTAX_VERDICTS[key] = (rc, stderr)
 
     # exit 0 → parseable (incl. valid multiline/heredoc/$()/quoted) → APPROVE.
-    if proc.returncode == 0:
+    if rc == 0:
         return {"decision": "approve"}
 
     # exit!=0 → syntax error == the headless-hang set → DENY, echo the shell's own

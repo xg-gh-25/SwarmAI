@@ -215,46 +215,69 @@ class TestFailOpen:
         # If the bash -n subprocess can't even start (FileNotFoundError), the
         # guard must APPROVE — never block a real command on infra failure.
         with patch(
-            "core.security_hooks.asyncio.create_subprocess_exec",
+            "core.security_hooks.subprocess.run",
             side_effect=FileNotFoundError("no bash"),
         ):
-            assert not _is_deny(_run('echo "unterminated'))
+            assert not _is_deny(_run('echo "unterminated-missing'))
 
     def test_check_timeout_fails_open(self):
-        # Drive the REAL timeout path (GUI32 — exercise the real cancellable
-        # subprocess, don't mock wait_for which leaves communicate() un-awaited):
-        # spawn a genuinely slow process in place of `bash -n` and set a tiny cap
-        # so wait_for actually fires, the kill branch actually runs on a real
-        # proc, and the guard fails OPEN.
-        async def _slow_proc(*_a, **kw):
-            # A real subprocess that outlives the 0.05s cap. communicate() will be
-            # cancelled by wait_for → guard kills it → fail-open.
-            return await asyncio.create_subprocess_exec(
-                "/bin/sh", "-c", "sleep 5",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-        with patch("core.security_hooks._BASH_SYNTAX_CHECK_TIMEOUT_S", 0.05), patch(
-            "core.security_hooks.asyncio.create_subprocess_exec", side_effect=_slow_proc
-        ):
-            assert not _is_deny(_run('echo "unterminated'))
+        # Drive the REAL timeout path: a genuinely slow process in place of the
+        # shell's -n check and a tiny cap, so subprocess.run's timeout fires, it
+        # kills the child, and the guard fails OPEN.
+        with patch("core.security_hooks._BASH_SYNTAX_CHECK_TIMEOUT_S", 0.05), \
+             patch("core.security_hooks._SYNTAX_CHECK_SHELL", "/bin/sh"), \
+             patch("core.security_hooks._SYNTAX_CHECK_ARGS", ("-c", "sleep 5")):
+            assert not _is_deny(_run('echo "unterminated-timeout'))
 
     def test_unexpected_exception_fails_open(self):
         with patch(
-            "core.security_hooks.asyncio.create_subprocess_exec",
+            "core.security_hooks.subprocess.run",
             side_effect=RuntimeError("boom"),
         ):
-            assert not _is_deny(_run('echo "unterminated'))
+            assert not _is_deny(_run('echo "unterminated-boom'))
 
     def test_oversized_command_fails_open_without_shell(self):
         # GATE-2 LOW: a pathological huge/deeply-nested command could pin a core
         # in the parse check. Oversized input must fail-open WITHOUT invoking the
-        # shell at all. Patch create_subprocess_exec to assert it is NOT called.
+        # shell at all. Patch subprocess.run to assert it is NOT called.
         big = "echo " + ("$(" * 200_000)  # > 256KB, also unbalanced
         with patch(
-            "core.security_hooks.asyncio.create_subprocess_exec",
+            "core.security_hooks.subprocess.run",
             side_effect=AssertionError("shell must NOT be invoked for oversized cmd"),
         ):
             assert not _is_deny(_run(big))
+
+
+class TestFastPathAndCache:
+    """F3 (2026-10-21): the guard started a shell on every Bash call, forking this
+    process on the event loop thread (one stack showed 3.2s); 78 checks timed out."""
+
+    def test_plain_commands_start_no_shell(self):
+        with patch("core.security_hooks.subprocess.run",
+                   side_effect=AssertionError("no shell for a plain command")):
+            for c in ("ls -la", "git status", "grep -n foo bar.py | head -20",
+                      "cd /tmp && ls 2>/dev/null", "sed -n 1,80p f"):
+                assert not _is_deny(_run(c)), c
+
+    def test_incomplete_shapes_still_reach_the_shell_and_are_denied(self):
+        for c in ('echo "abc', "ls |", "(cd x", "if true", "echo `date"):
+            assert _is_deny(_run(c)), c
+        # a trailing && / || is not fast-pathed: the shell decides (zsh accepts it)
+        from core.security_hooks import _syntax_cannot_be_incomplete
+        assert not _syntax_cannot_be_incomplete("ls && ")
+        assert not _syntax_cannot_be_incomplete("ls ||")
+
+    def test_a_repeated_command_is_parsed_once(self):
+        import subprocess as sp
+        real = sp.run
+        calls = []
+
+        def counting(*a, **k):
+            calls.append(1)
+            return real(*a, **k)
+
+        with patch("core.security_hooks.subprocess.run", side_effect=counting):
+            cmd = 'echo "cached-probe-$RANDOM-unique-9f3"'
+            assert not _is_deny(_run(cmd))
+            assert not _is_deny(_run(cmd))
+        assert len(calls) == 1

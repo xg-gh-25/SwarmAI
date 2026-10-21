@@ -410,13 +410,30 @@ async def test_check_does_not_cache_expired(validator: CredentialValidator):
     assert mock.call_count == 2
 
 
-async def test_check_does_not_cache_unknown(validator: CredentialValidator):
-    """'unknown' is NOT cached — re-checks every call."""
+async def test_check_holds_unknown_with_backoff(validator: CredentialValidator):
+    """F3 (2026-10-21): offline, an uncached 'unknown' meant a new Session + STS
+    call every 10s (606 times). It is held 60s, doubling to 5 min while it
+    repeats; a 'valid' resets the hold."""
+    import core.credential_validator as cv
+    clock = {"t": 1000.0}
     mock = MagicMock(side_effect=EndpointConnectionError(endpoint_url="https://sts"))
-    with patch.object(validator, "_call_sts_typed", mock):
+    with patch.object(cv.time, "monotonic", lambda: clock["t"]), \
+         patch.object(validator, "_call_sts_typed", mock):
         assert await validator.check("us-east-1") == "unknown"
+        clock["t"] += 30
         assert await validator.check("us-east-1") == "unknown"
-    assert mock.call_count == 2
+        assert mock.call_count == 1                      # held for 60s
+        clock["t"] += 31
+        assert await validator.check("us-east-1") == "unknown"
+        assert mock.call_count == 2
+        clock["t"] += 100
+        assert await validator.check("us-east-1") == "unknown"
+        assert mock.call_count == 2                      # now held 120s
+        clock["t"] += 21
+        mock.side_effect = None
+        mock.return_value = FAKE_IDENTITY
+        assert await validator.check("us-east-1") == "valid"
+        assert validator._unknown_hold == cv._UNKNOWN_HOLD_S
 
 
 async def test_check_recovers_after_valid(validator: CredentialValidator):

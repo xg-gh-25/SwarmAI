@@ -44,6 +44,7 @@ from .security_hooks import (
 )
 from .design_hooks import design_lint_guard
 from .gate_decision_log import with_decision_log
+from . import hook_timing
 from .verdict import Disposition, from_sdk, to_sdk
 from .ask_question_manager import ask_question_manager
 from .permission_manager import PERMISSION_ANSWER_TIMEOUT_SECONDS
@@ -111,6 +112,8 @@ class HookRegistry:
             # tool input, so gates never need their own [BLOCKED] logging to be audited.
             # A compose_gates group logs per member instead (its own flag).
             hook = with_decision_log(name, hook)
+        if not no_timeout:  # a HITL hook's duration is a person's answer time
+            hook = hook_timing.timed(name, hook)
         self._hooks[(event, matcher)].append((name, hook, no_timeout))
 
     def build_sdk_hooks(self) -> dict[str, list]:

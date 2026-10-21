@@ -71,6 +71,11 @@ AuthStatus = Literal["valid", "expired", "unknown"]
 # Set ≥ the frontend /health poll interval (30s) so /health does at most ONE
 # STS GetCallerIdentity per poll, not one every other poll (Gate-2 L1).
 _CHECK_CACHE_TTL: int = 90
+# check() holds an "unknown" (network / throttling) this long, doubling while it
+# repeats, up to the max (F3, 2026-10-21: offline, the 10s readiness sampler
+# built a new boto3 Session and called STS 606 times). Callers fail open on it.
+_UNKNOWN_HOLD_S: float = 60.0
+_UNKNOWN_HOLD_MAX_S: float = 300.0
 
 
 def _sts_timeout_config():
@@ -128,6 +133,9 @@ class CredentialValidator:
         # 30min cache. Only a "valid" status is ever stored here.
         self._check_cache_time: float = 0
         self._check_cache_status: AuthStatus | None = None
+        # check(): an "unknown" is returned without STS until this monotonic time
+        self._unknown_until: float = 0.0
+        self._unknown_hold: float = _UNKNOWN_HOLD_S
 
     def _is_cache_valid(self) -> bool:
         """Return True if the cached result is still within the TTL window."""
@@ -271,6 +279,8 @@ class CredentialValidator:
             and (time.monotonic() - self._check_cache_time) < _CHECK_CACHE_TTL
         ):
             return self._check_cache_status
+        if time.monotonic() < self._unknown_until:
+            return "unknown"   # held: no STS call, no new Session (_UNKNOWN_HOLD_S)
 
         try:
             # Dedicated 'spawn' pool (run_e76b3ea5): check() is the readiness
@@ -281,6 +291,7 @@ class CredentialValidator:
             await executors.run_in("spawn", self._call_sts_typed, region)
             self._check_cache_status = "valid"
             self._check_cache_time = time.monotonic()
+            self._unknown_until, self._unknown_hold = 0.0, _UNKNOWN_HOLD_S
             return "valid"
         except NoCredentialsError:
             # Subclass of BotoCoreError — MUST precede the BotoCoreError branch.
@@ -298,7 +309,7 @@ class CredentialValidator:
             logger.warning(
                 "Credential check: non-auth STS error %s → unknown", code
             )
-            return "unknown"
+            return self._hold_unknown()
         except BotoCoreError as exc:
             # Network / endpoint / config error — NOT definitive. Fail open.
             logger.warning(
@@ -306,14 +317,20 @@ class CredentialValidator:
                 type(exc).__name__,
             )
             self._invalidate_check_cache()
-            return "unknown"
+            return self._hold_unknown()
         except Exception as exc:  # noqa: BLE001 — log type, never swallow silently
             logger.warning(
                 "Credential check: unexpected %s → unknown",
                 type(exc).__name__,
             )
             self._invalidate_check_cache()
-            return "unknown"
+            return self._hold_unknown()
+
+    def _hold_unknown(self) -> AuthStatus:
+        """Hold an "unknown" for the current hold time, then double it (max 5 min)."""
+        self._unknown_until = time.monotonic() + self._unknown_hold
+        self._unknown_hold = min(self._unknown_hold * 2, _UNKNOWN_HOLD_MAX_S)
+        return "unknown"
 
     def _invalidate_check_cache(self) -> None:
         """Clear the short check() cache so the next call re-checks."""
@@ -328,6 +345,7 @@ class CredentialValidator:
         cached ``True``.
         """
         logger.debug("Credential cache explicitly invalidated")
+        self._unknown_until, self._unknown_hold = 0.0, _UNKNOWN_HOLD_S
         self._invalidate_cache()
         self._invalidate_check_cache()
 
