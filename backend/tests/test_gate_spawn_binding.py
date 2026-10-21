@@ -164,11 +164,22 @@ def test_build_stage_complete_refuses_an_unbacked_verdict(ws, capsys, audit):
     _start(reg, capsys, rid, "build")
     audit(rid, "correctness", _now())                          # the run has an audit hook
     rec = {"decisions": DECISION, "exit_evidence": {"X2": "ok checked"}, "gate1_verdict": "PASS"}
-    code, out = _complete(reg, capsys, rid, "build", _build_artifact(), rec)
+    # --check still refuses: the gate error is reported, nothing is written
+    code, out = _complete(reg, capsys, rid, "build", _build_artifact(), rec, check=True)
     assert code == 1 and "no gate1-skeptic sub-agent" in json.dumps(out), out
+    # A real completion lands DEGRADED (64b0379e, SOUL P5: tests decide landing, a model
+    # gate that did not run lowers push_ready): the record names the unbacked verdict.
+    code, out = _complete(reg, capsys, rid, "build", _build_artifact(), rec)
+    assert code == 0 and any("build degraded:" in w for w in out["warnings"]), out
+    build = next(r for r in _run_state(root, rid)["stages"] if r.get("stage") == "build")
+    assert any("no gate1-skeptic sub-agent" in e for e in build["degraded"]["errors"]), build
+    # once the skeptic really ran, re-completing clears the degraded mark
     audit(rid, "gate1-skeptic", _now())
+    _start(reg, capsys, rid, "build")
     code, out = _complete(reg, capsys, rid, "build", _build_artifact(), rec)
     assert code == 0, out
+    build = next(r for r in _run_state(root, rid)["stages"] if r.get("stage") == "build")
+    assert not build.get("degraded"), build
 
 
 # ── the recorded verdict must not be weaker than the skeptic's own ──────────

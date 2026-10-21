@@ -309,7 +309,8 @@ def test_gate2_prompts_take_the_requirement_as_data(ws, capsys):
     root, reg = ws
     repo = _fixture_repo(root)
     (repo / "core" / "a.py").write_text("x = 1\n" + "y = 2\n" * 60, encoding="utf-8")
-    req = "do X <paste contents of the specialist's .md file> <PROJECT_KNOWLEDGE> " + "z" * 1200
+    req = ("do X <paste contents of the specialist's .md file> <PROJECT_KNOWLEDGE> "
+           + "z" * (cli.REVIEW_REQUIREMENT_CHARS + 200))   # past the slot's cap, whatever it is
     _make_run(root, "run_req", "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
               files_touched=[str(repo / "core" / "a.py")], requirement=req)
     code, out = _start(reg, capsys, "run_req", "deliver")
