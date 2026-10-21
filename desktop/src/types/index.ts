@@ -1534,6 +1534,9 @@ export interface HealthState {
   auth?: AuthStatus;
   lastCheckedAt: number | null;
   consecutiveFailures: number;
+  /** Why it is not 'connected' (hooks/backendIssue.ts): a short label for the
+   *  header and a sentence for the toast / tooltip. Absent when connected. */
+  issue?: { kind: string; cause: string; short: string; detail: string };
 }
 
 // ============== Rate Limit Types ==============

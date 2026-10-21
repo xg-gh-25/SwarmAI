@@ -26,6 +26,8 @@ An independent ``threading.Thread`` (NOT an asyncio task) ticks every
   ``time.sleep`` and the write syscall RELEASE the GIL, so this thread keeps
   ticking even when the loop thread is 100% CPU-bound. A fresh ``ts`` (mtime) =
   the process is running.
+- ``stall`` — only while the loop is stalled: WHY (core/stall_diagnosis.py:
+  CPU / memory / low battery / busy in our code), so the UI can say it.
 - ``loop_age`` — **loop alive vs wedged**. A 1-line asyncio task
   (:func:`loop_tick_loop`) bumps a shared monotonic timestamp every
   ``TICK_INTERVAL_S``. The heartbeat thread computes ``loop_age = now - last_tick``.
@@ -327,6 +329,32 @@ def _battery_status(run=None) -> str:
         return f"power: unknown ({type(exc).__name__})"
 
 
+# The stall diagnosis is refreshed at most this often while a stall lasts (it runs
+# ps / sysctl / pmset, each capped at 2s, on this writer thread).
+_STALL_DIAG_INTERVAL_S: float = 5.0
+_stall_cache: "tuple[float, dict] | None" = None
+
+
+def _stall_diagnosis(now: float, stalled: bool) -> "dict | None":
+    """The current stall's cause (cached), or None when the loop is not stalled.
+    Never raises."""
+    global _stall_cache
+    if not stalled:
+        _stall_cache = None
+        return None
+    if _stall_cache is not None and now - _stall_cache[0] < _STALL_DIAG_INTERVAL_S:
+        return _stall_cache[1]
+    try:
+        from .stall_diagnosis import diagnose
+        frame = sys._current_frames().get(_loop_thread_id) if _loop_thread_id else None
+        diag = diagnose(frame, _is_idle_frame)
+    except Exception as exc:  # observability must never break the heartbeat
+        logger.debug("stall diagnosis failed: %s", exc)
+        diag = {"cause": "unknown", "starved": False}
+    _stall_cache = (now, diag)
+    return diag
+
+
 def _write_heartbeat_once() -> None:
     """Atomically write the heartbeat file with pid + ts + loop_age.
 
@@ -375,6 +403,11 @@ def _write_heartbeat_once() -> None:
         "ts": time.time(),
         "loop_age": round(loop_age, 3),
     }
+    # WHY the loop is stalled (core/stall_diagnosis.py), for the UI's message:
+    # computed only while stalled, at most every _STALL_DIAG_INTERVAL_S.
+    stall = _stall_diagnosis(now, is_real_starvation)
+    if stall is not None:
+        payload["stall"] = stall
     tmp = HEARTBEAT_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(tmp, HEARTBEAT_PATH)

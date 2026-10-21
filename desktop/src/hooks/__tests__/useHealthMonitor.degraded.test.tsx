@@ -14,8 +14,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Desktop mode so the Tauri backend-event effect actually subscribes. Each
 // onBackend* spy captures its callback so the test can fire the event directly.
 const cbs = vi.hoisted(() => ({
-  degraded: undefined as undefined | (() => void),
-  terminatedRestarting: undefined as undefined | (() => void),
+  degraded: undefined as undefined | ((p?: unknown) => void),
+  terminatedRestarting: undefined as undefined | ((p?: unknown) => void),
   resumed: undefined as undefined | ((port: number) => void),
 }));
 
@@ -24,7 +24,7 @@ vi.mock('../../services/tauri', () => ({
   getApiBaseUrl: () => 'http://test',
   setBackendPort: vi.fn(),
   tauriService: {
-    onBackendTerminatedRestarting: vi.fn((cb: () => void) => {
+    onBackendTerminatedRestarting: vi.fn((cb: (p?: unknown) => void) => {
       cbs.terminatedRestarting = cb;
       return Promise.resolve(() => {});
     }),
@@ -34,7 +34,7 @@ vi.mock('../../services/tauri', () => ({
       return Promise.resolve(() => {});
     }),
     onBackendTerminated: vi.fn().mockResolvedValue(() => {}),
-    onBackendDegraded: vi.fn((cb: () => void) => {
+    onBackendDegraded: vi.fn((cb: (p?: unknown) => void) => {
       cbs.degraded = cb;
       return Promise.resolve(() => {});
     }),
@@ -112,5 +112,19 @@ describe('run_13094a88: backend-degraded → degraded state (inputs stay usable)
     // A late/stray degraded event must not re-enable inputs on a dead backend.
     act(() => { cbs.degraded!(); });
     expect(result.current.state.status).toBe('disconnected');
+  });
+
+  it('the toast and health.issue say why; a repeat with a new cause updates it', async () => {
+    const { result } = renderHook(() => useHealthMonitor(), { wrapper });
+    await waitFor(() => expect(cbs.degraded).toBeTypeOf('function'));
+    act(() => { cbs.degraded!({ heartbeatFresh: true, loopAge: 6, processAlive: true, stall: { cause: 'cpu', starved: true, loadPerCore: 9 } }); });
+    expect(result.current.state.issue?.short).toBe('Slowed: CPU fully used');
+    act(() => { cbs.degraded!({ heartbeatFresh: true, loopAge: 9, processAlive: true, stall: { cause: 'cpu', starved: true, loadPerCore: 9.5 } }); });
+    expect(result.current.state.issue?.short).toBe('Slowed: CPU fully used');
+    act(() => { cbs.degraded!({ heartbeatFresh: true, loopAge: 12, processAlive: true, stall: { cause: 'memory', starved: true, memPercent: 96 } }); });
+    expect(result.current.state.issue?.short).toBe('Slowed: low memory');
+    act(() => { cbs.terminatedRestarting!({ heartbeatFresh: false, processAlive: true }); });
+    expect(result.current.state.status).toBe('disconnected');
+    expect(result.current.state.issue?.short).toBe('Backend paused');
   });
 });

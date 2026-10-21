@@ -109,10 +109,12 @@ export function ChatHeader({
           <div
             className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-500/10 text-red-400 text-xs font-medium mr-2"
             role="status"
-            aria-label={t('health.disconnected', 'Backend Offline')}
+            data-testid="health-pill"
+            title={health.issue?.detail}
+            aria-label={health.issue?.detail ?? t('health.disconnected', 'Backend Offline')}
           >
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            {t('health.disconnected', 'Backend Offline')}
+            {health.issue?.short ?? t('health.disconnected', 'Backend Offline')}
           </div>
         )}
         {health.status === 'initializing' && (
@@ -131,10 +133,12 @@ export function ChatHeader({
           <div
             className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-500/10 text-amber-400 text-xs font-medium mr-2"
             role="status"
-            aria-label={t('health.degraded', 'Reconnecting…')}
+            data-testid="health-pill"
+            title={health.issue?.detail}
+            aria-label={health.issue?.detail ?? t('health.degraded', 'Reconnecting…')}
           >
             <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-            {t('health.degraded', 'Reconnecting…')}
+            {health.issue?.short ?? t('health.degraded', 'Reconnecting…')}
           </div>
         )}
       </div>

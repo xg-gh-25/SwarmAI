@@ -117,8 +117,9 @@ export const tauriService = {
    *  death (launchd will restart) OR a transient stall; a single miss can't
    *  tell. UI shows a soft "not responding — reconnecting…" notice; a real
    *  death escalates to `backend-terminated`. */
-  async onBackendTerminatedRestarting(callback: (code: number | null) => void): Promise<UnlistenFn> {
-    return listen<number | null>('backend-terminated-restarting', (event) => callback(event.payload));
+  async onBackendTerminatedRestarting(callback: (diag: unknown) => void): Promise<UnlistenFn> {
+    // payload: the watchdog's view (hooks/backendIssue.ts BackendDiag)
+    return listen<unknown>('backend-terminated-restarting', (event) => callback(event.payload));
   },
 
   /** Backend auto-restarted on a new port. */
@@ -137,8 +138,9 @@ export const tauriService = {
    *  PROCESS is verified alive (launchctl pid) — a transient >3s stall, not death.
    *  The UI shows a reconnecting banner but keeps inputs ENABLED. Only a persistent
    *  outage (miss streak) or a gone process escalates to backend-terminated-restarting. */
-  async onBackendDegraded(callback: (port: number) => void): Promise<UnlistenFn> {
-    return listen<number>('backend-degraded', (event) => callback(event.payload));
+  async onBackendDegraded(callback: (diag: unknown) => void): Promise<UnlistenFn> {
+    // payload: the watchdog's view (hooks/backendIssue.ts BackendDiag)
+    return listen<unknown>('backend-degraded', (event) => callback(event.payload));
   },
 
   /** Backend mode notification: always "daemon" in production. */

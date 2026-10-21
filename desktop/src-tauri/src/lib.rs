@@ -529,9 +529,32 @@ const HEARTBEAT_STALE_SECS: u64 = 10;
 /// but well under a human's "is it dead?" patience.
 const HEARTBEAT_WEDGE_SECS: f64 = 15.0;
 
+/// The heartbeat as the watchdog uses it: freshness and wedge as above, plus the
+/// loop's age and the backend's own stall diagnosis (`stall`, core/stall_diagnosis.py:
+/// cause cpu / memory / low_battery / busy / unknown, `starved`, evidence), which the
+/// UI shows as the reason. Same read rules: missing or stale → not fresh, nothing else.
+#[derive(Debug, Clone, Default)]
+struct HeartbeatView {
+    fresh: bool,
+    loop_wedged: bool,
+    loop_age: Option<f64>,
+    stall: Option<serde_json::Value>,
+}
+
+impl HeartbeatView {
+    /// The loop is stalled by an outside shortage (CPU / memory / low battery), not
+    /// stuck in our code: the process is alive and will catch up.
+    fn starved(&self) -> bool {
+        self.stall
+            .as_ref()
+            .and_then(|s| s.get("starved"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+}
+
 /// Read the backend liveness heartbeat (`~/.swarm-ai/heartbeat`) written by the
-/// independent-thread writer in `core/heartbeat.py`. Returns
-/// `(heartbeat_fresh, loop_wedged)`:
+/// independent-thread writer in `core/heartbeat.py`:
 ///
 /// - `heartbeat_fresh` — the file exists and its mtime is within
 ///   `HEARTBEAT_STALE_SECS`. TRUE = the writer thread is ticking = the PROCESS
@@ -546,16 +569,16 @@ const HEARTBEAT_WEDGE_SECS: f64 = 15.0;
 ///
 /// Freshness uses FILE MTIME (filesystem truth, robust to in-file clock skew and
 /// naturally goes stale when the writing process dies); wedge uses the parsed
-/// `loop_age` field. Any read/parse failure → `(false, false)` = "can't prove
+/// `loop_age` field. Any read/parse failure → a default (not fresh) view = "can't prove
 /// alive" → safe fallback to the legacy path. Pure file I/O, compiles on all
 /// platforms (only consulted in daemon mode).
-fn read_heartbeat() -> (bool, bool) {
+fn read_heartbeat_full() -> HeartbeatView {
     let home = std::env::var("HOME").unwrap_or_default();
     let path = std::path::Path::new(&home).join(".swarm-ai").join("heartbeat");
 
     let metadata = match std::fs::metadata(&path) {
         Ok(m) => m,
-        Err(_) => return (false, false), // missing → not fresh → legacy fallback
+        Err(_) => return HeartbeatView::default(), // missing → not fresh → legacy fallback
     };
     let fresh = match metadata.modified() {
         Ok(mtime) => match mtime.elapsed() {
@@ -568,23 +591,41 @@ fn read_heartbeat() -> (bool, bool) {
         Err(_) => false,
     };
     if !fresh {
-        return (false, false);
+        return HeartbeatView::default();
     }
     // Fresh → parse loop_age to decide wedged-vs-busy. A parse failure leaves
     // loop_wedged=false (busy, protected) — the conservative choice: a readable-
     // but-unparseable fresh file still proves the process is writing.
-    let loop_wedged = match std::fs::read_to_string(&path) {
-        Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
-            Ok(json) => json
-                .get("loop_age")
-                .and_then(|v| v.as_f64())
-                .map(|age| age >= HEARTBEAT_WEDGE_SECS)
-                .unwrap_or(false),
-            Err(_) => false,
-        },
-        Err(_) => false,
-    };
-    (fresh, loop_wedged)
+    let json = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok());
+    let loop_age = json.as_ref().and_then(|j| j.get("loop_age")).and_then(|v| v.as_f64());
+    HeartbeatView {
+        fresh: true,
+        loop_wedged: loop_age.map(|age| age >= HEARTBEAT_WEDGE_SECS).unwrap_or(false),
+        loop_age,
+        stall: json.as_ref().and_then(|j| j.get("stall")).cloned(),
+    }
+}
+
+/// The wedge flag the down-decision uses: a loop stalled ≥ HEARTBEAT_WEDGE_SECS by an
+/// outside shortage (the CPU fully used, memory exhausted, low-battery throttling) is
+/// a starved live process, not a deadlock — it stays Degraded ("slowed down"), never
+/// "not responding". A wedge in our own code (or of unknown cause) still escalates.
+fn effective_wedged(hb: &HeartbeatView) -> bool {
+    hb.loop_wedged && !hb.starved()
+}
+
+/// The payload of `backend-degraded` / `backend-terminated-restarting`: what the
+/// watchdog knows, so the UI can say why instead of a bare "offline".
+fn health_event_payload(hb: &HeartbeatView, process_alive: Option<bool>) -> serde_json::Value {
+    serde_json::json!({
+        "port": DAEMON_PORT,
+        "heartbeatFresh": hb.fresh,
+        "loopAge": hb.loop_age,
+        "processAlive": process_alive,
+        "stall": hb.stall,
+    })
 }
 
 /// Atomically install a file: copy `src` → `<dst>.<pid>.tmp-install`, chmod,
@@ -2043,7 +2084,9 @@ fn spawn_daemon_health_watchdog(
                 // Heartbeat override (run_5b0d6ec3): a fresh heartbeat + non-wedged
                 // loop proves alive-but-busy → stay Degraded even at the streak
                 // ceiling. Read here (pure file I/O, fast) on every miss.
-                let (heartbeat_fresh, loop_wedged) = read_heartbeat();
+                let hb = read_heartbeat_full();
+                let (heartbeat_fresh, loop_wedged) = (hb.fresh, effective_wedged(&hb));
+                let payload = health_event_payload(&hb, if is_daemon { Some(pid_present) } else { None });
                 match watchdog_down_decision(is_daemon, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES, heartbeat_fresh, loop_wedged) {
                     WatchdogDownDecision::Degraded => {
                         // Alive but stalled: tell the UI to show a reconnecting
@@ -2052,13 +2095,13 @@ fn spawn_daemon_health_watchdog(
                         // the miss streak reaches DOWN_ESCALATE_MISSES.
                         println!("[Tauri] Watchdog: daemon /health missed but PROCESS ALIVE — DEGRADED (miss {}/{}), not declaring death",
                             recovery_attempts, DOWN_ESCALATE_MISSES);
-                        let _ = app_handle.emit("backend-degraded", DAEMON_PORT);
+                        let _ = app_handle.emit("backend-degraded", payload);
                         was_healthy = false;
                         continue; // poll again at RECOVERY_POLL_SECS; may resume or escalate
                     }
                     WatchdogDownDecision::Terminated => {
                         // Process gone (or subprocess mode): a real death signal.
-                        let _ = app_handle.emit("backend-terminated-restarting", Option::<i32>::None);
+                        let _ = app_handle.emit("backend-terminated-restarting", payload);
                     }
                 }
 
@@ -2141,14 +2184,16 @@ fn spawn_daemon_health_watchdog(
                         // busy→terminated escalation (the residual false-offline);
                         // a stale heartbeat (dead process) or a genuinely wedged loop
                         // lets the streak escalate to a real death on the next poll.
-                        let (heartbeat_fresh, loop_wedged) = read_heartbeat();
+                        let hb = read_heartbeat_full();
+                        let (heartbeat_fresh, loop_wedged) = (hb.fresh, effective_wedged(&hb));
+                        let payload = health_event_payload(&hb, Some(pid_present));
                         let decision = watchdog_down_decision(true, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES, heartbeat_fresh, loop_wedged);
                         let event = recovery_poll_event(decision);
                         match decision {
                             WatchdogDownDecision::Terminated => {
                                 println!("[Tauri] Watchdog: degraded daemon persisted {} misses (pid_present={}, hb_fresh={}, wedged={}) — escalating to terminated",
                                     recovery_attempts, pid_present, heartbeat_fresh, loop_wedged);
-                                let _ = app_handle.emit(event, Option::<i32>::None);
+                                let _ = app_handle.emit(event, payload);
                                 terminated_emitted = true;
                             }
                             WatchdogDownDecision::Degraded => {
@@ -2158,7 +2203,7 @@ fn spawn_daemon_health_watchdog(
                                 // one-shot emit let a longer stall expire it, and the
                                 // 30s JS poll then flipped to red "Backend is
                                 // unavailable" while this watchdog still said alive.
-                                let _ = app_handle.emit(event, DAEMON_PORT);
+                                let _ = app_handle.emit(event, payload);
                             }
                         }
                     }
@@ -3033,6 +3078,50 @@ mod adaptive_probe_tests {
     // WEDGE: a fresh heartbeat but a WEDGED loop (loop_age ≥ 15s) is a genuine
     // deadlock — the override does NOT protect it; it falls through to the legacy
     // path. Below threshold → still Degraded; at threshold → real Terminated.
+    // A loop wedged ≥15s by an outside shortage (CPU / memory / low battery) is a
+    // starved live process: not wedged for the decision → Degraded at any streak.
+    // A wedge in our own code (or of unknown cause) still escalates.
+    #[test]
+    fn starved_wedge_stays_degraded_own_wedge_escalates() {
+        let starved = HeartbeatView {
+            fresh: true, loop_wedged: true, loop_age: Some(40.0),
+            stall: Some(serde_json::json!({"cause": "cpu", "starved": true, "loadPerCore": 12.9})),
+        };
+        assert!(!effective_wedged(&starved));
+        assert_eq!(
+            watchdog_down_decision(true, true, 99, 2, starved.fresh, effective_wedged(&starved)),
+            WatchdogDownDecision::Degraded
+        );
+        let own = HeartbeatView {
+            stall: Some(serde_json::json!({"cause": "busy", "starved": false, "busyWith": "core/x.py:f"})),
+            ..starved.clone()
+        };
+        assert!(effective_wedged(&own));
+        assert_eq!(
+            watchdog_down_decision(true, true, 2, 2, own.fresh, effective_wedged(&own)),
+            WatchdogDownDecision::Terminated
+        );
+        let no_diag = HeartbeatView { stall: None, ..starved.clone() };
+        assert!(effective_wedged(&no_diag)); // an older backend: unchanged behavior
+    }
+
+    #[test]
+    fn health_payload_carries_the_reason() {
+        let hb = HeartbeatView {
+            fresh: true, loop_wedged: false, loop_age: Some(7.5),
+            stall: Some(serde_json::json!({"cause": "memory", "starved": true, "memPercent": 95.0})),
+        };
+        let p = health_event_payload(&hb, Some(true));
+        assert_eq!(p["port"], serde_json::json!(DAEMON_PORT));
+        assert_eq!(p["heartbeatFresh"], serde_json::json!(true));
+        assert_eq!(p["loopAge"], serde_json::json!(7.5));
+        assert_eq!(p["processAlive"], serde_json::json!(true));
+        assert_eq!(p["stall"]["cause"], serde_json::json!("memory"));
+        let gone = health_event_payload(&HeartbeatView::default(), Some(false));
+        assert_eq!(gone["heartbeatFresh"], serde_json::json!(false));
+        assert!(gone["stall"].is_null() && gone["loopAge"].is_null());
+    }
+
     #[test]
     fn hb_fresh_wedged_falls_through_to_legacy() {
         // Wedged + below threshold + pid present → legacy says Degraded.

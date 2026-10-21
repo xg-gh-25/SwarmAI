@@ -6,7 +6,10 @@
  * three states: `connected`, `disconnected`, and `initializing`.
  *
  * Key behaviors:
- * - Fires a persistent warning toast on connected → disconnected
+ * - Fires a persistent warning toast on connected → disconnected / degraded that
+ *   says WHY (hooks/backendIssue.ts: from the watchdog's payload — CPU fully used,
+ *   low memory, low battery, busy in X, stopped, paused, stuck), and keeps the reason
+ *   in `health.issue` for the header pill
  * - Fires a success toast on disconnected → connected
  * - Handles `initializing` status from the backend response body
  * - Listens for Tauri backend events for instant crash/restart detection
@@ -22,6 +25,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { HealthState, BackendStatus, AuthStatus } from '../types';
 import { getApiBaseUrl, isDesktop, setBackendPort, tauriService } from '../services/tauri';
 import { useToast } from '../contexts/ToastContext';
+import { describeBackendIssue, parseBackendDiag } from './backendIssue';
+import type { BackendIssue } from './backendIssue';
 
 /** Default polling interval in milliseconds. */
 const DEFAULT_INTERVAL_MS = 30_000;
@@ -169,6 +174,13 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
   addToastRef.current = addToast;
   const removeToastRef = useRef(removeToast);
   removeToastRef.current = removeToast;
+  // The reason last shown (hooks/backendIssue.ts); cleared on recovery.
+  const issueRef = useRef<BackendIssue | null>(null);
+  /** Show why the backend is not answering: the one health toast, its sentence. */
+  const showIssue = useCallback((issue: BackendIssue) => {
+    issueRef.current = issue;
+    addToastRef.current({ severity: 'warning', message: issue.detail, id: HEALTH_DISCONNECTED_TOAST_ID });
+  }, []);
 
   // ------------------------------------------------------------------
   // Transition helpers (read toast fns from refs — no deps needed)
@@ -194,6 +206,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         backendStatus !== 'degraded'
       ) {
         removeToastRef.current(HEALTH_DISCONNECTED_TOAST_ID);
+        issueRef.current = null;
         if (backendStatus === 'connected') {
           // Pick an honest recovery message based on what actually happened.
           // Default (JS-poller-only recovery, no Tauri event) → generic reconnect.
@@ -248,11 +261,8 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
             currentStatusRef.current = 'degraded';
             if (previousStatus !== 'degraded') {
               recoveryKindRef.current = null;
-              addToastRef.current({
-                severity: 'warning',
-                message: 'Backend busy — reconnecting…',
-                id: HEALTH_DISCONNECTED_TOAST_ID,
-              });
+              // the watchdog's last reason, if it gave one; else a plain "slow"
+              showIssue(issueRef.current?.kind === 'degraded' ? issueRef.current : describeBackendIssue('degraded'));
             }
           }
         } else {
@@ -264,11 +274,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
             // value set by a prior, never-consumed event can't mislabel this
             // episode's recovery toast.
             recoveryKindRef.current = null;
-            addToastRef.current({
-              severity: 'warning',
-              message: 'Backend is unavailable',
-              id: HEALTH_DISCONNECTED_TOAST_ID,
-            });
+            showIssue(describeBackendIssue('unreachable'));
           }
         }
       }
@@ -281,11 +287,12 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         // currently confirm (Gate-2 M2). The next successful poll re-supplies
         // it. Preserve auth while still 'connected'/'initializing'.
         auth: currentStatusRef.current === 'disconnected' ? undefined : prev.auth,
+        issue: issueRef.current ?? prev.issue,
         lastCheckedAt: now,
         consecutiveFailures: failures,
       }));
     },
-    [failureThreshold], // only re-creates if threshold option changes
+    [failureThreshold, showIssue], // only re-creates if threshold option changes (showIssue is stable)
   );
 
   // ------------------------------------------------------------------
@@ -380,23 +387,21 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
     // must NOT assert "crashed" or "restarting" — both overclaim what a single
     // timeout proves. A truly-dead daemon escalates to onBackendTerminated.
     unlisteners.push(
-      tauriService.onBackendTerminatedRestarting(() => {
+      tauriService.onBackendTerminatedRestarting((payload) => {
         if (!mountedRef.current) return;
+        const issue = describeBackendIssue('not_responding', parseBackendDiag(payload));
 
         failureCountRef.current = DEFAULT_FAILURE_THRESHOLD;
         currentStatusRef.current = 'disconnected';
         recoveryKindRef.current = null; // clean episode; resumed/restarted sets it next
         lastDegradedAtRef.current = 0;  // real death → drop stale liveness proof so it can't mask this outage
 
-        addToastRef.current({
-          severity: 'warning',
-          message: 'Backend not responding — reconnecting…',
-          id: HEALTH_DISCONNECTED_TOAST_ID,
-        });
+        showIssue(issue);
 
         setHealthState((prev) => ({
           ...prev,
           status: 'disconnected',
+          issue,
           // Lost backend → no fresh auth signal; clear it (Gate-2 M2).
           auth: undefined,
           lastCheckedAt: Date.now(),
@@ -413,8 +418,9 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
     // onBackendTerminatedRestarting on the Rust side (miss streak), and the 30s
     // poll's own failureThreshold path is independent.
     unlisteners.push(
-      tauriService.onBackendDegraded(() => {
+      tauriService.onBackendDegraded((payload) => {
         if (!mountedRef.current) return;
+        const issue = describeBackendIssue('degraded', parseBackendDiag(payload));
 
         // Don't downgrade a real 'disconnected' back to 'degraded' — a live-death
         // that already disabled inputs must stay disabled until a genuine recovery.
@@ -430,20 +436,24 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         // transition: re-adding the toast / bumping health state on every repeat
         // would re-render every HealthContext consumer each 3s on an already
         // loaded machine and resurrect a toast the user dismissed.
-        if (currentStatusRef.current === 'degraded') return;
+        // A repeat updates the message only when the REASON changed (CPU → memory,
+        // busy → slowed), not on every loop-age tick.
+        if (currentStatusRef.current === 'degraded') {
+          if (issueRef.current?.cause === issue.cause) return;
+          showIssue(issue);
+          setHealthState((prev) => ({ ...prev, issue }));
+          return;
+        }
 
         currentStatusRef.current = 'degraded';
         recoveryKindRef.current = null;
 
-        addToastRef.current({
-          severity: 'warning',
-          message: 'Backend busy — reconnecting…',
-          id: HEALTH_DISCONNECTED_TOAST_ID,
-        });
+        showIssue(issue);
 
         setHealthState((prev) => ({
           ...prev,
           status: 'degraded',
+          issue,
           lastCheckedAt: Date.now(),
         }));
       }),
@@ -500,15 +510,13 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         recoveryKindRef.current = null;
         lastDegradedAtRef.current = 0;  // permanent death → drop stale liveness proof
 
-        addToastRef.current({
-          severity: 'warning',
-          message: 'Backend is taking longer than expected to restart…',
-          id: HEALTH_DISCONNECTED_TOAST_ID,
-        });
+        const slowIssue = describeBackendIssue('slow_restart');
+        showIssue(slowIssue);
 
         setHealthState((prev) => ({
           ...prev,
           status: 'disconnected',
+          issue: slowIssue,
           // Lost backend → no fresh auth signal; clear it (Gate-2 M2).
           auth: undefined,
           lastCheckedAt: Date.now(),
@@ -520,7 +528,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
     return () => {
       unlisteners.forEach((p) => p.then((unlisten) => unlisten()));
     };
-  }, []);  
+  }, [showIssue]); // showIssue is stable (useCallback, no deps): subscribes once
 
   return { state: healthState, checkNow: performHealthCheck };
 }
