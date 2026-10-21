@@ -4,7 +4,7 @@ date: 2026-10-21
 created: 2026-10-21
 updated: 2026-10-21
 project: SwarmAI
-status: DRAFT — 待 XG 确认 §9 的待决问题
+status: FINAL — XG 2026-10-21 定稿；§9 的问题按建议定
 related: pipeline-review-convergence.md（N1–N5，本文收窄其轮数）；pipeline-run-worktree.md（run_owner_gate 的 token 机制）；pipeline-run-budget.md（轮数预算）
 ---
 # Pipeline gate 与 expert review 简化
@@ -20,7 +20,7 @@ related: pipeline-review-convergence.md（N1–N5，本文收窄其轮数）；p
 | G1 | `pipeline_test_gate` | 在 run 内直接跑 pytest/vitest/tsc 一律 deny，改道到 runner；heredoc 里出现 `pytest` 字样也 deny | 只保留"runner 不许放进循环、不许一次调用跑两遍"的 deny。直接跑测试改为放行并附一句提示 | 低：落地只认 runner 的证据，直接跑的结果本来就不算数 |
 | G2 | `run_owner_gate` 的"必须是第一条命令" | 发 token 的 CLI 调用前面不能有任何命令 | CLI 调用可以在 `&&`/`;` 链的任意位置，前面的段不能有函数定义、alias、`source`/`.`、`eval`、对 CLI 脚本的写入 | 中：需要 security expert 复核 §5.2 的论证 |
 | G3 | `audit_marker_write_gate` | `cd` 进审计目录或只读的 glob 也 deny | 只读命令放行 | 低 |
-| G4 | gate 治理 | 加 gate 不需要证据 | 新 gate 要引用真实事故；deny 分支标类别，`routing`/`format` 类每月按误伤复审 | 无 |
+| G4 | gate 治理 | 加 gate 不需要证据 | 新 gate 要引用真实事故 | 无 |
 | E0 | 两套 Gate-2 并存 | legacy（3 轮 + meta-review + root-cause）和 deterministic（finding ledger，2 轮）同时在用 | 只留 finding ledger 这一套 | 中：迁移量最大 |
 | E1 | Gate-2 名单 | 最多 7 个 specialist，按文件模式触发 | 默认只派 correctness；有明显安全风险时才加 security + red-team。其他 lens 并进 correctness 的检查清单 | 中：部分 MEDIUM 可能漏 |
 | E2 | gate0 / gate1 / meta-review | 三个都常态派出 | 删 gate1 和 meta-review；gate0 只在 bugfix 或需求有两种读法时派 | 低 |
@@ -124,7 +124,7 @@ related: pipeline-review-convergence.md（N1–N5，本文收窄其轮数）；p
 
 **为什么安全**：`pipeline_validator.landing_test_errors` 和 `_deliver_push_ready_bound` 只读 runner 写的 `latest-<mode>.json`（带 `tree_digest`）。直接跑的 pytest 不产生这个文件，不能让 run 落地，也不能让 push_ready 变真。直接跑最多浪费时间，而单次调用已被 `pytest_command_guard` 限时。
 
-**放弃的东西**：runner 会在调用前后对比仓库状态，恢复测试写坏的 tracked 文件；直接跑的测试没有这层保护，写出的改动会留在 worktree 的 diff 里，可能被当成本 run 的改动提交。现有防线是 conftest 里对已知副作用调用的 autouse stub。G1 另加一条：放行直接测试命令时，gate 记下当时 `git status --porcelain` 的指纹；runner 下一次调用时对比，期间新出现且不在计划路径里的改动列为 `repo_mutations.unexplained`，进 REPORT。
+**放弃的东西**：runner 会在调用前后对比仓库状态，恢复测试写坏的 tracked 文件；直接跑的测试没有这层保护，写出的改动会留在 worktree 的 diff 里，可能被当成本 run 的改动提交。现有防线是 conftest 里对已知副作用调用的 autouse stub。不另加机制：这类测试是少数，已知的都被 stub 了。
 
 **删除的测试**：`tests/test_pipeline_test_gate*.py` 里断言 pytest/vitest/tsc/stdin deny 的用例改为断言 approve + 提示；loop/repeat 用例保留。
 
@@ -140,7 +140,7 @@ related: pipeline-review-convergence.md（N1–N5，本文收窄其轮数）；p
 
 token 前缀仍然只加在 CLI 那一条简单命令上，其他段拿不到。
 
-**安全论证**见 §5.2：这个限制想挡的"同一行里先执行的程序改写 CLI 脚本"，在两次 Bash 调用之间同样能做到（上一次调用里跑 `python3 /tmp/x.py` 改 `artifact_cli.py`，gate 只看命令文本，看不到脚本内部）。所以"第一条命令"挡不住这个威胁，只多了 31 次往返。真要防，应该在 CLI 侧校验自身完整性（§5.2 的 G2b）。
+**安全论证**见 §5.2：这个限制想挡的"同一行里先执行的程序改写 CLI 脚本"，在两次 Bash 调用之间同样能做到（上一次调用里跑 `python3 /tmp/x.py` 改 `artifact_cli.py`，gate 只看命令文本，看不到脚本内部）。所以"第一条命令"挡不住这个威胁，只多了 31 次往返。
 
 **测试**：`tests/test_run_owner_gate*.py` 增加"前置 python 准备脚本 + CLI"放行、"前置函数定义/alias/eval"拒绝、"前置重定向写 CLI 脚本"拒绝。
 
@@ -155,10 +155,7 @@ token 前缀仍然只加在 CLI 那一条简单命令上，其他段拿不到。
 
 ### G4 gate 治理
 
-1. 新 gate 的 PR/run 必须在设计里引用至少一个真实事故（日志行、run id 或 commit）。
-2. 每个 deny 分支在原因文本里带一个类别标签：`safety`（挡危险或不可逆操作）、`isolation`（挡跨 session 污染）、`routing`（改道到另一个入口）、`format`（命令写法不符）。`gate_audit.py` 增加 `--by-kind`，按分支和类别统计。
-3. `routing` 和 `format` 类分支每月复审一次：看 deny 样本，误伤占多数的降为 warn；连续两个月仍以误伤为主就删除。`safety` 和 `isolation` 类不走自动降级。
-4. `gate_decisions.jsonl` 目前只有 2 天，先保留 60 天再做第一次复审。
+新 gate 必须在设计里引用至少一个真实事故（日志行、run id 或 commit）。没有新流程、新标签或定期复审；要看 gate 效果时用现有的 `gate_audit.py --samples`。
 
 ## 4. Expert 改动
 
@@ -171,7 +168,7 @@ token 前缀仍然只加在 CLI 那一条简单命令上，其他段拿不到。
 
 两套共存意味着每个 gate2 相关改动都要写两遍、测两遍，阶段文档也要分两路讲（`deliver-convergence.md`、`gate2-findings.md`、`gate2-deterministic.md`）。
 
-**改成**：所有 profile 都走 finding ledger。难点是共享 checkout：run 落到共享 checkout 时现在退回 legacy，因为 break test 要在 R1 时的代码上跑旧侧，而共享 checkout 没有 R1 快照。`worktree_mode` 已经默认开启（`core/run_worktree.py` `mode_enabled`），共享 checkout 只在建 worktree 失败时出现（`pipeline_worktree._shared`）。两个办法，选一个（§9 Q1）：
+**改成**：所有 profile 都走 finding ledger。难点是共享 checkout：run 落到共享 checkout 时现在退回 legacy，因为 break test 要在 R1 时的代码上跑旧侧，而共享 checkout 没有 R1 快照。`worktree_mode` 已经默认开启（`core/run_worktree.py` `mode_enabled`），共享 checkout 只在建 worktree 失败时出现（`pipeline_worktree._shared`）。两个办法，定为 (a)（§9 Q1）：
 - (a) 去掉共享 checkout 回退：建 worktree 失败时 stage-start 报错，给出原因和重试命令；
 - (b) 保留回退，R1 时由 runner 在 `$KIROCREW_SCRATCH` 下 `git worktree add --detach <R1 commit>` 建一次性快照目录，旧侧在那里跑。
 
@@ -281,7 +278,7 @@ token 机制要证明的是"这次 CLI 调用前，PreToolUse hook 真的跑过"
 
 G2 放宽后，前置段仍禁止函数定义、alias、`source`、`eval`、`PATH` 改写和对 CLI 脚本的重定向写入，即命令文本层面能看到的劫持方式都还挡着。
 
-**G2b（建议一起做，单独评估）**：run-create 时把 CLI 脚本的 sha256 记进 `run.json["cli"]`；CLI 每次烧 token 时把自身文件的 sha256 发给 daemon，daemon 对不上就拒绝。这样不管改写发生在哪一次调用，都能挡住。需要先确认：pipeline 在改 `artifact_cli.py` 自己的 run（10 月约一半）里，`run.json["cli"]` 指向主 checkout 还是 worktree 的脚本。指向 worktree 的话，sha 要在每次 run-commit 后更新，否则会误伤。
+跨调用改写 CLI 脚本这个已有漏洞不在本文范围，需要时单独评估。
 
 ## 6. 实施分期
 
@@ -289,8 +286,8 @@ G2 放宽后，前置段仍禁止函数定义、alias、`source`、`eval`、`PAT
 
 | 期 | 内容 | 主要文件 | 预计改动 |
 |---|---|---|---|
-| P1 | G1、G3、E5 的"无输出不压低"部分、G4 的类别标签 | `security_hooks.py`、`finding_ledger.py`、`gate_audit.py`、对应测试 | 约 300 行（删多于加） |
-| P2 | G2（+ G2b）| `run_owner_gate.py`、`hook_token.py`、`artifact_cli.py` 的 token 烧录 | 约 200 行；需要 security expert |
+| P1 | G1、G3、E5 的"无输出不压低"部分 | `security_hooks.py`、`finding_ledger.py`、对应测试 | 约 300 行（删多于加） |
+| P2 | G2 | `run_owner_gate.py`、对应测试 | 约 100 行；需要 security expert |
 | P3 | E0、E1、E2、E4、E5 余下部分 | `artifact_cli.py`、`finding_ledger.py`、`gate2_*`、`review_round_gate.py`、`pipeline_validator.py`、`backend/experts/code/*.md`、`stages/deliver.md`、`stages/ref/deliver/*.md`、`stages/build.md` | 大：预计删除 3000+ 行代码和 40KB+ 文档 |
 | P4 | E3 | `stages/review.md`、`stages/ref/review/*`、`_review_dispatch` | 中 |
 
@@ -307,7 +304,7 @@ G2 放宽后，前置段仍禁止函数定义、alias、`source`、`eval`、`PAT
 | 每个 run 的 expert 派出（中位数） | 27（均值） | ≤ 3 |
 | REVIEW + DELIVER 占阶段时间 | 33% | ≤ 15% |
 | gate deny / 天 | 约 62 | ≤ 15 |
-| `routing` + `format` 类和误伤 deny 占比 | 约 55%（69/124） | ≤ 20% |
+| 改道、格式和误伤类 deny 占比（按 §1.2 的分法） | 约 55%（69/124） | ≤ 20% |
 | 每个 run 抓到的 HIGH（有 finding 的 run 里） | 基线待测 | 不低于基线的 80% |
 | push_ready=yes 的完成 run 比例 | 3/41 | ≥ 50% |
 | REPORT 里写"手工落地"的 run | 2 天 4 个 | 0 |
@@ -318,14 +315,14 @@ G2 放宽后，前置段仍禁止函数定义、alias、`source`、`eval`、`PAT
 ## 8. 回滚
 
 - G1、G3：deny 分支改为放行是一个函数内的改动，回滚即 revert 对应提交。
-- G2：保留 `_token_binding` 的严格模式，用 `config.json["pipeline"]["owner_gate_strict"]` 切换，P2 落地后观察两周再删开关。
+- G2：同上，revert 对应提交。
 - E0–E5：P3 期间 `--convergence legacy` 先保留为隐藏选项，落地两周、指标达标后再删除 legacy 代码。删除提交单独做，方便 revert。
 - 删除的 expert 文档文件保留在 `backend/experts/code/`，只改为"已并入"说明，恢复时改回 `_dispatch_experts` 即可。
 
-## 9. 待决问题
+## 9. 已定的决定（XG 2026-10-21）
 
-- **Q1**：E0 的共享 checkout 选 (a) 去掉回退，还是 (b) 建一次性快照？建议 (a)。
-- **Q2**（已定，XG 2026-10-21）：red-team 只在有明显安全风险时派。
-- **Q3**：E5 里 HIGH 的 `untestable` 是否允许由作者写理由后放行？建议不允许，留给人看（REPORT 列出）。
-- **Q4**：G2b 是否和 G2 一起做？建议一起做，否则 G2 只是把一个已知漏洞的窄版本放宽。
-- **Q5**：P3 用 direct 分批提交，还是走一次完整 pipeline run？建议 direct 分批。
+- **Q1**：E0 去掉共享 checkout 回退，建不了 worktree 时 stage-start 报错。
+- **Q2**：red-team 只在有明显安全风险时派。
+- **Q3**：HIGH 的 `untestable` 不能由作者放行，留给人看（REPORT 列出）。
+- **Q4**：G1 不加 git 状态指纹，不做 CLI 自身 sha 校验，G4 不加类别标签和定期复审。
+- **Q5**：P3 用 direct 分批提交。
