@@ -761,12 +761,18 @@ class TestListFilesHidesLockAndTmp:
         assert "IMPROVEMENT.tmp" not in names, ".tmp scratch must be hidden"
         assert "sub.lock" in names, "a DIRECTORY named *.lock must NOT be hidden (files-only)"
 
-    def test_work_in_a_folder_keeps_lockfiles(self, tmp_path: Path):
-        """base_path set (work-in-a-folder on an arbitrary repo): *.lock is legit user
-        content (Cargo.lock, uv.lock) → must NOT be filtered (Gate-2 low #1)."""
+    def test_work_in_a_folder_keeps_lockfiles(self, tmp_path: Path, monkeypatch):
+        """base_path set (work-in-a-folder on a repo inside the workspace): *.lock is
+        legit user content (Cargo.lock, uv.lock) → must NOT be filtered (Gate-2 low #1).
+        base_path must resolve inside the workspace (804abf96), so the workspace is
+        pinned to tmp_path's parent."""
         import asyncio
+        from core.initialization_manager import initialization_manager
         from routers.workspace import list_files
         from schemas.workspace import WorkspaceListRequest
+        monkeypatch.setattr(
+            initialization_manager, "get_cached_workspace_path", lambda: str(tmp_path.parent)
+        )
         (tmp_path / "Cargo.lock").write_text("", encoding="utf-8")
         (tmp_path / "main.rs").write_text("fn main(){}\n", encoding="utf-8")
 

@@ -27,10 +27,14 @@ async def _seed_skill(name, is_privileged=False):
     folder_name = name.lower().replace(" ", "-")
 
     # Determine skill directory based on privilege level
+    # Seed where the manager actually scans. The skill_manager singleton fixes its
+    # user_skills_path when it is first built, possibly in an earlier test's sandbox
+    # (conftest re-roots module attributes, not instance attributes), so the current
+    # get_app_data_dir() can be a directory it never reads.
     if is_privileged:
         skills_dir = get_app_data_dir() / "built-in-skills"
     else:
-        skills_dir = get_app_data_dir() / "skills"
+        skills_dir = skill_manager.user_skills_path
 
     skill_path = skills_dir / folder_name
     skill_path.mkdir(parents=True, exist_ok=True)

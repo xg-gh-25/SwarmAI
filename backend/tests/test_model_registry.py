@@ -94,7 +94,11 @@ class TestStdlibOnly:
                 "rationale for a separate registry module cannot be demonstrated "
                 "here, but the stdlib-only requirement still holds"
             )
-        assert "pydantic_settings" in result.stderr
+        # config.py loads pydantic_settings lazily since 00ed32a5, so on an old system
+        # python the import now fails earlier (e.g. 3.9 rejects `dict[str, str] | None`).
+        # Either way config.py is not stdlib-importable, which is the point here.
+        assert result.returncode != 0
+        assert "pydantic_settings" in result.stderr or "TypeError" in result.stderr, result.stderr
 
 
 class TestFlagshipOrdering:
