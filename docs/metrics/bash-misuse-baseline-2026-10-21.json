@@ -1,0 +1,60 @@
+{
+  "since": "2026-10-14T00:00:00+00:00",
+  "until": "2026-10-21T05:00:00+00:00",
+  "transcripts": 1448,
+  "bash": {
+    "calls": 31272,
+    "errors": 1837,
+    "error_rate": 0.0587
+  },
+  "gates": {
+    "pytest_command_guard": {
+      "denials": 453,
+      "repeat_sessions": 95
+    },
+    "pipeline_test_gate": {
+      "denials": 194,
+      "repeat_sessions": 15
+    },
+    "bash_syntax_guard": {
+      "denials": 135,
+      "repeat_sessions": 5
+    },
+    "run_owner_gate": {
+      "denials": 70,
+      "repeat_sessions": 12
+    },
+    "adversarial_commit_gate": {
+      "denials": 65,
+      "repeat_sessions": 5
+    },
+    "worktree_write_gate": {
+      "denials": 36,
+      "repeat_sessions": 5
+    },
+    "background_command_guard": {
+      "denials": 35,
+      "repeat_sessions": 2
+    },
+    "active_run_commit_gate": {
+      "denials": 18,
+      "repeat_sessions": 1
+    },
+    "audit_marker_write_gate": {
+      "denials": 7,
+      "repeat_sessions": 0
+    },
+    "other_hook": {
+      "denials": 2,
+      "repeat_sessions": 0
+    },
+    "session_link_gate": {
+      "denials": 2,
+      "repeat_sessions": 0
+    }
+  },
+  "auto_backgrounded": 34,
+  "inline_state_reads": 1031,
+  "run_json_writes": 26,
+  "scan_seconds": 9.8
+}

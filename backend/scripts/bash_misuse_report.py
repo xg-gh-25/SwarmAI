@@ -1,0 +1,190 @@
+"""bash_misuse_report — how agents' Bash calls go wrong, measured from SDK transcripts.
+
+One command for the questions of the 2026-10-21 gate audit, so every later change
+is judged with the same measure (run before and after, compare the JSON):
+
+- ``bash.calls`` / ``bash.errors``: Bash tool calls and how many returned an error;
+- ``gates``: denials per PreToolUse gate (recognised by the gate's own deny text),
+  and ``repeat_sessions``: sessions where the same gate denied 3+ times, the sign
+  that its message did not tell the agent what to do;
+- ``auto_backgrounded``: foreground calls the CLI moved to the background (the call
+  ran past its Bash timeout and returned no output);
+- ``inline_state_reads``: ``python -c`` / stdin python that loads run.json or
+  evidence/ instead of ``run-get --brief`` / ``--field``;
+- ``run_json_writes``: python that loads a run's run.json and writes JSON back.
+
+Usage::
+
+    python backend/scripts/bash_misuse_report.py [--days 7 | --since D [--until D]]
+        [--root ~/.claude/projects] [--samples N] [--save docs/metrics/<name>.json]
+
+Output is one JSON object on stdout. ``--save`` writes the same object without
+samples (counts only: no command text leaves the transcripts). Read-only.
+
+Public: ``scan(root, since)``, ``classify_gate(text)``, ``main()``.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import time
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+# A gate's deny text → its name. First match wins; order: specific before generic.
+GATE_PATTERNS: list[tuple[str, re.Pattern]] = [(n, re.compile(p)) for n, p in [
+    ("pytest_command_guard", r"This pytest (?:command|run)|pytest piped into tail/head|pytest 调用 → 必须"),
+    ("pipeline_test_gate", r"DENY \(runner |is active in this session, so tests and builds go through"),
+    ("run_owner_gate", r"DENY \(run owner gate\)"),
+    ("worktree_write_gate", r"DENY \(worktree gate\)"),
+    ("audit_marker_write_gate", r"this writes, moves or deletes files in"),
+    ("session_link_gate", r"this command removes or overrides"),
+    ("run_amend_gate", r"DENY \(git commit --amend\)"),
+    ("direct_commit_gate", r"git commit → DENY: this commit changes"),
+    ("active_run_commit_gate", r"git commit → DENY: this commit touches file\(s\) owned"),
+    ("adversarial_commit_gate", r"requires an adversarial review"),
+    ("bash_syntax_guard", r"has a SYNTAX ERROR"),
+    ("background_command_guard", r"Background execution is disabled for this command"),
+    ("review_round_gate", r"DENY \(parallel review\)|round already finished"),
+]]
+_HOOK_ERROR = re.compile(r"^\s*PreToolUse:\w+ hook error:")
+_AUTO_BG = re.compile(r"Command running in background with ID: (\w+)")
+_PY_CODE = re.compile(r"python[\d.]*\s+(?:-\w+\s+)*(?:-c\b|-\s|-\s*<<)|python[\d.]*\s+-\s*$", re.M)
+_STATE_FILE = re.compile(r"run\.json|evidence/")
+_LOADS = re.compile(r"json\.load\(")
+_WRITES = re.compile(r"json\.dump\(|\.write_text\(|open\([^)]*,\s*['\"][wa]")
+_RUN_JSON_PATH = re.compile(r"\.artifacts/runs/[^'\"\s]*run\.json|run_[0-9a-f]{8}/run\.json")
+
+
+def classify_gate(text: str) -> "str | None":
+    """The gate that wrote this deny *text*, ``"other_hook"`` for an unknown hook
+    error, or None when it is not a denial."""
+    for name, pat in GATE_PATTERNS:
+        if pat.search(text[:600]):
+            return name
+    return "other_hook" if _HOOK_ERROR.search(text) else None
+
+
+def _text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(c.get("text", "") for c in content if isinstance(c, dict))
+    return ""
+
+
+def _blocks(line: str):
+    """(timestamp, block) for each content block of one transcript line."""
+    try:
+        d = json.loads(line)
+    except ValueError:
+        return
+    content = (d.get("message") or {}).get("content")
+    if isinstance(content, list):
+        for b in content:
+            if isinstance(b, dict):
+                yield d.get("timestamp") or "", b
+
+
+def scan(root: Path, since: datetime, samples: int = 0, until: "datetime | None" = None) -> dict:
+    """Count the report's measures over transcript entries in [*since*, *until*)."""
+    cutoff = since.timestamp()
+    since_iso = since.strftime("%Y-%m-%dT%H:%M:%S")
+    until_iso = until.strftime("%Y-%m-%dT%H:%M:%S") if until else "9999"
+    files = [p for p in root.rglob("*.jsonl") if p.stat().st_mtime >= cutoff]
+    calls: dict[str, tuple[str, dict]] = {}   # tool_use_id -> (session, input)
+    bash = Counter()
+    gates = Counter()
+    per_session = defaultdict(Counter)
+    auto_bg = 0
+    examples = defaultdict(list)
+    state_reads = writes = 0
+    for f in files:
+        session = f.stem
+        try:
+            fh = open(f, errors="ignore")
+        except OSError:
+            continue
+        with fh:
+            for line in fh:
+                if '"tool_use"' not in line and '"tool_result"' not in line:
+                    continue
+                for ts, b in _blocks(line):
+                    if ts and not (since_iso <= ts[:19] < until_iso):
+                        continue
+                    if b.get("type") == "tool_use" and b.get("name") == "Bash":
+                        inp = b.get("input") or {}
+                        calls[b.get("id", "")] = (session, inp)
+                        bash["calls"] += 1
+                        cmd = inp.get("command", "") or ""
+                        if _PY_CODE.search(cmd) and _STATE_FILE.search(cmd) and _LOADS.search(cmd):
+                            state_reads += 1
+                            if _RUN_JSON_PATH.search(cmd) and _WRITES.search(cmd):
+                                writes += 1
+                    elif b.get("type") == "tool_result" and b.get("tool_use_id") in calls:
+                        session, inp = calls[b["tool_use_id"]]
+                        text = _text(b.get("content"))
+                        if _AUTO_BG.search(text[:300]) and not inp.get("run_in_background"):
+                            auto_bg += 1
+                        if not b.get("is_error"):
+                            continue
+                        bash["errors"] += 1
+                        gate = classify_gate(text)
+                        if gate:
+                            gates[gate] += 1
+                            per_session[session][gate] += 1
+                            if len(examples[gate]) < samples:
+                                examples[gate].append((inp.get("command") or "")[:200])
+    repeat = Counter(g for c in per_session.values() for g, n in c.items() if n >= 3)
+    out = {
+        "since": since.isoformat(timespec="seconds"),
+        "until": until.isoformat(timespec="seconds") if until else None,
+        "transcripts": len(files),
+        "bash": {"calls": bash["calls"], "errors": bash["errors"],
+                 "error_rate": round(bash["errors"] / bash["calls"], 4) if bash["calls"] else 0.0},
+        "gates": {g: {"denials": n, "repeat_sessions": repeat.get(g, 0)}
+                  for g, n in gates.most_common()},
+        "auto_backgrounded": auto_bg,
+        "inline_state_reads": state_reads,
+        "run_json_writes": writes,
+    }
+    if samples:
+        out["samples"] = {g: v for g, v in examples.items()}
+    return out
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
+    ap.add_argument("--days", type=float, default=7.0, help="window ending now (ignored with --since)")
+    ap.add_argument("--since", help="window start, UTC ISO date/time (e.g. 2026-10-14)")
+    ap.add_argument("--until", help="window end, UTC ISO date/time (exclusive)")
+    ap.add_argument("--root", default=str(Path.home() / ".claude" / "projects"))
+    ap.add_argument("--samples", type=int, default=0, help="N sample commands per gate (stdout only)")
+    ap.add_argument("--save", help="also write the counts (no samples) to this JSON file")
+    args = ap.parse_args(argv)
+    root = Path(args.root).expanduser()
+    if not root.is_dir():
+        print(json.dumps({"error": f"no transcript directory: {root}"}), file=sys.stderr)
+        return 1
+    def _at(v):
+        d = datetime.fromisoformat(v)
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    since = _at(args.since) if args.since else datetime.now(timezone.utc) - timedelta(days=args.days)
+    until = _at(args.until) if args.until else None
+    t0 = time.monotonic()
+    report = scan(root, since, args.samples, until)
+    report["scan_seconds"] = round(time.monotonic() - t0, 1)
+    if args.save:
+        saved = {k: v for k, v in report.items() if k != "samples"}
+        Path(args.save).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.save).write_text(json.dumps(saved, indent=2, ensure_ascii=False) + "\n",
+                                   encoding="utf-8")
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
