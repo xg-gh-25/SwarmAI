@@ -637,6 +637,13 @@ class RetryManager:
                 return
             except Exception as retry_exc:
                 error_str = str(retry_exc)
+                from .cli_stream_reader import is_turn_abandoned
+                if is_turn_abandoned(retry_exc):
+                    # The retried turn was abandoned with the CLI alive: end it like a
+                    # first attempt (identity kept), never via the exhausted crash.
+                    async for event in self._parent._end_abandoned_turn(retry_exc):
+                        yield event
+                    return
                 logger.warning(
                     "Retry %d failed for session %s: %s",
                     self._parent._retry_count,

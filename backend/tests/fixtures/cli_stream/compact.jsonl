@@ -1,0 +1,31 @@
+{"type": "system", "subtype": "session_state_changed", "state": "running", "uuid": "cdc213f0-e8f8-49ee-97c8-c67cdd2bc5ef", "session_id": "S"}
+{"type": "command_lifecycle", "state": "queued", "uuid": "b27475f9-aa34-4335-963f-a5faee304377", "session_id": "S"}
+{"type": "command_lifecycle", "state": "started", "uuid": "171b2872-4cf7-4743-9696-c7600ee5cae5", "session_id": "S"}
+{"type": "system", "subtype": "init", "uuid": "e3f957eb-0293-4f07-8ab7-2bda8a2a8562", "session_id": "S", "cwd": "/tmp/spike", "tools": [], "mcp_servers": [], "model": "m", "permissionMode": "bypassPermissions"}
+{"type": "system", "subtype": "status", "status": "requesting", "uuid": "fe5c36ac-0cc8-4827-bf22-18dd40938da3", "session_id": "S"}
+{"type": "system", "subtype": "commands_changed", "uuid": "bace90bf-d8ef-472c-b7f1-b8a04f0a8958", "session_id": "S"}
+{"type": "user", "parent_tool_use_id": null, "uuid": "00000000-0000-4000-8000-000000000001", "session_id": "S", "message": {"role": "user", "content": "Reply with the single word ONE."}}
+{"type": "stream_event", "uuid": "9572d66d-bb98-4cb0-9c2d-92f7d0845ecc", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_start"}}
+{"type": "stream_event", "uuid": "c71b645a-0395-4543-a82f-5a8280d889cb", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_start"}}
+{"type": "stream_event", "uuid": "bc7342e6-c3d7-407b-b35f-802e5f956215", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "assistant", "parent_tool_use_id": null, "uuid": "710a11e7-8033-43d1-8013-54ca2a4c30bb", "session_id": "S", "message": {"role": "assistant", "content": [{"type": "text", "text": "ONE"}], "model": "m"}}
+{"type": "stream_event", "uuid": "7e4a4ace-e523-4a10-868e-dd43e21340b9", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_stop"}}
+{"type": "stream_event", "uuid": "283709f4-a1c9-4a09-b76a-80569631550b", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_delta"}}
+{"type": "stream_event", "uuid": "08511bbe-832a-49ad-afc9-e3018bb940b0", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_stop"}}
+{"stop_reason": "end_turn", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 17161, "cache_read_input_tokens": 10057, "output_tokens": 5, "output_tokens_details": {"thinking_tokens": 0}, "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0}, "service_tier": "standard", "cache_creation": {"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 17161}, "inference_geo": "", "iterations": [], "speed": "standard", "fallback_credit": null}, "is_error": false, "num_turns": 1, "subtype": "success", "result": "ONE", "type": "result", "duration_ms": 3086, "uuid": "fec3a5a0-f6e0-4366-89a8-d879f2e8c394", "session_id": "S", "duration_api_ms": 1, "total_cost_usd": 0}
+{"_marker": "user_query_written", "uuid": "00000000-0000-4000-8000-000000000003"}
+{"type": "command_lifecycle", "state": "completed", "uuid": "22ce4622-db38-4b69-87b9-4c4b9aa7e078", "session_id": "S"}
+{"type": "system", "subtype": "session_state_changed", "state": "idle", "uuid": "ca77fdaf-d514-4af3-a8d4-3de955965088", "session_id": "S"}
+{"type": "system", "subtype": "session_state_changed", "state": "running", "uuid": "e76436a8-3294-4052-9195-553de60cda44", "session_id": "S"}
+{"type": "command_lifecycle", "state": "queued", "uuid": "37f0c8b0-9168-4727-952c-4738c47d684a", "session_id": "S"}
+{"type": "command_lifecycle", "state": "started", "uuid": "b8e06117-9d88-425f-9d9e-28eaaa492184", "session_id": "S"}
+{"type": "system", "subtype": "status", "status": "compacting", "uuid": "5c3170ab-74c4-4fd5-9e45-2893f3dfa40b", "session_id": "S"}
+{"type": "system", "subtype": "status", "status": null, "uuid": "5bb279e3-a851-4c87-ac11-44f2da6df719", "session_id": "S"}
+{"type": "system", "subtype": "init", "uuid": "24783844-94a7-450f-9eff-9cdd8c81570c", "session_id": "S", "cwd": "/tmp/spike", "tools": [], "mcp_servers": [], "model": "m", "permissionMode": "bypassPermissions"}
+{"type": "system", "subtype": "compact_boundary", "uuid": "8d045875-d8a2-4508-a73f-514e24b357ac", "session_id": "S"}
+{"type": "user", "parent_tool_use_id": null, "uuid": "474b901b-47f8-4323-a867-1966da3592ee", "session_id": "S", "message": {"role": "user", "content": "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request and Intent: The user asked: \"Reply with the single word ONE.\" I replied \"ONE\". The user then asked for this summary of the conversation, with a text-only response and no tool calls.\n\n2. Key Technical Concepts: None. The"}}
+{"type": "user", "parent_tool_use_id": null, "uuid": "1dab4bf1-8c29-4f79-930a-d3cd64d492d8", "session_id": "S", "message": {"role": "user", "content": "<local-command-stdout>Compacted </local-command-stdout>"}}
+{"type": "user", "parent_tool_use_id": null, "uuid": "00000000-0000-4000-8000-000000000003", "session_id": "S", "message": {"role": "user", "content": "<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}
+{"is_error": false, "num_turns": 0, "stop_reason": null, "usage": {"output_tokens_details": {"thinking_tokens": 0}, "input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0, "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0}, "service_tier": "standard", "cache_creation": {"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 0}, "inference_geo": "", "iterations": [], "speed": "standard", "fallback_credit": null}, "subtype": "success", "result": "", "type": "result", "duration_ms": 5690, "uuid": "d8b47c7f-5af3-4c3f-8a3f-71e50723e2f4", "session_id": "S", "duration_api_ms": 1, "total_cost_usd": 0}
+{"type": "command_lifecycle", "state": "completed", "uuid": "27853093-e452-4226-9d93-9e03a675005d", "session_id": "S"}
+{"type": "system", "subtype": "session_state_changed", "state": "idle", "uuid": "e934c74d-a268-4544-8a54-21a2e27d79e1", "session_id": "S"}

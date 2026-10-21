@@ -63,6 +63,9 @@ def _make_unit(session_id: str, state: SessionState, idle_seconds: float,
     # eviction now reads is_post_disconnect_flushing (replaces the deleted
     # is_generating_after_disconnect guard).
     unit.is_post_disconnect_flushing = False
+    # Same for the background-work guard (a live CLI background task): a real unit
+    # returns a bool; a truthy Mock would exclude the unit from channel eviction.
+    unit.has_background_work = False
     # Metrics for eviction priority
     metrics = MagicMock()
     metrics.rss_bytes = rss_bytes

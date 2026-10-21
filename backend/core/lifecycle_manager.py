@@ -479,6 +479,9 @@ class LifecycleManager:
                 unit for unit in self._router.list_units()
                 if unit.state == SessionState.IDLE
                 and unit.pid
+                # A live background task / queued CLI-initiated turn (I5): the
+                # restart would lose it. Tier-1 memory pressure still reclaims it.
+                and not unit.has_background_work
                 and (time.monotonic() - unit._last_proactive_restart
                      >= SessionUnit.PROACTIVE_COOLDOWN)
             ]
@@ -503,7 +506,7 @@ class LifecycleManager:
                     continue
                 # Re-check state: a unit may have left IDLE between the RSS
                 # gather and now (TOCTOU) — never interrupt a STREAMING turn.
-                if unit.state != SessionState.IDLE:
+                if unit.state != SessionState.IDLE or unit.has_background_work:
                     continue
 
                 logger.warning(
@@ -1024,6 +1027,9 @@ class LifecycleManager:
                 # is maintained by the long-lived subprocess + --resume.
                 if unit.is_channel_session:
                     continue
+                # A live background task / queued CLI-initiated turn (I5).
+                if unit.has_background_work:
+                    continue
                 # P-a AC1: an unadopted prewarm unit is a warm subprocess
                 # awaiting adoption, not a stale chat — exempt from TTL kill
                 # (same non-competitive-GC exemption as the orphan reaper).
@@ -1095,6 +1101,8 @@ class LifecycleManager:
         for unit in self._router.list_units():
             if unit.state != SessionState.IDLE:
                 continue  # protect STREAMING / WAITING_INPUT / COLD / DEAD
+            # Background work does NOT exempt an orphan: no window would see the turn
+            # its task leads to, and a never-ending task would pin the slot (I5).
             if unit.is_channel_session:
                 continue  # daemon-owned, no window
             # P-a AC1: an unadopted prewarm unit is a warm subprocess awaiting

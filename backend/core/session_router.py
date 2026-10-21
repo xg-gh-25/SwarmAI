@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 import re
@@ -1944,6 +1945,9 @@ class SessionRouter:
         self._drain_queue: asyncio.Queue[str] = asyncio.Queue()
         self._drain_worker_task: Optional[asyncio.Task] = None
         self._drain_enqueued: set[str] = set()  # de-dupe: at most one pending entry/session
+        # CLI-initiated turns (core/cli_stream_reader.py): one sink task per
+        # session at a time, running the unit's queued injected turns in order.
+        self._injected_tasks: dict[str, asyncio.Task] = {}
 
         # ── Desktop prewarm pool (方案A, design v2 §4/§5, run_f107f442) ───────
         # Maps a bucket key → the prewarm-prefixed session_id of a pre-spawned,
@@ -2260,6 +2264,7 @@ class SessionRouter:
                 session_id=session_id,
                 agent_id=agent_id,
                 on_state_change=self._on_unit_state_change,
+                on_cli_event=self._on_unit_cli_event,
             )
             # Lazy-inject persisted sdk_session_id (Design §2B fix).
             # pop() ensures one-shot consumption — no stale reuse.
@@ -2310,6 +2315,7 @@ class SessionRouter:
             session_id=temp_session_id,
             agent_id=agent_id,
             on_state_change=self._on_unit_state_change,
+            on_cli_event=self._on_unit_cli_event,
         )
         # NOTE: unit is NOT registered in _units yet — deferred until spawn
         # succeeds.  This prevents the lifecycle reaper from seeing a
@@ -2894,6 +2900,9 @@ class SessionRouter:
             u for u in self._units.values()
             if u.state == SessionState.IDLE
             and not u.is_post_disconnect_flushing  # Option B-soft: don't kill a long turn finishing post-disconnect
+            # a live background task / queued CLI turn (I5): protected on the channel
+            # pool; chat eviction only takes orphans, whose turn no window would see
+            and not (u.has_background_work and u.is_channel_session)
             and u is not exclude
             and u.is_channel_session == channel_only
         ]
@@ -3052,6 +3061,111 @@ class SessionRouter:
         # here (F1 deadlock/recursion). The serial worker does the actual drain.
         if new_state == SessionState.IDLE:
             self.enqueue_drain(session_id)
+            # A CLI-initiated turn that arrived while the unit was busy runs now.
+            self.enqueue_injected(session_id)
+
+    # ── CLI-initiated turns (core/cli_stream_reader.py) ───────────
+
+    def _on_unit_cli_event(self, session_id: str, kind: str) -> None:
+        """Callback from a unit's stream reader (runs on the reader's task).
+
+        ``injected``: the CLI started a turn nobody claimed → run it through the
+        sink. ``idle``: the CLI is quiescent again → pending messages the send
+        gate deferred may be delivered. Both are non-blocking enqueues (F1)."""
+        if kind == "injected":
+            self.enqueue_injected(session_id)
+        elif kind == "idle":
+            self.enqueue_drain(session_id)
+
+    def enqueue_injected(self, session_id: str) -> None:
+        """Start the session's sink task unless one is running. Non-blocking."""
+        unit = self._units.get(session_id)
+        queued = getattr(unit, "_injected_turns", None)
+        # A real deque only: a test double for a unit is never driven here.
+        if not isinstance(queued, deque) or not queued:
+            return
+        task = self._injected_tasks.get(session_id)
+        if task is not None and not task.done():
+            return
+        try:
+            self._injected_tasks[session_id] = asyncio.ensure_future(
+                self._run_injected_turns(session_id))
+        except RuntimeError:
+            # No running loop (sync unit test): re-driven on the next IDLE edge.
+            self._injected_tasks.pop(session_id, None)
+
+    async def _run_injected_turns(self, session_id: str) -> None:
+        """Run the unit's queued CLI-initiated turns, one at a time, while it is
+        in a clean IDLE. A turn left queued (the unit got busy) is re-driven by
+        the next IDLE edge. Never raises out."""
+        try:
+            while True:
+                unit = self._units.get(session_id)
+                if unit is None:
+                    return
+                ts = unit.take_injected_turn()
+                if ts is None:
+                    return
+                await self.run_injected_turn(unit, ts)
+        except Exception as exc:  # noqa: BLE001 — a background sink never raises out
+            logger.warning("session_router.injected_sink_error session_id=%s: %s",
+                           session_id, exc, exc_info=True)
+
+    async def run_injected_turn(self, unit: SessionUnit, ts: Any) -> None:
+        """Persist one CLI-initiated turn (a background task finished and the CLI
+        answered it on its own).
+
+        The unit goes IDLE → STREAMING (``begin_injected_turn``), so the tab's
+        streaming-state poll shows the spinner and a user message arriving now is
+        queued; the frames go through the same ``_read_formatted_response`` and
+        ``_persist_stream_event`` as a user turn, under the label ``injected``
+        and a fresh client_id; the orchestrator's result handling returns the
+        unit to IDLE. A question or permission inside the turn pauses it in
+        WAITING_INPUT exactly as a user turn (its continuation reuses the turn's
+        client_id). An error is logged and ends the turn (F4)."""
+        from .cli_stream_reader import TurnAbandoned
+        session_id = unit.session_id
+        client_id = f"injected-{uuid4()}"
+        unit.begin_injected_turn(ts, client_id)
+        logger.info("session_router.injected_turn_start session_id=%s client_id=%s",
+                    session_id, client_id)
+        pending: list[dict] = []
+        row_key = f"{client_id}-asst"
+        try:
+            async for event in unit._read_formatted_response():
+                if not isinstance(event, dict):
+                    continue
+                try:
+                    await self._persist_stream_event(
+                        session_id, event, pending, label="injected",
+                        client_id=row_key, files=self._turn_files_of(unit),
+                        changes=getattr(unit, "_turn_changes", None),
+                    )
+                except Exception as exc:  # noqa: BLE001 — F4: persistence must not wedge the unit
+                    logger.warning(
+                        "session_router.injected_persist_failed session_id=%s type=%s: %s",
+                        session_id, event.get("type"), exc)
+        except TurnAbandoned as exc:
+            logger.warning("session_router.injected_turn_abandoned session_id=%s: %s",
+                           session_id, exc)
+            if unit.state == SessionState.STREAMING:
+                unit._transition(SessionState.IDLE)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("session_router.injected_turn_failed session_id=%s: %s: %s",
+                           session_id, type(exc).__name__, exc)
+            if unit.state == SessionState.STREAMING:
+                await unit._crash_to_cold_async(clear_identity=False)
+        finally:
+            if pending:
+                try:
+                    await self._persist_assistant_blocks(
+                        session_id, list(pending), None,
+                        label="injected-results", client_id=row_key)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("session_router.injected_results_persist_failed "
+                                   "session_id=%s: %s", session_id, exc)
+        logger.info("session_router.injected_turn_end session_id=%s state=%s",
+                    session_id, unit.state.value)
 
     # ── Drain worker (Root-1 SSOT Phase 2, L3) ────────────────────
 
@@ -3122,6 +3236,8 @@ class SessionRouter:
             return
         if unit.has_outstanding_tool_use:
             return  # F3: a question is awaiting its answer — do not inject a turn
+        if not unit.cli_quiescent:
+            return  # the CLI runs a turn of its own; its idle report re-drives this
 
         claimed = await session_pending.claim_pending_batch(session_id)
         if not claimed:
@@ -3515,6 +3631,7 @@ class SessionRouter:
             and not any(
                 u.state == SessionState.IDLE
                 and not u.is_post_disconnect_flushing
+                and not (u.has_background_work and u.is_channel_session)
                 and u is not unit
                 for u in self._units.values()
             )

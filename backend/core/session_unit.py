@@ -13,6 +13,15 @@ Public symbols:
 
 This module contains state management and subprocess lifecycle logic:
 ``send()``, ``_spawn()``, ``_stream_response()``, and ``kill()``.
+
+The CLI's message stream has ONE consumer per live client, a
+``core.cli_stream_reader.CliStreamReader`` started in ``_spawn()`` and closed in
+``_cleanup_internal()``. Each turn reads its own ``TurnStream`` from it: a user
+send, compact or leak continuation claims its turn before writing
+(``streaming_orchestrator.write_user_message``); a turn the CLI starts on its
+own (a background task finished) is queued and run by the router's sink
+through ``begin_injected_turn`` (IDLE → STREAMING, the same exit as a user
+turn). ``send()`` writes only while the CLI is quiescent (``cli_quiescent``).
 The ``interrupt()``, ``continue_with_answer()``, ``continue_with_permission()``,
 and ``compact()`` methods are added by task 3.3.
 
@@ -180,6 +189,27 @@ LONG_TURN_HEARTBEAT_S: float = 60.0
 # so ALL spawns across ALL SessionUnit instances must serialize.
 # If you need multiple SessionRouter instances (e.g., tests), mock this lock.
 _spawn_lock = asyncio.Lock()
+
+
+def _enable_stream_reader_options(options: Any) -> None:
+    """Turn on the two CLI outputs the stream reader routes by.
+
+    - ``--replay-user-messages``: the CLI echoes every user message we write,
+      with our uuid, where it consumes it — how the reader tells which turn a
+      message landed in (core/cli_stream_reader.py).
+    - ``CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1``: ``session_state_changed``
+      frames (running / idle / requires_action) reach the stream instead of
+      being kept inside the SDK; ``idle`` is the quiescence signal.
+
+    Set on the options of every spawn (the reader exists for every spawned
+    client), per subprocess via ``options.env`` rather than the daemon's env.
+    """
+    extra = dict(getattr(options, "extra_args", None) or {})
+    extra["replay-user-messages"] = None
+    options.extra_args = extra
+    env = dict(getattr(options, "env", None) or {})
+    env["CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS"] = "1"
+    options.env = env
 
 # ── Resume-degrade observability (run_af851c26) ──────────────────────────────
 # The persisted-`_sdk_session_id` fast-resume path can strand a history-bearing
@@ -526,6 +556,12 @@ class SessionUnit:
         Optional callback invoked after every state transition.
         Signature: ``(session_id, old_state, new_state) -> None``.
         Intended for Radar / observability events.
+    on_cli_event:
+        Optional callback for what the CLI does on its own, between turns.
+        Signature: ``(session_id, kind) -> None`` with kind ``"injected"`` (a
+        CLI-initiated turn is queued, see ``take_injected_turn``) or ``"idle"``
+        (the CLI reported idle: pending messages may be delivered). Called from
+        the stream reader's task; must not block.
     """
 
     def __init__(
@@ -536,6 +572,7 @@ class SessionUnit:
         on_state_change: Optional[
             Callable[[str, SessionState, SessionState], None]
         ] = None,
+        on_cli_event: Optional[Callable[[str, str], None]] = None,
     ) -> None:
         # ── Public identity ──────────────────────────────────────
         self.session_id: str = session_id
@@ -568,17 +605,18 @@ class SessionUnit:
         self._lock: asyncio.Lock = asyncio.Lock()
         # Subprocess-IO serialization lock (run_4b74b764). SEPARATE from
         # ``self._lock`` (which is the kill/recovery transaction lock — see
-        # kill()). ``_client_io`` serializes the consumers of the SINGLE
-        # ``self._client.receive_response()`` anyio channel: a post-turn
-        # ``compact()`` holds it across its query+drain, and the foreground
-        # turn takes a SHORT BARRIER at send()'s IDLE-entry (acquire→release,
-        # NOT held across the streaming body — that would self-deadlock with the
-        # in-loop CompactionGuard interrupt and break user Stop). Two concurrent
-        # ``receive_response()`` drives would otherwise split the SDK stream and
-        # co-starve → double timeout → kill+respawn (the 3-5min "freeze").
-        # interrupt()/flush stay lock-FREE: they are control-channel calls, not
-        # receive_response, and acquiring here would deadlock Stop against the
-        # very turn it stops. The two background maintenance ops probe
+        # kill()). ``_client_io`` serializes the turns that write to the CLI:
+        # ``compact()`` holds it across its write and its turn's drain, and the
+        # foreground turn takes a SHORT BARRIER at send()'s IDLE-entry
+        # (acquire→release, NOT held across the streaming body — that would
+        # self-deadlock with the in-loop CompactionGuard interrupt and break user
+        # Stop); the injected-turn sink does not start while it is held. The
+        # stream itself has one consumer (the CliStreamReader); before it, two
+        # concurrent ``receive_response()`` drives split the SDK stream and
+        # co-starved (the 3-5min "freeze", run_4b74b764) — a unit without a
+        # reader (test fakes) still reads that way.
+        # interrupt()/flush stay lock-FREE: they are control-channel calls, and
+        # acquiring here would deadlock Stop against the very turn it stops. The two background maintenance ops probe
         # ``_client_io.locked()`` and SKIP (never block) when a turn holds it.
         self._client_io: asyncio.Lock = asyncio.Lock()
         self._sdk_session_id: Optional[str] = None
@@ -844,6 +882,20 @@ class SessionUnit:
         # this session reported it running (chat turn spec v6 §7.3).
         self._live_task_ids: set[str] = set()
 
+        # ── CLI stream reader (core/cli_stream_reader.py) ─────────
+        # The ONE consumer of the live client's SDK message stream, from _spawn to
+        # _cleanup_internal. Every turn reads its frames from a TurnStream the
+        # reader routes to: _turn_stream is the one the current turn reads (a
+        # user send, compact, a leak continuation, or a CLI-initiated turn), kept
+        # across a WAITING_INPUT pause so continue_with_answer/permission resume
+        # the same stream. A unit with no reader (a test fake set as _client
+        # without _spawn) reads client.receive_response() as before.
+        self._stream_reader: Optional[Any] = None
+        self._turn_stream: Optional[Any] = None
+        # CLI-initiated turns waiting for the router's sink (FIFO).
+        self._injected_turns: "_deque[Any]" = _deque()
+        self._on_cli_event: Optional[Callable[[str, str], None]] = on_cli_event
+
         # ── Tool-hang tracking (run_fb6e94a9) ─────────────────────
         # tool_use_id → monotonic-ish start time (time.time()) for EVERY tool
         # the model emits, cleared when its ToolResultBlock arrives. The PID
@@ -1087,6 +1139,239 @@ class SessionUnit:
         is delivered.
         """
         return self._pending_tool_use_id is not None
+
+    @property
+    def cli_quiescent(self) -> bool:
+        """True when a new user message may be written to the CLI now: its last
+        session state was idle, no background task finished since, no turn is
+        open or claimed (``CliStreamReader.quiescent``), and no CLI-initiated turn
+        waits for the sink (so its rows land before the next user turn's). True
+        with no reader.
+        (getattr: some fixtures build a unit with __new__, skipping __init__.)"""
+        r = getattr(self, "_stream_reader", None)
+        if r is None:
+            return True
+        # A dead reader is quiescent (nothing runs on it; the next write respawns),
+        # but complete CLI turns already queued still go to the sink first.
+        return r.quiescent and not self._queued_injected()
+
+    @property
+    def has_background_work(self) -> bool:
+        """True while the CLI has a live background task (command or subagent) or
+        a CLI-initiated turn is waiting for the sink. Routine reclaim of a unit
+        someone can still see (the TTL, the RSS proactive restart, channel-pool
+        eviction) skips such an IDLE unit: killing it loses the task and the turn it
+        will start. An orphan (no window owns it) is not exempt, nor is
+        memory-pressure survival. A dead reader reports no background work."""
+        r = getattr(self, "_stream_reader", None)
+        return self._queued_injected() or (r is not None and bool(r.background_tasks))
+
+    def _queued_injected(self) -> bool:
+        """True while a CLI-initiated turn waits for the sink. Drops streams the
+        reader transferred to a user claim (the notification race): that turn is
+        the claimant's now, and leaving it queued would hold the CLI "busy" until
+        the next idle report (a pending message would wait for it)."""
+        q = getattr(self, "_injected_turns", None)
+        if not q:
+            return False
+        while q and getattr(q[0], "transferred", False):
+            q.popleft()
+        return any(not getattr(ts, "transferred", False) for ts in q)
+
+    def _start_stream_reader(self, client: Any) -> None:
+        """Create and start the one consumer of ``client``'s message stream.
+
+        Every ClaudeSDKClient has ``receive_messages()``. A client without it (a
+        test double that only scripts ``receive_response()``) gets no reader and
+        is read per turn as before — loudly, because in production that is the
+        path where a CLI-initiated turn stalls."""
+        old = getattr(self, "_stream_reader", None)
+        if old is not None:
+            # Never two consumers of one stream (I1): every respawn path tears the
+            # old client down first, but a missed path must not leave it reading.
+            old.close()
+            self._stream_reader = None
+        if not callable(getattr(client, "receive_messages", None)):
+            logger.warning(
+                "session_unit.no_stream_reader session_id=%s client=%s — client has "
+                "no receive_messages(); reading per turn (CLI-initiated turns will "
+                "not be read until the next send)",
+                self.session_id, type(client).__name__,
+            )
+            self._stream_reader = None
+            return
+        from .cli_stream_reader import CliStreamReader
+        self._stream_reader = CliStreamReader(
+            client, self.session_id,
+            on_injected=self._on_reader_injected,
+            on_idle=self._on_reader_idle,
+            on_error=self._on_reader_error,
+        )
+        self._stream_reader.start()
+
+    def _on_reader_injected(self, ts: Any) -> None:
+        """Reader callback: the CLI started a turn nobody claimed."""
+        self._injected_turns.append(ts)
+        self._emit_cli_event("injected")
+
+    def _on_reader_idle(self) -> None:
+        """Reader callback: the CLI reported idle."""
+        self._emit_cli_event("idle")
+
+    def _on_reader_error(self) -> None:
+        """Reader callback: the stream failed or ended (the subprocess is gone).
+
+        Turns the CLI finished before it died are still queued with their frames:
+        hand them to the sink first, then re-drive the pending drain, whose send()
+        respawns the dead subprocess with --resume (see send())."""
+        if self._queued_injected():
+            self._emit_cli_event("injected")
+        self._emit_cli_event("idle")
+
+    def _emit_cli_event(self, kind: str) -> None:
+        cb = self._on_cli_event
+        if cb is None:
+            return
+        try:
+            cb(self.session_id, kind)
+        except Exception:  # noqa: BLE001 — a callback must never break the reader
+            logger.exception("session_unit.cli_event_callback_failed session_id=%s kind=%s",
+                             self.session_id, kind)
+
+    def _record_gate_mark(self) -> None:
+        """Remember what the quiescence gate saw (reader, finished-task count) for the
+        claim of the turn this gate admits (``write_user_message``): a task that
+        finishes between the gate and the write then counts as after the claim."""
+        r = getattr(self, "_stream_reader", None)
+        self._gate_mark = (r, r.notif_count) if r is not None else None
+
+    async def _end_abandoned_turn(self, err: Any) -> AsyncIterator[dict]:
+        """End a turn the reader abandoned while the CLI is alive (I4), never through
+        the non-retriable crash (which drops the --resume identity).
+
+        - our own teardown already moved the unit out of the turn: end quietly, as the
+          old per-turn stream simply ended;
+        - the CLI never took the message: back to IDLE and raise SessionBusyError, so
+          the router stores it as pending and the next idle delivers it;
+        - the turn ran and was cut short: back to IDLE (identity and subprocess kept)
+          with a non-terminal TURN_ABANDONED error.
+        """
+        from .cli_stream_reader import is_message_not_consumed
+        from .session_utils import _build_error_event
+        if self.state not in (SessionState.STREAMING, SessionState.WAITING_INPUT):
+            logger.info("session_unit.turn_abandoned_after_teardown session_id=%s state=%s",
+                        self.session_id, self.state.value)
+            return
+        self._transition(SessionState.IDLE)
+        if is_message_not_consumed(err):
+            from .exceptions import SessionBusyError
+            raise SessionBusyError(
+                detail=(f"Session {self.session_id}: the CLI did not take this message. "
+                        f"It has been queued and will be sent when the CLI is idle."),
+            )
+        logger.warning("session_unit.turn_abandoned session_id=%s: %s", self.session_id, err)
+        yield _build_error_event(
+            code="TURN_ABANDONED",
+            message="The response stopped before it finished.",
+            detail=str(err),
+            suggested_action="Send your message again to continue.",
+        )
+
+    def take_injected_turn(self) -> Optional[Any]:
+        """Pop the next CLI-initiated turn the sink may run, or None.
+
+        Only from a clean IDLE with no compact holding the subprocess: a turn
+        queued while the unit was busy waits for the next IDLE edge. A stream
+        that was transferred to a user claim (the notification race) is skipped.
+        """
+        if self.state != SessionState.IDLE or self._client is None or self._client_io.locked():
+            return None
+        r = self._stream_reader
+        while self._injected_turns:
+            ts = self._injected_turns.popleft()
+            if r is not None and r.start_sink(ts):
+                return ts
+        return None
+
+    def begin_injected_turn(self, ts: Any, client_id: Optional[str]) -> None:
+        """IDLE → STREAMING for a CLI-initiated turn whose frames are in ``ts``.
+
+        Same per-turn reset as a user send, so the turn's tracking starts clean;
+        the orchestrator's result handling returns the unit to IDLE exactly as
+        for a user turn.
+        """
+        if self.state != SessionState.IDLE:
+            raise RuntimeError(
+                f"Cannot begin an injected turn in state {self.state.value} "
+                f"(session_id={self.session_id})")
+        self._send_generation += 1
+        self._stop_event.clear()
+        self._interrupted = False
+        self._user_stopped_current_turn = False
+        self._reset_turn_state()
+        self._turn_client_id = client_id
+        self._turn_stream = ts
+        self._transition(SessionState.STREAMING)
+        self._health_sensor.record_activity()
+
+    def _reset_turn_state(self) -> None:
+        """Per-turn state reset at a new-turn admission point (a user send or a
+        CLI-initiated turn, ``begin_injected_turn``). Synchronous, no await."""
+        # Reset per-send state (retry counter + buffer overflow flag).
+        # _buffer_overflow_recovery is per-message, not per-session:
+        # each new user message should get a fresh recovery attempt
+        # if it triggers a different buffer overflow.
+        self._retry_count = 0
+        # Clear last turn's spawn timing at the new-turn admission point
+        # (same lifecycle as the per-turn fields around it). A warm turn never
+        # reaches _spawn, so this reset is what guarantees it relays None — not a
+        # stale cold-turn value — to the TTFT probe (run_8149838f).
+        self._last_turn_spawn_ms = None
+        # _interrupted is cleared by the caller (send() Layer 0 / begin_injected_turn)
+        self._buffer_overflow_recovery = False
+        self._leak_restart_done = False  # per-message: one leak restart budget
+        self._compaction_guard.reset()  # New user turn — reset tool tracking
+        self._last_call_usage = None  # an interrupted turn's last usage must not leak in
+        self._context_recorded_this_turn = False
+        self._content_emitted = False   # Track if meaningful content is emitted
+        self._active_agent_tools = {}  # Clear stale sub-agent progress on new turn
+        self._live_task_ids = set()  # an earlier turn's task ids are not stoppable
+        self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
+        # Gate-2 F3 (belt-and-suspenders): a fresh user turn never carries a stale
+        # outstanding-tool_use guard. Gate-2 F4: drop the stale last-drained hint so
+        # the read API doesn't surface seqs from a previous turn indefinitely.
+        self._pending_tool_use_id = None
+        self._pending_question = None
+        self._last_drained_seqs = []
+        # ROOT-FIX (audit Finding 1): the continuation-row correlation key
+        # (_turn_client_id) shares the SAME turn lifecycle as the pending-question
+        # fields above — it is meaningful only WHILE this turn's question is open.
+        # Reset it here, at the new-turn admission point, so EVERY entrance
+        # (main send / drain worker / channel / a CLI-initiated turn) starts from
+        # None and the caller fills in the correct key (the router for a send,
+        # begin_injected_turn for a CLI-initiated turn). This is why a keyless drain
+        # turn no longer inherits a prior keyed turn's cid → answer content can never
+        # attach to the wrong bubble.
+        # SAFE PLACEMENT (send): this point is downstream of the WAITING_INPUT
+        # busy-guard (which RAISES before here for an intruding send, preserving the
+        # pending turn's stash) and BEFORE the first yield (so the router's in-loop
+        # stash write always runs after this reset, never races it);
+        # begin_injected_turn runs only from a clean IDLE. Continuations run via
+        # continue_with_answer/continue_with_permission — SEPARATE methods that never
+        # re-enter send() — so this reset cannot drop a stash a continuation needs.
+        self._turn_client_id = None
+        # Same lifecycle: the products of a turn paused for a question / permission
+        # ride the unit until that turn's `result` (router continuation loops).
+        self._turn_files = {}
+        try:
+            from core.turn_changes import TurnChanges
+            self._turn_changes = TurnChanges.start()
+        except Exception as exc:  # noqa: BLE001 — a display aid never blocks a send
+            logger.debug("turn_changes start skipped: %s", exc)
+            self._turn_changes = None
+        # Pipeline runs this turn has shown the alignment of (streaming_orchestrator
+        # _pipeline_stage_events): each new turn announces a running run once more.
+        self._pipeline_runs_announced = set()
 
     def _has_live_outstanding_waiter(self) -> bool:
         """True iff the outstanding tool_use has a REAL awaiting hook coroutine.
@@ -2280,59 +2565,7 @@ class SessionUnit:
                 f"(session_id={self.session_id})"
             )
 
-        # Reset per-send state (retry counter + buffer overflow flag).
-        # _buffer_overflow_recovery is per-message, not per-session:
-        # each new user message should get a fresh recovery attempt
-        # if it triggers a different buffer overflow.
-        self._retry_count = 0
-        # Clear last turn's spawn timing at the single new-turn admission point
-        # (same lifecycle as the per-turn fields around it). A warm turn never
-        # reaches _spawn, so this reset is what guarantees it relays None — not a
-        # stale cold-turn value — to the TTFT probe (run_8149838f).
-        self._last_turn_spawn_ms = None
-        # _interrupted already cleared in Layer 0 above
-        self._buffer_overflow_recovery = False
-        self._leak_restart_done = False  # per-message: one leak restart budget
-        self._compaction_guard.reset()  # New user turn — reset tool tracking
-        self._last_call_usage = None  # an interrupted turn's last usage must not leak in
-        self._context_recorded_this_turn = False
-        self._content_emitted = False   # Track if meaningful content is emitted
-        self._active_agent_tools = {}  # Clear stale sub-agent progress on new turn
-        self._live_task_ids = set()  # an earlier turn's task ids are not stoppable
-        self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
-        # Gate-2 F3 (belt-and-suspenders): a fresh user turn never carries a stale
-        # outstanding-tool_use guard. Gate-2 F4: drop the stale last-drained hint so
-        # the read API doesn't surface seqs from a previous turn indefinitely.
-        self._pending_tool_use_id = None
-        self._pending_question = None
-        self._last_drained_seqs = []
-        # ROOT-FIX (audit Finding 1): the continuation-row correlation key
-        # (_turn_client_id) shares the SAME turn lifecycle as the pending-question
-        # fields above — it is meaningful only WHILE this turn's question is open.
-        # Reset it here, at the single new-turn admission point, so EVERY entrance
-        # (main send / drain worker / channel) starts from None and the router's
-        # `if client_id` set-logic fills in the correct key (or leaves None for a
-        # keyless turn). This is why a keyless drain turn no longer inherits a prior
-        # keyed turn's cid → answer content can never attach to the wrong bubble.
-        # SAFE PLACEMENT: this point is downstream of the WAITING_INPUT busy-guard
-        # (which RAISES before here for an intruding send, preserving the pending
-        # turn's stash) and BEFORE the first yield (so the router's in-loop stash
-        # write always runs after this reset, never races it). Continuations run via
-        # continue_with_answer/continue_with_permission — SEPARATE methods that never
-        # re-enter send() — so this reset cannot drop a stash a continuation needs.
-        self._turn_client_id = None
-        # Same lifecycle: the products of a turn paused for a question / permission
-        # ride the unit until that turn's `result` (router continuation loops).
-        self._turn_files = {}
-        try:
-            from core.turn_changes import TurnChanges
-            self._turn_changes = TurnChanges.start()
-        except Exception as exc:  # noqa: BLE001 — a display aid never blocks a send
-            logger.debug("turn_changes start skipped: %s", exc)
-            self._turn_changes = None
-        # Pipeline runs this turn has shown the alignment of (streaming_orchestrator
-        # _pipeline_stage_events): each new turn announces a running run once more.
-        self._pipeline_runs_announced = set()
+        self._reset_turn_state()
 
         # ── Resume-poison guard (fail-closed) — recycle-before-reuse ────
         # If we are about to REUSE a warm IDLE subprocess that did NOT end its
@@ -2380,6 +2613,15 @@ class SessionUnit:
         # error_max_turns — state stayed IDLE for hooks/slots, but
         # process is dead). Transition to COLD first so _ensure_spawned
         # works correctly.
+        _reader = getattr(self, "_stream_reader", None)
+        if self.state == SessionState.IDLE and _reader is not None and _reader.dead:
+            # The CLI's stream failed or ended between turns: the subprocess is gone.
+            # Respawn with --resume (identity kept) instead of writing into it.
+            logger.warning(
+                "session_unit.dead_stream_respawn session_id=%s error=%s",
+                self.session_id, type(_reader.error).__name__,
+            )
+            await self._crash_to_cold_async(clear_identity=False)
         if self.state == SessionState.IDLE and self._client is None:
             self._transition(SessionState.COLD)
         if self.state == SessionState.COLD:
@@ -2407,10 +2649,9 @@ class SessionUnit:
         # but a user waiting on their own answer must never queue behind others.
         await self._await_streaming_slot()
 
-        # Subprocess-IO barrier (run_4b74b764): if a post-turn compact() is
-        # draining the SAME subprocess, wait for it to finish before this turn
-        # drives receive_response — two consumers on the single SDK channel
-        # co-starve. This is a SHORT barrier (acquire→immediately release): we do
+        # Subprocess-IO barrier (run_4b74b764): if a compact() is running its
+        # turn on the SAME subprocess, wait for it to finish before this turn
+        # writes — two turns written at once fold into each other. This is a SHORT barrier (acquire→immediately release): we do
         # NOT hold _client_io across the streaming body, because the read loop
         # self-interrupts via the CompactionGuard and a user Stop must be able to
         # interrupt() (a lock-free control call) without waiting on this turn.
@@ -2443,6 +2684,19 @@ class SessionUnit:
         # a clean abort here makes the user's resend a clean cold-resume — the
         # correct recovery, not a half-spawned limbo. Mirror the existing
         # _ensure_spawned bail shape: yield a user-facing error + {_abort}.
+        if self.state in (SessionState.STREAMING, SessionState.WAITING_INPUT):
+            # Busy, not refreshed: a CLI-initiated turn (the router's sink) or a
+            # concurrent send took the unit during the waits above. Raised, so the
+            # router stores the message as pending (a yielded error would drop it).
+            from .exceptions import SessionBusyError
+            if getattr(self, "_injected_turns", None):
+                self._emit_cli_event("injected")
+            raise SessionBusyError(
+                detail=(
+                    f"Session {self.session_id} started another turn while this "
+                    f"message was waiting. It has been queued and will be sent next."
+                ),
+            )
         if self.state != SessionState.IDLE:
             logger.warning(
                 "session_unit.send_aborted_state_flip session_id=%s state=%s "
@@ -2458,6 +2712,31 @@ class SessionUnit:
             )
             yield {"_abort": True}
             return
+
+        # Quiescence gate (I3): the CLI may be running a turn of its own (a
+        # background task finished) or about to. Writing now would fold this
+        # message into that turn. SessionBusyError makes the router store it as
+        # pending; the reader's idle report re-drives the drain. Same synchronous
+        # block as the state re-check and the transition (no await between).
+        self._record_gate_mark()
+        if not self.cli_quiescent:
+            from .exceptions import SessionBusyError
+            if self._injected_turns:
+                # A CLI-initiated turn may have been passed over while this send
+                # held the _client_io barrier: hand it to the sink again.
+                self._emit_cli_event("injected")
+            logger.info(
+                "session_unit.send_deferred_cli_busy session_id=%s — the CLI is "
+                "running or about to run a turn of its own; message queued",
+                self.session_id,
+            )
+            raise SessionBusyError(
+                detail=(
+                    f"Session {self.session_id} is finishing work it started in the "
+                    f"background. Your message has been queued and will be sent "
+                    f"when it is done."
+                ),
+            )
 
         # IDLE → STREAMING
         self._transition(SessionState.STREAMING)
@@ -2746,6 +3025,13 @@ class SessionUnit:
                 # Recovery stream failed — error_str updated via
                 # _fallthrough_error sentinel from _handle_buffer_overflow.
                 # Fall through to retry/error handling below.
+
+            # ── A turn the reader abandoned (CLI alive) — never the crash path ──
+            from .cli_stream_reader import is_turn_abandoned
+            if is_turn_abandoned(error_str):
+                async for event in self._end_abandoned_turn(error_str):
+                    yield event
+                return
 
             # ── Retry loop for retriable errors ──────────────────
             if _is_retriable_error(error_str, tb_str) and self._retry_count < self.MAX_RETRY_ATTEMPTS:
@@ -3607,6 +3893,8 @@ class SessionUnit:
         # pre-declared to None so the emit is robust on the config-None path and
         # so a raising __aenter__ (which propagates before the emit) leaves no
         # half-referenced local. perf_counter (monotonic) is a ~ns clock read.
+        _enable_stream_reader_options(options)
+
         _t0 = time.perf_counter()
         _t_lock = _t_cfg0 = _t_cfg1 = _t_w0 = _t_w1 = None
         async with _spawn_lock:
@@ -3637,6 +3925,10 @@ class SessionUnit:
         self._wrapper = wrapper
         self._client = client
         self.last_used = time.time()
+        # The client's one stream consumer, for its whole life (I1). Started
+        # before the unit leaves COLD, so no frame (and no control request
+        # queued behind one) ever waits for a turn to start reading.
+        self._start_stream_reader(client)
 
         # Emit AFTER lock release (see note above). Guarded deltas: config-None
         # → configure_ms=0.0; a seam never reached → its ms stays 0.0.
@@ -4396,6 +4688,8 @@ class SessionUnit:
         pid = self.pid
         if not pid:
             return
+        if self.has_background_work:
+            return  # a live background task / queued CLI-initiated turn (I5)
 
         try:
             from .resource_monitor import resource_monitor
@@ -4430,7 +4724,7 @@ class SessionUnit:
         )
 
         # Step 1: compact to generate checkpoint (best-effort, 30s timeout)
-        # compact() internally calls client.query() + receive_response()
+        # compact() internally writes /compact and drains its turn
         # with no timeout — if CLI hangs during compact, this would block
         # the entire proactive restart (and maintenance loop if called from
         # lifecycle_manager).  30s is generous for a summarization call.
@@ -4557,6 +4851,15 @@ class SessionUnit:
                 "success": False,
                 "message": "No active subprocess",
             }
+        _reader = getattr(self, "_stream_reader", None)
+        if _reader is not None and _reader.dead:
+            return {"success": False, "message": "The CLI stream ended; nothing to compact"}
+        self._record_gate_mark()
+        if not self.cli_quiescent:
+            return {
+                "success": False,
+                "message": "The CLI is running a turn of its own; compact later",
+            }
 
         # Inject work summary so post-compaction agent
         # knows what it already did and doesn't re-run completed tools.
@@ -4573,9 +4876,8 @@ class SessionUnit:
             # Serialize the subprocess drain (run_4b74b764). compact() stays
             # IDLE→IDLE and does NOT _transition, so the state gate gives NO
             # mutual exclusion against a concurrent send() reusing the same
-            # subprocess. Hold _client_io across query+receive_response so the
-            # two cannot iterate the single SDK channel simultaneously and
-            # co-starve. The foreground turn takes a short barrier on this lock
+            # subprocess. Hold _client_io across the write and the turn's drain
+            # so a user turn is never written into the compact turn. The foreground turn takes a short barrier on this lock
             # at send()'s IDLE-entry, so it waits for an in-flight compact here.
             # A manual /compact never passes through the turn's SSE stream, so
             # the context snapshot is updated here from the drained
@@ -4589,11 +4891,12 @@ class SessionUnit:
             _recorded = False
             try:
                 async with self._client_io:
-                    await self._client.query(
-                        prompt=command,
+                    from .streaming_orchestrator import write_user_message
+                    _stream = await write_user_message(
+                        self, command, kind="compact",
                         session_id=self._sdk_session_id or "default",
                     )
-                    async for _msg in self._client.receive_response():
+                    async for _msg in _stream:
                         if getattr(_msg, "subtype", None) == "compact_boundary":
                             _data = getattr(_msg, "data", None)
                             _md = _data.get("compact_metadata") if isinstance(_data, dict) else None
@@ -4616,6 +4919,11 @@ class SessionUnit:
             finally:
                 if not _recorded and self._context_usage_sdk_id == _compact_identity:
                     self._invalidate_context_usage()
+                # A CLI-initiated turn queued while this compact held the
+                # subprocess has no IDLE edge to wait for (compact stays IDLE):
+                # hand it to the sink now that _client_io is released.
+                if getattr(self, "_injected_turns", None):
+                    self._emit_cli_event("injected")
             self.last_used = time.time()
             # Transition guard to ACTIVE — post-compaction loop detection enabled
             self._compaction_guard.activate()
@@ -4869,12 +5177,19 @@ class SessionUnit:
         instead of capping at MAX_RETRY_ATTEMPTS=3).  The retry counter
         is reset only at ``send()`` entry and on successful completion.
         """
+        _reader = getattr(self, "_stream_reader", None)
+        if _reader is not None:
+            # Fails any open or waiting turn stream; a later claim raises.
+            _reader.close()
+        self._stream_reader = None
+        self._turn_stream = None
+        self._injected_turns = _deque()
         self._client = None
         self._wrapper = None
         self._interrupted = False
         self._live_task_ids = set()  # the subprocess is gone: so are its tasks
         # NOTE: self._retry_count is intentionally NOT reset here.
-        # It is reset in send() (line ~620) and on success (line ~1672).
+        # It is reset at each new turn (_reset_turn_state) and on success.
         self._model_name = None
         self._peak_tree_rss_bytes = 0
         # CRITICAL (Gate-2 F3): clear the outstanding-tool_use guard on EVERY

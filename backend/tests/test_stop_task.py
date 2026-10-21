@@ -169,8 +169,12 @@ def test_registry_cleared_at_teardown_and_interrupt_and_send():
     unit._live_task_ids = {"t1"}
     unit._cleanup_internal()
     assert unit._live_task_ids == set()
-    # an id from an earlier turn: send()'s Layer 0 and interrupt() clear it
-    assert "self._live_task_ids = set()" in inspect.getsource(SessionUnit.send)
+    # an id from an earlier turn: the new-turn reset (send() and a CLI-initiated
+    # turn both run it) and interrupt() clear it
+    unit._live_task_ids = {"t2"}
+    unit._reset_turn_state()
+    assert unit._live_task_ids == set()
+    assert "self._reset_turn_state()" in inspect.getsource(SessionUnit.send)
     assert "self._live_task_ids = set()" in inspect.getsource(SessionUnit.interrupt)
 
 

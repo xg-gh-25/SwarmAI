@@ -21,6 +21,7 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional, Protocol
 
@@ -114,6 +115,74 @@ class StreamingCallbacks(Protocol):
 # ═══════════════════════════════════════════════════════════════════
 # StreamingOrchestrator — Phase 2 (logic migrated, parent ref access)
 # ═══════════════════════════════════════════════════════════════════
+
+
+async def write_user_message(
+    unit: Any, content: Any, *, kind: str, session_id: Optional[str] = None,
+) -> Any:
+    """Write one user message to the CLI and return the stream of its turn.
+
+    The only place a user message reaches the CLI (a send, a leak
+    continuation, compact). With a stream reader the turn is CLAIMED before
+    the write, under a fresh server-side uuid the CLI echoes back, so the
+    reader hands this caller exactly that turn's frames (I2), and the claim
+    becomes the unit's ``_turn_stream`` (what ``_turn_iter`` reads, also after
+    a WAITING_INPUT pause). Without one (a test fake set as ``_client``) it
+    writes as before and returns ``client.receive_response()``.
+
+    The quiescence gate (I3) is applied by the callers that START a turn
+    (``send``, ``compact``); a leak continuation is written right after its own
+    turn's result, inside the same user turn, and is not gated.
+    """
+    client = unit._client
+    reader = getattr(unit, "_stream_reader", None)
+    if reader is None:
+        if isinstance(content, list):
+            async def _multimodal_gen():
+                yield {
+                    "type": "user",
+                    "message": {"role": "user", "content": content},
+                    # Always None — the tool-result routing path was removed
+                    # when continue_with_answer migrated to
+                    # _read_formatted_response(). Kept for the SDK message shape.
+                    "parent_tool_use_id": None,
+                }
+            await client.query(_multimodal_gen())
+        elif session_id is not None:
+            await client.query(prompt=content, session_id=session_id)
+        else:
+            await client.query(content)
+        return client.receive_response()
+
+    msg_uuid = str(uuid.uuid4())
+    notif_mark = None
+    if kind in ("human", "compact"):
+        # The gate that admitted this turn recorded what it saw; use it once, and
+        # only if it is this reader's (a respawn or retry makes a new reader).
+        gate = getattr(unit, "_gate_mark", None)
+        unit._gate_mark = None
+        if gate is not None and gate[0] is reader:
+            notif_mark = gate[1]
+    claim = reader.claim(msg_uuid, kind, notif_mark=notif_mark)
+    message = {
+        "type": "user",
+        "message": {"role": "user", "content": content},
+        "parent_tool_use_id": None,
+        "uuid": msg_uuid,
+    }
+    if session_id is not None:
+        message["session_id"] = session_id
+
+    async def _one():
+        yield message
+
+    try:
+        await client.query(_one())
+    except BaseException:
+        reader.drop_claim(msg_uuid)
+        raise
+    unit._turn_stream = claim
+    return claim
 
 
 class StreamingOrchestrator:
@@ -455,14 +524,41 @@ class StreamingOrchestrator:
     # Migrated from session_unit.py — _stream_response
     # ═══════════════════════════════════════════════════════════════
 
+    def _turn_started_at(self) -> Optional[float]:
+        """When the current turn started, for the fast-empty-turn guards: the unit's
+        STREAMING start, or the turn's own first frame if that was earlier (a turn
+        whose frames were buffered before its consumer began: a CLI-initiated turn
+        the sink runs later, or a claim handed buffered frames by the echo)."""
+        start = self._parent._streaming_start_time
+        ts = getattr(self._parent, "_turn_stream", None)
+        opened = getattr(ts, "opened_at", None) if ts is not None else None
+        if opened is not None and (start is None or opened < start):
+            return opened
+        return start
+
+    def _turn_iter(self) -> Any:
+        """The iterator the current turn reads: its claimed TurnStream (also for
+        a continuation after WAITING_INPUT, and for a CLI-initiated turn), or
+        ``client.receive_response()`` for a unit without a stream reader."""
+        if getattr(self._parent, "_stream_reader", None) is not None:
+            ts = getattr(self._parent, "_turn_stream", None)
+            if ts is None:
+                # Never fall back to a second reader of the stream (K1).
+                raise RuntimeError(
+                    f"no turn stream for session {self._parent.session_id}: a turn "
+                    f"must be claimed (write_user_message) or begun "
+                    f"(begin_injected_turn) before it is read")
+            return ts.__aiter__()
+        return self._parent._client.receive_response().__aiter__()
+
     async def _stream_response(
         self,
         query_content: Any,
     ) -> AsyncIterator[dict]:
         """Send query and yield raw SDK messages.
 
-        Reads ``client.receive_response()`` and yields each message
-        as-is.  Handles state transitions:
+        Reads the turn's stream (``write_user_message``) and yields each
+        message as-is.  Handles state transitions:
 
         - On ``result`` message → STREAMING → IDLE
         - On ``ask_user_question`` / ``cmd_permission_request`` →
@@ -491,23 +587,8 @@ class StreamingOrchestrator:
                         logger.warning("session_unit: stripping null bytes from content block")
                         block["text"] = block["text"].replace("\x00", "")
 
-        # Send the query
-        if isinstance(query_content, list):
-            # Multimodal content — wrap in async generator
-            async def _multimodal_gen():
-                msg = {
-                    "type": "user",
-                    "message": {"role": "user", "content": query_content},
-                    # Always None — the tool-result routing path was removed when
-                    # continue_with_answer migrated to _read_formatted_response().
-                    # Key retained to preserve the exact SDK message shape.
-                    "parent_tool_use_id": None,
-                }
-                yield msg
-
-            await self._parent._client.query(_multimodal_gen())
-        else:
-            await self._parent._client.query(query_content)
+        # Send the query (claims the turn first when a stream reader exists)
+        await write_user_message(self._parent, query_content, kind="human")
 
         logger.info(
             "Query sent for session %s, reading response...",
@@ -1349,7 +1430,7 @@ class StreamingOrchestrator:
         from core.permission_manager import permission_manager as _pm
         perm_queue = _pm.get_session_queue(self._parent.session_id)
 
-        response_iter = self._parent._client.receive_response().__aiter__()
+        response_iter = self._turn_iter()
         _STREAM_EXHAUSTED = object()  # Sentinel: iterator is done
         # tool_use_id → list[raw_path] WRITTEN by that tool (Write/Edit/NotebookEdit
         # file_path + Bash `>`/tee/cp/mv-DEST). Emits operation=written at the ToolResult
@@ -2769,10 +2850,8 @@ class StreamingOrchestrator:
                     # no content + <2s) so a genuine mid-generation error — which
                     # has real text or arrives after streamed content — is still
                     # surfaced, never silently retried.
-                    streaming_dur = (
-                        time.time() - self._parent._streaming_start_time
-                        if self._parent._streaming_start_time else 0.0
-                    )
+                    _t0 = self._turn_started_at()
+                    streaming_dur = time.time() - _t0 if _t0 else 0.0
                     if (
                         subtype == "error_during_execution"
                         and not error_text.strip()
@@ -2969,10 +3048,8 @@ class StreamingOrchestrator:
                 # done. Raising HERE means a blank/degraded turn never reaches
                 # the frontend as a turn-end; send() respawns and the retry's
                 # session_start lands while still STREAMING → UI stays armed.
-                streaming_dur = (
-                    time.time() - self._parent._streaming_start_time
-                    if self._parent._streaming_start_time else None
-                )
+                _t0 = self._turn_started_at()
+                streaming_dur = time.time() - _t0 if _t0 else None
                 output_tok = (usage.get("output_tokens") or 0) if usage else 0
 
                 # (a) Post-interrupt corruption: warm-but-broken subprocess
@@ -3056,8 +3133,9 @@ class StreamingOrchestrator:
                         self._MAX_LEAK_CONTINUATIONS, stop_reason,
                     )
                     self._record_token_usage_bg(message, usage)
-                    await self._parent._client.query(self._LEAK_CONTINUATION_PROMPT)
-                    response_iter = self._parent._client.receive_response().__aiter__()
+                    await write_user_message(
+                        self._parent, self._LEAK_CONTINUATION_PROMPT, kind="leak")
+                    response_iter = self._turn_iter()
                     is_first_message = True
                     continue
                 if _leak_tail:
@@ -3200,10 +3278,8 @@ class StreamingOrchestrator:
             # the subprocess is likely dead (e.g. corrupted after
             # interrupt).  Kill it so the caller's retry logic can
             # respawn a fresh process with --resume.
-            streaming_dur = (
-                time.time() - self._parent._streaming_start_time
-                if self._parent._streaming_start_time else 0.0
-            )
+            _t0 = self._turn_started_at()
+            streaming_dur = time.time() - _t0 if _t0 else 0.0
             if streaming_dur < 2.0 and not self._parent._content_emitted:
                 logger.warning(
                     "session_unit.zombie_detected session_id=%s "

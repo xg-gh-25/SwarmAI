@@ -1,0 +1,59 @@
+{"type": "system", "subtype": "session_state_changed", "state": "running", "uuid": "2a9f0d29-8384-4449-8647-cc4d691b8184", "session_id": "S"}
+{"type": "command_lifecycle", "state": "queued", "uuid": "76a2d04e-8bd4-4864-9698-fc50f96bc620", "session_id": "S"}
+{"type": "command_lifecycle", "state": "started", "uuid": "149eea06-2a54-44ea-805f-9c6b653c44af", "session_id": "S"}
+{"type": "system", "subtype": "init", "uuid": "eb251d81-8bc0-4325-b180-553779e9f4cb", "session_id": "S", "cwd": "/tmp/spike", "tools": [], "mcp_servers": [], "model": "m", "permissionMode": "bypassPermissions"}
+{"type": "system", "subtype": "status", "status": "requesting", "uuid": "a6d88e15-9b6a-43e5-90ac-6053616569d7", "session_id": "S"}
+{"type": "user", "parent_tool_use_id": null, "uuid": "00000000-0000-4000-8000-000000000001", "session_id": "S", "message": {"role": "user", "content": "Run this Bash command with run_in_background set to true: `sleep 6; echo bgdone`. Reply STARTED and end your turn. When notified it finished, reply NOTIFIED without any tool."}}
+{"type": "stream_event", "uuid": "7a1d2279-def7-4896-ba27-8cb4d7b93cf0", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_start"}}
+{"type": "stream_event", "uuid": "9c5f8a13-343f-47a5-b88b-f8a917e7629e", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_start"}}
+{"type": "stream_event", "uuid": "af0ca965-a622-428f-91b5-d3888019363e", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "005ca21d-d59a-4f42-8490-fcf2e0a0476f", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "1b744c00-e7b1-4b8b-a68c-6c183cdf3742", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "d2d05319-9389-4761-aa95-64e51e4d5b23", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "9d197643-225b-41b8-ba48-cbbd50bb6364", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "dc916261-8331-498a-9f3a-64c0a6448560", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "c432dea2-142a-4bdb-93dc-07f8e2ca9845", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "f4d75244-97dd-440a-9f86-5875281cee3f", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "fbd9cb2e-009e-4630-8e80-a577cce68077", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "be8d09e2-7df3-479f-8d63-d255c4534248", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "5722f59c-35d1-4e61-8881-5f4f4561f750", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "ee1f4347-3c25-42f2-991a-80e73b5b28d1", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "8eb3b19f-ed9c-419d-9894-fbf4fea76757", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "e0db4099-8b34-473d-afcc-f1e0c87e60e9", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "63a2247d-469a-43d2-947f-ce200b96e5e7", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "9ec1dfe4-4a40-4ea4-9ad5-740973fe9277", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "dbcf9a41-eb34-4946-9131-f1c42d29360e", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "bb12231b-174b-4059-94da-5b23843a0748", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "assistant", "parent_tool_use_id": null, "uuid": "49013b57-2cc7-452b-b317-8be8b70ceea2", "session_id": "S", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_bdrk_01DTjrTEGsScoiTQeKJF2azh", "name": "Bash", "input": {"command": "sleep 6; echo bgdone", "description": "Sleep 6 seconds then print bgdone", "run_in_background": true}}], "model": "m"}}
+{"type": "stream_event", "uuid": "5bedf141-9af2-47e9-85cb-3dbd36a6ca6a", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_stop"}}
+{"type": "stream_event", "uuid": "497c146e-4fba-4d47-8267-0e1f7d5aa54b", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_delta"}}
+{"type": "stream_event", "uuid": "13180ddf-3874-4fb4-8a69-3494efa860c9", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_stop"}}
+{"type": "system", "subtype": "background_tasks_changed", "uuid": "f68d3228-2ebc-4d5c-a5dc-1547084fcd70", "session_id": "S"}
+{"type": "system", "subtype": "task_started", "task_id": "bwdd8kfjo", "tool_use_id": "toolu_bdrk_01DTjrTEGsScoiTQeKJF2azh", "description": "Sleep 6 seconds then print bgdone", "task_type": "local_bash", "uuid": "939fd46e-bde1-4d1d-b368-cec72952a66a", "session_id": "S"}
+{"type": "user", "parent_tool_use_id": null, "uuid": "effed7a8-1cdc-4dc1-87db-0eb9fb73c471", "session_id": "S", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_bdrk_01DTjrTEGsScoiTQeKJF2azh", "content": "Command running in background with ID: bwdd8kfjo. Output is being written to: /tmp/claude-503/-private-tmp-swarm-spike/ae028e64-6ff7-48df-bf5b-f58b775c3806/tasks/bwdd8kfjo.output. You will be notified when it completes. To check interim output, use Read on that file path.", "is_error": false}]}}
+{"type": "system", "subtype": "status", "status": "requesting", "uuid": "bd4b03e2-04ee-49e1-94e1-52e9cac677d1", "session_id": "S"}
+{"type": "stream_event", "uuid": "ba2ba610-739b-4371-bbd8-5600b2f060fe", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_start"}}
+{"type": "stream_event", "uuid": "ab614559-2417-4d24-b44f-2be3e84475b4", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_start"}}
+{"type": "stream_event", "uuid": "9a49d255-dcd3-4a3c-9067-1d0f5f4d3485", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "assistant", "parent_tool_use_id": null, "uuid": "548fd8ca-6354-4822-bc8d-b864579d1fc9", "session_id": "S", "message": {"role": "assistant", "content": [{"type": "text", "text": "STARTED"}], "model": "m"}}
+{"type": "stream_event", "uuid": "f267ad06-06b1-4e75-84a3-fe313844b22a", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_stop"}}
+{"type": "stream_event", "uuid": "15b75d51-9245-49fe-a229-7582f686d147", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_delta"}}
+{"type": "stream_event", "uuid": "fc60033f-d804-4b1f-8a6f-a527e775f0ec", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_stop"}}
+{"stop_reason": "end_turn", "usage": {"input_tokens": 4, "cache_creation_input_tokens": 23241, "cache_read_input_tokens": 42037, "output_tokens": 125, "output_tokens_details": {"thinking_tokens": 0}, "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0}, "service_tier": "standard", "cache_creation": {"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 23241}, "inference_geo": "", "iterations": [], "speed": "standard", "fallback_credit": null}, "is_error": false, "num_turns": 2, "subtype": "success", "result": "STARTED", "type": "result", "duration_ms": 8446, "uuid": "948fbeaf-33c5-47d3-9565-030fa6669578", "session_id": "S", "duration_api_ms": 1, "total_cost_usd": 0}
+{"type": "command_lifecycle", "state": "completed", "uuid": "8882bf46-e79d-458d-ab34-9737781f1c0f", "session_id": "S"}
+{"type": "system", "subtype": "session_state_changed", "state": "idle", "uuid": "47c5ff55-6042-4bc4-8e23-3d3f8386d728", "session_id": "S"}
+{"type": "system", "subtype": "task_updated", "task_id": "bwdd8kfjo", "uuid": "d600801c-b553-45ac-bc1d-bc569ff76ba5", "session_id": "S", "patch": {"status": "completed"}}
+{"type": "system", "subtype": "task_notification", "task_id": "bwdd8kfjo", "tool_use_id": "toolu_bdrk_01DTjrTEGsScoiTQeKJF2azh", "status": "completed", "summary": "Background command \"Sleep 6 seconds then print bgdone\" completed (exit code 0)", "uuid": "d40ae54f-df19-48bc-87fc-17c16fa5f256", "session_id": "S", "output_file": "/tmp/task.output"}
+{"type": "system", "subtype": "background_tasks_changed", "uuid": "8b735901-4860-4922-a492-f2a952f22a26", "session_id": "S"}
+{"type": "system", "subtype": "session_state_changed", "state": "running", "uuid": "60a71b19-f268-49ee-ae34-bd42e488a6a7", "session_id": "S"}
+{"type": "system", "subtype": "init", "uuid": "b2c4573d-19a8-4248-9ea6-f106c1f40fab", "session_id": "S", "cwd": "/tmp/spike", "tools": [], "mcp_servers": [], "model": "m", "permissionMode": "bypassPermissions"}
+{"type": "system", "subtype": "status", "status": "requesting", "uuid": "f568bd21-3195-4482-b16e-8d41f6120042", "session_id": "S"}
+{"type": "stream_event", "uuid": "df3b4d72-657d-4767-a686-0bdbf40238b7", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_start"}}
+{"type": "stream_event", "uuid": "2f58da0f-5173-4e82-bdf1-64d9d465f006", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_start"}}
+{"type": "stream_event", "uuid": "df9ddc7f-6af0-4554-9dd3-70c3112edb06", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "assistant", "parent_tool_use_id": null, "uuid": "1d538855-bef8-4f38-9f86-16009dc4a39e", "session_id": "S", "message": {"role": "assistant", "content": [{"type": "text", "text": "NOTIFIED"}], "model": "m"}}
+{"type": "stream_event", "uuid": "b581faea-a031-497c-96ee-1c54b145b639", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_stop"}}
+{"type": "stream_event", "uuid": "4486c384-4596-4cd8-b1a0-b95dc810b816", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_delta"}}
+{"type": "stream_event", "uuid": "2f1dd882-03ba-4cdc-9e39-4e360a88ddf4", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_stop"}}
+{"stop_reason": "end_turn", "usage": {"input_tokens": 4, "cache_creation_input_tokens": 384, "cache_read_input_tokens": 33298, "output_tokens": 9, "output_tokens_details": {"thinking_tokens": 0}, "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0}, "service_tier": "standard", "cache_creation": {"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 384}, "inference_geo": "", "iterations": [], "speed": "standard", "fallback_credit": null}, "origin": {"kind": "task-notification", "producer": "session-task", "runId": "0mvgi5ayu-5cc652ab"}, "is_error": false, "num_turns": 1, "subtype": "success", "result": "NOTIFIED", "type": "result", "duration_ms": 2104, "uuid": "c075da11-da80-4508-a9a0-9e7dfdf5bebc", "session_id": "S", "duration_api_ms": 1, "total_cost_usd": 0}
+{"type": "system", "subtype": "session_state_changed", "state": "idle", "uuid": "83750e0b-ee34-4160-b2d6-9e1ea8ff47c1", "session_id": "S"}

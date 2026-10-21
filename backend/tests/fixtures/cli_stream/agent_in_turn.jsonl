@@ -1,0 +1,109 @@
+{"type": "system", "subtype": "session_state_changed", "state": "running", "uuid": "013b3b6d-a4b0-46ed-ade4-726304cd8d35", "session_id": "S"}
+{"type": "command_lifecycle", "state": "queued", "uuid": "6eac6df5-8747-415d-bd9a-81233e64ae13", "session_id": "S"}
+{"type": "command_lifecycle", "state": "started", "uuid": "af2e0d27-e082-47cd-a8fc-c63e369c664e", "session_id": "S"}
+{"type": "system", "subtype": "init", "uuid": "bbc53069-37a5-4358-a282-0ac6c2e446d1", "session_id": "S", "cwd": "/tmp/spike", "tools": [], "mcp_servers": [], "model": "m", "permissionMode": "bypassPermissions"}
+{"type": "system", "subtype": "status", "status": "requesting", "uuid": "6bce7b20-656f-4d6c-967c-6470366c5d4b", "session_id": "S"}
+{"type": "user", "parent_tool_use_id": null, "uuid": "00000000-0000-4000-8000-000000000001", "session_id": "S", "message": {"role": "user", "content": "Use the Agent tool with run_in_background set to true (subagent_type general-purpose, description 'say SUB', prompt 'Reply with the single word SUB.'). Then run the foreground Bash command `sleep 5; echo waited`, reply STARTED and end your turn. When notified the agent finished, reply AGENTDONE without any tool."}}
+{"type": "stream_event", "uuid": "8f7f2563-0f90-4ae1-8a5f-c5b76d2ac808", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_start"}}
+{"type": "stream_event", "uuid": "45aaad0c-534f-4675-83e3-e6cc1d6c994e", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_start"}}
+{"type": "stream_event", "uuid": "83942ced-47fa-4d2f-8a6e-aeb4a821c5e4", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "70876ef8-611b-4ff7-94b2-c0ab1b8d5768", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "d968d9c6-cb7d-4826-a3e9-c8534279cbe2", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "87f522c8-aa28-44d3-9bb2-7e58b130c523", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "406f6786-8946-4bfa-ad61-1821735a581a", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "f4b85f18-f810-4515-ac3a-92355e1455d6", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "bb61dfb9-072f-4734-9c2b-b6744b9be5ed", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "9229a824-ae9c-4f0a-ad0d-d2eb6d7aab05", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "66d22565-c3d1-47c9-9091-4d3b1d11a63f", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "7c3d3397-abf4-4d05-b696-e991be7d2811", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "cd20f14d-699f-47ae-afb2-0033099bf711", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "9a38f5af-545d-4b5d-a7ae-d5e7d434ed07", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "f5909dfe-2654-4af9-829c-faeb6cdd3eca", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "646ce5b9-4da1-4530-ad63-5317ef887f23", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "70b5b9f2-30b2-4268-b5de-5c5875c7f918", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "ec13acc6-c8b3-4526-9c8c-80081e72081c", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "90e539ff-f9a6-4020-947f-756885a8252b", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "6ff82706-0a9c-4dec-9771-a4d7da2933e2", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "a56a499b-5a6e-4672-bbab-f4bafdb6d03f", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "45cd8599-4038-4903-9174-3e4209bb5300", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "3c265922-adac-4177-aec6-26b0afd31384", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "assistant", "parent_tool_use_id": null, "uuid": "7d4c614e-c9a5-4263-86a0-8c5825682df6", "session_id": "S", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_bdrk_01TAVm25JWMeBfehkz1zv6SQ", "name": "Agent", "input": {"subagent_type": "general-purpose", "description": "say SUB", "prompt": "Reply with the single word SUB.", "run_in_background": true}}], "model": "m"}}
+{"type": "stream_event", "uuid": "3de8e014-29bd-4917-8f1d-0475f900f49a", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_stop"}}
+{"type": "system", "subtype": "background_tasks_changed", "uuid": "4d4d077e-f25f-49a5-aeab-06874cecf5a7", "session_id": "S"}
+{"type": "system", "subtype": "task_started", "task_id": "a9c7d46cbde765db3", "tool_use_id": "toolu_bdrk_01TAVm25JWMeBfehkz1zv6SQ", "description": "say SUB", "task_type": "local_agent", "uuid": "932e9240-e2bb-42e8-87a5-b362846f2612", "session_id": "S"}
+{"type": "user", "parent_tool_use_id": null, "uuid": "78531a7e-60aa-4e72-ade2-8781441c3b7d", "session_id": "S", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_bdrk_01TAVm25JWMeBfehkz1zv6SQ", "content": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: a9c7d46cbde765db3 (internal ID - do not mention to user. Use SendMessage with to: 'a9c7d46cbde765db3', summary: '<5-10 wor", "is_error": false}]}}
+{"type": "stream_event", "uuid": "d87f14e2-e743-4455-9001-55e31459f590", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_start"}}
+{"type": "stream_event", "uuid": "12581ff6-4c92-4425-9cd6-fd94b6bc9b53", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "a9212452-ea39-41fd-b2c7-b6396a0bdeb9", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "73a86814-db30-41f9-bd0d-6f939f95381a", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "b11249ba-246b-4acb-b94b-43fa8908108f", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "9cc2a976-4c41-43ee-9092-cb863a0613a4", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "f2be97c6-b72b-4fee-b503-3dc128a7749f", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "e05aa0f3-bf57-4850-b4fc-2f2fc0a417fe", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "dc946fcf-ea9b-455b-8934-d80d4a8c7801", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "29ef19b8-4354-4918-9d0b-63b1a9e4d5e5", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "4a3a9613-e014-4856-8162-dea7dc3178ab", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "12990d25-88ff-49fb-bab5-a2e4514a4db3", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "9a5d05ef-c92e-411e-9ddb-69194d580736", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "52841d75-2494-4192-bfdf-5c1cb993ba78", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "16507868-c2fb-4150-b20c-c68a17ca7916", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "310b7c08-78e7-41be-9ca1-ffe6a47ab8e7", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "assistant", "parent_tool_use_id": null, "uuid": "1b2ee695-7fc4-4a9e-b2cc-7fe57c76797b", "session_id": "S", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_bdrk_01S67meLHrsdwRDf4wjXpRvo", "name": "Bash", "input": {"command": "sleep 5; echo waited", "description": "Wait five seconds then print a message"}}], "model": "m"}}
+{"type": "stream_event", "uuid": "393dbb54-c284-4729-9fb5-fb66145e9657", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_stop"}}
+{"type": "stream_event", "uuid": "59e38da3-d7fa-4f47-a4f7-1ea6148e5c8e", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_delta"}}
+{"type": "stream_event", "uuid": "02f99738-ee94-4de1-90ef-60df2bfe1b95", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_stop"}}
+{"type": "assistant", "parent_tool_use_id": "toolu_bdrk_01TAVm25JWMeBfehkz1zv6SQ", "uuid": "058c10c3-4387-4b1c-a22d-b8a1890436d6", "session_id": "S", "message": {"role": "assistant", "content": [{"type": "text", "text": "SUB"}], "model": "m"}}
+{"type": "system", "subtype": "task_updated", "task_id": "a9c7d46cbde765db3", "uuid": "7c8d240f-0f6e-457d-844b-8629ff5c14fa", "session_id": "S", "patch": {"status": "completed"}}
+{"type": "system", "subtype": "task_notification", "task_id": "a9c7d46cbde765db3", "tool_use_id": "toolu_bdrk_01TAVm25JWMeBfehkz1zv6SQ", "status": "completed", "summary": "SUB", "usage": {"total_tokens": 22611, "tool_uses": 0, "duration_ms": 3145}, "uuid": "53fe2619-de06-4056-a23e-3542bb1c80d1", "session_id": "S", "output_file": "/tmp/task.output"}
+{"type": "system", "subtype": "background_tasks_changed", "uuid": "52904bf0-e1bb-42ed-a9f7-56901ed8379a", "session_id": "S"}
+{"type": "system", "subtype": "task_started", "task_id": "bxnlivoy4", "tool_use_id": "toolu_bdrk_01S67meLHrsdwRDf4wjXpRvo", "description": "Wait five seconds then print a message", "task_type": "local_bash", "uuid": "3e76e48c-73f6-4df8-9f76-54d97e93bb42", "session_id": "S"}
+{"type": "system", "subtype": "task_notification", "task_id": "bxnlivoy4", "tool_use_id": "toolu_bdrk_01S67meLHrsdwRDf4wjXpRvo", "status": "completed", "summary": "Wait five seconds then print a message", "uuid": "91f328a5-8add-48a6-bf85-a1a0a7a2e2fe", "session_id": "S", "output_file": "/tmp/task.output"}
+{"type": "user", "parent_tool_use_id": null, "uuid": "e65a1656-a906-4796-967a-760eef11a437", "session_id": "S", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_bdrk_01S67meLHrsdwRDf4wjXpRvo", "content": "waited", "is_error": false}]}}
+{"type": "user", "parent_tool_use_id": null, "uuid": "87f4f282-d9bf-4393-a20b-e7b25af8c423", "origin": {"kind": "task-notification", "producer": "session-task", "runId": "0mvgiatc9-42479e92"}, "session_id": "S", "message": {"role": "user", "content": "<task-notification>\n<task-id>a9c7d46cbde765db3</task-id>\n<tool-use-id>toolu_bdrk_01TAVm25JWMeBfehkz1zv6SQ</tool-use-id>\n<output-file>/tmp/claude-503/-private-tmp-swarm-spike/0dbf61dc-d8f1-4c60-82a8-2ef750f8c281/tasks/a9c7d46cbde765db3.output</output-file>\n<status>completed</status>\n<summary>Agent \"say SUB\" finished</summary>\n<note>A task-notification fires each time this agent stops with n"}}
+{"type": "system", "subtype": "status", "status": "requesting", "uuid": "0154bdd2-941c-4684-b024-fc83934cdfba", "session_id": "S"}
+{"type": "stream_event", "uuid": "7efee5b0-4aba-49f0-80bc-5255f723673a", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_start"}}
+{"type": "stream_event", "uuid": "a4ce8236-8e7f-4fc2-8c02-4dc55ea5592a", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_start"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "1e973ee4-3483-4ba4-b45a-f5d27a329293", "session_id": "S"}
+{"type": "stream_event", "uuid": "a4b74f39-fe9b-415e-b59e-ee367704d7e0", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "f6c57606-41a5-4a0b-a6c2-ad5101a41a71", "session_id": "S"}
+{"type": "stream_event", "uuid": "d6984b15-ec67-40ae-8fb6-3c5fe78ee28a", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "79602c32-df83-4ae3-a7f2-d861d2911ee0", "session_id": "S"}
+{"type": "stream_event", "uuid": "ab5ddf44-1ba6-4f4e-81f6-3975828c3b46", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "693f221d-48f3-4245-8b90-aabe9402a9fc", "session_id": "S"}
+{"type": "stream_event", "uuid": "4df51000-84b7-4bc3-9936-4997d745ee74", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "4d5ffe43-48e6-4436-9814-90d314cf1594", "session_id": "S"}
+{"type": "stream_event", "uuid": "06ed0f5b-a202-4b7a-b07d-8695008547b1", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "debf8932-5510-4a92-b3a2-dbcff5c3b93c", "session_id": "S"}
+{"type": "stream_event", "uuid": "37e9b0ff-33a2-467c-a0fa-3ad20611e609", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "5f76142c-9faf-41ca-9ec7-4ebd5d58e2da", "session_id": "S"}
+{"type": "stream_event", "uuid": "39ac2901-31e2-49d7-90d4-80e16dbc8f10", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "c67b3424-3e1d-46b9-b6b4-0b813eb740ba", "session_id": "S"}
+{"type": "stream_event", "uuid": "e0cf16da-0890-426e-b6bf-bb5acb8bd23b", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "d7aa4703-78cc-4392-bd48-8e4a9a79c366", "session_id": "S"}
+{"type": "stream_event", "uuid": "88fbd8b5-47a7-4aeb-8dae-e371ee90c7a3", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "8d4fc3e2-ac80-46fa-bfff-db6bf61c46b9", "session_id": "S"}
+{"type": "stream_event", "uuid": "b38a4f48-6cbe-44a2-a117-b940baf463a0", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "f489d001-f5b0-43e6-915f-959db5af9c17", "session_id": "S"}
+{"type": "stream_event", "uuid": "942c9cc0-2f31-4a78-8471-cd89e064e05a", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "277753e1-c815-4cf3-a5ad-c2b32609c341", "session_id": "S"}
+{"type": "stream_event", "uuid": "c27bb161-4300-4a8f-ad53-79a7774c9252", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "18c2534b-1602-4756-90a5-5930e63bc684", "session_id": "S"}
+{"type": "stream_event", "uuid": "8e9afad9-6e75-4a57-8582-e965bd0f0e74", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "110528dd-6f95-42a7-8531-a3f9af3a2d3d", "session_id": "S"}
+{"type": "stream_event", "uuid": "1bde30fe-72bc-4afb-87bd-3e085da56c72", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "43ece2ca-20e2-4766-9997-78c7e8e999b7", "session_id": "S"}
+{"type": "stream_event", "uuid": "6fac0a8f-160f-4646-8846-6c1032c537c7", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "system", "subtype": "thinking_tokens", "uuid": "2330b523-c4b5-4eee-9f51-2a6cd0b2f74f", "session_id": "S"}
+{"type": "stream_event", "uuid": "1b10fc70-92f7-4fbc-9824-f7e8bc961114", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "assistant", "parent_tool_use_id": null, "uuid": "ebadc39a-ce39-4cf7-b2a8-4587fb3126b9", "session_id": "S", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "", "signature": "sig"}], "model": "m"}}
+{"type": "stream_event", "uuid": "8641587b-8253-46ef-a635-a60bdea1bbe9", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_stop"}}
+{"type": "stream_event", "uuid": "b06dc4d8-968b-4f52-9cdb-c1f06dc37d01", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_start"}}
+{"type": "stream_event", "uuid": "f4ea9d87-38ea-404b-925e-508471fa32f5", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "stream_event", "uuid": "7a9c361c-0843-4222-91fe-cb90139743e2", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_delta"}}
+{"type": "assistant", "parent_tool_use_id": null, "uuid": "1660b56c-6497-4438-a140-c2a7d6055976", "session_id": "S", "message": {"role": "assistant", "content": [{"type": "text", "text": "STARTED\n\nAGENTDONE"}], "model": "m"}}
+{"type": "stream_event", "uuid": "2a154748-9815-48ce-b42a-eb161fa2d8a8", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "content_block_stop"}}
+{"type": "stream_event", "uuid": "942b9c0b-dade-49a4-b555-2cd15d39b560", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_delta"}}
+{"type": "stream_event", "uuid": "bc3e8512-cb10-479c-a414-b1b5821523ab", "session_id": "S", "parent_tool_use_id": null, "event": {"type": "message_stop"}}
+{"stop_reason": "end_turn", "usage": {"input_tokens": 4, "cache_creation_input_tokens": 24842, "cache_read_input_tokens": 42115, "output_tokens": 360, "output_tokens_details": {"thinking_tokens": 125}, "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0}, "service_tier": "standard", "cache_creation": {"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 24842}, "inference_geo": "", "iterations": [], "speed": "standard", "fallback_credit": null}, "is_error": false, "num_turns": 3, "subtype": "success", "result": "STARTED\n\nAGENTDONE", "type": "result", "duration_ms": 14457, "uuid": "f84e217b-5eb6-45e4-a8aa-669d254a568f", "session_id": "S", "duration_api_ms": 1, "total_cost_usd": 0}
+{"type": "command_lifecycle", "state": "completed", "uuid": "17dd10f0-eb05-4ed0-8466-7cf52451cb54", "session_id": "S"}
+{"type": "system", "subtype": "session_state_changed", "state": "idle", "uuid": "6a8f08e2-0e6a-42d3-9bab-8dce4897ddbd", "session_id": "S"}
