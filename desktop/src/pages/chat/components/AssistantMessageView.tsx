@@ -12,11 +12,11 @@
  *   turn keeps the work before its run above `Pipeline started · <profile>`, then one
  *   group per started stage. A direct run (profile `direct`) is a chat turn.
  * - Needs-you cards (question / permission / escalation, a final failure) in place
- * - The ending: RESULT, then ONE output card (TurnCards OutputCard: the backend's code
- *   changes + the turn's deliverables, a pipeline run's documents only there), then
- *   the next-step chips (NextSteps, last assistant message only); Copy copies the answer
- * - The streaming bee is the turn's one animated signal
- * - Red border error wrapper when message.isError is true
+ * - The ending: RESULT → compact machine run status → immediate action → ONE output
+ *   card → folded assumptions beside Next steps. Terminal errors append one local
+ *   structured notice without replacing or recoloring the streamed turn above it.
+ * - Streaming uses the established two-level status design: header pulse for the
+ *   message state, and the tail bee for activity/rest; no third progress signal.
  * - min-w-0 overflow constraint on content (prevents flex overflow)
  * - Save-to-Memory button on the last assistant message (hover-to-reveal,
  *   next to the Copy button) with per-session status tracking
@@ -24,8 +24,7 @@
  *   after Save-to-Memory) — conditionally visible when contextWarning
  *   level is 'warn' or 'critical', with urgency coloring at critical level
  *
- * Key layout change: content starts at the left margin directly below the
- * header line — no avatar column or indentation gap.
+ * Content and header share the flexible column beside the compact 24px avatar.
  *
  * @exports AssistantMessageView      — The view React component
  * @exports AssistantMessageViewProps  — Props interface
@@ -39,7 +38,8 @@ import clsx from 'clsx';
 import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
-import { AttentionCard, OutputCard, RunResult } from './TurnCards';
+import { ChatErrorMessage } from '../../../components/chat';
+import { AssumptionsDisclosure, AttentionCard, isVerificationAttentionItem, OutputCard, RunResult } from './TurnCards';
 import { NextSteps } from './NextSteps';
 import { TurnZoneList, ZONE_GAP } from './TurnZones';
 import type { ZoneContext } from './TurnZones';
@@ -199,6 +199,8 @@ export interface AssistantMessageViewProps {
   contextWarning?: ContextWarning | null;
   /** Callback to send a continuation prompt when model stopped prematurely */
   onContinue?: () => void;
+  /** Callback for a terminal error whose existing action can be retried. */
+  onRetryError?: () => void;
   /** Read-only render (History preview) — forces interactive blocks inert. */
   readOnly?: boolean;
 }
@@ -226,6 +228,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   isLastAssistant,
   contextWarning,
   onContinue,
+  onRetryError,
   readOnly,
 }) => {
   const { t } = useTranslation();
@@ -277,23 +280,32 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     }
   }, [sessionId, compactStatus, showNote, t]);
 
+  // Error handlers append one final text block to the assistant message. Keep that
+  // terminal notice out of the turn projection so it cannot become RESULT or change
+  // the process grouping; the structured error card renders it after the preserved turn.
+  const { turnContent, terminalErrorText } = useMemo(() => {
+    if (!message.isError) return { turnContent: message.content, terminalErrorText: undefined };
+    const last = message.content[message.content.length - 1];
+    if (last?.type !== 'text') return { turnContent: message.content, terminalErrorText: undefined };
+    return { turnContent: message.content.slice(0, -1), terminalErrorText: last.text };
+  }, [message.content, message.isError]);
+
   // The ONE display projection of this turn (pages/chat/turnView.ts): ordered
   // units (process segments / landmarks / outcome / interrupts), the single
   // done rule, the lifted next-steps block and what Copy copies.
   const view = useMemo(
-    () => deriveTurnView(message.content, !!isStreaming, message.subAgentProgress),
-    [message.content, isStreaming, message.subAgentProgress],
+    () => deriveTurnView(turnContent, !!isStreaming, message.subAgentProgress),
+    [turnContent, isStreaming, message.subAgentProgress],
   );
 
-  /** All text the message carries — gates the action row exactly as before the
-   *  projection (a turn that ended mid-process, with no answer yet, still gets
-   *  Continue / Save). */
+  /** All non-error text the message carries — gates the action row exactly as before
+   *  the projection. The terminal notice is never copied as part of the answer. */
   const allText = useMemo(
-    () => message.content
+    () => turnContent
       .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
       .map((b) => b.text)
       .join('\n'),
-    [message.content],
+    [turnContent],
   );
   /** Copy copies the answer (outcome text) — not process notes, not next-steps;
    *  a turn with no answer falls back to all of its text (still without a
@@ -441,7 +453,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const summary = !isStreaming ? view.summary : undefined;
   const summaryDocs = summary?.docs ?? [];
   // A document already shown as a card on its stage row is not a deliverable tile too.
-  const stageDocPaths = new Set(message.content.flatMap((b) => (b.type === 'pipeline_stage'
+  const stageDocPaths = new Set(turnContent.flatMap((b) => (b.type === 'pipeline_stage'
     ? [...(b.docs ?? []), ...(b.doc ? [b.doc] : [])].map((d) => d.absolutePath) : [])));
   const deliverables = view.deliverables.filter((d) => !stageDocPaths.has(d.absolutePath)
     && !summaryDocs.some((x) => x.absolutePath === d.absolutePath));
@@ -453,9 +465,10 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     );
     return files.length ? { ...view.changes, files } : undefined;
   }, [view, isStreaming, summaryDocs]);
-  const attentionCard = view.attention && view.attention.items.length > 0
-    ? <AttentionCard block={view.attention} />
-    : null;
+  const attention = view.attention && view.attention.items.length > 0 ? view.attention : undefined;
+  const hasActionAttention = !!attention?.items.some((item) => !isVerificationAttentionItem(item));
+  const hasVerificationAttention = !!attention
+    && (attention.items.some(isVerificationAttentionItem) || (attention.more ?? 0) > 0);
   const hasResult = zones.some((z) => z.kind === 'text' && z.result);
   const contentBlocks: React.ReactNode[] = [];
   // A turn the CLI started to answer background agents that finished: say which, first.
@@ -464,13 +477,50 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   }
   const zoneList = <TurnZoneList key="zones" zones={zones} ctx={ctx} hasOpenQuestionIn={(z) => hasOpenQuestion(z.body)} />;
   contentBlocks.push(view.backgroundFinished?.length ? <div key="zones" className="mt-2">{zoneList}</div> : zoneList);
-  // A finished run: its verdict first, then what to check, then what it produced.
-  if (summary) contentBlocks.push(<div key="result" className={zones.length ? ZONE_GAP : ''}><RunResult summary={summary} showReasons={!attentionCard} /></div>);
-  if (attentionCard) contentBlocks.push(<div key="attention" className={zones.length || summary ? ZONE_GAP : ''}>{attentionCard}</div>);
+  // Completion hierarchy: model Result, machine status, immediate action, produced
+  // output, then optional assumptions beside the proposed next steps.
+  if (summary) {
+    contentBlocks.push(
+      <div key="result" className={zones.length ? ZONE_GAP : ''}>
+        <RunResult summary={summary} showReasons={!hasActionAttention} collapseDetails={hasResult} />
+      </div>,
+    );
+  }
+  if (attention && hasActionAttention) {
+    contentBlocks.push(
+      <div key="attention" className={zones.length || summary ? ZONE_GAP : ''}>
+        <AttentionCard block={attention} />
+      </div>,
+    );
+  }
   if (!isStreaming && (changes || deliverables.length || summaryDocs.length)) {
     contentBlocks.push(
       <div key="output" className={hasResult ? 'mt-5' : ZONE_GAP}>
-        <OutputCard changes={changes} deliverables={isStreaming ? [] : deliverables} summary={summary} />
+        <OutputCard changes={changes} deliverables={deliverables} summary={summary} />
+      </div>,
+    );
+  }
+  if (!isStreaming && attention && hasVerificationAttention) {
+    contentBlocks.push(
+      <div key="assumptions" className={ZONE_GAP}>
+        <AssumptionsDisclosure block={attention} />
+      </div>,
+    );
+  }
+  if (message.isError) {
+    const errorCode = message.errorCode;
+    contentBlocks.push(
+      <div key="terminal-error" className={contentBlocks.length ? ZONE_GAP : ''}>
+        <ChatErrorMessage
+          error={{
+            code: errorCode,
+            message: terminalErrorText ?? tf(t, 'chat.list.errorFallback', 'An error occurred'),
+            detail: message.errorDetail,
+            suggestedAction: message.suggestedAction,
+            retryAfter: (message as Message & { retryAfter?: number }).retryAfter,
+          }}
+          onRetry={errorCode === 'QUEUE_TIMEOUT' ? onRetryError : undefined}
+        />
       </div>,
     );
   }
@@ -500,28 +550,18 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         isStreaming={isStreaming}
       />
 
-      {message.isError ? (
-        <div
-          className="border border-amber-500/60 bg-amber-500/10 rounded-lg p-3"
-          role="alert"
-          aria-label={tf(t, 'chat.message.interrupted', 'Connection interrupted')}
-        >
-          <div>{contentBlocks}</div>
-        </div>
-      ) : (
-        <div className="text-[var(--color-text-secondary)]">
-          {contentBlocks}
-          {/* Streaming indicator — the bee at the end of the streaming content
-              (flying while content arrives, resting after a quiet spell). */}
-          {isStreaming && <StreamingBee resting={!!isResting} />}
-          {/* A running sub-agent shows in its Agents panel row (TurnZones,
-              fed by subagent_progress) — no separate timer banner. */}
-        </div>
-      )}
+      <div className="text-[var(--color-text-secondary)]">
+        {contentBlocks}
+        {/* Streaming indicator — the bee at the end of the streaming content
+            (flying while content arrives, resting after a quiet spell). */}
+        {isStreaming && <StreamingBee resting={!!isResting} />}
+        {/* A running sub-agent shows in its Agents panel row (TurnZones,
+            fed by subagent_progress) — no separate timer banner. */}
+      </div>
 
       {/* Next steps — the reply's trailing ```next-steps block as clickable chips.
-          Only on the latest answer (older ones are stale) and never in read-only. */}
-      {!readOnly && !isStreaming && isLastAssistant && <NextSteps steps={view.nextSteps} />}
+          Only on the latest successful answer (older or interrupted suggestions are stale). */}
+      {!readOnly && !isStreaming && !message.isError && isLastAssistant && <NextSteps steps={view.nextSteps} />}
 
       {/* Action buttons — appear on hover below content, hidden while streaming.
           Hidden entirely in read-only (History preview) — Copy/Save/Compact/

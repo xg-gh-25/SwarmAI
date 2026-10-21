@@ -3,8 +3,8 @@
  *
  * What is tested (real AssistantMessageView + turnView, only leaf contexts mocked):
  * - pipeline_run: never rendered as text (no requirement card, no "Intent" label)
- * - pipeline_attention: a first-level card after the answer and before the output
- *   card (chat turn spec v6 §4/§8); one item per kind; a blocking verdict is red
+ * - pipeline_attention: immediate action before Output; self-answered decisions and
+ *   assumptions in a folded disclosure after Output, beside Next steps
  * - turn_deliverables: the output section after the answer, one compact row per
  *   file (deduped across rows), middle-ellipsis names keep the extension, Open dispatches OPEN_FILE_EVENT with the absolute path, Copy copies it; a product
  *   is not listed again as a changed file (turn_changes)
@@ -56,7 +56,7 @@ const deliv = (...paths: string[]): ContentBlock => ({ type: 'turn_deliverables'
 
 function renderView(content: ContentBlock[], isStreaming = false) {
   const message: Message = { id: 'm1', role: 'assistant', content, timestamp: new Date().toISOString(), isError: false };
-  return render(<ToastProvider><AssistantMessageView message={message} isStreaming={isStreaming} /></ToastProvider>);
+  return render(<ToastProvider><AssistantMessageView message={message} isStreaming={isStreaming} isLastAssistant /></ToastProvider>);
 }
 const order = (container: HTMLElement, ...ids: string[]) => {
   const all = Array.from(container.querySelectorAll('[data-testid]')).map((e) => e.getAttribute('data-testid'));
@@ -83,37 +83,53 @@ describe('pipeline_run — never rendered as text (chat display v8)', () => {
 });
 
 describe('pipeline_attention — what needs the user', () => {
-  it('a first-level card after the answer, before the output card', () => {
-    const { container } = renderView(PIPELINE);
+  it('puts action before Output and folded assumptions immediately before proposed next steps', () => {
+    const withNext = PIPELINE.map((block) => block.type === 'text' && block.text.startsWith('Shipped:')
+      ? tx(`${block.text}\n\n\`\`\`next-steps\nVerify the assumption\n\`\`\``)
+      : block);
+    const { container } = renderView(withNext);
     const result = screen.getByTestId('turn-result');
-    const card = screen.getByTestId('turn-attention');
+    const action = screen.getByTestId('turn-attention');
+    const assumptions = screen.getByTestId('turn-assumptions');
     expect(within(result).queryByTestId('turn-attention')).toBeNull();
-    expect(result.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(card.textContent).toContain('For you to check · 4');
-    expect(within(card).getAllByTestId('attention-item').map((e) => e.getAttribute('data-kind')))
-      .toEqual(['self_answered', 'assumption', 'gate', 'not_push_ready']);
-    expect(card.textContent).toContain('→ prompt_builder');
-    expect(within(card).getByText('BLOCK').className).toContain('text-red-500');
-    // What Swarm settled without asking is ONE group under ONE name line.
-    const decided = within(card).getByTestId('attention-decided');
-    expect(within(decided).getAllByTestId('attention-item').map((e) => e.getAttribute('data-kind')))
+    expect(within(action).getAllByTestId('attention-item').map((e) => e.getAttribute('data-kind')))
+      .toEqual(['gate', 'not_push_ready']);
+    expect(action.textContent).toContain('For you to check');
+    expect(action.textContent).not.toContain('For you to check ·');
+    expect(within(action).getByText('BLOCK').className).toContain('text-red-500');
+    expect(assumptions.getAttribute('open')).toBeNull();
+    expect(within(assumptions).getAllByTestId('attention-item').map((e) => e.getAttribute('data-kind')))
       .toEqual(['self_answered', 'assumption']);
-    expect(decided.textContent).toContain('Swarm decided for you · 2');
-    expect(decided.textContent).toContain('Why: covers stored configs');
-    expect(decided.textContent).toContain('Assumed FR-3');
-    expect(card.textContent!.match(/Swarm/g)).toHaveLength(1);
-    expect(screen.getAllByTestId('turn-attention')).toHaveLength(1);
-    expect(order(container, 'turn-attention', 'output-card')[0]).toBeLessThan(
-      order(container, 'turn-attention', 'output-card')[1]);
+    expect(assumptions.textContent).toContain('Assumptions to verify');
+    expect(assumptions.textContent).toContain('→ prompt_builder');
+    expect(assumptions.textContent).not.toContain('Q1');
+    expect(assumptions.textContent).not.toContain('FR-3');
+    expect(order(container, 'turn-attention', 'output-card', 'turn-assumptions', 'next-steps'))
+      .toEqual([expect.any(Number), expect.any(Number), expect.any(Number), expect.any(Number)]);
+    const positions = order(container, 'turn-attention', 'output-card', 'turn-assumptions', 'next-steps');
+    expect(positions[0]).toBeLessThan(positions[1]);
+    expect(positions[1]).toBeLessThan(positions[2]);
+    expect(positions[2]).toBeLessThan(positions[3]);
   });
 
-  it('while streaming it shows after the work so far, and there is no RESULT yet', () => {
+  it('while streaming it shows action after the work so far, and defers assumptions to their final slot', () => {
     const live = [...PIPELINE.slice(0, 12), tu('d', 'Bash')];
     renderView(live, true);
     const card = screen.getByTestId('turn-attention');
+    expect(screen.queryByTestId('turn-assumptions')).toBeNull();
     expect(screen.queryByTestId('turn-result')).toBeNull();
     const stages = screen.getAllByTestId('zone-stage');
     expect(stages[stages.length - 1].compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('verification-only attention creates no action card', () => {
+    const verificationOnly = { ...ATTN, items: [
+      { kind: 'self_answered', id: 'Q1', question: 'Where?', answer: 'prompt_builder', reason: 'covers stored configs' },
+      { kind: 'assumption', id: 'FR-3', statement: 'eval later' },
+    ] } as ContentBlock;
+    renderView([tu('a', 'Bash'), tr('a'), verificationOnly, tx('done')]);
+    expect(screen.queryByTestId('turn-attention')).toBeNull();
+    expect(screen.getByTestId('turn-assumptions')).toBeTruthy();
   });
 
   it('no name line when Swarm settled nothing', () => {
@@ -227,5 +243,33 @@ describe('display blocks never shape the flow', () => {
     const proc = v.units.find((u) => u.kind === 'process');
     expect(proc && proc.kind === 'process' && proc.unrecoveredFailure?.block.id).toBe('a');
     expect(v.deliverables).toHaveLength(1);
+  });
+});
+
+
+describe('terminal errors — preserve the completed work above the interruption', () => {
+  it('keeps prior Result and renders one local coded alert with retry', () => {
+    const retry = vi.fn();
+    const message: Message = {
+      id: 'm-error',
+      role: 'assistant',
+      timestamp: new Date().toISOString(),
+      isError: true,
+      errorCode: 'QUEUE_TIMEOUT',
+      content: [tu('a', 'Bash'), tr('a'), tx('Partial result survived.'), tx('Slots stayed busy.')],
+    };
+    render(
+      <ToastProvider>
+        <AssistantMessageView message={message} isLastAssistant onRetryError={retry} />
+      </ToastProvider>,
+    );
+    const result = screen.getByTestId('turn-result');
+    const alert = screen.getByRole('alert');
+    expect(result.textContent).toContain('Partial result survived.');
+    expect(alert.textContent).toContain('Slots stayed busy.');
+    expect(alert.contains(result)).toBe(false);
+    expect(screen.getAllByText('Slots Busy')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: /Retry when slot opens/ }));
+    expect(retry).toHaveBeenCalledOnce();
   });
 });

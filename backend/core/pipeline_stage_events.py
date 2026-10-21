@@ -450,10 +450,9 @@ def new_stage_blocks(
 #                        (new_stage_blocks): the run's requirement, its planned
 #                        stages, its checklist (stages + gates) and the stage in
 #                        progress (``current``).
-#   pipeline_attention — with the DELIVER row: only what needs a human judgement,
-#                        from STRUCTURED fields (never the model's prose): questions
-#                        the pipeline answered itself, assumed requirements, gate
-#                        verdicts that are not a pass, and a push_ready of False.
+#   pipeline_attention — with the DELIVER row: structured human-judgement items,
+#                        ordered as unresolved gate/push blockers first, then
+#                        self-answered decisions and still-open assumptions.
 
 RUN_BLOCK_TYPE = "pipeline_run"
 ATTENTION_BLOCK_TYPE = "pipeline_attention"
@@ -465,7 +464,7 @@ MAX_ATTENTION_ITEMS = 8
 # BLOCK that was resolved. Verdicts are free text in real run.json files, so the
 # match is on the leading word.
 _OK_VERDICT_RE = re.compile(r"^\s*(PASS|SUPPORTED|PROCEED|GO|SKIP)", re.I)
-_OPEN_REQ_STATUSES = {"assumed", "needs-clarification"}
+_OPEN_REQ_STATUSES = {"assumed", "needs-clarification", "proposed"}
 
 
 def _clip(value: object, limit: int = ITEM_TEXT_MAX) -> Optional[str]:
@@ -667,32 +666,41 @@ def plain_reasons(raw: object, limit: int = 4) -> list[str]:
 
 
 def attention_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str, Any]]:
-    """What in this run needs a human judgement, from structured fields only; None
-    when nothing does. Fail-safe: an unreadable artifact just contributes nothing."""
+    """What in this run needs a human judgement, from structured fields only.
+
+    Actionable blockers lead and therefore survive ``MAX_ATTENTION_ITEMS``. Decisions
+    Swarm made on the user's behalf and still-open assumptions follow as optional
+    verification context. Confirmed assumptions are quiet. Fail-safe: an unreadable
+    artifact just contributes nothing.
+    """
     if not state:
         return None
     stages: dict = state.get("stages") or {}
     run_dir = state.get("run_dir")
     evaluation = _artifact(run_dir, stages.get("evaluate"))
     deliver_art = _artifact(run_dir, stages.get("deliver"))
-    items: list[dict] = []
-    for c in evaluation.get("clarifications") or []:
-        if isinstance(c, dict) and str(c.get("answered_by") or "").strip() == "self":
-            items.append({"kind": "self_answered", "id": _clip(c.get("qid"), 20),
-                          "question": _clip(c.get("question")), "answer": _clar_answer(c),
-                          "reason": _clip(c.get("resolution"))})
-    for r in evaluation.get("requirements") or []:
-        if not isinstance(r, dict):
-            continue
-        source = r.get("source") if isinstance(r.get("source"), dict) else {}
-        if source.get("kind") == "assumption" or str(r.get("status") or "").strip() in _OPEN_REQ_STATUSES:
-            items.append({"kind": "assumption", "id": _clip(r.get("id"), 20), "statement": _clip(r.get("statement"))})
-    items += _gate_items(stages, deliver_art)
+
+    action_items = _gate_items(stages, deliver_art)
     deliver = stages.get("deliver") or {}
     if deliver.get("push_ready") is False:
         pairs = plain_reason_items(deliver.get("push_ready_reason"))
-        items.append({"kind": "not_push_ready", "reasons": [t for _c, t in pairs],
-                      "reasonCodes": [c for c, _t in pairs], "detail": "Details: REPORT §10"})
+        action_items.append({"kind": "not_push_ready", "reasons": [t for _c, t in pairs],
+                             "reasonCodes": [c for c, _t in pairs], "detail": "Details: REPORT §10"})
+
+    verification_items: list[dict] = []
+    for c in evaluation.get("clarifications") or []:
+        if isinstance(c, dict) and str(c.get("answered_by") or "").strip() == "self":
+            verification_items.append({"kind": "self_answered", "id": _clip(c.get("qid"), 20),
+                                       "question": _clip(c.get("question")), "answer": _clar_answer(c),
+                                       "reason": _clip(c.get("resolution"))})
+    for r in evaluation.get("requirements") or []:
+        if not isinstance(r, dict):
+            continue
+        if str(r.get("status") or "").strip() in _OPEN_REQ_STATUSES:
+            verification_items.append({"kind": "assumption", "id": _clip(r.get("id"), 20),
+                                       "statement": _clip(r.get("statement"))})
+
+    items = action_items + verification_items
     if not items:
         return None
     return {"type": ATTENTION_BLOCK_TYPE, "runId": run_id,

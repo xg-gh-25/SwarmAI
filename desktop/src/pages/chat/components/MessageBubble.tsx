@@ -44,6 +44,8 @@ export interface MessageBubbleProps {
   onCancelQueued?: () => void;
   /** Called when user clicks Continue to request agent continuation */
   onContinue?: () => void;
+  /** Called by the assistant's local terminal-error card when retry is available. */
+  onRetryError?: () => void;
   /** Read-only render (History preview): force all interactive blocks
    *  (AskUserQuestion / permission / escalation) to a non-actionable state,
    *  regardless of their historical pending status. */
@@ -64,6 +66,7 @@ function MessageBubbleImpl({
   contextWarning,
   onCancelQueued,
   onContinue,
+  onRetryError,
   readOnly,
   viewKey,
 }: MessageBubbleProps) {
@@ -91,6 +94,7 @@ function MessageBubbleImpl({
       isLastAssistant={isLastAssistant}
       contextWarning={contextWarning}
       onContinue={onContinue}
+      onRetryError={onRetryError}
       readOnly={readOnly}
     />
   );

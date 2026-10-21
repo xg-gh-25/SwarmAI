@@ -2,18 +2,15 @@
  * TurnCards — the backend-written cards of a turn (chat turn spec v6).
  *
  * Each has a fixed place in the turn, set by AssistantMessageView:
- * - AttentionCard — what the run needs the user to judge (`pipeline_attention`): a
- *                   first-level card after the turn's zones, before the output card.
- *                   What the assistant settled without asking (questions it answered,
- *                   assumptions) is one group under ONE "{name} decided for you" line.
- * - OutputCard    — the turn's ONE output card at the end: a code-changes section
- *                   (ChangesCard, from `turn_changes`) and a deliverables section (what
- *                   the turn produced — compact `turn_deliverables` rows — and a pipeline
- *                   run's documents, with the run's verdict). Either section alone;
- *                   a file is in one section only.
+ * - AttentionCard — unresolved gates / not-push-ready causes that require action,
+ *                   immediately after the machine run status.
+ * - AssumptionsDisclosure — self-answered decisions and still-open assumptions,
+ *                           folded after Output and directly before Next steps.
+ * - OutputCard — the turn's code changes and deliverables.
  * All text in these blocks is model-written: rendered plain, never as markdown.
  *
- * @exports AttentionCard, OutputCard, middleEllipsis
+ * @exports AttentionCard, AssumptionsDisclosure, isVerificationAttentionItem,
+ *          OutputCard, middleEllipsis
  */
 import { useContext, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -25,18 +22,18 @@ import { fileIcon, fileIconColor } from '../../../utils/fileUtils';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { tf } from '../tf';
 import { docMeta } from '../runDocMeta';
-import { ASSISTANT_NAME } from '../assistantName';
 import { ReadOnlyContext } from '../readOnlyContext';
 import { ChangesCard } from './ChangesCard';
 
 
 /** A verdict that blocks is red; anything else that needs a look stays amber. */
 const isBlocking = (v: string) => /BLOCK|FAIL|REJECT/i.test(v);
-/** Items Swarm settled without asking: a question it answered itself, an assumption. */
-const isDecided = (i: PipelineAttentionItem) => i.kind === 'self_answered' || i.kind === 'assumption';
+/** Secondary audit context, not an action blocker. */
+export const isVerificationAttentionItem = (i: PipelineAttentionItem) =>
+  i.kind === 'self_answered' || i.kind === 'assumption';
 
 const DIM = 'text-[12.5px] text-[var(--color-text-muted)]';
-const TAG = 'mr-1.5 font-mono text-[11.5px] text-[var(--color-text-muted)]';
+const TAG = 'mr-1.5 text-[11px] font-medium uppercase tracking-[0.05em] text-[var(--color-text-muted)]';
 
 function AttentionRow({ item }: { item: PipelineAttentionItem }) {
   const { t } = useTranslation();
@@ -45,7 +42,7 @@ function AttentionRow({ item }: { item: PipelineAttentionItem }) {
   if (item.kind === 'self_answered') {
     line = (
       <>
-        {item.id && <span className={TAG}>{item.id}</span>}
+        <span className={TAG}>{tf(t, 'chat.turn.assumptions.decision', 'Decision')}</span>
         {item.question}
         {item.answer && <> → {item.answer}</>}
       </>
@@ -54,7 +51,7 @@ function AttentionRow({ item }: { item: PipelineAttentionItem }) {
   } else if (item.kind === 'assumption') {
     line = (
       <>
-        <span className={TAG}>{tf(t, 'chat.turn.attention.assumption', 'Assumed {{id}}', { id: item.id ?? '' }).trim()}</span>
+        <span className={TAG}>{tf(t, 'chat.turn.assumptions.assumption', 'Assumption')}</span>
         {item.statement}
       </>
     );
@@ -69,7 +66,6 @@ function AttentionRow({ item }: { item: PipelineAttentionItem }) {
         <span className="text-amber-600 dark:text-amber-400">{tf(t, 'chat.turn.attention.notPushReady', 'Not ready to push')}</span>
         {item.reasons.length > 0 && (
           <ul data-testid="not-ready-reasons" className={`${DIM} list-disc pl-5`}>
-            {/* one sentence per cause, in the UI language when the backend named the cause */}
             {item.reasons.map((r, i) => {
               const code = item.reasonCodes?.[i];
               return <li key={i}>{code ? tf(t, `chat.turn.attention.reasonCode.${code}`, r) : r}</li>;
@@ -88,11 +84,11 @@ function AttentionRow({ item }: { item: PipelineAttentionItem }) {
   );
 }
 
+/** Immediate action only. Verification context has its own later disclosure. */
 export function AttentionCard({ block }: { block: PipelineAttentionContent }) {
   const { t } = useTranslation();
-  const count = block.items.length + (block.more || 0);
-  const decided = block.items.filter(isDecided);
-  const rest = block.items.filter((i) => !isDecided(i));
+  const action = block.items.filter((item) => !isVerificationAttentionItem(item));
+  if (action.length === 0) return null;
   return (
     <section
       data-testid="turn-attention"
@@ -100,31 +96,36 @@ export function AttentionCard({ block }: { block: PipelineAttentionContent }) {
       className="border-l-2 border-amber-500/70 bg-amber-500/[0.06] rounded-r-md pl-3 pr-2 py-2"
     >
       <div className="text-[12px] font-medium text-amber-600 dark:text-amber-400">
-        {tf(t, 'chat.turn.attention.heading', 'For you to check · {{count}}', { count })}
+        {tf(t, 'chat.turn.attention.title', 'For you to check')}
       </div>
-      {/* The assistant's name once, over what it settled for the user; its items
-          inherit the subject (spacing groups them, not a box). */}
-      {decided.length > 0 && (
-        <div data-testid="attention-decided" className="mt-1">
-          <div className="text-[12px] text-[var(--color-text-secondary)]">
-            {tf(t, 'chat.turn.attention.decidedFor', '{{name}} decided for you · {{count}}', { name: ASSISTANT_NAME, count: decided.length })}
-          </div>
-          <ul className="pl-3">
-            {decided.map((item, i) => <AttentionRow key={`d-${i}`} item={item} />)}
-          </ul>
-        </div>
-      )}
-      {rest.length > 0 && (
-        <ul className="mt-1">
-          {rest.map((item, i) => <AttentionRow key={`r-${i}`} item={item} />)}
-        </ul>
-      )}
-      {block.more > 0 && (
-        <div className={`mt-0.5 ${DIM}`}>
-          {tf(t, 'chat.turn.attention.more', '+{{count}} more in the run report', { count: block.more })}
-        </div>
-      )}
+      <ul className="mt-1">
+        {action.map((item, i) => <AttentionRow key={`a-${i}`} item={item} />)}
+      </ul>
     </section>
+  );
+}
+
+/** Optional context for judging the proposed next step, quiet until requested. */
+export function AssumptionsDisclosure({ block }: { block: PipelineAttentionContent }) {
+  const { t } = useTranslation();
+  const verification = block.items.filter(isVerificationAttentionItem);
+  const more = block.more ?? 0;
+  if (verification.length === 0 && more === 0) return null;
+  return (
+    <details data-testid="turn-assumptions" className="group/assumptions text-[12.5px] text-[var(--color-text-muted)]">
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded py-0.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
+        <span aria-hidden="true" className="material-symbols-outlined text-[15px] transition-transform group-open/assumptions:rotate-90">chevron_right</span>
+        <span>{tf(t, 'chat.turn.assumptions.title', 'Assumptions to verify')}</span>
+      </summary>
+      <ul className="mt-1 ml-[22px] space-y-1">
+        {verification.map((item, i) => <AttentionRow key={`v-${i}`} item={item} />)}
+      </ul>
+      {more > 0 && (
+        <div className={`mt-1 ml-[22px] ${DIM}`}>
+          {tf(t, 'chat.turn.attention.more', '+{{count}} more in the run report', { count: more })}
+        </div>
+      )}
+    </details>
   );
 }
 
@@ -236,21 +237,16 @@ export function runVerdict(t: Parameters<typeof tf>[0], summary: PipelineSummary
  * (`showReasons`). The documents are in the output card. Model-written text (intent,
  * outcome): rendered plain.
  */
-export function RunResult({ summary, showReasons = false }: { summary: PipelineSummaryContent; showReasons?: boolean }) {
+export function RunResult({ summary, showReasons = false, collapseDetails = false }: {
+  summary: PipelineSummaryContent; showReasons?: boolean; collapseDetails?: boolean;
+}) {
   const { t } = useTranslation();
   const v = runVerdict(t, summary);
   const tone = v.tone === 'warn' ? 'text-amber-600 dark:text-amber-400' : v.tone === 'ok' ? 'text-[var(--color-text)]' : 'text-[var(--color-text-secondary)]';
   const label = 'shrink-0 w-12 text-[12px] text-[var(--color-text-muted)]';
-  return (
-    <section data-testid="run-result" aria-label={tf(t, 'chat.turn.runResult.title', 'Run result')} className="space-y-1">
-      <div data-testid="summary-verdict" className={`text-[14px] font-medium ${tone}`}>
-        {v.text}
-        {summary.landedSha && (
-          <span className="ml-2 font-mono text-[12.5px] font-normal text-[var(--color-text-muted)]">
-            {tf(t, 'chat.turn.runResult.landed', 'on main · {{sha}}', { sha: summary.landedSha.slice(0, 8) })}
-          </span>
-        )}
-      </div>
+  const hasDetails = !!summary.intent || !!summary.solved;
+  const detailRows = hasDetails ? (
+    <div className="space-y-1">
       {summary.intent && (
         <div data-testid="run-intent" className="flex gap-2 text-[13px] text-[var(--color-text-secondary)] min-w-0">
           <span className={label}>{tf(t, 'chat.turn.runResult.asked', 'Asked')}</span>
@@ -263,6 +259,27 @@ export function RunResult({ summary, showReasons = false }: { summary: PipelineS
           <div className="flex gap-2 min-w-0"><span className={label}>{tf(t, 'chat.turn.runResult.now', 'Now')}</span><span className="min-w-0 break-words text-[var(--color-text)]">{summary.solved.now}</span></div>
         </div>
       )}
+    </div>
+  ) : null;
+  return (
+    <section data-testid="run-result" aria-label={tf(t, 'chat.turn.runResult.title', 'Run result')} className="space-y-1">
+      <div data-testid="summary-verdict" className={`text-[14px] font-medium ${tone}`}>
+        {v.text}
+        {summary.landedSha && (
+          <span className="ml-2 font-mono text-[12.5px] font-normal text-[var(--color-text-muted)]">
+            {tf(t, 'chat.turn.runResult.landed', 'on main · {{sha}}', { sha: summary.landedSha.slice(0, 8) })}
+          </span>
+        )}
+      </div>
+      {collapseDetails && detailRows ? (
+        <details data-testid="run-details" className="group/run-details text-[12.5px] text-[var(--color-text-muted)]">
+          <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded py-0.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
+            <span aria-hidden="true" className="material-symbols-outlined text-[15px] transition-transform group-open/run-details:rotate-90">chevron_right</span>
+            <span>{tf(t, 'chat.turn.runResult.details', 'Run details')}</span>
+          </summary>
+          <div className="mt-1 ml-[19px]">{detailRows}</div>
+        </details>
+      ) : detailRows}
       {showReasons && summary.pushReady === false && (summary.pushReasons?.length ?? 0) > 0 && (
         <ul data-testid="run-reasons" className={`${DIM} list-disc pl-5`}>
           {summary.pushReasons!.map((r, i) => (

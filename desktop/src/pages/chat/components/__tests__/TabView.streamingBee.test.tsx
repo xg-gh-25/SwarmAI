@@ -20,11 +20,15 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (k: string, d?: unknown) => (typeof d === 'string' ? d : k) }),
 }));
 vi.mock('../MessageBubble', () => ({
-  MessageBubble: ({ message, isStreaming, isResting }: { message: Message; isStreaming?: boolean; isResting?: boolean }) => (
+  MessageBubble: ({ message, isStreaming, isResting, onRetryError }: {
+    message: Message; isStreaming?: boolean; isResting?: boolean; onRetryError?: () => void;
+  }) => (
     <div
       data-testid={`bubble-${message.id}`}
       data-streaming={String(!!isStreaming)}
       data-resting={String(!!isResting)}
+      data-error={String(!!message.isError)}
+      data-error-retry={String(!!onRetryError)}
     />
   ),
 }));
@@ -110,5 +114,34 @@ describe('TabView — streaming bee resting cue', () => {
     rerender(<TabView {...props('A', false)} />);
     expect(attr(getByTestId('bubble-a1'), 'data-streaming')).toBe('false');
     expect(attr(getByTestId('bubble-a1'), 'data-resting')).toBe('false');
+  });
+});
+
+
+describe('TabView — terminal error stays on the assistant message path', () => {
+  beforeEach(() => {
+    (Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = vi.fn();
+    messageStoreRegistry.clear();
+  });
+  afterEach(() => {
+    cleanup();
+    messageStoreRegistry.clear();
+  });
+
+  it('passes an errored assistant message and queue retry through MessageBubble', () => {
+    const error: Message = {
+      id: 'error-1',
+      role: 'assistant',
+      timestamp: ts,
+      isError: true,
+      errorCode: 'QUEUE_TIMEOUT',
+      content: [{ type: 'text', text: 'partial' }, { type: 'text', text: 'queue timed out' }],
+    };
+    messageStoreRegistry.getOrCreate('A').replace([error]);
+    const retry = vi.fn();
+    const { getByTestId } = render(<TabView {...props('A', false, { onRetryQueueTimeout: retry })} />);
+    const bubble = getByTestId('bubble-error-1');
+    expect(attr(bubble, 'data-error')).toBe('true');
+    expect(attr(bubble, 'data-error-retry')).toBe('true');
   });
 });

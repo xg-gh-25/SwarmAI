@@ -3,12 +3,12 @@
  *
  * Renders a single tab's scrollable message list: the "Load earlier messages"
  * control, the `WelcomeScreen` empty-state, the per-message bubble map
- * (MessageBubble / system divider / CompactNotice / ChatErrorMessage), the connection-state
+ * (MessageBubble / system divider / CompactNotice), the connection-state
  * indicators (reconnecting / resuming, the fallback spinner, the SESSION_BUSY
  * recovery spinner), the "↓ Back to latest" pill (only while streaming AND the
- * user has scrolled away; no prefix, no spinner — the bee is the turn's one animated
- * signal, chat turn spec v6 §6). Where the viewport sits — following the bottom, or
- * holding what the user is reading — is decided by pages/chat/scrollFocus.ts. What the
+ * user has scrolled away; chat streaming keeps its by-design header pulse plus tail bee,
+ * with no third activity spinner, chat turn spec v6 §6). Where the viewport sits — following
+ * the bottom, or holding what the user is reading — is decided by pages/chat/scrollFocus.ts. What the
  * agent is DOING is not rendered here — it lives in each message's zones (TurnZones).
  *
  * Migration Step 5.1 (this revision): TabView is now rendered ONE PER OPEN TAB
@@ -44,7 +44,6 @@ import {
 import type { ScrollAnchor, SeenState } from '../scrollFocus';
 import type { StreamingActivity, ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { Spinner } from '../../../components/common';
-import { ChatErrorMessage } from '../../../components/chat';
 import type { PendingQuestion } from '../types';
 import { resolvePendingToolUseId } from '../utils';
 import { MessageBubble } from './MessageBubble';
@@ -751,25 +750,6 @@ function TabViewImpl({
               </div>
             );
           }
-          // Error messages get the structured error renderer
-          if (msg.isError) {
-            const textBlock = msg.content.find(b => b.type === 'text');
-            const errorText = textBlock && 'text' in textBlock ? textBlock.text : tf(t, 'chat.list.errorFallback', 'An error occurred');
-            const errorCode = (msg as unknown as Record<string, unknown>).errorCode as string | undefined;
-            return (
-              <ChatErrorMessage
-                key={msg.id}
-                error={{
-                  code: errorCode,
-                  message: errorText,
-                  detail: (msg as unknown as Record<string, unknown>).errorDetail as string | undefined,
-                  suggestedAction: (msg as unknown as Record<string, unknown>).suggestedAction as string | undefined,
-                  retryAfter: (msg as unknown as Record<string, unknown>).retryAfter as number | undefined,
-                }}
-                onRetry={errorCode === 'QUEUE_TIMEOUT' ? onRetryQueueTimeout : undefined}
-              />
-            );
-          }
           // A CLI-injected turn is announced by an empty placeholder before its
           // first persisted block arrives. Rendering that placeholder flashes a
           // bare Swarm header + bee for one frame, then replaces it with the
@@ -837,6 +817,7 @@ function TabViewImpl({
                   contextWarning={idx === lastAssistantIdx ? contextWarning : null}
                   onCancelQueued={msg.isQueued && tabId ? () => onCancelQueued(tabId) : undefined}
                   onContinue={idx === lastAssistantIdx && !isStreaming ? onContinue : undefined}
+                  onRetryError={msg.isError && msg.errorCode === 'QUEUE_TIMEOUT' ? onRetryQueueTimeout : undefined}
                 />
               </div>
               {streamingIndicator}

@@ -58,6 +58,7 @@ EVAL = {"data": {
         {"id": "FR-1", "statement": "registry has opus-5-5", "status": "met", "source": {"kind": "user"}},
         {"id": "FR-3", "statement": "eval later", "status": "proposed", "source": {"kind": "assumption"}},
         {"id": "FR-5", "statement": "which tab?", "status": "needs-clarification", "source": {"kind": "user"}},
+        {"id": "FR-6", "statement": "confirmed choice", "status": "confirmed", "source": {"kind": "assumption"}},
     ],
 }}
 DELIVER = {"adversarial_review": {"findings_total": 3, "findings_fixed": 2}}
@@ -81,13 +82,32 @@ def test_run_block_is_the_alignment(tmp_path, monkeypatch):
 def test_attention_items_come_from_structured_fields_only(tmp_path, monkeypatch):
     b = pse.attention_block("run_a1", _state(tmp_path, monkeypatch), "T")
     kinds = [(i["kind"], i.get("name") or i.get("id")) for i in b["items"]]
-    assert kinds == [("self_answered", "Q1"), ("assumption", "FR-3"), ("assumption", "FR-5"), ("gate", "GATE 0"), ("gate", "GATE 1"),
-                     ("gate", "GATE 2"), ("not_push_ready", None)]
-    q1 = b["items"][0]
+    assert kinds == [("gate", "GATE 0"), ("gate", "GATE 1"), ("gate", "GATE 2"),
+                     ("not_push_ready", None), ("self_answered", "Q1"),
+                     ("assumption", "FR-3"), ("assumption", "FR-5")]
+    assert all(i.get("id") != "FR-6" for i in b["items"])
+    q1 = b["items"][4]
     assert (q1["answer"], q1["reason"]) == ("prompt_builder at runtime", "covers stored configs too")
-    assert b["items"][5]["verdict"] == "1/3 open"
-    assert b["items"][6]["reasons"] == ["Tests failed", "A review finding is still open"]
-    assert b["items"][6]["detail"] == "Details: REPORT §10"
+    assert b["items"][2]["verdict"] == "1/3 open"
+    assert b["items"][3]["reasons"] == ["Tests failed", "A review finding is still open"]
+    assert b["items"][3]["detail"] == "Details: REPORT §10"
+
+
+def test_attention_cap_never_drops_action_items_behind_audit_detail(tmp_path, monkeypatch):
+    noisy_eval = {"data": {
+        "clarifications": [
+            {"qid": f"Q{i}", "question": f"choice {i}", "answer": "A", "answered_by": "self"}
+            for i in range(10)
+        ],
+        "requirements": [],
+    }}
+    b = pse.attention_block("run_a1", _state(tmp_path, monkeypatch, arts={
+        "evaluation-x-art_ev1.json": noisy_eval,
+        "delivery-x-art_dl1.json": DELIVER,
+    }), "T")
+    assert [i["kind"] for i in b["items"][:4]] == ["gate", "gate", "gate", "not_push_ready"]
+    assert len(b["items"]) == pse.MAX_ATTENTION_ITEMS
+    assert b["more"] == 6
 
 
 @pytest.mark.parametrize("verdict", ["PASS", "SUPPORTED (calibrated)", "SKIPPED", "PROCEED-WITH-FIXES",

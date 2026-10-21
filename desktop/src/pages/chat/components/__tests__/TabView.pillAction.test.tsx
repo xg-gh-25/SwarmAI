@@ -3,8 +3,8 @@
  *
  * What is tested (real TabView, MessageBubble mocked): once the user has scrolled
  * away from the bottom while the turn streams, the pill says only "↓ Back to latest"
- * — never the running call, a step count, a timer or "Thinking" (what runs now is in
- * the turn itself; the one animated signal is the bee). The same with a call running
+ * — never the running call, a step count, a timer or "Thinking" (header pulse +
+ * tail bee already carry the by-design streaming state). The same with a call running
  * and between calls.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';

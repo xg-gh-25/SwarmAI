@@ -3,10 +3,10 @@
  * summary, and a card per run document it wrote — REQUIREMENTS / DESIGN_SPEC / REVIEW /
  * FIXING_SPEC / REPORT (backend/core/run_docs.py).
  *
- * A card shows the document's first section folded (the backend's `excerpt`). "Show
- * full text" reads the file from the workspace (GET /workspace/file) and renders it in
- * place; "Open" puts it in the Canvas. Shown outside the stage's fold: the stage's
- * work can collapse, what it produced stays visible.
+ * A card starts as one compact document row. "Show full text" reads the file from
+ * the workspace (GET /workspace/file) and renders it in place; while that read is in
+ * flight, the backend excerpt is a fast preview. "Open" puts it in the Canvas. The
+ * row stays outside the stage fold so the produced document remains discoverable.
  *
  * @exports StageResult, DocCard, readRunDoc
  */
@@ -78,14 +78,14 @@ export function DocCard({ doc, renderText }: { doc: PipelineDocRef; renderText: 
           </button>
         )}
       </div>
-      {!open && body && (
-        <div data-testid="stage-doc-excerpt" className="mt-1 max-h-[5.5em] overflow-hidden text-[12.5px] text-[var(--color-text-secondary)]">
-          {renderText(body, `${doc.name}-ex`)}
-        </div>
-      )}
       {open && (
         <div data-testid="stage-doc-full" className="mt-2 text-[13px]">
-          {state === 'loading' && <span className="text-[12px] text-[var(--color-text-dim)]">{tf(t, 'chat.turn.doc.loading', 'Loading…')}</span>}
+          {state === 'loading' && body && (
+            <div data-testid="stage-doc-loading-preview" className="max-h-[5.5em] overflow-hidden text-[12.5px] text-[var(--color-text-secondary)]">
+              {renderText(body, `${doc.name}-loading`)}
+            </div>
+          )}
+          {state === 'loading' && !body && <span className="text-[12px] text-[var(--color-text-dim)]">{tf(t, 'chat.turn.doc.loading', 'Loading…')}</span>}
           {state === 'failed' && <span className="text-[12px] text-[var(--color-text-dim)]">{tf(t, 'chat.turn.doc.failed', 'Could not read this document')}</span>}
           {state === 'idle' && text !== null && renderText(text, `${doc.name}-full`)}
         </div>

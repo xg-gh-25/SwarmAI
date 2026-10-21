@@ -11,8 +11,8 @@
  * - a run document is listed once in the output card (not again as a deliverable tile)
  * - not shown while the turn streams; a direct run shows its summary too, and an
  *   abandoned run says it closed without landing (XG 2026-10-20)
- * - a completed stage shows its summary line and a card per document it wrote: the
- *   first section folded, "Show full text" reads the file and renders it in place
+ * - a completed stage shows its summary line and a compact document row: no excerpt
+ *   by default; "Show full text" reads the file and renders it in place
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
@@ -106,7 +106,7 @@ describe('pipeline_summary', () => {
     expect(screen.queryByText(/X1 unmet/)).toBeNull();
   });
 
-  it('the result comes first: verdict and where it landed, what was asked, before → now', () => {
+  it('keeps the machine verdict visible and folds duplicate run prose behind details when Result exists', () => {
     const sum = { ...(SUMMARY(true) as object), intent: '修 main 上 3 个红测试', landedSha: '5d941e20aa11',
       solved: { before: '原来 3 个测试一直红', now: '现在 5 个全过' } } as ContentBlock;
     const attn = { type: 'pipeline_attention', runId: 'run_s', at: 'T', more: 0,
@@ -114,13 +114,24 @@ describe('pipeline_summary', () => {
     renderView([...TURN(sum), attn]);
     const result = screen.getByTestId('run-result');
     expect(within(result).getByTestId('summary-verdict').textContent).toBe('Done · ready to push' + 'on main · 5d941e20');
-    expect(within(result).getByTestId('run-intent').textContent).toContain('修 main 上 3 个红测试');
-    expect(within(result).getByTestId('run-solved').textContent).toContain('原来 3 个测试一直红');
-    expect(within(result).getByTestId('run-solved').textContent).toContain('现在 5 个全过');
+    const details = within(result).getByTestId('run-details');
+    expect(details.getAttribute('open')).toBeNull();
+    expect(within(details).getByText('Run details')).toBeTruthy();
+    expect(within(details).getByTestId('run-intent').textContent).toContain('修 main 上 3 个红测试');
+    expect(within(details).getByTestId('run-solved').textContent).toContain('现在 5 个全过');
     const order = [result, screen.getByTestId('turn-attention'), screen.getByTestId('output-card')];
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
+  });
+
+  it('keeps the complete delivery record visible when there is no normal Result', () => {
+    const sum = { ...(SUMMARY(true) as object), intent: '修 main 上 3 个红测试',
+      solved: { before: '原来 3 个测试一直红', now: '现在 5 个全过' } } as ContentBlock;
+    renderView([sum]);
+    expect(screen.queryByTestId('run-details')).toBeNull();
+    expect(screen.getByTestId('run-intent').textContent).toContain('修 main 上 3 个红测试');
+    expect(screen.getByTestId('run-solved').textContent).toContain('现在 5 个全过');
   });
 
   it('without an attention card in the turn, the summary says why it is not ready', () => {
@@ -204,14 +215,14 @@ describe('a completed stage shows what it produced', () => {
     expect(seen).toEqual([DOC.absolutePath]);
   });
 
-  it('its summary line and a document card with the first section folded', () => {
+  it('keeps the stage conclusion and document entry visible without a default excerpt', () => {
     renderView(withExcerpt('GO · 3 acceptance criteria'), false);
     expect(screen.getByTestId('stage-summary').textContent).toBe('GO · 3 acceptance criteria');
     const card = screen.getByTestId('stage-doc');
     expect(card.getAttribute('data-name')).toBe('REQUIREMENTS.md');
-    const ex = within(card).getByTestId('stage-doc-excerpt').textContent ?? '';
-    expect(ex).toContain('Ship the cards.');
-    expect(ex).not.toContain('## Requirements');
+    expect(within(card).getByText('REQUIREMENTS.md')).toBeTruthy();
+    expect(within(card).queryByTestId('stage-doc-excerpt')).toBeNull();
+    expect(card.textContent).not.toContain('Ship the cards.');
   });
 
   it('"Show full text" reads the file and renders it in place; a read failure says so', async () => {
@@ -222,7 +233,7 @@ describe('a completed stage shows what it produced', () => {
     expect(apiGet).toHaveBeenCalledWith('/workspace/file', { params: { path: DOC.absolutePath } });
     expect(screen.queryByTestId('stage-doc-excerpt')).toBeNull();
     fireEvent.click(screen.getByTestId('stage-doc-toggle'));
-    expect(screen.getByTestId('stage-doc-excerpt')).toBeTruthy();
+    expect(screen.queryByTestId('stage-doc-excerpt')).toBeNull();
     apiGet.mockRejectedValueOnce(new Error('gone'));
     renderView(withExcerpt(null), false);
     fireEvent.click(screen.getAllByTestId('stage-doc-toggle')[1]);

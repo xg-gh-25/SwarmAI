@@ -360,13 +360,19 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   ○, no `k/N`. A stage that runs again is the same group with `round N`; a gate is one
   verdict row with its earlier rounds' verdicts; a run that stopped mid-way says
   `Stopped at X`. A direct run (a code change in its own worktree) is not a pipeline:
-  none of this, and no run-summary card. (7) **The ending is RESULT → one output card →
-  chips.** One card, two sections at most: code changes (from the backend's per-turn
-  diff only — machine-written logs, context files and deliverable copies excluded) and
-  deliverables (what the turn produced, plus a run's documents — listed only there).
-  The answer never re-lists them. (8) **One animated signal** — the streaming bee; a
-  running strip, ⟳ and WORKING are static marks; no floating "Thinking" pill;
-  scrolled up shows only `↓ Back to latest`. (9) **Breathing room is two steps:** 28px
+  none of this, and no run-summary card. (7) **The ending follows decision priority:**
+  `RESULT → machine run status → action required → one output card → folded assumptions
+  → proposed-next-step chips` (omit empty slots). The machine status keeps only trusted
+  run facts above its disclosure when Result already explains the work. Action means an
+  unresolved gate or not-push-ready cause; self-answered decisions and open assumptions
+  sit in a folded `Assumptions to verify` disclosure beside the proposed next steps. One
+  output card, two sections at most: code changes (from the backend's per-turn diff only —
+  machine-written logs, context files and deliverable copies excluded) and deliverables
+  (what the turn produced, plus a run's documents — listed only there). The answer never
+  re-lists them. (8) **Two coordinated streaming signals are by design:** the header pulse
+  says this message is live; the tail bee shows activity versus a quiet/resting stream.
+  They must agree on the same state, and no third spinner/pill is added. A running strip,
+  ⟳ and WORKING are static marks; scrolled up shows only `↓ Back to latest`. (9) **Breathing room is two steps:** 28px
   between zones, at most 10px inside one, 2px between strips — measured as
   min(between) > max(inside) on real data, never eyeballed. (10) **Nothing changes
   shape on the spot.** While a turn streams the zone list only grows: no zone already
@@ -385,9 +391,9 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
     output card.
   - **The agent's words are first level** — a note between calls is the conclusion of
     one phase and the plan of the next: it stands between groups, at body size.
-  - **One fact, one representation** — one spinner, one place for file counts, one
-    place for run documents. Two indicators that disagree cost more trust than either
-    earns.
+  - **One fact, one representation** — one place for file counts and one for run
+    documents. The header pulse and tail bee deliberately show different facets of the
+    same streaming state; any third indicator, or two indicators that disagree, costs trust.
   - **Color only for what needs action** — when every recovered failure is red, the
     one failure that needs the user stops standing out.
   - **Fold, never delete** — the process stays auditable (phase → strip → detail):

@@ -535,10 +535,10 @@ export interface Message {
   content: ContentBlock[];
   timestamp: string;
   model?: string;
-  /** When true, the message contains an error and should be visually distinguished (red border). */
+  /** When true, the message ends with a terminal error notice; prior content stays normal. */
   isError?: boolean;
   /** Backend error `code` for an isError message (e.g. TOOL_CALL_LEAK_UNRECOVERED,
-   *  AGENT_TIMEOUT). Read by TabView → ChatErrorMessage to pick the coded label +
+   *  AGENT_TIMEOUT). Read by AssistantMessageView → ChatErrorMessage to pick the coded label +
    *  severity colour. ABSENT (undefined) → the amber "Interrupted" fallback. Set by
    *  the SSE error-event handler via `errorFieldsFromEvent`; a code-less error (a
    *  genuine connection drop) correctly leaves this undefined. */
