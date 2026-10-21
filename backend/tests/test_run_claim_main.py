@@ -692,7 +692,7 @@ def test_claim_token_is_issued_only_after_approval(flow, monkeypatch):
     assert og._decide("s1", start, {"command": start}, "approved") is None
     got = og._decide("s1", start, {"command": start}, "check")
     assert got["hookSpecificOutput"]["updatedInput"]["command"].startswith(hook_token.TOKEN_ENV)
-    bad = "cd /tmp && " + cmd                                   # the check phase still denies
+    bad = "source /tmp/env && " + cmd                          # the check phase still denies
     assert og._decide("s1", bad, {"command": bad}, "check")["hookSpecificOutput"][
         "permissionDecision"] == "deny"
 
