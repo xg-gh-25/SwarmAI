@@ -132,6 +132,87 @@ atexit.register(_kill_child_processes)
 
 
 # ---------------------------------------------------------------------------
+# Kill guard — a test must never signal the test process, its group or ancestors
+# ---------------------------------------------------------------------------
+# Product kill paths (SessionUnit._force_kill, the PID watchdog, process-tree
+# reapers) run in tests against mocked units. A MagicMock pid is 1 as an int, a
+# fake pid can collide with a real process, and the "shared pgid" branch of
+# _force_kill walks our own tree. Any of these SIGKILLs the xdist worker, which
+# then shows up as "worker crashed" on whatever test was running. The guard turns
+# that into a PermissionError (which the kill paths already handle) and appends
+# the stack to SWARM_TEST_KILL_LOG so the offending test can be found.
+_REAL_OS_KILL = os.kill
+_REAL_OS_KILLPG = os.killpg
+
+
+def _protected_pids() -> set:
+    """Self, ancestors, and every process of the pytest run that is not ours.
+
+    xdist workers are siblings: a kill path that walks a mocked pid's tree (pid 1
+    is launchd, the whole user session) reaches the OTHER workers, which die as
+    "worker crashed" without any trace in their own logs. Our own descendants
+    (subprocesses this test started) stay killable.
+    """
+    pids = {os.getpid()}
+    try:
+        import psutil as _ps
+        me = _ps.Process()
+        parents = me.parents()
+        pids.update(p.pid for p in parents)
+        own = {c.pid for c in me.children(recursive=True)}
+        if parents:  # the xdist controller (or the shell for a serial run)
+            ctrl = parents[0]
+            pids.update(c.pid for c in ctrl.children(recursive=True)
+                        if c.pid not in own)
+    except Exception:  # psutil missing or AccessDenied: own pid + parent only
+        pids.add(os.getppid())
+    return pids
+
+
+def _refuse_kill(kind: str, target: int, sig: int) -> None:
+    import traceback
+    log = os.environ.get("SWARM_TEST_KILL_LOG") or os.path.join(
+        tempfile.gettempdir(), f"swarmai_test_kill_refused_{os.getpid()}.log"
+    )
+    try:
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write(f"--- refused {kind}({target}, {sig}) in pid {os.getpid()} "
+                     f"test={os.environ.get('PYTEST_CURRENT_TEST')}\n")
+            fh.write("".join(traceback.format_stack(limit=25)))
+    except OSError:
+        pass
+    raise PermissionError(f"test kill guard: refused {kind}({target}, {sig})")
+
+
+def _guarded_kill(pid, sig):
+    if sig != 0:
+        try:
+            ipid = int(pid)
+        except (TypeError, ValueError):
+            ipid = None
+        if ipid is not None and (ipid <= 1 or ipid in _protected_pids()
+                                 or (ipid < 0 and -ipid == os.getpgid(0))):
+            _refuse_kill("os.kill", ipid, sig)
+    return _REAL_OS_KILL(pid, sig)
+
+
+def _guarded_killpg(pgid, sig):
+    if sig != 0:
+        try:
+            ipg = int(pgid)
+        except (TypeError, ValueError):
+            ipg = None
+        if ipg is not None and (ipg <= 1 or ipg == os.getpgid(0)
+                                or ipg in _protected_pids()):
+            _refuse_kill("os.killpg", ipg, sig)
+    return _REAL_OS_KILLPG(pgid, sig)
+
+
+os.kill = _guarded_kill
+os.killpg = _guarded_killpg
+
+
+# ---------------------------------------------------------------------------
 # Memory-adaptive worker count
 # ---------------------------------------------------------------------------
 _WORKER_MEMORY_BUDGET = int(1.0 * 1024**3)        # 1 GB per worker
@@ -469,6 +550,48 @@ async def async_client() -> AsyncGenerator[AsyncClient, None]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture(autouse=True)
+def _restore_streaming_count():
+    """Give back the daemon-wide streaming counter after every test.
+
+    core.session_unit._streaming_count is bumped by every SessionUnit that enters
+    STREAMING and only decremented when it leaves. Tests routinely build a unit in
+    STREAMING and drop it, so the count climbed past MAX_CONCURRENT_STREAMS within
+    one worker. Every later send() then sat in _await_streaming_slot for its full
+    120 s admission timeout; under --timeout=120 that killed the xdist worker
+    ("worker crashed" on whichever send()-test came next). Production units always
+    transition out, so this is test isolation only.
+    """
+    mod = _sys.modules.get("core.session_unit")
+    before = getattr(mod, "_streaming_count", None) if mod else None
+    yield
+    mod = _sys.modules.get("core.session_unit")
+    if mod is not None:
+        mod._streaming_count = before or 0
+
+
+@pytest.fixture(autouse=True)
+def _restore_thread_event_loop():
+    """Put back the thread's event loop when a test cleared it.
+
+    asyncio.run() (Runner.close) and helpers that call set_event_loop(None) leave
+    the main thread with no current loop. A live loop that was current before the
+    test (pytest-asyncio's session loop) is then lost for the rest of the worker,
+    and every later loop_scope="session" test fails with "There is no current event
+    loop in thread 'MainThread'" (test_chat_scenarios_e2e under xdist). Only that
+    case is repaired: a loop that was not current before is never installed, since
+    an unclosed stray loop keeps aiosqlite's worker thread alive at exit.
+    """
+    import asyncio as _asyncio
+
+    local = getattr(_asyncio.get_event_loop_policy(), "_local", None)
+    before = getattr(local, "_loop", None)
+    yield
+    if before is not None and not before.is_closed() \
+            and getattr(local, "_loop", None) is None:
+        _asyncio.set_event_loop(before)
 
 
 @pytest.fixture(autouse=True)
