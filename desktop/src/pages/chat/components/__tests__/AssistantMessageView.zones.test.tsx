@@ -261,6 +261,22 @@ describe('AC4 — one light strip per call', () => {
     const tools = screen.getAllByTestId('strip-tool').map((s) => s.textContent);
     expect(tools).toEqual(['Bash ×2', 'Bash']);
   });
+
+  it('Result is a structured reading region without a private width or font class', () => {
+    render(view([
+      tx('go'), bash('a', 'ls'), tr('a'),
+      tx('结论先说。\n\n## 改了什么\n\n- **执行方式**：独立 worktree\n  - 细节退到下一层\n\n## 验证\n\n- 55 tests passed'),
+    ], false));
+    const result = screen.getByTestId('turn-result');
+    expect(result.classList.contains('turn-result')).toBe(true);
+    expect(result.getAttribute('role')).toBe('region');
+    expect(result.getAttribute('aria-label')).toBe('Result');
+    expect(result.className).not.toMatch(/max-w|font-/);
+    expect(result.closest('.assistant-message')).not.toBeNull();
+    const markdown = within(result).getByText('结论先说。').closest('.markdown-content')!;
+    expect(markdown.querySelectorAll(':scope > h2')).toHaveLength(2);
+    expect(markdown.querySelector(':scope > ul > li > ul')).not.toBeNull();
+  });
 });
 
 describe('AC5 — the Agents panel', () => {

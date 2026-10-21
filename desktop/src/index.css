@@ -1191,3 +1191,98 @@ body {
   font-size: 0.96rem;      /* ≈12.5px */
   line-height: 1.55;
 }
+
+/* ── Assistant response — edited-answer hierarchy ─────────────────────────
+   Every assistant prose block, including the still-streaming candidate for the
+   final answer, uses this same hierarchy. Moving that block into RESULT at turn
+   end therefore changes neither font metrics nor list geometry.
+
+   The response keeps the SAME inherited SwarmAI font and the SAME responsive
+   chat-column width. Readability comes from hierarchy and grouping, never a
+   second font stack or a private max-width. Short headings split concerns. A
+   top-level list scans as rows; nested detail recedes behind a quiet guide
+   instead of becoming a wall of equal-weight bullet markers. */
+.assistant-message .markdown-content {
+  font-family: inherit;
+}
+
+.assistant-message .markdown-content h1,
+.assistant-message .markdown-content h2,
+.assistant-message .markdown-content h3,
+.assistant-message .markdown-content h4 {
+  margin-top: 1.2rem;
+  margin-bottom: 0.45rem;
+  padding: 0;
+  border: 0;
+  color: var(--color-text);
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: 0;
+}
+
+.assistant-message .markdown-content h1 {
+  font-size: 1.24rem;
+}
+
+.assistant-message .markdown-content h2 {
+  font-size: 1.16rem;
+}
+
+.assistant-message .markdown-content h3 {
+  font-size: 1.1rem;
+}
+
+.assistant-message .markdown-content h4 {
+  font-size: 1.08rem;
+}
+
+.assistant-message .markdown-content > ul,
+.assistant-message .markdown-content > ol {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.35rem 0 0.9rem;
+  padding-left: 1.25rem;
+}
+
+.assistant-message .markdown-content li {
+  padding-left: 0.2rem;
+  line-height: 1.68;
+}
+
+.assistant-message .markdown-content li::marker {
+  color: var(--color-text-dim);
+}
+
+.assistant-message .markdown-content li > ul,
+.assistant-message .markdown-content li > ol {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.45rem 0 0.2rem;
+  padding-left: 1rem;
+  border-left: 1px solid var(--color-border);
+  list-style: none;
+  color: var(--color-text-secondary);
+}
+
+.assistant-message .markdown-content li > ul li,
+.assistant-message .markdown-content li > ol li {
+  padding-left: 0;
+}
+
+.assistant-message .markdown-content li > ul li > ul,
+.assistant-message .markdown-content li > ol li > ol,
+.assistant-message .markdown-content li > ul li > ol,
+.assistant-message .markdown-content li > ol li > ul {
+  border-left: 0;
+  padding-left: 1.1rem;
+  list-style: disc;
+  color: var(--color-text-muted);
+}
+
+.assistant-message .markdown-content strong {
+  font-weight: 600;
+}
+
+.assistant-message .markdown-content > :last-child {
+  margin-bottom: 0;
+}

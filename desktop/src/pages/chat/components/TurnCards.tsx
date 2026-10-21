@@ -8,7 +8,7 @@
  *                   assumptions) is one group under ONE "{name} decided for you" line.
  * - OutputCard    — the turn's ONE output card at the end: a code-changes section
  *                   (ChangesCard, from `turn_changes`) and a deliverables section (what
- *                   the turn produced — `turn_deliverables` tiles — and a pipeline
+ *                   the turn produced — compact `turn_deliverables` rows — and a pipeline
  *                   run's documents, with the run's verdict). Either section alone;
  *                   a file is in one section only.
  * All text in these blocks is model-written: rendered plain, never as markdown.
@@ -161,28 +161,28 @@ function DeliverableTile({ file }: { file: TurnDeliverable }) {
   const headProps = readOnly ? {} : { type: 'button' as const, onClick: open };
   const action = 'text-[11.5px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:underline';
   return (
-    <li data-testid="deliverable" data-path={file.absolutePath} className="min-w-0 rounded-md border border-[var(--color-border)] p-2">
-      <Head {...headProps} title={file.absolutePath} className="w-full flex items-center gap-2 min-w-0 text-left">
+    <li data-testid="deliverable" data-path={file.absolutePath} className="flex items-center gap-2 min-w-0 py-1.5">
+      <Head {...headProps} title={file.absolutePath} className="min-w-0 flex-1 flex items-center gap-2 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
         {thumb ? (
-          <img src={thumb} alt="" onError={() => setThumbFailed(true)} className="w-10 h-10 rounded object-cover shrink-0" />
+          <img src={thumb} alt="" onError={() => setThumbFailed(true)} className="w-7 h-7 rounded object-cover shrink-0" />
         ) : (
           <span
             aria-hidden="true"
-            className="material-symbols-outlined text-[28px] leading-none shrink-0"
+            className="material-symbols-outlined text-[18px] leading-none shrink-0"
             style={{ color: fileIconColor(name), filter: 'saturate(0.55)' }}
           >
             {fileIcon(name)}
           </span>
         )}
-        <span className="min-w-0 font-mono text-[12px] text-[var(--color-text-secondary)] truncate">{middleEllipsis(name)}</span>
+        <span className="min-w-0 font-mono text-[12.5px] text-[var(--color-text-secondary)] truncate">{middleEllipsis(name)}</span>
       </Head>
       {!readOnly && (
-      <div className="mt-1.5 flex items-center gap-3">
-        <button type="button" onClick={open} className={action}>{tf(t, 'chat.turn.deliverables.open', 'Open in Canvas')}</button>
-        <button type="button" onClick={copy} className={action}>
-          {copied ? tf(t, 'chat.turn.deliverables.copied', 'Copied') : tf(t, 'chat.turn.deliverables.copyPath', 'Copy path')}
-        </button>
-      </div>
+        <div className="ml-auto shrink-0 flex items-center gap-3">
+          <button type="button" onClick={open} className={action}>{tf(t, 'chat.turn.deliverables.open', 'Open in Canvas')}</button>
+          <button type="button" onClick={copy} className={action}>
+            {copied ? tf(t, 'chat.turn.deliverables.copied', 'Copied') : tf(t, 'chat.turn.deliverables.copyPath', 'Copy path')}
+          </button>
+        </div>
       )}
     </li>
   );
@@ -289,19 +289,19 @@ export function OutputCard({ changes, deliverables, summary }: {
   const nDeliv = deliverables.length + docs.filter((d) => !!d.absolutePath).length;
   if (!changes && !deliverables.length && !docs.length) return null;
   return (
-    <section data-testid="output-card" className="rounded-lg border border-[var(--color-border)] overflow-hidden">
-      {changes && <ChangesCard block={changes} bare />}
+    <section data-testid="output-card" className="space-y-3">
+      {changes && <ChangesCard block={changes} />}
       {(deliverables.length > 0 || docs.length > 0) && (
-        <div data-testid="output-deliverables" className={`px-3 pt-2 pb-3 ${changes ? 'border-t border-[var(--color-border)]' : ''}`}>
-          <div className="mb-1.5 flex items-baseline gap-2 font-mono text-[13px] text-[var(--color-text)]">
+        <div data-testid="output-deliverables">
+          <div className="mb-1 flex items-baseline gap-2 text-[12px] font-medium text-[var(--color-text-muted)]">
             {nDeliv === 1 ? tf(t, 'chat.turn.output.deliverableOne', '1 deliverable') : tf(t, 'chat.turn.output.deliverables', '{{count}} deliverables', { count: nDeliv })}
           </div>
           {deliverables.length > 0 && (
-            <ul className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(190px,1fr))]">
+            <ul className="divide-y divide-[var(--color-border)]">
               {deliverables.map((f) => <DeliverableTile key={f.absolutePath} file={f} />)}
             </ul>
           )}
-          {docs.length > 0 && <ul className={deliverables.length ? 'mt-2' : ''}>{docs.map((d) => <SummaryDocRow key={d.name} doc={d} />)}</ul>}
+          {docs.length > 0 && <ul className={deliverables.length ? 'mt-1' : ''}>{docs.map((d) => <SummaryDocRow key={d.name} doc={d} />)}</ul>}
         </div>
       )}
     </section>

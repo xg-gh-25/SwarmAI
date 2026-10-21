@@ -744,7 +744,12 @@ export function TurnZoneList({ zones, ctx, hasOpenQuestionIn }: {
           case 'phase': el = <PhaseGroup zone={z} ctx={ctx} />; break;
           case 'text':
             el = (
-              <div data-testid={z.result ? 'turn-result' : z.role === 'restatement' ? 'turn-restatement' : z.role === 'note' ? 'turn-note' : 'turn-answer'} {...ANCHOR_PROPS}>
+              <div
+                data-testid={z.result ? 'turn-result' : z.role === 'restatement' ? 'turn-restatement' : z.role === 'note' ? 'turn-note' : 'turn-answer'}
+                className={z.result ? 'turn-result' : undefined}
+                {...(z.result ? { role: 'region', 'aria-label': tf(t, 'chat.turn.result', 'Result') } : {})}
+                {...ANCHOR_PROPS}
+              >
                 {z.result && (
                   <div className="flex items-center gap-2.5 mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
                     {tf(t, 'chat.turn.result', 'Result')}

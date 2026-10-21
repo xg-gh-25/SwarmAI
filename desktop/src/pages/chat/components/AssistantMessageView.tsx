@@ -3,7 +3,9 @@
  *
  * This sub-component handles the full rendering of assistant-role messages:
  * - Branded header via AssistantHeader (🐝 SwarmAI · timestamp)
- * - Content from the ONE turn projection (`deriveTurnView`, pages/chat/turnView.ts),
+ * - Content from the ONE turn projection (`deriveTurnView`, pages/chat/turnView.ts).
+ *   One `assistant-message` prose scope is shared by streaming notes and RESULT,
+ *   so turn completion never swaps typography or list geometry. The content is
  *   laid out as the turn's zones (`turnZones`, pages/chat/turnZones.ts) and rendered
  *   by TurnZoneList (chat turn spec v6, Knowledge/Designs/2026-10-19-chat-turn-display-
  *   spec.md): THOUGHTS → restatement → WORKED → note → WORKED → … → RESULT; a pipeline
@@ -480,7 +482,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 
   return (
     <ReadOnlyContext.Provider value={!!readOnly}>
-    <div ref={messageRef} className="group/msg min-w-0 flex gap-2.5 items-start">
+    <div ref={messageRef} className="assistant-message group/msg min-w-0 flex gap-2.5 items-start">
       {/* Agent avatar — 24px bronze gradient circle matching mockup & nav logo */}
       <div
         className="w-6 h-6 rounded-[6px] flex items-center justify-center flex-shrink-0 mt-0.5 text-[13px]"

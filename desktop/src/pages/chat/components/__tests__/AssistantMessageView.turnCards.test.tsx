@@ -5,9 +5,8 @@
  * - pipeline_run: never rendered as text (no requirement card, no "Intent" label)
  * - pipeline_attention: a first-level card after the answer and before the output
  *   card (chat turn spec v6 §4/§8); one item per kind; a blocking verdict is red
- * - turn_deliverables: the output card's deliverables section, after the answer, one
- *   tile per file (deduped across rows), middle-ellipsis names keep the extension,
- *   Open dispatches OPEN_FILE_EVENT with the absolute path, Copy copies it; a product
+ * - turn_deliverables: the output section after the answer, one compact row per
+ *   file (deduped across rows), middle-ellipsis names keep the extension, Open dispatches OPEN_FILE_EVENT with the absolute path, Copy copies it; a product
  *   is not listed again as a changed file (turn_changes)
  * - none of the three splits a process segment or hides an unrecovered failure
  */
@@ -142,12 +141,17 @@ describe('pipeline_attention — what needs the user', () => {
 });
 
 describe('turn_deliverables — what the turn produced', () => {
-  it('one tile per file, after the answer, deduped across rows', () => {
+  it('one compact row per file, after the answer, deduped across rows', () => {
     renderView([...PIPELINE, deliv('docs/report.md')]);
+    const output = screen.getByTestId('output-card');
     const card = screen.getByTestId('output-deliverables');
+    expect(output.className).not.toMatch(/border|rounded|overflow-hidden/);
     expect(card.textContent).toContain('2 deliverables');
-    expect(within(card).getAllByTestId('deliverable').map((e) => e.getAttribute('data-path')))
+    const rows = within(card).getAllByTestId('deliverable');
+    expect(rows.map((e) => e.getAttribute('data-path')))
       .toEqual(['/ws/docs/report.md', '/ws/out/deck.pptx']);
+    expect(rows.every((row) => row.classList.contains('flex'))).toBe(true);
+    expect(rows.every((row) => !row.className.match(/border|rounded-md|grid/))).toBe(true);
     const result = screen.getByTestId('turn-result');
     expect(result.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
