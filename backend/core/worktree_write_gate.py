@@ -233,27 +233,19 @@ class _NoRun:
 
 
 def _session_runs_light(sid: str) -> "list[dict]":
-    """This session's live runs (running/paused), newest first — a cheap scan (stat every
-    run.json, parse only those touched in the last 3 days)."""
-    import glob
-    import json
+    """This session's live runs (running/paused) touched in the last 3 days, newest
+    first (core.run_index: one stat per run, a parse only for a changed file)."""
+    from core import run_index
     from core.security_hooks import _pipeline_runs_root
     cutoff = time.time() - 3 * 86400
     out = []
-    for f in glob.glob(os.path.join(_pipeline_runs_root(), "Projects", "*", ".artifacts",
-                                    "runs", "*", "run.json")):
-        try:
-            t = os.path.getmtime(f)
-            if t < cutoff:
-                continue
-            with open(f, encoding="utf-8") as fh:
-                d = json.load(fh)
-        except (OSError, ValueError):
+    for r in run_index.live_runs(_pipeline_runs_root()):
+        d = r.data
+        if r.mtime < cutoff or d.get("session_id") != sid:
             continue
-        if isinstance(d, dict) and d.get("session_id") == sid and d.get("status") in ("running", "paused"):
-            out.append((t, {"id": str(d.get("id") or os.path.basename(os.path.dirname(f))),
-                            "project": str(d.get("project") or ""), "status": d.get("status"),
-                            "worktree_mode": d.get("worktree_mode"), "cli": d.get("cli")}))
+        out.append((r.mtime, {"id": str(d.get("id") or r.path.parent.name),
+                              "project": str(d.get("project") or ""), "status": d.get("status"),
+                              "worktree_mode": d.get("worktree_mode"), "cli": d.get("cli")}))
     return [r for _t, r in sorted(out, key=lambda x: x[0], reverse=True)]
 
 
@@ -701,7 +693,7 @@ def create_worktree_write_gate(session_context: "dict[str, Any]"):
         sid = str(session_context.get("sdk_session_id") or "")
         try:
             v = await asyncio.wait_for(
-                executors.run_in("subprocess", _decide_by, time.monotonic() + _GATE_TIMEOUT,
+                executors.run_in("gate", _decide_by, time.monotonic() + _GATE_TIMEOUT,
                                  sid, input_data), timeout=_GATE_TIMEOUT)
         except Exception:  # incl. TimeoutError — fail-open, the sync check is the backstop
             logger.warning("worktree_write_gate: judgment failed — failing open", exc_info=True)

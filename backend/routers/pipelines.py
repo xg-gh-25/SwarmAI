@@ -139,30 +139,14 @@ def _load_pipeline_runs() -> list[dict]:
     to_thread, not by a lossy pre-filter. If the full scan ever becomes a real
     (measured) cost, add a proper active-run index — not an mtime heuristic.
     """
-    projects_dir = _get_swarmws() / "Projects"
-    if not projects_dir.exists():
-        return []
-
+    # core.run_index: a run.json is parsed again only when it changed (the "proper
+    # run index" the note above asked for; no mtime heuristic, every run is listed).
+    from core import run_index
     runs = []
-    for project_dir in projects_dir.iterdir():
-        if not project_dir.is_dir():
-            continue
-        artifacts_dir = project_dir / ".artifacts"
-        if not artifacts_dir.exists():
-            continue
-
-        # Run path: .artifacts/runs/*/run.json
-        runs_subdir = artifacts_dir / "runs"
-        if runs_subdir.exists():
-            for rd in runs_subdir.iterdir():
-                rf = rd / "run.json"
-                if rf.exists():
-                    try:
-                        state = json.loads(rf.read_text(encoding="utf-8"))
-                        state["_project"] = project_dir.name
-                        runs.append(state)
-                    except (json.JSONDecodeError, OSError, KeyError) as e:
-                        logger.debug("Skipping %s: %s", rf, e)
+    for r in run_index.runs(_get_swarmws()):
+        state = r.data  # a copy: adding _project does not touch the index
+        state["_project"] = r.path.parents[3].name
+        runs.append(state)
 
     runs.sort(key=lambda r: r.get("updated_at", ""), reverse=True)
     return runs

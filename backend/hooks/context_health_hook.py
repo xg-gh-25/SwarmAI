@@ -188,12 +188,12 @@ class ContextHealthHook:
         # pool (NOT the default pool) so a slow refresh never starves the event
         # loop's /health scheduling (COE run_b36c7880, run_d72047b0).
         # ── Light: refresh indexes if workspace changed ──────────────
-        await executors.run_in("subprocess", self._light_refresh, root, ws_path)
+        await executors.run_in("maintenance", self._light_refresh, root, ws_path)
 
         # ── Deep: once per calendar day ──────────────────────────────
         today = date.today().isoformat()
         if self._last_deep_date != today:
-            await executors.run_in("subprocess", self._deep_check, root, ws_path)
+            await executors.run_in("maintenance", self._deep_check, root, ws_path)
             self._last_deep_date = today
 
     # ------------------------------------------------------------------

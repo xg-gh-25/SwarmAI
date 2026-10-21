@@ -1758,19 +1758,15 @@ def diff_since(run_id: str, entry: dict, main, name: "str | None", stat: bool = 
 
 # ── run discovery ────────────────────────────────────────────────────────────
 def _iter_runs(workspace: "str | Path", ids: "set[str] | None" = None):
-    """(run.json path, data) of every run; *ids*: only the run dirs named in it, the
-    others are not even read (the caller already knows which runs it wants)."""
-    import glob
-    for f in glob.glob(os.path.join(str(workspace), "Projects", "*", ".artifacts", "runs",
-                                    "run_*", "run.json")):
-        if ids is not None and os.path.basename(os.path.dirname(f)) not in ids:
+    """(run.json path, data) of every run; *ids*: only the run dirs named in it.
+    Read through core.run_index (a run.json is parsed again only when it changed);
+    *data* is a shallow copy: do not mutate nested values."""
+    from core import run_index
+    for r in run_index.runs(workspace):
+        name = r.path.parent.name
+        if not name.startswith("run_") or (ids is not None and name not in ids):
             continue
-        try:
-            data = json.loads(Path(f).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if isinstance(data, dict):
-            yield Path(f), data
+        yield r.path, r.data
 
 
 def active_entries(data: dict) -> "list[dict]":

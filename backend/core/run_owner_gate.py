@@ -658,7 +658,7 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
             return {"decision": "approve"}
         try:
             res = await asyncio.wait_for(
-                executors.run_in("subprocess", _decide, sid, command, dict(tool_input),
+                executors.run_in("gate", _decide, sid, command, dict(tool_input),
                                  phase),
                 timeout=_DECIDE_TIMEOUT)
         except Exception:  # incl. TimeoutError — fail-open, never block a command

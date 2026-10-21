@@ -42,6 +42,8 @@ another, and MUST never touch the default pool the event loop schedules on):
   spawn       — LATENCY-SENSITIVE cold-spawn READERS only (STS preflight, resume
                 git) — isolated from the slow 'subprocess' writers so a 100s index
                 or an unbounded git-clone never delays a cold-session TTFT
+  gate        — per-tool-call hook judgments (fail-open timeouts count queueing)
+  maintenance — context_health post-session work (slow, uncancellable)
   turn_snapshot / turn_changes — core/turn_changes' per-send start snapshots and
                 its finish diffs / on-demand diffs; kept off 'subprocess' so they
                 never delay its fail-open safety gates, and apart from each other
@@ -66,6 +68,16 @@ T = TypeVar("T")
 _POOL_SPECS: dict[str, int] = {
     "io": 6,          # fs/git-status/sqlite — frequent, medium; the widest pool
     "subprocess": 3,  # git/ada/aws CLI — slow, bursty (the slow-WRITER pool)
+    "gate": 4,        # PreToolUse/PostToolUse judgments run on EVERY tool call
+                      # (worktree write gate, commit / run-owner / review-round /
+                      # pipeline-test gates, session-link stamper). Each waits with a
+                      # short fail-open timeout that counts queueing, so they must
+                      # never sit behind a slow writer: on 'subprocess' (3 threads,
+                      # shared with auto-commit's 4×10s git and context_health) the
+                      # worktree gate timed out and failed open 324 times in a week.
+    "maintenance": 1, # post-session context_health refresh/deep check (~16s, and
+                      # uncancellable once its timeout fires): alone, so it can
+                      # neither hold a 'subprocess' worker nor queue another hook.
     "llm": 2,         # Bedrock inference — very slow, low concurrency by design
     "briefing": 1,    # Welcome-Screen pre-warm — serialize; at most one recompute
     "spawn": 2,       # LATENCY-SENSITIVE cold-spawn READERS ONLY (run_e76b3ea5):

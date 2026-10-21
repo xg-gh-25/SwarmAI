@@ -3070,7 +3070,7 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
         # discipline). Order of the fail-OPEN branches is load-bearing.
         try:
             has_marker, covered, has_unbounded = await asyncio.wait_for(
-                executors.run_in("subprocess", _session_adversarial_coverage, session_id),
+                executors.run_in("gate", _session_adversarial_coverage, session_id),
                 timeout=_GATE_COVERAGE_TIMEOUT,
             )
         except Exception:  # incl. asyncio.TimeoutError; ANY gate-infra failure (even
@@ -3097,7 +3097,7 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
             # uncomputable (not a repo / git error / timeout) → fail OPEN.
             try:
                 pending = await asyncio.wait_for(
-                    executors.run_in("subprocess", _pending_commit_paths, cwd, command),
+                    executors.run_in("gate", _pending_commit_paths, cwd, command),
                     timeout=_GATE_COVERAGE_TIMEOUT,
                 )
             except Exception:  # incl. asyncio.TimeoutError → fail open (never hang)
@@ -3300,24 +3300,18 @@ def _active_run_ownership() -> "tuple[set, set]":
 
 def _active_runs() -> list:
     """run.json dicts of every active (running|paused) run under _ACTIVE_RUN_GLOB_ROOT.
-    A corrupt/unreadable run.json is skipped; a glob failure yields []."""
-    import glob as _glob
+    A corrupt/unreadable run.json is skipped (core.run_index); a scan failure yields []."""
+    from core import run_index
     out: list = []
-    pattern = os.path.join(_ACTIVE_RUN_GLOB_ROOT, "Projects", "*", ".artifacts", "runs", "*", "run.json")
     try:
-        files = _glob.glob(pattern)
+        all_runs = run_index.runs(_ACTIVE_RUN_GLOB_ROOT)
     except Exception:
         logger.debug("_active_runs: suppressed exception on a fail-safe path", exc_info=True)
         return out
-    for f in files:
-        try:
-            with open(f, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except Exception:
-            logger.debug("_active_runs: suppressed exception on a fail-safe path", exc_info=True)
-            continue  # corrupt/unreadable single run.json → skip, never raise
-        if isinstance(data, dict) and data.get("status") in _ACTIVE_RUN_STATUSES:
-            data.setdefault("id", os.path.basename(os.path.dirname(f)))
+    for r in all_runs:
+        data = r.data  # a copy: setting "id" does not touch the index
+        if data.get("status") in _ACTIVE_RUN_STATUSES:
+            data.setdefault("id", r.path.parent.name)
             out.append(data)
     return out
 
@@ -3363,7 +3357,7 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
         # fails OPEN.
         try:
             pending = await asyncio.wait_for(
-                executors.run_in("subprocess", _pending_commit_paths, cwd, command),
+                executors.run_in("gate", _pending_commit_paths, cwd, command),
                 timeout=_GATE_COVERAGE_TIMEOUT,
             )
         except Exception:  # incl. asyncio.TimeoutError
@@ -3379,7 +3373,7 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 
         try:
             owned, run_ids = await asyncio.wait_for(
-                executors.run_in("subprocess", _active_run_ownership),
+                executors.run_in("gate", _active_run_ownership),
                 timeout=_GATE_COVERAGE_TIMEOUT,
             )
         except Exception:
@@ -3561,7 +3555,7 @@ def _run_activity_time(path: str, data: dict) -> float:
 
 def _recorded_run_cli(project: str, run_id: str) -> "dict | None":
     """The ``cli`` block a run recorded in its run.json (sync: called via the
-    subprocess pool from the async pipeline_test_gate, never on the event loop)."""
+    gate pool from the async pipeline_test_gate, never on the event loop)."""
     path = os.path.join(_pipeline_runs_root(), "Projects", project, ".artifacts",
                         "runs", run_id, "run.json")
     with open(path, encoding="utf-8") as fh:
@@ -3583,23 +3577,20 @@ def _session_run_state(app_session_id: str) -> "dict[str, str] | None":
     stamped with this session's id by session_link_stamper after the session's
     artifact_cli call (artifact_cli still warns at run-create). A corrupt or
     unreadable run.json is skipped. A glob failure propagates; each caller fails OPEN on it."""
-    import glob as _glob
     import time as _time
+    from core import run_index
 
     if not app_session_id:
         return None
-    pattern = os.path.join(
-        _pipeline_runs_root(), "Projects", "*", ".artifacts", "runs", "*", "run.json")
     cutoff = _time.time() - _RUN_ACTIVE_WINDOW_SECONDS
     best: dict[str, str] | None = None
     best_t = -1.0
-    for f in _glob.glob(pattern):
+    for _r in run_index.live_runs(_pipeline_runs_root()):
+        f, data = str(_r.path), _r.data
         try:
-            if os.path.getmtime(f) < cutoff:
+            if _r.mtime < cutoff:
                 continue  # cheap pre-filter: every run.json write (incl. updated_at) bumps mtime
-            with open(f, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            if not isinstance(data, dict) or data.get("status") != "running":
+            if data.get("status") != "running":
                 continue
             if data.get("session_id") != app_session_id:
                 continue
@@ -4550,7 +4541,7 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
             return {"decision": "approve"}
         try:
             own_run = await asyncio.wait_for(
-                executors.run_in("subprocess", _session_run_state, session_id),
+                executors.run_in("gate", _session_run_state, session_id),
                 timeout=_RUN_SCAN_TIMEOUT,
             )
         except Exception:  # incl. asyncio.TimeoutError
@@ -4565,7 +4556,7 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
         try:  # the run's recorded CLI makes it ONE absolute command (pipeline-run-worktree §16.9)
             from core.worktree_write_gate import cli_command
             _cli = await asyncio.wait_for(
-                executors.run_in("subprocess", _recorded_run_cli,
+                executors.run_in("gate", _recorded_run_cli,
                                  own_run["project"], own_run["id"]),
                 timeout=_RUN_SCAN_TIMEOUT,
             )
@@ -4621,7 +4612,7 @@ def create_run_amend_gate(session_context: dict[str, Any]):
             return {"decision": "approve"}
         try:
             own_run = await asyncio.wait_for(
-                executors.run_in("subprocess", _session_run_state, session_id),
+                executors.run_in("gate", _session_run_state, session_id),
                 timeout=_RUN_SCAN_TIMEOUT,
             )
         except Exception:  # incl. asyncio.TimeoutError
@@ -6340,7 +6331,7 @@ def create_session_link_stamper(session_context: dict[str, Any]):
             since = (start - _STAMP_SLACK_SECONDS if start is not None
                      else _time.time() - _STAMP_FALLBACK_WINDOW_SECONDS)
             await asyncio.wait_for(
-                executors.run_in("subprocess", _stamp_unlinked_runs, sid, since, command),
+                executors.run_in("gate", _stamp_unlinked_runs, sid, since, command),
                 timeout=_STAMP_TIMEOUT,
             )
         except Exception as exc:  # incl. asyncio.TimeoutError — never into the chat path
@@ -6514,7 +6505,7 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
         cwd = input_data.get("cwd", "") or ""
         try:
             own_run = await asyncio.wait_for(
-                executors.run_in("subprocess", _session_run_state, session_id),
+                executors.run_in("gate", _session_run_state, session_id),
                 timeout=_RUN_SCAN_TIMEOUT,
             )
         except Exception:  # incl. asyncio.TimeoutError
@@ -6525,7 +6516,7 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
 
         try:
             mode_on, _root = await asyncio.wait_for(
-                executors.run_in("subprocess", _direct_gate_mode, cwd, session_id),
+                executors.run_in("gate", _direct_gate_mode, cwd, session_id),
                 timeout=_DIRECT_GATE_TIMEOUT,
             )
         except Exception:  # incl. asyncio.TimeoutError
@@ -6536,7 +6527,7 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
         limit = 0 if mode_on else _DIRECT_COMMIT_MAX_SOURCE_LINES
         try:
             lines = await asyncio.wait_for(
-                executors.run_in("subprocess", _pending_source_line_count, cwd, command,
+                executors.run_in("gate", _pending_source_line_count, cwd, command,
                                  mode_on),
                 timeout=_DIRECT_GATE_TIMEOUT,
             )
