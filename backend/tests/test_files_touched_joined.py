@@ -78,3 +78,15 @@ def test_existing_path_with_a_space_is_one_path(ws):
 
 def test_parts_that_do_not_exist_are_not_judged(ws):
     assert _update(ws, "new/x.py new/y.py").returncode == 0
+
+
+def test_same_answer_from_a_subdirectory_of_the_repo(ws):
+    # re-check 015938d4: repo-relative parts are found from backend/ too
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("acli", BACKEND / "scripts" / "artifact_cli.py")
+    entry = "backend/core/security_hooks.py backend/scripts/artifact_cli.py"
+    repo = str(BACKEND.parent)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod._joined_paths(entry, [repo]) is True
+    assert mod._joined_paths(entry, [str(BACKEND), repo]) is True

@@ -111,6 +111,16 @@ class TestCapAgainstBashTimeout:
         reason = _deny_reason(_run("gtimeout 1 pytest tests/a.py", timeout_ms=5000))
         assert "too short" in reason and "alarm" not in reason
 
+    # re-check 015938d4: quoted data is never a run, a cap or a pager
+    def test_quoted_data_naming_tail_or_pytest_is_ignored(self):
+        assert not _is_deny(_run("gtimeout 50 pytest tests/a.py -k 'tail -f parser'"))
+        assert not _is_deny(_run("echo '; pytest fake.py'; gtimeout 50 pytest tests/a.py"))
+        assert not _is_deny(_run('echo "pytest | tail -f"; gtimeout 50 pytest tests/a.py'))
+
+    def test_quoted_decoy_cap_still_does_not_cover_a_real_run(self):
+        assert _is_deny(_run("echo 'gtimeout 1 pytest x'; pytest tests/b.py"))
+        assert _is_deny(_run('echo "perl -e alarm 1 exec @ARGV pytest x"; pytest tests/b.py'))
+
 
 class TestPytestNoWallClock:
     """AC2 (UPGRADED to DENY, XG-approved direct): pytest WITHOUT a wall-clock

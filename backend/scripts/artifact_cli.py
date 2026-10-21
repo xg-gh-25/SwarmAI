@@ -2425,16 +2425,36 @@ def _link_session_to_run(session_id: "str | None", run_id: str) -> None:
               file=sys.stderr)
 
 
-def _joined_paths(entry: str) -> bool:
+def _path_bases() -> "list[str]":
+    """Where a relative files_touched entry may live: the current directory and the
+    git top level it is in (an agent may call the CLI from backend/ or the repo root)."""
+    bases = [os.getcwd()]
+    try:
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                             text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        top = ""
+    if top and top not in bases:
+        bases.append(top)
+    return bases
+
+
+def _joined_paths(entry: str, bases: "list[str] | None" = None) -> bool:
     """True when *entry* is several existing paths joined by whitespace: the whole
-    string is not a path, and every whitespace-separated part is one (relative to
-    the current directory, or absolute). Decided by the file system, not by the
-    shape of the string, so a single path with a space in it (that exists) and an
-    entry whose parts do not exist are both stored as they are."""
+    string is not a path, and every whitespace-separated part is one (absolute, or
+    relative to the cwd or the repo top level). Decided by the file system, not by
+    the shape of the string, so a single path with a space in it (that exists) and
+    an entry whose parts do not exist yet are stored as they are."""
     parts = entry.split()
-    if len(parts) < 2 or os.path.exists(os.path.expanduser(entry)):
+    if len(parts) < 2:
         return False
-    return all(os.path.exists(os.path.expanduser(x)) for x in parts)
+    bases = bases if bases is not None else _path_bases()
+
+    def exists(x: str) -> bool:
+        x = os.path.expanduser(x)
+        return any(os.path.exists(os.path.join(b, x)) for b in bases)
+
+    return not exists(entry) and all(exists(x) for x in parts)
 
 
 def _normalize_files_touched_arg(value):
@@ -3790,7 +3810,8 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         # space-separated list) are stored as one bogus path that run-commit cannot
         # stage; agents then rewrote run.json by hand to split it (2026-10-14..21).
         # Refuse it here, the one place a malformed argument is reported.
-        joined = [e for e in incoming if isinstance(e, str) and _joined_paths(e.strip())]
+        bases = _path_bases()
+        joined = [e for e in incoming if isinstance(e, str) and _joined_paths(e.strip(), bases)]
         if joined:
             print(json.dumps({"error": "--files-touched: an entry holds several paths joined by "
                               "spaces; pass each path as its own quoted argument, or a JSON "

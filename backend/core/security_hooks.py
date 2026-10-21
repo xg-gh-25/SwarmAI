@@ -1953,12 +1953,27 @@ def _pytest_run_time_s(command: str) -> "int | None":
     one (`gtimeout 1 pytest a; pytest b`). Both are counted on the raw text, so a
     quoted decoy (`echo 'gtimeout 1 pytest x'; pytest b`) adds one invocation AND
     one cap and the real run is still uncovered."""
+    command = _drop_quoted_data(command)
     caps = [int(m.group("timeout") or m.group("alarm"))
             for m in _WALLCLOCK_BOUND_PYTEST_RE.finditer(command)]
     runs = sum(1 for _ in _PYTEST_INVOCATION_RE.finditer(command))
     if not caps or len(caps) < runs:
         return None
     return sum(caps)
+
+
+# A quoted span that names pytest or tail is data (an echo, a -k expression, a commit
+# message), never a run, a cap or a pager: it is dropped before counting. Every other
+# quoted span stays, because the perl cap is one (`perl -e 'alarm 90; exec @ARGV'`).
+# One rule for all three counts, so a decoy cannot add a cap the real run lacks
+# (`echo 'gtimeout 1 pytest x'; pytest b`) and cannot add a run (`echo '; pytest x'`).
+_QUOTED_SPAN_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
+_DATA_WORD_RE = re.compile(r"\b(?:py\.test|pytest|tail)\b", re.IGNORECASE)
+
+
+def _drop_quoted_data(command: str) -> str:
+    return _QUOTED_SPAN_RE.sub(lambda m: "" if _DATA_WORD_RE.search(m.group(0)) else m.group(0),
+                               command)
 
 
 # `tail -f` / `-F` / `--follow` never exits, so a capped run piped into it still
@@ -2076,7 +2091,7 @@ async def pytest_command_guard(
     timeout = _bash_call_timeout_s(input_data.get("tool_input", {}) or {})
     limit = timeout - _CAP_MARGIN_S
     total = _pytest_run_time_s(command)
-    follow = bool(_FOLLOW_RE.search(command))
+    follow = bool(_FOLLOW_RE.search(_drop_quoted_data(command)))
     if total is None or total > limit or follow:
         logger.warning("[BLOCKED] pytest runs %s > %ss (follow=%s): %s", total, limit,
                        follow, command[:80])
