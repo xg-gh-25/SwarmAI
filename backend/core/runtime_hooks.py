@@ -412,7 +412,10 @@ def create_user_correction_detector(
                         # [pitfall]→## Pitfalls (its fixed home since Gap #17), so we do NOT
                         # re-route on the judge's section (that would write "[pitfall]" into
                         # e.g. ## Corrections — a type/section mismatch, adversarial BUG#1).
-                        verdict, _section, _reason, distilled = admit_memory_lesson(summary)
+                        # The judge is a blocking Bedrock call (seconds): run it in a
+                        # worker thread so the event loop (/health, SSE) keeps serving.
+                        verdict, _section, _reason, distilled = await asyncio.to_thread(
+                            admit_memory_lesson, summary)
                     ws = _Path.home() / ".swarm-ai" / "SwarmWS"
                     if verdict == "pending":
                         # RECOVERABLE (judge budget-exhausted / infra down) — DEFER to the

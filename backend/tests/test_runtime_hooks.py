@@ -1850,6 +1850,35 @@ class TestMemoryWorthyCorrectionGate:
         assert mem.read_text().count("TAURI_SIGNING") == 1, \
             "duplicate lesson must not be appended twice"
 
+    @pytest.mark.asyncio
+    async def test_judge_runs_off_event_loop(
+        self, corrections_file, session_context, tmp_path, monkeypatch
+    ):
+        """admit_memory_lesson is a blocking Bedrock call; this UserPromptSubmit hook
+        fires on every correction prompt, so on the loop thread it stalled /health
+        before the turn even started. It must run in a worker thread."""
+        import threading
+        import core.eval_hooks as eh
+        import core.ingestion_gate as ig
+        monkeypatch.setattr(eh, "seed_from_correction", lambda *a, **k: None)
+        loop_thread = threading.get_ident()
+        seen: list[int] = []
+
+        def _spy(summary, *a, **k):
+            seen.append(threading.get_ident())
+            return ("discard", None, "test", None)
+
+        monkeypatch.setattr(ig, "admit_memory_lesson", _spy)
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        real = ("不对 —— TAURI_SIGNING_PRIVATE_KEY error at build tail is an "
+                "environment-fixed updater-signing gap, not a regression; relaunch "
+                "the built app and it runs clean")
+        from core.runtime_hooks import create_user_correction_detector
+        hook = create_user_correction_detector(str(corrections_file), session_context)
+        await hook({"prompt": real}, None, MagicMock())
+        assert seen, "admit_memory_lesson was not called"
+        assert all(t != loop_thread for t in seen)
+
 
 # ---------------------------------------------------------------------------
 # UserPromptSubmit: per-turn enforcement injector (A: symmetric language,

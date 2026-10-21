@@ -584,3 +584,33 @@ class TestSizeValve:
         for t in moved_texts:
             key = t.split("\n")[0]  # the ### header line
             assert key not in body, "a successfully-archived block IS removed from live"
+
+
+class TestClassifierRunsOffEventLoop:
+    """classify_new_corrections makes blocking Bedrock calls; on the loop thread it
+    stalled /health for the whole classification (asyncio.wait_for cannot interrupt
+    sync code). It must run in a worker thread."""
+
+    @pytest.mark.asyncio
+    async def test_classify_runs_in_worker_thread(self, tmp_path, monkeypatch):
+        import threading
+        import core.evolution.governance_router as gr
+
+        ctx_dir = tmp_path / ".context"
+        ctx_dir.mkdir()
+        _write_recent_evolution_state(ctx_dir)
+        (ctx_dir / "EVOLUTION.md").write_text(_make_evolution_md([]))
+        (ctx_dir / "EVOLUTION_CHANGELOG.jsonl").write_text("")
+
+        loop_thread = threading.get_ident()
+        seen: list[int] = []
+
+        def _spy(**kw):
+            seen.append(threading.get_ident())
+            return {"processed": 0}
+
+        monkeypatch.setattr(gr, "classify_new_corrections", _spy)
+        hook = EvolutionMaintenanceHook(context_dir=ctx_dir, deprecation_days=30)
+        await hook.execute(_make_context(tmp_path))
+        assert seen, "classify_new_corrections was not called"
+        assert all(t != loop_thread for t in seen)

@@ -14,6 +14,7 @@ library) rather than shelling out, for atomicity and testability.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -316,8 +317,12 @@ class EvolutionMaintenanceHook:
 
             # Closed taxonomy (SOUL/EVOLUTION.md). Reserved for Phase-2 recurrence
             # matching; Phase 1 passes it for a stable signature.
-            summary = classify_new_corrections(
-                evolution_classes=["CLASS_A", "CLASS_B", "CLASS_C"]
+            # Blocking Bedrock calls (one per new correction): a worker thread, not
+            # the event loop — asyncio.wait_for cannot interrupt sync code, so on the
+            # loop this stalled /health for the whole classification.
+            summary = await asyncio.to_thread(
+                classify_new_corrections,
+                evolution_classes=["CLASS_A", "CLASS_B", "CLASS_C"],
             )
             if summary.get("processed"):
                 logger.info(
