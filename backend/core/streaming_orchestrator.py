@@ -242,6 +242,7 @@ class StreamingOrchestrator:
             "pending_heredoc_writes": {}, "pending_script_sweeps": {},
             "pending_completion": {}, "tool_names": {}, "tool_parent": {},
             "task_parent": {}, "subagent_last": {}, "pending_stage_watch": {},
+            "background_agents": {},
         }
 
     def reset_turn_carry(self) -> None:
@@ -1492,6 +1493,10 @@ class StreamingOrchestrator:
         # durationMs, summary). Rides the Agent's tool_result as `subagent`, so the
         # final status survives the stream (subagent_progress itself is not persisted).
         _subagent_last: dict[str, dict] = self._turn_carry["subagent_last"]
+        # Agent tool_use ids started with run_in_background: their result comes back
+        # at once (the agent was launched, it has not finished), so it is kept as
+        # status "background", never "completed". Values unused (a dict for the carry).
+        _background_agents: dict[str, bool] = self._turn_carry.setdefault("background_agents", {})
         # tool_use_id → run_id for ANY Bash `artifact_cli.py … --run-id <id>` call.
         # Its successful result re-reads run.json and yields a persisted
         # pipeline_stage block per newly finished stage (_pipeline_stage_events) —
@@ -2044,6 +2049,11 @@ class StreamingOrchestrator:
                             if _tr_name == "Agent":
                                 _sa_final = self._subagent_final(
                                     _subagent_last.pop(_blk.tool_use_id, None), _tr["is_error"])
+                                _launched = _background_agents.pop(_blk.tool_use_id, None) or str(
+                                    _tr.get("content") or "").lstrip().startswith("Async agent launched")
+                                if _launched and not _tr["is_error"]:
+                                    # launched, still running: its outcome arrives later
+                                    _sa_final = {**(_sa_final or {}), "status": "background"}
                                 if _sa_final:
                                     _tr["subagent"] = _sa_final
                             _parent_id = _tool_parent.pop(_blk.tool_use_id, None)
@@ -2557,6 +2567,9 @@ class StreamingOrchestrator:
                             _tool_parent[block.id] = _am_parent
                         content_blocks.append(_tu_block)
                         _tool_names[block.id] = block.name
+                        if block.name == "Agent" and isinstance(block.input, dict) \
+                                and block.input.get("run_in_background"):
+                            _background_agents[block.id] = True
                         # ── Record tool call for compaction guard ──
                         self._parent._compaction_guard.record_tool_call(
                             block.name, block.input

@@ -265,6 +265,13 @@ function buildResultMap(content: ContentBlock[]): Map<string, ToolResultContent>
 const isSubAgentBlock = (b: ContentBlock): boolean =>
   (b.type === 'tool_use' || b.type === 'tool_result') && !!b.parentToolUseId;
 
+/** The step that stands for an Agent called in an earlier turn (its sub-agent's calls
+ *  arrived in this message): it nests them, so they are not lost. */
+const standInAgent = (id: string): ToolUseContent => ({
+  type: 'tool_use', id, name: 'Agent', summary: 'Agent: background agent from an earlier turn',
+  category: 'agent', display: { tool: 'Agent', object: 'background agent from an earlier turn', key: `stand-${id}` },
+} as ToolUseContent);
+
 /** Backend-written display blocks that are not part of the turn's flow (the run's
  *  alignment, what needs the user, the turn's products): lifted into TurnView
  *  fields, invisible to segments, the done rule and the outcome. */
@@ -369,9 +376,70 @@ export function deriveTurnView(
   let summary: PipelineSummaryContent | undefined;
   const deliverables: TurnDeliverable[] = [];
   let changes: TurnChangesContent | undefined;
+  // One tool step (and its sub-agent children) into the open process segment. `stand`:
+  // a stand-in Agent step for sub-agent calls whose Agent was called in an earlier turn
+  // (a background agent still running): running while the turn streams, else done.
+  const pushToolStep = (block: ToolUseContent, index: number, stand = false) => {
+    const result = results.get(block.id);
+    const status: ToolStatus = stand ? (isStreaming ? 'pending' : 'done') : result?.isError
+      ? 'error'
+      : result
+        ? 'done'
+        : gatedAfter[index]
+          ? 'waiting'
+          : laterNonTool[index]
+            ? 'done'
+            : isStreaming
+              ? 'pending'
+              // The turn ended with no result for it and nothing written after:
+              // stopped or cut off. Where results are recorded (every returned
+              // call has one) that holds for EVERY such call — parallel calls end
+              // together. Older history kept no results at all; there a later call
+              // is the only sign the earlier ones returned, so only the last one
+              // is unknown.
+              : hasResults || index === lastToolIdx
+                ? 'unknown'
+                : 'done';
+    const step: ToolStep = { kind: 'tool', block, index, status, result };
+    if (resultAt.has(block.id)) step.resultIndex = resultAt.get(block.id);
+    const subs = children.get(block.id);
+    // The sub-agent's outcome: live progress while streaming, else what its
+    // Agent result kept (status, steps, duration, summary — persisted).
+    const live = isStreaming ? progress?.[block.id] : undefined;
+    const kept = result?.subagent ? { ...result.subagent, parentToolUseId: block.id } : undefined;
+    // a background launch stays `background` while its agent reports running live
+    const subOutcome = kept?.status === 'background' && (!live || live.status === 'running')
+      ? { ...live, ...kept } : live ?? kept;
+    const subCut = subOutcome?.status === 'failed' || subOutcome?.status === 'stopped';
+    if (subs) {
+      // A sub-agent step is done when its own result came back; without one it
+      // shares its Agent's fate (running while it runs, cut off if it was).
+      step.children = subs.map(({ block: sb, index: si }) => {
+        const r = results.get(sb.id);
+        const s: ToolStatus = r?.isError ? 'error' : r ? 'done'
+          : status === 'pending' || status === 'unknown' || status === 'waiting' ? status
+            : subCut ? 'unknown' : 'done';
+        return { kind: 'tool', block: sb, index: si, status: s, result: r };
+      });
+    }
+    if (subOutcome) step.progress = subOutcome;
+    openSeg().steps.push(step);
+  };
+  // The Agent calls of this message; a sub-agent call under any other id ran under an
+  // Agent of an earlier turn and gets a stand-in step where its first call is.
+  // (any tool_use id here counts: a sub-agent's own Agent nests its calls itself)
+  const agentIds = new Set(content.filter((b) => b.type === 'tool_use').map((b) => (b as ToolUseContent).id));
+  const standIns = new Set<string>();
   content.forEach((block, index) => {
     if (block.type === 'tool_result') return; // consumed by its tool_use
-    if (isSubAgentBlock(block)) return; // nested under its Agent step below
+    if (isSubAgentBlock(block)) {
+      if (block.type === 'tool_use' && block.parentToolUseId && !agentIds.has(block.parentToolUseId) && !standIns.has(block.parentToolUseId)) {
+        const parent = block.parentToolUseId;
+        standIns.add(parent);
+        pushToolStep(standInAgent(parent), index, true);
+      }
+      return; // nested under its Agent step
+    }
     if (isRunBlock(block) && !isPipelineBlock(block)) {
       // A direct run (above) has no stage groups, but what it produced is shown: each
       // completed stage's summary and documents (its end summary is lifted below, for
@@ -469,50 +537,7 @@ export function deriveTurnView(
       thoughts += 1;
       return;
     }
-    if (block.type === 'tool_use') {
-      const result = results.get(block.id);
-      const status: ToolStatus = result?.isError
-        ? 'error'
-        : result
-          ? 'done'
-          : gatedAfter[index]
-            ? 'waiting'
-            : laterNonTool[index]
-              ? 'done'
-              : isStreaming
-                ? 'pending'
-                // The turn ended with no result for it and nothing written after:
-                // stopped or cut off. Where results are recorded (every returned
-                // call has one) that holds for EVERY such call — parallel calls end
-                // together. Older history kept no results at all; there a later call
-                // is the only sign the earlier ones returned, so only the last one
-                // is unknown.
-                : hasResults || index === lastToolIdx
-                  ? 'unknown'
-                  : 'done';
-      const step: ToolStep = { kind: 'tool', block, index, status, result };
-      if (resultAt.has(block.id)) step.resultIndex = resultAt.get(block.id);
-      const subs = children.get(block.id);
-      // The sub-agent's outcome: live progress while streaming, else what its
-      // Agent result kept (status, steps, duration, summary — persisted).
-      const live = isStreaming ? progress?.[block.id] : undefined;
-      const kept = result?.subagent ? { ...result.subagent, parentToolUseId: block.id } : undefined;
-      const subOutcome = live ?? kept;
-      const subCut = subOutcome?.status === 'failed' || subOutcome?.status === 'stopped';
-      if (subs) {
-        // A sub-agent step is done when its own result came back; without one it
-        // shares its Agent's fate (running while it runs, cut off if it was).
-        step.children = subs.map(({ block: sb, index: si }) => {
-          const r = results.get(sb.id);
-          const s: ToolStatus = r?.isError ? 'error' : r ? 'done'
-            : status === 'pending' || status === 'unknown' || status === 'waiting' ? status
-              : subCut ? 'unknown' : 'done';
-          return { kind: 'tool', block: sb, index: si, status: s, result: r };
-        });
-      }
-      if (subOutcome) step.progress = subOutcome;
-      openSeg().steps.push(step);
-    }
+    if (block.type === 'tool_use') { pushToolStep(block, index); return; }
   });
 
   if (!isStreaming && lastToolIdx >= 0 && !laterBlock[lastToolIdx]) {

@@ -354,6 +354,8 @@
         "worked": "Worked",
         "working": "Working",
         "stoppedCount": "{{count}} stopped",
+        "backgroundCount": "{{count}} in background",
+        "inBackground": "in background",
         "stoppedByYouPlain": "Stopped by you"
       },
       "doc": {

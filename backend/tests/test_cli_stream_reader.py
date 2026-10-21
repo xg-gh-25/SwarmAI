@@ -602,3 +602,59 @@ async def test_drop_claim_restores_quiescence_and_ends_the_stream():
     with pytest.raises(TurnAbandoned):
         await asyncio.wait_for(_drain(ts), 1)
     r.close()
+
+
+# ── a background sub-agent after its turn ended ───────────────────────────
+
+
+def _subagent_frames(parent: str = "toolu_bg_agent") -> list[dict]:
+    """A background sub-agent's own call and result, as the CLI streams them after
+    the turn that started it ended (each frame carries its Agent's tool_use id)."""
+    return [
+        {"type": "assistant", "parent_tool_use_id": parent, "uuid": "a-sub-1", "session_id": "S",
+         "message": {"role": "assistant", "model": "m", "content": [
+             {"type": "tool_use", "id": "toolu_sub_bash", "name": "Bash", "input": {"command": "ls"}}]}},
+        {"type": "user", "parent_tool_use_id": parent, "uuid": "u-sub-1", "session_id": "S",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "toolu_sub_bash", "content": "ok"}]}},
+        {"type": "stream_event", "uuid": "e-sub-1", "session_id": "S", "parent_tool_use_id": parent,
+         "event": {"type": "content_block_start"}},
+    ]
+
+
+async def test_background_subagent_frames_open_no_turn():
+    """A background sub-agent's frames after its turn ended belong to its Agent: they
+    open no injected turn (the session would show an empty reply streaming until the
+    agent finished), and the CLI stays quiescent."""
+    c = FakeClient()
+    injected: list = []
+    r = _reader(c, injected)
+    r.start()
+    c.feed(_until_result(_split(_frames("compact"))[0]))
+    await _settle(c)
+    injected.clear()
+    c.feed(_subagent_frames())
+    await _settle(c)
+    assert injected == []
+    assert r._open is None
+    r.close()
+
+
+async def test_background_subagent_frames_do_not_become_a_waiting_claims_turn():
+    """A user message waiting for its turn is not handed a sub-agent frame as its
+    first frame: the claim opens on the CLI's init and ends on its own result."""
+    c = FakeClient()
+    injected: list = []
+    r = _reader(c, injected)
+    r.start()
+    claim = r.claim(U1, "human")
+    c.feed(_subagent_frames())
+    await _settle(c)
+    assert not claim.closed and injected == []
+    before, _ = _split(_frames("compact"))
+    c.feed(before)
+    got = await asyncio.wait_for(_drain(claim), 1)
+    assert isinstance(got[0], SystemMessage) and got[0].subtype == "init"
+    assert not any(getattr(m, "parent_tool_use_id", None) == "toolu_bg_agent" for m in got)
+    assert got[-1].result == "ONE"
+    r.close()

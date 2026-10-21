@@ -284,6 +284,31 @@ describe('AC5 — the Agents panel', () => {
     expect(stopTask).toHaveBeenCalledWith('s1', 't2');
   });
 
+  it('an agent started in the background says in background, not done', () => {
+    const launched = { type: 'tool_result', toolUseId: 'g1', content: 'Async agent launched', isError: false, truncated: false,
+      subagent: { status: 'background' } } as ContentBlock;
+    render(view([tx('go'), agent('g1', 'measure reflect'), launched, bash('x', 'ls'), tr('x'), tx('Waiting for it.')], false));
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    const row = screen.getByTestId('agent-row');
+    expect(row.textContent).toContain('↗');
+    expect(within(row).getByTestId('agent-background').textContent).toBe('in background');
+    const panel = screen.getByTestId('agents-panel').textContent ?? '';
+    expect(panel).toContain('1 in background');
+    expect(panel).not.toContain('done');
+  });
+
+  it('calls of an agent started in an earlier turn get a stand-in Agent step, not hidden', () => {
+    const sub = (id: string, cmd: string) =>
+      ({ type: 'tool_use', id, name: 'Bash', summary: `Running: ${cmd}`, category: 'bash', parentToolUseId: 'earlier' }) as ContentBlock;
+    render(view([sub('s1', 'grep -rn reflect'), sub('s2', 'wc -l runs')], true));
+    const panel = screen.getByTestId('agents-panel');
+    const row = within(panel).getByTestId('agent-row');
+    expect(row.textContent).toContain('background agent from an earlier turn');
+    expect(row.textContent).toContain('⟳'); // running while the turn streams
+    fireEvent.click(within(row).getByTestId('agent-toggle'));
+    expect(within(row).getAllByTestId('tool-strip').map((e) => e.textContent).join(' ')).toContain('grep -rn reflect');
+  });
+
   it('an agent the turn stopped under says stopped, not done', () => {
     render(view([tx('go'), agent('g1', 'security review'), tx('---\n*Stopped*')], false));
     fireEvent.click(screen.getByTestId('group-toggle'));

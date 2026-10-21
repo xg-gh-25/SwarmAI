@@ -301,12 +301,17 @@ export function ToolStripV6({ item }: { item: StripItem }) {
 
 const AGENT_RESULT_MAX = 600;
 
+/** An Agent started in the background: its call returned at once (the agent was
+ *  launched), so it is not done. The backend marks its result `background`. */
+const inBackground = (s: ToolStep) => s.progress?.status === 'background';
+
 function AgentRow({ step, sessionId, readOnly }: { step: ToolStep; sessionId?: string; readOnly?: boolean }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [stopping, setStopping] = useState(false);
   const p = step.progress;
   const running = step.status === 'pending' && (p?.status === undefined || p.status === 'running');
+  const background = !running && inBackground(step);
   const elapsed = usePendingToolElapsed(step.block.id, running);
   const desc = stripView(step.block).object || stripView(step.block).full;
   const tools = Math.max(step.children?.length ?? 0, p?.toolUses ?? 0);
@@ -317,7 +322,7 @@ function AgentRow({ step, sessionId, readOnly }: { step: ToolStep; sessionId?: s
   ].filter(Boolean).join(' · ');
   // Stopped: the SDK said so, or the turn ended with the agent neither finished nor
   // reported (the user stopped the turn; live progress is gone once streaming ends).
-  const stoppedAgent = p?.status === 'stopped' || (!running && step.status === 'unknown' && (!p || p.status === 'running'));
+  const stoppedAgent = !background && (p?.status === 'stopped' || (!running && step.status === 'unknown' && (!p || p.status === 'running')));
   const result = (p?.summary || step.result?.outcome || '').trim();
   const stop = async () => {
     if (!sessionId || !p?.taskId) return;
@@ -338,10 +343,11 @@ function AgentRow({ step, sessionId, readOnly }: { step: ToolStep; sessionId?: s
           onClick={() => setOpen((o) => !o)}
           className="flex-1 flex items-start gap-2 min-w-0 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
         >
-          <span aria-hidden="true" className={`${MARK_COL} text-[12px] text-purple-400`}>{running ? '⟳' : stoppedAgent ? '■' : '✓'}</span>
+          <span aria-hidden="true" className={`${MARK_COL} text-[12px] text-purple-400`}>{running ? '⟳' : background ? '↗' : stoppedAgent ? '■' : '✓'}</span>
           <span className="min-w-0 flex-1 break-words text-[12.5px] text-[var(--color-text-secondary)]">{desc}</span>
           {meta && <span className="shrink-0 text-[12px] tabular-nums text-[var(--color-text-dim)]">{meta}</span>}
           {stoppedAgent && <span className="shrink-0 text-[12px] text-[var(--color-text-dim)]">{tf(t, 'chat.turn.zone.stoppedCall', 'stopped')}</span>}
+          {background && <span data-testid="agent-background" className="shrink-0 text-[12px] text-[var(--color-text-dim)]">{tf(t, 'chat.turn.zone.inBackground', 'in background')}</span>}
         </button>
         {running && !readOnly && p?.taskId && sessionId && (
           <button
@@ -383,13 +389,16 @@ export function AgentsPanel({ agents, sessionId, readOnly }: { agents: ToolStep[
   const { t } = useTranslation();
   const [open, setOpen] = useState(true);
   const isRunning = (s: ToolStep) => s.status === 'pending' && (s.progress?.status === undefined || s.progress.status === 'running');
-  const isStopped = (s: ToolStep) => !isRunning(s)
+  const isBackground = (s: ToolStep) => !isRunning(s) && inBackground(s);
+  const isStopped = (s: ToolStep) => !isRunning(s) && !isBackground(s)
     && (s.progress?.status === 'stopped' || (s.status === 'unknown' && (!s.progress || s.progress.status === 'running')));
   const running = agents.filter(isRunning).length;
+  const background = agents.filter(isBackground).length;
   const stopped = agents.filter(isStopped).length;
-  const done = agents.length - running - stopped;
+  const done = agents.length - running - background - stopped;
   const meta = [
     running > 0 && `⟳ ${tf(t, 'chat.turn.zone.running', '{{count}} running', { count: running })}`,
+    background > 0 && `↗ ${tf(t, 'chat.turn.zone.backgroundCount', '{{count}} in background', { count: background })}`,
     done > 0 && `✓ ${tf(t, 'chat.turn.zone.done', '{{count}} done', { count: done })}`,
     stopped > 0 && `■ ${tf(t, 'chat.turn.zone.stoppedCount', '{{count}} stopped', { count: stopped })}`,
   ].filter((x): x is string => !!x);

@@ -191,6 +191,7 @@ class CliStreamReader:
         self._state_seen = False
         self._idle = True  # nothing has run yet
         self._bg: set[str] = set()
+        self._bg_frames = 0  # background sub-agent frames seen with no turn open
         self.error: Optional[BaseException] = None
 
     # ── lifecycle ──────────────────────────────────────────────────────
@@ -424,6 +425,17 @@ class CliStreamReader:
                                self._session_id, getattr(msg, "subtype", None))
                 if not self._state_seen:
                     self._mark_idle()
+                return
+            if getattr(msg, "parent_tool_use_id", None):
+                # A background sub-agent's own progress (its Agent was called in a
+                # turn that has ended): it belongs to that Agent, not to a new turn.
+                # Opening one here showed an empty, endlessly streaming reply and
+                # gave a waiting user claim a turn that was not its own. The CLI
+                # opens its own turn (init) when the task finishes and it answers.
+                self._bg_frames += 1
+                if self._bg_frames == 1 or self._bg_frames % 50 == 0:
+                    logger.info("cli_stream_reader.background_subagent_frames session_id=%s count=%d",
+                                self._session_id, self._bg_frames)
                 return
             self._open_turn(msg)
             return

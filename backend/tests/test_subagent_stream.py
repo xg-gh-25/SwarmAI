@@ -214,6 +214,29 @@ async def test_agent_result_without_progress_has_no_subagent_and_others_never_do
     assert [("subagent" in b) for b in results] == [False, False]
 
 
+@pytest.mark.asyncio
+async def test_a_background_agent_result_is_kept_as_background_not_completed():
+    """run_in_background: the Agent call returns at once (the agent was launched, it
+    is still running); its result must not say completed. The CLI's launch text is
+    recognised too, for a launch the input did not flag."""
+    events = await _run([
+        SystemMessage(subtype="init", data={"session_id": "s"}),
+        AssistantMessage(content=[
+            ToolUseBlock(id=AGENT_ID, name="Agent", input={"description": "Measure", "run_in_background": True}),
+            ToolUseBlock(id="ag2", name="Agent", input={"description": "Other"}),
+            ToolUseBlock(id="ag3", name="Agent", input={"description": "Fg"})], model="m"),
+        _task(TaskStartedMessage, task_id="t1", description="Measure", tool_use_id=AGENT_ID),
+        UserMessage(content=[
+            ToolResultBlock(tool_use_id=AGENT_ID, content="Async agent launched successfully.", is_error=False),
+            ToolResultBlock(tool_use_id="ag2", content="Async agent launched successfully. agentId: x", is_error=False),
+            ToolResultBlock(tool_use_id="ag3", content="the answer", is_error=False)]),
+    ])
+    res = {b["tool_use_id"]: b for e in events if e["type"] == "tool_result" for b in e["content"]}
+    assert res[AGENT_ID]["subagent"]["status"] == "background"
+    assert res["ag2"]["subagent"] == {"status": "background"}
+    assert "subagent" not in res["ag3"]
+
+
 def test_subagent_final_resolves_a_still_running_status_from_the_result():
     fin = StreamingOrchestrator._subagent_final
     assert fin({"status": "running", "toolUses": 2}, False) == {"toolUses": 2, "status": "completed"}
