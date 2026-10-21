@@ -2187,9 +2187,10 @@ def _npx() -> list[str]:
 
 def _frontend_jobs(ctx, desktop_files: list[str], with_tsc: bool,
                    with_backend: bool = False, exclude: "list[str] | None" = None) -> list[_Job]:
-    """``exclude``: desktop test files a continuation already has results for (run
-    only the rest of the related set: one call cannot hold a large set, and re-running
-    it whole every call never finishes)."""
+    """``exclude``: desktop test files a continuation already has results for, or (an
+    explicit recheck on unchanged desktop inputs) that already passed: run only the rest
+    of the related set — one call cannot hold a large set, and re-running it whole every
+    call never finishes."""
     desktop = ctx.repo / "desktop"
     env = dict(os.environ)
     rel = [f[len("desktop/"):] for f in desktop_files]
@@ -3229,6 +3230,56 @@ def _continuation_series(ev_root: Path, mode: str) -> "list[int]":
     return [e["unfinished"] for e in _continuation_rows(ev_root, mode)]
 
 
+def _desktop_key(repo: Path) -> str:
+    """The desktop inputs a vitest result ran on: HEAD plus every uncommitted change
+    under desktop/ (``_desktop_state``; package-lock.json and the vitest / ts configs are
+    under desktop/ too). A desktop result is reused only under the key it was recorded
+    with; if git cannot say what changed, the key is unique per call (nothing reused)."""
+    return hashlib.sha256(_desktop_state(repo).encode()).hexdigest()[:32]
+
+
+#: prefix of the desktop_key of a call whose desktop inputs changed while it ran. Each
+#: such key is unique (random suffix), so it equals no other key, another call's
+#: unknown key included: nothing is reused from it, and a later recheck's results
+#: replace all of its desktop results.
+DESKTOP_KEY_UNKNOWN = "unknown"
+
+
+def _desktop_key_of_call(repo: Path, plan: dict) -> str:
+    """The key taken before the call ran, if the desktop inputs are still the same at its
+    end; a unique ``DESKTOP_KEY_UNKNOWN-…`` key when they changed meanwhile (results of
+    mixed inputs)."""
+    start = plan.get("desktop_key")
+    if start and start == _desktop_key(repo):
+        return start
+    return f"{DESKTOP_KEY_UNKNOWN}-{os.urandom(8).hex()}"
+
+
+def _is_desktop_result(r: dict) -> bool:
+    return str(_rfile(r)).startswith("desktop/src/") or r.get("nodeid") == "desktop::vitest"
+
+
+def _desktop_ran(ev: dict) -> bool:
+    """``ev`` holds a vitest result (a test, a file-level entry or the vitest placeholder)."""
+    return any(isinstance(r, dict) and _is_desktop_result(r)
+               for r in list(ev.get("results") or []) + list(ev.get("failures") or []))
+
+
+def _desktop_passed(ev: dict) -> "set[str]":
+    """Desktop test files whose every result in ``ev`` passed (or was skipped by the test
+    itself): what an explicit recheck on unchanged desktop inputs leaves out of the related
+    set. A file with any failed, errored or unfinished result is not in it, so a recheck
+    always re-runs a failure."""
+    outcomes: dict[str, set] = {}
+    for r in list(ev.get("results") or []) + list(ev.get("failures") or []):
+        if not isinstance(r, dict):
+            continue
+        f = str(_rfile(r))
+        if f.startswith("desktop/src/") and _DESKTOP_TEST_RE.search(f):
+            outcomes.setdefault(f, set()).add(r.get("outcome"))
+    return {f for f, oc in outcomes.items() if oc and oc <= {"passed", "skipped"}}
+
+
 def _desktop_done(ev: dict) -> "set[str]":
     """Desktop test files with a result (not a deadline timeout) in ``ev``: what a vitest
     continuation leaves out of the related set, and how its progress is counted (vitest
@@ -4028,6 +4079,10 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                 plan["rechecked"] += 1  # re-evaluated below with every other probe ref
             elif n in ("desktop::vitest", "desktop::tsc") or n.startswith("desktop/"):
                 plan["desktop_recheck"] = True
+                if _DESKTOP_TEST_RE.search(n.split("::")[0]):
+                    # named to vitest: a file outside the related set of the changed
+                    # files would otherwise never be answered
+                    plan.setdefault("desktop_rerun", []).append(n.split("::")[0])
                 plan["desktop_tsc"] = plan.get("desktop_tsc") or n == "desktop::tsc"
                 plan["rechecked"] += 1
             else:
@@ -4089,11 +4144,22 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                        if f.startswith("desktop/src/") and (ctx.repo / f).is_file()]
     # AC-named desktop tests run in the same vitest job (and so join its cache key).
     plan["desktop"] += [f for f in plan.get("ac_desktop", []) if f not in plan["desktop"]]
+    if plan["desktop"]:
+        plan["desktop"] += [f for f in dict.fromkeys(plan.get("desktop_rerun", []))
+                            if f not in plan["desktop"] and (ctx.repo / f).is_file()]
+        # the desktop inputs this call's vitest results run on (checked again at its end)
+        plan["desktop_key"] = _desktop_key(ctx.repo)
     if mode == "recheck" and getattr(ns, "auto_recheck_of", None) and plan["desktop"] and prev:
         # A continuation runs only what the deadline left unrun (as for backend tests):
         # every desktop test file with a result in the report it continues stays out
         # of the related set; the overlay keeps those results.
         plan["desktop_done"] = sorted(_desktop_done(prev))
+    elif (mode == "recheck" and plan["desktop"] and prev and prev.get("desktop_key")
+          and prev.get("desktop_key") == plan.get("desktop_key")):
+        # An explicit recheck on the desktop inputs its base ran on continues the vitest
+        # part too: files whose every test passed there stay out of the related set (a
+        # file with a failure always re-runs), so a set larger than one call finishes.
+        plan["desktop_done"] = sorted(_desktop_passed(prev))
     if mode == "recheck" and plan.get("desktop_recheck") and not plan["desktop"]:
         lost.append("desktop:: (no desktop/src file in this run's change set)")
     if mode == "recheck" and lost and getattr(ns, "auto_recheck_of", None):
@@ -4153,6 +4219,24 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
     old = {r["nodeid"]: r for r in base.get("results") or []
            if isinstance(r, dict) and isinstance(r.get("nodeid"), str)}
     base_fails = [f for f in base.get("failures") or [] if isinstance(f, dict)]
+    if (_desktop_ran(re_ev) and "desktop_key" in base
+            and re_ev.get("desktop_key") != base.get("desktop_key")):
+        # The recheck ran vitest on other desktop inputs than the base: every base desktop
+        # result is stale. Each base desktop test file the recheck did not report stays
+        # listed as not run, so a later call runs it on the current code. A base written
+        # before desktop keys existed (no field) keeps its results, as it always did.
+        reported = {str(_rfile(r)) for r in new.values()}
+        lost = sorted({str(_rfile(r)) for r in list(old.values()) + base_fails
+                       if _is_desktop_result(r) and _DESKTOP_TEST_RE.search(str(_rfile(r)))}
+                      - reported)
+        old = {n: r for n, r in old.items() if not _is_desktop_result(r)}
+        base_fails = [f for f in base_fails if not _is_desktop_result(f)]
+        for f in lost:
+            ph = _res(f, "timeout", ["not run on the current desktop code: its earlier result "
+                                     "came from other desktop inputs"], file=f, layer="vitest",
+                      notrun=True)
+            old[f] = ph
+            base_fails.append(ph)
     # An order_dependent failure only reproduces after its shard prefix / culprit: a
     # pass from a recheck that did not re-run that context is no verdict on it.
     in_ctx = set(re_ev.get("od_in_context") or [])
@@ -4224,6 +4308,10 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
     for k in ("changed_files", "head_sha", "tree_digest", "worktree"):
         if re_ev.get(k) is not None:
             ev[k] = re_ev[k]
+    if _desktop_ran(re_ev) and re_ev.get("desktop_key"):
+        # the merged desktop results are the recheck's inputs' now (stale ones dropped
+        # above); a recheck without vitest leaves the base's key with the base's results
+        ev["desktop_key"] = re_ev["desktop_key"]
     if isinstance(base.get("l2_file_keys"), dict):
         # A rechecked file's results now come from a later tree: its old key no longer
         # describes them, so it is never reused from this evidence (_reusable).
@@ -4354,6 +4442,8 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                   warnings=ctx.warnings + ["cached: tests and their inputs are unchanged since the last run"],
                   changed_files=_digest_map(ctx.repo, plan["changed"]),
                   head_sha=head, tree_digest=tree)
+        if plan["desktop"]:
+            ev["desktop_key"] = _desktop_key_of_call(ctx.repo, plan)
         ev.pop("worktree", None)
         wtev = _worktree_evidence(ctx)
         if wtev:
@@ -4591,6 +4681,7 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
           "failures": failures, "layers": layers, "tdd_repeats": repeats,
           "warnings": list(ctx.warnings), "cache_key": key,
           "changed_files": _digest_map(ctx.repo, plan["changed"]),
+          **({"desktop_key": _desktop_key_of_call(ctx.repo, plan)} if plan["desktop"] else {}),
           "runner_errors": [_capped_id(r["nodeid"], refs)["nodeid"] for r in results
                             if r.get("runner_error")]}
     if any(r.get("layer") in ("vitest", "tsc") for r in results):

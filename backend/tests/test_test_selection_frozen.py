@@ -39,7 +39,7 @@ DIGESTS = {
     "_full_scope_refusal": "0e054d7718481d65",  # 10-20: recheck past the cap; tampered index refused (2c05cfbc, §11)
     "_smoke_modules": "1ea6c7b77910e927",
     "_recent_failure_files": "7173dd3412333fa3",
-    "_plan": "93cfac8fe76bc31f",  # 10-21: stale AC ref -> warning; frontend recheck skips done files (0fde9f38, 91c8f493, §11)
+    "_plan": "35fec4d802736e45",  # 10-21: explicit recheck skips passed frontend files on unchanged desktop digest (§11)
     "_plan_ac_refs": "0fc3e865d5f7a0a0",  # 10-21: split out of _plan by 0fde9f38, frozen with it (§11)
     "build_source_graph": "e581602ee29be082",  # 10-21: bare script imports resolved (§11)
     "_resolve_script_imports": "3009fba168114713",  # 10-21: new, decides import edges (§11)

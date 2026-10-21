@@ -206,6 +206,12 @@ break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连�
   `test_router_async_blocking`，合计约 20 秒）。它们用 rglob 扫源码，没有 import 边，原来选不到：8d3b7c1e
   改 `core/heartbeat.py` 加了一个静默 except，main 上 `test_silent_except_baseline` 就红了，没有人发现。
   `test_pipeline_test.py` 把这个列表和仓库里所有 glob `*.py` 的测试对齐，新加的扫描测试漏登记会变红。
+- 2026-10-21 `_plan`（XG 批准："你直接给我改"）：显式 `--mode recheck` 续跑前端时，原来不排除已有结果的
+  测试文件（91c8f493 只对自动续跑 `auto_recheck_of` 生效），每次调用都从头跑整套 vitest 相关测试，到时限被截断，
+  永远跑不完（run_ef9eacfb：130 个文件跑完、剩 2 个，每次都排不上）。改动：每份测试证据记一个前端输入摘要
+  （HEAD 加 `desktop/` 下未提交改动，开始和结束各取一次，运行中被改就记成不可复用的 unknown）；摘要一致时显式
+  recheck 跳过全部通过的前端文件，有失败的文件照常重跑；摘要不一致时旧的前端结果整体作废、重新标记为未跑。
+  选哪些测试没变，只改了续跑时哪些已完成的文件可以不重跑。
 
 ## 12. main 上已有的红：登记，单独修（2026-10-21，XG 决定）
 

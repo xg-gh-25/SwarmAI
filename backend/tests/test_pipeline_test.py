@@ -1986,3 +1986,186 @@ def test_a_large_frontend_set_finishes_across_continuation_calls(rig, tmp_path, 
     ev = _evidence(tmp_path, "tests/latest-verify.json")
     passed = {r.get("file") or r["nodeid"].split("::")[0] for r in ev["results"] if r["outcome"] == "passed"}
     assert set(tests) <= passed, (passed, out)
+
+
+# A slow ``vitest related`` that logs every call's --exclude list (FAKE_NPX_LOG), names
+# each test after the desktop source it ran on (src/setup.ts), and gives every file in
+# FAKE_NPX_FAIL one passing and one failing test.
+FAKE_NPX_LOGGED = """import json, os, sys, time
+from pathlib import Path
+
+args = sys.argv[1:]
+if args[0] == "vitest":
+    out = next(a.split("=", 1)[1] for a in args if a.startswith("--outputFile"))
+    skip = sorted({args[i + 1] for i, a in enumerate(args) if a == "--exclude"})
+    with open(os.environ["FAKE_NPX_LOG"], "a") as fh:
+        fh.write(json.dumps({"exclude": skip}) + "\\n")
+    fail = set(filter(None, os.environ.get("FAKE_NPX_FAIL", "").split(",")))
+    sleep = json.loads(os.environ.get("FAKE_NPX_SLEEP") or "{}")
+    marker = (Path.cwd() / "src" / "setup.ts").read_text().strip()
+    files = sorted((str(p.relative_to(Path.cwd())) for p in (Path.cwd() / "src").rglob("*.test.ts")),
+                   reverse=marker == os.environ.get("FAKE_NPX_REVERSE_ON", ""))
+    files = [f for f in files if f not in set(skip)]
+    results = []
+    for f in files:
+        time.sleep(sleep.get(f, sleep.get("*", 1.5)))
+        with open(os.environ["FAKE_NPX_LOG"], "a") as fh:
+            fh.write(json.dumps({"ran": f, "marker": marker}) + "\\n")
+        edit = os.environ.get("FAKE_NPX_EDIT_DURING")
+        if edit:
+            (Path.cwd() / "src" / "setup.ts").write_text(edit)
+        bad = f in fail
+        print((" \\u00d7 " if bad else " \\u2713 ") + f + " (2 tests) 3ms", flush=True)
+        tests = [{"fullName": "works " + marker, "status": "passed", "failureMessages": []}]
+        if bad:
+            tests.append({"fullName": "breaks " + marker, "status": "failed",
+                          "failureMessages": ["expected 1 to be 2"]})
+        results.append({"name": str(Path.cwd() / f), "assertionResults": tests})
+    Path(out).write_text(json.dumps({"testResults": results}))
+sys.exit(0)
+"""
+
+
+def _logged_npx(tmp_path, monkeypatch, fail=(), sleep=None):
+    npx = tmp_path / "npx_logged.py"
+    npx.write_text(FAKE_NPX_LOGGED)
+    log = tmp_path / "npx_calls.jsonl"
+    monkeypatch.setenv("SWARM_TEST_NPX", str(npx))
+    monkeypatch.setenv("FAKE_NPX_LOG", str(log))
+    monkeypatch.setenv("FAKE_NPX_FAIL", ",".join(fail))
+    monkeypatch.setenv("FAKE_NPX_SLEEP", json.dumps(sleep or {}))
+    monkeypatch.setenv("SWARM_TEST_MAX_WORKERS", "2")
+    return log
+
+
+def _npx_log(log):
+    return [json.loads(ln) for ln in log.read_text().splitlines()] if log.exists() else []
+
+
+def _npx_calls(log):
+    """One entry per vitest call: its --exclude list."""
+    return [e for e in _npx_log(log) if "exclude" in e]
+
+
+def _desktop_tests(n=4):
+    return {f"desktop/src/t{i}.test.ts": "test('works', () => {})\n" for i in range(n)}
+
+
+def _recheck_until_done(capsys, calls=6):
+    out, code = {}, 0
+    for _ in range(calls):
+        out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck", "--deadline", "4")
+        if not out.get("continue"):
+            break
+    return out, code
+
+
+def test_explicit_rechecks_finish_a_cut_frontend_set(rig, tmp_path, capsys, monkeypatch):
+    """run_ef9eacfb: an explicit recheck that continues a report whose vitest part was cut
+    re-ran the whole related set every call and never finished. Each explicit recheck on
+    unchanged desktop inputs now leaves out the files that already passed (the overlay
+    accumulates them), so the set finishes across calls."""
+    tests = _desktop_tests()
+    repo = rig({**tests, "desktop/src/setup.ts": "export const x = 1\n"})
+    _write(repo, {"desktop/src/setup.ts": "export const x = 2\n"})
+    log = _logged_npx(tmp_path, monkeypatch)
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "4")
+    assert out.get("continue"), out          # one 4 s call cannot hold 4 x 1.5 s
+    out, code = _recheck_until_done(capsys)
+    assert "continue" not in out and code == 0, out
+    later = _npx_calls(log)[1:]
+    assert later and all(c["exclude"] for c in later), later   # each recheck left passed files out
+    ev = _evidence(tmp_path, "tests/latest-verify.json")
+    passed = {r.get("file") or r["nodeid"].split("::")[0] for r in ev["results"] if r["outcome"] == "passed"}
+    assert set(tests) <= passed, (passed, out)
+
+
+def test_a_recheck_after_a_desktop_edit_reruns_the_related_set(rig, tmp_path, capsys, monkeypatch):
+    """A desktop result is reused only on the desktop inputs it ran on. After an edit, the
+    first recheck leaves nothing out, a pass made before the edit is never excluded later
+    (even when that recheck is itself cut by the deadline), and the merged report ends up
+    holding only results of the current code."""
+    tests = _desktop_tests()
+    repo = rig({**tests, "desktop/src/setup.ts": "export const x = 1\n"})
+    _write(repo, {"desktop/src/setup.ts": "export const x = 2\n"})
+    log = _logged_npx(tmp_path, monkeypatch)
+    # on the edited code vitest takes the files in the other order, so the first recheck
+    # after the edit runs files the verify did not: the verify's passes are then stale
+    monkeypatch.setenv("FAKE_NPX_REVERSE_ON", "export const x = 3")
+    out, _ = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "4")
+    assert out.get("continue"), out
+    _write(repo, {"desktop/src/setup.ts": "export const x = 3\n"})
+    out, _ = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck", "--deadline", "4")
+    calls = _npx_calls(log)
+    assert calls[-1]["exclude"] == [], calls     # the key changed: nothing is left out
+    assert out.get("continue"), out              # cut again: a later call must finish it
+    out, code = _recheck_until_done(capsys)
+    assert "continue" not in out and code == 0, out
+    ev = _evidence(tmp_path, "tests/latest-verify.json")
+    desk = [r for r in ev["results"] if str(r.get("file") or r["nodeid"]).startswith("desktop/src/")]
+    passed = {r.get("file") or r["nodeid"].split("::")[0] for r in desk if r["outcome"] == "passed"}
+    assert set(tests) <= passed, (passed, out)
+    stale = [r["nodeid"] for r in desk if "::" in r["nodeid"] and "x = 3" not in r["nodeid"]]
+    assert stale == [], stale                    # no result of the pre-edit code survives
+    ran_after_edit = {"desktop/" + e["ran"] for e in _npx_log(log)
+                      if "ran" in e and e["marker"].endswith("x = 3")}
+    assert set(tests) <= ran_after_edit, ran_after_edit   # every file ran on the new code
+
+
+def test_an_explicit_recheck_reruns_a_failed_desktop_file(rig, tmp_path, capsys, monkeypatch):
+    """A file with a failed result is never left out of an explicit recheck, even on
+    unchanged code; a file whose every test passed is."""
+    tests = _desktop_tests()
+    repo = rig({**tests, "desktop/src/setup.ts": "export const x = 1\n"})
+    _write(repo, {"desktop/src/setup.ts": "export const x = 2\n"})
+    # t0..t2 finish at once (t0 with a failed test), t3 cannot finish in one call
+    log = _logged_npx(tmp_path, monkeypatch, fail=("src/t0.test.ts",),
+                      sleep={"*": 0.1, "src/t3.test.ts": 30})
+    out, _ = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "4")
+    assert out.get("continue"), out
+    _run(capsys, "--run-id", RUN_ID, "--mode", "recheck", "--deadline", "4")
+    excluded = _npx_calls(log)[-1]["exclude"]
+    assert "src/t0.test.ts" not in excluded, excluded
+    assert {"src/t1.test.ts", "src/t2.test.ts"} <= set(excluded), excluded  # fully passed files
+
+
+def test_a_desktop_edit_during_a_call_reuses_nothing_from_it(rig, tmp_path, capsys, monkeypatch):
+    """The desktop key is taken before a call runs and checked at its end: when the
+    desktop inputs changed meanwhile, the call's results came from mixed code, so the
+    evidence says so and the next explicit recheck leaves nothing out."""
+    tests = _desktop_tests()
+    repo = rig({**tests, "desktop/src/setup.ts": "export const x = 1\n"})
+    _write(repo, {"desktop/src/setup.ts": "export const x = 2\n"})
+    log = _logged_npx(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_NPX_EDIT_DURING", "export const x = 9\n")
+    out, _ = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "4")
+    assert out.get("continue"), out
+    assert _evidence(tmp_path, "tests/latest-verify.json")["desktop_key"].startswith(pt.DESKTOP_KEY_UNKNOWN + "-")
+    monkeypatch.delenv("FAKE_NPX_EDIT_DURING")
+    _run(capsys, "--run-id", RUN_ID, "--mode", "recheck", "--deadline", "4")
+    assert _npx_calls(log)[-1]["exclude"] == [], _npx_calls(log)
+
+
+def test_an_overlay_keeps_desktop_results_of_a_base_without_a_key():
+    """A report written before desktop keys existed keeps its desktop results when a
+    recheck runs vitest (as it always did); one with a different key loses them."""
+    old = {"nodeid": "desktop/src/a.test.ts::works", "outcome": "passed",
+           "file": "desktop/src/a.test.ts", "layer": "vitest"}
+    re_ev = {"results": [{"nodeid": "desktop/src/b.test.ts::works", "outcome": "passed",
+                          "file": "desktop/src/b.test.ts", "layer": "vitest"}],
+             "failures": [], "desktop_key": "k2"}
+    base = {"mode": "verify", "results": [old], "failures": []}
+    merged = pt._overlay_evidence(Path("."), base, re_ev, [])
+    assert old in merged["results"], merged["results"]
+    merged = pt._overlay_evidence(Path("."), {**base, "desktop_key": "k1"}, re_ev, [])
+    a = [r for r in merged["results"] if pt._rfile(r) == "desktop/src/a.test.ts"]
+    assert [r["outcome"] for r in a] == ["timeout"] and a[0].get("notrun"), a
+    assert merged["desktop_key"] == "k2"
+    # two calls whose inputs both moved while they ran never share a key
+    a_key = pt._desktop_key_of_call(Path("."), {})
+    b_key = pt._desktop_key_of_call(Path("."), {})
+    assert a_key != b_key and a_key.startswith(pt.DESKTOP_KEY_UNKNOWN)
+    merged = pt._overlay_evidence(Path("."), {**base, "desktop_key": a_key}, {**re_ev, "desktop_key": b_key}, [])
+    a = [r for r in merged["results"] if pt._rfile(r) == "desktop/src/a.test.ts"]
+    assert [r["outcome"] for r in a] == ["timeout"], a
+
