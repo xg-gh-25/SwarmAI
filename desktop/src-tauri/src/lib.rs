@@ -608,6 +608,97 @@ fn read_heartbeat_full() -> HeartbeatView {
     }
 }
 
+// ── Watchdog decision log (~/.swarm-ai/logs/watchdog.log) ──────────────────
+// The watchdog's println! output goes nowhere in the bundled app, so after an
+// offline/busy episode nobody could tell what it saw and decided. Every decision
+// line also goes to this file, with the evidence (pid, heartbeat, loop age, the
+// backend's stall diagnosis). Bounded: at WATCHDOG_LOG_MAX_BYTES it is moved to
+// watchdog.log.1 (one generation kept). Best-effort: a failed write is ignored.
+const WATCHDOG_LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// UTC `YYYY-MM-DDTHH:MM:SS.mmmZ` from a Unix time in milliseconds (no date crate).
+fn utc_timestamp(ms: u128) -> String {
+    let secs = (ms / 1000) as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // civil-from-days (Howard Hinnant)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60, ms % 1000)
+}
+
+fn watchdog_log_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::Path::new(&home).join(".swarm-ai").join("logs").join("watchdog.log")
+}
+
+/// Print a watchdog line and append it, timestamped, to the watchdog log.
+fn watchdog_log(line: &str) {
+    println!("[Tauri] {}", line);
+    let _ = append_watchdog_log(&watchdog_log_path(), line);
+}
+
+fn append_watchdog_log(path: &std::path::Path, line: &str) -> std::io::Result<()> {
+    let path = path.to_path_buf();
+    (|| -> std::io::Result<()> {
+        use std::io::Write;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        if std::fs::metadata(&path).map(|m| m.len() >= WATCHDOG_LOG_MAX_BYTES).unwrap_or(false) {
+            let _ = std::fs::rename(&path, path.with_extension("log.1"));
+        }
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        writeln!(f, "{} {}", utc_timestamp(ms), line)
+    })()
+}
+
+/// The evidence behind a down-decision, as one log fragment.
+fn watchdog_evidence(hb: &HeartbeatView, pid_present: Option<bool>) -> String {
+    let mut out = format!(
+        "pid_present={} hb_fresh={} loop_age={} wedged={}",
+        pid_present.map(|b| b.to_string()).unwrap_or_else(|| "n/a".into()),
+        hb.fresh,
+        hb.loop_age.map(|a| format!("{:.1}s", a)).unwrap_or_else(|| "-".into()),
+        hb.loop_wedged,
+    );
+    if let Some(stall) = &hb.stall {
+        let g = |k: &str| stall.get(k).map(|v| v.to_string().trim_matches('"').to_string());
+        out.push_str(&format!(" cause={} starved={}", g("cause").unwrap_or_else(|| "?".into()),
+            g("starved").unwrap_or_else(|| "false".into())));
+        for (k, name) in [("loadPerCore", "load"), ("memPercent", "mem%"), ("memPressure", "mem_pressure"),
+                          ("battery", "battery%"), ("busyWith", "busy_with")] {
+            if let Some(v) = g(k) {
+                out.push_str(&format!(" {}={}", name, v));
+            }
+        }
+        if let Some(top) = stall.get("topCpu").and_then(|v| v.as_array()) {
+            let t: Vec<String> = top.iter().filter_map(|p| Some(format!("{}:{}%",
+                p.get("name")?.as_str()?, p.get("cpu")?))).collect();
+            if !t.is_empty() {
+                out.push_str(&format!(" top_cpu={}", t.join(",")));
+            }
+        }
+    }
+    out
+}
+
+/// The stall cause of a heartbeat view ("-" without one): what makes a degraded
+/// re-emit worth a log line.
+fn stall_cause(hb: &HeartbeatView) -> String {
+    hb.stall.as_ref().and_then(|s| s.get("cause")).and_then(|v| v.as_str()).unwrap_or("-").to_string()
+}
+
 /// The wedge flag the down-decision uses: a loop stalled ≥ HEARTBEAT_WEDGE_SECS by an
 /// outside shortage (the CPU fully used, memory exhausted, low-battery throttling) is
 /// a starved live process, not a deadlock — it stays Degraded ("slowed down"), never
@@ -1989,6 +2080,8 @@ fn spawn_daemon_health_watchdog(
         // the terminated event must fire only ONCE per episode. Reset to false on
         // any recovery (was_healthy back to true).
         let mut terminated_emitted = false;
+        // The stall cause last written to the watchdog log in this episode.
+        let mut last_logged_cause = String::from("-");
         let mut known_boot_id: Option<String> = None;
         // Resolve uid ONCE for the watchdog's lifetime (not per-miss) — the launchd
         // uid is stable, and the cold-start path resolves it once per session too.
@@ -2009,7 +2102,7 @@ fn spawn_daemon_health_watchdog(
             {
                 let backend = state.lock().await;
                 if !backend.running || backend.intentional_shutdown {
-                    println!("[Tauri] Health watchdog: backend stopped intentionally — exiting");
+                    watchdog_log("Health watchdog: backend stopped intentionally — exiting");
                     return;
                 }
             }
@@ -2031,10 +2124,10 @@ fn spawn_daemon_health_watchdog(
                 if let Some(ref bid) = current_boot_id {
                     match &known_boot_id {
                         Some(old_bid) if old_bid != bid => {
-                            println!(
-                                "[Tauri] Daemon watchdog: boot_id changed ({} → {}) — daemon restarted silently",
+                            watchdog_log(&format!(
+                                "Watchdog: boot_id changed ({} → {}) — daemon restarted silently",
                                 old_bid, bid
-                            );
+                            ));
                             known_boot_id = Some(bid.clone());
                             let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
                             continue; // Skip normal health transition logic
@@ -2093,37 +2186,40 @@ fn spawn_daemon_health_watchdog(
                         // banner WITHOUT disabling inputs. Escalation to terminated
                         // happens in the !was_healthy && !healthy block below once
                         // the miss streak reaches DOWN_ESCALATE_MISSES.
-                        println!("[Tauri] Watchdog: daemon /health missed but PROCESS ALIVE — DEGRADED (miss {}/{}), not declaring death",
-                            recovery_attempts, DOWN_ESCALATE_MISSES);
+                        watchdog_log(&format!("Watchdog: /health missed — DEGRADED (miss {}/{}) {}",
+                            recovery_attempts, DOWN_ESCALATE_MISSES, watchdog_evidence(&hb, if is_daemon { Some(pid_present) } else { None })));
+                        last_logged_cause = stall_cause(&hb);
                         let _ = app_handle.emit("backend-degraded", payload);
                         was_healthy = false;
                         continue; // poll again at RECOVERY_POLL_SECS; may resume or escalate
                     }
                     WatchdogDownDecision::Terminated => {
                         // Process gone (or subprocess mode): a real death signal.
+                        watchdog_log(&format!("Watchdog: /health missed — TERMINATED (miss {}/{}) {}",
+                            recovery_attempts, DOWN_ESCALATE_MISSES, watchdog_evidence(&hb, if is_daemon { Some(pid_present) } else { None })));
                         let _ = app_handle.emit("backend-terminated-restarting", payload);
                     }
                 }
 
                 if is_daemon {
                     // Daemon mode: launchd KeepAlive will restart it — just wait
-                    println!("[Tauri] Watchdog: daemon unreachable — waiting for launchd restart (attempt {}/{})",
-                        recovery_attempts, MAX_RECOVERY_ATTEMPTS);
+                    watchdog_log(&format!("Watchdog: daemon unreachable — waiting for launchd restart (attempt {}/{})",
+                        recovery_attempts, MAX_RECOVERY_ATTEMPTS));
                 } else {
                     // Subprocess mode: WE must restart it
                     const SUBPROCESS_BACKOFF: [u64; 3] = [3, 6, 12];
                     let backoff = SUBPROCESS_BACKOFF[0];
-                    println!("[Tauri] Watchdog: subprocess crashed — re-spawning in {}s (attempt 1/3)", backoff);
+                    watchdog_log(&format!("Watchdog: subprocess crashed — re-spawning in {}s (attempt 1/3)", backoff));
                     tokio::time::sleep(tokio::time::Duration::from_secs(backoff)).await;
                     match spawn_subprocess(&app_handle, &state).await {
                         Ok(pid) => {
-                            println!("[Tauri] Watchdog: subprocess re-spawned (PID {})", pid);
+                            watchdog_log(&format!("Watchdog: subprocess re-spawned (PID {})", pid));
                             let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
                             recovery_attempts = 0;
                             was_healthy = true;
                             continue;
                         }
-                        Err(e) => println!("[Tauri] Watchdog: re-spawn attempt 1 failed: {}", e),
+                        Err(e) => watchdog_log(&format!("Watchdog: re-spawn attempt 1 failed: {}", e)),
                     }
                 }
             } else if !was_healthy && !healthy {
@@ -2134,21 +2230,21 @@ fn spawn_daemon_health_watchdog(
                     // Subprocess mode: retry with exponential backoff
                     const SUBPROCESS_BACKOFF: [u64; 3] = [3, 6, 12];
                     let backoff = SUBPROCESS_BACKOFF[(recovery_attempts - 1).min(2) as usize];
-                    println!("[Tauri] Watchdog: subprocess still down — re-spawning in {}s (attempt {}/3)",
-                        backoff, recovery_attempts);
+                    watchdog_log(&format!("Watchdog: subprocess still down — re-spawning in {}s (attempt {}/3)",
+                        backoff, recovery_attempts));
                     tokio::time::sleep(tokio::time::Duration::from_secs(backoff)).await;
                     match spawn_subprocess(&app_handle, &state).await {
                         Ok(pid) => {
-                            println!("[Tauri] Watchdog: subprocess re-spawned (PID {})", pid);
+                            watchdog_log(&format!("Watchdog: subprocess re-spawned (PID {})", pid));
                             let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
                             recovery_attempts = 0;
                             was_healthy = true;
                             continue;
                         }
-                        Err(e) => println!("[Tauri] Watchdog: re-spawn attempt {} failed: {}", recovery_attempts, e),
+                        Err(e) => watchdog_log(&format!("Watchdog: re-spawn attempt {} failed: {}", recovery_attempts, e)),
                     }
                     if recovery_attempts >= 3 {
-                        println!("[Tauri] Watchdog: subprocess failed to recover after 3 attempts — giving up");
+                        watchdog_log("Watchdog: subprocess failed to recover after 3 attempts — giving up");
                         let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
                     }
                 } else if is_daemon {
@@ -2191,8 +2287,8 @@ fn spawn_daemon_health_watchdog(
                         let event = recovery_poll_event(decision);
                         match decision {
                             WatchdogDownDecision::Terminated => {
-                                println!("[Tauri] Watchdog: degraded daemon persisted {} misses (pid_present={}, hb_fresh={}, wedged={}) — escalating to terminated",
-                                    recovery_attempts, pid_present, heartbeat_fresh, loop_wedged);
+                                watchdog_log(&format!("Watchdog: still unreachable after {} misses — TERMINATED {}",
+                                    recovery_attempts, watchdog_evidence(&hb, Some(pid_present))));
                                 let _ = app_handle.emit(event, payload);
                                 terminated_emitted = true;
                             }
@@ -2203,6 +2299,13 @@ fn spawn_daemon_health_watchdog(
                                 // one-shot emit let a longer stall expire it, and the
                                 // 30s JS poll then flipped to red "Backend is
                                 // unavailable" while this watchdog still said alive.
+                                // Logged when the stall's cause changes (not every 3s).
+                                let cause = stall_cause(&hb);
+                                if cause != last_logged_cause {
+                                    watchdog_log(&format!("Watchdog: still DEGRADED (miss {}), cause changed {} → {} {}",
+                                        recovery_attempts, last_logged_cause, cause, watchdog_evidence(&hb, Some(pid_present))));
+                                    last_logged_cause = cause;
+                                }
                                 let _ = app_handle.emit(event, payload);
                             }
                         }
@@ -2210,8 +2313,8 @@ fn spawn_daemon_health_watchdog(
                     // Daemon mode: launchd will restart — wait up to MAX_DAEMON_WAIT.
                     // Log every 10 attempts (30s) to avoid spam.
                     if recovery_attempts % 10 == 0 {
-                        println!("[Tauri] Watchdog: still waiting for daemon recovery (attempt {}, {}s elapsed)",
-                            recovery_attempts, recovery_attempts * RECOVERY_POLL_SECS as u32);
+                        watchdog_log(&format!("Watchdog: still waiting for daemon recovery (attempt {}, {}s elapsed)",
+                            recovery_attempts, recovery_attempts * RECOVERY_POLL_SECS as u32));
                     }
                     // Emit warning at soft threshold — frontend shows "taking longer" banner.
                     // Only for a daemon already judged dead this episode: if every
@@ -2219,14 +2322,14 @@ fn spawn_daemon_health_watchdog(
                     // the process is alive, and `backend-terminated` would disable
                     // inputs on a live daemon — the false offline this watchdog avoids.
                     if recovery_attempts == MAX_RECOVERY_ATTEMPTS && terminated_emitted {
-                        println!("[Tauri] Watchdog: daemon recovery taking longer than expected ({} attempts)",
-                            MAX_RECOVERY_ATTEMPTS);
+                        watchdog_log(&format!("Watchdog: daemon recovery taking longer than expected ({} attempts)",
+                            MAX_RECOVERY_ATTEMPTS));
                         let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
                     }
                     // Hard cap: stop polling after 10 minutes — daemon is truly dead.
                     if recovery_attempts >= MAX_DAEMON_WAIT {
-                        println!("[Tauri] Watchdog: daemon failed to recover after {} attempts ({}s) — giving up",
-                            MAX_DAEMON_WAIT, MAX_DAEMON_WAIT * RECOVERY_POLL_SECS as u32);
+                        watchdog_log(&format!("Watchdog: daemon failed to recover after {} attempts ({}s) — giving up",
+                            MAX_DAEMON_WAIT, MAX_DAEMON_WAIT * RECOVERY_POLL_SECS as u32));
                         return;
                     }
                 }
@@ -2242,16 +2345,16 @@ fn spawn_daemon_health_watchdog(
                     _ => false, // can't prove a new process → don't overclaim a restart
                 };
                 if real_restart {
-                    println!(
-                        "[Tauri] Watchdog: backend RESTARTED (boot_id changed) after {} attempts",
-                        recovery_attempts
-                    );
+                    watchdog_log(&format!(
+                        "Watchdog: backend RESTARTED (boot_id changed) after {} misses ({}s)",
+                        recovery_attempts, recovery_attempts * RECOVERY_POLL_SECS as u32
+                    ));
                     let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
                 } else {
-                    println!(
-                        "[Tauri] Watchdog: backend RESUMED (same process, boot_id unchanged) after {} attempts",
-                        recovery_attempts
-                    );
+                    watchdog_log(&format!(
+                        "Watchdog: backend RESUMED (same process) after {} misses ({}s)",
+                        recovery_attempts, recovery_attempts * RECOVERY_POLL_SECS as u32
+                    ));
                     let _ = app_handle.emit("backend-resumed", DAEMON_PORT);
                 }
                 known_boot_id = match current_boot_id {
@@ -3103,6 +3206,42 @@ mod adaptive_probe_tests {
         );
         let no_diag = HeartbeatView { stall: None, ..starved.clone() };
         assert!(effective_wedged(&no_diag)); // an older backend: unchanged behavior
+    }
+
+    #[test]
+    fn watchdog_log_line_format_and_rotation() {
+        assert_eq!(utc_timestamp(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(utc_timestamp(1_792_588_445_024), "2026-10-21T13:14:05.024Z");
+        let dir = std::env::temp_dir().join(format!("swarm-wd-{}", std::process::id()));
+        let path = dir.join("logs").join("watchdog.log");
+        let _ = std::fs::remove_dir_all(&dir);
+        append_watchdog_log(&path, "Watchdog: first").unwrap();
+        append_watchdog_log(&path, "Watchdog: second").unwrap();
+        let body = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].ends_with("Z Watchdog: first") && lines[0].starts_with("20"));
+        // over the cap → moved to watchdog.log.1, a fresh file starts
+        std::fs::write(&path, vec![b'x'; WATCHDOG_LOG_MAX_BYTES as usize]).unwrap();
+        append_watchdog_log(&path, "Watchdog: after rotation").unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().ends_with("Watchdog: after rotation\n"));
+        assert_eq!(std::fs::metadata(path.with_extension("log.1")).unwrap().len(), WATCHDOG_LOG_MAX_BYTES);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn watchdog_evidence_names_the_cause() {
+        let hb = HeartbeatView {
+            fresh: true, loop_wedged: true, loop_age: Some(40.25),
+            stall: Some(serde_json::json!({"cause": "cpu", "starved": true, "loadPerCore": 12.9,
+                "topCpu": [{"name": "python3.12", "cpu": 340}]})),
+        };
+        let e = watchdog_evidence(&hb, Some(true));
+        assert_eq!(e, "pid_present=true hb_fresh=true loop_age=40.2s wedged=true cause=cpu starved=true load=12.9 top_cpu=python3.12:340%");
+        assert_eq!(stall_cause(&hb), "cpu");
+        let none = watchdog_evidence(&HeartbeatView::default(), None);
+        assert_eq!(none, "pid_present=n/a hb_fresh=false loop_age=- wedged=false");
+        assert_eq!(stall_cause(&HeartbeatView::default()), "-");
     }
 
     #[test]
