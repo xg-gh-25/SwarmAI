@@ -34,6 +34,7 @@ Usage::
         ...
 """
 
+import asyncio
 import logging
 import time
 from typing import Any, Literal
@@ -133,6 +134,8 @@ class CredentialValidator:
         # 30min cache. Only a "valid" status is ever stored here.
         self._check_cache_time: float = 0
         self._check_cache_status: AuthStatus | None = None
+        # check(): the STS check in flight, shared by every caller
+        self._inflight: "asyncio.Future[AuthStatus] | None" = None
         # check(): an "unknown" is returned without STS until this monotonic time
         self._unknown_until: float = 0.0
         self._unknown_hold: float = _UNKNOWN_HOLD_S
@@ -267,12 +270,6 @@ class CredentialValidator:
         subclass, so it MUST be caught before the generic ``BotoCoreError``
         branch or "no credentials" would wrongly read as ``unknown``.
         """
-        from botocore.exceptions import (
-            BotoCoreError,
-            ClientError,
-            NoCredentialsError,
-        )
-
         # Cache hit — only ever stores "valid".
         if (
             self._check_cache_status is not None
@@ -281,6 +278,29 @@ class CredentialValidator:
             return self._check_cache_status
         if time.monotonic() < self._unknown_until:
             return "unknown"   # held: no STS call, no new Session (_UNKNOWN_HOLD_S)
+
+        # Single flight, shielded. Callers bound their wait (the readiness sampler
+        # gives it 1s), and an STS call that runs the credential_process takes
+        # 2-3s, longer under load. Cancelling the caller used to cancel the check
+        # before it stored "valid": the cache never filled from the sampler (/health
+        # auth stayed "unknown"), every cold spawn paid a full STS call (2.3s on
+        # 10-22 00:59, 33s under load at 00:11), and each abandoned sampler call
+        # still held one of the 2 'spawn' pool threads, queueing the spawn's own.
+        # Now one check runs at a time, every caller awaits it, and a caller that
+        # gives up leaves it to finish and fill the cache.
+        task = self._inflight
+        if task is None or task.done():
+            task = asyncio.ensure_future(self._check_uncached(region))
+            self._inflight = task
+        return await asyncio.shield(task)
+
+    async def _check_uncached(self, region: str) -> AuthStatus:
+        """The STS call behind check() (one at a time: see check)."""
+        from botocore.exceptions import (
+            BotoCoreError,
+            ClientError,
+            NoCredentialsError,
+        )
 
         try:
             # Dedicated 'spawn' pool (run_e76b3ea5): check() is the readiness

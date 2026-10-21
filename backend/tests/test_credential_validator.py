@@ -442,3 +442,30 @@ async def test_check_recovers_after_valid(validator: CredentialValidator):
     with patch.object(validator, "_call_sts_typed", mock):
         assert await validator.check("us-east-1") == "expired"
         assert await validator.check("us-east-1") == "valid"
+
+
+async def test_a_caller_that_gives_up_does_not_lose_the_result(validator: CredentialValidator):
+    """The readiness sampler waits 1s; an STS call through the credential_process
+    takes 2-3s. Cancelling the sampler used to cancel the check before it cached
+    "valid" (/health auth stuck at unknown, every cold spawn paid a full STS call).
+    The check now runs once, shielded: the abandoned one still fills the cache, and
+    concurrent callers share it."""
+    import asyncio
+    import threading
+    calls = []
+    gate = threading.Event()
+
+    def slow_sts(region):
+        calls.append(region)
+        gate.wait(2)
+        return FAKE_IDENTITY
+
+    with patch.object(validator, "_call_sts_typed", side_effect=slow_sts):
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(validator.check("us-east-1"), timeout=0.05)
+        second = asyncio.ensure_future(validator.check("us-east-1"))  # joins the same flight
+        await asyncio.sleep(0.05)
+        gate.set()
+        assert await second == "valid"
+        assert await validator.check("us-east-1") == "valid"  # cached
+    assert len(calls) == 1
