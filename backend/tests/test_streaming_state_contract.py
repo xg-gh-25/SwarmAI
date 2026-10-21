@@ -29,6 +29,7 @@ from routers import chat
 LIVE_KEYS = {
     "streaming", "state", "pid", "waiting_input",
     "pending_count", "pending_question", "last_drained_seqs",
+    "background_agents",  # core/background_agents.py snapshot (d39df26a)
 }
 
 REMOVED_MEMBERS = (

@@ -110,8 +110,12 @@ file_handler.setFormatter(logging.Formatter(log_format))
 # flush and the rotation check) run on one listener thread, never on the caller's.
 # Measured 2026-10-21: logging flush / shouldRollover on the asyncio loop thread
 # stalled it 4-5s at a time under disk load (the SSE heartbeat stops meanwhile).
-# The format is applied by the real handlers on the listener thread; the record is
-# prepared (message rendered, exc_info formatted) by QueueHandler at the call site.
+# The format is applied ONLY by the real handlers on the listener thread; the
+# record is prepared (message rendered, exc_info formatted) by QueueHandler at the
+# call site. The QueueHandler itself must have NO formatter: QueueHandler.prepare()
+# puts self.format(record) into record.msg, so a formatter there writes every
+# prefix twice (logging.basicConfig gives one to any handler it is passed, even
+# without format=; that was the 2026-10-21 regression).
 import atexit as _atexit
 import queue as _queue
 from logging.handlers import QueueHandler as _QueueHandler, QueueListener as _QueueListener
@@ -122,16 +126,62 @@ _queue_handler.setLevel(min(console_level, log_level))
 _log_listener = _QueueListener(_log_queue, console_handler, file_handler, respect_handler_level=True)
 _log_listener.start()
 _atexit.register(_log_listener.stop)  # drains what is queued at exit
-logging.basicConfig(
-    level=log_level,
-    format=log_format,
-    handlers=[_queue_handler]
-)
+
+
+def _install_root_queue_handler(root: logging.Logger, handler: logging.Handler, level: int) -> None:
+    """Route the root logger into the queue, as basicConfig would, but without
+    giving the QueueHandler a formatter. Like basicConfig, a root that already has
+    handlers (pytest's capture) is left alone."""
+    if root.handlers:
+        return
+    root.setLevel(level)
+    root.addHandler(handler)
+
+
+_install_root_queue_handler(logging.getLogger(), _queue_handler, log_level)
 logger = logging.getLogger(__name__)
 logger.info(f"Log file: {log_file}")
 
-# Suppress noisy debug logs from third-party libraries
+
+class _NetworkErrorDemoteFilter(logging.Filter):
+    """Slack's SDKs log every failed request during a network outage at ERROR,
+    every ~11s all night (1,550 DNS errors since 10-14). An outage is expected:
+    such records become WARNING, and the same message is let through at most
+    once per ``window_s``."""
+
+    _MARKERS = ("nodename nor servname", "Errno 8", "URLError", "Name or service not known",
+                "Temporary failure in name resolution", "Network is unreachable")
+
+    def __init__(self, window_s: float = 300.0) -> None:
+        super().__init__()
+        self._window_s = window_s
+        self._last: dict[str, float] = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno < logging.ERROR:
+            return True
+        msg = record.getMessage()
+        if not any(m in msg for m in self._MARKERS):
+            return True
+        record.levelno, record.levelname = logging.WARNING, "WARNING"
+        key = msg[:160]
+        now = time.monotonic()
+        if now - self._last.get(key, -1e18) < self._window_s:
+            return False
+        if len(self._last) > 256:
+            self._last.clear()
+        self._last[key] = now
+        return True
+
+
+# Third-party noise (counted 2026-10-21): httpx logs one INFO line per Bedrock
+# request and watchfiles one per change batch — together with the gateway's
+# per-request line about a third of the log.
 logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("watchfiles").setLevel(logging.WARNING)
+for _name in ("slack_bolt.App", "slack_sdk.web.base_client", "slack_sdk.socket_mode.builtin.client"):
+    logging.getLogger(_name).addFilter(_NetworkErrorDemoteFilter())
 
 
 # ---------------------------------------------------------------------------

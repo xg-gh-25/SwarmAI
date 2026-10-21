@@ -27,6 +27,7 @@ import os
 import signal
 import subprocess
 import time
+from core.awake_clock import awake_time  # liveness durations exclude sleep
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
@@ -919,7 +920,7 @@ class LifecycleManager:
         cooperative async (no await between state check and transition in
         continue_with_permission).
         """
-        now = time.time()
+        now = awake_time()
         for unit in self._router.list_units():
             if unit.state != SessionState.WAITING_INPUT:
                 continue
@@ -990,7 +991,7 @@ class LifecycleManager:
         if not self._hook_executor:
             return
 
-        now = time.time()
+        now = awake_time()
         for unit in self._router.list_units():
             if unit.state != SessionState.IDLE:
                 continue
@@ -1019,7 +1020,7 @@ class LifecycleManager:
         """
         from .session_router import PREWARM_SESSION_PREFIX
 
-        now = time.time()
+        now = awake_time()
         for unit in self._router.list_units():
             if unit.state == SessionState.IDLE:
                 # Channel sessions are never TTL-killed — they persist
@@ -1097,7 +1098,7 @@ class LifecycleManager:
         if owned is None:
             return  # ownership unknowable this cycle — fail safe, reap nothing
 
-        now = time.time()
+        now = awake_time()
         for unit in self._router.list_units():
             if unit.state != SessionState.IDLE:
                 continue  # protect STREAMING / WAITING_INPUT / COLD / DEAD
@@ -1203,7 +1204,7 @@ class LifecycleManager:
         Prevents unbounded growth of the _units dict from sessions that
         were evicted or killed and never returned to.
         """
-        now = time.time()
+        now = awake_time()
         stale_ids = [
             u.session_id for u in self._router.list_units()
             if u.state == SessionState.COLD

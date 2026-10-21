@@ -21,6 +21,7 @@ import asyncio
 import logging
 import os
 import time
+from core.awake_clock import awake_time  # liveness durations exclude sleep
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional, Protocol
@@ -929,7 +930,7 @@ class StreamingOrchestrator:
         parent = self._parent
         if subtype == "status":
             if data.get("status") == "compacting":
-                parent._last_progress_time = time.time()
+                parent._last_progress_time = awake_time()
                 logger.info("session_unit.compaction_started session_id=%s",
                             parent.session_id)
                 return [PromptBuilder.build_compacting_notice()]
@@ -940,7 +941,7 @@ class StreamingOrchestrator:
                 return [PromptBuilder.build_compacting_notice(failed=True)]
             return []
         if subtype == "compact_boundary":
-            parent._last_progress_time = time.time()
+            parent._last_progress_time = awake_time()
             md = data.get("compact_metadata")
             ctx = getattr(parent, "_hook_session_context", None)
             if isinstance(ctx, dict):
@@ -1246,7 +1247,7 @@ class StreamingOrchestrator:
                 + float(parent.TOOL_HANG_INTERRUPT_GRACE_S)
                 + float(current_timeout)
             )
-            age = time.time() - oldest_start
+            age = awake_time() - oldest_start
             if age > bound:
                 logger.warning(
                     "session_unit.tool_timeout_not_deferred session_id=%s — oldest "
@@ -1267,7 +1268,7 @@ class StreamingOrchestrator:
         start = self._parent._streaming_start_time
         return {
             "type": "still_working",
-            "elapsedSeconds": int(time.time() - start) if start else 0,
+            "elapsedSeconds": int(awake_time() - start) if start else 0,
             "message": text,
             "stall": True,
         }
@@ -1373,7 +1374,7 @@ class StreamingOrchestrator:
                 "subtype": "output_degenerated",
                 "stop_reason": "output_degenerated",
                 "session_id": self._parent.session_id,
-                "duration_ms": int((time.time() - start) * 1000) if start else 0,
+                "duration_ms": int((awake_time() - start) * 1000) if start else 0,
                 "total_cost_usd": None,
                 "num_turns": 1,
                 "usage": None,
@@ -1485,7 +1486,7 @@ class StreamingOrchestrator:
         from .output_degeneration import DegenerationDetector, ProgressWatch
 
         _degen: dict[tuple, DegenerationDetector] = {}
-        _progress = ProgressWatch(now=time.time())
+        _progress = ProgressWatch(now=awake_time())
 
         # ── Permission queue watcher ──────────────────────────────
         # The dangerous_command_gate hook blocks inside PreToolUse
@@ -1637,7 +1638,7 @@ class StreamingOrchestrator:
                             perm_task = self._completed_perm_task(_lost)
                             continue
                         _note = _progress.check(
-                            time.time(), tools_open=bool(self._parent._open_tool_uses)
+                            awake_time(), tools_open=bool(self._parent._open_tool_uses)
                         )
                         if _note is not None:
                             yield self._stall_event(_note)
@@ -1646,7 +1647,7 @@ class StreamingOrchestrator:
                             if hb is not None:
                                 # Only a reported stall is refreshed; a plain
                                 # long turn sends no notice.
-                                _stall = _progress.stall_note(time.time())
+                                _stall = _progress.stall_note(awake_time())
                                 if _stall is not None:
                                     yield {**hb, "message": _stall, "stall": True}
                         except Exception as hb_exc:
@@ -1750,7 +1751,7 @@ class StreamingOrchestrator:
                         "sessionId": self._parent.session_id,
                     }
                     self._parent._transition(SessionState.WAITING_INPUT)
-                    self._parent.last_used = time.time()
+                    self._parent.last_used = awake_time()
                     return
 
                 # The per-session queue survives respawn (keyed by session_id,
@@ -1798,7 +1799,7 @@ class StreamingOrchestrator:
                     "options": perm_request.get("options", ["approve", "deny"]),
                 }
                 self._parent._transition(SessionState.WAITING_INPUT)
-                self._parent.last_used = time.time()
+                self._parent.last_used = awake_time()
                 return
 
             # ── SDK message won the race ──────────────────────────
@@ -1860,7 +1861,7 @@ class StreamingOrchestrator:
                 # resets _last_event_time (for the watchdog) but must not reset
                 # this clock, or the ceiling could never be reached.
                 _since = _silence_since or _parent._streaming_start_time
-                _elapsed = (time.time() - _since) if _since else 0.0
+                _elapsed = (awake_time() - _since) if _since else 0.0
                 _ceiling = _parent.TOOL_FREE_HARD_CEILING_S
                 if (
                     _pid
@@ -1881,7 +1882,7 @@ class StreamingOrchestrator:
                         )
                         # Reset the liveness clocks so the watchdog backstop
                         # doesn't immediately kill on the same stale silence.
-                        _parent._last_event_time = time.time()
+                        _parent._last_event_time = awake_time()
                         continue  # fresh sdk_task next iteration (new __anext__)
                 logger.error(
                     "session_unit.%s_timeout session_id=%s — "
@@ -1902,7 +1903,7 @@ class StreamingOrchestrator:
             # on per-tool record_turn(), so an active stream (tokens/thinking)
             # or a single long tool call could trip the 90s hang detector and
             # trigger a spurious self-heal mid-response.
-            self._parent._last_event_time = time.time()
+            self._parent._last_event_time = awake_time()
             _silence_since = self._parent._last_event_time
             self._parent._health_sensor.record_activity()
             _progress.on_event(self._parent._last_event_time)
@@ -1914,7 +1915,7 @@ class StreamingOrchestrator:
             try:
                 hb = self._parent._maybe_build_elapsed_heartbeat()
                 if hb is not None:
-                    _stall = _progress.stall_note(time.time())
+                    _stall = _progress.stall_note(awake_time())
                     if _stall is not None:
                         yield {**hb, "message": _stall, "stall": True}
             except Exception as hb_exc:
@@ -1937,10 +1938,10 @@ class StreamingOrchestrator:
                     # The only progress signal of an invisible-thinking turn.
                     _data = getattr(message, "data", None) or {}
                     _progress.on_thinking_tokens(
-                        time.time(), _data.get("estimated_tokens_delta") or 0
+                        awake_time(), _data.get("estimated_tokens_delta") or 0
                     )
                     _note = _progress.check(
-                        time.time(), tools_open=bool(self._parent._open_tool_uses)
+                        awake_time(), tools_open=bool(self._parent._open_tool_uses)
                     )
                     if _note is not None:
                         yield self._stall_event(_note)
@@ -1965,7 +1966,7 @@ class StreamingOrchestrator:
                     if _sa_ev is not None:
                         self._note_subagent(_subagent_last, _sa_ev)
                         self._track_live_task(_sa_ev)
-                        self._parent._last_progress_time = time.time()
+                        self._parent._last_progress_time = awake_time()
                         _progress.on_visible(self._parent._last_progress_time)
                         yield _sa_ev
                 continue  # Don't forward other system messages
@@ -1979,7 +1980,7 @@ class StreamingOrchestrator:
                     delta = event_data.get("delta", {})
                     if delta.get("type") == "text_delta" and delta.get("text"):
                         self._parent._content_emitted = True
-                        self._parent._last_progress_time = time.time()  # real content
+                        self._parent._last_progress_time = awake_time()  # real content
                         _progress.on_visible(self._parent._last_progress_time)
                         _idx = event_data.get("index", 0)
                         _dtext = delta["text"]
@@ -2016,7 +2017,7 @@ class StreamingOrchestrator:
                     elif delta.get("type") == "input_json_delta" and delta.get("partial_json"):
                         # A tool input streaming in is visible progress, and it
                         # can loop like text (e.g. a Write whose content repeats).
-                        _progress.on_visible(time.time())
+                        _progress.on_visible(awake_time())
                         _det = _degen.get(_dkey)
                         if _det is None:
                             _det = _degen[_dkey] = DegenerationDetector(kind="tool_use")
@@ -2027,7 +2028,7 @@ class StreamingOrchestrator:
                                 yield _ev
                             return
                     elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
-                        self._parent._last_progress_time = time.time()  # real thinking
+                        self._parent._last_progress_time = awake_time()  # real thinking
                         _progress.on_visible(self._parent._last_progress_time)  # shown to the user
                         if _dkey[0] is None:  # a sub-agent's thinking is not the main turn's
                             yield {"type": "thinking_delta", "thinking": delta["thinking"], "index": event_data.get("index", 0)}
@@ -2068,7 +2069,7 @@ class StreamingOrchestrator:
             #       Deletes still need this explicit emit because a deleted path is
             #       skipped by the sweep, cf. run_5a7be540.)
             if isinstance(message, UserMessage):
-                self._parent._last_progress_time = time.time()  # sub-agent progress
+                self._parent._last_progress_time = awake_time()  # sub-agent progress
                 _progress.on_visible(self._parent._last_progress_time)  # tool results
                 self._clear_completed_sub_agents(message)
                 # (b) write + delete emit (run_cce6f4b9). List-guard mirrors
@@ -2249,7 +2250,7 @@ class StreamingOrchestrator:
                             _ctx_evt = None
                         if _ctx_evt is not None:
                             yield _ctx_evt
-                self._parent._last_progress_time = time.time()  # real content blocks
+                self._parent._last_progress_time = awake_time()  # real content blocks
                 if any(isinstance(b, (TextBlock, ToolUseBlock)) for b in message.content):
                     _progress.on_visible(self._parent._last_progress_time)
                 content_blocks = []
@@ -2403,14 +2404,14 @@ class StreamingOrchestrator:
                             # Agent/Bash legitimately run long, so they get a
                             # longer window before the CPU-liveness probe.
                             self._parent._open_tool_uses[block.id] = (
-                                time.time(), block.name,
+                                awake_time(), block.name,
                             )
                         # ── Track sub-agent (Agent tool) for progress observability ──
                         if block.name == "Agent" and isinstance(block.input, dict):
                             _agent_label = block.input.get("description") or block.input.get("prompt") or ""
                             self._parent._active_agent_tools[block.id] = {
                                 "label": _agent_label[:80],
-                                "start_time": time.time(),
+                                "start_time": awake_time(),
                             }
                         # ── File-change tracking (run_cce6f4b9: event-driven emit) ──
                         # Track WRITE + DELETE targets keyed by tool_use_id; the matching
@@ -2833,7 +2834,7 @@ class StreamingOrchestrator:
                     # Transition to IDLE (not error) — session is healthy,
                     # user can send the next message to continue work.
                     self._parent._transition(SessionState.IDLE)
-                    self._parent.last_used = time.time()
+                    self._parent.last_used = awake_time()
                     # CLI exited after error_max_turns (exit code 1).
                     # Clear process references so next send() knows to
                     # respawn (instead of writing to dead pipe → crash →
@@ -2950,7 +2951,7 @@ class StreamingOrchestrator:
                     if self._parent._interrupted:
                         self._parent._interrupted = False
                         self._parent._transition(SessionState.IDLE)
-                        self._parent.last_used = time.time()
+                        self._parent.last_used = awake_time()
                         # Still yield the error so the user sees what
                         # went wrong — silently swallowing SDK errors
                         # causes blank responses (e.g. unknown slash
@@ -2986,7 +2987,7 @@ class StreamingOrchestrator:
                     # has real text or arrives after streamed content — is still
                     # surfaced, never silently retried.
                     _t0 = self._turn_started_at()
-                    streaming_dur = time.time() - _t0 if _t0 else 0.0
+                    streaming_dur = awake_time() - _t0 if _t0 else 0.0
                     if (
                         subtype == "error_during_execution"
                         and not error_text.strip()
@@ -3055,7 +3056,7 @@ class StreamingOrchestrator:
                     # turn failed.  User can retry.  Matches the interrupted
                     # path (line ~2484) which also transitions to IDLE.
                     self._parent._transition(SessionState.IDLE)
-                    self._parent.last_used = time.time()
+                    self._parent.last_used = awake_time()
                     # If CLI subprocess died (the error it returned may have
                     # been its dying gasp), clear client refs so next send()
                     # respawns instead of writing to a dead pipe.
@@ -3184,7 +3185,7 @@ class StreamingOrchestrator:
                 # the frontend as a turn-end; send() respawns and the retry's
                 # session_start lands while still STREAMING → UI stays armed.
                 _t0 = self._turn_started_at()
-                streaming_dur = time.time() - _t0 if _t0 else None
+                streaming_dur = awake_time() - _t0 if _t0 else None
                 output_tok = (usage.get("output_tokens") or 0) if usage else 0
 
                 # (a) Post-interrupt corruption: warm-but-broken subprocess
@@ -3375,7 +3376,7 @@ class StreamingOrchestrator:
                 # done). See the "Retry guards" block above the yield.
 
                 self._parent._transition(SessionState.IDLE)
-                self._parent.last_used = time.time()
+                self._parent.last_used = awake_time()
                 self._parent._retry_count = 0
                 # Resume-poison guard: this is the ONE clean-completion point —
                 # a real ResultMessage reached the user after the blank/degraded
@@ -3414,7 +3415,7 @@ class StreamingOrchestrator:
             # interrupt).  Kill it so the caller's retry logic can
             # respawn a fresh process with --resume.
             _t0 = self._turn_started_at()
-            streaming_dur = time.time() - _t0 if _t0 else 0.0
+            streaming_dur = awake_time() - _t0 if _t0 else 0.0
             if streaming_dur < 2.0 and not self._parent._content_emitted:
                 logger.warning(
                     "session_unit.zombie_detected session_id=%s "
@@ -3430,7 +3431,7 @@ class StreamingOrchestrator:
                 )
 
             self._parent._transition(SessionState.IDLE)
-            self._parent.last_used = time.time()
+            self._parent.last_used = awake_time()
 
     # ═══════════════════════════════════════════════════════════════
     # End of migrated methods

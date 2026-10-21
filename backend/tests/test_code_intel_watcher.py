@@ -402,3 +402,48 @@ class TestWatcherRegistry:
         # Cleanup
         await stop_watcher("my-project")
         watcher_mod._watchers.clear()
+
+
+class TestWatcherHonorsGitignore:
+    """F9 (2026-10-21): every build rewrote ~170 .py files under the gitignored
+    PyInstaller output dir and the watcher re-indexed them (185 large batches)."""
+
+    def _repo(self, tmp_path):
+        import subprocess
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        (tmp_path / ".gitignore").write_text("binaries/\n")
+        (tmp_path / "binaries" / "_internal").mkdir(parents=True)
+        (tmp_path / "src").mkdir()
+        gen = tmp_path / "binaries" / "_internal" / "gen.py"
+        src = tmp_path / "src" / "app.py"
+        gen.write_text("x = 1\n"); src.write_text("y = 2\n")
+        return gen, src
+
+    def test_ignored_files_are_dropped_tracked_ones_kept(self, tmp_path):
+        from core.code_intel.watcher import _drop_git_ignored
+        gen, src = self._repo(tmp_path)
+        assert _drop_git_ignored(tmp_path, [gen, src]) == [src]
+        assert _drop_git_ignored(tmp_path, [src]) == [src]
+
+    def test_not_a_repo_keeps_everything(self, tmp_path):
+        from core.code_intel.watcher import _drop_git_ignored
+        f = tmp_path / "a.py"
+        f.write_text("")
+        assert _drop_git_ignored(tmp_path, [f]) == [f]
+
+    @pytest.mark.asyncio
+    async def test_a_batch_of_only_ignored_files_triggers_no_reindex(self, tmp_path):
+        from core.code_intel.watcher import CodeIntelWatcher
+        gen, _src = self._repo(tmp_path)
+        watcher = CodeIntelWatcher("p", tmp_path, MagicMock())
+        mock_watchfiles = MagicMock()
+
+        async def mock_awatch(*args, **kwargs):
+            yield [("modified", str(gen))]
+
+        mock_watchfiles.awatch = mock_awatch
+        with patch.dict("sys.modules", {"watchfiles": mock_watchfiles}):
+            watcher._running = True
+            with patch.object(watcher, "_trigger_incremental", new_callable=AsyncMock) as trig:
+                await watcher._watch_loop()
+                trig.assert_not_called()

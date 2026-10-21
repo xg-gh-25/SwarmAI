@@ -34,6 +34,7 @@ import logging
 import os
 import platform
 import time
+from core.awake_clock import awake_time  # liveness durations exclude sleep
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
@@ -2036,7 +2037,7 @@ class PromptBuilder:
             return ""
 
         lines: list[str] = []
-        now = time.time()
+        now = awake_time()  # unit.last_used is on the awake clock
 
         for unit in router.list_units():
             if unit.session_id == current_session_id:

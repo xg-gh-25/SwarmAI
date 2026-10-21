@@ -4,11 +4,15 @@ File system watcher for Code Intelligence auto-refresh.
 Watches indexed project directories for source file changes and triggers
 incremental reindex after a debounce period. Only active in daemon/hive mode.
 
-Uses watchfiles (Rust-based, async-native, cross-platform).
+Uses watchfiles (Rust-based, async-native, cross-platform). Paths the project's
+git ignores (PyInstaller output under desktop/src-tauri/binaries/, build dirs)
+are dropped per batch with one `git check-ignore --stdin` call: the static skip
+list below missed them, and every build re-indexed ~170 generated files.
 """
 
 import asyncio
 import logging
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -102,6 +106,9 @@ class CodeIntelWatcher:
                     break
                 changed_files = [Path(path) for _, path in changes]
                 source_changes = [f for f in changed_files if f.suffix in _WATCHED_EXTENSIONS]
+                if source_changes:
+                    source_changes = await executors.run_in(
+                        "io", _drop_git_ignored, self._root, source_changes)
                 if not source_changes:
                     continue
                 # Gate: large batches of source changes are unusual (typically a
@@ -213,6 +220,25 @@ class CodeIntelWatcher:
                 resolve_router_prefixes(self._graph, self._root)
             except Exception as e:
                 logger.warning(f"CodeIntelWatcher: router prefix resolution failed: {e}")
+
+
+def _drop_git_ignored(root: Path, files: list[Path]) -> list[Path]:
+    """The files git does not ignore in the repo at ``root`` (blocking: run off
+    the loop). One subprocess for the whole batch. Not a git repo, or git
+    failing, keeps every file: the watcher then behaves as before."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "check-ignore", "--stdin", "-z"],
+            input="\0".join(str(f) for f in files).encode(),
+            capture_output=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("CodeIntelWatcher: git check-ignore failed: %s", exc)
+        return files
+    if proc.returncode not in (0, 1):  # 1 = none ignored; 128 = not a repo
+        return files
+    ignored = {p for p in proc.stdout.decode(errors="replace").split("\0") if p}
+    return [f for f in files if str(f) not in ignored]
 
 
 # ── Module-level watcher registry ──────────────────────────────────────

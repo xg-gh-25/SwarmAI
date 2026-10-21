@@ -445,7 +445,10 @@ async def bedrock_gateway(model_id: str, action: str, request: Request):
                 yield chunk
         finally:
             await resp.aclose()
-            logger.info("bedrock_gw.forwarded model=%s action=%s status=%d injected=%s "
+            # One line per request was ~a sixth of the whole log: a success is
+            # DEBUG, only a non-200 stays visible.
+            (logger.debug if resp.status_code == 200 else logger.warning)(
+                        "bedrock_gw.forwarded model=%s action=%s status=%d injected=%s "
                         "bytes=%d dur=%.1fs", model_id, action, resp.status_code, injected,
                         total, time.time() - t0)
 

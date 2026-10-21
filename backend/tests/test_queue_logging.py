@@ -2,7 +2,9 @@
 
 What is tested (the logging main.py configures at import): records are handed to a
 QueueHandler (the caller only enqueues); one listener thread owns the console and
-rotating-file handlers and writes the record to the log file.
+rotating-file handlers and writes the record to the log file; each line carries
+exactly one prefix (the QueueHandler has no formatter); Slack's network-outage
+errors are demoted to one WARNING per message per window.
 
 Why: on 2026-10-21 logging flush / RotatingFileHandler.shouldRollover on the loop
 thread stalled the event loop 4-5s at a time; the SSE heartbeat stopped meanwhile.
@@ -41,3 +43,50 @@ def test_records_go_through_the_queue_and_the_listener_writes_the_file():
         raise AssertionError("the listener did not write the record")
     finally:
         probe.removeHandler(main._queue_handler)
+
+
+def test_the_queue_handler_has_no_formatter_so_each_line_has_one_prefix(tmp_path):
+    """2026-10-21 regression: basicConfig gave the QueueHandler a formatter, so
+    QueueHandler.prepare() put the formatted line into record.msg and the file
+    handler prefixed it again. Wire a root the way main does (a fresh logger tree,
+    since pytest owns the real root) and count the prefixes in the file."""
+    import queue
+    import re
+    from logging.handlers import QueueListener
+    import main
+
+    root = logging.Logger("fresh-root")
+    qh = QueueHandler(queue.SimpleQueue())
+    main._install_root_queue_handler(root, qh, logging.INFO)
+    assert root.handlers == [qh] and qh.formatter is None
+    # an already-configured root is left alone, as basicConfig would
+    main._install_root_queue_handler(root, QueueHandler(queue.SimpleQueue()), logging.INFO)
+    assert root.handlers == [qh]
+
+    fh = logging.FileHandler(tmp_path / "x.log", encoding="utf-8")
+    fh.setFormatter(logging.Formatter(main.log_format))
+    listener = QueueListener(qh.queue, fh)
+    listener.start()
+    try:
+        root.info("probe-%s", "line")
+    finally:
+        listener.stop()
+        fh.close()
+    text = (tmp_path / "x.log").read_text(encoding="utf-8")
+    assert len(re.findall(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} \[\d+\]", text)) == 1, text
+    assert text.rstrip().endswith("INFO - probe-line")
+
+
+def test_network_outage_errors_from_slack_become_one_warning():
+    import main
+    f = main._NetworkErrorDemoteFilter(window_s=300)
+
+    def rec(msg, level=logging.ERROR):
+        return logging.LogRecord("slack_bolt.App", level, __file__, 1, msg, None, None)
+
+    dns = "Failed to send a request to Slack API server: <urlopen error [Errno 8] nodename nor servname provided, or not known>"
+    first = rec(dns)
+    assert f.filter(first) and first.levelno == logging.WARNING and first.levelname == "WARNING"
+    assert not f.filter(rec(dns))  # same message within the window: dropped
+    other = rec("Slack AUTH_ERROR: invalid_auth")
+    assert f.filter(other) and other.levelno == logging.ERROR  # a real error stays ERROR

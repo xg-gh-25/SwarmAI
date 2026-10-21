@@ -58,6 +58,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from core.awake_clock import awake_time  # liveness durations exclude sleep
 from collections import OrderedDict
 from typing import Any, Callable, Optional
 
@@ -340,7 +341,7 @@ class CliStreamReader:
             else:
                 logger.warning("cli_stream_reader.injected_turn_unhandled session_id=%s", self._session_id)
         self._idle = False
-        self._open.opened_at = time.time()
+        self._open.opened_at = awake_time()
         self._open._put(msg)
 
     def _on_echo(self, uuid: str) -> None:
@@ -355,7 +356,7 @@ class CliStreamReader:
         claim.echo_seen = True
         if cur is None:
             # an echo outside any turn (should not happen): the claimant owns what follows
-            claim.opened_at = time.time()
+            claim.opened_at = awake_time()
             self._open = claim
             return
         claim.opened_at = cur.opened_at

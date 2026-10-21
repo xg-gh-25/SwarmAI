@@ -10,7 +10,7 @@ Gaps & ACs:
   (already exists, verified) is retained.
 - G2 (turn count):   AC3 hard graceful floor at max_turns-5, ONLY reachable when self-heal OFF.
 - G3 (single turn):  AC5 elapsed "still working" heartbeat; AC6 per-turn tool-loop budget.
-- AC4 observability: context_ring_debug WARN near cap + turn_count.
+- AC4 observability: context_ring_debug carries turn_count.
 
 Methodology: unit tests with mocked Claude SDK + forced-execution of each new
 guard path. AC3/AC6 force the trigger condition and assert the path RUNS

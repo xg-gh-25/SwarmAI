@@ -39,6 +39,7 @@ import os
 import signal
 import subprocess
 import time
+from core.awake_clock import awake_time  # liveness durations exclude sleep
 import traceback
 from enum import Enum
 from pathlib import Path
@@ -152,16 +153,6 @@ rss_executor = ThreadPoolExecutor(
 _rss_executor = rss_executor
 
 # ── Load-amplifier caps (Root 2) ───────────────────────────────────
-# Context-ring warning threshold (context %). ORIGINALLY the proactive
-# soft-compaction trigger; that path was REMOVED (run_2b1957f8) because holding
-# _client_io for a 300s /compact at 60% froze the user's next send() at the turn
-# boundary. The constant is RETAINED as the log-level boundary for
-# context_ring_debug (WARN at/above this %, INFO below) — a pure observability
-# signal, no compaction. Context is now managed by CLI autocompact + manual
-# refresh. The HARD notice (~85%, "start a new tab") lives in
-# prompt_builder.build_context_warning (AC2).
-SOFT_COMPACT_PCT: int = 60
-
 # Long single-turn heartbeat: emit a "still working" notice every interval once
 # a step's wall-clock exceeds this, so a legitimately long/slow step reads as
 # EXPECTED rather than a hang (reduces frontend "mark idle" desync + SSE-blip
@@ -601,7 +592,7 @@ class SessionUnit:
         self.agent_id: str = agent_id
         self.state: SessionState = SessionState.COLD
         self.created_at: float = time.time()
-        self.last_used: float = time.time()
+        self.last_used: float = awake_time()
         # True when this unit serves channel conversations (Slack, etc.)
         # Channel units use a dedicated slot pool, separate from chat tabs.
         # NOTE: this is deliberately False for an OWNER messaging via a channel
@@ -1611,7 +1602,7 @@ class SessionUnit:
             # than _streaming_start_time, so the discriminator would read every
             # fresh spawn as "events already flowing" and the watchdog would
             # never fire (run_6c482b10 adversarial HIGH). Capture once.
-            _stream_entry_ts = time.time()
+            _stream_entry_ts = awake_time()
             self._streaming_start_time = _stream_entry_ts
             self._last_event_time = _stream_entry_ts
             # Progress clock starts unset: until the first REAL content event,
@@ -1788,7 +1779,7 @@ class SessionUnit:
                 if self.state == SessionState.STREAMING:
                     last_event = self._last_event_time
                     if last_event is not None:
-                        silence = time.time() - last_event
+                        silence = awake_time() - last_event
                         timeout = self._compute_message_timeout()
 
                         # ── Tool-aware hang tier v2 (run_fb6e94a9) ────
@@ -1821,7 +1812,7 @@ class SessionUnit:
                         # resort to killing the subprocess.
                         in_interrupt_grace = (
                             self._tool_hang_interrupt_at is not None
-                            and (time.time() - self._tool_hang_interrupt_at)
+                            and (awake_time() - self._tool_hang_interrupt_at)
                             < self.TOOL_HANG_INTERRUPT_GRACE_S
                         )
                         # The force-kill backstop owns ONLY tool-FREE API hangs.
@@ -1990,7 +1981,7 @@ class SessionUnit:
             key=lambda k: self._open_tool_uses[k][0],
         )
         start, name = self._open_tool_uses[oldest_id]
-        return (time.time() - start, name, oldest_id)
+        return (awake_time() - start, name, oldest_id)
 
     def _tool_open_window(self, tool_name: str) -> float:
         """Per-tool open window before CPU-liveness probing kicks in.
@@ -2150,7 +2141,7 @@ class SessionUnit:
         # in the watchdog; latching it on a failed interrupt makes the hard
         # ceiling + escalation unreachable for a still-wedged tool).
         if ok:
-            self._tool_hang_interrupt_at = time.time()
+            self._tool_hang_interrupt_at = awake_time()
             # Once-per-episode guard (cleared on STREAMING entry + ToolResultBlock).
             self._tool_hang_interrupted = True
 
@@ -3491,9 +3482,7 @@ class SessionUnit:
         # Track context size for adaptive timeout (L1 resilience)
         if input_tokens and input_tokens > 0:
             self._last_known_context_tokens = input_tokens
-        # Root 2 / AC4: observability — log context-ring size + turn count, and
-        # escalate to WARN when context% is near the soft cap so the amplifier is
-        # visible BEFORE it bites (vs. the INFO debug line that's easy to miss).
+        # Root 2 / AC4: observability — log context-ring size + turn count.
         _ctx_pct = 0.0
         if input_tokens and input_tokens > 0:
             try:
@@ -3502,8 +3491,9 @@ class SessionUnit:
             except Exception:
                 logger.debug("_emit_post_stream_metadata: suppressed exception on a fail-safe path", exc_info=True)
                 _ctx_pct = 0.0
-        _log = logger.warning if _ctx_pct >= SOFT_COMPACT_PCT else logger.info
-        _log(
+        # INFO at every level: a full context is not a fault (the CLI compacts
+        # at 75%); at WARNING this debug line was 951 of the log's warnings.
+        logger.info(
             "session_unit.context_ring_debug session_id=%s "
             "usage_keys=%s raw_total=%s per_turn_est=%s pct=%.0f%% "
             "turn_count=%d num_turns=%d model=%s",
@@ -3918,7 +3908,7 @@ class SessionUnit:
 
         self._wrapper = wrapper
         self._client = client
-        self.last_used = time.time()
+        self.last_used = awake_time()
         # The client's one stream consumer, for its whole life (I1). Started
         # before the unit leaves COLD, so no frame (and no control request
         # queued behind one) ever waits for a turn to start reading.
@@ -4153,7 +4143,7 @@ class SessionUnit:
             # IDLE → IDLE is not a valid transition, so skip if already IDLE.
             if self.state != SessionState.IDLE:
                 self._transition(SessionState.IDLE)
-            self.last_used = time.time()
+            self.last_used = awake_time()
             # Clear stop event so the next send()'s SSE stream doesn't
             # immediately see a stale set() from this interrupt.  send()
             # also clears it, but clearing here prevents the race where
@@ -4664,7 +4654,7 @@ class SessionUnit:
             return None
         if self._streaming_start_time is None:
             return None
-        elapsed = time.time() - self._streaming_start_time
+        elapsed = awake_time() - self._streaming_start_time
         if elapsed < LONG_TURN_HEARTBEAT_S:
             return None
         # One notice per heartbeat interval: only emit if we've crossed into a
@@ -4766,7 +4756,7 @@ class SessionUnit:
                 # hand it to the sink now that _client_io is released.
                 if getattr(self, "_injected_turns", None):
                     self._emit_cli_event("injected")
-            self.last_used = time.time()
+            self.last_used = awake_time()
             # Transition guard to ACTIVE — post-compaction loop detection enabled
             self._compaction_guard.activate()
             return {"success": True, "message": "Session compacted"}
@@ -5397,9 +5387,9 @@ class SessionUnit:
         if self._last_progress_time is None:
             # No real progress yet — measure from streaming start (dumb-spawn).
             if self._streaming_start_time is not None:
-                return time.time() - self._streaming_start_time
+                return awake_time() - self._streaming_start_time
             return None
-        return time.time() - self._last_progress_time
+        return awake_time() - self._last_progress_time
 
     # Circuit breaker threshold for force_unstick_streaming.
     # After this many consecutive unstick attempts without a successful
