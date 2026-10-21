@@ -3,11 +3,10 @@
 WHAT IS TESTED
 --------------
 The fail-closed cleanliness flag that fixes "first message after resume reliably
-fails" (zombie_via_error). Root cause: send() reuses an alive-but-POISONED warm
-subprocess after a soft-interrupt / SSE-disconnect that left the CLI in corrupt
-turn-state. The existing eager-recycle (flush_subprocess_pipe → _crash_to_cold_async)
-runs AFTER its `await interrupt()`, and send() cancels the in-flight flush before
-reuse → recycle never runs → poisoned reuse → instant empty error_during_execution.
+fails" (zombie_via_error). Root cause: send() reused an alive-but-POISONED warm
+subprocess after a soft-interrupt that left the CLI in corrupt turn-state. (The
+eager recycle that once ran after a client disconnect is gone: a disconnect no
+longer interrupts the turn.)
 
 THE FIX (approach A2 — fail-closed):
 - ``self._last_turn_clean`` per-instance, default **False** (fail-closed).
@@ -75,7 +74,6 @@ def _make_unit(
     unit._last_progress_time = None
     unit._hooks_enqueued = False
     unit._pid_watchdog_task = None
-    unit._pipe_flush_task = None
     unit._stop_event = asyncio.Event()
     unit._interrupted = False
     unit._heal_checkpoint = None
@@ -181,11 +179,11 @@ class TestAC6ClearOnStreaming:
         )
 
     def test_transition_to_idle_does_not_set_clean(self):
-        """A bare IDLE transition (e.g. disconnect recovery) must NOT bless the turn.
+        """A bare IDLE transition (no result) must NOT bless the turn.
 
-        Only the success-result path sets clean=True. recover_from_disconnect and
-        interrupt paths transition to IDLE without a result — those must leave the
-        flag False so the next send() recycles.
+        Only the success-result path sets clean=True. Interrupt paths transition
+        to IDLE without a result — those must leave the flag False so the next
+        send() recycles.
         """
         unit = _make_unit(state=SessionState.STREAMING)
         unit._last_turn_clean = False
@@ -304,7 +302,7 @@ class TestAC2PoisonedRecycle:
         async def _arm(trigger, **k):
             # Faithful to _arm_recovery_checkpoint: arms the marker for recycles.
             unit._recycle_kill_pending = trigger in (
-                "flush_recycle", "interrupt_recycle", "poison_guard_recycle",
+                "interrupt_recycle", "poison_guard_recycle",
             )
 
         async def _spawn_ok(*a, **k):
@@ -517,7 +515,7 @@ async def _empty_async_iter(*args, **kwargs):
 # ═══════════════════════════════════════════════════════════════════
 # AC4 + Gate-1 F1: poison_guard exempts fresh PREWARM units by prefix,
 # NOT by _sdk_session_id (which would misclassify a first-message
-# SSE-disconnect zombie as fresh — recover_from_disconnect leaves a
+# zombie as fresh — a first-message turn that ended unclean leaves a
 # normal unit at IDLE+client+clean=False+sdk_session_id=None).
 # ═══════════════════════════════════════════════════════════════════
 
@@ -567,7 +565,7 @@ class TestAC4PrewarmPoisonGuard:
     async def test_disconnect_zombie_normal_id_IS_recycled(self):
         """Gate-1 F1 (CRITICAL regression guard): a NORMAL (non-prewarm) unit
         left at IDLE+client+clean=False+sdk_session_id=None by a first-message
-        SSE disconnect (recover_from_disconnect) is a REAL zombie and MUST still
+        turn that ended unclean (crash, interrupt) is a REAL zombie and MUST still
         be recycled. This is why the exemption keys on the prewarm- prefix, not
         on _sdk_session_id is None."""
         unit = _make_unit(state=SessionState.IDLE, session_id="normal-sess-789")

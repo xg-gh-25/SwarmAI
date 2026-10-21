@@ -70,13 +70,13 @@ The state machine is the guard (`SessionUnit.send()`); there is no per-session l
   if a newer send started; sets `_user_stopped_current_turn` (suppresses self-heal); on
   success recycles the subprocess to COLD with identity kept (PIT01). Only
   `autonomous=True` (tool-hang watchdog) keeps it warm.
-- **SSE disconnect**: `recover_from_disconnect()` → clean IDLE + drain, then a soft
-  `flush_subprocess_pipe` that leaves the subprocess ALIVE on timeout so a long tool
-  call can finish and persist. Never POST `/stop` on disconnect.
+- **SSE disconnect**: does not touch the turn. The session owns it: it runs to its own
+  end and persists, and the window's subscription (`GET /api/chat/events`) carries it
+  to the tabs (`core/session_events`). Never POST `/stop` on disconnect.
 - **Tab close** (`/chat/release`): kills an IDLE unit to free its slot; skips channel
   units; skips STREAMING/WAITING_INPUT unless `force=True`, which interrupts first.
   Never raw-`kill()` an active unit.
-- Lock rules: `interrupt()` and flush never take `_client_io`; `_client_io` is a short
+- Lock rules: `interrupt()` never takes `_client_io`; `_client_io` is a short
   barrier, never held across the stream; spawn holds `_spawn_lock` then `_env_lock`
   through `wrapper.__aenter__()`.
 

@@ -19,7 +19,7 @@ const mockGet = vi.spyOn(api, 'get');
 describe('chatService.getStreamingState — boundary mapping', () => {
   beforeEach(() => mockGet.mockReset());
 
-  it('maps all 6 fields snake→camel for an AskUserQuestion waiting_input session', async () => {
+  it('maps every live field snake→camel for an AskUserQuestion waiting_input session', async () => {
     mockGet.mockResolvedValue({
       data: {
         sessions: {
@@ -47,6 +47,12 @@ describe('chatService.getStreamingState — boundary mapping', () => {
     expect(e.pendingQuestion).not.toBeNull();
     expect(e.pendingQuestion!.toolUseId).toBe('toolu_01ABC');
     expect(e.pendingQuestion!.questions).toHaveLength(1);
+    // the mapped entry carries exactly the live fields of the backend's streaming-state
+    // contract (backend/tests/test_streaming_state_contract.py) except `pid`, which
+    // only the backend's session-health probe reads
+    expect(Object.keys(e).sort()).toEqual(
+      ['lastDrainedSeqs', 'pendingCount', 'pendingQuestion', 'state', 'streaming', 'waitingInput'],
+    );
   });
 
   it('Gate-2 HIGH: a command-permission pending_question (no `questions`) maps to pendingQuestion=null', async () => {
@@ -99,10 +105,6 @@ describe('chatService.getStreamingState — boundary mapping', () => {
       pendingCount: 0,
       pendingQuestion: null,
       lastDrainedSeqs: [],
-      // OT01 honest-signal fix: boundary mapping always emits this field with a
-      // fail-safe default (raw.post_disconnect_flushing ?? false), so even the
-      // "missing optional fields" case carries it as false.
-      postDisconnectFlushing: false,
     });
   });
 

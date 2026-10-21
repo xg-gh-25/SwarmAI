@@ -79,7 +79,7 @@ def test_adopted_unit_warm_reuses_on_first_message():
 def test_adopted_bridge_defaults_false_for_normal_unit():
     """A normal (non-adopted) IDLE unit with an unclean last turn is NOT
     warm-reuse eligible — the bridge must default False so a real
-    first-message-disconnect zombie (recover_from_disconnect) still recycles."""
+    first-message zombie (a first turn that ended unclean) still recycles."""
     unit = SessionUnit(session_id="real-normal", agent_id="agent-default")
     unit.state = SessionState.IDLE
     unit._client = object()

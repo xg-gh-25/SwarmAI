@@ -40,7 +40,7 @@ class TestClassifyFailure:
         assert ft == FailureType.OOM
 
     # ── Recycle-kill (-9) must NOT be classified OOM ──────────────────
-    # An app-initiated fast recycle (flush_recycle / interrupt_recycle of a
+    # An app-initiated fast recycle (interrupt_recycle / poison_guard_recycle of a
     # poisoned subprocess) force-kills the tree → "exit code -9", the SAME
     # string as an OS OOM SIGKILL. Without the recycle_kill flag it fell into
     # the OOM branch → 30/60/120s cooldown → tens of seconds of dead air on a

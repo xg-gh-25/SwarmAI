@@ -264,8 +264,8 @@ AUTO_RECOVER_STALL_THRESHOLD: float = 180.0
 #
 # _streaming_count is the single source of truth, mutated ONLY inside
 # _transition() (the one sync state chokepoint — verified: :779 self.state= is
-# the ONLY direct assignment, so every STREAMING entry/exit, incl kill/crash/
-# disconnect, routes through it → the counter cannot leak). A new send() turn
+# the ONLY direct assignment, so every STREAMING entry/exit, incl kill/crash,
+# routes through it → the counter cannot leak). A new send() turn
 # waits (poll) when the count is at the cap; continue_with_answer / permission /
 # retry paths COUNT toward the cap but are NEVER blocked (a user waiting on their
 # own answer must not queue behind others). Poll (not Event) is deliberate:
@@ -637,7 +637,7 @@ class SessionUnit:
         # concurrent ``receive_response()`` drives split the SDK stream and
         # co-starved (the 3-5min "freeze", run_4b74b764) — a unit without a
         # reader (test fakes) still reads that way.
-        # interrupt()/flush stay lock-FREE: they are control-channel calls, and
+        # interrupt() stays lock-FREE: it is a control-channel call, and
         # acquiring here would deadlock Stop against the very turn it stops. The two background maintenance ops probe
         # ``_client_io.locked()`` and SKIP (never block) when a turn holds it.
         self._client_io: asyncio.Lock = asyncio.Lock()
@@ -843,12 +843,12 @@ class SessionUnit:
         # completion (streaming_orchestrator success path). Cleared on every
         # STREAMING entry (_transition). send() checks it before reusing a
         # warm IDLE subprocess: NOT clean → the subprocess may be poisoned by
-        # a prior soft-interrupt / SSE-disconnect that left the CLI in corrupt
+        # a prior soft-interrupt that left the CLI in corrupt
         # turn-state (PIT01) → recycle-before-reuse instead of feeding the
         # poisoned process a first message that returns an instant empty
         # error_during_execution (zombie). Default False = fail-closed: a turn
-        # that did NOT reach the success transition (interrupt / disconnect /
-        # error / max_turns) is presumed poisoned, path-agnostically. This is
+        # that did NOT reach the success transition (interrupt / error /
+        # max_turns) is presumed poisoned, path-agnostically. This is
         # a per-instance attribute (NEVER module/class level) so the guard
         # never crosses sessions/tabs.
         self._last_turn_clean: bool = False
@@ -966,12 +966,6 @@ class SessionUnit:
         # ── SSE stop notification ─────────────────────────────────
         self._stop_event: asyncio.Event = asyncio.Event()
 
-        # ── Pipe flush background task ────────────────────────────
-        # Tracks the fire-and-forget flush_subprocess_pipe() task so
-        # send() can cancel it before starting a new stream.  Without
-        # this, the flush's _client.interrupt() races with the new stream.
-        self._pipe_flush_task: Optional[asyncio.Task] = None
-
 
         # ── Root-1 SSOT Phase 2: outstanding tool_use + pending question ──
         # When the agent emits an AskUserQuestion / cmd_permission tool_use the
@@ -1052,7 +1046,7 @@ class SessionUnit:
         # inject continuation context. None = no pending heal context.
         self._heal_checkpoint: TaskCheckpoint | None = None
         # Set True when the most recent kill was an APP-INITIATED fast recycle
-        # (flush_recycle / interrupt_recycle of a poisoned subprocess). Read by
+        # (interrupt_recycle / poison_guard_recycle of a poisoned subprocess). Read by
         # classify_failure so the resulting "exit code -9" is treated as ZOMBIE
         # (near-instant respawn) instead of OOM (30/60/120s backoff). Consumed
         # (reset) at classification and cleared at each new turn. RSS-driven
@@ -1470,28 +1464,6 @@ class SessionUnit:
         await self.force_unstick_waiting_input()
         return True
 
-    # Root-1 SSOT Phase 2 (L6, Option B): is_generating_after_disconnect (the
-    # post-disconnect "still generating" limbo property) is DELETED. A disconnect
-    # now yields a clean IDLE — there is no flag to consult. The streaming-state
-    # mirror reports streaming = (state == STREAMING).
-
-    @property
-    def is_post_disconnect_flushing(self) -> bool:
-        """DEAD: always False since a client disconnect stopped interrupting turns
-        (core/session_events) — nothing calls schedule_pipe_flush any more; kept
-        until the follow-up removes this cluster and its readers.
-
-        Was: True while a post-disconnect pipe-flush task is still running — i.e.
-        the subprocess was left alive after an SSE disconnect (Option B-soft, 1A)
-        and is finishing a long tool-loop whose output persists to DB.
-
-        Eviction/slot logic uses this so a clean-IDLE-but-still-flushing unit is
-        not killed mid-turn (replaces the deleted is_generating_after_disconnect
-        guard at the eviction sites — same protection, derived from the real task
-        instead of a manually-managed flag)."""
-        t = self._pipe_flush_task
-        return t is not None and not t.done()
-
     @property
     def is_protected(self) -> bool:
         """Cannot be evicted (STREAMING or WAITING_INPUT)."""
@@ -1564,7 +1536,7 @@ class SessionUnit:
 
         # R6 Step B: maintain the daemon-wide concurrent-streaming counter HERE,
         # inside the one sync state chokepoint, so every STREAMING entry/exit —
-        # including kill / crash / disconnect (all route through _transition) —
+        # including kill / crash (all route through _transition) —
         # keeps it accurate. old_state != new_state is guaranteed here (the
         # same-state early-return above already fired), so each STREAMING entry
         # increments exactly once and its matching exit decrements exactly once.
@@ -1582,7 +1554,7 @@ class SessionUnit:
             # success-result transition that re-blesses it. Clearing here (the
             # single STREAMING-entry chokepoint, NOT in send()'s reset batch)
             # is what keeps the warm-reuse fast path alive for clean turns
-            # while forcing a recycle for interrupted/disconnected ones.
+            # while forcing a recycle for interrupted ones.
             self._last_turn_clean = False
             # One-shot prewarm-adopt bridge (Gate-1 #5): a turn has now started,
             # so the re-key window is over — clear the bridge so the NEXT message
@@ -2381,40 +2353,6 @@ class SessionUnit:
         self._last_send_options = options
         self._last_send_config = config
 
-        # Cancel any in-flight pipe flush from a prior SSE disconnect.
-        # The flush sends a JSON "interrupt" control request to the CLI
-        # subprocess (NOT an OS signal).  If the flush times out (5s), it
-        # kills the subprocess → transitions to DEAD → COLD.
-        #
-        # We must await the task completion to prevent two races:
-        # (1) flush timeout → kill() → unit in DEAD state when our send()
-        #     checks state at line 775 → RuntimeError "Cannot send() in
-        #     state dead" → frontend shows "Connection interrupted".
-        # (2) flush's interrupt is in-flight → subprocess receives both
-        #     the old interrupt AND our new send_message → confused state.
-        #
-        # Awaiting costs <1ms when flush already completed (common path),
-        # and at most 5s when flush is mid-timeout (rare, but prevents
-        # user-visible error that forces resend).
-        if self._pipe_flush_task and not self._pipe_flush_task.done():
-            # Cancel the flush task — it's safe now because flush no longer
-            # kills the subprocess (2026-06-20 SSE reliability fix).  The
-            # subprocess may still be executing a tool call; SDK turn
-            # serialization ensures our new send() is queued until the
-            # current turn completes.
-            #
-            # The old "cross-turn bleed P0" concern (stale pipe data) is
-            # no longer applicable: we're not interrupting/killing the
-            # subprocess, so its current turn will complete normally and
-            # the SDK manages turn boundaries.
-            self._pipe_flush_task.cancel()
-            try:
-                await self._pipe_flush_task
-            except (asyncio.CancelledError, Exception):
-                logger.debug("send: suppressed exception on a fail-safe path", exc_info=True)
-                pass
-            self._pipe_flush_task = None
-
         # ── STREAMING state handling — three cases ─────────────────────
         #
         # HISTORY (this section has been fixed 4+ times):
@@ -2559,11 +2497,11 @@ class SessionUnit:
             # DEAD is recoverable at send-time, NOT a dead-end. Two DEAD sources
             # both strand the unit here until lifecycle_manager's 60s _cleanup_dead
             # loop happens to run — so the FIRST resume reliably failed:
-            #   (a) a flush_recycle / interrupt_recycle whose _crash_to_cold_async
-            #       was ORPHANED mid-teardown — send() itself cancels the in-flight
-            #       _pipe_flush_task above (~:1575), and the CancelledError unwinds
-            #       out of the locked DEAD→…→COLD sequence, releasing the lock with
-            #       the unit still DEAD (COLD never reached by that path).
+            #   (a) a recycle (interrupt_recycle / poison_guard_recycle) whose
+            #       _crash_to_cold_async is cancelled mid-teardown: the
+            #       CancelledError unwinds out of the locked DEAD→…→COLD sequence,
+            #       releasing the lock with the unit still DEAD (COLD never reached
+            #       by that path).
             #   (b) a watchdog kill (_pid_watchdog_loop / _maybe_escape_wedged_tool)
             #       that sets DEAD + force_kills then returns WITHOUT a lock or a
             #       COLD transition — a legitimately STABLE DEAD whose only other
@@ -2596,12 +2534,11 @@ class SessionUnit:
         # ── Resume-poison guard (fail-closed) — recycle-before-reuse ────
         # If we are about to REUSE a warm IDLE subprocess that did NOT end its
         # last turn via the success-result transition, it may be poisoned by a
-        # prior soft-interrupt / SSE-disconnect (PIT01): the CLI is in corrupt
-        # turn-state and the first message would return an instant empty
-        # error_during_execution (zombie) → kill+retry → "first resume fails".
-        # The existing flush/interrupt recycle runs AFTER an `await interrupt()`
-        # and is cancel-raced by this very send() (it cancels the in-flight
-        # flush task above), so it cannot be relied on. Recycle eagerly HERE,
+        # prior soft-interrupt (PIT01): the CLI is in corrupt turn-state and the
+        # first message would return an instant empty error_during_execution
+        # (zombie) → kill+retry → "first resume fails". The interrupt recycle
+        # covers only a non-autonomous interrupt() that returned cleanly, so it
+        # cannot be relied on for every unclean turn. Recycle eagerly HERE,
         # before reuse, via the blessed kill path (clear_identity=False preserves
         # --resume identity); the COLD branch below then spawns a clean process
         # WITH --resume. Clean turns skip this entirely → warm fast path intact.
@@ -4056,144 +3993,6 @@ class SessionUnit:
         async for event in self._streaming_orchestrator._read_formatted_response():
             yield event
 
-    def recover_from_disconnect(self) -> bool:
-        """DEAD: no caller since a client disconnect stopped interrupting turns
-        (core/session_events); kept until the follow-up removes this cluster.
-
-        Transition STREAMING → a CLEAN IDLE after SSE client disconnect.
-
-        Returns True if the transition happened.  No-op if not STREAMING.
-
-        Root-1 SSOT Phase 2 (L6, Option B-soft): there is NO post-disconnect
-        "generating" limbo flag any more. The transition produces a TRUE IDLE,
-        which (a) fires _on_unit_state_change → enqueue_drain, so any messages the
-        user queued during the turn coalesce-drain once the subprocess is free, and
-        (b) lets the streaming-state mirror report state==IDLE without a special
-        case. The subprocess is NOT killed here: the caller (chat.py) still
-        schedules ``flush_subprocess_pipe`` which soft-interrupts and — on timeout —
-        LEAVES THE SUBPROCESS ALIVE so a legitimate long tool-loop finishes and its
-        output persists to DB for reconciliation (1A: long turns survive a transient
-        SSE blip; lifecycle TTL handles a truly-stuck process).
-        """
-        if self.state != SessionState.STREAMING:
-            return False
-        self._transition(SessionState.IDLE)
-        self.last_used = time.time()
-        return True
-
-    def schedule_pipe_flush(
-        self, loop: asyncio.AbstractEventLoop, cleanup_coro=None,
-    ) -> None:
-        """Schedule a background pipe flush and track the task.
-
-        Called by the router layer after ``recover_from_disconnect()``.
-        Stores the task reference so ``send()`` can cancel it if the user
-        immediately sends a new message.
-
-        Parameters
-        ----------
-        loop:
-            The running event loop to schedule on.
-        cleanup_coro:
-            Optional coroutine to use as the task body.  If None, calls
-            ``self.flush_subprocess_pipe()`` directly.  The router passes
-            its own wrapper that adds error suppression.
-        """
-        coro = cleanup_coro if cleanup_coro is not None else self.flush_subprocess_pipe()
-        task = loop.create_task(coro)
-        self._pipe_flush_task = task
-
-    async def flush_subprocess_pipe(self, timeout: float = 3.0) -> None:
-        """Attempt a soft interrupt of the CLI subprocess after SSE disconnect.
-
-        Called after ``recover_from_disconnect()`` as a background task.
-        The unit is IDLE; the subprocess may still be running a tool
-        whose stdout output would contaminate the next ``send()``.
-
-        **Critical design choice (2026-06-20):** On timeout, we do NOT kill
-        the subprocess. The subprocess is likely executing a tool call whose
-        output will be persisted to DB by session_router._persist_assistant_blocks
-        when it completes. Killing it destroys output that the frontend can
-        recover via reconciliation polling.
-
-        Instead: log and leave alive. The subprocess will either:
-        (a) finish the tool call → ResultMessage → transition happens normally, or
-        (b) become truly stuck → lifecycle_manager's 12hr TTL handles it.
-
-        If the user sends a new message before the tool finishes, send()
-        already handles the "subprocess busy" case (waits for current turn
-        to complete via SDK's built-in turn serialization).
-
-        Generation-guarded: if ``send()`` starts (advancing
-        ``_send_generation``) between our state check and the actual
-        interrupt call, we bail out — the new stream owns the subprocess.
-        """
-        if self.state != SessionState.IDLE or self._client is None:
-            return
-
-        # Capture generation — if send() starts while we're awaiting,
-        # generation advances and we must NOT interrupt the new stream.
-        gen_at_entry = self._send_generation
-
-        try:
-            await asyncio.wait_for(self._client.interrupt(), timeout=timeout)
-
-            # Post-interrupt generation check: if send() started during
-            # the await, our interrupt hit the new stream — log but don't
-            # escalate (send() already handles the recovery).
-            if self._send_generation != gen_at_entry:
-                logger.info(
-                    "session_unit.flush_pipe session_id=%s — send() started "
-                    "during flush (gen %d→%d), skipping state changes",
-                    self.session_id, gen_at_entry, self._send_generation,
-                )
-                return
-
-            logger.info(
-                "session_unit.flush_pipe session_id=%s — pipe flushed",
-                self.session_id,
-            )
-            # ── Recycle-on-flush (PIT01 zombie fix, disconnect path) ────────
-            # A CLEAN interrupt return means the turn actually stopped (no tool
-            # mid-flight — that path times out and is handled below). The
-            # subprocess is now in the same corrupt turn-state as a user Stop,
-            # so the next send() would reuse a poisoned process → zombie. Recycle
-            # it via the same blessed kill path (preserves --resume identity).
-            # Only on the IDLE-alive state: if the flush already drove us elsewhere
-            # (DEAD/COLD via a concurrent kill), there is nothing warm to recycle.
-            if self.state == SessionState.IDLE and self._client is not None:
-                await self._arm_recovery_checkpoint("flush_recycle")
-                await self._crash_to_cold_async(clear_identity=False)
-                logger.info(
-                    "session_unit.flush_recycle session_id=%s — poisoned "
-                    "subprocess recycled to COLD after clean flush",
-                    self.session_id,
-                )
-        except asyncio.CancelledError:
-            # Cancelled externally (e.g. timeout wrapper or session teardown).
-            logger.info(
-                "session_unit.flush_pipe session_id=%s — cancelled externally",
-                self.session_id,
-            )
-            return
-        except asyncio.TimeoutError:
-            # Don't kill — subprocess is likely still executing a tool call.
-            # Its output will be persisted to DB when it finishes, and the
-            # frontend reconciliation will recover the content.
-            if self._send_generation != gen_at_entry:
-                logger.info(
-                    "session_unit.flush_pipe session_id=%s — timeout but "
-                    "send() started (gen %d→%d), not killing",
-                    self.session_id, gen_at_entry, self._send_generation,
-                )
-                return
-            logger.info(
-                "session_unit.flush_pipe session_id=%s — interrupt timed out, "
-                "leaving subprocess alive (tool call likely in progress, "
-                "output will persist to DB for reconciliation recovery)",
-                self.session_id,
-            )
-
     # ── Interactive methods (task 3.3) ─────────────────────────────
 
     async def stop_task(self, task_id: str) -> dict:
@@ -5230,9 +5029,6 @@ class SessionUnit:
         # silently never delivered). Clearing here makes the guard self-heal.
         self._pending_tool_use_id = None
         self._pending_question = None
-        if self._pipe_flush_task is not None:
-            self._pipe_flush_task.cancel()
-            self._pipe_flush_task = None
         # Don't reset _lifecycle_response_count — it tracks across the
         # full unit lifetime (resume awareness persists through kill/restart).
         # Reset channel history injection flag — the new subprocess
@@ -5463,11 +5259,11 @@ class SessionUnit:
         # classified ZOMBIE (~0.5s respawn) not OOM (30/60/120s backoff). Set
         # BEFORE the idempotency early-return so it reflects the latest kill
         # reason even when a checkpoint is already armed. ONLY the poisoned/
-        # corrupt-turn-state recycles (flush/interrupt/poison_guard) — NOT
+        # corrupt-turn-state recycles (interrupt/poison_guard) — NOT
         # rss_*/stuck_*/watchdog (those are real memory pressure / genuine
         # hangs that keep their own 30/60/120s backoff semantics).
         self._recycle_kill_pending = trigger in (
-            "flush_recycle", "interrupt_recycle", "poison_guard_recycle",
+            "interrupt_recycle", "poison_guard_recycle",
         )
 
         if self._heal_checkpoint is not None:

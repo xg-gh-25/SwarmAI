@@ -993,7 +993,7 @@ describe('useChatStreamingLifecycle', () => {
       const stateSpy = vi
         .spyOn(chatService, 'getStreamingState')
         .mockResolvedValue({
-          'sess-heal-sw': { streaming: true, state: 'streaming', waitingInput: false, postDisconnectFlushing: false },
+          'sess-heal-sw': { streaming: true, state: 'streaming', waitingInput: false },
         } as unknown as Awaited<ReturnType<typeof chatService.getStreamingState>>);
       try {
         const msgId = 'msg-heal-sw';
@@ -3653,7 +3653,7 @@ describe('TabStatusIndicator component', () => {
       const stateSpy = vi
         .spyOn(chatService, 'getStreamingState')
         .mockResolvedValue({
-          'sess-dc1': { streaming: true, state: 'streaming', waitingInput: false, postDisconnectFlushing: false },
+          'sess-dc1': { streaming: true, state: 'streaming', waitingInput: false },
         } as unknown as Awaited<ReturnType<typeof chatService.getStreamingState>>);
       try {
         const tabId = 'tab-dc-working';
@@ -3692,7 +3692,7 @@ describe('TabStatusIndicator component', () => {
       const stateSpy = vi
         .spyOn(chatService, 'getStreamingState')
         .mockResolvedValue({
-          'sess-dc2': { streaming: false, state: 'idle', waitingInput: false, postDisconnectFlushing: false },
+          'sess-dc2': { streaming: false, state: 'idle', waitingInput: false },
         } as unknown as Awaited<ReturnType<typeof chatService.getStreamingState>>);
       const msgsSpy = vi
         .spyOn(chatService, 'getSessionMessagesReconcileTail')

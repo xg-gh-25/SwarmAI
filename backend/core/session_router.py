@@ -2881,7 +2881,6 @@ class SessionRouter:
         idle_units = [
             u for u in self._units.values()
             if u.state == SessionState.IDLE
-            and not u.is_post_disconnect_flushing  # always False now: dead guard, removal is a follow-up
             # a live background task / queued CLI turn (I5): protected on the channel
             # pool; chat eviction only takes orphans, whose turn no window would see
             and not (u.has_background_work and u.is_channel_session)
@@ -3710,11 +3709,10 @@ class SessionRouter:
         # gate — spawn_budget (RAM), not the compute_max_tabs UX ceiling. We will
         # need to queue iff: not already alive, RAM can't admit a fresh spawn,
         # AND no evictable IDLE peer exists to free a slot.
-        # Mirror _evict_idle's candidate filter: a unit that is IDLE but still
-        # generating after an SSE disconnect is NOT evictable, so it must not
-        # count as a free-able slot here — otherwise we skip the "queued"
-        # indicator and then fail to evict, falling through to QUEUE_TIMEOUT
-        # without ever telling the user they were waiting.
+        # Mirror _evict_idle's candidate filter: a unit _evict_idle would not
+        # take must not count as a free-able slot here — otherwise we skip the
+        # "queued" indicator and then fail to evict, falling through to
+        # QUEUE_TIMEOUT without ever telling the user they were waiting.
         _precheck_budget = _rm_check.spawn_budget(alive_count=self.alive_count)
         needs_queue = (
             not unit.is_alive
@@ -3722,7 +3720,6 @@ class SessionRouter:
             and not _precheck_budget.can_spawn
             and not any(
                 u.state == SessionState.IDLE
-                and not u.is_post_disconnect_flushing
                 and not (u.has_background_work and u.is_channel_session)
                 and u is not unit
                 for u in self._units.values()
@@ -4640,7 +4637,7 @@ class SessionRouter:
         if unit.is_channel_session:
             return {"status": "skipped_channel", "alive_count": self.alive_count}
 
-        # Active states are never raw-killed (races disconnect recovery).
+        # Active states are never raw-killed: the turn is still running.
         if unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT):
             if not force:
                 return {"status": "skipped_active", "alive_count": self.alive_count}

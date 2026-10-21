@@ -65,7 +65,6 @@ def _make_unit(session_id: str, state: SessionState, idle_seconds: float = 0,
                               SessionState.WAITING_INPUT)
     unit._hooks_enqueued = False
     unit.kill = AsyncMock()
-    unit.is_post_disconnect_flushing = False
     metrics = MagicMock()
     metrics.rss_bytes = rss_bytes
     unit._last_metrics = metrics

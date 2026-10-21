@@ -47,7 +47,7 @@
   "core/summarization.py": 1,
   "core/transcript_usage.py": 1,
   "core/voice_transcribe.py": 1,
-  "routers/chat.py": 5,
+  "routers/chat.py": 4,
   "routers/eval.py": 2,
   "routers/memory.py": 1,
   "routers/plugins.py": 2,

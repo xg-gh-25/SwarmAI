@@ -222,8 +222,8 @@ export interface UnifiedTab {
    *  clock keeps restarting and force-clear is never reached (the "stuck 10+ min"
    *  case, frontend.log forcing-clear ×204). This clock gives forceClearStreamVerdict
    *  an absolute upper bound (default 120s; effective clear latency is hardCapMs +
-   *  one ~15s reconcile poll). Consulted ONLY after all four alive guards
-   *  (backend_streaming/active_backend/flushing/resuming) AND exempted for
+   *  one ~15s reconcile poll). Consulted ONLY after all three alive guards
+   *  (backend_streaming/active_backend/resuming) AND exempted for
    *  drain/queue holds, so it can never clear a genuinely-live or queued-draining
    *  turn. NOTE: because every terminal handler routes through setIsStreaming(false),
    *  the clock is cleared on all turn ends — but a queued-drain result keeps

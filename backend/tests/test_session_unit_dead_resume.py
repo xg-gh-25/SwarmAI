@@ -7,8 +7,8 @@ DEAD from two sources, and send()'s state guard (session_unit.py:1708) rejected
 BOTH until lifecycle_manager's 60s background loop happened to drive DEAD→COLD:
 
   (a) transient-under-lock inside _crash_to_cold_async (IDLE→DEAD→kill→COLD) that
-      got ORPHANED — send() itself cancels its in-flight flush_recycle task at
-      :1575, the CancelledError unwinds out of the locked section leaving DEAD.
+      got ORPHANED — a CancelledError during a recycle's teardown unwinds out of
+      the locked section leaving DEAD.
   (b) 4 watchdog paths that set DEAD and `return` without lock/COLD
       (_pid_watchdog_loop:1099/1173, _maybe_escape_wedged_tool:1288/1377) —
       legitimate STABLE DEAD whose only other exit was the 60s loop.
@@ -77,7 +77,6 @@ def _make_unit(state: SessionState = SessionState.DEAD,
     unit._last_progress_time = None
     unit._hooks_enqueued = False
     unit._pid_watchdog_task = None
-    unit._pipe_flush_task = None
     unit._stop_event = asyncio.Event()
     unit._active_agent_tools = {}
     unit._open_tool_uses = {}

@@ -146,8 +146,8 @@ describe('AC2: post-disconnect send is queued (forced path)', () => {
 
 // ═══════════════════════════════════════════════════════════════════
 // OT01 honest-signal: heal-grace expiry must NOT show a "Connection lost" error
-// while the backend turn is still alive (streaming / waiting_input / flushing a
-// long turn post-disconnect). The recurring user-facing bug: spinner stopped +
+// while the backend turn is still alive (streaming / waiting_input). The
+// recurring user-facing bug: spinner stopped +
 // scary error shown while the answer was still being produced, content filled in
 // silently ~15s later via reconcile.
 // ═══════════════════════════════════════════════════════════════════
@@ -155,19 +155,11 @@ describe('healGraceExpiryVerdict (OT01 honest error signal)', () => {
   const dead: HealGraceExpiryInput = {
     backendIsStreaming: false,
     backendWaitingInput: false,
-    postDisconnectFlushing: false,
     queryFailed: false,
   };
 
   it('backend genuinely idle/done → show-error (legit failure path preserved)', () => {
     expect(healGraceExpiryVerdict(dead)).toBe('show-error');
-  });
-
-  it('THE BUG: backend still flushing a long turn post-disconnect → still-working (NO error)', () => {
-    // This is the exact OT01 scenario: clean-IDLE backend (streaming=false) whose
-    // subprocess is still producing the answer. Before the fix this showed a hard
-    // "Connection lost" error; now it must keep the spinner.
-    expect(healGraceExpiryVerdict({ ...dead, postDisconnectFlushing: true })).toBe('still-working');
   });
 
   it('backend still streaming → still-working (NO error)', () => {
@@ -184,8 +176,7 @@ describe('healGraceExpiryVerdict (OT01 honest error signal)', () => {
     expect(healGraceExpiryVerdict({ ...dead, queryFailed: true })).toBe('show-error');
     // Fail-safe wins even if a stale "alive" flag is somehow set alongside the failure.
     expect(healGraceExpiryVerdict({
-      backendIsStreaming: true, backendWaitingInput: true,
-      postDisconnectFlushing: true, queryFailed: true,
+      backendIsStreaming: true, backendWaitingInput: true, queryFailed: true,
     })).toBe('show-error');
   });
 });
@@ -599,42 +590,10 @@ describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
     ).toBe('backend_streaming');
   });
 
-  // ── THE POST-DISCONNECT FLUSH FIX (OT01) ───────────────────────────────────
-  // After the SSE dropped, the backend turn is left ALIVE and flushes the answer
-  // into the DB; the unit reports CLEAN-IDLE (streaming=false, state='idle').
-  // Heal-grace expiry deliberately KEEPS the spinner (isStreaming stays true) for
-  // this case — so the reconcile loop must NOT force-clear mid-flush, or the
-  // truncated-content / premature-stop half of OT01 recurs. This is the exact gap
-  // Gate-2 caught: the heal-grace verdict kept the spinner, but the reachable
-  // reconcile branch (forceClearStreamVerdict, gated on isStreaming===true) was
-  // flushing-blind and cleared it ~30s later.
-  it('FIX: clean-idle backend + post-disconnect flushing → exempt (no force-clear)', () => {
+  it('PRESERVED: clean-idle backend past the settle window → force-clears (genuinely stuck)', () => {
     expect(
-      forceClearStreamVerdict({ ...base, reportedState: 'idle', postDisconnectFlushing: true }),
-    ).toEqual({ verdict: 'reset-and-skip', reason: 'flushing' });
-  });
-
-  it('PRESERVED: clean-idle backend + NOT flushing → still force-clears (genuinely stuck)', () => {
-    // Mutation guard: this is `base` with flushing explicitly false — it MUST
-    // still clear. If the new guard were unconditional (ignored the flag), this
-    // would wrongly become reset-and-skip and go red.
-    expect(
-      forceClearStreamVerdict({ ...base, postDisconnectFlushing: false }),
+      forceClearStreamVerdict({ ...base, reportedState: 'idle' }),
     ).toEqual({ verdict: 'force-clear', reason: 'stuck' });
-  });
-
-  it('PRESERVED: flushing flag cannot hang the spinner past the 120-min cap', () => {
-    // Same backstop as active_backend: a stuck flushing flag must expire so a
-    // genuinely dead subprocess does not spin forever.
-    expect(
-      forceClearStreamVerdict({ ...base, postDisconnectFlushing: true, activeGuardAge: 7_200_001 }).verdict,
-    ).toBe('force-clear');
-  });
-
-  it('PRESERVED: backend streaming wins over flushing (defense-in-depth ordering)', () => {
-    expect(
-      forceClearStreamVerdict({ ...base, backendIsStreaming: true, postDisconnectFlushing: true }).reason,
-    ).toBe('backend_streaming');
   });
 
   // ── B-2: TERMINAL backend state skips the settle window (OT01 root-fix) ──────
@@ -643,11 +602,11 @@ describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
   // state ('dead' / 'evicted') is NOT a blip: the session is gone and will NEVER
   // recover, so making the user stare at a stuck spinner for 30s+ (or the
   // churn-extended minutes) is pure latency with zero protection value. When we
-  // are PAST all four alive guards AND the backend reports a terminal state,
+  // are PAST all three alive guards AND the backend reports a terminal state,
   // force-clear IMMEDIATELY — the spinner reflects a session that cannot come
   // back. This is the "frontend stopped refreshing" symptom's root-fix: the
   // existing backend-authoritative clear path, minus the needless terminal-state
-  // settle delay. Alive guards (streaming/waiting_input/flushing/resuming) are
+  // settle delay. Alive guards (streaming/waiting_input/resuming) are
   // untouched (O030 preserved) — only provably-dead terminal states skip settle.
   it('B-2: dead backend → force-clear IMMEDIATELY, skip settle (fresh stamp)', () => {
     // idleStreamingSince just stamped (age ~0) → would normally wait-settle.
@@ -690,8 +649,8 @@ describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
   // reached — the "stuck 10+ min" case (frontend.log: forcing clear ×204).
   // _streamingSinceHardStart is an INDEPENDENT clock stamped once on genuine
   // stream start and NOT reset by churn, giving an absolute upper bound.
-  // Gate-1 invariant: the hard-cap branch sits AFTER all four alive guards
-  // (backend_streaming/active_backend/flushing/resuming) so it can NEVER clear
+  // Gate-1 invariant: the hard-cap branch sits AFTER all three alive guards
+  // (backend_streaming/active_backend/resuming) so it can NEVER clear
   // a genuinely-live turn.
   it('HARD-CAP: churn keeps resetting the settle clock, but hard-cap forces clear past the cap', () => {
     // idleStreamingSince=undefined (churn just reset it → settle age treated as 0
@@ -726,18 +685,6 @@ describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
         streamingSinceHardStart: base.now - 999_999,
       }),
     ).toEqual({ verdict: 'reset-and-skip', reason: 'backend_streaming' });
-  });
-
-  it('HARD-CAP INVARIANT: NEVER fires while backend is flushing a long turn, even past the cap', () => {
-    // flushing = clean-idle-but-alive; force-clearing here truncates the answer.
-    // Bounded by its OWN 120-min cap (activeGuardAge), NOT the 120s hard-cap.
-    expect(
-      forceClearStreamVerdict({
-        ...base,
-        postDisconnectFlushing: true,
-        streamingSinceHardStart: base.now - 999_999,
-      }).reason,
-    ).toBe('flushing');
   });
 
   it('HARD-CAP INVARIANT: NEVER fires while a resume is in flight, even past the cap', () => {
@@ -803,8 +750,8 @@ describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
 
 // ── Store↔React desync convergence (OT01 sibling path) ───────────────────────
 // The reconcile loop's desync guard converges isStreaming=true + store-phase-idle
-// (the watchdog's 90s silent endStreaming) to idle — UNLESS the backend is still
-// alive flushing a long post-disconnect turn. This is the SAME OT01 bug class as
+// (the watchdog's 90s silent endStreaming) to idle — UNLESS the backend turn is
+// still alive (streaming / waiting_input). This is the SAME OT01 bug class as
 // forceClearStreamVerdict, on a SIBLING branch that fires earlier (and `continue`s,
 // pre-empting the force-clear guard). Adversarial-found (correctness specialist).
 describe('desyncConvergeVerdict — OT01 sibling-path protection', () => {
@@ -814,14 +761,7 @@ describe('desyncConvergeVerdict — OT01 sibling-path protection', () => {
     streamStartAge: 100_000,   // past 90s watchdog, past 10s grace
     backendIsStreaming: false,
     backendWaitingInput: false,
-    postDisconnectFlushing: false,
   };
-
-  it('FIX: store idle BUT backend still flushing → do NOT converge (keep spinner)', () => {
-    // The bug Gate-2's correctness pass found: without the backend-alive gate,
-    // this returned true and dropped the spinner mid-flush.
-    expect(desyncConvergeVerdict({ ...base, postDisconnectFlushing: true })).toBe(false);
-  });
 
   it('FIX: store idle + backend still streaming → do NOT converge', () => {
     expect(desyncConvergeVerdict({ ...base, backendIsStreaming: true })).toBe(false);
@@ -846,10 +786,10 @@ describe('desyncConvergeVerdict — OT01 sibling-path protection', () => {
     expect(desyncConvergeVerdict({ ...base, streamStartAge: 5_000 })).toBe(false);
   });
 
-  it('PRESERVED: stuck flushing flag past the 120-min cap → converge anyway', () => {
-    // A backend bug that never clears the flag must not hang the spinner forever.
+  it('PRESERVED: stuck alive flag past the 120-min cap → converge anyway', () => {
+    // A backend bug that never clears waiting_input must not hang the spinner forever.
     expect(
-      desyncConvergeVerdict({ ...base, postDisconnectFlushing: true, streamStartAge: 7_200_001 }),
+      desyncConvergeVerdict({ ...base, backendWaitingInput: true, streamStartAge: 7_200_001 }),
     ).toBe(true);
   });
 });

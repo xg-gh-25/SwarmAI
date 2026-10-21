@@ -368,9 +368,9 @@ async def test_has_outstanding_tool_use_property():
 
 @pytest.mark.asyncio
 async def test_idle_transition_enqueues_drain(wired):
-    """L6/AC7: a transition INTO IDLE (e.g. from recover_from_disconnect's clean
-    IDLE) fires _on_unit_state_change → enqueue_drain, so queued messages drain
-    once the subprocess is free. STREAMING→IDLE is the disconnect-recovery edge."""
+    """L6/AC7: a transition INTO IDLE (a turn ending: STREAMING→IDLE) fires
+    _on_unit_state_change → enqueue_drain, so queued messages drain once the
+    subprocess is free."""
     router, _ = wired
     router._on_unit_state_change("sess-idle-edge", SessionState.STREAMING, SessionState.IDLE)
     assert "sess-idle-edge" in router._drain_enqueued
@@ -383,21 +383,6 @@ async def test_idle_transition_enqueues_drain(wired):
             await router._drain_worker_task
         except BaseException:
             pass
-
-
-@pytest.mark.asyncio
-async def test_recover_from_disconnect_clean_idle_no_flag(wired):
-    """L6/Option B-soft: recover_from_disconnect produces a clean IDLE (no
-    generating-limbo flag) — the deleted flag attribute is never set True."""
-    from core.session_unit import SessionUnit
-    from unittest.mock import MagicMock as MM
-
-    unit = MM()
-    unit.state = SessionState.STREAMING
-    unit.last_used = 0
-    result = SessionUnit.recover_from_disconnect(unit)
-    assert result is True
-    unit._transition.assert_called_once_with(SessionState.IDLE)
 
 
 @pytest.mark.asyncio

@@ -331,15 +331,6 @@ export interface ForceClearStreamInput {
    *  resume ("resume needs two sends / spinner vanished"). This flag
    *  disambiguates a spawning resume from a genuinely dead/evicted session. */
   resumeInProgress?: boolean;
-  /** Backend mirror reports the subprocess is still flushing a long turn
-   *  post-disconnect (CLEAN-IDLE — state==='idle', streaming===false — but ALIVE,
-   *  finishing the answer into the DB). This is the OT01 case: heal-grace expiry
-   *  kept the spinner (isStreaming stays true) and handed off here, but the unit
-   *  reports clean-idle, so without this exemption the reconcile loop force-clears
-   *  the spinner MID-FLUSH and the answer appears truncated until a later tick.
-   *  Same CLEAN-IDLE-but-alive family as `active_backend`; reuses the same
-   *  activeGuardAge/activeGuardMaxMs (120-min) cap — NO new timer (Gate-1 B4/Q4). */
-  postDisconnectFlushing?: boolean;
   /** ms since the tab's reconcile stream-start stamp (for the active-state cap). */
   activeGuardAge: number;
   /** Reconcile-owned stamp of when the stuck condition was first observed. */
@@ -349,7 +340,7 @@ export interface ForceClearStreamInput {
    *  reconcile loop's reset-and-skip churn, so under abort+recycle churn (where the
    *  backend momentarily reports streaming between turns and keeps restarting the
    *  settle window) it still provides an absolute upper bound. Consulted ONLY after
-   *  all four alive guards (backend_streaming/active_backend/flushing/resuming), so
+   *  all three alive guards (backend_streaming/active_backend/resuming), so
    *  it can NEVER force-clear a genuinely-live turn. undefined → hard-cap disabled
    *  (opt-in): a tab that never stamped it falls through to the normal settle path. */
   streamingSinceHardStart?: number;
@@ -364,8 +355,8 @@ export interface ForceClearStreamInput {
   activeGuardMaxMs?: number;
   /** Absolute hard-cap (ms) measured from streamingSinceHardStart. Once a
    *  frontend-streaming tab whose backend is NOT alive (not streaming/active/
-   *  flushing/resuming) exceeds this, force-clear EVEN IF churn keeps resetting
-   *  the settle clock. Default 120s. Fires only after the four alive guards. */
+   *  resuming) exceeds this, force-clear EVEN IF churn keeps resetting
+   *  the settle clock. Default 120s. Fires only after the three alive guards. */
   hardCapMs?: number;
 }
 
@@ -383,7 +374,6 @@ export type ForceClearReason =
   | 'no_session'        // tab has no backend session id
   | 'backend_streaming' // backend mirror reports streaming — spinner is correct
   | 'active_backend'    // backend in an active state (waiting_input) within cap
-  | 'flushing'          // backend clean-idle but flushing a long turn post-disconnect (OT01)
   | 'resuming'          // a resume is in flight — cold/idle is spawn, not stuck
   | 'too_fresh'         // stuck but within the settle window
   | 'hard_cap'          // churn-immune absolute cap exceeded (backend not alive) → force-clear
@@ -413,7 +403,6 @@ export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClea
   const {
     drainPending, hasQueuedMessage, queueAge, hasSessionId,
     backendIsStreaming, reportedState, resumeInProgress, activeGuardAge,
-    postDisconnectFlushing = false,
     idleStreamingSince, streamingSinceHardStart, now,
     queueImmunityMs = 60_000, settleMs = 30_000, activeGuardMaxMs = 7_200_000,
     hardCapMs = 120_000,
@@ -437,17 +426,6 @@ export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClea
     return { verdict: 'reset-and-skip', reason: 'active_backend' };
   }
 
-  // Post-disconnect flush (OT01): the unit is CLEAN-IDLE (streaming=false,
-  // state='idle') but its subprocess is still finishing a long turn into the DB
-  // after the SSE dropped. Heal-grace expiry deliberately KEPT the spinner
-  // (isStreaming stays true) for exactly this case — so force-clearing here would
-  // re-introduce the truncated-content / premature-stop half of OT01. Same
-  // alive-but-clean-idle family as active_backend; bounded by the SAME 120-min
-  // cap so a stuck flushing flag can't hang the spinner forever (no new timer).
-  if (postDisconnectFlushing && activeGuardAge < activeGuardMaxMs) {
-    return { verdict: 'reset-and-skip', reason: 'flushing' };
-  }
-
   // A resume genuinely in flight: the backend reports 'cold'/'idle' during the
   // spawn + --resume replay window, but it IS working. Exempt so the spinner is
   // not force-cleared mid-resume. Bounded by the FE's own 60s resume timeout,
@@ -456,8 +434,8 @@ export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClea
   // still force-clears below.
   if (resumeInProgress) return { verdict: 'reset-and-skip', reason: 'resuming' };
 
-  // HARD-CAP (OT01 route-A): we are PAST all four alive guards, so the backend is
-  // provably NOT alive (not streaming / not active / not flushing / not resuming).
+  // HARD-CAP (OT01 route-A): we are PAST all three alive guards, so the backend is
+  // provably NOT alive (not streaming / not active / not resuming).
   // The settle clock (idleStreamingSince) is reset to undefined on every
   // reset-and-skip tick, so under abort+recycle churn it never accumulates to
   // settleMs and force-clear is never reached — the "stuck 10+ min" case. The
@@ -487,7 +465,7 @@ export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClea
   }
 
   // B-2 (OT01 root-fix): a TERMINAL backend state skips the settle window.
-  // We are past all four alive guards, so the backend is provably NOT alive. The
+  // We are past all three alive guards, so the backend is provably NOT alive. The
   // settle window below exists to absorb a transient idle BLIP (backend momentarily
   // reads 'idle' between sub-steps, then recovers) — but a terminal state is NOT a
   // blip: a 'dead'/'evicted' session is gone and will NEVER recover, so waiting
@@ -495,7 +473,7 @@ export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClea
   // protection value — the "frontend stopped refreshing" symptom. Clear it NOW.
   // Scope is deliberately narrow (terminal only, not all not-alive): 'idle' keeps
   // its settle window because it CAN be a transient blip; only provably-gone states
-  // skip. Placed AFTER the resume/flushing/streaming alive guards by construction,
+  // skip. Placed AFTER the resume/streaming alive guards by construction,
   // so this never short-circuits a live or resuming turn (O030 preserved).
   // Only 'dead' — the sole TERMINAL value SessionState actually emits
   // (session_unit.py SessionState = cold|idle|streaming|waiting_input|dead; there
@@ -528,9 +506,6 @@ export interface HealGraceExpiryInput {
   backendIsStreaming: boolean;
   /** Backend mirror reports state === 'waiting_input'. */
   backendWaitingInput: boolean;
-  /** Backend mirror reports the subprocess is still flushing a long turn
-   *  post-disconnect (CLEAN-IDLE but alive). The signal the old code lacked. */
-  postDisconnectFlushing: boolean;
   /** The getStreamingState() query itself failed/threw at expiry. Fail-safe:
    *  we cannot prove the backend is alive, so do NOT keep the spinner forever —
    *  fall through to the error path (never strand the user). */
@@ -538,7 +513,7 @@ export interface HealGraceExpiryInput {
 }
 
 /** Verdict for heal-grace expiry.
- *  - 'still-working': backend is provably alive (streaming/waiting/flushing) →
+ *  - 'still-working': backend is provably alive (streaming/waiting) →
  *    keep the spinner, NO error toast; the 15s reconcile loop owns recovery.
  *  - 'show-error': backend is genuinely done/dead (or the liveness query failed)
  *    → run the existing error path (clear streaming + error toast). */
@@ -548,8 +523,8 @@ export type HealGraceVerdict = 'still-working' | 'show-error';
  * Decide what heal-grace expiry should do, given the authoritative backend state.
  *
  * INVARIANT (the OT01 bug this exists to kill): when the backend turn is still
- * alive — streaming, waiting on input, OR flushing a long turn post-disconnect —
- * expiry must NOT show a "Connection lost" error and must NOT stop the spinner.
+ * alive — streaming or waiting on input — expiry must NOT show a "Connection
+ * lost" error and must NOT stop the spinner.
  * The error is only honest when the backend is genuinely done (or we cannot tell,
  * in which case fail-safe to the error so the spinner never hangs forever).
  *
@@ -560,11 +535,11 @@ export type HealGraceVerdict = 'still-working' | 'show-error';
  * loop's existing 120-min cap, not a new short timer (Gate-1 Q4).
  */
 export function healGraceExpiryVerdict(input: HealGraceExpiryInput): HealGraceVerdict {
-  const { backendIsStreaming, backendWaitingInput, postDisconnectFlushing, queryFailed } = input;
+  const { backendIsStreaming, backendWaitingInput, queryFailed } = input;
   // Fail-safe: a failed liveness query means we cannot prove the backend is
   // alive → show the error (never keep a spinner up on an unprovable state).
   if (queryFailed) return 'show-error';
-  if (backendIsStreaming || backendWaitingInput || postDisconnectFlushing) {
+  if (backendIsStreaming || backendWaitingInput) {
     return 'still-working';
   }
   return 'show-error';
@@ -576,8 +551,8 @@ export function healGraceExpiryVerdict(input: HealGraceExpiryInput): HealGraceVe
  *  a tab shows isStreaming=true but its MessageStore flipped to phase='idle'
  *  (the watchdog's 90s silent endStreaming). Normally that divergence means the
  *  turn is OVER and the spinner should converge to idle. The exception is OT01:
- *  the turn's SSE dropped but the backend is STILL alive flushing the answer —
- *  converging there drops the spinner mid-flush (truncated content). */
+ *  the turn's SSE dropped but the backend turn is STILL running — converging
+ *  there drops the spinner mid-turn (truncated content). */
 export interface DesyncConvergeInput {
   /** MessageStore reports phase==='idle' for this tab. */
   storeIdle: boolean;
@@ -589,9 +564,6 @@ export interface DesyncConvergeInput {
   backendIsStreaming: boolean;
   /** Backend mirror reports state==='waiting_input'. */
   backendWaitingInput: boolean;
-  /** Backend mirror reports the subprocess is still flushing a long turn
-   *  post-disconnect (clean-idle but ALIVE) — the OT01 signal. */
-  postDisconnectFlushing: boolean;
   /** Grace before treating idle-store-while-streaming as a desync. Default 10s
    *  (a just-sent turn awaits buildContentArray before store.startStreaming). */
   graceMs?: number;
@@ -609,18 +581,18 @@ export interface DesyncConvergeInput {
  * or the backend is provably still alive and converging would truncate).
  *
  * INVARIANT (OT01): never converge while the backend is genuinely alive
- * (streaming / waiting_input / post-disconnect flushing) within the cap — that is
+ * (streaming / waiting_input) within the cap — that is
  * the long-turn-outlives-SSE case the spinner must survive. Past the cap, a stuck
  * alive-flag cannot hang the spinner: converge anyway.
  */
 export function desyncConvergeVerdict(input: DesyncConvergeInput): boolean {
   const {
     storeIdle, streamStartAge, backendIsStreaming, backendWaitingInput,
-    postDisconnectFlushing, graceMs = 10_000, capMs = 7_200_000,
+    graceMs = 10_000, capMs = 7_200_000,
   } = input;
   if (!storeIdle) return false;            // store still streaming → no desync
   if (streamStartAge < graceMs) return false;  // just-started turn → not a desync
-  const backendAlive = backendIsStreaming || backendWaitingInput || postDisconnectFlushing;
+  const backendAlive = backendIsStreaming || backendWaitingInput;
   if (backendAlive && streamStartAge < capMs) return false;  // alive → keep spinner
   return true;                             // genuinely over (or past cap) → converge
 }

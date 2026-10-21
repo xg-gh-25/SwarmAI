@@ -74,8 +74,9 @@ def classify_failure(
     cooldown that would hold every other tab's spawn).
 
     ``recycle_kill`` marks that the immediately-preceding kill was an
-    APP-INITIATED fast recycle of a poisoned/corrupt subprocess (post-interrupt
-    or clean-flush). Such a kill surfaces as ``exit code -9`` (SIGKILL) — the
+    APP-INITIATED fast recycle of a poisoned/corrupt subprocess (after an
+    interrupt, or found unclean at the next send). Such a kill surfaces as
+    ``exit code -9`` (SIGKILL) — the
     SAME string an OS/Jetsam OOM kill produces — but it is OUR kill, not memory
     pressure, so it must respawn near-instantly (ZOMBIE) instead of eating the
     OOM 30/60/120s backoff. RSS-driven kills do NOT set this flag (they are real
@@ -102,9 +103,9 @@ def classify_failure(
     if "zombie subprocess detected" in error_lower:
         return FailureType.ZOMBIE, metadata
 
-    # ── 0b. App-initiated fast recycle (flush_recycle / interrupt_recycle) ──
-    # A poisoned/corrupt subprocess (left after a Stop/interrupt or a clean
-    # pipe-flush) is force-killed by us; the SDK then reports "exit code -9".
+    # ── 0b. App-initiated fast recycle (interrupt_recycle / poison_guard_recycle) ──
+    # A poisoned/corrupt subprocess (left after a Stop/interrupt, or found warm but
+    # unclean at the next send) is force-killed by us; the SDK then reports "exit code -9".
     # That -9 is INDISTINGUISHABLE by string from an OS OOM SIGKILL, so it used
     # to fall through to the OOM branch below and get a 30/60/120s cooldown —
     # turning a recycle that should --resume in ~0.5s into tens of seconds of

@@ -316,7 +316,7 @@ _daemon_other_busy_sessions() {
 import json, os, sys
 me = os.environ.get("_DRAIN_SELF", "")
 for sid, s in (json.load(sys.stdin).get("sessions") or {}).items():
-    if sid != me and (s.get("streaming") or s.get("post_disconnect_flushing")):
+    if sid != me and s.get("streaming"):
         print(sid)
 ' 2>/dev/null || true
 }

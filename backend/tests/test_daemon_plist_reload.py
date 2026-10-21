@@ -173,19 +173,18 @@ class TestReloadSubcommand:
 
 _STATE_JSON = (
     '{"sessions": {'
-    '"self": {"streaming": true, "post_disconnect_flushing": false},'
-    '"busy": {"streaming": true, "post_disconnect_flushing": false},'
-    '"flush": {"streaming": false, "post_disconnect_flushing": true},'
-    '"idle": {"streaming": false, "post_disconnect_flushing": false}}}'
+    '"self": {"streaming": true, "state": "streaming"},'
+    '"busy": {"streaming": true, "state": "streaming"},'
+    '"idle": {"streaming": false, "state": "idle"}}}'
 )
 
 
 class TestDeployDrain:
-    def test_busy_sessions_exclude_caller_and_include_flushing(self, tmp_path):
+    def test_busy_sessions_are_the_streaming_others(self, tmp_path):
         script = (f"curl() {{ echo '{_STATE_JSON}'; }}\n"
                   "SWARM_APP_SESSION_ID=self _daemon_other_busy_sessions")
         out = _run(script, tmp_path).split()
-        assert sorted(out) == ["busy", "flush"]
+        assert sorted(out) == ["busy"]
 
     def test_drain_waits_until_others_idle_then_waits_for_persist(self, tmp_path):
         script = ('C="$HOME/calls"; : > "$C"\n'

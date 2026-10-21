@@ -3335,9 +3335,6 @@ class StreamingOrchestrator:
             self._parent._transition(SessionState.IDLE)
             self._parent.last_used = time.time()
 
-    # ── SSE disconnect recovery ─────────────────────────────────────
-
-
     # ═══════════════════════════════════════════════════════════════
     # End of migrated methods
     # ═══════════════════════════════════════════════════════════════

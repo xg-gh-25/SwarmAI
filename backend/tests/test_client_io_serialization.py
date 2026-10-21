@@ -21,7 +21,7 @@ Fix (A+C+B, Gate-1-revised):
   it would self-deadlock with the in-loop CompactionGuard interrupt + break Stop).
 - (C) background maint ops (`_check_mcp_health`) probe `_client_io.locked()` and
   SKIP this round if a turn holds it.
-- interrupt() / flush_subprocess_pipe stay LOCK-FREE (control-channel, not
+- interrupt() stays LOCK-FREE (control-channel, not
   receive_response — acquiring would deadlock Stop against the turn it stops).
 
 Methodology: forced-execution. We drive the REAL `compact()` (mocking ONLY the
@@ -212,7 +212,6 @@ async def test_interrupt_does_not_acquire_client_io():
 
     u._client = _C()
     u._send_generation = 0
-    u._pipe_flush_task = None
     u._stop_event = asyncio.Event()
     u._interrupted = False
     u._user_stopped_current_turn = False

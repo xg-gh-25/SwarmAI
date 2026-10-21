@@ -837,8 +837,6 @@ async def get_streaming_state_endpoint():
     `streaming` is simply `state == STREAMING`. A client disconnect no longer
     touches the turn: it keeps running (and reports streaming) to its own end, and
     the session subscription (GET /events) carries it to the tabs.
-    `post_disconnect_flushing` is still emitted for the frontend's reader but is
-    always false now (the SessionUnit disconnect cluster (recover_from_disconnect / schedule_pipe_flush / flush_subprocess_pipe / is_post_disconnect_flushing) is dead since a client disconnect stopped interrupting turns (core/session_events); removal is a follow-up).
 
     Must be registered BEFORE /sessions/{session_id} to avoid path parameter
     capturing 'streaming-state' as a session ID.
@@ -902,17 +900,6 @@ async def get_streaming_state_endpoint():
             except Exception:
                 pending_question = None
 
-        # Honest-signal (OT01): expose whether the subprocess is still finishing a
-        # long turn post-disconnect. The unit is CLEAN-IDLE (streaming=false) but
-        # alive; without this the frontend's heal-grace expiry surfaces a false
-        # "Connection lost" error while the answer is still being produced. getattr
-        # fail-safe to False so an older/mocked unit lacking the property never
-        # falsely claims flushing.
-        try:
-            post_disconnect_flushing = bool(unit.is_post_disconnect_flushing)
-        except Exception:
-            post_disconnect_flushing = False
-
         result[unit.session_id] = {
             "streaming": is_streaming,
             "state": unit.state.value,
@@ -921,7 +908,6 @@ async def get_streaming_state_endpoint():
             # check needs it to sample tree CPU; a None pid → probe skips the
             # session (fail-safe). Additive field — frontend ignores unknowns.
             "pid": unit.pid,
-            "post_disconnect_flushing": post_disconnect_flushing,
             # waiting_input must also reflect a re-surfaced durable request, else
             # the frontend won't render the prompt it was just handed.
             "waiting_input": unit.state.value == "waiting_input" or pending_question is not None,
@@ -1201,8 +1187,8 @@ async def release_session(session_id: str, request: Request):
 
     Optional JSON body:
         { "force": true }  — confirmed close of a STREAMING/WAITING_INPUT tab.
-        Without force, an active session is left untouched (``skipped_active``)
-        because the SSE-disconnect recovery path already handles it.
+        Without force, an active session is left untouched (``skipped_active``):
+        its turn is session-owned and runs to its own end.
     """
     # Defensive parse: never 422 on a fire-and-forget endpoint. Strict on force —
     # only an explicit JSON boolean true enables the destructive interrupt-active

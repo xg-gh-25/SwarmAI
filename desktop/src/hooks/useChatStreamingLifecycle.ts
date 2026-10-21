@@ -1294,13 +1294,13 @@ export function useChatStreamingLifecycle(
             const dsStore = messageStoreRegistry.get(tabId);
             const dsStartAge = Date.now() - (tabState._reconcileStreamStart ?? 0);
             // OT01 sibling-path guard: the MessageStore watchdog flips phase→idle
-            // at 90s, but a long turn whose SSE dropped is STILL flushing the
-            // answer into the DB (backend alive, unit clean-idle). Converging the
-            // spinner here would drop it mid-flush — the exact truncated-content
+            // at 90s, but a long turn whose SSE dropped is STILL running on the
+            // backend (a disconnect does not stop it). Converging the
+            // spinner here would drop it mid-turn — the exact truncated-content
             // bug, just surfacing on THIS branch instead of the force-clear branch.
             // The desync decision is now backend-state-gated (same alive signal as
             // forceClearStreamVerdict): converge only when the store is idle AND
-            // the backend is NOT alive (streaming/waiting_input/flushing), bounded
+            // the backend is NOT alive (streaming/waiting_input), bounded
             // by the same 120-min cap so a stuck flag still converges.
             const dsBackend = tabState.sessionId ? states[tabState.sessionId] : undefined;
             const dsConverge = dsStore
@@ -1309,7 +1309,6 @@ export function useChatStreamingLifecycle(
                   streamStartAge: dsStartAge,
                   backendIsStreaming: dsBackend?.streaming ?? false,
                   backendWaitingInput: dsBackend?.state === 'waiting_input',
-                  postDisconnectFlushing: dsBackend?.postDisconnectFlushing ?? false,
                 })
               : false;
             if (dsConverge) {
@@ -1332,7 +1331,7 @@ export function useChatStreamingLifecycle(
           if (!tabState.isStreaming && tabState._postDisconnectUncertain && !tabState.isWaitingForBusy) {
             // Time cap (matches the streaming-path 120min cap): if stopSession
             // failed AND the backend never transitions out of streaming
-            // (is_generating_after_disconnect stuck), the flag would never clear
+            // (a stuck turn), the flag would never clear
             // and the tab would be bricked. After the cap, force-clear regardless
             // of reported backend state.
             const pdAge = Date.now() - (tabState._postDisconnectAt ?? 0);
@@ -1342,15 +1341,8 @@ export function useChatStreamingLifecycle(
             const pdBackend = pdSid ? states[pdSid] : undefined;
             const pdStreaming = pdBackend?.streaming ?? false;
             const pdActive = pdBackend?.state === 'waiting_input' || pdBackend?.state === 'streaming';
-            // Honest-signal (OT01): the unit is CLEAN-IDLE (streaming=false) but its
-            // subprocess is still finishing a long turn post-disconnect. Treat that
-            // as "still alive" so we keep waiting (re-pulling DB each tick) instead
-            // of resolving — resolving here is what surfaced the false "Connection
-            // lost" error while the answer was still being produced. Fail-safe:
-            // undefined (older backend) → false → behavior identical to before.
-            const pdFlushing = pdBackend?.postDisconnectFlushing ?? false;
 
-            if ((!pdStreaming && !pdActive && !pdFlushing) || pdCapExceeded) {
+            if ((!pdStreaming && !pdActive) || pdCapExceeded) {
               // Backend idle (or evicted, or cap exceeded) — uncertainty resolved.
               // CRITICAL: only clear _postDisconnectUncertain when there is NO
               // queued message to drain. When a message IS queued, leave the flag
@@ -1608,14 +1600,11 @@ export function useChatStreamingLifecycle(
             backendIsStreaming: backendState?.streaming ?? false,
             reportedState: backendState?.state,
             resumeInProgress: !!tabState.isResuming,
-            // OT01: backend clean-idle but still flushing a long turn post-disconnect
-            // (heal-grace kept the spinner; do not force-clear mid-flush).
-            postDisconnectFlushing: backendState?.postDisconnectFlushing ?? false,
             activeGuardAge: Date.now() - (tabState._reconcileStreamStart ?? 0),
             idleStreamingSince: tabState._idleStreamingSince,
             // OT01 AC1: churn-immune absolute bound. Cleared on the streaming→idle
             // edge (setIsStreaming false), so it is only non-undefined during a
-            // live span; the verdict consults it ONLY after all four alive guards.
+            // live span; the verdict consults it ONLY after all three alive guards.
             streamingSinceHardStart: tabState._streamingSinceHardStart,
             now: Date.now(),
           });
@@ -2679,8 +2668,8 @@ export function useChatStreamingLifecycle(
         // failures. Control/lifecycle events (session_start, session_resuming,
         // reconnecting), error events, AND heartbeats do NOT count as "data":
         // otherwise a connection-phase error that arrives right AFTER
-        // session_start (e.g. the backend pipe-flush from a Stop kills the
-        // freshly-spawned subprocess on the next send) would flip
+        // session_start (a connection-phase failure on the send right after a
+        // Stop) would flip
         // hasReceivedData=true and defeat the silent-retry, surfacing a spurious
         // "Connection interrupted — send again" and forcing a manual resend
         // after every Stop. Heartbeat is excluded for the same reason: it now
@@ -3375,9 +3364,9 @@ export function useChatStreamingLifecycle(
 
           // POST-STOP SILENT RETRY: If we haven't received any data yet
           // (connection-phase) and we have a retry function, auto-retry once
-          // instead of showing a scary error. This catches the race where
-          // the backend's pipe flush kills our new stream before it produces
-          // any output. The user never sees the error — just a brief delay.
+          // instead of showing a scary error. This catches a send that fails
+          // before it produces any output (e.g. the first send after a Stop).
+          // The user never sees the error — just a brief delay.
           if (
             tabState &&
             !tabState.hasReceivedData &&
@@ -3403,7 +3392,7 @@ export function useChatStreamingLifecycle(
                 abort: () => { newAbort(); },
                 signal: { aborted: false },
               } as unknown as AbortController;
-            }, 300); // 300ms — enough for pipe flush to complete
+            }, 300); // a short pause before the single retry
             return;
           }
 
@@ -4054,10 +4043,10 @@ export function useChatStreamingLifecycle(
             // ── Honest-signal decision (OT01) ──────────────────────────────
             // The SSE connection is gone, but the backend subprocess may still be
             // producing the answer (a long agent turn can outlive the connection:
-            // it is left ALIVE post-disconnect and finishes into the DB). Showing
+            // a disconnect does not interrupt it, and it persists to the DB). Showing
             // a hard "Connection lost" error here while the turn is still alive was
             // the recurring false-error bug. Consult the authoritative backend
-            // mirror ONCE; if alive (streaming / waiting_input / flushing) keep the
+            // mirror ONCE; if alive (streaming / waiting_input) keep the
             // spinner and hand ongoing recovery to the 15s reconcile owner. Only
             // surface the error when the backend is genuinely done — or when the
             // liveness query fails (fail-safe: never strand on an eternal spinner).
@@ -4069,13 +4058,11 @@ export function useChatStreamingLifecycle(
               verdict = healGraceExpiryVerdict({
                 backendIsStreaming: auth?.streaming ?? false,
                 backendWaitingInput: auth?.waitingInput ?? false,
-                postDisconnectFlushing: auth?.postDisconnectFlushing ?? false,
                 queryFailed: false,
               });
             } catch {
               verdict = healGraceExpiryVerdict({
-                backendIsStreaming: false, backendWaitingInput: false,
-                postDisconnectFlushing: false, queryFailed: true,
+                backendIsStreaming: false, backendWaitingInput: false, queryFailed: true,
               });
             }
             // Re-read AFTER the await — the tab may have closed / reconnected /
@@ -4099,7 +4086,7 @@ export function useChatStreamingLifecycle(
               // reconcile loop while _reconcileStreamStart stays stale (~0), so
               // the next tick computes a huge dsStartAge → the ≥10s start-grace
               // does NOT apply → the spinner is force-cleared in the backend
-              // dead→cold gap while the answer is still flushing = the exact
+              // dead→cold gap while the answer is still being produced = the exact
               // OT01 truncated-render bug, just surfacing on the heal-grace path.
               tab2._reconcileStreamStart = Date.now();
               // Leave _healGraceActive + isStreaming true (spinner stays).
@@ -4565,7 +4552,7 @@ export function useChatStreamingLifecycle(
             // Consult the authoritative backend mirror ONCE — SYMMETRIC with the
             // heal-grace expiry path. Before this fix the timeout UNCONDITIONALLY
             // cleared the spinner + did a ONE-SHOT DB pull; if the backend was
-            // still flushing/streaming, that pull grabbed INCOMPLETE content and
+            // still streaming, that pull grabbed INCOMPLETE content and
             // nothing re-pulled the finished answer until the user's NEXT send
             // (the reported bug). Fail-safe try/catch: a failed query -> show-error,
             // never strand on an eternal spinner.
@@ -4577,13 +4564,11 @@ export function useChatStreamingLifecycle(
               verdict = healGraceExpiryVerdict({
                 backendIsStreaming: auth?.streaming ?? false,
                 backendWaitingInput: auth?.waitingInput ?? false,
-                postDisconnectFlushing: auth?.postDisconnectFlushing ?? false,
                 queryFailed: false,
               });
             } catch {
               verdict = healGraceExpiryVerdict({
-                backendIsStreaming: false, backendWaitingInput: false,
-                postDisconnectFlushing: false, queryFailed: true,
+                backendIsStreaming: false, backendWaitingInput: false, queryFailed: true,
               });
             }
 
@@ -4602,7 +4587,7 @@ export function useChatStreamingLifecycle(
             }
 
             if (verdict === 'still-working') {
-              // Backend alive (streaming / waiting_input / flushing). KEEP the
+              // Backend alive (streaming / waiting_input). KEEP the
               // spinner; hand ongoing recovery to the 15s reconcile loop. Do NOT
               // endStreaming() here (would flip the store idle immediately).
               //
@@ -4620,13 +4605,6 @@ export function useChatStreamingLifecycle(
               // (capMs/graceMs) and force-clear (activeGuardAge) caps anchor to
               // NOW — without it the age is ~Date.now() (every cap pre-blown) and
               // the spinner is force-cleared in the backend dead->cold gap.
-              // KNOWN SOFT-LIMIT (Gate-2 HIGH-2, accepted): if the backend's
-              // postDisconnectFlushing flag gets stuck true, stage-1 defers up to
-              // the shared 120-min long-turn cap. A tighter post-disconnect cap
-              // would thread a new signal into desyncConvergeVerdict (OT01 hot
-              // zone) — deferred over expanding blast radius for a backend-leak
-              // edge the _postDisconnectUncertain block's own 120-min cap (:1243)
-              // already backstops.
               console.log('[DisconnectHandler] Timeout — backend still working; handing recovery to reconcile loop', { capturedTabId });
               currentTabState._postDisconnectUncertain = true;
               currentTabState._postDisconnectAt = Date.now();
