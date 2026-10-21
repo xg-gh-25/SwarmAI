@@ -231,6 +231,7 @@ def _pending_c_wait(frame) -> bool:
             return obj.__name__ in _BLOCKING_C_MODULES
         return issubclass(type(obj), _BLOCKING_C_TYPES)
     except Exception:  # pragma: no cover - observability must never break
+        logger.debug("heartbeat: C-wait classification failed", exc_info=True)
         return False
 
 
