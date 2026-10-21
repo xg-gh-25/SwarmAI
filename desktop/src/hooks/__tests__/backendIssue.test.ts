@@ -50,6 +50,17 @@ describe('describeBackendIssue', () => {
     expect(describeBackendIssue('unreachable').short).toBe('Backend unreachable');
   });
 
+  it('paused states only what was seen, not a guessed cause (an overloaded host pauses it too)', () => {
+    const watched = describeBackendIssue('degraded', d({ heartbeatFresh: false, processAlive: true, suspended: true, loopAge: 12 }));
+    const plain = describeBackendIssue('not_responding', d({ processAlive: true, heartbeatFresh: false }));
+    for (const p of [watched, plain]) {
+      expect(p.detail).toContain('has not run');
+      expect(p.detail).toContain('process is still there');
+      expect(p.detail).not.toMatch(/slept|battery|suspended it/i);
+    }
+    expect(watched.detail).toContain('12s');
+  });
+
   it('a suspended process reads as paused, also on a degraded event', () => {
     const p = describeBackendIssue('degraded', d({ heartbeatFresh: false, processAlive: true, suspended: true }));
     expect(p.short).toBe('Backend paused');

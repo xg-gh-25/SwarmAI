@@ -35,8 +35,9 @@ export interface BackendDiag {
   loopAge?: number | null;
   /** null: not known (subprocess mode) */
   processAlive?: boolean | null;
-  /** launchd still runs the pid that wrote the (now stale) heartbeat: macOS
-   *  suspended the process (sleep, very low battery); it resumes on its own */
+  /** launchd still runs the pid that wrote the (now stale) heartbeat: the process
+   *  has not been scheduled. Sleep, very low battery and an overloaded host all
+   *  look like this, so the text states the fact, not a cause; it resumes on its own */
   suspended?: boolean;
   /** awake seconds the process has looked suspended (past the watchdog's cap the
    *  watchdog stops calling it suspended: it is then treated as stuck) */
@@ -108,7 +109,7 @@ export function describeBackendIssue(kind: BackendIssueKind, diag: BackendDiag =
   const t = secs(diag.loopAge);
   if (diag.suspended && (kind === 'degraded' || kind === 'not_responding')) {
     return { kind, cause: 'paused', short: 'Backend paused',
-      detail: 'The backend process exists but is not running: macOS suspended it (the Mac slept, or the battery is very low). It resumes on its own.' };
+      detail: `The backend has not run${t ? ` for ${t}` : ' for a few seconds'}; its process is still there and usually resumes on its own.` };
   }
   if (kind === 'degraded') {
     const s = slowed(diag.stall, diag.loopAge);
@@ -129,7 +130,7 @@ export function describeBackendIssue(kind: BackendIssueKind, diag: BackendDiag =
     }
     if (diag.processAlive === true && diag.heartbeatFresh === false) {
       return { kind, cause: 'paused', short: 'Backend paused',
-        detail: 'The backend process exists but is not running: macOS may have suspended it (the Mac slept, or the battery is very low). It resumes on its own.' };
+        detail: `The backend has not run${t ? ` for ${t}` : ' for a few seconds'}; its process is still there and usually resumes on its own.` };
     }
     if (diag.heartbeatFresh) {
       const s = slowed(diag.stall, diag.loopAge);
