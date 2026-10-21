@@ -227,6 +227,26 @@ class StreamingOrchestrator:
         """
         self._parent = parent
         self._session_id = parent.session_id
+        # Per-TURN tool bookkeeping (tool_use_id -> ...), carried across the
+        # pause of a permission / AskUserQuestion: the tool_use arrives in the
+        # send stream, its result in the continue stream (a second
+        # _read_formatted_response call). As locals they were empty in the
+        # continuation, so the approved call's result was dropped and the turn
+        # rendered as "Stopped". Reset at a new query and at the turn's result.
+        self._turn_carry: dict[str, dict] = self._new_turn_carry()
+
+    @staticmethod
+    def _new_turn_carry() -> dict[str, dict]:
+        return {
+            "pending_file_changes": {}, "pending_file_deletes": {},
+            "pending_heredoc_writes": {}, "pending_script_sweeps": {},
+            "pending_completion": {}, "tool_names": {}, "tool_parent": {},
+            "task_parent": {}, "subagent_last": {}, "pending_stage_watch": {},
+        }
+
+    def reset_turn_carry(self) -> None:
+        """Forget the previous turn's unmatched tool ids (new turn starts)."""
+        self._turn_carry = self._new_turn_carry()
 
     async def stream_query(
         self,
@@ -587,6 +607,8 @@ class StreamingOrchestrator:
                         logger.warning("session_unit: stripping null bytes from content block")
                         block["text"] = block["text"].replace("\x00", "")
 
+        # A new query is a new turn: drop the last turn's unmatched tool ids.
+        self.reset_turn_carry()
         # Send the query (claims the turn first when a stream reader exists)
         await write_user_message(self._parent, query_content, kind="human")
 
@@ -1437,44 +1459,44 @@ class StreamingOrchestrator:
         # (success) point — the EVENT-DRIVEN live-surfacing emit (run_cce6f4b9), which
         # rides the WRITING session's own stream (so it is stamped with the correct
         # session → tab-isolation correct by construction, unlike the deleted global sweep).
-        _pending_file_changes: dict[str, list[str]] = {}
+        _pending_file_changes: dict[str, list[str]] = self._turn_carry["pending_file_changes"]
         # tool_use_id → list[raw_path] DELETED by that tool (Bash rm / mv-SRC). Emits
         # operation=deleted at the ToolResult point so the rail drops stale rows (G1,
         # run_5a7be540). Separate from _pending_file_changes because one Bash command
         # can both write and delete.
-        _pending_file_deletes: dict[str, list[str]] = {}
+        _pending_file_deletes: dict[str, list[str]] = self._turn_carry["pending_file_deletes"]
         # tool_use_id → (candidate raw paths, tool_use start time) for a Bash
         # interpreter heredoc patch (`python3 - <<'PY' … open(p,'w')`). The paths
         # are only string literals in the script, so each is emitted as written
         # ONLY if its mtime moved during the call (a read-only literal is dropped).
-        _pending_heredoc_writes: dict[str, tuple[list[str], float]] = {}
+        _pending_heredoc_writes: dict[str, tuple[list[str], float]] = self._turn_carry["pending_heredoc_writes"]
         # tool_use_id → (root, start time) for a Bash call whose SCRIPT may write
         # files its command never names (`python make_deck.py`): the successful
         # result sweeps root for files written during the call (script_output_sweep)
         # and emits them through the same write gate.
-        _pending_script_sweeps: dict[str, tuple[str, float]] = {}
+        _pending_script_sweeps: dict[str, tuple[str, float]] = self._turn_carry["pending_script_sweeps"]
         # tool_use_id → run_id for a Bash `run-update --status completed` command
         # (run_beff6754). Emits the finish-time Canvas surface at the ToolResult point
         # IF run.json confirms status==completed — the backend-auto replacement for the
         # agent-discipline surface_run_outputs call (which docs-only runs skipped, so
         # Canvas never auto-opened on the most common pipeline).
-        _pending_completion: dict[str, str] = {}
+        _pending_completion: dict[str, str] = self._turn_carry["pending_completion"]
         # tool_use_id → tool name, so a result can be summarized per tool.
-        _tool_names: dict[str, str] = {}
+        _tool_names: dict[str, str] = self._turn_carry["tool_names"]
         # tool_use_id → the Agent tool_use it ran under (sub-agent steps only).
         # Stamped on its live tool_result so the UI nests it under that step.
-        _tool_parent: dict[str, str] = {}
+        _tool_parent: dict[str, str] = self._turn_carry["tool_parent"]
         # SDK task_id → parent Agent tool_use id (TaskUpdatedMessage lacks one).
-        _task_parent: dict[str, str] = {}
+        _task_parent: dict[str, str] = self._turn_carry["task_parent"]
         # Agent tool_use id → its sub-agent's latest progress (status, toolUses,
         # durationMs, summary). Rides the Agent's tool_result as `subagent`, so the
         # final status survives the stream (subagent_progress itself is not persisted).
-        _subagent_last: dict[str, dict] = {}
+        _subagent_last: dict[str, dict] = self._turn_carry["subagent_last"]
         # tool_use_id → run_id for ANY Bash `artifact_cli.py … --run-id <id>` call.
         # Its successful result re-reads run.json and yields a persisted
         # pipeline_stage block per newly finished stage (_pipeline_stage_events) —
         # stage progress shown by the backend, not left to the model writing it.
-        _pending_stage_watch: dict[str, str] = {}
+        _pending_stage_watch: dict[str, str] = self._turn_carry["pending_stage_watch"]
         # Per-TURN resolution cache (perf directive): raw_path → resolved dict|None.
         # Turn-scoped (local to this method), so no cross-session leak; keyed by the
         # raw path string. Only deliverable-candidate writes are ever resolved —
@@ -2698,6 +2720,9 @@ class StreamingOrchestrator:
 
             # ── ResultMessage — response complete or error ──────────
             if isinstance(message, ResultMessage):
+                # Turn over: later streams (injected turn) start clean. The
+                # locals of THIS stream keep their (now detached) dicts.
+                self.reset_turn_carry()
                 is_error = getattr(message, "is_error", False)
                 subtype = getattr(message, "subtype", None)
 

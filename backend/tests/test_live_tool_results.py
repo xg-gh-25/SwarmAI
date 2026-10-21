@@ -90,3 +90,46 @@ async def test_read_loop_yields_live_tool_result_with_outcome():
     assert len(results) == 1
     blk = results[0]["content"][0]
     assert (blk["tool_use_id"], blk["is_error"], blk["outcome"]) == ("tu1", False, "lines 1–40")
+
+
+async def _drain(orch, unit, msgs):
+    from core import permission_manager as _pm
+    unit._client.receive_response = lambda: _Script(msgs)
+    events = []
+    with patch.object(_pm.permission_manager, "get_session_queue", return_value=asyncio.Queue()):
+        with pytest.raises(Exception):
+            async for ev in orch._read_formatted_response():
+                events.append(ev)
+    return [e for e in events if e["type"] == "tool_result"]
+
+
+@pytest.mark.asyncio
+async def test_approved_call_result_survives_the_permission_pause():
+    """The tool_use arrives in the send stream; after the user approves, the
+    result arrives in a SECOND _read_formatted_response call (the continue
+    stream). It must still be yielded, or the turn renders as Stopped."""
+    unit = SessionUnit(session_id="carry-tr", agent_id="default")
+    unit.state = SessionState.STREAMING
+    unit._streaming_start_time = unit._last_event_time = time.time()
+    orch = StreamingOrchestrator(unit)
+    unit._client = MagicMock()
+    first = await _drain(orch, unit, [
+        AssistantMessage(content=[ToolUseBlock(id="tu-perm", name="Bash", input={"command": "echo approved"})],
+                         model="m"),
+    ])
+    assert first == []
+    unit.state = SessionState.STREAMING
+    unit._last_event_time = time.time()
+    second = await _drain(orch, unit, [
+        UserMessage(content=[ToolResultBlock(tool_use_id="tu-perm", content="done", is_error=False)]),
+    ])
+    assert [b["tool_use_id"] for r in second for b in r["content"]] == ["tu-perm"]
+
+
+@pytest.mark.asyncio
+async def test_a_new_turn_forgets_the_previous_turns_tool_ids():
+    unit = SessionUnit(session_id="carry-reset", agent_id="default")
+    orch = StreamingOrchestrator(unit)
+    orch._turn_carry["tool_names"]["old"] = "Bash"
+    orch.reset_turn_carry()
+    assert orch._turn_carry["tool_names"] == {}
