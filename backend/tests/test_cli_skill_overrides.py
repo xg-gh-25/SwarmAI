@@ -49,5 +49,8 @@ def test_overrides_reach_the_cli_settings_flag(sandbox):
 
 
 def test_production_options_pass_the_overrides():
+    # build_options assembles the flag-level CLI settings in one dict and passes it
+    # as `settings=json.dumps(cli_settings)` (it also carries autoCompactWindow).
     src = (Path(__file__).resolve().parents[1] / "core" / "prompt_builder.py").read_text()
-    assert 'settings=json.dumps({"skillOverrides": CLI_SKILL_OVERRIDES})' in src
+    assert '"skillOverrides": CLI_SKILL_OVERRIDES' in src
+    assert "settings=json.dumps(cli_settings)" in src

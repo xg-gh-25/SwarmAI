@@ -59,8 +59,21 @@ def _desktop(repo: Path, files: dict[str, str]) -> None:
 
 
 def _live_vitest(repo: Path) -> list[str]:
-    ps = subprocess.run(["ps", "-eo", "pid,command"], capture_output=True, text=True, timeout=10)
-    return [ln for ln in ps.stdout.splitlines() if "vitest" in ln and str(repo) in ln]
+    """Command lines of vitest processes still running for *repo*. ``ps`` first;
+    psutil when ``ps`` cannot run (a sandboxed agent shell denies spawning it)."""
+    try:
+        ps = subprocess.run(["ps", "-eo", "pid,command"], capture_output=True, text=True,
+                            timeout=10)
+        lines = ps.stdout.splitlines()
+    except OSError:
+        import psutil
+        lines = []
+        for p in psutil.process_iter(attrs=["pid", "cmdline"]):
+            try:
+                lines.append(f"{p.info['pid']} {' '.join(p.info['cmdline'] or [])}")
+            except psutil.Error:
+                continue
+    return [ln for ln in lines if "vitest" in ln and str(repo) in ln]
 
 
 @real

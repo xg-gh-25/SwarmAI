@@ -58,6 +58,27 @@ class TestDeriveVisibility:
 class TestEndpointContract:
     """GET /api/skills returns the new fields and is run-mode-keyed (backend-primary)."""
 
+    @pytest.fixture(autouse=True)
+    def _isolated_skills(self, tmp_path, monkeypatch):
+        """Own every input instead of reading the machine: the repo ships no internal
+        skill, so one is planted in a temp plugin tier, and hive-mode requests carry a
+        valid credential (HiveAuthMiddleware is fail-closed since e2d540a4; the
+        visibility filter, not the auth layer, is what these tests check)."""
+        from core.skill_manager import skill_manager
+        from middleware.hive_auth import HiveAuthMiddleware
+
+        plugin = tmp_path / "plugin-skills"
+        skill = plugin / "s_internal-fixture"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: internal-fixture\ndescription: \"Owner-only test skill.\"\n"
+            "tier: lazy\n---\n# Internal fixture\n", encoding="utf-8")
+        monkeypatch.setattr(skill_manager, "plugin_skills_path", plugin)
+        monkeypatch.setattr(HiveAuthMiddleware, "_is_authorized", lambda self, scope: True)
+        skill_manager.invalidate_cache()
+        yield
+        skill_manager.invalidate_cache()
+
     def test_list_returns_category_and_visibility(self, client):
         resp = client.get("/api/skills")
         assert resp.status_code == 200
