@@ -49,4 +49,11 @@ describe('describeBackendIssue', () => {
     expect(describeBackendIssue('not_responding', d(null)).short).toBe('Backend not responding');
     expect(describeBackendIssue('unreachable').short).toBe('Backend unreachable');
   });
+
+  it('a suspended process reads as paused, also on a degraded event', () => {
+    const p = describeBackendIssue('degraded', d({ heartbeatFresh: false, processAlive: true, suspended: true }));
+    expect(p.short).toBe('Backend paused');
+    expect(p.cause).toBe('paused');
+    expect(d({ suspended: 'yes' }).suspended).toBe(false);
+  });
 });

@@ -35,6 +35,9 @@ export interface BackendDiag {
   loopAge?: number | null;
   /** null: not known (subprocess mode) */
   processAlive?: boolean | null;
+  /** launchd still runs the pid that wrote the (now stale) heartbeat: macOS
+   *  suspended the process (sleep, very low battery); it resumes on its own */
+  suspended?: boolean;
   stall?: BackendStall | null;
 }
 
@@ -59,6 +62,7 @@ export function parseBackendDiag(payload: unknown): BackendDiag {
     heartbeatFresh: typeof p.heartbeatFresh === 'boolean' ? p.heartbeatFresh : undefined,
     loopAge: typeof p.loopAge === 'number' ? p.loopAge : null,
     processAlive: typeof p.processAlive === 'boolean' ? p.processAlive : null,
+    suspended: p.suspended === true,
     stall,
   };
 }
@@ -98,6 +102,10 @@ function slowed(stall: BackendStall | null | undefined, loopAge?: number | null)
 
 export function describeBackendIssue(kind: BackendIssueKind, diag: BackendDiag = {}): BackendIssue {
   const t = secs(diag.loopAge);
+  if (diag.suspended && (kind === 'degraded' || kind === 'not_responding')) {
+    return { kind, cause: 'paused', short: 'Backend paused',
+      detail: 'The backend process exists but is not running: macOS suspended it (the Mac slept, or the battery is very low). It resumes on its own.' };
+  }
   if (kind === 'degraded') {
     const s = slowed(diag.stall, diag.loopAge);
     if (s) return { kind, ...s };
