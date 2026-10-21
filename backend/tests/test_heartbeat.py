@@ -264,3 +264,57 @@ def test_stack_dump_lists_busy_threads_and_skips_idle_ones():
     assert "busy thread busy-worker" in out
     assert "idle-worker" not in out
     assert "loop thread: not found" in out
+
+
+# ── Battery status in the starvation log (10-21 10:47 freeze was a 3% battery) ──
+
+_PMSET_LOW = (
+    "Now drawing from 'Battery Power'\n"
+    " -InternalBattery-0 (id=25034851)\t3%; discharging; 0:04 remaining present: true\n"
+)
+_PMSET_AC = (
+    "Now drawing from 'AC Power'\n"
+    " -InternalBattery-0 (id=25034851)\t98%; charging; 0:16 remaining present: true\n"
+)
+
+
+def test_parse_pmset_batt_low_battery_and_ac():
+    assert heartbeat._parse_pmset_batt(_PMSET_LOW) == "Battery Power, 3%, discharging"
+    assert heartbeat._parse_pmset_batt(_PMSET_AC) == "AC Power, 98%, charging"
+    assert heartbeat._parse_pmset_batt("Now drawing from 'AC Power'\n") == "AC Power, no battery"
+
+
+def test_battery_status_never_raises_and_reports_slow_probe(monkeypatch):
+    import subprocess
+    monkeypatch.setattr(heartbeat.sys, "platform", "darwin")
+
+    def slow(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="pmset", timeout=2)
+
+    def broken(*a, **k):
+        raise OSError("no pmset")
+
+    assert "pmset took over" in heartbeat._battery_status(run=slow)
+    assert heartbeat._battery_status(run=broken) == "power: unknown (OSError)"
+
+
+def test_starvation_log_carries_battery_status(caplog, monkeypatch):
+    """The warning line itself names the power source and battery level."""
+    _reset_starvation_log_state()
+    monkeypatch.setattr(heartbeat, "_battery_status",
+                        lambda: "power: Battery Power, 3%, discharging")
+    heartbeat._last_loop_tick = time.monotonic() - (heartbeat._LOOP_AGE_LOG_THRESHOLD_S + 2.0)
+    with caplog.at_level("WARNING", logger="core.heartbeat"):
+        heartbeat._write_heartbeat_once()
+    msgs = [r.getMessage() for r in caplog.records if "event-loop starvation" in r.getMessage()]
+    assert msgs and "power: Battery Power, 3%, discharging" in msgs[0]
+
+
+def test_no_battery_probe_without_starvation(monkeypatch):
+    """A healthy tick must not spawn pmset: the probe only runs when logging."""
+    _reset_starvation_log_state()
+    calls = []
+    monkeypatch.setattr(heartbeat, "_battery_status", lambda: calls.append(1) or "")
+    heartbeat._last_loop_tick = time.monotonic()
+    heartbeat._write_heartbeat_once()
+    assert calls == []

@@ -197,6 +197,59 @@ def _format_starvation_stacks(frames: dict | None = None) -> str:
         return f"stack capture failed: {exc!r}"
 
 
+# Bound on the battery probe. A low-battery throttled machine makes even tiny
+# subprocesses slow (pgrep took >5s during the 2026-10-21 10:47 freeze), and the
+# probe runs on the writer thread, so it must never delay the heartbeat file long.
+_BATTERY_PROBE_TIMEOUT_S: float = 2.0
+
+
+def _parse_pmset_batt(out: str) -> str:
+    """Turn ``pmset -g batt`` output into e.g. ``Battery Power, 3%, discharging``."""
+    source = ""
+    first = out.splitlines()[0] if out else ""
+    if "'" in first:
+        source = first.split("'")[1]
+    detail = ""
+    for line in out.splitlines()[1:]:
+        if "%" in line and "\t" in line:
+            # "-InternalBattery-0 (id=..)\t98%; charging; 0:16 remaining present: true"
+            fields = [f.strip() for f in line.split("\t", 1)[1].split(";")]
+            detail = ", ".join(f.split(" present:")[0] for f in fields[:2] if f)
+            break
+    if not detail:
+        return f"{source or 'unknown power source'}, no battery"
+    return f"{source or 'unknown power source'}, {detail}"
+
+
+def _battery_status(run=None) -> str:
+    """Power source + battery level for the starvation log. Never raises.
+
+    A starvation that coincides with a nearly empty battery is macOS throttling
+    the process, not a SwarmAI bug (2026-10-21 10:47, 322s at 3%; 10-17 17:49,
+    762s at 7%). Logging this makes that cause visible without cross-reading
+    ``pmset -g log``. ``run`` is injectable for tests (defaults to subprocess.run).
+    """
+    try:
+        if sys.platform == "darwin":
+            import subprocess
+            run = run or subprocess.run
+            try:
+                proc = run(["pmset", "-g", "batt"], capture_output=True, text=True,
+                           timeout=_BATTERY_PROBE_TIMEOUT_S)
+            except subprocess.TimeoutExpired:
+                return f"battery: unknown (pmset took over {_BATTERY_PROBE_TIMEOUT_S:.0f}s)"
+            return f"power: {_parse_pmset_batt(proc.stdout or '')}"
+        if sys.platform.startswith("linux"):
+            for bat in sorted(Path("/sys/class/power_supply").glob("BAT*")):
+                cap = (bat / "capacity").read_text().strip()
+                status = (bat / "status").read_text().strip().lower()
+                return f"power: battery {cap}%, {status}"
+            return "power: no battery"
+        return "power: unknown"
+    except Exception as exc:  # observability must never break
+        return f"power: unknown ({type(exc).__name__})"
+
+
 def _write_heartbeat_once() -> None:
     """Atomically write the heartbeat file with pid + ts + loop_age.
 
@@ -231,9 +284,9 @@ def _write_heartbeat_once() -> None:
             logger.warning(
                 "event-loop starvation: loop_age=%.1fs (>=%.1fs threshold) — "
                 "the asyncio loop has not scheduled for this long; an on-loop SSE "
-                "heartbeat cannot be emitted while this persists (pid=%d)\n%s",
+                "heartbeat cannot be emitted while this persists (pid=%d; %s)\n%s",
                 loop_age, _LOOP_AGE_LOG_THRESHOLD_S, os.getpid(),
-                _format_starvation_stacks(),
+                _battery_status(), _format_starvation_stacks(),
             )
     else:
         _loop_age_was_over = False
