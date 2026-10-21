@@ -36,9 +36,15 @@ KEY PROPERTIES
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+# test_ac5 / the next test import pipeline_validator by its bare name: put scripts/ on
+# sys.path here, not by luck of an earlier test importing scripts.artifact_cli first.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────
