@@ -176,6 +176,8 @@ class LifecycleManager:
         if not self._tracked_child_pids:
             return
         killed = 0
+        from core import kill_audit
+        kill_audit.record(list(self._tracked_child_pids), "shutdown tracked child")
         for pid in list(self._tracked_child_pids):
             try:
                 os.kill(pid, signal.SIGKILL)
@@ -1972,6 +1974,8 @@ class LifecycleManager:
                     continue
 
             try:
+                from core import kill_audit
+                kill_audit.record([pid], f"reap {label}")
                 os.kill(pid, signal.SIGKILL)
                 killed += 1
                 logger.info("lifecycle_manager.reap_%s pid=%d", label, pid)

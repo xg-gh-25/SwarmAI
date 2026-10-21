@@ -174,6 +174,16 @@ def classify_failure(
         sigkill_only = any(p in error_lower for p in (
             "exit code -9", "exit code: -9", "exit code=-9", "sigkill", "signal 9", "killed by signal"))
         if level == "ok" and sigkill_only and "jetsam" not in error_lower:
+            # core/kill_audit: did THIS process SIGKILL a CLI just now? If not,
+            # the kill came from outside (a test or tool sweeping processes).
+            try:
+                from core import kill_audit
+                metadata["killed_by"] = "swarmai" if kill_audit.killed_by_us() else "external"
+            except Exception:  # noqa: BLE001
+                logger.debug("classify_failure: kill audit unreadable", exc_info=True)
+            if metadata.get("killed_by") == "external":
+                logger.warning("classify_failure: SIGKILL with no kill of ours on record "
+                               "and memory pressure ok — an external kill")
             return FailureType.KILLED, metadata
         return FailureType.OOM, metadata
 

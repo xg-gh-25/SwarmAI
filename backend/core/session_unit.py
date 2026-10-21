@@ -455,8 +455,11 @@ def _snapshot_descendant_tree_pgrep(parent_pid: int) -> list[int]:
     return to_kill
 
 
-def _kill_pids(pids: list[int]) -> int:
-    """SIGKILL a list of PIDs. Returns count successfully killed."""
+def _kill_pids(pids: list[int], reason: str = "tree") -> int:
+    """SIGKILL a list of PIDs (recorded in core/kill_audit first). Returns count
+    successfully killed."""
+    from core import kill_audit
+    kill_audit.record(pids, reason)
     killed = 0
     for pid in pids:
         try:
@@ -4874,6 +4877,8 @@ class SessionUnit:
             # Before the kill: the SDK reader logs its "exit code -9" ERROR
             # within milliseconds of the signal (see _ExpectedKillLogFilter).
             _note_intentional_kill()
+            from core import kill_audit
+            kill_audit.record([pid], f"session {self.session_id}")
             try:
                 pgid = os.getpgid(pid)
                 my_pgid = os.getpgid(os.getpid())

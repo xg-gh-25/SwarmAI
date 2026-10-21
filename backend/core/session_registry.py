@@ -241,7 +241,9 @@ def kill_all_claude_processes() -> int:
 
                 from core.session_unit import _snapshot_descendant_tree, _kill_pids
                 tree = _snapshot_descendant_tree(pid)
-                tree_killed = _kill_pids(tree)
+                tree_killed = _kill_pids(tree, "startup leftover (descendant)")
+                from core import kill_audit
+                kill_audit.record([pid], f"startup leftover (owner {owner_pid} dead)")
                 os.kill(pid, signal.SIGKILL)
                 killed += 1
                 logger.info(

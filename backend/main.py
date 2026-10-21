@@ -285,6 +285,26 @@ def _backend_json_lock(path: str) -> str:
     return path + ".lock"
 
 
+def _other_live_backend(path: str = _BACKEND_JSON_DEFAULT) -> "int | None":
+    """PID of ANOTHER backend that backend.json says is running and that is alive,
+    else None (no file, unreadable, our own pid, or a dead pid: we are its
+    successor). A pid we may not signal counts as alive."""
+    import json as _json
+    try:
+        pid = int(_json.loads(Path(path).read_text()).get("pid"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    if pid == os.getpid() or pid <= 0:
+        return None
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return pid
+    except OSError:
+        return None
+    return pid
+
+
 def write_backend_json(
     port: int,
     mode: str,
@@ -1382,6 +1402,12 @@ async def lifespan(app: FastAPI):
     if (os.environ.get("SWARMAI_VERIFY_BUILD") == "1"
             or os.environ.get("SWARMAI_NO_CLI_SWEEP") == "1"):
         logger.info("Isolated instance (verify probe / smoke) — skipping leftover claude CLI sweep")
+    elif (_owner := _other_live_backend()) is not None:
+        # F6: only the backend that owns backend.json may sweep. Another live
+        # backend is registered (this is a test, probe or second instance): its
+        # CLIs are not leftovers. Two clusters of 3-5 CLIs killed within 230 ms
+        # (10-20, 10-21) came after the probe / owner-tag fixes.
+        logger.info("Backend pid %s owns backend.json — skipping leftover claude CLI sweep", _owner)
     else:
         startup_killed = session_registry.kill_all_claude_processes()
         if startup_killed:
