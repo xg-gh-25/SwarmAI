@@ -190,8 +190,9 @@ function statsMeta(t: ReturnType<typeof useTranslation>['t'], s: { steps: number
 const THOUGHT_TEXT = 'text-[12.5px] italic leading-relaxed text-[var(--color-text-muted)] whitespace-pre-wrap break-words';
 
 /** A thought inside a phase: one row in the strip column, `✻ Thought`, its first line
- *  and how long it ran; the row opens to all of it. It never takes more than one line
- *  while it streams, so the strips around it keep their place. */
+ *  and how long it ran; the row opens to all of it. Open, the row drops the preview:
+ *  the full text below starts with that same line, shown once. It never takes more
+ *  than one line while it streams, so the strips around it keep their place. */
 function PhaseThought({ unit, scope, open, onToggle }: { unit: ThoughtUnit; scope: string; open: boolean; onToggle: (o: boolean) => void }) {
   const { t } = useTranslation();
   const first = unit.text.trim().split('\n')[0];
@@ -206,7 +207,7 @@ function PhaseThought({ unit, scope, open, onToggle }: { unit: ThoughtUnit; scop
         className="w-full flex items-center gap-3 min-w-0 pl-2 pr-3 py-[3px] rounded-[6px] text-left hover:bg-[var(--color-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
       >
         <span className="w-[10ch] shrink-0 truncate font-mono text-[12px] text-[var(--color-text-dim)]">✻ {tf(t, 'chat.turn.zone.thought', 'Thought')}</span>
-        <span className="truncate min-w-0 text-[12.5px] italic text-[var(--color-text-muted)]">{first}</span>
+        <span className="truncate min-w-0 text-[12.5px] italic text-[var(--color-text-muted)]">{open ? '' : first}</span>
         <span className="ml-auto w-[7ch] shrink-0 text-right font-mono text-[12px] tabular-nums text-[var(--color-text-muted)]">
           {seconds !== undefined && seconds >= MIN_SECONDS ? fmt(seconds) : ''}
         </span>

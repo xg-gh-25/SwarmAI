@@ -129,6 +129,8 @@ describe('AC2 — notes stay in their group', () => {
     expect(within(column).getAllByTestId('tool-strip')).toHaveLength(2);
     fireEvent.click(within(thought).getByTestId('thought-toggle'));
     expect(screen.getByTestId('thought-text').textContent).toContain('second line');
+    // open, the first line is shown once (in the text), not again in the row
+    expect(screen.getByTestId('thought').textContent!.split('first line')).toHaveLength(2);
   });
 });
 
