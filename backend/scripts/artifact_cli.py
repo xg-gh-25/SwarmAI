@@ -14989,6 +14989,11 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
                                                   f"--run-id {run_id} --stage {stage}")])
         warnings += ledger_warn
     out["warnings"] = warnings
+    # How to read this run's state (status, stages, files, latest test counts and
+    # failing ids) without a `python3 -c "json.load(open('…/run.json'))"` one-liner:
+    # agents wrote ~1,075 such reads of run.json in one week (2026-10-21).
+    out["read_run"] = (_cli_cmd(f"run-get --project {project} --run-id {run_id} --brief")
+                       + "  (one value: --field stages.3.status; never python -c on run.json)")
     print(json.dumps(_fit_stage_start(out), default=str, ensure_ascii=False))
 
 

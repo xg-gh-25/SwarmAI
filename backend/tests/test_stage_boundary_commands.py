@@ -208,6 +208,15 @@ class TestDirectProfileFlow:
         assert PIPELINE_PROFILES["direct"] == ["plan", "build", "deliver"]
         assert is_relaxed_profile("direct") is False
 
+    def test_stage_start_says_how_to_read_the_run(self, ws, capsys):
+        root, reg = ws
+        rid = "run_readrun1"
+        _make_run(root, rid, "direct", files_touched=["backend/a.py"])
+        code, out = _start(reg, capsys, rid, "plan")
+        assert code == 0
+        assert f"run-get --project {PROJECT} --run-id {rid} --brief" in out["read_run"]
+        assert "--field" in out["read_run"]
+
     def test_plan_build_deliver(self, ws, capsys):
         root, reg = ws
         rid = "run_direct1"
