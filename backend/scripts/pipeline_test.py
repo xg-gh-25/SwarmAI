@@ -2220,6 +2220,7 @@ def _parse_frontend(job: _Job) -> list[dict]:
 
 
 _FE_NOISE = re.compile(r"Browserslist|update-browserslist-db|browserslist/update-db|/node_modules/")
+_ANSI_CSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _VITEST_FILE_LINE = re.compile(r"^\s*([✓❯×])\s+(\S+?\.(?:test|spec)\.[cm]?[jt]sx?)\s+\(")
 _TSC_LINE = re.compile(r"^(?P<f>[^\s(:][^(:]*?)(?:\((?P<l>\d+),(?P<c>\d+)\):|:(?P<l2>\d+):(?P<c2>\d+)"
                        r"\s+-)\s*(?P<msg>error TS.*)$")  # --pretty false | pretty format
@@ -2255,7 +2256,8 @@ def _vitest_partial(job: _Job) -> list[dict]:
     reporter's per-file status lines; each requested test file that never reported is
     a timeout. At least one timeout is always returned (a killed run is never green)."""
     done: dict[str, str] = {}
-    for ln in _lines(_read_text(job.out)):
+    for raw in _lines(_read_text(job.out)):
+        ln = _ANSI_CSI.sub("", raw)
         m = _VITEST_FILE_LINE.match(ln)
         if m:
             done["desktop/" + m.group(2)] = "passed" if m.group(1) == "✓" else "failed"

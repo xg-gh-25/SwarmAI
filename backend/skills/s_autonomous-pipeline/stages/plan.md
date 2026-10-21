@@ -1,10 +1,10 @@
 # PLAN — execution card
 
-Turn the chosen alternative into a design BUILD can execute with zero project context, plus the exit contract that ends verification.
+Design BUILD and define its exit contract.
 
-**Enter**: `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage plan` (upstream ACs, `cross_boundary`, `exit_criteria_default`, valid examples).
+**Enter**: `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage plan` (ACs, `cross_boundary`, defaults, examples).
 
-**`direct` profile**: PLAN is mandatory (BUILD / DELIVER refuse to start before it) and is only step 11: 1-5 `exit_criteria` taken from the requirement, each with the test that checks it (`manual` when no test can). Steps 1-10 are not required; code already in the worktree counts.
+**`direct`**: PLAN is mandatory; only step 11 applies; existing code counts.
 
 ## Steps
 
@@ -18,7 +18,7 @@ Turn the chosen alternative into a design BUILD can execute with zero project co
 8. **Security boundaries**: only when `cross_boundary.value == true` (Gates).
 9. **Required experts**: `python backend/scripts/artifact_cli.py run-update --project <P> --run-id <R> --add-required-expert <id>` per `backend/experts/code/` domain touched (endpoint ⇒ `security`, async ⇒ `concurrency`, state machine ⇒ `state-machine`). Append-only, never `spec-compliance`.
 10. **Impact projection**: only if the project has `code_intel.db`.
-11. **Exit contract**: `exit_criteria[]` = `[{id, kind, ref, expect}]`; kind ∈ test|probe|mutation|manual, expect ∈ pass|no_new_findings|all_killed|done. Start from `exit_criteria_default`, real refs (manual may omit). A `test` ref is ONE file/nodeid or `mode:<m>`, never a directory or glob. Met per `stage-complete` → stop verifying.
+11. **Exit contract**: `exit_criteria[]` = `[{id, kind, ref, expect}]`; kind ∈ test|probe|mutation|manual, expect ∈ pass|no_new_findings|all_killed|done. Start from `exit_criteria_default`; use real refs (manual may omit). A `test` ref is ONE file/nodeid or `mode:<m>`, never a directory or glob; use `mode:regression` for whole-scope coverage. Met per `stage-complete` → stop verifying.
 
 PLAN runs no tests; any test goes only through `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode <m>`.
 
