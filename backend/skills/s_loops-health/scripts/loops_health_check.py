@@ -77,8 +77,8 @@ MEMORY_SECTIONS = [
 MEMORY_ENTRY_SECTIONS = {
     "Decisions": 60, "Guidelines": 250, "Pitfalls": 200, "Corrections": 30,
 }
-# EVOLUTION.md correction marker: "C0NN" ids (e.g. C056), found both in
-# "### C056 | YYYY-MM-DD" entries and inline under "### CLASS A/B/C" blocks.
+# EVOLUTION.md correction marker: "C0NN" ids, found both in
+# "### C0NN | YYYY-MM-DD" entries and inline under "### CLASS A/B/C" blocks.
 EVOLUTION_CORRECTION_RE = r"\bC0\d{2}\b"
 EVOLUTION_CLASS_RE = r"^### CLASS [ABC]"
 
@@ -474,7 +474,7 @@ class SelfLoopsHealthEngine:
             ))
 
         # E3: Correction capture — counts distinct "C0NN" ids (e.g. C037), whether
-        # they sit in "### C056 | 2026-10-20" entry headers or inline under a CLASS block.
+        # they sit in "### C0NN | YYYY-MM-DD" entry headers or inline under a CLASS block.
         # Count distinct correction ids present (capture is healthy if the
         # registry holds corrections at all; recency is measured by M1 dates).
         c_ids = set(re.findall(EVOLUTION_CORRECTION_RE, evolution))
