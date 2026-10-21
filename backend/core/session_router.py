@@ -24,12 +24,14 @@ import asyncio
 import logging
 import time
 from collections import deque
+from contextlib import aclosing
 from datetime import datetime
 from pathlib import Path
 import re
 from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
 from uuid import uuid4
 
+from . import session_events
 from .session_unit import SessionState, SessionUnit
 from .turn_phase import PREPARING as TURN_PHASE_PREPARING, turn_phase_event
 
@@ -715,8 +717,8 @@ def _is_warm_reuse(unit: Any) -> bool:
     warm-reuse-ELIGIBLE — it reuses the pre-spawned live subprocess via query(),
     and 阶段二 routes its first-message recall/SENSE through query_content (not the
     discarded system_prompt), so nothing is lost. It is keyed on the `prewarm-`
-    PREFIX, NOT `_sdk_session_id is None`: a first-message SSE-disconnect zombie
-    (recover_from_disconnect) has the identical (clean=False, sdk_session_id=None)
+    PREFIX, NOT `_sdk_session_id is None`: a first-message turn that ended
+    unclean (crash, interrupt) has the identical (clean=False, sdk_session_id=None)
     shape but a normal id — it must recycle, so the prefix is the only safe signal."""
     return (
         unit.state == SessionState.IDLE
@@ -2879,7 +2881,7 @@ class SessionRouter:
         idle_units = [
             u for u in self._units.values()
             if u.state == SessionState.IDLE
-            and not u.is_post_disconnect_flushing  # Option B-soft: don't kill a long turn finishing post-disconnect
+            and not u.is_post_disconnect_flushing  # always False now: dead guard, removal is a follow-up
             # a live background task / queued CLI turn (I5): protected on the channel
             # pool; chat eviction only takes orphans, whose turn no window would see
             and not (u.has_background_work and u.is_channel_session)
@@ -3111,20 +3113,37 @@ class SessionRouter:
                     session_id, client_id)
         pending: list[dict] = []
         row_key = f"{client_id}-asst"
-        try:
+
+        async def persisted_frames() -> AsyncIterator[dict]:
+            # Persist first, then hand the event on to be published, so a tab
+            # that reloads on turn_end finds every row it was shown live.
             async for event in unit._read_formatted_response():
                 if not isinstance(event, dict):
                     continue
+                extras: list[dict] = []
                 try:
-                    await self._persist_stream_event(
+                    extras = await self._persist_stream_event(
                         session_id, event, pending, label="injected",
                         client_id=row_key, files=self._turn_files_of(unit),
                         changes=getattr(unit, "_turn_changes", None),
-                    )
+                    ) or []
                 except Exception as exc:  # noqa: BLE001 — F4: persistence must not wedge the unit
                     logger.warning(
                         "session_router.injected_persist_failed session_id=%s type=%s: %s",
                         session_id, event.get("type"), exc)
+                # the turn's products (turn_deliverables / turn_changes) come
+                # before its result, as on the other turn paths
+                for _extra in extras:
+                    yield _extra
+                yield event
+
+        try:
+            async with aclosing(self._published_turn(
+                persisted_frames(), session_id=session_id, turn_client_id=row_key,
+                source="injected", start_on_session_start=False,
+            )) as turn:
+                async for _published in turn:
+                    pass
         except TurnAbandoned as exc:
             logger.warning("session_router.injected_turn_abandoned session_id=%s: %s",
                            session_id, exc)
@@ -3426,6 +3445,60 @@ class SessionRouter:
 
     # ── Public API ────────────────────────────────────────────────
 
+    # ── Session event publishing (core/session_events) ────────────────
+
+    async def _published_turn(
+        self,
+        agen: AsyncIterator[dict],
+        *,
+        session_id: Optional[str],
+        turn_client_id: Optional[str],
+        source: str,
+        start_on_session_start: bool,
+    ) -> AsyncIterator[dict]:
+        """Run one turn's event generator and publish every event of the turn.
+
+        The single place every router turn goes through (run_conversation,
+        continue_with_answer, continue_with_cmd_permission, run_injected_turn),
+        so a subscribed tab sees every turn of its session no matter who started
+        it. The turn starts at the turn's ``session_start`` when
+        ``start_on_session_start`` (run_conversation: events before it, such as
+        ``queued`` or a SESSION_BUSY rejection, are replies to the POST that sent
+        them and are yielded unstamped), else at the first event. From then on
+        ``turn_start``, every event and, in ``finally``, ``turn_end`` are
+        published; the caller receives the stamped envelopes (``turnId``,
+        ``eventSeq``) so a POST stream can bind its turn. The inner generator is
+        closed with ``aclosing`` whenever this one is, so its ``finally`` blocks
+        (pending rollback, slot release) run exactly as when it was iterated
+        directly.
+        """
+        hub = session_events.hub()
+        turn_id = uuid4().hex[:12]
+        sid = session_id
+        started = False
+        async with aclosing(agen) as inner:
+            try:
+                async for ev in inner:
+                    if not isinstance(ev, dict):
+                        yield ev
+                        continue
+                    if not started:
+                        if start_on_session_start and ev.get("type") != "session_start":
+                            yield ev
+                            continue
+                        sid = ev.get("sessionId") or ev.get("session_id") or sid
+                        if sid is None:
+                            yield ev
+                            continue
+                        started = True
+                        yield hub.publish(sid, {"type": "turn_start", "source": source},
+                                          turn_id=turn_id, turn_client_id=turn_client_id)
+                    yield hub.publish(sid, ev, turn_id=turn_id, turn_client_id=turn_client_id)
+            finally:
+                if started:
+                    hub.publish(sid, {"type": "turn_end"}, turn_id=turn_id,
+                                turn_client_id=turn_client_id)
+
     async def run_conversation(
         self,
         agent_id: str,
@@ -3440,18 +3513,57 @@ class SessionRouter:
         agent_config: Optional[dict] = None,
         client_id: Optional[str] = None,
         _drained_pending: bool = False,
-        _auto_continue: bool = False,
     ) -> AsyncIterator[dict]:
-        """Entry point for chat requests.
+        """Entry point for chat requests: one turn, published to the session hub.
+
+        A turn without a client_id of its own (drain, channel, task, skill
+        creator) gets a server one, so its persisted assistant rows and a
+        subscribed tab's live bubble share the ``{client_id}-asst`` key (no
+        duplicate bubble at the turn-end reconcile). Safe for the continuation
+        stash: ``_run_conversation_impl`` writes ``unit._turn_client_id`` only
+        after send() admitted the turn. See ``_published_turn`` for what is
+        published; ``_run_conversation_impl`` does the turn.
+        """
+        source = "drain" if _drained_pending else ("channel" if channel_context else "chat")
+        if client_id is None:
+            client_id = f"{source}-{uuid4().hex}"
+        agen = self._run_conversation_impl(
+            agent_id=agent_id, user_message=user_message, content=content,
+            session_id=session_id, enable_skills=enable_skills, enable_mcp=enable_mcp,
+            channel_context=channel_context, editor_context=editor_context,
+            terminal_context=terminal_context, agent_config=agent_config,
+            client_id=client_id, _drained_pending=_drained_pending,
+        )
+        async with aclosing(self._published_turn(
+            agen, session_id=session_id,
+            turn_client_id=f"{client_id}-asst" if client_id else None,
+            source=source,
+            start_on_session_start=True,
+        )) as turn:
+            async for ev in turn:
+                yield ev
+
+    async def _run_conversation_impl(
+        self,
+        agent_id: str,
+        user_message: Optional[str] = None,
+        content: Optional[list[dict]] = None,
+        session_id: Optional[str] = None,
+        enable_skills: bool = False,
+        enable_mcp: bool = False,
+        channel_context: Optional[dict] = None,
+        editor_context: Optional[dict] = None,
+        terminal_context: Optional[dict] = None,
+        agent_config: Optional[dict] = None,
+        client_id: Optional[str] = None,
+        _drained_pending: bool = False,
+    ) -> AsyncIterator[dict]:
+        """One chat turn (called through ``run_conversation``).
 
         ``_drained_pending`` (internal): set by the drain worker when delivering
         a coalesced pending turn. The rows already exist in the DB (sent=0,
         claimed); the worker flips them to sent=1 after delivery, so the pre-slot
         re-persist below is skipped to avoid a duplicate user row.
-
-        ``_auto_continue`` (internal): core/auto_continue resuming a turn dropped
-        by an SSE disconnect. Its prompt is not the user's, so no user row is
-        written: the chat shows the same turn carrying on.
 
         1. Get or create SessionUnit
         2. Build options via PromptBuilder
@@ -3558,7 +3670,7 @@ class SessionRouter:
         # pending message (Root-1 SSOT Phase 2 L2) instead of deleting it — the
         # drain worker then delivers it when the session next reaches IDLE.
         persisted_msg_id: Optional[str] = None
-        if user_content and not _drained_pending and not _auto_continue:
+        if user_content and not _drained_pending:
             title = (user_message or "Chat")[:50]
             try:
                 await session_manager.store_session(session_id, agent_id, title)
@@ -4211,8 +4323,9 @@ class SessionRouter:
                 # `if client_id` guard prevents a drain/channel turn (client_id=None)
                 # from CLOBBERING a still-valid stash from the turn that owns the
                 # open question.
-                # A keyed turn stamps its cid here; a keyless turn (drain / channel)
-                # leaves the stash at the None that send() reset it to at admission
+                # Every turn carries a client_id now (run_conversation gives a
+                # drain / channel / task turn a server one), so each admitted turn
+                # stamps its own cid here; send() reset the stash at admission
                 # (session_unit.py — the _turn_client_id lifecycle reset). No stale
                 # inheritance is possible, so no explicit clear is needed here. The
                 # `if client_id` guard also stops an intruding WAITING_INPUT send from
@@ -4497,10 +4610,11 @@ class SessionRouter:
           the feature fixes (a closed idle tab that would otherwise hold a slot
           until the 12h TTL).
         - **Active state (STREAMING / WAITING_INPUT)** — never raw-``kill()``:
-          that races ``_recover_streaming_on_disconnect`` (which the SSE abort on
-          tab close already triggers) and could destroy a freshly-reused slot.
-          Without ``force`` → ``skipped_active`` (leave it alone — the abort path
-          handles the slot).  With ``force=True`` (user confirmed closing a
+          the running turn belongs to the session, not to the closed tab (a client
+          disconnect no longer stops it), and a raw kill could destroy a
+          freshly-reused slot. Without ``force`` → ``skipped_active`` (the turn
+          finishes; the IDLE unit is then reaped like any orphan).  With
+          ``force=True`` (user confirmed closing a
           streaming tab) → ``interrupt()`` (generation-safe), then ``kill()`` the
           settled-IDLE unit to actually free the slot.
 
@@ -4560,7 +4674,32 @@ class SessionRouter:
         )
         return {"status": "released", "alive_count": self.alive_count}
 
+    def _continuation_client_id(self, session_id: str) -> Optional[str]:
+        unit = self.get_unit(session_id)
+        tcid = getattr(unit, "_turn_client_id", None) if unit is not None else None
+        return f"{tcid}-asst" if tcid else None
+
     async def continue_with_answer(
+        self, session_id: str, answer: str,
+        tool_use_id: str | None = None,
+    ) -> AsyncIterator[dict]:
+        """Continue a turn with the user's answer, published to the session hub.
+
+        No unit → the SESSION_NOT_FOUND reply goes to the caller only (no turn)."""
+        if self.get_unit(session_id) is None:
+            async for ev in self._continue_with_answer_impl(session_id, answer, tool_use_id=tool_use_id):
+                yield ev
+            return
+        async with aclosing(self._published_turn(
+            self._continue_with_answer_impl(session_id, answer, tool_use_id=tool_use_id),
+            session_id=session_id,
+            turn_client_id=self._continuation_client_id(session_id),
+            source="answer", start_on_session_start=False,
+        )) as turn:
+            async for ev in turn:
+                yield ev
+
+    async def _continue_with_answer_impl(
         self, session_id: str, answer: str,
         tool_use_id: str | None = None,
     ) -> AsyncIterator[dict]:
@@ -4599,6 +4738,25 @@ class SessionRouter:
             yield event
 
     async def continue_with_cmd_permission(
+        self, session_id: str, request_id: str, allowed: bool,
+    ) -> AsyncIterator[dict]:
+        """Continue a turn after a permission decision, published to the session hub.
+
+        No unit → the SESSION_NOT_FOUND reply goes to the caller only (no turn)."""
+        if self.get_unit(session_id) is None:
+            async for ev in self._continue_with_cmd_permission_impl(session_id, request_id, allowed):
+                yield ev
+            return
+        async with aclosing(self._published_turn(
+            self._continue_with_cmd_permission_impl(session_id, request_id, allowed),
+            session_id=session_id,
+            turn_client_id=self._continuation_client_id(session_id),
+            source="permission", start_on_session_start=False,
+        )) as turn:
+            async for ev in turn:
+                yield ev
+
+    async def _continue_with_cmd_permission_impl(
         self, session_id: str, request_id: str, allowed: bool,
     ) -> AsyncIterator[dict]:
         """Delegate to SessionUnit.continue_with_permission().

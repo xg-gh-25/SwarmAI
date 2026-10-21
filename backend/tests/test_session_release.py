@@ -8,8 +8,8 @@ chat tab is closed, instead of waiting for the 12h idle TTL. The release MUST:
 - NEVER kill the WRONG session-instance when a slot/sessionId is reused
   (generation stale-guard — Gate-1 CRITICAL 2a/2c).
 - Route active states (STREAMING / WAITING_INPUT) through the generation-safe
-  interrupt() primitive, never a raw kill that races
-  _recover_streaming_on_disconnect (Gate-1 CRITICAL 5a).
+  interrupt() primitive, never a raw kill: the turn belongs to the session and
+  keeps running after its tab closes (Gate-1 CRITICAL 5a).
 - Preserve multi-tab isolation: release(A) must never touch unit B (Gate-1 3).
 
 Test strategy: construct a SessionRouter with mock deps, populate _units with
@@ -166,7 +166,7 @@ async def test_release_does_not_touch_other_units():
 @pytest.mark.asyncio
 async def test_release_streaming_unit_without_force_does_not_kill():
     """Gate-1 2a/5a: a STREAMING unit (e.g. freshly-reused slot) is NOT killed
-    by an unforced release — it would race _recover_streaming_on_disconnect and
+    by an unforced release — the running turn outlives its closed tab, and a kill
     could destroy a new session-instance."""
     router = _make_router()
     s = _add_unit(router, "sess-S", SessionState.STREAMING)

@@ -1158,10 +1158,10 @@ export default function ChatPage() {
     // (This tab's in-tab notices are dropped by closeTab → tabNoticeStore.clearTab.)
 
     // Let closeTab handle map deletion + auto-create of last tab.
-    // closeTab also aborts the tab's in-flight stream (abortController.abort),
-    // which on the backend triggers _recover_streaming_on_disconnect
-    // (STREAMING→IDLE). The release below is ordered AFTER closeTab so it acts
-    // on a settling/idle unit, not racing a live stream (Gate-1 finding #5a).
+    // closeTab also aborts the tab's in-flight stream (abortController.abort);
+    // the backend turn keeps running to its own end (a disconnect no longer
+    // stops it), so an unforced release below skips the still-active unit; once
+    // idle it is freed by slot eviction or the idle TTL (Gate-1 finding #5a).
     // Do NOT call cleanupTabState before closeTab — it deletes the tab
     // from the map, causing closeTab to early-return and skip the
     // "auto-create new tab when last one is closed" logic.

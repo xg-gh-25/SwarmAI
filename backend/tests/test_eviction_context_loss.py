@@ -464,7 +464,9 @@ class TestReadLiveIdentityContract:
 
         from core.session_router import SessionRouter
 
-        src = textwrap.dedent(inspect.getsource(SessionRouter.run_conversation))
+        # run_conversation is a thin publishing wrapper; the turn body (and its
+        # build_options call) lives in _run_conversation_impl.
+        src = textwrap.dedent(inspect.getsource(SessionRouter._run_conversation_impl))
         tree = ast.parse(src)
 
         # -- Invariant (1): binding — every build_options call reads live id ------

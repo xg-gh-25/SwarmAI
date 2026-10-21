@@ -1477,7 +1477,11 @@ class SessionUnit:
 
     @property
     def is_post_disconnect_flushing(self) -> bool:
-        """True while a post-disconnect pipe-flush task is still running — i.e.
+        """DEAD: always False since a client disconnect stopped interrupting turns
+        (core/session_events) — nothing calls schedule_pipe_flush any more; kept
+        until the follow-up removes this cluster and its readers.
+
+        Was: True while a post-disconnect pipe-flush task is still running — i.e.
         the subprocess was left alive after an SSE disconnect (Option B-soft, 1A)
         and is finishing a long tool-loop whose output persists to DB.
 
@@ -2606,8 +2610,8 @@ class SessionUnit:
         # _force_kill is anchored to self.pid only — it never touches a sibling
         # session's subprocess tree (per-session isolation).
         # Gate-1 F1: exempt a fresh PREWARM unit by its session-id PREFIX, NOT by
-        # `_sdk_session_id is None`. A first-message SSE disconnect
-        # (recover_from_disconnect) leaves a NORMAL unit at the identical shape
+        # `_sdk_session_id is None`. A first-message turn that ended unclean
+        # (crash, interrupt) leaves a NORMAL unit at the identical shape
         # (IDLE + client + _last_turn_clean=False + _sdk_session_id=None) — that
         # is a real zombie the guard MUST still recycle. Only a `prewarm-` id is a
         # genuinely never-used, adoptable warm subprocess; recycling it would
@@ -4053,7 +4057,10 @@ class SessionUnit:
             yield event
 
     def recover_from_disconnect(self) -> bool:
-        """Transition STREAMING → a CLEAN IDLE after SSE client disconnect.
+        """DEAD: no caller since a client disconnect stopped interrupting turns
+        (core/session_events); kept until the follow-up removes this cluster.
+
+        Transition STREAMING → a CLEAN IDLE after SSE client disconnect.
 
         Returns True if the transition happened.  No-op if not STREAMING.
 

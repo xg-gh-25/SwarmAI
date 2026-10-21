@@ -904,10 +904,9 @@ describe('useChatStreamingLifecycle', () => {
       // ROOT CAUSE (2026-06-21): a stale "Gap 2 fix" in the error handler
       // POSTed /stop on mid-stream disconnect → backend interrupt_session →
       // kill → poisoned subprocess → next send zombie_via_error → manual
-      // Continue loop. The backend's _recover_streaming_on_disconnect already
-      // transitions STREAMING → IDLE (soft-interrupt, leaves subprocess alive),
-      // so the frontend stop is both redundant AND harmful. The error handler
-      // must NOT call stopSession.
+      // Continue loop. A disconnect does not stop the backend turn at all (it
+      // runs to its own end, core/session_events), so the frontend stop is
+      // both redundant AND harmful. The error handler must NOT call stopSession.
       const stopSpy = vi
         .spyOn(chatService, 'stopSession')
         .mockResolvedValue({ status: 'ok', message: '' });

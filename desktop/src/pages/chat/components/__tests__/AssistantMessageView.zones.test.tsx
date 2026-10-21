@@ -314,7 +314,7 @@ describe('AC9 — one signal; a stopped turn says so', () => {
     expect(screen.getByTestId('turn-stopped').textContent).toBe('Stopped · your newer message continued the conversation');
   });
 
-  it('auto-continue: a resumed turn is not stopped; one that gave up says so (core/auto_continue)', () => {
+  it('auto-continue (historical rows): a resumed turn is not stopped; one that gave up says so', () => {
     const n = (reason: string) => ({ type: 'turn_notice', reason, cause: 'disconnected' }) as ContentBlock;
     // the dropped call, the restarted notice, then the continuation's output
     const { unmount } = render(view([tx('go'), bash('a', 'make'), n('restarted'), bash('b', 'make'), tr('b'), tx('done')], false));

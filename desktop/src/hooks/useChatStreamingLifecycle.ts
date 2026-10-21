@@ -54,6 +54,12 @@ import { applyCompactionEvent } from '../pages/chat/compaction';
 import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
 import { errorFieldsFromEvent } from './errorFields';
 import { chatService } from '../services/chat';
+import { sessionEvents } from '../services/sessionEvents';
+import {
+  createTabTurnState, onPostSend, routePostEvent, routeSubEvent, onPostComplete, onPostLost,
+  onSubDisconnected, syncTurnStateSession,
+  type TabTurnState, type TurnAction, type TurnEnvelope, type TurnSource,
+} from './sessionTurnRouter';
 import { promptMetadataToCamelCase } from '../services/tscc';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import { collapseAdjacentDuplicateBlocks } from '../utils/duplicateBlocks';
@@ -1258,6 +1264,10 @@ export function useChatStreamingLifecycle(
         if (cancelled) return;
 
         let anyCleared = false;
+        // The subscription keeps cursors for the sessions shown in tabs; a newly
+        // shown session is joined, so a turn still running after a reload is
+        // replayed from its start.
+        watchOpenTabs();
 
         // Check ALL tabs, not just active — background tabs can hang too
         for (const [tabId, tabState] of tabMapRef.current.entries()) {
@@ -1495,7 +1505,12 @@ export function useChatStreamingLifecycle(
               const retireId = (tabState.queuedMessage && drain.serverPendingCount === 0)
                 ? tabState.queuedMessage.messageId
                 : null;
-              if (drainSid) {
+              const routedTurn = tabState._turnRoute?.bound;
+              if (routedTurn && !routedTurn.completed) {
+                // A turn is rendering in this tab (the drained one, via the
+                // subscription): it retires the queued mirror itself at its end.
+                // Retry this surface on a later tick — _lastDrainedSeqs stays.
+              } else if (drainSid) {
                 chatService.invalidateMessageCache(drainSid);
                 chatService.getSessionMessagesReconcileTail(drainSid, RECONCILE_TAIL).then((msgs) => {
                   if (cancelled) return;
@@ -1517,6 +1532,11 @@ export function useChatStreamingLifecycle(
                   if (retireId) {
                     tabState.queuedMessage = undefined;
                     tabState._queuedAt = undefined;
+                  }
+                  // nothing pending on the server: the rejected send was delivered
+                  if (drain.serverPendingCount === 0 && tabState.isWaitingForBusy) {
+                    tabState.isWaitingForBusy = false;
+                    if (tabId === activeTabIdRef.current) setIsWaitingForBusy(false);
                   }
                 }).catch(() => { /* best-effort; _lastDrainedSeqs NOT advanced → retry next tick */ });
               } else {
@@ -2328,8 +2348,64 @@ export function useChatStreamingLifecycle(
 
   // --- Stream handler factories (tab-aware — Fix 6) ---
 
+  // ── Session turn routing ────────────────────────────────────────────
+  // Every turn of a tab's session reaches it from the window's session
+  // subscription (services/sessionEvents); its own sends also get a POST stream.
+  // hooks/sessionTurnRouter decides which source renders each event (the
+  // subscription while it is connected, the POST only as a fallback), renders
+  // each eventSeq once, begins turns the tab did not send (drained messages,
+  // CLI-initiated turns, channel turns), and turns a lost POST into a detach.
+  // The POST factories below wrap their handlers through it; the subscription
+  // effect feeds it. turnRunRef is assigned after the factories exist.
+  const turnStateOf = (tab: UnifiedTab): TabTurnState => {
+    if (!tab._turnRoute) tab._turnRoute = createTabTurnState(tab.sessionId);
+    // eventSeq is per session: a tab that moved to another session starts over
+    // (the POST handlers stay — a send for the new session may be in flight).
+    if (syncTurnStateSession(tab._turnRoute, tab.sessionId) && tab._turnHandlers) {
+      tab._turnHandlers.subRender = undefined;
+      tab._turnHandlers.subComplete = undefined;
+      tab._turnHandlers.drainSyntheticId = undefined;
+    }
+    return tab._turnRoute;
+  };
+  const turnHandlersOf = (tab: UnifiedTab) => {
+    if (!tab._turnHandlers) tab._turnHandlers = {};
+    return tab._turnHandlers;
+  };
+  const turnRunRef = useRef<(
+    tabId: string, actions: TurnAction[], postRender?: (event: StreamEvent) => void,
+    postComplete?: () => void,
+  ) => void>(() => {});
+
+  /** Keep the window's subscription on the sessions shown in tabs. */
+  const watchOpenTabs = () => {
+    sessionEvents.watch(
+      Array.from(tabMapRef.current.values(), (t) => t.sessionId).filter((s): s is string => !!s),
+    );
+  };
+
+  const wrapPostHandler = (
+    tabId: string | null | undefined,
+    inner: (event: StreamEvent) => void,
+    bubbleId: string,
+  ): ((event: StreamEvent) => void) => {
+    const tab = tabId ? tabMapRef.current.get(tabId) : undefined;
+    if (!tabId || !tab) return inner;
+    onPostSend(turnStateOf(tab));
+    turnHandlersOf(tab).postRender = inner;
+    turnHandlersOf(tab).postBubbleId = bubbleId;
+    return (event: StreamEvent) => {
+      const live = tabMapRef.current.get(tabId);
+      if (!live) { inner(event); return; }
+      // this POST's own handler renders what the router gives the POST side
+      turnRunRef.current(tabId, routePostEvent(
+        turnStateOf(live), event as TurnEnvelope, sessionEvents.isConnected(),
+      ), inner);
+    };
+  };
+
   const createStreamHandler = useCallback(
-    (assistantMessageId: string, tabId?: string) => {
+    (assistantMessageId: string, tabId?: string, source: 'post' | 'sub' = 'post') => {
       // Capture the tab this handler belongs to. Falls back to active tab
       // for backward compatibility with single-tab usage.
       const capturedTabId = tabId ?? activeTabIdRef.current;
@@ -2381,7 +2457,7 @@ export function useChatStreamingLifecycle(
         }
       }
 
-      return (event: StreamEvent) => {
+      const inner = (event: StreamEvent) => {
         // ╔══════════════════════════════════════════════════════════════╗
         // ║ CRITICAL — watchdog liveness reset. Keep this FIRST.           ║
         // ╚══════════════════════════════════════════════════════════════╝
@@ -2818,6 +2894,7 @@ export function useChatStreamingLifecycle(
           if (tabState) {
             tabState.sessionId = event.sessionId;
             // Keep tabState.isStreaming = true (set by setIsStreaming(true) in handleSendMessage)
+            watchOpenTabs();
           }
           // Notify the owner that THIS tab bound a session — fires for background
           // tabs too, so a dispatched ToDo record can backfill even when the tab
@@ -3374,12 +3451,13 @@ export function useChatStreamingLifecycle(
           // window where the guard didn't catch it.)
           // See: 2026-04-02 SSE disconnect kill chain diagnosis.
           //
-          // Recovery (2026-05-14): poll the messages endpoint so the in-flight
-          // backend response renders when it completes. On completion we drain
-          // the re-queued message (single owner — the queue), so it is sent
-          // exactly once.
+          // Recovery: the server persisted the rejected message as pending and
+          // drains it when the session is idle. The running turn and the drained
+          // one reach this tab on the session subscription (or the reconcile's
+          // drain surface while it is down); the re-queued bubble is only a
+          // mirror and is never re-sent while a session exists.
           if (event.code === 'SESSION_BUSY') {
-            console.log('[StreamHandler] SESSION_BUSY — starting poll recovery', { capturedTabId });
+            console.log('[StreamHandler] SESSION_BUSY — message pending on the server', { capturedTabId });
             const busyEndStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
             if (busyEndStore) busyEndStore.endStreaming();
             setIsStreaming(false, capturedTabId ?? undefined);
@@ -3459,110 +3537,19 @@ export function useChatStreamingLifecycle(
               }
             }
 
-            // Start polling messages endpoint (ETag-based, cheap 304s)
             const pollSessionId = capturedTabId
               ? tabMapRef.current.get(capturedTabId)?.sessionId
               : undefined;
 
             if (pollSessionId && capturedTabId) {
-              const busyTab = tabMapRef.current.get(capturedTabId);
-              if (!busyTab) return;
-
-              // Clear any existing poll for this tab (safety)
-              if (busyTab.busyPollInterval) clearInterval(busyTab.busyPollInterval);
-              if (busyTab.busyPollTimeout) clearTimeout(busyTab.busyPollTimeout);
-
-              // Helper: clear all busy-poll state for the tab
-              const clearBusyPoll = (tab: typeof busyTab) => {
-                if (tab.busyPollInterval) clearInterval(tab.busyPollInterval);
-                if (tab.busyPollTimeout) clearTimeout(tab.busyPollTimeout);
-                tab.busyPollInterval = undefined;
-                tab.busyPollTimeout = undefined;
-                tab.isWaitingForBusy = false;
-              };
-
-              // ── B1: drain-aware busy recovery (authoritative state) ────────
-              // The backend is the SOLE owner of the pending drain (Root-1 SSOT):
-              // the rejected send was persisted server-side (sent=0) and will be
-              // coalesce-drained at the next clean IDLE. We therefore do NOT
-              // re-send from here — a frontend re-send double-sends against the
-              // server drain AND spawns fresh SESSION_BUSY rows (the root of the
-              // "queue loops / never continues" symptom). Instead we POLL
-              // authoritative state and RECONCILE the DB each tick so the in-flight
-              // turn AND the drained turn surface progressively (Root-1 deferred
-              // live token re-attach — design Scenario 7/F8). getSessionMessages
-              // excludes sent=0 pending rows, so nothing flickers before the drain
-              // flips them sent=1. Finish only when the backend is genuinely idle
-              // with nothing pending. The always-on 15s reconcile tick is the
-              // backstop if this fast poll is cleared early.
-              busyTab.busyPollInterval = setInterval(async () => {
-                // Guard: tab may have been closed during polling
-                const currentTab = tabMapRef.current.get(capturedTabId);
-                if (!currentTab || !currentTab.isWaitingForBusy) {
-                  clearBusyPoll(busyTab);
-                  return;
-                }
-                try {
-                  const states = await chatService.getStreamingState();
-                  const auth = states[pollSessionId];
-                  // "Busy" = an in-flight turn (streaming/waiting) OR a coalesced
-                  // drain still queued/running (pendingCount > 0). Missing entry =
-                  // session GC'd/evicted = nothing running = not busy.
-                  const backendBusy =
-                    auth?.streaming === true ||
-                    auth?.state === 'streaming' ||
-                    auth?.state === 'waiting_input' ||
-                    (auth?.pendingCount ?? 0) > 0;
-
-                  // Surface current DB truth every tick (cheap; dedups by id;
-                  // phase-gated NO-OP if a live stream restarted).
-                  chatService.invalidateMessageCache(pollSessionId);
-                  const msgs = await chatService.getSessionMessagesReconcileTail(pollSessionId, RECONCILE_TAIL);
-                  const busyStore = messageStoreRegistry.getOrCreate(capturedTabId, { sessionId: pollSessionId });
-                  busyStore.reconcile(msgs);
-                  if (busyStore.phase === 'idle') {
-                    currentTab.messages = busyStore.messages;
-                    if (capturedTabId === activeTabIdRef.current) setMessages(busyStore.getSnapshot());
-                  }
-
-                  if (!backendBusy) {
-                    // In-flight turn + coalesced drain are all done. Retire the
-                    // optimistic queued bubble (the DB reconcile above already
-                    // brought the canonical drained rows, so the synthetic would
-                    // duplicate them) — then finish. NO re-send (single owner).
-                    if (currentTab.queuedMessage) {
-                      const qid = currentTab.queuedMessage.messageId;
-                      busyStore.remove((m) => m.id === qid);
-                      currentTab.queuedMessage = undefined;
-                      currentTab._queuedAt = undefined;
-                      if (busyStore.phase === 'idle') {
-                        currentTab.messages = busyStore.messages;
-                        if (capturedTabId === activeTabIdRef.current) setMessages(busyStore.getSnapshot());
-                      }
-                    }
-                    clearBusyPoll(currentTab);
-                    if (capturedTabId === activeTabIdRef.current) setIsWaitingForBusy(false);
-                    updateTabStatus(
-                      capturedTabId,
-                      capturedTabId === activeTabIdRef.current ? 'idle' : 'complete_unread',
-                    );
-                  }
-                } catch {
-                  // Silently ignore poll errors — don't turn recovery into error
-                }
-              }, 3000);
-
-              // Safety cap: stop the fast poll after 10 min. The always-on 15s
-              // reconcile tick remains the backstop that surfaces any later drain.
-              // NO re-send on timeout (single owner — the backend drains).
-              busyTab.busyPollTimeout = setTimeout(() => {
-                const currentTab = tabMapRef.current.get(capturedTabId);
-                if (currentTab) clearBusyPoll(currentTab);
-                if (capturedTabId === activeTabIdRef.current) setIsWaitingForBusy(false);
-                updateTabStatus(capturedTabId, 'idle');
-              }, 600_000);
+              // No poll: the server owns the pending message. The session
+              // subscription renders the running turn and then the drained one
+              // live (the drained turn retires the queued mirror and clears the
+              // waiting state at its end); while the subscription is down, the
+              // always-on reconcile's drain surface shows it and clears the waiting
+              // state once nothing is pending.
             } else {
-              // No session ID — can't poll, clear immediately
+              // No session ID — nothing is pending on the server: clear now
               if (capturedTabId) {
                 const tabState = tabMapRef.current.get(capturedTabId);
                 if (tabState) {
@@ -3917,11 +3904,14 @@ export function useChatStreamingLifecycle(
         // Telemetry events (agent_activity, tool_invocation, etc.) are no
         // longer processed — TSCC fetches metadata from the endpoint instead.
       };
+      // A POST send's handler goes through the turn router; a subscription
+      // turn's handler is called by the router directly.
+      return source === 'post' ? wrapPostHandler(capturedTabId, inner, assistantMessageId) : inner;
     },
     [queryClient, setIsStreaming, incrementStreamGen, updateTabStatus, applyContextUsage], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
   );
 
-  const createErrorHandler = useCallback(
+  const createErrorHandlerInner = useCallback(
     (assistantMessageId: string, tabId?: string) => {
       const capturedTabId = tabId ?? activeTabIdRef.current;
       // Capture stream generation — stale errors from a previous stream
@@ -4129,9 +4119,9 @@ export function useChatStreamingLifecycle(
             tab2._postDisconnectAt = Date.now();
             // NOTE (2026-06-21, zombie-poison fix): do NOT POST /stop here.
             // /stop → interrupt_session → kill-on-timeout POISONS the subprocess
-            // → next send zombie_via_error → manual-Continue loop. The backend's
-            // _recover_streaming_on_disconnect already transitions STREAMING→IDLE
-            // and leaves the subprocess alive; the 15s reconcile loop drains any
+            // → next send zombie_via_error → manual-Continue loop. A client
+            // disconnect no longer touches the backend turn at all (it runs to
+            // its own end, core/session_events); the reconcile loop drains any
             // queued message.
             // In-tab error on the tab whose stream was lost (this timer can fire
             // while another tab is active — it must never land there).
@@ -4188,12 +4178,10 @@ export function useChatStreamingLifecycle(
         // error_during_execution → zombie_via_error → kill+--resume → the
         // "response stops half-way, must click Continue" loop.
         //
-        // The backend already handles SSE disconnect gracefully via
-        // _recover_streaming_on_disconnect: it transitions STREAMING → IDLE
-        // (so the next send() takes the normal IDLE path, NOT force_unstick)
-        // and soft-interrupts the subprocess, LEAVING IT ALIVE on timeout so
-        // a long tool-loop finishes and its output persists to DB for
-        // reconciliation recovery. The frontend stop was both redundant and
+        // A client disconnect does not stop the backend turn: the turn belongs
+        // to its session and runs to its own end (core/session_events), its
+        // output persisted to DB and published to the session subscription.
+        // The frontend stop was both redundant and
         // the actual source of the poison. Trust the backend recovery.
 
         // If this was a successful reconnection that then failed mid-stream,
@@ -4315,6 +4303,28 @@ export function useChatStreamingLifecycle(
     [setIsStreaming, incrementStreamGen, updateTabStatus], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
   );
 
+  // A transport error of a POST whose turn the session subscription carries is
+  // a detach, not an error: the turn is still running and being rendered.
+  const createErrorHandler = useCallback(
+    (assistantMessageId: string, tabId?: string) => {
+      const innerError = createErrorHandlerInner(assistantMessageId, tabId);
+      const capturedTabId = tabId ?? activeTabIdRef.current;
+      return (error: Error) => {
+        const tab = capturedTabId ? tabMapRef.current.get(capturedTabId) : undefined;
+        if (capturedTabId && tab) {
+          const lost = onPostLost(turnStateOf(tab), sessionEvents.isConnected());
+          turnRunRef.current(capturedTabId, lost.actions);
+          if (lost.verdict === 'detach') {
+            console.info('[TurnRouter] POST stream error — the session subscription carries the turn', { capturedTabId, error: error?.message });
+            return;
+          }
+        }
+        innerError(error);
+      };
+    },
+    [createErrorHandlerInner], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
+  );
+
   /**
    * Create a complete handler that is generation-guarded and tab-aware.
    *
@@ -4324,7 +4334,7 @@ export function useChatStreamingLifecycle(
    * or an event-driven pause already handled the transition), the handler
    * is a no-op.
    */
-  const createCompleteHandler = useCallback((tabId?: string) => {
+  const createCompleteHandler = useCallback((tabId?: string, source: 'post' | 'sub' = 'post') => {
     const capturedGen = streamGenRef.current;
     const capturedTabId = tabId ?? activeTabIdRef.current;
 
@@ -4341,7 +4351,7 @@ export function useChatStreamingLifecycle(
       if (liveTab) liveTab.latestCompleteGen = capturedGen;
     }
 
-    return () => {
+    const inner = () => {
       // --- Pre-guard drain: rescue orphaned queued messages ---
       // When an SSE-level error event fires without a subsequent
       // `reconnecting` (backend decided not to retry), the error
@@ -4480,6 +4490,17 @@ export function useChatStreamingLifecycle(
         }
       }
     };
+    if (source === 'sub' || !capturedTabId) return inner;
+    const ownTab = tabMapRef.current.get(capturedTabId);
+    if (!ownTab) return inner;
+    turnHandlersOf(ownTab).postComplete = inner;
+    // The POST's [DONE]: the router decides whether it completes the turn now
+    // (POST rendered it, or a pre-turn reply) or the subscription's turn_end does.
+    return () => {
+      const live = tabMapRef.current.get(capturedTabId);
+      if (!live) { inner(); return; }
+      turnRunRef.current(capturedTabId, onPostComplete(turnStateOf(live), sessionEvents.isConnected()), undefined, inner);
+    };
   }, [setIsStreaming, updateTabStatus]); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
 
   /**
@@ -4497,6 +4518,19 @@ export function useChatStreamingLifecycle(
     const DISCONNECT_TIMEOUT_MS = 30_000; // 30s before giving up
 
     return () => {
+      // A POST lost while the session subscription is connected is not a
+      // disconnect: the turn keeps running and the subscription renders it.
+      if (capturedTabId) {
+        const routedTab = tabMapRef.current.get(capturedTabId);
+        if (routedTab) {
+          const lost = onPostLost(turnStateOf(routedTab), sessionEvents.isConnected());
+          turnRunRef.current(capturedTabId, lost.actions);
+          if (lost.verdict === 'detach') {
+            console.info('[TurnRouter] POST stream closed early — the session subscription carries the turn', { capturedTabId });
+            return;
+          }
+        }
+      }
       // Generation guard: discard stale disconnect from a previous stream.
       if (capturedTabId) {
         const currentTabState = tabMapRef.current.get(capturedTabId);
@@ -4640,6 +4674,140 @@ export function useChatStreamingLifecycle(
     };
   }, [setIsStreaming]); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
 
+  /** Begin rendering a turn this tab did not send (drained / CLI-initiated /
+   *  channel turn, or a running turn the tab joined after a reload). The bubble
+   *  id is the persisted assistant rows' client_id when it is a `local-` id,
+   *  else a `local-sub-` id carrying that client_id, so the turn-end DB reconcile
+   *  correlates it. A bubble already shown for this turn is replaced: the
+   *  subscription replays the turn from its turn_start. */
+  const beginSubscriptionTurn = (tabId: string, ev: TurnEnvelope) => {
+    const tab = tabMapRef.current.get(tabId);
+    if (!tab) return;
+    const cid = ev.turnClientId;
+    // A continuation shares its client_id with the turn that asked the question:
+    // it gets a bubble of its own, and that turn's bubble and rows stay.
+    const source = (ev as { source?: TurnSource }).source;
+    const continuation = source === 'answer' || source === 'permission';
+    const id = !continuation && cid && cid.startsWith('local-') ? cid : `local-sub-${ev.turnId}`;
+    const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: tab.sessionId });
+    if (store.phase === 'streaming') store.endStreaming();
+    // The replay rebuilds this turn from its start: drop what was shown of it —
+    // its placeholder, the POST bubble when it is this tab's own send, and (for a
+    // turn that is not a continuation) its persisted rows.
+    const route = turnStateOf(tab);
+    const postBubble = route.postTurnId === ev.turnId ? turnHandlersOf(tab).postBubbleId : undefined;
+    store.remove((m) => m.role === 'assistant' && (
+      m.id === id || (!!postBubble && m.id === postBubble)
+      || (!continuation && !!cid && m.metadata?.client_id === cid)));
+    store.appendMany([{
+      id, role: 'assistant', content: [], timestamp: new Date().toISOString(),
+      ...(cid ? { metadata: { client_id: cid } } : {}),
+    } as Message]);
+    const handlers = turnHandlersOf(tab);
+    // A drained turn delivers the message the tab shows as queued: the backend
+    // owns that drain, so the queue mirror must never re-send it.
+    handlers.drainSyntheticId = undefined;
+    if ((ev as { source?: TurnSource }).source === 'drain' && tab.queuedMessage) {
+      handlers.drainSyntheticId = tab.queuedMessage.messageId;
+      tab.queuedMessage = undefined;
+      tab._queuedAt = undefined;
+    }
+    if (tab._disconnectTimeoutId) { clearTimeout(tab._disconnectTimeoutId); tab._disconnectTimeoutId = undefined; }
+    tab.isReconnecting = false;
+    setIsStreaming(true, tabId);
+    updateTabStatus(tabId, 'streaming');
+    incrementStreamGen();
+    handlers.subRender = createStreamHandler(id, tabId, 'sub');
+    handlers.subComplete = createCompleteHandler(tabId, 'sub');
+    if (tabId === activeTabIdRef.current) setMessages(store.getSnapshot());
+  };
+
+  const resyncTabFromDb = (tabId: string) => {
+    const tab = tabMapRef.current.get(tabId);
+    const sid = tab?.sessionId;
+    if (!tab || !sid) return;
+    chatService.invalidateMessageCache(sid);
+    chatService.getSessionMessagesReconcileTail(sid, RECONCILE_TAIL).then((msgs) => {
+      const s = messageStoreRegistry.getOrCreate(tabId, { sessionId: sid });
+      s.reconcile(msgs);
+      if (s.phase === 'idle') {
+        if (tabId === activeTabIdRef.current) setMessages(() => s.messages);
+        else tab.messages = s.messages;
+      }
+    }).catch(() => { /* best-effort: the reconcile tick retries */ });
+  };
+
+  // `postRender` / `postComplete`: the calling POST's own handlers, so a stale
+  // POST's callbacks act on that POST's turn, never on a newer send's.
+  turnRunRef.current = (
+    tabId: string, actions: TurnAction[], postRender?: (event: StreamEvent) => void,
+    postComplete?: () => void,
+  ) => {
+    for (const a of actions) {
+      const tab = tabMapRef.current.get(tabId);
+      if (!tab) return;
+      const h = turnHandlersOf(tab);
+      if (a.type === 'render') {
+        (a.origin === 'post' ? (postRender ?? h.postRender) : h.subRender)?.(a.event);
+      } else if (a.type === 'begin') {
+        beginSubscriptionTurn(tabId, a.event);
+        turnHandlersOf(tab).subRender?.(a.event);
+      } else if (a.type === 'complete') {
+        if (a.origin === 'sub') {
+          if (h.drainSyntheticId) {
+            const synthetic = h.drainSyntheticId;
+            h.drainSyntheticId = undefined;
+            messageStoreRegistry.get(tabId)?.remove((m) => m.id === synthetic);
+          }
+          if (tab.isWaitingForBusy) {
+            tab.isWaitingForBusy = false;
+            if (tabId === activeTabIdRef.current) setIsWaitingForBusy(false);
+          }
+          const done = h.subComplete;
+          h.subRender = undefined;
+          h.subComplete = undefined;
+          done?.();
+        } else {
+          (postComplete ?? h.postComplete)?.();
+        }
+      } else if (a.type === 'postComplete') {
+        (postComplete ?? h.postComplete)?.();
+      } else if (a.type === 'resync') {
+        resyncTabFromDb(tabId);
+      } else if (a.type === 'reset') {
+        // the turn is replayed from its turn_start next: its bubble is rebuilt by
+        // the begin that follows; nothing completes now (the completion handler
+        // stays, in case the turn ends before its replay arrives)
+        if (a.origin === 'sub') h.subRender = undefined;
+      }
+    }
+  };
+
+  // One session subscription per window: route each event to the tab(s)
+  // showing its session. The client is a module singleton, never stopped here
+  // (a StrictMode re-mount must not drop the window's stream).
+  useEffect(() => {
+    watchOpenTabs(); // restored tabs are in the first connect's URL
+    sessionEvents.start();
+    const offEvents = sessionEvents.subscribe((ev) => {
+      const sid = ev.sessionId;
+      if (!sid) return;
+      // Every tab sees every event; the router's ownership rule decides what is
+      // the tab's own (its session, its bound turn, or a candidate while its
+      // first send has no session yet) — one rule, in sessionTurnRouter.
+      for (const [tabId, tab] of tabMapRef.current.entries()) {
+        turnRunRef.current(tabId, routeSubEvent(turnStateOf(tab), ev as TurnEnvelope));
+      }
+    });
+    const offConn = sessionEvents.onConnectionChange((connected) => {
+      if (connected) return;
+      for (const [tabId, tab] of tabMapRef.current.entries()) {
+        turnRunRef.current(tabId, onSubDisconnected(turnStateOf(tab)));
+      }
+    });
+    return () => { offEvents(); offConn(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
+
   /**
    * Remove a specific tab from ``pendingStreamTabs``. Called by ChatPage
    * when closing a tab to prevent stale entries from lingering in the Set
@@ -4724,10 +4892,6 @@ export function useChatStreamingLifecycle(
     // status label would flicker to 'idle' until the next event. A no-op here
     // keeps cancel strictly a busy-wait concern and can never perturb a live turn.
     if (tab.isStreaming) return;
-    if (tab.busyPollInterval) clearInterval(tab.busyPollInterval);
-    if (tab.busyPollTimeout) clearTimeout(tab.busyPollTimeout);
-    tab.busyPollInterval = undefined;
-    tab.busyPollTimeout = undefined;
     tab.isWaitingForBusy = false;
     if (tabId === activeTabIdRef.current) setIsWaitingForBusy(false);
     updateTabStatus(tabId, 'idle');

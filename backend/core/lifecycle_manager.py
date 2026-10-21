@@ -1138,6 +1138,7 @@ class LifecycleManager:
         - session_registry.surfaced_paths           (Canvas-surfaced abs paths, run_c014a4f3)
         - permission_manager._approved_commands    (command hashes)
         - permission_manager._session_queues       (asyncio.Queue)
+        - session_events hub replay buffer          (up to 4000 envelopes)
         """
         try:
             from . import session_registry
@@ -1152,6 +1153,11 @@ class LifecycleManager:
             permission_manager.remove_session_queue(session_id)
         except Exception as exc:
             logger.debug("_release_session_state permission cleanup failed: %s", exc)
+        try:
+            from . import session_events
+            session_events.hub().drop_session(session_id)
+        except Exception as exc:
+            logger.debug("_release_session_state event-log cleanup failed: %s", exc)
 
     async def _cleanup_dead(self) -> None:
         """Transition DEAD units to COLD. Fire hooks if not yet fired (Gap 3 fix).

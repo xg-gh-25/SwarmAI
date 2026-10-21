@@ -234,13 +234,11 @@ export interface UnifiedTab {
    *  Signals reconcile poll: "backend is IDLE but drain is intentionally
    *  holding streaming state — do NOT force-clear." */
   drainPending?: boolean;
-  /** True when backend returned SESSION_BUSY — polling for response completion.
-   *  Send button is disabled, "Waiting..." indicator shown, polling active. */
+  /** True when backend returned SESSION_BUSY — the message is pending on the
+   *  server. Send button is disabled, "Waiting..." indicator shown. Cleared when
+   *  the drained turn completes (session subscription) or the reconcile's drain
+   *  surface sees nothing pending. */
   isWaitingForBusy?: boolean;
-  /** Per-tab polling interval handle — cleared on tab close or recovery. */
-  busyPollInterval?: ReturnType<typeof setInterval>;
-  /** Per-tab polling timeout handle — cleared on tab close or recovery. */
-  busyPollTimeout?: ReturnType<typeof setTimeout>;
   /** Self-healing grace period active — backend may be refreshing session.
    *  While true, don't show error on SSE disconnect (looks like "thinking").
    *  Cleared by: (a) grace timeout expiry → show error, or
@@ -278,6 +276,21 @@ export interface UnifiedTab {
    *  previous reconcile poll — compared against the current poll to detect a
    *  server drain and retire the local optimistic queue mirror. */
   _lastDrainedSeqs?: number[];
+  /** Session turn routing (hooks/sessionTurnRouter): which source renders this
+   *  tab's turn events, the highest eventSeq rendered, held events. Runtime-only. */
+  _turnRoute?: import('./sessionTurnRouter').TabTurnState;
+  /** The render / completion handlers of the tab's current POST turn and
+   *  subscription turn, used by the turn router. Runtime-only. */
+  _turnHandlers?: {
+    postRender?: (event: import('../types').StreamEvent) => void;
+    postComplete?: () => void;
+    subRender?: (event: import('../types').StreamEvent) => void;
+    subComplete?: () => void;
+    /** id of the synthetic queued bubble a drained subscription turn delivers */
+    drainSyntheticId?: string;
+    /** the bubble the tab's latest POST send streams into */
+    postBubbleId?: string;
+  };
   /** Resume timeout handle — auto-clears isResuming after 60s if no data arrives.
    *  Prevents permanent "Resuming session..." spinner when --resume hangs. */
   _resumeTimeoutId?: ReturnType<typeof setTimeout>;
@@ -591,10 +604,6 @@ export function useUnifiedTabState(
           // already aborted — safe to ignore
         }
       }
-
-      // Clear SESSION_BUSY polling if active (prevents orphaned intervals)
-      if (tab.busyPollInterval) clearInterval(tab.busyPollInterval);
-      if (tab.busyPollTimeout) clearTimeout(tab.busyPollTimeout);
 
       // closeTab stays pure (no backend call). R6b: the backend slot release is
       // fired from ChatPage.handleTabClose (which has access to streaming state

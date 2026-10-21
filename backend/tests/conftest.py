@@ -631,9 +631,15 @@ def _reroot_frozen_app_data_constants(sandbox, monkeypatch, *, basetemp=None) ->
 
     sandbox = Path(sandbox)
     real = Path.home() / ".swarm-ai"
+    # The source tree itself is never app data, even when it lives under ~/.swarm-ai
+    # (a pipeline worktree is ~/.swarm-ai/worktrees/<run>/…): re-rooting it would hide
+    # files the code ships with (e.g. channels/install_backend_daemon.TEMPLATE).
+    source_root = Path(__file__).resolve().parents[2]
 
     def _stale_suffix(val):
         """Path parts BELOW whichever stale root *val* sits under, or None."""
+        if val.is_relative_to(source_root):
+            return None
         try:
             return val.relative_to(real).parts
         except ValueError:

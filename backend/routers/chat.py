@@ -34,6 +34,7 @@ from core.permission_manager import permission_manager as _pm
 from core.chat_thread_manager import chat_thread_manager
 from core.session_manager import session_manager
 from core import surface_injection
+from core import session_events
 
 # ── Multi-session architecture ────────────────────────────────────
 import logging as _logging
@@ -44,95 +45,6 @@ _chat_logger = _logging.getLogger(__name__)
 # Lazy-initialized singletons — resolved on first chat request
 _session_router = None
 _lifecycle_manager = None
-
-
-def _recover_streaming_on_disconnect(session_id: Optional[str]) -> None:
-    """Transition a STREAMING session to IDLE after SSE client disconnect
-    and schedule subprocess pipe cleanup.
-
-    When the SSE connection drops (network blip, browser stall timeout,
-    tab close), the consumer_task in sse_with_heartbeat is cancelled,
-    propagating CancelledError into message_generator. Without this
-    cleanup, the session stays in STREAMING — the next send() triggers
-    force_unstick_streaming → kill → respawn --resume, replaying the
-    previous turn's completed output as if it were new content.
-
-    Two-phase cleanup:
-
-    1. **Immediate** — transition STREAMING → IDLE so the next ``send()``
-       follows the normal IDLE → STREAMING path instead of the
-       force_unstick → kill → --resume replay path.
-    2. **Background** — schedule ``_cleanup_subprocess_after_disconnect``
-       to interrupt the CLI subprocess.  The subprocess may still be
-       running a tool from the interrupted turn; its stdout pipe may
-       contain stale events that would contaminate the next ``send()``'s
-       ``receive_response()`` iterator.  Interrupting flushes the pipe;
-       if the interrupt times out the subprocess is killed so the next
-       ``send()`` spawns fresh from COLD.
-
-    This is a best-effort, fire-and-forget cleanup. Errors are logged
-    but never propagated.
-    """
-    if not session_id or _session_router is None:
-        return
-    try:
-        unit = _session_router.get_unit(session_id)
-        if unit and unit.recover_from_disconnect():
-            _chat_logger.info(
-                "SSE disconnect recovery: session %s transitioned "
-                "STREAMING → IDLE",
-                session_id,
-            )
-            # Phase 2: schedule subprocess pipe cleanup via unit method.
-            # Unit tracks the task so send() can cancel it on quick resume.
-            try:
-                loop = asyncio.get_running_loop()
-                unit.schedule_pipe_flush(
-                    loop,
-                    cleanup_coro=_cleanup_subprocess_after_disconnect(unit, session_id),
-                )
-            except RuntimeError:
-                pass  # No running event loop — skip async cleanup
-            # Only a user Stop stops a turn: any other disconnect resumes it
-            # (core/auto_continue; a /chat/stop arriving after the abort cancels).
-            from core import auto_continue
-            if auto_continue.schedule(_session_router, unit):
-                _chat_logger.info("SSE disconnect: auto-continue scheduled for %s", session_id)
-    except Exception as e:
-        _chat_logger.warning(
-            "SSE disconnect recovery failed for session %s: %s",
-            session_id, e,
-        )
-
-
-async def _cleanup_subprocess_after_disconnect(
-    unit: "SessionUnit",  # noqa: F821 — forward ref, resolved at runtime
-    session_id: str,
-) -> None:
-    """Background task: attempt soft interrupt of subprocess after SSE disconnect.
-
-    The state machine has already been transitioned to IDLE by
-    ``recover_from_disconnect()``.  This delegates to the unit's
-    ``flush_subprocess_pipe()`` which attempts a soft interrupt.
-
-    On timeout the subprocess is LEFT ALIVE (not killed) — it's likely
-    executing a tool call whose output will be persisted to DB by
-    session_router._persist_assistant_blocks. The frontend reconciliation
-    polling (every 15s) will recover the content from DB.
-
-    Timeout is generous (30s) to allow most tool calls to complete.
-    If the tool call takes longer, the subprocess stays alive — the
-    lifecycle_manager's 12hr TTL handles actual zombies.
-    """
-    try:
-        await unit.flush_subprocess_pipe(timeout=30.0)
-    except asyncio.CancelledError:
-        pass  # App shutting down — don't log noise
-    except Exception as e:
-        _chat_logger.warning(
-            "SSE disconnect cleanup failed for session %s: %s",
-            session_id, e,
-        )
 
 
 def _get_router():
@@ -168,6 +80,9 @@ chat_threads_router = APIRouter()
 
 # SSE heartbeat interval in seconds (keeps connection alive during long operations)
 SSE_HEARTBEAT_INTERVAL = 15
+
+#: consumer tasks of turns whose client went away (strong refs until they end)
+_DETACHED_TURNS: set = set()
 
 # ---------------------------------------------------------------------------
 # Content validation constants and helpers
@@ -266,6 +181,16 @@ async def sse_with_heartbeat(
     Sends heartbeat messages at regular intervals when no data is being sent,
     keeping the SSE connection alive during long operations.
 
+    The generator is a TURN and belongs to its session, not to this response:
+    when the client goes away (disconnect, the session's stop event, an
+    unexpected stream error) the consumer task is DETACHED, never cancelled. It
+    keeps driving the turn to its own end (a result, an error, or an interrupt
+    from /chat/stop) and stops queueing what nobody will read; it is held in
+    ``_DETACHED_TURNS`` until it finishes. Subscribed tabs keep receiving the
+    turn from the session event hub (core/session_events). Before this, the
+    disconnect cancelled the consumer and interrupted the CLI, and a synthetic
+    "continue" turn re-drove it.
+
     During extended thinking (thinking_start received, no text_start/text_delta
     yet), emits ``thinking_progress`` events instead of plain heartbeats so the
     frontend can show elapsed time and suppress "session stalled" warnings.
@@ -279,6 +204,7 @@ async def sse_with_heartbeat(
     """
     message_queue: asyncio.Queue = asyncio.Queue()
     generator_done = False
+    detached = False
 
     # ── Thinking phase tracking ────────────────────────────────────────
     # When the SDK is in extended thinking, heartbeat slots emit
@@ -292,12 +218,17 @@ async def sse_with_heartbeat(
         nonlocal generator_done
         try:
             async for msg in message_generator:
-                await message_queue.put(("message", msg))
+                if not detached:
+                    await message_queue.put(("message", msg))
         except Exception as e:
-            await message_queue.put(("error", e))
+            if not detached:
+                await message_queue.put(("error", e))
+            else:
+                logger.warning("Detached turn ended with an error: %s", e)
         finally:
             # Signal completion by putting a sentinel value
-            await message_queue.put(("done", None))
+            if not detached:
+                await message_queue.put(("done", None))
             generator_done = True
 
     # Start consuming messages in the background
@@ -388,13 +319,14 @@ async def sse_with_heartbeat(
                     pass  # Last resort — can't even send error, just close
                 break
     finally:
-        # Ensure the consumer task is properly cleaned up
+        # The client is gone (or the stream ended): a running turn is detached,
+        # not cancelled — see the docstring.
         if not consumer_task.done():
-            consumer_task.cancel()
-            try:
-                await consumer_task
-            except asyncio.CancelledError:
-                pass
+            detached = True
+            while not message_queue.empty():
+                message_queue.get_nowait()
+            _DETACHED_TURNS.add(consumer_task)
+            consumer_task.add_done_callback(_DETACHED_TURNS.discard)
 
 
 @router.post("/transcribe")
@@ -473,15 +405,10 @@ async def chat_stream(request: Request):
         """Generate messages from the agent conversation."""
         # For a NEW session the request carries session_id=None; the real id is
         # assigned server-side and first arrives on the `session_start` event
-        # (streaming_orchestrator.py:594, camelCase `sessionId`). Capture it so a
-        # mid-stream client drop recovers the SERVER-created session — passing
-        # chat_request.session_id (None) here made recovery a no-op and left the
-        # new session stuck STREAMING (run_1c0a1da5).
-        # KNOWN RESIDUAL: a drop BEFORE session_start is yielded still leaves
-        # captured=None (the unit exists from get_or_create_unit but hasn't
-        # emitted its id yet). Follow-up: router-owned recovery keyed off the
-        # uuid it generates, so no caller ever passes None.
+        # (camelCase `sessionId`). Captured for the Layer-2 injection queue below
+        # and to publish its events to the session hub.
         captured_session_id = chat_request.session_id
+        last_turn: dict = {}
         # Layer-2 Canvas live-surfacing (surface_injection): register an injection
         # queue for this turn so the daemon fs-watcher can push author-agnostic
         # writes (sub-agent/CLI/hook — SDK-sidechain-filtered from Layer-1) onto
@@ -515,11 +442,19 @@ async def chat_stream(request: Request):
                         surface_injection.register(captured_session_id)
                         _injection_registered = captured_session_id
                 logger.debug(f"Yielding message: {msg.get('type')}")
+                if msg.get("turnId"):
+                    last_turn = msg
                 yield msg
                 # Interleave any watcher-surfaced file_changed events into the
-                # live stream (non-blocking; [] when none pending).
+                # live stream (non-blocking; [] when none pending). While the
+                # turn is running they are published to the session hub too,
+                # so a subscribed tab gets them even with this POST gone.
                 if _injection_registered is not None:
                     for _inj in surface_injection.drain_nowait(_injection_registered):
+                        if last_turn and last_turn.get("type") != "turn_end" and captured_session_id:
+                            _inj = session_events.hub().publish(
+                                captured_session_id, _inj, turn_id=last_turn["turnId"],
+                                turn_client_id=last_turn.get("turnClientId"))
                         yield _inj
             # Final drain (fix3, run_bfbbe0fd): the async-for has ended (all SDK
             # messages consumed). This catches an event that PASSED the in-flight
@@ -536,13 +471,6 @@ async def chat_stream(request: Request):
             if _injection_registered is not None:
                 for _inj in surface_injection.drain_nowait(_injection_registered):
                     yield _inj
-        except asyncio.CancelledError:
-            logger.info("Chat stream cancelled (client disconnected)")
-            # Transition session STREAMING → IDLE so the next send()
-            # doesn't force-unstick and replay the previous turn via --resume.
-            # Use the captured server-assigned id (not the request's None).
-            _recover_streaming_on_disconnect(captured_session_id)
-            return
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
             yield {
@@ -679,10 +607,6 @@ async def answer_question(request: Request):
             ):
                 logger.debug(f"Yielding message: {msg.get('type')}")
                 yield msg
-        except asyncio.CancelledError:
-            logger.info("Answer-question stream cancelled (client disconnected)")
-            _recover_streaming_on_disconnect(answer_request.session_id)
-            return
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
             yield {
@@ -709,6 +633,67 @@ async def answer_question(request: Request):
 
     return StreamingResponse(
         sse_with_heartbeat(message_generator(), request=request, stop_event=_stop_evt),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+EVENTS_HEARTBEAT_INTERVAL = 15
+
+
+@router.get("/events")
+async def session_events_stream(
+    request: Request,
+    cursors: Optional[str] = Query(None, max_length=65536),
+    epoch: Optional[str] = Query(None, max_length=64),
+):
+    """Subscribe to every session's turn events (one stream per desktop window).
+
+    ``cursors`` is a JSON map ``{sessionId: lastEventSeq}`` (``-1`` = join the
+    session's active turn); ``epoch`` is the ``events_hello.epoch`` the cursors
+    came from. See core/session_events for replay / resync semantics. Unlike a
+    turn's POST stream, a client disconnect ENDS this subscription: nothing is
+    owned by it.
+    """
+    parsed = session_events.parse_cursors(cursors)
+    sub = session_events.hub().subscribe(parsed, epoch)
+
+    async def stream() -> AsyncIterator[str]:
+        nxt: Optional[asyncio.Task] = None
+        try:
+            while True:
+                if nxt is None:
+                    nxt = asyncio.ensure_future(sub.__anext__())
+                done, _ = await asyncio.wait({nxt}, timeout=EVENTS_HEARTBEAT_INTERVAL)
+                if nxt in done:
+                    try:
+                        env = nxt.result()
+                    except StopAsyncIteration:
+                        return
+                    nxt = None
+                    yield f"data: {json.dumps(env)}\n\n"
+                    continue
+                try:
+                    if await request.is_disconnected():
+                        return
+                except Exception as exc:  # noqa: BLE001 — is_disconnected can fail; keep serving
+                    logger.debug("session_events.is_disconnected_failed: %s", exc)
+                yield create_sse_heartbeat()
+        finally:
+            if nxt is not None and not nxt.done():
+                nxt.cancel()
+                try:
+                    await nxt
+                except (asyncio.CancelledError, StopAsyncIteration):
+                    pass
+            await sub.aclose()
+
+    return StreamingResponse(
+        stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -849,16 +834,11 @@ async def get_streaming_state_endpoint():
     stale isStreaming state when SSE events are lost. Returns all non-prewarm
     sessions — frontend iterates its own tab map and indexes by session ID.
 
-    **State desync (Root-1 SSOT Phase 2, Option B):** After an SSE disconnect the
-    unit transitions to a CLEAN IDLE immediately (so the next send() works) — there
-    is NO generating-limbo flag, so `streaming` is simply `state == STREAMING` and a
-    disconnected-but-still-flushing turn reports `streaming=false, state='idle'`.
-    The subprocess is left alive (1A) to finish a long turn; its output persists to
-    DB and loads on the next reconcile. To let the frontend distinguish
-    "alive-but-flushing" from "genuinely done" (else it surfaces a false
-    'Connection lost' error at heal-grace expiry — OT01), we ALSO emit
-    `post_disconnect_flushing` (true iff `is_post_disconnect_flushing`, derived from
-    the live `_pipe_flush_task`). The reconcile loop keeps waiting while it is true.
+    `streaming` is simply `state == STREAMING`. A client disconnect no longer
+    touches the turn: it keeps running (and reports streaming) to its own end, and
+    the session subscription (GET /events) carries it to the tabs.
+    `post_disconnect_flushing` is still emitted for the frontend's reader but is
+    always false now (the SessionUnit disconnect cluster (recover_from_disconnect / schedule_pipe_flush / flush_subprocess_pipe / is_post_disconnect_flushing) is dead since a client disconnect stopped interrupting turns (core/session_events); removal is a follow-up).
 
     Must be registered BEFORE /sessions/{session_id} to avoid path parameter
     capturing 'streaming-state' as a session ID.
@@ -870,11 +850,8 @@ async def get_streaming_state_endpoint():
     for unit in sr.list_units():
         if not unit.session_id or unit.session_id.startswith(PREWARM_SESSION_PREFIX):
             continue
-        # Root-1 SSOT Phase 2 (L6, Option B): streaming is now simply
-        # state==STREAMING. A disconnect yields a CLEAN IDLE (no generating-limbo
-        # flag), so there is no special case. If the subprocess is still finishing
-        # a long turn post-disconnect (is_post_disconnect_flushing), the mirror
-        # shows IDLE and the completed content loads from DB on the next reconcile.
+        # streaming is simply state==STREAMING; a client disconnect does not
+        # change the unit's state (the turn runs to its own end).
         is_streaming = unit.state.value == "streaming"
         # Root-1 SSOT Phase 2 (L5): the frontend mirror reads these directly
         # instead of inferring. waiting_input surfaces a (possibly SSE-lost)
@@ -1182,10 +1159,6 @@ async def stop_session(session_id: str):
     The agent will stop processing and the stream will end gracefully.
     """
     logger.info(f"Received stop request for session {session_id}")
-    _stop_unit = _get_router().get_unit(session_id)
-    if _stop_unit is not None:
-        from core import auto_continue
-        auto_continue.mark_user_stop(_stop_unit)
     result = await _get_router().interrupt_session(session_id)
 
     if result["success"]:
@@ -1487,10 +1460,6 @@ async def cmd_permission_continue(request: Request):
             ):
                 logger.debug(f"Yielding message: {msg.get('type')}")
                 yield msg
-        except asyncio.CancelledError:
-            logger.info("Permission-continue stream cancelled (client disconnected)")
-            _recover_streaming_on_disconnect(permission_request.session_id)
-            return
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
             yield {

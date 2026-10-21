@@ -18,7 +18,9 @@ from typing import Optional
 
 #: restarted  — the AI process was restarted mid-turn; the call it ran was lost.
 #: superseded — a newer message resumed the conversation; this turn stopped.
-#: gave_up    — auto-continue (core/auto_continue) used its attempts; the turn stopped.
+#: gave_up    — historical: written by the removed disconnect auto-continue when it ran
+#:              out of attempts. No longer produced (a disconnect no longer stops a
+#:              turn); kept so rows already in the DB still render.
 REASONS = ("restarted", "superseded", "gave_up")
 
 
