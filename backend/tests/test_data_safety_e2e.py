@@ -58,7 +58,7 @@ def test_boot_corruption_surfaces_in_attention_end_to_end(tmp_path, _seed, monke
     monkeypatch.setattr("main._get_seed_database_path", lambda: _seed)
     monkeypatch.setattr(settings, "sqlite_db_path", str(user_db))
     monkeypatch.setattr(aa, "get_app_data_dir", lambda: app_data)
-    database._db_instance = None
+    monkeypatch.setattr(database, "_db_instance", None)  # restored after the test
 
     # --- BOOT side (REAL): a genuinely corrupt db drives the recovery path ---
     _write_garbage_db(user_db)

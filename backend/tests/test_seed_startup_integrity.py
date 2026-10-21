@@ -78,7 +78,7 @@ def _point_singleton_at(monkeypatch, temp_app_data_dir, seed_db_path):
     monkeypatch.setattr("main._get_seed_database_path", lambda: seed_db_path)
     monkeypatch.setattr(settings, "sqlite_db_path", str(user_db))
     # Fresh singleton so initialize() actually runs against our temp db.
-    database._db_instance = None
+    monkeypatch.setattr(database, "_db_instance", None)  # restored after the test
     return user_db
 
 
@@ -318,7 +318,7 @@ def test_reseed_retry_is_bounded_not_infinite(temp_app_data_dir, monkeypatch):
     monkeypatch.setattr("main.get_app_data_dir", lambda: temp_app_data_dir)
     monkeypatch.setattr("main._get_seed_database_path", lambda: None)  # no seed
     monkeypatch.setattr(settings, "sqlite_db_path", str(user_db))
-    database._db_instance = None
+    monkeypatch.setattr(database, "_db_instance", None)  # restored after the test
 
     _write_garbage_db(user_db)
 
@@ -347,7 +347,7 @@ def test_reseed_succeeds_but_fresh_db_also_bad_propagates(
     user_db = temp_app_data_dir / "data.db"
     monkeypatch.setattr("main.get_app_data_dir", lambda: temp_app_data_dir)
     monkeypatch.setattr(settings, "sqlite_db_path", str(user_db))
-    database._db_instance = None
+    monkeypatch.setattr(database, "_db_instance", None)  # restored after the test
 
     _write_garbage_db(user_db)
 
