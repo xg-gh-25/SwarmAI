@@ -27,7 +27,9 @@ run-commit  --project <P> --run-id <R> [--sha <sha>[,<sha>]]   # commits even wh
             # --sha: record commits already made for this run instead of staging files_touched
             # (each reachable from HEAD, newer than the run, 'Run: <R>' in its message,
             # touching a files_touched path). A commit made by hand must name the run id.
-run-get     --project <P> [--run-id <R>]
+run-get     --project <P> [--run-id <R>] [--brief | --field <dot.path> ...]
+            # --brief: status, stage plan + current stage, files, latest test counts + failing ids
+            # --field: just those paths (stages.3.status); read run.json with these, not python -c
 run-budget  --project <P> --run-id <R>            # informational consumed/pct (NOT a checkpoint gate)
 run-checkpoint --project <P> --run-id <R> --stage <stg> --reason "<why>"
 run-resume  --project <P> --run-id <R>

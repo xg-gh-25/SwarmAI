@@ -6507,11 +6507,27 @@ def cmd_release_gate(args, reg: "ArtifactRegistry") -> None:
 
 
 def cmd_run_get(args, reg: ArtifactRegistry) -> None:
-    """Get a pipeline run's current state."""
+    """Get a pipeline run's current state.
+
+    ``--brief`` prints the compact view (``_run_brief``), ``--field PATH`` (repeatable,
+    dot path, list index as a number) prints only those values; both single-line JSON.
+    They replace the inline ``python3 -c "json.load(open('…/run.json'))…"`` calls
+    agents used to write (1,075 such reads of run.json in one week of transcripts).
+    """
+    brief = getattr(args, "brief", False)
+    fields = getattr(args, "field", None) or []
+    if (brief or fields) and not args.run_id:
+        print(json.dumps({"error": "--brief / --field need --run-id"}), file=sys.stderr)
+        sys.exit(1)
     if args.run_id:
         run_file = _resolve_run_file(args.project, args.run_id)
         run_state = json.loads(run_file.read_text(encoding="utf-8"))
-        print(json.dumps(run_state, indent=2))
+        if fields:
+            print(json.dumps({p: _run_field(run_state, p) for p in fields}, ensure_ascii=False))
+        elif brief:
+            print(json.dumps(_run_brief(run_state, run_file.parent), ensure_ascii=False))
+        else:
+            print(json.dumps(run_state, indent=2))
         return
 
     # List all pipeline runs for this project (scan both new and legacy paths)
@@ -6544,6 +6560,82 @@ def _run_summary(state: dict) -> dict:
             1 for s in state.get("stages", []) if s.get("status") == "completed"
         ),
         "created_at": state["created_at"],
+    }
+
+
+def _run_field(state, path: str):
+    """``a.b.0.c`` out of run.json; a path that does not exist reads as ``None``
+    with ``{"missing": path}`` so it is never confused with a stored null."""
+    cur = state
+    for part in path.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        elif isinstance(cur, list) and part.lstrip("-").isdigit() and -len(cur) <= int(part) < len(cur):
+            cur = cur[int(part)]
+        else:
+            return {"missing": path}
+    return cur
+
+
+_BRIEF_SUMMARY = 160
+_BRIEF_FAILURES = 10
+
+
+def _latest_tests(run_dir: Path) -> list:
+    """One line per test mode from ``evidence/tests/latest-<mode>.json``: when it
+    finished, its counts and the failing node ids (first ``_BRIEF_FAILURES``)."""
+    out = []
+    tests = run_dir / "evidence" / "tests"
+    if not tests.is_dir():
+        return out
+    for f in sorted(tests.glob("latest-*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(d, dict):
+            continue
+        failures = [x.get("nodeid") for x in d.get("failures") or [] if isinstance(x, dict)]
+        out.append({
+            "mode": d.get("mode") or f.stem[len("latest-"):],
+            "finished_at": d.get("finished_at"),
+            "counts": d.get("counts"),
+            "failures": failures[:_BRIEF_FAILURES],
+            "more_failures": max(0, len(failures) - _BRIEF_FAILURES),
+            "evidence": f"evidence/tests/{f.name}",
+        })
+    return out
+
+
+def _run_brief(state: dict, run_dir: Path) -> dict:
+    """The fields agents read run.json for, measured from a week of transcripts
+    (status, stages, failures, counts, files_touched, …), without the stage decisions,
+    token bookkeeping and hand-outs that make run.json ~16 KB."""
+    done = {s.get("stage"): s for s in state.get("stages") or [] if isinstance(s, dict)}
+    plan = _get_profile_stages(normalize_profile(state.get("profile")))
+    current = next((st for st in plan if (done.get(st) or {}).get("status") != "completed"), None)
+    stages = []
+    for st in plan + [s for s in done if s not in plan]:
+        s = done.get(st)
+        row = {"stage": st, "status": (s or {}).get("status", "pending")}
+        summary = (s or {}).get("summary")
+        if isinstance(summary, str) and summary:
+            row["summary"] = summary if len(summary) <= _BRIEF_SUMMARY else summary[: _BRIEF_SUMMARY - 1] + "…"
+        stages.append(row)
+    cp = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else None
+    return {
+        "id": state.get("id"),
+        "status": state.get("status"),
+        "profile": state.get("profile"),
+        "current_stage": current,
+        "stages": stages,
+        "files_touched": state.get("files_touched") or [],
+        "worktree_mode": state.get("worktree_mode"),
+        "worktrees": state.get("worktrees") or [],
+        "checkpoint": {k: cp.get(k) for k in ("reason", "stage", "checkpointed_at", "resumed_at")} if cp else None,
+        "tests": _latest_tests(run_dir),
+        "updated_at": state.get("updated_at"),
+        "full": "run-get --run-id <id> (whole run.json) or --field <dot.path>",
     }
 
 
@@ -14987,6 +15079,10 @@ def main() -> None:
     p_run_get = sub.add_parser("run-get", help="Get pipeline run state")
     p_run_get.add_argument("--project", required=True)
     p_run_get.add_argument("--run-id", default=None, help="Specific run ID (omit for list)")
+    p_run_get.add_argument("--brief", action="store_true",
+                           help="Compact view: status, stages, current stage, files, latest test counts + failures")
+    p_run_get.add_argument("--field", action="append", default=None, metavar="PATH",
+                           help="Only this dot path of run.json (repeatable), e.g. stages.3.status")
 
     p_run_commit = sub.add_parser("run-commit", help="Auto local-commit this run's files after PUSH-READY (never pushes)")
     p_run_commit.add_argument("--project", required=True)
