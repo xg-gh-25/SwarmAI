@@ -4,7 +4,7 @@ date: 2026-10-21
 created: 2026-10-21
 updated: 2026-10-21
 project: SwarmAI
-status: FINAL — XG 2026-10-21 定稿；§9 的问题按建议定
+status: FINAL — XG 2026-10-21 定稿；P1、P2、P3a 已落地，其余由 pipeline v13 设计一次切换实现（§6）
 related: pipeline-review-convergence.md（N1–N5，本文收窄其轮数）；pipeline-run-worktree.md（run_owner_gate 的 token 机制）；pipeline-run-budget.md（轮数预算）
 ---
 # Pipeline gate 与 expert review 简化
@@ -282,18 +282,17 @@ G2 放宽后，前置段仍禁止函数定义、alias、`source`、`eval`、`PAT
 
 ## 6. 实施分期
 
-每期是一个独立 run（或 direct 改动），各自落地、各自验收。按顺序做，后一期依赖前一期的数据。
+P1、P2 和 P3a 已经在 main 上落地。其余部分不再在 main 上分期实施，由 pipeline 统一设计 v13（`~/.swarm-ai/SwarmWS/Projects/SwarmAI/2-understanding/knowledge/designs/2026-10-21-pipeline-structural-decisions.md`）的 cycle 5、7 实现，并在 v13 的切换 commit 里与旧代码的删除一起落地（v13 §D1、§D3.4；XG 2026-10-21 确认：一次切换，不留隐藏开关）。
 
-| 期 | 内容 | 主要文件 | 预计改动 |
-|---|---|---|---|
-| P1 | G1、E5 的"无输出不压低"部分（G3 撤回） | `security_hooks.py`、`finding_ledger.py`、对应测试 | 约 300 行（删多于加） |
-| P2 | G2 | `run_owner_gate.py`、对应测试 | 约 100 行；需要 security expert |
-| P3 | E0、E1、E2、E4、E5 余下部分 | `artifact_cli.py`、`finding_ledger.py`、`gate2_*`、`review_round_gate.py`、`pipeline_validator.py`、`backend/experts/code/*.md`、`stages/deliver.md`、`stages/ref/deliver/*.md`、`stages/build.md` | 大：预计删除 3000+ 行代码和 40KB+ 文档 |
-| P4 | E3 | `stages/review.md`、`stages/ref/review/*`、`_review_dispatch` | 中 |
+| 期 | 内容 | 状态 |
+|---|---|---|
+| P1 | G1、E5 的"无输出不压低"部分（G3 撤回） | 已落地 `dee27dd7` |
+| P2 | G2 | 已落地 `db08c31f`（测试修正 `8948540a`） |
+| P3a | E1：Gate-2 名单 | 已落地 `8fd9335c`。规则与 v13 §A1.4 相同，v1 的 cycle 5 重写这段代码时沿用 |
+| P3 其余 | E0、E2、E4、E5 余下部分 | 由 v13 实现：E0、E2 在 cycle 7 的删除清单（§C2）里，E4 在 cycle 5（§B4 聚类），E5 在 cycle 5（§A3.5 push 规则） |
+| P4 | E3 | 由 v13 实现（§A1.4：REVIEW 不再派 spec-compliance / code-quality / ux-test） |
 
-**测试**：P3、P4 会碰到很多写死卡片措辞的测试（gate1 相关 17 个文件、meta-review 45 个、gate2_convergence 16 个）。每期开始前先 `grep` 列出所有引用，按"删除对应功能的测试 / 改断言 / 保留"分类写进该期的计划，不边改边修。
-
-**怎么做 P3**：P3 是在改 pipeline 自己的 review 机制，用现有 pipeline 跑它会出现"旧 review 机制审查删除旧 review 机制的代码"的循环。建议 P3 用 direct profile 分 3–4 个 worktree 提交完成，每个提交独立可测，并且在 P1 落地后再开始（P1 减少的摩擦让 P3 本身更容易跑完）。
+为什么不在 main 上继续分期：这些代码会先在 main 上改一遍，再被 v1 整体替换；而且分期需要的"保留 legacy 两周"会让 main 上新旧并存，与 v13 冲突。
 
 ## 7. 验收指标
 
@@ -310,14 +309,14 @@ G2 放宽后，前置段仍禁止函数定义、alias、`source`、`eval`、`PAT
 | REPORT 里写"手工落地"的 run | 2 天 4 个 | 0 |
 | 逃逸率：落地后 7 天内改同一文件的 `fix:` 提交占比 | 基线待测 | 不高于基线 |
 
-"抓到的 HIGH"和"逃逸率"是质量底线。任何一期落地后两周内这两项变差超过目标，就回滚那一期（§8）。
+"抓到的 HIGH"和"逃逸率"是质量底线。P1、P2、P3a 落地后两周内这两项变差超过目标，就回滚对应提交；v13 切换后用 v13 §E6 的指标对比（§8）。
 
 ## 8. 回滚
 
 - G1：deny 分支改为放行是一个函数内的改动，回滚即 revert 对应提交。
 - G2：同上，revert 对应提交。
-- E0–E5：P3 期间 `--convergence legacy` 先保留为隐藏选项，落地两周、指标达标后再删除 legacy 代码。删除提交单独做，方便 revert。
-- 删除的 expert 文档文件保留在 `backend/experts/code/`，只改为"已并入"说明，恢复时改回 `_dispatch_experts` 即可。
+- P3a：revert `8fd9335c`。
+- 其余：按 v13 §D1，revert 切换 commit，再 build 并重启。不保留隐藏开关。
 
 ## 9. 已定的决定（XG 2026-10-21）
 
@@ -325,4 +324,4 @@ G2 放宽后，前置段仍禁止函数定义、alias、`source`、`eval`、`PAT
 - **Q2**：red-team 只在有明显安全风险时派。
 - **Q3**：HIGH 的 `untestable` 不能由作者放行，留给人看（REPORT 列出）。
 - **Q4**：G1 不加 git 状态指纹，不做 CLI 自身 sha 校验，G4 不加类别标签和定期复审。
-- **Q5**：P3 用 direct 分批提交。
+- **Q5**：~~P3 用 direct 分批提交~~ 改为：P3 其余部分和 P4 由 v13 一次切换实现（XG 2026-10-21）。
