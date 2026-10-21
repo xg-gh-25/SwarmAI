@@ -2425,6 +2425,13 @@ def _link_session_to_run(session_id: "str | None", run_id: str) -> None:
               file=sys.stderr)
 
 
+# One files_touched entry that is really several paths: a file name with an
+# extension, whitespace, then another path start (`/abs`, `~/`, `dir/`). A single
+# path with a space in a directory name (`Visual Studio Code.app/x.js`) has no
+# extension right before its space.
+_JOINED_PATHS_RE = re.compile(r"\.\w+\s+(?:/|~/|[\w.-]+/)")
+
+
 def _normalize_files_touched_arg(value):
     """``--files-touched`` as ONE JSON-array string, whatever form it came in.
 
@@ -3773,6 +3780,16 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         if not isinstance(incoming, list):
             print(json.dumps({"error": "--files-touched: malformed JSON array (or pass plain paths)"}),
                   file=sys.stderr)
+            sys.exit(1)
+        # Several paths joined into ONE entry (`--files-touched "$FILES"` quoted, a
+        # space-separated list) are stored as one bogus path that run-commit cannot
+        # stage; agents then rewrote run.json by hand to split it (2026-10-14..21).
+        # Refuse it here, the one place a malformed argument is reported.
+        joined = [e for e in incoming if isinstance(e, str) and _JOINED_PATHS_RE.search(e.strip())]
+        if joined:
+            print(json.dumps({"error": "--files-touched: an entry holds several paths joined by "
+                              "spaces; pass each path as its own argument (unquoted $FILES, "
+                              "or a JSON array)", "entries": joined[:5]}), file=sys.stderr)
             sys.exit(1)
         # NOTE: the helper dedups on the STRIPPED string. The prior inline loop
         # compared the RAW entry against `seen` while appending the stripped form, so
