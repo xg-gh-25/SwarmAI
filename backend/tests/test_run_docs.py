@@ -596,3 +596,127 @@ def test_review_doc_shows_the_gate1_points():
     md = rd.render_review({"id": "r"}, {}, recs, {}, {})
     assert "Gate 1 — plan skeptic | WARN" in md
     assert "normalize paths first" in md and "reuse check_migration_class" in md
+
+
+# ── run_53674c75: the document shows the readers the consumers gate judges ─────────
+
+def test_design_spec_shows_readers_declared_after_plan(monkeypatch, tmp_path):
+    """I1 / AC4: a post-PLAN declaration is shown, with the PLAN status it replaced."""
+    from core import run_worktree as rw
+    monkeypatch.setattr(rw, "wt_root", lambda: tmp_path / "wts")
+    wt = tmp_path / "wts" / "run_d3" / "swarmai"
+    state = {"id": "run_d3",
+             "worktrees": [{"repo_name": "swarmai", "main": str(tmp_path / "main"), "state": "released"}],
+             "consumer_readers": [
+                 {"id": "K1", "at": f"{wt}/backend/a.py::f", "status": "unaffected",
+                  "reason": "only logs the value"},
+                 {"id": "K1", "at": "backend/c.md", "status": "unaffected", "reason": "prose only, no code"}]}
+    md = rd.render_design_spec(state, {}, {**PLAN, **PLAN_SECTIONS})
+    row = next(ln for ln in md.splitlines() if ln.startswith("| K1 |"))
+    assert "backend/a.py::f unaffected — only logs the value (declared after PLAN; PLAN said migrated)" in row
+    assert "backend/c.md::<file> unaffected — prose only, no code (declared after PLAN)" in row
+    assert row.count("backend/a.py::f") == 1   # one unit, one entry, however it was written
+    assert "backend/b.py::g unaffected — logs only" in row
+
+
+def test_design_spec_shows_an_unresolvable_reader_as_written():
+    plan = {"implementation_constraints": {"consumers": [
+        {"id": "K1", "contract": "c", "pattern": "x", "paths": ["."],
+         "readers": [{"at": "/abs/elsewhere/a.py::f", "status": "migrated"}]}]}}
+    md = rd.render_design_spec({"id": "r"}, {}, plan)
+    assert "/abs/elsewhere/a.py::f migrated (not resolved)" in md
+    plan["implementation_constraints"]["consumers"][0]["readers"] = [{"at": "a.py::f", "status": "done"}]
+    md = rd.render_design_spec({"id": "r"}, {}, plan)
+    assert "a.py::f done (not resolved)" in md
+
+
+def test_run_update_re_renders_design_spec_with_the_new_reader(tmp_path, monkeypatch, capsys):
+    """I1 / AC4: run-update --add-consumer-reader rewrites DESIGN_SPEC.md."""
+    import argparse
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from scripts import artifact_cli as cli
+    run_dir = tmp_path / "runs" / "run_d4"
+    run_dir.mkdir(parents=True)
+    state = {"id": "run_d4", "project": "P", "status": "running", "stages": [
+        {"stage": "plan", "status": "completed", "artifact_id": "art_p"}]}
+    (run_dir / "run.json").write_text(json.dumps(state))
+    (run_dir / "DESIGN_SPEC.md").write_text("stale\n")
+    monkeypatch.setattr(cli, "_resolve_run_file", lambda project, run_id: run_dir / "run.json")
+    monkeypatch.setattr(rd, "load_stage_artifacts", lambda d, rs: {"plan": {**PLAN, **PLAN_SECTIONS}})
+    attrs = ("active_only actual_effort adversarial_count alternatives backend "
+             "categories command context data ddd_checksums dismissed escalated "
+             "evaluation_id event files_estimated files_touched fixed force_checkpoint "
+             "frontend full indicators "
+             "lessons limit modules outcome overlap partial probes producer profile "
+             "reason requirement resolved retries review_count rp_violations "
+             "scope stage stage_json state status summary taste_decision "
+             "timestamp tokens_consumed topic type types user_override force "
+             "add_required_expert outputs_surfaced").split()
+    args = argparse.Namespace(**{a: None for a in attrs}, project="P", run_id="run_d4",
+                              add_consumer_reader=["K1|backend/a.py::f|unaffected|only logs the value"])
+    reports = []
+    monkeypatch.setattr(cli, "_ensure_report_before_advance", lambda *a, **k: (reports.append(a) or (True, True)))
+    cli.cmd_run_update(args, None)
+    assert reports == []   # adding a reader is not the end of the run: no report
+    md = (run_dir / "DESIGN_SPEC.md").read_text()
+    assert "backend/a.py::f unaffected — only logs the value (declared after PLAN; PLAN said migrated)" in md
+    saved = json.loads((run_dir / "run.json").read_text())
+    assert saved["consumer_readers"][-1]["at"] == "backend/a.py::f"
+
+
+def test_run_update_says_so_when_design_spec_cannot_be_rendered(tmp_path, monkeypatch, capsys):
+    """F1: the declaration is saved; a failed re-render is a warning, never a crash."""
+    import argparse
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from scripts import artifact_cli as cli
+    run_dir = tmp_path / "runs" / "run_d5"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(json.dumps({"id": "run_d5", "project": "P", "status": "running",
+                                                  "stages": []}))
+    monkeypatch.setattr(cli, "_resolve_run_file", lambda project, run_id: run_dir / "run.json")
+    monkeypatch.setattr(rd, "load_stage_artifacts", lambda d, rs: {})
+    attrs = ("active_only actual_effort adversarial_count alternatives backend "
+             "categories command context data ddd_checksums dismissed escalated "
+             "evaluation_id event files_estimated files_touched fixed force_checkpoint "
+             "frontend full indicators lessons limit modules outcome overlap partial probes "
+             "producer profile reason requirement resolved retries review_count rp_violations "
+             "scope stage stage_json state status summary taste_decision timestamp "
+             "tokens_consumed topic type types user_override force add_required_expert "
+             "outputs_surfaced").split()
+    args = argparse.Namespace(**{a: None for a in attrs}, project="P", run_id="run_d5",
+                              add_consumer_reader=["K1|backend/a.py::f|migrated"])
+    cli.cmd_run_update(args, None)
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert any("not re-rendered" in w for w in out.get("warnings", []))
+    assert json.loads((run_dir / "run.json").read_text())["consumer_readers"][0]["at"] == "backend/a.py::f"
+
+
+
+def test_an_abandoned_run_still_gets_its_report(tmp_path, monkeypatch, capsys):
+    """The terminal-status report branch beside the new reader branch (REVIEW parity)."""
+    import argparse
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from scripts import artifact_cli as cli
+    import pipeline_worktree
+    run_dir = tmp_path / "runs" / "run_d6"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(json.dumps({"id": "run_d6", "project": "P", "status": "running",
+                                                  "stages": []}))
+    monkeypatch.setattr(cli, "_resolve_run_file", lambda project, run_id: run_dir / "run.json")
+    monkeypatch.setattr(pipeline_worktree, "after_status_write", lambda **k: None)
+    reports = []
+    monkeypatch.setattr(cli, "_ensure_report_before_advance", lambda *a, **k: (reports.append(a) or (True, True)))
+    attrs = ("active_only actual_effort adversarial_count alternatives backend "
+             "categories command context data ddd_checksums dismissed escalated "
+             "evaluation_id event files_estimated files_touched fixed force_checkpoint "
+             "frontend full indicators lessons limit modules outcome overlap partial probes "
+             "producer profile reason requirement resolved retries review_count rp_violations "
+             "scope stage stage_json state summary taste_decision timestamp "
+             "tokens_consumed topic type types user_override force add_required_expert "
+             "outputs_surfaced add_consumer_reader").split()
+    attrs.remove("reason")
+    args = argparse.Namespace(**{a: None for a in attrs}, project="P", run_id="run_d6", status="abandoned")
+    args.reason = "superseded by a later run of the same requirement"
+    cli.cmd_run_update(args, None)
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert len(reports) == 1 and out.get("report", "").endswith("REPORT.md")

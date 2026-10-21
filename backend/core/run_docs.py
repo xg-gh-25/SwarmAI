@@ -468,7 +468,7 @@ def render_design_spec(run_state: dict, think: dict, plan: dict) -> str:
             lines.append(f"| {_cell(e.get('id'), 8)} | {_cell(e.get('kind'), 12)} | "
                          f"{_cell(e.get('ref'), 200)} | {_cell(e.get('expect'), 20)} |")
         lines.append("")
-    lines += _plan_sections(pl, dd)
+    lines += _plan_sections(pl, dd, run_state)
     if len(lines) <= len(_header("Design Spec", run_state)):
         lines += ["_No design recorded._", ""]
     return "\n".join(lines).rstrip() + "\n"
@@ -480,10 +480,41 @@ def _code_cell(v: Any, n: int = 200) -> str:
     return "`" + _t(v, n).replace("`", "'").replace("|", "\\|") + "`"
 
 
-def _plan_sections(pl: dict, dd: dict) -> list[str]:
+def _reader_cells(cons: list, run_state: Optional[dict]) -> dict:
+    """{consumer id: readers cell}: the declarations the consumers gate judges
+    (``core/contract_readers.resolve`` over the PLAN readers and run.json
+    ``consumer_readers``, with the run's roots), one per unit, the latest deciding. A
+    declaration made after PLAN says so, with the PLAN status it replaced; one that names
+    no unit inside the run's roots is shown as written, marked not resolved."""
+    from core import contract_readers as cr
+    state = run_state if isinstance(run_state, dict) else {}
+    extra = [r for r in _l(state.get("consumer_readers")) if isinstance(r, dict)]
+    roots = cr.run_roots(state)
+    by_id, rejected = cr.resolve(cons, extra, roots)
+    out = {}
+    for cid in by_id:
+        cells = []
+        for e in by_id.get(cid, [])[:30]:
+            cell = f"{_cell(e['unit'], 160)} {_cell(e['status'], 12)}"
+            if e["reason"]:
+                cell += f" — {_cell(e['reason'], 160)}"
+            if e["source"] == "run":
+                plan_said = [r["status"] for r in e["replaced"] if r["source"] == "plan"]
+                cell += (f" (declared after PLAN; PLAN said {_cell(plan_said[-1], 12)})" if plan_said
+                         else " (declared after PLAN)")
+            cells.append(cell)
+        # what resolve() refused (outside every root, or no valid status): shown as written
+        cells += [f"{_cell(r['at'], 160)} {_cell(r['status'], 12)} (not resolved)"
+                  for r in rejected if r["id"] == cid][:10]
+        out[cid] = "; ".join(cells)
+    return out
+
+
+def _plan_sections(pl: dict, dd: dict, run_state: Optional[dict] = None) -> list[str]:
     """The plan's security boundaries, boundaries, test strategy, success criteria and
     contract readers: fields the validator judges that the committed
-    document used to leave out. Each may sit at the plan's top level or in design_doc."""
+    document used to leave out. Each may sit at the plan's top level or in design_doc.
+    The readers are the ones the consumers gate judges (``_reader_cells``)."""
     def pick(key):
         v = pl.get(key)
         return v if v not in (None, [], {}) else dd.get(key)
@@ -520,11 +551,9 @@ def _plan_sections(pl: dict, dd: dict) -> list[str]:
     if cons:
         out += ["## Contract readers", "",
                 "| ID | Contract | Pattern | Paths | Readers |", "|---|---|---|---|---|"]
+        cells = _reader_cells(cons, run_state)
         for c in cons[:20]:
-            readers = "; ".join(
-                f"{_cell(r.get('at'), 160)} {_cell(r.get('status'), 12)}"
-                + (f" — {_cell(r.get('reason'), 160)}" if r.get("reason") else "")
-                for r in _l(c.get("readers"))[:30] if isinstance(r, dict))
+            readers = cells.get(str(c.get("id") or "?"), "")
             out.append(f"| {_cell(c.get('id'), 8)} | {_cell(c.get('contract'), 200)} | "
                        f"{_code_cell(c.get('pattern'))} | "
                        f"{_cell(', '.join(_t(p, 60) for p in _l(c.get('paths'))[:8]), 120)} | "

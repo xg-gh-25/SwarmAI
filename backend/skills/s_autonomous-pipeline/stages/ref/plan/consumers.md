@@ -35,11 +35,13 @@ No shared contract changes → `{"no_contract_change_reason": "<why, >= 20 chars
 - `id`: `K<n>`.
 - `pattern`: a `git grep -E` regex that finds every reader. Search the name the readers use
   (the function, the field, the status literal), not your own call site.
-- `paths`: tree roots only (`.`, `backend`, `desktop`). A deeper path means you choose the
-  files to search, which brings back the blind spot the search exists to remove.
-- `readers[].at`: `path::function` (`Class.method`, `outer.inner` for nested defs,
-  `path::<module>` or just `path` for module-level code and non-Python files). Absolute
-  paths of the main checkout or the worktree are accepted and normalized.
+- `paths`: tree roots only (`.`, `backend`, `desktop`), read literally. A deeper path means
+  you choose the files to search, which brings back the blind spot the search exists to
+  remove; pathspec magic (`:!x`, `:(exclude)…`) and glob characters are refused.
+- `readers[].at`: `path::function` (`Class.method`, `outer.inner` for nested defs),
+  `path::<module>` for module-level code of a `.py`, `path` (= `path::<file>`) for a
+  non-Python or unparsable file. Absolute paths of the main checkout or the worktree are
+  accepted and normalized.
 - `status`: `migrated` (the diff must change that unit) or `unaffected` (needs a `reason`,
   >= 10 chars).
 
@@ -48,7 +50,8 @@ No shared contract changes → `{"no_contract_change_reason": "<why, >= 20 chars
 1. Every unit (`path::function`) with a hit of the pattern is either changed by the run's
    diff (from the worktree's base commit, new files included) or declared `unaffected` with
    a reason.
-2. Every unit declared `migrated` is changed by the diff.
+2. Every unit declared `migrated` is changed by the diff itself: a change to another
+   function of the same file does not count. A deleted file counts for every unit in it.
 3. A pattern git rejects is refused, naming the `K<n>`.
 4. A pattern with no hit now and none at the base is refused (it checks nothing). Hits at
    the base and none now pass: every reader was removed.
@@ -69,5 +72,8 @@ python backend/scripts/artifact_cli.py run-update --project <P> --run-id <R> \
     --add-consumer-reader 'K1|backend/c.py::other|unaffected|reads only the length'
 ```
 
-Append-only and idempotent, stored in run.json `consumer_readers`. It cannot remove a
-reader the PLAN declared.
+Stored in order in run.json `consumer_readers`. For each unit the latest declaration decides
+(PLAN readers first, then these), so a later declaration can correct a PLAN reader; adding
+an entry again makes it the latest again. An `unaffected` override still needs its reason.
+DESIGN_SPEC.md shows every declaration the gate judges, each one made after PLAN marked
+with the PLAN status it replaced (rendered again on each add and at completion).

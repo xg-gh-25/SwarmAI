@@ -430,3 +430,83 @@ def test_gate1_point_lines_are_levels_after_a_colon():
     text = ("4. SSA: WARNING. structural\n5. API: PARTIAL. budget out\n"
             "Verdict: PASS (no BLOCK found)\n6. Notes: mentions WARN in passing\n")
     assert cli._gate1_points_from_text(text) == ["4. SSA: WARNING. structural", "5. API: PARTIAL. budget out"]
+
+
+# ── run_53674c75: Gate-1 points at goal_cycle, derived only ───────────────────────
+
+def test_gate1_points_use_the_given_stage_window(monkeypatch):
+    """AC7: a goal run's points come from the goal_cycle window, not build's."""
+    seen = []
+    monkeypatch.setattr(cli, "_gate1_prompt_unread", lambda rid, rs, since, w: (seen.append(since) or (None, None)))
+    monkeypatch.setattr(cli, "_gate_marker_rows", lambda rid, eid, since: [
+        {"ts": 5, "verdict": "WARN", "verdict_text": "GATE 1 VERDICT: WARN"}])
+    st = {"stage_timing": {"build": {"started_at": "2026-01-01T00:00:00+00:00"},
+                           "goal_cycle": {"started_at": "2026-02-01T00:00:00+00:00"}}}
+    assert cli._gate1_points("run_x", st, "goal_cycle") == ["GATE 1 VERDICT: WARN"]
+    assert cli._gate1_points("run_x", st) == ["GATE 1 VERDICT: WARN"]
+    assert seen[0] == cli._iso_epoch("2026-02-01T00:00:00+00:00")
+    assert seen[1] == cli._iso_epoch("2026-01-01T00:00:00+00:00")
+
+
+def test_gate1_points_are_derived_at_goal_cycle_and_never_from_the_model(monkeypatch, tmp_path):
+    assert "gate1_points" in cli._DERIVED_RECORD_KEYS
+    stages_called = []
+    monkeypatch.setattr(cli, "_gate1_points",
+                        lambda rid, rs, stage="build": (stages_called.append(stage) or ["2. x: WARN. y"]))
+    cand = {"stage": "goal_cycle"}
+    derived, _ = cli._derive_stage_fields(project="P", run_id="run_x", run_dir=tmp_path,
+                                          run_state={"id": "run_x", "stages": []}, stage="goal_cycle",
+                                          profile="goal", artifact={"files_changed": []},
+                                          record_in={}, cand_rec=cand)
+    assert stages_called == ["goal_cycle"] and cand["gate1_points"] == ["2. x: WARN. y"]
+    assert derived["gate1_points"]["value"] == 1
+
+
+
+def test_an_artifactless_goal_cycle_still_gets_its_gate1_points(monkeypatch, tmp_path):
+    """REVIEW: goal_cycle may complete without an artifact; the points come from markers."""
+    monkeypatch.setattr(cli, "_gate1_points", lambda rid, rs, stage="build": ["GATE 1 VERDICT: WARN"])
+    cand = {"stage": "goal_cycle"}
+    cli._derive_stage_fields(project="P", run_id="run_x", run_dir=tmp_path,
+                             run_state={"id": "run_x", "stages": []}, stage="goal_cycle",
+                             profile="goal", artifact=None, record_in={}, cand_rec=cand)
+    assert cand["gate1_points"] == ["GATE 1 VERDICT: WARN"]
+
+
+def test_run_update_stage_json_neither_injects_nor_erases_gate1_points(tmp_path, monkeypatch):
+    """Gate-2 (I4): gate1_points come only from the skeptic's marker. run-update
+    --stage-json drops a model-written value and keeps the derived one it replaces."""
+    import argparse
+    run_dir = tmp_path / "runs" / "run_g1"
+    run_dir.mkdir(parents=True)
+    state = {"id": "run_g1", "project": "P", "status": "running", "stages": [
+        {"stage": "build", "status": "recorded", "gate1_points": ["3. Reuse: BLOCK. real"]}]}
+    (run_dir / "run.json").write_text(json.dumps(state))
+    monkeypatch.setattr(cli, "_resolve_run_file", lambda project, run_id: run_dir / "run.json")
+    monkeypatch.setattr(cli, "_ensure_report_before_advance", lambda *a, **k: (True, True))
+    attrs = ("active_only actual_effort adversarial_count alternatives backend "
+             "categories command context data ddd_checksums dismissed escalated "
+             "evaluation_id event files_estimated files_touched fixed force_checkpoint "
+             "frontend full indicators "
+             "lessons limit modules outcome overlap partial probes producer profile "
+             "reason requirement resolved retries review_count rp_violations "
+             "scope stage stage_json state status summary taste_decision "
+             "timestamp tokens_consumed topic type types user_override force "
+             "add_required_expert outputs_surfaced add_consumer_reader").split()
+
+    def update(rec):
+        args = argparse.Namespace(**{a: None for a in attrs}, project="P", run_id="run_g1")
+        args.stage_json = json.dumps(rec)
+        cli.cmd_run_update(args, None)
+        saved = json.loads((run_dir / "run.json").read_text())
+        return [s for s in saved["stages"] if s.get("stage") == "build"]
+
+    forged = {"stage": "build", "status": "recorded", "gate1_points": ["3. Reuse: WARN. fine"]}
+    builds = update(forged)
+    assert len(builds) == 1 and builds[0]["gate1_points"] == ["3. Reuse: BLOCK. real"]
+    builds = update({"stage": "build", "status": "recorded"})
+    assert builds[0]["gate1_points"] == ["3. Reuse: BLOCK. real"]   # not erased either
+    fresh = {"id": "run_g1", "project": "P", "status": "running", "stages": []}
+    (run_dir / "run.json").write_text(json.dumps(fresh))
+    builds = update(forged)
+    assert "gate1_points" not in builds[0]   # a new record never takes the model's value

@@ -1235,11 +1235,15 @@ def create_agent_tool_audit_hook(
                     final = last_message if isinstance(last_message, str) and last_message.strip() \
                         else (_read_subagent_final_text(transcript_path) if transcript_path else "")
                     base["verdict"] = _gate_verdict(expert_id, final)
-                    if expert_id in ("root-cause", "gate1-skeptic"):
-                        # root-cause: its reasons go into REPORT §10 / the PLAN redesign
-                        # verbatim; gate1-skeptic: its BLOCK / WARN points go into the
-                        # build record and REVIEW.md (artifact_cli._gate1_points)
+                    if expert_id == "root-cause":
+                        # its reasons go into REPORT §10 / the PLAN redesign verbatim,
+                        # read from the top
                         base["verdict_text"] = (final or "")[:2000]
+                    elif expert_id == "gate1-skeptic":
+                        # its BLOCK / WARN points go into the build record and REVIEW.md
+                        # (artifact_cli._gate1_points): the verdict comes first and the
+                        # check lines may come last, so a long answer keeps both ends
+                        base["verdict_text"] = _head_and_tail(final or "", 2000)
                 elif expert_id:
                     # Key present = this daemon records the expert's own findings and
                     # re-check answers (DELIVER stage-complete compares the record).
@@ -1618,6 +1622,30 @@ _CODE_BLOCK_RE = re.compile(r"```[\w-]*\n([\s\S]*?)```")
 # on the six.
 _FINDING_TEXT_FIELDS = ("fix", "exploit", "evidence")
 _FINDING_TEXT_MAX = 600
+
+
+def _head_and_tail(text: str, n: int) -> str:
+    """*text* if it fits in *n* chars, else its first and last whole lines (about n/2
+    chars each) around a '…' line. A line longer than n/2 keeps its start, so the
+    level prefix a reader matches ('- K1: BLOCK.') survives."""
+    text = text.rstrip()
+    if len(text) <= n:
+        return text
+    half = n // 2
+    lines = text.split("\n")
+
+    def take(seq):
+        kept, size = [], 0
+        for ln in seq:
+            if size + len(ln) + 1 > half:
+                break
+            kept.append(ln)
+            size += len(ln) + 1
+        return kept or [next(iter(seq), "")[:half]]
+
+    head = take(lines)
+    tail = take(lines[::-1])[::-1]
+    return "\n".join(head) + "\n…\n" + "\n".join(tail)
 
 
 def _finding_row(d: dict) -> Optional[dict]:

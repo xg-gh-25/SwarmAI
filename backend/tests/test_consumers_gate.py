@@ -328,12 +328,13 @@ def test_parse_consumer_reader():
             cli._parse_consumer_reader(bad)
 
 
-def test_apply_consumer_readers_is_append_only_and_idempotent():
+def test_apply_consumer_readers_moves_a_repeat_to_the_end():
+    """AC3: the store is an ordered history; re-adding A after B makes A the latest."""
     state = {"id": "run_x", "consumer_readers": [{"id": "K1", "at": "a.py::f", "status": "migrated"}]}
     cli._apply_consumer_readers(state, ["K1|b.py::g|unaffected|reads only the length"])
     assert [x["at"] for x in state["consumer_readers"]] == ["a.py::f", "b.py::g"]
-    cli._apply_consumer_readers(state, ["K1|b.py::g|unaffected|reads only the length"])
-    assert len(state["consumer_readers"]) == 2
+    cli._apply_consumer_readers(state, ["K1|a.py::f|migrated"])
+    assert [x["at"] for x in state["consumer_readers"]] == ["b.py::g", "a.py::f"]
 
 
 def test_gate2_next_fixed_is_refused_by_the_consumers_gate(repo, monkeypatch, capsys, tmp_path):
@@ -448,3 +449,170 @@ def test_gate2_recheck_prints_the_unverified_warning(monkeypatch, capsys, tmp_pa
     with pytest.raises(SystemExit):
         cli.cmd_gate2_recheck(args, None)
     assert "NOT verified" in capsys.readouterr().err
+
+
+# ── run_53674c75: one declaration rule, exact-grain credit, literal paths ─────────────
+
+def _fixed_readers() -> list:
+    return [{"at": "backend/readers.py::read_index", "status": "unaffected",
+             "reason": "the definition itself, not a reader"}]
+
+
+def test_a_later_declaration_replaces_an_earlier_one(repo):
+    """I1 / AC1: a PLAN 'migrated' corrected after PLAN by 'unaffected' with a reason passes."""
+    r, base = repo
+    _migrate_one(r)
+    c = _consumer(readers=_fixed_readers() + [{"at": "backend/readers.py::breaker", "status": "migrated"}])
+    errors, _w = cg.check([c], [], repo=r, base=base, new_files=[])
+    assert any("breaker" in e and "declared migrated" in e for e in errors)
+    extra = [{"id": "K1", "at": "backend/readers.py::breaker", "status": "unaffected",
+              "reason": "only tests truthiness, empty list is falsy"}]
+    errors, _w = cg.check([c], extra, repo=r, base=base, new_files=[])
+    assert errors == []
+
+
+def test_a_later_unaffected_without_a_reason_does_not_silence_a_plan_reader(repo):
+    """The fail-open direction of I1: an override still needs its reason."""
+    r, base = repo
+    _migrate_one(r)
+    c = _consumer(readers=_fixed_readers() + [{"at": "backend/readers.py::breaker", "status": "migrated"}])
+    extra = [{"id": "K1", "at": "backend/readers.py::breaker", "status": "unaffected", "reason": "short"}]
+    errors, _w = cg.check([c], extra, repo=r, base=base, new_files=[])
+    assert any("breaker" in e and "without a reason" in e for e in errors)
+
+
+def test_migrated_function_in_a_touched_file_must_itself_change(repo):
+    """I2 / AC5: a change elsewhere in the file credits no other unit of it."""
+    r, base = repo
+    _migrate_one(r)
+    readers = _fixed_readers() + [
+        {"at": "backend/readers.py::breaker", "status": "unaffected", "reason": "truthiness only, fine"},
+        {"at": "backend/readers.py::<module>", "status": "migrated"},
+        {"at": "backend/readers.py::Missing.method", "status": "migrated"}]
+    errors, _w = cg.check([_consumer(readers=readers)], [], repo=r, base=base, new_files=[])
+    assert any("readers.py::<module> is declared migrated" in e for e in errors)
+    assert any("readers.py::Missing.method is declared migrated" in e for e in errors)
+    bare = readers[:2] + [{"at": "backend/readers.py", "status": "migrated"}]
+    errors, _w = cg.check([_consumer(readers=bare)], [], repo=r, base=base, new_files=[])
+    assert any("name the function or backend/readers.py::<module>" in e for e in errors)
+    readers[-2:] = [{"at": "backend/readers.py::count_runs", "status": "migrated"}]
+    errors, _w = cg.check([_consumer(readers=readers)], [], repo=r, base=base, new_files=[])
+    assert errors == []
+
+
+def test_a_bare_python_path_covers_only_the_file_unit(repo):
+    """AC5: a bare .py path is path::<file>; module-level code must be named ::<module>."""
+    r, _base = repo
+    (r / "backend" / "conf.py").write_text("DEFAULT = read_index('x')\n")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "module-level reader")
+    base2 = _git(r, "rev-parse", "HEAD").strip()
+    _migrate_one(r)
+    readers = _fixed_readers() + [
+        {"at": "backend/readers.py::breaker", "status": "unaffected", "reason": "truthiness only, fine"},
+        {"at": "backend/conf.py", "status": "unaffected", "reason": "loads it at import, untouched"}]
+    errors, _w = cg.check([_consumer(readers=readers)], [], repo=r, base=base2, new_files=[])
+    assert any("backend/conf.py::<module> matches" in e and "name it backend/conf.py::<module>" in e
+               for e in errors)
+    readers[-1]["at"] = "backend/conf.py::<module>"
+    errors, _w = cg.check([_consumer(readers=readers)], [], repo=r, base=base2, new_files=[])
+    assert errors == []
+
+
+def test_a_touched_non_python_file_still_credits_its_file_unit(repo):
+    """Gate-1 SSA: removing file-level credit for .py units keeps <file> for other files."""
+    r, base = repo
+    _migrate_one(r)
+    (r / "README.md").write_text("call read_index(path) or [] to load it\n")
+    readers = _fixed_readers() + [
+        {"at": "backend/readers.py::breaker", "status": "unaffected", "reason": "truthiness only, fine"},
+        {"at": "README.md", "status": "migrated"}]
+    errors, _w = cg.check([_consumer(paths=["."], readers=readers)], [], repo=r, base=base, new_files=[])
+    assert errors == []
+
+
+def test_pathspec_magic_cannot_exclude_files(repo):
+    """I3 / AC6: a declared path is a literal tree root, never a pathspec."""
+    for bad in (":!x", ":(exclude)*", ":(icase)BACKEND", "*", "[ab]", "back?end", "!x", "a\\b"):
+        assert cg.root_path(bad) is None, bad
+    assert cg.root_path(".") == "." and cg.root_path("backend/") == "backend"
+    r, base = repo
+    _migrate_one(r)
+    c = _consumer(paths=["backend", ":!*readers.py"])
+    errors, _w = cg.check([c], [], repo=r, base=base, new_files=[])
+    assert any("paths must be tree roots" in e for e in errors)
+    # the second layer: git reads every path literally, so '*' names a file called '*'
+    assert cg._hits(r, r"read_index\(", ["*"]) == {}
+    assert cg._hits(r, r"read_index\(", ["backend"])
+
+
+def test_the_document_and_the_gate_read_the_same_roots(tmp_path, monkeypatch):
+    """I1 / AC2: _consumers_repo hands the gate run_roots (every worktree and main)."""
+    from core import contract_readers as cr
+    from core import run_worktree as rw
+    monkeypatch.setattr(rw, "wt_root", lambda: tmp_path / "wts")
+    state = {"id": "run_abc", "worktrees": [
+        {"repo_name": "swarmai", "main": str(tmp_path / "main"), "state": "active", "base": "abc"}]}
+    wt = cli._run_worktree_path("run_abc", state)
+    wt.mkdir(parents=True)
+    got = cli._consumers_repo("run_abc", state)
+    assert got is not None and got["roots"] == cr.run_roots(state)
+    assert str(wt) in got["roots"] and str(tmp_path / "main") in got["roots"]
+
+
+def test_a_new_file_gets_the_same_credit_committed_or_not(repo):
+    """REVIEW r2: a new file is every unit of it, whether untracked, staged or committed."""
+    r, base = repo
+    _migrate_one(r)
+    (r / "backend" / "fresh.py").write_text("def new_reader(p):\n    return read_index(p)\n")
+    readers = _fixed_readers() + [
+        {"at": "backend/readers.py::breaker", "status": "unaffected", "reason": "truthiness only, fine"},
+        {"at": "backend/fresh.py", "status": "migrated"}]
+    untracked, _w = cg.check([_consumer(readers=readers)], [], repo=r, base=base,
+                             new_files=["backend/fresh.py"])
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "cycle commit")
+    committed, _w = cg.check([_consumer(readers=readers)], [], repo=r, base=base, new_files=[])
+    assert untracked == committed == []
+
+
+def test_an_unresolvable_reader_is_refused_when_declared():
+    """REVIEW r2: a reader outside every root never enters the store (it could not be
+    superseded later)."""
+    state = {"id": "run_x", "worktrees": []}
+    with pytest.raises(ValueError, match="outside"):
+        cli._apply_consumer_readers(state, ["K1|/etc/passwd::x|unaffected|not ours at all"])
+    assert state.get("consumer_readers", []) == []
+    cli._apply_consumer_readers(state, ["K1|backend/a.py::f|migrated"])
+    assert state["consumer_readers"][0]["at"] == "backend/a.py::f"
+
+
+def _drop_breaker(r: Path) -> None:
+    """Remove breaker (the last function) from readers.py; the file stays."""
+    src = (r / "backend" / "readers.py").read_text()
+    src = src.replace("\n\ndef breaker(path):\n    data = read_index(path)\n    return bool(data)\n", "\n")
+    (r / "backend" / "readers.py").write_text(src)
+
+
+def test_a_reader_removed_from_a_kept_file_counts_as_changed(repo):
+    """Gate-2 (I2): deleting a reader is a migration; its own base lines credit it."""
+    r, base = repo
+    _migrate_one(r)
+    _drop_breaker(r)
+    readers = _fixed_readers() + [
+        {"at": "backend/readers.py::count_runs", "status": "migrated"},
+        {"at": "backend/readers.py::breaker", "status": "migrated"}]
+    errors, _w = cg.check([_consumer(readers=readers)], [], repo=r, base=base, new_files=[])
+    assert errors == []
+
+
+def test_removing_a_function_does_not_credit_its_neighbour(repo):
+    """Gate-2 (I2): a pure deletion credits the removed unit only, never the line before it."""
+    r, base = repo
+    _drop_breaker(r)   # count_runs is untouched
+    readers = _fixed_readers() + [
+        {"at": "backend/readers.py::count_runs", "status": "migrated"},
+        {"at": "backend/readers.py::breaker", "status": "migrated"}]
+    errors, _w = cg.check([_consumer(readers=readers)], [], repo=r, base=base, new_files=[])
+    assert any("readers.py::count_runs is declared migrated" in e for e in errors), errors
+    assert not any("readers.py::breaker" in e for e in errors), errors

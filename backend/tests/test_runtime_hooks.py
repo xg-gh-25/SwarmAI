@@ -2681,3 +2681,50 @@ def test_finding_row_keeps_structured_evidence_as_json():
     import core.runtime_hooks as rh
     row = rh._finding_row({"severity": "MED", "summary": "s", "evidence": ["a.py:3", "b.py:9"]})
     assert row["evidence"] == '["a.py:3", "b.py:9"]'
+
+
+@pytest.mark.asyncio
+async def test_a_long_gate1_answer_keeps_its_head_and_tail(tmp_path, monkeypatch):
+    """I4 / AC7: the skeptic's verdict comes first and its checks may come last — both stay."""
+    import core.runtime_hooks as rh
+    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+    transcript = tmp_path / "sub.jsonl"
+    answer = ("GATE 1 VERDICT: WARN\n" + ("analysis line\n" * 400)
+              + "  7. Failure Pattern: WARN. normalize paths last\n")
+    _gate_transcript(transcript, "EXPERT-ID: gate1-skeptic", answer)
+    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-g1l"})
+    await hook({"agent_id": "a-7", "agent_transcript_path": str(transcript), "agent_type": "x"},
+               None, MagicMock())
+    data = json.loads(next(p for p in tmp_path.glob("session_sess-g1l_*.marker")
+                           if "_adv_" not in p.name).read_text())
+    text = data["verdict_text"]
+    assert text.startswith("GATE 1 VERDICT: WARN") and "normalize paths last" in text
+    assert len(text) <= 2100
+
+
+@pytest.mark.asyncio
+async def test_a_long_root_cause_answer_keeps_its_head(tmp_path, monkeypatch):
+    """root-cause's reasons are read head-first (REPORT §10): unchanged."""
+    import core.runtime_hooks as rh
+    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+    transcript = tmp_path / "sub.jsonl"
+    answer = "ROOT-CAUSE VERDICT: SOUND\nfirst reason\n" + ("x" * 5000) + "\nTAIL-MARK"
+    _gate_transcript(transcript, "EXPERT-ID: root-cause", answer)
+    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-rc"})
+    await hook({"agent_id": "a-8", "agent_transcript_path": str(transcript), "agent_type": "x"},
+               None, MagicMock())
+    data = json.loads(next(p for p in tmp_path.glob("session_sess-rc_*.marker")
+                           if "_adv_" not in p.name).read_text())
+    assert data["verdict_text"] == answer[:2000]
+
+
+def test_head_and_tail_keeps_a_long_last_line():
+    """REVIEW r2: a last line longer than half the cap, with or without a newline after it."""
+    import core.runtime_hooks as rh
+    last = "- K1: BLOCK. " + "y" * 1500
+    for text in ("GATE 1 VERDICT: BLOCK\n" + "x\n" * 900 + last + "\n",
+                 "GATE 1 VERDICT: BLOCK\n" + "x\n" * 900 + last):
+        out = rh._head_and_tail(text, 2000)
+        assert out.startswith("GATE 1 VERDICT: BLOCK")
+        assert "- K1: BLOCK." in out and len(out) <= 2010
+    assert rh._head_and_tail("short", 2000) == "short"

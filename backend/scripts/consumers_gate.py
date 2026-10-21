@@ -21,16 +21,26 @@ The PLAN declares each changed contract under ``implementation_constraints.consu
    file as ``Outer.inner`` (``<module>`` outside any), a ``.py`` that does not parse or
    any other file as ``<file>``;
 3. maps the run's diff (``git diff -U0 <base>`` plus the untracked new files) to units
-   the same way;
+   the same way, both sides of every hunk: added lines are units of the current file,
+   removed lines units of the file at the base (so a function the run deleted from a
+   file that still exists is changed, and its neighbour is not);
 4. requires every hit unit to be CHANGED by the diff, or declared ``unaffected`` with a
-   reason; and every unit declared ``migrated`` to be changed (a declaration does not
-   stand in for the edit).
+   reason; and every unit declared ``migrated`` to be changed itself — a change to
+   another unit of the same file credits nothing; a deleted file (``path::<deleted>``)
+   credits every unit it held (a declaration does not stand in for the edit).
+
+The declarations are ``core/contract_readers.resolve``'s, the same entries the run's
+DESIGN_SPEC.md shows: one per unit, the latest (PLAN readers, then run.json
+``consumer_readers`` in order) deciding. A bare path is ``path::<file>``; module-level
+code of a ``.py`` is ``path::<module>``.
 
 A pattern that matches nothing at the base and nothing now is refused (a typo checks
 nothing); one that matched at the base and matches nothing now passes (every reader was
 removed). Paths must be tree roots (one segment, ``.`` allowed): a deep path is the
 author choosing the files to search, which re-imports the blind spot the search exists
-to remove (the same rule as ``check_migration_class.validate_enumeration_cmd``).
+to remove (the same rule as ``check_migration_class.validate_enumeration_cmd``). Pathspec
+magic (a leading ':') and glob characters are refused, and every git call runs with the
+global ``--literal-pathspecs``, so a path can never exclude files from the search.
 
 Infra failures (git missing, the base not resolvable) are returned as warnings that say
 the readers were NOT verified; they are never a silent pass and never a refusal that
@@ -47,15 +57,21 @@ import ast
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Iterable
+
+if str(Path(__file__).resolve().parents[1]) not in sys.path:   # standalone load: core lives in backend/
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from core import contract_readers  # noqa: E402
+from core.run_worktree import LITERAL_PATHSPECS  # noqa: E402
 
 GIT_TIMEOUT_S = 60  # hang guard for one git call; the calls finish in well under a second
 MAX_HITS_SHOWN = 30
 PATTERN_MAX = 500
-_STATUSES = ("migrated", "unaffected")
 _REASON_MIN = 10
-_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_PATHSPEC_MAGIC = set("*?[]\\!")
+_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
 class _GitError(Exception):
@@ -64,40 +80,24 @@ class _GitError(Exception):
 
 def _git(repo: Path, *args: str) -> "subprocess.CompletedProcess":
     try:
-        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
-                              text=True, timeout=GIT_TIMEOUT_S)
+        # a global option, before the subcommand: every path is read literally, never
+        # as pathspec magic (':!x', ':(exclude)…') or a glob
+        return subprocess.run(["git", "-C", str(repo), LITERAL_PATHSPECS, *args],
+                              capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError) as exc:
         raise _GitError(f"git {args[0]} could not run: {type(exc).__name__}: {exc}") from exc
 
 
 # ── paths ──────────────────────────────────────────────────────────────────────
 
-def _rel(path: str, repo: Path, roots: Iterable[Path]) -> "str | None":
-    """*path* as a repo-relative POSIX path, or None when it is outside every root."""
-    p = str(path).strip()
-    if not p:
-        return None
-    if os.path.isabs(p):
-        for root in [repo, *roots]:
-            r = os.path.realpath(str(root)) if os.path.exists(str(root)) else str(root)
-            for cand in {str(root).rstrip(os.sep), r.rstrip(os.sep)}:
-                if p == cand or p.startswith(cand + os.sep):
-                    p = os.path.relpath(p, cand)
-                    break
-            else:
-                continue
-            break
-        else:
-            return None
-    p = os.path.normpath(p).replace(os.sep, "/")
-    if p.startswith("../") or p == ".." or os.path.isabs(p):
-        return None
-    return p
-
-
 def root_path(p: str) -> "str | None":
-    """A tree-root search path ('.', 'backend', 'desktop/'), or None."""
-    q = os.path.normpath(str(p).strip()).replace(os.sep, "/") if str(p).strip() else ""
+    """A tree-root search path ('.', 'backend', 'desktop/'), or None. Pathspec magic
+    (a leading ':') and glob characters are refused: git would read them as a pattern
+    that can exclude files from the search."""
+    raw = str(p).strip()
+    if raw.startswith(":") or _PATHSPEC_MAGIC & set(raw):
+        return None
+    q = os.path.normpath(raw).replace(os.sep, "/") if raw else ""
     if not q or q.startswith("..") or os.path.isabs(q):
         return None
     return q if (q == "." or "/" not in q) else None
@@ -151,6 +151,12 @@ def _read(repo: Path, rel: str) -> "str | None":
         return None
 
 
+def _read_base(repo: Path, base: str, rel: str) -> "str | None":
+    """*rel* as it was at *base*, or None (not there, or git failed)."""
+    p = _git(repo, "show", f"{base}:{rel}")
+    return p.stdout if p.returncode == 0 else None
+
+
 def _all_units(repo: Path, rel: str) -> "set[str]":
     src = _read(repo, rel)
     if not rel.endswith(".py") or src is None:
@@ -166,7 +172,9 @@ def _changed_units(repo: Path, base: str, new_files: Iterable[str]) -> "set[str]
     if p.returncode != 0:
         raise _GitError(f"git diff {base[:12]} failed: {(p.stderr or p.stdout).strip()[:200]}")
     lines_by: "dict[str, list[int]]" = {}
+    old_by: "dict[str, list[int]]" = {}
     deleted: "set[str]" = set()
+    added: "set[str]" = set()
     cur: "str | None" = None
     gone: "str | None" = None
     for ln in p.stdout.splitlines():
@@ -182,22 +190,36 @@ def _changed_units(repo: Path, base: str, new_files: Iterable[str]) -> "set[str]
             else:
                 cur = tgt[2:] if tgt.startswith("b/") else tgt
                 lines_by.setdefault(cur, [])
+                old_by.setdefault(cur, [])
+                if gone == "/dev/null":   # a file the run added (staged or committed)
+                    added.add(cur)
         elif ln.startswith("@@") and cur is not None:
             m = _HUNK.match(ln)
             if m:
-                start, count = int(m.group(1)), int(m.group(2) if m.group(2) is not None else 1)
-                lines_by[cur] += (list(range(start, start + count)) if count
-                                  else [max(start, 1)])  # pure deletion: the line it follows
+                # both sides, each at its own grain: the lines the run removed are units of
+                # the base source (a removed function is credited by its own lines), the
+                # lines it added are units of the current file; a count of 0 adds nothing
+                o_start, o_count = int(m.group(1)), int(m.group(2) if m.group(2) is not None else 1)
+                n_start, n_count = int(m.group(3)), int(m.group(4) if m.group(4) is not None else 1)
+                old_by[cur] += list(range(o_start, o_start + o_count))
+                lines_by[cur] += list(range(n_start, n_start + n_count))
     out: "set[str]" = set()
     for rel, lines in lines_by.items():
-        src = _read(repo, rel)
-        units = units_of(rel, src, lines)
-        out |= units | {f"{rel}::<file>"}
-    for rel in new_files or []:
-        r = _rel(rel, repo, [])
+        # the units the changed lines fall in, and no other: a touched file credits
+        # its <file> unit only when it has no finer one (not Python, or unparsable)
+        if lines:
+            out |= units_of(rel, _read(repo, rel), lines)
+    for rel, lines in old_by.items():
+        if lines and rel not in added:
+            out |= units_of(rel, _read_base(repo, base, rel), lines)
+    # a new file is every unit of it, the same whether it is untracked (new_files),
+    # staged or already committed by an earlier cycle (a '--- /dev/null' diff)
+    for rel in [*(new_files or []), *sorted(added)]:
+        r = contract_readers.rel(rel, [repo])
         if r:
             out |= _all_units(repo, r)
-    out |= {f"{rel}::<file>" for rel in deleted}
+    # a deleted file: every unit it held is gone, and <deleted> credits any of them
+    out |= {f"{rel}::<deleted>" for rel in deleted}
     return out
 
 
@@ -224,41 +246,20 @@ def _hit_at_base(repo: Path, base: str, pattern: str, paths: "list[str]") -> boo
 
 # ── the check ──────────────────────────────────────────────────────────────────
 
-def _readers(consumer: dict, extra: Iterable[dict], repo: Path, roots, errors: list) -> "list[tuple[str, str, str]]":
-    """(unit, status, reason) of every declared reader of *consumer*."""
-    cid = str(consumer.get("id") or "?")
-    raw = [r for r in (consumer.get("readers") or []) if isinstance(r, dict)]
-    raw += [r for r in (extra or []) if isinstance(r, dict) and str(r.get("id") or "") == cid]
-    out = []
-    for r in raw:
-        at = str(r.get("at") or "").strip()
-        path, sep, unit = at.partition("::")
-        rel = _rel(path, repo, roots)
-        if rel is None:
-            errors.append(f"{cid}: reader '{at}' is outside the repo {repo} — name it repo-relative "
-                          "(path::function)")
-            continue
-        status = str(r.get("status") or "").strip().lower()
-        if status not in _STATUSES:
-            errors.append(f"{cid}: reader '{at}' has status '{status}' — use migrated or unaffected")
-            continue
-        out.append((f"{rel}::{unit}" if sep else rel, status, str(r.get("reason") or "").strip()))
-    return out
-
-
-def _covered(unit: str, declared: "list[tuple[str, str, str]]") -> "tuple[str, str] | None":
-    """The (status, reason) declared for *unit*; a bare path covers its <module> / <file>."""
-    path, _, q = unit.partition("::")
-    for u, status, reason in declared:
-        if u == unit or (u == path and q in ("<module>", "<file>")):
-            return status, reason
-    return None
+def _credited(unit: str, changed: "set[str]") -> bool:
+    """The change credits *unit*: that unit itself changed, or its file was deleted."""
+    return unit in changed or f"{unit.partition('::')[0]}::<deleted>" in changed
 
 
 def check(consumers: "list[dict] | None", extra_readers: "list[dict] | None", *, repo,
           base: str, new_files: "Iterable[str] | None" = None,
           roots: "Iterable[Path] | None" = None) -> "tuple[list[str], list[str]]":
-    """(errors, warnings) for the declared *consumers* against the change from *base*."""
+    """(errors, warnings) for the declared *consumers* against the change from *base*.
+
+    The declarations of each consumer are ``contract_readers.resolve``'s: one per unit,
+    the latest (PLAN readers, then *extra_readers* in order) deciding — the same entries
+    DESIGN_SPEC.md shows. *roots*: the absolute roots a declaration may be written
+    under besides *repo* (``contract_readers.run_roots``)."""
     items = [c for c in (consumers or []) if isinstance(c, dict)]
     if not items:
         return [], []
@@ -270,6 +271,7 @@ def check(consumers: "list[dict] | None", extra_readers: "list[dict] | None", *,
         changed = _changed_units(repo, base, new_files or [])
     except _GitError as exc:
         return [], [f"consumers gate: readers NOT verified — {exc}"]
+    by_id, rejected = contract_readers.resolve(items, extra_readers, [repo, *roots])
     for c in items:
         cid = str(c.get("id") or "?")
         pattern = c.get("pattern")
@@ -281,7 +283,8 @@ def check(consumers: "list[dict] | None", extra_readers: "list[dict] | None", *,
         paths = [root_path(p) for p in raw_paths]
         if not raw_paths or any(p is None for p in paths):
             errors.append(f"{cid}: paths must be tree roots inside the repo ('.', 'backend', "
-                          f"'desktop'), not {raw_paths!r} — search the tree, not the files you expect")
+                          f"'desktop'; no pathspec magic or glob characters), not {raw_paths!r} — "
+                          "search the tree, not the files you expect")
             continue
         try:
             hits = _hits(repo, pattern, paths)
@@ -291,7 +294,9 @@ def check(consumers: "list[dict] | None", extra_readers: "list[dict] | None", *,
         except _GitError as exc:
             warnings.append(f"consumers gate: {cid} readers NOT verified — {exc}")
             continue
-        declared = _readers(c, extra_readers or [], repo, roots, errors)
+        entries = by_id.get(cid, [])
+        errors += [r["error"] for r in rejected if r["id"] == cid]
+        declared = {e["unit"]: e for e in entries}
         if not hits:
             try:
                 had = _hit_at_base(repo, base, pattern, paths)
@@ -308,23 +313,30 @@ def check(consumers: "list[dict] | None", extra_readers: "list[dict] | None", *,
         for u in sorted(hit_units):
             if u in changed:
                 continue
-            got = _covered(u, declared)
-            if got and got[0] == "unaffected" and len(got[1]) >= _REASON_MIN:
+            got = declared.get(u)
+            if got and got["status"] == "unaffected" and len(got["reason"]) >= _REASON_MIN:
                 continue
             missing.append((u, got))
         for u, got in missing[:MAX_HITS_SHOWN]:
-            if got and got[0] == "unaffected":
+            if got and got["status"] == "unaffected":
                 errors.append(f"{cid}: {u} is declared unaffected without a reason (>= {_REASON_MIN} chars)")
-            elif got and got[0] == "migrated":
+            elif got and got["status"] == "migrated":
                 errors.append(f"{cid}: {u} is declared migrated but the change does not touch it")
             else:
+                path, _, q = u.partition("::")
+                hint = (f" (a declaration of {path} is {path}::<file>; name it {path}::<module>)"
+                        if q == "<module>" and f"{path}::<file>" in declared else "")
                 errors.append(f"{cid}: {u} matches {pattern!r} but the change does not touch it and "
-                              f"no reader declares it unaffected — migrate it, or run-update "
+                              f"no reader declares it unaffected{hint} — migrate it, or run-update "
                               f"--add-consumer-reader '{cid}|{u}|unaffected|<reason>'")
         if len(missing) > MAX_HITS_SHOWN:
             errors.append(f"{cid}: {len(missing) - MAX_HITS_SHOWN} more unit(s) not shown")
-        for u, status, _reason in declared:
-            if status == "migrated" and u not in changed and u not in {m[0] for m in missing} \
-                    and f"{u.partition('::')[0]}::<file>" not in changed:
-                errors.append(f"{cid}: {u} is declared migrated but the change does not touch it")
+        shown = {m[0] for m in missing}
+        for u, e in declared.items():
+            if e["status"] == "migrated" and u not in shown and not _credited(u, changed):
+                path, _, q = u.partition("::")
+                hint = (f" (a bare {path} is {path}::<file>, which a parsable .py never has; "
+                        f"name the function or {path}::<module>)"
+                        if q == "<file>" and path.endswith(".py") else "")
+                errors.append(f"{cid}: {u} is declared migrated but the change does not touch it{hint}")
     return errors, warnings

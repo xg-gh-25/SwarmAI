@@ -3572,6 +3572,11 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         # exit_evidence is not rejected (or judged unmet) on this path either.
         import pipeline_validator as _pv_norm
         stage_record = _pv_norm.normalize_exit_evidence(stage_record)
+        # gate1_points are the Gate-1 skeptic's own lines, derived from its audit marker
+        # by stage-complete: never taken from this input (it is the model's), and kept
+        # from the record being replaced below, so this path neither injects nor erases them
+        if isinstance(stage_record, dict):
+            stage_record.pop("gate1_points", None)
         # Did THIS call assert push_ready? A carried-forward verdict must not be re-capped:
         # run-commit may already have relied on it, and re-judging it against later
         # file edits would rewrite a passed gate as failed.
@@ -3634,6 +3639,8 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             existing_rec = run_state["stages"][existing_idx]
             if isinstance(existing_rec, dict):
                 _carry_forward(stage_record, existing_rec)
+                if existing_rec.get("gate1_points") is not None:
+                    stage_record["gate1_points"] = existing_rec["gate1_points"]
                 # The verdict carries as ONE unit, and only when the finalize says
                 # nothing about push_ready: a payload that sets push_ready brings its
                 # own verdict, never a stale reason/capped flag from the old one.
@@ -3865,6 +3872,14 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         result["run_documents"] = run_docs_status
         if run_docs_warnings:
             result["run_documents_warnings"] = run_docs_warnings
+    if getattr(args, "add_consumer_reader", None):
+        # every exemption the consumers gate accepts is shown in DESIGN_SPEC.md (the
+        # completion docs gate renders it again from the final state)
+        from core import run_docs as _rd_cr
+        if _rd_cr.write_stage_doc(run_file.parent, {**run_state, "id": args.run_id}, "plan") is None:
+            result.setdefault("warnings", []).append(
+                "DESIGN_SPEC.md was not re-rendered with the new reader (no PLAN artifact, "
+                "or the write failed); the completion docs gate renders it again")
     if args.status in ("abandoned", "failed", "cancelled"):
         # A run that ends without completing still hands back its report (the chat's
         # summary card lists it); best-effort, never undoes the status already written.
@@ -5077,13 +5092,14 @@ def _gate1_points_from_text(text: "str | None") -> "list[str]":
     return out
 
 
-def _gate1_points(run_id: str, run_state: dict) -> "list[str]":
+def _gate1_points(run_id: str, run_state: dict, stage: str = "build") -> "list[str]":
     """The BLOCK / WARN / PARTIAL lines of the gate1-skeptic round whose verdict counts —
     the same window and the same bound rounds the Gate-1 verdict check uses
-    (``_gate1_prompt_unread``), so a round that never loaded the gate cannot supply the
+    (``_gate1_prompt_unread``; the hand-out time, else *stage*'s start — build, or a
+    goal run's goal_cycle), so a round that never loaded the gate cannot supply the
     points. [] when that round carries no text (a daemon from before the hook kept it)."""
     handout = run_state.get("gate1_handout") if isinstance(run_state.get("gate1_handout"), dict) else {}
-    timing = (run_state.get("stage_timing") or {}).get("build") or {}
+    timing = (run_state.get("stage_timing") or {}).get(stage) or {}
     since = _iso_epoch(handout.get("at")) or _iso_epoch(
         timing.get("first_started_at") or timing.get("started_at")) or 0.0
     unread, bound = _gate1_prompt_unread(run_id, run_state, since, [])
@@ -9652,7 +9668,7 @@ _DERIVED_RECORD_KEYS = frozenset({
     "stage", "name", "status", "artifact_id", "stage_doc_consumed",
     "consumed_artifacts", "token_usage", "token_cost_source", "derived_sources",
     "auto_recorded", "exit_criteria_met", "exit_contract_source", "push_ready_capped",
-    "gate2_outcome", "push_ready_lowered", "degraded",
+    "gate2_outcome", "push_ready_lowered", "degraded", "gate1_points",
 })
 # A PLAN record written by stage-complete carries this marker: its run declared an
 # exit contract through the strict path, so a missing contract at DELIVER is UNMET.
@@ -10295,13 +10311,17 @@ def _derive_stage_fields(
                                              "source": "STAGE_ROUTING upstream records"}
 
     reg_ev = _read_run_evidence(run_dir, "tests/latest-regression.json", run_id)
+    if stage in ("build", "goal_cycle") and not skipped:
+        # the skeptic's own points, from its marker (never the model's summary:
+        # gate1_points is a derived-only key, so a model value is dropped); read from
+        # run state and markers only, so an artifactless goal_cycle gets them too
+        _pts = _gate1_points(run_id, run_state, stage)
+        if _pts:
+            cand_rec["gate1_points"] = _pts
+            derived["gate1_points"] = {"value": len(_pts), "source": "gate1-skeptic marker verdict_text"}
     if isinstance(artifact, dict) and not skipped:
         ft = run_state.get("files_touched")
         if stage == "build":
-            _pts = _gate1_points(run_id, run_state)
-            if _pts:   # the skeptic's own points, from its marker (not the model's summary)
-                cand_rec["gate1_points"] = _pts
-                derived["gate1_points"] = {"value": len(_pts), "source": "gate1-skeptic marker verdict_text"}
             import pipeline_worktree as _pw_b
             recorded = [f for f in ft if isinstance(f, str)] if isinstance(ft, list) else []
             declared = artifact.get("files_changed")
@@ -12571,14 +12591,16 @@ def _cli_cmd(rest: str) -> str:
 
 
 def _run_worktree_path(run_id: str, run_state: dict) -> "Path | None":
+    """The gated repo's worktree (``contract_readers.gated_entry``), or None."""
+    from core import contract_readers
     from core import run_worktree as rw
-    for e in run_state.get("worktrees") or []:
-        if isinstance(e, dict) and e.get("state") == "active" and e.get("repo_name"):
-            try:
-                return rw.wt_path(run_id, str(e["repo_name"]))
-            except rw.WorktreeError:
-                return None
-    return None
+    e = contract_readers.gated_entry(run_state)
+    if e is None:
+        return None
+    try:
+        return rw.wt_path(run_id, str(e["repo_name"]))
+    except rw.WorktreeError:
+        return None
 
 
 # ── consumers gate (scripts/consumers_gate.py; plan implementation_constraints) ──────
@@ -12597,13 +12619,20 @@ def _parse_consumer_reader(spec: str) -> dict:
 
 
 def _apply_consumer_readers(run_state: dict, specs: "list[str]") -> None:
-    """Append readers declared after PLAN to run.json ``consumer_readers`` (append-only,
-    idempotent — the same entry twice is one entry)."""
+    """Add readers declared after PLAN to run.json ``consumer_readers``: an ordered
+    history in which the latest declaration of a unit decides
+    (``core/contract_readers.resolve``). An entry added again moves to the end, so it is
+    the latest again; nothing is dropped."""
+    from core import contract_readers
+    roots = contract_readers.run_roots(run_state)
     have = run_state.get("consumer_readers") if isinstance(run_state.get("consumer_readers"), list) else []
     for spec in specs or []:
         entry = _parse_consumer_reader(spec)
-        if entry not in have:
-            have.append(entry)
+        if contract_readers.unit(entry["at"], roots) is None:
+            # refused here, not stored: a stored one could never be superseded
+            raise ValueError(f"--add-consumer-reader: '{entry['at']}' is outside the run's "
+                             "repo — name it repo-relative (path::function)")
+        have = [h for h in have if h != entry] + [entry]
     run_state["consumer_readers"] = have
 
 
@@ -12616,16 +12645,17 @@ def _consumers_repo(run_id: str, run_state: dict) -> "dict | None":
     from core import run_worktree as rw
     wt = _run_worktree_path(run_id, run_state)
     if wt is not None and wt.is_dir():
-        entry = next((e for e in run_state.get("worktrees") or []
-                      if isinstance(e, dict) and e.get("state") == "active"), {})
+        from core import contract_readers
+        entry = contract_readers.gated_entry(run_state) or {}   # the repo wt belongs to
         base = str(entry.get("base") or "").strip()
         if base:
             try:
                 new = rw.untracked_new_files(wt, run_id)
             except rw.WorktreeError:
                 new = []
-            roots = [Path(entry["main"])] if entry.get("main") else []
-            return {"repo": wt, "base": base, "roots": roots, "new_files": new}
+            # the roots DESIGN_SPEC.md uses too: one unit, one key, in both
+            return {"repo": wt, "base": base, "roots": contract_readers.run_roots(run_state),
+                    "new_files": new}
     return None
 
 
@@ -15062,7 +15092,7 @@ def main() -> None:
     p_run_update.add_argument("--add-required-expert", default=None, action="append", metavar="EXPERT_ID",
                               help="APPEND an expert id to run.json required_experts (R1.5a, D7 key-system; append-only — repeatable, idempotent, NEVER removes). The future D7 gate verifies declared ⊆ actually-ran.")
     p_run_update.add_argument("--add-consumer-reader", default=None, action="append", metavar="K<n>|PATH::FN|STATUS[|REASON]",
-                              help="APPEND a reader of a PLAN-declared contract to run.json consumer_readers (status migrated | unaffected; unaffected needs a reason). Append-only, repeatable, idempotent; read by the consumers gate at BUILD and before each Gate-2 re-check")
+                              help="Declare a reader of a PLAN-declared contract in run.json consumer_readers (status migrated | unaffected; unaffected needs a reason). The latest declaration of a unit decides (it can correct a PLAN reader; re-adding an entry makes it the latest again); every declaration is shown in DESIGN_SPEC.md. Repeatable; read by the consumers gate at BUILD and before each Gate-2 re-check")
     p_run_update.add_argument("--force-checkpoint", action="store_true", help="Override the confabulation guard when setting --status paused")
     p_run_update.add_argument("--outputs-surfaced", action="store_true",
                               help="With --status completed: record that this run's committed source was surfaced "

@@ -1267,7 +1267,8 @@ def _read(p: Path) -> "bytes | None":
 
 # A claimed path is a file name, never a pattern: `app/[id]/x.tsx` must not also match
 # `app/i/x.tsx` (git() drops an inherited GIT_LITERAL_PATHSPECS, so pass the flag).
-_LIT = "--literal-pathspecs"
+LITERAL_PATHSPECS = "--literal-pathspecs"   # also scripts/consumers_gate._git
+_LIT = LITERAL_PATHSPECS
 
 
 def _index_entry(cwd, rel: str) -> str:
