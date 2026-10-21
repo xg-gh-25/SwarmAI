@@ -77,8 +77,8 @@ MEMORY_SECTIONS = [
 MEMORY_ENTRY_SECTIONS = {
     "Decisions": 60, "Guidelines": 250, "Pitfalls": 200, "Corrections": 30,
 }
-# EVOLUTION.md correction marker: the live format is inline "C0NN" ids (e.g.
-# C037) + "### CLASS A/B/C" headers, NOT the legacy "### C\d+ | YYYY-MM".
+# EVOLUTION.md correction marker: "C0NN" ids (e.g. C056), found both in
+# "### C056 | YYYY-MM-DD" entries and inline under "### CLASS A/B/C" blocks.
 EVOLUTION_CORRECTION_RE = r"\bC0\d{2}\b"
 EVOLUTION_CLASS_RE = r"^### CLASS [ABC]"
 
@@ -89,7 +89,10 @@ EVOLUTION_CLASS_RE = r"^### CLASS [ABC]"
 PROBE_REGISTRY = [
     ("M1/M3", "MEMORY.md", "## Decisions"),
     ("M4", "MEMORY.md", "## Open Threads"),
-    ("E3/E4", "EVOLUTION.md", "### CLASS A"),
+    # E3/E4 anchor on the stable section, not a single CLASS header: size-valve
+    # archival moves whole CLASS blocks into EVOLUTION-archive*.md (### CLASS A
+    # went 2026-07-19), which made this probe report DRIFTED on a healthy file.
+    ("E3/E4", "EVOLUTION.md", "## Corrections Captured"),
     # X1 PROBE removed 2026-08-14 — this registry row asserted the "## Knowledge
     # Index" section EXISTS, but that section was deleted with the in-prompt index.
     # (The X1 *finding* in _check_coherence still works — it reads capability sync
@@ -470,8 +473,8 @@ class SelfLoopsHealthEngine:
                 status="fail", detail="Missing",
             ))
 
-        # E3: Correction capture — live format is inline "C0NN" ids (e.g. C037)
-        # under "### CLASS A/B/C", NOT the legacy "### C\d+ | YYYY-MM" headers.
+        # E3: Correction capture — counts distinct "C0NN" ids (e.g. C037), whether
+        # they sit in "### C056 | 2026-10-20" entry headers or inline under a CLASS block.
         # Count distinct correction ids present (capture is healthy if the
         # registry holds corrections at all; recency is measured by M1 dates).
         c_ids = set(re.findall(EVOLUTION_CORRECTION_RE, evolution))
