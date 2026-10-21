@@ -904,3 +904,24 @@ class TestConsecutiveRepeatDetection:
         assert results[5] == EscalationLevel.SOFT_WARN
         # Still PASSIVE phase the whole time
         assert guard.phase == GuardPhase.PASSIVE
+
+
+def test_a_repeated_detection_is_logged_once_per_turn(caplog):
+    """2026-10-21: _detect_loop runs on every later call and re-logged the same
+    single_tool_repeat 388 times. Still detected every time; logged once."""
+    import logging
+    guard = CompactionGuard()
+    guard.activate()
+    with caplog.at_level(logging.WARNING, logger="core.compaction_guard"):
+        for _ in range(8):
+            guard.record_tool_call("Read", {"file_path": "/x/diff.patch"})
+            guard._detect_loop()
+        assert guard._detect_loop() is True
+        lines = [r for r in caplog.records if "loop_detected single_tool_repeat" in r.getMessage()]
+        assert len(lines) == 1
+        guard.reset()
+        for _ in range(5):
+            guard.record_tool_call("Read", {"file_path": "/x/diff.patch"})
+        guard._detect_loop()
+        lines = [r for r in caplog.records if "loop_detected single_tool_repeat" in r.getMessage()]
+        assert len(lines) == 2  # a new turn logs its own first detection

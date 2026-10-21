@@ -510,7 +510,8 @@ def _git_verdict(g: dict, own: "_Own | None") -> "dict | None":
     in_wt = run_for_path(d)
     strict = in_wt is not None or own is not None
     root = os.path.realpath(str(wt_root()))
-    if sub == "stash" and in_wt is not None:
+    # `stash list` / `stash show` only read refs/stash (denied 10-20 and 10-21)
+    if sub == "stash" and in_wt is not None and not (args and args[0] in ("list", "show")):
         return _deny("git stash is shared by every worktree (refs/stash): a stash made here "
                      "can be popped into the main checkout. To look at base, use "
                      "`artifact_cli.py run-diff --mark <name>` and `run-diff --since <name>`.")

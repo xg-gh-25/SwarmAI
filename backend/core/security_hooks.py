@@ -1802,26 +1802,57 @@ def _bg_segment_is_text(seg: list[str]) -> bool:
         os.path.basename(seg[1]) == "artifact_cli.py")
 
 
+# Programs that run a file, a string or their stdin as code: a list that runs one
+# anywhere keeps the strict whole-command rule (`echo nohup x > f; bash f`).
+_BG_CODE_RUNNERS = frozenset({
+    "bash", "sh", "zsh", "dash", "ksh", "fish", "source", ".", "eval", "exec",
+    "xargs", "env", "sudo", "su", "ssh", "node", "perl", "ruby", "osascript", "make",
+})
+
+
 def _bg_keyword_is_text(command: str) -> bool:
-    """True when the detach keywords in *command* can only be text: the command
-    parses, has no backtick and no substitution inside a token, and every segment is
-    a text-only program (_bg_segment_is_text). Fail closed otherwise, so a keyword
-    reached through a wrapper (``env -i``, ``sudo -u``, ``nohup grep``), shell or
-    interpreter code (``bash -c``, ``python -c``, ``node -e``, a heredoc a shell
-    reads), or a program that runs its arguments (``find -exec``, ``xargs``,
-    ``su -c``, ``ssh``) is still denied. A heredoc body written by ``cat > f`` is
+    """True when the detach keywords in *command* can only be text.
+
+    The command must parse and have no backtick. It is split into lists at
+    top-level ``;`` ``&&`` ``||`` (a pipe or a subshell keeps segments together):
+    every list that contains a keyword must consist of text-only programs
+    (_bg_segment_is_text) with no substitution inside a token. A list without a
+    keyword cannot pass one on — unless some list runs code (a shell, an
+    interpreter, a wrapper: _BG_CODE_RUNNERS / python), which could read a file the
+    keyword was written to; then every segment of the whole command must be text,
+    as before. So ``sed -n 1,9p f; grep setsid f`` is text (10-20 / 10-21 false
+    denies), while a keyword reached through a wrapper (``env -i``, ``sudo -u``,
+    ``nohup grep``), shell or interpreter code (``bash -c``, ``python -c``, a
+    heredoc a shell reads), or a program that runs its arguments (``find -exec``,
+    ``xargs``, ``ssh``) is still denied. A heredoc body written by ``cat > f`` is
     not a segment, so its text does not count."""
     if "`" in command:
         return False
-    segments = _gate_shell_segments(command)
+    seps: "list[str]" = []
+    segments = _gate_shell_segments(command, seps)
     if not segments:
         return False
-    for seg in segments:
-        if not _bg_segment_is_text(seg):
-            return False
-        if any(m in t for t in seg for m in ("$(", "<(", ">(")):
-            return False
-    return True
+    lists: "list[list[list[str]]]" = []
+    for seg, sep in zip(segments, seps):
+        if not lists or sep in (";", "&&", "||"):
+            lists.append([seg])
+        else:
+            lists[-1].append(seg)
+
+    def _has_kw(segs: "list[list[str]]") -> bool:
+        return any(_BG_KEYWORD_RE.search(t) for sg in segs for t in sg)
+
+    def _all_text(segs: "list[list[str]]") -> bool:
+        return all(_bg_segment_is_text(sg)
+                   and not any(m in t for t in sg for m in ("$(", "<(", ">("))
+                   for sg in segs)
+
+    runs_code = any(os.path.basename(sg[0]) in _BG_CODE_RUNNERS
+                    or _BG_PYTHONS.match(os.path.basename(sg[0]))
+                    for sg in segments)
+    if runs_code:
+        return _all_text(segments)
+    return all(_all_text(lst) for lst in lists if _has_kw(lst))
 
 
 async def background_command_guard(

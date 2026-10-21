@@ -112,6 +112,11 @@ def test_shared_git_state_denied_inside_any_run_worktree(env, cmd):
     assert _denied(wg.judge(_call("Bash", cwd=str(env["wt"]), command=cmd), None))
 
 
+@pytest.mark.parametrize("cmd", ["git stash list", "git stash show -p stash@{0}"])
+def test_reading_the_stash_is_allowed_inside_a_run_worktree(env, cmd):
+    assert not _denied(wg.judge(_call("Bash", cwd=str(env["wt"]), command=cmd), None))
+
+
 def test_git_stash_in_worktree_via_dash_c_from_main(env):
     assert _denied(wg.judge(_call("Bash", cwd=str(env["main"]),
                                   command=f"git -C {env['wt']} stash pop"), None))

@@ -179,6 +179,8 @@ class CompactionGuard:
     # ── Init & Properties ────────────────────────────────────────
 
     def __init__(self) -> None:
+        # Loop detections already logged this turn (_log_detection_once)
+        self._logged_detections: set = set()
         # Phase
         self._phase: GuardPhase = GuardPhase.PASSIVE
 
@@ -482,6 +484,16 @@ class CompactionGuard:
 
     # ── _detect_loop() ───────────────────────────────────────────
 
+    def _log_detection_once(self, key, msg: str, *args) -> None:
+        """Log a loop detection the first time *key* is seen: _detect_loop runs on
+        every later call and re-detects the same pattern (388 identical lines by
+        2026-10-21)."""
+        seen = self._logged_detections
+        if key in seen:
+            return
+        seen.add(key)
+        logger.warning(msg, *args)
+
     def _detect_loop(self) -> bool:
         """Detect loop via set-overlap and single-tool repetition.
 
@@ -498,7 +510,7 @@ class CompactionGuard:
                 1 for pair in seq if pair in self._pre_compaction_set
             )
             if overlap_count / total > _OVERLAP_THRESHOLD:
-                logger.warning(
+                self._log_detection_once("set_overlap",
                     "compaction_guard.loop_detected set_overlap "
                     "overlap=%d total=%d pct=%.1f%%",
                     overlap_count,
@@ -517,7 +529,7 @@ class CompactionGuard:
             counter = Counter(seq)
             most_common_pair, most_common_count = counter.most_common(1)[0]
             if most_common_count >= _SINGLE_TOOL_REPEAT_LIMIT:
-                logger.warning(
+                self._log_detection_once((most_common_pair, "single"),
                     "compaction_guard.loop_detected single_tool_repeat "
                     "tool=%s hash=%s count=%d",
                     most_common_pair[0],
@@ -876,6 +888,7 @@ class CompactionGuard:
             self._post_compaction_sequence = []
             self._last_pattern_desc = ""
             self._grace_calls_remaining = 0
+            self._logged_detections = set()
         except Exception:
             logger.exception("compaction_guard.reset failed")
 
@@ -900,6 +913,7 @@ class CompactionGuard:
             self._last_pair = None
             self._consec_count = 0
             self._grace_calls_remaining = 0
+            self._logged_detections = set()
         except Exception:
             logger.exception("compaction_guard.reset_all failed")
 

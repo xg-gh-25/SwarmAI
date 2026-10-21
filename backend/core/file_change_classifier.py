@@ -73,6 +73,7 @@ def _clean_target(tok: str) -> str | None:
     return tok
 
 
+_SEGMENT_SEPS = frozenset({"&&", "||", "|", ";", "&", ";;", "|&", "(", ")"})
 _REDIR_OPS = frozenset({">", ">>", "<", "<<", "<<<", ">&", "<&", "&>", "&>>", ">|"})
 
 
@@ -139,8 +140,15 @@ def parse_bash_write_targets(command: str) -> list[str]:
                     targets.append(t)
                 break  # first file target is enough for surfacing
         elif tok in ("cp", "mv"):
-            # dest is the LAST non-flag argument
-            args = [a for a in tokens[i + 1:] if not a.startswith("-")]
+            # dest is the LAST non-flag argument OF THIS SEGMENT: without the cut at
+            # the next separator, `cp a b; grep x f | sed -n 1,80p` named sed's
+            # script `1,80p` as the destination (2026-10-21 worktree-gate false deny)
+            rest: list[str] = []
+            for a in tokens[i + 1:]:
+                if a in _SEGMENT_SEPS:
+                    break
+                rest.append(a)
+            args = [a for a in rest if not a.startswith("-")]
             if len(args) >= 2:
                 t = _clean_target(args[-1])
                 if t and t not in targets:
@@ -150,7 +158,7 @@ def parse_bash_write_targets(command: str) -> list[str]:
     #    so a later `&& cat x` is never mistaken for an edited file.
     seg: list[str] = []
     for tok in tokens + [";"]:
-        if tok in ("&&", "||", "|", ";", "&"):
+        if tok in _SEGMENT_SEPS:
             for t in _sed_in_place_targets(seg):
                 if t not in targets:
                     targets.append(t)
@@ -287,7 +295,12 @@ def parse_bash_delete_targets(command: str) -> list[str]:
     # `rm` inside them is never treated as a command.
     unquoted = _blank_quoted(_blank_heredocs(command))
     try:
-        tokens = shlex.split(unquoted)
+        # punctuation_chars splits `;` `&&` `|` off their neighbours: plain
+        # shlex.split glued them to the word (`a;`), so `rm a; ls b c` was ONE
+        # segment and reported `ls`, `b`, `c` as deleted (2026-10-21).
+        lex = shlex.shlex(unquoted, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        tokens = _drop_redirections(list(lex))
     except ValueError:
         return []  # unbalanced quotes → refuse to guess
 
@@ -295,10 +308,9 @@ def parse_bash_delete_targets(command: str) -> list[str]:
     # Split into command segments on shell separators, so we only treat a token as
     # `rm`/`mv` when it is the COMMAND (segment head), never a subcommand
     # (`git rm`) or a bare word (`cat rmfile`).
-    _SEPARATORS = {"&&", "||", "|", ";", "&"}
     segments: list[list[str]] = [[]]
     for tok in tokens:
-        if tok in _SEPARATORS:
+        if tok in _SEGMENT_SEPS:
             segments.append([])
         else:
             segments[-1].append(tok)

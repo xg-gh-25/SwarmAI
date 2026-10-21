@@ -590,3 +590,24 @@ class TestPollChannelMessages:
             assert on_message.call_count == 0
         finally:
             loop.close()
+
+
+def test_switching_to_polling_closes_the_dead_socket_handler(adapter):
+    """F8c (2026-10-21): left open, slack_bolt's monitor thread reconnected every
+    ~11s all night. The close runs in a worker thread (it joins threads)."""
+    import threading
+    closed_on = []
+    handler = MagicMock()
+    handler.close.side_effect = lambda: closed_on.append(threading.current_thread())
+    adapter._handler = handler
+    adapter._ws_fail_count = 3
+    loop = asyncio.new_event_loop()
+    try:
+        with patch.object(adapter, "_ensure_identity", new_callable=AsyncMock), \
+             patch.object(adapter, "_discover_poll_channels", new_callable=AsyncMock), \
+             patch.object(adapter, "_run_polling", new_callable=AsyncMock):
+            loop.run_until_complete(adapter._switch_to_polling())
+    finally:
+        loop.close()
+    assert len(closed_on) == 1 and closed_on[0] is not threading.main_thread()
+    assert adapter._connection_mode == "polling"

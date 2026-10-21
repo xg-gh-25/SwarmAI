@@ -69,3 +69,16 @@ def test_redirect_operands_are_not_file_arguments():
     from core.file_change_classifier import parse_bash_write_targets
     assert parse_bash_write_targets("sed -i 's/a/b/' f.py 2>&1") == ["f.py"]
     assert parse_bash_write_targets("sed -i 's/a/b/' f.py 2>/dev/null") == ["f.py"]
+
+
+# ── 2026-10-21: a cp/mv/rm argument list ends at the segment's separator ──
+def test_cp_dest_and_rm_args_stop_at_the_next_separator():
+    from core.file_change_classifier import parse_bash_delete_targets, parse_bash_write_targets
+    # sed's script `1,80p` was read as cp's destination → worktree-gate false deny
+    assert parse_bash_write_targets("cp a b; grep x f | sed -n 1,80p") == ["b"]
+    assert parse_bash_write_targets("cp a b | cat") == ["b"]
+    assert parse_bash_write_targets("cp -r src dst && echo ok") == ["dst"]
+    # `rm a; ls b c` reported ls, b and c as deleted
+    assert parse_bash_delete_targets("rm a; ls b c") == ["a"]
+    assert parse_bash_delete_targets("mv a b; grep x f") == ["a"]
+    assert parse_bash_delete_targets("rm -f x.log 2>/dev/null; echo") == ["x.log"]

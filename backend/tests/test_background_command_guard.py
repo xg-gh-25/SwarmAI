@@ -230,3 +230,31 @@ def test_a_named_detach_keyword_is_data(command):
 ])
 def test_a_detach_keyword_that_runs_is_still_caught(command):
     assert _is_backgrounded(command, {"command": command}) is True
+
+
+# ── F7 (2026-10-21 stability design): a keyword only counts in the list it is in ──
+def test_keyword_in_a_separate_text_list_is_not_backgrounding():
+    """The 10-20 and 10-21 false denies: a read-only `grep setsid` after `sed -n`."""
+    from core.security_hooks import _is_backgrounded
+    for cmd in (
+        'sed -n 1320,1365p backend/scripts/pipeline_test.py; grep -n "setsid\\|nohup" x.py | head',
+        "cd core; sed -n 513,530p a.py; grep -n 'nohup' b.py | grep -n setsid | head -20",
+        "awk '{print}' f && grep -c disown f",
+    ):
+        assert not _is_backgrounded(cmd, {}), cmd
+
+
+def test_keyword_still_counts_where_it_can_run():
+    from core.security_hooks import _is_backgrounded
+    for cmd in (
+        "nohup sleep 999",
+        "sed -n 1p f; nohup sleep 999",
+        "echo 'nohup sleep 9' > f.sh; bash f.sh",
+        "echo setsid -f sleep 9 | xargs sh -c",
+        "grep -l x . | sed 's/^/nohup /' | sh",
+        "env -i nohup sleep 9",
+        "python3 -c 'import os; os.system(\"nohup sleep 9\")'",
+        "ls; find . -exec setsid sleep 9 \\;",
+        "cat f; echo `nohup sleep 9`",
+    ):
+        assert _is_backgrounded(cmd, {}), cmd

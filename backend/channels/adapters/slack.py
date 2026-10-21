@@ -550,15 +550,16 @@ class SlackChannelAdapter(ChannelAdapter):
             self._monitor_task.cancel()
             self._monitor_task = None
 
+        # close() and join() block (up to 3s+ each, 24 loop stalls by 10-21): off the loop
         if self._handler is not None:
             try:
-                self._handler.close()
+                await asyncio.to_thread(self._handler.close)
             except Exception:
                 pass
 
         ws_thread = self._ws_thread
         if ws_thread is not None and ws_thread.is_alive():
-            ws_thread.join(timeout=3.0)
+            await asyncio.to_thread(ws_thread.join, 3.0)
             if ws_thread.is_alive():
                 logger.warning(
                     "Slack WS thread for channel %s did not stop within 3s",
@@ -1417,6 +1418,18 @@ class SlackChannelAdapter(ChannelAdapter):
             self.channel_id,
             self._ws_fail_count,
         )
+        # Close the dead Socket Mode handler. Left open, slack_bolt's own monitor
+        # thread kept reconnecting every ~11s all night (1,550 DNS errors and 676
+        # "Failed to check" since 10-14). close() joins threads: off the loop. The
+        # attribute is kept (the stall path relies on that); a later successful
+        # probe replaces it, and closing a closed handler is harmless.
+        old = self._handler
+        if old is not None:
+            try:
+                await asyncio.to_thread(old.close)
+            except Exception:
+                logger.debug("Channel %s: closing the socket handler failed",
+                             self.channel_id, exc_info=True)
         # Resolve bot identity (needed for filtering own messages)
         await self._ensure_identity()
         # Discover which channels to poll
@@ -1685,11 +1698,12 @@ class SlackChannelAdapter(ChannelAdapter):
                     # a fresh one — reusing a crashed handler's start()
                     # may fail due to corrupted internal state.
                     if self._handler is not None:
+                        old = self._handler
+                        self._handler = None
                         try:
-                            self._handler.close()
+                            await asyncio.to_thread(old.close)   # joins threads: off the loop
                         except Exception:
                             pass
-                        self._handler = None
                     self._start_socket_mode_thread()
             elif ws is not None and ws.is_alive() and not self._stopped:
                 # Thread ALIVE but is it actually connected? Detects the stuck-but-

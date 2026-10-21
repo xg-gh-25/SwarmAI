@@ -2630,10 +2630,16 @@ class StreamingOrchestrator:
                             _background_agents[block.id] = True
                             self._launch_background_agent(block.id, block.input)
                         # ── Record tool call for compaction guard ──
-                        self._parent._compaction_guard.record_tool_call(
-                            block.name, block.input
-                        )
-                        level = self._parent._compaction_guard.check()
+                        # Only the main agent's own calls: parallel review sub-agents
+                        # each reading the same diff looked like one agent re-reading
+                        # it ("Loop pattern detected", 388 log lines by 10-21), and an
+                        # interrupt here would stop the parent for a child's pattern.
+                        level = EscalationLevel.MONITORING
+                        if _am_parent is None:
+                            self._parent._compaction_guard.record_tool_call(
+                                block.name, block.input
+                            )
+                            level = self._parent._compaction_guard.check()
                         if level != EscalationLevel.MONITORING:
                             guard_event = self._parent._compaction_guard.build_guard_event(level)
                             if guard_event:

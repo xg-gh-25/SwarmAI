@@ -73,6 +73,51 @@ _CODE_EXTENSIONS = frozenset(
 )
 
 
+
+def _git_running_in(ws_path: str) -> bool:
+    """True when a process named ``git`` has its cwd inside *ws_path*, or when that
+    cannot be told (fail toward keeping the lock)."""
+    try:
+        import psutil
+    except ImportError:
+        return True
+    root = os.path.join(os.path.realpath(ws_path), "")
+    for proc in psutil.process_iter(["name"]):
+        try:
+            if proc.info.get("name") != "git":
+                continue
+            cwd = os.path.join(os.path.realpath(proc.cwd()), "")
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            continue
+        except psutil.AccessDenied:
+            return True
+        if cwd.startswith(root):
+            return True
+    return False
+
+
+def _git(args: "list[str]", cwd: str, timeout: float, text: bool = False) -> subprocess.CompletedProcess:
+    """Run a git command; on timeout end it with SIGTERM first, SIGKILL only if it
+    does not exit within 3s, then raise TimeoutExpired.
+
+    subprocess.run(timeout=) SIGKILLs at once, and a git killed mid-``add`` leaves
+    .git/index.lock behind (48 stale locks removed 10-14 → 10-21, some up to 49
+    min old). git removes its own lock files on SIGTERM, so ending it that way
+    leaves none."""
+    proc = subprocess.Popen(["git", *args], cwd=cwd, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=text)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            proc.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+        raise
+    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+
 class WorkspaceAutoCommitHook:
     """Smart git commit at session close with conventional commit messages.
 
@@ -161,20 +206,12 @@ class WorkspaceAutoCommitHook:
             # resolve staged paths against the root, NOT ws_path (defense-in-depth
             # vs a future where the cached workspace path is a repo SUBDIR, which
             # would otherwise make every code path look uncovered → over-withhold).
-            root = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                cwd=ws_path, capture_output=True, text=True,
-                timeout=WorkspaceAutoCommitHook.GIT_TIMEOUT,
-            )
+            root = _git(["rev-parse", "--show-toplevel"], ws_path, WorkspaceAutoCommitHook.GIT_TIMEOUT, text=True)
             base = root.stdout.strip() if root.returncode == 0 and root.stdout.strip() else ws_path
 
             # Staged paths (name-only, NUL-safe), resolved to absolute realpaths to
             # match `covered` (which holds realpath'd absolutes from the marker).
-            staged = subprocess.run(
-                ["git", "diff", "--cached", "--name-only", "-z"],
-                cwd=ws_path, capture_output=True, text=True,
-                timeout=WorkspaceAutoCommitHook.GIT_TIMEOUT,
-            )
+            staged = _git(["diff", "--cached", "--name-only", "-z"], ws_path, WorkspaceAutoCommitHook.GIT_TIMEOUT, text=True)
             if staged.returncode != 0:
                 return set()
             withhold: set[str] = set()
@@ -250,9 +287,8 @@ class WorkspaceAutoCommitHook:
         - age > STALE_LOCK_AGE_SECONDS → delete UNCONDITIONALLY. A live hook
           commit self-bounds at GIT_TIMEOUT=10s, so a 300s lock is provably a
           zombie; a matching git process is itself wedged and must not block us.
-        - young lock (<= threshold) → keep the ``pgrep`` guard: delete only if
-          NO git process matches (an orphan), else skip (a live commit may hold
-          it legitimately).
+        - young lock (<= threshold) → delete only if no process named ``git``
+          runs with its cwd in this repo (_git_running_in); else skip.
         """
         lock_file = os.path.join(ws_path, ".git", "index.lock")
         if not os.path.exists(lock_file):
@@ -270,14 +306,13 @@ class WorkspaceAutoCommitHook:
                 )
                 return
 
-            # Young lock — a live commit may hold it; only remove a true orphan.
-            result = subprocess.run(
-                ["pgrep", "-f", f"git.*{ws_path}"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode != 0:  # No matching git process
+            # Young lock — a live commit may hold it; only remove a true orphan:
+            # no process NAMED git is running in this repo. The old test,
+            # `pgrep -f "git.*<ws>"`, matched command lines, and every claude CLI's
+            # names both git and the workspace path, so it always said "running".
+            if not _git_running_in(ws_path):
                 os.remove(lock_file)
-                logger.warning("Removed orphan .git/index.lock (young, no git process)")
+                logger.warning("Removed orphan .git/index.lock (young, no git in %s)", ws_path)
             else:
                 logger.info("Git index.lock is young and git is running — skipping cleanup")
         except FileNotFoundError:
@@ -306,10 +341,7 @@ class WorkspaceAutoCommitHook:
             return
         try:
             for i in range(0, len(rels), 100):  # batch to stay under argv limits
-                subprocess.run(
-                    ["git", "reset", "-q", "--", *rels[i:i + 100]],
-                    cwd=ws_path, capture_output=True, timeout=self.GIT_TIMEOUT,
-                )
+                _git(["reset", "-q", "--", *rels[i:i + 100]], ws_path, self.GIT_TIMEOUT)
             logger.info("auto_commit: unstaged %d sibling-session path(s) (R29)", len(rels))
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning("auto_commit: unstage of sibling paths failed (non-fatal): %s", e)
@@ -339,20 +371,12 @@ class WorkspaceAutoCommitHook:
 
         try:
             # 1. Check for changes
-            status = subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=ws_path, capture_output=True, text=True,
-                timeout=self.GIT_TIMEOUT,
-            )
+            status = _git(["status", "--porcelain"], ws_path, self.GIT_TIMEOUT, text=True)
             if not status.stdout.strip():
                 return  # No changes
 
             # 2. Stage all changes
-            add_result = subprocess.run(
-                ["git", "add", "-A"],
-                cwd=ws_path, capture_output=True,
-                timeout=self.GIT_TIMEOUT,
-            )
+            add_result = _git(["add", "-A"], ws_path, self.GIT_TIMEOUT)
             if add_result.returncode != 0:
                 logger.warning("git add failed: %s", add_result.stderr)
                 return
@@ -376,11 +400,7 @@ class WorkspaceAutoCommitHook:
                 self._unstage_paths(ws_path, to_unstage)
 
             # 3. Analyze staged changes
-            diff_stat = subprocess.run(
-                ["git", "diff", "--cached", "--stat"],
-                cwd=ws_path, capture_output=True, text=True,
-                timeout=self.GIT_TIMEOUT,
-            )
+            diff_stat = _git(["diff", "--cached", "--stat"], ws_path, self.GIT_TIMEOUT, text=True)
             changed_files = self._parse_diff_stat(diff_stat.stdout)
 
             # 4. Generate commit message
@@ -392,11 +412,7 @@ class WorkspaceAutoCommitHook:
                 message = self._generate_commit_message(changed_files)
 
             # 5. Commit
-            commit_result = subprocess.run(
-                ["git", "commit", "-m", message],
-                cwd=ws_path, capture_output=True,
-                timeout=self.GIT_TIMEOUT,
-            )
+            commit_result = _git(["commit", "-m", message], ws_path, self.GIT_TIMEOUT)
             logger.info("Auto-committed workspace: %s", message)
 
             # 5b. Emit GIT_COMMIT event for DDD cultivation v2
