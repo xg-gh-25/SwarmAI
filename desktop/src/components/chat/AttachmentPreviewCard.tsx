@@ -97,7 +97,7 @@ export function AttachmentPreviewCard({ attachment, onRemove }: AttachmentPrevie
               whose meta fetch failed. A wrong "0 B" is worse than no label. A real
               tiny file (size>0, e.g. 100 B) still shows. */}
           {size > 0 && (
-            <p className="text-[10px] text-[var(--color-text-muted)]">{formatFileSize(size)}</p>
+            <p className="text-[11px] text-[var(--color-text-muted)]">{formatFileSize(size)}</p>
           )}
         </div>
       </div>

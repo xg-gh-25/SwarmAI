@@ -382,7 +382,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
             onClick={() => setStarredOnly((v) => !v)}
             data-testid="artifacts-chip-Starred"
             aria-pressed={starredOnly}
-            className={`flex items-center gap-1 text-[10.5px] px-2.5 py-1 rounded-full border transition-colors ${
+            className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
               starredOnly
                 ? 'border-[var(--color-git-modified,#d59a26)] text-[var(--color-git-modified,#d59a26)] bg-[color-mix(in_srgb,var(--color-git-modified,#d59a26)_14%,transparent)]'
                 : 'border-[var(--color-git-modified,#d59a26)] text-[var(--color-git-modified,#d59a26)] hover:bg-[color-mix(in_srgb,var(--color-git-modified,#d59a26)_8%,transparent)]'
@@ -401,7 +401,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
                 }}
                 data-testid={`artifacts-chip-${role}`}
                 aria-pressed={on}
-                className={`flex items-center gap-1.5 text-[10.5px] px-2.5 py-1 rounded-full border transition-colors ${
+                className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
                   on
                     ? 'border-[var(--color-primary)] text-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_12%,transparent)]'
                     : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
@@ -419,7 +419,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
           {/* time-window chip (right-aligned) */}
           <span
             data-testid="artifacts-window-chip"
-            className={`ml-auto text-[10.5px] px-2.5 py-1 rounded-full border border-[var(--color-border)] ${
+            className={`ml-auto text-[11px] px-2.5 py-1 rounded-full border border-[var(--color-border)] ${
               ignoreWindow ? 'text-[var(--color-text-faint)] opacity-60' : 'text-[var(--color-text-muted)]'
             }`}
           >
@@ -462,7 +462,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
             {/* PRIMARY: time-grouped list of the active role */}
             {windowGroups.map((g) => (
               <section key={g.bucket} data-testid={`artifacts-timegroup-${g.bucket.replace(/\s/g, '-')}`}>
-                <div className="flex items-center gap-2 px-1 pt-4 pb-1.5 text-[10.5px] uppercase tracking-wide text-[var(--color-text-faint)]">
+                <div className="flex items-center gap-2 px-1 pt-4 pb-1.5 text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">
                   <span>{g.bucket}</span>
                   <span className="opacity-70">· {g.products.length}</span>
                   <span className="flex-1 h-px bg-[var(--color-border)] opacity-40" />
@@ -477,7 +477,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
             {!ignoreWindow && earlierCount > 0 && (
               foldOpen ? (
                 <section data-testid="artifacts-timegroup-Earlier">
-                  <div className="flex items-center gap-2 px-1 pt-4 pb-1.5 text-[10.5px] uppercase tracking-wide text-[var(--color-text-faint)]">
+                  <div className="flex items-center gap-2 px-1 pt-4 pb-1.5 text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">
                     <span>Earlier</span>
                     <span className="opacity-70">· {earlierCount}</span>
                     <span className="flex-1 h-px bg-[var(--color-border)] opacity-40" />

@@ -78,7 +78,7 @@ export function CommunityContent({ close }: CommunityContentProps) {
             ].join(' ')}
           >
             {t.label}
-            <span className="ml-1.5 text-[10px] font-normal text-[var(--color-text-faint)]">{t.sub}</span>
+            <span className="ml-1.5 text-[11px] font-normal text-[var(--color-text-faint)]">{t.sub}</span>
           </button>
         ))}
       </div>
@@ -166,7 +166,7 @@ function StateBanner({ loading, error, empty, emptyMsg }: {
 // chunk a tab into whitespace-separated groups instead of boxing every row.
 function SectionLabel({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={`text-[10px] uppercase tracking-wide text-[var(--color-text-faint)] font-semibold ${className}`}>
+    <div className={`text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] font-semibold ${className}`}>
       {children}
     </div>
   );
@@ -224,7 +224,7 @@ function InboundTab({ close }: { close: () => void }) {
               <span className="block text-[11.5px] text-[var(--color-text-dim)]">Weekly community report</span>
             </span>
             {pastReports.length > 0 && (
-              <span className="text-[10.5px] text-[var(--color-text-faint)] shrink-0">+{pastReports.length} past</span>
+              <span className="text-[11px] text-[var(--color-text-faint)] shrink-0">+{pastReports.length} past</span>
             )}
             <span className="text-[12px] text-[var(--panel-accent,var(--color-primary))] shrink-0">open ↗</span>
           </button>
@@ -318,7 +318,7 @@ function HotTopicsSection() {
         <SectionLabel>This week the community is discussing</SectionLabel>
         <span
           data-testid="hot-topics-freshness"
-          className={`text-[10.5px] flex items-center gap-1.5 ${fresh.stale ? 'text-amber-500' : 'text-emerald-500'}`}
+          className={`text-[11px] flex items-center gap-1.5 ${fresh.stale ? 'text-amber-500' : 'text-emerald-500'}`}
         >
           <span className={`w-[5px] h-[5px] rounded-full ${fresh.stale ? 'bg-amber-500' : 'bg-emerald-500'}`} aria-hidden />
           {fresh.text}
@@ -362,7 +362,7 @@ function HotTopicRow({ topic, widthPct }: { topic: CommunityHotTopic; widthPct: 
       <span className="w-16 h-1 rounded-full bg-[var(--color-border)] shrink-0 overflow-hidden" aria-hidden>
         <span className="block h-full rounded-full bg-[var(--panel-accent,var(--color-primary))]" style={{ width: `${widthPct}%` }} />
       </span>
-      <span className="text-[10.5px] text-[var(--color-text-dim)] w-8 text-right shrink-0">{topic.comments}</span>
+      <span className="text-[11px] text-[var(--color-text-dim)] w-8 text-right shrink-0">{topic.comments}</span>
     </button>
   );
 }
@@ -468,7 +468,7 @@ function SourcesTab() {
               disabled={busy === s.id}
               onClick={() => mutate(s.id, () => communityService.updateSource(s.id, { enabled: !s.enabled }))}
               className={[
-                'text-[10.5px] px-2 py-1 rounded border transition-colors',
+                'text-[11px] px-2 py-1 rounded border transition-colors',
                 s.enabled
                   ? 'text-[var(--color-text)] border-[var(--color-border-strong)]'
                   : 'text-[var(--color-text-faint)] border-[var(--color-border)]',
@@ -484,7 +484,7 @@ function SourcesTab() {
                 disabled={busy === s.id}
                 onClick={() => mutate(s.id, () => communityService.deleteSource(s.id))}
                 aria-label={`Confirm delete source ${s.name}`}
-                className="text-[10.5px] px-2 py-1 rounded bg-red-500/15 text-red-400 border border-red-500/40"
+                className="text-[11px] px-2 py-1 rounded bg-red-500/15 text-red-400 border border-red-500/40"
               >
                 confirm?
               </button>
@@ -565,7 +565,7 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
               disabled={busy}
               onClick={() => run(() => communityService.deleteMember(source.id, m), true)}
               aria-label={`Confirm remove member ${m}`}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/40"
+              className="text-[11px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/40"
             >
               confirm?
             </button>
@@ -583,7 +583,7 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
         </div>
       ))}
       {source.membersTruncated && (
-        <div className="text-[10.5px] text-[var(--color-text-faint)] py-0.5">
+        <div className="text-[11px] text-[var(--color-text-faint)] py-0.5">
           Showing first {source.members.length} of {source.memberCount}.
         </div>
       )}
@@ -758,7 +758,7 @@ function OutboundTab() {
                     <PostedRow key={`${it.repo}#${it.issueNumber}-${it.commentUrl}`} item={it} />
                   ))}
                   {capped && (
-                    <div data-testid="community-list-cap" className="mt-1 px-2 text-[10.5px] text-[var(--color-text-faint)] italic">
+                    <div data-testid="community-list-cap" className="mt-1 px-2 text-[11px] text-[var(--color-text-faint)] italic">
                       Showing the {items.length} most recent of {e.kpis.commentsPosted} posted comments.
                     </div>
                   )}
@@ -806,7 +806,7 @@ function FollowupRow({ item }: { item: CommunityEngagementItem }) {
           {item.repo}{item.issueNumber != null ? ` #${item.issueNumber}` : ''}
         </span>
         {item.hasMaintainerReply && (
-          <span className="text-[9px] uppercase tracking-wide text-amber-500 border border-amber-500/40 rounded px-1.5 py-0.5 shrink-0">
+          <span className="text-[11px] uppercase tracking-wide text-amber-500 border border-amber-500/40 rounded px-1.5 py-0.5 shrink-0">
             maintainer
           </span>
         )}
@@ -818,7 +818,7 @@ function FollowupRow({ item }: { item: CommunityEngagementItem }) {
           <span className="text-[var(--color-text-dim)] truncate">{latest.body}</span>
         </div>
       )}
-      <div className="mt-1 text-[10.5px] text-[var(--color-text-faint)]">
+      <div className="mt-1 text-[11px] text-[var(--color-text-faint)]">
         {item.topic && <span className="font-mono">{item.topic}</span>}
         {item.postedAt && <span> · posted {item.postedAt.slice(0, 10)}</span>}
         {item.confidence != null && <span> · conf {item.confidence}</span>}
@@ -844,7 +844,7 @@ function PostedRow({ item }: { item: CommunityEngagementItem }) {
         {item.repo}{item.issueNumber != null ? ` #${item.issueNumber}` : ''}
       </span>
       {item.replyCount > 0 && (
-        <span className={`text-[10.5px] shrink-0 ${item.hasMaintainerReply ? 'text-[var(--panel-accent,var(--color-primary))]' : 'text-emerald-500'}`}>
+        <span className={`text-[11px] shrink-0 ${item.hasMaintainerReply ? 'text-[var(--panel-accent,var(--color-primary))]' : 'text-emerald-500'}`}>
           ● {item.replyCount}
         </span>
       )}

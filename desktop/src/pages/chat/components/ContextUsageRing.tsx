@@ -58,7 +58,7 @@ export function ContextUsageRing({ pct, level = null, size = 18, showLabel = fal
         </svg>
       </div>
       {showLabel && (
-        <span className="text-[10px] font-medium text-[var(--color-text-muted)]" style={{ lineHeight: 1 }}>
+        <span className="text-[11px] font-medium text-[var(--color-text-muted)]" style={{ lineHeight: 1 }}>
           {pct !== null ? `${Math.round(pct)}%` : '—'}
         </span>
       )}

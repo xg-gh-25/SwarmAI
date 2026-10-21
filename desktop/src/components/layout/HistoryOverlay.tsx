@@ -186,7 +186,7 @@ export function HistoryContent({ agentId, onDeleteSession, onResume, close }: Hi
               <div className="flex items-center gap-3 px-4 py-2 border-b border-[var(--color-border)]">
                 <div className="flex-1 min-w-0">
                   <p className="text-[13px] font-medium truncate text-[var(--color-text)]">{previewSession.title}</p>
-                  <p className="text-[10.5px] text-[var(--color-text-muted)]">Read-only preview</p>
+                  <p className="text-[11px] text-[var(--color-text-muted)]">Read-only preview</p>
                 </div>
                 <button
                   onClick={handleResume}
@@ -201,9 +201,9 @@ export function HistoryContent({ agentId, onDeleteSession, onResume, close }: Hi
               </div>
               <div className="flex-1 overflow-y-auto px-4 py-3">
                 {previewLoading ? (
-                  <p className="text-[10.5px] text-[var(--color-text-muted)] text-center py-6">Loading…</p>
+                  <p className="text-[11px] text-[var(--color-text-muted)] text-center py-6">Loading…</p>
                 ) : previewMessages.length === 0 ? (
-                  <p className="text-[10.5px] text-[var(--color-text-muted)] text-center py-6">No messages</p>
+                  <p className="text-[11px] text-[var(--color-text-muted)] text-center py-6">No messages</p>
                 ) : (
                   previewMessages.map((m) => <MessageBubble key={m.id} message={m} readOnly />)
                 )}

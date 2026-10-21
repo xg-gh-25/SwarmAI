@@ -67,7 +67,7 @@ function SectionHeader({
   return (
     <button
       onClick={onToggle}
-      className="w-full flex items-center gap-1.5 px-3.5 py-1 text-[10px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-dim)] cursor-pointer hover:text-[var(--color-text-muted)] transition-colors border-t border-[var(--color-border)] first:border-t-0"
+      className="w-full flex items-center gap-1.5 px-3.5 py-1 text-[11px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-dim)] cursor-pointer hover:text-[var(--color-text-muted)] transition-colors border-t border-[var(--color-border)] first:border-t-0"
     >
       <span
         className="material-symbols-outlined text-[14px] transition-transform duration-150"
@@ -78,7 +78,7 @@ function SectionHeader({
       {title}
       {count > 0 && (
         <span
-          className={`ml-auto text-[9px] font-medium px-1.5 rounded-full ${
+          className={`ml-auto text-[11px] font-medium px-1.5 rounded-full ${
             badgeColor === 'green'
               ? 'bg-[rgba(63,185,80,0.12)] text-[#3fb950]'
               : 'bg-[var(--color-hover)] text-[var(--color-text-dim)]'
@@ -131,13 +131,13 @@ function WorkingFileItem({
         {node.name}
       </span>
       {parentName && (
-        <span className="text-[10px] font-mono text-[var(--color-text-dim)] truncate flex-shrink-0" style={{ maxWidth: 80 }}>
+        <span className="text-[11px] font-mono text-[var(--color-text-dim)] truncate flex-shrink-0" style={{ maxWidth: 80 }}>
           {parentName}
         </span>
       )}
       {badge && (
         <span
-          className="text-[9px] font-medium px-1 rounded-[3px] flex-shrink-0 ml-auto"
+          className="text-[11px] font-medium px-1 rounded-[3px] flex-shrink-0 ml-auto"
           style={{ color: badge.color, backgroundColor: badge.bg }}
         >
           {badge.label}
@@ -177,7 +177,7 @@ export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat }:
           </div>
         )}
         {workingOpen && workingFiles.length === 0 && (
-          <div className="px-3.5 py-2 text-[10px] text-[var(--color-text-dim)] italic">
+          <div className="px-3.5 py-2 text-[11px] text-[var(--color-text-dim)] italic">
             No uncommitted changes
           </div>
         )}

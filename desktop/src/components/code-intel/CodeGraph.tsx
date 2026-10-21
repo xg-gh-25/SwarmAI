@@ -230,9 +230,9 @@ export function CodeGraph({ project, limit = 300, onClose, inline = false }: Cod
 
       {/* Legend */}
       <div className="absolute bottom-4 left-4 bg-[#161b22] border border-gray-800 rounded-lg p-3 z-10 max-w-[200px]">
-        <div className="text-[10px] text-gray-400 mb-2 font-medium">Modules</div>
+        <div className="text-[11px] text-gray-400 mb-2 font-medium">Modules</div>
         {modules.map(([mod, count]) => (
-          <div key={mod} className="flex items-center gap-2 text-[10px] text-gray-300 py-0.5">
+          <div key={mod} className="flex items-center gap-2 text-[11px] text-gray-300 py-0.5">
             <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: getModuleColor(mod) }} />
             <span className="truncate">{mod}</span>
             <span className="text-gray-600 ml-auto">{count}</span>
@@ -244,7 +244,7 @@ export function CodeGraph({ project, limit = 300, onClose, inline = false }: Cod
       {hoveredNode && (
         <div className="absolute top-12 left-1/2 -translate-x-1/2 bg-[#161b22] border border-gray-700 rounded px-3 py-1.5 z-10 pointer-events-none">
           <div className="text-xs text-white font-mono">{hoveredNode.name}</div>
-          <div className="text-[10px] text-gray-400">{hoveredNode.type} · {hoveredNode.file_path}</div>
+          <div className="text-[11px] text-gray-400">{hoveredNode.type} · {hoveredNode.file_path}</div>
         </div>
       )}
 

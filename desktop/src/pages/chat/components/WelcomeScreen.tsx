@@ -51,12 +51,12 @@ function FocusItem({
         onClick={() => onClick?.(item.title)}
         className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer text-left"
       >
-        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${badge.cls}`}>
+        <span className={`text-[11px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${badge.cls}`}>
           {badge.label}
         </span>
         <span className="text-sm text-[var(--color-text)] truncate">{item.title}</span>
         {item.momentum && (
-          <span className="text-[10px] bg-green-500/15 text-green-400 px-1.5 py-0.5 rounded font-mono shrink-0">
+          <span className="text-[11px] bg-green-500/15 text-green-400 px-1.5 py-0.5 rounded font-mono shrink-0">
             ⚡ active
           </span>
         )}
@@ -101,11 +101,11 @@ function SectionCard({
     >
       <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
         <span className="text-[12px]">{icon}</span>
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-muted)]">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-muted)]">
           {title}
         </span>
         {count != null && count > 0 && (
-          <span className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-medium rounded-full bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]">
+          <span className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[11px] font-medium rounded-full bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]">
             {count}
           </span>
         )}

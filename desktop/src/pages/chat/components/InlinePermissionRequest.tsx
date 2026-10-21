@@ -193,7 +193,7 @@ export function InlinePermissionRequest({
           <span className="material-symbols-outlined text-sm">check</span>
           Approve
         </button>
-        <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">
+        <span className="ml-auto text-[11px] text-[var(--color-text-muted)]">
           {tf(t, 'chat.permission.timesOutIn', 'Times out in')} {formatRemaining(Math.ceil(remainingMs / 1000))}
         </span>
       </div>

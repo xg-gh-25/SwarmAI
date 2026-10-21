@@ -8,8 +8,9 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
-        mono: ['JetBrains Mono', 'Fira Code', 'ui-monospace', 'monospace'],
+        // The stacks live once, in index.css; utilities only point at them.
+        sans: ['var(--font-family-sans)'],
+        mono: ['var(--font-family-mono)'],
       },
       colors: {
         primary: {

@@ -486,7 +486,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
             backgroundColor: badge.bg,
             flexShrink: 0,
             letterSpacing: '0.02em',
-            fontFamily: 'monospace',
+            fontFamily: 'var(--font-family-mono)',
           }}
         >
           {badge.label}

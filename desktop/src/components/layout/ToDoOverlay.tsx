@@ -151,7 +151,7 @@ function Segmented<T extends string>({
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-muted)] shrink-0">{label}</span>
+      <span className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)] shrink-0">{label}</span>
       <div
         role="tablist"
         aria-label={label}
@@ -472,7 +472,7 @@ function Kpi({ label, value, testid, icon, primary }: { label: string; value: nu
       >{icon}</span>
       <div className="flex flex-col min-w-0">
         <span className={`text-[20px] leading-none tabular-nums ${primary ? 'font-bold text-primary' : 'font-semibold text-[var(--color-text)]'}`}>{value}</span>
-        <span className="mt-1 text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)] truncate">{label}</span>
+        <span className="mt-1 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)] truncate">{label}</span>
       </div>
     </div>
   );
@@ -494,9 +494,9 @@ function AnalyticsStrip({ weekly, sources }: {
           above) so the whole surface reads as one system, not stacked ad-hoc rows. */}
       <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-3 py-2.5" data-testid="todo-weekly">
         <div className="flex items-center justify-between">
-          <div className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Weekly activity</div>
+          <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">Weekly activity</div>
           {/* Legend — was missing entirely; gray vs accent bars were unlabeled. */}
-          <div className="flex items-center gap-2.5 text-[9px] text-[var(--color-text-muted)]">
+          <div className="flex items-center gap-2.5 text-[11px] text-[var(--color-text-muted)]">
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-[var(--color-text-faint)]/40" />Created</span>
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-primary" />Completed</span>
           </div>
@@ -504,7 +504,7 @@ function AnalyticsStrip({ weekly, sources }: {
         <WeeklyBars data={weekly} />
       </div>
       <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-3 py-2.5" data-testid="todo-sources">
-        <div className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Source distribution</div>
+        <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">Source distribution</div>
         <SourceBars data={sources} />
       </div>
     </div>
@@ -534,7 +534,7 @@ function SourceBars({ data }: { data: ReturnType<typeof sourceDist> }) {
   return (
     <div className="flex flex-col gap-1">
       {data.map((d) => (
-        <div key={d.source} className="flex items-center gap-2 text-[10px]" title={`${d.source}: ${d.count}`}>
+        <div key={d.source} className="flex items-center gap-2 text-[11px]" title={`${d.source}: ${d.count}`}>
           <span className="w-16 shrink-0 text-[var(--color-text-muted)] truncate">{d.source}</span>
           <div className="flex-1 h-2.5 rounded-sm bg-[var(--color-bg)] overflow-hidden">
             <div className="h-full bg-primary/70 rounded-sm" style={{ width: `${(d.count / total) * 100}%` }} />
@@ -586,16 +586,16 @@ function TodoTable({ rows, sortKey, sortDir, onSort, onDispatch, onWithdraw, onS
                     key={c.key}
                     onClick={() => onSort(c.key)}
                     data-testid={`todo-th-${c.key}`}
-                    className={`text-left px-3 py-2 text-[10px] font-mono uppercase tracking-wider cursor-pointer select-none whitespace-nowrap transition-colors ${
+                    className={`text-left px-3 py-2 text-[11px] uppercase tracking-wider cursor-pointer select-none whitespace-nowrap transition-colors ${
                       active ? 'text-primary' : 'text-[var(--color-text-faint)] hover:text-[var(--color-text)]'
                     }`}
                   >
                     {c.label}
-                    <span className="ml-1 text-[9px]">{active ? (sortDir === 'asc' ? '▲' : '▼') : ''}</span>
+                    <span className="ml-1 text-[11px]">{active ? (sortDir === 'asc' ? '▲' : '▼') : ''}</span>
                   </th>
                 );
               })}
-              <th className="text-right px-3 py-2 text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Actions</th>
+              <th className="text-right px-3 py-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -666,7 +666,7 @@ function StatusBadge({ status }: { status: TodoStatusLabel }) {
     Cancelled: 'bg-red-400',
   };
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap ${cls[status]}`}>
+    <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap ${cls[status]}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${dot[status]}`} />{status}
     </span>
   );
@@ -814,7 +814,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
         <div className="mt-2 flex items-center gap-2 flex-wrap pl-3.5">
           <StatusSelect todo={todo} onSetZone={onSetZone} />
           <PriorityPill priority={todo.priority} />
-          <span className="text-[10px] font-mono text-[var(--color-text-faint)]">{todo.sourceType}</span>
+          <span className="text-[11px] font-mono text-[var(--color-text-faint)]">{todo.sourceType}</span>
         </div>
       </div>
 
@@ -823,7 +823,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
             callout above the fold, not a gray peer of Timeline. */}
         {wp?.next_step && (
           <div className="rounded-lg border border-primary/25 bg-primary/[0.06] px-3 py-2.5" data-testid="todo-drawer-nextstep">
-            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-primary">
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-primary">
               <span className="material-symbols-outlined text-[13px]">arrow_forward</span>Next step
             </div>
             <p className="mt-1 text-[12px] text-[var(--color-text)] leading-relaxed break-words">{wp.next_step}</p>
@@ -878,7 +878,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
                   >
                     <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">attach_file</span>
                     <span className="flex-1 truncate">{a.filename}</span>
-                    <span className="font-mono text-[10px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
+                    <span className="font-mono text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
                     <span className="material-symbols-outlined text-[13px] text-[var(--color-text-faint)]">open_in_new</span>
                   </button>
                 </li>
@@ -922,7 +922,7 @@ function PriorityPill({ priority }: { priority: Priority }) {
   const color = PRIORITY_COLOR[priority];
   return (
     <span
-      className="text-[10px] font-medium px-1.5 py-0.5 rounded capitalize"
+      className="text-[11px] font-medium px-1.5 py-0.5 rounded capitalize"
       style={{ color, background: `color-mix(in srgb, ${color} 14%, transparent)` }}
     >{priority}</span>
   );
@@ -949,7 +949,7 @@ function openAttachment(relPath: string): void {
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <div className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">{label}</div>
+      <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">{label}</div>
       {children}
     </div>
   );
@@ -1198,7 +1198,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
                     >
                       <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">attach_file</span>
                       <span className="flex-1 truncate text-[var(--color-text)]">{a.filename}</span>
-                      <span className="font-mono text-[10px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
+                      <span className="font-mono text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
                     </button>
                     <button onClick={() => void removeExisting(a)} title="Remove" className="text-[var(--color-text-muted)] hover:text-red-400 shrink-0">
                       <span className="material-symbols-outlined text-[14px]">close</span>
@@ -1209,7 +1209,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
                   <li key={s.key} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-[11px]" data-testid="todo-form-staged">
                     <span className="material-symbols-outlined text-[14px] text-[var(--color-text-faint)]">schedule</span>
                     <span className="flex-1 truncate text-[var(--color-text-muted)]">{s.file.name}</span>
-                    <span className="font-mono text-[10px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(s.file.size)}</span>
+                    <span className="font-mono text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(s.file.size)}</span>
                     <button onClick={() => setStaged((prev) => prev.filter((x) => x.key !== s.key))} title="Remove" className="text-[var(--color-text-muted)] hover:text-red-400">
                       <span className="material-symbols-outlined text-[14px]">close</span>
                     </button>
@@ -1218,7 +1218,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
               </ul>
             )}
             {!isEdit && staged.length > 0 && (
-              <span className="text-[10px] text-[var(--color-text-faint)]">Files upload when you create the ToDo.</span>
+              <span className="text-[11px] text-[var(--color-text-faint)]">Files upload when you create the ToDo.</span>
             )}
           </div>
         </Field>
@@ -1244,7 +1244,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">{label}</label>
+      <label className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">{label}</label>
       {children}
     </div>
   );

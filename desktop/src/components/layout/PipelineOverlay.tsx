@@ -319,12 +319,12 @@ function Stat({ label, value, sub, accent, onClick, active, testid }: {
   } ${active ? 'ring-2 ring-rose-500/60' : ''} ${onClick ? 'cursor-pointer hover:brightness-110 transition' : ''}`;
   const inner = (
     <>
-      <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)] flex items-center gap-1">
+      <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] flex items-center gap-1">
         {label}
         {onClick && <span className="material-symbols-outlined text-[12px]">{active ? 'filter_alt_off' : 'filter_alt'}</span>}
       </div>
       <div className={`text-sm font-mono ${accent ? 'text-rose-500' : 'text-[var(--color-text)]'}`}>{value}</div>
-      {sub && <div className="text-[10px] text-[var(--color-text-faint)] font-mono">{sub}</div>}
+      {sub && <div className="text-[11px] text-[var(--color-text-faint)] font-mono">{sub}</div>}
     </>
   );
   return onClick
@@ -359,7 +359,7 @@ function RunRow({ r, onOpenRun, close, showProject }: {
       className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-hover)] transition-colors border-b border-[var(--color-border)] last:border-b-0"
     >
       {/* Status pill (dot + label) — replaces the bare color dot (AC2) */}
-      <span className={`inline-flex items-center gap-1 shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium ${pill.text}`}>
+      <span className={`inline-flex items-center gap-1 shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-medium ${pill.text}`}>
         <span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} />{pill.label}
       </span>
       {/* Requirement — click opens the detail drawer; title shows the full text (AC7/D) */}
@@ -372,13 +372,13 @@ function RunRow({ r, onOpenRun, close, showProject }: {
         {showProject && <span className="text-[var(--color-text-faint)]">{showProject} · </span>}
         {r.requirement || r.id}
       </button>
-      <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0">{r.profile}</span>
+      <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0">{r.profile}</span>
       {/* Run-time column (run_0e68e235): when this run last updated (= finish time
           for a terminal run). Rows arrive newest-first from the backend
           (summaries.sort updated_at reverse). Absolute stamp, no "N ago" (fmtTs). */}
-      <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0 w-28 text-right" title={r.updatedAt || r.createdAt}>{fmtTs(r.updatedAt || r.createdAt)}</span>
-      <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0 w-12 text-right">{fmtCycle(r.cycleTimeMin)}</span>
-      <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0 w-16 text-right">
+      <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0 w-28 text-right" title={r.updatedAt || r.createdAt}>{fmtTs(r.updatedAt || r.createdAt)}</span>
+      <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0 w-12 text-right">{fmtCycle(r.cycleTimeMin)}</span>
+      <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0 w-16 text-right">
         {fmtTokens(r.tokensActual)}/{fmtTokens(r.tokensEst)}
       </span>
       {/* Report button (AC2) — only when this run has a REPORT.md. Opens it in Canvas. */}
@@ -484,7 +484,7 @@ function RunDetailDrawer({
               <div className="flex items-start gap-2">
                 <div className="text-sm text-[var(--color-text)] flex-1 min-w-0">{detail.requirement}</div>
                 <span data-testid="pipeline-detail-status"
-                      className={`inline-flex items-center gap-1 shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${pill.text}`}>
+                      className={`inline-flex items-center gap-1 shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-medium ${pill.text}`}>
                   <span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} />{pill.label}
                 </span>
               </div>
@@ -547,7 +547,7 @@ function RunDetailDrawer({
                   {detail.stageTokens.map((s) => {
                     const max = Math.max(...detail.stageTokens.flatMap((x) => [x.est, x.actual]), 1);
                     return (
-                      <div key={s.stage} className="text-[10px] font-mono">
+                      <div key={s.stage} className="text-[11px] font-mono">
                         <div className="flex justify-between text-[var(--color-text-faint)]">
                           <span>{s.stage}</span><span>{fmtTokens(s.actual)}/{fmtTokens(s.est)}</span>
                         </div>
@@ -579,7 +579,7 @@ function RunDetailDrawer({
               <div>
                 <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Commits</div>
                 {detail.commits.map((c, i) => (
-                  <div key={i} className="text-[10px] font-mono text-[var(--color-text-muted)]">
+                  <div key={i} className="text-[11px] font-mono text-[var(--color-text-muted)]">
                     <span className="text-primary">{c.sha}</span> · {c.files.length} file{c.files.length === 1 ? '' : 's'}
                   </div>
                 ))}

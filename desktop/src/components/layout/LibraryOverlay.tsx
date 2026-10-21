@@ -232,7 +232,7 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
 
       {submitted.trim() ? (
         <section data-testid="library-search-results">
-          <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+          <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
             {isFetching ? 'Searching…' : `${search?.count ?? 0} recall hits for “${submitted}”`}
           </div>
           {(search?.hits ?? []).length === 0 && !isFetching ? (
@@ -252,7 +252,7 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
                   onClick={() => h.source && document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: h.source } }))}
                   className="flex items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-[var(--color-hover)]"
                 >
-                  <span className="shrink-0 rounded px-1.5 py-[1px] text-[10px] font-mono"
+                  <span className="shrink-0 rounded px-1.5 py-[1px] text-[11px] font-mono"
                     style={{ background: h.domain === 'codeintel' ? 'color-mix(in srgb,#4a8fb0 16%,transparent)' : 'color-mix(in srgb,#5fc99a 16%,transparent)',
                              color: h.domain === 'codeintel' ? '#4a8fb0' : '#5fc99a' }}>
                     {h.domain === 'codeintel' ? 'code' : 'docs'}{h.mount_id ? '·mount' : ''}
@@ -271,7 +271,7 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
       <>
       {/* NATIVE — cognition green. Live Knowledge/ tree: expand to any file, click to open in Canvas. */}
       <section data-testid="library-native-section" className="flex flex-col min-h-0 flex-1">
-        <div className="mb-2 flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider shrink-0" style={{ color: '#5fc99a' }}>
+        <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-wider shrink-0" style={{ color: '#5fc99a' }}>
           📗 Native · Knowledge/
         </div>
         <LibraryTree />
@@ -280,7 +280,7 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
       {/* MOUNTED — cooler tint + link icon; empty-state is compact, not a void (§4) */}
       <section data-testid="library-mounted-section" className="shrink-0">
         <div className="mb-2 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider" style={{ color: '#4a8fb0' }}>
+          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider" style={{ color: '#4a8fb0' }}>
             🔗 Mounted · external sources
           </div>
           <AddFolderButton />
@@ -330,11 +330,11 @@ function MountRowView({ m }: { m: MountRow }) {
         {/* Honest recall-reachability line — never let a registered-but-unindexed
             mount read as searchable. docs kind needs its cards written in chat. */}
         {indexed ? (
-          <div data-testid={`library-mount-indexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-[10px]" style={{ color: '#5fc99a' }}>
+          <div data-testid={`library-mount-indexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-[11px]" style={{ color: '#5fc99a' }}>
             <span aria-hidden>✓</span> indexed — recall reaches it
           </div>
         ) : (
-          <div data-testid={`library-mount-unindexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-[10px]" style={{ color: '#d08a4a' }}>
+          <div data-testid={`library-mount-unindexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-[11px]" style={{ color: '#d08a4a' }}>
             <span aria-hidden>⚠</span>
             {m.kind === 'docs'
               ? 'no text content found (empty or all-binary) — recall can’t reach it'
@@ -342,8 +342,8 @@ function MountRowView({ m }: { m: MountRow }) {
           </div>
         )}
       </div>
-      <span className="shrink-0 rounded px-1.5 py-[1px] text-[10px] font-mono self-start" style={{ background: 'color-mix(in srgb, #4a8fb0 16%, transparent)', color: '#4a8fb0' }}>{m.kind}</span>
-      <span className="shrink-0 text-[10px] font-mono text-[var(--color-text-faint)] self-start">Local</span>
+      <span className="shrink-0 rounded px-1.5 py-[1px] text-[11px] font-mono self-start" style={{ background: 'color-mix(in srgb, #4a8fb0 16%, transparent)', color: '#4a8fb0' }}>{m.kind}</span>
+      <span className="shrink-0 text-[11px] font-mono text-[var(--color-text-faint)] self-start">Local</span>
     </div>
   );
 }
@@ -497,7 +497,7 @@ function GuideTab() {
       {/* What the Library IS — the index-not-warehouse framing (folded here from the
           rail so there's ONE explainer, not two — run_139d7652). */}
       <section data-testid="library-guide-what">
-        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
           📚 What the Library is
         </div>
         <div className="text-sm text-[var(--color-text-muted)] leading-relaxed">
@@ -510,7 +510,7 @@ function GuideTab() {
 
       {/* How recall uses this */}
       <section>
-        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
           🧠 How recall uses your library
         </div>
         <div className="text-sm text-[var(--color-text-muted)] mb-3">
@@ -531,7 +531,7 @@ function GuideTab() {
 
       {/* How to manage */}
       <section>
-        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
           💬 How to manage — chat-native (heavy ops), overlay (light ops)
         </div>
         <div className="flex flex-col gap-1">
@@ -543,7 +543,7 @@ function GuideTab() {
             </div>
           ))}
         </div>
-        <div className="mt-2 text-[10px] text-[var(--color-text-faint)]">
+        <div className="mt-2 text-[11px] text-[var(--color-text-faint)]">
           Overlay = browse + light ops (open · delete · move · unmount · refresh). Chat = add + heavy semantic ops.
         </div>
       </section>
@@ -566,7 +566,7 @@ function TabBtn({
       }
     >
       {label}
-      {badge != null && <span className="rounded-full bg-[var(--color-hover)] px-1.5 text-[10px] text-[var(--color-text-faint)]">{badge}</span>}
+      {badge != null && <span className="rounded-full bg-[var(--color-hover)] px-1.5 text-[11px] text-[var(--color-text-faint)]">{badge}</span>}
     </button>
   );
 }

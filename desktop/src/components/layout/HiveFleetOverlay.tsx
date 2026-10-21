@@ -175,7 +175,7 @@ function OverviewStrip({ instances }: { instances: HiveInstance[] }) {
       {cells.map((c) => (
         <div key={c.label} className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 flex flex-col">
           <span className={`text-[15px] font-bold ${c.danger ? 'text-red-400' : 'text-[var(--color-text)]'}`}>{c.value}</span>
-          <span className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">{c.label}</span>
+          <span className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">{c.label}</span>
         </div>
       ))}
     </div>

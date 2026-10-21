@@ -367,7 +367,7 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
 function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <div className={`rounded-md border px-2.5 py-1.5 ${accent ? 'border-amber-500/50 bg-amber-500/10' : 'border-[var(--color-border)] bg-[var(--color-card)]'}`}>
-      <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)]">{label}</div>
+      <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">{label}</div>
       <div className={`text-sm font-mono ${accent ? 'text-amber-500' : 'text-[var(--color-text)]'}`}>{value}</div>
     </div>
   );
@@ -406,9 +406,9 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
           {expanded ? 'expand_more' : 'chevron_right'}
         </span>
         <span className="text-sm font-medium text-[var(--color-text)] truncate flex-1 min-w-0">{card.topic}</span>
-        {card.domain && <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0">[{card.domain}]</span>}
-        <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0">{fmtDate(card.createdAt)}</span>
-        <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0">
+        {card.domain && <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0">[{card.domain}]</span>}
+        <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0">{fmtDate(card.createdAt)}</span>
+        <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0">
           {card.publishedCount > 0 && <span className="text-emerald-500">🟢{card.publishedCount} </span>}
           ⚪{card.readyCount}
         </span>
@@ -442,7 +442,7 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
                   </div>
                   <div className="flex items-center gap-1 px-1.5 py-1">
                     <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${stateDot(a.publishStatus)}`} />
-                    <span className="text-[10px] text-[var(--color-text-muted)] truncate flex-1 min-w-0">
+                    <span className="text-[11px] text-[var(--color-text-muted)] truncate flex-1 min-w-0">
                       {a.platform || a.format}
                     </span>
                   </div>
@@ -578,7 +578,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
         {/* Caption / narrative BODY — the text you grab to go publish (design §4, moment ②) */}
         {(captionPath || bodyLoading) && (
           <div>
-            <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">
+            <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">
               {captionAsset && isPublishKit(captionAsset) ? 'Publish kit'
                 : captionAsset?.format === 'narrative' ? 'Narrative' : 'Caption'}
             </div>
@@ -670,7 +670,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
         {/* Same topic — platforms not yet produced → offer to make (design §4). */}
         {missingPlatforms.length > 0 && (
           <div>
-            <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Not yet produced for</div>
+            <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Not yet produced for</div>
             <div className="flex gap-1.5 flex-wrap" data-testid="pollinate-missing-platforms">
               {missingPlatforms.map((p) => (
                 <button
@@ -815,7 +815,7 @@ function FunnelBar({ label, value, max }: { label: string; value: number; max: n
       <div className="w-full h-16 flex items-end">
         <div className="w-full rounded-t bg-primary/40" style={{ height: `${Math.max(pct, 3)}%` }} />
       </div>
-      <div className="text-[10px] text-[var(--color-text-faint)] text-center mt-1">{label}</div>
+      <div className="text-[11px] text-[var(--color-text-faint)] text-center mt-1">{label}</div>
     </div>
   );
 }

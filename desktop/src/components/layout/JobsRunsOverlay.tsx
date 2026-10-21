@@ -245,7 +245,7 @@ function OverviewStrip({ o }: { o: JobsOverview }) {
       {cells.map((c) => (
         <div key={c.label} className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 flex flex-col">
           <span className={`text-[15px] font-bold ${c.danger ? 'text-red-400' : 'text-[var(--color-text)]'}`}>{c.value}</span>
-          <span className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">{c.label}</span>
+          <span className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">{c.label}</span>
         </div>
       ))}
     </div>
@@ -261,9 +261,9 @@ function JobCard({ job, onSelect }: { job: JobRosterRow; onSelect: (j: JobRoster
     >
       <span className="w-2 h-2 rounded-full shrink-0" style={{ background: healthColor(job) }} data-testid="job-health-dot" />
       <span className="flex-1 min-w-0 text-[12.5px] text-[var(--color-text)] truncate">{job.name}</span>
-      <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0">{job.schedule || '—'}</span>
-      <span className="text-[10px] font-mono text-[var(--color-text-muted)] shrink-0 w-[110px] text-right">{fmtTs(job.lastRun)}</span>
-      <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 rounded shrink-0 ${
+      <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0">{job.schedule || '—'}</span>
+      <span className="text-[11px] font-mono text-[var(--color-text-muted)] shrink-0 w-[110px] text-right">{fmtTs(job.lastRun)}</span>
+      <span className={`text-[11px] uppercase px-1.5 py-0.5 rounded shrink-0 ${
         job.source === 'system' ? 'text-[var(--color-text-faint)] bg-[var(--color-hover)]' : 'text-primary bg-primary/10'
       }`}>{job.source}</span>
     </div>
@@ -293,9 +293,9 @@ function RunsView({ roster }: { roster: JobRosterRow[] }) {
           {rows.map((r) => (
             <div key={r.key} className="flex items-center gap-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5" data-testid="run-row">
               <span className="flex-1 min-w-0 text-[12px] text-[var(--color-text)] truncate">{r.name}</span>
-              <span className="text-[10px] font-mono text-[var(--color-text-muted)] shrink-0">{r.detail}</span>
+              <span className="text-[11px] font-mono text-[var(--color-text-muted)] shrink-0">{r.detail}</span>
               <StatusBadge status={r.status} />
-              <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0 w-[110px] text-right">{fmtTs(r.ts)}</span>
+              <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0 w-[110px] text-right">{fmtTs(r.ts)}</span>
             </div>
           ))}
         </div>
@@ -308,7 +308,7 @@ function StatusBadge({ status }: { status: string }) {
   const ok = status === 'success' || status === 'completed';
   const bad = status === 'failed' || status === 'cancelled' || status === 'abandoned';
   const cls = ok ? 'text-emerald-400 bg-emerald-500/10' : bad ? 'text-red-400 bg-red-500/10' : 'text-[var(--color-text-muted)] bg-[var(--color-hover)]';
-  return <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded shrink-0 ${cls}`}>{status}</span>;
+  return <span className={`text-[11px] font-mono px-1.5 py-0.5 rounded shrink-0 ${cls}`}>{status}</span>;
 }
 
 // ── Detail drawer ───────────────────────────────────────────────────
@@ -342,7 +342,7 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
         <span className="mt-1 w-2 h-2 rounded-full shrink-0" style={{ background: healthColor(job) }} />
         <div className="flex-1 min-w-0">
           <div className="text-[13px] font-semibold text-[var(--color-text)] leading-snug break-words">{job.name}</div>
-          <div className="mt-0.5 flex items-center gap-2 text-[10px] font-mono text-[var(--color-text-faint)]">
+          <div className="mt-0.5 flex items-center gap-2 text-[11px] font-mono text-[var(--color-text-faint)]">
             <span>{job.type || '—'}</span><span>·</span><span>{job.source}</span><span>·</span><span>{job.lastStatus}</span>
           </div>
         </div>
@@ -437,7 +437,7 @@ function DrawerBtn({ icon, label, primary, disabled, onClick }: {
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <div className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">{label}</div>
+      <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">{label}</div>
       {children}
     </div>
   );
@@ -545,7 +545,7 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
 function FormField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">{label}</label>
+      <label className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">{label}</label>
       {children}
     </div>
   );

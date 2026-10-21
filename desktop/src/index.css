@@ -179,8 +179,12 @@
 }
 
 @theme {
-  --font-family-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-family-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  /* One type system across SwarmAI, the same one the macOS system UI uses:
+     SF Pro + PingFang SC are designed as a pair, so mixed CJK/Latin lines keep one
+     size and weight. JetBrains Mono stays bundled as the mono fallback off macOS. */
+  --font-family-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-family-mono: ui-monospace, 'SF Mono', Menlo, 'JetBrains Mono', Consolas, monospace;
+  --font-mono: var(--font-family-mono); /* alias: older rules reference this name */
 
   /* Primary colors (unchanged for both themes) */
   --color-primary: #2b6cee;
@@ -258,6 +262,11 @@ html, body {
 #root {
   height: 100%;
   overflow: hidden;
+}
+
+/* Code shows what was typed: no ligatures (JetBrains Mono would draw => as ⇒). */
+code, pre, kbd, samp, .font-mono {
+  font-variant-ligatures: none;
 }
 
 /* Base styles */

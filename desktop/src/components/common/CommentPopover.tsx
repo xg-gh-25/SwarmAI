@@ -199,7 +199,7 @@ export default function CommentPopover({
       </div>
 
       {/* Keyboard hint */}
-      <div className="px-3 pb-1.5 text-[10px] text-[var(--color-text-dim)]">
+      <div className="px-3 pb-1.5 text-[11px] text-[var(--color-text-dim)]">
         ⌘+Enter to save · Esc to cancel
       </div>
     </div>

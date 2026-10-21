@@ -152,11 +152,11 @@ function TierSection({
         >
           {label}
         </span>
-        <span className="text-[10.5px] text-[var(--color-text-dim)]">· {items.length} · {hint}</span>
+        <span className="text-[11px] text-[var(--color-text-dim)]">· {items.length} · {hint}</span>
       </div>
       {groups.map(([brain, brainItems]) => (
         <div key={brain} className="mb-2">
-          <div className="px-1 py-1 text-[10.5px] font-mono uppercase tracking-wide text-[var(--color-text-muted)]">
+          <div className="px-1 py-1 text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">
             {brain}
           </div>
           <div className="flex flex-col gap-1">
@@ -168,7 +168,7 @@ function TierSection({
                 className="w-full text-left rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2 hover:bg-[var(--color-hover)] transition-colors"
               >
                 <div className="flex items-center gap-2">
-                  <span className="text-[9.5px] font-mono uppercase text-[var(--color-text-muted)] bg-[var(--color-hover)] rounded px-1.5 py-0.5">
+                  <span className="text-[11px] uppercase text-[var(--color-text-muted)] bg-[var(--color-hover)] rounded px-1.5 py-0.5">
                     {SOURCE_LABEL[it.source]}
                   </span>
                   <span className="flex-1 text-[12.5px] text-[var(--color-text)] truncate">{it.title}</span>
@@ -177,7 +177,7 @@ function TierSection({
                   </span>
                 </div>
                 {it.detail && (
-                  <div className="mt-0.5 text-[10.5px] leading-snug text-[var(--color-text-dim)] line-clamp-2">
+                  <div className="mt-0.5 text-[11px] leading-snug text-[var(--color-text-dim)] line-clamp-2">
                     {it.detail}
                   </div>
                 )}

@@ -157,13 +157,13 @@ function FlowTab() {
             <div className={`flex-1 mb-2.5 rounded-lg border p-2.5 bg-[var(--color-hover)]/30 ${s.accent ? ACCENT_BORDER[s.accent] : 'border-[var(--color-border)]'}`}>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[12.5px] font-semibold text-[var(--color-text)]">{s.title}</span>
-                <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-[#38d9c4]/10 text-[#38d9c4]">{s.fn}</span>
+                <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-[#38d9c4]/10 text-[#38d9c4]">{s.fn}</span>
               </div>
               <div className="text-[11px] text-[var(--color-text-muted)] mt-1 leading-snug">{s.desc}</div>
               {s.chips.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-1.5">
                   {s.chips.map((c, j) => (
-                    <span key={j} className={`text-[9.5px] font-mono px-1.5 py-0.5 rounded-full border ${CHIP_TONE[c.tone]}`}>{c.t}</span>
+                    <span key={j} className={`text-[11px] font-mono px-1.5 py-0.5 rounded-full border ${CHIP_TONE[c.tone]}`}>{c.t}</span>
                   ))}
                 </div>
               )}
@@ -314,7 +314,7 @@ function FilesTab({ metadata }: { metadata: SystemPromptMetadata | null }) {
           );
         })}
       </div>
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[9px] text-[var(--color-text-muted)] mb-3">
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-[var(--color-text-muted)] mb-3">
         {[['sys', '#6ea8fe'], ['user', '#4ade80'], ['agent', '#a78bfa'], ['gen', '#38d9c4']].map(([l, c]) => (
           <span key={l} className="flex items-center gap-1">
             <span className="inline-block w-2 h-2 rounded-sm" style={{ background: c as string }} />
@@ -335,9 +335,9 @@ function FilesTab({ metadata }: { metadata: SystemPromptMetadata | null }) {
                 <span className="text-[var(--color-text)] truncate flex items-center gap-1.5 text-[12px]">
                   <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: o.color }} />
                   <span className="font-mono">{f.filename}</span>
-                  <span className="text-[9px] px-1 rounded" style={{ background: `${o.color}22`, color: o.color }}>{o.label}</span>
+                  <span className="text-[11px] px-1 rounded" style={{ background: `${o.color}22`, color: o.color }}>{o.label}</span>
                   {f.truncated && (
-                    <span className="text-[9px] px-1 rounded bg-amber-500/20 text-amber-500" title="Marked truncated to fit budget — the read path is warn-only (context-file truncation was removed 2026-08-14), so this effectively never fires">trunc</span>
+                    <span className="text-[11px] px-1 rounded bg-amber-500/20 text-amber-500" title="Marked truncated to fit budget — the read path is warn-only (context-file truncation was removed 2026-08-14), so this effectively never fires">trunc</span>
                   )}
                 </span>
                 <span className="text-[11px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
@@ -398,12 +398,12 @@ function RecallTab({ snap, state }: { snap: RecallSnapshot | null; state: FetchS
         <span className="tabular-nums">~{snap.tokens.toLocaleString()} tok</span>
         <span className="tabular-nums">{Math.round(snap.latencyMs)} ms</span>
         <span className="tabular-nums">{snap.hits.length} hits</span>
-        <span className="text-[10px] px-1.5 rounded bg-[#6ea8fe]/15 text-[#6ea8fe] font-mono">keyword / FTS5</span>
+        <span className="text-[11px] px-1.5 rounded bg-[#6ea8fe]/15 text-[#6ea8fe] font-mono">keyword / FTS5</span>
       </div>
       {snap.keywords.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-3">
           {snap.keywords.slice(0, 12).map((k, i) => (
-            <span key={i} className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--color-hover)] text-[var(--color-text-muted)] font-mono">{k}</span>
+            <span key={i} className="text-[11px] px-1.5 py-0.5 rounded-full bg-[var(--color-hover)] text-[var(--color-text-muted)] font-mono">{k}</span>
           ))}
         </div>
       )}
@@ -419,9 +419,9 @@ function RecallTab({ snap, state }: { snap: RecallSnapshot | null; state: FetchS
                 <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-hover)]/30">
                   <span className="text-[13px] font-semibold flex items-center gap-1.5">
                     <span>{m.icon}</span>{m.label}
-                    <span className="text-[10px] font-normal text-[var(--color-text-muted)]">{m.sub}</span>
+                    <span className="text-[11px] font-normal text-[var(--color-text-muted)]">{m.sub}</span>
                   </span>
-                  <span className="text-[9px] px-1.5 rounded font-mono bg-[#38d9c4]/13 text-[#38d9c4]">{method}</span>
+                  <span className="text-[11px] px-1.5 rounded font-mono bg-[#38d9c4]/13 text-[#38d9c4]">{method}</span>
                 </div>
                 <div className="p-1.5 space-y-0.5">
                   {hits.map((h, i) => (
@@ -429,7 +429,7 @@ function RecallTab({ snap, state }: { snap: RecallSnapshot | null; state: FetchS
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-[11px] text-[var(--color-text-muted)] flex-1 truncate">{h.source || '(source)'}</span>
                         {h.hasScore && (
-                          <span className="font-mono text-[10.5px] text-[#4ade80] flex-shrink-0">{h.score.toFixed(2)}</span>
+                          <span className="font-mono text-[11px] text-[#4ade80] flex-shrink-0">{h.score.toFixed(2)}</span>
                         )}
                       </div>
                       {h.text && (
@@ -438,7 +438,7 @@ function RecallTab({ snap, state }: { snap: RecallSnapshot | null; state: FetchS
                     </div>
                   ))}
                 </div>
-                <div className="px-3 py-1.5 border-t border-[var(--color-border)] text-[10.5px] text-[var(--color-text-muted)] font-mono flex justify-between">
+                <div className="px-3 py-1.5 border-t border-[var(--color-border)] text-[11px] text-[var(--color-text-muted)] font-mono flex justify-between">
                   <span>{hits.length} hits</span>
                   {hits.some((h) => h.hasScore) && <span>BM25 [0,1]</span>}
                 </div>
@@ -510,7 +510,7 @@ function SecurityTab({ scan, state }: { scan: SecurityScanResult | null; state: 
         {sevCells.map(([l, c, col]) => (
           <div key={l} className="bg-[var(--color-hover)]/50 border border-[var(--color-border)] rounded-lg py-2 text-center">
             <div className="text-lg font-bold font-mono" style={{ color: c > 0 ? col : 'var(--color-text-muted)' }}>{c}</div>
-            <div className="text-[9px] uppercase tracking-wide text-[var(--color-text-muted)]">{l}</div>
+            <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">{l}</div>
           </div>
         ))}
       </div>
@@ -527,7 +527,7 @@ function SecurityTab({ scan, state }: { scan: SecurityScanResult | null; state: 
               <div className="flex-1 min-w-0">
                 <div className="text-[13px] font-medium text-[var(--color-text)] flex items-center gap-2">
                   {f.detector}
-                  <span className="text-[9px] px-1.5 rounded uppercase font-mono" style={{ background: `${sc}22`, color: sc }}>
+                  <span className="text-[11px] px-1.5 rounded uppercase" style={{ background: `${sc}22`, color: sc }}>
                     {pass ? 'pass' : f.severity}
                   </span>
                 </div>
@@ -537,7 +537,7 @@ function SecurityTab({ scan, state }: { scan: SecurityScanResult | null; state: 
           );
         })}
       </ul>
-      <p className="text-[10px] text-[var(--color-text-muted)] italic mt-2 pt-2 border-t border-[var(--color-border)]">
+      <p className="text-[11px] text-[var(--color-text-muted)] italic mt-2 pt-2 border-t border-[var(--color-border)]">
         Design-time scan of assembled context, not a runtime output filter.
       </p>
     </div>
@@ -596,7 +596,7 @@ function PromptTab({
       <div className="flex items-center gap-3 mb-3">
         <div className="min-w-[70px]">
           <div className="text-lg font-bold font-mono" style={{ color: over ? '#fbbf24' : 'var(--color-text)' }}>{fmtK(total)}</div>
-          <div className="text-[10px] text-[var(--color-text-muted)]">assembled</div>
+          <div className="text-[11px] text-[var(--color-text-muted)]">assembled</div>
         </div>
         {hasBudget ? (
           <>
@@ -605,7 +605,7 @@ function PromptTab({
                 <div className="h-full rounded-full" style={{ width: `${barPct}%`, background: over ? 'linear-gradient(90deg,#4ade80,#fbbf24)' : '#4ade80' }} />
                 <div className="absolute top-[-2px] w-0.5 h-[14px] bg-[#f87171]" style={{ left: `${BUDGET_MARKER_PCT}%` }} title={`budget ${fmtK(budget)}`} />
               </div>
-              <div className="flex justify-between text-[9px] text-[var(--color-text-muted)] mt-1 font-mono">
+              <div className="flex justify-between text-[11px] text-[var(--color-text-muted)] mt-1 font-mono">
                 <span>0</span>
                 <span className="text-[#f87171]">↑ {fmtK(budget)} budget</span>
                 <span>{fmtK(budget * GAUGE_HEADROOM)}</span>
@@ -613,13 +613,13 @@ function PromptTab({
             </div>
             <div className="text-right min-w-[64px]">
               <div className="text-[12px] font-mono font-semibold" style={{ color: over ? '#f87171' : '#4ade80' }}>{pctOfBudget}%</div>
-              <div className="text-[9px] text-[var(--color-text-muted)]">{over ? 'no cut · warn' : 'in budget'}</div>
+              <div className="text-[11px] text-[var(--color-text-muted)]">{over ? 'no cut · warn' : 'in budget'}</div>
             </div>
           </>
         ) : (
           // No budget reported. Drawing a gauge would mean inventing a ceiling,
           // which is the bug this replaced — say "unknown" instead.
-          <div className="flex-1 text-[10px] text-[var(--color-text-muted)] italic">
+          <div className="flex-1 text-[11px] text-[var(--color-text-muted)] italic">
             Budget not reported for this session — percentage unavailable.
           </div>
         )}
@@ -632,7 +632,7 @@ function PromptTab({
       >
         {isLoading ? 'Loading…' : 'View Full Prompt'}
       </button>
-      <p className="text-[10px] text-[var(--color-text-muted)] italic mt-2">
+      <p className="text-[11px] text-[var(--color-text-muted)] italic mt-2">
         CJK 1.1 tok/char + Latin 2.2 tok/word (calibrated). Read path never hard-cuts; over-budget warns only.
       </p>
       {showModal && fullText !== null && <FullPromptModal fullText={fullText} onClose={() => setShowModal(false)} />}
@@ -752,7 +752,7 @@ export function SystemPromptModule({ sessionId, metadata: metadataProp }: System
           <span className="material-symbols-outlined text-[16px] text-[#f87171] flex-shrink-0">warning</span>
           <div className="min-w-0">
             <div className="text-[11px] font-semibold text-[#f87171]">Prompt assembled incomplete</div>
-            <div className="text-[10.5px] font-mono text-[var(--color-text-muted)] break-words">{metadata.degraded}</div>
+            <div className="text-[11px] font-mono text-[var(--color-text-muted)] break-words">{metadata.degraded}</div>
           </div>
         </div>
       )}

@@ -316,7 +316,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
             data-tier={s.tier}
             title={TIER_MARK[s.tier]?.label ?? s.tier}
             aria-label={TIER_MARK[s.tier]?.label ?? s.tier}
-            className="ml-auto shrink-0 text-[10px] text-[var(--color-text-faint)] opacity-50"
+            className="ml-auto shrink-0 text-[11px] text-[var(--color-text-faint)] opacity-50"
           >
             {TIER_MARK[s.tier]?.icon ?? ''}
           </span>
@@ -438,7 +438,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                     style={{ background: 'linear-gradient(135deg, color-mix(in srgb, var(--panel-accent, var(--color-primary)) 12%, transparent), transparent)' }}
                     data-testid={`cap-skill-${h.folderName}`}
                   >
-                    <div className="text-[10px] font-mono tracking-wider text-[var(--color-primary)]">⭐ SIGNATURE</div>
+                    <div className="text-[11px] font-mono tracking-wider text-[var(--color-primary)]">⭐ SIGNATURE</div>
                     <div className="text-base font-semibold mt-2 flex items-center gap-2">
                       <span>{SIGNATURE[h.folderName]?.icon ?? '✨'}</span>{h.name}
                     </div>
@@ -654,7 +654,7 @@ function ConnGroup({
                 data-tier={m.tier}
                 title={MCP_TIER_MARK[m.tier]?.label ?? m.tier}
                 aria-label={MCP_TIER_MARK[m.tier]?.label ?? m.tier}
-                className="shrink-0 text-[10px] text-[var(--color-text-faint)] opacity-50"
+                className="shrink-0 text-[11px] text-[var(--color-text-faint)] opacity-50"
               >
                 {MCP_TIER_MARK[m.tier]?.icon ?? ''}
               </span>

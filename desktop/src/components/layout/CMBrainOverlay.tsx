@@ -232,7 +232,7 @@ export function CMBrainContent() {
           data-testid="cm-overview-rail"
         >
           <div>
-            <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Current load</div>
+            <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">Current load</div>
             <div className="mt-1 flex items-baseline gap-1.5">
               <span
                 className="text-2xl font-semibold"
@@ -252,14 +252,14 @@ export function CMBrainContent() {
 
           {/* 30-day token growth — from the daily snapshot series (collecting until >=2 pts) */}
           <div>
-            <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">30-day token growth</div>
+            <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">30-day token growth</div>
             <div className="mt-1.5">
               <RailTrend trend={trend} />
             </div>
           </div>
 
           <div>
-            <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Needs you</div>
+            <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">Needs you</div>
             {needsErr ? (
               // B1: don't show a false "0" — say the fetch failed + offer Retry.
               <div data-testid="cm-needs-error" className="mt-2 rounded-md border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-2.5 py-2 text-[11px] text-[var(--color-text)]">
@@ -267,7 +267,7 @@ export function CMBrainContent() {
                 <button
                   data-testid="cm-needs-retry"
                   onClick={() => { void refetchHealth(); void refetchGov(); }}
-                  className="mt-1.5 rounded px-2 py-0.5 text-[10px] font-medium text-white"
+                  className="mt-1.5 rounded px-2 py-0.5 text-[11px] font-medium text-white"
                   style={{ background: '#d0524a' }}
                 >
                   Retry
@@ -320,7 +320,7 @@ function RailTrend({ trend }: { trend: BrainTrend | undefined }) {
   const pts = trend?.points ?? [];
   if (pts.length < 2) {
     return (
-      <div className="text-[10px] text-[var(--color-text-faint)]">
+      <div className="text-[11px] text-[var(--color-text-faint)]">
         📈 collecting since {trend?.launch_date ?? 'launch'}…
       </div>
     );
@@ -375,7 +375,7 @@ function BudgetAlert({ block }: { block: TokenBlock }) {
             key={f.name}
             data-testid={`cm-budget-open-${f.name}`}
             onClick={() => document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `.context/${f.name}` } }))}
-            className="rounded px-2 py-0.5 text-[10px] font-medium text-white"
+            className="rounded px-2 py-0.5 text-[11px] font-medium text-white"
             style={{ background: '#d0524a' }}
           >
             Open {f.name}
@@ -426,7 +426,7 @@ function ProposalCard({
       <span
         data-testid="cm-class-phrase"
         title={cls}
-        className="mr-1.5 rounded px-1.5 py-[1px] text-[10px] font-semibold"
+        className="mr-1.5 rounded px-1.5 py-[1px] text-[11px] font-semibold"
         style={{ color: '#d0524a', background: 'color-mix(in srgb, #d0524a 14%, transparent)' }}
       >
         {phrase}
@@ -451,16 +451,16 @@ function ProposalCard({
           <div data-testid="cm-card-what" className="text-sm font-semibold leading-snug text-[var(--color-text)]">{tag}{what}</div>
           <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">{where}</div>
           {demoted && (
-            <div data-testid="cm-demoted" className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-[1px] text-[10px] font-medium" style={{ color: '#7c8194', background: 'color-mix(in srgb, #7c8194 12%, transparent)' }}>
+            <div data-testid="cm-demoted" className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-[1px] text-[11px] font-medium" style={{ color: '#7c8194', background: 'color-mix(in srgb, #7c8194 12%, transparent)' }}>
               ⏳ still emerging — not yet actionable
             </div>
           )}
         </div>
-        {conf != null && <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-[1px] text-[10px] font-medium text-[var(--color-text-faint)]">conf {conf.toFixed(2)}</span>}
+        {conf != null && <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-[1px] text-[11px] font-medium text-[var(--color-text-faint)]">conf {conf.toFixed(2)}</span>}
       </div>
       {why && <div className="mt-2 border-l-2 border-[var(--color-border)] pl-2.5 text-[12px] leading-relaxed text-[var(--color-text-muted)]">{why}</div>}
       <div className="mt-2.5 flex items-center justify-between">
-        <span className="font-mono text-[10px] text-[var(--color-text-faint)]">{id}</span>
+        <span className="font-mono text-[11px] text-[var(--color-text-faint)]">{id}</span>
         {state ? (
           <span className="text-[11px] text-[var(--color-text-muted)]">{state}ed ✓</span>
         ) : (
@@ -535,7 +535,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
       {rows.length > 0 && (
         <div
           data-testid="cm-file-header"
-          className="grid items-center gap-3 px-3 pb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-faint)] max-w-3xl"
+          className="grid items-center gap-3 px-3 pb-1 text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] max-w-3xl"
           style={{ gridTemplateColumns: '2rem 0.375rem 1fr 4rem 4rem 6rem 4rem 1.5rem' }}
         >
           <span>Pri</span>
@@ -590,7 +590,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
             {f.health_counts && (f.health_counts.dormant > 0 || f.health_counts.reclaimable > 0 || f.health_counts.duplicate > 0) && (
               <span
                 data-testid={`cm-health-counts-${f.name}`}
-                className="mt-0.5 flex gap-2 text-[10px] font-mono text-[var(--color-text-faint)]"
+                className="mt-0.5 flex gap-2 text-[11px] font-mono text-[var(--color-text-faint)]"
                 title="Knowledge health — auto decay+dedup sweep targets these (dormant = no longer injected · reclaimable = archivable noise · duplicate = exact-dup a sweep removes)"
               >
                 {f.health_counts.dormant > 0 && <span>{f.health_counts.dormant} dormant</span>}
@@ -618,14 +618,14 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
                 />
               )}
             </span>
-            <span data-testid="cm-pct-num" className="w-8 shrink-0 text-right font-mono text-[10px] text-[var(--color-text-faint)]">
+            <span data-testid="cm-pct-num" className="w-8 shrink-0 text-right font-mono text-[11px] text-[var(--color-text-faint)]">
               {typeof f.pct === 'number' ? `${f.pct}%` : '—'}
             </span>
           </span>
           {f.health ? (
             <span
               data-testid="cm-health"
-              className="text-center text-[10px] font-medium rounded px-1 py-[1px]"
+              className="text-center text-[11px] font-medium rounded px-1 py-[1px]"
               style={{ color: HEALTH_TINT[f.health], background: `color-mix(in srgb, ${HEALTH_TINT[f.health]} 12%, transparent)` }}
             >
               {f.health}
@@ -676,7 +676,7 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
     <>
       {/* type/kind graph — nodes sized by count, rendered in backend priority order */}
       <section>
-        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
           Knowledge graph · {showDecay ? '7 types' : 'kinds'} as nodes (click to drill in)
         </div>
         <div className="flex flex-wrap gap-3">
@@ -698,19 +698,19 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
                 }}
               >
                 <span className="font-mono text-sm font-extrabold" style={{ color: tint }}>{n.count}</span>
-                <span className="font-mono text-[9px] font-bold" style={{ color: tint }}>{n.type.slice(0, 4)}</span>
+                <span className="font-mono text-[11px] font-bold" style={{ color: tint }}>{n.type.slice(0, 4)}</span>
               </button>
             );
           })}
         </div>
-        <div className="mt-1.5 text-[10px] text-[var(--color-text-faint)]">
+        <div className="mt-1.5 text-[11px] text-[var(--color-text-faint)]">
           node size = entry count{showDecay ? ' · bright = active · dim = dormant/archived' : ''}
         </div>
       </section>
 
       {/* by-type distribution bars (also drill) */}
       <section>
-        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
           By-{showDecay ? 'type' : 'kind'} distribution
         </div>
         <div className="flex flex-col gap-1">
@@ -749,7 +749,7 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
                   <div key={i} className="flex items-center gap-2 text-xs">
                     <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: e.status === 'active' ? '#5fc99a' : '#7c8194' }} />
                     <span className="min-w-0 flex-1 truncate text-[var(--color-text)]">{e.title}</span>
-                    {e.meta && <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-faint)]">{e.meta}</span>}
+                    {e.meta && <span className="shrink-0 font-mono text-[11px] text-[var(--color-text-faint)]">{e.meta}</span>}
                   </div>
                 ))}
               </div>
@@ -795,7 +795,7 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
 
   return (
     <section data-testid={`cm-archive-${source}`}>
-      <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+      <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
         Archived {source} · recall-backed cold storage
       </div>
       <div className="mb-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
@@ -838,7 +838,7 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
               <div key={`${r.shard}-${i}`} className="border-l-2 border-[#5fc99a] pl-2.5">
                 <div className="text-sm font-medium leading-snug text-[var(--color-text)]">{r.title || '(untitled)'}</div>
                 <div className="mt-0.5 text-[12px] leading-relaxed text-[var(--color-text-muted)]">{r.snippet}</div>
-                <div className="mt-0.5 font-mono text-[10px] text-[var(--color-text-faint)]">{r.shard}</div>
+                <div className="mt-0.5 font-mono text-[11px] text-[var(--color-text-faint)]">{r.shard}</div>
               </div>
             ))}
           </div>
@@ -871,7 +871,7 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
                 <span className="w-16 shrink-0 font-mono text-xs font-medium text-[var(--color-text)]">{f.period}</span>
                 <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text-muted)]" title={f.name}>{f.name}</span>
                 <span className="shrink-0 text-[11px] text-[var(--color-text-muted)]">{f.entry_count} entr{f.entry_count === 1 ? 'y' : 'ies'}</span>
-                <span className="w-14 shrink-0 text-right font-mono text-[10px] text-[var(--color-text-faint)]">{fmtBytes(f.bytes)}</span>
+                <span className="w-14 shrink-0 text-right font-mono text-[11px] text-[var(--color-text-faint)]">{fmtBytes(f.bytes)}</span>
               </button>
             ))}
           </div>
@@ -894,7 +894,7 @@ function ArchiveError({ what, error, onRetry }: { what: string; error: unknown; 
     <div className="rounded-md border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-2.5 py-2 text-[11px] text-[var(--color-text)]">
       <div>{classifyLoadError(error, what, `Couldn’t load ${what} — the backend may be unavailable. This is NOT “nothing archived”.`)}</div>
       {onRetry && (
-        <button onClick={onRetry} className="mt-1.5 rounded px-2 py-0.5 text-[10px] font-medium text-white" style={{ background: '#d0524a' }}>Retry</button>
+        <button onClick={onRetry} className="mt-1.5 rounded px-2 py-0.5 text-[11px] font-medium text-white" style={{ background: '#d0524a' }}>Retry</button>
       )}
     </div>
   );
@@ -924,7 +924,7 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
 
       {/* MEMORY.md size trend (from the daily snapshot series) */}
       <section>
-        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
           MEMORY.md size trend
         </div>
         <TrendChart trend={trend} field="memory_bytes" />
@@ -970,7 +970,7 @@ function EvolutionTab({ enabled }: { enabled: boolean }) {
 
       {/* EVOLUTION.md size trend — real per-file bytes from the daily snapshot series */}
       <section>
-        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
           EVOLUTION.md size trend
         </div>
         <TrendChart trend={trend} field="memory_bytes" />
@@ -1067,7 +1067,7 @@ function GuidelineTab() {
 
       {/* Lifecycle flow */}
       <section>
-        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
           Lifecycle — every message flows through this
         </div>
         <div data-testid="cm-guideline-lifecycle" className="flex items-stretch gap-2">
@@ -1079,7 +1079,7 @@ function GuidelineTab() {
               >
                 <div className="text-lg leading-none">{s.icon}</div>
                 <div className="mt-1 text-xs font-semibold text-[var(--color-text)]">{s.title}</div>
-                <div className="mt-0.5 text-[10px] leading-tight text-[var(--color-text-muted)]">{s.desc}</div>
+                <div className="mt-0.5 text-[11px] leading-tight text-[var(--color-text-muted)]">{s.desc}</div>
               </div>
               {i < LIFECYCLE.length - 1 && <span className="shrink-0 text-[var(--color-text-faint)]">→</span>}
             </div>
@@ -1089,7 +1089,7 @@ function GuidelineTab() {
 
       {/* Automatic vs Manual */}
       <section>
-        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
           Automatic vs Manual — what runs itself, what you steer
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -1100,7 +1100,7 @@ function GuidelineTab() {
 
       {/* Reference chips */}
       <section>
-        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
           Under the hood — the machinery
         </div>
         <div data-testid="cm-guideline-chips" className="flex flex-col gap-2">
@@ -1135,7 +1135,7 @@ function AmColumn({
     <div data-testid={testid} className="rounded-lg border border-[var(--color-border)] p-3">
       <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
         {head}
-        <span className="rounded-full px-2 py-[1px] font-mono text-[9px] tracking-wider" style={{ background: `color-mix(in srgb, ${accent} 16%, transparent)`, color: accent }}>{badge}</span>
+        <span className="rounded-full px-2 py-[1px] font-mono text-[11px] tracking-wider" style={{ background: `color-mix(in srgb, ${accent} 16%, transparent)`, color: accent }}>{badge}</span>
       </div>
       <div className="flex flex-col gap-1.5">
         {items.map((it) => (
@@ -1145,7 +1145,7 @@ function AmColumn({
               <div className="text-xs font-medium text-[var(--color-text)]">{it.name}</div>
               <div className="truncate text-[11px] text-[var(--color-text-muted)]">{it.desc}</div>
             </div>
-            <span className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-[1px] font-mono text-[9px] text-[var(--color-text-faint)]">{it.tag}</span>
+            <span className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-[1px] font-mono text-[11px] text-[var(--color-text-faint)]">{it.tag}</span>
           </div>
         ))}
       </div>
@@ -1168,7 +1168,7 @@ function TabBtn({
       }
     >
       {label}
-      {badge != null && <span className="rounded-full bg-[var(--color-hover)] px-1.5 text-[10px] text-[var(--color-text-faint)]">{badge}</span>}
+      {badge != null && <span className="rounded-full bg-[var(--color-hover)] px-1.5 text-[11px] text-[var(--color-text-faint)]">{badge}</span>}
     </button>
   );
 }

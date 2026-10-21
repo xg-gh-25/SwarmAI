@@ -197,7 +197,7 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
 
       {/* Meta row */}
       <div className="flex items-center gap-4 text-xs text-[var(--color-text-muted)] mb-2">
-        {url && <code className="bg-[var(--color-card)] px-1.5 py-0.5 rounded select-all text-[10px]">{url}</code>}
+        {url && <code className="bg-[var(--color-card)] px-1.5 py-0.5 rounded select-all text-[11px]">{url}</code>}
         <span>{inst.instanceType}</span>
         <span>{inst.region}</span>
         {inst.version && <span>v{inst.version}</span>}
@@ -352,16 +352,16 @@ export function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
         <span className="text-[var(--color-text-muted)]">/</span>
         <code className="text-[var(--color-text)] select-all">{passDisplay}</code>
         <button onClick={togglePass} disabled={loadingPass}
-          className="px-1.5 py-0.5 text-[10px] bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] disabled:opacity-50">
+          className="px-1.5 py-0.5 text-[11px] bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] disabled:opacity-50">
           {loadingPass ? '...' : showPass ? 'Hide' : 'Show'}
         </button>
         <button onClick={handleCopyPassword}
-          className="px-1.5 py-0.5 text-[10px] bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)]">
+          className="px-1.5 py-0.5 text-[11px] bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)]">
           {copied === 'password' ? 'Copied!' : 'Copy'}
         </button>
       </div>
       {fetchError && (
-        <div className="text-red-400 text-[10px]">{fetchError}</div>
+        <div className="text-red-400 text-[11px]">{fetchError}</div>
       )}
       <div className="flex items-center gap-2">
         <button

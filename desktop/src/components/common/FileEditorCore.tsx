@@ -342,7 +342,7 @@ function SelectionCommentPopover({
           Send
         </button>
       </div>
-      <div className="px-3 pb-1.5 text-[10px] text-[var(--color-text-dim)]">
+      <div className="px-3 pb-1.5 text-[11px] text-[var(--color-text-dim)]">
         ⌘+Enter to send · Esc to cancel
       </div>
     </div>,
@@ -466,7 +466,7 @@ function DiffView({
               {line.content}
             </span>
             {hasComment && (
-              <span className="shrink-0 pr-2 text-[10px] self-center" title="Has comment">💬</span>
+              <span className="shrink-0 pr-2 text-[11px] self-center" title="Has comment">💬</span>
             )}
           </div>
         );
@@ -1360,7 +1360,7 @@ export default function FileEditorCore({
                   if (!badge) return null;
                   return (
                     <span
-                      className="text-[10px] font-bold px-1 py-0.5 rounded shrink-0"
+                      className="text-[11px] font-bold px-1 py-0.5 rounded shrink-0"
                       style={{ color: badge.color, backgroundColor: badge.bg }}
                     >
                       {badge.label}
@@ -1454,7 +1454,7 @@ export default function FileEditorCore({
               <span className="material-symbols-outlined text-sm">rate_review</span>
               {!iconOnly && (review.isReviewMode ? 'Exit Review' : 'Review')}
               {review.comments.length > 0 && (
-                <span className="ml-0.5 px-1 py-px rounded-full bg-amber-500/30 text-[10px] font-bold">
+                <span className="ml-0.5 px-1 py-px rounded-full bg-amber-500/30 text-[11px] font-bold">
                   {review.comments.length}
                 </span>
               )}

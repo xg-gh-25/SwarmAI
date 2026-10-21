@@ -130,7 +130,7 @@ export function TSCCSnapshotCard({ snapshot }: TSCCSnapshotCardProps) {
                 {snapshot.activeSources.map((s, i) => (
                   <li key={i} className="flex items-center gap-2">
                     <span className="text-[var(--color-text)]">{s.path}</span>
-                    <span className="px-1.5 py-0 text-[10px] rounded bg-[var(--color-hover)] text-[var(--color-text-muted)]">
+                    <span className="px-1.5 py-0 text-[11px] rounded bg-[var(--color-hover)] text-[var(--color-text-muted)]">
                       {s.origin}
                     </span>
                   </li>

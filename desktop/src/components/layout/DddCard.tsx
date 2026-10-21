@@ -123,7 +123,7 @@ function CardHeader({ name, kind, verdict }: { name: string; kind: string; verdi
     <div className="flex items-center gap-2 mb-2">
       <span className="material-symbols-outlined text-[16px] text-[#f0a500]">psychology</span>
       <span className="text-[13px] font-semibold">{name}</span>
-      <span className="text-[10px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{kind}</span>
+      <span className="text-[11px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{kind}</span>
       {verdict != null && <span className="ml-auto">{verdict}</span>}
     </div>
   );
@@ -170,7 +170,7 @@ function NeedsActionable({ health }: { health: BrainHealth }) {
 function CalmMeta({ lifecycleStage, health }: { lifecycleStage: LifecycleStage; health: BrainHealth }) {
   const bits = [lifecycleStage, `${health.sinking} sinking`, health.lastChangeRelative];
   return (
-    <div data-testid="dddcard-calm-meta" className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-faint)] mt-1.5 font-mono">
+    <div data-testid="dddcard-calm-meta" className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-faint)] mt-1.5 font-mono">
       {bits.map((b, i) => (
         <span key={i}>{i > 0 ? '· ' : ''}{b}</span>
       ))}
@@ -190,7 +190,7 @@ function CardBriefing({ description }: { description?: string }) {
   return (
     <div
       data-testid="dddcard-briefing"
-      className="mt-2 pt-2 border-t border-[var(--color-border)] text-[10px] leading-snug text-[var(--color-text-muted)] line-clamp-2"
+      className="mt-2 pt-2 border-t border-[var(--color-border)] text-[11px] leading-snug text-[var(--color-text-muted)] line-clamp-2"
     >
       {description}
     </div>
@@ -335,7 +335,7 @@ function FullBody(
       {!ontologyOnly && (
         <div data-testid="ddd-needs-you"
           className={`rounded-md border px-2.5 py-2 ${needs.length ? 'bg-[#1e1a0e] border-[#5a4a20]' : 'bg-[#0f1a10] border-[#1f3d24]'}`}>
-          <div className={`text-[9px] uppercase tracking-wide font-semibold mb-1 ${needs.length ? 'text-[#f0a500]' : 'text-[#3fb950]'}`}>
+          <div className={`text-[11px] uppercase tracking-wide font-semibold mb-1 ${needs.length ? 'text-[#f0a500]' : 'text-[#3fb950]'}`}>
             {needs.length ? 'Needs you' : '✓ Nothing needs you'}
           </div>
           {needs.map((it) => (
@@ -354,14 +354,14 @@ function FullBody(
           <span className={below > 0 ? 'text-[#f0a500]' : 'text-[var(--color-text)]'}>
             {trustStale ? 'not computed' : `${pct}% sections ≥ high`}
           </span>
-          <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">
+          <span className="ml-auto text-[11px] text-[var(--color-text-faint)]">
             {trustStale ? 'no scheduled score' : `scored ${_ageOf(metrics.computedAt)}`}
           </span>
         </div>
         <div data-testid="ddd-fact-activity" className="flex items-baseline gap-2">
           <span className="text-[var(--color-text-faint)] w-[52px]">Activity</span>
           <span className="text-[var(--color-text)]">edited {freshText}</span>
-          <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">
+          <span className="ml-auto text-[11px] text-[var(--color-text-faint)]">
             {metrics.recentActivity === undefined ? '—' : metrics.recentActivity} sediments / 30d
           </span>
         </div>
@@ -408,7 +408,7 @@ export function Ontology({ typeCounts }: { typeCounts: Record<EntryType, number>
       {/* NO total-entry-count header — Principle-1: a bigger brain is not a better
           one. The per-layer + per-type counts convey the cognitive SHAPE without a
           headline "size" number (the shape is the signal, not the volume). */}
-      <div className="text-[9px] uppercase tracking-wide text-[var(--color-text-faint)]">
+      <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">
         Knowledge ontology · 3 layers × 7 types
       </div>
       {LAYERS.map((l) => (
@@ -416,7 +416,7 @@ export function Ontology({ typeCounts }: { typeCounts: Record<EntryType, number>
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-sm" style={{ background: l.color }} />
             <span className="text-[11px] font-semibold" style={{ color: l.color }}>{l.label}</span>
-            <span className="text-[10px] text-[var(--color-text-muted)]">{t[l.key]}</span>
+            <span className="text-[11px] text-[var(--color-text-muted)]">{t[l.key]}</span>
             <span className="flex-1 h-1.5 rounded-sm bg-[var(--color-bg)] overflow-hidden ml-1">
               <span className="block h-full" style={{ width: `${(t[l.key] / total) * 100}%`, background: l.color }} />
             </span>
@@ -424,7 +424,7 @@ export function Ontology({ typeCounts }: { typeCounts: Record<EntryType, number>
           <div className="flex flex-wrap gap-1 pl-[17px]">
             {l.types.map((ty) => (
               <span key={ty} data-testid={`ddd-type-${ty}`}
-                className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] ${typeCounts[ty] ? 'text-[var(--color-text-muted)]' : 'opacity-40 text-[var(--color-text-faint)]'}`}>
+                className={`flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] ${typeCounts[ty] ? 'text-[var(--color-text-muted)]' : 'opacity-40 text-[var(--color-text-faint)]'}`}>
                 <span className="font-semibold text-[var(--color-text)]">{typeCounts[ty] ?? 0}</span> {ty}
               </span>
             ))}

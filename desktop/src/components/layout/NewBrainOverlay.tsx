@@ -314,7 +314,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
           <div className="p-5 flex flex-col min-w-0">
             <div className="flex items-baseline justify-between mb-2">
               <span className="text-[11px] font-semibold tracking-wide text-[var(--color-text-muted)]">STARTER MATERIAL</span>
-              <span className="text-[10px] text-[var(--color-text-faint)]">optional</span>
+              <span className="text-[11px] text-[var(--color-text-faint)]">optional</span>
             </div>
 
             {/* Acquisition zone — two DISTINCT input methods, not one box (a local
@@ -323,7 +323,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                 URL / repo / path, or type). */}
             <div className="flex flex-col gap-2 mb-3">
               <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold tracking-wide uppercase text-[var(--color-text-faint)] w-[42px] shrink-0">Local</span>
+                <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--color-text-faint)] w-[42px] shrink-0">Local</span>
                 <button
                   type="button"
                   data-testid="new-brain-add-files"
@@ -344,7 +344,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                 </button>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold tracking-wide uppercase text-[var(--color-text-faint)] w-[42px] shrink-0">Link</span>
+                <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--color-text-faint)] w-[42px] shrink-0">Link</span>
                 <input
                   data-testid="new-brain-material-input"
                   value={draft}
@@ -380,7 +380,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                     <div>
                       <div className="text-2xl opacity-60 mb-1.5">⤵</div>
                       <div className="text-[12px] text-[var(--color-text-muted)] font-medium">Add files, a folder, or a link above</div>
-                      <div className="text-[10.5px] mt-1">…or drag files &amp; folders here · sorted by type, click a pill to change the role</div>
+                      <div className="text-[11px] mt-1">…or drag files &amp; folders here · sorted by type, click a pill to change the role</div>
                     </div>
                   </div>
                 )}
@@ -391,7 +391,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                     <button
                       data-testid={`new-brain-role-${it.id}`}
                       onClick={() => cycleRole(it.id)}
-                      className={`text-[10px] font-bold tracking-wide px-2 py-1 rounded border ${ROLE_STYLE[it.role].cls}`}
+                      className={`text-[11px] font-bold tracking-wide px-2 py-1 rounded border ${ROLE_STYLE[it.role].cls}`}
                       title="Click to change the role"
                     >
                       {ROLE_STYLE[it.role].label} ▾

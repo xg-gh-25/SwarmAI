@@ -194,7 +194,7 @@ const OutputRow = memo(function OutputRow({
       </span>
       {style && (
         <span
-          className="shrink-0 text-[10px] font-semibold leading-none font-mono"
+          className="shrink-0 text-[11px] font-semibold leading-none font-mono"
           style={{ color: style.color }}
           data-testid="canvas-output-badge"
           title={badge === 'new' ? 'added' : 'modified'}
@@ -209,7 +209,7 @@ const OutputRow = memo(function OutputRow({
           NOT gate the row's open handler. */}
       {file.liveDirty && (
         <span
-          className="shrink-0 text-[10px] font-medium leading-none"
+          className="shrink-0 text-[11px] font-medium leading-none"
           style={{ color: file.liveDirty === 'missing' ? 'var(--color-error, #d9534f)' : 'var(--color-warning, #d59a26)' }}
           data-testid="canvas-output-drift"
           title={
@@ -222,7 +222,7 @@ const OutputRow = memo(function OutputRow({
         </span>
       )}
       {dir && (
-        <span className="ml-auto truncate text-[10.5px] text-[var(--color-text-faint,var(--color-text-muted))]">
+        <span className="ml-auto truncate text-[11px] text-[var(--color-text-faint,var(--color-text-muted))]">
           {dir}
         </span>
       )}
@@ -465,7 +465,7 @@ const BrowsingRow = memo(function BrowsingRow({
           context (adversarial F2). Nested inside the listitem so the <ul> stays
           valid (a bare <div> child of <ul> is invalid markup). */}
       <div
-        className="px-3 pt-1.5 pb-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-[var(--color-text-faint,var(--color-text-muted))]"
+        className="px-3 pt-1.5 pb-0.5 text-[11px] font-bold uppercase tracking-[0.1em] text-[var(--color-text-faint,var(--color-text-muted))]"
         aria-hidden="true"
       >
         Browsing
@@ -484,7 +484,7 @@ const BrowsingRow = memo(function BrowsingRow({
         <span className="material-symbols-outlined shrink-0 text-[14px] text-[var(--color-text-muted)]" aria-hidden="true">visibility</span>
         <span className="shrink-0 truncate text-[var(--color-text)] font-medium">{fileName}</span>
         {dir && (
-          <span className="ml-auto truncate text-[10.5px] text-[var(--color-text-faint,var(--color-text-muted))]">
+          <span className="ml-auto truncate text-[11px] text-[var(--color-text-faint,var(--color-text-muted))]">
             {dir}
           </span>
         )}

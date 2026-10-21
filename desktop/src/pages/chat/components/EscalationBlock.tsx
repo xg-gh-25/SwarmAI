@@ -111,7 +111,7 @@ export function EscalationBlock({
             </button>
           ))}
           {onSelectOption && (
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-1 px-1">
+            <p className="text-[11px] text-[var(--color-text-muted)] mt-1 px-1">
               Click an option to respond
             </p>
           )}

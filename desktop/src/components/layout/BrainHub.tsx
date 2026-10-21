@@ -248,7 +248,7 @@ function BrainDetailShell(
         <TabBtn active={detailView === 'overview'} onClick={() => onSelectView('overview')} testid="brainhub-tab-overview">Overview</TabBtn>
         <TabBtn active={detailView === 'browse'} onClick={() => onSelectView('browse')} testid="brainhub-tab-browse">Browse</TabBtn>
         <TabBtn active={detailView === 'review'} onClick={() => onSelectView('review')} testid="brainhub-tab-review">
-          Review{pending > 0 ? <span data-testid="review-tab-badge" className="ml-1 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-[#5a4a20] text-[#f0a500] text-[9px] font-semibold">{pending}</span> : null}
+          Review{pending > 0 ? <span data-testid="review-tab-badge" className="ml-1 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-[#5a4a20] text-[#f0a500] text-[11px] font-semibold">{pending}</span> : null}
         </TabBtn>
         <TabBtn active={detailView === 'distribute'} onClick={() => onSelectView('distribute')} testid="brainhub-tab-distribute">Distribute</TabBtn>
       </div>
@@ -370,10 +370,10 @@ function BrainSearchRow({ name, onOpenFile }: { name: string; onOpenFile: (p: st
             >
               <div className="flex items-baseline gap-2">
                 <span className="text-[12px] font-medium text-[var(--color-text)] truncate">{h.title || h.source}</span>
-                <span className="ml-auto text-[9px] font-mono text-[var(--color-text-faint)] flex-shrink-0">{h.domain}</span>
+                <span className="ml-auto text-[11px] font-mono text-[var(--color-text-faint)] flex-shrink-0">{h.domain}</span>
               </div>
-              {h.source && <div className="text-[10px] font-mono text-[var(--color-text-faint)] truncate">{h.source}</div>}
-              {h.content && <div className="text-[10px] text-[var(--color-text-muted)] line-clamp-2 mt-0.5">{h.content}</div>}
+              {h.source && <div className="text-[11px] font-mono text-[var(--color-text-faint)] truncate">{h.source}</div>}
+              {h.content && <div className="text-[11px] text-[var(--color-text-muted)] line-clamp-2 mt-0.5">{h.content}</div>}
             </button>
           ))}
         </div>
@@ -608,7 +608,7 @@ function NeedYouBlock(
       data-testid="brainhub-needyou"
       className={`rounded-lg border px-3 py-2.5 ${hasWork ? 'bg-[#1e1a0e] border-[#5a4a20]' : 'bg-[var(--color-card)] border-[var(--color-border)]'}`}
     >
-      <div className={`text-[9px] uppercase tracking-wide font-semibold mb-1.5 ${hasWork ? 'text-[#f0a500]' : 'text-[var(--color-text-faint)]'}`}>
+      <div className={`text-[11px] uppercase tracking-wide font-semibold mb-1.5 ${hasWork ? 'text-[#f0a500]' : 'text-[var(--color-text-faint)]'}`}>
         {hasWork ? '▲ Needs you' : 'Need you'}
       </div>
       {!hasWork ? (
@@ -669,16 +669,16 @@ function CoreDocCards(
     <div data-testid="brainhub-coredocs">
       {/* group header — the aggregate "what moved this week" + Weekly Report entry */}
       <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--color-text-faint)]">
+        <span className="text-[11px] uppercase tracking-wide font-semibold text-[var(--color-text-faint)]">
           Judgment core · review periodically
         </span>
-        <span className="text-[10px] text-[var(--color-text-muted)]" data-testid="coredocs-agg">
+        <span className="text-[11px] text-[var(--color-text-muted)]" data-testid="coredocs-agg">
           {hasSignal ? `since last review · ${totalNew} new · ${totalPending} pending` : 'up to date since last review'}
         </span>
         <button
           data-testid="coredocs-weekly"
           onClick={onToggleWeekly}
-          className="ml-auto flex items-center gap-1 text-[10px] text-[#58a6ff] border border-[#1f3a5a] rounded px-1.5 py-0.5 hover:bg-[#12233a]"
+          className="ml-auto flex items-center gap-1 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded px-1.5 py-0.5 hover:bg-[#12233a]"
         >
           <span className="material-symbols-outlined text-[12px]">summarize</span>
           {showWeekly ? 'Hide report' : 'Weekly Report'}
@@ -706,8 +706,8 @@ function CoreDocCards(
                 <span className="text-[12px] font-semibold font-mono">{docName}</span>
                 {marked && <span data-testid={`coredoc-mark-${docName}`} className="ml-auto w-1.5 h-1.5 rounded-full bg-[#f0a500]" />}
               </div>
-              <div className="text-[10px] text-[var(--color-text-muted)] mb-1">{DOC_ROLE[docName] ?? 'DDD document'}</div>
-              <div className="flex items-center gap-2 text-[9px] text-[var(--color-text-faint)]">
+              <div className="text-[11px] text-[var(--color-text-muted)] mb-1">{DOC_ROLE[docName] ?? 'DDD document'}</div>
+              <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-faint)]">
                 {sig.newCount > 0 && <span className="text-[#7ee787]">{sig.newCount} new</span>}
                 {sig.pendingCount > 0 && <span className="text-[#f0a500]">{sig.pendingCount} pending</span>}
                 {!marked && <span>up to date</span>}
@@ -739,7 +739,7 @@ function WeeklyReportPanel({ weekly, projectName }: { weekly: WeeklyReportModel;
     <div data-testid="brainhub-weekly-panel" className="rounded-lg border border-[#1f3a5a] bg-[#0e1723] p-3 mb-2 text-[11px]">
       <div className="flex items-center gap-1.5 mb-2 font-semibold text-[#58a6ff]">
         <span className="material-symbols-outlined text-[15px]">summarize</span>
-        {projectName} · weekly review {weekly.sinceSha && <span className="text-[9px] font-mono text-[var(--color-text-faint)]">since {weekly.sinceSha}</span>}
+        {projectName} · weekly review {weekly.sinceSha && <span className="text-[11px] font-mono text-[var(--color-text-faint)]">since {weekly.sinceSha}</span>}
       </div>
       <div className="flex flex-col gap-1 text-[var(--color-text-muted)]">
         <div><span className="text-[#7ee787] font-semibold">{weekly.autoApplied}</span> auto-cultivated change{weekly.autoApplied === 1 ? '' : 's'} since last review</div>
@@ -814,7 +814,7 @@ function BrainBrowse(
           >
             <span className="material-symbols-outlined text-[15px] text-[#58a6ff]">hub</span>
             <span className="font-medium">Code Graph</span>
-            {!graphOpen && <span className="text-[10px] text-[var(--color-text-faint)]">· expand to load the dependency graph</span>}
+            {!graphOpen && <span className="text-[11px] text-[var(--color-text-faint)]">· expand to load the dependency graph</span>}
             <span className="material-symbols-outlined text-[16px] text-[var(--color-text-faint)] ml-auto">
               {graphOpen ? 'expand_less' : 'expand_more'}
             </span>
@@ -979,10 +979,10 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
         </div>
         {/* engineer detail — folded, muted; kept for power users */}
         <details className="mt-1">
-          <summary className="text-[10px] text-[var(--color-text-muted)] cursor-pointer select-none opacity-70 hover:opacity-100">
+          <summary className="text-[11px] text-[var(--color-text-muted)] cursor-pointer select-none opacity-70 hover:opacity-100">
             git detail
           </summary>
-          <div className="mt-1 text-[10px] font-mono text-[var(--color-text-muted)]">
+          <div className="mt-1 text-[11px] font-mono text-[var(--color-text-muted)]">
             diff <span className="text-[var(--color-text)]">Projects/{name}/</span>
             · last-reviewed <span className="text-[var(--color-text)]">{shortSha(data.last_reviewed_sha)}</span>
             → HEAD <span className="text-[var(--color-text)]">{shortSha(data.head_sha)}</span>
@@ -998,7 +998,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
           <span className="material-symbols-outlined text-[14px]">warning</span>
           The review diff timed out — this queue may be incomplete. "Mark all seen" is disabled to avoid skipping unreviewed changes.
           <button onClick={() => load()} disabled={busy} data-testid="review-diff-retry"
-            className="ml-auto flex items-center gap-1 text-[10px] text-[#f0a500] border border-[#5a4a1f] rounded px-1.5 py-0.5 hover:bg-[#2e2814] disabled:opacity-40">
+            className="ml-auto flex items-center gap-1 text-[11px] text-[#f0a500] border border-[#5a4a1f] rounded px-1.5 py-0.5 hover:bg-[#2e2814] disabled:opacity-40">
             <span className="material-symbols-outlined text-[12px]">refresh</span>Retry
           </button>
         </div>
@@ -1011,7 +1011,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
           <span className="material-symbols-outlined text-[14px]">error</span>
           Action failed: {actionError}
           <button onClick={() => setActionError(null)} data-testid="review-action-error-dismiss"
-            className="ml-auto text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1.5">dismiss</button>
+            className="ml-auto text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1.5">dismiss</button>
         </div>
       )}
 
@@ -1044,17 +1044,17 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
                 <span className="text-[var(--color-text-faint)]">· {p.target_section}</span>
                 {/* F4: confidence is the human-gate decision signal — render it
                     (null-guarded: an un-scored proposal shows "—", never "null"). */}
-                <span className="text-[10px] text-[var(--color-text-muted)]" data-testid="proposal-confidence" title="cultivation confidence">
+                <span className="text-[11px] text-[var(--color-text-muted)]" data-testid="proposal-confidence" title="cultivation confidence">
                   conf {p.confidence != null ? p.confidence.toFixed(2) : '—'}
                 </span>
                 <div className="ml-auto flex gap-1">
                   <button onClick={() => onProposal(p, true)} disabled={busy}
-                    className="text-[10px] text-[#3fb950] border border-[#1f5a2a] rounded px-1.5 py-0.5 hover:bg-[#132918] disabled:opacity-40">Approve</button>
+                    className="text-[11px] text-[#3fb950] border border-[#1f5a2a] rounded px-1.5 py-0.5 hover:bg-[#132918] disabled:opacity-40">Approve</button>
                   <button onClick={() => onProposal(p, false)} disabled={busy}
-                    className="text-[10px] text-[#ef4444] border border-[#5a1f1f] rounded px-1.5 py-0.5 hover:bg-[#2a1214] disabled:opacity-40">Reject</button>
+                    className="text-[11px] text-[#ef4444] border border-[#5a1f1f] rounded px-1.5 py-0.5 hover:bg-[#2a1214] disabled:opacity-40">Reject</button>
                 </div>
               </div>
-              <div className="text-[10px] text-[var(--color-text-muted)] line-clamp-2">{p.content}</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] line-clamp-2">{p.content}</div>
             </div>
           ))}
       </ReviewZone>
@@ -1069,7 +1069,7 @@ function ReviewZone({ testid, title, desc, color, children }: {
     <div className="mb-4" data-testid={testid}>
       <div className="flex items-center gap-2 mb-1.5">
         <span className="text-[12px] font-semibold" style={{ color }}>{title}</span>
-        <span className="text-[10px] text-[var(--color-text-faint)]">{desc}</span>
+        <span className="text-[11px] text-[var(--color-text-faint)]">{desc}</span>
       </div>
       {children}
     </div>
@@ -1097,22 +1097,22 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
           (empty for .md — Gate-1), shown only when git gave a non-empty heading. */}
       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-[var(--color-border)]" data-testid={`hunk-summary-${sig}`}>
         <span className="font-mono text-[11px] text-[var(--color-text)]">{fileName}</span>
-        <span className="text-[10px] font-mono">
+        <span className="text-[11px] font-mono">
           <span className="text-[#7ee787]">+{s.adds}</span>
           <span className="text-[var(--color-text-faint)]"> / </span>
           <span className="text-[#ff9a94]">-{s.dels}</span>
         </span>
         {s.startLine != null && (
-          <span className="text-[9px] text-[var(--color-text-faint)]">around line {s.startLine}</span>
+          <span className="text-[11px] text-[var(--color-text-faint)]">around line {s.startLine}</span>
         )}
         {s.section && (
-          <span className="text-[9px] text-[var(--color-text-faint)] truncate italic">· {s.section}</span>
+          <span className="text-[11px] text-[var(--color-text-faint)] truncate italic">· {s.section}</span>
         )}
         <div className="ml-auto flex items-center gap-1">
           <button
             onClick={() => setShowDiff((v) => !v)}
             data-testid={`hunk-toggle-diff-${sig}`}
-            className="flex items-center gap-1 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] rounded px-1.5 py-0.5 hover:bg-[var(--color-hover)]"
+            className="flex items-center gap-1 text-[11px] text-[var(--color-text-muted)] border border-[var(--color-border)] rounded px-1.5 py-0.5 hover:bg-[var(--color-hover)]"
           >
             <span className="material-symbols-outlined text-[12px]">{showDiff ? 'expand_less' : 'code'}</span>
             {showDiff ? 'Hide diff' : 'View diff'}
@@ -1120,7 +1120,7 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
           <button
             onClick={onOpenFile}
             data-testid={`hunk-open-file-${sig}`}
-            className="flex items-center gap-1 text-[10px] text-[#58a6ff] border border-[#1f3a5a] rounded px-1.5 py-0.5 hover:bg-[#12233a]"
+            className="flex items-center gap-1 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded px-1.5 py-0.5 hover:bg-[#12233a]"
             title="Open this file in the Canvas"
           >
             <span className="material-symbols-outlined text-[12px]">open_in_new</span>
@@ -1130,7 +1130,7 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
             onClick={onReject}
             disabled={busy}
             data-testid="review-reject-hunk"
-            className="flex items-center gap-1 text-[10px] text-[#ef4444] border border-[#5a1f1f] rounded px-1.5 py-0.5 hover:bg-[#2a1214] disabled:opacity-40"
+            className="flex items-center gap-1 text-[11px] text-[#ef4444] border border-[#5a1f1f] rounded px-1.5 py-0.5 hover:bg-[#2a1214] disabled:opacity-40"
           >
             <span className="material-symbols-outlined text-[13px]">undo</span>
             Revert hunk
@@ -1138,7 +1138,7 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
         </div>
       </div>
       {showDiff && (
-        <pre className="text-[10px] font-mono leading-relaxed px-2 py-1 overflow-x-auto max-h-40" data-testid={`hunk-diff-${sig}`}>
+        <pre className="text-[11px] font-mono leading-relaxed px-2 py-1 overflow-x-auto max-h-40" data-testid={`hunk-diff-${sig}`}>
           {hunk.diff_text.split('\n').slice(0, 20).map((ln, i) => {
             const c = ln.startsWith('+') && !ln.startsWith('+++') ? '#7ee787'
               : ln.startsWith('-') && !ln.startsWith('---') ? '#ff9a94'
@@ -1232,13 +1232,13 @@ function DistributeView(
       {/* declared reach — guided Step 2 (confirm targets & freshness) */}
       {data.distributable ? (
         <>
-          <div className="flex items-center gap-2 mb-1.5 text-[10px] uppercase tracking-wider font-semibold text-[#3fb950]" data-testid="distribute-step" data-step="2">
+          <div className="flex items-center gap-2 mb-1.5 text-[11px] uppercase tracking-wider font-semibold text-[#3fb950]" data-testid="distribute-step" data-step="2">
             Step 2 · confirm targets &amp; freshness
           </div>
           <div className="flex items-center gap-2 mb-3 text-[12px]">
             <span className="material-symbols-outlined text-[16px] text-[#3fb950]">outbound</span>
             <span className="font-semibold text-[var(--color-text)]">Distributable</span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${data.visibility === 'external' ? 'bg-[#3a2412] text-[#f0a500]' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]'}`}>
+            <span className={`text-[11px] px-1.5 py-0.5 rounded font-mono ${data.visibility === 'external' ? 'bg-[#3a2412] text-[#f0a500]' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]'}`}>
               {data.visibility}
             </span>
           </div>
@@ -1248,26 +1248,26 @@ function DistributeView(
                 <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">deployed_code</span>
                 <span className="font-mono text-[11px] text-[var(--color-text)]">{t}</span>
                 {/* AC1 (run_8d2ec26c): where it lands — derived read-only from target+visibility. */}
-                <span className="text-[10px] text-[var(--color-text-muted)]" title={repoForTarget(t).install}>
+                <span className="text-[11px] text-[var(--color-text-muted)]" title={repoForTarget(t).install}>
                   → {repoForTarget(t).label}
                 </span>
                 {/* F2 TRISTATE — three EXPLICIT branches. `null` (freshness unknown,
                     uncommitted output) must NOT fall into "up to date" (the old
                     `!source_changed_since` did exactly that, re-burying staleness). */}
                 {!data.has_output ? (
-                  <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">never distributed</span>
+                  <span className="ml-auto text-[11px] text-[var(--color-text-faint)]">never distributed</span>
                 ) : data.source_changed_since === true ? (
-                  <span className="ml-auto text-[9px] text-[#f0a500]" title="knowledge changed since last distribute">● source changed since last distribute</span>
+                  <span className="ml-auto text-[11px] text-[#f0a500]" title="knowledge changed since last distribute">● source changed since last distribute</span>
                 ) : data.source_changed_since === false ? (
-                  <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">up to date</span>
+                  <span className="ml-auto text-[11px] text-[var(--color-text-faint)]">up to date</span>
                 ) : (
-                  <span className="ml-auto text-[9px] text-[var(--color-text-muted)]" title="the distribute output isn't git-committed, so there's no stable anchor to compare against — commit the output to enable freshness tracking">freshness unknown</span>
+                  <span className="ml-auto text-[11px] text-[var(--color-text-muted)]" title="the distribute output isn't git-committed, so there's no stable anchor to compare against — commit the output to enable freshness tracking">freshness unknown</span>
                 )}
               </div>
             ))}
           </div>
           {data.has_output && (
-            <div className="text-[10px] text-[var(--color-text-faint)] mb-3 font-mono">
+            <div className="text-[11px] text-[var(--color-text-faint)] mb-3 font-mono">
               last output: {data.output_path} {data.last_distribute_time ? `· ${data.last_distribute_time.slice(0, 10)}` : ''}
             </div>
           )}
@@ -1278,7 +1278,7 @@ function DistributeView(
           <button
             onClick={openAimJson}
             data-testid="distribute-edit-aim"
-            className="mb-4 flex items-center gap-1.5 text-[10px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-1 hover:bg-[#12233a]"
+            className="mb-4 flex items-center gap-1.5 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-1 hover:bg-[#12233a]"
             title="Open aim.json in the Canvas to edit the declared reach (targets / visibility)"
           >
             <span className="material-symbols-outlined text-[13px]">edit</span>
@@ -1292,11 +1292,11 @@ function DistributeView(
               would contradict the orphaned warning below. So split on has_output:
               orphaned → re-declare (a regression state); else → honest Step 1. */}
           {data.has_output ? (
-            <div className="flex items-center gap-2 mb-1.5 text-[10px] uppercase tracking-wider font-semibold text-[#db8c3a]" data-testid="distribute-redeclare">
+            <div className="flex items-center gap-2 mb-1.5 text-[11px] uppercase tracking-wider font-semibold text-[#db8c3a]" data-testid="distribute-redeclare">
               Reach removed · re-declare to resume distribution
             </div>
           ) : (
-            <div className="flex items-center gap-2 mb-1.5 text-[10px] uppercase tracking-wider font-semibold text-[#f0a500]" data-testid="distribute-step" data-step="1">
+            <div className="flex items-center gap-2 mb-1.5 text-[11px] uppercase tracking-wider font-semibold text-[#f0a500]" data-testid="distribute-step" data-step="1">
               Step 1 · declare a reach
             </div>
           )}
@@ -1304,7 +1304,7 @@ function DistributeView(
             <span className="material-symbols-outlined text-[16px]">block</span>
             Not distributable
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+          <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
             This brain has no <span className="font-mono">distribution</span> block in its <span className="font-mono">aim.json</span>.
             The owner must declare a reach before it can be distributed — add to <span className="font-mono">aim.json</span>:
             <code className="block mt-1 px-2 py-1 rounded bg-[var(--color-bg)] text-[var(--color-text-muted)] whitespace-pre">{'"distribution": { "targets": ["open-plugin"], "visibility": "internal" }'}</code>
@@ -1323,7 +1323,7 @@ function DistributeView(
           <button
             onClick={openAimJson}
             data-testid="distribute-open-aim"
-            className="mt-2.5 flex items-center gap-1.5 text-[10px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-1 hover:bg-[#12233a]"
+            className="mt-2.5 flex items-center gap-1.5 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-1 hover:bg-[#12233a]"
             title="Open aim.json in the Canvas to declare the distribution block"
           >
             <span className="material-symbols-outlined text-[13px]">open_in_new</span>
@@ -1338,7 +1338,7 @@ function DistributeView(
           + emit≠publish once the message lands. */}
       <div className="flex flex-col gap-1.5">
         {data.distributable && (
-          <div className="text-[10px] uppercase tracking-wider font-semibold text-[#3fb950]" data-testid="distribute-step" data-step="3">
+          <div className="text-[11px] uppercase tracking-wider font-semibold text-[#3fb950]" data-testid="distribute-step" data-step="3">
             Step 3 · run
           </div>
         )}
@@ -1360,7 +1360,7 @@ function DistributeView(
               : 'Distribute a brain'}
           </button>
           {data.distributable && (
-            <span className="text-[10px] text-[var(--color-text-faint)] font-mono">→ {distributeCmd}</span>
+            <span className="text-[11px] text-[var(--color-text-faint)] font-mono">→ {distributeCmd}</span>
           )}
         </div>
       </div>

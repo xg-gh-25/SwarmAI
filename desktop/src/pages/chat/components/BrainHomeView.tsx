@@ -96,8 +96,8 @@ function DecisionBlock({ brains, onOpenBrain }: { brains: BrainSummary[]; onOpen
     <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary,var(--color-bg))] overflow-hidden" data-testid="tier-decision">
       <div className="flex items-center gap-2 px-3.5 pt-3 pb-1.5">
         <span className="w-2 h-2 rounded-full" style={{ background: '#f0a500' }} />
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.8px] text-[#f0a500]">Needs your decision</span>
-        <span className="ml-auto text-[10px] text-[var(--color-text-faint)]">{brains.length} brain{brains.length > 1 ? 's' : ''}</span>
+        <span className="text-[11px] font-semibold uppercase tracking-[0.8px] text-[#f0a500]">Needs your decision</span>
+        <span className="ml-auto text-[11px] text-[var(--color-text-faint)]">{brains.length} brain{brains.length > 1 ? 's' : ''}</span>
       </div>
       <div className="pb-1.5">
         {brains.map((b) => (
@@ -109,7 +109,7 @@ function DecisionBlock({ brains, onOpenBrain }: { brains: BrainSummary[]; onOpen
           >
             <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: '#f0a500' }} />
             <span className="text-sm text-[var(--color-text)] flex-1 min-w-0 truncate">{b.name}</span>
-            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: 'rgba(240,165,0,.14)', color: '#f0a500' }}>
+            <span className="text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: 'rgba(240,165,0,.14)', color: '#f0a500' }}>
               {b.health.pending} pending
             </span>
             {/* `sinking` removed from the first screen (run: welcome-declutter): it is an
@@ -136,7 +136,7 @@ function BrainPulse({
     <div data-testid="tier-pulse" className="flex items-center gap-3.5 px-4 py-2.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary,var(--color-bg))]">
       <span className="material-symbols-outlined text-[16px] text-[#f0a500]">psychology</span>
       <span className="text-[13px] font-semibold text-[var(--color-text)]">{count}</span>
-      <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)]">brain{count > 1 ? 's' : ''}</span>
+      <span className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">brain{count > 1 ? 's' : ''}</span>
       {totals && grand > 0 && (
         <div className="flex h-1.5 rounded-sm overflow-hidden flex-1 min-w-[80px] max-w-[220px]"
           title={LAYERS.map((l) => `${l.label}: ${totals[l.key]}`).join(' · ')}
@@ -148,7 +148,7 @@ function BrainPulse({
         </div>
       )}
       {lastChange && (
-        <span className="text-[10px] text-[var(--color-text-faint)] shrink-0">edited {lastChange}</span>
+        <span className="text-[11px] text-[var(--color-text-faint)] shrink-0">edited {lastChange}</span>
       )}
       <button
         data-testid="brain-home-batch-review"

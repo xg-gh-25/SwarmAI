@@ -82,7 +82,7 @@ export function VoiceConversationIndicator({
       </span>
       <span>{config.label}</span>
       {state === 'speaking' && (
-        <span className="text-[10px] opacity-60 ml-1">(click to interrupt)</span>
+        <span className="text-[11px] opacity-60 ml-1">(click to interrupt)</span>
       )}
     </div>
   );

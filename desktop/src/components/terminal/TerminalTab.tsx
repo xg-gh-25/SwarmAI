@@ -129,7 +129,7 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       const t = new Terminal({
         cursorBlink: true,
         fontFamily:
-          "'JetBrains Mono', 'SF Mono', Menlo, Monaco, 'Courier New', monospace",
+          "'SF Mono', Menlo, 'JetBrains Mono', Monaco, 'Courier New', monospace",
         // Terminal is an auxiliary panel with little vertical space — pack it
         // densely. fontSize 11 + lineHeight 1.0 (was 12 / 1.3, which wasted ~30%
         // of every row to leading) fits noticeably more rows in the same height.

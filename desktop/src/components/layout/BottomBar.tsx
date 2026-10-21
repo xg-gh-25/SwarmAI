@@ -52,14 +52,14 @@ function CodeIntelPopover({ summary, onReindex, isReindexing, onViewGraph }: {
       <div className="mt-2.5 flex gap-1.5">
         <button
           onClick={onViewGraph}
-          className="flex-1 text-center py-1 px-2 rounded border border-indigo-500/50 hover:bg-indigo-500/20 text-[10px] text-indigo-300"
+          className="flex-1 text-center py-1 px-2 rounded border border-indigo-500/50 hover:bg-indigo-500/20 text-[11px] text-indigo-300"
         >
           View Graph
         </button>
         <button
           onClick={onReindex}
           disabled={isReindexing}
-          className="flex-1 text-center py-1 px-2 rounded border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-[10px]"
+          className="flex-1 text-center py-1 px-2 rounded border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-[11px]"
         >
           {isReindexing ? 'Indexing...' : 'Re-index'}
         </button>
@@ -199,7 +199,7 @@ export function BottomBar() {
 
   return (
     <div
-      className="h-[26px] bg-[var(--color-bg-chrome)] border-t border-[var(--color-border)] flex items-center px-3.5 text-[10px] text-[var(--color-text-dim,var(--color-text-muted))] select-none flex-shrink-0"
+      className="h-[26px] bg-[var(--color-bg-chrome)] border-t border-[var(--color-border)] flex items-center px-3.5 text-[11px] text-[var(--color-text-dim,var(--color-text-muted))] select-none flex-shrink-0"
       data-testid="bottom-bar"
     >
       {/* Left: status */}
@@ -287,7 +287,7 @@ export function BottomBar() {
       {/* Right: keyboard hints with badge-style kbd — overflow-hidden allows graceful
           clipping at extreme narrow widths instead of rigid flex-shrink-0 which would
           push the left status section off-screen. pr-1.5 avoids window edge clip. */}
-      <div className="flex items-center gap-3 pr-1.5 font-mono text-[9px] overflow-x-hidden">
+      <div className="flex items-center gap-3 pr-1.5 font-mono text-[11px] overflow-x-hidden">
         <span className="flex items-center gap-1">
           <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">Enter</kbd>
           <span>send</span>

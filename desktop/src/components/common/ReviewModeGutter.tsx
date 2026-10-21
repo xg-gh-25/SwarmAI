@@ -137,9 +137,9 @@ export default function ReviewModeGutter({
               aria-label={hasComment ? `Edit comment on line ${lineNum}` : `Add comment on line ${lineNum}`}
             >
               {applied ? (
-                <span className="absolute left-0.5 top-1/2 -translate-y-1/2 text-[10px]">✅</span>
+                <span className="absolute left-0.5 top-1/2 -translate-y-1/2 text-[11px]">✅</span>
               ) : hasComment ? (
-                <span className="absolute left-0.5 top-1/2 -translate-y-1/2 text-[10px]">💬</span>
+                <span className="absolute left-0.5 top-1/2 -translate-y-1/2 text-[11px]">💬</span>
               ) : null}
               <span className={hasComment || applied ? 'pl-3' : ''}>{lineNum}</span>
             </div>

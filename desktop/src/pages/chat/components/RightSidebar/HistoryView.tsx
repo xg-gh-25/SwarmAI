@@ -121,7 +121,7 @@ export function HistoryView({
         <p className="text-[12.5px] leading-4 font-medium truncate text-[var(--color-text)]">
           {session.title}
         </p>
-        <p className="text-[10.5px] opacity-70">
+        <p className="text-[11px] opacity-70">
           {agentName(session.agentId)} • {formatTimestamp(session.lastAccessedAt)}
         </p>
       </div>
@@ -201,19 +201,19 @@ export function HistoryView({
              null while the first query is still in flight → treat as empty +
              isSearching so the "Searching…" hint shows. */
           (searchResults?.length ?? 0) === 0 ? (
-            <p className="px-3 py-4 text-[10.5px] text-[var(--color-text-muted)] text-center">
+            <p className="px-3 py-4 text-[11px] text-[var(--color-text-muted)] text-center">
               {isSearching ? 'Searching…' : 'No matching conversations'}
             </p>
           ) : (
             <>
-              <p className="px-3 py-1.5 text-[10.5px] font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
+              <p className="px-3 py-1.5 text-[11px] font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
                 {searchResults!.length} result{searchResults!.length === 1 ? '' : 's'}
               </p>
               {searchResults!.map(renderSessionRow)}
             </>
           )
         ) : filteredGroups.length === 0 ? (
-          <p className="px-3 py-4 text-[10.5px] text-[var(--color-text-muted)] text-center">
+          <p className="px-3 py-4 text-[11px] text-[var(--color-text-muted)] text-center">
             {hasQuery ? 'No matching sessions' : t('chat.noHistory')}
           </p>
         ) : (
@@ -221,7 +221,7 @@ export function HistoryView({
             <div key={group.group}>
               {/* Time-period heading */}
               <p
-                className={`px-3 py-1.5 text-[10.5px] font-medium text-[var(--color-text-muted)]
+                className={`px-3 py-1.5 text-[11px] font-medium text-[var(--color-text-muted)]
                   uppercase tracking-wider${groupIndex > 0 ? ' mt-2.5' : ''}`}
               >
                 {t(TIME_GROUP_LABEL_KEYS[group.group])}

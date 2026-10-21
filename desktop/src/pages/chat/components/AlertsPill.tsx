@@ -53,7 +53,7 @@ export function AlertsPill({ count }: AlertsPillProps) {
         </span>
         <span className="flex-1 text-left text-[11.5px] font-mono tracking-wide whitespace-nowrap">{tf(t, 'chat.alerts.label', 'Needs You')}</span>
         {!calm && (
-          <span className="min-w-[16px] h-4 px-1 rounded-lg bg-red-500 text-white text-[9.5px] font-bold font-mono flex items-center justify-center animate-pulse">
+          <span className="min-w-[16px] h-4 px-1 rounded-lg bg-red-500 text-white text-[11px] font-bold font-mono flex items-center justify-center animate-pulse">
             {count}
           </span>
         )}

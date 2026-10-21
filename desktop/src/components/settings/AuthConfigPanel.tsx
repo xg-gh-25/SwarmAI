@@ -350,7 +350,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
               <label className="block text-xs text-[var(--color-text-muted)] mb-1">AWS Account ID</label>
               <div className="w-full px-3 py-2 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text-muted)] flex items-center justify-between">
                 <code className="text-[var(--color-text)]">{accountId}</code>
-                <span className="text-[10px] uppercase tracking-wide opacity-60">from AWS profile</span>
+                <span className="text-[11px] uppercase tracking-wide opacity-60">from AWS profile</span>
               </div>
             </div>
           ) : null}
@@ -422,7 +422,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
                     ada credentials update --account={displayAccount} --role={displayRole} --provider=isengard
                   </code>
                   {!hasRealValues && (
-                    <p className="text-[var(--color-text-muted)] mt-1.5 opacity-50 text-[10px]">
+                    <p className="text-[var(--color-text-muted)] mt-1.5 opacity-50 text-[11px]">
                       Fill in Account ID and Role above — the command will update automatically.
                     </p>
                   )}
@@ -456,7 +456,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
                   <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded mt-1">
                     aws sso login --profile &lt;your-profile&gt;
                   </code>
-                  <p className="text-[var(--color-text-muted)] mt-1.5 opacity-60 text-[10px]">
+                  <p className="text-[var(--color-text-muted)] mt-1.5 opacity-60 text-[11px]">
                     `aws configure sso` walks you through your Identity Center start URL + region.
                   </p>
                 </>
@@ -479,7 +479,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
               className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
             />
           </div>
-          <p className="text-[10px] text-[var(--color-text-muted)] opacity-60">
+          <p className="text-[11px] text-[var(--color-text-muted)] opacity-60">
             Stored securely on this device (not synced, not in config backups). Get a key at console.anthropic.com.
           </p>
         </div>
@@ -505,19 +505,19 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
               className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
             />
           </div>
-          <p className="text-[10px] text-[var(--color-text-muted)] opacity-70">
+          <p className="text-[11px] text-[var(--color-text-muted)] opacity-70">
             Use a <strong>short-term key</strong> (max 12h — it inherits the permissions of the IAM
             principal that generated it). Generate one with{' '}
             <code className="text-[var(--color-primary)]">aws bedrock create-api-key</code> or the Bedrock console.
           </p>
           <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-            <p className="text-[10px] text-amber-500/90 leading-relaxed">
+            <p className="text-[11px] text-amber-500/90 leading-relaxed">
               ⚠️ Avoid <strong>long-term keys</strong> in production: generating one in the console
               auto-creates an IAM User, and a leaked token carries a high blast radius. Prefer
               short-term keys and rotate them.
             </p>
           </div>
-          <p className="text-[10px] text-[var(--color-text-muted)] opacity-60">
+          <p className="text-[11px] text-[var(--color-text-muted)] opacity-60">
             Stored securely on this device (not synced, not in config backups).
           </p>
         </div>

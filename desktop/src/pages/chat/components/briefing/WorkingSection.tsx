@@ -51,7 +51,7 @@ export function WorkingSection({ items, onItemClick }: WorkingSectionProps) {
             <span className="text-[13px] leading-5 text-[var(--color-text)] truncate flex-1">
               {item.title}
             </span>
-            <span className="shrink-0 text-[10px] text-[var(--color-text-muted)] bg-[var(--color-bg-hover)] px-1.5 py-0.5 rounded">
+            <span className="shrink-0 text-[11px] text-[var(--color-text-muted)] bg-[var(--color-bg-hover)] px-1.5 py-0.5 rounded">
               {sourceLabel}
             </span>
           </button>

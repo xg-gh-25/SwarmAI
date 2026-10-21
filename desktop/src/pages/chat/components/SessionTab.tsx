@@ -134,7 +134,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
 
       {/* Shortcut hint — shown on hover, 9px mono font, dim color */}
       {shortcutLabel && (
-        <span className="text-[9px] font-mono text-[var(--color-text-dim)] opacity-0 group-hover/tab:opacity-100 transition-opacity flex-shrink-0 ml-auto">
+        <span className="text-[11px] font-mono text-[var(--color-text-dim)] opacity-0 group-hover/tab:opacity-100 transition-opacity flex-shrink-0 ml-auto">
           {shortcutLabel}
         </span>
       )}

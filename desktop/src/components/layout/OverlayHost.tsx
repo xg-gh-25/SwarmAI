@@ -231,7 +231,7 @@ export function OverlayHost() {
         <div className="relative flex items-center gap-3 h-[50px] px-5 shrink-0 rounded-t-[18px] bg-gradient-to-b from-[var(--color-bg-chrome)] to-[var(--color-card)] border-b border-[var(--color-border)] before:absolute before:inset-x-0 before:bottom-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-[var(--panel-accent)] before:to-transparent before:opacity-50">
           {renderSpec.mode && (
             <span
-              className="font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--panel-accent)] bg-[color-mix(in_srgb,var(--panel-accent)_14%,transparent)] ring-1 ring-[color-mix(in_srgb,var(--panel-accent)_25%,transparent)] px-2 py-[3px] rounded-md"
+              className=" text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--panel-accent)] bg-[color-mix(in_srgb,var(--panel-accent)_14%,transparent)] ring-1 ring-[color-mix(in_srgb,var(--panel-accent)_25%,transparent)] px-2 py-[3px] rounded-md"
               data-testid="overlay-host-mode-badge"
             >
               {renderSpec.mode}

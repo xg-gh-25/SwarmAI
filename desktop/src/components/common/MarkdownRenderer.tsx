@@ -314,7 +314,8 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
         titleColor: '#1e293b',
         edgeLabelBackground: '#ffffff',
       },
-      fontFamily: 'Inter, sans-serif',
+      // mermaid measures labels with a concrete stack (no CSS variables): the app's.
+      fontFamily: '-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif',
     });
   }, [resolvedTheme]);
 

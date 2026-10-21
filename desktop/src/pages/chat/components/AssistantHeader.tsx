@@ -48,7 +48,7 @@ export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   const formattedTime = formatTimestamp(timestamp);
 
   return (
-    <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-dim)] mb-3">
+    <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-dim)] mb-3">
       <span className="text-[11.5px] font-semibold text-[var(--color-text)]" style={{ letterSpacing: '-0.02em' }}>
         {ASSISTANT_NAME}
       </span>

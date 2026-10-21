@@ -309,7 +309,7 @@ export default function AIModelsTab() {
                     <span className="flex items-center gap-2 min-w-0">
                       <span className="text-[var(--color-text)] font-mono text-sm truncate">{m.shortName}</span>
                       {m.isNew && !already && (
-                        <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded">NEW</span>
+                        <span className="px-1.5 py-0.5 text-[11px] font-semibold bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded">NEW</span>
                       )}
                     </span>
                     {already ? (

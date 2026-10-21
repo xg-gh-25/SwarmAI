@@ -395,7 +395,7 @@ function OverviewTab() {
                 <td className="px-3 py-2 font-mono">{run.triggered_at?.slice(0, 10)}</td>
                 <td className="px-3 py-2">{run.triggered_by}</td>
                 <td className="px-3 py-2">
-                  <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                  <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-semibold ${
                     run.overall_score >= 80 ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500'
                   }`}>
                     {run.overall_score}%
@@ -441,7 +441,7 @@ function ChipGroup({
   const interactive = !!onClick;
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[9px] uppercase tracking-wide text-[var(--color-text-muted)] font-medium">{label}</span>
+      <span className="text-[11px] uppercase tracking-wide text-[var(--color-text-muted)] font-medium">{label}</span>
       <div className="flex flex-wrap gap-1">
         {entries.map((e) => {
           const isActive = activeKey === e.key;
@@ -452,7 +452,7 @@ function ChipGroup({
               data-testid={`chip-${testidPrefix}-${e.key}`}
               {...(interactive ? { onClick: () => onClick!(e.key), type: 'button' as const } : {})}
               title={interactive ? `Filter by ${label.toLowerCase()}: ${e.key}` : `${e.key}: ${e.count}`}
-              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] border transition-colors ${
                 isActive
                   ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)]'
                   : 'bg-[var(--color-bg)] border-[var(--color-border)] text-[var(--color-text-secondary)]'
@@ -592,7 +592,7 @@ export function GoldenSetTab() {
             {breakdowns.tier.map((t) => <option key={t.key} value={t.key}>{t.key}</option>)}
           </select>
           <div className="flex-1" />
-          <span className="text-[10px] text-[var(--color-text-muted)]">
+          <span className="text-[11px] text-[var(--color-text-muted)]">
             {filtered.length}/{gs.total_cases} cases
           </span>
         </div>
@@ -617,7 +617,7 @@ export function GoldenSetTab() {
                     {collapsed ? 'chevron_right' : 'expand_more'}
                   </span>
                   <span className="font-semibold text-xs">{cat}</span>
-                  <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-hover)] text-[10px] text-[var(--color-text-muted)]">{cases.length}</span>
+                  <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-hover)] text-[11px] text-[var(--color-text-muted)]">{cases.length}</span>
                 </button>
                 {/* Group rows */}
                 {!collapsed && (
@@ -634,7 +634,7 @@ export function GoldenSetTab() {
                           <td className="px-3 py-2"><OriginBadge origin={c._origin} /></td>
                           <td className="px-3 py-2">
                             {c.eval_method && (
-                              <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[10px] text-[var(--color-text-secondary)]">{c.eval_method}</span>
+                              <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[11px] text-[var(--color-text-secondary)]">{c.eval_method}</span>
                             )}
                           </td>
                           <td className="px-3 py-2 text-[var(--color-text-muted)] whitespace-nowrap">{c.dimension?.replace(/_/g, ' ')}</td>
@@ -663,7 +663,7 @@ export function GoldenSetTab() {
         <div className="flex gap-2 mt-3 pt-3 border-t border-[var(--color-border)]">
           <button
             onClick={() => setShowAddForm(true)}
-            className="px-2.5 py-1.5 text-[10px] font-medium rounded-md bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
+            className="px-2.5 py-1.5 text-[11px] font-medium rounded-md bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
           >
             + Add Case
           </button>
@@ -673,7 +673,7 @@ export function GoldenSetTab() {
           <button
             disabled
             title="Coming soon — not yet available"
-            className="px-2.5 py-1.5 text-[10px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] opacity-50 cursor-not-allowed"
+            className="px-2.5 py-1.5 text-[11px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] opacity-50 cursor-not-allowed"
           >
             Import from Correction
             <span className="ml-1 text-[8px] uppercase tracking-wide opacity-70">soon</span>
@@ -681,14 +681,14 @@ export function GoldenSetTab() {
           <button
             disabled
             title="Coming soon — not yet available"
-            className="px-2.5 py-1.5 text-[10px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] opacity-50 cursor-not-allowed"
+            className="px-2.5 py-1.5 text-[11px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] opacity-50 cursor-not-allowed"
           >
             Archive Stable
             <span className="ml-1 text-[8px] uppercase tracking-wide opacity-70">soon</span>
           </button>
           <button
             onClick={() => triggerRun.mutate({})}
-            className="px-2.5 py-1.5 text-[10px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-colors"
+            className="px-2.5 py-1.5 text-[11px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-colors"
           >
             Run All
           </button>
@@ -796,7 +796,7 @@ export function GovernanceProposalCard({
   return (
     <div className="border border-[var(--color-border)] rounded-lg p-3">
       <div className="flex items-center gap-2 mb-1.5">
-        <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${
+        <span className={`px-1.5 py-0.5 text-[11px] font-semibold rounded ${
           p.proposal_kind === 'gate'
             ? 'bg-red-500/10 text-red-600'
             : 'bg-blue-500/10 text-blue-600'
@@ -804,7 +804,7 @@ export function GovernanceProposalCard({
           {p.proposal_kind.toUpperCase()}
         </span>
         <span className="text-sm font-medium text-[var(--color-text)]">{p.source_class}</span>
-        <span className="text-[10px] text-[var(--color-text-muted)]">{p.occurrence_count}×</span>
+        <span className="text-[11px] text-[var(--color-text-muted)]">{p.occurrence_count}×</span>
       </div>
       <p className="text-xs text-[var(--color-text)] mb-2">{p.proposed_rule}</p>
 
@@ -812,7 +812,7 @@ export function GovernanceProposalCard({
           the cards are indistinguishable and cannot be judged (Bug1 root cause). */}
       {evidence.length > 0 ? (
         <div className="mb-2 border-l-2 border-[var(--color-border)] pl-2 space-y-1">
-          <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">
+          <div className="text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">
             Evidence ({evidence.length})
           </div>
           {evidence.map((e, i) => (
@@ -933,11 +933,11 @@ export function TrendsTab() {
               className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] hover:border-[var(--color-primary)] transition-colors text-left"
             >
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] font-mono text-[var(--color-text-muted)]">{r.triggered_at?.slice(0, 10)}</span>
+                <span className="text-[11px] font-mono text-[var(--color-text-muted)]">{r.triggered_at?.slice(0, 10)}</span>
                 <span className="text-sm font-mono font-semibold" style={{ color: sc }}>{Math.round(score)}%</span>
               </div>
-              <div className="text-[10px] text-[var(--color-text-muted)]">{r.triggered_by}</div>
-              <div className="flex gap-2 mt-1 text-[9px]">
+              <div className="text-[11px] text-[var(--color-text-muted)]">{r.triggered_by}</div>
+              <div className="flex gap-2 mt-1 text-[11px]">
                 <span className="text-green-500">{r.cases_passed ?? 0}✓</span>
                 <span className="text-red-500">{r.cases_failed ?? 0}✗</span>
                 <span className="text-[var(--color-text-muted)]">{r.cases_skipped ?? 0}skip</span>
@@ -956,7 +956,7 @@ export function TrendsTab() {
           height={48}
           color="var(--color-primary)"
         />
-        <div className="flex justify-between text-[9px] text-[var(--color-text-muted)] mt-1 font-mono">
+        <div className="flex justify-between text-[11px] text-[var(--color-text-muted)] mt-1 font-mono">
           <span>{runs[0]?.triggered_at?.slice(0, 10)}</span>
           <span>{runs[runs.length - 1]?.triggered_at?.slice(0, 10)}</span>
         </div>
@@ -1016,7 +1016,7 @@ function RunDetailPanel({ runId, onClose }: { runId: string; onClose: () => void
         <div className="sticky top-0 bg-[var(--color-card)] border-b border-[var(--color-border)] px-4 py-3 flex items-center justify-between">
           <div>
             <div className="text-xs font-mono font-semibold">{runId}</div>
-            {run && <div className="text-[10px] text-[var(--color-text-muted)]">{run.triggered_at?.slice(0, 19).replace('T', ' ')} · {run.triggered_by}</div>}
+            {run && <div className="text-[11px] text-[var(--color-text-muted)]">{run.triggered_at?.slice(0, 19).replace('T', ' ')} · {run.triggered_by}</div>}
           </div>
           <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
             <span className="material-symbols-outlined text-base">close</span>
@@ -1037,11 +1037,11 @@ function RunDetailPanel({ runId, onClose }: { runId: string; onClose: () => void
               <div key={status} className="mb-4" data-testid={`run-status-${status}`}>
                 <div className="flex items-center gap-2 mb-1.5">
                   <StatusBadge status={status} />
-                  <span className="text-[10px] text-[var(--color-text-muted)]">{cases.length}</span>
+                  <span className="text-[11px] text-[var(--color-text-muted)]">{cases.length}</span>
                 </div>
                 <div className="space-y-1">
                   {cases.map((c) => (
-                    <div key={c.id} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-[10px]">
+                    <div key={c.id} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-[11px]">
                       <span className="font-mono font-semibold">{c.id}</span>
                       {dimById.get(c.id) && <span className="text-[var(--color-text-muted)]">{dimById.get(c.id)?.replace(/_/g, ' ')}</span>}
                       {c.evaluator && <span className="ml-auto text-[var(--color-text-muted)]">{c.evaluator}</span>}
@@ -1121,7 +1121,7 @@ function ContextHealthTab() {
             <span className="material-symbols-outlined text-base text-red-500">rule</span>
             Semantic Drift ({driftFindings.length})
             {drift?.report_date && (
-              <span className="text-[10px] text-[var(--color-text-muted)] font-normal">
+              <span className="text-[11px] text-[var(--color-text-muted)] font-normal">
                 from self-audit {drift.report_date}
               </span>
             )}
@@ -1147,12 +1147,12 @@ function ContextHealthTab() {
             </table>
           </div>
           {(drift?.at_risk_cases?.length ?? 0) > 0 && (
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
+            <p className="text-[11px] text-[var(--color-text-muted)] mt-1.5">
               ⚠️ {drift!.at_risk_cases.length} eval case(s) at risk (affected_by a drifted doc):{' '}
               <span className="font-mono">{drift!.at_risk_cases.map(c => c.case_id).join(', ')}</span>
             </p>
           )}
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-1 italic">
+          <p className="text-[11px] text-[var(--color-text-muted)] mt-1 italic">
             Semantic contradictions found by the weekly DDD self-audit. Fix via chat: "s_persist … correct the claim".
           </p>
         </section>
@@ -1187,7 +1187,7 @@ function ContextHealthTab() {
               </tbody>
             </table>
           </div>
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5 italic">
+          <p className="text-[11px] text-[var(--color-text-muted)] mt-1.5 italic">
             Tip: Ask in chat "refresh AIDLC TECH.md" or "update DDD docs" to resolve.
           </p>
         </section>
@@ -1207,12 +1207,12 @@ function ContextHealthTab() {
                   <span className="text-xs font-medium text-[var(--color-text)]">
                     {p.target_doc} → {p.target_section}
                   </span>
-                  <span className="text-[10px] text-[var(--color-text-muted)]">
+                  <span className="text-[11px] text-[var(--color-text-muted)]">
                     {new Date(p.created_at).toLocaleDateString()}
                   </span>
                 </div>
                 <p className="text-xs text-[var(--color-text-muted)] mt-1 line-clamp-2">{p.content}</p>
-                <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5 italic">
+                <p className="text-[11px] text-[var(--color-text-muted)] mt-1.5 italic">
                   Ask in chat: "approve proposal {p.id}" or "reject proposal {p.id}"
                 </p>
               </div>
@@ -1248,12 +1248,12 @@ function ContextHealthTab() {
                       {entry.target}
                     </td>
                     <td className="px-3 py-2">
-                      <code className="text-red-400 line-through text-[10px]">{entry.old}</code>
+                      <code className="text-red-400 line-through text-[11px]">{entry.old}</code>
                       {' → '}
-                      <code className="text-green-400 text-[10px]">{entry.new}</code>
+                      <code className="text-green-400 text-[11px]">{entry.new}</code>
                     </td>
                     <td className="px-3 py-2">
-                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium ${
                         entry.layer === 1
                           ? 'bg-green-500/10 text-green-500'
                           : 'bg-blue-500/10 text-blue-500'
@@ -1267,7 +1267,7 @@ function ContextHealthTab() {
             </table>
           </div>
           {data.refresh_log.length > 20 && (
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
+            <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
               Showing 20 of {data.refresh_log.length} entries.
             </p>
           )}
@@ -1757,10 +1757,10 @@ export function GuideTab() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
                     <span className="text-xs font-semibold">{dim[t].name}</span>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] font-mono">{dim.share}</span>
+                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] font-mono">{dim.share}</span>
                   </div>
                   <div className="text-[11px] text-[var(--color-text-secondary)] italic mb-1">"{dim[t].question}"</div>
-                  <div className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">{dim[t].method}</div>
+                  <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">{dim[t].method}</div>
                 </div>
               </div>
             </div>
@@ -1776,10 +1776,10 @@ export function GuideTab() {
         <div className="grid grid-cols-3 gap-3">
           {/* Programmatic */}
           <div className="p-3 rounded-lg border border-green-500/20 bg-green-500/5">
-            <div className="text-[10px] font-bold text-green-600 mb-2">{guideContent.programmatic[t]}</div>
+            <div className="text-[11px] font-bold text-green-600 mb-2">{guideContent.programmatic[t]}</div>
             <div className="space-y-1.5">
               {guideContent.programmaticItems.map((item) => (
-                <div key={item.name} className="text-[10px]">
+                <div key={item.name} className="text-[11px]">
                   <span className="font-mono text-green-600">{item.name}</span>
                   <span className="text-[var(--color-text-muted)] ml-1">— {item[t]}</span>
                 </div>
@@ -1789,10 +1789,10 @@ export function GuideTab() {
 
           {/* LLM-Judge */}
           <div className="p-3 rounded-lg border border-[var(--color-primary)]/20 bg-[var(--color-primary)]/5">
-            <div className="text-[10px] font-bold text-[var(--color-primary)] mb-2">{guideContent.llmJudge[t]}</div>
+            <div className="text-[11px] font-bold text-[var(--color-primary)] mb-2">{guideContent.llmJudge[t]}</div>
             <div className="space-y-1.5">
               {guideContent.llmJudgeItems.map((item) => (
-                <div key={item.name} className="text-[10px]">
+                <div key={item.name} className="text-[11px]">
                   <span className="font-mono text-[var(--color-primary)]">{item.name}</span>
                   <span className="text-[var(--color-text-muted)] ml-1">— {item[t]}</span>
                 </div>
@@ -1802,10 +1802,10 @@ export function GuideTab() {
 
           {/* Behavior — third EXECUTION METHOD (real-agent spawn), not a programmatic/LLM evaluator */}
           <div className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5">
-            <div className="text-[10px] font-bold text-amber-600 mb-2">{guideContent.behavior[t]}</div>
+            <div className="text-[11px] font-bold text-amber-600 mb-2">{guideContent.behavior[t]}</div>
             <div className="space-y-1.5">
               {guideContent.behaviorItems.map((item) => (
-                <div key={item.name} className="text-[10px]">
+                <div key={item.name} className="text-[11px]">
                   <span className="font-mono text-amber-600">{item.name}</span>
                   <span className="text-[var(--color-text-muted)] ml-1">— {item[t]}</span>
                 </div>
@@ -1819,7 +1819,7 @@ export function GuideTab() {
       <div className="mb-8">
         <h2 className="text-[15px] font-semibold mb-3">{guideContent.architecture[t]}</h2>
         <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-          <pre className="text-[10px] font-mono text-[var(--color-text-secondary)] leading-[2] whitespace-pre overflow-x-auto">
+          <pre className="text-[11px] font-mono text-[var(--color-text-secondary)] leading-[2] whitespace-pre overflow-x-auto">
 {t === 'en'
 ? `┌─────────────────────────────────────────────────────────────┐
 │  PRODUCTION SESSION              EVAL SESSION (isolated)     │
@@ -1865,10 +1865,10 @@ export function GuideTab() {
 └─────────────────────────────────────────────────────────────┘`}
           </pre>
           <div className="mt-3 space-y-2">
-            <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">{guideContent.archDesc[t]}</p>
+            <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">{guideContent.archDesc[t]}</p>
             <div className="p-2 rounded bg-yellow-500/5 border border-yellow-500/20">
-              <div className="text-[9px] font-bold text-yellow-600 mb-0.5">{t === 'en' ? 'Judge Pinning' : 'Judge 版本固定'}</div>
-              <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">{guideContent.archJudge[t]}</p>
+              <div className="text-[11px] font-bold text-yellow-600 mb-0.5">{t === 'en' ? 'Judge Pinning' : 'Judge 版本固定'}</div>
+              <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">{guideContent.archJudge[t]}</p>
             </div>
           </div>
         </div>
@@ -1896,12 +1896,12 @@ export function GuideTab() {
           {guideContent.lifecycleStages.map((stage, i) => (
             <div key={i} className="flex items-start flex-1">
               <div className="flex flex-col items-center">
-                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0 ${
+                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0 ${
                   i === 0 ? 'bg-red-500' : i === 1 ? 'bg-orange-500' : i === 2 ? 'bg-[var(--color-primary)]' : i === 3 ? 'bg-green-500' : 'bg-gray-400'
                 }`}>{i + 1}</div>
                 <div className="mt-1.5 text-center px-1">
-                  <div className="text-[10px] font-semibold">{stage[t].stage}</div>
-                  <div className="text-[9px] text-[var(--color-text-muted)] leading-tight mt-0.5">{stage[t].desc}</div>
+                  <div className="text-[11px] font-semibold">{stage[t].stage}</div>
+                  <div className="text-[11px] text-[var(--color-text-muted)] leading-tight mt-0.5">{stage[t].desc}</div>
                 </div>
               </div>
               {i < 4 && <div className="w-full h-px bg-[var(--color-border)] mt-3.5 mx-0.5" />}
@@ -1926,7 +1926,7 @@ export function GuideTab() {
               {guideContent.triggerItems.map((item, i) => (
                 <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
                   <td className="px-3 py-2 font-medium">{item[t].trigger}</td>
-                  <td className="px-3 py-2 text-[var(--color-primary)] font-mono text-[10px]">{item[t].cadence}</td>
+                  <td className="px-3 py-2 text-[var(--color-primary)] font-mono text-[11px]">{item[t].cadence}</td>
                   <td className="px-3 py-2 text-[var(--color-text-muted)]">{item[t].desc}</td>
                 </tr>
               ))}
@@ -1939,7 +1939,7 @@ export function GuideTab() {
       <div className="mb-8">
         <h2 className="text-[15px] font-semibold mb-1.5">{guideContent.caseExample[t]}</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mb-2.5">{guideContent.caseExampleDesc[t]}</p>
-        <pre className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-[10.5px] font-mono leading-[1.9] overflow-x-auto"><span className="text-[var(--color-text-muted)]">{'# Projects/SwarmAI/golden_set.yaml'}</span>{'\n'}
+        <pre className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px] font-mono leading-[1.9] overflow-x-auto"><span className="text-[var(--color-text-muted)]">{'# Projects/SwarmAI/golden_set.yaml'}</span>{'\n'}
 {'\n'}
 {'- '}<span className="text-[var(--color-primary)]">id:</span>{' GS_EXAMPLE\n'}
 {'  '}<span className="text-[var(--color-primary)]">category:</span>{' compliance\n'}
@@ -1966,16 +1966,16 @@ export function GuideTab() {
         </pre>
         <div className="grid grid-cols-3 gap-2 mt-3">
           <div className="p-2 rounded border border-[var(--color-primary)]/20 bg-[var(--color-primary)]/5">
-            <div className="text-[9px] font-bold text-[var(--color-primary)] mb-0.5">{t === 'en' ? 'LAYER 1: Trajectory' : '第一层：轨迹'}</div>
-            <div className="text-[10px] text-[var(--color-text-muted)]">{t === 'en' ? 'Right tools, right order?' : '正确的工具，正确的顺序？'}</div>
+            <div className="text-[11px] font-bold text-[var(--color-primary)] mb-0.5">{t === 'en' ? 'LAYER 1: Trajectory' : '第一层：轨迹'}</div>
+            <div className="text-[11px] text-[var(--color-text-muted)]">{t === 'en' ? 'Right tools, right order?' : '正确的工具，正确的顺序？'}</div>
           </div>
           <div className="p-2 rounded border border-green-500/20 bg-green-500/5">
-            <div className="text-[9px] font-bold text-green-500 mb-0.5">{t === 'en' ? 'LAYER 2: Assertions' : '第二层：断言'}</div>
-            <div className="text-[10px] text-[var(--color-text-muted)]">{t === 'en' ? 'LLM-judge verifies behavior' : 'LLM-judge 验证行为'}</div>
+            <div className="text-[11px] font-bold text-green-500 mb-0.5">{t === 'en' ? 'LAYER 2: Assertions' : '第二层：断言'}</div>
+            <div className="text-[11px] text-[var(--color-text-muted)]">{t === 'en' ? 'LLM-judge verifies behavior' : 'LLM-judge 验证行为'}</div>
           </div>
           <div className="p-2 rounded border border-yellow-500/20 bg-yellow-500/5">
-            <div className="text-[9px] font-bold text-yellow-500 mb-0.5">{t === 'en' ? 'LAYER 3: Response' : '第三层：响应'}</div>
-            <div className="text-[10px] text-[var(--color-text-muted)]">{t === 'en' ? 'Programmatic keyword match' : '程序化关键词匹配'}</div>
+            <div className="text-[11px] font-bold text-yellow-500 mb-0.5">{t === 'en' ? 'LAYER 3: Response' : '第三层：响应'}</div>
+            <div className="text-[11px] text-[var(--color-text-muted)]">{t === 'en' ? 'Programmatic keyword match' : '程序化关键词匹配'}</div>
           </div>
         </div>
       </div>
@@ -1984,7 +1984,7 @@ export function GuideTab() {
       <div className="mb-8">
         <h2 className="text-[15px] font-semibold mb-3">{guideContent.flywheel[t]}</h2>
         <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-          <pre className="text-[10px] font-mono text-center text-[var(--color-text-secondary)] leading-relaxed whitespace-pre">
+          <pre className="text-[11px] font-mono text-center text-[var(--color-text-secondary)] leading-relaxed whitespace-pre">
 {t === 'en'
   ? `Mistake → Correction → Golden Set Case → Eval Detects Recurrence → Alert → Fix → Stronger
      ↑                                                                                       │
@@ -1993,7 +1993,7 @@ export function GuideTab() {
    ↑                                                                          │
    └────────────────────────────── 自增长覆盖 ─────────────────────────────────┘`}
           </pre>
-          <div className="mt-3 p-2.5 rounded-md bg-[var(--color-hover)] text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+          <div className="mt-3 p-2.5 rounded-md bg-[var(--color-hover)] text-[11px] text-[var(--color-text-muted)] leading-relaxed">
             <strong className="text-[var(--color-text-secondary)]">{t === 'en' ? 'Key insight:' : '核心洞察：'}</strong>{' '}
             {t === 'en'
               ? 'Every correction the user makes becomes a permanent behavioral test. The eval set is not maintained by QA — it grows organically from real failures. Coverage compounds monotonically.'
@@ -2039,8 +2039,8 @@ export function GuideTab() {
             const c = comp[t] ?? comp['en'];
             return (
               <div key={i} className="p-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-                <div className="text-[10px] font-bold text-[var(--color-text-secondary)] mb-1">{c.name}</div>
-                <div className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">{c.desc}</div>
+                <div className="text-[11px] font-bold text-[var(--color-text-secondary)] mb-1">{c.name}</div>
+                <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">{c.desc}</div>
               </div>
             );
           })}
@@ -2058,8 +2058,8 @@ export function GuideTab() {
                 <span className="text-lg shrink-0" aria-hidden="true">{step.icon}</span>
                 <div className="flex-1 min-w-0">
                   <div className="text-[11px] font-semibold mb-1">{(step[t] ?? step['en']).title}</div>
-                  <div className="text-[10px] text-[var(--color-text-muted)] leading-relaxed mb-2">{(step[t] ?? step['en']).desc}</div>
-                  <pre className="text-[9px] font-mono p-2 rounded bg-[var(--color-hover)] text-[var(--color-text-secondary)] whitespace-pre-wrap">{(step[t] ?? step['en']).example}</pre>
+                  <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed mb-2">{(step[t] ?? step['en']).desc}</div>
+                  <pre className="text-[11px] font-mono p-2 rounded bg-[var(--color-hover)] text-[var(--color-text-secondary)] whitespace-pre-wrap">{(step[t] ?? step['en']).example}</pre>
                 </div>
               </div>
             </div>
@@ -2076,29 +2076,29 @@ function MetricCard({ label, value, color, sub }: { label: string; value: string
   const colorClass = color === 'green' ? 'text-green-500' : color === 'yellow' ? 'text-yellow-500' : color === 'red' ? 'text-red-500' : 'text-[var(--color-text)]';
   return (
     <div className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-      <div className="text-[10px] text-[var(--color-text-muted)] mb-1">{label}</div>
+      <div className="text-[11px] text-[var(--color-text-muted)] mb-1">{label}</div>
       <div className={`text-xl font-bold font-mono ${colorClass}`}>{value}</div>
-      <div className="text-[10px] text-[var(--color-text-muted)] mt-1">{sub}</div>
+      <div className="text-[11px] text-[var(--color-text-muted)] mt-1">{sub}</div>
     </div>
   );
 }
 
 function StatusBadge({ status }: { status?: string }) {
-  if (!status) return <span className="text-[10px] text-[var(--color-text-muted)]">—</span>;
+  if (!status) return <span className="text-[11px] text-[var(--color-text-muted)]">—</span>;
   const cls = status === 'passed' ? 'bg-green-500/10 text-green-500'
     : status === 'failed' ? 'bg-red-500/10 text-red-500'
     : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]';
-  return <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase ${cls}`}>{status}</span>;
+  return <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-semibold uppercase ${cls}`}>{status}</span>;
 }
 
 // Distinguishes curated public cases (ship in the repo) from private instance
 // cases (gitignored). The single most-requested distinction for the golden set.
 function OriginBadge({ origin }: { origin?: string }) {
-  if (!origin) return <span className="text-[10px] text-[var(--color-text-muted)]">—</span>;
+  if (!origin) return <span className="text-[11px] text-[var(--color-text-muted)]">—</span>;
   const isPublic = origin === 'public';
   const cls = isPublic ? 'bg-green-500/10 text-green-600' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]';
   return (
-    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold ${cls}`} title={isPublic ? 'Public — ships in the repo' : 'Private — gitignored instance case'}>
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold ${cls}`} title={isPublic ? 'Public — ships in the repo' : 'Private — gitignored instance case'}>
       <span className="material-symbols-outlined text-[11px]">{isPublic ? 'public' : 'lock'}</span>
       {origin}
     </span>
@@ -2110,7 +2110,7 @@ function GuideCard({ icon, title, desc }: { icon: string; title: string; desc: s
     <div className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
       <div className="text-base mb-1">{icon}</div>
       <div className="text-xs font-semibold mb-1">{title}</div>
-      <div className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">{desc}</div>
+      <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">{desc}</div>
     </div>
   );
 }
@@ -2221,7 +2221,7 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
         <div className="p-4 space-y-4 text-xs">
           {/* Title (editable) */}
           <div>
-            <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Title</div>
+            <div className="text-[11px] text-[var(--color-text-muted)] uppercase mb-1">Title</div>
             {editing ? (
               <div className="flex gap-1">
                 <input
@@ -2230,8 +2230,8 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
                   className="flex-1 px-2 py-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
                   autoFocus
                 />
-                <button onClick={saveEdit} className="px-2 py-1 rounded bg-[var(--color-primary)] text-white text-[10px]">Save</button>
-                <button onClick={() => setEditing(false)} className="px-2 py-1 rounded border border-[var(--color-border)] text-[10px]">Cancel</button>
+                <button onClick={saveEdit} className="px-2 py-1 rounded bg-[var(--color-primary)] text-white text-[11px]">Save</button>
+                <button onClick={() => setEditing(false)} className="px-2 py-1 rounded border border-[var(--color-border)] text-[11px]">Cancel</button>
               </div>
             ) : (
               <div className="flex items-center gap-2">
@@ -2246,30 +2246,30 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {/* Metadata Grid — 2×3 */}
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Category</div>
-              <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[10px]">{detail.category}</span>
+              <div className="text-[11px] text-[var(--color-text-muted)] uppercase">Category</div>
+              <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[11px]">{detail.category}</span>
             </div>
             <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Dimension</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] uppercase">Dimension</div>
               <span className="text-[11px]">{detail.dimension?.replace(/_/g, ' ')}</span>
             </div>
             <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Level</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] uppercase">Level</div>
               <span className="text-[11px]">{detail.level || '—'}</span>
             </div>
             <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Tier</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] uppercase">Tier</div>
               <span className="text-[11px]">{detail.tier || 'active'}</span>
             </div>
             <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Source</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] uppercase">Source</div>
               <span className="text-[11px] font-mono">{detail.source || '—'}</span>
             </div>
             <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Evaluators</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] uppercase">Evaluators</div>
               <div className="flex flex-wrap gap-0.5 mt-0.5">
                 {(detail.evaluators || []).map((ev, i) => (
-                  <span key={i} className="px-1 py-0.5 rounded bg-[var(--color-hover)] text-[9px] font-mono">{ev}</span>
+                  <span key={i} className="px-1 py-0.5 rounded bg-[var(--color-hover)] text-[11px] font-mono">{ev}</span>
                 ))}
               </div>
             </div>
@@ -2278,10 +2278,10 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {/* Affected By */}
           {detail.affected_by && detail.affected_by.length > 0 && (
             <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Affected By</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] uppercase mb-1">Affected By</div>
               <div className="flex flex-wrap gap-1">
                 {detail.affected_by.map((a, i) => (
-                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[10px]">{a}</span>
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[11px]">{a}</span>
                 ))}
               </div>
             </div>
@@ -2290,7 +2290,7 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {/* Scenario */}
           {detail.scenario?.turns && detail.scenario.turns.length > 0 && (
             <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Scenario</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] uppercase mb-1">Scenario</div>
               <div className="p-2.5 rounded bg-[var(--color-bg)] border border-[var(--color-border)]">
                 {detail.scenario.turns.map((t, i) => (
                   <div key={i} className="text-[11px] font-mono leading-relaxed">
@@ -2305,14 +2305,14 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {detail.expected_trajectory && detail.expected_trajectory.length > 0 && (
             <div className="p-2.5 rounded border border-[var(--color-primary)]/20 bg-[var(--color-primary)]/5">
               <div className="flex items-center justify-between mb-1.5">
-                <div className="text-[9px] font-bold text-[var(--color-primary)] uppercase">Layer 1: Trajectory</div>
+                <div className="text-[11px] font-bold text-[var(--color-primary)] uppercase">Layer 1: Trajectory</div>
                 {detail.trajectory_match && (
-                  <span className="text-[9px] text-[var(--color-text-muted)] font-mono">{detail.trajectory_match}</span>
+                  <span className="text-[11px] text-[var(--color-text-muted)] font-mono">{detail.trajectory_match}</span>
                 )}
               </div>
               <div className="flex flex-wrap gap-1">
                 {detail.expected_trajectory.map((t, i) => (
-                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] text-[10px] font-mono">{t}</span>
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] text-[11px] font-mono">{t}</span>
                 ))}
               </div>
             </div>
@@ -2321,10 +2321,10 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {/* Layer 2: Assertions */}
           {detail.assertions && detail.assertions.length > 0 && (
             <div className="p-2.5 rounded border border-green-500/20 bg-green-500/5">
-              <div className="text-[9px] font-bold text-green-500 uppercase mb-1.5">Layer 2: Assertions</div>
+              <div className="text-[11px] font-bold text-green-500 uppercase mb-1.5">Layer 2: Assertions</div>
               <ul className="space-y-1">
                 {detail.assertions.map((a, i) => (
-                  <li key={i} className="text-[10px] text-[var(--color-text-secondary)] leading-relaxed flex gap-1.5">
+                  <li key={i} className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed flex gap-1.5">
                     <span className="text-green-500 shrink-0">•</span>
                     <span>{a}</span>
                   </li>
@@ -2336,10 +2336,10 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {/* Layer 3: Expected Response Contains */}
           {detail.expected_response_contains && detail.expected_response_contains.length > 0 && (
             <div className="p-2.5 rounded border border-yellow-500/20 bg-yellow-500/5">
-              <div className="text-[9px] font-bold text-yellow-500 uppercase mb-1.5">Layer 3: Response</div>
+              <div className="text-[11px] font-bold text-yellow-500 uppercase mb-1.5">Layer 3: Response</div>
               <div className="flex flex-wrap gap-1">
                 {detail.expected_response_contains.map((kw, i) => (
-                  <span key={i} className="px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 text-[10px] font-mono">{kw}</span>
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 text-[11px] font-mono">{kw}</span>
                 ))}
               </div>
             </div>
@@ -2348,10 +2348,10 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {/* Tags */}
           {detail.tags && detail.tags.length > 0 && (
             <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Tags</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] uppercase mb-1">Tags</div>
               <div className="flex flex-wrap gap-1">
                 {detail.tags.map((tag, i) => (
-                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[10px] text-[var(--color-text-muted)]">{tag}</span>
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[11px] text-[var(--color-text-muted)]">{tag}</span>
                 ))}
               </div>
             </div>
@@ -2360,21 +2360,21 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {/* Promoted From */}
           {detail.promoted_from && (
             <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Promoted From</div>
-              <span className="text-[10px] text-[var(--color-text-muted)] font-mono">{detail.promoted_from}</span>
+              <div className="text-[11px] text-[var(--color-text-muted)] uppercase mb-1">Promoted From</div>
+              <span className="text-[11px] text-[var(--color-text-muted)] font-mono">{detail.promoted_from}</span>
             </div>
           )}
 
           {/* Run History */}
           {detail.history && detail.history.length > 0 && (
             <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Run History</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] uppercase mb-1">Run History</div>
               <div className="space-y-1">
                 {detail.history.map((h, i) => (
                   <div key={i} className="flex items-center gap-2 p-1.5 rounded bg-[var(--color-bg)]">
                     <StatusBadge status={h.status} />
-                    <span className="font-mono text-[10px]">{h.triggered_at?.slice(0, 10)}</span>
-                    {h.notes && <span className="text-[10px] text-[var(--color-text-muted)] truncate">{h.notes}</span>}
+                    <span className="font-mono text-[11px]">{h.triggered_at?.slice(0, 10)}</span>
+                    {h.notes && <span className="text-[11px] text-[var(--color-text-muted)] truncate">{h.notes}</span>}
                   </div>
                 ))}
               </div>
@@ -2435,7 +2435,7 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
-              <span className="text-[10px] text-[var(--color-text-muted)] uppercase">ID</span>
+              <span className="text-[11px] text-[var(--color-text-muted)] uppercase">ID</span>
               <input
                 value={form.id}
                 onChange={(e) => setForm({ ...form, id: e.target.value })}
@@ -2445,7 +2445,7 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
               />
             </label>
             <label className="block">
-              <span className="text-[10px] text-[var(--color-text-muted)] uppercase">Category</span>
+              <span className="text-[11px] text-[var(--color-text-muted)] uppercase">Category</span>
               <select
                 value={form.category}
                 onChange={(e) => setForm({ ...form, category: e.target.value })}
@@ -2456,7 +2456,7 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
             </label>
           </div>
           <label className="block">
-            <span className="text-[10px] text-[var(--color-text-muted)] uppercase">Title</span>
+            <span className="text-[11px] text-[var(--color-text-muted)] uppercase">Title</span>
             <input
               value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
@@ -2467,7 +2467,7 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
-              <span className="text-[10px] text-[var(--color-text-muted)] uppercase">Dimension</span>
+              <span className="text-[11px] text-[var(--color-text-muted)] uppercase">Dimension</span>
               <input
                 value={form.dimension}
                 onChange={(e) => setForm({ ...form, dimension: e.target.value })}
@@ -2475,7 +2475,7 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
               />
             </label>
             <label className="block">
-              <span className="text-[10px] text-[var(--color-text-muted)] uppercase">Evaluator</span>
+              <span className="text-[11px] text-[var(--color-text-muted)] uppercase">Evaluator</span>
               <select
                 value={form.evaluators}
                 onChange={(e) => setForm({ ...form, evaluators: e.target.value })}
@@ -2489,7 +2489,7 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
             </label>
           </div>
           <label className="block">
-            <span className="text-[10px] text-[var(--color-text-muted)] uppercase">Affected By (comma-separated)</span>
+            <span className="text-[11px] text-[var(--color-text-muted)] uppercase">Affected By (comma-separated)</span>
             <input
               value={form.affected_by}
               onChange={(e) => setForm({ ...form, affected_by: e.target.value })}
@@ -2508,7 +2508,7 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
             </button>
           </div>
           {createCase.isError && (
-            <div className="text-[10px] text-red-500 mt-1">
+            <div className="text-[11px] text-red-500 mt-1">
               {(createCase.error as Error)?.message || 'Failed to create case'}
             </div>
           )}

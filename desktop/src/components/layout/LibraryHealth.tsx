@@ -67,7 +67,7 @@ export function LibraryHealth() {
   const findings = Array.isArray(data?.findings) ? data!.findings : [];
   if (isLoading || isError || !data) {
     return isError ? (
-      <div data-testid="library-health-error" className="text-[10px] text-[var(--color-text-faint)]">
+      <div data-testid="library-health-error" className="text-[11px] text-[var(--color-text-faint)]">
         health check unavailable
       </div>
     ) : null;
@@ -84,7 +84,7 @@ export function LibraryHealth() {
 
   return (
     <div data-testid="library-health" className="flex flex-col gap-2">
-      <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+      <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
         🧹 Health
       </div>
       {findings.map((f) => {
@@ -96,7 +96,7 @@ export function LibraryHealth() {
               <span className="mt-1 w-1.5 h-1.5 shrink-0 rounded-full" style={{ background: KIND_TINT[f.kind] }} aria-hidden />
               <div className="min-w-0 flex-1">
                 <div className="text-[11px] font-medium text-[var(--color-text)] leading-snug">{f.title}</div>
-                <div className="text-[10px] text-[var(--color-text-faint)] leading-snug">{f.detail}</div>
+                <div className="text-[11px] text-[var(--color-text-faint)] leading-snug">{f.detail}</div>
               </div>
             </div>
             {f.actionable && (
@@ -110,19 +110,19 @@ export function LibraryHealth() {
                       if (f.reversible) action.mutate({ kind: f.kind, paths: f.paths, confirm: false });
                       else setConfirming(f.kind);
                     }}
-                    className="rounded px-2 py-0.5 text-[10px] font-medium text-white disabled:opacity-60"
+                    className="rounded px-2 py-0.5 text-[11px] font-medium text-white disabled:opacity-60"
                     style={{ background: KIND_TINT[f.kind] }}
                   >
                     {busy ? '…' : f.action_label}
                   </button>
                 ) : (
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-[var(--color-text-muted)]">Delete {f.count}?</span>
+                    <span className="text-[11px] text-[var(--color-text-muted)]">Delete {f.count}?</span>
                     <button
                       data-testid={`library-health-confirm-${f.kind}`}
                       disabled={busy}
                       onClick={() => action.mutate({ kind: f.kind, paths: f.paths, confirm: true })}
-                      className="rounded px-2 py-0.5 text-[10px] font-medium text-white disabled:opacity-60"
+                      className="rounded px-2 py-0.5 text-[11px] font-medium text-white disabled:opacity-60"
                       style={{ background: '#d0524a' }}
                     >
                       {busy ? '…' : 'Yes, delete'}
@@ -130,7 +130,7 @@ export function LibraryHealth() {
                     <button
                       data-testid={`library-health-cancel-${f.kind}`}
                       onClick={() => setConfirming(null)}
-                      className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                      className="text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                     >
                       cancel
                     </button>
@@ -142,7 +142,7 @@ export function LibraryHealth() {
         );
       })}
       {action.isError && (
-        <div className="text-[10px] text-[#d0524a]">Action failed — see logs.</div>
+        <div className="text-[11px] text-[#d0524a]">Action failed — see logs.</div>
       )}
     </div>
   );
