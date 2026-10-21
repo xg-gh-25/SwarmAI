@@ -264,6 +264,7 @@ class TurnChanges:
             try:
                 await fut
             except Exception:  # noqa: BLE001 — finish() reports a failed start
+                logger.debug("ready: suppressed exception on a fail-safe path", exc_info=True)
                 pass
 
     def note(self, event: dict) -> None:
@@ -398,6 +399,7 @@ def _run_worktree_home() -> Optional[str]:
         from core.run_worktree import wt_root
         return os.path.realpath(str(wt_root()))
     except Exception:  # noqa: BLE001
+        logger.debug("_run_worktree_home: suppressed exception on a fail-safe path", exc_info=True)
         return None
 
 

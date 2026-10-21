@@ -416,6 +416,7 @@ def _claim_note(main: str, p: str, claim: str, when: str) -> str:
                 "--no-renames", "--", ":(literal)" + rel, timeout=budget,
                 env={"GIT_OPTIONAL_LOCKS": "0"})
     except Exception:   # noqa: BLE001 — a hint only; the deny stands without it
+        logger.debug("_claim_note: suppressed exception on a fail-safe path", exc_info=True)
         return ""
     if r.returncode != 0 or not r.stdout.strip("\0"):
         return ""

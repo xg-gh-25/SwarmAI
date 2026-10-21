@@ -468,6 +468,7 @@ def tool_display(name: str, input_data: Optional[dict]) -> dict:
     try:
         _server, tool = _extract_mcp_tool_name(name)
     except Exception:  # noqa: BLE001 — a display aid never breaks the stream
+        logger.debug("tool_display: suppressed exception on a fail-safe path", exc_info=True)
         tool = name
     data = input_data if isinstance(input_data, dict) else {}
     lower = name.lower()
@@ -481,10 +482,12 @@ def tool_display(name: str, input_data: Optional[dict]) -> dict:
             safe = json.dumps(_redact_args(data), sort_keys=True, ensure_ascii=False, default=str)
             obj = redact_display(safe, DISPLAY_MAX)
     except Exception:  # noqa: BLE001
+        logger.debug("tool_display: suppressed exception on a fail-safe path", exc_info=True)
         obj = ""
     try:
         key = hashlib.sha1(f"{tool}\0{obj}".encode("utf-8", "replace")).hexdigest()[:16] if obj else ""
     except Exception:  # noqa: BLE001
+        logger.debug("tool_display: suppressed exception on a fail-safe path", exc_info=True)
         key = ""
     return {"tool": tool, "object": obj, "key": key}
 

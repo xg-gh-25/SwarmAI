@@ -125,6 +125,7 @@ def _profile_stages(profile: Optional[str]) -> list[str]:
         from .pipeline_profiles import get_profile_stages
         return list(get_profile_stages(profile))
     except Exception:  # noqa: BLE001 — unknown profile → the full stage list
+        logger.debug("_profile_stages: suppressed exception on a fail-safe path", exc_info=True)
         return ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]
 
 

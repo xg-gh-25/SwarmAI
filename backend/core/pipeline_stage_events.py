@@ -730,6 +730,7 @@ def _doc_ref(run_dir: Optional[str], name: str) -> Optional[dict[str, str]]:
             ref["excerpt"] = ex
         return ref
     except Exception:  # noqa: BLE001 — a display aid must never break the stream
+        logger.debug("_doc_ref: suppressed exception on a fail-safe path", exc_info=True)
         return None
 
 

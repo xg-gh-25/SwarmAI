@@ -1026,6 +1026,7 @@ def _own_run_worktree(d: str, sid: str) -> "bool | None":
         from core.run_worktree import run_for_path
         hit = run_for_path(d)
     except Exception:  # noqa: BLE001 — no worktree root: not a run worktree
+        logger.debug("_own_run_worktree: suppressed exception on a fail-safe path", exc_info=True)
         return None
     if hit is None:
         return None
@@ -1041,6 +1042,7 @@ def _own_run_worktree(d: str, sid: str) -> "bool | None":
             if data.get("session_id") == sid:
                 return True
     except Exception:  # noqa: BLE001 — cannot tell whose run it is: not scratch
+        logger.debug("_own_run_worktree: suppressed exception on a fail-safe path", exc_info=True)
         return False
     return False
 
@@ -4636,6 +4638,7 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
                 runner = ("perl -e 'alarm 110; exec @ARGV' "
                           + cli_command(_cli, _rest, script="pipeline_test.py"))
         except Exception:  # noqa: BLE001 — the relative form is still printed
+            logger.debug("_gate: suppressed exception on a fail-safe path", exc_info=True)
             pass
         logger.warning("[BLOCKED] pipeline_test_gate (%s) in run %s: %s",
                        ", ".join(hits), own_run["id"], command[:120])
