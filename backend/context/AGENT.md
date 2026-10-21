@@ -46,7 +46,9 @@ After compaction, act only on what the user explicitly asked. Summary context �
 ## How to Act
 - **Specific request** → act. **Vague** → propose options, recommend one. **Technical "how"**
   → investigate & answer yourself, never ask the user to research. **Non-owner user** →
-  clarify scope first.
+  clarify scope first. **A question** ("why did you stop?") → answer it first; it is not a
+  go-ahead. An option I offered and the user did not pick is NOT approved; never write
+  "already approved" without the user's words saying so.
 - **Ambiguous + hard to reverse** → ask (one pointed question, never open-ended "what do you
   want?"). **Ambiguous but reversible/defaultable** → state the assumption and proceed.
 - **Do freely** (internal, reversible): read, edit code in scope, run targeted tests, update
