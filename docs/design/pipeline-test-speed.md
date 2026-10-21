@@ -162,7 +162,7 @@ break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连�
 - 最近 3 天 107 次 `recheck` 调用里 61 次是续跑自动生成的（`auto_recheck_of`）。`recheck` 是续跑的载体，
   删掉就要重写续跑。
 
-守卫：`backend/tests/test_test_selection_frozen.py` 固定上面的常量，以及决定"跑什么"的 7 个函数的
+守卫：`backend/tests/test_test_selection_frozen.py` 固定上面的常量，以及决定"跑什么"的 8 个函数的
 源码摘要。它变红就说明有人改了冻结的设计：先要 XG 明确批准，再在本节记一条，同一个 commit 里更新摘要。
 不能为了让一个 run 变绿去改摘要。
 
@@ -188,3 +188,8 @@ break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连�
 - 2026-10-20 `_full_scope_refusal`（XG 事后批准，2c05cfbc / run_2702d56e 同样未经批准）：run 的
   `tests/.run_index` 读出来被篡改时，数不清已跑几轮全范围，就一轮都不放行（运维用
   `SWARM_GATE_FORCE=full_scope` 覆盖）。只是防护，跑哪些测试没变。
+- 2026-10-21 `_plan`（XG 事后批准，0fde9f38 和 91c8f493 都是 10-20 未经批准改的，冻结守卫红着落了地）：
+  - 0fde9f38：AC 测试引用的解析拆成新函数 `_plan_ac_refs`。行为变化一处：AC 引用的测试已改名或删除时，
+    不再作为 pytest 目标（原来会变成 runner 错误、挡住落地），改为记一条 warning，并在 `push_ready` 下点名。
+  - 91c8f493：前端 recheck 续跑时，已有结果的测试文件不再重跑；熔断的停滞计数也算上前端轮次。
+  - `_plan_ac_refs` 决定 AC 点名哪些测试，属于"跑什么"，一并加入冻结列表（现在 8 个函数）。

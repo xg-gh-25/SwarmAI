@@ -27,6 +27,7 @@ FROZEN_FUNCTIONS = (
     "_smoke_modules",
     "_recent_failure_files",
     "_plan",
+    "_plan_ac_refs",
 )
 
 DIGESTS = {
@@ -36,7 +37,8 @@ DIGESTS = {
     "_full_scope_refusal": "0e054d7718481d65",  # 10-20: recheck past the cap; tampered index refused (2c05cfbc, §11)
     "_smoke_modules": "1ea6c7b77910e927",
     "_recent_failure_files": "7173dd3412333fa3",
-    "_plan": "307335d80a43f01d",
+    "_plan": "93cfac8fe76bc31f",  # 10-21: stale AC ref -> warning; frontend recheck skips done files (0fde9f38, 91c8f493, §11)
+    "_plan_ac_refs": "0fc3e865d5f7a0a0",  # 10-21: split out of _plan by 0fde9f38, frozen with it (§11)
 }
 
 
