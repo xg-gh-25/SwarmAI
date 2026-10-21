@@ -158,7 +158,7 @@ def _deliver_run(ws, capsys, rid):
     a = repo / "core" / "a.py"
     a.write_text("x = 1\n" + "".join(f"y{i} = {i}\n" for i in range(60)), encoding="utf-8")
     rd = _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
-                   files_touched=[str(a)])
+                   files_touched=[str(a)], required_experts=["security"])
     code, out = _start(reg, capsys, rid, "deliver")
     assert code == 0, out
     return root, reg, repo, a, rd, out

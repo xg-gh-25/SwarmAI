@@ -9768,15 +9768,23 @@ _EXPERT_DOMAINS = {
     "integration": "Integration", "operational": "Operational",
     "red-team": "Red Team",
 }
-# deliver.md "Step 1: Scope Detection" file-pattern triggers, as code.
-_EXPERT_FILE_TRIGGERS = {
-    "security": re.compile(r"(routers/|handler|auth|database|sqlite|quer(y|ies)|"
-                           r"security|permission|file_access|user_input)", re.I),
-    "performance": re.compile(r"(routers/|endpoint|database|sqlite|hooks/|jobs/|"
-                              r"scheduler|background)", re.I),
-    "api-contract": re.compile(r"(routers/|schemas/|(^|/)models?/|_models?\.py$|services/)", re.I),
-    "operational": re.compile(r"(hooks/|jobs/|scheduler|daemon|background|launchd|systemd)", re.I),
-}
+# Gate-2 roster (docs/design/pipeline-gate-expert-simplification.md E1): correctness by
+# default; security + red-team only on a clear security risk. The other lenses
+# (performance, api-contract, integration, operational, state-machine, concurrency) are
+# items of correctness's checklist; a declared one maps to correctness.
+GATE2_EXPERTS = ("correctness", "security", "red-team")
+# A clear security risk, by path: auth and credentials, the permission boundary (hooks
+# that gate tools, the permission manager, file access), CORS / listen address, and the
+# governed system-prompt sources (_GOVERNED_CONTEXT_RE, checked separately).
+_SECURITY_RISK_PATH_RE = re.compile(
+    r"(auth|login|token|secret|credential|permission|security_hooks|hook_builder|_gate\.py$|"
+    r"file_access|cors)", re.I)
+# ...and by what the change ADDS: command execution, outbound requests, unsafe loading,
+# a listen address.
+_SECURITY_RISK_CODE_RE = re.compile(
+    r"(subprocess|shell\s*=\s*True|os\.system|os\.popen|\brequests\.|\bhttpx\.|"
+    r"urllib\.request|aiohttp|\bfetch\(|pickle\.loads?|yaml\.load\(|\beval\(|\bexec\(|"
+    r"allow_origins|0\.0\.0\.0|\.bind\(|create_server)")
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -11572,24 +11580,64 @@ def _review_waiver(run_state: dict) -> "str | None":
         return None
 
 
-def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "list[dict]":
-    """deliver.md "Step 1: Scope Detection" as code: tier default ∪ file-pattern
-    triggers ∪ run.json required_experts; refactor rule; bugfix default
-    correctness+security; <50 changed source lines → none unless required; a change
-    that is not small (``_small_change``) but got no one by those rules gets correctness
-    (+ security on a sensitive path) on a strict profile without a REVIEW stage (direct),
-    so a review the validator asks for always has a reviewer; a change
-    with no code file (``_is_docs_only``) → none unless required; a governed context
-    source (backend/context/) → security at any size and on any profile. The tier follows the
-    profile and the risky paths touched, never a line count alone (the former >100
-    insertions → full-tier override is gone). An expert's findings only lower
-    push_ready; landing is decided by the tests (pipeline_validator.landing_test_errors).
+def _security_risk(scope: dict) -> "str | None":
+    """The reason a change carries a clear security risk (E1), else None: a non-test path
+    matching _SECURITY_RISK_PATH_RE or _GOVERNED_CONTEXT_RE, or an added non-test line
+    matching _SECURITY_RISK_CODE_RE (read from ``git diff -U0 HEAD``; a file git cannot
+    diff is judged by its path alone)."""
+    src = [c for c in scope.get("changed_files", []) if not c.get("is_test")]
+    for c in src:
+        rel = _rel(c)
+        if _SECURITY_RISK_PATH_RE.search(rel) or _GOVERNED_CONTEXT_RE.search(rel):
+            return f"security-sensitive path: {rel}"
+    default_root = _git_repo_root(str(Path(__file__).resolve()))
+    by_root: dict = {}
+    for c in src:
+        p = str(c.get("path") or "")
+        root = _git_repo_root(p) if os.path.isabs(p) else default_root
+        if root:
+            c = dict(c, root=root)
+            by_root.setdefault(root, []).append(c)
+    for root, entries in by_root.items():
+        rels = [e.get("rel") or _rel(e) for e in entries]
+        try:
+            lines = _git_lines(["diff", "-U0", "--no-color", "HEAD", "--", *rels], root)
+        except Exception:  # noqa: BLE001 — no diff: the path rule above decided
+            continue
+        cur = ""
+        for ln in lines:
+            if ln.startswith("+++ "):
+                cur = ln[6:] if ln.startswith("+++ b/") else ln[4:]
+            elif ln.startswith("+") and _SECURITY_RISK_CODE_RE.search(ln):
+                return f"adds {_SECURITY_RISK_CODE_RE.search(ln).group(0)!r} in {cur}"
+        for c in entries:  # an untracked (new) file has no diff against HEAD
+            if c.get("status") == "A":
+                try:
+                    text = (Path(root) / (c.get("rel") or _rel(c))).read_text(
+                        encoding="utf-8", errors="replace")[:200_000]
+                except OSError:
+                    continue
+                m = _SECURITY_RISK_CODE_RE.search(text)
+                if m:
+                    return f"adds {m.group(0)!r} in {c.get('rel') or _rel(c)}"
+    return None
 
-    Sizes and file triggers read NON-TEST source only (``source_insertions`` /
-    ``source_deletions`` / ``is_test`` from ``_changed_files_scope``; a scope
-    without them falls back to the totals). On a strict profile the full tier
-    always carries ``security``: the security lens has ONE owner per run, and
-    when Gate-2 dispatches it is that owner (see ``_review_dispatch``)."""
+
+def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "list[dict]":
+    """Gate-2's roster (docs/design/pipeline-gate-expert-simplification.md E1).
+
+    - a small change (``_small_change``) or a docs-only one: nobody, unless declared;
+    - >= 50 non-test source lines on a strict profile: correctness; with a clear security
+      risk (``_security_risk``) also security and red-team;
+    - fewer lines with a clear security risk: security (any size above small);
+    - a governed system-prompt source (backend/context/): security on any profile;
+    - run.json ``required_experts``: added; an id outside GATE2_EXPERTS (performance,
+      api-contract, integration, ...) maps to correctness, whose checklist now holds it;
+    - a change not small enough to waive, picked by none of the above, on a strict profile
+      without a REVIEW stage: correctness, so a review the validator asks for has a
+      reviewer.
+    Relaxed profiles get only the governed-context and declared experts. An expert's
+    findings only lower push_ready; landing is decided by the tests."""
     from core.pipeline_profiles import is_relaxed_profile
     picked: dict[str, str] = {}
 
@@ -11598,49 +11646,35 @@ def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "lis
 
     if _small_change(scope):
         return []
-    changed = [c for c in scope.get("changed_files", []) if not c.get("is_test")]
     total = (scope.get("source_insertions", scope.get("diff_insertions", 0))
              + scope.get("source_deletions", scope.get("diff_deletions", 0)))
-    if total >= 50 and not _is_docs_only(scope):
-        if (work_type or "") == "refactor":
-            for e in ("correctness", "api-contract", "integration", "red-team"):
-                add(e, "work_type=refactor architecture set")
-        elif profile == "bugfix":
-            add("correctness", "bugfix tier default")
-            add("security", "bugfix tier default")
-        elif not is_relaxed_profile(profile):
-            add("correctness", "always (changeset > 50 lines)")
-            add("security", "strict profile: Gate-2 owns the security lens")
-            for eid, rx in _EXPERT_FILE_TRIGGERS.items():
-                hit = next((c["path"] for c in changed if rx.search(_rel(c))), None)
-                if hit:
-                    add(eid, f"file pattern: {hit}")
-            new_code = next((c["path"] for c in changed if c["status"] == "A"
-                             and Path(c["path"]).suffix in (".py", ".ts", ".tsx", ".js", ".rs")), None)
-            if new_code:
-                add("integration", f"new code file: {new_code}")
-        if total > 200 and not is_relaxed_profile(profile):
-            add("red-team", f"changeset {total} lines > 200 (also: any specialist HIGH)")
-    # A governed context source becomes every later session's system prompt: whatever
-    # its size, the security lens (RP65 instruction channel, RP70 persistent poisoning,
-    # a weakened control) reviews it. The meta-review follows from a non-empty plan.
+    docs = _is_docs_only(scope)
+    strict = not is_relaxed_profile(profile)
+    risk = None if docs else _security_risk(scope)
+    if strict and not docs:
+        if total >= 50:
+            add("correctness", "changeset >= 50 source lines")
+            if risk:
+                add("security", risk)
+                add("red-team", risk)
+        elif risk:
+            add("security", risk)
+    changed = [c for c in scope.get("changed_files", []) if not c.get("is_test")]
     ctx = next((_rel(c) for c in changed if _GOVERNED_CONTEXT_RE.search(_rel(c))), None)
     if ctx:
         add("security", f"governed system-prompt source: {ctx}")
     for e in required if isinstance(required, list) else []:
         if isinstance(e, str) and e.strip():
-            add(e.strip(), "run.json required_experts")
-    if (not picked and not _is_docs_only(scope) and not is_relaxed_profile(profile)
+            e = e.strip()
+            if e in GATE2_EXPERTS:
+                add(e, "run.json required_experts")
+            else:
+                add("correctness", f"run.json required_experts: {e} (merged into correctness)")
+    if (not picked and not docs and strict
             and "review" not in _get_profile_stages(profile)):
-        # Not small enough to waive (_small_change above), yet no size or file rule
-        # picked anyone, and no REVIEW stage reviewed it (with one, REVIEW's fan-out
-        # owns the small sensitive change): the validator asks for a review, so one
-        # is sent (a test-only change over the line rule, a few sensitive lines).
         add("correctness", "not small enough to skip review")
-        sens = next((c["path"] for c in scope.get("changed_files", [])
-                     if _REVIEW_SENSITIVE_RE.search(_rel(c))), None)
-        if sens:
-            add("security", f"sensitive path: {sens}")
+        if risk:
+            add("security", risk)
     return [{"id": e, "domain": _EXPERT_DOMAINS.get(e, e.replace("-", " ").title()),
              "reason": why} for e, why in picked.items()]
 
@@ -11674,8 +11708,9 @@ def _review_dispatch(*, profile: str, scope: dict, gate2_ids) -> "list[dict]":
     """The REVIEW stage's sub-agents, computed by the tool (not the Gate-2 list).
 
     Always spec-compliance (its own axis, upstream of fan-out). When fan-out applies:
-    code-quality, ux-test for a non-test frontend file, and security ONLY when the
-    Gate-2 list for the same scope lacks it — one security owner per run. A 20-line
+    code-quality, ux-test for a non-test frontend file, and security ONLY on a clear
+    security risk (``_security_risk``) the Gate-2 list for the same scope lacks — one
+    security owner per run. A 20-line
     auth fix (Gate-2 dispatches nothing under 50 lines) keeps its security review
     here; a change Gate-2 will security-review is not reviewed twice."""
     out = [{"id": "spec-compliance", "domain": "Spec Compliance",
@@ -11688,9 +11723,10 @@ def _review_dispatch(*, profile: str, scope: dict, gate2_ids) -> "list[dict]":
                if not c.get("is_test") and _FRONTEND_RE.search(_rel(c))), None)
     if fe:
         out.append({"id": "ux-test", "domain": "UX & Test", "reason": f"frontend file: {fe}"})
-    if "security" not in set(gate2_ids or ()):
+    risk = _security_risk(scope)
+    if risk and "security" not in set(gate2_ids or ()):
         out.append({"id": "security", "domain": "Security",
-                    "reason": "Gate-2 will not dispatch security for this scope"})
+                    "reason": f"{risk}; Gate-2 will not dispatch security for this scope"})
     return out
 
 
@@ -15019,7 +15055,8 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
             # No recorded REVIEW plan (a run that predates dispatch_plan): unknown, not "REVIEW
             # skipped security" — do not add a possibly duplicate security round.
             if (review_ids is not None and "security" not in {e["id"] for e in experts}
-                    and "security" not in review_ids and _review_fanout_applies(scope)):
+                    and "security" not in review_ids and _review_fanout_applies(scope)
+                    and _security_risk(scope)):
                 # Scope drift: REVIEW left security to Gate-2, but the final diff no longer
                 # makes Gate-2 dispatch it. Nobody would review security — add it here.
                 experts.append({"id": "security", "domain": "Security",

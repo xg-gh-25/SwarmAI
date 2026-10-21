@@ -65,7 +65,7 @@ def test_small_change_dispatches_nobody_even_declared_experts():
     assert out == []
     big = cli._dispatch_experts(profile="full", work_type="feature", scope=_scope(80),
                                 required=[])
-    assert {e["id"] for e in big} >= {"correctness", "security"}
+    assert {e["id"] for e in big} == {"correctness"}
 
 
 def _git(repo: Path, *a: str) -> str:

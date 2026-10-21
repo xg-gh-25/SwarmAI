@@ -885,22 +885,23 @@ def test_stage_start_deliver_scope_experts_and_prompts(ws, capsys):
     repo = _fixture_repo(root)
     (repo / "core" / "a.py").write_text("x = 1\n" + "y = 2\n" * 60, encoding="utf-8")
     (repo / "routers").mkdir()
-    (repo / "routers" / "r.py").write_text("z = 3\n" * 70, encoding="utf-8")
+    (repo / "routers" / "auth.py").write_text("z = 3\n" * 70, encoding="utf-8")
     rid = "run_scope"
     rd = _make_run(root, rid, "full",
                    stages=["evaluate", "think", "plan", "build", "review", "test"],
-                   files_touched=[str(repo / "core" / "a.py"), str(repo / "routers" / "r.py")],
+                   files_touched=[str(repo / "core" / "a.py"), str(repo / "routers" / "auth.py")],
                    required_experts=["concurrency"])
     code, out = _start(reg, capsys, rid, "deliver")
     assert code == 0, out
     by_path = {Path(c["path"]).name: c for c in out["changed_files"]}
     assert by_path["a.py"]["status"] == "M" and by_path["a.py"]["added"] == 60
-    assert by_path["r.py"]["status"] == "A" and by_path["r.py"]["added"] == 70
+    assert by_path["auth.py"]["status"] == "A" and by_path["auth.py"]["added"] == 70
     assert out["diff_insertions"] == 130
     assert "full_tier_override" not in out  # risk, not a line count, picks the tier
     ids = {e["id"] for e in out["experts"]}
-    assert {"correctness", "security", "api-contract", "integration", "concurrency"} <= ids
-    assert "red-team" not in ids  # 130 lines ≤ 200
+    # E1: correctness, + security and red-team on a security-sensitive path; the declared
+    # concurrency lens maps to correctness
+    assert ids == {"correctness", "security", "red-team"}
     for e in out["experts"]:
         if "prompt_path" in e:
             body = Path(e["prompt_path"]).read_text(encoding="utf-8")
@@ -919,11 +920,12 @@ def test_stage_start_deliver_scope_experts_and_prompts(ws, capsys):
     ("full", None, 10, 5, [], set()),                               # < 50 lines → none
     ("full", None, 10, 5, ["security"], set()),                     # ≤ 20 lines: small, even if required
     ("full", None, 25, 5, ["security"], {"security"}),              # 21-49 lines: only the required
-    ("bugfix", None, 60, 0, [], {"correctness", "security"}),       # bugfix default
-    ("bugfix", "refactor", 60, 0, [],
-     {"correctness", "api-contract", "integration", "red-team"}),   # refactor rule
-    ("full", None, 150, 100, [], {"correctness", "security", "red-team"}),  # > 200 lines; strict → security
-    ("direct", None, 150, 0, [], {"correctness", "security"}),     # no line-count force to full
+    # E1: correctness only, whatever the size, unless there is a clear security risk
+    ("bugfix", None, 60, 0, [], {"correctness"}),
+    ("bugfix", "refactor", 60, 0, [], {"correctness"}),
+    ("full", None, 150, 100, [], {"correctness"}),
+    ("direct", None, 150, 0, [], {"correctness"}),
+    ("full", None, 60, 0, ["api-contract"], {"correctness"}),       # old lens → correctness
     ("trivial", None, 150, 0, [], set()),                          # relaxed: no >100 override
 ])
 def test_dispatch_rules(profile, work_type, ins, dels, required, expect):
@@ -1268,40 +1270,50 @@ def test_size_escalation_counts_source_lines_only():
                     ("backend/tests/test_security_gate.py", "A", 300, 0)])
     got = {e["id"] for e in cli._dispatch_experts(profile="bugfix", work_type="bugfix",
                                                   scope=scope, required=[])}
-    assert got == {"correctness", "security"}
-    # a test path must not fire a file trigger either (test_security_gate.py matches 'security')
+    assert got == {"correctness"}
+    # a test path must not fire the security rule (test_routers_auth.py matches 'auth')
     scope2 = _scope([("backend/core/x.py", "M", 120, 0),
                      ("backend/tests/test_routers_auth.py", "A", 50, 0)])
     got2 = {e["id"] for e in cli._dispatch_experts(profile="full", work_type=None,
                                                    scope=scope2, required=[])}
-    assert "api-contract" not in got2 and "performance" not in got2
+    assert got2 == {"correctness"}
 
 
-def test_large_source_change_still_gets_full_tier_and_red_team():
-    scope = _scope([("backend/core/gate.py", "M", 260, 10)])
-    got = {e["id"] for e in cli._dispatch_experts(profile="bugfix", work_type="bugfix",
-                                                  scope=scope, required=[])}
-    assert {"correctness", "security", "red-team"} <= got
+def test_size_alone_never_adds_red_team_a_security_risk_does():
+    # E1: red-team follows a clear security risk, not a line count
+    big = _scope([("backend/core/util.py", "M", 260, 10)])
+    assert {e["id"] for e in cli._dispatch_experts(profile="bugfix", work_type="bugfix",
+                                                   scope=big, required=[])} == {"correctness"}
+    risky = _scope([("backend/core/run_owner_gate.py", "M", 60, 0)])
+    assert {e["id"] for e in cli._dispatch_experts(profile="bugfix", work_type="bugfix",
+                                                   scope=risky, required=[])} == {
+        "correctness", "security", "red-team"}
 
 
-def test_strict_profile_gate2_always_carries_security():
-    # core/x.py matches no security file trigger; before, Gate-2 had no security here
+def test_security_is_reviewed_once_per_run():
+    # E1: a change with no security risk gets no Gate-2 security; REVIEW's fan-out keeps
+    # its own rule (P4 replaces it); a risky one is owned by Gate-2, not reviewed twice
     scope = _scope([("backend/core/x.py", "M", 120, 0)])
     gate2 = {e["id"] for e in cli._dispatch_experts(profile="full", work_type=None,
                                                     scope=scope, required=[])}
+    assert gate2 == {"correctness"}
+    risky = _scope([("backend/core/auth.py", "M", 120, 0)])
+    gate2 = {e["id"] for e in cli._dispatch_experts(profile="full", work_type=None,
+                                                    scope=risky, required=[])}
     assert "security" in gate2
-    review = {e["id"] for e in cli._review_dispatch(profile="full", scope=scope, gate2_ids=gate2)}
+    review = {e["id"] for e in cli._review_dispatch(profile="full", scope=risky, gate2_ids=gate2)}
     assert "security" not in review  # one owner per run
 
 
-def test_small_auth_fix_keeps_security_at_review():
-    # 20 lines: Gate-2 dispatches nothing, REVIEW fan-out fires on the auth path → REVIEW owns it
+def test_small_auth_fix_gets_security_at_gate2():
+    # 20 lines on an auth path is not small (sensitive path): E1 sends security at any
+    # size there, so REVIEW does not dispatch it a second time
     scope = _scope([("backend/routers/auth.py", "M", 20, 0)])
     gate2 = {e["id"] for e in cli._dispatch_experts(profile="bugfix", work_type="bugfix",
                                                     scope=scope, required=[])}
-    assert gate2 == set()
+    assert gate2 == {"security"}
     review = {e["id"] for e in cli._review_dispatch(profile="bugfix", scope=scope, gate2_ids=gate2)}
-    assert {"spec-compliance", "code-quality", "security"} <= review
+    assert "security" not in review and {"spec-compliance", "code-quality"} <= review
 
 
 def test_review_dispatch_single_pass_when_fanout_does_not_apply():
@@ -1349,7 +1361,7 @@ def test_stage_start_deliver_records_plan_and_foreground(ws, capsys):
     code, out = _start(reg, capsys, rid, "deliver")
     assert code == 0, out
     ids = [e["id"] for e in out["experts"]]
-    assert "security" in ids and out["spawn_mode"] == "foreground"
+    assert ids == ["correctness"] and out["spawn_mode"] == "foreground"  # E1: no risk
     assert _run_state(root, rid)["dispatch_plan"]["deliver"] == ids + ["meta-review"]
 
 
@@ -1414,13 +1426,13 @@ def test_pytest_named_source_outside_tests_dir_is_not_a_test(tmp_path):
     assert cli._is_test_path("tests/simple_test.py", root=root) is True  # tests dir wins
 
 
-def test_root_level_models_dir_still_fires_api_contract():
-    """Triggers now match the repo-relative path, so a leading-slash pattern would
-    miss a repo-root ``models/`` folder that the absolute path used to hit."""
-    scope = _scope([("models/user.py", "M", 60, 0)])
-    ids = {e["id"] for e in cli._dispatch_experts(profile="full", work_type="existing-feature",
-                                                   scope=scope, required=None)}
-    assert "api-contract" in ids
+def test_security_risk_matches_the_repo_relative_path():
+    """The rule reads the repo-relative path: a home folder named like a sensitive word
+    must not fire it, a repo-relative auth path must."""
+    plain = _scope([("/Users/token/repo/backend/core/x.py", "M", 60, 0)])
+    plain["changed_files"][0]["rel"] = "backend/core/x.py"
+    assert cli._security_risk(plain) is None
+    assert cli._security_risk(_scope([("backend/auth/user.py", "M", 60, 0)]))
 
 
 def test_stage_start_keeps_a_concurrent_run_json_write(ws, capsys, monkeypatch):
@@ -1544,8 +1556,8 @@ def test_stage_budget_clamps_cycles_and_does_not_count_overlays(tmp_path, monkey
 
 
 def test_deliver_does_not_add_security_for_a_run_without_a_recorded_review_plan(ws, capsys):
-    """A run that predates dispatch_plan: whether REVIEW ran security is unknown, so the
-    drift guard must not add a possibly duplicate security round."""
+    """A run that predates dispatch_plan: the drift guard adds nothing. Gate-2 itself
+    sends security on an auth path at any size (E1), so it is the one owner."""
     root, reg = ws
     repo = _fixture_repo(root)
     (repo / "routers").mkdir()
@@ -1555,7 +1567,7 @@ def test_deliver_does_not_add_security_for_a_run_without_a_recorded_review_plan(
               files_touched=[str(repo / "routers" / "auth.py")])
     code, out = _start(reg, capsys, rid, "deliver")
     assert code == 0, out
-    assert "security" not in {e["id"] for e in out["experts"]}
+    assert [e["id"] for e in out["experts"]].count("security") == 1
 
 
 def test_stage_complete_names_an_old_daemon_instead_of_blaming_prompts(ws, capsys, monkeypatch):

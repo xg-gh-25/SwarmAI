@@ -16,15 +16,11 @@ specialists find what a generalist misses.
 
 | Profile | What runs |
 |---------|-----------|
-| full, standard (and every strict profile, incl. `direct`) | All scope-gated specialists + Red Team (conditional) |
-| bugfix | Correctness + Security (tier default) |
-| trivial | Skip entirely |
-| research | Skip entirely (no code changes) |
+| every strict profile (full, standard, bugfix, `direct`) | Correctness; Security + Red Team only on a clear security risk |
+| trivial, research | Skip (only a governed-context change or a declared expert) |
 
-**Exception — `understanding.work_type == refactor`:** never apply the bugfix
-narrowing, even when the profile resolved to bugfix. A refactor's risk is structural:
-dispatch **Correctness + API-Contract + Integration + Red-Team** (Red Team
-unconditionally, so a patch-shaped or wrong-layer delivery is attacked head-on).
+There is no refactor or bugfix tier of its own: correctness's checklist holds the
+structural lenses (callers, contracts, state machines).
 
 ## Dispatch rules (computed by `stage-start --stage deliver`)
 
@@ -37,16 +33,20 @@ returned (`diff_insertions`) for the report.
 
 | Specialist | Dispatch when | Checklist |
 |-----------|---------------|-----------|
-| **Correctness** | Always (if changeset > 50 lines) | `backend/experts/code/correctness.md` |
-| **Security** | Always on a strict-profile batch; otherwise files touch: routers/, handlers, auth, database queries, user input, file paths. Also added when REVIEW left it to Gate-2 and the final diff still meets REVIEW's fan-out rule but would no longer dispatch it | `backend/experts/code/security.md` |
-| **Performance** | Files touch: endpoints, database, loops over collections, hooks, background tasks | `backend/experts/code/performance.md` |
-| **API Contract** | Files touch: routers/, schemas/, models, response types, frontend services | `backend/experts/code/api-contract.md` |
-| **Integration** | Changeset creates new public functions, classes, hooks, or handlers | `backend/experts/code/integration.md` |
-| **Operational** | Files touch: hooks/, jobs/, schedulers, daemon code, background tasks | `backend/experts/code/operational.md` |
-| **Red Team** | CONDITIONAL: source changeset > 200 lines OR any specialist found HIGH severity | `backend/experts/code/red-team.md` |
+| **Correctness** | Source changeset >= 50 lines | `backend/experts/code/correctness.md` (also holds the performance, API-contract, integration, operational, state-machine and concurrency items) |
+| **Security** | A clear security risk, at any size above the small-change waiver | `backend/experts/code/security.md` |
+| **Red Team** | A clear security risk AND source changeset >= 50 lines | `backend/experts/code/red-team.md` |
+
+**A clear security risk** (`_security_risk`, docs/design/pipeline-gate-expert-simplification.md
+E1): a non-test path naming auth, login, token, secret, credential, permission, file
+access, CORS, `security_hooks`, `hook_builder` or a `*_gate.py`, or `backend/context/`;
+or an added line with `subprocess`, `shell=True`, `os.system`, an outbound HTTP client,
+`pickle.load`, `yaml.load(`, `eval(` / `exec(`, `allow_origins`, `0.0.0.0` or a bind.
+Size alone never adds Security or Red Team.
 
 **Always the UNION with the PLAN's declared `required_experts`:**
-`actual_dispatch_set = union(profile_tier_default_set, run.json["required_experts"])`.
+`actual_dispatch_set = union(profile_tier_default_set, run.json["required_experts"])`; a
+declared id outside correctness / security / red-team maps to correctness.
 `required_experts` is append-only (BUILD may have added one), so the union is taken
 against what is present NOW; `stage-start` does this. A declared expert that did not
 review sets push_ready false (`_d7_missing_required_experts`); it never blocks the local
@@ -122,17 +122,11 @@ bypass this gate exists to prevent. There is no self-review branch.
 
 ## Red Team (conditional, never a wave of its own)
 
-Two triggers, two moments — and in both the Red Team runs IN a batch that already runs,
-never as an extra sequential round:
-
-- **Size** (source changeset > 200 lines): `stage-start` lists `red-team` in `experts`,
-  so it runs in round 1, in the same parallel batch as the specialists.
-- **A specialist HIGH** in round 1 (a smaller change): `gate2-recheck` adds `red-team`
-  to its `recheck` list (`"round": 1`, a prompt on the whole change) — it runs in the
-  round-2 batch, in parallel with the specialists' re-checks.
-
-Neither fired → skip it and say why in the gate outcome. Once it has run, a fixed HIGH
-does not send it again; it is counted against the same 3-round cap as every expert.
+`stage-start` lists `red-team` in `experts` when the change carries a clear security
+risk and has >= 50 source lines, so it runs in round 1 in the same parallel batch.
+Otherwise it does not run; say why in the gate outcome. The legacy flow's
+"specialist HIGH" trigger below applies only to a run with `convergence` other than
+`deterministic`.
 
 **`[GATE·validator]` HIGH trigger is mechanical** (strict profiles; trivial/research
 exempt): every finding records its producer in `specialist` — the reviewer's EXPERT-ID.

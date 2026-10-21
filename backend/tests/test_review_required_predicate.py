@@ -53,10 +53,10 @@ def test_a_larger_test_only_change_gets_a_reviewer():
     assert _ids(s) == {"correctness"}
 
 
-def test_a_few_lines_on_a_sensitive_path_get_correctness_and_security():
+def test_a_few_lines_on_a_security_path_get_security():
     s = _scope(("backend/routers/auth.py", 30, False))
     assert cli._small_change(s) is None
-    assert _ids(s) == {"correctness", "security"}
+    assert _ids(s) == {"security"}
 
 
 def test_relaxed_profiles_and_docs_keep_their_rules():

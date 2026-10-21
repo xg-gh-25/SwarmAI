@@ -11,7 +11,7 @@ visibility: public
 # Correctness Specialist Review
 <!-- version: 2026-10-18 | synced with: REVIEW_PATTERNS.md RP1-RP91 -->
 
-Scope: Always dispatched when changeset > 50 lines.
+Scope: Always dispatched when the source changeset is >= 50 lines.
 
 **Cross-reference:** Also check patterns from `REVIEW_PATTERNS.md` that fall
 in your domain: RP13 (state machine), RP15 (setTimeout), RP16 (concurrent async),
@@ -96,6 +96,16 @@ Modifiers: +3 concrete failure demo, +2 reachable from user action, -4 test file
 - Boolean logic errors in conditional returns
 - Missing return statements in conditional branches
 - Return value ignored by caller when it shouldn't be
+
+### Merged lenses (no separate expert is dispatched for these any more)
+- Integration: every new public function, class, hook or handler has a caller; every caller of a changed signature or return shape changed with it.
+- API contract: a field added on one side exists on the other (Pydantic response model, `toCamelCase` mapper, TS type); no field is renamed or dropped silently.
+- Operational: a background task, job or hook started here is stopped, bounded by a timeout, and logs its failure.
+- Performance: no IO, subprocess or query inside a loop over an unbounded collection; nothing O(n²) on a list that grows per session.
+- Spec: every acceptance criterion of the requirement is actually implemented, not only tested.
+
+### Severity
+HIGH = data loss, a security bypass, a crash or hang, or a requirement not implemented. MED = wrong behaviour on a reachable but uncommon path. LOW = everything else.
 
 ---
 
