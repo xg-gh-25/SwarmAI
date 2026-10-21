@@ -214,8 +214,9 @@ implementations in `security_hooks.py`). By category:
    command and the `run-update --status abandoned` escape; separately, in every session, it
    denies running `pipeline_test.py` inside a for/while/until loop or twice in one Bash call,
    since each call is capped at `alarm 110` and a continuation is a new call), then
-   `pytest_command_guard` (every session: denies pytest piped to tail/head or without a
-   wall-clock cap).
+   `pytest_command_guard` (every session: denies a pytest run whose wall-clock cap does
+   not end it at least 10s before the call's Bash timeout, 120s by default: a command still
+   running then is moved to the background and returns nothing).
 3. **Command safety + human-in-the-loop** — `dangerous_command_gate` (Bash) and
    `external_approval_gate` (non-Bash off-machine side effects) route risky calls through
    `PermissionManager` (`permission_manager.py`): an SSE approval dialog, approvals tracked
@@ -463,8 +464,8 @@ change is fully green on THREE checks — any one unrun or red blocks the push:
    `cd backend && perl -e 'alarm 90; exec @ARGV' python -m pytest tests/test_<module>.py -v --timeout=60`
    (the `exec @ARGV` is required — without it perl exits 0 and pytest never runs; `gtimeout`
    is not installed here; a per-test `--timeout` alone is not a cap and `pytest_command_guard`
-   denies it). Frontend: `cd desktop && npm test -- --run`. Never pipe pytest through
-   `| tail`/`| head`. Last-failed: add `--lf`. Full suite (`SWARMAI_SUITE=1`, cap ≥120s per
+   denies it; so does a cap of 110s or more). Frontend: `cd desktop && npm test -- --run`.
+   Last-failed: add `--lf`. Full suite (`SWARMAI_SUITE=1`, cap ≥120s per
    test) only on explicit request or when the blast radius clearly warrants it — never as a
    reflex.
 3. **Eval** — `cd backend && python scripts/ci_eval_gate.py`. This is a *pure check* (zero

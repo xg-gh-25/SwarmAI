@@ -1863,23 +1863,21 @@ async def background_command_guard(
 
 
 # ---------------------------------------------------------------------------
-# pytest command guard — block two recurring pytest anti-patterns (R9)
+# pytest command guard — a pytest run must end before the Bash timeout (R9)
 # ---------------------------------------------------------------------------
-# R9 documents these in prose but prose did not stop them: in run_241014d4 the
-# agent piped a slow pytest into `tail`, the harness auto-backgrounded it, the
-# foreground returned empty, and the agent misattributed + re-ran it ~6×. This
-# guard is the structural backstop (defense outside the agent, like
-# background_command_guard): deny the narrow anti-pattern, approve everything
-# else (fail-safe). It is a pure deny — no HITL, no permission_mgr.
+# In run_241014d4 a slow pytest ran past the Bash timeout, the CLI moved it to the
+# background, the call returned empty, and the agent re-ran it ~6×. This guard
+# denies a pytest run that can outlive the call (see pytest_command_guard) and
+# approves everything else (fail-safe). It is a pure deny — no HITL.
 
 # pytest as an INVOCATION (not the literal string in a filename like pytest.log):
 # at a command-word position — line start, or after a shell separator/pipe,
 # `python -m` (any minor version), a runner wrapper, an env-assignment prefix,
 # OR a wall-clock wrapper (gtimeout/timeout N). The wall-clock-wrapper arm is
 # essential: the wrapped form is the shape we MANDATE, so the gate must still
-# SEE it as pytest (else the pipe-to-pager check is bypassed for the exact
-# commands we require — a fail-open hole). This is what stops the
-# `cat pytest.log | tail` false positive while catching `gtimeout 90 pytest`.
+# SEE it as pytest (its cap is then checked against the Bash timeout). This is
+# what stops the `cat pytest.log | tail` false positive while catching
+# `gtimeout 900 pytest`.
 # `python[\d.]*` matches python / python3 / python3.12 (Gate-2 C5).
 _PYTEST_INVOCATION_RE = re.compile(
     r"(?:^|[;&|]|\bpython[\d.]*\s+-m"      # line start / separator / `python -m`
@@ -1890,106 +1888,6 @@ _PYTEST_INVOCATION_RE = re.compile(
     r"\s*(?:python[\d.]*\s+-m\s+)?(?:py\.test|pytest)\b",  # opt. `python -m` after wrapper
     re.IGNORECASE,
 )
-# Output piped into a pager that the harness swallows (tail/head), possibly at
-# the end of a pipe chain (`pytest | grep x | tail`).
-_PIPE_TO_PAGER_RE = re.compile(
-    r"\|&?(?:\s|\\\n)*(?:command\s+|exec\s+)?(?:[\w./-]*/)?(?:tail|head)\b",
-    re.IGNORECASE,
-)
-# A pager word anywhere (used only on the fail-closed fallback path, AFTER the
-# first `|` — see _fallback_pipes_to_pager).
-_PAGER_WORD_RE = re.compile(r"\b(?:tail|head)\b", re.IGNORECASE)
-# Shell LIST separators that end one pipeline and start the next: `;`, `&&`,
-# `||`, newline, and a lone background `&`. The `&` arm excludes the redirect
-# forms `2>&1` / `&>file` / `>&2` and `|&`, which do NOT end a pipeline.
-_LIST_SEPARATOR_RE = re.compile(r"\|\||&&|;|\n|(?<![|&<>])&(?![&>])")
-# Grouping / substitution syntax. A group can carry a pipe across a separator
-# (`{ pytest; } | tail`), so a command containing any of these is NOT segmented.
-_SHELL_GROUPING_CHARS = frozenset("(){}`")
-# Shapes where a raw separator does NOT end the pipeline: a backslash (line
-# continuation `\<newline>| tail`, escaped `\;` / `\&`), a pipe that ends a
-# line and continues on the next (`pytest |<newline>tail`), a comment after the
-# pipe (`pytest | # note<newline>tail`), or a heredoc (`<<`), whose body can sit
-# between the pipe and the pager. The splitter can't read these, so such a
-# command is NOT segmented either.
-_UNSPLITTABLE_PIPE_RE = re.compile(r"\\|<<|\|&?[ \t]*(?:\n|#)")
-# A compound command (`for/while/until ... done`, `if ... fi`, `case ... esac`)
-# pipes its WHOLE body: `for f in a; do pytest $f; done | tail` feeds pytest to
-# tail, yet a `;` split puts `| tail` in a pytest-free piece. Its closing keyword
-# anywhere means the command is NOT segmented.
-_COMPOUND_CLOSER_RE = re.compile(r"(?:^|[\s;&|])(?:done|fi|esac)\b")
-
-
-def _fallback_pipes_to_pager(stripped: str) -> bool:
-    """True iff a tail/head word appears after the first `|` of ``stripped``.
-
-    Used on a whole command the pipeline splitter can't read, and on each
-    pytest-carrying pipeline the splitter produces. Comments, heredoc bodies,
-    continuations, wrappers (`env`/`time`/`nice`/`command -p`), assignments and
-    redirects can all sit between a pipe and its pager, so adjacency is never
-    required. Linear time: one `find` plus one regex
-    search over the tail of the string (no lazy `.*?` scan from each `|`).
-    """
-    if _PIPE_TO_PAGER_RE.search(stripped):
-        return True
-    first_pipe = stripped.find("|")
-    return first_pipe != -1 and bool(_PAGER_WORD_RE.search(stripped, first_pipe + 1))
-
-
-_SUBST_SPAN_RE = re.compile(r"\$\(([^()`]*)\)|`([^`]*)`")
-
-
-def _drop_pytest_free_substitutions(text: str) -> str:
-    """*text* with every innermost ``$(…)`` / backtick span that names no pytest token
-    replaced by a placeholder word, repeated until none is left (nested spans go from
-    the inside out). A span that names pytest or a pager (tail / head), or ``$((…))``
-    arithmetic, stays."""
-    for _ in range(32):
-        changed = False
-
-        def sub(m):
-            nonlocal changed
-            inner = m.group(1) if m.group(1) is not None else m.group(2)
-            if _PYTEST_TOKEN_RE.search(inner) or _PAGER_WORD_RE.search(inner):
-                return m.group(0)        # pytest inside, or the pager itself (`| $(which tail)`)
-            changed = True
-            return "_"
-        new = _SUBST_SPAN_RE.sub(sub, text)
-        if not changed:
-            return text
-        text = new
-    return text
-
-
-def _pytest_output_piped_to_pager(stripped: str) -> bool:
-    """True iff pytest's own output feeds tail/head (on a quote-stripped command).
-
-    The hang this guards is pytest's stdout swallowed by a pager, so only a
-    pipeline that RUNS pytest matters: `pytest > f; grep x f | tail` pipes grep,
-    not pytest, and is safe. Split the command into its pipelines and check each
-    one that carries a pytest token. Grouping/substitution syntax, compound
-    commands (loops / if / case), backslashes, heredocs and a pipe that ends a
-    line (or is followed by a comment) can all carry pytest's output across what
-    looks like a separator, so any such command falls back to
-    _fallback_pipes_to_pager (fail-closed, stricter than the old whole-string check).
-    A ``$(…)`` / backtick substitution with no pytest token inside is dropped first
-    (``c=$(awk … | sed …)``): its output can never be pytest's, so it neither forces the
-    fallback nor lends it a pipe.
-    """
-    stripped = _drop_pytest_free_substitutions(stripped)
-    if (
-        _SHELL_GROUPING_CHARS & set(stripped)
-        or _UNSPLITTABLE_PIPE_RE.search(stripped)
-        or _COMPOUND_CLOSER_RE.search(stripped)
-    ):
-        return _fallback_pipes_to_pager(stripped)
-    # Within the pytest pipeline, any pager word after a `|` denies — adjacency
-    # isn't required because wrappers, assignments and redirects can sit between
-    # them (`| env tail`, `| time tail`, `| LC_ALL=C tail`, `| 2>&1 tail`).
-    return any(
-        _PYTEST_TOKEN_RE.search(seg) and _fallback_pipes_to_pager(seg)
-        for seg in _LIST_SEPARATOR_RE.split(stripped)
-    )
 # A wall-clock wrapper that BINDS the pytest token — the wrapper must IMMEDIATELY
 # precede pytest (optionally via `python -m`), not merely appear somewhere in the
 # string. Gate-2 (run BLOCK) proved an unbound "wrapper anywhere" check fails open:
@@ -2010,23 +1908,37 @@ def _pytest_output_piped_to_pager(stripped: str) -> bool:
 _RUNNER_PREFIX = r"(?:(?:[\w.~/-]*/)?python[\d.]*\s+-m\s+|(?:uv|poetry|pdm)\s+run\s+)?"
 _WALLCLOCK_BOUND_PYTEST_RE = re.compile(
     # gtimeout/timeout N (N>=1) wrapping pytest (optionally via a runner prefix):
-    r"\bg?timeout\s+[1-9]\d*\s+" + _RUNNER_PREFIX + r"(?:py\.test|pytest)\b"
+    r"\bg?timeout\s+(?P<timeout>[1-9]\d*)\s+" + _RUNNER_PREFIX + r"(?:py\.test|pytest)\b"
     # OR perl-alarm: alarm N (N>=1) ... exec @ARGV <runner?> <pytest>, one command:
-    r"|\bperl\b[^|\n]*?\balarm\s+[1-9]\d*\b[^|\n]*?\bexec\s+@ARGV['\"]?\s+"
+    r"|\bperl\b[^|\n]*?\balarm\s+(?P<alarm>[1-9]\d*)\b[^|\n]*?\bexec\s+@ARGV['\"]?\s+"
     + _RUNNER_PREFIX + r"(?:py\.test|pytest)\b",
     re.IGNORECASE,
 )
+# The CLI's own Bash timeout (BASH_DEFAULT_TIMEOUT_MS, 120s here; a call may ask for
+# more with its `timeout` input). A command still running when it fires is moved to
+# the background and the call returns no output, so a pytest cap must end the run
+# this many seconds before it (pytest's report and the shell need the margin).
+_BASH_TIMEOUT_DEFAULT_MS = 120_000
+_CAP_MARGIN_S = 10
 
 
-def _strip_quoted(command: str) -> str:
-    """Remove single/double-quoted spans so a quoted '| tail' inside a -k/-m
-    expression isn't mistaken for a real pipe (Gate-2 false-positive fix).
+def _bash_call_timeout_s(tool_input: dict) -> int:
+    """The timeout of this Bash call, seconds: its `timeout` input, else the CLI default."""
+    for raw in (tool_input.get("timeout"), os.environ.get("BASH_DEFAULT_TIMEOUT_MS")):
+        try:
+            ms = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if ms > 0:
+            return ms // 1000
+    return _BASH_TIMEOUT_DEFAULT_MS // 1000
 
-    Only matches CLOSED quote spans (`'[^']*'`); an unterminated/odd quote does
-    not match and the text passes through untouched (fail-closed on malformed
-    input — the raw token is still seen by the caller's regex)."""
-    s = re.sub(r"'[^']*'", "", command)
-    return re.sub(r'"[^"]*"', "", s)
+
+def _pytest_cap_s(command: str) -> "int | None":
+    """The shortest wall-clock cap bound to a pytest invocation in *command*, or None."""
+    caps = [int(m.group("timeout") or m.group("alarm"))
+            for m in _WALLCLOCK_BOUND_PYTEST_RE.finditer(command)]
+    return min(caps) if caps else None
 
 
 # A bare pytest TOKEN at a word boundary (just "is the word pytest present").
@@ -2072,22 +1984,24 @@ async def pytest_command_guard(
     tool_use_id: str | None,
     context: Any,
 ) -> dict[str, Any]:
-    """PreToolUse (Bash): DENY pytest piped to tail/head AND DENY pytest without
-    a wall-clock wrapper.
+    """PreToolUse (Bash): DENY a pytest run whose wall-clock cap does not end it
+    before this Bash call's timeout.
 
-    Two pytest anti-patterns, BOTH now denied (upgraded XG-approved direct,
-    run after run_6af22b0d — C040 12th CLASS-B recurrence):
-      1. piped into tail/head → DENY. A slow run is auto-backgrounded, the
-         foreground returns EMPTY, and that reads as a hang (run_241014d4).
-      2. no WALL-CLOCK wrapper (`gtimeout N` / `timeout N`) → DENY. Was WARN-only;
-         the WARN was insufficient — a no-wrapper `pytest > file 2>&1` (no `|tail`)
-         still gets auto-backgrounded into the same hang. A per-test `--timeout`
-         does NOT count: it bounds each test, not the whole command. Fail-closed
-         (R9 / PIT10 allowlist): a pytest invocation MUST carry a wall-clock cap.
+    Why: the CLI moves a command still running at its Bash timeout (120s default,
+    or the call's `timeout` input) to the background and returns no output; the
+    agent reads that as a hang and re-runs it (run_241014d4, C040). Transcripts of
+    2026-10-14..21 show `perl -e 'alarm 120' … pytest` moved to the background
+    exactly this way, so a cap only counts when it is shorter than the timeout
+    (by _CAP_MARGIN_S). A per-test `--timeout` does not cap the run.
+
+    One rule, one message. A pipe into tail/head used to be denied as a second
+    rule; it only hid output because the run had no cap, and its suggested fix
+    (`pytest … > file`) was itself denied by the cap rule, so agents were refused
+    twice in a row (25 sessions in a week hit it 3+ times). A capped run piped into
+    tail returns its tail.
 
     Fail-safe for the INVOCATION gate: any non-Bash, non-pytest command is
-    approved untouched. The pipe check runs on a quote-stripped copy so a quoted
-    '| tail' in a -k expression is not mistaken for a real pipe.
+    approved untouched.
 
     ACCEPTED RESIDUAL (Gate-2 C4/C6, NOT silently capped): pytest reached
     INDIRECTLY — `bash -c "pytest ..."`, `make test`, `xargs pytest`, backticks,
@@ -2127,47 +2041,31 @@ async def pytest_command_guard(
     ):
         return {"decision": "approve"}
 
-    # DENY: pytest's own output piped to a pager (unquoted form, scoped to the
-    # pipeline that runs pytest — see _pytest_output_piped_to_pager).
-    if _pytest_output_piped_to_pager(_strip_quoted(command)):
-        logger.warning("[BLOCKED] pytest piped to pager: %s", command[:80])
+    # One rule: the run must carry a wall-clock cap that ends it before the Bash
+    # call's own timeout. Checked on the RAW command (NOT quote-stripped): the perl
+    # cap carries `alarm N` / `exec @ARGV` INSIDE its single-quoted -e arg.
+    # A pipe into tail/head is fine once the run ends in time (it was denied
+    # before because an uncapped run got moved to the background: the cap is what
+    # prevents that, and with no cap the deny below fires anyway).
+    limit = _bash_call_timeout_s(input_data.get("tool_input", {}) or {}) - _CAP_MARGIN_S
+    cap = _pytest_cap_s(command)
+    if cap is None or cap > limit:
+        logger.warning("[BLOCKED] pytest cap %s > %ss: %s", cap, limit, command[:80])
+        n = max(1, min(limit, 100))
+        why = ("has no wall-clock cap" if cap is None else
+               f"is capped at {cap}s, which outlives this call's {limit + _CAP_MARGIN_S}s "
+               "Bash timeout")
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
-                    "pytest piped into tail/head is denied (R9): a slow run gets "
-                    "auto-backgrounded and the foreground returns EMPTY output, "
-                    "which reads as a hang. Redirect to a file and Read it: "
-                    "`pytest ... --timeout=60 > /tmp/t.txt 2>&1` then Read /tmp/t.txt."
-                ),
-            }
-        }
-
-    # DENY: no WALL-CLOCK wrapper. A pytest without `gtimeout N`/`timeout N` can
-    # run for minutes, get auto-backgrounded, return an empty foreground, and
-    # read as a hang (C040, 12th CLASS-B). A per-test `--timeout` does NOT bound
-    # the whole command, so it does not satisfy this. Fail-closed (R9 / PIT10).
-    # Checked on the RAW command (NOT quote-stripped): the sanctioned perl-alarm
-    # cap — `perl -e 'alarm 90; exec @ARGV' ... pytest` — carries its `alarm N` /
-    # `exec @ARGV` cap tokens INSIDE the single-quoted -e arg; stripping quotes here
-    # would drop them and wrongly DENY the very form we mandate (run_5511508d).
-    if not _WALLCLOCK_BOUND_PYTEST_RE.search(command):
-        logger.warning("[BLOCKED] pytest without wall-clock wrapper: %s", command[:80])
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    "pytest 调用 → 必须被 gtimeout/timeout <N> 包裹,否则 DENY。 "
-                    "per-test --timeout 不算数(它不挡 wall-clock)。 (R9) A no-wrapper "
-                    "run gets auto-backgrounded → empty foreground → reads as a hang "
-                    "(C040). gtimeout/timeout aren't installed on this box — use the "
-                    "perl-alarm fallback (sanctioned shape): `perl -e 'alarm 90; exec "
-                    "@ARGV' python -m pytest <smallest scope> --timeout=60 "
-                    "-p no:cacheprovider > /tmp/t.txt 2>&1; echo exit=$?` then Read "
-                    "/tmp/t.txt. If it can't return in 90s, the answer is SMALLER "
-                    "scope, not a longer wait."
+                    f"This pytest run {why}. A command still running when the Bash "
+                    "timeout fires is moved to the background and the call returns no "
+                    "output. A per-test --timeout does not cap the run. Run it as: "
+                    f"`perl -e 'alarm {n}; exec @ARGV' python -m pytest <tests> "
+                    f"--timeout=60 -q` (redirecting to a file is fine; cap at most "
+                    f"{limit}s). If it cannot finish in {limit}s, run fewer tests."
                 ),
             }
         }

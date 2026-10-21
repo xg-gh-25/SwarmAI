@@ -26,10 +26,8 @@ from core.security_hooks import (
     _code_can_execute,
     _is_commit_amend,
     _is_history_rewrite,
-    _pytest_output_piped_to_pager,
     _rewrites_only_scratch,
     _runner_loop_kind,
-    _strip_quoted,
 )
 
 RUNNER = ("/repo/backend/.venv/bin/python /repo/backend/scripts/pipeline_test.py "
@@ -228,22 +226,6 @@ def test_the_cli_call_first_gets_the_token(cmd):
 ])
 def test_anything_else_before_the_cli_is_refused(cmd):
     assert _token_binding(cmd) is None
-
-
-# ── pytest pipe guard ────────────────────────────────────────────────────────
-@pytest.mark.parametrize("cmd,piped", [
-    ("c=$(awk 'NR<=405 && /^class /{c=$2} END{print c}' t.py | sed 's/x//'); "
-     "perl -e 'alarm 110; exec @ARGV' python -m pytest \"t.py::$c::test_a\" -q > /tmp/o 2>&1; "
-     "grep -E 'passed' /tmp/o | head -20 | cut -c1-300", False),
-    ("pytest -q > /tmp/o 2>&1; grep x /tmp/o | head", False),
-    ("pytest -q | tail -5", True),
-    ("x=$(pytest -q | tail -3); echo $x", True),
-    ("for f in a b; do pytest $f; done | tail", True),
-    ("echo `pytest -q | head`", True),
-    ("pytest -q | $(which tail) -5", True),                  # the pager is a substitution
-])
-def test_only_pytests_own_output_into_a_pager_counts(cmd, piped):
-    assert _pytest_output_piped_to_pager(_strip_quoted(cmd)) is piped
 
 
 # ── python code judgment ─────────────────────────────────────────────────────

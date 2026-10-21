@@ -200,10 +200,11 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
 - **Long-running / background:** a hang IS a failure. Backgrounding needs expected-duration +
   poll + give-up→kill+reroute; `background_command_guard` default-denies backgrounding.
   Never raise a timeout ceiling to PERMIT a longer hang — fix the leak.
-- **Pytest:** MUST wrap in a wall-clock timeout (`perl -e 'alarm 90' … --timeout=60`, or
-  `gtimeout` if present) — a per-test `--timeout` doesn't count. Never background, never
-  `| tail`, smallest scope, max 2 runs/task; full suite needs user approval.
-  `pytest_command_guard` enforces this.
+- **Pytest:** MUST wrap in a wall-clock cap shorter than the Bash timeout (`perl -e 'alarm 100;
+  exec @ARGV' … --timeout=60`, or `gtimeout` if present): a run still going at the timeout is
+  moved to the background and returns nothing. A per-test `--timeout` doesn't count. Never
+  background, smallest scope, max 2 runs/task; full suite needs user approval.
+  `pytest_command_guard` enforces the cap.
 - **Eval:** NEVER run system eval inside a coding pipeline or by hand — it scores the DEPLOYED
   system; on un-deployed code it tests the old binary and can hang the judge. Triggers = CI /
   deploy / scheduled only. Prose-enforced (no per-command eval hook — running eval is a
@@ -225,7 +226,7 @@ catch myself writing "Sprint 1 / 3 story points" for code — restate as "N×{pr
 debugging a broken skill after invoking it and observing its failure. (SOUL P4)
 
 **R9. Test scope** — targeted tests proactive; full suite (`SWARMAI_SUITE=1`) needs user
-approval. Never `| tail`. Max 2 runs/task. (SOUL P1)
+approval. Cap every run below the Bash timeout. Max 2 runs/task. (SOUL P1)
 
 **R10. Codebase-first** — product changes in `swarmai/`, not workspace-only. System-owned
 context files: source of truth = `backend/context/`. (SOUL P1)

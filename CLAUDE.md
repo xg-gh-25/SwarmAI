@@ -19,6 +19,6 @@ The three rules people get wrong most often (full detail in AGENTS.md):
    the shared main checkout (AGENTS.md "Code changes outside a pipeline run").
 2. **pytest needs a wall-clock cap:**
    `perl -e 'alarm 90; exec @ARGV' python -m pytest tests/test_<module>.py -v --timeout=60`
-   (from `backend/`). Never pipe pytest through `| tail`.
+   (from `backend/`). Keep the cap under the 120s Bash timeout, or the run is backgrounded.
 3. **Every commit ends with `Co-Authored-By: Swarm <swarm@swarmai.dev>`**, never a
    Claude/Anthropic identity. Nothing enforces this for a manual commit — write it yourself.

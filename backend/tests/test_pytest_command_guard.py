@@ -1,25 +1,17 @@
 """Tests for pytest_command_guard PreToolUse Bash gate.
 
-The guard denies two pytest anti-patterns that R9 documents but prose failed to
-stop (the agent re-ran a swallowed pytest ~6× in run_241014d4, then again in a
-no-pipe `> file` shape — C040, the 12th CLASS-B recurrence):
-  1. pytest piped into tail/head — long output is swallowed by harness
-     auto-backgrounding, producing empty output the agent misattributes.
-  2. pytest with NO wall-clock wrapper (`gtimeout N` / `timeout N`) — a slow run
-     gets auto-backgrounded and the foreground returns empty, reading as a hang.
-     A per-test `--timeout=N` does NOT count: it bounds each test, not the whole
-     command, so a large suite can still run for minutes. FAIL-CLOSED (R9 /
-     PIT10 allowlist): a pytest invocation MUST carry a wall-clock cap.
+One rule: a pytest run must carry a wall-clock cap (`gtimeout N` / `timeout N` /
+`perl -e 'alarm N; exec @ARGV'`) that ends it at least _CAP_MARGIN_S before this
+Bash call's timeout (the call's `timeout` input, else BASH_DEFAULT_TIMEOUT_MS, else
+120s). A run still going at the timeout is moved to the background by the CLI and
+the call returns nothing (run_241014d4, C040). A per-test `--timeout` does not
+count. A pipe into tail/head is allowed once the run is capped (it used to be a
+second rule whose suggested fix the cap rule denied).
 
-Contract (XG-approved direct, post run_6af22b0d):
-    pytest 调用 → 必须被 gtimeout/timeout <N> 包裹,否则 DENY。
-    per-test --timeout 不算数(它不挡 wall-clock)。
-
-Methodology: the guard is a stateless async fn returning {decision:"approve"}
-or {hookSpecificOutput:{permissionDecision:"deny",...}}. Tests assert the
-decision for each command shape. Invariant: APPROVE everything that is not a
-pytest invocation (fail-safe for non-Bash / non-pytest / filename false-positive)
-AND approve a pytest invocation that IS wall-clock-wrapped without a pager pipe.
+Methodology: the guard is a stateless async fn returning {decision:"approve"} or
+{hookSpecificOutput:{permissionDecision:"deny",...}}; tests assert the decision per
+command shape. Invariants: everything that is not a pytest invocation is approved;
+the command the deny message suggests is itself approved.
 """
 
 import asyncio
@@ -28,8 +20,10 @@ import asyncio
 from core.security_hooks import pytest_command_guard
 
 
-def _run(command, tool_name="Bash", run_in_background=False):
+def _run(command, tool_name="Bash", run_in_background=False, timeout_ms=None):
     tool_input = {"command": command}
+    if timeout_ms is not None:
+        tool_input["timeout"] = timeout_ms
     if run_in_background:
         tool_input["run_in_background"] = True
     return asyncio.run(
@@ -47,27 +41,48 @@ def _deny_reason(result):
     return result.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
 
 
-class TestPytestPipedToPager:
-    """AC1: pytest piped to tail/head is denied (checked before wall-clock)."""
+class TestCapAgainstBashTimeout:
+    """The cap must end the run before the call's Bash timeout (2026-10-21:
+    `alarm 120 … pytest` was moved to the background in real transcripts)."""
 
-    def test_pipe_to_tail_denied(self):
+    def test_capped_run_piped_to_tail_approved(self):
+        assert not _is_deny(_run("perl -e 'alarm 90; exec @ARGV' python -m pytest tests/foo.py | tail -5"))
+
+    def test_uncapped_run_piped_to_tail_denied(self):
         assert _is_deny(_run("python -m pytest tests/foo.py | tail -5"))
 
-    def test_pipe_to_head_denied(self):
-        assert _is_deny(_run("pytest tests/foo.py --timeout=60 | head -20"))
+    def test_cap_equal_to_default_timeout_denied(self):
+        r = _run("perl -e 'alarm 120; exec @ARGV' python -m pytest tests/foo.py > /tmp/t 2>&1")
+        assert _is_deny(r)
+        assert "120s" in _deny_reason(r)
 
-    def test_pipe_to_tail_with_grep_chain_denied(self):
-        # pytest ... | grep x | tail — still ends at a pager, still swallowed
-        assert _is_deny(_run("pytest tests/foo.py | grep PASS | tail -3"))
+    def test_cap_inside_the_margin_denied(self):
+        assert _is_deny(_run("gtimeout 115 pytest tests/foo.py"))
 
-    def test_pipe_denied_takes_priority_reason_names_redirect(self):
-        # The pipe check runs first; its reason points at the redirect fix.
-        reason = _deny_reason(_run("pytest x | tail"))
-        assert "redirect" in reason.lower() or "> " in reason or "file" in reason.lower()
+    def test_cap_at_the_limit_approved(self):
+        assert not _is_deny(_run("gtimeout 110 pytest tests/foo.py"))
 
-    def test_real_pipe_denied_even_with_wallclock(self):
-        # The pipe is a destructive trigger — denies regardless of a wrapper.
-        assert _is_deny(_run("gtimeout 90 pytest tests/ | tail -5"))
+    def test_longer_call_timeout_allows_longer_cap(self):
+        cmd = "perl -e 'alarm 400; exec @ARGV' python -m pytest tests/"
+        assert _is_deny(_run(cmd))
+        assert not _is_deny(_run(cmd, timeout_ms=600_000))
+
+    def test_env_default_timeout_is_used(self, monkeypatch):
+        monkeypatch.setenv("BASH_DEFAULT_TIMEOUT_MS", "60000")
+        assert _is_deny(_run("gtimeout 90 pytest tests/"))
+        assert not _is_deny(_run("gtimeout 50 pytest tests/"))
+
+    def test_the_suggested_command_is_approved(self):
+        reason = _deny_reason(_run("pytest tests/foo.py | tail"))
+        suggested = reason.split("Run it as: `", 1)[1].split("`", 1)[0].replace("<tests>", "tests/foo.py")
+        assert not _is_deny(_run(suggested))
+        assert not _is_deny(_run(suggested + " > /tmp/t.txt 2>&1"))
+        assert not _is_deny(_run(suggested + " | tail -5"))
+
+    def test_one_rule_one_message(self):
+        a = _deny_reason(_run("pytest tests/foo.py | tail"))
+        b = _deny_reason(_run("pytest tests/foo.py > /tmp/t 2>&1"))
+        assert a == b
 
 
 class TestPytestNoWallClock:
@@ -95,10 +110,10 @@ class TestPytestNoWallClock:
             _run("python -m pytest tests/foo.py --timeout=60 > /tmp/r.txt 2>&1")
         )
 
-    def test_deny_reason_names_gtimeout_and_scope(self):
+    def test_deny_reason_says_why_and_how(self):
         reason = _deny_reason(_run("pytest tests/foo.py -q"))
-        assert "gtimeout" in reason.lower()
-        assert "scope" in reason.lower() or "smaller" in reason.lower()
+        assert "no wall-clock cap" in reason
+        assert "alarm" in reason and "fewer tests" in reason
 
 
 class TestWallClockWrapperApproved:
@@ -123,7 +138,7 @@ class TestWallClockWrapperApproved:
     def test_gtimeout_not_confused_by_inner_timeout_token(self):
         # 'gtimeout' contains 'timeout'; the gtimeout arm must match it as a
         # wall-clock wrapper (not be excluded by the bare-timeout lookbehind).
-        assert not _is_deny(_run("gtimeout 120 pytest tests/foo.py"))
+        assert not _is_deny(_run("gtimeout 100 pytest tests/foo.py"))
 
     def test_perl_alarm_fallback_approved(self):
         # THE REAL PATH on this machine: gtimeout/timeout are NOT installed, only
@@ -243,7 +258,7 @@ class TestHardening:
         # (NOT the pipe reason — the quoted pipe is correctly not seen as a pipe).
         result = _run("pytest --timeout=60 -k 'a | tail'")
         assert _is_deny(result)
-        assert "gtimeout" in _deny_reason(result).lower()
+        assert "no wall-clock cap" in _deny_reason(result)
 
     def test_bare_pytest_no_wallclock_denied(self):
         # Config-driven timeout in pyproject.toml does NOT count — the contract
@@ -348,126 +363,6 @@ class TestInQuoteFalsePositive:
 
 
 _CAPPED = "perl -e 'alarm 90; exec @ARGV' python -m pytest tests/foo.py --timeout=60"
-
-
-class TestPagerScopedToPytestSegment:
-    """The pager check is scoped to the shell command that RUNS pytest.
-
-    The swallowed-output hang only happens when pytest's OWN stdout feeds a pager.
-    A `| tail`/`| head` on a DIFFERENT command of the same Bash call — grepping
-    the file pytest was redirected into, or an unrelated `ls | head` before it —
-    does not touch pytest's output, yet a whole-string check denies it, forcing a
-    correct command to be re-split. Grouping / subshell syntax is not segmented:
-    it falls back to the whole-string check (fail-closed), since
-    `{ pytest; } | tail` DOES pipe pytest.
-    """
-
-    def test_tail_on_redirected_file_after_semicolon_approved(self):
-        assert not _is_deny(_run(f"{_CAPPED} > /tmp/t.txt 2>&1; grep FAILED /tmp/t.txt | tail -3"))
-
-    def test_tail_after_and_and_approved(self):
-        assert not _is_deny(_run(f"{_CAPPED} > /tmp/t.txt 2>&1 && grep x /tmp/t.txt | head"))
-
-    def test_unrelated_head_before_pytest_approved(self):
-        assert not _is_deny(_run(f"ls | head -3; {_CAPPED} > /tmp/t.txt 2>&1"))
-
-    def test_newline_separated_commands_approved(self):
-        assert not _is_deny(_run(f"{_CAPPED} > /tmp/t.txt 2>&1\ngrep x /tmp/t.txt | tail -1"))
-
-    def test_stderr_redirect_does_not_split_the_pipe(self):
-        # `2>&1` contains `&` — must NOT be read as a command separator.
-        assert _is_deny(_run(f"{_CAPPED} 2>&1 | tail -5"))
-
-    def test_pipe_in_same_segment_after_other_commands_denied(self):
-        assert _is_deny(_run(f"cd backend && {_CAPPED} 2>&1 | grep x | tail -3"))
-
-    def test_loop_body_pipe_denied(self):
-        assert _is_deny(_run("for f in a b; do gtimeout 90 pytest $f | tail; done"))
-
-    def test_subshell_group_pipe_denied(self):
-        assert _is_deny(_run("(gtimeout 90 pytest x) | tail"))
-
-    def test_brace_group_pipe_denied(self):
-        # Splitting on `;` would put `| tail` in a pytest-free segment — grouping
-        # must fall back to the whole-string check.
-        assert _is_deny(_run("{ gtimeout 90 pytest x; } | tail"))
-
-    def test_command_substitution_pipe_denied(self):
-        assert _is_deny(_run("echo $(gtimeout 90 pytest x; true) | tail"))
-
-    # Shapes the separator split cannot read (security review, Gate-2): each is ONE
-    # pipeline in bash that feeds pytest's output to the pager, so each must deny.
-    def test_pipe_at_line_end_continuing_to_tail_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} |\ntail -5"))
-
-    def test_pipe_at_line_end_indented_head_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} |\n  head -20"))
-
-    def test_backslash_line_continuation_before_pipe_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} \\\n| tail -5"))
-
-    def test_escaped_semicolon_in_args_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} -k a\;b | tail -5"))
-
-    def test_escaped_ampersand_in_args_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} x\\&y | head"))
-
-    def test_pipe_ampersand_to_tail_denied(self):
-        # `|&` pipes stdout+stderr — the old regex missed it in every version.
-        assert _is_deny(_run(f"{_CAPPED} |& tail"))
-
-    def test_line_ending_pipe_on_other_command_still_falls_back(self):
-        # Fail-closed: an unsplittable shape anywhere reverts to the whole-string
-        # check, even when the pager is on a different command.
-        assert _is_deny(_run(f"{_CAPPED} > /tmp/t.txt 2>&1\ngrep x /tmp/t.txt |\ntail -1"))
-
-    # Compound commands pipe their whole body (correctness review, Gate-2 HIGH).
-    def test_for_loop_output_piped_to_tail_denied(self):
-        assert _is_deny(_run("for f in a b; do gtimeout 90 pytest x; done | tail"))
-
-    def test_while_loop_output_piped_to_tail_denied(self):
-        assert _is_deny(_run("while true; do gtimeout 90 pytest x; break; done | tail -3"))
-
-    def test_if_block_output_piped_to_tail_denied(self):
-        assert _is_deny(_run("if true; then gtimeout 90 pytest x; fi | tail -3"))
-
-    def test_multiline_if_block_output_piped_denied(self):
-        assert _is_deny(_run("if true\nthen\n  gtimeout 90 pytest x\nfi | tail -3"))
-
-    def test_pipe_backslash_newline_tail_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} | \\\n tail"))
-
-    # Text between the pipe and the pager (delta review, Gate-2 MEDIUM).
-    def test_comment_after_pipe_then_tail_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} | # note\ntail -3"))
-
-    def test_comment_line_between_pipe_and_tail_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} |\n# comment\ntail -1"))
-
-    def test_heredoc_body_between_pipe_and_tail_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} <<EOF |\nEOF\ntail -1"))
-
-    def test_pager_by_absolute_path_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} | /usr/bin/tail -3"))
-
-    def test_pager_via_command_builtin_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} | command tail -3"))
-
-    # Words between the pipe and the pager (final review, Gate-2 MEDIUM).
-    def test_pager_behind_env_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} | env tail -3"))
-
-    def test_pager_behind_time_and_nice_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} | time nice tail -3"))
-
-    def test_pager_behind_assignment_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} | LC_ALL=C tail -3"))
-
-    def test_pager_behind_redirect_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} | 2>&1 tail -3"))
-
-    def test_pager_behind_command_option_denied(self):
-        assert _is_deny(_run(f"{_CAPPED} | command -p head -3"))
 
 
 def test_venv_interpreter_by_path_is_a_wrapped_run():
