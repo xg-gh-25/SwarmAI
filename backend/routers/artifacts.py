@@ -343,39 +343,54 @@ async def get_artifact_drift(
     workspace_path = await _get_workspace_path()
     ws_root = Path(workspace_path)
 
-    # Resolve the target: accept absolute or workspace-relative.
+    def _resolve() -> "tuple[Path | None, DriftResponse | None]":
+        """(abs path to probe, None) or (None, final answer). Runs in a worker thread:
+        classify_source scans run state and bindings on disk, which must never run on
+        the event loop (it starved /health long enough for the app to show Backend
+        Offline)."""
+        # Resolve the target: accept absolute or workspace-relative.
+        try:
+            p = Path(path)
+            abs_p = p if p.is_absolute() else (ws_root / p)
+            abs_p = abs_p.resolve()
+        except (OSError, RuntimeError, ValueError):
+            return None, DriftResponse(dirty=False, reason="clean")  # unresolvable → fail-safe
+
+        # SECURITY (RP52/RP44 — path confinement): `path` is caller-supplied, so an
+        # attacker could probe `/etc/passwd` or `~/.ssh/id_rsa` and learn a file's
+        # existence + mtime via the untracked branch below. Canvas/Artifacts rows are
+        # ONLY ever owned files, so confine to a known tree using the SAME canonical
+        # resolver everything else uses (classify_source → _owning_tree). A path not
+        # owned by SwarmWS / a bound worktree is refused → clean (never disclosing an
+        # arbitrary file's state). Reuses the single source of truth — no 2nd allowlist.
+        try:
+            from core.artifact_source import classify_source
+
+            kind, _why = classify_source(str(abs_p), swarmws_root=str(ws_root))
+        except Exception:  # noqa: BLE001 — fail-safe: cannot classify → do not probe
+            logger.debug("get_artifact_drift: suppressed exception on a fail-safe path", exc_info=True)
+            kind = "copy"
+        if kind != "link":
+            return None, DriftResponse(dirty=False, reason="clean")
+
+        # File gone → missing (surfaced, not silent — mirrors KiroCrew source_missing).
+        if not abs_p.exists():
+            return None, DriftResponse(dirty=True, reason="missing")
+
+        # Directory / non-regular file → nothing to diff → clean.
+        if not abs_p.is_file():
+            return None, DriftResponse(dirty=False, reason="clean")
+        return abs_p, None
+
     try:
-        p = Path(path)
-        abs_p = p if p.is_absolute() else (ws_root / p)
-        abs_p = abs_p.resolve()
-    except (OSError, RuntimeError, ValueError):
-        return DriftResponse(dirty=False, reason="clean")  # unresolvable → fail-safe
-
-    # SECURITY (RP52/RP44 — path confinement): `path` is caller-supplied, so an
-    # attacker could probe `/etc/passwd` or `~/.ssh/id_rsa` and learn a file's
-    # existence + mtime via the untracked branch below. Canvas/Artifacts rows are
-    # ONLY ever owned files, so confine to a known tree using the SAME canonical
-    # resolver everything else uses (classify_source → _owning_tree). A path not
-    # owned by SwarmWS / a bound worktree is refused → clean (never disclosing an
-    # arbitrary file's state). Reuses the single source of truth — no 2nd allowlist.
-    try:
-        from core.artifact_source import classify_source
-
-        kind, _why = classify_source(str(abs_p), swarmws_root=str(ws_root))
-    except Exception:  # noqa: BLE001 — fail-safe: cannot classify → do not probe
-        logger.debug("get_artifact_drift: suppressed exception on a fail-safe path", exc_info=True)
-        kind = "copy"
-    if kind != "link":
+        # Dedicated limiter (not the shared pool) — see _DRIFT_LIMITER rationale.
+        resolved_p, early = await anyio.to_thread.run_sync(_resolve, limiter=_DRIFT_LIMITER)
+    except Exception:  # noqa: BLE001 — fail-safe: never surface a false dirty on error
+        logger.exception("drift resolve failed for %s — degrading to clean", path)
         return DriftResponse(dirty=False, reason="clean")
-
-    # File gone → missing (surfaced, not silent — mirrors KiroCrew source_missing).
-    if not abs_p.exists():
-        return DriftResponse(dirty=True, reason="missing")
-
-    # Directory / non-regular file → nothing to diff → clean.
-    if not abs_p.is_file():
-        return DriftResponse(dirty=False, reason="clean")
-
+    if early is not None:
+        return early
+    abs_p = resolved_p
     file_dir = abs_p.parent
 
     def _probe() -> DriftResponse:

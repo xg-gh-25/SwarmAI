@@ -231,3 +231,26 @@ async def test_git_error_fails_safe_to_clean(app_with_ws, monkeypatch):
     data = await _get(app, "report.md", since_ref=sha)
     assert data["dirty"] is False
     assert data["reason"] == "clean"
+
+
+# ── classify_source runs in a worker thread, never on the event loop ─────────
+async def test_classify_source_runs_off_event_loop(app_with_ws, monkeypatch):
+    """classify_source scans run state on disk; on the loop thread it starved
+    /health for tens of seconds (the app showed Backend Offline). It must run in a
+    worker thread."""
+    import threading
+    import core.artifact_source as src
+
+    app, repo = app_with_ws
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+    real = src.classify_source
+
+    def _spy(*a, **kw):
+        seen.append(threading.get_ident())
+        return real(*a, **kw)
+
+    monkeypatch.setattr(src, "classify_source", _spy)
+    await _get(app, "report.md", since_ref=_head_sha(repo, "report.md"))
+    assert seen, "classify_source was not called"
+    assert all(t != loop_thread for t in seen)

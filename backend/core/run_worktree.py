@@ -28,6 +28,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import logging
 import time
 from datetime import datetime, timezone
@@ -1773,20 +1774,59 @@ def active_entries(data: dict) -> "list[dict]":
 
 
 def active_worktree_roots(workspace: "str | Path") -> "list[tuple[str, str]]":
-    """(worktree path, repo name) of every live isolated run (no git calls)."""
+    """(worktree path, repo name) of every live isolated run (no git calls).
+
+    Hot path (artifact drift / source classification, once per Canvas row): a run.json
+    is parsed only when its (mtime_ns, size) changed since the last call, so the cost is
+    one stat per run instead of reading + parsing the whole run history (1000+ files)."""
+    import glob
+    prefix = os.path.join(str(workspace), "")
     out = []
-    for _f, data in _iter_runs(workspace):
-        if data.get("status") not in _LIVE:
-            continue
-        rid = str(data.get("id") or "")
-        for e in active_entries(data):
+    seen = set()
+    for f in glob.glob(os.path.join(str(workspace), "Projects", "*", ".artifacts", "runs",
+                                    "run_*", "run.json")):
+        seen.add(f)
+        for rid, repo in _live_summary(f):
             try:
-                p = wt_path(rid, str(e.get("repo_name")))
+                p = wt_path(rid, repo)
             except WorktreeError:
                 continue
             if p.is_dir():
-                out.append((str(p), str(e.get("repo_name"))))
+                out.append((str(p), repo))
+    with _LIVE_SUMMARY_LOCK:
+        for gone in [k for k in _LIVE_SUMMARY if k.startswith(prefix) and k not in seen]:
+            del _LIVE_SUMMARY[gone]
     return out
+
+
+# run.json path -> ((mtime_ns, size), ((run_id, repo_name), ...)). Only a live run has
+# entries; a terminal run caches () and is re-read only when its file changes.
+_LIVE_SUMMARY: "dict[str, tuple[tuple[int, int], tuple[tuple[str, str], ...]]]" = {}
+_LIVE_SUMMARY_LOCK = threading.Lock()
+
+
+def _live_summary(f: str) -> "tuple[tuple[str, str], ...]":
+    """(run_id, repo_name) of the active worktrees of the live run at *f*, or ()."""
+    try:
+        st = os.stat(f)
+    except OSError:
+        return ()
+    key = (st.st_mtime_ns, st.st_size)
+    with _LIVE_SUMMARY_LOCK:
+        hit = _LIVE_SUMMARY.get(f)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    try:
+        data = json.loads(Path(f).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ()   # not cached: a half-written file is read again next call
+    val: "tuple[tuple[str, str], ...]" = ()
+    if isinstance(data, dict) and data.get("status") in _LIVE:
+        rid = str(data.get("id") or "")
+        val = tuple((rid, str(e.get("repo_name"))) for e in active_entries(data))
+    with _LIVE_SUMMARY_LOCK:
+        _LIVE_SUMMARY[f] = (key, val)
+    return val
 
 
 def own_isolated_run(session_id: str, workspace: "str | Path",
