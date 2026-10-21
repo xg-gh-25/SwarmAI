@@ -756,6 +756,30 @@ class TestEntryLifecycleArchiveIsAMove:
         rep = reclaim_noise_entries(content, today, tmp_path, dry_run=True)
         assert set(rep.candidates) == accepted
 
+    def test_same_title_twins_transition_once_not_every_pass(self, tmp_path):
+        # Date-titled lessons share a title in one section (undated, as in the real
+        # docs, so reclaim leaves them); an idle one going active->dormant must be
+        # persisted so the next pass does not re-fire it.
+        from datetime import date as _d
+        doc = tmp_path / "Projects" / "P" / "2-understanding" / "IMPROVEMENT.md"
+        doc.parent.mkdir(parents=True)
+        today = _d.today().isoformat()
+        doc.write_text(
+            "# Improvement\n\n## What Failed\n\n"
+            "- [guideline] **2026-01-05** (session a): idle lesson.\n"
+            "  <!-- ref:0 | last:2026-01-05 | decay:active -->\n\n"
+            f"- [guideline] **2026-01-05** (session b): used lesson.\n"
+            f"  <!-- ref:0 | last:{today} | decay:active -->\n",
+            encoding="utf-8",
+        )
+        first = [f for f in self._run(tmp_path) if f.startswith("ENTRY_DECAY")]
+        second = [f for f in self._run(tmp_path) if f.startswith("ENTRY_DECAY")]
+        assert len(first) == 1 and "active→dormant" in first[0]
+        assert second == []
+        text = doc.read_text(encoding="utf-8")
+        assert "(session a)" in text and "(session b)" in text
+        assert text.count("decay:dormant") == 1 and text.count("decay:active") == 1
+
     def test_already_duplicated_archive_gains_no_copy_and_keeps_its_bytes(self, tmp_path):
         # Today's real shape: the entry is already in the archive several times and
         # still live. The pass must strip it without appending or rewriting.

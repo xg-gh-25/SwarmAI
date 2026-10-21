@@ -642,8 +642,16 @@ def parse_entries(content: str, *, include_prose: bool = False) -> list[EntryMet
 def inject_entry_metadata(content: str, entries: list[EntryMetadata]) -> str:
     """Write/update inline metadata comments for entries in content.
 
-    For each entry in `entries`, finds the matching bullet by title and
-    adds or replaces the metadata comment line immediately after the entry.
+    For each entry in `entries`, finds its bullet and adds or replaces the
+    metadata comment line immediately after it.
+
+    A parsed entry (raw_text set, as parse_entries produces) is matched by its
+    OWN bullet line within its section, in document order: several entries can
+    share a title in one section (date-titled lessons), and keying them by title
+    gave every same-titled bullet the LAST entry's metadata, so a transition on
+    any other one was never written back and re-fired every pass. An entry with
+    no raw_text (built by a caller, not parsed) falls back to (title, section),
+    then title. A bullet that matches no passed entry is left untouched.
 
     Returns updated content string.
     """
@@ -652,15 +660,18 @@ def inject_entry_metadata(content: str, entries: list[EntryMetadata]) -> str:
 
     lines = content.splitlines()
     result_lines: list[str] = []
-    # Key by (title, section) to handle duplicate titles across sections
+    # (section, exact bullet line) -> parsed entries in document order.
+    line_map: dict[tuple[str, str], list[EntryMetadata]] = {}
+    # Fallback maps hold ONLY entries without raw_text, so a parsed entry is never
+    # matched to another bullet that merely shares its title.
     entry_map: dict[tuple[str, str], EntryMetadata] = {}
-    for e in entries:
-        entry_map[(e.title, e.section)] = e
-    # Also build title-only fallback for entries without section context
     title_map: dict[str, EntryMetadata] = {}
     for e in entries:
-        if e.title not in title_map:
-            title_map[e.title] = e
+        if e.raw_text:
+            line_map.setdefault((e.section, e.raw_text.split("\n", 1)[0]), []).append(e)
+            continue
+        entry_map[(e.title, e.section)] = e
+        title_map.setdefault(e.title, e)
     skip_next_meta = False
     current_section = ""
     i = 0
@@ -689,8 +700,13 @@ def inject_entry_metadata(content: str, entries: list[EntryMetadata]) -> str:
             title = m.group(2)
             result_lines.append(line)
 
-            # Lookup: prefer (title, section), fall back to title-only
-            entry = entry_map.get((title, current_section)) or title_map.get(title)
+            # Lookup: the entry's own bullet line in this section (next in
+            # document order), else the raw_text-less fallbacks.
+            queue = line_map.get((current_section, line))
+            if queue:
+                entry = queue.pop(0)
+            else:
+                entry = entry_map.get((title, current_section)) or title_map.get(title)
             if entry:
                 # Collect continuation lines (indented, non-metadata, non-entry)
                 i += 1
@@ -776,7 +792,7 @@ def mark_superseded(
         e.valid_until = today
         e.superseded_by = new_anchor
     # inject_entry_metadata rewrites ONLY the matched entries' comment lines
-    # (keyed by (title, section)); untouched entries pass through verbatim.
+    # (each parsed entry by its own bullet line); untouched entries pass through verbatim.
     return inject_entry_metadata(content, matched)
 
 

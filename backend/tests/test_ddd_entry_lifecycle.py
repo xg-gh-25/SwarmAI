@@ -129,6 +129,37 @@ class TestClassifyEntryType:
 
 # ── AC3: inject_entry_metadata round-trip ────────────────────────────────────
 
+class TestInjectMetadataSameTitle:
+    """Several entries sharing one title in one section (date-titled lessons) each
+    keep their OWN metadata; a change to one is written back to that one only."""
+
+    DOC = (
+        "# Improvement\n\n## What Failed\n\n"
+        "- **2026-06-24** (session a): first lesson body.\n"
+        "  <!-- ref:0 | last:2026-06-01 | decay:active -->\n\n"
+        "- **2026-06-24** (session b): second lesson body.\n"
+        "  <!-- ref:0 | last:2026-06-02 | decay:active -->\n\n"
+        "- **2026-06-24** (session c): third lesson body.\n"
+        "  <!-- ref:0 | last:2026-06-03 | decay:active -->\n"
+    )
+
+    def test_change_to_a_middle_twin_is_written_to_that_twin_only(self):
+        entries = parse_entries(self.DOC)
+        assert [e.title for e in entries] == ["2026-06-24"] * 3
+        entries[1].decay_state = "dormant"
+        out = parse_entries(inject_entry_metadata(self.DOC, entries))
+        assert [e.decay_state for e in out] == ["active", "dormant", "active"]
+        assert [str(e.last_referenced) for e in out] == ["2026-06-01", "2026-06-02", "2026-06-03"]
+
+    def test_unpassed_twin_is_left_untouched(self):
+        entries = parse_entries(self.DOC)
+        entries[2].decay_state = "dormant"
+        out = inject_entry_metadata(self.DOC, [entries[2]])
+        assert out.count("decay:active") == 2
+        assert parse_entries(out)[2].decay_state == "dormant"
+        assert out.split("(session c)")[0] == self.DOC.split("(session c)")[0]
+
+
 class TestInjectMetadata:
     def test_roundtrip_preserves_entries(self):
         entries = parse_entries(SAMPLE_CONTENT)
