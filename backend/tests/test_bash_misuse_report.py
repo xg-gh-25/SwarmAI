@@ -10,7 +10,10 @@ SDK's tool_use / tool_result shape) are written to a temp dir and scanned. Check
 - ``inline_state_reads`` / ``run_json_writes`` count python that loads (and writes)
   run.json; ``run-get --brief`` does not count;
 - entries outside [--since, --until) are not counted;
-- ``--save`` writes counts without samples.
+- ``--save`` writes counts without samples;
+- (review 196b28b3) a timestamp-less ``api-request-blob`` copy of earlier blocks is
+  not counted again; the window compares instants, not text; every gate pattern
+  matches a deny text that really exists in backend/core.
 """
 
 import json
@@ -26,11 +29,12 @@ TS = "2026-10-20T10:00:00.000Z"
 
 def _use(i, cmd, bg=False, ts=TS):
     inp = {"command": cmd, **({"run_in_background": True} if bg else {})}
-    return {"timestamp": ts, "message": {"content": [{"type": "tool_use", "id": i, "name": "Bash", "input": inp}]}}
+    return {"type": "assistant", "timestamp": ts,
+            "message": {"content": [{"type": "tool_use", "id": i, "name": "Bash", "input": inp}]}}
 
 
 def _res(i, text, err=False, ts=TS):
-    return {"timestamp": ts, "message": {"content": [
+    return {"type": "user", "timestamp": ts, "message": {"content": [
         {"type": "tool_result", "tool_use_id": i, "content": text, "is_error": err}]}}
 
 
@@ -89,3 +93,56 @@ def test_window_and_save(tmp_path):
     assert bmr.main(["--root", str(tmp_path), "--since", "2026-10-01", "--samples", "2", "--save", str(out)]) == 0
     saved = json.loads(out.read_text(encoding="utf-8"))
     assert "samples" not in saved and saved["bash"]["calls"] == 2
+
+
+def test_request_blob_copies_are_not_counted(tmp_path):
+    pair = [_use("a", "ls"), _res("a", "PreToolUse:Bash hook error: has a SYNTAX ERROR", err=True)]
+    blob = {"type": "api-request-blob", "message": {"content": [
+        pair[0]["message"]["content"][0], pair[1]["message"]["content"][0]]}}
+    _write(tmp_path, "s1", pair + [blob, blob])
+    r = _scan(tmp_path)
+    assert r["bash"]["calls"] == 1 and r["bash"]["errors"] == 1
+    assert r["gates"]["bash_syntax_guard"]["denials"] == 1
+
+
+def test_window_compares_instants(tmp_path):
+    ts = "2026-10-20T10:00:00+08:00"   # 02:00Z
+    _write(tmp_path, "s1", [_use("a", "ls", ts=ts), _res("a", "ok", ts=ts)])
+    r = bmr.scan(tmp_path, datetime(2026, 10, 20, 2, 30, tzinfo=timezone.utc))
+    assert r["bash"]["calls"] == 0 and r["transcripts"] == 0
+
+
+def test_more_inline_read_forms(tmp_path):
+    a = "python3 -c \"import json,pathlib; json.loads(pathlib.Path('/x/.artifacts/runs/run_deadbeef/run.json').read_text())\""
+    b = "python3 <<'PY'\nimport json\nfrom pathlib import Path\njson.loads(Path('/x/evidence/r.json').read_text())\nPY"
+    c = "python3 - <<'PY'\nimport json\nfrom pathlib import Path\np = Path(R) / 'run.json'\nd = json.loads(p.read_text()); p.write_text(json.dumps(d))\nPY"
+    _write(tmp_path, "s1", [_use("a", a), _res("a", ""), _use("b", b), _res("b", ""),
+                            _use("c", c), _res("c", "")])
+    r = _scan(tmp_path)
+    assert r["inline_state_reads"] == 3 and r["run_json_writes"] == 1
+
+
+def test_every_gate_pattern_matches_a_real_deny_text():
+    core = Path(__file__).resolve().parent.parent / "core"
+    source = "".join(f.read_text(encoding="utf-8") for f in core.glob("*.py"))
+    samples = {
+        "pytest_command_guard": "This pytest command",
+        "pipeline_test_gate": "is active in this session, so tests and builds go through",
+        "run_owner_gate": "DENY (run owner gate)",
+        "worktree_write_gate": "DENY (worktree gate)",
+        "audit_marker_write_gate": "this writes, moves or deletes files in",
+        "session_link_gate": "this command removes or overrides",
+        "run_amend_gate": "DENY (git commit --amend)",
+        "direct_commit_gate": "git commit → DENY: this commit changes",
+        "active_run_commit_gate": "git commit → DENY: this commit touches file(s) owned",
+        "adversarial_commit_gate": "requires an adversarial review",
+        "bash_syntax_guard": "has a SYNTAX ERROR",
+        "background_command_guard": "Background execution is disabled for this command",
+        "dangerous_command_gate": "Matches dangerous command pattern",
+        "expert_budget_gate": "Tool budget used (",
+    }
+    assert set(samples) == {n for n, _ in bmr.GATE_PATTERNS}
+    for gate, text in samples.items():
+        assert text in source, f"{gate}: deny text no longer in backend/core: {text!r}"
+        probe = text.replace("Tool budget used (", "Tool budget used (24 calls)")
+        assert bmr.classify_gate(probe) == gate, gate

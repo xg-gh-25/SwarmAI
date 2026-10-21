@@ -6,24 +6,28 @@ agents were refused twice in a row (bash_misuse_report: 95 sessions with 3+ deni
 by that gate in a week). This file checks the suggestion of each gate against the
 REAL PreToolUse chain built by hook_builder.build_hooks, not one gate alone.
 
-Methodology: build_hooks with a mock permission manager and a session context;
+Methodology: build_hooks with a STRICT permission manager (nothing is pre-approved;
+an approval request is recorded and answered "deny" at once) and a session context;
 every PreToolUse matcher whose pattern matches "Bash" (or has none) is run on the
 command, in registration order. A case triggers a deny, takes the command the
-reason suggests (``Run it as: `…` `` or the line after ``instead:``), fills its
-placeholders, and asserts no hook in the chain denies or asks for it. Run state is
-real run.json files in a temp workspace; worktree mode is off.
+reason suggests (``Run it as: `…` ``, the line after ``instead:`` / ``Run:`` /
+``close it first``), fills its placeholders, and asserts no hook denies it and no
+approval was asked for. Run state is real run.json files in a temp workspace;
+worktree mode is off.
 
-Add a case here whenever a gate's deny text suggests a command.
+Covered: pytest_command_guard (no run) and pipeline_test_gate (active run).
+Not yet covered: run_owner_gate and worktree_write_gate, whose suggestions need an
+isolated run with a worktree and the hook-token service. Add a case whenever a
+gate's deny text suggests a command.
 """
 import asyncio
 import json
 import re
-from unittest.mock import MagicMock
-
 import pytest
 
 from core import security_hooks as sh
 from core.hook_builder import build_hooks
+from core.permission_manager import PermissionManager
 
 REPO = sh._SOURCE_REPO_ROOT
 SID = "app-session-suggest"
@@ -48,11 +52,32 @@ def _seed_run(ws, run_id="run_sugg0001", project="SwarmAI"):
     return run_id
 
 
+class StrictPermissions(PermissionManager):
+    """Nothing is pre-approved; an approval request is recorded and denied at once."""
+
+    def __init__(self, path):
+        super().__init__(persist_path=path)
+        self.asked = []
+
+    async def enqueue_permission_request(self, session_id, request):  # noqa: D401
+        self.asked.append(request)
+
+    async def wait_for_permission_decision(self, request_id, *a, **kw):
+        return "deny"
+
+
+_PM_DIR = None
+
+
 def _chain(command: str, cwd: str = REPO) -> list:
-    """(hook matcher, reason) for every hook of the real chain that denies or asks."""
+    """(hook matcher, reason) for every hook of the real chain that denies or asks,
+    plus ("permission", request) for every approval the chain asked for."""
+    import tempfile
+    pm = StrictPermissions(tempfile.mkdtemp() + "/pending.json")
+
     async def go():
         ctx = {"sdk_session_id": SID, "app_session_id": SID}
-        hooks, _, _ = await build_hooks({"id": "default"}, False, False, None, ctx, MagicMock())
+        hooks, _, _ = await build_hooks({"id": "default"}, False, False, None, ctx, pm)
         hits = []
         for hm in hooks.get("PreToolUse", []):
             m = getattr(hm, "matcher", None)
@@ -65,7 +90,7 @@ def _chain(command: str, cwd: str = REPO) -> list:
                 out = (r or {}).get("hookSpecificOutput", {})
                 if out.get("permissionDecision") in ("deny", "ask"):
                     hits.append((m, out.get("permissionDecisionReason", "")))
-        return hits
+        return hits + [("permission", str(r)) for r in pm.asked]
     return asyncio.run(go())
 
 
@@ -74,6 +99,7 @@ def _suggested(reason: str) -> list:
     cmds = re.findall(r"Run it as: `([^`]+)`", reason)
     cmds += [m.strip() for m in re.findall(r"instead[^:\n]*:\n([^\n]+)", reason)]
     cmds += [m.strip() for m in re.findall(r"close it first[^\n]*\n([^\n]+)", reason)]
+    cmds += [m.strip() for m in re.findall(r"(?m)^\s*Run: ([^\n]+)", reason)]
     return cmds
 
 
@@ -104,3 +130,9 @@ def test_pipeline_test_gate_suggestions_pass_the_chain(ws):
     hits = _chain("perl -e 'alarm 100; exec @ARGV' python -m pytest backend/tests/test_a.py -q")
     assert any("pipeline test runner" in r for _, r in hits)
     _assert_suggestions_pass(hits)
+
+
+def test_the_strict_manager_sees_an_approval_request(ws):
+    # the harness must not pass a command because a mock claimed it was approved
+    hits = _chain("git push --force origin main")
+    assert hits, "a dangerous command must be denied or sent for approval"
