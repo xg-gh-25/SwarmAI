@@ -25,7 +25,7 @@ Command translations made in the split:
 | re-run TEST in the Regression Protocol | `pipeline_test.py --mode recheck` |
 | revert the contract line by hand for 2.6 | `pipeline_test.py --mode mutation --mutations <spec.json>` |
 | ad-hoc fuzz / replay / e2e scripts | `pipeline_test.py --mode probe --name <n> -- <argv>` (converges on a 0-new-findings round) |
-| DoD criterion that is a test command | the runner (`pipeline_test_gate` denies raw pytest/vitest/tsc while a run is active) |
+| DoD criterion that is a test command | the runner (raw pytest/vitest/tsc is allowed but does not count as evidence) |
 | `publish` + `run-update --stage-json` + `advance` | `stage-complete --stage goal_cycle --data @/tmp/<R>/goal_cycle.json` |
 The record-level `adversarial_review: true` survives because the goal-profile
 completion gate in `artifact_cli.py run-update --status completed` reads the goal_cycle

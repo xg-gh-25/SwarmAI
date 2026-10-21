@@ -10,8 +10,8 @@ The old `stages/test.md` (~15.6K chars, read on every TEST entry) prescribed raw
 commands per layer. Measured runs showed fragmentation as the main cost: pytest
 called 10-58 times per run, a single test file re-run up to 34 times, and one run
 spending 48 minutes on manual hang triage (ps/kill/faulthandler). The runner
-`backend/scripts/pipeline_test.py` replaced all of it, and `pipeline_test_gate` denies
-the raw commands while a run is active. Command translations made in the split:
+`backend/scripts/pipeline_test.py` replaced all of it. Raw commands are allowed while
+a run is active, but they do not count as landing or push_ready evidence. Command translations made in the split:
 
 | Old command | Now |
 |---|---|

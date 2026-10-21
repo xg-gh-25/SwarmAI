@@ -4,7 +4,7 @@ date: 2026-10-21
 created: 2026-10-21
 updated: 2026-10-21
 project: SwarmAI
-status: DONE — P1、P2、P3a 已落地 main；其余由 pipeline v13 设计一次切换实现（§6）；验收基线见 §7
+status: DONE — P1、P3a 已落地 main；P2 安全复核失败后回退；其余由 pipeline v13 设计一次切换实现（§6）；验收基线见 §7
 related: pipeline-review-convergence.md（N1–N5，本文收窄其轮数）；pipeline-run-worktree.md（run_owner_gate 的 token 机制）；pipeline-run-budget.md（轮数预算）
 ---
 # Pipeline gate 与 expert review 简化
@@ -18,7 +18,7 @@ related: pipeline-review-convergence.md（N1–N5，本文收窄其轮数）；p
 | 编号 | 改什么 | 现在 | 改成 | 风险 |
 |---|---|---|---|---|
 | G1 | `pipeline_test_gate` | 在 run 内直接跑 pytest/vitest/tsc 一律 deny，改道到 runner；heredoc 里出现 `pytest` 字样也 deny | 只保留"runner 不许放进循环、不许一次调用跑两遍"的 deny。直接跑测试改为放行并附一句提示 | 低：落地只认 runner 的证据，直接跑的结果本来就不算数 |
-| G2 | `run_owner_gate` 的"必须是第一条命令" | 发 token 的 CLI 调用前面不能有任何命令 | CLI 调用可以在 `&&`/`;` 链的任意位置，前面的段不能有函数定义、alias、`source`/`.`、`eval`、对 CLI 脚本的写入 | 中：需要 security expert 复核 §5.2 的论证 |
+| G2 | `run_owner_gate` 的"必须是第一条命令" | 发 token 的 CLI 调用前面不能有任何命令 | **不改**：允许前置命令的实现安全复核失败，已回退（见 G2） | — |
 | G3 | `audit_marker_write_gate` | `cd` 进审计目录或只读的 glob 也 deny | **不改**（实施时撤回，见 G3） | — |
 | G4 | gate 治理 | 加 gate 不需要证据 | 新 gate 要引用真实事故 | 无 |
 | E0 | 两套 Gate-2 并存 | legacy（3 轮 + meta-review + root-cause）和 deterministic（finding ledger，2 轮）同时在用 | 只留 finding ledger 这一套 | 中：迁移量最大 |
@@ -28,7 +28,7 @@ related: pipeline-review-convergence.md（N1–N5，本文收窄其轮数）；p
 | E4 | 轮次与去重 | legacy 3 轮；同一 bug 被多个 expert 各报一次 | R1 全员，R2 只派"有发现被修过"的 expert、只看修复 diff；修之前按位置去重 | 低 |
 | E5 | `push_ready` | 每条 finding 都要被 break test 证明才算 ready；expert 没输出也压低 | 只有未解决的 HIGH 才压低；没输出、untestable 的 MEDIUM/LOW 记为剩余风险 | 中：需新增 `severity` 字段 |
 
-预计效果：每个 run 的 expert 派出 27 → 普通改动 1–2、有安全风险的改动 3–5，子 agent 时间和 token 减少约 75–80%；gate deny 从 2 天 124 条降到约 30 条，剩下的都是真拦截或 worktree 保护。
+预计效果：每个 run 的 expert 派出 27 → 普通改动 1–2、有安全风险的改动 3–5，子 agent 时间和 token 减少约 75–80%；G1 预计把 2 天 124 条 gate deny 降到约 90 条。P2 未保留，因此 `run_owner_gate` 的 31 次格式 deny 仍在。
 
 ## 1. 证据
 
@@ -128,21 +128,18 @@ related: pipeline-review-convergence.md（N1–N5，本文收窄其轮数）；p
 
 **删除的测试**：`tests/test_pipeline_test_gate*.py` 里断言 pytest/vitest/tsc/stdin deny 的用例改为断言 approve + 提示；loop/repeat 用例保留。
 
-### G2 `run_owner_gate`：CLI 调用不必是第一条命令
+### G2 `run_owner_gate`：撤回，不改
 
-**现在**（`backend/core/run_owner_gate.py` `_token_binding`）：需要 token 的 CLI 调用（stage-start、deliver 的 stage-complete、run-update 到终态）必须是整行第一条简单命令，前面只允许 `cat > FILE <<'EOF'` 写文件。原因是 token 通过 `updatedInput` 插成 `SWARM_HOOK_TOKEN=<nonce>` 前缀，必须保证同一行里先执行的命令没法改写 CLI 脚本或劫持调用。
+P2 曾让 token CLI 前面可以运行 python 或简单文件工具（`db08c31f`），以消除 2 天里的 31 次命令格式 deny。独立安全复核发现两个 HIGH、两个 MEDIUM：
 
-**改成**：CLI 调用可以出现在顶层 `&&` / `;` 链的任意位置（仍然只能有一个需要 token 的调用），前面的段满足下列全部条件：
-- 不含命令替换、子 shell、进程替换（沿用 `_SUBST`）；
-- 不是函数定义、`alias`、`source`/`.`、`eval`、`exec`、`export`/`set`/`unset`、`enable`、`builtin`、`command`、`hash`；
-- 没有对 `_SCRIPTS`（`artifact_cli.py`、`pipeline_test.py`）或 CLI 所在目录的重定向写入；
-- 前面的段不设置 `PATH` 或其他影响命令查找的变量，CLI 调用本身用绝对路径的解释器和脚本（`_single_form` 打印的就是这种形式）。
+- 前置 `cp` 可以替换随后接收 token 的 Python 解释器；脚本目录检查没有保护解释器、导入路径及符号链接别名。
+- `xargs ... artifact_cli.py` 被 `_unwrap_program` 识别成一个 CLI 调用，但 token 实际先给了 `xargs`；它能在运行时追加未审参数或启动多个子进程。
+- Bash 内建 `printf -v PYTHONPATH ...` 会改掉 CLI 继承的环境。
+- shell 注释后的换行 CLI 被 `_top_spans` 识别，但 `parse_cli_calls` 没识别，导致真实 CLI 拿不到 token。
 
-token 前缀仍然只加在 CLI 那一条简单命令上，其他段拿不到。
+继续补这些分支会把一个 49 行的绑定函数变成自建 shell parser（P2 一度增加 212 行），而且每轮复核都出现新的解析和执行边界。按本项目规则，这是错误方案信号，不再逐个补丁：完整回退 P2，恢复“CLI 是第一条简单命令；前面只允许原有的 quoted heredoc 写入”。需要准备 JSON 或改计划时，分成两次 Bash 调用。
 
-**安全论证**见 §5.2：这个限制想挡的"同一行里先执行的程序改写 CLI 脚本"，在两次 Bash 调用之间同样能做到（上一次调用里跑 `python3 /tmp/x.py` 改 `artifact_cli.py`，gate 只看命令文本，看不到脚本内部）。所以"第一条命令"挡不住这个威胁，只多了 31 次往返。
-
-**测试**：`tests/test_run_owner_gate*.py` 增加"前置 python 准备脚本 + CLI"放行、"前置函数定义/alias/eval"拒绝、"前置重定向写 CLI 脚本"拒绝。
+31 次 deny 是可见的流程摩擦，但没有安全地消除；v13 如要重新设计 token 传递，必须不依赖解析任意 shell 前缀。
 
 ### G3 `audit_marker_write_gate`：撤回，不改
 
@@ -261,33 +258,25 @@ spec-compliance 的"AC 是否真的实现"由 correctness 的检查清单承担�
 | 改动 | 可能漏掉 | 谁兜底 |
 |---|---|---|
 | G1 | 模型直接跑 pytest 却以为测试过了 | 落地和 push_ready 只认 runner 证据（`landing_test_errors`、`_deliver_push_ready_bound`）；放行时的提示明确说"不计入" |
-| G2 | 同一行里前置命令改写 CLI 脚本后再拿 token | 见 5.2；跨调用的同类攻击本来就存在，本改动不扩大攻击面 |
+| G2 | 允许前置命令使 token 的接收者和继承环境不再固定 | 独立复核发现两个 HIGH，完整回退；不靠继续扩展 shell parser 修补 |
 | E1 | performance、api-contract、operational 类 MEDIUM | 并入 correctness 清单；api-contract 的前后端字段问题由 TS 编译和 `toCamelCase` 测试兜一部分 |
 | E2 gate1 | 计划层面的错误（方向错、漏需求） | gate0 在 bugfix 和多读法时仍派；PLAN 的 AC↔测试由 validator 检查；correctness 检查"每条 AC 是否实现" |
 | E2 meta-review | 修复引入的新问题 | E4 的 R2 只看修复 diff，正对这个问题 |
 | E3 | spec-compliance 抓的"需求没实现" | 同样的问题在 12 个 v2 run 里被 correctness/red-team 也报过（"需求 3 没实现"报了 3 遍） |
 | E5 | 被报低的 HIGH | 提示词里的 HIGH 标准；REPORT 列出所有 severity；`push_ready` 只是"建议 push"，push 仍是人决定 |
 
-### 5.2 G2 的 token 论证
+### 5.2 G2 复核结论
 
-token 机制要证明的是"这次 CLI 调用前，PreToolUse hook 真的跑过"，用来挡没有 hook 的子进程（例如 `claude --print --bare`）冒充 owner 改 run 状态。"必须是第一条命令"额外挡的是"同一行里先运行的程序改写 `artifact_cli.py`，让拿到 token 的是被改过的脚本"。
-
-这个额外限制挡不住同类攻击：在上一次 Bash 调用里运行 `python3 /tmp/x.py`，脚本内部改 `artifact_cli.py`，gate 只看命令文本看不到；下一次调用再以第一条命令的形式调 CLI，照样拿到 token。所以第一条命令的限制只在"同一行"这个窄场景生效，代价是 2 天 31 次往返。
-
-G2 放宽后，前置段仍禁止函数定义、alias、`source`、`eval`、`PATH` 改写和对 CLI 脚本的重定向写入，即命令文本层面能看到的劫持方式都还挡着。
-
-跨调用改写 CLI 脚本这个已有漏洞不在本文范围，需要时单独评估。
-
-**实施时的复核（2026-10-21）**：逐条试了 24 种前置写法。glob 或目录作为写入目标（`cp x .../scripts/a*_cli.py`、`mv x .../scripts/`、`sed -i .../scripts/*.py`、`> .../scripts/art*`）一开始能通过，已补一条规则：前置命令不能提到 CLI 脚本所在目录。旧实现的 `cat > FILE <<'EOF'` 路径同样允许 glob，这条规则对它也收紧了。仍然存在的情况：`cd` 到上级目录后用相对路径写（`cd .../backend && cp x scripts/a*`），以及 python 代码拼接出脚本路径。这两种和跨调用改写是同一类，前一次 Bash 调用里就能做，所以不再追加规则。
+“前置命令跨调用本来就能改脚本”不能证明同一条 tokenized shell command 安全：后者在 hook 发出 token 之后、CLI 接收之前改变了解释器、环境或实际子进程，直接破坏 token 对调用身份的绑定。完整发现见 G2。该实现已回退。
 
 ## 6. 实施分期
 
-P1、P2 和 P3a 已经在 main 上落地。其余部分不再在 main 上分期实施，由 pipeline 统一设计 v13（`~/.swarm-ai/SwarmWS/Projects/SwarmAI/2-understanding/knowledge/designs/2026-10-21-pipeline-structural-decisions.md`）的 cycle 5、7 实现，并在 v13 的切换 commit 里与旧代码的删除一起落地（v13 §D1、§D3.4；XG 2026-10-21 确认：一次切换，不留隐藏开关）。
+P1、P3a 已经在 main 上落地；P2 在独立安全复核发现两个 HIGH 后回退。其余部分不再在 main 上分期实施，由 pipeline 统一设计 v13（`~/.swarm-ai/SwarmWS/Projects/SwarmAI/2-understanding/knowledge/designs/2026-10-21-pipeline-structural-decisions.md`）的 cycle 5、7 实现，并在 v13 的切换 commit 里与旧代码的删除一起落地（v13 §D1、§D3.4；XG 2026-10-21 确认：一次切换，不留隐藏开关）。
 
 | 期 | 内容 | 状态 |
 |---|---|---|
 | P1 | G1、E5 的"无输出不压低"部分（G3 撤回） | 已落地 `dee27dd7` |
-| P2 | G2 | 已落地 `db08c31f`（测试修正 `8948540a`） |
+| P2 | G2 | `db08c31f` 实现、`8948540a` 测试修正；独立安全复核发现两个 HIGH，随后完整回退 |
 | P3a | E1：Gate-2 名单 | 已落地 `8fd9335c`。规则与 v13 §A1.4 相同，v1 的 cycle 5 重写这段代码时沿用 |
 | P3 其余 | E0、E2、E4、E5 余下部分 | 由 v13 实现：E0、E2 在 cycle 7 的删除清单（§C2）里，E4 在 cycle 5（§B4 聚类），E5 在 cycle 5（§A3.5 push 规则） |
 | P4 | E3 | 由 v13 实现（§A1.4：REVIEW 不再派 spec-compliance / code-quality / ux-test） |
@@ -302,19 +291,19 @@ P1、P2 和 P3a 已经在 main 上落地。其余部分不再在 main 上分期�
 |---|---|---|
 | 每个 run 的 expert 派出（中位数） | 27（均值） | ≤ 3 |
 | REVIEW + DELIVER 占阶段时间 | 33% | ≤ 15% |
-| gate deny / 天 | 约 62 | ≤ 15 |
-| 改道、格式和误伤类 deny 占比（按 §1.2 的分法） | 约 55%（69/124） | ≤ 20% |
+| gate deny / 天 | 约 62 | ≤ 45 |
+| 改道、格式和误伤类 deny 占比（按 §1.2 的分法） | 约 55%（69/124） | ≤ 40% |
 | 至少有一个 HIGH 的 run 占有 finding 的 run 的比例 | 43%（55/127） | 不低于 34%（基线的 80%） |
 | push_ready=yes 的完成 run 比例 | 3/41 | ≥ 50% |
 | REPORT 里写"手工落地"的 run | 2 天 4 个 | 0 |
 | 逃逸率：run 的提交之后 3 天内，有 `fix` / `revert` 提交点名该 run 的 id 或 commit sha | 5%（4/85） | 不高于 5% |
 
-"HIGH 比例"和"逃逸率"是质量底线。逃逸率用 3 天窗口：run-commit 是 10 月中旬才有的，7 天窗口完整的 run 只有 7 个。按"7 天内改同一文件的 fix 提交"计算会得到 85%，因为这个仓库几乎每个文件每周都会被 fix 提交改到，这个口径测不出逃逸，没有采用。P1、P2、P3a 落地后两周内这两项变差超过目标，就回滚对应提交；v13 切换后用 v13 §E6 的指标对比（§8）。
+"HIGH 比例"和"逃逸率"是质量底线。逃逸率用 3 天窗口：run-commit 是 10 月中旬才有的，7 天窗口完整的 run 只有 7 个。按"7 天内改同一文件的 fix 提交"计算会得到 85%，因为这个仓库几乎每个文件每周都会被 fix 提交改到，这个口径测不出逃逸，没有采用。P1、P3a 落地后两周内这两项变差超过目标，就回滚对应提交；v13 切换后用 v13 §E6 的指标对比（§8）。
 
 ## 8. 回滚
 
 - G1：deny 分支改为放行是一个函数内的改动，回滚即 revert 对应提交。
-- G2：同上，revert 对应提交。
+- G2：已回退；不要恢复 `db08c31f`。
 - P3a：revert `8fd9335c`。
 - 其余：按 v13 §D1，revert 切换 commit，再 build 并重启。不保留隐藏开关。
 
@@ -323,5 +312,5 @@ P1、P2 和 P3a 已经在 main 上落地。其余部分不再在 main 上分期�
 - **Q1**：E0 去掉共享 checkout 回退，建不了 worktree 时 stage-start 报错。
 - **Q2**：red-team 只在有明显安全风险时派。
 - **Q3**：HIGH 的 `untestable` 不能由作者放行，留给人看（REPORT 列出）。
-- **Q4**：G1 不加 git 状态指纹，不做 CLI 自身 sha 校验，G4 不加类别标签和定期复审。
+- **Q4**：G1 不加 git 状态指纹，G4 不加类别标签和定期复审；P2/G2 的 shell-prefix 方案安全复核失败，已完整回退。
 - **Q5**：~~P3 用 direct 分批提交~~ 改为：P3 其余部分和 P4 由 v13 一次切换实现（XG 2026-10-21）。

@@ -13,8 +13,7 @@ What is tested:
 - runner loop (pipeline_test_gate): a ``for`` in a heredoc body is not a shell loop
   unless a shell runs it;
 - run owner token (run_owner_gate._token_binding): the CLI call may be followed by
-  output plumbing and preceded by python / simple file tools (G2), never by what can
-  change how it is found, what it inherits, or read its token;
+  output plumbing and preceded by quoted ``cat > FILE <<'EOF'`` writes;
 - python code judgment (_code_can_execute): ``re.compile(`` is a method, not the builtin.
 """
 from __future__ import annotations
@@ -204,55 +203,25 @@ def test_a_real_runner_loop_is_still_caught(cmd, kind):
     CLI + " > /tmp/ds.json; python3 -I -c \"import json;print(json.load(open('/tmp/ds.json')))\"",
     "cat > /tmp/deliver.json <<'EOF'\n{\"title\": \"it's done\", \"x\": \"$(not run)\"}\nEOF\n" + CLI,
     "cat > /tmp/a <<'A'\nx\nA\ncat >> /tmp/b <<-\"B\"\n\ty\n\tB\n" + CLI + " | head",
-    # G2 (pipeline-gate-expert-simplification): a preparation step may come first
-    "cd /repo && " + CLI,
-    "echo hi; " + CLI,
-    "python3 - <<'EOF'\nimport json\nprint(1)\nEOF\n" + CLI,
-    "python3 -I /tmp/run_x/fix_plan.py && " + CLI + " > /tmp/out.json 2>&1",
-    "python3 -c \"import json;print(1)\"; " + CLI,
-    "cat > $HOME/f <<'EOF'\nx\nEOF\n" + CLI,
-    "mkdir -p /tmp/r && cat > /tmp/r/d.json <<'EOF'\n{\"a\": \"$(not run)\"}\nEOF\n" + CLI,
 ])
-def test_the_cli_call_gets_the_token(cmd):
+def test_the_cli_call_first_gets_the_token(cmd):
     b = _token_binding(cmd)
     assert b is not None
     head, rest = b
     assert rest.startswith("/repo/backend/.venv/bin/python /repo/backend/scripts/artifact_cli.py")
     assert cmd == head + rest
-    # the token prefix goes right before the CLI call: the CLI is the first segment
-    # of rest, so nothing earlier in the line can read it from its environment
 
 
 @pytest.mark.parametrize("cmd", [
+    "cd /repo && " + CLI,
+    "echo hi; " + CLI,
     CLI + " --data $(cat f)",
     "(" + CLI + ")",
     "cat > /tmp/f <<EOF\n$(rm -rf ~)\nEOF\n" + CLI,          # unquoted: the body runs
     "cat > /tmp/f <<'EOF'\nabc\n" + CLI,                     # unterminated heredoc
+    "cat > $HOME/f <<'EOF'\nx\nEOF\n" + CLI,                 # a path that expands
+    "python3 - <<'EOF'\nprint(1)\nEOF\n" + CLI,              # code runs before the CLI
     "cat > /repo/backend/scripts/artifact_cli.py <<'EOF'\nprint(1)\nEOF\n" + CLI,  # rewrites the CLI
-    # G2: what can change how the CLI is found, what it inherits, or capture the token
-    "source ~/.bashrc && " + CLI,
-    ". ./env.sh; " + CLI,
-    "eval \"$X\"; " + CLI,
-    "export PYTHONPATH=/tmp/evil && " + CLI,
-    "PYTHONPATH=/tmp/evil; " + CLI,                           # bare assignment
-    "alias python=/tmp/evil; " + CLI,
-    "trap 'echo $BASH_COMMAND > /tmp/t' DEBUG; " + CLI,      # would read the token
-    "f() { :; }; " + CLI,
-    "hash -p /tmp/evil python; " + CLI,
-    "set -o functrace; " + CLI,
-    "sleep 1 & " + CLI,                                      # background
-    "false || " + CLI,                                       # the CLI is not the span head
-    "echo `id`; " + CLI,
-    "sed -i s/a/b/ /repo/backend/scripts/artifact_cli.py && " + CLI,
-    "cp /tmp/x /repo/backend/scripts/pipeline_test.py; " + CLI,
-    "cd /repo && python backend/scripts/artifact_cli.py stage-start --project P --run-id run_x --stage build",
-    "node -e 1; " + CLI,                                     # not an allowed program
-    # writes into the CLI's script directory without naming the script
-    "cp /tmp/x /repo/backend/scripts/a*_cli.py; " + CLI,
-    "mv /tmp/evil /repo/backend/scripts/; " + CLI,
-    "sed -i s/a/b/ /repo/backend/scripts/*.py && " + CLI,
-    "echo x > /repo/backend/scripts/art*; " + CLI,
-    "cd /repo/backend/scripts && cp /tmp/x ./artifact_cl?.py; " + CLI,
 ])
 def test_anything_else_before_the_cli_is_refused(cmd):
     assert _token_binding(cmd) is None

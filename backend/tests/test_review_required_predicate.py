@@ -19,6 +19,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 BACKEND = Path(__file__).resolve().parents[1]
 for p in (BACKEND, BACKEND / "scripts"):
     if str(p) not in sys.path:
@@ -75,6 +77,21 @@ def test_not_small_always_means_someone_reviews_on_a_strict_profile():
     for s in shapes:
         if cli._small_change(s) is None and not cli._is_docs_only(s):
             assert _ids(s), s
+
+
+@pytest.mark.parametrize("added", [
+    "+uvicorn.run(app, port=80)",
+    "+uvicorn.run(app, host='::')",
+    "+listen_port = 18321",
+])
+def test_port_or_listener_change_is_a_security_risk(monkeypatch, added):
+    """E1 explicitly includes port/listener changes even on a generic file path."""
+    monkeypatch.setattr(cli, "_git_lines", lambda *args, **kwargs: [
+        "+++ b/backend/core/server.py", added,
+    ])
+    scope = _scope(("backend/core/server.py", 30, False))
+    assert cli._security_risk(scope)
+    assert _ids(scope) == {"security"}
 
 
 # ── the outcome is shown to the user: their language ─────────────────────────

@@ -256,9 +256,7 @@ implementations in `security_hooks.py`). By category:
    (Bash, right after `commit_gate`; applies only to isolated runs and to the stage-start
    that decides an undecided run's mode — a run recorded `shared` is untouched; takes a crashed
    owner's run over, denies while the owner is live,
-   and issues the one-time `SWARM_HOOK_TOKEN` by rewriting the one artifact_cli call in the
-   command (python or simple file tools may run before it, nothing that changes how it is
-   found or what it inherits) via
+   and issues the one-time `SWARM_HOOK_TOKEN` by rewriting a single artifact_cli command via
    `updatedInput` — no other Bash hook may set `updatedInput`; the issuance record lives only
    in daemon memory, the CLI burns it over the owner-only socket started in `main.py`) and `worktree_write_gate`
    (Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep, its own group; keeps an isolated

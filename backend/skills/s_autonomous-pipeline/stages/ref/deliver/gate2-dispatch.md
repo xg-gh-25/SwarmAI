@@ -41,7 +41,8 @@ returned (`diff_insertions`) for the report.
 E1): a non-test path naming auth, login, token, secret, credential, permission, file
 access, CORS, `security_hooks`, `hook_builder` or a `*_gate.py`, or `backend/context/`;
 or an added line with `subprocess`, `shell=True`, `os.system`, an outbound HTTP client,
-`pickle.load`, `yaml.load(`, `eval(` / `exec(`, `allow_origins`, `0.0.0.0` or a bind.
+`pickle.load`, `yaml.load(`, `eval(` / `exec(`, `allow_origins`, a `host=` / `port=`
+listener setting, `0.0.0.0` or a bind.
 Size alone never adds Security or Red Team.
 
 **Always the UNION with the PLAN's declared `required_experts`:**

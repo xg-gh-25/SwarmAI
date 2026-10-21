@@ -9780,11 +9780,11 @@ _SECURITY_RISK_PATH_RE = re.compile(
     r"(auth|login|token|secret|credential|permission|security_hooks|hook_builder|_gate\.py$|"
     r"file_access|cors)", re.I)
 # ...and by what the change ADDS: command execution, outbound requests, unsafe loading,
-# a listen address.
+# listener host / port settings.
 _SECURITY_RISK_CODE_RE = re.compile(
     r"(subprocess|shell\s*=\s*True|os\.system|os\.popen|\brequests\.|\bhttpx\.|"
     r"urllib\.request|aiohttp|\bfetch\(|pickle\.loads?|yaml\.load\(|\beval\(|\bexec\(|"
-    r"allow_origins|0\.0\.0\.0|\.bind\(|create_server)")
+    r"allow_origins|\b(?:host|port|listen_port|daemon_port)\s*=|0\.0\.0\.0|\.bind\(|create_server)")
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 

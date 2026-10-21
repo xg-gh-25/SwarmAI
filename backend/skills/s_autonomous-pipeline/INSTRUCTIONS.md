@@ -25,7 +25,7 @@ Prefer the lightest profile that fits; goal only when you must iterate, not beca
 
 ## 3c. Execute Stage Behavior
 - **Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage <S>` → card path, upstream artifacts, ACs, exit criteria, examples (review/deliver: changed files, experts, prompts). Read its stdout as is.
-- **CLI calls:** copy the absolute command last printed; a prep step may precede it (`python3 /tmp/<R>/fix.py && <CLI>`).
+- **One command per call** (no `cd … &&`, `source`, `;`, pipes, redirects); copy the absolute command last printed.
 - <!-- R-instr-004 --> **[GATE·cli] BLOCKING:** before executing ANY stage, read its execution card `stages/<S>.md`; read a `stages/ref/` file only when the card's "Read only if" condition holds. Skipping the card skips the stage's quality gate (`stage_doc_consumed: true`; run-update exits 1 without it). Read from `backend/skills/`, never `.claude/skills/`.
 - **Tests:** only `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode tdd|verify|regression|recheck [--files …]` (`probe|mutation`: heavy checks); `continue: true` → rerun it. Direct pytest/vitest/tsc: allowed, not evidence.
 - **Exit:** `python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage <S> --data @/tmp/<R>/<S>.json` with `{"artifact": {...}, "record": {"decisions": [...]}}`. It validates first (each error names the `path` and expected value; fix from that, never from artifact_cli.py source), fills derived fields, publishes, records, advances. No `--check` preflight (a failure writes nothing); `--check` only to ask mid-stage whether the exit criteria are met. Exit criteria met → stop verifying.
