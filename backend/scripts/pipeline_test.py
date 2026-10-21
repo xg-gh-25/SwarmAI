@@ -3131,6 +3131,13 @@ def _write_evidence(ev_root: Path, mode: str, ev: dict, kind: str = "run",
         _prune_evidence(tdir)
     except OSError:  # housekeeping only; the evidence above is already written
         pass
+    if not ev.get("cached"):
+        try:  # main-red registry (core/main_red.py): a red on main gets its own fix run
+            from core import main_red
+            main_red.record_seen(ev.get("failures"), ev.get("run_id"), ev.get("head_sha"))
+        except Exception as e:  # noqa: BLE001 — bookkeeping only, never fails the run
+            print(json.dumps({"warning": f"main-red registry not updated: {type(e).__name__}"}),
+                  file=sys.stderr)
     return path
 
 

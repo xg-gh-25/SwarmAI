@@ -6329,6 +6329,10 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                        "index, a lock file left by a crashed git), then run run-commit again.",
         }, indent=2), file=sys.stderr)
         sys.exit(2)
+    if committed:  # shared mode: the committed tree is main now
+        _close_main_reds(run_file.parent, args.run_id,
+                         {"landed": {str(c.get("repo")): {"sha": c.get("sha")}
+                                     for c in committed if isinstance(c, dict)}}, warnings)
     print(json.dumps({
         "committed": committed,
         "warnings": warnings,
@@ -8413,6 +8417,14 @@ A stage with no published artifact cannot be timed and shows `-`."""
     # commits, attention_flags, meta-review risks): a run that recorded any of them
     # must never read "None identified" here.
     _flags += [f"- {_one_line(x)}" for x in _review.get("leftovers", [])]
+    # Tests in this run's scope that are red on main too: not this run's to fix (XG
+    # 2026-10-21), registered for their own fix run (core/main_red, `main-red`).
+    _reds = _main_reds_in_scope(run_file.parent, run_state.get("id") or run_file.parent.name)
+    if _reds:
+        _flags.append(f"- {len(_reds)} test(s) in this run's scope are red on main too "
+                      "(pre-existing, not this run's change; registered, see `artifact_cli.py "
+                      "main-red`): " + ", ".join(r["nodeid"] for r in _reds[:5])
+                      + (f" (+{len(_reds) - 5})" if len(_reds) > 5 else ""))
     gaps_section += ("\n".join(_flags) + "\n") if _flags else "None identified.\n"
     sections.append(gaps_section)
 
@@ -11239,6 +11251,51 @@ def _reopen_after_refused_landing(run_file: Path) -> None:
                           f"({type(e).__name__}); run stage-start for deliver"}), file=sys.stderr)
 
 
+def cmd_main_red(args, reg: ArtifactRegistry) -> None:
+    """Read-only: tests red on main (pre-existing in some run's scope), oldest first.
+    Each needs its own bug-fixing run; a landing whose tests pass closes it."""
+    from core import main_red
+    reds = sorted(main_red.open_reds().values(), key=lambda r: str(r.get("first_seen") or ""))
+    print(json.dumps({"open": len(reds), "registry": str(main_red.registry_path()),
+                      "reds": reds}, ensure_ascii=False, indent=2))
+
+
+def _close_main_reds(run_dir: Path, run_id: str, landing: "dict | None",
+                     warnings: "list[str]") -> None:
+    """After a landing the run's tested tree IS main: every open main-red test that
+    passed in the run's latest reports is fixed on main, so close it (core/main_red)."""
+    try:
+        import pipeline_validator as pv
+        from core import main_red
+        landed = (landing or {}).get("landed") or {}
+        head = next((v.get("sha") for v in landed.values() if isinstance(v, dict)), None)
+        results = [r for ev in pv.load_test_evidence(run_dir) if ev.get("run_id") in (None, run_id)
+                   for r in ev.get("results") or []]
+        closed = main_red.close_passing(results, head, run_id)
+        if closed:
+            warnings.append(f"main-red: {len(closed)} test(s) red on main now pass and are "
+                            f"closed: {', '.join(closed[:5])}")
+    except Exception as e:  # noqa: BLE001 — bookkeeping only, the landing already happened
+        warnings.append(f"main-red registry not closed after landing: {type(e).__name__}")
+
+
+def _main_reds_in_scope(run_dir: Path, run_id: str) -> "list[dict]":
+    """Open main-red entries among this run's selected test files, for REPORT §10."""
+    try:
+        import pipeline_validator as pv
+        from core import main_red
+        reds = main_red.open_reds()
+        if not reds:
+            return []
+        files = {f for ev in pv.load_test_evidence(run_dir) if ev.get("run_id") in (None, run_id)
+                 for f in ev.get("selected_files") or []}
+        return [r for n, r in sorted(reds.items()) if n.split("::")[0] in files]
+    except Exception as e:  # noqa: BLE001 — a report line, never a failure
+        import logging
+        logging.getLogger(__name__).debug("main-red scope lookup failed: %s", e)
+        return []
+
+
 def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready: bool,
                            reg: ArtifactRegistry, warnings: "list[str]",
                            deliver_rec: "dict | None" = None) -> "dict | None":
@@ -11335,6 +11392,7 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
         except Exception as e:  # noqa: BLE001 — the commits already carry the mark
             warnings.append(f"DELIVER record not lowered to push_ready false: {type(e).__name__}")
     if landing:
+        _close_main_reds(run_file.parent, run_id, landing, warnings)
         import contextlib
         import io
         from types import SimpleNamespace as _NS
@@ -15239,6 +15297,9 @@ def main() -> None:
     p_run_bgt.add_argument("--project", required=True)
     p_run_bgt.add_argument("--run-id", required=True, help="Pipeline run ID")
 
+    # main-red (core/main_red.py): tests red on main, each awaiting its own fix run
+    sub.add_parser("main-red", help="List tests red on main (pre-existing), read-only")
+
     # run-status (v3: cross-project dashboard)
     p_run_status = sub.add_parser("run-status", help="Cross-project pipeline dashboard")
     p_run_status.add_argument("--active-only", action="store_true", help="Only show running/paused")
@@ -15459,6 +15520,7 @@ def main() -> None:
         "run-checkpoint": cmd_run_checkpoint,
         "run-history": cmd_run_history,
         "run-budget": cmd_run_budget,
+        "main-red": cmd_main_red,
         "run-status": cmd_run_status,
         "run-resume": cmd_run_resume,
         "run-report": cmd_run_report,

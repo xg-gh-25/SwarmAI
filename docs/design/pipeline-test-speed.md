@@ -144,6 +144,7 @@ runner 里记录的耗时是单独串行跑的 2 到 3 倍（`test_artifact_cli_
 break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连续 5 次调用，不拆分、不熔断、还在继续；
 把"跑完一个文件"这条撤掉，这个测试就变红。
 
+
 ## 11. 冻结（2026-10-20，XG 批准）
 
 10-17 到 10-20 测试选择改了六版（c2e64f52、98c7e463、938475c1、87507d5e、f88dce48、1c348ba7）。
@@ -206,3 +207,16 @@ break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连�
   改 `core/heartbeat.py` 加了一个静默 except，main 上 `test_silent_except_baseline` 就红了，没有人发现。
   `test_pipeline_test.py` 把这个列表和仓库里所有 glob `*.py` 的测试对齐，新加的扫描测试漏登记会变红。
 
+## 12. main 上已有的红：登记，单独修（2026-10-21，XG 决定）
+
+run 选中的测试在 HEAD 上也红（`pre-existing`），不由这个 run 修：修它会让 run 的范围无限放大，
+责任也会记错。这条放行规则不变，补上的是后半段：
+
+- **登记**：runner 每写一份非缓存的报告，就把其中后端的 pre-existing 失败追加进
+  `<app data>/state/pipeline_agent_audit/main_red.jsonl`（`core/main_red.py`，只追加，加锁）。
+  这个目录受 `audit_marker_write_gate` 保护，模型不能手写或删除，只有代码写。
+- **点名**：REPORT §10 列出这个 run 选中范围里还红着的测试，注明"不是本 run 的改动"。
+- **关闭**：run 落地后，它测过的树就是 main；最新报告里通过的已登记测试，就记 `closed`。
+- **查看**：`artifact_cli.py main-red`（只读）。每条红应当有自己的 bugfix run，开不开由 XG 决定。
+- **还没做**：只比较"HEAD 上是不是也红"，不比较失败方式。run 让一个本来就红的测试换了一种失败
+  方式，现在仍算 pre-existing。登记里记了第一行报错，后续可以拿来比较。
