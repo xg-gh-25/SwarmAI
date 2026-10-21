@@ -615,7 +615,11 @@ export function PhaseGroup({ zone, ctx }: { zone: Extract<Zone, { kind: 'phase' 
   const lingering = useLinger(zone.live);
   const seconds = useSpanSeconds(ctx.scope, zone.id, zone.live);
   const choice = ctx.choice(zone.id);
-  const open = choice ?? (zone.live || lingering);
+  // One clock for the turn's ending: the phase the turn ended in is `held` open for
+  // the message's settle window and folds in the same frame the RESULT lands. Its own
+  // linger only counts while the turn is still open (a phase that ended mid-stream).
+  const turnOpen = ctx.isStreaming || ctx.settling;
+  const open = choice ?? (zone.live || !!zone.held || (turnOpen && lingering));
   const stats = zoneStats(zone.members);
   const meta = stats.steps === 0 && stats.thoughts > 0
     ? [tf(t, 'chat.turn.zone.thoughtCount', stats.thoughts === 1 ? '{{count}} thought' : '{{count}} thoughts', { count: stats.thoughts })]
@@ -659,7 +663,8 @@ export function StageGroup({ zone, ctx, mustOpen }: { zone: StageZone; ctx: Zone
   const { t } = useTranslation();
   const lingering = useLinger(zone.live);
   const choice = ctx.choice(zone.id);
-  const open = mustOpen || (choice ?? (zone.live || lingering || zone.stoppedHere));
+  const turnOpen = ctx.isStreaming || ctx.settling; // same single ending clock as PhaseGroup
+  const open = mustOpen || (choice ?? (zone.live || !!zone.held || (turnOpen && lingering) || zone.stoppedHere));
   const seconds = zone.status !== 'running' ? sinceIso(zone.startedAt, zone.endedAt) : undefined;
   const meta = [
     ...statsMeta(t, zoneStats(zone.body), seconds),

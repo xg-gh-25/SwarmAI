@@ -46,7 +46,7 @@ const STREAM_RENDER_THROTTLE_MS = 200;
  * updates within a window are coalesced and the LATEST value is flushed when the
  * window elapses (trailing edge) so the final token is never dropped.
  */
-function StreamingMarkdownText({ text }: { text: string }) {
+function StreamingMarkdownText({ text, live = true }: { text: string; live?: boolean }) {
   const [throttledText, setThrottledText] = useState(text);
   // Timestamp of the last committed render (0 = none yet → leading edge fires now).
   const lastRenderRef = useRef<number>(0);
@@ -86,7 +86,10 @@ function StreamingMarkdownText({ text }: { text: string }) {
     };
   }, []);
 
-  return <MarkdownRenderer content={throttledText} />;
+  // Resting: the full final text at once, from the SAME component instance, so the
+  // stream's end re-renders the markdown in place instead of remounting it (a remount
+  // re-runs mermaid and code highlighting, which reads as a flash).
+  return <MarkdownRenderer content={live ? throttledText : text} />;
 }
 
 /**
@@ -169,14 +172,11 @@ export function ContentBlockRenderer({
     // Render markdown in BOTH states so formatting (headings/lists/code/math) is
     // visible live, not just at stream end. While streaming, the value fed to the
     // markdown parser is THROTTLED (StreamingMarkdownText) so the O(n²) per-token
-    // reparse storm (run_00e0e872) is bounded by time (~10/sec). On stream end we
-    // render MarkdownRenderer directly with the full final text — the same resting
-    // path every historical message uses. (run_087e097e supersedes the plaintext
-    // branch of run_00e0e872.)
-    if (isStreaming) {
-      return <StreamingMarkdownText text={block.text || ''} />;
-    }
-    return <MarkdownRenderer content={block.text || ''} />;
+    // reparse storm (run_00e0e872) is bounded by time (~5/sec). On stream end the
+    // same instance renders the full final text unthrottled — what every historical
+    // message renders. (run_087e097e supersedes the plaintext branch of run_00e0e872.)
+    // One element type in both states: the end of the stream only stops the throttle.
+    return <StreamingMarkdownText text={block.text || ''} live={!!isStreaming} />;
   }
 
   if (block.type === 'ask_user_question') {

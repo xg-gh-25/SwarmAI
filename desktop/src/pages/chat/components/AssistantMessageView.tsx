@@ -240,8 +240,11 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const [processChoice, setProcessChoice] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [focusedAgentId, setFocusedAgentId] = useState<string>();
   const messageRef = useRef<HTMLDivElement | null>(null);
-  // True for FOLD_DELAY_MS after the turn stops streaming (the work keeps its layout).
+  // True while streaming and for FOLD_DELAY_MS after it (the work keeps its layout).
+  // The turn's ONE ending clock: when it turns false, the WORKING fold, the RESULT
+  // and every ending card land in the same frame, instead of one jump per timer.
   const settling = useLinger(!!isStreaming);
+  const ended = !settling;
   const chooseProcess = useCallback((id: string, open: boolean) => {
     setProcessChoice((prev) => new Map(prev).set(id, open));
   }, []);
@@ -337,7 +340,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 
   // Compact button visibility: only on last assistant, not streaming, with active warning
   const showCompactButton = isLastAssistant
-    && !isStreaming
+    && ended
     && sessionId
     && contextWarning
     && (contextWarning.level === 'warn' || contextWarning.level === 'critical');
@@ -383,7 +386,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // turnZones decides the first level (THOUGHTS · restatement · WORKED · note · … ·
   // pipeline · RESULT); TurnZoneList renders it with the two spacing steps. Every zone
   // keys by an id that only grows while streaming and survives the reconcile.
-  const zones = useMemo(() => turnZones(view, !!isStreaming), [view, isStreaming]);
+  const zones = useMemo(() => turnZones(view, !!isStreaming, settling), [view, isStreaming, settling]);
 
   useEffect(() => {
     const onFocusAgent = (event: Event) => {
@@ -450,7 +453,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // The ending (spec §8): one output card. Code changes come only from turn_changes;
   // a deliverable is not listed again as a changed file; a pipeline run's documents are
   // in the deliverables section only. A direct run has its summary too (XG 2026-10-20).
-  const summary = !isStreaming ? view.summary : undefined;
+  const summary = ended ? view.summary : undefined;
   const summaryDocs = summary?.docs ?? [];
   // A document already shown as a card on its stage row is not a deliverable tile too.
   const stageDocPaths = new Set(turnContent.flatMap((b) => (b.type === 'pipeline_stage'
@@ -458,13 +461,13 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const deliverables = view.deliverables.filter((d) => !stageDocPaths.has(d.absolutePath)
     && !summaryDocs.some((x) => x.absolutePath === d.absolutePath));
   const changes = useMemo(() => {
-    if (isStreaming || !view.changes) return undefined;
+    if (!ended || !view.changes) return undefined;
     const files = view.changes.files.filter(
       (f) => !view.deliverables.some((d) => isSameFile(f.absolutePath, d.path, d.absolutePath))
         && !summaryDocs.some((x) => !!x.absolutePath && isSameFile(f.absolutePath, x.path ?? '', x.absolutePath)),
     );
     return files.length ? { ...view.changes, files } : undefined;
-  }, [view, isStreaming, summaryDocs]);
+  }, [view, ended, summaryDocs]);
   const attention = view.attention && view.attention.items.length > 0 ? view.attention : undefined;
   const hasActionAttention = !!attention?.items.some((item) => !isVerificationAttentionItem(item));
   const hasVerificationAttention = !!attention
@@ -472,11 +475,16 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const hasResult = zones.some((z) => z.kind === 'text' && z.result);
   const contentBlocks: React.ReactNode[] = [];
   // A turn the CLI started to answer background agents that finished: say which, first.
+  // The card carries its own gap: wrapping the zone list only when it exists would
+  // swap the list's parent and remount the whole turn when a late card arrives.
   if (view.backgroundFinished?.length) {
-    contentBlocks.push(<BackgroundFinishedCard key="bg-finished" agents={view.backgroundFinished} sessionId={sessionId} />);
+    contentBlocks.push(
+      <div key="bg-finished" className="mb-2">
+        <BackgroundFinishedCard agents={view.backgroundFinished} sessionId={sessionId} />
+      </div>,
+    );
   }
-  const zoneList = <TurnZoneList key="zones" zones={zones} ctx={ctx} hasOpenQuestionIn={(z) => hasOpenQuestion(z.body)} />;
-  contentBlocks.push(view.backgroundFinished?.length ? <div key="zones" className="mt-2">{zoneList}</div> : zoneList);
+  contentBlocks.push(<TurnZoneList key="zones" zones={zones} ctx={ctx} hasOpenQuestionIn={(z) => hasOpenQuestion(z.body)} />);
   // Completion hierarchy: model Result, machine status, immediate action, produced
   // output, then optional assumptions beside the proposed next steps.
   if (summary) {
@@ -493,14 +501,14 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       </div>,
     );
   }
-  if (!isStreaming && (changes || deliverables.length || summaryDocs.length)) {
+  if (ended && (changes || deliverables.length || summaryDocs.length)) {
     contentBlocks.push(
       <div key="output" className={hasResult ? 'mt-5' : ZONE_GAP}>
         <OutputCard changes={changes} deliverables={deliverables} summary={summary} />
       </div>,
     );
   }
-  if (!isStreaming && attention && hasVerificationAttention) {
+  if (ended && attention && hasVerificationAttention) {
     contentBlocks.push(
       <div key="assumptions" className={ZONE_GAP}>
         <AssumptionsDisclosure block={attention} />
@@ -561,12 +569,12 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 
       {/* Next steps — the reply's trailing ```next-steps block as clickable chips.
           Only on the latest successful answer (older or interrupted suggestions are stale). */}
-      {!readOnly && !isStreaming && !message.isError && isLastAssistant && <NextSteps steps={view.nextSteps} />}
+      {!readOnly && ended && !message.isError && isLastAssistant && <NextSteps steps={view.nextSteps} />}
 
       {/* Action buttons — appear on hover below content, hidden while streaming.
           Hidden entirely in read-only (History preview) — Copy/Save/Compact/
           Continue are all side-effecting controls that don't belong there. */}
-      {!readOnly && !isStreaming && allText.length > 0 && (
+      {!readOnly && ended && allText.length > 0 && (
         <div className="opacity-0 group-hover/msg:opacity-100 transition-opacity mt-1 flex items-center gap-2">
           {/* Copy button (unchanged) */}
           <button

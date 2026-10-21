@@ -252,14 +252,31 @@ const MermaidModal = memo(function MermaidModal({
   );
 });
 
+// Rendered diagrams by theme + source. A block that remounts (a turn's answer moving
+// into its RESULT zone, a tab re-opening) shows its SVG on the first frame instead of
+// flashing "Loading diagram..." while mermaid renders the same source again. Bounded:
+// a streaming diagram renders every partial source, so the oldest entries go first.
+const MERMAID_CACHE_MAX = 64;
+const mermaidSvgCache = new Map<string, string>();
+function cacheMermaidSvg(key: string, svg: string): void {
+  mermaidSvgCache.delete(key);
+  mermaidSvgCache.set(key, svg);
+  while (mermaidSvgCache.size > MERMAID_CACHE_MAX) {
+    const oldest = mermaidSvgCache.keys().next().value;
+    if (oldest === undefined) break;
+    mermaidSvgCache.delete(oldest);
+  }
+}
+
 // Mermaid diagram component
 const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [svg, setSvg] = useState<string>('');
+  const { resolvedTheme } = useTheme();
+  const cacheKey = `${resolvedTheme}|${chart}`;
+  const [svg, setSvg] = useState<string>(() => mermaidSvgCache.get(cacheKey) ?? '');
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
-  const { resolvedTheme } = useTheme();
 
   // Reinitialize mermaid when theme changes
   useEffect(() => {
@@ -301,10 +318,17 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
   useEffect(() => {
     const renderDiagram = async () => {
       if (!chart.trim()) return;
+      const cached = mermaidSvgCache.get(cacheKey);
+      if (cached) {
+        setSvg(cached);
+        setError(null);
+        return;
+      }
 
       try {
         const id = `mermaid-${Math.random().toString(36).substring(2, 11)}`;
         const { svg: renderedSvg } = await mermaid.render(id, chart);
+        cacheMermaidSvg(cacheKey, renderedSvg);
         setSvg(renderedSvg);
         setError(null);
       } catch (err) {
@@ -314,7 +338,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
     };
 
     renderDiagram();
-  }, [chart]);
+  }, [chart, cacheKey]);
 
   // Download as SVG
   const handleDownloadSvg = () => {

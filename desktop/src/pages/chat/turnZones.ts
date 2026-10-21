@@ -65,6 +65,9 @@ export interface StageZone {
   next: string | null;
   /** The turn ended while this stage was still running. */
   stoppedHere: boolean;
+  /** The turn just ended and is still settling: this was the live stage, and it keeps
+   *  its place and stays open until the whole ending lands in one frame. */
+  held?: boolean;
   /** ISO times from the backend rows (the latest round's start, its end). */
   startedAt?: string;
   endedAt?: string;
@@ -77,7 +80,7 @@ export interface StageZone {
 export type Zone =
   | { kind: 'thinking'; id: string; thoughts: ThoughtUnit[]; live: boolean }
   | { kind: 'text'; id: string; text: string; role: 'restatement' | 'note' | 'answer'; result: boolean }
-  | { kind: 'phase'; id: string; members: PhaseMember[]; live: boolean }
+  | { kind: 'phase'; id: string; members: PhaseMember[]; live: boolean; held?: boolean }
   | { kind: 'needs'; id: string; block: InterruptBlock }
   | { kind: 'failure'; id: string; step: ToolStep }
   | { kind: 'pipelineStart'; id: string; profile: string | null }
@@ -181,7 +184,23 @@ function markLive(zones: Zone[], isStreaming: boolean): void {
   if (last.kind === 'stage' && last.live) markLive(last.body, true);
 }
 
-export function turnZones(view: TurnView, isStreaming: boolean): Zone[] {
+/** The zone markLive marked a moment ago, while the turn settles: it stays open in
+ *  place (its own fold timer is not consulted) so the fold, the RESULT and the
+ *  ending cards all land together when the settle window closes. Idempotent. */
+function markHeld(zones: Zone[]): void {
+  const last = zones[zones.length - 1];
+  if (!last) return;
+  if (last.kind === 'phase') last.held = true;
+  if (last.kind === 'stage' && last.held) markHeld(last.body);
+}
+
+/**
+ * `hold` (default: `isStreaming`) keeps the streaming LAYOUT for the settle window
+ * after the turn ends: the answer stays where it streamed and nothing is judged
+ * ended yet (RESULT, Stopped, stopped-at). Liveness still follows `isStreaming`, so
+ * WORKING reads Worked at once; only the moves wait, and then happen in one frame.
+ */
+export function turnZones(view: TurnView, isStreaming: boolean, hold: boolean = isStreaming): Zone[] {
   const units = view.units;
   const hasCalls = units.some((u) => u.kind === 'process' && u.steps.length > 0);
   const zones: Zone[] = [];
@@ -193,17 +212,17 @@ export function turnZones(view: TurnView, isStreaming: boolean): Zone[] {
   // the notice accounts for it, so it alone does not make the turn "stopped".
   const notice = view.notice;
   const lost = (s: ToolStep) => !!notice && s.index < notice.index;
-  const unfinished = !isStreaming && units.some((u) => u.kind === 'process' && u.steps.some((s) => s.status === 'unknown' && !lost(s)));
+  const unfinished = !hold && units.some((u) => u.kind === 'process' && u.steps.some((s) => s.status === 'unknown' && !lost(s)));
   // the notice ended the turn: a hand-over, or a restart with nothing after it
   const lastIndex = Math.max(-1, ...units.map((u) => (u.kind === 'process' ? (u.steps[u.steps.length - 1]?.index ?? -1) : firstIndex(u))));
-  const noticeEnds = !isStreaming && !!notice && !unfinished
+  const noticeEnds = !hold && !!notice && !unfinished
     && (notice.reason === 'superseded' || lastIndex < notice.index);
   const stopped = !!view.stoppedMarker || (unfinished && hasResults) || noticeEnds;
 
   // RESULT: the first text after the last call, once the turn ended, with nothing still
   // waiting for the user after it, in a turn that did not stop.
   let resultOrdinal: number | null = null;
-  if (hasCalls && !isStreaming && !stopped) {
+  if (hasCalls && !hold && !stopped) {
     const first = units.find((u): u is Extract<TurnUnit, { kind: 'outcome' }> => u.kind === 'outcome');
     const waits = first && units.some((u) => u.kind === 'interrupt' && u.index > first.index && isUnanswered(u.block));
     if (first && !waits) resultOrdinal = first.textOrdinal;
@@ -234,11 +253,11 @@ export function turnZones(view: TurnView, isStreaming: boolean): Zone[] {
     }
     (firstIndex(u) < start ? chat : pipe).push(u);
   }
-  zones.push(...layOut(chat, hasCalls, resultOrdinal, !view.midWork, isStreaming));
+  zones.push(...layOut(chat, hasCalls, resultOrdinal, !view.midWork, hold));
 
   if (start !== undefined) {
     zones.push({ kind: 'pipelineStart', id: 'pipeline-start', profile: view.pipelineStart?.profile ?? view.run?.profile ?? null });
-    zones.push(...pipelineZones(pipe, view, hasCalls, isStreaming, resultOrdinal));
+    zones.push(...pipelineZones(pipe, view, hasCalls, isStreaming, resultOrdinal, hold));
   }
 
   if (stopped) {
@@ -246,10 +265,11 @@ export function turnZones(view: TurnView, isStreaming: boolean): Zone[] {
       ...(noticeEnds && notice ? { notice: { reason: notice.reason, cause: notice.cause } } : {}) });
   }
   markLive(zones, isStreaming);
+  if (hold && !isStreaming) markHeld(zones);
   return zones;
 }
 
-function pipelineZones(units: TurnUnit[], view: TurnView, hasCalls: boolean, isStreaming: boolean, resultOrdinal: number | null): Zone[] {
+function pipelineZones(units: TurnUnit[], view: TurnView, hasCalls: boolean, isStreaming: boolean, resultOrdinal: number | null, hold: boolean = isStreaming): Zone[] {
   const out: Zone[] = [];
   const stages = new Map<string, StageZone>();
   const gates = new Map<string, Extract<Zone, { kind: 'gate' }>>();
@@ -261,7 +281,7 @@ function pipelineZones(units: TurnUnit[], view: TurnView, hasCalls: boolean, isS
   // fresh run's work stands below the divider, before the first stage, for good.
   const held: TurnUnit[] = [];
   const flushHeld = () => {
-    if (held.length) { out.push(...layOut(held, hasCalls, resultOrdinal, false, isStreaming)); held.length = 0; }
+    if (held.length) { out.push(...layOut(held, hasCalls, resultOrdinal, false, hold)); held.length = 0; }
   };
 
   const openStage = (stage: string, row?: PipelineStageContent): StageZone => {
@@ -317,7 +337,7 @@ function pipelineZones(units: TurnUnit[], view: TurnView, hasCalls: boolean, isS
     // follows, so it never moves out and back in mid-stream.
     if (u.kind === 'outcome') {
       const planDone = !!current && current.status !== 'running' && (plan.length === 0 || plan[plan.length - 1] === current.stage);
-      if (!current || planDone || !isStreaming) { flushHeld(); out.push(...layOut([u], hasCalls, resultOrdinal, false)); continue; }
+      if (!current || planDone || !hold) { flushHeld(); out.push(...layOut([u], hasCalls, resultOrdinal, false)); continue; }
     }
     if (current) bodyUnits.get(current)!.push(u);
     else held.push(u);
@@ -331,9 +351,10 @@ function pipelineZones(units: TurnUnit[], view: TurnView, hasCalls: boolean, isS
   // ended inside a running stage says `Stopped at X`.
   const last = current;
   for (const z of stages.values()) {
-    z.body = layOut(bodyUnits.get(z) ?? [], hasCalls, resultOrdinal, false, isStreaming);
+    z.body = layOut(bodyUnits.get(z) ?? [], hasCalls, resultOrdinal, false, hold);
     if (z === last) {
       if (isStreaming) { z.live = true; markLive(z.body, true); }
+      else if (hold) { z.held = true; markHeld(z.body); }
       else if (z.status === 'running') z.stoppedHere = true;
     }
     if (!z.live) z.next = null;

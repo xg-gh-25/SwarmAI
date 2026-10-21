@@ -535,3 +535,37 @@ describe('AC9 — one signal; a stopped turn says so', () => {
       .toBe('Stopped · the connection dropped 3 times and auto-continue gave up; send a message to continue');
   });
 });
+
+describe('the ending lands in one frame (no flash)', () => {
+  const WORK = [bash('b1', 'ls'), tr('b1'), tx('The answer.')];
+
+  it('keeps the streamed layout through the settle window, then folds, labels RESULT and shows the ending together', () => {
+    vi.useFakeTimers();
+    const { container, rerender } = render(view(WORK, true));
+    const answerWhileStreaming = within(screen.getByTestId('zone-phase')).getByText('The answer.');
+    rerender(view(WORK, false));
+    // Ended, but nothing moved: the answer is the same node, still in the open phase.
+    expect(screen.queryByTestId('turn-result')).toBeNull();
+    expect(within(screen.getByTestId('zone-phase')).getByText('The answer.')).toBe(answerWhileStreaming);
+    expect(screen.getByTestId('zone-phase').textContent).toContain('Worked');
+    expect(container.querySelector('[title="Copy message"]')).toBeNull();
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS); });
+    // One commit: the phase folded, the answer is the RESULT, the actions appeared.
+    expect(within(screen.getByTestId('zone-phase')).queryByText('The answer.')).toBeNull();
+    expect(screen.getByTestId('turn-result').textContent).toContain('The answer.');
+    expect(container.querySelector('[title="Copy message"]')).not.toBeNull();
+  });
+
+  it('a history turn (never streamed here) renders its ending at once', () => {
+    render(view(WORK, false));
+    expect(screen.getByTestId('turn-result').textContent).toContain('The answer.');
+  });
+
+  it('a background-finished card arriving later does not remount the turn', () => {
+    const first = render(view([tx('Hi.')], false));
+    const answer = screen.getByText('Hi.');
+    const bg = { type: 'background_finished', agents: [{ id: 'a1', description: 'scan', status: 'completed' }] } as unknown as ContentBlock;
+    first.rerender(view([bg, tx('Hi.')], false));
+    expect(screen.getByText('Hi.')).toBe(answer);
+  });
+});

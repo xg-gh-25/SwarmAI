@@ -16,7 +16,8 @@
  * - diffBar: share of adds/deletes, grey under five lines
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
+import { FOLD_DELAY_MS } from '../../../../hooks/useLinger';
 import { AssistantMessageView } from '../AssistantMessageView';
 import { diffBar } from '../ChangesCard';
 import { ToastProvider } from '../../../../contexts/ToastContext';
@@ -151,16 +152,21 @@ describe('ChangesCard', () => {
   });
 
   it('waits for the turn to end, then is the first section of the one output card', () => {
+    vi.useFakeTimers();
     const { container, rerender } = renderView([...WORK, CHANGES, DELIV], true);
     expect(screen.queryByTestId('turn-changes')).toBeNull();
     const message: Message = { id: 'm1', role: 'assistant', content: [...WORK, CHANGES, DELIV, tx('Done.')], timestamp: 'T', isError: false };
     rerender(<ToastProvider><AssistantMessageView message={message} isStreaming={false} /></ToastProvider>);
+    // The ending lands with the WORKING fold, after the settle window — not on the spot.
+    expect(screen.queryByTestId('output-card')).toBeNull();
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS); });
     const card = screen.getByTestId('output-card');
     expect(screen.getAllByTestId('output-card')).toHaveLength(1);
     const ids = Array.from(card.querySelectorAll('[data-testid]')).map((e) => e.getAttribute('data-testid'));
     expect(ids.indexOf('turn-changes')).toBeGreaterThanOrEqual(0);
     expect(ids.indexOf('turn-changes')).toBeLessThan(ids.indexOf('output-deliverables'));
     expect(container.contains(card)).toBe(true);
+    vi.useRealTimers();
   });
 });
 
