@@ -48,6 +48,7 @@ import { ChatErrorMessage } from '../../../components/chat';
 import type { PendingQuestion } from '../types';
 import { resolvePendingToolUseId } from '../utils';
 import { MessageBubble } from './MessageBubble';
+import { ReadingContext } from '../readingContext';
 import { WelcomeScreen } from './WelcomeScreen';
 import { CompactNotice } from './CompactNotice';
 import { TurnPhaseLine } from './TurnPhaseLine';
@@ -891,7 +892,8 @@ function TabViewImpl({
     </div>
   );
 
-  return body;
+  // Live Worked groups fold only while the user follows (pages/chat/readingContext.ts).
+  return <ReadingContext.Provider value={awayFromBottom}>{body}</ReadingContext.Provider>;
 }
 
 /**

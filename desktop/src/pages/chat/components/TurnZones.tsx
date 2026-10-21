@@ -14,8 +14,10 @@
  *   foldable.
  * Inside a group, in stream order: thoughts (one row in the strip column, `✻ Thought`,
  * the first line, open for all of it), light strips (one call each; `Read ×N` /
- * `Bash ×N` merges), the text the agent wrote between calls (as written, where it was
- * written) and Agents panels (one per batch of sub-agents that ran at the same time).
+ * `Bash ×N` merges) and Agents panels (one per batch of sub-agents that ran at the
+ * same time). The text the agent wrote between calls stands where it was written and
+ * carries the work after it under a ▸: while live only the latest text's work is open
+ * (the fold moves on only while the user follows the bottom); opened later, all fold.
  *
  * Strips carry no failure mark and no red: a call that returned an error looks like the
  * others and shows its error when opened. Only what needs the user is a card. The one
@@ -25,10 +27,10 @@
  * Fold choices are lifted (`choice(id)` / `choose(id, open)` from AssistantMessageView,
  * keyed by zone id) so they survive a remount, the stream-end reconcile and a tab switch.
  *
- * @exports TurnZoneList, ToolStripV6, AgentsPanel, ZONE_GAP, RESULT_GAP
+ * @exports TurnZoneList, ToolStripV6, AgentsPanel, PhaseBody, ZONE_GAP, RESULT_GAP
  */
-import { useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FOLD_DELAY_MS, useLinger } from '../../../hooks/useLinger';
 import { usePendingToolElapsed } from '../../../hooks/usePendingToolElapsed';
@@ -36,8 +38,9 @@ import { chatService } from '../../../services/chat';
 import { ANCHOR_PROPS } from '../scrollFocus';
 import { tf } from '../tf';
 import type { ThoughtUnit, ToolStep } from '../turnView';
-import { STOP_TURN_EVENT, agentBatches, mergeStrips, stripView, zoneStats } from '../turnZones';
+import { STOP_TURN_EVENT, agentBatches, mergeStrips, phaseSegments, stripView, zoneStats } from '../turnZones';
 import type { PhaseMember, StageZone, StripItem, Zone } from '../turnZones';
+import { ReadingContext } from '../readingContext';
 import { StageResult } from './StageDocs';
 
 /** Between two zones (spec §9.3): clearly more than anything inside a zone. */
@@ -432,19 +435,17 @@ export interface ZoneContext {
 
 type BodyItem =
   | { key: string; thought: ThoughtUnit }
-  | { key: string; text: string }
   | { key: string; strips: StripItem[] }
   | { key: string; agents: ToolStep[] };
 
-/** A phase's members as body items in stream order: thoughts, text, runs of strips, panels. */
-function bodyItems(members: PhaseMember[], settled: (id: string) => boolean): BodyItem[] {
+/** Members as body items in stream order: thoughts, runs of strips, panels. `batchOf`
+ *  is the whole phase's agent batching (a panel is not split by a note). */
+function bodyItems(members: PhaseMember[], settled: (id: string) => boolean, batchOf: Map<string, string>): BodyItem[] {
   const out: BodyItem[] = [];
-  const allSteps = members.flatMap((m) => (m.kind === 'process' ? m.steps : []));
-  const batchOf = agentBatches(allSteps);
   const panels = new Map<string, Extract<BodyItem, { agents: ToolStep[] }>>();
   for (const m of members) {
     if (m.kind === 'thought') { out.push({ key: `th-${m.ordinal}`, thought: m }); continue; }
-    if (m.kind === 'text') { out.push({ key: `tx-${m.textOrdinal}`, text: m.text }); continue; }
+    if (m.kind === 'text') continue; // the segments carry the text
     let run: ToolStep[] = [];
     const flush = () => {
       if (run.length) out.push({ key: `strips-${run[0].block.id}`, strips: mergeStrips(run, settled) });
@@ -467,38 +468,98 @@ function bodyItems(members: PhaseMember[], settled: (id: string) => boolean): Bo
   return out;
 }
 
+/** Text in a phase: the agent's words as written; ▸ opens the work under it. A click
+ *  on a link or with text selected does not toggle. */
+function PhaseNote({ text, renderKey, hasWork, open, onToggle, ctx }: {
+  text: string; renderKey: string; hasWork: boolean; open: boolean; onToggle: (o: boolean) => void; ctx: ZoneContext;
+}) {
+  const toggle = (e: MouseEvent) => {
+    if (!hasWork) return;
+    const target = e.target as Element;
+    if (target.closest('a, button:not([data-testid="segment-toggle"])')) return;
+    if (window.getSelection()?.toString()) return;
+    onToggle(!open);
+  };
+  return (
+    <div data-testid="phase-text" data-open={hasWork ? String(open) : undefined} onClick={toggle}
+      className={`flex items-start gap-1.5 text-[14px] ${hasWork ? 'cursor-pointer' : ''}`} {...ANCHOR_PROPS}>
+      {hasWork
+        ? (
+          <button type="button" data-testid="segment-toggle" aria-expanded={open}
+            className="mt-[3px] rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
+            <Chevron open={open} />
+          </button>
+        )
+        : <span aria-hidden="true" className={MARK_COL} />}
+      <div className="min-w-0 flex-1">{ctx.renderText(text, renderKey)}</div>
+    </div>
+  );
+}
+
+/**
+ * A phase's body. The calls before the first text show as they are; each text the
+ * agent wrote carries the work after it (up to the next text) under a ▸. While the
+ * phase is live the latest text's work is open; an earlier one folds FOLD_DELAY_MS
+ * after the next text arrived (never on the spot), and only while the user follows the
+ * bottom (ReadingContext). A folded phase opened later shows its texts folded. The
+ * user's own toggle wins.
+ */
 export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live: boolean; ctx: ZoneContext }) {
   const lingering = useLinger(live);
   const active = live || lingering;
+  const reading = useContext(ReadingContext);
   const steps = members.flatMap((m) => (m.kind === 'process' ? m.steps : []));
   const settled = useSettled(steps.map((s) => ({ id: s.block.id, done: s.status !== 'pending' })), active);
-  const items = bodyItems(members, settled);
-  // Adjacent thoughts and strips share one column (strip spacing); text and an Agents
-  // panel stand between columns.
-  const blocks: Array<{ key: string; column?: BodyItem[]; item?: BodyItem }> = [];
-  for (const it of items) {
-    const inColumn = 'thought' in it || 'strips' in it;
-    const prev = blocks[blocks.length - 1];
-    if (inColumn && prev?.column) prev.column.push(it);
-    else if (inColumn) blocks.push({ key: `col-${it.key}`, column: [it] });
-    else blocks.push({ key: it.key, item: it });
-  }
-  const columnRow = (it: BodyItem) => {
-    if ('thought' in it) {
-      const k = `th-${it.thought.ordinal}`;
-      return <PhaseThought key={it.key} unit={it.thought} scope={ctx.scope} open={ctx.choice(k) === true} onToggle={(o) => ctx.choose(k, o)} />;
+  const batchOf = agentBatches(steps);
+  const { lead, segments } = phaseSegments(members);
+  // A segment folds FOLD_DELAY_MS after a later text arrived (never on the spot), and
+  // only while the user follows the bottom: while they read, nothing new folds.
+  const latest = segments.length ? `seg-tx-${segments[segments.length - 1].note.textOrdinal}` : null;
+  const segSettled = useSettled(segments.map((sg) => {
+    const id = `seg-tx-${sg.note.textOrdinal}`;
+    return { id, done: id !== latest && !reading };
+  }), active);
+
+  const renderItems = (items: BodyItem[]) => {
+    // Adjacent thoughts and strips share one column (strip spacing); a panel stands apart.
+    const blocks: Array<{ key: string; column?: BodyItem[]; item?: BodyItem }> = [];
+    for (const it of items) {
+      const inColumn = 'thought' in it || 'strips' in it;
+      const prev = blocks[blocks.length - 1];
+      if (inColumn && prev?.column) prev.column.push(it);
+      else if (inColumn) blocks.push({ key: `col-${it.key}`, column: [it] });
+      else blocks.push({ key: it.key, item: it });
     }
-    if ('strips' in it) return it.strips.map((s) => <ToolStripV6 key={s.key} item={s} />);
-    return null;
+    const columnRow = (it: BodyItem) => {
+      if ('thought' in it) {
+        const k = `th-${it.thought.ordinal}`;
+        return <PhaseThought key={it.key} unit={it.thought} scope={ctx.scope} open={ctx.choice(k) === true} onToggle={(o) => ctx.choose(k, o)} />;
+      }
+      if ('strips' in it) return it.strips.map((s) => <ToolStripV6 key={s.key} item={s} />);
+      return null;
+    };
+    return blocks.map((b) => {
+      if (b.column) return <div key={b.key} className="space-y-[2px]">{b.column.map(columnRow)}</div>;
+      const it = b.item!;
+      if ('agents' in it) return <AgentsPanel key={b.key} agents={it.agents} sessionId={ctx.sessionId} readOnly={ctx.readOnly} />;
+      return null;
+    });
   };
+
   return (
     <div data-testid="phase-body" className="space-y-2">
-      {blocks.map((b) => {
-        if (b.column) return <div key={b.key} className="space-y-[2px]">{b.column.map(columnRow)}</div>;
-        const it = b.item!;
-        if ('text' in it) return <div key={b.key} data-testid="phase-text" className="text-[14px]" {...ANCHOR_PROPS}>{ctx.renderText(it.text, `${it.key}-b`)}</div>;
-        if ('agents' in it) return <AgentsPanel key={b.key} agents={it.agents} sessionId={ctx.sessionId} readOnly={ctx.readOnly} />;
-        return null;
+      {lead.length > 0 && <div className="space-y-2">{renderItems(bodyItems(lead, settled, batchOf))}</div>}
+      {segments.map((seg) => {
+        const key = `seg-tx-${seg.note.textOrdinal}`;
+        const hasWork = seg.members.length > 0;
+        const open = hasWork && (ctx.choice(key) ?? !segSettled(key));
+        return (
+          <div key={key} data-testid="phase-segment" className="space-y-2">
+            <PhaseNote text={seg.note.text} renderKey={`tx-${seg.note.textOrdinal}-b`} hasWork={hasWork} open={open}
+              onToggle={(o) => ctx.choose(key, o)} ctx={ctx} />
+            {open && <div className="space-y-2 ml-[22px]">{renderItems(bodyItems(seg.members, settled, batchOf))}</div>}
+          </div>
+        );
       })}
     </div>
   );

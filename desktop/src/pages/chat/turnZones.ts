@@ -42,7 +42,7 @@
  * from the backend display object, else the summary); `mergeStrips` merges adjacent
  * calls of one tool with identical input, or adjacent Read / Grep / Glob.
  *
- * @exports turnZones, stripView, mergeStrips, zoneStats, Zone, PhaseMember, PhaseText, StripView, StripItem
+ * @exports turnZones, stripView, mergeStrips, zoneStats, phaseSegments, Zone, PhaseMember, PhaseText, PhaseSegment, StripView, StripItem
  */
 import type { InterruptBlock, ProcessUnit, ThoughtUnit, ToolStep, TurnUnit, TurnView } from './turnView';
 import { displayCommand, isGateStage, isUnanswered, toolCall } from './turnView';
@@ -90,6 +90,19 @@ export type Zone =
       notice?: { reason: string; cause?: string } };
 
 const firstIndex = (u: TurnUnit): number => (u.kind === 'process' ? (u.steps[0]?.index ?? -1) : u.index);
+
+/** A phase cut at the text the agent wrote: the members before the first text, then
+ *  one segment per text — the text and the calls / thoughts after it, up to the next. */
+export interface PhaseSegment { note: PhaseText; members: PhaseMember[] }
+export function phaseSegments(members: PhaseMember[]): { lead: PhaseMember[]; segments: PhaseSegment[] } {
+  const lead: PhaseMember[] = [];
+  const segments: PhaseSegment[] = [];
+  for (const m of members) {
+    if (m.kind === 'text') segments.push({ note: m, members: [] });
+    else (segments.length ? segments[segments.length - 1].members : lead).push(m);
+  }
+  return { lead, segments };
+}
 
 /** A phase's id: its first member's ordinal key. */
 const memberKey = (m: PhaseMember) => (m.kind === 'thought' ? `th-${m.ordinal}` : m.kind === 'text' ? `tx-${m.textOrdinal}` : m.id);

@@ -9,6 +9,9 @@
  * - AC2 THOUGHTS → restatement → WORKED → RESULT: a note between calls stays inside
  *   its group where it was written (it never splits one); a thought between calls is
  *   one `✻ Thought` row in the strip column
+ * - AC2b each note carries the work after it under a ▸: while streaming the latest is
+ *   open and an earlier one folds FOLD_DELAY_MS after the next note (never on the spot,
+ *   never while the user reads); a finished group opened later shows every note folded
  * - AC3 every group but RESULT toggles from its header; headers count steps and
  *   commands, never files; a turn with no calls has no RESULT label
  * - AC4 one light strip per call: the tool's own name (MCP prefix dropped), the
@@ -27,6 +30,7 @@ import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import { AssistantMessageView } from '../AssistantMessageView';
 import { ToastProvider } from '../../../../contexts/ToastContext';
 import { FOLD_DELAY_MS } from '../../../../hooks/useLinger';
+import { ReadingContext } from '../../readingContext';
 import { chatService } from '../../../../services/chat';
 import type { Message, ContentBlock, SubAgentProgress } from '../../../../types';
 
@@ -124,6 +128,61 @@ describe('AC2 — notes stay in their group', () => {
     expect(within(column).getAllByTestId('tool-strip')).toHaveLength(2);
     fireEvent.click(within(thought).getByTestId('thought-toggle'));
     expect(screen.getByTestId('thought-text').textContent).toContain('second line');
+  });
+});
+
+describe('AC2b — a note carries the work after it; earlier ones fold', () => {
+  const blocks = [tx('go'), bash('a', 'cat lead.ts'), tr('a'), tx('Now the runner:'), bash('b', 'edit runner.py'), tr('b'),
+    tx('Now the landing:'), bash('c', 'edit land.py'), tr('c')];
+  const strips = () => screen.queryAllByTestId('tool-strip').map((s) => s.textContent ?? '');
+  const isShown = (cmd: string) => strips().some((t) => t.includes(cmd));
+
+  it('while streaming: the latest note is open, an earlier one folds FOLD_DELAY_MS after the next (not on the spot)', () => {
+    vi.useFakeTimers();
+    const r = render(view(blocks.slice(0, 6), true));
+    expect(isShown('runner.py')).toBe(true);
+    r.rerender(view(blocks, true));
+    expect(isShown('runner.py')).toBe(true); // never on the spot
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(blocks, true));
+    expect(isShown('runner.py')).toBe(false);
+    expect(isShown('land.py')).toBe(true); // the latest stays open
+    expect(isShown('lead.ts')).toBe(true); // the work before the first note has no note to hang under
+    const notes = screen.getAllByTestId('phase-text').map((n) => n.textContent ?? '');
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toContain('Now the runner:');
+    expect(notes[1]).toContain('Now the landing:');
+    // ▸ opens it again, under the note
+    fireEvent.click(screen.getAllByTestId('segment-toggle')[0]);
+    expect(isShown('runner.py')).toBe(true);
+  });
+
+  it('a finished group opened later shows every note folded', () => {
+    vi.useFakeTimers();
+    const done = [...blocks, tx('All done.')];
+    const r = render(view(done, true));
+    r.rerender(view(done, false));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    fireEvent.click(within(screen.getByTestId('zone-phase')).getByTestId('group-toggle'));
+    expect(isShown('lead.ts')).toBe(true);
+    expect(isShown('runner.py')).toBe(false);
+    expect(isShown('land.py')).toBe(false);
+    expect(screen.getAllByTestId('segment-toggle')).toHaveLength(2);
+  });
+
+  it('while the user reads (scrolled up), nothing new folds', () => {
+    vi.useFakeTimers();
+    const reading = (n: number) => <ReadingContext.Provider value>{view(blocks.slice(0, n), true)}</ReadingContext.Provider>;
+    const r = render(reading(6));
+    r.rerender(reading(blocks.length));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(reading(blocks.length));
+    expect(isShown('runner.py')).toBe(true);
+    // back to following: it folds FOLD_DELAY_MS later
+    r.rerender(view(blocks, true));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(blocks, true));
+    expect(isShown('runner.py')).toBe(false);
   });
 });
 
