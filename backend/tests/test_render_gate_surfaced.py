@@ -23,7 +23,16 @@ from fastapi import HTTPException
 from routers.workspace_api import _resolve_file_path
 
 
-def test_external_abs_not_in_allowset_still_400(tmp_path: Path):
+@pytest.fixture
+def isolated_home(tmp_path: Path, monkeypatch):
+    """Keep tmp test paths outside the home boundary regardless of pytest basetemp."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    return home
+
+
+def test_external_abs_not_in_allowset_still_400(tmp_path: Path, isolated_home):
     ws = tmp_path / "SwarmWS"
     ws.mkdir()
     ext = tmp_path / "outside" / "secret.txt"
@@ -48,7 +57,7 @@ def test_external_abs_in_allowset_resolves(tmp_path: Path):
     assert str(target) == resolved
 
 
-def test_allowset_does_not_widen_a_path_not_in_it(tmp_path: Path):
+def test_allowset_does_not_widen_a_path_not_in_it(tmp_path: Path, isolated_home):
     ws = tmp_path / "SwarmWS"
     ws.mkdir()
     allowed = tmp_path / "extrepo" / "ok.py"
@@ -62,7 +71,7 @@ def test_allowset_does_not_widen_a_path_not_in_it(tmp_path: Path):
     assert ei.value.status_code == 400
 
 
-def test_none_allowset_preserves_home_only_guard(tmp_path: Path):
+def test_none_allowset_preserves_home_only_guard(tmp_path: Path, isolated_home):
     ws = tmp_path / "SwarmWS"
     ws.mkdir()
     ext = tmp_path / "x" / "f.py"

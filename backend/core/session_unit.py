@@ -364,6 +364,20 @@ def _snapshot_process_table() -> dict[int, int]:
     Parsing is defensive: skips any line that doesn't contain exactly
     two integer fields, handling header variations across macOS/Linux.
     """
+    def _via_psutil() -> dict[int, int]:
+        table: dict[int, int] = {}
+        try:
+            import psutil
+
+            for proc in psutil.process_iter(attrs=["pid", "ppid"]):
+                info = proc.info
+                table[int(info["pid"])] = int(info["ppid"])
+        except (ImportError, OSError):
+            return {}
+        except psutil.Error:
+            pass
+        return table
+
     try:
         result = subprocess.run(
             ["ps", "-eo", "pid,ppid"],
@@ -379,9 +393,17 @@ def _snapshot_process_table() -> dict[int, int]:
                 table[pid] = ppid
             except ValueError:
                 continue  # header line or malformed — skip
+        if table:
+            return table
+        if result.returncode != 0:
+            # Sandboxed macOS runtimes can deny /bin/ps while still allowing the
+            # native process APIs used by psutil. Keep cleanup functional there.
+            return _via_psutil()
         return table
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    except subprocess.TimeoutExpired:
         return {}
+    except (FileNotFoundError, OSError):
+        return _via_psutil()
 
 
 def _snapshot_descendant_tree(parent_pid: int) -> list[int]:

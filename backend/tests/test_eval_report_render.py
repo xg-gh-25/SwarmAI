@@ -177,13 +177,13 @@ def test_dim_snapshot_key_covers_the_three_that_differ():
 # ─── _report_populations (single-source counts) ──────────────────────────────
 def test_report_populations_pending_is_set_difference(snapshot, golden):
     pops = _report_populations(golden, snapshot)
-    # merged golden set = 181; run executed = 157; pending (golden ids not run) = 24
-    assert pops["golden_size"] == len(golden["cases"])
-    assert pops["executed"] == len(snapshot["cases"])
-    assert pops["pending"] == pops["golden_size"] - pops["executed"]
-    # On this snapshot every run id IS in the golden set, so pending is exactly
-    # the un-run remainder.
-    assert pops["pending"] >= 0
+    golden_ids = {case["id"] for case in golden["cases"]}
+    snapshot_ids = {case["id"] for case in snapshot["cases"]}
+    assert pops["golden_size"] == len(golden_ids)
+    assert pops["executed"] == len(snapshot_ids & golden_ids)
+    assert pops["orphans"] == len(snapshot_ids - golden_ids)
+    assert pops["pending"] == len(golden_ids - snapshot_ids)
+    assert pops["executed"] + pops["pending"] == pops["golden_size"]
 
 
 def test_report_populations_no_hardcoded_115():

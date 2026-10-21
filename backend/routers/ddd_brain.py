@@ -1703,36 +1703,11 @@ async def reject_review(name: str, body: RejectHunkBody) -> dict:
 # No stored metric — all live-computed (R30#4).
 
 
-def _last_content_commit_iso(project_dir: Path) -> Optional[str]:
-    """ISO time of the last commit touching this DDD's KNOWLEDGE content —
-    the subtree EXCLUDING .artifacts/ (pipeline bookkeeping, incl. the distribute
-    output itself). Mirrors the Run-2 review-diff .artifacts exclusion."""
-    ws = _workspace_root()
-    if not (ws / ".git").exists():
-        return None
-    try:
-        rel = project_dir.relative_to(ws).as_posix()
-    except ValueError:
-        rel = project_dir.as_posix()
-    try:
-        r = subprocess.run(
-            ["git", "log", "-1", "--format=%cI", "--",
-             rel, f":(exclude){rel}/.artifacts/**"],
-            cwd=str(ws), capture_output=True, text=True, timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if r.returncode != 0:
-        return None
-    return r.stdout.strip() or None
-
-
 def _output_is_committed(project_dir: Path, out_dir: Path) -> bool:
-    """True if the distribute-output dir has at least one commit touching it in
-    this tree — i.e. its mtime is a trustworthy freshness anchor (F2). An
-    uncommitted output (freshly emitted, or a just-checked-out copy) has no
-    reliable commit time, so freshness is UNKNOWN. `git log -1 -- <output path>`
-    returning a commit == committed."""
+    """Return whether the distribute-output directory has a commit in this tree.
+
+    Uncommitted output has no commit baseline, so freshness remains unknown.
+    """
     ws = _workspace_root()
     if not (ws / ".git").exists():
         return False
@@ -1750,6 +1725,42 @@ def _output_is_committed(project_dir: Path, out_dir: Path) -> bool:
     return r.returncode == 0 and bool(r.stdout.strip())
 
 
+def _content_changed_since_output(project_dir: Path, out_dir: Path) -> Optional[bool]:
+    """Return whether committed DDD content changed after the output commit.
+
+    Commit identity, rather than filesystem or commit timestamps, defines ordering.
+    Git timestamps have one-second resolution and filesystem mtimes are reset by
+    checkout, so comparing either can miss a source commit created in the same second.
+    ``None`` means Git could not establish the relationship.
+    """
+    ws = _workspace_root()
+    if not (ws / ".git").exists():
+        return None
+    try:
+        project_rel = project_dir.relative_to(ws).as_posix()
+        output_rel = out_dir.relative_to(ws).as_posix()
+    except ValueError:
+        return None
+    try:
+        output_commit = subprocess.run(
+            ["git", "log", "-1", "--format=%H", "--", output_rel],
+            cwd=str(ws), capture_output=True, text=True, timeout=5,
+        )
+        output_hash = output_commit.stdout.strip()
+        if output_commit.returncode != 0 or not output_hash:
+            return None
+        newer_content = subprocess.run(
+            ["git", "log", "-1", "--format=%H", f"{output_hash}..HEAD", "--",
+             project_rel, f":(exclude){project_rel}/.artifacts/**"],
+            cwd=str(ws), capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if newer_content.returncode != 0:
+        return None
+    return bool(newer_content.stdout.strip())
+
+
 def _distribution_state(project_dir: Path) -> dict:
     """Live distribution projection for one DDD (declared reach + output state)."""
     from core.ddd_distribution_policy import validate_distribution_file
@@ -1758,14 +1769,9 @@ def _distribution_state(project_dir: Path) -> dict:
     out_dir = _distribute_output_dir(project_dir)
     output_path: Optional[str] = None
     last_distribute_time: Optional[str] = None
-    # TRISTATE (F2): None = freshness UNKNOWN. The freshness signal anchors on the
-    # output dir's filesystem mtime, which git does NOT preserve — after a clone /
-    # checkout / worktree switch every mtime is reset to checkout-time, so an
-    # mtime-based boolean would read "up to date" (or "changed") at random for a
-    # genuinely-stale output. We can only trust the mtime when the output dir is
-    # actually git-committed in THIS tree (so its content is anchored, not a
-    # just-checked-out copy). Uncommitted output → we don't know → None, and the
-    # frontend shows "freshness unknown" rather than a confident-but-wrong boolean.
+    # TRISTATE (F2): None = freshness UNKNOWN. A committed output provides an
+    # exact Git baseline; later commits touching reviewable DDD content make it
+    # stale. An uncommitted output has no baseline, so it remains unknown.
     source_changed_since: Optional[bool] = None
     if out_dir is not None:
         output_path = out_dir.name  # the .artifacts/<name> stem (never an abs host path)
@@ -1775,17 +1781,10 @@ def _distribution_state(project_dir: Path) -> dict:
                 out_mtime, tz=timezone.utc
             ).isoformat()
             if _output_is_committed(project_dir, out_dir):
-                # source_changed_since: the subtree's last KNOWLEDGE commit is NEWER
-                # than the output. "Source" = the DDD's reviewable content, EXCLUDING
-                # .artifacts/ (the same exclusion the Run-2 review diff uses), so
-                # committing the output itself never counts as a source change.
-                # Compare epoch-to-epoch (parse the ISO commit time — never str-vs-float).
-                iso = _last_content_commit_iso(project_dir)
-                if iso:
-                    commit_epoch = datetime.fromisoformat(iso).timestamp()
-                    source_changed_since = commit_epoch > out_mtime
-                else:
-                    source_changed_since = False  # committed output, no content commits → up to date
+                # Source freshness is a commit-order question. The output commit is
+                # the baseline; any later commit touching reviewable DDD content
+                # (excluding .artifacts) makes the output stale.
+                source_changed_since = _content_changed_since_output(project_dir, out_dir)
             # else: uncommitted output → leave None (freshness unknown)
         except (OSError, ValueError):
             source_changed_since = None

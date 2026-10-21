@@ -102,7 +102,8 @@ class TestRegularFileGitStatus:
 
         **Validates: Requirements 3.1**
         """
-        (tmp_path / "clean.txt").write_text("clean")
+        create_dir_on_disk(tmp_path, "content")
+        (tmp_path / "content" / "clean.txt").write_text("clean")
 
         git_status = {"other.txt": "modified"}
 
@@ -113,8 +114,8 @@ class TestRegularFileGitStatus:
             git_status=git_status,
         )
 
-        node = find_node_by_path(tree, "clean.txt")
-        assert node is not None, "clean.txt node should exist"
+        node = find_node_by_path(tree, "content/clean.txt")
+        assert node is not None, "content/clean.txt node should exist"
         assert "git_status" not in node, (
             "File not in git_status should have no git_status key"
         )
@@ -137,8 +138,11 @@ class TestRegularFileGitStatus:
         example_dir = tmp_path / str(uuid.uuid4())
         example_dir.mkdir()
 
-        (example_dir / file_name).write_text("content")
-        git_status = {file_name: status_code}
+        content_dir = example_dir / "content"
+        content_dir.mkdir()
+        (content_dir / file_name).write_text("content")
+        file_path = f"content/{file_name}"
+        git_status = {file_path: status_code}
 
         tree = _build_tree(
             root=example_dir,
@@ -147,8 +151,8 @@ class TestRegularFileGitStatus:
             git_status=git_status,
         )
 
-        node = find_node_by_path(tree, file_name)
-        assert node is not None, f"Node {file_name} should exist"
+        node = find_node_by_path(tree, file_path)
+        assert node is not None, f"Node {file_path} should exist"
         assert node.get("git_status") == status_code, (
             f"Expected git_status={status_code!r}, "
             f"got {node.get('git_status')!r}"

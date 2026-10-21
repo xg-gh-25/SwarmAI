@@ -132,10 +132,7 @@ class TestSourceChangedSinceTristate:
         (pd / "aim.json").write_text('{"distribution": {"targets": ["open-plugin"], "visibility": "internal"}}')
         monkeypatch.setattr(m, "_distribute_output_dir", lambda p: out)
         monkeypatch.setattr(m, "_output_is_committed", lambda p, o: True)
-        # content commit is far in the FUTURE relative to the output dir mtime → changed
-        from datetime import datetime, timezone
-        future = datetime(2999, 1, 1, tzinfo=timezone.utc).isoformat()
-        monkeypatch.setattr(m, "_last_content_commit_iso", lambda p: future)
+        monkeypatch.setattr(m, "_content_changed_since_output", lambda p, o: True)
         d = m._distribution_state(pd)
         assert d["source_changed_since"] is True
 
@@ -147,7 +144,7 @@ class TestSourceChangedSinceTristate:
         (pd / "aim.json").write_text('{"distribution": {"targets": ["open-plugin"], "visibility": "internal"}}')
         monkeypatch.setattr(m, "_distribute_output_dir", lambda p: out)
         monkeypatch.setattr(m, "_output_is_committed", lambda p, o: True)
-        monkeypatch.setattr(m, "_last_content_commit_iso", lambda p: None)
+        monkeypatch.setattr(m, "_content_changed_since_output", lambda p, o: False)
         d = m._distribution_state(pd)
         assert d["source_changed_since"] is False
 

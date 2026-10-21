@@ -7,6 +7,7 @@ band). After backfill, what remains is what the NEW rules produce.
 """
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parents[1]
@@ -18,7 +19,8 @@ def _write_proposal(pdir: Path, pid: str, **fields):
     base = {
         "id": pid, "target_doc": "TECH.md", "target_section": "Runtime Traps",
         "content": "A genuinely load-bearing runtime lesson worth keeping in the brain over time.",
-        "source_run_id": "run_x", "confidence": 0.72, "created_at": "2026-08-10T00:00:00+00:00",
+        "source_run_id": "run_x", "confidence": 0.72,
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "status": "escalated", "source_stage": "reflect",
     }
     base.update(fields)

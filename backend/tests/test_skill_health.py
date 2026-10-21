@@ -223,6 +223,8 @@ class TestHealthEndpointFailSafe:
         # Gate-1 BLOCK-3 (leak guard): a non-owner (hive) session must NOT receive an internal
         # skill name as a health-map key.
         monkeypatch.setenv("SWARMAI_MODE", "hive")
+        from middleware.hive_auth import HiveAuthMiddleware
+        monkeypatch.setattr(HiveAuthMiddleware, "_is_authorized", lambda self, scope: True)
         resp = client.get("/api/skills/health")
         assert resp.status_code == 200
         for folder_name in resp.json():

@@ -19,7 +19,6 @@ Key invariants:
 
 import json
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
@@ -103,8 +102,8 @@ class TestDistribution:
         _git(ws, "add", "-A")
         _git(ws, "commit", "-qm", "distribute output")
 
-        # Ensure a later mtime gap, then commit a NEW subtree change.
-        time.sleep(0.02)
+        # Commit a NEW subtree change immediately; commit identity must detect it
+        # even when both commits share the same one-second timestamp.
         (ws / "Projects" / "Declared" / "2-understanding" / "TECH.md").write_text(
             "line1\nCHANGED\nline3\n"
         )
@@ -124,7 +123,6 @@ class TestDistribution:
         )
         _git(ws, "add", "-A")
         _git(ws, "commit", "-qm", "early change")
-        time.sleep(0.02)
         outdir = ws / "Projects" / "Declared" / ".artifacts" / "distribute"
         outdir.mkdir(parents=True)
         (outdir / "x.txt").write_text("out\n")
