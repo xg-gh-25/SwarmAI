@@ -15,9 +15,9 @@ reason suggests (``Run it as: `…` ``, the line after ``instead:`` / ``Run:`` /
 approval was asked for. Run state is real run.json files in a temp workspace;
 worktree mode is off.
 
-Covered: pytest_command_guard (no run) and pipeline_test_gate (active run).
-Not yet covered: run_owner_gate and worktree_write_gate, whose suggestions need an
-isolated run with a worktree and the hook-token service. Add a case whenever a
+Covered: pytest_command_guard (no run), pipeline_test_gate (active run) and
+run_owner_gate (an isolated run with its worktree, a recorded CLI and the hook-token
+service). Not yet covered: worktree_write_gate. Add a case whenever a
 gate's deny text suggests a command.
 """
 import asyncio
@@ -100,6 +100,7 @@ def _suggested(reason: str) -> list:
     cmds += [m.strip() for m in re.findall(r"instead[^:\n]*:\n([^\n]+)", reason)]
     cmds += [m.strip() for m in re.findall(r"close it first[^\n]*\n([^\n]+)", reason)]
     cmds += [m.strip() for m in re.findall(r"(?m)^\s*Run: ([^\n]+)", reason)]
+    cmds += [m.strip() for m in re.findall(r"Run instead[^:\n]*: ([^\n]+)", reason)]
     return cmds
 
 
@@ -136,3 +137,64 @@ def test_the_strict_manager_sees_an_approval_request(ws):
     # the harness must not pass a command because a mock claimed it was approved
     hits = _chain("git push --force origin main")
     assert hits, "a dangerous command must be denied or sent for approval"
+
+
+# ── run_owner_gate: an isolated run of this session ──────────────────────────
+@pytest.fixture
+def iso(tmp_path, monkeypatch):
+    """An isolated run owned by SID: a git repo, its run worktree, a run.json with a
+    recorded CLI that exists on disk, worktree mode on, the daemon's token service."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from core import hook_token
+    from core import run_worktree as rw
+
+    def g(cwd, *a):
+        subprocess.run(["git", "-C", str(cwd), *a], check=True, capture_output=True)
+
+    tmp = Path(os.path.realpath(tmp_path))
+    main = tmp / "src" / "swarmai"
+    main.mkdir(parents=True)
+    g(main, "init", "-q", "-b", "main")
+    for k, v in (("user.name", "T"), ("user.email", "t@e.com"), ("core.hooksPath", str(tmp))):
+        g(main, "config", k, v)
+    (main / "a.py").write_text("a = 1\n")
+    g(main, "add", "-A")
+    g(main, "commit", "-q", "-m", "i")
+    ws = tmp / "ws"
+    monkeypatch.setenv("SWARM_WORKSPACE", str(ws))
+    monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(tmp / "wt"))
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+    monkeypatch.setattr(sh, "_ACTIVE_RUN_GLOB_ROOT", str(ws))
+    monkeypatch.delenv("SWARM_GATE_FORCE", raising=False)
+    script = tmp / "cli" / "backend" / "scripts" / "artifact_cli.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("")
+    (script.parent / "pipeline_worktree.py").write_text("")
+    (script.parent.parent / "core").mkdir()
+    (script.parent.parent / "core" / "run_worktree.py").write_text("")
+    cli = {"python": os.path.realpath(sys.executable), "script": str(script)}
+    rid = "run_iso00001"
+    entry = rw.create(rid, "swarmai", main)
+    rd = ws / "Projects" / "P" / ".artifacts" / "runs" / rid
+    rd.mkdir(parents=True)
+    (rd / "run.json").write_text(json.dumps({
+        "id": rid, "project": "P", "status": "running", "session_id": SID,
+        "worktree_mode": "isolated", "worktrees": [entry], "cli": cli}))
+    hook_token.stop_oracle()
+    if not hook_token.start_oracle(51000 + os.getpid() % 9000):
+        pytest.skip("hook-token service not supported here")
+    yield {"rid": rid, "cli": cli, "wt": str(rw.wt_path(rid, "swarmai"))}
+    hook_token.stop_oracle()
+
+
+def test_run_owner_gate_suggestion_passes_the_chain(iso):
+    import shlex
+    cli = f"{shlex.quote(iso['cli']['python'])} {shlex.quote(iso['cli']['script'])}"
+    compound = (f"cd {iso['wt']} && source .venv/bin/activate && {cli} stage-start "
+                f"--project P --run-id {iso['rid']} --stage build")
+    hits = _chain(compound, cwd=iso["wt"])
+    assert any("DENY (run owner gate)" in r for _, r in hits), hits
+    _assert_suggestions_pass(hits, cwd=iso["wt"])
