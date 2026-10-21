@@ -38,6 +38,9 @@ export interface BackendDiag {
   /** launchd still runs the pid that wrote the (now stale) heartbeat: macOS
    *  suspended the process (sleep, very low battery); it resumes on its own */
   suspended?: boolean;
+  /** awake seconds the process has looked suspended (past the watchdog's cap the
+   *  watchdog stops calling it suspended: it is then treated as stuck) */
+  suspendedSecs?: number | null;
   stall?: BackendStall | null;
 }
 
@@ -63,6 +66,7 @@ export function parseBackendDiag(payload: unknown): BackendDiag {
     loopAge: typeof p.loopAge === 'number' ? p.loopAge : null,
     processAlive: typeof p.processAlive === 'boolean' ? p.processAlive : null,
     suspended: p.suspended === true,
+    suspendedSecs: typeof p.suspendedSecs === 'number' ? p.suspendedSecs : null,
     stall,
   };
 }
@@ -116,6 +120,12 @@ export function describeBackendIssue(kind: BackendIssueKind, diag: BackendDiag =
     if (diag.processAlive === false) {
       return { kind, cause: 'stopped', short: 'Backend stopped',
         detail: 'The backend process is not running; macOS restarts it automatically.' };
+    }
+    if (diag.processAlive === true && diag.heartbeatFresh === false
+        && typeof diag.suspendedSecs === 'number' && diag.suspendedSecs >= 60) {
+      const min = Math.round(diag.suspendedSecs / 60);
+      return { kind, cause: 'stuck', short: 'Backend stuck',
+        detail: `The backend process exists but has not run for ${min} min while this Mac was awake, so macOS is not what paused it: it is probably stuck.` };
     }
     if (diag.processAlive === true && diag.heartbeatFresh === false) {
       return { kind, cause: 'paused', short: 'Backend paused',

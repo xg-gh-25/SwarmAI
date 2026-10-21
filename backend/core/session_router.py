@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from core.awake_clock import awake_time  # liveness durations exclude sleep
 from collections import deque
 from contextlib import aclosing
 from datetime import datetime
@@ -2925,7 +2926,7 @@ class SessionRouter:
         # Grace period: for chat eviction (not channel), filter out
         # sessions that have been idle less than EVICTION_GRACE_SECONDS
         # unless force=True (queue timeout fallback).
-        now = time.time()
+        now = awake_time()  # unit.last_used is on the awake clock (core/awake_clock)
         if not channel_only and not force:
             stale_units = [
                 u for u in idle_units

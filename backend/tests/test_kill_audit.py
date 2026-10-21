@@ -96,3 +96,15 @@ def test_stream_reader_logs_our_own_kill_at_info(audit, caplog):
     recs = {r.getMessage().split()[1]: r.levelno for r in caplog.records
             if "stream_error" in r.getMessage()}
     assert recs == {"session_id=s-ours:": logging.INFO, "session_id=s-other:": logging.WARNING}
+
+
+def test_startup_sweep_needs_an_explicit_launcher_mode():
+    """F6 fail-closed: the sweep runs only for a process a real launcher started
+    (SWARMAI_MODE set: launchd wrapper, hive unit, Tauri, dev.sh). A test or script
+    that imports the app on a temp HOME has no backend.json to consult."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "main.py").read_text()
+    i = src.index("session_registry.kill_all_claude_processes()")
+    guard = src[src.rindex("if (", 0, i):i]
+    assert 'elif not os.environ.get("SWARMAI_MODE"):' in guard
+    assert "_other_live_backend()" in guard

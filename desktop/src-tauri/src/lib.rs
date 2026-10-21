@@ -626,13 +626,43 @@ fn suspended(hb: &HeartbeatView, launchd_pid: Option<u32>) -> bool {
     !hb.fresh && hb.pid.is_some() && hb.pid == launchd_pid
 }
 
+/// How long a process may look suspended while the Mac is AWAKE before it is
+/// treated as stuck. A real deadlock looks the same as a suspension (a C call
+/// holding the GIL freezes the heartbeat thread, the pid stays), so "suspended"
+/// cannot protect it forever. Measured with `Instant`, which on macOS does not
+/// advance while the Mac sleeps; the 10-21 low-battery suspension lasted 322s.
+const SUSPEND_MAX_SECS: u64 = 600;
+
+/// The process looks suspended (`suspended`) and has for less than
+/// SUSPEND_MAX_SECS of awake time. *suspended_for*: how long it has looked so
+/// (None: just now).
+fn suspended_within_cap(hb: &HeartbeatView, launchd_pid: Option<u32>,
+                        suspended_for: Option<std::time::Duration>) -> bool {
+    suspended(hb, launchd_pid)
+        && suspended_for.map_or(true, |d| d.as_secs() < SUSPEND_MAX_SECS)
+}
+
 /// (heartbeat_fresh, loop_wedged) for the down-decision: a suspended process
-/// reads as alive-but-busy (Degraded, never Terminated).
-fn decision_inputs(hb: &HeartbeatView, launchd_pid: Option<u32>) -> (bool, bool) {
-    if suspended(hb, launchd_pid) {
+/// reads as alive-but-busy (Degraded) until SUSPEND_MAX_SECS; then the old
+/// path applies (stale heartbeat → escalates to Terminated).
+fn decision_inputs(hb: &HeartbeatView, launchd_pid: Option<u32>,
+                   suspended_for: Option<std::time::Duration>) -> (bool, bool) {
+    if suspended_within_cap(hb, launchd_pid, suspended_for) {
         (true, false)
     } else {
         (hb.fresh, effective_wedged(hb))
+    }
+}
+
+/// Track since when the process looks suspended (reset as soon as it does not)
+/// and return for how long.
+fn track_suspension(since: &mut Option<std::time::Instant>, hb: &HeartbeatView,
+                    launchd_pid: Option<u32>) -> Option<std::time::Duration> {
+    if suspended(hb, launchd_pid) {
+        Some(since.get_or_insert_with(std::time::Instant::now).elapsed())
+    } else {
+        *since = None;
+        None
     }
 }
 
@@ -738,13 +768,16 @@ fn effective_wedged(hb: &HeartbeatView) -> bool {
 /// The payload of `backend-degraded` / `backend-terminated-restarting`: what the
 /// watchdog knows, so the UI can say why instead of a bare "offline".
 fn health_event_payload(hb: &HeartbeatView, process_alive: Option<bool>,
-                        launchd_pid: Option<u32>) -> serde_json::Value {
+                        launchd_pid: Option<u32>,
+                        suspended_for: Option<std::time::Duration>) -> serde_json::Value {
     serde_json::json!({
         "port": DAEMON_PORT,
         "heartbeatFresh": hb.fresh,
         "loopAge": hb.loop_age,
         "processAlive": process_alive,
-        "suspended": suspended(hb, launchd_pid),
+        // within SUSPEND_MAX_SECS: "paused"; past it the UI says "not running"
+        "suspended": suspended_within_cap(hb, launchd_pid, suspended_for),
+        "suspendedSecs": suspended_for.map(|d| d.as_secs()),
         "stall": hb.stall,
     })
 }
@@ -2117,6 +2150,8 @@ fn spawn_daemon_health_watchdog(
         let mut terminated_emitted = false;
         // The stall cause last written to the watchdog log in this episode.
         let mut last_logged_cause = String::from("-");
+        // Since when the daemon looks suspended (track_suspension); awake time only.
+        let mut suspended_since: Option<std::time::Instant> = None;
         let mut known_boot_id: Option<String> = None;
         // Resolve uid ONCE for the watchdog's lifetime (not per-miss) — the launchd
         // uid is stable, and the cold-start path resolves it once per session too.
@@ -2213,8 +2248,9 @@ fn spawn_daemon_health_watchdog(
                 // loop proves alive-but-busy → stay Degraded even at the streak
                 // ceiling. Read here (pure file I/O, fast) on every miss.
                 let hb = read_heartbeat_full();
-                let (heartbeat_fresh, loop_wedged) = decision_inputs(&hb, launchd_pid);
-                let payload = health_event_payload(&hb, if is_daemon { Some(pid_present) } else { None }, launchd_pid);
+                let suspended_for = track_suspension(&mut suspended_since, &hb, launchd_pid);
+                let (heartbeat_fresh, loop_wedged) = decision_inputs(&hb, launchd_pid, suspended_for);
+                let payload = health_event_payload(&hb, if is_daemon { Some(pid_present) } else { None }, launchd_pid, suspended_for);
                 match watchdog_down_decision(is_daemon, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES, heartbeat_fresh, loop_wedged) {
                     WatchdogDownDecision::Degraded => {
                         // Alive but stalled: tell the UI to show a reconnecting
@@ -2222,7 +2258,7 @@ fn spawn_daemon_health_watchdog(
                         // happens in the !was_healthy && !healthy block below once
                         // the miss streak reaches DOWN_ESCALATE_MISSES.
                         watchdog_log(&format!("Watchdog: /health missed — DEGRADED (miss {}/{}) {}",
-                            recovery_attempts, DOWN_ESCALATE_MISSES, format!("{} suspended={}", watchdog_evidence(&hb, if is_daemon { Some(pid_present) } else { None }), suspended(&hb, launchd_pid))));
+                            recovery_attempts, DOWN_ESCALATE_MISSES, format!("{} suspended={} suspended_secs={}", watchdog_evidence(&hb, if is_daemon { Some(pid_present) } else { None }), suspended_within_cap(&hb, launchd_pid, suspended_for), suspended_for.map(|d| d.as_secs()).unwrap_or(0))));
                         last_logged_cause = stall_cause(&hb);
                         let _ = app_handle.emit("backend-degraded", payload);
                         was_healthy = false;
@@ -2231,7 +2267,7 @@ fn spawn_daemon_health_watchdog(
                     WatchdogDownDecision::Terminated => {
                         // Process gone (or subprocess mode): a real death signal.
                         watchdog_log(&format!("Watchdog: /health missed — TERMINATED (miss {}/{}) {}",
-                            recovery_attempts, DOWN_ESCALATE_MISSES, format!("{} suspended={}", watchdog_evidence(&hb, if is_daemon { Some(pid_present) } else { None }), suspended(&hb, launchd_pid))));
+                            recovery_attempts, DOWN_ESCALATE_MISSES, format!("{} suspended={} suspended_secs={}", watchdog_evidence(&hb, if is_daemon { Some(pid_present) } else { None }), suspended_within_cap(&hb, launchd_pid, suspended_for), suspended_for.map(|d| d.as_secs()).unwrap_or(0))));
                         let _ = app_handle.emit("backend-terminated-restarting", payload);
                     }
                 }
@@ -2316,14 +2352,15 @@ fn spawn_daemon_health_watchdog(
                         // a stale heartbeat (dead process) or a genuinely wedged loop
                         // lets the streak escalate to a real death on the next poll.
                         let hb = read_heartbeat_full();
-                        let (heartbeat_fresh, loop_wedged) = decision_inputs(&hb, launchd_pid);
-                        let payload = health_event_payload(&hb, Some(pid_present), launchd_pid);
+                        let suspended_for = track_suspension(&mut suspended_since, &hb, launchd_pid);
+                        let (heartbeat_fresh, loop_wedged) = decision_inputs(&hb, launchd_pid, suspended_for);
+                        let payload = health_event_payload(&hb, Some(pid_present), launchd_pid, suspended_for);
                         let decision = watchdog_down_decision(true, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES, heartbeat_fresh, loop_wedged);
                         let event = recovery_poll_event(decision);
                         match decision {
                             WatchdogDownDecision::Terminated => {
                                 watchdog_log(&format!("Watchdog: still unreachable after {} misses — TERMINATED {}",
-                                    recovery_attempts, format!("{} suspended={}", watchdog_evidence(&hb, Some(pid_present)), suspended(&hb, launchd_pid))));
+                                    recovery_attempts, format!("{} suspended={} suspended_secs={}", watchdog_evidence(&hb, Some(pid_present)), suspended_within_cap(&hb, launchd_pid, suspended_for), suspended_for.map(|d| d.as_secs()).unwrap_or(0))));
                                 let _ = app_handle.emit(event, payload);
                                 terminated_emitted = true;
                             }
@@ -2338,7 +2375,7 @@ fn spawn_daemon_health_watchdog(
                                 let cause = stall_cause(&hb);
                                 if cause != last_logged_cause {
                                     watchdog_log(&format!("Watchdog: still DEGRADED (miss {}), cause changed {} → {} {}",
-                                        recovery_attempts, last_logged_cause, cause, format!("{} suspended={}", watchdog_evidence(&hb, Some(pid_present)), suspended(&hb, launchd_pid))));
+                                        recovery_attempts, last_logged_cause, cause, format!("{} suspended={} suspended_secs={}", watchdog_evidence(&hb, Some(pid_present)), suspended_within_cap(&hb, launchd_pid, suspended_for), suspended_for.map(|d| d.as_secs()).unwrap_or(0))));
                                     last_logged_cause = cause;
                                 }
                                 let _ = app_handle.emit(event, payload);
@@ -2403,6 +2440,7 @@ fn spawn_daemon_health_watchdog(
                 // Recovered → allow a fresh terminated emit for any FUTURE episode
                 // (run_5b0d6ec3 HIGH-1: the once-guard is per down-episode).
                 terminated_emitted = false;
+                suspended_since = None;
             }
 
             was_healthy = healthy;
@@ -3288,14 +3326,14 @@ mod adaptive_probe_tests {
             stall: Some(serde_json::json!({"cause": "memory", "starved": true, "memPercent": 95.0})),
             pid: Some(42),
         };
-        let p = health_event_payload(&hb, Some(true), Some(42));
+        let p = health_event_payload(&hb, Some(true), Some(42), None);
         assert_eq!(p["port"], serde_json::json!(DAEMON_PORT));
         assert_eq!(p["heartbeatFresh"], serde_json::json!(true));
         assert_eq!(p["loopAge"], serde_json::json!(7.5));
         assert_eq!(p["processAlive"], serde_json::json!(true));
         assert_eq!(p["stall"]["cause"], serde_json::json!("memory"));
         assert_eq!(p["suspended"], serde_json::json!(false)); // fresh: not suspended
-        let gone = health_event_payload(&HeartbeatView::default(), Some(false), None);
+        let gone = health_event_payload(&HeartbeatView::default(), Some(false), None, None);
         assert_eq!(gone["heartbeatFresh"], serde_json::json!(false));
         assert!(gone["stall"].is_null() && gone["loopAge"].is_null());
     }
@@ -3307,16 +3345,39 @@ mod adaptive_probe_tests {
     fn suspended_process_stays_degraded_a_restart_does_not() {
         let stale = HeartbeatView { pid: Some(4242), ..HeartbeatView::default() };
         assert!(suspended(&stale, Some(4242)));
-        let (f, w) = decision_inputs(&stale, Some(4242));
+        let short = Some(std::time::Duration::from_secs(SUSPEND_MAX_SECS - 1));
+        let (f, w) = decision_inputs(&stale, Some(4242), short);
         assert_eq!(watchdog_down_decision(true, true, 99, 2, f, w), WatchdogDownDecision::Degraded);
-        assert_eq!(health_event_payload(&stale, Some(true), Some(4242))["suspended"], serde_json::json!(true));
+        assert_eq!(health_event_payload(&stale, Some(true), Some(4242), short)["suspended"], serde_json::json!(true));
+        // Past the cap (awake time) a "suspension" is treated as stuck: the old
+        // escalation applies and the UI no longer says paused.
+        let long = Some(std::time::Duration::from_secs(SUSPEND_MAX_SECS));
+        let (f, w) = decision_inputs(&stale, Some(4242), long);
+        assert_eq!(watchdog_down_decision(true, true, 2, 2, f, w), WatchdogDownDecision::Terminated);
+        let p = health_event_payload(&stale, Some(true), Some(4242), long);
+        assert_eq!(p["suspended"], serde_json::json!(false));
+        assert_eq!(p["suspendedSecs"], serde_json::json!(SUSPEND_MAX_SECS));
         for other in [Some(5000), None] {
             assert!(!suspended(&stale, other));
-            let (f, w) = decision_inputs(&stale, other);
+            let (f, w) = decision_inputs(&stale, other, None);
             assert_eq!(watchdog_down_decision(true, true, 2, 2, f, w), WatchdogDownDecision::Terminated);
         }
         let unknown_writer = HeartbeatView::default();
         assert!(!suspended(&unknown_writer, Some(4242)));
+    }
+
+    #[test]
+    fn suspension_clock_starts_once_and_resets_when_it_ends() {
+        let stale = HeartbeatView { pid: Some(7), ..HeartbeatView::default() };
+        let mut since = None;
+        let a = track_suspension(&mut since, &stale, Some(7)).unwrap();
+        let first = since;
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let b = track_suspension(&mut since, &stale, Some(7)).unwrap();
+        assert_eq!(since, first);            // the start is kept
+        assert!(b > a);
+        assert!(track_suspension(&mut since, &HeartbeatView::default(), Some(7)).is_none());
+        assert!(since.is_none());            // a fresh heartbeat (or restart) resets it
     }
 
     #[test]

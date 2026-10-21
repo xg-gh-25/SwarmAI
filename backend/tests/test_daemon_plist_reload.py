@@ -276,7 +276,8 @@ class TestVerifyProbeIsolation:
     def test_probe_skips_systemwide_cli_sweep(self):
         src = (REPO / "backend" / "main.py").read_text()
         i = src.index("session_registry.kill_all_claude_processes()")
-        assert 'SWARMAI_VERIFY_BUILD") == "1"' in src[i - 600:i]
+        guard = src[src.rindex("if (", 0, i):i]   # the whole if/elif chain before the call
+        assert 'SWARMAI_VERIFY_BUILD") == "1"' in guard
 
     def test_deploy_scripts_verify_once_and_abort_on_failure(self):
         for script in ("prod.sh", "dev.sh"):

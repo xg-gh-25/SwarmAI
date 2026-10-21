@@ -56,4 +56,13 @@ describe('describeBackendIssue', () => {
     expect(p.cause).toBe('paused');
     expect(d({ suspended: 'yes' }).suspended).toBe(false);
   });
+
+  it('past the watchdog cap a "suspension" while awake reads as stuck, not paused', () => {
+    const i = describeBackendIssue('not_responding',
+      d({ heartbeatFresh: false, processAlive: true, suspended: false, suspendedSecs: 600 }));
+    expect(i.short).toBe('Backend stuck');
+    expect(i.detail).toContain('has not run for 10 min while this Mac was awake');
+    expect(describeBackendIssue('not_responding',
+      d({ heartbeatFresh: false, processAlive: true })).short).toBe('Backend paused');
+  });
 });

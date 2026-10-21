@@ -1402,12 +1402,20 @@ async def lifespan(app: FastAPI):
     if (os.environ.get("SWARMAI_VERIFY_BUILD") == "1"
             or os.environ.get("SWARMAI_NO_CLI_SWEEP") == "1"):
         logger.info("Isolated instance (verify probe / smoke) — skipping leftover claude CLI sweep")
-    elif (_owner := _other_live_backend()) is not None:
+    elif not os.environ.get("SWARMAI_MODE"):
+        # F6, fail closed: every real launcher sets SWARMAI_MODE explicitly (the
+        # launchd wrapper, hive's systemd unit, Tauri's subprocess spawn, dev.sh).
+        # Unset means a script or test imported the app (conftest strips it): it
+        # has no leftovers of its own to clean, even on a temp HOME where no
+        # backend.json is found.
+        logger.info("SWARMAI_MODE not set (not a registered launcher) — skipping leftover claude CLI sweep")
+    elif _other_live_backend() is not None:
         # F6: only the backend that owns backend.json may sweep. Another live
         # backend is registered (this is a test, probe or second instance): its
         # CLIs are not leftovers. Two clusters of 3-5 CLIs killed within 230 ms
         # (10-20, 10-21) came after the probe / owner-tag fixes.
-        logger.info("Backend pid %s owns backend.json — skipping leftover claude CLI sweep", _owner)
+        logger.info("Backend pid %s owns backend.json — skipping leftover claude CLI sweep",
+                    _other_live_backend())
     else:
         startup_killed = session_registry.kill_all_claude_processes()
         if startup_killed:
