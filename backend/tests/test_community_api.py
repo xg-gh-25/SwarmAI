@@ -1057,14 +1057,20 @@ def tmp_config(tmp_path: Path, monkeypatch) -> Path:
 
 
 def _run(coro):
+    # Leave the thread's current loop exactly as found. set_event_loop(None) here
+    # used to clear the pytest-asyncio session loop, so every later async test on
+    # the same worker raised "There is no current event loop" (test_chat_scenarios_e2e
+    # under xdist); several other files carried workarounds for it.
+    try:
+        prev_loop = asyncio.get_event_loop_policy().get_event_loop()
+    except RuntimeError:
+        prev_loop = None
     loop = asyncio.new_event_loop()
     try:
         return loop.run_until_complete(coro)
     finally:
         loop.close()
-        # Clear the stale closed loop so a later test's asyncio.get_event_loop()
-        # doesn't inherit it (the Run-1 pollution class — Gate-2 red-team).
-        asyncio.set_event_loop(None)
+        asyncio.set_event_loop(prev_loop)
 
 
 def test_add_feed_writes_managed_by_user(tmp_config: Path) -> None:
