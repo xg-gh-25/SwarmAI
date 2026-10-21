@@ -1536,6 +1536,33 @@ def test_selection_adds_tests_that_drive_a_changed_script_by_subprocess(rig, tmp
     assert "backend/tests/test_tool_cli.py" not in sel2
 
 
+def test_selection_resolves_a_bare_script_import_via_sys_path(rig, tmp_path):
+    """A test that puts backend/scripts on sys.path and does ``import tool`` is a direct
+    importer of scripts/tool.py (10-21: 56 of 66 such pairs were never selected). A
+    backend-root module of the same name keeps its own meaning."""
+    repo = rig({
+        **TRANS,
+        "backend/scripts/tool.py": "X = 1\n",
+        "backend/thing.py": "Y = 1\n",
+        "backend/scripts/thing.py": "Y = 2\n",
+        "backend/tests/test_bare_tool.py": (
+            "import sys\nsys.path.insert(0, 'scripts')\nimport tool\nimport thing\n\n\n"
+            "def test_t():\n    assert tool.X and thing.Y\n"),
+    })
+    _write(repo, {"backend/scripts/tool.py": "X = 2\n"})
+    cache = tmp_path / "cache"
+    sgraph = pt.build_source_graph(repo, cache)
+    graph = pt.build_import_graph(repo, cache, sgraph)
+    sel, _, _ = pt.select_backend(repo, pt.changed_files(repo, {}), graph, 40, (), sgraph)
+    assert "backend/tests/test_bare_tool.py" in sel
+    # the cache-hit path resolves the same way
+    sgraph2 = pt.build_source_graph(repo, cache)
+    assert "scripts.tool" in sgraph2["backend/tests/test_bare_tool.py"]
+    assert "tool" not in sgraph2["backend/tests/test_bare_tool.py"]
+    assert "thing" in sgraph2["backend/tests/test_bare_tool.py"]  # backend root wins
+    assert "scripts.thing" not in sgraph2["backend/tests/test_bare_tool.py"]
+
+
 def test_a_module_loaded_by_computed_name_is_never_served_stale(rig, capsys, tmp_path):
     """red-team 2026-10-18: no import edge reaches core/plugin_a.py (importlib with a built
     name), so a per-file key of static imports alone reused a stale pass after it broke."""

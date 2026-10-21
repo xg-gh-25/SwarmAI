@@ -752,7 +752,7 @@ def build_source_graph(repo: Path, cache_dir: Path) -> dict[str, list[str]]:
     cached = _read_json(cpath) or {}
     old = cached.get("entries") if cached.get("v") == RUNNER_VERSION else None
     if isinstance(old, dict) and cached.get("key") == dir_key:
-        return {rel: e["mods"] for rel, e in old.items()}
+        return _resolve_script_imports(repo, {rel: e["mods"] for rel, e in old.items()})
     old = old if isinstance(old, dict) else {}
     entries = {}
     for rel, ms in stats.items():
@@ -765,7 +765,21 @@ def build_source_graph(repo: Path, cache_dir: Path) -> dict[str, list[str]]:
         _write_json(cpath, {"v": RUNNER_VERSION, "key": dir_key, "entries": entries})
     except OSError:
         pass
-    return {rel: e["mods"] for rel, e in entries.items()}
+    return _resolve_script_imports(repo, {rel: e["mods"] for rel, e in entries.items()})
+
+
+def _resolve_script_imports(repo: Path, sgraph: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Map a bare ``import x`` to ``scripts.x`` when ``backend/scripts/x.py`` exists and
+    ``x`` is not a backend-root module. Tests (and scripts) put ``backend/scripts`` on
+    ``sys.path`` and import a script by its bare name; without this the edge was lost and
+    56 of 66 test -> script pairs were never selected when the script changed (10-21, §11)."""
+    scripts = {p.stem for p in (repo / "backend" / "scripts").glob("*.py")}
+    scripts -= {m for m in scripts if _module_file(repo, m)}  # backend-root module wins
+
+    def fix(m: str) -> str:
+        return f"scripts.{m}" if m.split(".", 1)[0] in scripts else m
+
+    return {rel: sorted({fix(m) for m in mods}) for rel, mods in sgraph.items()}
 
 
 def build_import_graph(repo: Path, cache_dir: Path,

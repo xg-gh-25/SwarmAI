@@ -193,3 +193,10 @@ break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连�
     不再作为 pytest 目标（原来会变成 runner 错误、挡住落地），改为记一条 warning，并在 `push_ready` 下点名。
   - 91c8f493：前端 recheck 续跑时，已有结果的测试文件不再重跑；熔断的停滞计数也算上前端轮次。
   - `_plan_ac_refs` 决定 AC 点名哪些测试，属于"跑什么"，一并加入冻结列表（现在 8 个函数）。
+- 2026-10-21 `build_source_graph` / 新函数 `_resolve_script_imports`（XG 批准）：测试把 `backend/scripts`
+  加进 `sys.path` 后写 `import x`，现在解析成 `scripts.x`（`backend/` 根下有同名模块时仍按根模块算）。
+  原来这条边丢了：66 组"测试 -> 脚本"里 56 组在脚本改动时选不到对应测试，冻结守卫自己也在其中，
+  所以 b41e7adb / 2c05cfbc 改了冻结函数，run 内却没跑它。回放最近 113 个后端 commit：每个 run 选中的
+  测试文件中位数 75 -> 89，p90 102 -> 110（全部 670 个）。不扩 import 层数（depth 2 的 p90 是 484），
+  不加 `test_<模块>.py` 命名规则（回放中多选 0 个）。两个函数加入冻结列表（现在 10 个）。
+  `test_test_selection_frozen.py` 加进 BVT 清单：run 内再漏选，CI 也会跑红。

@@ -69,3 +69,4 @@ test_tool_risk.py
 test_tool_summary_fixture.py
 test_tscc_security_scan.py
 test_lint_problem_values.py   # scripts/lint_problem_values.py: banned shapes, pinned scope, clean tree
+test_test_selection_frozen.py  # freeze guard: CI catches a selection change a run missed (10-21)
