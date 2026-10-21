@@ -68,10 +68,14 @@ const CAUSE_TEXT: Record<string, string> = {
   stalled: 'it stopped responding (for example while the computer slept)',
   oom: 'it ran out of memory',
   timeout: 'it timed out',
+  disconnected: 'the chat lost its connection to it',
 };
 function stoppedNoticeText(t: Parameters<typeof tf>[0], n: { reason: string; cause?: string }): string {
   if (n.reason === 'superseded') {
     return tf(t, 'chat.turn.zone.stoppedSuperseded', 'Stopped · your newer message continued the conversation');
+  }
+  if (n.reason === 'gave_up') {
+    return tf(t, 'chat.turn.zone.stoppedGaveUp', 'Stopped · the connection dropped 3 times and auto-continue gave up; send a message to continue');
   }
   const cause = n.cause ? CAUSE_TEXT[n.cause] ?? n.cause : null;
   return cause

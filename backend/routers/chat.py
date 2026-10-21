@@ -93,6 +93,11 @@ def _recover_streaming_on_disconnect(session_id: Optional[str]) -> None:
                 )
             except RuntimeError:
                 pass  # No running event loop — skip async cleanup
+            # Only a user Stop stops a turn: any other disconnect resumes it
+            # (core/auto_continue; a /chat/stop arriving after the abort cancels).
+            from core import auto_continue
+            if auto_continue.schedule(_session_router, unit):
+                _chat_logger.info("SSE disconnect: auto-continue scheduled for %s", session_id)
     except Exception as e:
         _chat_logger.warning(
             "SSE disconnect recovery failed for session %s: %s",
@@ -1177,6 +1182,10 @@ async def stop_session(session_id: str):
     The agent will stop processing and the stream will end gracefully.
     """
     logger.info(f"Received stop request for session {session_id}")
+    _stop_unit = _get_router().get_unit(session_id)
+    if _stop_unit is not None:
+        from core import auto_continue
+        auto_continue.mark_user_stop(_stop_unit)
     result = await _get_router().interrupt_session(session_id)
 
     if result["success"]:

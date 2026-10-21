@@ -285,4 +285,15 @@ describe('AC9 — one signal; a stopped turn says so', () => {
     render(view([tx('go'), bash('a', 'make'), tr('a'), bash('b', 'make'), n('superseded')], false));
     expect(screen.getByTestId('turn-stopped').textContent).toBe('Stopped · your newer message continued the conversation');
   });
+
+  it('auto-continue: a resumed turn is not stopped; one that gave up says so (core/auto_continue)', () => {
+    const n = (reason: string) => ({ type: 'turn_notice', reason, cause: 'disconnected' }) as ContentBlock;
+    // the dropped call, the restarted notice, then the continuation's output
+    const { unmount } = render(view([tx('go'), bash('a', 'make'), n('restarted'), bash('b', 'make'), tr('b'), tx('done')], false));
+    expect(screen.queryByTestId('turn-stopped')).toBeNull();
+    unmount();
+    render(view([tx('go'), bash('a', 'make'), n('gave_up')], false));
+    expect(screen.getByTestId('turn-stopped').textContent)
+      .toBe('Stopped · the connection dropped 3 times and auto-continue gave up; send a message to continue');
+  });
 });

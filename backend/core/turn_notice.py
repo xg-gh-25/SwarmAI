@@ -18,7 +18,8 @@ from typing import Optional
 
 #: restarted  — the AI process was restarted mid-turn; the call it ran was lost.
 #: superseded — a newer message resumed the conversation; this turn stopped.
-REASONS = ("restarted", "superseded")
+#: gave_up    — auto-continue (core/auto_continue) used its attempts; the turn stopped.
+REASONS = ("restarted", "superseded", "gave_up")
 
 
 def turn_notice_event(reason: str, cause: Optional[str] = None) -> dict:

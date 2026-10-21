@@ -3344,6 +3344,7 @@ class SessionRouter:
         agent_config: Optional[dict] = None,
         client_id: Optional[str] = None,
         _drained_pending: bool = False,
+        _auto_continue: bool = False,
     ) -> AsyncIterator[dict]:
         """Entry point for chat requests.
 
@@ -3351,6 +3352,10 @@ class SessionRouter:
         a coalesced pending turn. The rows already exist in the DB (sent=0,
         claimed); the worker flips them to sent=1 after delivery, so the pre-slot
         re-persist below is skipped to avoid a duplicate user row.
+
+        ``_auto_continue`` (internal): core/auto_continue resuming a turn dropped
+        by an SSE disconnect. Its prompt is not the user's, so no user row is
+        written: the chat shows the same turn carrying on.
 
         1. Get or create SessionUnit
         2. Build options via PromptBuilder
@@ -3457,7 +3462,7 @@ class SessionRouter:
         # pending message (Root-1 SSOT Phase 2 L2) instead of deleting it — the
         # drain worker then delivers it when the session next reaches IDLE.
         persisted_msg_id: Optional[str] = None
-        if user_content and not _drained_pending:
+        if user_content and not _drained_pending and not _auto_continue:
             title = (user_message or "Chat")[:50]
             try:
                 await session_manager.store_session(session_id, agent_id, title)
