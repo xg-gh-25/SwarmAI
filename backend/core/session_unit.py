@@ -984,6 +984,13 @@ class SessionUnit:
         # (reset) at classification and cleared at each new turn. RSS-driven
         # kills do NOT set this — they are real memory pressure (keep OOM).
         self._recycle_kill_pending: bool = False
+        # Set by force_unstick_streaming: the next "exit code -9" is the stall
+        # watchdog's own kill, classified as a hang, never OOM. Consumed once.
+        self._stall_kill_pending: bool = False
+        # Set by send(): what a permission/answer continuation re-spawns with
+        # when its process dies mid-continuation (2026-10-20 13:22).
+        self._last_send_options: Any = None
+        self._last_send_config: Any = None
         # Graceful pre-kill: when turn_approaching fires, set this flag
         # so next send() injects WRAP_UP_PROMPT before the actual kill.
         # One turn of grace for the agent to finish its thought.
@@ -2060,6 +2067,8 @@ class SessionUnit:
         # abandon-fallback path (build_resume_context needs the stable
         # persistence key, not the transient sdk_session_id).
         self._app_session_id = app_session_id
+        self._last_send_options = options
+        self._last_send_config = config
 
         # Cancel any in-flight pipe flush from a prior SSE disconnect.
         # The flush sends a JSON "interrupt" control request to the CLI
@@ -3013,6 +3022,39 @@ class SessionUnit:
         async for event in self._retry_manager._handle_buffer_overflow(
             query_content, options, config, error_str
         ):
+            yield event
+
+    async def _retry_continuation(
+        self, exc: Exception, tb_str: str,
+    ) -> AsyncIterator[dict]:
+        """A permission/answer continuation's process died: resume like send() does.
+
+        Before this, the continue paths only crashed to COLD and re-raised, so a
+        killed CLI left the turn stopped until the user typed again (366718fc,
+        2026-10-20 13:22). Same retry as send(): --resume, then the leak-restart
+        continuation prompt, since the user's own message was already answered.
+        Non-retriable errors, or no send() options yet, keep the old behaviour.
+        """
+        from .session_utils import _is_retriable_error
+
+        error_str = str(exc)
+        if (
+            self._last_send_options is None
+            or not _is_retriable_error(error_str, tb_str)
+            or self._retry_count >= self.MAX_RETRY_ATTEMPTS
+        ):
+            await self._crash_to_cold_async(clear_identity=False)
+            raise exc
+        logger.warning(
+            "session_unit.continuation_retry session_id=%s error=%s",
+            self.session_id, error_str[:120],
+        )
+        async for event in self._retry_with_resume(
+            StreamingOrchestrator._GLITCH_CONTINUATION_PROMPT,
+            self._last_send_options, self._last_send_config, error_str, tb_str,
+        ):
+            if event.get("_abort"):
+                return
             yield event
 
     async def _retry_with_resume(
@@ -4156,9 +4198,9 @@ class SessionUnit:
         try:
             async for event in self._read_formatted_response():
                 yield event
-        except Exception:
-            await self._crash_to_cold_async(clear_identity=False)
-            raise
+        except Exception as exc:
+            async for event in self._retry_continuation(exc, traceback.format_exc()):
+                yield event
 
     async def continue_with_permission(
         self, request_id: str, allowed: bool,
@@ -4217,9 +4259,9 @@ class SessionUnit:
         try:
             async for event in self._read_formatted_response():
                 yield event
-        except Exception:
-            await self._crash_to_cold_async(clear_identity=False)
-            raise
+        except Exception as exc:
+            async for event in self._retry_continuation(exc, traceback.format_exc()):
+                yield event
 
     async def reclaim_for_mcp_swap(self, mcp_name: Optional[str] = None) -> None:
         """Kill subprocess to prepare for MCP hot-swap.
@@ -5310,6 +5352,8 @@ class SessionUnit:
         await self._arm_recovery_checkpoint("stuck_streaming")
         # read by the retry's turn_notice: this -9 is the stall watchdog, not a crash
         self._last_unstick_at = time.monotonic()
+        # and by classify_failure: not OOM (consumed once by the retry)
+        self._stall_kill_pending = True
         await self._crash_to_cold_async(clear_identity=False)
 
     async def force_unstick_waiting_input(self) -> None:

@@ -330,9 +330,11 @@ class RetryManager:
             # failure on the respawn is classified on its own merits.
             _recycle = self._parent._recycle_kill_pending
             self._parent._recycle_kill_pending = False
+            _stall = getattr(self._parent, "_stall_kill_pending", False)
+            self._parent._stall_kill_pending = False
             failure_type, failure_meta = classify_failure(
                 error_str, self._parent._hook_session_context,
-                recycle_kill=_recycle,
+                recycle_kill=_recycle, stall_kill=_stall,
             )
             self._parent._last_error_type = failure_type.value
 

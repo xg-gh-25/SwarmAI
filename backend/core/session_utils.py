@@ -61,11 +61,17 @@ def classify_failure(
     hook_context: Optional[dict] = None,
     *,
     recycle_kill: bool = False,
+    stall_kill: bool = False,
 ) -> tuple[FailureType, dict]:
     """Classify a failure using hook-captured context first, string fallback second.
 
     Returns ``(failure_type, metadata)`` where metadata contains type-specific
     info (e.g. ``resets_at`` for rate limits, ``pressure_level`` for OOM).
+
+    ``stall_kill`` marks that the -9 was the stall watchdog's own kill
+    (``force_unstick_streaming``): a genuine hang, NOT memory pressure. It keeps
+    a normal backoff but never counts as OOM (no OOM counter, no global
+    cooldown that would hold every other tab's spawn).
 
     ``recycle_kill`` marks that the immediately-preceding kill was an
     APP-INITIATED fast recycle of a poisoned/corrupt subprocess (post-interrupt
@@ -111,6 +117,13 @@ def classify_failure(
     ):
         metadata["recycle_kill"] = True
         return FailureType.ZOMBIE, metadata
+
+    # ── 0c. Stall-watchdog kill: our own -9 on a hung stream, not OOM ──
+    if stall_kill and any(
+        p in error_lower for p in ("exit code -9", "exit code: -9", "exit code=-9", "sigkill", "signal 9")
+    ):
+        metadata["stall_kill"] = True
+        return FailureType.UNKNOWN, metadata
 
     # ── 1. Hook context: rate limit notification ──────────────
     if hook_context:

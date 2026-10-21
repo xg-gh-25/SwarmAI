@@ -67,6 +67,10 @@ _TEST_CONTROL_ENV = frozenset({
 for _k in [k for k in _os.environ if k.startswith(("SWARM_", "SWARMAI_"))]:
     if _k not in _TEST_CONTROL_ENV:
         del _os.environ[_k]
+# The app's startup sweeps leftover claude CLIs SYSTEM-WIDE (pgrep), so any test
+# that boots the app (30 files build their own TestClient) would reach the LIVE
+# daemon's processes. Off for the whole suite (2026-10-20 13:22).
+_os.environ["SWARMAI_NO_CLI_SWEEP"] = "1"
 
 import atexit
 

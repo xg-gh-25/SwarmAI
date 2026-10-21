@@ -200,7 +200,7 @@ def kill_all_claude_processes() -> int:
         # At startup, kill processes owned by a PREVIOUS backend instance
         # (SWARMAI_OWNER_PID set but owner PID is dead).  Processes owned
         # by the CURRENT instance (shouldn't exist at startup) are skipped.
-        # Processes without the tag are skipped (not SwarmAI-managed).
+        # Processes without a readable tag are skipped (not provably ours).
         result = subprocess.run(
             ["pgrep", "-f", "claude_agent_sdk/_bundled/claude"],
             capture_output=True, text=True, timeout=5,
@@ -228,8 +228,16 @@ def kill_all_claude_processes() -> int:
                         pass  # Owner dead — proceed to kill
                     except PermissionError:
                         continue  # Can't check — assume alive
-                # owner_pid is None (no tag) at startup = legacy process
-                # from before ownership model.  Kill it (startup guarantee).
+                else:
+                    # No tag READ: either untagged or the read failed (``ps eww``
+                    # timed out, or a sandbox denied it: KiroCrew's sandbox
+                    # refuses /bin/ps). Killing on that killed the LIVE daemon's
+                    # whole CLI tree whenever a sandboxed pytest booted the app
+                    # (2026-10-20 13:22). Skip, the same fail-safe rule as
+                    # lifecycle_manager._is_owned_orphan. Every SwarmAI CLI has
+                    # carried the tag since the ownership model, so a genuinely
+                    # untagged leftover predates it.
+                    continue
 
                 from core.session_unit import _snapshot_descendant_tree, _kill_pids
                 tree = _snapshot_descendant_tree(pid)
