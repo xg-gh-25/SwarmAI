@@ -46,6 +46,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -1534,6 +1535,35 @@ def test_selection_adds_tests_that_drive_a_changed_script_by_subprocess(rig, tmp
     _write(repo, {"backend/scripts/tool.py": "from core.b import val\nprint(val())\n"})
     sel2, _, _ = pt.select_backend(repo, pt.changed_files(repo, {}), graph, 40, (), sgraph)
     assert "backend/tests/test_tool_cli.py" not in sel2
+
+
+def test_selection_adds_source_scan_suites_for_any_backend_module_change(rig, tmp_path):
+    """A suite that scans backend source (rglob *.py) has no import edge to the module it
+    polices: a change to any non-test backend module selects every such suite (10-21:
+    8d3b7c1e reddened test_silent_except_baseline on main). A test-only change does not."""
+    scan = pt._SOURCE_SCAN_SUITES[0]
+    repo = rig({**TRANS, scan: "def test_scan():\n    assert True\n"})
+    _write(repo, {"backend/core/b.py": "def val():\n    return 1  # v2\n"})
+    cache = tmp_path / "cache"
+    sgraph = pt.build_source_graph(repo, cache)
+    graph = pt.build_import_graph(repo, cache, sgraph)
+    sel, _, _ = pt.select_backend(repo, pt.changed_files(repo, {}), graph, 40, (), sgraph)
+    assert scan in sel
+    sel2, _, _ = pt.select_backend(repo, ["backend/tests/test_a.py"], graph, 40, (), sgraph)
+    assert scan not in sel2
+
+
+def test_source_scan_suites_cover_every_test_that_globs_python_files():
+    """Pin _SOURCE_SCAN_SUITES to the repo: every test file that globs *.py is listed,
+    or exempted in _NOT_SOURCE_SCANS; every listed file exists."""
+    backend = Path(__file__).resolve().parent.parent
+    pat = re.compile(r"""\.r?glob\(\s*['"](\*\*/)?\*\.py['"]""")
+    found = {f"backend/tests/{p.name}" for p in (backend / "tests").glob("test_*.py")
+             if pat.search(p.read_text(encoding="utf-8", errors="ignore"))}
+    listed = set(pt._SOURCE_SCAN_SUITES) | set(pt._NOT_SOURCE_SCANS)
+    assert found - listed == set(), "add to _SOURCE_SCAN_SUITES or _NOT_SOURCE_SCANS"
+    missing = [t for t in listed if not (backend.parent / t).is_file()]
+    assert missing == []
 
 
 def test_selection_resolves_a_bare_script_import_via_sys_path(rig, tmp_path):

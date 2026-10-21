@@ -200,3 +200,9 @@ break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连�
   测试文件中位数 75 -> 89，p90 102 -> 110（全部 670 个）。不扩 import 层数（depth 2 的 p90 是 484），
   不加 `test_<模块>.py` 命名规则（回放中多选 0 个）。两个函数加入冻结列表（现在 10 个）。
   `test_test_selection_frozen.py` 加进 BVT 清单：run 内再漏选，CI 也会跑红。
+- 2026-10-21 `select_backend`（XG 批准，同一方案"能看到改动的测试都要选上"的第三类）：改了任何非测试的
+  backend 模块时，加选 `_SOURCE_SCAN_SUITES`（12 个扫描 backend 源码的套件，如 `test_silent_except_baseline`、
+  `test_router_async_blocking`，合计约 20 秒）。它们用 rglob 扫源码，没有 import 边，原来选不到：8d3b7c1e
+  改 `core/heartbeat.py` 加了一个静默 except，main 上 `test_silent_except_baseline` 就红了，没有人发现。
+  `test_pipeline_test.py` 把这个列表和仓库里所有 glob `*.py` 的测试对齐，新加的扫描测试漏登记会变红。
+

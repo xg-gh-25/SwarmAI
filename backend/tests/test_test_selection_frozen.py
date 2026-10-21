@@ -33,7 +33,7 @@ FROZEN_FUNCTIONS = (
 )
 
 DIGESTS = {
-    "select_backend": "7a8ad119e42f5b27",  # 10-20: backend/context/ suites (b41e7adb, §11)
+    "select_backend": "7274543cdb6db9cc",  # 10-21: source-scan suites on any module change (§11)
     "transitive_unselected": "b1acd1e5cfa8521f",
     "_bvt_files": "c275cb940b06a3a9",
     "_full_scope_refusal": "0e054d7718481d65",  # 10-20: recheck past the cap; tampered index refused (2c05cfbc, §11)

@@ -905,6 +905,26 @@ _CONTEXT_SUITES = (
     "backend/tests/test_context_templates.py",
     "backend/tests/test_context_directory_loader.py",
 )
+# The suites that scan backend source text or AST (rglob over *.py) for a rule: no
+# import edge reaches them, so a change to any backend module can turn them red
+# unseen (8d3b7c1e reddened test_silent_except_baseline on main, 10-21). ~20s in total.
+# test_pipeline_test.py pins this list against every test that globs *.py.
+_SOURCE_SCAN_SUITES = (
+    "backend/tests/test_app_config_manager.py",
+    "backend/tests/test_bash_misuse_report.py",
+    "backend/tests/test_cjk_encoding.py",
+    "backend/tests/test_ddd_canonical_docs_single_source.py",
+    "backend/tests/test_ddd_paths_single_source.py",
+    "backend/tests/test_gate_decision_log.py",
+    "backend/tests/test_handler_log_safety.py",
+    "backend/tests/test_job_model_ssot.py",
+    "backend/tests/test_output_degeneration.py",
+    "backend/tests/test_r6a_ceiling_decouple.py",
+    "backend/tests/test_router_async_blocking.py",
+    "backend/tests/test_silent_except_baseline.py",
+)
+# Glob *.py but not over backend source (a tmp_path or a generated tree).
+_NOT_SOURCE_SCANS = ("backend/tests/test_gate_scaffold.py",)
 
 
 def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
@@ -930,6 +950,9 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
                           if t not in changed_tests and (repo / t).is_file()]
     if any(f.startswith("backend/context/") for f in changed):
         changed_tests += [t for t in _CONTEXT_SUITES
+                          if t not in changed_tests and (repo / t).is_file()]
+    if any(module_of(f) and not _is_backend_test(f) for f in changed):
+        changed_tests += [t for t in _SOURCE_SCAN_SUITES
                           if t not in changed_tests and (repo / t).is_file()]
     mfiles = _changed_module_files(repo, changed, include_deleted=True)
     mods = [(m, pkg) for _, m, pkg in mfiles]
