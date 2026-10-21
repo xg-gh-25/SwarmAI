@@ -127,9 +127,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # evolution_optimizer.HIGH_CONFIDENCE / MED_CONFIDENCE (data-calibrated).
     },
     # Pipeline-run worktrees (docs/design/pipeline-run-worktree.md §9, §16.9): "on"
-    # gives each new pipeline run its own git worktree per repo it writes. Read
-    # straight from config.json by core.run_worktree.mode_enabled (no restart).
-    "pipeline": {"worktree_mode": "off"},
+    # (the default) gives each new pipeline run its own git worktree per repo it writes;
+    # only an explicit "off" turns it off. Read straight from config.json by
+    # core.run_worktree.mode_enabled (no restart).
+    "pipeline": {"worktree_mode": "on"},
 }
 
 

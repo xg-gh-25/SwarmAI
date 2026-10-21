@@ -349,19 +349,26 @@ def _symbolic_head(cwd) -> "str | None":
 
 # ── switch and bindings ──────────────────────────────────────────────────────
 def mode_enabled() -> bool:
-    """``config.json["pipeline"]["worktree_mode"] == "on"`` (read-only, fail-safe off).
-    $SWARM_WORKTREE_MODE (on/off) overrides — tests and operator use."""
+    """True unless ``config.json["pipeline"]["worktree_mode"]`` is ``"off"`` (any case or
+    whitespace) or JSON false (read-only).
+    On is the default: a missing key or an unreadable config means on, and a run that
+    cannot get a worktree still falls back to the shared checkout at stage-start
+    (pipeline_worktree._shared). $SWARM_WORKTREE_MODE (on/off) overrides — tests and
+    operator use."""
     env = (os.environ.get("SWARM_WORKTREE_MODE") or "").strip().lower()
     if env in ("on", "off"):
         return env == "on"
     try:
         from config import get_app_data_dir
         cfg = json.loads((get_app_data_dir() / "SwarmWS" / "config.json").read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 — unreadable config = the default (off)
-        logger.debug("worktree_mode: config unreadable (%s) — off", exc)
-        return False
+    except Exception as exc:  # noqa: BLE001 — unreadable config = the default (on)
+        logger.debug("worktree_mode: config unreadable (%s) — on", exc)
+        return True
     pipe = cfg.get("pipeline") if isinstance(cfg, dict) else None
-    return isinstance(pipe, dict) and str(pipe.get("worktree_mode") or "").lower() == "on"
+    raw = pipe.get("worktree_mode") if isinstance(pipe, dict) else None
+    if raw is False:
+        return False            # a hand edit that wrote JSON false means off
+    return str(raw or "").strip().lower() != "off"
 
 
 def code_repos(workspace: "str | Path", project: str, self_repo: "str | Path") -> "list[tuple[str, Path]]":

@@ -575,6 +575,10 @@ def _isolate_app_data_dir(tmp_path_factory, monkeypatch):
     defends. Re-rooting BOTH on every test keeps them equal."""
     d = tmp_path_factory.mktemp("app_data")
     monkeypatch.setenv("SWARM_DATA_DIR", str(d))
+    # Worktree mode defaults to on when config.json has no "off"; the sandbox has no
+    # config, so pin the mode every test ran under. A test that needs it on sets the
+    # variable itself (its setenv runs after this one and wins).
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "off")
     _reroot_frozen_app_data_constants(
         d, monkeypatch, basetemp=tmp_path_factory.getbasetemp()
     )

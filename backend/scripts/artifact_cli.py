@@ -2507,7 +2507,7 @@ def _convergence_for(args) -> "str | None":
     profile while worktree mode is on, else none (legacy).
 
     The deterministic flow proves findings on snapshots of the run's own worktree. With
-    worktree mode off (the default of a fresh install) a run is on the shared checkout, and
+    worktree mode off (an explicit "off" in config.json) a run is on the shared checkout, and
     the legacy publish / run-update path never reaches stage-start, where
     pipeline_worktree._shared would switch it back; so it stays legacy from creation. A run
     that falls back to the shared checkout later is still switched at stage-start."""

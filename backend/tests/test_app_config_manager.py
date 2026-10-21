@@ -678,20 +678,56 @@ def test_update_keeps_a_hand_edit_made_after_load(mgr, tmp_config):
     import time
     mgr.load()
     data = json.loads(tmp_config.read_text())
-    data["pipeline"] = {"worktree_mode": "on"}
+    data["pipeline"] = {"worktree_mode": "off"}
     tmp_config.write_text(json.dumps(data))
     st = tmp_config.stat()
     os.utime(tmp_config, (st.st_atime, st.st_mtime + 5))   # a later edit, whatever the clock
     time.sleep(0)
     mgr.update({"aws_region": "eu-west-1"})
     disk = json.loads(tmp_config.read_text())
-    assert disk["pipeline"] == {"worktree_mode": "on"} and disk["aws_region"] == "eu-west-1"
+    assert disk["pipeline"] == {"worktree_mode": "off"} and disk["aws_region"] == "eu-west-1"
 
 
-def test_pipeline_switch_defaults_off(mgr):
+def test_pipeline_switch_defaults_on(mgr):
     from core.app_config_manager import DEFAULT_CONFIG
-    assert DEFAULT_CONFIG["pipeline"] == {"worktree_mode": "off"}
+    assert DEFAULT_CONFIG["pipeline"] == {"worktree_mode": "on"}
+    assert mgr.load()["pipeline"] == {"worktree_mode": "on"}
+
+
+def test_an_explicit_off_on_disk_is_kept(mgr, tmp_config):
+    """An install that already has "off" keeps it: the new default never overwrites it."""
+    tmp_config.write_text(json.dumps({"pipeline": {"worktree_mode": "off"}}))
     assert mgr.load()["pipeline"] == {"worktree_mode": "off"}
+
+
+@pytest.mark.parametrize("content,expect", [
+    (None, True),                                              # no config.json
+    ("{not json", True),                                       # unreadable
+    ('{"aws_region": "us-east-1"}', True),                     # no pipeline key
+    ('{"pipeline": {"worktree_mode": "on"}}', True),
+    ('{"pipeline": {"worktree_mode": "off"}}', False),
+    ('{"pipeline": {"worktree_mode": " OFF "}}', False),
+    ('{"pipeline": {"worktree_mode": false}}', False),         # hand-written JSON false
+])
+def test_mode_enabled_is_on_unless_config_says_off(tmp_path, monkeypatch, content, expect):
+    from core import run_worktree as rw
+    monkeypatch.delenv("SWARM_WORKTREE_MODE", raising=False)
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
+    if content is not None:
+        (tmp_path / "SwarmWS").mkdir()
+        (tmp_path / "SwarmWS" / "config.json").write_text(content)
+    assert rw.mode_enabled() is expect
+
+
+def test_mode_enabled_env_overrides_the_config(tmp_path, monkeypatch):
+    from core import run_worktree as rw
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "off")
+    assert rw.mode_enabled() is False
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+    (tmp_path / "SwarmWS").mkdir()
+    (tmp_path / "SwarmWS" / "config.json").write_text('{"pipeline": {"worktree_mode": "off"}}')
+    assert rw.mode_enabled() is True
 
 
 def test_update_refuses_a_hand_edit_that_no_longer_parses(mgr, tmp_config):

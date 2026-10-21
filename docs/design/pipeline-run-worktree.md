@@ -4,7 +4,7 @@ date: 2026-10-18
 created: 2026-10-18
 updated: 2026-10-19
 project: SwarmAI
-status: FINAL r4，P0–P2 已实现；任意 repo、owner gate 范围、开关持久化见 §16.9（开关默认 off）— §11 三个决定 XG 2026-10-18 已确认；对抗审查（r1→r2 单人，r2→r3 四路并行，两轮外部审查，r4 XG 审查）见 §16
+status: FINAL r4，P0–P2 已实现；任意 repo、owner gate 范围、开关持久化见 §16.9（开关 2026-10-21 起默认 on）— §11 三个决定 XG 2026-10-18 已确认；对抗审查（r1→r2 单人，r2→r3 四路并行，两轮外部审查，r4 XG 审查）见 §16
 related: parallel-session-commit-isolation.md（本文是其中"方案二"的完整设计，取代该草稿）; pipeline-run-budget.md; pipeline-speed-systematic-fix.md
 author: Kiro
 ---
@@ -51,7 +51,7 @@ deliver 的 stage-complete ──► push_ready 成立就直接落地（run-comm
 ```
 
 开关 `config.json["pipeline"]["worktree_mode"]`（`off` | `on`）只决定新 run 建不建 worktree；已经存在的 run 一律
-按它自己 run.json 里的模式处理（§9）。P0–P2 全部验收前保持 `off`。
+按它自己 run.json 里的模式处理（§9）。P0–P2 验收期间默认 `off`；2026-10-21 起默认 `on`，只有显式写 `off` 才关闭。
 
 ## 4. 前置（P0）：run 锁与归属
 
@@ -679,7 +679,7 @@ run 的半成品；而在 main 里禁掉所有 session 的 stash 会误伤非 pi
 
 代码：`core/run_lock.py`、`core/hook_token.py`、`core/run_worktree.py`（git 机制）、`scripts/pipeline_worktree.py`
 （artifact_cli 一侧的策略）、`core/run_owner_gate.py`、`core/worktree_write_gate.py`、`jobs/handlers/worktree_sweep.py`，
-artifact_cli / pipeline_test / router / stamper / needs_human_review 只加调用点。开关默认 `off`。
+artifact_cli / pipeline_test / router / stamper / needs_human_review 只加调用点。开关 2026-10-21 起默认 `on`。
 
 实现中发现并修掉的一个 git 细节：给临时 index 复制工作区 index 时必须保留 mtime（`copy2`）。git 用 index 文件本身的
 mtime 判断条目是否"racy"；复制出的新 mtime 会让同一秒内、同大小的修改被当成未修改，`T` 漏掉改动（测试稳定复现）。
@@ -691,7 +691,7 @@ mtime 判断条目是否"racy"；复制出的新 mtime 会让同一秒内、同�
 | 判定三（§6.1） | 对所有 session：run worktree 里的 stash、改别的 run 的 `run/*` 分支、指向 `WT_ROOT` 的 worktree 命令。只在 run worktree 里执行、或本 session 拥有 isolated run 时，才禁止动其他 ref / config / gc --prune 等 | 按 common dir 对所有 session 一律禁止，会挡掉主工作区里正常的 `git tag` / `git branch -D`（发布流程就要打 tag）。防的是"从 worktree 绕过集成"，这个收窄不影响它 |
 | 接管与 token（§4.2） | 只在开关为 on、或该 run 是 isolated 时生效 | 开关关闭时行为与今天完全一致（不改写命令、不拒绝组合命令） |
 | 运行期 `release`（§8.2） | owner 的 `run-update` 到终止状态、带 token 时立即释放；否则写 `release_requested`，由 daemon 清扫 | 与设计一致；补充：owner 在终止后再调 `stage-start` 会被拒绝并当场释放 |
-| 卡片删减（§6.2、§6.3） | 卡片不改；isolated run 的 stage-start 输出 `card_override`，逐阶段覆盖卡片里不适用的步骤（§16.8） | 开关默认 off，shared 模式仍需要卡片里的这些步骤。开关转为默认 on 时再删卡片 |
+| 卡片删减（§6.2、§6.3） | 卡片不改；isolated run 的 stage-start 输出 `card_override`，逐阶段覆盖卡片里不适用的步骤（§16.8） | shared 模式仍需要卡片里的这些步骤。开关 2026-10-21 起默认 on，但显式 off、hookless 执行器和 worktree 创建失败仍走 shared，所以卡片保留，card_override 继续生效 |
 | Canvas 已有 rail 行的路径刷新（§6.4） | 不改前端存的行；读文件时把已释放 worktree 下的路径映射到 main（§16.8） | rail 行的持久化在前端，一处后端映射覆盖所有旧行 |
 | 14 天闲置被释放后的重建（§8.3） | 下一次 stage-start 自动从 ledger 重建（§16.8） | 快照另记改动集的树和未 add 文件，重建后未 add 的仍是未 add |
 | srcgraph 缓存清理（§8.1） | 释放时删除（§16.8） | |
@@ -778,7 +778,7 @@ CLI 自己输出的后续命令（`next_action`、`complete_with`）也一律是
 token 在那里本来就没有要保护的东西。另一个已知缺口：gate 解析不了的 Bash 写入，进入一个还没有 worktree 的 repo 时不会被拦，
 改动留在那个 repo 的 main 里，交付时照旧按文件提交（`run_commit_isolated` 交给原来的 pathspec 提交），不会丢。
 
-**开关持久化。** `pipeline.worktree_mode` 进了 `DEFAULT_CONFIG`（默认 `off`），`PUT /api/settings` 接受并校验
+**开关持久化。** `pipeline.worktree_mode` 进了 `DEFAULT_CONFIG`（2026-10-21 起默认 `on`：缺这个键或 config 读不出来都算 on，只有 `off` 关闭；已经写了 `off` 的安装保持不变），`PUT /api/settings` 接受并校验
 `{"worktree_mode": "on" | "off"}`；`AppConfigManager.update()` 发现 config.json 在读入后被改过（手改）时，先重新读盘再合并，
 不再用启动时的缓存覆盖手改。`mode_enabled()` 每次直接读 config.json，打开或关闭都不用重启。
 
