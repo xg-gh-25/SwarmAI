@@ -21,7 +21,6 @@
     "test:run": "vitest run"
   },
   "dependencies": {
-    "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/material-symbols-outlined": "^5.2.33",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@tanstack/react-query": "^5.90.5",
