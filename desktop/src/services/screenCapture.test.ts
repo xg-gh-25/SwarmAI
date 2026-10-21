@@ -21,10 +21,9 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   readFile: (...args: unknown[]) => readFileMock(...args),
 }));
 
-import { captureCurrentScreen } from './tauri';
-
 describe('captureCurrentScreen', () => {
   beforeEach(() => {
+    vi.resetModules();
     invokeMock.mockReset();
     readFileMock.mockReset();
   });
@@ -37,6 +36,7 @@ describe('captureCurrentScreen', () => {
     const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]); // PNG magic + payload
     readFileMock.mockResolvedValue(bytes);
 
+    const { captureCurrentScreen } = await import('./tauri');
     const file = await captureCurrentScreen();
 
     expect(invokeMock).toHaveBeenCalledWith('screen_capture_current_display');
@@ -49,6 +49,7 @@ describe('captureCurrentScreen', () => {
 
   it('AC5(service): a Rust Err rejects the promise so the caller can toast', async () => {
     invokeMock.mockRejectedValue('capture failed (grant Screen Recording to SwarmAI)');
+    const { captureCurrentScreen } = await import('./tauri');
     await expect(captureCurrentScreen()).rejects.toBeTruthy();
     expect(readFileMock).not.toHaveBeenCalled();
   });

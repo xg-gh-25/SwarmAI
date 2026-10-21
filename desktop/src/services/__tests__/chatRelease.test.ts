@@ -11,21 +11,14 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../api', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn(),
-    put: vi.fn(),
-    delete: vi.fn(),
-  },
-}));
-
 import api from '../api';
 import { chatService } from '../chat';
 
+const postMock = vi.spyOn(api, 'post');
+
 describe('chatService.releaseSession (R6b)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    postMock.mockReset();
   });
 
   it('idle close: posts to /chat/release/{id} with NO body (unforced)', async () => {

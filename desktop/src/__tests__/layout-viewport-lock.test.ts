@@ -199,8 +199,8 @@ describe('Layout viewport lock — MUST NOT CHANGE (preserved behaviors)', () =>
     const layoutFile = readFileSync(
       resolve(PROJECT_ROOT, 'src/components/layout/ThreeColumnLayout.tsx'), 'utf-8'
     );
-    // TopBar: h-10 flex-shrink-0
-    expect(layoutFile).toMatch(/h-10.*flex-shrink-0/);
+    // TopBar: h-7 flex-shrink-0 (compact chrome, still fixed and unshrinkable)
+    expect(layoutFile).toMatch(/h-7.*flex-shrink-0/);
   });
 
   it('ChatHeader must remain fixed height and unshrinkable', () => {

@@ -19,17 +19,10 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../api', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn(),
-    put: vi.fn(),
-    delete: vi.fn(),
-  },
-}));
-
 import api from '../api';
 import { chatService } from '../chat';
+
+const getMock = vi.spyOn(api, 'get');
 
 /** Build N minimal backend message rows (snake_case wire shape). */
 function rows(n: number, startId = 1): Record<string, unknown>[] {
@@ -44,7 +37,7 @@ function rows(n: number, startId = 1): Record<string, unknown>[] {
 
 describe('chatService.getSessionMessagesReconcileTail (#4 cache isolation)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    getMock.mockReset();
     // Clear the module-level per-session cache between tests.
     chatService.invalidateMessageCache('sess-heavy');
   });

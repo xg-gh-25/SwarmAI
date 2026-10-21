@@ -11,17 +11,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../api', () => ({
-  default: { get: vi.fn() },
-}));
-
 import api from '../api';
 import { chatService } from '../chat';
 
-const mockGet = api.get as unknown as ReturnType<typeof vi.fn>;
+const mockGet = vi.spyOn(api, 'get');
 
 describe('chatService.getStreamingState — boundary mapping', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => mockGet.mockReset());
 
   it('maps all 6 fields snake→camel for an AskUserQuestion waiting_input session', async () => {
     mockGet.mockResolvedValue({
