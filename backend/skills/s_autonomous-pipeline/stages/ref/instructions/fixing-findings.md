@@ -40,9 +40,9 @@ Applies everywhere a review returns findings:
 | REVIEW fan-out (spec-compliance + experts + inline RP checks) | the whole fan-out | the REVIEW artifact's fixed findings (`invariant`, `root_cause`, `class_fix`, `break_test`) |
 | TEST regression / recheck failures | one regression run | `exit_evidence.fixes` grouped by cause; one recheck after the pass |
 | goal Final Quality Gate | the gate's findings + the ledger | the findings ledger, re-judged on the total diff |
-| DELIVER Gate-2 + meta-review | one Gate-2 round (one `gate2-recheck` batch) | `gate2-fixspec` → `FIXING_SPEC.md` (code-enforced: `gate2-recheck` refuses without an accepted spec) |
+| DELIVER Gate-2 + meta-review | one Gate-2 round (one `gate2-recheck` batch) | `gate2-fixspec` → `FIXING_SPEC.md` (legacy flow only; no accepted spec → push_ready false) |
 
 The fix-by-class validator (`design_spec.stage_errors`, `[GATE·validator]`) already
 refuses a fixed blocking finding without `invariant`, `root_cause`, `class_fix` and
 `break_test`; the cluster grouping and the single pass are `[MUST]` everywhere and
-code-enforced for Gate-2 by `gate2-fixspec` (`ref/deliver/gate2-findings.md`).
+checked for legacy Gate-2 by `gate2-fixspec` (`ref/deliver/gate2-findings.md`).

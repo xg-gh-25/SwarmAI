@@ -85,13 +85,39 @@ def _create(capsys, ws, **kw) -> dict:
     return json.loads(Path(out["file"]).read_text(encoding="utf-8"))
 
 
-def test_run_create_default_stays_legacy(ws, capsys):
-    """Gate-2 R1 (integration-af71f7, correctness-d96ccc): a default deterministic run on
-    a shared (non-isolated) checkout gets no snapshot, so no proof, so it can never be
-    push-ready; the default stays legacy until that case exists."""
+def test_run_create_defaults_to_deterministic_with_worktree_mode_on(ws, capsys, monkeypatch):
+    """Every profile starts on the deterministic Gate-2 flow while worktree mode is on
+    (reset plan 2026-10-21 step 1). A run that falls back to the shared checkout later is
+    switched to legacy at its first stage-start (test_gate2_termination_cli)."""
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+    for prof in (None, "full", "bugfix", "goal"):
+        st = _create_profile(capsys, ws, prof)
+        assert st.get("convergence") == "deterministic", prof
+        assert cli._deterministic(st)
+
+
+def test_run_create_stays_legacy_with_worktree_mode_off(ws, capsys, monkeypatch):
+    """Worktree mode off: the run is on the shared checkout, where the deterministic flow
+    has no snapshots and the publish path never reaches the stage-start fallback; a
+    deterministic default would refuse every published DELIVER (spawned=False)."""
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "off")
     st = _create(capsys, ws)
     assert st.get("convergence") != "deterministic"
     assert not cli._deterministic(st)
+
+
+def test_run_create_legacy_on_request(ws, capsys, monkeypatch):
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+    st = _create(capsys, ws, convergence="legacy")
+    assert st.get("convergence") != "deterministic"
+    assert not cli._deterministic(st)
+
+
+def _create_profile(capsys, ws, profile) -> dict:
+    args = SimpleNamespace(project="Proj", requirement="REQ", profile=profile, intent=None)
+    cli.cmd_run_create(args, ArtifactRegistry(workspace_root=str(ws)))
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    return json.loads(Path(out["file"]).read_text(encoding="utf-8"))
 
 
 def test_run_create_deterministic_on_request(ws, capsys):
@@ -264,7 +290,7 @@ def test_publish_deliver_projects_the_ledger_for_a_deterministic_run(tmp_path, m
     run_dir.mkdir(parents=True)
     (run_dir / "run.json").write_text(json.dumps(
         {"id": "run_pub", "profile": "full", "convergence": "deterministic",
-         "created_at": _AFTER_CUTOVER, "stages": []}))
+         "worktree_mode": "isolated", "created_at": _AFTER_CUTOVER, "stages": []}))
     seen = {}
 
     def spy_project(rid, rd, rs, data):

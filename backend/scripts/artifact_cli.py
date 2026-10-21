@@ -748,6 +748,32 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
                     if isinstance(_own, dict):
                         _pub_created_at = _own.get("created_at") or ""
                         _pub_convergence = _own.get("convergence")
+                        if (stage == "deliver" and _pub_convergence == "deterministic"
+                                and _own.get("worktree_mode") != "isolated"):
+                            # A DELIVER of a run that never got a worktree (this path skips
+                            # stage-start, where pipeline_worktree._shared switches such a
+                            # run; plan/build would have isolated it by now): no ledger
+                            # proofs, so it is judged by the legacy rules, and switched ON
+                            # DISK, as _shared does, so every later reader judges one flow.
+                            # Earlier stages never switch: worktree_mode is decided later.
+                            _why = ("deterministic needs an isolated run: DELIVER published "
+                                    "without a worktree")
+                            _own = dict(_own, convergence="legacy", convergence_fallback=_why)
+                            _pub_convergence = "legacy"
+                            _pub_warnings.append("this run uses the legacy Gate-2 flow: " + _why)
+
+                            def _to_legacy(d):
+                                if (d.get("convergence") != "deterministic"
+                                        or d.get("worktree_mode") == "isolated"):
+                                    return False   # changed since it was read: leave it
+                                d.update(convergence="legacy", convergence_fallback=_why)
+                            try:
+                                from core.run_lock import update_run
+                                update_run(_own_file, _to_legacy)
+                            except Exception as _ue:  # noqa: BLE001 — judged legacy here anyway
+                                _pub_warnings.append(
+                                    "run.json not switched to legacy "
+                                    f"({type(_ue).__name__}): only this publish judges it so")
                         _pub_run, _pub_run_dir = _own, _own_file.parent
                 except (FileNotFoundError, json.JSONDecodeError, OSError):
                     pass  # unknown/typo'd run id → "full" (strict, safe)
@@ -2477,13 +2503,19 @@ def _normalize_files_touched_arg(value):
 
 
 def _convergence_for(args) -> "str | None":
-    """run-create's Gate-2 flow: the explicit --convergence, else deterministic for a
-    direct run, else none (legacy)."""
+    """run-create's Gate-2 flow: the explicit --convergence, else deterministic for every
+    profile while worktree mode is on, else none (legacy).
+
+    The deterministic flow proves findings on snapshots of the run's own worktree. With
+    worktree mode off (the default of a fresh install) a run is on the shared checkout, and
+    the legacy publish / run-update path never reaches stage-start, where
+    pipeline_worktree._shared would switch it back; so it stays legacy from creation. A run
+    that falls back to the shared checkout later is still switched at stage-start."""
     asked = getattr(args, "convergence", None)
     if asked:
         return asked
-    prof = getattr(args, "profile", None)
-    return "deterministic" if prof and normalize_profile(prof) == "direct" else None
+    from core import run_worktree as rw
+    return "deterministic" if rw.mode_enabled() else None
 
 
 def cmd_run_create(args, reg: ArtifactRegistry) -> None:
@@ -13770,8 +13802,9 @@ def _fixspec_found(run_id: str, run_dir: Path, run_state: dict, artifact, got) -
 def _fixspec_recheck_check(run_id: str, run_dir: Path, run_state: dict
                            ) -> "tuple[dict[str, str] | None, str | None, list[str]]":
     """gate2-recheck's FIXING_SPEC check: (item → owning cluster, the refusal or None,
-    warnings). The refusal: the round has open items and no accepted spec covers them all
-    (the caller refuses on an enforced run and warns on an older one)."""
+    warnings). The problem: the round has open items and no accepted spec covers them all,
+    or (owner None) the round cannot be computed at all. The caller refuses only the
+    second, on an enforced run; a missing acceptance is a warning (push_ready false)."""
     ri = _fixspec_round(run_id, run_dir, run_state)
     if ri is None:
         return None, ("the Gate-2 marker store is unreadable: this round's open items cannot be "
@@ -13884,14 +13917,20 @@ def cmd_gate2_recheck(args, reg: ArtifactRegistry) -> None:
     if man.get("late"):
         fail("the round-1 snapshot was taken on a DELIVER re-entry, after fixes may have "
              "landed: re-check by re-spawning the round-1 prompts (`experts[].prompt_path`)")
-    # FIXING_SPEC chokepoint: no fix is re-checked before its cause is agreed (an accepted
-    # spec covers every open item of the round). Never waived by an unverified reason.
+    # FIXING_SPEC: a re-check without an accepted spec is not refused. Whether the
+    # fixspec-skeptic agreed is a model verdict, so it never stops the run (SOUL P5): the
+    # missing acceptance is a warning here and _fixspec_errors completes DELIVER degraded
+    # (push_ready false). An unreadable marker store (owner None) is not a verdict: the
+    # round's items cannot be computed at all, so an enforced run is still refused.
     owner, spec_err, pre_warn = _fixspec_recheck_check(run_id, run_dir, run_state)
     refuted = _fixspec_refuted(run_id, run_dir, run_state)
-    if spec_err and _fixspec_enforced(run_state):
+    if spec_err and owner is None and _fixspec_enforced(run_state):
         fail(spec_err)
-    if spec_err:
+    if spec_err and owner is None:
         pre_warn.append(f"(not enforced: run created before FIXSPEC_CUTOVER) {spec_err}")
+    elif spec_err:
+        pre_warn.append(f"no accepted fixing spec, re-check goes ahead and push_ready will be "
+                        f"false: {spec_err}")
     done_rounds = (g2 or {}).get("rounds") or {}
     files_touched = run_state.get("files_touched") if isinstance(run_state.get("files_touched"), list) else []
     try:
@@ -15116,9 +15155,10 @@ def main() -> None:
     p_run_create.add_argument("--requirement", required=True, help="Requirement text")
     p_run_create.add_argument("--profile", default=None, help="Pipeline profile: full/trivial/research/docs/bugfix/goal/direct")
     p_run_create.add_argument("--convergence", default=None, choices=("legacy", "deterministic"),
-                              help="Gate-2 flow: deterministic = gate2-next (models find, "
-                                   "tests decide); default legacy (gate2-ledger / gate2-fixspec / "
-                                   "gate2-recheck)")
+                              help="Gate-2 flow: deterministic = gate2-next (models find, tests "
+                                   "decide), the default while worktree mode is on; legacy = "
+                                   "gate2-ledger / gate2-fixspec / gate2-recheck, the default "
+                                   "with worktree mode off and the shared-checkout fallback")
     p_run_create.add_argument("--intent", default=None,
                               help="The user's original words (fallback when the session's message cannot be read)")
 

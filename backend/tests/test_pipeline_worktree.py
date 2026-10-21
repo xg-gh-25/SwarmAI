@@ -808,9 +808,9 @@ def test_an_abandoned_run_still_hands_back_its_report(flow):
     assert (f.parent / "REPORT.md").is_file() and out.get("report") == str(f.parent / "REPORT.md")
 
 
-def test_run_create_defaults_direct_to_deterministic_convergence(flow):
-    """XG 2026-10-20: a direct run gets the deterministic Gate-2 flow unless it opts
-    out with --convergence legacy; other profiles keep the legacy default."""
+def test_run_create_defaults_every_profile_to_deterministic_convergence(flow):
+    """Every profile gets the deterministic Gate-2 flow unless it opts out with
+    --convergence legacy (reset plan 2026-10-21 step 1)."""
     rid, f = _create(flow)
     assert _state(f).get("convergence") == "deterministic"
     rc, out = cli("run-create", "--project", "P", "--requirement", "y", "--profile",
@@ -818,6 +818,10 @@ def test_run_create_defaults_direct_to_deterministic_convergence(flow):
     assert rc == 0, out
     runs = flow["ws"] / "Projects" / "P" / ".artifacts" / "runs"
     assert "convergence" not in _state(runs / out["pipeline_id"] / "run.json")
-    rc, out = cli("run-create", "--project", "P", "--requirement", "z", "--profile", "full")
+    for prof in ("full", "bugfix", "trivial", "goal"):
+        rc, out = cli("run-create", "--project", "P", "--requirement", "z", "--profile", prof)
+        assert rc == 0, out
+        assert _state(runs / out["pipeline_id"] / "run.json").get("convergence") == "deterministic", prof
+    rc, out = cli("run-create", "--project", "P", "--requirement", "w")
     assert rc == 0, out
-    assert "convergence" not in _state(runs / out["pipeline_id"] / "run.json")
+    assert _state(runs / out["pipeline_id"] / "run.json").get("convergence") == "deterministic"

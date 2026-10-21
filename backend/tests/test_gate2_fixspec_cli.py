@@ -13,8 +13,9 @@ app-data dir, as in test_gate2_convergence / test_gate2_ledger_min):
   and ``_gate2_outcome`` then hands out the root-cause review before the cap (F6); its
   SOUND sends the spec to the skeptic (never an acceptance by itself), and a later
   reopen's trigger does not take the earlier round's PASS away
-- ``gate2-recheck`` refuses a round whose open items no accepted spec covers, and with
-  one writes the re-check prompt plus ``<expert>-recheck.map.json`` (item → cluster)
+- ``gate2-recheck`` goes ahead with a warning on a round whose open items no accepted
+  spec covers (a skeptic verdict never stops the run), refuses only when the marker
+  store is unreadable, and with an accepted spec writes the re-check prompt plus ``<expert>-recheck.map.json`` (item → cluster)
 - DELIVER ``_fixspec_errors``: a re-checked round with open items and no accepted spec,
   and a fixed blocking finding in no accepted cluster (or not in the ledger), are errors;
   rounds are numbered globally (a late Red Team counts in the round it joined); a run
@@ -439,12 +440,22 @@ def _prompts(run_dir):
         (p / f"{sid}.md").write_text(f"EXPERT-ID: {sid}\nreview\n\n## The change\nx\n")
 
 
-def test_recheck_refused_without_an_accepted_spec(env, monkeypatch, capsys):
+def test_recheck_without_an_accepted_spec_goes_ahead_and_warns(env, monkeypatch, capsys):
     audit, run_dir, t0 = env
     _review(audit, t0)
     _prompts(run_dir)
+    out = _recheck(run_dir, monkeypatch, capsys)
+    assert out["ok"] is True and {r["id"] for r in out["recheck"]} == {"correctness", "security"}
+    assert any("push_ready will be false" in w and "gate2-fixspec" in w for w in out["warnings"])
+
+
+def test_recheck_refuses_when_the_round_cannot_be_computed(env, monkeypatch, capsys):
+    audit, run_dir, t0 = env
+    _review(audit, t0)
+    _prompts(run_dir)
+    monkeypatch.setattr(cli, "_fixspec_round", lambda *a, **k: None)
     out = _recheck(run_dir, monkeypatch, capsys, expect_exit=True)
-    assert out["ok"] is False and "gate2-fixspec" in out["error"]
+    assert out["ok"] is False and "unreadable" in out["error"]
 
 
 def test_recheck_with_an_accepted_spec_maps_items_to_clusters(env, monkeypatch, capsys):
@@ -466,7 +477,7 @@ def test_recheck_before_the_cutover_warns_instead_of_refusing(env, monkeypatch, 
     _review(audit, t0)
     _prompts(run_dir)
     out = _recheck(run_dir, monkeypatch, capsys)
-    assert out["ok"] is True and any("not enforced" in w for w in out["warnings"])
+    assert out["ok"] is True and any("push_ready will be false" in w for w in out["warnings"])
 
 
 # ── DELIVER stage-complete ────────────────────────────────────────────────────

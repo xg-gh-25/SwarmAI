@@ -104,15 +104,17 @@ report the same cause at a new site (docs/design/pipeline-anti-whack-a-mole.md �
    `refuted` [{id, evidence}], not a cluster.
 3. `gate2-fixspec --data @/tmp/<R>/spec.json` validates, stores and renders FIXING_SPEC.md,
    then prints `next`: `skeptic` → spawn its `spawn` exactly (foreground); PASS → fix as the
-   spec says; BLOCK → revise and submit again. `root_cause` (a reopen, a second revision of
+   spec says; BLOCK → revise once and submit again, or fix as the spec says (no PASS only
+   lowers push_ready, it never stops the run). `root_cause` (a reopen, a second revision of
    one cluster, >= 2 new invariants, `redesign`, or the 3rd submission of a round) → no more
    fixing: run `gate2-recheck`, it hands out the ONE root-cause review; after it answers, run
    `gate2-recheck` again. SOUND → run step 3 again: the spec goes to the skeptic (only its
    PASS accepts a spec; a NEW trigger still goes to root_cause and ends the loop); WRONG or
    no verdict line ends the loop.
 4. Record each fix by class in its disposition (`invariant`, `root_cause`, `class_fix`,
-   `break_test`); a missed invariant → `design_updates`. `gate2-recheck` refuses until the
-   round's spec is accepted, and DELIVER refuses a fixed finding no accepted cluster owns.
+   `break_test`); a missed invariant → `design_updates`. `gate2-recheck` without an accepted
+   spec goes ahead with a warning, and DELIVER completes degraded (push_ready false) on a
+   round with no accepted spec or a fixed finding no accepted cluster owns.
    A round-1 specialist HIGH adds the Red Team to round 2's batch (`gate2-recheck`).
 Old backend (the skeptic's stop records no `verdict`): once a skeptic round has read this
 hand-out, re-run step 3 unchanged with `--unverified-reason "<why>"` (a verification gap:

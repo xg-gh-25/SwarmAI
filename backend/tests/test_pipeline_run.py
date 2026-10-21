@@ -37,6 +37,8 @@ def _run_cli(workspace: Path, *args: str) -> dict:
         "SWARM_TODO_DB": str(todo_db),
         "PATH": "/usr/bin:/bin",
         "PYTHONPATH": str(Path(__file__).resolve().parent.parent),
+        # run-create's Gate-2 default follows worktree mode: pin it, never the host config
+        "SWARM_WORKTREE_MODE": "off",
     }
     result = subprocess.run(
         [sys.executable, str(cli_path), *args],
@@ -188,6 +190,30 @@ class TestRunCreate:
         r2 = _run_cli(workspace, "run-create", "--project", "TestProject",
                        "--requirement", "Task 2")
         assert r1["pipeline_id"] != r2["pipeline_id"]
+
+
+def test_a_never_isolated_deterministic_run_publishes_deliver_by_legacy_rules(workspace):
+    """A run marked deterministic that never reached stage-start (so never got a worktree)
+    has no ledger to prove findings on: publish judges its DELIVER by the legacy rules
+    instead of refusing it for spawned=False."""
+    rid = _run_cli(workspace, "run-create", "--project", "TestProject", "--requirement", "R",
+                   "--profile", "full", "--convergence", "deterministic")["pipeline_id"]
+    assert _publish_valid_deliver(workspace, rid).startswith("art_")
+    state = _run_cli(workspace, "run-get", "--project", "TestProject", "--run-id", rid)
+    # switched on disk, so every later reader judges the same flow
+    assert state["convergence"] == "legacy" and "without a worktree" in state["convergence_fallback"]
+
+
+def test_publishing_an_early_stage_never_switches_a_deterministic_run(workspace):
+    """worktree_mode is decided at the first plan/build stage-start, so it is unset when
+    EVALUATE is published: that publish must leave the run deterministic."""
+    rid = _run_cli(workspace, "run-create", "--project", "TestProject", "--requirement", "R",
+                   "--profile", "full", "--convergence", "deterministic")["pipeline_id"]
+    _run_cli(workspace, "publish", "--project", "TestProject", "--run-id", rid,
+             "--type", "evaluation", "--producer", "test", "--summary", "s",
+             "--stage", "evaluate", "--data", json.dumps({"recommendation": "GO"}))
+    state = _run_cli(workspace, "run-get", "--project", "TestProject", "--run-id", rid)
+    assert state["convergence"] == "deterministic" and "convergence_fallback" not in state
 
 
 class TestRunUpdate:

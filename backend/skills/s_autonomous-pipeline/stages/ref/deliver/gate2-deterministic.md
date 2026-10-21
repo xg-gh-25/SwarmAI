@@ -1,9 +1,11 @@
 # DELIVER ref — Gate-2 in a deterministic run
 
 Read when: `stage-start --stage deliver` returned `gate2_flow` (run.json `convergence:
-deterministic`, set by `run-create --convergence deterministic`). It replaces deliver.md
-steps 3, 4, 5 and 7 (4b, the one full-scope regression run, stays). A run without it is
-on the legacy flow and keeps those steps.
+deterministic`, which `run-create` sets for every profile while worktree mode is on,
+unless `--convergence legacy`).
+It replaces deliver.md steps 3, 4, 5 and 7 (4b, the one full-scope regression run, stays).
+A run without it (a shared-checkout run, see below) is on the legacy flow and keeps those
+steps.
 
 Models find, tests decide. Experts report findings; a finding closes only when its break
 test is proven: it FAILs by an assertion on the round's snapshot (2 of 2 runs) and PASSes
