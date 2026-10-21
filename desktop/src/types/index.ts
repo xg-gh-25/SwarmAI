@@ -247,7 +247,7 @@ export interface ToolResultContent {
   /** On an Agent step's result: its sub-agent's final status, step count,
    *  duration and summary. Live AND persisted — the only copy of the outcome
    *  after the stream (subagent_progress is never persisted). */
-  subagent?: Pick<SubAgentProgress, 'status' | 'toolUses' | 'durationMs' | 'summary'>;
+  subagent?: Pick<SubAgentProgress, 'status' | 'toolUses' | 'durationMs' | 'summary' | 'background'>;
 }
 
 /** Live status of a sub-agent, from the backend `subagent_progress` event
@@ -264,6 +264,9 @@ export interface SubAgentProgress {
   toolUses?: number;
   durationMs?: number;
   summary?: string;
+  /** It was started in the background (run_in_background): set on the stored
+   *  result once its end was written (backend core/background_agents.py). */
+  background?: boolean;
 }
 
 // AskUserQuestion types
@@ -507,9 +510,16 @@ export interface TurnNoticeContent {
   at?: string;
 }
 
+/** At the top of a turn the CLI started to answer finished background agents
+ *  (backend core/background_agents.py): which ones, how they ended. */
+export interface BackgroundFinishedContent {
+  type: 'background_finished';
+  agents: Array<{ toolUseId?: string; description?: string; status: string; durationMs?: number }>;
+}
+
 export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent
   | PipelineRunContent | PipelineAttentionContent | PipelineSummaryContent | TurnDeliverablesContent | TurnChangesContent
-  | TurnNoticeContent;
+  | TurnNoticeContent | BackgroundFinishedContent;
 
 export interface Message {
   id: string;

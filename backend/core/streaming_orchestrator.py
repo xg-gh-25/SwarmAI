@@ -242,7 +242,7 @@ class StreamingOrchestrator:
             "pending_heredoc_writes": {}, "pending_script_sweeps": {},
             "pending_completion": {}, "tool_names": {}, "tool_parent": {},
             "task_parent": {}, "subagent_last": {}, "pending_stage_watch": {},
-            "background_agents": {},
+            "background_agents": {}, "agent_inputs": {},
         }
 
     def reset_turn_carry(self) -> None:
@@ -1046,6 +1046,18 @@ class StreamingOrchestrator:
             if event.get(key) is not None:
                 cur[key] = event[key]
 
+    def _launch_background_agent(self, tool_use_id: str, tool_input: Any) -> None:
+        """Record a top-level background Agent with the session's registry
+        (core/background_agents.py), so its status outlives this turn."""
+        reg = getattr(self._parent, "background_agents", None)
+        if reg is None:
+            return
+        desc = tool_input.get("description") if isinstance(tool_input, dict) else None
+        try:
+            reg.launch(tool_use_id, desc or "")
+        except Exception:  # noqa: BLE001 — a display aid never breaks the stream
+            logger.exception("streaming_orchestrator.background_launch_failed")
+
     @staticmethod
     def _subagent_final(state: "dict | None", is_error: bool) -> "dict | None":
         """The sub-agent's outcome to keep on its Agent tool_result: its last
@@ -1497,6 +1509,8 @@ class StreamingOrchestrator:
         # at once (the agent was launched, it has not finished), so it is kept as
         # status "background", never "completed". Values unused (a dict for the carry).
         _background_agents: dict[str, bool] = self._turn_carry.setdefault("background_agents", {})
+        # top-level Agent tool_use id → its description (for a launch seen only in its result)
+        _agent_inputs: dict[str, dict] = self._turn_carry.setdefault("agent_inputs", {})
         # tool_use_id → run_id for ANY Bash `artifact_cli.py … --run-id <id>` call.
         # Its successful result re-reads run.json and yields a persisted
         # pipeline_stage block per newly finished stage (_pipeline_stage_events) —
@@ -2053,6 +2067,9 @@ class StreamingOrchestrator:
                                     _tr.get("content") or "").lstrip().startswith("Async agent launched")
                                 if _launched and not _tr["is_error"]:
                                     # launched, still running: its outcome arrives later
+                                    if _tool_parent.get(_blk.tool_use_id) is None:
+                                        self._launch_background_agent(
+                                            _blk.tool_use_id, _agent_inputs.pop(_blk.tool_use_id, None))
                                     _sa_final = {**(_sa_final or {}), "status": "background"}
                                 if _sa_final:
                                     _tr["subagent"] = _sa_final
@@ -2567,9 +2584,12 @@ class StreamingOrchestrator:
                             _tool_parent[block.id] = _am_parent
                         content_blocks.append(_tu_block)
                         _tool_names[block.id] = block.name
+                        if block.name == "Agent" and _am_parent is None and isinstance(block.input, dict):
+                            _agent_inputs[block.id] = {"description": block.input.get("description")}
                         if block.name == "Agent" and isinstance(block.input, dict) \
-                                and block.input.get("run_in_background"):
+                                and block.input.get("run_in_background") and _am_parent is None:
                             _background_agents[block.id] = True
+                            self._launch_background_agent(block.id, block.input)
                         # ── Record tool call for compaction guard ──
                         self._parent._compaction_guard.record_tool_call(
                             block.name, block.input

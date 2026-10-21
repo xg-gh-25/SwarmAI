@@ -826,6 +826,15 @@ async def get_admission_state_endpoint():
     }
 
 
+def _bg_snapshot(unit) -> list:
+    from core.background_agents import BackgroundAgents
+    reg = getattr(unit, "background_agents", None)
+    try:
+        return reg.snapshot() if isinstance(reg, BackgroundAgents) else []
+    except Exception:  # noqa: BLE001 — a display aid
+        return []
+
+
 @router.get("/sessions/streaming-state")
 async def get_streaming_state_endpoint():
     """Return the streaming state for all active sessions.
@@ -914,6 +923,9 @@ async def get_streaming_state_endpoint():
             "pending_count": pending_count,
             "pending_question": pending_question,
             "last_drained_seqs": getattr(unit, "_last_drained_seqs", []),
+            # Background agents (core/background_agents.py) of this daemon run: the
+            # live status is also pushed as `background_agents` envelopes on /events.
+            "background_agents": _bg_snapshot(unit),
         }
     return {"sessions": result}
 

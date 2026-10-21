@@ -114,3 +114,21 @@ describe('chatService.getStreamingState — boundary mapping', () => {
     expect(out).toEqual({});
   });
 });
+
+describe('chatService.getStreamingState — background agents snapshot', () => {
+  beforeEach(() => mockGet.mockReset());
+
+  it('every read replaces the background agents store (stores/backgroundAgentsStore)', async () => {
+    const { backgroundAgentsStore } = await import('../../stores/backgroundAgentsStore');
+    backgroundAgentsStore.reset();
+    mockGet.mockResolvedValue({ data: { sessions: {
+      s1: { streaming: false, state: 'idle', background_agents: [{ toolUseId: 'ag1', description: 'd', status: 'running' }] },
+      s2: { streaming: false, state: 'idle' },
+    } } });
+    await chatService.getStreamingState();
+    expect(backgroundAgentsStore.loaded()).toBe(true);
+    expect(backgroundAgentsStore.get('s1').map((a) => a.status)).toEqual(['running']);
+    expect(backgroundAgentsStore.get('s2')).toEqual([]);
+    backgroundAgentsStore.reset();
+  });
+});

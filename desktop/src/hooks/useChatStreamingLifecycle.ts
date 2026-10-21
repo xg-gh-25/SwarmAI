@@ -55,6 +55,7 @@ import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurf
 import { errorFieldsFromEvent } from './errorFields';
 import { chatService } from '../services/chat';
 import { sessionEvents } from '../services/sessionEvents';
+import { backgroundAgentsStore } from '../stores/backgroundAgentsStore';
 import {
   createTabTurnState, onPostSend, routePostEvent, routeSubEvent, onPostComplete, onPostLost,
   onSubDisconnected, syncTurnStateSession,
@@ -4770,6 +4771,11 @@ export function useChatStreamingLifecycle(
     const offEvents = sessionEvents.subscribe((ev) => {
       const sid = ev.sessionId;
       if (!sid) return;
+      if (ev.type === 'background_agents') {
+        // a background agent changed status: not a turn event (stores/backgroundAgentsStore)
+        backgroundAgentsStore.apply(sid, (ev as { agents?: unknown }).agents);
+        return;
+      }
       // Every tab sees every event; the router's ownership rule decides what is
       // the tab's own (its session, its bound turn, or a candidate while its
       // first send has no session yet) — one rule, in sessionTurnRouter.

@@ -647,6 +647,42 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                 rows = await cursor.fetchall()
                 return [self._row_to_dict(row) for row in rows]
 
+    async def update_agent_result(self, session_id: str, tool_use_id: str, subagent: dict) -> bool:
+        """Set the ``subagent`` outcome on the stored Agent tool_result ``tool_use_id``
+        of a session (a background agent's final status arrives turns later).
+        Returns True when a row was updated. The match is narrowed in SQL by the id
+        and done exactly on the decoded blocks."""
+        import json as _json
+        needle = f'%"tool_use_id": "{tool_use_id}"%'
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                f"SELECT id, content FROM {self.table_name} WHERE session_id = ? AND content LIKE ? "
+                f"ORDER BY created_at DESC LIMIT 5",
+                (session_id, needle),
+            ) as cursor:
+                rows = await cursor.fetchall()
+            for row_id, raw in rows:
+                try:
+                    blocks = _json.loads(raw) if isinstance(raw, str) else raw
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(blocks, list):
+                    continue
+                hit = False
+                for blk in blocks:
+                    if isinstance(blk, dict) and blk.get("type") == "tool_result" \
+                            and blk.get("tool_use_id") == tool_use_id and not blk.get("parent_tool_use_id"):
+                        blk["subagent"] = dict(subagent)
+                        hit = True
+                if hit:
+                    await conn.execute(
+                        f"UPDATE {self.table_name} SET content = ?, updated_at = ? WHERE id = ?",
+                        (self._serialize_value(blocks), datetime.now().isoformat(), row_id),
+                    )
+                    await conn.commit()
+                    return True
+        return False
+
     async def assistant_replied_since(self, session_id: str, since_iso: str) -> bool:
         """Return True if the session has ≥1 assistant message created at/after
         `since_iso`. Used by the todo auto-complete sweep (run_d28de5fd).

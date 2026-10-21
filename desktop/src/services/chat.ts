@@ -25,8 +25,11 @@ interface RawStreamingStateEntry {
     options?: string[];
   } | null;
   last_drained_seqs?: number[];
+  /** core/background_agents.py snapshot (camelCase keys already) */
+  background_agents?: unknown[];
 }
 import api from './api';
+import { backgroundAgentsStore } from '../stores/backgroundAgentsStore';
 import { notifyContextUsageStale, type ContextUsageSnapshot } from '../hooks/contextUsage';
 import { getApiBaseUrl } from './tauri';
 
@@ -597,7 +600,10 @@ export const chatService = {
       '/chat/sessions/streaming-state',
     );
     const out: Record<string, StreamingStateEntry> = {};
+    // The daemon's background agents ride every read (stores/backgroundAgentsStore).
+    const bg: Record<string, unknown> = {};
     for (const [sid, raw] of Object.entries(response.data.sessions ?? {})) {
+      bg[sid] = raw.background_agents ?? [];
       const rawPq = raw.pending_question;
       // Only map an AskUserQuestion payload (non-empty `questions`). A
       // command-permission prompt also sets pending_question on WAITING_INPUT but
@@ -616,6 +622,7 @@ export const chatService = {
         lastDrainedSeqs: raw.last_drained_seqs ?? [],
       };
     }
+    backgroundAgentsStore.applySnapshot(bg);
     return out;
   },
 

@@ -917,6 +917,12 @@ class SessionUnit:
         # CLI-initiated turns waiting for the router's sink (FIFO).
         self._injected_turns: "_deque[Any]" = _deque()
         self._on_cli_event: Optional[Callable[[str, str], None]] = on_cli_event
+        # Background Agents (run_in_background) and their status, across turns
+        # (core/background_agents.py). A change is handed to the router through
+        # on_cli_event("background_agent"); the entry waits in _bg_agent_changes.
+        from .background_agents import BackgroundAgents
+        self.background_agents = BackgroundAgents(on_change=self._on_bg_agent_change)
+        self._bg_agent_changes: "_deque[dict]" = _deque(maxlen=200)
 
         # ── Tool-hang tracking (run_fb6e94a9) ─────────────────────
         # tool_use_id → monotonic-ish start time (time.time()) for EVERY tool
@@ -1206,6 +1212,7 @@ class SessionUnit:
             # Never two consumers of one stream (I1): every respawn path tears the
             # old client down first, but a missed path must not leave it reading.
             old.close()
+            self.background_agents.lose_all()
             self._stream_reader = None
         if not callable(getattr(client, "receive_messages", None)):
             logger.warning(
@@ -1222,6 +1229,7 @@ class SessionUnit:
             on_injected=self._on_reader_injected,
             on_idle=self._on_reader_idle,
             on_error=self._on_reader_error,
+            on_task=self._on_reader_task,
         )
         self._stream_reader.start()
 
@@ -1229,6 +1237,28 @@ class SessionUnit:
         """Reader callback: the CLI started a turn nobody claimed."""
         self._injected_turns.append(ts)
         self._emit_cli_event("injected")
+
+    def _on_reader_task(self, sub: str, msg: Any) -> None:
+        """Reader callback: a task frame (any time). Feeds the background agents."""
+        data = msg.data if isinstance(getattr(msg, "data", None), dict) else {}
+        task_id = getattr(msg, "task_id", None) or data.get("task_id")
+        tool_use_id = getattr(msg, "tool_use_id", None) or data.get("tool_use_id")
+        if sub == "task_started":
+            self.background_agents.task_started(task_id, tool_use_id)
+            return
+        if sub == "task_notification":
+            status = getattr(msg, "status", None) or data.get("status")
+        else:
+            patch = data.get("patch")
+            status = patch.get("status") if isinstance(patch, dict) else None
+        self.background_agents.task_finished(
+            task_id, status, tool_use_id=tool_use_id,
+            summary=getattr(msg, "summary", None) or data.get("summary"),
+            usage=getattr(msg, "usage", None) or data.get("usage"))
+
+    def _on_bg_agent_change(self, entry: dict) -> None:
+        self._bg_agent_changes.append(entry)
+        self._emit_cli_event("background_agent")
 
     def _on_reader_idle(self) -> None:
         """Reader callback: the CLI reported idle."""
@@ -1239,7 +1269,9 @@ class SessionUnit:
 
         Turns the CLI finished before it died are still queued with their frames:
         hand them to the sink first, then re-drive the pending drain, whose send()
-        respawns the dead subprocess with --resume (see send())."""
+        respawns the dead subprocess with --resume (see send()). Its background
+        agents died with it."""
+        self.background_agents.lose_all()
         if self._queued_injected():
             self._emit_cli_event("injected")
         self._emit_cli_event("idle")
@@ -5009,6 +5041,8 @@ class SessionUnit:
         if _reader is not None:
             # Fails any open or waiting turn stream; a later claim raises.
             _reader.close()
+            # the subprocess goes: a background agent still running dies with it
+            self.background_agents.lose_all()
         self._stream_reader = None
         self._turn_stream = None
         self._injected_turns = _deque()

@@ -53,10 +53,14 @@ def _task(cls, **kw):
     return cls(**base, **kw)
 
 
+_LAST_UNIT: list = []
+
+
 async def _run(msgs) -> list[dict]:
     from core import permission_manager as _pm
 
     unit = SessionUnit(session_id="sub-stream", agent_id="default")
+    _LAST_UNIT[:] = [unit]
     unit.state = SessionState.STREAMING
     unit._streaming_start_time = unit._last_event_time = time.time()
     orch = StreamingOrchestrator(unit)
@@ -235,6 +239,11 @@ async def test_a_background_agent_result_is_kept_as_background_not_completed():
     assert res[AGENT_ID]["subagent"]["status"] == "background"
     assert res["ag2"]["subagent"] == {"status": "background"}
     assert "subagent" not in res["ag3"]
+    # both launches reach the session's registry, with their description, running
+    reg = {e["toolUseId"]: e for e in _LAST_UNIT[0].background_agents.snapshot()}
+    assert set(reg) == {AGENT_ID, "ag2"}
+    assert reg[AGENT_ID]["description"] == "Measure" and reg["ag2"]["description"] == "Other"
+    assert {e["status"] for e in reg.values()} == {"running"}
 
 
 def test_subagent_final_resolves_a_still_running_status_from_the_result():

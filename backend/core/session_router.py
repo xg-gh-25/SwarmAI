@@ -3057,6 +3057,44 @@ class SessionRouter:
             self.enqueue_injected(session_id)
         elif kind == "idle":
             self.enqueue_drain(session_id)
+        elif kind == "background_agent":
+            self._publish_background_agents(session_id)
+
+    def _publish_background_agents(self, session_id: str) -> None:
+        """A background agent changed status (core/background_agents.py): publish the
+        session's agents to the window's event stream (a ``background_agents``
+        envelope outside any turn), and write a final status into its stored Agent
+        result so a reload shows it."""
+        unit = self._units.get(session_id)
+        from .background_agents import BackgroundAgents
+        reg = getattr(unit, "background_agents", None)
+        changes = getattr(unit, "_bg_agent_changes", None)
+        if not isinstance(reg, BackgroundAgents) or not isinstance(changes, deque):
+            return
+        try:
+            session_events.hub().publish(
+                session_id, {"type": "background_agents", "agents": reg.snapshot()}, turn_id="")
+        except Exception as exc:  # noqa: BLE001 — a display aid
+            logger.warning("session_router.background_agents_publish_failed session_id=%s: %s",
+                           session_id, exc)
+        while changes:
+            entry = changes.popleft()
+            if entry.get("status") == "running":
+                continue
+            sub = {k: entry[k] for k in ("status", "durationMs", "toolUses", "summary") if k in entry}
+            sub["background"] = True  # it ran in the background (the row says so after a reload)
+            try:
+                asyncio.ensure_future(self._store_background_agent(session_id, entry["toolUseId"], sub))
+            except RuntimeError:
+                pass  # no running loop (sync test)
+
+    async def _store_background_agent(self, session_id: str, tool_use_id: str, sub: dict) -> None:
+        try:
+            from database import db
+            await db.messages.update_agent_result(session_id, tool_use_id, sub)
+        except Exception as exc:  # noqa: BLE001 — a display aid
+            logger.warning("session_router.background_agent_store_failed session_id=%s: %s",
+                           session_id, exc)
 
     def enqueue_injected(self, session_id: str) -> None:
         """Start the session's sink task unless one is running. Non-blocking."""
@@ -3114,6 +3152,23 @@ class SessionRouter:
         row_key = f"{client_id}-asst"
 
         async def persisted_frames() -> AsyncIterator[dict]:
+            # What this CLI turn answers: the background agents that finished since
+            # the last one (one line at its top), persisted like any block.
+            from .background_agents import BackgroundAgents
+            _bg = getattr(unit, "background_agents", None)
+            finished = _bg.take_unannounced() if isinstance(_bg, BackgroundAgents) else []
+            if finished:
+                block = {"type": "background_finished", "agents": [
+                    {k: a[k] for k in ("toolUseId", "description", "status", "durationMs") if k in a}
+                    for a in finished]}
+                event0 = {"type": "assistant", "content": [block], "model": None}
+                try:
+                    await self._persist_stream_event(session_id, event0, pending, label="injected",
+                                                      client_id=row_key)
+                except Exception as exc:  # noqa: BLE001 — F4
+                    logger.warning("session_router.background_finished_persist_failed session_id=%s: %s",
+                                   session_id, exc)
+                yield event0
             # Persist first, then hand the event on to be published, so a tab
             # that reloads on turn_end finds every row it was shown live.
             async for event in unit._read_formatted_response():

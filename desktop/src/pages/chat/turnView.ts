@@ -65,6 +65,7 @@
  *          ToolStatus / StepLabel / StepVerb / ToolCallView / NextStepsResult types
  */
 import type {
+  BackgroundFinishedContent,
   ContentBlock,
   ToolResultContent,
   ToolUseContent,
@@ -191,6 +192,9 @@ export interface TurnView {
   /** The latest backend `turn_notice` (why a call did not finish) and its content
    *  index: a call started before it with no result was lost by that event. */
   notice?: { reason: string; cause?: string; index: number };
+  /** A turn the CLI started to answer finished background agents: those agents
+   *  (`background_finished`, shown as one line at the turn's top). */
+  backgroundFinished?: BackgroundFinishedContent['agents'];
 }
 
 const INTERRUPT_TYPES = new Set(['ask_user_question', 'cmd_permission_request', 'escalation']);
@@ -275,7 +279,7 @@ const standInAgent = (id: string): ToolUseContent => ({
 /** Backend-written display blocks that are not part of the turn's flow (the run's
  *  alignment, what needs the user, the turn's products): lifted into TurnView
  *  fields, invisible to segments, the done rule and the outcome. */
-const DISPLAY_TYPES = new Set(['pipeline_run', 'pipeline_attention', 'pipeline_summary', 'turn_deliverables', 'turn_changes', 'turn_notice']);
+const DISPLAY_TYPES = new Set(['pipeline_run', 'pipeline_attention', 'pipeline_summary', 'turn_deliverables', 'turn_changes', 'turn_notice', 'background_finished']);
 
 /** Derive the display units for one assistant message. Pure.
  *  `progress` is the streaming message's live sub-agent status, by Agent id. */
@@ -370,6 +374,7 @@ export function deriveTurnView(
   }
   let stoppedMarker = false;
   let notice: TurnView['notice'];
+  let backgroundFinished: TurnView['backgroundFinished'];
   let thoughts = 0;
   let texts = 0;
   let attention: PipelineAttentionContent | undefined;
@@ -484,6 +489,10 @@ export function deriveTurnView(
     }
     if (block.type === 'pipeline_attention') { attention = block; return; }
     if (block.type === 'pipeline_summary') { summary = block; return; }
+    if (block.type === 'background_finished') {
+      if (Array.isArray(block.agents) && block.agents.length) backgroundFinished = [...(backgroundFinished ?? []), ...block.agents];
+      return;
+    }
     if (block.type === 'turn_notice') {
       notice = { reason: String(block.reason || ''), cause: block.cause, index };
       return;
@@ -613,7 +622,7 @@ export function deriveTurnView(
     .filter((u): u is Extract<TurnUnit, { kind: 'outcome' }> => u.kind === 'outcome')
     .map((u) => u.text)
     .join('\n\n');
-  return { units, nextSteps, copyText, run, attention, summary, deliverables, changes, liveStage, midWork, pipelineStart, stoppedMarker, notice };
+  return { units, nextSteps, copyText, run, attention, summary, deliverables, changes, liveStage, midWork, pipelineStart, stoppedMarker, notice, backgroundFinished };
 }
 
 // ── Step labels ─────────────────────────────────────────────────────────────

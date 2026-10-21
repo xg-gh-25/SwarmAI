@@ -31,6 +31,7 @@ import { AssistantMessageView } from '../AssistantMessageView';
 import { ToastProvider } from '../../../../contexts/ToastContext';
 import { FOLD_DELAY_MS } from '../../../../hooks/useLinger';
 import { ReadingContext } from '../../readingContext';
+import { backgroundAgentsStore } from '../../../../stores/backgroundAgentsStore';
 import { chatService } from '../../../../services/chat';
 import type { Message, ContentBlock, SubAgentProgress } from '../../../../types';
 
@@ -285,6 +286,7 @@ describe('AC5 — the Agents panel', () => {
   });
 
   it('an agent started in the background says in background, not done', () => {
+    backgroundAgentsStore.reset();
     const launched = { type: 'tool_result', toolUseId: 'g1', content: 'Async agent launched', isError: false, truncated: false,
       subagent: { status: 'background' } } as ContentBlock;
     render(view([tx('go'), agent('g1', 'measure reflect'), launched, bash('x', 'ls'), tr('x'), tx('Waiting for it.')], false));
@@ -295,6 +297,59 @@ describe('AC5 — the Agents panel', () => {
     const panel = screen.getByTestId('agents-panel').textContent ?? '';
     expect(panel).toContain('1 in background');
     expect(panel).not.toContain('done');
+  });
+
+  describe('a background agent follows the daemon’s status in place', () => {
+    const launched = { type: 'tool_result', toolUseId: 'g1', content: 'Async agent launched', isError: false, truncated: false,
+      subagent: { status: 'background' } } as ContentBlock;
+    const turn = [tx('go'), agent('g1', 'measure reflect'), launched, tx('Waiting for it.')];
+    const rowOf = () => {
+      fireEvent.click(screen.getByTestId('group-toggle'));
+      return screen.getByTestId('agent-row');
+    };
+    afterEach(() => { backgroundAgentsStore.reset(); });
+
+    it('running while the daemon says so', () => {
+      backgroundAgentsStore.applySnapshot({ s1: [{ toolUseId: 'g1', description: 'measure reflect', status: 'running' }] });
+      render(view(turn, false));
+      expect(within(rowOf()).getByTestId('agent-background').textContent).toBe('in background');
+    });
+
+    it('done in background, with its time, once the daemon saw it end — no reload', () => {
+      backgroundAgentsStore.applySnapshot({ s1: [{ toolUseId: 'g1', status: 'running' }] });
+      render(view(turn, false));
+      act(() => { backgroundAgentsStore.apply('s1', [{ toolUseId: 'g1', status: 'completed', durationMs: 252000 }]); });
+      const row = rowOf();
+      expect(row.textContent).toContain('✓');
+      expect(within(row).getByTestId('agent-background').textContent).toBe('done in background');
+      expect(row.textContent).toContain('4m 12s');
+      expect(screen.getByTestId('agents-panel').textContent).toContain('1 done');
+    });
+
+    it('lost when the daemon does not know it (it restarted, or the CLI went away)', () => {
+      backgroundAgentsStore.applySnapshot({ s1: [] });
+      render(view(turn, false));
+      const row = rowOf();
+      expect(row.textContent).toContain('■');
+      expect(within(row).getByTestId('agent-background').textContent).toContain('lost');
+    });
+
+    it('after a reload the stored end is shown as is', () => {
+      const ended = { ...(launched as object), subagent: { status: 'completed', durationMs: 9000, background: true } } as ContentBlock;
+      backgroundAgentsStore.applySnapshot({ s1: [] });
+      render(view([tx('go'), agent('g1', 'measure reflect'), ended, tx('Waiting for it.')], false));
+      expect(within(rowOf()).getByTestId('agent-background').textContent).toBe('done in background');
+    });
+  });
+
+  it('a turn the CLI started for finished background agents says which, first', () => {
+    const fin = { type: 'background_finished', agents: [{ toolUseId: 'g1', description: 'Measure REFLECT', status: 'completed', durationMs: 252000 }] } as ContentBlock;
+    const { container } = render(view([fin, tx('Here is what it found.')], false));
+    const line = screen.getByTestId('background-finished');
+    expect(line.textContent).toContain('Measure REFLECT');
+    expect(line.textContent).toContain('finished · 4m 12s');
+    // it comes before the turn's text
+    expect(container.textContent!.indexOf('Measure REFLECT')).toBeLessThan(container.textContent!.indexOf('Here is what it found.'));
   });
 
   it('calls of an agent started in an earlier turn get a stand-in Agent step, not hidden', () => {

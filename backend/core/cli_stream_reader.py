@@ -36,7 +36,8 @@ Turn ownership (verified against the real CLI, see the design doc §2):
 Quiescence (``quiescent``): the CLI may be written to only when its last
 ``session_state_changed`` was ``idle`` with no finished-task signal since (a
 ``task_notification`` or a terminal ``task_updated``), no turn open and no claim waiting. Without session-state frames (an older CLI) a ResultMessage
-counts as idle. ``on_idle`` fires whenever the CLI reports idle.
+counts as idle. ``on_idle`` fires whenever the CLI reports idle. ``on_task(subtype, msg)`` gets every
+``task_started`` / ``task_notification`` / ``task_updated`` frame, turn open or not.
 
 Failure:
 
@@ -174,8 +175,10 @@ class CliStreamReader:
         on_injected: Optional[Callable[[TurnStream], None]] = None,
         on_idle: Optional[Callable[[], None]] = None,
         on_error: Optional[Callable[[], None]] = None,
+        on_task: Optional[Callable[[str, Any], None]] = None,
     ) -> None:
         self._client = client
+        self._on_task = on_task
         self._session_id = session_id
         self._on_injected = on_injected
         self._on_idle = on_idle
@@ -393,6 +396,8 @@ class CliStreamReader:
                 else:
                     self._idle = False
                 return
+            if sub in ("task_started", "task_notification", "task_updated"):
+                self._task_event(sub, msg)
             if sub == "task_started":
                 tid = data.get("task_id")
                 if tid:
@@ -442,6 +447,16 @@ class CliStreamReader:
         self._deliver(msg)
         if isinstance(msg, ResultMessage):
             self._close_turn(msg)
+
+    def _task_event(self, sub: str, msg: Any) -> None:
+        """Hand a task frame to the session (``on_task``), with or without a turn
+        open: a background agent's start and end arrive between turns too."""
+        if self._on_task is None:
+            return
+        try:
+            self._on_task(sub, msg)
+        except Exception:  # noqa: BLE001 — a display aid never stops reading
+            logger.exception("cli_stream_reader.on_task_failed session_id=%s", self._session_id)
 
     def _abandon_unconsumed_claims(self) -> None:
         """On idle: end every waiting claim the CLI ran past without consuming.

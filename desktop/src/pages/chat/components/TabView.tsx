@@ -49,6 +49,7 @@ import type { PendingQuestion } from '../types';
 import { resolvePendingToolUseId } from '../utils';
 import { MessageBubble } from './MessageBubble';
 import { ReadingContext } from '../readingContext';
+import { useBackgroundAgents } from '../../../stores/backgroundAgentsStore';
 import { WelcomeScreen } from './WelcomeScreen';
 import { CompactNotice } from './CompactNotice';
 import { TurnPhaseLine } from './TurnPhaseLine';
@@ -395,6 +396,8 @@ function TabViewImpl({
   // Render mirror of "not following", for the "back to latest" pill only — the
   // pin path reads followRef.
   const [awayFromBottom, setAwayFromBottom] = useState(false);
+  const { agents: bgAgents } = useBackgroundAgents(sessionId);
+  const bgRunning = bgAgents.filter((a) => a.status === 'running');
 
   // ── Mount-on-first-activation (Step 5.2 / F2) ──────────────────────
   // A tab that has never been visible renders a lightweight placeholder — no
@@ -864,6 +867,25 @@ function TabViewImpl({
               {t('chat.stopWaiting', 'Stop waiting')}
             </button>
           )}
+        </div>
+      )}
+      {/* Background agents still running for this session (stores/backgroundAgentsStore):
+          one quiet line, the tab is free for the next message meanwhile. A click
+          brings the first one's Agent row into view. */}
+      {bgRunning.length > 0 && !(isStreaming && lastAssistantIdx >= 0 && awayFromBottom) && (
+        <div data-testid="background-agents-line" className="sticky bottom-0 z-10 flex justify-center py-1">
+          <button
+            type="button"
+            onClick={() => {
+              const id = bgRunning[0].toolUseId;
+              const row = containerRef.current?.querySelector(`[data-agent-id="${CSS.escape(id)}"]`);
+              row?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            }}
+            title={bgRunning.map((a) => a.description).filter(Boolean).join('\n')}
+            className="px-2.5 py-0.5 rounded-full text-[12px] text-[var(--color-text-muted)] bg-[var(--color-bg-primary)]/95 border border-[var(--color-border-subtle)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+          >
+            ↗ {tf(t, 'chat.turn.backgroundAgentsRunning', bgRunning.length === 1 ? '{{count}} background agent running' : '{{count}} background agents running', { count: bgRunning.length })}
+          </button>
         </div>
       )}
       {/* "↓ Back to latest" pill — shown ONLY while streaming AND the user has

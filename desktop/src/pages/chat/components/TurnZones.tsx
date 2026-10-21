@@ -42,6 +42,8 @@ import { STOP_TURN_EVENT, agentBatches, mergeStrips, phaseSegments, stripView, z
 import type { PhaseMember, StageZone, StripItem, Zone } from '../turnZones';
 import { ReadingContext } from '../readingContext';
 import { StageResult } from './StageDocs';
+import { agentStatus, useBackgroundAgents } from '../../../stores/backgroundAgentsStore';
+import type { BackgroundAgent } from '../../../stores/backgroundAgentsStore';
 
 /** Between two zones (spec §9.3): clearly more than anything inside a zone. */
 export const ZONE_GAP = 'mt-5';
@@ -301,28 +303,43 @@ export function ToolStripV6({ item }: { item: StripItem }) {
 
 const AGENT_RESULT_MAX = 600;
 
-/** An Agent started in the background: its call returned at once (the agent was
- *  launched), so it is not done. The backend marks its result `background`. */
-const inBackground = (s: ToolStep) => s.progress?.status === 'background';
+/** An Agent started in the background (its call returned at once, the backend marks
+ *  the result `background`): how it stands now, from the daemon's live view
+ *  (stores/backgroundAgentsStore). null for any other Agent. */
+type BgView = { status: string; durationMs?: number } | null;
+const bgView = (s: ToolStep, agents: BackgroundAgent[], loaded: boolean): BgView =>
+  agentStatus(agents, loaded, s.block.id, s.progress?.status, s.progress);
+const inBackground = (bg: BgView) => bg?.status === 'running';
 
 function AgentRow({ step, sessionId, readOnly }: { step: ToolStep; sessionId?: string; readOnly?: boolean }) {
   const { t } = useTranslation();
+  const { agents: bgAgents, loaded: bgLoaded } = useBackgroundAgents(sessionId);
+  const bg = bgView(step, bgAgents, bgLoaded);
   const [open, setOpen] = useState(false);
   const [stopping, setStopping] = useState(false);
   const p = step.progress;
   const running = step.status === 'pending' && (p?.status === undefined || p.status === 'running');
-  const background = !running && inBackground(step);
+  const background = !running && inBackground(bg);
+  // the background agent ended (the daemon saw it end, or lost it)
+  const bgEnd = bg && bg.status !== 'running' ? bg.status : null;
   const elapsed = usePendingToolElapsed(step.block.id, running);
   const desc = stripView(step.block).object || stripView(step.block).full;
   const tools = Math.max(step.children?.length ?? 0, p?.toolUses ?? 0);
-  const seconds = running ? elapsed ?? undefined : p?.durationMs !== undefined ? Math.round(p.durationMs / 1000) : undefined;
+  const doneMs = bgEnd ? bg?.durationMs : p?.durationMs;
+  const seconds = running ? elapsed ?? undefined : doneMs !== undefined ? Math.round(doneMs / 1000) : undefined;
   const meta = [
     seconds !== undefined && seconds >= MIN_SECONDS && fmt(seconds),
     tools > 0 && tf(t, 'chat.turn.zone.tools', tools === 1 ? '{{count}} tool' : '{{count}} tools', { count: tools }),
   ].filter(Boolean).join(' · ');
   // Stopped: the SDK said so, or the turn ended with the agent neither finished nor
   // reported (the user stopped the turn; live progress is gone once streaming ends).
-  const stoppedAgent = !background && (p?.status === 'stopped' || (!running && step.status === 'unknown' && (!p || p.status === 'running')));
+  const stoppedAgent = !background && !bgEnd && (p?.status === 'stopped' || (!running && step.status === 'unknown' && (!p || p.status === 'running')));
+  const bgLabel = bgEnd === 'completed' ? tf(t, 'chat.turn.zone.doneInBackground', 'done in background')
+    : bgEnd === 'failed' ? tf(t, 'chat.turn.zone.failedInBackground', 'failed in background')
+      : bgEnd === 'stopped' ? tf(t, 'chat.turn.zone.stoppedCall', 'stopped')
+        : bgEnd === 'lost' ? tf(t, 'chat.turn.zone.lostInBackground', 'lost: its process ended before it finished')
+          : background ? tf(t, 'chat.turn.zone.inBackground', 'in background') : '';
+  const mark = running ? '⟳' : background ? '↗' : bgEnd === 'completed' ? '✓' : bgEnd === 'failed' ? '✕' : bgEnd ? '■' : stoppedAgent ? '■' : '✓';
   const result = (p?.summary || step.result?.outcome || '').trim();
   const stop = async () => {
     if (!sessionId || !p?.taskId) return;
@@ -334,7 +351,7 @@ function AgentRow({ step, sessionId, readOnly }: { step: ToolStep; sessionId?: s
     if (!ok) setStopping(false);
   };
   return (
-    <div data-testid="agent-row" data-status={running ? 'running' : p?.status ?? step.status} {...ANCHOR_PROPS}>
+    <div data-testid="agent-row" data-agent-id={step.block.id} data-status={running ? 'running' : bg?.status ?? p?.status ?? step.status} {...ANCHOR_PROPS}>
       <div className="flex items-start gap-2 min-w-0">
         <button
           type="button"
@@ -343,11 +360,11 @@ function AgentRow({ step, sessionId, readOnly }: { step: ToolStep; sessionId?: s
           onClick={() => setOpen((o) => !o)}
           className="flex-1 flex items-start gap-2 min-w-0 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
         >
-          <span aria-hidden="true" className={`${MARK_COL} text-[12px] text-purple-400`}>{running ? '⟳' : background ? '↗' : stoppedAgent ? '■' : '✓'}</span>
+          <span aria-hidden="true" className={`${MARK_COL} text-[12px] text-purple-400`}>{mark}</span>
           <span className="min-w-0 flex-1 break-words text-[12.5px] text-[var(--color-text-secondary)]">{desc}</span>
           {meta && <span className="shrink-0 text-[12px] tabular-nums text-[var(--color-text-dim)]">{meta}</span>}
           {stoppedAgent && <span className="shrink-0 text-[12px] text-[var(--color-text-dim)]">{tf(t, 'chat.turn.zone.stoppedCall', 'stopped')}</span>}
-          {background && <span data-testid="agent-background" className="shrink-0 text-[12px] text-[var(--color-text-dim)]">{tf(t, 'chat.turn.zone.inBackground', 'in background')}</span>}
+          {bgLabel && <span data-testid="agent-background" className="shrink-0 text-[12px] text-[var(--color-text-dim)]">{bgLabel}</span>}
         </button>
         {running && !readOnly && p?.taskId && sessionId && (
           <button
@@ -389,9 +406,15 @@ export function AgentsPanel({ agents, sessionId, readOnly }: { agents: ToolStep[
   const { t } = useTranslation();
   const [open, setOpen] = useState(true);
   const isRunning = (s: ToolStep) => s.status === 'pending' && (s.progress?.status === undefined || s.progress.status === 'running');
-  const isBackground = (s: ToolStep) => !isRunning(s) && inBackground(s);
-  const isStopped = (s: ToolStep) => !isRunning(s) && !isBackground(s)
-    && (s.progress?.status === 'stopped' || (s.status === 'unknown' && (!s.progress || s.progress.status === 'running')));
+  const { agents: bgAgents, loaded: bgLoaded } = useBackgroundAgents(sessionId);
+  const bgOf = (s: ToolStep) => bgView(s, bgAgents, bgLoaded);
+  const isBackground = (s: ToolStep) => !isRunning(s) && inBackground(bgOf(s));
+  const isStopped = (s: ToolStep) => {
+    if (isRunning(s) || isBackground(s)) return false;
+    const end = bgOf(s)?.status;
+    if (end) return end === 'stopped' || end === 'lost' || end === 'failed';
+    return s.progress?.status === 'stopped' || (s.status === 'unknown' && (!s.progress || s.progress.status === 'running'));
+  };
   const running = agents.filter(isRunning).length;
   const background = agents.filter(isBackground).length;
   const stopped = agents.filter(isStopped).length;

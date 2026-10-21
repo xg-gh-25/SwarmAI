@@ -303,6 +303,12 @@
         "failed": "Failed"
       },
       "backToLatest": "↓ Back to latest",
+      "backgroundAgentsRunning_one": "{{count}} background agent running",
+      "backgroundAgentsRunning_other": "{{count}} background agents running",
+      "bgFinished": "finished",
+      "bgFailed": "failed",
+      "bgStopped": "stopped",
+      "bgAgent": "Background agent",
       "changes": {
         "binary": "binary",
         "deleted": "deleted",
@@ -356,6 +362,9 @@
         "stoppedCount": "{{count}} stopped",
         "backgroundCount": "{{count}} in background",
         "inBackground": "in background",
+        "doneInBackground": "done in background",
+        "failedInBackground": "failed in background",
+        "lostInBackground": "lost: its process ended before it finished",
         "stoppedByYouPlain": "Stopped by you"
       },
       "doc": {

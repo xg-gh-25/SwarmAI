@@ -42,6 +42,7 @@ import { NextSteps } from './NextSteps';
 import { TurnZoneList, ZONE_GAP } from './TurnZones';
 import type { ZoneContext } from './TurnZones';
 import { deriveTurnView, extractNextSteps } from '../turnView';
+import type { TurnView } from '../turnView';
 import { hasOpenQuestion, stripView, turnZones } from '../turnZones';
 import type { Zone } from '../turnZones';
 import { useTranslation } from 'react-i18next';
@@ -59,6 +60,34 @@ import { useLinger } from '../../../hooks/useLinger';
 
 /** A step's file path (absolute, or relative to wherever the tool ran) names the
  *  deliverable at `rel` / `abs`. */
+/** The line at the top of a turn the CLI started because background agents finished:
+ *  one per agent, how it ended and how long it ran. */
+function BackgroundFinishedLine({ agents }: { agents: NonNullable<TurnView['backgroundFinished']> }) {
+  const { t } = useTranslation();
+  const fmtS = (ms?: number) => {
+    if (ms === undefined) return '';
+    const s = Math.round(ms / 1000);
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  };
+  return (
+    <div data-testid="background-finished" className="space-y-0.5 text-[12.5px] text-[var(--color-text-muted)]">
+      {agents.map((a, i) => {
+        const how = a.status === 'completed' ? tf(t, 'chat.turn.bgFinished', 'finished')
+          : a.status === 'failed' ? tf(t, 'chat.turn.bgFailed', 'failed')
+            : tf(t, 'chat.turn.bgStopped', 'stopped');
+        const time = fmtS(a.durationMs);
+        return (
+          <div key={a.toolUseId ?? i} className="flex items-baseline gap-1.5 min-w-0">
+            <span aria-hidden="true">↘</span>
+            <span className="truncate min-w-0 text-[var(--color-text-secondary)]">{a.description || tf(t, 'chat.turn.bgAgent', 'Background agent')}</span>
+            <span className="shrink-0">{how}{time ? ` · ${time}` : ''}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function isSameFile(p: string, rel: string, abs: string): boolean {
   const q = p.replace(/^\.\//, '');
   return q === abs || q === rel || abs.endsWith(`/${q}`);
@@ -316,9 +345,13 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     ? <AttentionCard block={view.attention} />
     : null;
   const hasResult = zones.some((z) => z.kind === 'text' && z.result);
-  const contentBlocks: React.ReactNode[] = [
-    <TurnZoneList key="zones" zones={zones} ctx={ctx} hasOpenQuestionIn={(z) => hasOpenQuestion(z.body)} />,
-  ];
+  const contentBlocks: React.ReactNode[] = [];
+  // A turn the CLI started to answer background agents that finished: say which, first.
+  if (view.backgroundFinished?.length) {
+    contentBlocks.push(<BackgroundFinishedLine key="bg-finished" agents={view.backgroundFinished} />);
+  }
+  const zoneList = <TurnZoneList key="zones" zones={zones} ctx={ctx} hasOpenQuestionIn={(z) => hasOpenQuestion(z.body)} />;
+  contentBlocks.push(view.backgroundFinished?.length ? <div key="zones" className="mt-2">{zoneList}</div> : zoneList);
   // A finished run: its verdict first, then what to check, then what it produced.
   if (summary) contentBlocks.push(<div key="result" className={zones.length ? ZONE_GAP : ''}><RunResult summary={summary} showReasons={!attentionCard} /></div>);
   if (attentionCard) contentBlocks.push(<div key="attention" className={zones.length || summary ? ZONE_GAP : ''}>{attentionCard}</div>);
