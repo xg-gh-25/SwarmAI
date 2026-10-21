@@ -22,13 +22,13 @@ related: pipeline-review-convergence.md（N1–N5，本文收窄其轮数）；p
 | G3 | `audit_marker_write_gate` | `cd` 进审计目录或只读的 glob 也 deny | 只读命令放行 | 低 |
 | G4 | gate 治理 | 加 gate 不需要证据 | 新 gate 要引用真实事故；deny 分支标类别，`routing`/`format` 类每月按误伤复审 | 无 |
 | E0 | 两套 Gate-2 并存 | legacy（3 轮 + meta-review + root-cause）和 deterministic（finding ledger，2 轮）同时在用 | 只留 finding ledger 这一套 | 中：迁移量最大 |
-| E1 | Gate-2 名单 | 最多 7 个 specialist，按文件模式触发 | correctness + red-team；碰敏感路径再加 security。其他 lens 并进 correctness 的检查清单 | 中：部分 MEDIUM 可能漏 |
+| E1 | Gate-2 名单 | 最多 7 个 specialist，按文件模式触发 | 默认只派 correctness；有明显安全风险时才加 security + red-team。其他 lens 并进 correctness 的检查清单 | 中：部分 MEDIUM 可能漏 |
 | E2 | gate0 / gate1 / meta-review | 三个都常态派出 | 删 gate1 和 meta-review；gate0 只在 bugfix 或需求有两种读法时派 | 低 |
 | E3 | REVIEW 阶段 | 再派 spec-compliance / code-quality / ux-test / security | 不派 sub-agent，只做确定性的 AC→测试检查 | 中 |
 | E4 | 轮次与去重 | legacy 3 轮；同一 bug 被多个 expert 各报一次 | R1 全员，R2 只派"有发现被修过"的 expert、只看修复 diff；修之前按位置去重 | 低 |
 | E5 | `push_ready` | 每条 finding 都要被 break test 证明才算 ready；expert 没输出也压低 | 只有未解决的 HIGH 才压低；没输出、untestable 的 MEDIUM/LOW 记为剩余风险 | 中：需新增 `severity` 字段 |
 
-预计效果：每个 run 的 expert 派出 27 → 4–6，子 agent 时间和 token 减少约 75–80%；gate deny 从 2 天 124 条降到约 30 条，剩下的都是真拦截或 worktree 保护。
+预计效果：每个 run 的 expert 派出 27 → 普通改动 1–2、有安全风险的改动 3–5，子 agent 时间和 token 减少约 75–80%；gate deny 从 2 天 124 条降到约 30 条，剩下的都是真拦截或 worktree 保护。
 
 ## 1. 证据
 
@@ -188,15 +188,26 @@ token 前缀仍然只加在 CLI 那一条简单命令上，其他段拿不到。
 | expert | 何时派 |
 |---|---|
 | correctness | 总是 |
-| red-team | 总是 |
-| security | 改动碰到 `_REVIEW_SENSITIVE_RE` 或 `_GOVERNED_CONTEXT_RE`（任何行数），或 profile 是 bugfix 且改动在 `routers/`、`hooks/`、`channels/` |
+| security | 有明显安全风险（见下），任何行数 |
+| red-team | 有明显安全风险，且源码改动 ≥ 50 行 |
+
+**明显安全风险**用一个新的 `_SECURITY_RISK_RE` 判定，比现在的 `_REVIEW_SENSITIVE_RE` 窄（后者还包含 config、settings、schema、handler、migration 等，大多不是安全问题）：
+- 认证和凭据：`auth`、`login`、`token`、`secret`、`credential`、`permission`；
+- 权限边界：`security_hooks.py`、`hook_builder.py`、`*_gate.py`、`permission_manager.py`、`file_access`；
+- 命令执行和外联：新增或修改 `subprocess`、`shell=True`、`os.system`、出站 HTTP 请求的代码（按 diff 内容判定，不按文件名）；
+- 每个 session 的系统提示词来源：`_GOVERNED_CONTEXT_RE`（`backend/context/`）；
+- CORS、监听地址、端口。
+
+不再按"> 200 行"或"有 specialist 报了 HIGH"加 red-team。
 
 - `correctness.md` 的检查清单并入 integration（新公共符号有没有调用方、调用方有没有一起改）、api-contract（前后端字段映射、Pydantic 字段）、state-machine、concurrency、operational（后台任务、调度、daemon）、performance（循环里的 IO、N+1）和 spec-compliance（每条 AC 是否真的实现）这几项。并进来的每项写成一行可检查的问题，不搬整份文档。
 - 删除 `_EXPERT_FILE_TRIGGERS` 中 performance、api-contract、operational 三项。对应的 `backend/experts/code/*.md` 保留文件，标为"已并入 correctness"，以便 `required_experts` 引用旧 id 时映射。
-- `required_experts` 只接受 `correctness`、`red-team`、`security`。旧 id 映射到 correctness，并在 stage-start 输出里说明映射。
+- `required_experts` 只接受 `correctness`、`security`、`red-team`；声明了 security 或 red-team 但改动没有安全风险时，按声明派（PLAN 的显式判断优先）。旧 id 映射到 correctness，并在 stage-start 输出里说明映射。
 - small change 规则（≤ 20 行、无新代码文件、无敏感路径 → 不派）和 docs-only 规则不变。
 
-**为什么这样选**：能归属的 HIGH 里 69% 来自这三个。被并掉的 integration 派了 123 次出 6 个 HIGH；它的检查点本来就是 correctness 应该看的"调用方"。red-team 改为总是派，因为它的 HIGH 率（7%）和 correctness 相当，而且它是唯一按攻击者视角看的 lens。
+**为什么这样选**：能归属的 HIGH 里 69% 来自这三个，其中 correctness 一个就占 27/71。被并掉的 integration 派了 123 次出 6 个 HIGH，它的检查点本来就是 correctness 应该看的"调用方"。red-team 和 security 是攻击者视角，只在改动碰到安全边界时才有用武之地，普通改动不派。
+
+**放弃的东西**：red-team 现在报的 HIGH 里，有一部分不在安全边界上（例如边界输入导致崩溃）。这类问题改由 correctness 清单里的"异常输入和边界值"一项覆盖。落地后按 §7 的 HIGH 指标观察，掉得多再放宽触发条件。
 
 ### E2 删 gate1-skeptic 和 meta-review，gate0 按需
 
@@ -293,7 +304,7 @@ G2 放宽后，前置段仍禁止函数定义、alias、`source`、`eval`、`PAT
 
 | 指标 | 基线 | 目标 |
 |---|---|---|
-| 每个 run 的 expert 派出（中位数） | 27（均值） | ≤ 6 |
+| 每个 run 的 expert 派出（中位数） | 27（均值） | ≤ 3 |
 | REVIEW + DELIVER 占阶段时间 | 33% | ≤ 15% |
 | gate deny / 天 | 约 62 | ≤ 15 |
 | `routing` + `format` 类和误伤 deny 占比 | 约 55%（69/124） | ≤ 20% |
@@ -314,7 +325,7 @@ G2 放宽后，前置段仍禁止函数定义、alias、`source`、`eval`、`PAT
 ## 9. 待决问题
 
 - **Q1**：E0 的共享 checkout 选 (a) 去掉回退，还是 (b) 建一次性快照？建议 (a)。
-- **Q2**：E1 里 red-team 改为"总是派"，还是保留现在的"> 200 行或有 HIGH 时才派"？总是派每个 run 多 1 次派出，换来攻击者视角的固定覆盖。建议总是派。
+- **Q2**（已定，XG 2026-10-21）：red-team 只在有明显安全风险时派。
 - **Q3**：E5 里 HIGH 的 `untestable` 是否允许由作者写理由后放行？建议不允许，留给人看（REPORT 列出）。
 - **Q4**：G2b 是否和 G2 一起做？建议一起做，否则 G2 只是把一个已知漏洞的窄版本放宽。
 - **Q5**：P3 用 direct 分批提交，还是走一次完整 pipeline run？建议 direct 分批。
