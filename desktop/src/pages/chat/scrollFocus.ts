@@ -105,7 +105,8 @@ export function sentMessageId(messages: Message[]): string | null {
 }
 
 /** The id of an error bubble at the tail — the turn just ended on it, so the user
- *  should see it (an error replaces the reply; it is not something to read past). */
+ *  should see it (the error ends the reply that streamed before it; it is not
+ *  something to read past). */
 export function tailErrorId(messages: Message[]): string | null {
   const last = messages[messages.length - 1];
   return last && last.isError ? last.id : null;

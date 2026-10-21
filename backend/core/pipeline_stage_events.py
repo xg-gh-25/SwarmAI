@@ -464,7 +464,7 @@ MAX_ATTENTION_ITEMS = 8
 # BLOCK that was resolved. Verdicts are free text in real run.json files, so the
 # match is on the leading word.
 _OK_VERDICT_RE = re.compile(r"^\s*(PASS|SUPPORTED|PROCEED|GO|SKIP)", re.I)
-_OPEN_REQ_STATUSES = {"assumed", "needs-clarification", "proposed"}
+_OPEN_REQ_STATUSES = {"assumed", "needs-clarification"}
 
 
 def _clip(value: object, limit: int = ITEM_TEXT_MAX) -> Optional[str]:
@@ -696,7 +696,12 @@ def attention_block(run_id: str, state: Optional[dict], at: str) -> Optional[dic
     for r in evaluation.get("requirements") or []:
         if not isinstance(r, dict):
             continue
-        if str(r.get("status") or "").strip() in _OPEN_REQ_STATUSES:
+        # Same trigger as run_delivery_summary._ai_decisions_line and the
+        # validator's leftovers: a `confirmed` status alone is not user
+        # confirmation while source.kind still says the AI assumed it.
+        src = r.get("source")
+        kind = str(src.get("kind") or "").strip() if isinstance(src, dict) else ""
+        if kind == "assumption" or str(r.get("status") or "").strip() in _OPEN_REQ_STATUSES:
             verification_items.append({"kind": "assumption", "id": _clip(r.get("id"), 20),
                                        "statement": _clip(r.get("statement"))})
 

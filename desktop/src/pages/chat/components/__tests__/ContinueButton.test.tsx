@@ -29,6 +29,11 @@ vi.mock('../../../../contexts/ToastContext', () => ({
   useToast: () => ({ addToast: vi.fn() }),
 }));
 
+// An errored message renders its local ChatErrorMessage, which reads HealthContext.
+vi.mock('../../../../contexts/HealthContext', () => ({
+  useHealth: () => ({ triggerHealthCheck: vi.fn() }),
+}));
+
 const mockAssistantMessage: Message = {
   id: 'msg-1',
   role: 'assistant',

@@ -84,8 +84,10 @@ def test_attention_items_come_from_structured_fields_only(tmp_path, monkeypatch)
     kinds = [(i["kind"], i.get("name") or i.get("id")) for i in b["items"]]
     assert kinds == [("gate", "GATE 0"), ("gate", "GATE 1"), ("gate", "GATE 2"),
                      ("not_push_ready", None), ("self_answered", "Q1"),
-                     ("assumption", "FR-3"), ("assumption", "FR-5")]
-    assert all(i.get("id") != "FR-6" for i in b["items"])
+                     ("assumption", "FR-3"), ("assumption", "FR-5"), ("assumption", "FR-6")]
+    # FR-6 says confirmed but its source is still the AI's assumption — it stays
+    # visible, matching REPORT's "AI 替你拍板" count. FR-1 (user, met) stays silent.
+    assert all(i.get("id") != "FR-1" for i in b["items"])
     q1 = b["items"][4]
     assert (q1["answer"], q1["reason"]) == ("prompt_builder at runtime", "covers stored configs too")
     assert b["items"][2]["verdict"] == "1/3 open"
