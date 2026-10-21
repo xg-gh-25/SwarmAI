@@ -294,8 +294,18 @@ class CliStreamReader:
             raise
         except Exception as exc:  # noqa: BLE001 — surfaced to the turn that waits for it
             self.error = exc
-            logger.warning("cli_stream_reader.stream_error session_id=%s: %s: %s",
-                           self._session_id, type(exc).__name__, exc)
+            # A CLI we SIGKILLed ourselves (release, refresh, recycle, reap) ends its
+            # stream with exit -9: expected, INFO. Any other end stays WARNING.
+            ours = False
+            if "-9" in str(exc):
+                try:
+                    from core import kill_audit
+                    ours = kill_audit.killed_session_recently(self._session_id)
+                except Exception:  # noqa: BLE001
+                    logger.debug("kill audit unreadable", exc_info=True)
+            (logger.info if ours else logger.warning)(
+                "cli_stream_reader.stream_error session_id=%s: %s: %s%s",
+                self._session_id, type(exc).__name__, exc, " (killed by SwarmAI)" if ours else "")
             self._fail_all(exc)
         finally:
             if self.dead and self._on_error is not None:

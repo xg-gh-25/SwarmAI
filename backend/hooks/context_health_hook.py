@@ -77,6 +77,17 @@ def _is_canary_state_path(path: str) -> bool:
     return name.startswith(_CANARY_STATE_PREFIX)
 
 
+def _is_runtime_state_path(path: str) -> bool:
+    """True if a (porcelain) .context path is machine-written runtime state: a
+    dotfile (.code_change_feed_last_commit.txt, .eval-*, .memory-usage*,
+    .evolution_*, .session_cultivated.json …) rewritten by hooks and jobs. The
+    context files themselves (MEMORY.md, AGENT.md …) never start with a dot. Being
+    dirty is expected for these, not a "forgot to commit" signal (65 such
+    UNCOMMITTED warnings by 2026-10-21)."""
+    name = path.strip().strip('"').rstrip("/").rsplit("/", 1)[-1]
+    return name.startswith(".")
+
+
 # Episodic war-story detector — the 7th MEMORY admission gate (run_117bcdf4).
 #
 # ROOT CAUSE it closes: a REFLECT lesson whose BODY narrates a single-run event
@@ -3116,7 +3127,7 @@ class ContextHealthHook:
             # Excluded in code (the workspace .gitignore is user-owned).
             uncommitted = [
                 l.strip() for l in result.stdout.strip().splitlines()
-                if l.strip() and not _is_canary_state_path(l.split()[-1])
+                if l.strip() and not _is_runtime_state_path(l.split()[-1])
             ]
             if uncommitted:
                 findings.append(

@@ -1883,18 +1883,9 @@ class LifecycleManager:
                 # session within THIS instance.  But we only kill it if its
                 # parent is dead (reparented to launchd).
                 try:
-                    loop = asyncio.get_running_loop()
-                    ppid_result = await loop.run_in_executor(
-                        _subprocess_executor,
-                        functools.partial(
-                            subprocess.run,
-                            ["ps", "-o", "ppid=", "-p", str(pid)],
-                            capture_output=True, text=True, timeout=5,
-                        ),
-                    )
-                    ppid = int(ppid_result.stdout.strip())
-                    return ppid == 1  # Reparented to launchd = orphan
-                except (ValueError, subprocess.TimeoutExpired):
+                    import psutil  # no fork (a `ps` per pid ran the reaper past 30s)
+                    return psutil.Process(pid).ppid() == 1  # Reparented to launchd = orphan
+                except Exception:  # noqa: BLE001 — gone / denied: not an orphan (fail safe)
                     return False
 
             # Owner is a different PID — check if that backend is still alive

@@ -69,3 +69,30 @@ def test_only_the_backend_json_owner_sweeps(tmp_path):
     p = subprocess.Popen([sys.executable, "-c", "pass"]); p.wait()
     bj.write_text(json.dumps({"pid": p.pid, "port": 1}))
     assert main._other_live_backend(str(bj)) is None                 # dead: we succeed it
+
+
+def test_stream_reader_logs_our_own_kill_at_info(audit, caplog):
+    """The CLI stream of a session we SIGKILLed ends with exit -9: INFO, not the
+    WARNING stream_error (5 a day, all intentional, buried the real ones)."""
+    import asyncio
+    import logging
+    from core.cli_stream_reader import CliStreamReader
+
+    class _Client:
+        def __init__(self, err):
+            self.err = err
+
+        async def receive_messages(self):
+            raise self.err
+            yield  # pragma: no cover
+
+    def run(sid, err):
+        asyncio.run(CliStreamReader(_Client(err), sid)._run())
+
+    kill_audit.record([1], "session s-ours")
+    with caplog.at_level(logging.INFO, logger="core.cli_stream_reader"):
+        for sid in ("s-ours", "s-other"):
+            run(sid, RuntimeError("Command failed with exit code -9"))
+    recs = {r.getMessage().split()[1]: r.levelno for r in caplog.records
+            if "stream_error" in r.getMessage()}
+    assert recs == {"session_id=s-ours:": logging.INFO, "session_id=s-other:": logging.WARNING}

@@ -75,23 +75,33 @@ _CODE_EXTENSIONS = frozenset(
 
 
 def _git_running_in(ws_path: str) -> bool:
-    """True when a process named ``git`` has its cwd inside *ws_path*, or when that
-    cannot be told (fail toward keeping the lock)."""
+    """True when a git process works on the repo at *ws_path*: a process whose name
+    starts with ``git`` (git, git-remote-https …) whose cwd is inside the repo or
+    whose arguments name a path inside it (``git -C <ws> …`` from elsewhere), or
+    when that cannot be told (fail toward keeping the lock)."""
     try:
         import psutil
     except ImportError:
         return True
-    root = os.path.join(os.path.realpath(ws_path), "")
+    root = os.path.realpath(ws_path)
+    prefix = os.path.join(root, "")
+
+    def _inside(p: str) -> bool:
+        p = os.path.realpath(os.path.expanduser(p))
+        return p == root or p.startswith(prefix)
+
     for proc in psutil.process_iter(["name"]):
         try:
-            if proc.info.get("name") != "git":
+            if not (proc.info.get("name") or "").startswith("git"):
                 continue
-            cwd = os.path.join(os.path.realpath(proc.cwd()), "")
+            if _inside(proc.cwd()):
+                return True
+            if any(a and not a.startswith("-") and ("/" in a or a.startswith("~")) and _inside(a)
+                   for a in proc.cmdline()[1:]):
+                return True
         except (psutil.NoSuchProcess, psutil.ZombieProcess):
             continue
         except psutil.AccessDenied:
-            return True
-        if cwd.startswith(root):
             return True
     return False
 

@@ -77,11 +77,10 @@ class TestIsOwnedOrphan:
         # Owner PID is our own PID (alive)
         with patch.object(manager, "_read_process_owner_pid",
                           return_value=os.getpid()):
-            # Mock ps to return our PID as parent (not reparented)
-            mock_ps = MagicMock()
-            mock_ps.stdout = f"  {os.getpid()}"
-            with patch("core.lifecycle_manager.subprocess.run",
-                       return_value=mock_ps):
+            # Parent is our PID (not reparented); read via psutil, no `ps` fork
+            proc = MagicMock()
+            proc.ppid.return_value = os.getpid()
+            with patch("psutil.Process", return_value=proc):
                 result = await manager._is_owned_orphan(99999)
                 assert result is False
 
@@ -107,11 +106,10 @@ class TestIsOwnedOrphan:
 
         with patch.object(manager, "_read_process_owner_pid",
                           return_value=os.getpid()):
-            # Mock ps to return ppid=1 (reparented to launchd)
-            mock_ps = MagicMock()
-            mock_ps.stdout = "  1"
-            with patch("core.lifecycle_manager.subprocess.run",
-                       return_value=mock_ps):
+            # ppid=1 (reparented to launchd); read via psutil, no `ps` fork
+            proc = MagicMock()
+            proc.ppid.return_value = 1
+            with patch("psutil.Process", return_value=proc):
                 result = await manager._is_owned_orphan(99999)
                 assert result is True
 
@@ -134,3 +132,24 @@ class TestSnapshotKnownPids:
         ppid = os.getppid()
         if ppid > 1:
             assert ppid in pids
+
+
+
+def test_read_owner_pid_reads_the_environment_without_ps():
+    """The orphan reaper ran past its 30s budget 11 times on 10-21: one `ps eww`
+    fork per pgrep match. read_owner_pid now asks psutil (sysctl, no fork)."""
+    import subprocess as sp
+    import sys
+    from core.session_utils import read_owner_pid
+    p = sp.Popen([sys.executable, "-c", "import time; time.sleep(20)"],
+                 env={"SWARMAI_OWNER_PID": "4242", "PATH": "/usr/bin:/bin"})
+    try:
+        import time as _t
+        _t.sleep(0.3)
+        with patch("core.session_utils.subprocess.run",
+                   side_effect=AssertionError("no ps fork")):
+            assert read_owner_pid(p.pid) == 4242
+    finally:
+        p.kill()
+        p.wait()
+    assert read_owner_pid(p.pid) is None   # gone

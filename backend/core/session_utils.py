@@ -942,6 +942,21 @@ def read_owner_pid(pid: int) -> int | None:
     ``lifecycle_manager._is_owned_orphan()`` and
     ``session_registry.kill_all_claude_processes()``.
     """
+    # psutil reads the environment with sysctl (no fork, ~0.2 ms). The `ps eww`
+    # below forks this large process once per pid: the orphan reaper, which asks
+    # for every pgrep match, ran past its 30s budget 11 times on 2026-10-21 and
+    # skipped the cycle. A denied / vanished process keeps the old answer (None
+    # when unreadable), so the fail-safe rules of the callers are unchanged.
+    try:
+        import psutil
+        env = psutil.Process(pid).environ()
+        val = env.get("SWARMAI_OWNER_PID")
+        return int(val) if val and val.isdigit() else None
+    except (ImportError, OSError, ValueError):
+        pass  # fall through to ps / procfs
+    except Exception as exc:  # noqa: BLE001 — psutil.AccessDenied / NoSuchProcess / ZombieProcess
+        if type(exc).__name__ in ("NoSuchProcess", "ZombieProcess"):
+            return None
     if platform.system() == "Darwin":
         try:
             result = subprocess.run(

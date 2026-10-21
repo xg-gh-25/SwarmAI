@@ -313,6 +313,8 @@ class TestDddCompleteness:
         (ctx / ".eval-canary.json").write_text('{"score": 100}\n')       # tracked, dirty
         (ctx / ".eval-canary-daily.json").write_text("{}\n")             # untracked
         (ctx / ".eval-canary-daily.json.lock").write_text("")            # untracked
+        (ctx / ".code_change_feed_last_commit.txt").write_text("abc\n")  # other runtime state
+        (ctx / ".memory-usage.json").write_text("{}\n")
 
         findings = hook._check_git_health(workspace, str(workspace))
         assert not any("UNCOMMITTED" in f for f in findings), findings
@@ -322,7 +324,7 @@ class TestDddCompleteness:
         findings = hook._check_git_health(workspace, str(workspace))
         unc = [f for f in findings if "UNCOMMITTED" in f]
         assert unc and "1 context file" in unc[0] and "MEMORY.md" in unc[0], findings
-        assert "eval-canary" not in unc[0]
+        assert "eval-canary" not in unc[0] and "code_change_feed" not in unc[0]
 
 
 # --------------------------------------------------------------------------

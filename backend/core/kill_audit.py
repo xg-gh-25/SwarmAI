@@ -6,6 +6,9 @@
   *caller* is the first frames above the kill helpers (so the 20+ ``unit.kill()``
   call sites are told apart without each passing a reason) and *by* is this
   process's pid. Also kept in memory for ``killed_by_us``.
+- ``killed_session_recently(session_id, window_s)`` — True when this process
+  recorded a kill of that session's CLI in the last *window_s* seconds (the
+  stream reader then logs the CLI's exit -9 at INFO: it is our own doing).
 - ``killed_by_us(window_s)`` — True when this process recorded a kill in the last
   *window_s* seconds: a SIGKILL'd CLI with no such record was killed by someone
   else (7 clusters 10-19 → 10-21 of 3-5 CLIs dying within 230 ms, 27 unexplained
@@ -31,6 +34,7 @@ _MAX_BYTES = 1024 * 1024
 _SKIP_FUNCS = frozenset({"record", "_kill_pids", "_force_kill", "kill", "_kill_tracked_pids"})
 _lock = threading.Lock()
 _recent: "deque[float]" = deque(maxlen=256)
+_recent_reasons: "deque[tuple[float, str]]" = deque(maxlen=256)
 
 
 def _path() -> Path:
@@ -62,6 +66,7 @@ def record(pids: "Iterable[int]", reason: str) -> None:
     now = time.time()
     with _lock:
         _recent.append(time.monotonic())
+        _recent_reasons.append((time.monotonic(), reason))
     try:
         caller = _caller()
         path = _path()
@@ -86,6 +91,15 @@ def killed_by_us(window_s: float = 30.0) -> bool:
         return any(now - t <= window_s for t in _recent)
 
 
+def killed_session_recently(session_id: str, window_s: float = 10.0) -> bool:
+    if not session_id:
+        return False
+    tag, now = f"session {session_id}", time.monotonic()
+    with _lock:
+        return any(now - t <= window_s and r == tag for t, r in _recent_reasons)
+
+
 def _reset_for_tests() -> None:
     with _lock:
         _recent.clear()
+        _recent_reasons.clear()

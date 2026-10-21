@@ -158,3 +158,31 @@ def test_git_timeout_ends_git_with_sigterm_first(tmp_path, monkeypatch):
     with pytest.raises(subprocess.TimeoutExpired):
         ach._git(["add", "-A"], str(tmp_path), 1)
     assert calls == ["TERM"]
+
+
+def test_git_dash_c_from_elsewhere_counts_as_running(tmp_path):
+    """`git -C <ws> …` started from another directory holds the lock too (its cwd
+    is elsewhere); a non-git process naming the path does not count."""
+    from hooks.auto_commit_hook import _git_running_in
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    class _P:
+        def __init__(self, name, cwd, argv):
+            self.info = {"name": name}
+            self._cwd, self._argv = cwd, argv
+
+        def cwd(self):
+            return self._cwd
+
+        def cmdline(self):
+            return self._argv
+
+    def run(procs):
+        with patch("psutil.process_iter", return_value=procs):
+            return _git_running_in(str(ws))
+
+    assert run([_P("git", "/tmp", ["git", "-C", str(ws), "add", "-A"])]) is True
+    assert run([_P("git", str(ws / "sub"), ["git", "status"])]) is True
+    assert run([_P("claude", "/tmp", ["claude", "--add-dir", str(ws), "git"])]) is False
+    assert run([_P("git", "/tmp", ["git", "-C", "/elsewhere", "status"])]) is False
