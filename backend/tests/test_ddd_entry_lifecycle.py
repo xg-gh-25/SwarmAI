@@ -2011,3 +2011,83 @@ class TestReclaimDuplicateEntries:
             archive_name="T-archive.md", source_path=src, dry_run=False,
         )
         assert r2.archived == 0
+
+
+class TestArchiveEntriesIsIdempotent:
+    """archive_entries never appends an entry the archive already holds."""
+
+    def _e(self, title, body="body text that makes the lesson distinct."):
+        from core.ddd_entry_lifecycle import EntryMetadata
+        return EntryMetadata(
+            title=title, entry_type="guideline", decay_state="dormant",
+            raw_text=f"- [guideline] **{title}** — {body} (2025-01-01)",
+            created_date=date(2025, 1, 1),
+        )
+
+    def test_same_entry_twice_is_archived_once(self, tmp_path):
+        from core.ddd_entry_lifecycle import archive_entries
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text("", encoding="utf-8")
+        assert archive_entries(tmp_path, [self._e("Alpha")], source_path=doc) == 1
+        assert archive_entries(tmp_path, [self._e("Alpha")], source_path=doc) == 1
+        text = (tmp_path / "IMPROVEMENT-archive.md").read_text(encoding="utf-8")
+        assert text.count("**Alpha**") == 1
+
+    def test_duplicates_within_one_batch_are_archived_once(self, tmp_path):
+        from core.ddd_entry_lifecycle import archive_entries
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text("", encoding="utf-8")
+        archive_entries(tmp_path, [self._e("Beta"), self._e("Beta")], source_path=doc)
+        text = (tmp_path / "IMPROVEMENT-archive.md").read_text(encoding="utf-8")
+        assert text.count("**Beta**") == 1
+
+    def test_entry_contained_in_a_longer_archived_entry_is_still_appended(self, tmp_path):
+        # Dedup must be exact per entry, not a substring of the archive: a short entry
+        # whose text appears inside a longer archived one is a different entry.
+        from core.ddd_entry_lifecycle import archive_entries
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text("", encoding="utf-8")
+        archive_entries(tmp_path, [self._e("Gamma", "short text. and much more after it.")],
+                        source_path=doc)
+        archive_entries(tmp_path, [self._e("Gamma", "short text.")], source_path=doc)
+        text = (tmp_path / "IMPROVEMENT-archive.md").read_text(encoding="utf-8")
+        assert text.count("**Gamma**") == 2
+
+    def test_existing_archive_content_is_never_rewritten(self, tmp_path):
+        from core.ddd_entry_lifecycle import archive_entries
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text("", encoding="utf-8")
+        archive = tmp_path / "IMPROVEMENT-archive.md"
+        archive_entries(tmp_path, [self._e("Delta")], source_path=doc)
+        before = archive.read_text(encoding="utf-8")
+        archive_entries(tmp_path, [self._e("Delta"), self._e("Epsilon")], source_path=doc)
+        after = archive.read_text(encoding="utf-8")
+        assert after.startswith(before.rstrip("\n"))
+        assert after.count("**Epsilon**") == 1
+
+    def test_unchanged_archive_is_parsed_once_across_calls(self, tmp_path):
+        from unittest.mock import patch
+        import core.ddd_entry_lifecycle as lc
+        from core.ddd_entry_lifecycle import archive_entries
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text("", encoding="utf-8")
+        archive_entries(tmp_path, [self._e("Zeta")], source_path=doc)
+        real = lc.parse_entries
+        with patch.object(lc, "parse_entries", side_effect=real) as spy:
+            archive_entries(tmp_path, [self._e("Zeta")], source_path=doc)
+            archive_entries(tmp_path, [self._e("Zeta")], source_path=doc)
+        assert spy.call_count == 0
+        text = (tmp_path / "IMPROVEMENT-archive.md").read_text(encoding="utf-8")
+        assert text.count("**Zeta**") == 1
+
+    def test_external_change_to_archive_is_seen(self, tmp_path):
+        from core.ddd_entry_lifecycle import archive_entries
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text("", encoding="utf-8")
+        archive = tmp_path / "IMPROVEMENT-archive.md"
+        archive_entries(tmp_path, [self._e("Eta")], source_path=doc)
+        # another writer appends Theta by hand
+        with archive.open("a", encoding="utf-8") as fh:
+            fh.write("\n" + self._e("Theta").raw_text + "\n  <!-- ref:0 | last:none | decay:archived -->\n")
+        archive_entries(tmp_path, [self._e("Theta")], source_path=doc)
+        assert archive.read_text(encoding="utf-8").count("**Theta**") == 1

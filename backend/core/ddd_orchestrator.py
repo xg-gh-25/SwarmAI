@@ -816,18 +816,19 @@ class DddCultivationOrchestrator:
         """Channel 8: Per-entry reference bumping, decay assessment, and state transitions.
 
         Runs on TIMER_30MIN and SESSION_CLOSE. For each project's IMPROVEMENT.md:
-        1. Bump references from recent DailyActivity text (F1 activation)
+        1. Refresh last_referenced from recall usage (.ddd-usage.json)
         2. Assess decay transitions (active→dormant→archived)
-        3. Archive entries that reached end-of-life
+        3. MOVE entries that reached end-of-life: archive once, strip from the doc
         Uses the shared md_lock (utils.file_lock) advisory lock — the SAME
         <doc>.md.lock name every DDD-doc writer uses — to prevent concurrent
         read-modify-write (run_06350217).
         """
         from datetime import date as _date
         from core.ddd_entry_lifecycle import (
-            archive_entries,
+            archive_and_strip_lines,
             assess_decay,
             inject_entry_metadata,
+            may_leave_live_doc,
             parse_entries,
             reclaim_noise_entries,
         )
@@ -912,35 +913,63 @@ class DddCultivationOrchestrator:
                                         _e.last_referenced = _hit
                         except Exception:  # noqa: BLE001 — best-effort usage bump
                             pass
-                        transitions = assess_decay(entries, today)
-                        if transitions:
-                            # Separate archival transitions from dormant transitions
-                            to_archive = []
-                            for t in transitions:
-                                t.entry.decay_state = t.new_state
-                                findings.append(
-                                    f"ENTRY_DECAY: [{t.entry.entry_type}] "
-                                    f"'{t.entry.title[:50]}' "
-                                    f"{t.old_state}→{t.new_state} ({t.reason})"
-                                )
-                                if t.new_state == "archived":
-                                    to_archive.append(t.entry)
+                        original = content
+                        # A live entry still carrying a decay:archived marker (the
+                        # pre-fix runaway shape) is re-decided, not moved on the stale
+                        # marker: reset it to dormant so assess_decay judges it again
+                        # with the fresh usage bump above. Superseded entries keep
+                        # their lineage untouched (assess_decay skips them anyway).
+                        for _e in entries:
+                            if _e.decay_state == "archived" and not _e.superseded_by:
+                                _e.decay_state = "dormant"
+                        # An entry leaves the live doc on decay grounds only through
+                        # may_leave_live_doc, the same rule reclaim uses (real
+                        # created_date past grace, ref 0, not superseded, not
+                        # keep-class). A dormant->archived transition that fails it
+                        # is dropped: the entry keeps its persisted state, so an
+                        # undated or keep-class entry neither leaves the doc nor
+                        # re-fires the same transition on every pass.
+                        to_archive = []
+                        for t in assess_decay(entries, today):
+                            t.entry.decay_state = t.new_state
+                            if t.new_state == "archived" and not may_leave_live_doc(t.entry, today):
+                                t.entry.decay_state = t.old_state
+                                continue
+                            findings.append(
+                                f"ENTRY_DECAY: [{t.entry.entry_type}] "
+                                f"'{t.entry.title[:50]}' "
+                                f"{t.old_state}→{t.new_state} ({t.reason})"
+                            )
+                            if t.new_state == "archived":
+                                to_archive.append(t.entry)
 
-                            # Archive entries that transitioned to archived state.
-                            # source_path=imp_path so the archive lands NEXT TO the
-                            # resolved live doc (2-understanding/), not the raw root
-                            # — the split-brain that grew a 17MB orphan (run_f71e5920).
-                            if to_archive:
-                                archive_entries(project_dir, to_archive,
-                                                source_path=imp_path)
+                        # MOVE archived entries: append each to the archive at most
+                        # once, then strip its block (by line) from content. Before
+                        # this, the pass appended and only annotated, so the entry
+                        # stayed live and was re-archived every pass (one entry
+                        # reached 1,375 copies). The append runs first: if it raises,
+                        # nothing is stripped and the doc is not rewritten.
+                        # source_path=imp_path so the archive lands NEXT TO the
+                        # resolved live doc (2-understanding/), not the raw root
+                        # — the split-brain that grew a 17MB orphan (run_f71e5920).
+                        if to_archive:
+                            _n, content = archive_and_strip_lines(
+                                content, to_archive, project_dir,
+                                archive_name="IMPROVEMENT-archive.md",
+                                source_path=imp_path,
+                            )
+                            findings.append(
+                                f"ENTRY_ARCHIVE: {_n} entries moved to the archive "
+                                f"from {project_dir.name}"
+                            )
 
-                        # Write updated metadata back — covers BOTH ref bumps (F1)
-                        # and decay transitions. Only write if content actually changed.
+                        # Write metadata for the surviving entries into the stripped
+                        # content; one write, only if anything changed.
                         active_entries = [e for e in entries if e.decay_state != "archived"]
                         updated = inject_entry_metadata(content, active_entries)
-                        if updated != content:
+                        if updated != original:
                             imp_path.write_text(updated, encoding="utf-8")
-                            content = updated  # reclaim operates on the latest content
+                        content = updated  # reclaim operates on the latest content
 
                         # CLEAN (M0 ②): reclaim stale operational noise — archive
                         # AND physically strip (inject_entry_metadata only annotates,

@@ -632,3 +632,170 @@ class TestSourceAnchorDrift:
         findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
         assert not any("DDD-SOURCE-DRIFT" in f for f in findings), \
             "uppercase anchor of the SAME commit must not fire a false drift"
+
+
+class TestEntryLifecycleArchiveIsAMove:
+    """The decay pass archives an entry ONCE and removes it from the live doc.
+
+    Regression for the archive runaway: the pass used to append an archived entry to
+    IMPROVEMENT-archive.md and leave its bullet live (still decay:dormant), so every
+    later pass appended it again (one entry reached 1,375 copies).
+    """
+
+    # Default fixture: a DATED idle [guideline] past grace, the shape that may leave
+    # the live doc (may_leave_live_doc). Before the fix it was archived by the decay
+    # pass and left live, so every pass appended it again. An UNDATED entry (the
+    # bulk of the real runaway) must instead stay live as dormant: its age cannot be
+    # proven, the same rule reclaim applies.
+    KEEP = "- [guideline] **Fresh lesson** — still in use. ({today})"
+
+    def _doc(self, root: Path, *, old_meta: str = "decay:dormant", dated: bool = True,
+             title: str = "Old idle lesson", entry_type: str = "guideline") -> Path:
+        from datetime import date as _d
+        self.OLD = f"- [{entry_type}] **{title}** -- something nobody used."
+        if dated:
+            self.OLD += " (2025-01-01)"
+        doc = root / "Projects" / "P" / "2-understanding" / "IMPROVEMENT.md"
+        doc.parent.mkdir(parents=True)
+        doc.write_text(
+            "# Improvement\n\n## What Worked\n\n"
+            f"{self.OLD}\n  <!-- ref:0 | last:none | {old_meta} -->\n\n"
+            f"{self.KEEP.format(today=_d.today().isoformat())}\n"
+            "  <!-- ref:0 | last:none | decay:active -->\n",
+            encoding="utf-8",
+        )
+        return doc
+
+    def _run(self, root: Path) -> list:
+        from core.ddd_orchestrator import DddCultivationOrchestrator
+        return DddCultivationOrchestrator()._ch_entry_lifecycle(root, str(root))
+
+    def test_archived_entry_leaves_live_doc_and_lands_in_archive(self, tmp_path):
+        doc = self._doc(tmp_path)
+        self._run(tmp_path)
+        archive = doc.parent / "IMPROVEMENT-archive.md"
+        assert "Old idle lesson" not in doc.read_text(encoding="utf-8")
+        assert "Fresh lesson" in doc.read_text(encoding="utf-8")
+        assert archive.read_text(encoding="utf-8").count("Old idle lesson") == 1
+
+    def test_second_pass_appends_nothing(self, tmp_path):
+        doc = self._doc(tmp_path)
+        self._run(tmp_path)
+        archive = doc.parent / "IMPROVEMENT-archive.md"
+        after_first = archive.read_text(encoding="utf-8")
+        self._run(tmp_path)
+        assert archive.read_text(encoding="utf-8") == after_first
+        assert after_first.count("Old idle lesson") == 1
+        assert "Old idle lesson" not in doc.read_text(encoding="utf-8")
+
+    def test_keep_class_coe_entry_is_never_moved_out_of_the_live_doc(self, tmp_path):
+        doc = self._doc(tmp_path, title="COE07 storage outage lesson")
+        self._run(tmp_path)
+        self._run(tmp_path)
+        assert "COE07 storage outage lesson" in doc.read_text(encoding="utf-8")
+        archive = doc.parent / "IMPROVEMENT-archive.md"
+        if archive.exists():
+            assert archive.read_text(encoding="utf-8").count("COE07 storage outage lesson") <= 1
+
+    @pytest.mark.parametrize("kw", [
+        {"dated": False},
+        {"title": "COE07 storage outage lesson"},
+        {"dated": False, "old_meta": "decay:archived"},
+    ], ids=["undated", "keep_class_coe", "undated_stale_archived_marker"])
+    def test_entry_that_may_not_leave_keeps_state(self, tmp_path, kw):
+        doc = self._doc(tmp_path, **kw)
+        title = kw.get("title", "Old idle lesson")
+        archive = doc.parent / "IMPROVEMENT-archive.md"
+        first = self._run(tmp_path)
+        after_first = doc.read_text(encoding="utf-8")
+        second = self._run(tmp_path)
+        # Stays live; a stale archived marker is re-decided to dormant once.
+        assert title in after_first
+        assert "decay:dormant" in after_first.split(title, 1)[1].split("\n\n", 1)[0]
+        # Pass 2 changes nothing and the archive never gains the entry.
+        assert doc.read_text(encoding="utf-8") == after_first
+        assert not archive.exists() or title not in archive.read_text(encoding="utf-8")
+        for f in first + second:
+            assert not (f.startswith("ENTRY_DECAY") and title[:30] in f), f
+            assert not f.startswith("ENTRY_ARCHIVE"), f
+
+    def test_dated_pitfall_with_stale_archived_marker_ends_in_archive_once(self, tmp_path):
+        # Full pass, reclaim included: a dated [pitfall] past grace is reclaimable
+        # noise (EVERGREEN_TYPES guards age-decay, not reclaim), so it leaves once.
+        doc = self._doc(tmp_path, entry_type="pitfall", old_meta="decay:archived")
+        self._run(tmp_path)
+        self._run(tmp_path)
+        archive = doc.parent / "IMPROVEMENT-archive.md"
+        assert "Old idle lesson" not in doc.read_text(encoding="utf-8")
+        assert archive.read_text(encoding="utf-8").count("Old idle lesson") == 1
+
+    def test_decay_move_reclaim_and_gate_select_the_same_entries(self, tmp_path):
+        # Parity on a fixture with no duplicate (title, section) pairs.
+        from datetime import date as _d
+        from core.ddd_entry_lifecycle import (
+            compute_reclaimable_noise, may_leave_live_doc, parse_entries,
+            reclaim_noise_entries,
+        )
+        today = _d.today()
+        lines = ["# Improvement", "", "## What Worked", ""]
+        specs = [("A dated idle", "guideline", " (2025-01-01)", "decay:dormant"),
+                 ("B undated idle", "guideline", "", "decay:dormant"),
+                 ("C COE09 lesson", "guideline", " (2025-01-01)", "decay:dormant"),
+                 ("D dated pitfall", "pitfall", " (2025-01-01)", "decay:archived"),
+                 ("E decision", "decision", " (2025-01-01)", "decay:dormant"),
+                 ("F fresh", "process", f" ({today.isoformat()})", "decay:dormant")]
+        for title, typ, date_s, meta in specs:
+            lines += [f"- [{typ}] **{title}** -- body text here.{date_s}",
+                      f"  <!-- ref:0 | last:none | {meta} -->", ""]
+        content = "\n".join(lines)
+        entries = parse_entries(content)
+        accepted = {e.title for e in entries if may_leave_live_doc(e, today)}
+        assert accepted == {"A dated idle", "D dated pitfall"}
+        gate = compute_reclaimable_noise(entries, today)
+        assert set(gate.noisy_titles) == accepted
+        rep = reclaim_noise_entries(content, today, tmp_path, dry_run=True)
+        assert set(rep.candidates) == accepted
+
+    def test_already_duplicated_archive_gains_no_copy_and_keeps_its_bytes(self, tmp_path):
+        # Today's real shape: the entry is already in the archive several times and
+        # still live. The pass must strip it without appending or rewriting.
+        doc = self._doc(tmp_path)
+        archive = doc.parent / "IMPROVEMENT-archive.md"
+        block = f"{self.OLD}\n  <!-- ref:0 | last:none | decay:archived -->\n\n"
+        before = "# Archived Knowledge Entries\n\n" + block * 3
+        archive.write_text(before, encoding="utf-8")
+        self._run(tmp_path)
+        assert archive.read_text(encoding="utf-8") == before
+        assert "Old idle lesson" not in doc.read_text(encoding="utf-8")
+
+    def test_reclaimable_entry_is_archived_once_not_twice(self, tmp_path):
+        doc = self._doc(tmp_path, dated=True)
+        self._run(tmp_path)
+        archive = doc.parent / "IMPROVEMENT-archive.md"
+        assert "Old idle lesson" not in doc.read_text(encoding="utf-8")
+        assert archive.read_text(encoding="utf-8").count("Old idle lesson") == 1
+
+    def test_live_entry_already_marked_archived_is_moved(self, tmp_path):
+        # assess_decay skips decay:archived entries, so they need their own path out.
+        doc = self._doc(tmp_path, old_meta="decay:archived")
+        self._run(tmp_path)
+        archive = doc.parent / "IMPROVEMENT-archive.md"
+        assert "Old idle lesson" not in doc.read_text(encoding="utf-8")
+        assert archive.read_text(encoding="utf-8").count("Old idle lesson") == 1
+
+    def test_archive_write_failure_leaves_live_doc_untouched(self, tmp_path):
+        doc = self._doc(tmp_path)
+        before = doc.read_text(encoding="utf-8")
+        with patch("core.ddd_entry_lifecycle.archive_entries", side_effect=OSError("disk full")):
+            self._run(tmp_path)
+        assert doc.read_text(encoding="utf-8") == before
+
+    def test_doc_locked_by_another_writer_is_skipped_untouched(self, tmp_path):
+        from utils.file_lock import md_lock
+        doc = self._doc(tmp_path)
+        before = doc.read_text(encoding="utf-8")
+        with md_lock(doc, blocking=True) as got:
+            assert got
+            self._run(tmp_path)
+        assert doc.read_text(encoding="utf-8") == before
+        assert not (doc.parent / "IMPROVEMENT-archive.md").exists()

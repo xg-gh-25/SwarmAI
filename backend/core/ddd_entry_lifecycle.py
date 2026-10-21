@@ -1005,10 +1005,17 @@ def archive_entries(
     archive_name: str = "IMPROVEMENT-archive.md",
     source_path: "Path | None" = None,
 ) -> int:
-    """Move entries to an archive file and return count archived.
+    """Append entries to an archive file, at most once each; return the count archived.
 
-    Creates archive file if it doesn't exist. Appends entries with their
-    full raw_text + metadata comment. Marks entries as 'archived' in-place.
+    Creates the archive file if it doesn't exist. Appends each entry's full raw_text
+    + metadata comment and marks every passed entry 'archived' in-place. IDEMPOTENT:
+    an entry whose content_signature already matches an entry in the archive (or an
+    earlier entry in the same batch) is not appended again — the comparison is
+    per-entry equality, never a substring of the file, so a short entry contained in
+    a longer archived one is still a different entry. Existing archive content is
+    only ever appended to, never rewritten. This function does NOT remove the
+    entries from their live doc; callers that move an entry use
+    ``archive_and_strip_lines`` (line-precise) or ``_archive_and_strip``.
 
     Args:
         project_dir: Path to the project directory (e.g., Projects/SwarmAI/)
@@ -1023,7 +1030,8 @@ def archive_entries(
             never relies on the fallback.
 
     Returns:
-        Number of entries successfully archived.
+        Number of passed entries now present in the archive (newly appended or
+        already there).
     """
     if not entries:
         return 0
@@ -1031,31 +1039,44 @@ def archive_entries(
     archive_path = _resolve_archive_path(project_dir, archive_name, source_path)
     archive_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Function-local import (no cycle: ddd_cultivation imports this module lazily).
+    from core.ddd_cultivation import content_signature  # noqa: PLC0415
+
+    present = set(_archived_signatures(archive_path))
+
     # Build archive content to append
     archive_lines: list[str] = []
     for entry in entries:
         # Use raw_text if available, otherwise reconstruct
-        if entry.raw_text:
-            archive_lines.append(entry.raw_text)
-        else:
-            archive_lines.append(
-                f"- [{entry.entry_type}] **{entry.title}** — (archived)"
-            )
-        # Add metadata with archived state
+        text = entry.raw_text or f"- [{entry.entry_type}] **{entry.title}** — (archived)"
+        # Mark archived even when the append is skipped: the entry IS archived.
         entry.decay_state = "archived"
+        sig = content_signature(text)
+        if sig and sig in present:
+            continue  # already in the archive (or earlier in this batch)
+        if sig:
+            present.add(sig)
+        archive_lines.append(text)
         archive_lines.append(entry.to_comment())
         archive_lines.append("")  # Blank separator
 
+    if not archive_lines:
+        return len(entries)
+
     new_content = "\n".join(archive_lines)
 
-    # Write to archive file (create or append)
+    # Write to archive file (create or APPEND). Append mode never reads or rewrites
+    # the existing bytes (archives can be tens of MB), so existing archive content
+    # cannot be truncated by a failed write of the whole file.
     if archive_path.exists():
-        existing = archive_path.read_text(encoding="utf-8")
-        if not existing.endswith("\n"):
-            existing += "\n"
-        archive_path.write_text(
-            existing + "\n" + new_content, encoding="utf-8"
-        )
+        with archive_path.open("rb") as fh:
+            fh.seek(0, 2)
+            ends_with_nl = fh.tell() == 0
+            if not ends_with_nl:
+                fh.seek(-1, 2)
+                ends_with_nl = fh.read(1) == b"\n"
+        with archive_path.open("a", encoding="utf-8") as fh:
+            fh.write(("" if ends_with_nl else "\n") + "\n" + new_content)
     else:
         header = "# Archived Knowledge Entries\n\n"
         header += "_Entries archived by the Knowledge Lifecycle decay engine. "
@@ -1063,8 +1084,81 @@ def archive_entries(
         archive_path.write_text(
             header + new_content, encoding="utf-8"
         )
+    _remember_signatures(archive_path, present)
 
     return len(entries)
+
+
+# (path, mtime_ns, size) → signatures of that archive. Parsing a large archive costs
+# seconds, and the decay pass and reclaim can both archive in one pass, so the set is
+# cached and refreshed only when the file changes (stat key) or after our own append.
+_ARCHIVE_SIG_CACHE: "dict[str, tuple[int, int, frozenset[str]]]" = {}
+
+
+def _archived_signatures(archive_path: Path) -> "frozenset[str]":
+    """content_signature of every entry already in ``archive_path`` (empty if absent).
+
+    Parsed with ``parse_entries`` (prose bullets included, so retired prose entries
+    dedup too), so each signature is one whole archived entry — the dedup in
+    ``archive_entries`` compares entries for equality, never a substring of the
+    file. Cached per (mtime, size).
+    """
+    try:
+        st = archive_path.stat()
+    except FileNotFoundError:
+        return frozenset()
+    key = str(archive_path)
+    hit = _ARCHIVE_SIG_CACHE.get(key)
+    if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+        return hit[2]
+    from core.ddd_cultivation import content_signature  # noqa: PLC0415
+
+    sigs = {
+        content_signature(e.raw_text)
+        for e in parse_entries(archive_path.read_text(encoding="utf-8"),
+                               include_prose=True)
+    }
+    sigs.discard("")
+    frozen = frozenset(sigs)
+    _ARCHIVE_SIG_CACHE[key] = (st.st_mtime_ns, st.st_size, frozen)
+    return frozen
+
+
+def _remember_signatures(archive_path: Path, sigs: "set[str]") -> None:
+    """Record ``sigs`` as the archive's signature set after our own append."""
+    try:
+        st = archive_path.stat()
+    except FileNotFoundError:
+        return
+    _ARCHIVE_SIG_CACHE[str(archive_path)] = (st.st_mtime_ns, st.st_size, frozenset(sigs))
+
+
+def archive_and_strip_lines(
+    content: str,
+    selected: "list[EntryMetadata]",
+    project_dir: Path,
+    *,
+    archive_name: str = "IMPROVEMENT-archive.md",
+    source_path: "Path | None" = None,
+) -> "tuple[int, str]":
+    """Move ``selected`` entries out of ``content``: archive them, then strip their blocks.
+
+    Line-precise: each entry's block is removed by its own ``line_number`` (as
+    ``parse_entries`` assigned it on this same ``content``), so a same-title twin in
+    the same section stays live. The archive append happens FIRST; if it raises, the
+    exception propagates and nothing is stripped, so an entry is never removed from
+    the live doc without being in the archive. Does NOT write ``content`` back —
+    callers persist the returned string (the decay pass injects metadata into it
+    before its single write).
+
+    Returns:
+        (count archived, content with the selected blocks removed)
+    """
+    if not selected:
+        return 0, content
+    archived = archive_entries(project_dir, selected, archive_name=archive_name,
+                               source_path=source_path)
+    return archived, _strip_entries_by_line(content, {e.line_number for e in selected})
 
 
 def archive_raw_lines(
@@ -1283,9 +1377,7 @@ def compute_reclaimable_noise(
         # Gate == action: use the SAME reclaimable predicate reclaim uses
         # (date REQUIRED), so a date-less-dominant doc isn't stuck FAILing
         # forever on noise no reclaim run can clean (adversarial H3).
-        if not _is_reclaimable_noise(entry, today, grace_days):
-            continue
-        if is_keep_class(entry, evergreen_sections=evergreen_sections):
+        if not may_leave_live_doc(entry, today, grace_days, evergreen_sections):
             continue
         noisy_titles.append(entry.title)
         section_key = entry.section or "(no section)"
@@ -1421,6 +1513,27 @@ def is_keep_class(
     return False
 
 
+def may_leave_live_doc(
+    entry: EntryMetadata,
+    today: date,
+    grace_days: int = GRACE_PERIOD_DAYS,
+    evergreen_sections: "frozenset[str] | set[str] | None" = None,
+) -> bool:
+    """True if ``entry`` may be removed from its live doc on age/decay grounds.
+
+    The one rule shared by the decay-pass move (ddd_orchestrator), the reclaim
+    action (reclaim_noise_entries) and the reclaim gate (compute_reclaimable_noise):
+    reclaimable noise (real created_date past grace, ref 0, not superseded, decay
+    state dormant/archived) AND not keep-class. EVERGREEN_TYPES is deliberately not
+    part of it (see its definition). Exceptions with their own rules:
+    reclaim_duplicate_entries (an exact duplicate goes, the survivor keeps the
+    content) and retire_entry (curator force).
+    """
+    return _is_reclaimable_noise(entry, today, grace_days) and not is_keep_class(
+        entry, evergreen_sections=evergreen_sections
+    )
+
+
 def reclaim_noise_entries(
     content: str,
     today: date,
@@ -1465,11 +1578,10 @@ def reclaim_noise_entries(
     # minus keep-class.
     selected: list[EntryMetadata] = []
     for entry in entries:
-        if not _is_reclaimable_noise(entry, today, grace_days):
-            continue
-        # Reclaimable. Now apply the protection guard.
-        if is_keep_class(entry, evergreen_sections=evergreen_sections):
-            report.kept_protected += 1
+        if not may_leave_live_doc(entry, today, grace_days, evergreen_sections):
+            # Reclaimable noise refused only by the keep-class guard is counted.
+            if _is_reclaimable_noise(entry, today, grace_days):
+                report.kept_protected += 1
             continue
         selected.append(entry)
 
@@ -1632,16 +1744,14 @@ def reclaim_duplicate_entries(
     # no-op (every real signature-dup is same-title). The correct identity for
     # dedup is the entry's own line span. archive the non-survivors, then strip
     # ONLY their blocks by line_number, leaving the survivor untouched.
-    archived = archive_entries(project_dir, selected, archive_name=archive_name,
-                               source_path=source_path)
-    report.archived = archived
     # Strip by the entry's own 0-based line index. parse_entries ALWAYS assigns a
     # real index (0 is valid — an entry at the very first line), so do NOT filter
     # `> 0` (that would leave a line-0 dup un-stripped — the invariant-weakening
     # Gate-2 flagged). `selected` are all parsed entries, so every line_number is
     # genuine; a synthesized entry (line_number defaulting to 0) never reaches here.
-    report.new_content = _strip_entries_by_line(
-        content, {e.line_number for e in selected}
+    report.archived, report.new_content = archive_and_strip_lines(
+        content, selected, project_dir,
+        archive_name=archive_name, source_path=source_path,
     )
     if source_path is not None:
         Path(source_path).write_text(report.new_content, encoding="utf-8")
@@ -1858,7 +1968,8 @@ def _strip_entries_by_line(content: str, start_lines: "set[int]") -> str:
     """Return content with the bullet blocks that START at `start_lines` removed.
 
     `start_lines` are 0-based indices into content.splitlines() — the EXACT
-    `EntryMetadata.line_number` values parse_entries assigned. Used by
+    `EntryMetadata.line_number` values parse_entries assigned. Used (through
+    archive_and_strip_lines) by the orchestrator decay pass and by
     reclaim_duplicate_entries: a dedup group shares one (title, section) (because
     content_signature is title-inclusive), so the (title, section) set-strip in
     _strip_entries CANNOT keep the survivor — it would strip every collider. Line
