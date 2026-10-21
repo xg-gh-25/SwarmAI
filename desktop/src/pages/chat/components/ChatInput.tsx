@@ -135,8 +135,6 @@ interface ChatInputProps {
   inputValueMapRef?: React.MutableRefObject<Map<string, string>>;
   /** Callback to propagate draft text changes to the per-tab storage layer. */
   onInputValueChange?: (tabId: string, value: string) => void;
-  /** True when streaming but no real SDK events received for >60s (session likely stalled). */
-  isLikelyStalled?: boolean;
   /** Callback to trigger context refresh (same-tab restart with resume) */
   onRefreshContext?: () => void;
   /** Available skills for slash command picker */
@@ -190,7 +188,6 @@ export function ChatInput({
   activeTabIdRef,
   inputValueMapRef,
   onInputValueChange,
-  isLikelyStalled = false,
   onRefreshContext,
   skills = [],
   voiceConversationState = 'off',
@@ -927,11 +924,9 @@ export function ChatInput({
               placeholder={
                 disabled
                   ? t('chat.disconnectedPlaceholder', 'Backend offline...')
-                  : isLikelyStalled
-                    ? 'Session may be stalled \u2014 send a message to recover'
-                    : isStreaming
-                      ? 'Type to queue a follow-up...'
-                      : 'Ask Swarm anything...'
+                  : isStreaming
+                    ? 'Type to queue a follow-up...'
+                    : 'Ask Swarm anything...'
               }
               rows={DEFAULT_ROWS}
               disabled={disabled}

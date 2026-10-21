@@ -14,8 +14,7 @@
  * at all", which the 15s heartbeat would make unreachable. Events that write no
  * content (heartbeat, still_working, thinking_progress) deliberately do not
  * wake it: that silent stretch is exactly what "mulling it over" describes. It
- * is NOT a stall alarm; that is `isLikelyStalled` in useChatStreamingLifecycle,
- * a different signal (one ref shared by all tabs, 60-600s thresholds).
+ * is NOT a stall alarm: a real stall is reported by the backend (still_working).
  *
  * How: the timer records WHICH key it rested on; the hook reports resting only
  * while that is still the current key. A new key therefore reads "not resting"

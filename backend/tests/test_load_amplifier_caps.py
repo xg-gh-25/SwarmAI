@@ -48,7 +48,8 @@ def _make_idle_unit(session_id: str = "test-amplifier") -> SessionUnit:
 
 
 class TestAC2HardNoticeExists:
-    """G1: hard threshold surfaces 'start a new tab', never auto-kills."""
+    """G1: the hard threshold says earlier messages are summarized automatically
+    (the CLI compacts at 75% and continues), never asks for a new tab, never kills."""
 
     def test_critical_notice_at_85pct(self):
         from core.prompt_builder import PromptBuilder
@@ -57,7 +58,8 @@ class TestAC2HardNoticeExists:
         assert evt is not None
         assert evt["level"] == "critical"
         assert evt["pct"] >= 85
-        assert "new tab" in evt["message"].lower()
+        assert "summarized automatically" in evt["message"]
+        assert "new tab" not in evt["message"].lower()
         # Notice is informational only — no kill/discard signal in the event.
         assert evt["type"] == "context_warning"
 
@@ -120,6 +122,9 @@ class TestAC5ElapsedHeartbeat:
         assert evt is not None
         assert evt["type"] == "still_working"
         assert evt.get("elapsedSeconds", 0) >= LONG_TURN_HEARTBEAT_S
+        # A tick, not a notice: a plain long turn shows the user nothing (the
+        # orchestrator only uses it to refresh a reported stall).
+        assert "message" not in evt
 
     def test_no_heartbeat_before_threshold(self):
         unit = _make_idle_unit()

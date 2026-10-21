@@ -1913,7 +1913,6 @@ class SessionUnit:
     # tree is burning ~0 CPU (a genuine deadlock). A busy tool (incl. a healthy
     # Agent sub-agent running its own CLI child) shows CPU > epsilon and is
     # NEVER interrupted.
-    TOOL_HANG_SOFT_S: float = 120.0       # surface "still running, Stop to recover"
     TOOL_HANG_OPEN_S: float = 600.0       # quick tools: probe CPU after this long
     TOOL_HANG_OPEN_S_LONG: float = 1800.0 # long-window tools (see below)
     # Tools that get the LONG window. Two reasons a tool belongs here:
@@ -4646,12 +4645,16 @@ class SessionUnit:
         return True
 
     def _maybe_build_elapsed_heartbeat(self) -> Optional[dict]:
-        """AC5 (G3): build a 'still working' notice for a long-running turn.
+        """The once-per-LONG_TURN_HEARTBEAT_S tick of a long-running turn.
 
         Event-driven (called when an SDK event arrives during STREAMING): if the
-        current turn's wall-clock exceeds LONG_TURN_HEARTBEAT_S and we haven't
-        emitted a notice for this interval, return a notice event. Returns None
-        otherwise. One notice per LONG_TURN_HEARTBEAT_S interval (no spam).
+        current turn's wall-clock exceeds LONG_TURN_HEARTBEAT_S and no tick was
+        returned for this interval, return a ``still_working`` event WITHOUT a
+        message, else None. The orchestrator sends it only to refresh a stall it
+        has reported (output_degeneration.ProgressWatch); a plain long turn
+        shows nothing — its running row already has a live timer, and a long
+        tool is not a fault (the CPU-gated hang tiers below handle a real hang
+        without the user, so telling them to press Stop was only alarming).
 
         The notice is an SSE/UI event — never written to the system prompt
         (byte-stability invariant). Reset _last_heartbeat_elapsed on STREAMING
@@ -4671,28 +4674,7 @@ class SessionUnit:
         if interval_idx <= last_idx:
             return None
         self._last_heartbeat_elapsed = elapsed
-        minutes = int(elapsed // 60)
-        # AC1 (run_fb6e94a9): if a specific tool has been open a long time,
-        # name it and tell the user they can Stop to recover — turns a silent
-        # spinner into an actionable signal.
-        oldest = self._oldest_open_tool()
-        if oldest is not None and oldest[0] > self.TOOL_HANG_SOFT_S:
-            tool_age, tool_name, _tool_id = oldest
-            tmin = int(tool_age // 60)
-            return {
-                "type": "still_working",
-                "elapsedSeconds": int(elapsed),
-                "toolName": tool_name,
-                "message": (
-                    f"⏳ {tool_name} has been running {tmin}m with no output. "
-                    f"Still working — press Stop to recover if this looks stuck."
-                ),
-            }
-        return {
-            "type": "still_working",
-            "elapsedSeconds": int(elapsed),
-            "message": f"Still working — {minutes}m elapsed on this step.",
-        }
+        return {"type": "still_working", "elapsedSeconds": int(elapsed)}
 
     async def compact(self, instructions: Optional[str] = None) -> dict:
         """Trigger /compact on the subprocess.

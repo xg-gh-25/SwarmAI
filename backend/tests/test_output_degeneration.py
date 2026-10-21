@@ -252,7 +252,7 @@ def test_progress_watch_thinking_notice_once_per_episode():
     w.on_event(301.0)
     w.on_thinking_tokens(301.0, delta=40)
     note = w.check(301.0, tools_open=False)
-    assert note is not None and "思考" in note
+    assert note is not None and "Thinking for" in note
     assert w.check(330.0, tools_open=False) is None  # once per episode
     w.on_visible(400.0)  # model produced output → re-armed
     w.on_thinking_tokens(705.0, delta=10)
@@ -264,7 +264,7 @@ def test_progress_watch_silent_notice_and_tool_suppression():
     w = ProgressWatch(now=0.0)
     assert w.check(400.0, tools_open=True) is None  # a running tool is not a stall
     note = w.check(400.0, tools_open=False)
-    assert note is not None and "事件" in note
+    assert note is not None and "No reply" in note
     assert w.check(500.0, tools_open=False) is None
 
 
@@ -276,7 +276,7 @@ def test_progress_watch_thinking_then_silent_gives_each_notice_once():
     w.on_event(10.0)
     assert w.check(10.0 + SILENT_STALL_S - 1, tools_open=False) is None
     first = w.check(10.0 + SILENT_STALL_S + 1, tools_open=False)
-    assert first is not None and "事件" in first  # thinking stopped long ago → silence
+    assert first is not None and "No reply" in first  # thinking stopped long ago → silence
     assert w.check(900.0, tools_open=False) is None
 
 
@@ -296,11 +296,11 @@ def test_silent_note_does_not_stick_once_events_resume():
 
     w = ProgressWatch(now=0.0)
     assert w.check(SILENT_STALL_S + 1, tools_open=False) is not None
-    assert "事件" in w.stall_note(SILENT_STALL_S + 2)
+    assert "No reply" in w.stall_note(SILENT_STALL_S + 2)
     w.on_event(SILENT_STALL_S + 5)  # thinking frames arrive again
     w.on_thinking_tokens(SILENT_STALL_S + 5, delta=50)
     note = w.stall_note(SILENT_STALL_S + 6)
-    assert note is None or "事件" not in note
+    assert note is None or "No reply" not in note
 
 
 # ── 2. Transcript cleaning ────────────────────────────────────────────────
@@ -528,11 +528,11 @@ def test_orchestrator_thinking_stall_notice(monkeypatch):
         return [ev async for ev in orch._read_formatted_response()]
 
     events = asyncio.run(_run())
-    stalls = [e for e in events if e.get("type") == "still_working" and "思考" in e.get("message", "")]
+    stalls = [e for e in events if e.get("type") == "still_working" and "Thinking for" in e.get("message", "")]
     assert len(stalls) == 1, stalls
     assert stalls[0]["stall"] is True
     # Never conversation content: nothing persisted as if the model said it.
-    assert not [t for t in _assistant_texts(events) if "思考" in t]
+    assert not [t for t in _assistant_texts(events) if "Thinking for" in t]
     assert orch._parent._interrupt_calls["n"] == 0  # notice only, never a stop
     assert events[-1]["type"] == "result" and events[-1]["subtype"] == "success"
 
@@ -547,7 +547,7 @@ def test_heartbeat_keeps_showing_a_reported_stall(monkeypatch):
     monkeypatch.setattr(so.time, "time", lambda: clock["t"])
     orch = _make_orchestrator()
     orch._parent._maybe_build_elapsed_heartbeat = lambda: {
-        "type": "still_working", "elapsedSeconds": 1, "message": "Still working — 6m elapsed on this step."}
+        "type": "still_working", "elapsedSeconds": 1, "message": "(unused)"}
     frames = [SystemMessage(subtype="thinking_tokens", data={"estimated_tokens_delta": 100}) for _ in range(14)]
 
     class _Client:
@@ -573,7 +573,7 @@ def test_heartbeat_keeps_showing_a_reported_stall(monkeypatch):
     sw = [e for e in events if e.get("type") == "still_working"]
     first_stall = next(i for i, e in enumerate(sw) if e.get("stall"))
     assert first_stall < len(sw) - 1
-    assert all("思考" in e["message"] for e in sw[first_stall:])  # never reverts to generic text
+    assert all("Thinking for" in e["message"] for e in sw[first_stall:])  # never reverts to generic text
 
 
 def test_abort_prefix_strips_hidden_leak_markup():
@@ -784,3 +784,18 @@ def test_real_session_unit_interrupt_runs_on_degeneration():
     assert unit.state == SessionState.COLD
     assert unit._sdk_session_id  # --resume identity kept (not cleared)
     assert events[-1]["subtype"] == "output_degenerated"
+
+
+def test_stall_notices_state_facts_and_never_advise_stopping():
+    """Thinking tokens still arriving = the model is working; silence is ended
+    by the backend itself. Neither notice tells the user to stop or resend."""
+    from core.output_degeneration import ProgressWatch, THINKING_STALL_S, SILENT_STALL_S
+    w = ProgressWatch(now=0.0)
+    w.on_thinking_tokens(THINKING_STALL_S - 10, 12_000)
+    thinking = w.check(THINKING_STALL_S + 1, tools_open=False)
+    assert thinking == "Thinking for ~5 min (~12000 thinking tokens), no visible output yet."
+    w2 = ProgressWatch(now=0.0)
+    silent = w2.check(SILENT_STALL_S + 1, tools_open=False)
+    assert silent.startswith("No reply from the model for ~4 min.")
+    for note in (thinking, silent):
+        assert "stop" not in note.lower() and "resend" not in note.lower() and "stuck" not in note.lower()

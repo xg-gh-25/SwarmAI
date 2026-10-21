@@ -26,7 +26,7 @@ import {
   useContextUsageRefresh,
   type ContextUsageSnapshot,
 } from '../hooks/contextUsage';
-import { useChatStreamingLifecycle, CONTEXT_CRITICAL_NOTICE_ID } from '../hooks/useChatStreamingLifecycle';
+import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
 import { tabNoticeStore } from '../stores/tabNoticeStore';
 import { getContextRingColor } from '../pages/chat/components/ContextUsageRing';
 import { messageStoreRegistry } from '../stores/MessageStore';
@@ -188,41 +188,14 @@ describe('lifecycle hook applies backend snapshots', () => {
     expect(result.current.contextWarning?.pct).toBe(4);
   });
 
-  // The critical warning is an in-tab notice of the tab the snapshot is for —
-  // never a top-right toast, never routed through "the active tab".
-  const critical = (tabId: string) =>
-    tabNoticeStore.getSnapshot(tabId).filter((n) => n.id === CONTEXT_CRITICAL_NOTICE_ID);
-
-  it('critical notice is raised once per episode, not per snapshot', () => {
-    const { handler } = setup('tab-d');
-    act(() => { handler(snap({ level: 'critical', pct: 86, measuredAt: 1 }) as never); });
-    const first = critical('tab-d')[0];
-    act(() => { tabNoticeStore.dismiss('tab-d', CONTEXT_CRITICAL_NOTICE_ID); });
-    act(() => { handler(snap({ level: 'critical', pct: 87, measuredAt: 2 }) as never); });
-    act(() => { handler(snap({ level: 'critical', pct: 88, measuredAt: 3 }) as never); });
-    expect(first).toBeDefined();
-    expect(critical('tab-d')).toHaveLength(0); // the user's dismiss sticks for the episode
+  // A full context raises no notice: the CLI summarizes earlier messages at 75%
+  // and the turn continues; the ring shows the level.
+  it('a critical snapshot raises no notice and no toast', () => {
+    const { result, handler } = setup('tab-d');
+    act(() => { handler(snap({ level: 'critical', pct: 88, measuredAt: 1 }) as never); });
+    expect(result.current.contextWarning?.level).toBe('critical');
+    expect(tabNoticeStore.getSnapshot('tab-d')).toHaveLength(0);
     expect(mockAddToast).not.toHaveBeenCalled();
-  });
-
-  it('a critical background tab gets the notice on ITS tab only; leaving critical retracts it', () => {
-    const bg = setup('tab-bg', 'sess-bg');
-    setup('tab-fg', 'sess-fg'); // initTestTab makes this the active tab
-    act(() => { bg.handler(snap({ level: 'critical', pct: 90, measuredAt: 1 }) as never); });
-    expect(critical('tab-bg')).toHaveLength(1);
-    expect(critical('tab-bg')[0].sessionId).toBe('sess-bg');
-    expect(critical('tab-fg')).toHaveLength(0);
-    act(() => { bg.handler(snap({ level: 'ok', pct: 4, basis: 'post_compact', measuredAt: 2 }) as never); });
-    expect(critical('tab-bg')).toHaveLength(0);
-  });
-
-  it('a new critical episode after leaving critical raises the notice again', () => {
-    const { handler } = setup('tab-ep', 'sess-ep');
-    act(() => { handler(snap({ level: 'critical', pct: 90, measuredAt: 1 }) as never); });
-    act(() => { tabNoticeStore.dismiss('tab-ep', CONTEXT_CRITICAL_NOTICE_ID); });
-    act(() => { handler(snap({ level: 'ok', pct: 10, measuredAt: 2 }) as never); });
-    act(() => { handler(snap({ level: 'critical', pct: 91, measuredAt: 3 }) as never); });
-    expect(critical('tab-ep')).toHaveLength(1);
   });
 
   it('a GET answered after a newer SSE snapshot does not roll the ring back', async () => {

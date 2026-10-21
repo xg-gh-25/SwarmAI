@@ -85,7 +85,6 @@ import { toContextWarning, isNewerSnapshot, snapshotFromEvent, onContextUsageSta
 const RECONNECT_MAX_ATTEMPTS = 9;
 
 /** In-tab notice id for the critical-context warning (one per tab). */
-export const CONTEXT_CRITICAL_NOTICE_ID = 'context-critical';
 /** In-tab notice id for "automatic recovery stopped" (one per tab). */
 export const RECOVERY_EXHAUSTED_NOTICE_ID = 'recovery-exhausted';
 /** In-tab notice id for the long-turn "still working" heartbeat (one per tab). */
@@ -112,21 +111,6 @@ const RECONNECT_BASE_DELAY_MS = 1000;
  *  fires within ≤10s instead of leaving a long blind gap. With 9 attempts the
  *  schedule is 1,2,4,8,10,10,10,10,10 ≈ 65s total. */
 const RECONNECT_MAX_DELAY_MS = 10000;
-
-// ---------------------------------------------------------------------------
-// Stall detection constants
-// ---------------------------------------------------------------------------
-
-/** Stall threshold during text generation — no real (non-heartbeat) event for this long. */
-const STALL_THRESHOLD_TEXT_MS = 60_000;
-
-/** Stall threshold during tool execution — tools like Bash/Read can take minutes. */
-const STALL_THRESHOLD_TOOL_MS = 180_000;
-
-/** Stall threshold while a sub-agent (Agent tool) runs: the main agent is silent
- *  until it returns, and a sub-agent may think for minutes between its own
- *  steps. The backend's own hang tier for Agent is 30 min (session_unit). */
-const STALL_THRESHOLD_AGENT_MS = 600_000;
 
 /**
  * Tail size for turn-end reconcile fetches. The reconcile sites below only need
@@ -651,23 +635,6 @@ export function applySubAgentProgress(msg: Message, event: StreamEvent): Message
   return { ...msg, subAgentProgress: { ...msg.subAgentProgress, [parent]: next } };
 }
 
-/** Which tool calls of a message are still waiting for their result — drives
- *  the stall threshold (a tool, and above all a sub-agent, legitimately runs
- *  silent for minutes; a false "session may be stalled" breaks the chat). */
-export function openToolState(msg: Message | undefined): { tool: boolean; agent: boolean } {
-  if (!msg) return { tool: false, agent: false };
-  const done = new Set<string>();
-  for (const b of msg.content) if (b.type === 'tool_result') done.add(b.toolUseId);
-  let tool = false;
-  let agent = false;
-  for (const b of msg.content) {
-    if (b.type !== 'tool_use' || done.has(b.id) || b.name === 'AskUserQuestion') continue;
-    tool = true;
-    if (b.category === 'agent' || b.name === 'Agent' || b.name === 'Task') agent = true;
-  }
-  return { tool, agent };
-}
-
 // ---------------------------------------------------------------------------
 // Fix 5: sessionStorage persistence helpers (exported for testability)
 // ---------------------------------------------------------------------------
@@ -985,10 +952,6 @@ export interface ChatStreamingLifecycle {
   // (Compaction notice has no hook-level state — it is appended as a persistent
   //  system message to the per-tab MessageStore at the event site; no React slot.)
 
-  // Hang detection — true when streaming but no real (non-heartbeat) SDK events for >60s
-  /** True when the active stream has received only heartbeats for >60s. */
-  isLikelyStalled: boolean;
-
   // SESSION_BUSY recovery — true when polling for backend completion
   /** True when backend returned SESSION_BUSY and we're polling for the response. */
   isWaitingForBusy: boolean;
@@ -1106,14 +1069,6 @@ export function useChatStreamingLifecycle(
   const messagesRef = useRef<Message[]>(messages);
   const streamStartTimeRef = useRef<number | null>(null); // Fix 9: elapsed time counter
 
-  // --- Hang detection: track last real (non-heartbeat) SSE event ---
-  // Context-aware: tool execution can legitimately take minutes (npm test,
-  // large file reads), so we use a longer threshold when a tool is in flight.
-  const lastRealEventRef = useRef<number>(Date.now());
-  const pendingToolUseRef = useRef<boolean>(false);
-  // A sub-agent (Agent tool) is running: the longest stall threshold applies.
-  const openAgentRef = useRef<boolean>(false);
-  const [isLikelyStalled, setIsLikelyStalled] = useState(false);
 
   // ── Streaming State Machine (shadow mode — coexists with boolean flags) ──
   // Phase 2 integration: reducer dispatches at lifecycle boundaries.
@@ -1205,28 +1160,6 @@ export function useChatStreamingLifecycle(
   // SESSION_BUSY recovery: polling state (intervals stored per-tab in UnifiedTab)
   const [isWaitingForBusy, setIsWaitingForBusy] = useState(false);
 
-  // Poll for stall state while streaming (10s interval).
-  // Heartbeats keep the SSE connection alive but mask SDK hangs from the
-  // frontend. This timer checks whether we've received any real SDK event
-  // (text, tool_use, tool_result, result, etc.) within the threshold.
-  useEffect(() => {
-    if (!isStreaming) {
-      setIsLikelyStalled(false);
-      pendingToolUseRef.current = false;
-      openAgentRef.current = false;
-      return;
-    }
-    const interval = setInterval(() => {
-      const threshold = openAgentRef.current
-        ? STALL_THRESHOLD_AGENT_MS
-        : pendingToolUseRef.current
-          ? STALL_THRESHOLD_TOOL_MS
-          : STALL_THRESHOLD_TEXT_MS;
-      const stalled = Date.now() - lastRealEventRef.current > threshold;
-      setIsLikelyStalled(stalled);
-    }, 10_000);
-    return () => clearInterval(interval);
-  }, [isStreaming]);
 
   // ── Streaming state reconciliation (all tabs) — ALWAYS-ON ──
   // Safety net: if ANY frontend tab thinks isStreaming=true but backend has
@@ -1773,25 +1706,10 @@ export function useChatStreamingLifecycle(
         tabState.contextMeasuredAt = raw.measuredAt;
         tabState.contextMeasuredFor = tabState.sessionId;
       }
-      // Critical context is a notice IN THIS TAB, raised once per critical
-      // episode of this tab's CURRENT session and retracted when it leaves
-      // critical. Keyed by the explicit tabId of this snapshot — never by "the
-      // active tab" — so a tab switch cannot move it, and a notice the user
-      // dismissed stays dismissed until the episode ends (or the session changes).
-      const episodeKey = tabState.sessionId ?? '';
-      if (next?.level === 'critical') {
-        if (tabState.criticalNoticeFor !== episodeKey && tabId) {
-          tabNoticeStore.post(tabState, tabState.sessionId, {
-            id: CONTEXT_CRITICAL_NOTICE_ID,
-            severity: 'error',
-            message: next.message,
-          });
-          tabState.criticalNoticeFor = episodeKey;
-        }
-      } else {
-        tabState.criticalNoticeFor = undefined;
-        if (tabId) tabNoticeStore.dismiss(tabId, CONTEXT_CRITICAL_NOTICE_ID);
-      }
+      // No in-tab notice for a full context: the CLI summarizes earlier messages
+      // automatically at 75% and the turn continues (core/prompt_builder.py
+      // AUTOCOMPACT_TRIGGER_FRACTION); the context ring shows the level, and a
+      // failed compaction has its own notice (CompactNotice).
     }
     // One snapshot per API call: skip the re-render when nothing visible changed.
     if (!unchanged && (tabId === null || tabId === activeTabIdRef.current)) {
@@ -2505,7 +2423,7 @@ export function useChatStreamingLifecycle(
         // the oldest open tool, and a "press Stop to recover" hint). Surface it
         // in-tab so a multi-minute turn reads as "still working", not a dead
         // spinner. Handled HERE — before the generation guard and before the
-        // lastRealEventRef update — so it (a) is never discarded as stale and
+        // stall bookkeeping — so it (a) is never discarded as stale and
         // (b) does NOT reset the stall timer (a heartbeat is not SDK progress,
         // same exclusion as 'heartbeat'). Active tab only: a background tab's
         // notice would surface against the chat the user is actually viewing.
@@ -2744,27 +2662,10 @@ export function useChatStreamingLifecycle(
           });
         }
 
-        // Track last real (non-heartbeat) event for stall detection.
-        // Heartbeats keep the SSE connection alive but don't indicate SDK
-        // progress. Only real events reset the stall timer. (thinking_progress
-        // IS progress → it falls in here and correctly resets the stall timer.)
-        if (event.type !== 'heartbeat') {
-          lastRealEventRef.current = Date.now();
-        }
-
         // Liveness: the per-tab force-end watchdog is already reset at the TOP
-        // of this handler for EVERY event (heartbeat/thinking_progress included),
-        // so no type-gated touch() is needed here. The stall detector
-        // (lastRealEventRef, above) is a DIFFERENT signal — SDK progress — and
-        // deliberately excludes heartbeat; do not conflate the two.
-
-        // Track tool execution state for context-aware stall thresholds.
-        // tool_use → tool is running (may take minutes), tool_result → done.
-        if (event.type === 'tool_use') {
-          pendingToolUseRef.current = true;
-        } else if (event.type === 'tool_result') {
-          pendingToolUseRef.current = false;
-        }
+        // of this handler for EVERY event, so no type-gated touch() is needed.
+        // (No frontend stall guess: the backend reports a real stall itself as
+        // a still_working notice, and ends a silent wait on its own.)
 
         // ── Unified file-change notification (run_e626e121) — the SINGLE
         //    backend-authoritative Canvas trigger. Carries the enriched payload
@@ -2968,8 +2869,6 @@ export function useChatStreamingLifecycle(
           if (capturedTabId && tabState && tabState.status !== 'streaming') {
             updateTabStatus(capturedTabId, 'streaming');
           }
-          // Reset stall threshold to text-mode (60s) — thinking phase is over.
-          pendingToolUseRef.current = false;
 
           const textFresh = freshText;
           freshText = false;
@@ -3023,9 +2922,6 @@ export function useChatStreamingLifecycle(
             resStore.updateLast(
               (msg) => {
                 const next = updateMessages([msg], assistantMessageId, event.content!, undefined)[0];
-                const open = openToolState(next);
-                pendingToolUseRef.current = open.tool;
-                openAgentRef.current = open.agent;
                 return next;
               },
               (msg) => msg.id === assistantMessageId,
@@ -3035,7 +2931,6 @@ export function useChatStreamingLifecycle(
           // A sub-agent's lifecycle / progress (SDK Task* messages): the main
           // agent is silent while it runs, so this is what keeps the chat alive
           // and tells the user what runs and how far it got. Ephemeral side field.
-          openAgentRef.current = event.status === 'running' || openAgentRef.current;
           const saStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
           if (saStore) {
             saStore.updateLast(
@@ -3052,10 +2947,6 @@ export function useChatStreamingLifecycle(
           if (capturedTabId && tabState && tabState.status !== 'streaming') {
             updateTabStatus(capturedTabId, 'streaming');
           }
-          // Extended thinking can have 30-120s silent periods (deep reasoning
-          // without producing tokens). Use the longer tool threshold to avoid
-          // false "session stalled" warnings during thinking.
-          pendingToolUseRef.current = true;
         } else if (event.type === 'assistant' && event.content) {
           // Full assistant message — the SDK's complete, authoritative content.
           // SINGLE-WRITER: store handles dedup + subscription syncs to React.
@@ -3073,9 +2964,6 @@ export function useChatStreamingLifecycle(
                 const next = updateMessages([msg], assistantMessageId, event.content!, event.model)[0];
                 // The backend never sends a top-level `tool_use` event: a tool
                 // call arrives inside `assistant`, so the stall threshold is set here.
-                const open = openToolState(next);
-                pendingToolUseRef.current = open.tool;
-                openAgentRef.current = open.agent;
                 return next;
               },
               (msg) => msg.id === assistantMessageId,
@@ -4115,8 +4003,11 @@ export function useChatStreamingLifecycle(
             // while another tab is active — it must never land there).
             tabNoticeStore.post(tab2, graceSessionId, {
               id: CONNECTION_LOST_NOTICE_ID,
-              severity: 'error',
-              message: 'Connection lost after self-heal attempt. Send your message again to continue.',
+              severity: 'warning',
+              // Not "send it again": once the backend is idle the reconcile loop
+              // reloads this session's saved messages, so an answer that finished
+              // meanwhile appears by itself; resending would duplicate it.
+              message: 'The connection to this reply dropped. If it finished, it appears here within about 15s; if not, send your message again.',
             });
           }, HEAL_GRACE_PERIOD_MS);
           return; // Don't show error — heal grace in progress
@@ -4917,7 +4808,6 @@ export function useChatStreamingLifecycle(
     setPromptMetadata,
     compactionGuard,
     setCompactionGuard,
-    isLikelyStalled,
     isWaitingForBusy,
     cancelBusyWait,
   };

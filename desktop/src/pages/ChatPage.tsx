@@ -363,7 +363,6 @@ export default function ChatPage() {
     refreshContextUsage,
     promptMetadata,
     setPromptMetadata,
-    isLikelyStalled,
     isWaitingForBusy,
     cancelBusyWait,
   } = useChatStreamingLifecycle({
@@ -3486,7 +3485,6 @@ export default function ChatPage() {
                 onInputValueChange={(tabId: string, value: string) => {
                   inputValueMapRef.current.set(tabId, value);
                 }}
-                isLikelyStalled={isLikelyStalled}
                 onRefreshContext={() => setShowRefreshModal(true)}
                 skills={skills}
                 voiceConversationState={voiceConversation.state}

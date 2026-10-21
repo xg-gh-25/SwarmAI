@@ -145,7 +145,6 @@ export interface UnifiedTab {
   /** The session (`''` = none yet) whose current critical-context episode
    *  already raised this tab's in-tab notice; cleared when the tab leaves
    *  critical. A different session starts a new episode. */
-  criticalNoticeFor?: string;
   /** Per-tab compaction guard event from backend (null = no active guard event). */
   compactionGuard: CompactionGuardEvent | null;
   /** Per-tab system prompt metadata delivered via SSE (null = not yet received). */

@@ -875,13 +875,13 @@ class PromptBuilder:
             msg = (
                 f"{prefix}context is {pct}% full "
                 f"(~{tokens_k}K/{window_k}K tokens). "
-                f"Start a new tab for best results."
+                f"Earlier messages are summarized automatically; the conversation continues."
             )
         elif pct >= cls._CONTEXT_WARN_PCT:
             msg = (
                 f"{prefix}context is at {pct}% "
                 f"(~{tokens_k}K/{window_k}K tokens). "
-                f"Consider a new tab if more heavy tasks remain."
+                f"Earlier messages will be summarized automatically as it fills."
             )
         else:
             msg = (

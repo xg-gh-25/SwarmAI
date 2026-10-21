@@ -314,16 +314,19 @@ class ProgressWatch:
     def _text(self, kind: str, now: float) -> str:
         if kind == "thinking":
             minutes = max(1, int((now - self._last_visible) // 60))
+            # Thinking tokens are still arriving: the model is working. State
+            # the fact; no guess that it is looping, no advice to stop (that
+            # throws the thinking away).
             return (
-                f"⏳ 模型已连续思考约 {minutes} 分钟(约 {self._thinking_tokens} thinking tokens)"
-                "仍未产生任何输出,可能陷入思考空转;可以继续等待,或停止后重新发送。"
-                f"(Model has been thinking for ~{minutes} min with no visible output.)"
+                f"Thinking for ~{minutes} min (~{self._thinking_tokens} thinking tokens), "
+                "no visible output yet."
             )
         minutes = max(1, int((now - self._last_event) // 60))
+        # The orchestrator ends a silent wait itself (adaptive streaming timeout,
+        # extended only while the CLI is using CPU), so the user need not act.
         return (
-            f"⏳ 已约 {minutes} 分钟没有收到模型的任何事件(无 thinking、无输出),"
-            "可能卡住;可以继续等待,或停止后重新发送。"
-            f"(No model events for ~{minutes} min.)"
+            f"No reply from the model for ~{minutes} min. "
+            "SwarmAI ends the wait on its own if it does not answer."
         )
 
     def check(self, now: float, *, tools_open: bool) -> Optional[str]:

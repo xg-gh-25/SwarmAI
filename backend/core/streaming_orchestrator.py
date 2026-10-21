@@ -1644,12 +1644,11 @@ class StreamingOrchestrator:
                         try:
                             hb = self._parent._maybe_build_elapsed_heartbeat()
                             if hb is not None:
-                                # Keep a reported stall on screen: the generic
-                                # heartbeat shares the toast slot.
+                                # Only a reported stall is refreshed; a plain
+                                # long turn sends no notice.
                                 _stall = _progress.stall_note(time.time())
                                 if _stall is not None:
-                                    hb = {**hb, "message": _stall, "stall": True}
-                                yield hb
+                                    yield {**hb, "message": _stall, "stall": True}
                         except Exception as hb_exc:
                             logger.debug(
                                 "streaming_orchestrator.heartbeat_failed session_id=%s: %s",
@@ -1908,18 +1907,16 @@ class StreamingOrchestrator:
             self._parent._health_sensor.record_activity()
             _progress.on_event(self._parent._last_event_time)
 
-            # ── Long-turn heartbeat (Root 2 / AC5) ─────────────────
-            # If this turn has been running a long time, surface a "still
-            # working" notice so the FE reads it as expected, not a hang.
-            # Event-driven (fires on the next SDK event after the threshold);
-            # one notice per interval. Never written to the system prompt.
+            # ── Long-turn tick (Root 2 / AC5) ─────────────────────
+            # Once per interval of a long turn, refresh a stall notice that
+            # ProgressWatch reported (a plain long turn sends nothing).
+            # Never written to the system prompt.
             try:
                 hb = self._parent._maybe_build_elapsed_heartbeat()
                 if hb is not None:
                     _stall = _progress.stall_note(time.time())
                     if _stall is not None:
-                        hb = {**hb, "message": _stall, "stall": True}
-                    yield hb
+                        yield {**hb, "message": _stall, "stall": True}
             except Exception as hb_exc:
                 # Best-effort — never break the stream — but log so a
                 # persistently-throwing heartbeat (e.g. an attribute rename) is
