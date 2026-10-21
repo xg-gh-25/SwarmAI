@@ -4,7 +4,7 @@ date: 2026-10-21
 created: 2026-10-21
 updated: 2026-10-21
 project: SwarmAI
-status: FINAL — XG 2026-10-21 定稿；P1、P2、P3a 已落地，其余由 pipeline v13 设计一次切换实现（§6）
+status: DONE — P1、P2、P3a 已落地 main；其余由 pipeline v13 设计一次切换实现（§6）；验收基线见 §7
 related: pipeline-review-convergence.md（N1–N5，本文收窄其轮数）；pipeline-run-worktree.md（run_owner_gate 的 token 机制）；pipeline-run-budget.md（轮数预算）
 ---
 # Pipeline gate 与 expert review 简化
@@ -296,7 +296,7 @@ P1、P2 和 P3a 已经在 main 上落地。其余部分不再在 main 上分期�
 
 ## 7. 验收指标
 
-落地后 30 天对比落地前 30 天（P1 之前先跑一次 `gate_audit.py` 和 run 统计脚本，存一份基线）：
+落地后 30 天对比落地前的基线。基线取 10-01 到 P1 落地（10-21 20:50 CST）之间的数据，2026-10-21 计算：
 
 | 指标 | 基线 | 目标 |
 |---|---|---|
@@ -304,12 +304,12 @@ P1、P2 和 P3a 已经在 main 上落地。其余部分不再在 main 上分期�
 | REVIEW + DELIVER 占阶段时间 | 33% | ≤ 15% |
 | gate deny / 天 | 约 62 | ≤ 15 |
 | 改道、格式和误伤类 deny 占比（按 §1.2 的分法） | 约 55%（69/124） | ≤ 20% |
-| 每个 run 抓到的 HIGH（有 finding 的 run 里） | 基线待测 | 不低于基线的 80% |
+| 至少有一个 HIGH 的 run 占有 finding 的 run 的比例 | 43%（55/127） | 不低于 34%（基线的 80%） |
 | push_ready=yes 的完成 run 比例 | 3/41 | ≥ 50% |
 | REPORT 里写"手工落地"的 run | 2 天 4 个 | 0 |
-| 逃逸率：落地后 7 天内改同一文件的 `fix:` 提交占比 | 基线待测 | 不高于基线 |
+| 逃逸率：run 的提交之后 3 天内，有 `fix` / `revert` 提交点名该 run 的 id 或 commit sha | 5%（4/85） | 不高于 5% |
 
-"抓到的 HIGH"和"逃逸率"是质量底线。P1、P2、P3a 落地后两周内这两项变差超过目标，就回滚对应提交；v13 切换后用 v13 §E6 的指标对比（§8）。
+"HIGH 比例"和"逃逸率"是质量底线。逃逸率用 3 天窗口：run-commit 是 10 月中旬才有的，7 天窗口完整的 run 只有 7 个。按"7 天内改同一文件的 fix 提交"计算会得到 85%，因为这个仓库几乎每个文件每周都会被 fix 提交改到，这个口径测不出逃逸，没有采用。P1、P2、P3a 落地后两周内这两项变差超过目标，就回滚对应提交；v13 切换后用 v13 §E6 的指标对比（§8）。
 
 ## 8. 回滚
 

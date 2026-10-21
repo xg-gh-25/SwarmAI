@@ -9,9 +9,9 @@ At PLAN, declare the code-review experts (`backend/experts/code/`) this changese
 reviewed by: the experts whose domain the change touches. Examples: an endpoint/handler change
 ⇒ `security`; a concurrency/async change ⇒ `concurrency`; a state-machine change ⇒
 `state-machine`. Use the registry's expert ids as the vocabulary
-(`ExpertManager.scan_experts()`, or the 12 ids under `backend/experts/code/`: api-contract,
-code-quality, concurrency, correctness, integration, operational, performance, red-team,
-security, spec-compliance, state-machine, ux-test).
+(`ExpertManager.scan_experts()`). Gate-2 dispatches only `correctness`, `security` and
+`red-team`; any other id you declare (api-contract, concurrency, integration, operational,
+performance, state-machine) is reviewed by correctness, whose checklist carries those lenses.
 
 ```bash
 python backend/scripts/artifact_cli.py run-update --project <P> --run-id <R> \

@@ -32,9 +32,10 @@ stage-start adds security back — when the final diff still meets the fan-out r
 final diff below both bars (under 50 source lines and no fan-out trigger) gets no
 security sub-agent; the inline Security Scan covers it. The inline Security Scan
 (check 2) runs every time regardless.
-(Gate-2's size tiers read the same non-test source counts: < 50 lines → no specialist
-unless required, a documentation-only change → none, > 200 lines → red-team. They are DELIVER's
-to apply; REVIEW uses them only through the security-owner decision above.)
+(Gate-2 reads the same non-test source counts: < 50 lines → no specialist unless required
+or a clear security risk (security only), a documentation-only change → none; >= 50 lines →
+correctness, plus security and red-team on a clear security risk (`_security_risk`). They are
+DELIVER's to apply; REVIEW uses them only through the security-owner decision above.)
 
 ## Spawning (Phase A — one message, several foreground Agent calls)
 - Issue ALL Agent tool calls in a single assistant message so they run in parallel, every

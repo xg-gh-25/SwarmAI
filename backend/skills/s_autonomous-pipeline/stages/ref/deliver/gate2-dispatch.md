@@ -93,7 +93,7 @@ analysis."`
   — use stdout ONLY on exit 0 (exit 2 = no numeric cap, exit 3 = `--project` missing;
   stdout is empty on both). In zsh pass the files as separate words.
 - `EXPERT-ID: <EXPERT_ID>` (the D7 key) takes the specialist's lowercase registry id
-  — the `<id>` of `backend/experts/code/<id>.md` (`correctness`, `api-contract`,
+  — the `<id>` of `backend/experts/code/<id>.md` (`correctness`, `security`,
   `red-team`), never the Title-case `<DOMAIN>`. A wrong value fails the
   `^EXPERT-ID: [a-z…]$` anchor read by `runtime_hooks._extract_expert_id`; the marker
   then records no expert and D7 cannot credit it.

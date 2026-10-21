@@ -251,8 +251,8 @@ implementations in `security_hooks.py`). By category:
    `state/pipeline_agent_audit`, the SubagentStop markers that D7, the Red Team check,
    Gate-0/1 and `adversarial_commit_gate` trust; reads pass; cannot be forced; it reads command text (an unparseable command naming the
    dir fails closed), so a path built at run time or a standalone script file is not seen.
-   Per-run worktrees (`docs/design/pipeline-run-worktree.md`; off until
-   `config.json["pipeline"]["worktree_mode"] = "on"`, a `PUT /api/settings` key): `run_owner_gate`
+   Per-run worktrees (`docs/design/pipeline-run-worktree.md`; on by default, turned off only by
+   `config.json["pipeline"]["worktree_mode"] = "off"`, a `PUT /api/settings` key): `run_owner_gate`
    (Bash, right after `commit_gate`; applies only to isolated runs and to the stage-start
    that decides an undecided run's mode — a run recorded `shared` is untouched; takes a crashed
    owner's run over, denies while the owner is live,
