@@ -283,7 +283,7 @@ async def persist_pending(
     payload = _payload_json(user_message, content)
     # Same single-authority encoder as the payload — a client_id is ASCII today,
     # but the policy must not fork per call site (that is how door 2 drifted).
-    from core.cjk_index import expand_cjk
+    from core.message_search_text import message_content_seg
     from database.sqlite import dumps_json
     metadata_json = dumps_json({"client_id": client_id}) if client_id else "{}"
 
@@ -315,7 +315,7 @@ async def persist_pending(
                     " sent, pending_seq, claimed_at, expires_at, "
                     " created_at, updated_at) "
                     "VALUES (?, ?, 'user', ?, ?, NULL, ?, 0, ?, NULL, ?, ?, ?)",
-                    (msg_id, session_id, payload, expand_cjk(payload),
+                    (msg_id, session_id, payload, message_content_seg(payload),
                      metadata_json, next_seq, expires_at, now, now),
                 )
                 await conn.commit()

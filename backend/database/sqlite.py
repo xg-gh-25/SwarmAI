@@ -604,17 +604,16 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
         # word is unfindable under any FTS5 built-in tokenizer. Populating it
         # HERE — at the write chokepoint — is what keeps the index and its
         # content source in agreement; the triggers only copy the column.
-        # `content` may already be a JSON string or a list/dict, so serialize
-        # through the same path the base class uses before segmenting.
+        # Only searchable words are indexed (text blocks + tool summaries), never
+        # base64 payloads, signatures, ids or JSON keys -- see
+        # core/message_search_text.py.
         if "content" in item:
             # Imported lazily: `core/__init__` eagerly imports the session stack,
-            # which imports `database`, so a module-level `from core.cjk_index`
-            # here would be a circular import. cjk_index itself imports nothing
-            # beyond `re`, so the lazy import is cheap and cycle-free.
-            from core.cjk_index import expand_cjk
+            # which imports `database`, so a module-level import here would be
+            # circular.
+            from core.message_search_text import message_content_seg
 
-            item["content_seg"] = expand_cjk(
-                str(self._serialize_value(item["content"]) or ""))
+            item["content_seg"] = message_content_seg(item["content"])
 
         return await super().put(item)
 
@@ -2400,14 +2399,14 @@ class SQLiteDatabase(BaseDatabase):
         Idempotent: only rows whose segmented value differs are rewritten, so this
         is safe to re-run and converges to zero.
         """
-        from core.cjk_index import expand_cjk
+        from core.message_search_text import message_content_seg
 
         cursor = await conn.execute(
             "SELECT rowid, content, content_seg FROM messages")
         rows = await cursor.fetchall()
         pending = []
         for rowid, content, seg in rows:
-            wanted = expand_cjk(str(content or ""))
+            wanted = message_content_seg(content)
             if seg != wanted:
                 pending.append((wanted, rowid))
         if not pending:

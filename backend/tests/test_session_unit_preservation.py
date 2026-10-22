@@ -480,9 +480,10 @@ class TestAssistantMessagePreservation:
         )
 
     @pytest.mark.asyncio
-    async def test_nonempty_thinking_preserves_signature(self):
-        """A ThinkingBlock WITH content must be emitted with BOTH thinking and
-        signature preserved (signature was previously dropped at line 2095)."""
+    async def test_nonempty_thinking_drops_signature(self):
+        """A ThinkingBlock WITH content is emitted with its thinking text and
+        WITHOUT the signature: nothing replays thinking from these blocks, so
+        the signature was stored (~4x the text) and read by nobody."""
         unit = _make_unit()
 
         thinking_block = _MockThinkingBlock()
@@ -506,7 +507,7 @@ class TestAssistantMessagePreservation:
         assert len(thinking_blocks) == 1
         tb = thinking_blocks[0]
         assert tb["thinking"] == "Let me compute 17 * 23 step by step..."
-        assert tb["signature"] == "ErUBCkYIByJ...", "signature must be preserved, not dropped"
+        assert "signature" not in tb
 
 
 # ---------------------------------------------------------------------------

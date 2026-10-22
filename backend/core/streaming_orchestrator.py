@@ -2373,9 +2373,11 @@ class StreamingOrchestrator:
                             content_blocks.append({
                                 "type": "thinking",
                                 "thinking": block.thinking,
-                                # Preserve signature — required to replay thinking
-                                # to the API on any future multi-turn reconstruction.
-                                "signature": getattr(block, "signature", ""),
+                                # No `signature`: it is only needed to replay
+                                # thinking to the API, and nothing does that
+                                # from these blocks -- resume uses the SDK's
+                                # own transcript. Stored, it was ~4x the size
+                                # of the thinking text and read by nobody.
                             })
                         else:
                             # The model DID respond (it produced a thinking block,

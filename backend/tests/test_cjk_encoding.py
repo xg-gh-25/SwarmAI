@@ -1982,11 +1982,11 @@ class TestEveryMessagesWriterPopulatesSeg:
         from database.sqlite import SQLiteMessagesTable
 
         put_src = inspect.getsource(SQLiteMessagesTable.put)
-        assert 'item["content_seg"] = expand_cjk(' in put_src, put_src
+        assert 'item["content_seg"] = message_content_seg(' in put_src, put_src
 
         pending_src = inspect.getsource(session_pending.persist_pending)
         assert "content_seg" in pending_src
-        assert "expand_cjk(payload)" in pending_src, pending_src
+        assert "message_content_seg(payload)" in pending_src, pending_src
 
 
 class TestFreshIndexReconciliation:
