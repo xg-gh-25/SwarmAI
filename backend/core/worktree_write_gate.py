@@ -145,7 +145,7 @@ def cli_command(cli: "dict | None", args: str, script: str = "artifact_cli.py") 
         target = os.path.join(sdir, script)
         # the record must look like the real CLI tree, not a planted pair of files
         if (run_for_path(sc) is None and os.path.isfile(target)
-                and os.path.isfile(os.path.join(sdir, "pipeline_worktree.py"))
+                and os.path.isfile(os.path.join(sdir, "pipeline_v1.py"))
                 and os.path.isfile(os.path.join(os.path.dirname(sdir), "core", "run_worktree.py"))):
             return f"{shlex.quote(py)} {shlex.quote(target)} {args}"
     return f"backend/.venv/bin/python backend/scripts/{script} {args}"

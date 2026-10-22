@@ -67,10 +67,6 @@ def test_quality_line_says_how_many_passes_were_reused():
     assert "复用" not in rds._quality_line({}, {}, {"tests_total": 5, "failed": 0, "tests_reused": None})
 
 
-
-
-
-
 # ── AC2 / AC3: both doors render the measured numbers ───────────────────────
 
 def test_quality_line_names_pre_existing_and_flaky():
@@ -89,31 +85,6 @@ def test_quality_line_never_goes_negative():
 def test_quality_line_unchanged_without_new_fields():
     line = rds._quality_line({}, {}, {"tests_total": 50, "failed": 2})
     assert "测试 48/50 通过" in line and "既有失败" not in line and "flaky" not in line
-
-
-def test_report_metrics_carry_pre_existing():
-    m = cli._report_test_metrics({"passed": True, "tests_total": 1220, "failed": 0,
-                                  "pre_existing_failures": 3, "flaky_failures": 1})
-    assert m["pre_existing_failures"] == 3 and m["flaky_failures"] == 1
-    assert cli._report_tests_phrase(m) == "1220 run, 0 failed, 3 pre-existing, 1 flaky"
-
-
-def test_summary_door_passes_pre_existing(ws, monkeypatch):
-    seen = {}
-
-    def fake_build(run_state, arts, run_dir, repo_root=None):
-        seen.update(arts["test"])
-        return "ok"
-
-    import core.run_delivery_summary as mod
-    monkeypatch.setattr(mod, "build_delivery_summary", fake_build)
-    monkeypatch.setattr(cli, "_load_stage_artifacts", lambda p, r, s: {
-        "test": {"passed": True, "tests_total": 1220, "failed": 0,
-                 "pre_existing_failures": 3, "flaky_failures": 0}})
-    root, _ = ws
-    _make_run(root, "run_door")
-    assert cli._delivery_summary_for(PROJECT, "run_door") == "ok"
-    assert seen["pre_existing_failures"] == 3 and seen["tests_total"] == 1220
 
 
 # ── AC4 / AC5: done marks in mitigation / disposition ───────────────────────
@@ -149,11 +120,3 @@ def test_fixed_risk_leaves_leftovers():
     left = rds.review_summary({}, deliver)["leftovers"]
     assert any("preflight blind" in x for x in left)
     assert not any("no parity test" in x for x in left)
-
-
-def test_push_ready_doc_states_marking():
-    doc = (_BACKEND / "skills" / "s_autonomous-pipeline" / "stages" / "ref" / "deliver"
-           / "push-ready.md").read_text(encoding="utf-8")
-    assert "fixed: <how>" in doc and "accepted: <why>" in doc
-    # resolved is the mark the push-ready HIGH check reads; the doc must require it.
-    assert '"resolved": true' in doc

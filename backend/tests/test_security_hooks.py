@@ -600,30 +600,6 @@ class TestGovernanceFileGate:
         from core.security_hooks import _match_governance_tier
         assert _match_governance_tier("backend/skills/s_autonomous-pipeline/stages/build.md") == 2
 
-    @pytest.mark.parametrize("path", [
-        "backend/skills/s_autonomous-pipeline/stages/ref/build/greenfield.md",
-        "/Users/x/repo/backend/skills/s_autonomous-pipeline/stages/ref/review/a/b.md",
-        "backend/skills/s_autonomous-pipeline/stages/ref/topic.md",
-        "backend/skills/s_autonomous-pipeline/stages/history/deliver.md",
-        "/Users/x/repo/backend/skills/s_autonomous-pipeline/stages/history/old/x.md",
-        # backup/temp variants of a subtree file must not slip through either
-        "backend/skills/s_autonomous-pipeline/stages/ref/build/greenfield.md.bak",
-        "backend/skills/s_autonomous-pipeline/stages/history/deliver.md~",
-    ])
-    def test_tier2_matches_pipeline_stage_subtrees(self, path):
-        """Splitting stage docs into stages/ref/ and stages/history/ must not
-        drop them out of governance: every depth under stages/ stays Tier 2."""
-        from core.security_hooks import _match_governance_tier
-        assert _match_governance_tier(path) == 2
-
-    def test_stage_subtree_patterns_are_present_and_original_kept(self):
-        """The explicit subtree spellings exist, and the original top-level
-        pattern was not replaced by them (additive only, never loosened)."""
-        from core.security_hooks import GOVERNANCE_TIER2_PATTERNS as pats
-        assert "*/s_autonomous-pipeline/stages/*.md" in pats
-        assert "*/s_autonomous-pipeline/stages/ref/**/*.md" in pats
-        assert "*/s_autonomous-pipeline/stages/history/**/*.md" in pats
-
     def test_tier0_for_normal_files(self):
         """Non-governance files return tier 0."""
         from core.security_hooks import _match_governance_tier

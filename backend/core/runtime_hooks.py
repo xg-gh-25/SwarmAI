@@ -907,7 +907,7 @@ def create_pipeline_run_mapping_hook(session_context: Optional[dict] = None):
 # information — we decide which expert to spawn and author its prompt — so it must
 # NOT round-trip through the SDK agent-registry (that is the rejected X/Y coupling:
 # .claude/agents or ClaudeAgentOptions.agents=). Instead the spawn prompt carries a
-# structured anchor line `EXPERT-ID: <id>` (injected by deliver.md/gate2-adversarial.md),
+# structured anchor line `EXPERT-ID: <id>` (injected by the review prompt producer),
 # and we extract it from the sub-agent's own transcript head — the same head already
 # read for adversarial-intent classification, so no new transcript read.
 #
@@ -1143,7 +1143,7 @@ def create_agent_tool_audit_hook(
     2. Always: writes ``session_<session_id>_<ts>.marker`` as session-level
        evidence. The validator (Check 9b) accepts either form. It carries the
        ``expert_id`` of the prompt's EXPERT-ID line and, for a gate skeptic
-       (gate0-skeptic / gate1-skeptic), the ``verdict`` its final answer gave.
+       (Gate-0), the ``verdict`` its final answer gave.
     3. CONDITIONAL: if THIS sub-agent's intent is adversarial-review (classified
        via _is_adversarial_intent on agent_type + the transcript-head spawn
        prompt), ALSO writes ``session_<session_id>_adv_<ts>.marker`` carrying a
@@ -1251,8 +1251,8 @@ def create_agent_tool_audit_hook(
                     # read; "session" = the session's newest run + the prompt's own line
                     "attributed_by": attributed_by,
                     # Key present = this daemon captures prompt reads for EVERY sub-agent
-                    # ({} = none read, None = transcript unreadable → readers warn). Gate-1,
-                    # Gate-0 and the Gate-2 re-check bind to the prompt file handed out.
+                    # ({} = none read, None = transcript unreadable → readers warn). Gate-0
+                    # and prompt-backed reviews bind to the prompt file handed out.
                     "prompt_reads": reads,
                     # when it was spawned (its transcript's first record): REVIEW / DELIVER
                     # stage-complete require one round's experts to start together
@@ -1398,8 +1398,7 @@ def _read_subagent_prompt_head(transcript_path: str) -> str:
 
 # A gate skeptic's OWN verdict, read from its final answer, so stage-complete can compare
 # the verdict the orchestrator records with what the skeptic said (artifact_cli
-# `_gate_verdict_mismatch`). Only LINE-ANCHORED verdict lines count — gate1: a line that
-# starts "GATE 1 VERDICT:" (the mandated first line of its report); gate0: a line whose
+# `_gate_verdict_mismatch`). Only LINE-ANCHORED verdict lines count: Gate-0 uses a line whose
 # first ≤40 chars lead to "verdict:" ("4. Verdict: …", "Claim 2 — Verdict: …") — and a
 # template line listing the options ("PASS | WARN | BLOCK") never counts. When several
 # lines give different tokens the MOST SEVERE wins: quoted plan / claim text (DATA the
@@ -1688,8 +1687,8 @@ _FINDING_IDENTITY = ("severity", "confidence", "path", "line", "category", "summ
 
 
 def _rows_of(obj) -> list:
-    """Finding rows in one parsed JSON value: a finding object, a list of them, or a
-    meta-review object whose ``risks`` list holds them (``description`` = summary)."""
+    """Finding rows in one parsed JSON value: a finding object, a list of them, or
+    an aggregate review object whose ``risks`` list holds them."""
     if isinstance(obj, list):
         return [r for x in obj for r in _rows_of(x)]
     if not isinstance(obj, dict):
@@ -1705,10 +1704,10 @@ def _expert_answer(final_text: str) -> dict:
     """Findings and re-check answers from a Gate-2 expert's final answer.
 
     ``reported`` = its findings: whole JSON values first (each fenced code block and the
-    whole answer: a findings array, a meta-review ``{"risks": [...]}``), then one JSON
+    whole answer: a findings array, an aggregate ``{"risks": [...]}``), then one JSON
     object per line (trailing commas allowed), de-duplicated. ``reported_state`` =
     "findings" | "no_findings" (no finding and the answer ENDS in ``NO FINDINGS``, or a
-    meta-review ``"verdict": "CLEAR"``) | "unparsed" (neither: DELIVER refuses to compare
+    aggregate-review ``"verdict": "CLEAR"``) | "unparsed" (neither: DELIVER refuses to compare
     blind). ``recheck_answers`` = {"<n>": "RESOLVED" | "NOT RESOLVED"} from ``R<n> …``
     lines; NOT RESOLVED wins when an item is answered both ways."""
     text = final_text or ""

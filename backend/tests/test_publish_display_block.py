@@ -181,15 +181,6 @@ def test_ac4_legacy_schema_version_no_block(reg, capsys):
 
 # ── AC6: render fn raises → publish still succeeds, no block ─────────────────
 
-def test_ac6_render_failure_degrades_gracefully(reg, capsys, monkeypatch):
-    import pipeline_validator
-    def _boom(requirement, data):
-        raise RuntimeError("render exploded")
-    monkeypatch.setattr(pipeline_validator, "render_audit_trail_md", _boom)
-    # must not raise, must still emit a valid success JSON without the block
-    parsed, _, err = _run_publish(_args(_eval_data()), reg, capsys)
-    assert parsed is not None and "artifact_id" in parsed
-    assert "_display_block" not in parsed
 
 
 # ── AC5: the block is LITERALLY render_audit_trail_md's output (no reimpl) ───

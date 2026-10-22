@@ -197,86 +197,8 @@ class TestThreeState:
 # ─────────────────────────────────────────────────────────────────────────────
 # AC4 — profile-aware changeset stage
 # ─────────────────────────────────────────────────────────────────────────────
-class TestChangesetStageForProfile:
-    def test_full_profile_reads_build(self):
-        import scripts.artifact_cli as cli
-        assert cli._changeset_stage_for_profile("full") == "build"
-
-    def test_bugfix_profile_reads_build(self):
-        import scripts.artifact_cli as cli
-        assert cli._changeset_stage_for_profile("bugfix") == "build"
-
-    def test_goal_profile_reads_goal_cycle(self):
-        import scripts.artifact_cli as cli
-        assert cli._changeset_stage_for_profile("goal") == "goal_cycle"
-
-    def test_unknown_profile_defaults_build(self):
-        import scripts.artifact_cli as cli
-        assert cli._changeset_stage_for_profile("mystery") == "build"
 
 
-class TestGoalChangesetRendersFromRecord:
-    """REVIEW MED edge: an artifactless goal_cycle (no artifact_id, 'commits
-    incrementally') must still surface files_changed from the STAGE RECORD into
-    the report header, not render a hard 0 (the old build-only read)."""
-
-    def test_goal_run_without_cycle_artifact_renders_record_files(self, workspace, monkeypatch):
-        import scripts.artifact_cli as cli
-        from argparse import Namespace
-        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
-        project, run_id = "P", "run_goal"
-        run_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
-        run_dir.mkdir(parents=True)
-        # goal_cycle stage: completed, NO artifact_id, files_changed on the RECORD
-        run_state = {
-            "id": run_id, "project": project, "profile": "goal",
-            "requirement": "goal thing", "status": "completed",
-            "created_at": "2026-10-12T00:00:00+00:00",
-            "completed_at": "2026-10-12T01:00:00+00:00",
-            "stages": [
-                {"stage": "goal_cycle", "status": "completed", "token_cost": 1,
-                 "files_changed": ["a.py", "b.py", "c.py"], "cycles_run": 4,
-                 "dod_met": 3, "adversarial_review": {"spawned": True, "findings": []}},
-                {"stage": "deliver", "status": "completed", "token_cost": 1},
-                {"stage": "reflect", "status": "completed", "token_cost": 1,
-                 "lessons": ["[guideline] a sufficiently long reflect lesson here."]},
-            ],
-        }
-        (run_dir / "run.json").write_text(json.dumps(run_state), encoding="utf-8")
-        (workspace / "Projects" / project / ".artifacts" / "manifest.json").write_text(
-            json.dumps({"project": project, "artifacts": []}), encoding="utf-8")
-        cli.cmd_run_report(Namespace(project=project, run_id=run_id), None)
-        report = (run_dir / "REPORT.md").read_text(encoding="utf-8")
-        # header `Files:` must reflect the 3 files from the goal_cycle RECORD, not 0
-        assert "**Files:** 3" in report, f"goal files not surfaced from record: {report[:400]}"
-
-    def test_full_run_files_unaffected(self, workspace, monkeypatch):
-        """Guard: the common full-profile path still reads build, unaffected."""
-        import scripts.artifact_cli as cli
-        from argparse import Namespace
-        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
-        project, run_id = "P", "run_full"
-        run_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
-        run_dir.mkdir(parents=True)
-        run_state = {
-            "id": run_id, "project": project, "profile": "full",
-            "requirement": "full thing", "status": "completed",
-            "created_at": "2026-10-12T00:00:00+00:00",
-            "completed_at": "2026-10-12T01:00:00+00:00",
-            "stages": [
-                {"stage": "build", "status": "completed", "token_cost": 1,
-                 "files_changed": ["x.py", "y.py"]},
-                {"stage": "deliver", "status": "completed", "token_cost": 1},
-                {"stage": "reflect", "status": "completed", "token_cost": 1,
-                 "lessons": ["[guideline] a sufficiently long reflect lesson here."]},
-            ],
-        }
-        (run_dir / "run.json").write_text(json.dumps(run_state), encoding="utf-8")
-        (workspace / "Projects" / project / ".artifacts" / "manifest.json").write_text(
-            json.dumps({"project": project, "artifacts": []}), encoding="utf-8")
-        cli.cmd_run_report(Namespace(project=project, run_id=run_id), None)
-        report = (run_dir / "REPORT.md").read_text(encoding="utf-8")
-        assert "**Files:** 2" in report
 
 
 # ─────────────────────────────────────────────────────────────────────────────

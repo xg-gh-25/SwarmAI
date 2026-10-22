@@ -250,17 +250,14 @@ class TestGitErrorObservability:
 
 
 class TestStageDocsWiring:
-    """AC3 — deliver.md + complete.md must instruct open-canvas-file with the full
-    run-scoped path + run-surface-changes, and NOT the stale open-canvas /
-    'no open-file action' text."""
+    """The v1 deliver card must not restore the stale open-canvas instruction."""
 
-    def _docs(self):
+    def _deliver_doc(self):
         base = Path(__file__).resolve().parents[1] / "skills" / "s_autonomous-pipeline" / "stages"
-        return (base / "deliver.md").read_text(), (base / "complete.md").read_text()
-
+        return (base / "deliver.md").read_text()
 
     def test_docs_drop_stale_open_canvas_instruction(self):
-        deliver, _ = self._docs()
+        deliver = self._deliver_doc()
         assert "no `open-file` action" not in deliver, (
             "deliver.md still has the stale 'no open-file action' line"
         )

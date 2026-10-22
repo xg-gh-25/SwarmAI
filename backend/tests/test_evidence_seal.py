@@ -30,7 +30,6 @@ for _p in (str(_BACKEND / "scripts"), str(_BACKEND)):
         sys.path.insert(0, _p)
 
 import pipeline_test as pt  # noqa: E402
-import pipeline_validator as pv  # noqa: E402
 import scripts.artifact_cli as cli  # noqa: E402
 from core import evidence_seal as es  # noqa: E402
 
@@ -113,16 +112,6 @@ def test_an_unreadable_store_fails_open(env):
     assert ok and "unreadable" in why
 
 
-def test_validator_loader_and_landing_reader_drop_a_forged_report(env):
-    _enable(env)
-    forged = env.run_dir / "evidence" / "tests" / "latest-regression.json"
-    forged.write_text(json.dumps({"schema": 1, "mode": "regression", "counts": {"passed": 9}}))
-    data, why = pv._load_evidence_json(forged)
-    assert data is None and "no seal" in why
-    [ev] = pv.load_test_evidence(env.run_dir)
-    assert ev.get("unreadable") and not ev.get("counts")
-
-
 def test_runner_read_returns_none_for_a_forged_cache(env):
     _enable(env)
     cache = env.run_dir / "evidence" / "proofs" / "old-side.json"
@@ -141,47 +130,6 @@ def test_two_writers_leave_the_seal_matching_the_file(env):
 
 
 # ── Gate-2 R1 break tests ────────────────────────────────────────────────────
-def test_a_symlinked_report_is_rejected(env, tmp_path):
-    """security-af5361 / correctness-f2da06 / red-team-16e9f7: a link to a file outside
-    the run, a link to an older sealed report of the same run, and a linked directory."""
-    _enable(env)
-    tests = env.run_dir / "evidence" / "tests"
-    outside = tmp_path / "forged.json"
-    outside.write_text(json.dumps({"schema": 1, "mode": "regression", "counts": {"passed": 9}}))
-    link = tests / "latest-regression.json"
-    link.symlink_to(outside)
-    assert pv._load_evidence_json(link)[0] is None
-    assert not es.check(link)[0]
-    link.unlink()
-    older = tests / "regression-20261020T000000.json"
-    pt._write_json(older, {"schema": 1, "mode": "regression", "counts": {"passed": 3}})
-    link.symlink_to(older)
-    assert pv._load_evidence_json(link)[0] is None
-    assert pt._read_json(link) is None
-    pdir = env.run_dir / "evidence" / "proofs"
-    elsewhere = tmp_path / "proofs-elsewhere"
-    elsewhere.mkdir()
-    (elsewhere / "prove-R1-x.json").write_text(json.dumps({"proofs": []}))
-    pdir.rmdir()
-    pdir.symlink_to(elsewhere, target_is_directory=True)
-    assert pv._load_evidence_json(pdir / "prove-R1-x.json")[0] is None
-
-
-def test_the_parsed_bytes_are_the_checked_bytes(env, monkeypatch):
-    """red-team-314fe1: a reader that parses one read and hashes another can be fed a
-    swapped file; the loader must parse exactly what it checked."""
-    _enable(env)
-    p = env.run_dir / "evidence" / "tests" / "latest-regression.json"
-    pt._write_json(p, {"schema": 1, "mode": "regression", "counts": {"failed": 3}})
-    real_read_text = Path.read_text
-
-    def swapped(self, *a, **k):
-        if self.name == "latest-regression.json":
-            return json.dumps({"schema": 1, "mode": "regression", "counts": {"failed": 0}})
-        return real_read_text(self, *a, **k)
-    monkeypatch.setattr(Path, "read_text", swapped)
-    data, problem = pv._load_evidence_json(p)
-    assert problem is None and data is not None and data["counts"] == {"failed": 3}
 
 
 def test_a_write_after_the_store_vanished_warns(env, capsys):

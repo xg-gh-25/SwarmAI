@@ -82,24 +82,6 @@ def _run_commit(workspace, run_id):
     return captured
 
 
-class TestRunCommitGates:
-
-
-    def test_recomputed_bound_ignores_only_root_cause_deferred_findings(self):
-        """run-commit's recompute must not count findings a SOUND verdict deferred (they
-        would keep the exception from ever firing); push_ready itself still counts them."""
-        import pipeline_validator as pv
-        art = {"quality": {"tests_pass": True, "regressions": 0},
-               "completion_audit": {"all_green": True},
-               "adversarial_review": {"findings": [
-                   {"severity": "HIGH", "confidence": 9, "description": "x",
-                    "deferred_by": pv.DEFERRED_BY_ROOT_CAUSE}]}}
-        _, reasons = pv.push_ready_upper_bound(art, "full")
-        assert any(r.startswith("findings:") for r in reasons)
-        _, reasons = pv.push_ready_upper_bound(art, "full", honor_deferred=True)
-        assert not any(r.startswith("findings:") for r in reasons)
-
-
 # ── PR-review surface (run_b8ea6d5c): LOCAL_PR.md REMOVED; finish batch = rail rows ──
 class TestNoLocalPR:
     """LOCAL_PR.md generation was removed (run_b8ea6d5c): the aggregated doc had no

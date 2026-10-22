@@ -41,11 +41,8 @@ from pathlib import Path
 
 import pytest
 
-from core.runtime_hooks import _is_adversarial_intent
-
 _SKILL_ROOT = Path(__file__).resolve().parents[1] / "skills" / "s_autonomous-pipeline"
 _SCRIPTS = _SKILL_ROOT / "scripts"
-_GATE2 = _SKILL_ROOT / "data" / "gate-prompts" / "gate2-adversarial.md"
 
 _PITFALL = (
     "- [pitfall] **The bottom re-pin in TabView must stay a single followRef authority** "
@@ -105,54 +102,9 @@ def swarmws(tmp_path):
 _FILES = ["desktop/src/pages/chat/components/TabView.tsx", "desktop/src/pages/chat/turnView.ts"]
 
 
-def test_recalled_entry_text_reaches_the_gate2_prompt(swarmws):
-    rc, out, err = _run("--gate", "gate2-adversarial", "--project", "Acme",
-                        "--files", *_FILES, swarmws=swarmws)
-    assert rc == 0, err
-    assert "single followRef authority" in out, "the recalled ENTRY TEXT must be in the prompt"
-    assert "IMPROVEMENT.md" in out and "Scar Tissue" in out, "provenance (doc + section) missing"
-    assert "<PROJECT_KNOWLEDGE>" not in out, "slot left unfilled"
-    assert "Billing exports" not in out, "an entry sharing no query term was injected"
-
-
-def test_prompt_head_contract_survives_injection(swarmws):
-    rc, out, _ = _run("--gate", "gate2-adversarial", "--project", "Acme",
-                      "--files", *_FILES, swarmws=swarmws)
-    assert rc == 0
-    assert out.splitlines()[0].startswith("EXPERT-ID: "), "line 1 must stay the EXPERT-ID anchor"
-    assert _is_adversarial_intent("", "", out[:2000]) is True
-
-
-def test_project_and_files_placeholders_are_filled(swarmws):
-    rc, out, _ = _run("--gate", "gate2-adversarial", "--project", "Acme",
-                      "--files", *_FILES, swarmws=swarmws)
-    assert rc == 0
-    assert "Project: Acme" in out
-    assert "<PROJECT>" not in out
-    assert "<list of all changed files>" not in out
-    assert "desktop/src/pages/chat/components/TabView.tsx" in out
-
-
-@pytest.mark.parametrize("project", ["Empty", "NoSuchProject"])
-def test_empty_or_unknown_project_is_a_complete_state(swarmws, project):
-    rc, out, err = _run("--gate", "gate2-adversarial", "--project", project,
-                        "--files", *_FILES, swarmws=swarmws)
-    assert rc == 0, err
-    assert "No project knowledge recalled" in out
-    assert "<PROJECT_KNOWLEDGE>" not in out
-
-
-def test_slot_bearing_prompt_without_project_is_refused(swarmws):
-    rc, out, err = _run("--gate", "gate2-adversarial", swarmws=swarmws)
-    assert rc == 3
-    assert out == "", "stdout must be EMPTY on refusal"
-    assert "--project" in err
-
-
-def test_gates_without_the_slot_need_no_project(swarmws):
-    for gate in ("gate0-skeptic", "gate1-skeptic"):
-        rc, out, _ = _run("--gate", gate, swarmws=swarmws)
-        assert rc == 0 and out
+def test_gate0_needs_no_project(swarmws):
+    rc, out, _ = _run("--gate", "gate0-skeptic", swarmws=swarmws)
+    assert rc == 0 and out
 
 
 def test_knowledge_only_prints_just_the_block(swarmws):
@@ -173,13 +125,6 @@ def test_block_names_the_on_demand_recall_command(swarmws):
                       swarmws=swarmws)
     assert rc == 0
     assert "context_recall_cli.py --domains ddd --project Acme" in out
-
-
-def test_template_names_no_ddd_section():
-    text = _GATE2.read_text(encoding="utf-8")
-    assert "Runtime Environment Traps" not in text
-    assert "Architecture Invariants" not in text
-    assert "<PROJECT_KNOWLEDGE>" in text
 
 
 # ── renderer unit properties (3 states, whole-entry cap) ───────────────────────

@@ -44,15 +44,24 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-try:  # One neutralization rule shared with the REPORT provenance audit.
-    from scripts.pipeline_validator import _md_cell
-except ImportError:  # pragma: no cover - fallback mirrors pipeline_validator._md_cell
-    def _md_cell(value) -> str:  # type: ignore[no-redef]
-        raw = str(value if value is not None else "")
-        if not raw.strip():
-            return ""
-        return (raw.replace("\\", "\\\\").replace("\n", " ⏎ ")
-                .replace("\r", "").replace("|", "\\|"))
+# One neutralization rule for every interpolated audit field.
+def _md_cell(value) -> str:
+    """Neutralize LLM-authored artifact text before it is interpolated into the
+    audit markdown (Gate-2 MED): fold newlines to a visible marker (so a crafted
+    `statement`/`answer`/`resolution` cannot terminate a list item and inject a
+    fake `## heading` / bullet into the report) and escape `|` (table-column
+    injection). The audit block is the 'glass box' — its own integrity must not be
+    breakable by the very data it renders. ONE rule for EVERY interpolated field, so
+    the per-field escaping drift the Q&A table had cannot recur.
+
+    Whitespace/newline-ONLY input returns "" (not a visible ⏎): an empty-in-substance
+    value must stay empty-in-substance, else a blank acceptance would fold to a
+    non-empty ' ⏎ ' and flip a downstream presence check (○→● false-green). Content
+    with real text keeps its folded newline markers."""
+    raw = str(value if value is not None else "")
+    if not raw.strip():
+        return ""
+    return raw.replace("\\", "\\\\").replace("\n", " ⏎ ").replace("\r", "").replace("|", "\\|")
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 RULE_LINE = "━" * 36

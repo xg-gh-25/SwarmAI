@@ -20,8 +20,6 @@ the source of truth; the BLOCKING directive guards the copy.
 import re
 from pathlib import Path
 
-from core.runtime_hooks import _is_adversarial_intent
-
 _SKILL = Path(__file__).resolve().parents[1] / "skills" / "s_autonomous-pipeline"
 
 
@@ -41,45 +39,6 @@ def _spawn_budget():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
-
-#: The Gate-2 specialist prompt. It moved out of ``stages/deliver.md`` into its own
-#: whole-file prompt so that the orchestrator emits it (``scripts/spawn_prompt.py``)
-#: instead of retyping a fenced block. This module follows the content, not the
-#: old location — R27: a reader of a moved contract must be migrated with it.
-_DELIVER_MD = _SKILL / "data" / "gate-prompts" / "gate2-adversarial.md"
-
-
-def _extract_specialist_template_head(text: str) -> str:
-    """Return the HEAD of the specialist prompt — the leading instruction block
-    BEFORE the first '## ' section (## Context, ## Checklist, etc.).
-
-    This head is what LEADS every spawned specialist prompt and is the part that
-    must carry the adversarial signal; matching incidental prose deeper in the
-    body (e.g. the 'Restraint' section mentioning 'adversarial found 5') would be
-    test-theater (RP47) — a match that does not reflect the spawn-prompt lead.
-
-    ``text`` is now the WHOLE gate-prompt file rather than a fenced block carved
-    out of ``deliver.md``. No fence is located because none encloses the prompt
-    any more: the Gate-1 prompt contains a nested ``` block, and a
-    find-the-next-fence extractor closed on it and silently dropped the tail.
-    """
-    head_end = text.find("\n## ")
-    return text if head_end == -1 else text[:head_end]
-
-
-def test_specialist_template_is_classified_adversarial():
-    """The shipped specialist prompt template must carry an adversarial-review
-    signal `_is_adversarial_intent` recognizes — else the pipeline's own reviewers
-    never emit the _adv_ marker and the commit gate blocks the pipeline's own work."""
-    head = _extract_specialist_template_head(_DELIVER_MD.read_text())
-    assert _is_adversarial_intent("", "", head) is True, (
-        "data/gate-prompts/gate2-adversarial.md no longer matches "
-        "_is_adversarial_intent — the pipeline's canonical adversarial review would "
-        "stop emitting the _adv_ marker and block its own commits. Restore an "
-        "adversarial phrase (e.g. 'Adversarially review this changeset — hunt for "
-        "bugs, regressions and security issues in this diff.') to the prompt head."
-    )
-
 
 # ---------------------------------------------------------------------------
 # Scope-budget contract — ONE authority, not one copy per template
@@ -107,9 +66,7 @@ _BUDGET_MARKER = "SCOPE BUDGET"
 # output-format spec while the caps survived, which left the caps-based check green.
 # A whole file has no fence to mis-pair.
 _IN_FENCE_TEMPLATES = (
-    _SKILL_ROOT / "data" / "gate-prompts" / "gate2-adversarial.md",
     _SKILL_ROOT / "data" / "gate-prompts" / "gate0-skeptic.md",
-    _SKILL_ROOT / "data" / "gate-prompts" / "gate1-skeptic.md",
 )
 
 # Files that are referenced by PATH only (never pasted). They must not carry a
@@ -208,27 +165,4 @@ def test_no_volatile_measured_values_in_skill_text():
         "skill text embeds values that will expire:\n  " + "\n  ".join(offenders) +
         "\nReplace each with a claim that stays true across a model or corpus "
         "change; keep the measurement in the run record."
-    )
-
-
-def test_adversarial_phrase_stays_inside_the_prompt_head_window():
-    """The intent detector reads only the first 2000 chars of the spawn prompt.
-
-    `runtime_hooks._read_subagent_prompt_head` truncates at `content[:2000]`, and
-    `_is_adversarial_intent` runs on that slice. So the real constraint is a
-    CHARACTER WINDOW, not the order of two lines: if the adversarial phrasing
-    drifts past 2000 chars the `_adv_` marker stops being written and the
-    pipeline silently blocks its own commits.
-    """
-    head = _extract_specialist_template_head(_DELIVER_MD.read_text())
-    idx = head.lower().find("adversarially review")
-    assert idx != -1, "template head lost its 'Adversarially review' phrasing"
-    assert idx < 2000, (
-        f"'Adversarially review' sits at char {idx} of the specialist template, "
-        "past the 2000-char head the intent detector reads "
-        "(runtime_hooks._read_subagent_prompt_head). Keep it near the top."
-    )
-    assert _BUDGET_MARKER in head, (
-        f"{_BUDGET_MARKER} must appear in the specialist template HEAD (before the "
-        "first '## ' section), so the spawned sub-agent actually reads it."
     )

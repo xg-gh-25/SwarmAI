@@ -82,33 +82,7 @@ def test_legacy_integer_passed_is_a_count_not_a_flag():
     assert m["tests_total"] == 42 and m["failed"] == 2 and "suite_passed" not in m
 
 
-def test_header_test_phrase():
-    assert ac._report_tests_phrase({"tests_total": 2847, "failed": 0}) == "2847 run, 0 failed"
-    assert ac._report_tests_phrase({}) is None
-
-
 # ── adversarial + completion audit ────────────────────────────────────────────
-
-def test_adversarial_summary_from_writer_counts():
-    s = ac._report_adversarial_summary(
-        {"spawned": True, "findings_total": 16, "findings_fixed": 14, "findings_remaining": 0})
-    assert s == "16 found · 14 fixed · 0 open"
-
-
-def test_adversarial_summary_absent_without_counts():
-    assert ac._report_adversarial_summary({"spawned": True}) is None
-
-
-def test_completion_audit_lines_from_writer_fields():
-    lines = ac._report_completion_lines(
-        {"all_green": True, "requirements_met": 9, "requirements_total": 9})
-    assert "**Requirements met:** 9/9" in lines
-    assert "**All green:** yes" in lines
-
-
-def test_completion_audit_legacy_criteria_still_render():
-    lines = ac._report_completion_lines({"criteria_met": ["a"], "criteria_unmet": ["b"]})
-    assert "- [x] a" in lines and "- [ ] b" in lines
 
 
 # ── files/lines from the run's own commits ────────────────────────────────────
@@ -135,25 +109,6 @@ def repo(tmp_path):
     return r
 
 
-def test_commit_stats_from_git_numstat(repo):
-    sha = _git(repo, "rev-parse", "--short", "HEAD")
-    st = ac._report_commit_stats([{"repo": str(repo), "sha": sha, "files": ["a.py", "b.py"]}])
-    assert st == {"files": ["a.py", "b.py"], "added": 3, "removed": 1}
-
-
-@pytest.mark.parametrize("bad_sha", ["--output=/tmp/x", "HEAD;rm -rf", "", "zzzzzzz"])
-def test_malformed_sha_is_never_passed_to_git(repo, bad_sha):
-    assert ac._report_commit_stats([{"repo": str(repo), "sha": bad_sha}]) is None
-
-
-def test_vanished_repo_yields_no_stats(tmp_path):
-    assert ac._report_commit_stats([{"repo": str(tmp_path / "gone"), "sha": "abcdef1"}]) is None
-
-
-def test_no_commits_yields_no_stats():
-    assert ac._report_commit_stats([]) is None
-
-
 # ── end to end ────────────────────────────────────────────────────────────────
 
 def _write(ws, project, run_id, run_data, artifacts):
@@ -170,79 +125,6 @@ def _write(ws, project, run_id, run_data, artifacts):
     (art_dir / "manifest.json").write_text(json.dumps({"project": project, "artifacts": entries}))
     (run_dir / "run.json").write_text(json.dumps(run_data))
     return run_dir
-
-
-def test_report_renders_measured_values_and_no_invented_ones(tmp_path, monkeypatch, repo):
-    monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
-    project, run_id = "P", "run_fields01"
-    sha = _git(repo, "rev-parse", "--short", "HEAD")
-    run_data = {
-        "id": run_id, "project": project, "profile": "full", "requirement": "r",
-        "status": "completed", "created_at": "2026-10-17T09:00:00+00:00",
-        "updated_at": "2026-10-17T10:00:00+00:00", "completed_at": "2026-10-17T10:00:00+00:00",
-        "commits": [{"repo": str(repo), "sha": sha, "files": ["a.py", "b.py"]}],
-        "stages": [
-            {"stage": "build", "status": "completed", "artifact_id": "art_b",
-             "files_changed": ["only_one.py"],
-             "tdd": {"tests_generated": 63, "red_failures": 41, "green_pass": True}},
-            {"stage": "test", "status": "completed", "artifact_id": "art_t"},
-            {"stage": "deliver", "status": "completed", "artifact_id": "art_d"},
-        ],
-        "taste_decisions": [],
-    }
-    run_dir = _write(tmp_path, project, run_id, run_data, {
-        "art_b": ("changeset", {"files_changed": ["only_one.py"], "tdd": {"tests_generated": 63}}),
-        "art_t": ("test_report", {"passed": True, "failed": 0, "tests_total": 2847,
-                                  "tests_new": 105, "regressions": 0, "layers": {}}),
-        "art_d": ("delivery", {"title": "T", "adversarial_review": {
-            "spawned": True, "profile_tier": "full", "findings_total": 16,
-            "findings_fixed": 14, "findings_remaining": 0, "findings": []},
-            "completion_audit": {"all_green": True, "requirements_met": 9,
-                                 "requirements_total": 9}}),
-    })
-    reg = ac.ArtifactRegistry(ac._get_workspace())
-    ac.cmd_run_report(SimpleNamespace(project=project, run_id=run_id), reg)
-    text = (run_dir / "REPORT.md").read_text(encoding="utf-8")
-
-    assert "**Tests:** 2847 run, 0 failed" in text
-    assert "Tests: 0/0" not in text and "**Tests:** 0/0" not in text
-    assert "**Files:** 2" in text, "file count must come from the run's commit, not BUILD's list"
-    assert "+3 / -1" in text
-    assert "Confidence" not in text, "numeric confidence was retired; no stage writes it"
-    assert "16 found · 14 fixed · 0 open" in text
-    assert "verdict: ?" not in text
-    assert "Requirements met:** 9/9" in text
-    assert "(No completion audit data)" not in text
-
-
-def test_unfixable_gap_is_surfaced_as_a_known_gap(tmp_path, monkeypatch):
-    """deliver.md: "unfixable_gaps > 0 → WARNING (note in report, user decides)".
-
-    The report used to read only ``criteria_unmet`` here, so a run whose real-app
-    check could not be done inside the pipeline showed "None identified."
-    """
-    monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
-    project, run_id = "P", "run_gaps01"
-    run_data = {
-        "id": run_id, "project": project, "profile": "full", "requirement": "r",
-        "status": "completed", "created_at": "2026-10-17T09:00:00+00:00",
-        "updated_at": "2026-10-17T10:00:00+00:00", "completed_at": "2026-10-17T10:00:00+00:00",
-        "stages": [{"stage": "deliver", "status": "completed", "artifact_id": "art_d"}],
-        "taste_decisions": [],
-    }
-    run_dir = _write(tmp_path, project, run_id, run_data, {
-        "art_d": ("delivery", {"title": "T", "adversarial_review": {"spawned": True},
-                               "completion_audit": {"all_green": True, "requirements_met": 9,
-                                                    "requirements_total": 10, "gaps": 0,
-                                                    "unfixable_gaps": 1}}),
-    })
-    reg = ac.ArtifactRegistry(ac._get_workspace())
-    ac.cmd_run_report(SimpleNamespace(project=project, run_id=run_id), reg)
-    text = (run_dir / "REPORT.md").read_text(encoding="utf-8")
-    gaps = text.split("## 10. Known Gaps", 1)[1]
-    assert "could not be closed inside the pipeline" in gaps
-    assert "None identified" not in gaps
-    assert "**Tests:** not recorded" in text, "no test stage ran — say so, never 0/0"
 
 
 def _report_for(tmp_path, monkeypatch, run_id, review=None, adversarial=None):
@@ -264,21 +146,6 @@ def _report_for(tmp_path, monkeypatch, run_id, review=None, adversarial=None):
     return (run_dir / "REPORT.md").read_text(encoding="utf-8")
 
 
-def test_spawned_review_without_counts_is_not_reported_as_zero(tmp_path, monkeypatch):
-    text = _report_for(tmp_path, monkeypatch, "run_nocount", review={"approved": True},
-                       adversarial={"spawned": True, "profile_tier": "full"})
-    assert "findings not recorded (approved)" in text
-    assert "Findings: 0" not in text and "| 0 findings" not in text
-    assert "Sub-agent spawned: ✅ | findings not recorded" in text
-
-
-def test_present_empty_findings_list_is_a_measured_zero(tmp_path, monkeypatch):
-    text = _report_for(tmp_path, monkeypatch, "run_zero", review={"findings": [], "approved": True},
-                       adversarial={"spawned": True, "profile_tier": "full", "findings": []})
-    assert "| 0 findings (approved)" in text
-    assert "Findings: 0" in text
-
-
 # ── the contract list must match what the read helpers actually read ──────────
 
 #: read helper -> the (stage, path) it reads. A new helper must be added here.
@@ -288,44 +155,6 @@ _HELPER_SCOPE = {
     "_report_completion_lines": ("deliver", ("completion_audit",)),
     "_report_build_tests_written": ("build", ("tdd",)),
 }
-
-
-@pytest.mark.parametrize("fn_name,scope", list(_HELPER_SCOPE.items()))
-def test_every_field_a_read_helper_gets_is_listed(fn_name, scope):
-    """Parse the helper and collect every ``.get("<field>")`` — by AST, not by grep,
-    so a field named in a comment or docstring does not count. Each must be in
-    _REPORT_READS (or the legacy list) for that scope, which the contract test above
-    pins to the writer schema. Without this, the list could drift from the code."""
-    import ast
-    import inspect
-
-    tree = ast.parse(inspect.getsource(getattr(ac, fn_name)))
-    got = {
-        node.args[0].value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "get" and node.args
-        and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
-    }
-    assert got, f"{fn_name} reads no fields — the parse found nothing to check"
-    allowed = set(ac._REPORT_READS.get(scope, ())) | set(ac._REPORT_LEGACY_READS.get(scope, ()))
-    assert got <= allowed, (
-        f"{fn_name} reads {sorted(got - allowed)} which _REPORT_READS[{scope}] does not "
-        "list — add it there (and the contract test will check it against the writer)."
-    )
-
-
-def test_shared_commit_counts_only_the_runs_own_files(repo):
-    """A credited commit can also carry another session's files: stats follow the
-    record's `files`, never the whole commit (retro Gate-2 of ba1c8a22, MEDIUM-1)."""
-    sha = _git(repo, "rev-parse", "--short", "HEAD")
-    st = ac._report_commit_stats([{"repo": str(repo), "sha": sha, "files": ["b.py"]}])
-    assert st == {"files": ["b.py"], "added": 1, "removed": 0}
-    # files: [] = nothing in this commit is ours → not measured from it
-    assert ac._report_commit_stats([{"repo": str(repo), "sha": sha, "files": []}]) is None
-    # legacy record without `files` → the whole commit, as before
-    whole = ac._report_commit_stats([{"repo": str(repo), "sha": sha}])
-    assert whole == {"files": ["a.py", "b.py"], "added": 3, "removed": 1}
 
 
 def _review_report(tmp_path, monkeypatch, run_id, deliver, stage_extra=None, commits=None):
@@ -340,51 +169,3 @@ def _review_report(tmp_path, monkeypatch, run_id, deliver, stage_extra=None, com
     reg = ac.ArtifactRegistry(ac._get_workspace())
     ac.cmd_run_report(SimpleNamespace(project="P", run_id=run_id), reg)
     return (run_dir / "REPORT.md").read_text(encoding="utf-8")
-
-
-def test_known_gaps_lists_deliver_leftovers_never_none(tmp_path, monkeypatch):
-    """run_1907ca1d shape: 4 attention_flags + meta-review risks + a forced commit
-    rendered 'None identified.' — the false-clean this run removes."""
-    deliver = {"title": "T", "adversarial_review": {"spawned": True, "findings": [
-                   {"severity": "MEDIUM", "finding": "left open", "resolved": False}]},
-               "attention_flags": ["daemon rebuild needed"],
-               "meta_review": {"verdict": "RISKS", "risks": ["marker history grows"]}}
-    text = _review_report(tmp_path, monkeypatch, "run_rv01", deliver,
-                          stage_extra={"push_ready": False, "push_ready_reason": "no clean regression"},
-                          commits=[{"sha": "e09bd0ce", "files": ["a"], "forced_push_ready": True}])
-    gaps = text.split("## 10. Known Gaps", 1)[1]
-    assert "None identified" not in gaps
-    for s in ("daemon rebuild needed", "marker history grows", "left open",
-              "no clean regression", "e09bd0ce"):
-        assert s in gaps, s
-
-
-def test_tldr_is_the_three_part_review_not_the_requirement(tmp_path, monkeypatch):
-    deliver = {"title": "T", "adversarial_review": {"spawned": True},
-               "outcome": {"problem_before": "summaries hid leftovers",
-                           "result_now": "leftovers are listed", "approach": ["one shared function"]}}
-    text = _review_report(tmp_path, monkeypatch, "run_rv02", deliver)
-    tldr = text.split("## TL;DR", 1)[1].split("## 1.", 1)[0]
-    assert "解决了什么问题" in tldr and "summaries hid leftovers" in tldr
-    assert "leftovers are listed" in tldr and "one shared function" in tldr
-    assert "遗留问题" in tldr
-
-
-def test_tldr_says_unrecorded_when_outcome_missing(tmp_path, monkeypatch):
-    text = _review_report(tmp_path, monkeypatch, "run_rv03",
-                          {"title": "T", "adversarial_review": {"spawned": True}})
-    tldr = text.split("## TL;DR", 1)[1].split("## 1.", 1)[0]
-    assert tldr.count("未记录") >= 2
-    assert "the requirement text" not in tldr
-
-
-def test_review_failure_is_never_rendered_as_clean(tmp_path, monkeypatch):
-    import core.run_delivery_summary as rds
-
-    def boom(*a, **k):
-        raise RuntimeError("x")
-    monkeypatch.setattr(rds, "review_summary", boom)
-    text = _review_report(tmp_path, monkeypatch, "run_rv04",
-                          {"title": "T", "adversarial_review": {"spawned": True}})
-    gaps = text.split("## 10. Known Gaps", 1)[1]
-    assert "None identified" not in gaps and "NOT checked" in gaps

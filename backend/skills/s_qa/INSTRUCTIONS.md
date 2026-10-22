@@ -227,14 +227,9 @@ python backend/scripts/artifact_cli.py publish \
   --data '<JSON of test report>'
 ```
 
-**Advance pipeline:**
-```bash
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliver --run-id <RUN_ID>
-```
-
-> `--run-id` applies when this skill runs INSIDE a pipeline run (it enables the
-> pre-advance validator). Standalone — no pipeline run — omit it; passing a
-> non-existent run id makes the validator fail closed and the advance exit 1.
+**Inside a pipeline run:** stage progress is recorded by `backend/scripts/pipeline_v1.py`
+(`stage-complete --project <PROJECT> --run-id <RUN_ID>`), never by this skill. Standalone,
+publishing the artifact above is the whole hand-off.
 
 > **⏭️ Continuation contract — advance is not the end of your turn.** `advance` only records the state transition; it is NOT a
 > handoff point. Immediately Read the next stage's doc (the `advance` output prints its

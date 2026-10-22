@@ -5,8 +5,7 @@
 `agent_type`(恒 general-purpose)。
 
 两端自契约:
-  * 注入端 = `data/gate-prompts/gate2-adversarial.md` 的 `EXPERT-ID: <EXPERT_ID>` 行
-    + `stages/deliver.md` 指示用 lowercase registry id 填充。
+  * 注入端 = Pipeline v1 的 review prompt producer 写入 `EXPERT-ID: <id>` 行。
   * 提取端 = `runtime_hooks._extract_expert_id` 的锚定正则。
 
 测试覆盖(forced-execution + mutation-proven):
@@ -24,13 +23,6 @@ from pathlib import Path
 import pytest
 
 import core.runtime_hooks as rh
-
-_REPO_ROOT = Path(__file__).resolve().parents[1]  # backend/
-_GATE2 = (
-    _REPO_ROOT
-    / "skills/s_autonomous-pipeline/data/gate-prompts/gate2-adversarial.md"
-)
-
 
 # ---- 1. Contract: inject → extract ----------------------------------------
 @pytest.mark.parametrize(
@@ -111,26 +103,6 @@ def test_extract_expert_id_absent_returns_none(head):
     # head with no EXPERT-ID line → None. Must NOT fall back to agent_type
     # (that is the rejected SDK-coupling path — 方案 Z).
     assert rh._extract_expert_id(head) is None
-
-
-# ---- 4. Drift: template carries the placeholder, deliver.md teaches id -----
-def test_gate2_template_carries_expert_id_placeholder():
-    """The inject end must contain the EXPERT-ID contract line near the top
-    (within the first-read window the extractor sees). Guards against someone
-    removing/renaming the placeholder, silently breaking the contract."""
-    assert _GATE2.exists(), f"gate2 template missing: {_GATE2}"
-    text = _GATE2.read_text(encoding="utf-8")
-    # placeholder present
-    assert "EXPERT-ID: <EXPERT_ID>" in text, (
-        "gate2-adversarial.md must carry the 'EXPERT-ID: <EXPERT_ID>' contract line"
-    )
-    # and it must be front-loaded (within the first few lines — the extractor
-    # only sees _read_subagent_prompt_head's content[:2000], and the orchestrator
-    # fills real content below, so the placeholder must lead)
-    head_lines = text.splitlines()[:3]
-    assert any(ln.startswith("EXPERT-ID:") for ln in head_lines), (
-        "EXPERT-ID line must be in the first 3 lines of the template (front-loaded)"
-    )
 
 
 # ---- 5. E2E: real transcript fixture → marker expert_id --------------------

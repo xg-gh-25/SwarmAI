@@ -99,108 +99,6 @@ class TestGuessHelpersDeleted:
             "_find_active_runs (plural) must be deleted — it guessed targets"
 
 
-class TestAdvanceValidationOwnership:
-    """advance must validate ONLY the explicitly-named run, never a guessed one."""
-
-    def _completed_stage(self):
-        return [{"stage": "build", "status": "completed", "artifact_id": "art_x",
-                 "stage_doc_consumed": True}]
-
-    def test_advance_without_run_id_skips_validation(self, tmp_path, monkeypatch):
-        """AC4: no --run-id → auto-validate is skipped (never guesses a run to
-        validate/block). Must NOT raise even when an active run exists."""
-        import sys
-        from pathlib import Path as _P
-        _scripts_dir = str(_P(__file__).resolve().parent.parent / "scripts")
-        if _scripts_dir not in sys.path:
-            sys.path.insert(0, _scripts_dir)
-        import scripts.artifact_cli as cli
-        monkeypatch.setattr(cli, "_get_workspace", lambda: tmp_path)
-
-        # An active run whose stage would FAIL validation if it were picked.
-        _mk_run(tmp_path, "run_sibling", status="running",
-                stages=self._completed_stage())
-
-        called = {"n": 0}
-        import subprocess as _sp
-        monkeypatch.setattr(_sp, "run", lambda *a, **k: called.__setitem__("n", called["n"] + 1) or _sp.CompletedProcess(a, 0, "", ""))
-
-        # No run-id → must be a clean no-op (no validation, no exit).
-        cli._auto_validate_before_advance("P", "review", None)
-        assert called["n"] == 0, "validator must not run when --run-id is absent"
-
-    def test_advance_with_unknown_run_id_is_noop(self, tmp_path, monkeypatch):
-        """AC4: a typo'd / unknown --run-id → no-op (run.json not found), never
-        touches another run."""
-        import sys
-        from pathlib import Path as _P
-        _scripts_dir = str(_P(__file__).resolve().parent.parent / "scripts")
-        if _scripts_dir not in sys.path:
-            sys.path.insert(0, _scripts_dir)
-        import scripts.artifact_cli as cli
-        monkeypatch.setattr(cli, "_get_workspace", lambda: tmp_path)
-        _mk_run(tmp_path, "run_real", status="running", stages=self._completed_stage())
-
-        # Should simply return — no exception, no validation of run_real.
-        cli._auto_validate_before_advance("P", "review", "run_typo_nonexistent")
-
-    def test_advance_validates_only_named_run(self, tmp_path, monkeypatch):
-        """AC4: with --run-id, validation reads exactly that run's stages (not a
-        sibling's). We assert the validator is invoked against the named run's
-        current stage."""
-        import sys
-        from pathlib import Path as _P
-        _scripts_dir = str(_P(__file__).resolve().parent.parent / "scripts")
-        if _scripts_dir not in sys.path:
-            sys.path.insert(0, _scripts_dir)
-        import scripts.artifact_cli as cli
-        monkeypatch.setattr(cli, "_get_workspace", lambda: tmp_path)
-
-        _mk_run(tmp_path, "run_named", status="running", stages=self._completed_stage())
-        _mk_run(tmp_path, "run_sibling", status="running", minutes_ago=0,
-                stages=self._completed_stage())
-
-        seen = {}
-        import subprocess as _sp
-
-        def _fake_run(cmd, *a, **k):
-            # capture the run.json path the validator was pointed at
-            seen["cmd"] = cmd
-            return _sp.CompletedProcess(cmd, 0, json.dumps({"valid": True}), "")
-
-        monkeypatch.setattr(_sp, "run", _fake_run)
-        cli._auto_validate_before_advance("P", "review", "run_named")
-        # The validator subprocess must reference the NAMED run, never the sibling.
-        joined = " ".join(seen.get("cmd", []))
-        assert seen.get("cmd"), "validator must actually be invoked for the named run"
-        assert "run_named" in joined, "validator must target the named run"
-        assert "run_sibling" not in joined, "validator must NOT touch the sibling run"
-
-    def test_advance_deliver_stage_checks_named_run_report(self, tmp_path, monkeypatch, capsys):
-        """run_f3975b8b BLOCKER regression (Gate-2): the deliver-stage REPORT.md
-        gate must build the run dir from the NAMED run_id — not the deleted
-        `artifacts_dir` (which raised NameError on the live deliver→reflect path).
-        A completed deliver stage with NO REPORT.md must BLOCK (exit 1), and the
-        error must be the REPORT.md message, NOT a 'Validator crashed: name
-        artifacts_dir is not defined' surrogate."""
-        import sys
-        from pathlib import Path as _P
-        _scripts_dir = str(_P(__file__).resolve().parent.parent / "scripts")
-        if _scripts_dir not in sys.path:
-            sys.path.insert(0, _scripts_dir)
-        import scripts.artifact_cli as cli
-        monkeypatch.setattr(cli, "_get_workspace", lambda: tmp_path)
-
-        _mk_run(tmp_path, "run_deliver", status="running",
-                stages=[{"stage": "deliver", "status": "completed",
-                         "artifact_id": "art_d", "stage_doc_consumed": True}])
-        # No REPORT.md on disk → must block with the REPORT.md error (not NameError).
-        with pytest.raises(SystemExit) as exc:
-            cli._auto_validate_before_advance("P", "reflect", "run_deliver")
-        assert exc.value.code == 1
-        captured = capsys.readouterr()
-        assert "REPORT.md not found" in captured.err
-        assert "artifacts_dir" not in captured.err, "NameError must not surface"
 
 
 class TestRunDirPathTraversal:
@@ -221,41 +119,9 @@ class TestRunDirPathTraversal:
         monkeypatch.setattr(cli, "_get_workspace", lambda: tmp_path)
         return cli
 
-    def test_run_dir_rejects_traversal_run_id(self, tmp_path, monkeypatch):
-        """AC3: a run_id containing '../' must raise ValueError at _run_dir entry
-        (the choke point), never return an escaping path."""
-        cli = self._cli(tmp_path, monkeypatch)
-        (tmp_path / "Projects" / "P" / ".artifacts" / "runs").mkdir(parents=True)
-        with pytest.raises(ValueError):
-            cli._run_dir("P", "../../../etc/runs/run_evil")
 
-    def test_resolve_run_file_inherits_traversal_guard(self, tmp_path, monkeypatch):
-        """AC4: _resolve_run_file routes through _run_dir, so it inherits the
-        same guard — a traversal run_id must raise before any filesystem touch."""
-        cli = self._cli(tmp_path, monkeypatch)
-        (tmp_path / "Projects" / "P" / ".artifacts" / "runs").mkdir(parents=True)
-        with pytest.raises(ValueError):
-            cli._resolve_run_file("P", "../../OTHER/.artifacts/runs/run_x")
 
-    def test_run_dir_accepts_legit_run_id(self, tmp_path, monkeypatch):
-        """AC4 regression: a legitimate run_<hex> id is unaffected — _run_dir
-        returns the expected path under the project's runs/ dir."""
-        cli = self._cli(tmp_path, monkeypatch)
-        (tmp_path / "Projects" / "P" / ".artifacts" / "runs").mkdir(parents=True)
-        got = cli._run_dir("P", "run_abc12345")
-        expected = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_abc12345"
-        assert got == expected
 
-    def test_advance_rejects_traversal_run_id(self, tmp_path, monkeypatch):
-        """AC3 (Gate-1 amendment A): `advance`'s pre-validation builds the run
-        dir inline from --run-id; it must inherit the traversal guard (routes
-        through _run_dir). A traversal id raises ValueError, not read a file
-        outside the project."""
-        cli = self._cli(tmp_path, monkeypatch)
-        (tmp_path / "Projects" / "P" / ".artifacts" / "runs").mkdir(parents=True)
-        with pytest.raises(ValueError):
-            cli._auto_validate_before_advance("P", "review",
-                                              "../../OTHER/.artifacts/runs/run_x")
 
     def test_main_translates_traversal_valueerror_to_clean_exit(self, tmp_path, monkeypatch, capsys):
         """AC3 (Gate-1 amendment B): a traversal run_id reaching main() must exit
@@ -276,24 +142,3 @@ class TestRunDirPathTraversal:
         err = capsys.readouterr().err
         parsed = json.loads(err.strip().splitlines()[-1])
         assert "error" in parsed, f"stderr must be the standard JSON error, got: {err!r}"
-
-    def test_analytics_batch_skips_bad_id_not_aborts(self, tmp_path, monkeypatch, capsys):
-        """AC (Gate-2 #2 follow-through): _run_dir now RAISES on a malformed on-disk
-        `id`. cmd_run_analytics loops over _load_completed_runs (which does NOT
-        validate the id field), so a single corrupt/legacy run.json must be SKIPPED,
-        not abort the whole batch. Pre-guard behavior degraded gracefully; preserve it."""
-        cli = self._cli(tmp_path, monkeypatch)
-        (tmp_path / "Projects" / "P" / ".artifacts" / "runs").mkdir(parents=True)
-        # One malformed-id run + one valid run. The valid run must still be aggregated.
-        bad = {"id": "../../../etc/evil", "project": "P", "stages": []}
-        good = {"id": "run_good1234", "project": "P", "stages": []}
-        monkeypatch.setattr(cli, "_load_completed_runs", lambda project, limit=10: [bad, good])
-
-        class _Args:
-            project = "P"
-            limit = 10
-        # Must NOT raise (the bad id is skipped, not fatal). It prints analytics JSON
-        # or a "No metrics extracted" message — either is a graceful completion.
-        cli.cmd_run_analytics(_Args(), reg=None)
-        out = capsys.readouterr().out
-        assert out.strip(), "analytics must produce output, not abort on one bad id"

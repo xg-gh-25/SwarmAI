@@ -40,7 +40,7 @@ from unittest.mock import patch
 import pytest
 
 from tests.test_stage_boundary_commands import (  # noqa: F401 — `ws` is a fixture
-    DECISION, PROJECT, _make_run, _plan_artifact, _run_state, _snapshot, _start,
+    DECISION, PROJECT, _make_run, _run_state, _snapshot, _start,
     _complete, cli, ws,
 )
 
@@ -147,25 +147,6 @@ def _expected_rp_ids(paths):
     _h, _rows, hits = sp._select(sp.REVIEW_PATTERNS_PATH.read_text(encoding="utf-8"),
                                  paths, "")
     return [r["id"] for r in hits]
-
-
-def test_review_warns_when_selected_rp_has_no_verdict():
-    import pipeline_validator as pv
-    files = [str(REPO / "backend" / "scripts" / "artifact_cli.py")]
-    ids = _expected_rp_ids(["backend/scripts/artifact_cli.py"])
-    assert len(ids) >= 2
-    dropped = ids[-1]
-    art = {"runtime_patterns": {"checked": len(ids) - 1, "patterns": [
-        {"pattern": f"{i} checked", "status": "pass", "detail": "looked at the code path"}
-        for i in ids[:-1]]}}
-    warns = pv._check_semantic_depth("review", art, {"files_touched": files}, "P", "run_x")
-    hit = [w for w in warns if "no verdict" in w]
-    assert hit and dropped in hit[0]
-
-    art["runtime_patterns"]["patterns"].append(
-        {"pattern": f"{dropped} checked", "status": "N/A", "detail": "not applicable here"})
-    warns = pv._check_semantic_depth("review", art, {"files_touched": files}, "P", "run_x")
-    assert not [w for w in warns if "no verdict" in w]
 
 
 # ── AC5 ──────────────────────────────────────────────────────────────────────
@@ -300,8 +281,3 @@ def test_write_marker_takes_run_id_from_run_directory(tmp_path):
 
 
 # ── AC10 ─────────────────────────────────────────────────────────────────────
-def test_cli_reference_documents_new_codes_and_flags():
-    text = CLI_REF.read_text(encoding="utf-8")
-    assert "E_STAGE_NOT_OPEN" in text
-    assert "--outputs-surfaced" in text
-    assert "--sha" in text

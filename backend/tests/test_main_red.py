@@ -81,21 +81,6 @@ def _run_dir(tmp_path, results, selected):
     return d
 
 
-def test_report_scope_names_only_reds_in_the_selected_files(tmp_path):
-    import artifact_cli as ac
-    main_red.record_seen([_fail(N1), _fail(N2)], "run_1", "a")
-    d = _run_dir(tmp_path, [], ["backend/tests/test_y.py"])
-    assert [r["nodeid"] for r in ac._main_reds_in_scope(d, "run_l")] == [N2]
-
-
-def test_main_red_cli_lists_open_reds(capsys):
-    import artifact_cli as ac
-    main_red.record_seen([_fail(N1)], "run_1", "a")
-    ac.cmd_main_red(SimpleNamespace(), None)
-    out = json.loads(capsys.readouterr().out)
-    assert out["open"] == 1 and out["reds"][0]["nodeid"] == N1
-
-
 def test_agent_writes_to_the_registry_are_denied_by_the_audit_gate(tmp_path, monkeypatch):
     """The registry lives in the protected agent-audit dir: a model cannot forge or
     erase a red with a shell write or a file tool."""

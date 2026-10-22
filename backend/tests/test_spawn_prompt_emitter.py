@@ -60,33 +60,14 @@ _STAGE_DOCS = (
     _SKILL_ROOT / "stages" / "deliver.md",
 )
 
-_GATE_IDS = ("gate0-skeptic", "gate1-skeptic", "gate2-adversarial")
+_GATE_IDS = ("gate0-skeptic",)
 
 # SHA-256 of each prompt body EXACTLY as it stood between the fences in its stage
 # doc before the move (body = the lines strictly between the open/close fence
 # lines, trailing newline included). Measured pre-move; never recompute these
 # from the post-move files — that would make the check circular.
 _PRE_MOVE_SHA256 = {
-    # gate0 INTENTIONALLY edited by 7018cd71 (root cause before design): a 5th question
-    # attacks the root cause (is its last why level a symptom? one missed prior/sibling)
-    # and WRONG-FRAME covers a symptom "root" / a missed sibling. Recomputed 2026-10-20.
     "gate0-skeptic": "f6eaa63c591d786f13f1e45c8d9ae15ca54f3eeabd4a73503ca58694704d640f",  # pragma: allowlist secret
-    # gate0/1/2 INTENTIONALLY edited for gate speed (pipeline-run-budget §11): caps cut to
-    # 6 / 8 / 8 tool calls with the evidence handed in (gate1 inputs, gate2 diff file).
-    # gate1 INTENTIONALLY edited: the re-check paragraph (a second round reviews the
-    # fix only; a third needs a recorded reason — docs/design/pipeline-run-budget.md H2).
-    "gate1-skeptic": "521927afe4779e301cf8218686f9c2df8b73f3059d03233b726b23b5b38b17a5",  # pragma: allowlist secret
-    # gate2 was INTENTIONALLY edited after the move: its hand-paste "Project-Specific
-    # Traps" block (which named two TECH.md section titles and was filled for 1 of 13
-    # real expert prompts) became the <PROJECT_KNOWLEDGE> slot that spawn_prompt.py
-    # fills from DDD recall. Recomputed in the same change, as this test instructs.
-    # ...and again for the same re-check paragraph (H2).
-    # ...and again 2026-10-18 (pipeline-run-budget §11): the Gate-2 caps were RAISED
-    # back (8 -> 20 tool calls, 4 -> 10 files, 350 -> 600 words) with a consumer-trace
-    # instruction, after a controlled replay showed the 8-call cap truncating the
-    # checklist (PARTIAL "budget exhausted") and the misses living in unchanged
-    # consumer code. NOT-INCLUDED changed files no longer eat the file budget.
-    "gate2-adversarial": "8c2d10450c7b693d3a5a04a83843f556cdfa73ab27d4e7f5c25c07725c623407",  # pragma: allowlist secret
 }
 
 
@@ -139,45 +120,12 @@ def test_gate_prompt_matches_pre_move_digest(gate_id):
     )
 
 
-def test_gate2_emit_changes_only_the_filled_placeholders():
-    """With --project, gate2 is the gate file with exactly its placeholders filled.
-
-    Expected text is assembled from the file on disk, not from the emitter, so the
-    emitter cannot pass by agreeing with itself: everything before ``<PROJECT>``
-    and everything after the knowledge slot must come through unchanged.
-    """
-    raw = (_GATE_PROMPTS / "gate2-adversarial.md").read_text()
-    rc, out, err = _run_emitter("--gate", "gate2-adversarial", "--project", "NoSuchProject")
-    assert rc == 0, err
-    head = raw[: raw.index("<PROJECT>")]
-    tail = raw[raw.index("<PROJECT_KNOWLEDGE>") + len("<PROJECT_KNOWLEDGE>"):]
-    assert out.startswith(head), "text before the project placeholder was altered"
-    assert out.endswith(tail), "text after the knowledge slot was altered"
-
-
-def test_gate1_prompt_retains_the_output_format_block():
-    """The Gate-1 prompt must still carry its verdict format.
-
-    This is the specific content a fence-extracting emitter silently dropped: the
-    numeric caps sat before the nested fence and survived, so every cap-based
-    check still passed while the verdict spec was gone. Asserting the caps alone
-    would not have caught it — this asserts the part that actually disappeared.
-    """
-    text = (_GATE_PROMPTS / "gate1-skeptic.md").read_text()
-    assert "GATE 1 VERDICT" in text, (
-        "gate1-skeptic.md lost its 'GATE 1 VERDICT' output-format block. A prompt "
-        "with caps but no verdict format returns an unparseable answer — the "
-        "failure mode this file's structure exists to prevent."
-    )
-    assert "API Existence" in text, "gate1-skeptic.md lost the Check 5 section"
-
-
 # ---------------------------------------------------------------------------
 # AC1/AC3 — the emitter emits the real prompt, caps included
 # ---------------------------------------------------------------------------
 
 #: Gates whose prompt carries no project-knowledge slot — emitted byte-for-byte.
-_VERBATIM_GATE_IDS = ("gate0-skeptic", "gate1-skeptic")
+_VERBATIM_GATE_IDS = ("gate0-skeptic",)
 
 
 @pytest.mark.parametrize("gate_id", _VERBATIM_GATE_IDS)
@@ -209,8 +157,7 @@ def test_emitted_prompt_states_a_numeric_cap(gate_id):
     gate silently loses its cap.
     """
     sb = _load_spawn_budget()
-    extra = ("--project", "NoSuchProject") if gate_id == "gate2-adversarial" else ()
-    rc, out, _ = _run_emitter("--gate", gate_id, *extra)
+    rc, out, _ = _run_emitter("--gate", gate_id)
     assert rc == 0
     assert sb.BUDGET_MARKER in out, f"{gate_id} prompt lost its {sb.BUDGET_MARKER} line"
     assert sb.has_numeric_cap(out), (
@@ -371,14 +318,11 @@ def test_stage_doc_has_no_pasteable_prompt_body(doc):
 
 
 
-@pytest.mark.parametrize("gate_id", ("gate0-skeptic", "gate1-skeptic", "meta-review"))
+@pytest.mark.parametrize("gate_id", ("gate0-skeptic",))
 def test_gate_prompt_is_attributed_by_expert_id(gate_id):
-    """Every emitted gate prompt starts with the EXPERT-ID anchor the SubagentStop hook
-    reads, so a completed gate is counted per id (pipeline-run-budget H1)."""
+    """Every emitted gate prompt starts with the EXPERT-ID anchor read by the completion hook."""
     from core.runtime_hooks import _extract_expert_id
-    args = ("--gate", gate_id) + (("--project", "NoSuchProject", "--files", "backend/core/a.py")
-                                  if gate_id == "meta-review" else ())
-    rc, out, err = _run_emitter(*args)
+    rc, out, err = _run_emitter("--gate", gate_id)
     assert rc == 0, err
     assert out.splitlines()[0] == f"EXPERT-ID: {gate_id}"
-    assert _extract_expert_id(out[:400]) == gate_id  # what the SubagentStop hook will record
+    assert _extract_expert_id(out[:400]) == gate_id

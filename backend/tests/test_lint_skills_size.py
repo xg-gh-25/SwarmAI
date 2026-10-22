@@ -6,8 +6,8 @@ miniature ``backend/skills/s_autonomous-pipeline`` tree, with an explicit
 pending-split table passed in, so every rule is driven on real files.
 
 Invariants:
-  * an unlisted file must meet its real limit (card 5K, INSTRUCTIONS 10K,
-    any non-history stages subdir 15K); ``stages/history/`` is unlimited;
+  * an unlisted v1 card must meet its real limit (card 5K, INSTRUCTIONS 10K);
+    nested stage paths are not cards and are not size-governed;
   * a listed file may shrink but never grow past its ceiling;
   * a listed file that fits its real limit, or no longer exists, is a stale
     entry and itself a finding;
@@ -40,11 +40,7 @@ def _write(root: Path, rel: str, n: int, ch: str = "x") -> str:
 @pytest.mark.parametrize("rel,limit", [
     (f"{_SKILL}/stages/build.md", 5_000),
     (f"{_SKILL}/INSTRUCTIONS.md", 10_000),
-    (f"{_SKILL}/stages/ref/build/greenfield.md", 15_000),
-    (f"{_SKILL}/stages/ref/topic.md", 15_000),
-    (f"{_SKILL}/stages/specialists/x.md", 15_000),
-    (f"{_SKILL}/stages/history/build.md", None),
-    (f"{_SKILL}/stages/history/old/deep.md", None),
+    (f"{_SKILL}/stages/nested/topic.md", None),
     (f"{_SKILL}/REVIEW_PATTERNS.md", None),
     (f"{_SKILL}/SKILL.md", None),
     (f"{_SKILL}/stages/build.txt", None),
@@ -57,8 +53,6 @@ def test_size_limit_for_each_location(rel, limit):
 @pytest.mark.parametrize("rel,limit", [
     (f"{_SKILL}/stages/build.md", 5_000),
     (f"{_SKILL}/INSTRUCTIONS.md", 10_000),
-    (f"{_SKILL}/stages/ref/build/greenfield.md", 15_000),
-    (f"{_SKILL}/stages/specialists/x.md", 15_000),
 ])
 def test_unlisted_file_must_meet_the_real_limit(tmp_path, rel, limit):
     _write(tmp_path, rel, limit)
@@ -66,11 +60,6 @@ def test_unlisted_file_must_meet_the_real_limit(tmp_path, rel, limit):
     _write(tmp_path, rel, limit + 1)
     findings = lint_skills.lint_sizes(tmp_path, pending={})
     assert len(findings) == 1 and rel in findings[0] and "exceeds" in findings[0]
-
-
-def test_history_tree_is_unlimited(tmp_path):
-    _write(tmp_path, f"{_SKILL}/stages/history/deliver.md", 200_000)
-    assert lint_skills.lint_sizes(tmp_path, pending={}) == []
 
 
 def test_size_is_counted_in_characters_not_bytes(tmp_path):
@@ -103,12 +92,6 @@ def test_listed_file_that_no_longer_exists_is_a_stale_entry(tmp_path):
     gone = f"{_SKILL}/stages/evaluate.md"
     findings = lint_skills.lint_sizes(tmp_path, pending={gone: 56_000})
     assert len(findings) == 1 and gone in findings[0] and "stale" in findings[0]
-
-
-def test_listed_history_file_is_a_stale_entry(tmp_path):
-    rel = _write(tmp_path, f"{_SKILL}/stages/history/build.md", 90_000)
-    findings = lint_skills.lint_sizes(tmp_path, pending={rel: 90_000})
-    assert len(findings) == 1 and "stale" in findings[0]
 
 
 def test_absent_pipeline_skill_is_a_clean_no_op(tmp_path):

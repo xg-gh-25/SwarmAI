@@ -173,7 +173,7 @@ def iso(tmp_path, monkeypatch):
     script = tmp / "cli" / "backend" / "scripts" / "artifact_cli.py"
     script.parent.mkdir(parents=True)
     script.write_text("")
-    (script.parent / "pipeline_worktree.py").write_text("")
+    (script.parent / "pipeline_v1.py").write_text("")
     (script.parent.parent / "core").mkdir()
     (script.parent.parent / "core" / "run_worktree.py").write_text("")
     cli = {"python": os.path.realpath(sys.executable), "script": str(script)}

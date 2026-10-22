@@ -40,10 +40,10 @@ BODY (every tracked file in the corpus)
     gate keeps the corpus from regrowing.
 
 SIZE (the autonomous pipeline's stage documents)
-    ``lint_sizes()`` caps ``stages/*.md`` at 5K chars, ``INSTRUCTIONS.md`` at 10K
-    and ``stages/<dir>/**`` at 15K (``stages/history/`` unlimited). Files that
-    predate the limits sit in the ``_SIZE_PENDING_SPLIT`` ratchet: they may
-    shrink, never grow, and leave the table once they fit.
+    ``lint_sizes()`` caps Pipeline v1's ``stages/*.md`` cards at 5K chars and
+    ``INSTRUCTIONS.md`` at 10K. Detailed rules live in ``core/run_protocol/``.
+    Files that predate the limits sit in the ``_SIZE_PENDING_SPLIT`` ratchet:
+    they may shrink, never grow, and leave the table once they fit.
 
 Run from repo root (CI runs after backend deps are installed):
     python scripts/lint_skills.py
@@ -436,25 +436,16 @@ def lint_skill(skill_md: Path) -> list[str]:
 
 # ── SIZE pass: the autonomous pipeline's stage documents ──────────────────────
 #
-# Every stage entry re-reads its document, so size is a per-run token cost paid
-# on every stage of every run. The target structure (docs/design/
-# pipeline-speed-systematic-fix.md §C1) is a short execution card per stage, an
-# on-demand reference tree, and an unread history tree. Limits are CHARACTERS
-# (``len`` of the UTF-8-decoded text), not bytes.
+# Every stage entry re-reads its card, so size is a per-run token cost. Pipeline
+# v1 has no stage reference/history trees: cards are templates and executable
+# rules live in core/run_protocol/. Limits are CHARACTERS (``len`` of decoded
+# text), not bytes.
 #
-#   stages/*.md                    ≤ 5,000   execution card, read on every entry
-#   INSTRUCTIONS.md                ≤ 10,000  orchestration card
-#   stages/history/**              unlimited never read at runtime
-#   stages/<any other dir>/**/*.md ≤ 15,000  ref/ (read only when a card says
-#                                            so), and any sibling such as
-#                                            specialists/ — a doc an agent may be
-#                                            told to read gets the ref ceiling
-#                                            rather than escaping all limits.
+#   stages/*.md      ≤ 5,000   execution card, read on every entry
+#   INSTRUCTIONS.md  ≤ 10,000  orchestration card
 PIPELINE_SKILL_DIR = Path("backend/skills/s_autonomous-pipeline")
 SIZE_LIMIT_STAGE_CARD = 5_000
 SIZE_LIMIT_INSTRUCTIONS = 10_000
-SIZE_LIMIT_REF = 15_000
-_SIZE_UNLIMITED_DIRS = frozenset({"history"})
 
 # RATCHET for files that predate the limits and have not been split yet. Each
 # value is the file's size when it was listed: it may shrink, it may not grow.
@@ -470,7 +461,7 @@ def size_limit_for(rel: str) -> int | None:
     """The real character limit for a repo-relative POSIX path, or None.
 
     None means "not size-governed": outside the pipeline skill, not markdown,
-    or under an unlimited tree (``stages/history/``).
+    or not one of Pipeline v1's top-level cards.
     """
     prefix = PIPELINE_SKILL_DIR.as_posix() + "/"
     if not rel.startswith(prefix) or not rel.endswith(".md"):
@@ -478,13 +469,9 @@ def size_limit_for(rel: str) -> int | None:
     parts = rel[len(prefix):].split("/")
     if parts == ["INSTRUCTIONS.md"]:
         return SIZE_LIMIT_INSTRUCTIONS
-    if len(parts) < 2 or parts[0] != "stages":
-        return None  # SKILL.md, REVIEW_PATTERNS.md, data/ — not stage docs
-    if len(parts) == 2:
+    if len(parts) == 2 and parts[0] == "stages":
         return SIZE_LIMIT_STAGE_CARD
-    if parts[1] in _SIZE_UNLIMITED_DIRS:
-        return None
-    return SIZE_LIMIT_REF
+    return None  # SKILL.md, data/, and nested paths are not v1 stage cards
 
 
 def lint_sizes(repo_root: Path | None = None,
@@ -521,7 +508,7 @@ def lint_sizes(repo_root: Path | None = None,
             if size > limit:
                 findings.append(
                     f"{rel}: {size:,} chars exceeds the {limit:,}-char limit — "
-                    f"split it (execution card / stages/ref / stages/history)")
+                    f"shrink the card or move executable rules into core/run_protocol/")
         elif size <= limit:
             findings.append(
                 f"{rel}: now {size:,} chars, within the {limit:,}-char limit — "

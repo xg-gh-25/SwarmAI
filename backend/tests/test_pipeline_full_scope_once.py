@@ -100,13 +100,6 @@ def _bound(tmp_path, monkeypatch, reports: list[dict], touched: list[str]):
                                          exit_result={"met": True})
 
 
-def test_whole_scope_criteria_are_judged_at_deliver_only():
-    import pipeline_validator as pv
-    for wt in ("feature", "refactor", "bugfix", None):
-        assert not any(str(c.get("ref", "")).startswith("mode:")
-                       for c in pv.default_exit_criteria(wt, ["AC1"])), wt
-
-
 # ── the cap and the landing check never lock each other (XG 2026-10-20) ───────
 _RUN = {"kind": "run", "mode": "regression", "auto_recheck_of": None, "cached": False}
 _FIX = {"kind": "run", "mode": "recheck", "auto_recheck_of": None, "cached": False, "fix": True}
@@ -187,32 +180,3 @@ def test_overlay_on_changed_code_records_the_recheck_tree():
             "worktree": {"swarmai": {"tree": "T1", "base": "B", "untracked": []}}}
     ev = pt._overlay_evidence(Path("."), base, same, [], auto=True)
     assert ev["worktree"]["swarmai"]["tree"] == "T1" and "fix" not in ev["rechecked_from"]
-
-
-def test_landing_on_a_fix_recheck_lands_with_push_ready_false(tmp_path, monkeypatch):
-    import pipeline_worktree as pw
-    rep = {"mode": "regression", "rechecked_from": {"finished_at": "t0", "rechecked": 3,
-                                                    "auto": False, "fix": True}}
-    monkeypatch.setattr(pw, "_binding_report", lambda _d, _r: rep)
-    soft = pw._fix_recheck_gap(tmp_path, "r")
-    assert soft and "recheck" in soft[0] and "not re-run" in soft[0]
-    rep["rechecked_from"].pop("fix")
-    assert pw._fix_recheck_gap(tmp_path, "r") == []
-
-
-def test_the_fix_mark_survives_a_later_recheck_on_unchanged_code(tmp_path, monkeypatch):
-    """A fix recheck that hits the deadline is finished by a recheck on the same code.
-    That overlay must keep rechecked_from.fix, or the landing loses its push_ready
-    reason while most of the scope still ran only on the pre-fix code."""
-    import pipeline_worktree as pw
-    base = {"mode": "regression", "finished_at": "t0", "results": [], "failures": [],
-            "runner_errors": [], "layers": {}, "changed_files": {"backend/a.py": "d1"},
-            "worktree": {"swarmai": {"tree": "T1", "base": "B", "untracked": []}}}
-    fixed = {"results": [], "failures": [], "runner_errors": [],
-             "changed_files": {"backend/a.py": "d2"},
-             "worktree": {"swarmai": {"tree": "T2", "base": "B", "untracked": []}}}
-    first = pt._overlay_evidence(Path("."), base, fixed, [])
-    finish = pt._overlay_evidence(Path("."), first, dict(fixed), [])      # same code
-    assert finish["rechecked_from"].get("fix") is True
-    monkeypatch.setattr(pw, "_binding_report", lambda _d, _r: finish)
-    assert pw._fix_recheck_gap(tmp_path, "r")

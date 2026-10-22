@@ -165,7 +165,7 @@ def test_cli_diff_file_feeds_keywords(tmp_path):
     (["--patterns-for", _PY, "--bogus"], None),        # unknown flag
     (["--patterns-for"], None),                         # no path
     (["--patterns-for-stdin"], "\n  \n"),               # empty stdin
-    (["--gate", "gate1-skeptic", "--diff-file", "x"], None),  # flag misuse
+    (["--gate", "gate0-skeptic", "--diff-file", "x"], None),  # flag misuse
     (["--patterns-for", _PY, "--patterns-source", "/nonexistent/rp.md"], None),
 ])
 def test_cli_usage_errors_exit_1_with_empty_stdout(args, stdin):
@@ -369,9 +369,7 @@ def test_compact_cells_split_from_the_left_with_pipes_in_later_columns(tmp_path)
 
 # v13 §C3: the REVIEW card names checks and commands only; the RP rows reach the
 # reviewer through the correctness handout (test_correctness_handout_* below).
-@pytest.mark.parametrize("doc", [
-    "stages/ref/review/checks-core.md", "REVIEW_PATTERNS.md",
-])
+@pytest.mark.parametrize("doc", ["REVIEW_PATTERNS.md"])
 def test_review_docs_say_how_to_fetch_full_rows(doc):
     """The rule, not just the flag: verdict every listed row, and fetch the full row
     before judging one whose trigger is present."""

@@ -2,16 +2,10 @@
 run documents (CLI side) read — nothing on the seam is mocked.
 
 What is tested:
-- A gate1-skeptic sub-agent finishes → the REAL SubagentStop hook writes its marker into
-  an audit dir → the REAL CLI reader (``artifact_cli._gate1_points`` through
-  ``_gate_marker_rows``) picks the points up → the REAL renderer puts them in REVIEW.md's
-  Gate 1 row. Only the app-data dir is redirected to a temp dir.
 - A Gate-2 expert's finding with a fix → the real hook keeps the fix on the marker row.
 - A plan artifact with contract readers → the validator accepts exactly what DESIGN_SPEC.md
   renders (one artifact, two readers).
 
-Mutation-verified at TEST: reverting the hook's gate1-skeptic verdict_text capture turns
-the first test RED.
 """
 from __future__ import annotations
 
@@ -22,11 +16,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from core import run_docs as rd
-from scripts import artifact_cli as cli
 from tests.test_runtime_hooks import _gate_transcript
 
 RID = "run_chain1"
-OLD_RUN = "2026-10-01T00:00:00+00:00"   # before the hand-out cutover: binding not checked
 
 
 @pytest.fixture
@@ -55,22 +47,7 @@ async def _finish(rh, tmp_path, name: str, expert_line: str, answer: str, sessio
 
 
 @pytest.mark.asyncio
-async def test_gate1_answer_reaches_review_md_through_the_real_hook(audit, tmp_path):
-    rh, _d = audit
-    row = await _finish(rh, tmp_path, "g1", "EXPERT-ID: gate1-skeptic",
-                        "GATE 1 VERDICT: WARN\n  2. Failure Pattern: WARN. normalize paths first\n"
-                        "  3. Simplicity: PASS. fine", "sess-chain")
-    if row.get("run_id") != RID:
-        pytest.skip(f"hook attributed the marker to {row.get('run_id')!r}: owner resolution differs here")
-    points = cli._gate1_points(RID, {"id": RID, "created_at": OLD_RUN})
-    assert points == ["GATE 1 VERDICT: WARN", "2. Failure Pattern: WARN. normalize paths first"]
-    md = rd.render_review({"id": RID}, {}, {"build": {"gate1_verdict": "WARN", "gate1_points": points}}, {}, {})
-    gate1_row = next(ln for ln in md.splitlines() if ln.startswith("| Gate 1"))
-    assert "normalize paths first" in gate1_row
-
-
-@pytest.mark.asyncio
-async def test_a_gate2_fix_text_reaches_the_marker_row(audit, tmp_path):
+async def test_a_review_fix_text_reaches_the_marker_row(audit, tmp_path):
     rh, _d = audit
     finding = ('{"severity":"HIGH","confidence":8,"path":"a.py","line":3,"category":"c",'
                '"summary":"reader left behind","fix":"migrate b.py::g too","specialist":"integration"}')

@@ -23,7 +23,6 @@ _BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_BACKEND / "scripts"))
 import artifact_cli as cli  # noqa: E402
 import pipeline_test as pt  # noqa: E402
-import pipeline_worktree as pw  # noqa: E402
 
 
 def _scope(lines: int, path: str = "backend/core/x.py", status: str = "M") -> dict:
@@ -43,23 +42,6 @@ def _tree(repo: Path, files: dict) -> str:
         (repo / k).write_text(v)
     _git(repo, "add", "-A")
     return _git(repo, "write-tree")
-
-
-def test_small_review_delta_keeps_the_review(tmp_path):
-    repo = tmp_path / "r"
-    repo.mkdir()
-    _git(repo, "init", "-q")
-    body = "".join(f"line {i}\n" for i in range(50))
-    t0 = _tree(repo, {"a.py": body})
-    t1 = _tree(repo, {"a.py": body.replace("line 3\n", "line three\n")})
-    t2 = _tree(repo, {"a.py": "".join(f"x {i}\n" for i in range(50))})
-    t3 = _tree(repo, {"a.py": body, "b.py": "new\n"})
-    wts = [({"repo_name": "r"}, repo, None)]
-    rec = {"at": 1.0, "trees": {"r": t0}}
-    assert pw._small_review_delta(rec, wts, {"r": t1}) == 2
-    assert pw._small_review_delta(rec, wts, {"r": t2}) is None   # 100 lines
-    assert pw._small_review_delta(rec, wts, {"r": t3}) is None   # added file
-    assert pw._small_review_delta({"trees": {"r": t0}}, wts, {"r": t1}) is None  # never reviewed
 
 
 def test_stalled_calls_count_progress_by_unfinished_tests():

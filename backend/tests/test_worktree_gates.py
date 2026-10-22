@@ -301,7 +301,7 @@ def cli_rec(env):
     sc = env["ws"].parent / "src2" / "backend" / "scripts" / "artifact_cli.py"
     sc.parent.mkdir(parents=True)
     sc.write_text("")
-    (sc.parent / "pipeline_worktree.py").write_text("")
+    (sc.parent / "pipeline_v1.py").write_text("")
     (sc.parent.parent / "core").mkdir()
     (sc.parent.parent / "core" / "run_worktree.py").write_text("")
     return {"python": os.path.realpath(sys.executable), "script": str(sc)}

@@ -2457,13 +2457,13 @@ async def test_gate_marker_records_the_prompt_files_the_skeptic_read(tmp_path, m
     monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
     prompts = tmp_path / "run" / "evidence" / "prompts"
     prompts.mkdir(parents=True)
-    (prompts / "meta-review.md").write_text("m\n")
+    (prompts / "summary-review.md").write_text("m\n")
     (prompts / "fix.md").write_text("f\n")
-    g1 = prompts / "gate1-skeptic.md"
-    g1.write_text("EXPERT-ID: gate1-skeptic\n\nthe gate\n")
+    g1 = prompts / "plan-skeptic.md"
+    g1.write_text("EXPERT-ID: plan-skeptic\n\nthe gate\n")
     kn = prompts / "review-knowledge.md"
     kn.write_text("knowledge\n")
-    first = "EXPERT-ID: gate1-skeptic\nAdversarially review this plan: read it first."
+    first = "EXPERT-ID: plan-skeptic\nAdversarially review this plan: read it first."
     transcript = tmp_path / "sub.jsonl"
     transcript.write_text("\n".join(json.dumps(r) for r in [
         {"isSidechain": True, "type": "user", "message": {"content": first}},
@@ -2475,7 +2475,7 @@ async def test_gate_marker_records_the_prompt_files_the_skeptic_read(tmp_path, m
             {"type": "tool_use", "name": "Read", "input": {"file_path": str(tmp_path / "other.md")}}]}},
         # naming a prompt path, or reading one line of it, is no read of the gate
         {"type": "assistant", "message": {"content": [
-            {"type": "tool_use", "name": "Bash", "input": {"command": f"ls -la {prompts / 'meta-review.md'}"}}]}},
+            {"type": "tool_use", "name": "Bash", "input": {"command": f"ls -la {prompts / 'summary-review.md'}"}}]}},
         {"type": "assistant", "message": {"content": [
             {"type": "tool_use", "name": "Read", "input": {"file_path": str(prompts / "fix.md"), "limit": 1}}]}},
         {"type": "assistant", "message": {"content": [{"type": "text", "text": "GATE 1 VERDICT: PASS"}]}},
@@ -2566,17 +2566,17 @@ async def test_a_session_with_two_runs_credits_the_run_whose_prompt_was_read(tmp
     credited to the newer run."""
     import core.runtime_hooks as rh
     monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path / "audit")
-    g1 = _handout(tmp_path, "run_old", "gate1-skeptic.md", "EXPERT-ID: gate1-skeptic")
+    g1 = _handout(tmp_path, "run_old", "plan-skeptic.md", "EXPERT-ID: plan-skeptic")
     other = _handout(tmp_path, "run_old", "correctness.md", "EXPERT-ID: correctness")
     ctx = {"sdk_session_id": "sess-a", "_active_pipeline_run_id": "run_new",
            "_active_pipeline_run_id_ts": time.time()}
-    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: gate1-skeptic\nread {g1} first", [g1])
-    assert (base["run_id"], base["expert_id"]) == ("run_old", "gate1-skeptic")
+    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: plan-skeptic\nread {g1} first", [g1])
+    assert (base["run_id"], base["expert_id"]) == ("run_old", "plan-skeptic")
     assert g1.as_posix() in base["prompt_reads"]
-    # its own line names gate1-skeptic but it read only another expert's file: no run from
+    # its own line names plan-skeptic but it read only another expert's file: no run from
     # that file (a meta-review reading the experts' prompts must not move them)
-    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: gate1-skeptic\njudge {other}", [other])
-    assert (base["run_id"], base["expert_id"], base["attributed_by"]) == ("run_new", "gate1-skeptic", "session")
+    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: plan-skeptic\njudge {other}", [other])
+    assert (base["run_id"], base["expert_id"], base["attributed_by"]) == ("run_new", "plan-skeptic", "session")
 
 
 @pytest.mark.asyncio
@@ -2605,9 +2605,9 @@ async def test_file_attribution_never_takes_a_foreign_or_ambiguous_run(tmp_path,
     fake = _handout(tmp_path, "run_x1", "security.md", "EXPERT-ID: security", root=tmp_path / "tmp")
     base, _ = await _finish(rh, tmp_path, ctx, f"Read {fake}", [fake])
     assert (base["run_id"], base["expert_id"]) == ("run_mine", None)
-    legacy = _handout(tmp_path, "run_legacy", "gate1-skeptic.md", "EXPERT-ID: gate1-skeptic", session_id=None)
-    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: gate1-skeptic\nread {legacy}", [legacy])
-    assert (base["run_id"], base["expert_id"]) == ("run_mine", "gate1-skeptic")
+    legacy = _handout(tmp_path, "run_legacy", "plan-skeptic.md", "EXPERT-ID: plan-skeptic", session_id=None)
+    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: plan-skeptic\nread {legacy}", [legacy])
+    assert (base["run_id"], base["expert_id"]) == ("run_mine", "plan-skeptic")
 
 
 # ── a Gate-2 expert's own findings and re-check answers on its marker ─────────
