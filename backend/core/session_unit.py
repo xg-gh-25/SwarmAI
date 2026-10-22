@@ -728,6 +728,12 @@ class SessionUnit:
         # Reset with the other recall guards in _cleanup_internal (fresh subprocess
         # = fresh detection). (project, signal) tuple or None.
         self._active_project: Optional[tuple[Optional[str], str]] = None
+        # Follow-up recall on a topic change (session_router._maybe_followup_recall):
+        # the query terms of the last recall, how many follow-ups ran, and the
+        # text already recalled this session (so a follow-up never repeats it).
+        self._recall_terms: Optional[frozenset] = None
+        self._recall_followups: int = 0
+        self._recall_history: str = ""
         # NOTE: the M2 background-vector-task fields (run_e9b15722) were removed in
         # run_4d06640b — recall now runs both legs synchronously to completion, so
         # there is no background task / pending-result / teardown-cancel to track.
@@ -5166,6 +5172,9 @@ class SessionUnit:
         # Reset shared active-project cache (run_6ebf6479) — a new subprocess must
         # re-detect (the editor/project context may have changed across the restart).
         self._active_project = None
+        self._recall_terms = None
+        self._recall_followups = 0
+        self._recall_history = ""
         # Release canary ownership if this session held it (Fix #1: canary leak)
         release_canary(self.session_id)
 

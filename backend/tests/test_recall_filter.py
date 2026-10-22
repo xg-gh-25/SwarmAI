@@ -125,3 +125,76 @@ def test_legacy_recall_engine_marks_external_chunks():
     own = RecallEngine._format_chunk({"source_file": "Notes/a.md", "heading": "h", "content": "x"})
     assert ext.startswith("**[EXTERNAL — UNTRUSTED]**")
     assert "UNTRUSTED" not in own
+
+
+def _fu_unit():
+    from unittest.mock import MagicMock
+    u = MagicMock()
+    u.is_channel_session = False
+    u._recall_followups = 0
+    u._recall_terms = frozenset({"recall", "机制"})
+    u._recall_history = "earlier recalled text"
+    u._recall_query_block = None
+    u._active_project = None
+    u._app_session_id = "sess-x"
+    return u
+
+
+async def test_followup_recall_runs_on_a_new_topic_only(monkeypatch):
+    """Recall used to run once per session. A later message on a NEW topic recalls
+    again (bounded); the same topic, a single plain word, or a channel does not."""
+    import core.session_router as sr
+    from unittest.mock import MagicMock
+
+    calls = []
+    def fake_body(q, project, prompt_text, sid, deadline):
+        calls.append((q, prompt_text))
+        return "new knowledge about pipeline worktree", []
+    monkeypatch.setattr(sr, "_unified_recall_body", fake_body)
+
+    u, o = _fu_unit(), MagicMock(); o.system_prompt = "BASE"
+    assert await sr._maybe_followup_recall("recall 机制 还有问题吗", o, u, False) is None
+    assert await sr._maybe_followup_recall("commit", o, u, False) is None
+    assert calls == []
+
+    ms = await sr._maybe_followup_recall("pipeline worktree 隔离 怎么做", o, u, False)
+    assert ms is not None and len(calls) == 1
+    assert "earlier recalled text" in calls[0][1] and "BASE" in calls[0][1]  # dedupe source
+    assert "new knowledge about pipeline worktree" in u._recall_query_block
+    assert u._recall_followups == 1 and "pipeline" in u._recall_terms
+
+    u.is_channel_session = True
+    assert await sr._maybe_followup_recall("deploy hive ami 镜像", o, u, False) is None
+
+
+async def test_followup_recall_is_capped(monkeypatch):
+    import core.session_router as sr
+    from unittest.mock import MagicMock
+    monkeypatch.setattr(sr, "_unified_recall_body", lambda *a: ("x" * 50, []))
+    u, o = _fu_unit(), MagicMock(); o.system_prompt = ""
+    u._recall_followups = sr._RECALL_MAX_FOLLOWUPS
+    assert await sr._maybe_followup_recall("pipeline worktree 隔离", o, u, False) is None
+
+
+def test_ddd_leg_injects_only_relevant_sections(tmp_path, monkeypatch):
+    """The DDD leg kept the top 3 normalized sections for ANY message; now a
+    section must contain enough of the message's keywords, and a keyword-less
+    message gets the project pointer only."""
+    import core.recall_multi as rm
+    from types import SimpleNamespace
+    from core.session_router import _inject_ddd_for_active_project
+
+    base = tmp_path / "P"
+    base.mkdir()
+    docs = {"TECH.md": "## Architecture\nThe pipeline worktree isolation design.\n"
+                       "## Philosophy\nUnrelated principles.\n"}
+    monkeypatch.setattr(rm, "_load_ddd_docs_text", lambda project: (base, docs))
+    monkeypatch.setattr(rm, "recall_all", lambda q, project=None, domains=(): BucketedRecall(
+        query=q, buckets={"ddd": [{"doc": "TECH.md", "section": "Architecture", "score": 1.0},
+                                  {"doc": "TECH.md", "section": "Philosophy", "score": 1.0}]}))
+    o = SimpleNamespace(system_prompt="")
+    _inject_ddd_for_active_project(o, "pipeline worktree 隔离", ("P", "signal1_project_path"))
+    assert "§ Architecture" in o.system_prompt and "§ Philosophy" not in o.system_prompt
+    o = SimpleNamespace(system_prompt="")
+    _inject_ddd_for_active_project(o, "继续", ("P", "signal1_project_path"))
+    assert "[DDD:P]" in o.system_prompt and "§" not in o.system_prompt

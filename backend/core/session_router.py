@@ -263,7 +263,7 @@ def _record_ddd_inject(outcome: str) -> None:
 # = ran fine but matched nothing / declined by design — NEVER counted as failure
 # (summing them would false-alarm on every legitimate empty recall; see :98).
 _RECALL_TRUE_FAILURE_REASONS: frozenset[str] = frozenset({
-    "recall_db_unavailable", "leg_failure", "disaster_timeout",
+    "recall_db_unavailable", "leg_failure", "disaster_timeout", "followup_timeout",
 })
 # exception-family reasons are dynamic ("exception:<Type>") → prefix-matched.
 # Each prefix is listed in FULL: startswith("exception:") does NOT match
@@ -274,7 +274,7 @@ _RECALL_TRUE_FAILURE_REASONS: frozenset[str] = frozenset({
 # as by-design informational. Under-alarming on a real bug is the worse error.
 _RECALL_TRUE_FAILURE_PREFIXES: tuple[str, ...] = (
     "exception:", "inject_exception:", "unified_exception:", "flatten_exception:",
-    "toplevel_exception:",
+    "toplevel_exception:", "followup_exception:",
 )
 # INFORMATIONAL (NOT failures): "empty_with_keywords" (genuine no-match),
 # "unified_empty_fallback_legacy" (strangler-fig fallback to legacy, expected).
@@ -297,7 +297,7 @@ _RECALL_KNOWN_INFORMATIONAL: frozenset[str] = frozenset({
     "unified_failed_fallback_legacy",
 })
 _DDD_KNOWN_INFORMATIONAL: frozenset[str] = frozenset({
-    "injected", "declined:no_ddd_hits",
+    "injected", "declined:no_ddd_hits", "injected_pointer_only",
     # dynamic "declined:<signal>" from detect_active_project — by-design declines:
     "declined:no_projects", "declined:ambiguous", "declined:no_signal",
 })
@@ -1140,6 +1140,109 @@ def _resolve_active_project(
     return detect_active_project(editor_file_path=editor_file_path, query=user_message)
 
 
+# Follow-up recall on a topic change. Recall used to run once per session (the
+# first keyword-bearing message), so a session that moved on to another subject
+# never recalled anything for it. A later message whose query terms overlap the
+# last recall's by less than this (Jaccard) is a new topic and recalls again,
+# at most _RECALL_MAX_FOLLOWUPS times per session, never repeating text already
+# recalled in it, and never injecting the "no match" nudge (the agent already
+# has it from the first recall).
+_RECALL_TOPIC_OVERLAP = 0.2
+_RECALL_MAX_FOLLOWUPS = 6
+_RECALL_HISTORY_CHARS = 60_000
+
+
+def _remember_recall(unit: Any, keywords: str, recalled: str) -> None:
+    """Record the topic (query terms) and text of a recall on the unit."""
+    try:
+        from .recall_filter import query_terms
+        unit._recall_terms = frozenset(query_terms(keywords))
+        if recalled:
+            hist = (getattr(unit, "_recall_history", "") or "") + "\n\n" + recalled
+            unit._recall_history = hist[-_RECALL_HISTORY_CHARS:]
+    except Exception:  # noqa: BLE001 -- bookkeeping must never break recall
+        logger.debug("_remember_recall: suppressed exception", exc_info=True)
+
+
+def _is_new_topic(prev: "frozenset | None", terms: "frozenset") -> bool:
+    if not terms:
+        return False
+    if not prev:
+        return True
+    return len(terms & prev) / len(terms | prev) < _RECALL_TOPIC_OVERLAP
+
+
+async def _maybe_followup_recall(
+    user_message: str, options: Any, unit: Any, should_mutate_system_prompt: bool,
+) -> Optional[float]:
+    """Recall again when a later message starts a new topic (bounded).
+
+    Same unified path, relevance gate and budget as the first recall. The
+    prompt text it dedupes against is the system prompt plus everything recalled
+    earlier in this session, so a follow-up only adds what is new. Returns the
+    leg ms when it ran, else None. Never raises.
+    """
+    try:
+        if getattr(unit, "is_channel_session", False):
+            return None
+        if (getattr(unit, "_recall_followups", 0) or 0) >= _RECALL_MAX_FOLLOWUPS:
+            return None
+        keywords = _extract_query_keywords(user_message)
+        if not keywords:
+            return None
+        from .recall_filter import is_code_like, query_terms
+        terms = frozenset(query_terms(keywords))
+        if len(terms) < 2 and not any(is_code_like(t) for t in keywords.split()):
+            return None  # one plain word is not a topic
+        if not _is_new_topic(getattr(unit, "_recall_terms", None), terms):
+            return None
+        from core import executors
+        seen = (options.system_prompt or "") + "\n" + (getattr(unit, "_recall_history", "") or "")
+        project = getattr(unit, "_active_project", None) or (None, "no_signal")
+        t0 = time.perf_counter()
+        body, _hits = await asyncio.wait_for(
+            executors.run_in("io", _unified_recall_body, keywords, project, seen,
+                             getattr(unit, "_app_session_id", None) or unit.session_id,
+                             time.monotonic() + _RECALL_DISASTER_TIMEOUT_S),
+            timeout=_RECALL_DISASTER_TIMEOUT_S,
+        )
+        ms = (time.perf_counter() - t0) * 1000.0
+        unit._recall_followups = (getattr(unit, "_recall_followups", 0) or 0) + 1
+        _remember_recall(unit, keywords, body or "")
+        try:
+            from core.recall_metrics import record_recall_metric
+            record_recall_metric("session_followup", ("followup",), ms,
+                                 hit_count=1 if body else 0,
+                                 degraded_reason=None if body else "empty_with_keywords")
+        except Exception:  # noqa: BLE001
+            logger.debug("followup recall metric failed", exc_info=True)
+        if not body:
+            logger.info("follow-up recall (new topic) matched nothing | keywords=%s | %.0fms",
+                        keywords[:80], ms)
+            return ms
+        from .injected_blocks import RECALL_HEADER, RECALL_HINT, RECALL_PROVENANCE
+        block = f"{RECALL_HEADER}\n{RECALL_PROVENANCE}{body}{RECALL_HINT}"
+        if should_mutate_system_prompt:
+            options.system_prompt = (options.system_prompt or "") + f"\n\n{block}"
+        else:
+            unit._recall_query_block = block
+        logger.info("follow-up recall (new topic #%d) injected: +%d chars into %s | "
+                    "keywords=%s | %.0fms", unit._recall_followups, len(body),
+                    "system prompt" if should_mutate_system_prompt else "query (warm-reuse)",
+                    keywords[:80], ms)
+        return ms
+    except asyncio.TimeoutError:
+        _record_recall_degraded("followup_timeout")
+        logger.warning("follow-up recall timed out (>%.0fs); turn proceeds without it",
+                       _RECALL_DISASTER_TIMEOUT_S)
+        return None
+    except Exception as exc:  # noqa: BLE001 -- recall must never reach the send path
+        _record_recall_degraded(f"followup_exception:{type(exc).__name__}")
+        logger.warning("follow-up recall failed (turn proceeds): %s: %s",
+                       type(exc).__name__, exc)
+        return None
+
+
 async def _maybe_inject_recall(
     user_message: str,
     options: Any,
@@ -1237,7 +1340,10 @@ async def _maybe_inject_recall_inner(
     # TTFT probe uses this to label recall as n/a rather than fake a stale/0 value
     # (Gate-1: attributing turn-1 recall to a later turn corrupts the residual math).
     if unit._recall_injected:
-        return None
+        # The first recall already ran; a later message on a NEW topic gets a
+        # bounded follow-up recall (see _maybe_followup_recall).
+        return await _maybe_followup_recall(
+            user_message, options, unit, should_mutate_system_prompt)
 
     # Channel sessions: skip recall, set flag
     if unit.is_channel_session:
@@ -1431,6 +1537,7 @@ async def _maybe_inject_recall_inner(
                 # WARM-reuse: system_prompt is discarded by the reused subprocess —
                 # stash the block for the caller to prefix onto query_content (阶段二).
                 unit._recall_query_block = _recall_block
+            _remember_recall(unit, keywords, recalled)
             # Observability (loud-on-success counterpart to loud-on-degradation):
             # recall succeeds SILENTLY otherwise, so "0 recall lines in the log"
             # was ambiguous between "working" and "never ran". This makes a live
@@ -1494,6 +1601,7 @@ async def _maybe_inject_recall_inner(
             # agent to try synonyms itself rather than silently proceeding with zero
             # recall (the keyword-only blind spot).
             from .injected_blocks import RECALL_MISS as _miss_block
+            _remember_recall(unit, keywords, "")
             if should_mutate_system_prompt:
                 options.system_prompt = (
                     options.system_prompt + f"\n\n{_miss_block}"
@@ -1681,17 +1789,42 @@ def _inject_ddd_for_active_project(
     NOTHING (Gate-2 L1: the counter distinguishes 'correctly declined' from 'detector
     broken').
     """
-    from .recall_multi import recall_all
+    from .recall_multi import (_load_ddd_docs_text, _parse_docs_sections, recall_all)
+    from .recall_filter import _coverage, _required, query_terms
 
     project, signal = active_project if active_project else (None, "no_detection")
     if not project:
         _record_ddd_inject(f"declined:{signal}")
         return
 
+    # Score on the extracted keywords, not the raw message, and keep only
+    # sections that actually contain enough of them (the recall relevance rule,
+    # core/recall_filter.py). The section scores are normalized to the best
+    # match, so the top three were "relevant" for ANY message: "继续" pointed at
+    # Design Philosophy and What Failed. A message with no keywords ("继续")
+    # gets no sections, only the project pointer below -- that is what the
+    # editor-path signal is for.
+    keywords = _extract_query_keywords(user_message)
     _ddd_t0 = time.perf_counter()
-    result = recall_all(user_message, project=project, domains=("ddd",))
+    ddd_hits: list = []
+    if keywords:
+        result = recall_all(keywords, project=project, domains=("ddd",))
+        raw_hits = result.buckets.get("ddd", []) if hasattr(result, "buckets") else []
+        base, docs_text = _load_ddd_docs_text(project)
+        sections = _parse_docs_sections(docs_text) if docs_text else {}
+        terms = query_terms(keywords)
+        need = _required(terms)
+        for h in raw_hits:
+            doc, sec = str(h.get("doc") or ""), str(h.get("section") or "")
+            text = str(h.get("content") or "") or str((sections.get(doc) or {}).get(sec) or "")
+            if not text and base is not None and sec == "(whole file)":
+                try:
+                    text = (base / doc).read_text(encoding="utf-8")[:65536]
+                except OSError:
+                    text = ""
+            if _coverage(f"{sec}\n{text}", terms) >= need:
+                ddd_hits.append(h)
     _ddd_ms = (time.perf_counter() - _ddd_t0) * 1000.0
-    ddd_hits = result.buckets.get("ddd", []) if hasattr(result, "buckets") else []
     # Recall metrics (run_40091f5c): the ddd leg is a REAL per-prompt daemon recall
     # on its OWN path (excluded from the session_prompt sample) — measure it too, or
     # daemon recall latency is only half-covered. Runs in the io-thread; the metric's
@@ -1704,9 +1837,17 @@ def _inject_ddd_for_active_project(
         logger.debug("_inject_ddd_for_active_project: suppressed exception on a fail-safe path", exc_info=True)
         pass
     if not ddd_hits:
-        _record_ddd_inject("declined:no_ddd_hits")
-        logger.info("DDD detected project=%s (%s) but 0 DDD sections matched",
-                    project, signal)
+        # The project is known (the user is in it) but no section is about this
+        # message: say where its brain is, nothing more (~250 chars).
+        options.system_prompt = (options.system_prompt or "") + (
+            f"\n\n## Project DDD — [DDD:{project}]\n"
+            f"> **[DDD:{project}]** You are working in project {project} "
+            f"(detected via {signal}). Its domain docs are under "
+            f"`Projects/{project}/` (PRODUCT / TECH / IMPROVEMENT / PROJECT); read the "
+            f"relevant one before acting on project-specific decisions.\n")
+        _record_ddd_inject("injected_pointer_only")
+        logger.info("DDD detected project=%s (%s): no section matched the message "
+                    "-- injected the project pointer only", project, signal)
         return
 
     # Render top sections with a [DDD:<project>] provenance prefix (distinct
