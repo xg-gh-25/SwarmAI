@@ -30,6 +30,7 @@ import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import { AssistantMessageView } from '../AssistantMessageView';
 import { ToastProvider } from '../../../../contexts/ToastContext';
 import { FOLD_DELAY_MS } from '../../../../hooks/useLinger';
+import { backgroundAgentsStore } from '../../../../stores/backgroundAgentsStore';
 import { ReadingContext } from '../../readingContext';
 import { backgroundAgentsStore } from '../../../../stores/backgroundAgentsStore';
 import { chatService } from '../../../../services/chat';
@@ -171,6 +172,55 @@ describe('AC2b — a note carries the work after it; earlier ones fold', () => {
     expect(isShown('runner.py')).toBe(false);
     expect(isShown('land.py')).toBe(false);
     expect(screen.getAllByTestId('segment-toggle')).toHaveLength(2);
+  });
+
+  it('a later note with no work yet does not fold the work before it', () => {
+    vi.useFakeTimers();
+    const live = [...blocks, tx('Now checking the result:')];
+    const r = render(view(live, true));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(live, true));
+    expect(isShown('land.py')).toBe(true); // the latest work stays open
+    expect(isShown('runner.py')).toBe(false);
+    // the newest note starts work: the one before folds FOLD_DELAY_MS later
+    const working = [...live, bash('d', 'make check'), tr('d')];
+    r.rerender(view(working, true));
+    expect(isShown('land.py')).toBe(true);
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(working, true));
+    expect(isShown('land.py')).toBe(false);
+    expect(isShown('make check')).toBe(true);
+  });
+
+  it('a segment with a background agent still running does not fold, until it ends', () => {
+    vi.useFakeTimers();
+    act(() => {
+      backgroundAgentsStore.apply('s1', [
+        { toolUseId: 'g1', description: 'blind review A', status: 'running' },
+        { toolUseId: 'g2', description: 'blind review B', status: 'running' },
+      ]);
+    });
+    // the launch acks return at once: in the stream the calls look finished
+    const live = [tx('go'), bash('a', 'cat lead.ts'), tr('a'), tx('Two blind reviews:'),
+      agent('g1', 'blind review A'), agent('g2', 'blind review B'), tr('g1'), tr('g2'),
+      tx('Meanwhile, the next part:'), bash('n', 'edit next.py'), tr('n')];
+    const panels = () => screen.queryAllByText(/blind review A/).length;
+    const r = render(view(live, true));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(live, true));
+    expect(panels()).toBeGreaterThan(0); // still running: the AGENTS panel stays where it started
+    act(() => {
+      backgroundAgentsStore.apply('s1', [
+        { toolUseId: 'g1', description: 'blind review A', status: 'completed' },
+        { toolUseId: 'g2', description: 'blind review B', status: 'completed' },
+      ]);
+    });
+    r.rerender(view(live, true));
+    expect(panels()).toBeGreaterThan(0); // never on the spot
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(live, true));
+    expect(panels()).toBe(0);
+    act(() => { backgroundAgentsStore.apply('s1', []); });
   });
 
   it('while the user reads (scrolled up), nothing new folds', () => {

@@ -131,7 +131,12 @@ function useSettled(items: Array<{ id: string; done: boolean }>, active: boolean
   const [, setTick] = useState(0);
   const now = Date.now();
   if (doneAt.current === null) doneAt.current = new Map(items.filter((i) => i.done).map((i) => [i.id, -Infinity]));
-  else for (const i of items) if (i.done && !doneAt.current.has(i.id)) doneAt.current.set(i.id, now);
+  else for (const i of items) {
+    if (i.done && !doneAt.current.has(i.id)) doneAt.current.set(i.id, now);
+    // no longer done (a segment became the latest again, the user started reading):
+    // forget it, so it settles FOLD_DELAY_MS after it is done again, not at once
+    else if (!i.done) doneAt.current.delete(i.id);
+  }
   const map = doneAt.current;
   const pending = items.filter((i) => i.done).map((i) => map.get(i.id)!).filter((at) => at + FOLD_DELAY_MS > now);
   const nextAt = pending.length ? Math.min(...pending) + FOLD_DELAY_MS : null;
@@ -545,8 +550,9 @@ function PhaseNote({ text, renderKey, hasWork, open, onToggle, ctx }: {
 /**
  * A phase's body. The calls before the first text show as they are; each text the
  * agent wrote carries the work after it (up to the next text) under a ▸. While the
- * phase is live the latest text's work is open; an earlier one folds FOLD_DELAY_MS
- * after the next text arrived (never on the spot), and only while the user follows the
+ * phase is live the latest text with work is open; an earlier one folds FOLD_DELAY_MS
+ * after a later text started work (never on the spot), unless it holds a background
+ * Agent still running, and only while the user follows the
  * bottom (ReadingContext). A folded phase opened later shows its texts folded. The
  * user's own toggle wins.
  */
@@ -558,12 +564,20 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
   const settled = useSettled(steps.map((s) => ({ id: s.block.id, done: s.status !== 'pending' })), active);
   const batchOf = agentBatches(steps);
   const { lead, segments } = phaseSegments(members);
-  // A segment folds FOLD_DELAY_MS after a later text arrived (never on the spot), and
-  // only while the user follows the bottom: while they read, nothing new folds.
-  const latest = segments.length ? `seg-tx-${segments[segments.length - 1].note.textOrdinal}` : null;
+  // A segment folds FOLD_DELAY_MS after a LATER segment started work (a call, not just
+  // its text), never on the spot, and only while the user follows the bottom: while
+  // they read, nothing new folds. So the latest work stays open until newer work shows.
+  // A segment holding a background Agent the daemon still runs stays open too: its
+  // launch ack returns at once, so the stream alone would call it finished.
+  const { agents: bgAgents } = useBackgroundAgents(ctx.sessionId);
+  const bgRunning = new Set(bgAgents.filter((a) => a.status === 'running').map((a) => a.toolUseId));
+  const segSteps = (sg: (typeof segments)[number]) => sg.members.flatMap((m) => (m.kind === 'process' ? m.steps : []));
+  const worked = segments.filter((sg) => segSteps(sg).length > 0);
+  const latest = worked.length ? `seg-tx-${worked[worked.length - 1].note.textOrdinal}` : null;
   const segSettled = useSettled(segments.map((sg) => {
     const id = `seg-tx-${sg.note.textOrdinal}`;
-    return { id, done: id !== latest && !reading };
+    const holdsRunningAgent = segSteps(sg).some((s) => bgRunning.has(s.block.id));
+    return { id, done: id !== latest && !reading && !holdsRunningAgent };
   }), active);
 
   const renderItems = (items: BodyItem[]) => {
