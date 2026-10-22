@@ -4482,7 +4482,8 @@ class SessionUnit:
         )
         # The stored prompt shows the decision only once the hook has it. Off the
         # critical path (a display aid; it must not hold the state switch).
-        from core.permission_prompt import record_decision
+        from core.permission_prompt import note_decision, record_decision
+        note_decision(request_id, decision)   # a reload before the record reads it decided
         _t = asyncio.ensure_future(record_decision(self.session_id, request_id, decision))
         _BACKGROUND_RECORDS.add(_t)
         _t.add_done_callback(_BACKGROUND_RECORDS.discard)
