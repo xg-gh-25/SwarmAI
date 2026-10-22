@@ -29,7 +29,7 @@
  *
  * @exports TurnZoneList, ToolStripV6, AgentsPanel, PhaseBody, ZONE_GAP, RESULT_GAP
  */
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FOLD_DELAY_MS, useLinger } from '../../../hooks/useLinger';
@@ -255,7 +255,21 @@ function PathObject({ dir, file }: { dir: string; file: string }) {
 }
 
 /** One strip: one call, or merged adjacent calls (`×N`). */
-export function ToolStripV6({ item }: { item: StripItem }) {
+/** Two strip items show the same thing: same calls (by block), same status and
+ *  result, same merged objects. deriveTurnView rebuilds every StripItem on each
+ *  streamed token while the content blocks themselves keep their identity, so
+ *  comparing by value lets a finished row skip the token's render. */
+function sameStrip(a: { item: StripItem }, b: { item: StripItem }): boolean {
+  const x = a.item;
+  const y = b.item;
+  if (x.key !== y.key || x.steps.length !== y.steps.length || x.objects.join('\u0000') !== y.objects.join('\u0000')) return false;
+  return x.steps.every((s, i) => {
+    const t = y.steps[i];
+    return s.block === t.block && s.status === t.status && s.result === t.result && s.progress === t.progress;
+  });
+}
+
+export const ToolStripV6 = memo(function ToolStripV6({ item }: { item: StripItem }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const step = item.steps[0];
@@ -304,7 +318,7 @@ export function ToolStripV6({ item }: { item: StripItem }) {
       )}
     </div>
   );
-}
+}, sameStrip);
 
 // ── Agents panel ────────────────────────────────────────────────────────────────
 
