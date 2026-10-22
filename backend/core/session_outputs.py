@@ -149,6 +149,9 @@ def backfill(session_id: str, turns: Iterable[tuple[str, list[dict]]]) -> None:
     ``(created_at, turn_deliverables files)`` oldest first. Rows already recorded live
     win; marks the session backfilled so it never runs again. Blocking."""
     turns = list(turns)
+    p = _path(session_id)
+    if p is None or (not p.exists() and not any(files for _at, files in turns)):
+        return    # nothing to import and no record: create nothing (re-checked next read)
 
     def fn(data: dict):
         if data.get("backfilled"):

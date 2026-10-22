@@ -125,3 +125,23 @@ def test_external_paths_are_only_the_external_rows(tmp_path):
                      _ev("Knowledge/n.md")])
     assert so.external_paths("s1") == {str(f.resolve())}
     assert so.external_paths("s2") == set()
+
+
+def test_backfill_with_nothing_to_import_creates_no_record():
+    so.backfill("empty", [])
+    so.backfill("empty", [("t1", [])])
+    assert not (so.store_dir() / "empty.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_unknown_session_is_404_and_leaves_no_record(monkeypatch):
+    from fastapi import HTTPException
+    from routers import canvas_changes as r
+
+    async def none(_sid):
+        return None
+    monkeypatch.setattr("database.db.sessions.get", none)
+    with pytest.raises(HTTPException) as e:
+        await r.get_session_outputs(session_id="nope", parts="all")
+    assert e.value.status_code == 404
+    assert not (so.store_dir() / "nope.json").exists()

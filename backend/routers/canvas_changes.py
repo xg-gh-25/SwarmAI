@@ -28,8 +28,13 @@ async def _run(fn, *args):
 async def get_session_outputs(session_id: str = Path(..., min_length=1, max_length=128),
                               parts: str = Query("all", pattern="^(all|artifacts)$")):
     """What this session produced: {artifacts, changes} (core/canvas_session).
-    ``parts=artifacts`` = the cheap live refresh (changes is null: not computed)."""
+    ``parts=artifacts`` = the cheap live refresh (changes is null: not computed).
+    404 for a session id that does not exist."""
     from core.canvas_session import build
+    from database import db
+    if not await db.sessions.get(session_id):
+        # an unknown id gets no record created for it (build backfills on first read)
+        raise HTTPException(status_code=404, detail="unknown session")
     return await build(session_id, changes=parts == "all")
 
 
