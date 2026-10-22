@@ -62,6 +62,12 @@ def test_a_call_waiting_for_approval_never_ran():
     assert "Stopped mid-call" not in note
 
 
+def test_the_note_disowns_the_cli_resume_placeholder():
+    # 2026-10-22 e4f3397f: on --resume after a Stop the CLI writes a synthetic
+    # "No response requested." the model then apologised for as its own reply.
+    note = turn_stop.continuation_note({"at": "t", "calls": [], "agents": []})
+    assert '"No response requested."' in note and "not a reply you gave" in note
+
 def test_build_caps_rows_and_counts_the_rest():
     calls = {f"c{i}": (0.0, "Bash") for i in range(25)}
     block = turn_stop.build(open_tool_uses=calls, agent_tools={}, background=[], now=1.0)

@@ -49,3 +49,5 @@ def test_a_blank_result_on_a_turn_we_sent_still_raises_for_retry():
     orch._parent._turn_stream = types.SimpleNamespace(kind="user", opened_at=None)
     _events, raised = asyncio.run(_drive(orch, [_blank_result()]))
     assert raised is not None and "API returned empty response" in str(raised)
+    # the CLI's own turn time (0ms), not "since the stream start" (huge here)
+    assert "duration=0.0s" in str(raised)

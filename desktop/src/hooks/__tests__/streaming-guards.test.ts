@@ -16,6 +16,7 @@ import {
   retryPayloadHasAttachments,
   shouldResurfaceQuestion,
   shouldResurfacePermission,
+  queuedBehindApprovalText,
   computeDrainRetirement,
   shouldArmSpinnerFromBackend,
   forceClearStreamVerdict,
@@ -836,5 +837,30 @@ describe('nextReconcileDelay (B-1: steady-state primary poll cadence)', () => {
 
   it('fast cadence ≤ 3s (AC5: ≤3s self-heal, not 15s/45s)', () => {
     expect(nextReconcileDelay(true)).toBeLessThanOrEqual(3_000);
+  });
+});
+
+describe('queuedBehindApprovalText (why a sent message is not moving)', () => {
+  const perm = { requestId: 'p1', toolName: 'Bash', toolInput: { command: 'make clean' }, reason: '', options: [] };
+  const base = { backendWaitingInput: true, backendPendingPermission: perm, serverPendingCount: 2, hasLocalQueued: false };
+
+  it('names the count and the command it waits on', () => {
+    expect(queuedBehindApprovalText(base)).toBe(
+      '2 messages are waiting for your approval of Bash: make clean. They send after you decide.');
+    expect(queuedBehindApprovalText({ ...base, serverPendingCount: 0, hasLocalQueued: true })).toBe(
+      'Your message is waiting for your approval of Bash: make clean. It sends after you decide.');
+  });
+
+  it('is null when nothing is queued or nothing is awaited', () => {
+    expect(queuedBehindApprovalText({ ...base, serverPendingCount: 0 })).toBeNull();
+    expect(queuedBehindApprovalText({ ...base, backendWaitingInput: false })).toBeNull();
+    expect(queuedBehindApprovalText({ ...base, backendPendingPermission: null })).toBeNull();
+  });
+
+  it('shortens a long command and falls back to the tool name', () => {
+    const long = queuedBehindApprovalText({ ...base, backendPendingPermission: { ...perm, toolInput: { command: 'x'.repeat(200) } } })!;
+    expect(long).toContain(`Bash: ${'x'.repeat(79)}…`);
+    expect(queuedBehindApprovalText({ ...base, backendPendingPermission: { ...perm, toolName: 'Write', toolInput: {} } }))
+      .toContain('approval of Write.');
   });
 });

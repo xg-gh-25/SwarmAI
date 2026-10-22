@@ -3156,17 +3156,25 @@ class StreamingOrchestrator:
                     output_tokens=output_tok,
                     subtype=subtype,
                 ):
+                    # The CLI's own clock for this turn (duration_ms) and its
+                    # model time (duration_api_ms); streaming_dur is since the
+                    # turn's first frame, which for a buffered turn includes
+                    # the time it sat queued (e4f3397f: "40.1s" for a 0ms turn).
+                    _cli_s = (getattr(message, "duration_ms", 0) or 0) / 1000
+                    _api_s = (getattr(message, "duration_api_ms", 0) or 0) / 1000
                     logger.warning(
                         "session_unit.api_empty_response session_id=%s "
-                        "duration=%.1fs output_tokens=0 subtype='%s' — "
+                        "duration=%.1fs api=%.1fs since_first_frame=%.1fs "
+                        "output_tokens=0 subtype='%s' — "
                         "raising for retry (before result yield)",
                         self._parent.session_id,
+                        _cli_s, _api_s,
                         streaming_dur or 0,
                         subtype,
                     )
                     raise RuntimeError(
                         f"API returned empty response (output_tokens=0, "
-                        f"duration={(streaming_dur or 0):.1f}s) — likely "
+                        f"duration={_cli_s:.1f}s) — likely "
                         f"transient 429/503/timeout "
                         f"(session_id={self._parent.session_id})"
                     )

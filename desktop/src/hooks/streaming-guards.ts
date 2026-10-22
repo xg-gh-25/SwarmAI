@@ -20,7 +20,7 @@
  *      drained when the backend genuinely finishes) instead of escaping.
  */
 
-import type { ContentBlock, UnifiedAttachment } from '../types';
+import type { ContentBlock, PendingPermission, UnifiedAttachment } from '../types';
 
 /** Shape of the retryPayload the backend attaches to a SESSION_BUSY (and
  *  QUEUE_TIMEOUT) SSE event so the frontend can recover the user's message. */
@@ -222,6 +222,33 @@ export function shouldResurfacePermission(input: ResurfacePermissionInput): bool
   if (id === currentPendingRequestId) return false;
   if (decidedRequestId && id === decidedRequestId) return false;
   return true;
+}
+
+/** Inputs to {@link queuedBehindApprovalText}. */
+export interface QueuedBehindApprovalInput {
+  backendWaitingInput: boolean;
+  backendPendingPermission: PendingPermission | null;
+  /** Messages the server holds as pending for this session. */
+  serverPendingCount: number;
+  /** A message this tab holds back itself (``tabState.queuedMessage``). */
+  hasLocalQueued: boolean;
+}
+
+/**
+ * Why a sent message is not moving, when the answer is "it waits on an
+ * approval" (2026-10-22: two messages sat 18 min behind a prompt with no
+ * explanation). Null when nothing is queued or the session waits on nothing.
+ */
+export function queuedBehindApprovalText(input: QueuedBehindApprovalInput): string | null {
+  const { backendWaitingInput, backendPendingPermission: perm, serverPendingCount, hasLocalQueued } = input;
+  if (!backendWaitingInput || !perm?.requestId) return null;
+  const n = Math.max(serverPendingCount, 0) || (hasLocalQueued ? 1 : 0);
+  if (n === 0) return null;
+  const cmd = typeof perm.toolInput?.command === 'string' ? perm.toolInput.command.trim() : '';
+  const what = cmd ? `${perm.toolName}: ${cmd.length > 80 ? `${cmd.slice(0, 79)}…` : cmd}` : perm.toolName;
+  const msgs = n === 1 ? 'Your message is' : `${n} messages are`;
+  const after = n === 1 ? 'It sends' : 'They send';
+  return `${msgs} waiting for your approval of ${what}. ${after} after you decide.`;
 }
 
 // ── Root-1 SSOT Phase 3: AC4 — server pending_count / last_drained_seqs mirror ──

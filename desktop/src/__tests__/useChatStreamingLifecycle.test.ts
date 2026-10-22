@@ -1849,6 +1849,9 @@ describe('Fix 6: Per-tab state isolation', () => {
           expect(perms().map((b) => b.requestId)).toEqual(['perm_lost']);
           expect(testTabMap.get('tab-lost')!.pendingPermissionRequestId).toBe('perm_lost');
           expect(result.current.pendingPermissionRequestId).toBe('perm_lost');
+          // the two queued messages say what they wait on
+          const queued = () => tabNoticeStore.getSnapshot('tab-lost').find((n) => n.id === 'queued-behind-approval');
+          expect(queued()?.message).toBe('2 messages are waiting for your approval of Bash: make clean. They send after you decide.');
           // idempotent: the next poll does not add a second card
           await act(async () => { await vi.advanceTimersByTimeAsync(16_000); });
           expect(perms()).toHaveLength(1);
@@ -1857,6 +1860,7 @@ describe('Fix 6: Per-tab state isolation', () => {
             pendingQuestion: null, pendingPermission: null, lastDrainedSeqs: [] } };
           await act(async () => { await vi.advanceTimersByTimeAsync(16_000); });
           expect(testTabMap.get('tab-lost')!.pendingPermissionRequestId).toBeNull();
+          expect(queued()).toBeUndefined();
           expect(result.current.pendingPermissionRequestId).toBeNull();
         } finally {
           stateSpy.mockRestore(); tailSpy.mockRestore(); invSpy.mockRestore();

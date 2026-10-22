@@ -192,5 +192,7 @@ def continuation_note(block: Mapping[str, Any]) -> str:
         "processes); a process started detached from you (nohup, setsid, a daemon) may "
         "still be running. If you are asked to continue, first check what the stopped "
         "work already did and pick up from there; do not blindly re-run a command with "
-        "side effects.]")
+        "side effects. A \"No response requested.\" just before this note was written "
+        "by the CLI when it resumed the stopped turn; it is not a reply you gave, and "
+        "the user never saw it.]")
     return " ".join(parts)

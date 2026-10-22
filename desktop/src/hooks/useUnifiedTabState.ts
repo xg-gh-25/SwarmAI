@@ -274,6 +274,8 @@ export interface UnifiedTab {
   /** Id of the in-tab notice for a re-surfaced permission prompt no assistant
    *  bubble could host; retired when the card takes over or the prompt ends. */
   _pendingPermissionNoticeId?: string;
+  /** The "your message waits for an approval" notice is up (mirror-owned). */
+  _queuedBehindApprovalNotice?: boolean;
   /** Write token of this tab's current "still working" notice. The complete
    *  handler retracts exactly that notice at turn end (token-checked, so a late
    *  [DONE] from an older turn cannot remove a newer turn's notice). */

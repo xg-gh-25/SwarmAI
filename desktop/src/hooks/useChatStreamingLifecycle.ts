@@ -52,7 +52,7 @@ import type {
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import { applyCompactionEvent } from '../pages/chat/compaction';
-import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, shouldResurfacePermission, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
+import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, shouldResurfacePermission, queuedBehindApprovalText, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
 import { errorFieldsFromEvent } from './errorFields';
 import { chatService } from '../services/chat';
 import { sessionEvents } from '../services/sessionEvents';
@@ -104,6 +104,9 @@ export const CONNECTION_LOST_NOTICE_ID = 'connection-lost';
  *  health flips back. Capped so a flapping backend (up/down/up) can't drive an
  *  unbounded resend loop. */
 const RESEND_MAX_ATTEMPTS = 2;
+
+/** Tab-notice id of "your message waits for an approval" (one per tab). */
+const QUEUED_BEHIND_APPROVAL_NOTICE = 'queued-behind-approval';
 
 /** Base delay in ms for exponential backoff (attempt 0 → 1000ms). */
 const RECONNECT_BASE_DELAY_MS = 1000;
@@ -1451,6 +1454,24 @@ export function useChatStreamingLifecycle(
               tabState._decidedPermissionId = undefined;
             }
 
+            // Say why sent messages are not moving when they wait on an approval.
+            {
+              const queuedText = queuedBehindApprovalText({
+                backendWaitingInput: mirrorState.waitingInput,
+                backendPendingPermission: mirrorState.pendingPermission ?? null,
+                serverPendingCount: mirrorState.pendingCount ?? 0,
+                hasLocalQueued: !!tabState.queuedMessage,
+              });
+              if (queuedText) {
+                tabNoticeStore.post(tabState, mirrorSid, {
+                  id: QUEUED_BEHIND_APPROVAL_NOTICE, severity: 'info', message: queuedText,
+                });
+                tabState._queuedBehindApprovalNotice = true;
+              } else if (tabState._queuedBehindApprovalNotice) {
+                tabNoticeStore.dismiss(tabId, QUEUED_BEHIND_APPROVAL_NOTICE);
+                tabState._queuedBehindApprovalNotice = false;
+              }
+            }
             // AC4: mirror the server's drain progress. Retire the local optimistic
             // queue mirror once the server confirms it drained a tracked seq.
             // NOTE: the session-level "N queued" badge DRIVEN BY pending_count is
