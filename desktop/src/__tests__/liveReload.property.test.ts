@@ -178,32 +178,10 @@ function replay(s: Scenario, renderLifecycle: () => void, withReconcile: boolean
  * Remove a line when its root is fixed; the test then holds it.
  */
 const KNOWN = new Set<string>([
-  // R1 — a continuation turn (answer / permission) gets its own bubble live
-  // (beginSubscriptionTurn: local-sub-<turnId>), but the reload merges it into the
-  // asking turn's message. Turn-end reconcile cannot correlate that bubble, keeps
-  // it, and it ends up AFTER later messages: everything it holds shows twice.
-  'stream: assistant bubbles: a answer turn has its own bubble',
-  'stream: assistant bubbles: a permission turn has its own bubble',
-  'reconciled: assistant bubbles: a answer turn has its own bubble',
-  'reconciled: assistant bubbles: a permission turn has its own bubble',
-  'reconciled: live repeats: text',
-  'reconciled: live repeats: thinking',
-  'reconciled: live repeats: tool_use',
-  'reconciled: live repeats: tool_result',
-  'reconciled: live repeats: background_finished',
-  'reconciled: live repeats: permission',
   // R2 — ask_user_question is never stored (core/permission_prompt stores only
   // permission prompts): after a reload the question and its answer are gone.
   'stream: only live: question',
   'reconciled: only live: question',
-  // R3 — since cc2ceef6 a CLI turn renders into the previous bubble; the
-  // assistant-event merge treats a text/thinking identical to an earlier confirmed
-  // one in the same message as a re-emission and drops it, across turns. The
-  // reload keeps both.
-  'stream: live drops a repeated thinking',
-  'stream: live drops a repeated text',
-  'reconciled: live drops a repeated thinking',
-  'reconciled: live drops a repeated text',
 ]);
 
 const scenarios = (fixture as { scenarios: Scenario[] }).scenarios;

@@ -381,6 +381,7 @@ export function updateMessages(
   assistantMessageId: string,
   newContent: ContentBlock[],
   model?: string,
+  turnStart = 0,
 ): Message[] {
   return currentMessages.map((msg) => {
     if (msg.id !== assistantMessageId) return msg;
@@ -405,7 +406,10 @@ export function updateMessages(
     // confirmation was lost stays visible). Tool_use / tool_result are deduped by id.
     const MIN_DEDUP_LENGTH = 20;
     const content = [...msg.content];
-    const consumed = new Set<number>();
+    // `turnStart`: the index where this turn's blocks begin when the bubble also
+    // holds earlier turns (a continued bubble). Those blocks are final and never
+    // matched: a later turn repeating an earlier text keeps both (live == reload).
+    const consumed = new Set<number>(Array.from({ length: Math.min(turnStart, content.length) }, (_, i) => i));
     const dropped = new Set<number>();
     const appended: ContentBlock[] = [];
     let changed = false;
@@ -496,11 +500,15 @@ export function updateMessages(
     }
 
     if (!changed && appended.length === 0) return msg;
+    // Earlier turns' blocks (before turnStart) are never dropped above; the collapse
+    // only looks at this turn's, so a turn starting with its predecessor's last text
+    // keeps both, as the reload does.
+    const merged = [...content.filter((_, i) => !dropped.has(i)), ...appended];
+    const head = Math.min(turnStart, merged.length);
     return {
       ...msg,
-      content: collapseAdjacentDuplicateBlocks(
-        [...content.filter((_, i) => !dropped.has(i)), ...appended], 'updateMessages',
-      ),
+      content: [...merged.slice(0, head),
+        ...collapseAdjacentDuplicateBlocks(merged.slice(head), 'updateMessages')],
       ...(model ? { model } : {}),
       ...(msg.isError ? { isError: false } : {}),
     };
@@ -2461,6 +2469,13 @@ export function useChatStreamingLifecycle(
       // Capture the tab this handler belongs to. Falls back to active tab
       // for backward compatibility with single-tab usage.
       const capturedTabId = tabId ?? activeTabIdRef.current;
+      // Where this turn begins in its bubble: >0 when the bubble also holds the
+      // turns before it (beginSubscriptionTurn hostedTurn); read per event, since
+      // the begin sets it right before this handler gets its first event.
+      const turnStartOf = (): number => {
+        const h = capturedTabId ? tabMapRef.current.get(capturedTabId)?._turnHandlers?.hostedTurn : undefined;
+        return h && h.hostId === assistantMessageId ? h.baseLen : 0;
+      };
       // Capture stream generation at creation time — events from a stale
       // generation (e.g. old response arriving after user sent a new message)
       // must be discarded to prevent cross-turn bleed.
@@ -3072,7 +3087,7 @@ export function useChatStreamingLifecycle(
           if (resStore) {
             resStore.updateLast(
               (msg) => {
-                const next = updateMessages([msg], assistantMessageId, event.content!, undefined)[0];
+                const next = updateMessages([msg], assistantMessageId, event.content!, undefined, turnStartOf())[0];
                 return next;
               },
               (msg) => msg.id === assistantMessageId,
@@ -3112,7 +3127,7 @@ export function useChatStreamingLifecycle(
             // complex dedup/confirm logic without rewriting it.
             assistStore.updateLast(
               (msg) => {
-                const next = updateMessages([msg], assistantMessageId, event.content!, event.model)[0];
+                const next = updateMessages([msg], assistantMessageId, event.content!, event.model, turnStartOf())[0];
                 // The backend never sends a top-level `tool_use` event: a tool
                 // call arrives inside `assistant`, so the stall threshold is set here.
                 return next;
@@ -3122,10 +3137,10 @@ export function useChatStreamingLifecycle(
           } else {
             // Fallback: initial tab before store exists
             if (tabState) {
-              tabState.messages = updateMessages(tabState.messages, assistantMessageId, event.content, event.model);
+              tabState.messages = updateMessages(tabState.messages, assistantMessageId, event.content, event.model, turnStartOf());
             }
             if (isActiveTab) {
-              setMessages((prev) => updateMessages(prev, assistantMessageId, event.content!, event.model));
+              setMessages((prev) => updateMessages(prev, assistantMessageId, event.content!, event.model, turnStartOf()));
             }
           }
         } else if (event.type === 'ask_user_question' && !(event.questions && event.toolUseId)) {
@@ -4667,24 +4682,33 @@ export function useChatStreamingLifecycle(
     const tab = tabMapRef.current.get(tabId);
     if (!tab) return;
     const cid = ev.turnClientId;
-    // A continuation shares its client_id with the turn that asked the question:
-    // it gets a bubble of its own, and that turn's bubble and rows stay.
     const source = (ev as { source?: TurnSource }).source;
+    // A continuation shares its client_id with the turn that asked the question.
     const continuation = source === 'answer' || source === 'permission';
     const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: tab.sessionId });
     if (store.phase === 'streaming') store.endStreaming();
     const handlers = turnHandlersOf(tab);
-    // A CLI-initiated turn (a background agent finished) right after an assistant
-    // message continues THAT bubble, as the reloaded history shows it: the history
-    // endpoint merges consecutive assistant rows into one message. A new bubble
-    // per turn showed N avatars for one piece of work (2026-10-22).
-    const host = source === 'injected' ? hostForInjectedTurn(store.getSnapshot(), ev.turnId, handlers.hostedTurn) : null;
+    const route = turnStateOf(tab);
+    const postBubble = route.postTurnId === ev.turnId ? handlers.postBubbleId : undefined;
+    // ONE bubble per run of assistant turns, as the reload shows it (the history
+    // endpoint merges consecutive assistant rows into one message; live == reload,
+    // liveReload.property.test.ts). A turn that does not follow a user message — a
+    // CLI-initiated one (a background agent finished), or the continuation after a
+    // question / permission — renders INTO the bubble before it. Its own POST
+    // placeholder (the numeric bubble ChatPage adds for a continuation) is dropped
+    // first: the subscription renders this turn.
+    const hosts = source === 'injected' || continuation;
+    if (hosts) {
+      store.remove((m) => m.role === 'assistant' && (m.content?.length ?? 0) === 0
+        && (m.id === postBubble || /^\d+$/.test(m.id) || m.id === `local-sub-${ev.turnId}`));
+    }
+    const host = hosts ? hostForInjectedTurn(store.getSnapshot(), ev.turnId, handlers.hostedTurn) : null;
     if (host) {
       const replay = handlers.hostedTurn?.turnId === ev.turnId;
       const baseLen = replay ? handlers.hostedTurn!.baseLen : host.content.length;
       // What the host shows so far belongs to turns that have ended: final. Marked
-      // confirmed so this turn's assistant events never take it for their own
-      // streamed (provisional) text and replace it.
+      // confirmed, and the turn's merge starts at baseLen (updateMessages turnStart),
+      // so this turn never replaces or de-duplicates against it.
       store.updateById(host.id, (m) => ({
         ...m,
         content: m.content.slice(0, baseLen).map((b) =>
@@ -4700,8 +4724,6 @@ export function useChatStreamingLifecycle(
       // The replay rebuilds this turn from its start: drop what was shown of it —
       // its placeholder, the POST bubble when it is this tab's own send, and (for a
       // turn that is not a continuation) its persisted rows.
-      const route = turnStateOf(tab);
-      const postBubble = route.postTurnId === ev.turnId ? turnHandlersOf(tab).postBubbleId : undefined;
       store.remove((m) => m.role === 'assistant' && (
         m.id === id || (!!postBubble && m.id === postBubble)
         || (!continuation && !!cid && m.metadata?.client_id === cid)));

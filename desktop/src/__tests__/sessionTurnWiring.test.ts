@@ -358,7 +358,7 @@ describe('session turn wiring', () => {
     expect(JSON.stringify(lastAssistant('s1', result.current.messages)!.content)).toContain('only on the POST');
   });
 
-  it('an answer turn rebuilt from its replay replaces its own bubble and keeps the question turn', () => {
+  it('an answer turn rebuilt from its replay continues the question turn\'s bubble, once', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => {
       initTestTab('a1');
@@ -379,8 +379,10 @@ describe('session turn wiring', () => {
     act(() => { fake.emit(start); });
     act(() => { fake.emit(env('A', 21, text('answered'))); });
     const ids = (messageStoreRegistry.get('a1')?.messages ?? []).filter((m) => m.role === 'assistant').map((m) => m.id);
-    expect(ids).toContain('local-q-asst');           // the question turn stays
-    expect(ids).not.toContain('1700000000000');      // the POST's own bubble is replaced
-    expect(ids.filter((x) => x === 'local-sub-A')).toHaveLength(1);
+    // one bubble for the question turn and its answer turn, as the reload shows it
+    expect(ids).toEqual(['local-q-asst']);           // POST bubble gone, no separate answer bubble
+    const body = JSON.stringify(messageStoreRegistry.get('a1')!.messages.find((m) => m.id === 'local-q-asst')!.content);
+    expect(body.match(/which one\?/g)?.length).toBe(1);
+    expect(body.match(/answered/g)?.length).toBe(1);  // the replay rendered it once
   });
 });
