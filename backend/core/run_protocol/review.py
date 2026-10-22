@@ -76,12 +76,105 @@ def lint_prompt(prompt: str, *, expert_id: str, round: int) -> list[str]:
     return errors
 
 
+_SPAWN_PROMPT = (Path(__file__).resolve().parents[2] / "skills" / "s_autonomous-pipeline"
+                 / "scripts" / "spawn_prompt.py")
+_SPAWN_PROMPT_MOD: list[Any] = []
+
+
+def _spawn_prompt():
+    """spawn_prompt.py by path (a skill script, not a package): the one REVIEW_PATTERNS
+    parser and selector, shared with the ``--patterns-for`` CLI."""
+    if not _SPAWN_PROMPT_MOD:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_v1_spawn_prompt", _SPAWN_PROMPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        _SPAWN_PROMPT_MOD.append(mod)
+    return _SPAWN_PROMPT_MOD[0]
+
+
+_EXT_GLOB = re.compile(r"\*\.[a-z0-9]+")
+
+
+def _specific_hit(row: Mapping[str, Any], paths: Sequence[str], diff_text: str) -> bool:
+    """The row matched on evidence about THIS change: a keyword in a path or the diff,
+    or a glob narrower than a bare extension (``*.py`` fires on every Python file, so
+    on its own it says nothing about the change)."""
+    if row.get("always"):
+        return False
+    import fnmatch
+    norm = [str(p).replace("\\", "/").lower() for p in paths]
+    for g in row.get("globs") or ():
+        if _EXT_GLOB.fullmatch(g):
+            continue
+        if any(fnmatch.fnmatchcase(p, g) or fnmatch.fnmatchcase(p.rsplit("/", 1)[-1], g)
+               for p in norm):
+            return True
+    hay = "\n".join(norm) + "\n" + diff_text.lower()
+    return any(k in hay for k in row.get("keywords") or ())
+
+
+def review_patterns(paths: Sequence[str], diff_text: str = "") -> dict[str, Any]:
+    """The REVIEW_PATTERNS rows this change triggers (v13 E1: the RP lens is part of
+    correctness's checklist, so the ENGINE selects the rows; the model never does).
+
+    Returns ``{"compact": str, "triggered": [ids], "error": str | None}``. compact is
+    the --patterns-for listing (every applying row, one line each) for the
+    correctness handout; triggered are the rows matched on specific evidence
+    (_specific_hit: a keyword, or a glob narrower than ``*.<ext>``), which make even
+    a small change get a correctness review.
+    On any failure: no listing, error set (the caller still dispatches correctness).
+    """
+    try:
+        sp = _spawn_prompt()
+        text = sp.REVIEW_PATTERNS_PATH.read_text(encoding="utf-8")
+        _, _, hits = sp._select(text, list(paths), diff_text)
+        compact = sp.render_patterns_compact(text, list(paths), diff_text)
+        return {"compact": compact,
+                "triggered": [r["id"] for r in hits if _specific_hit(r, paths, diff_text)],
+                "error": None}
+    except Exception as exc:  # noqa: BLE001 — a broken table must not stop REVIEW
+        return {"compact": "", "triggered": [], "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _table_only(compact: str) -> str:
+    """The listing's table rows and warnings, without its closing instruction (that
+    one asks for per-row pass / N/A / fail; a v1 reviewer answers in findings)."""
+    keep = [ln for ln in compact.splitlines() if ln.startswith("|") or ln.startswith("WARNING")]
+    return "\n".join(keep)
+
+
+def patterns_block(patterns: Mapping[str, Any]) -> str:
+    """The REVIEW_PATTERNS section of the correctness handout: the selected rows and
+    how to read one in full. A failed selection says so and points at the file."""
+    if patterns.get("compact"):
+        return ("REVIEW PATTERNS (RP) for this change, selected by the engine. Check each "
+                "listed row against the diff; report a violated row as a finding naming its "
+                "RP id. Before judging a row whose trigger is present in the change, print "
+                "its full row (what to verify + example bug): python "
+                "backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --patterns-rows "
+                "RP<n> [RP<m> ...]\n\n" + _table_only(str(patterns["compact"])))
+    if patterns.get("error"):
+        return ("REVIEW PATTERNS: the engine could not select rows "
+                f"({patterns['error']}); apply backend/skills/s_autonomous-pipeline/"
+                "REVIEW_PATTERNS.md rows whose trigger is present in the diff.")
+    return "REVIEW PATTERNS: no source file changed; no rows apply."
+
+
 def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
-              required: Sequence[str] = (), small_change: bool = False) -> list[dict[str, str]]:
-    """P3a E1 roster: default correctness; security/red-team only on clear risk."""
+              required: Sequence[str] = (), small_change: bool = False,
+              patterns: Sequence[str] = ()) -> list[dict[str, str]]:
+    """P3a E1 roster: default correctness; security/red-team only on clear risk.
+
+    *patterns*: REVIEW_PATTERNS rows the change triggers by path or diff
+    (review_patterns). Any of them dispatches correctness, also for a small change:
+    the RP lens has no other reviewer since REVIEW stopped dispatching code-quality."""
     picked: dict[str, str] = {}
+    if patterns:
+        shown = ", ".join(patterns[:6]) + (f" +{len(patterns) - 6}" if len(patterns) > 6 else "")
+        picked["correctness"] = f"review patterns triggered: {shown}"
     if small_change:
-        return []
+        return [{"id": expert, "reason": reason} for expert, reason in picked.items()]
     source = [row for row in changed if row.get("is_test") is not True
               and not str(row.get("path") or "").endswith((".md", ".txt", ".rst"))]
     total = sum(int(row.get("insertions") or 0) + int(row.get("deletions") or 0)

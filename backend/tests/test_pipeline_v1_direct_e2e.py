@@ -145,3 +145,53 @@ def test_worktree_creation_failure_pauses_without_shared_fallback(tmp_path, monk
     state = engine.projection()
     assert state["status"] == "paused" and state["reason"] == "worktree_unavailable"
     assert engine.contract["mode"] == "isolated" and engine.effective_repos() == {}
+
+
+def test_a_small_change_that_triggers_review_patterns_gets_correctness(tmp_path, monkeypatch):
+    """v13 E1: the RP lens is part of correctness. A 2-line change whose diff hits a
+    review pattern (here subprocess.Popen, RP1) still gets a correctness review, and
+    its handout carries the engine-selected RP rows; a plain one still gets none."""
+    data, workspace = tmp_path / "data", tmp_path / "workspace"
+    (workspace / "Projects/P").mkdir(parents=True)
+    monkeypatch.setenv("SWARM_DATA_DIR", str(data))
+    monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(tmp_path / "worktrees"))
+    monkeypatch.setenv("SWARM_WORKTREE_LEDGER", str(tmp_path / "ledger"))
+    repo = _repo(tmp_path)
+    engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
+                              profile="direct", session_id="s", repos={"repo": str(repo)},
+                              run_id="run_rp", risk_test_file_cap=20)
+    wt = engine.stage_start()["repos"]["repo"]
+    (__import__("pathlib").Path(wt) / "a.py").write_text(
+        "import subprocess\nvalue = subprocess.Popen(['true'])\n")
+    engine.stage_complete(_documents())
+    _finalize(_runner(engine, wt), "tdd")
+    assert engine.stage_complete()["state"]["stage"] == "review"
+    started = engine.review_start()
+    assert [r["id"] for r in started["reviewers"]] == ["correctness"]
+    assert "RP1" in started["reviewers"][0]["reason"]
+    prompt = started["handouts"][0]["prompt"]
+    assert "REVIEW PATTERNS (RP) for this change" in prompt
+    assert "| RP1 |" in prompt and "--patterns-rows" in prompt
+
+
+def test_a_failed_pattern_selection_still_dispatches_correctness(tmp_path, monkeypatch):
+    from core.run_protocol import review
+    data, workspace = tmp_path / "data", tmp_path / "workspace"
+    (workspace / "Projects/P").mkdir(parents=True)
+    monkeypatch.setenv("SWARM_DATA_DIR", str(data))
+    monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(tmp_path / "worktrees"))
+    monkeypatch.setenv("SWARM_WORKTREE_LEDGER", str(tmp_path / "ledger"))
+    monkeypatch.setattr(review, "review_patterns",
+                        lambda paths, diff="": {"compact": "", "triggered": [], "error": "OSError: gone"})
+    repo = _repo(tmp_path)
+    engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
+                              profile="direct", session_id="s", repos={"repo": str(repo)},
+                              run_id="run_rp2", risk_test_file_cap=20)
+    wt = engine.stage_start()["repos"]["repo"]
+    (__import__("pathlib").Path(wt) / "a.py").write_text("value = 2\n")
+    engine.stage_complete(_documents())
+    _finalize(_runner(engine, wt), "tdd")
+    engine.stage_complete()
+    started = engine.review_start()
+    assert [r["id"] for r in started["reviewers"]] == ["correctness"]
+    assert "could not select rows" in started["handouts"][0]["prompt"]

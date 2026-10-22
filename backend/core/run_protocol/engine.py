@@ -905,16 +905,28 @@ class RunEngine:
                                 "deletions": int(delete or 0),
                                 "is_test": "/tests/" in path or path.startswith("tests/")})
             diffs.append(f"## {name}\n" + _git(root, "diff", "--no-ext-diff", "HEAD"))
-        roster = review.reviewers(profile=state["profile"], changed=changed)
+        source_paths = [row["path"] for row in changed if not row["is_test"]
+                        and not row["path"].endswith((".md", ".txt", ".rst"))]
+        patterns = (review.review_patterns(source_paths, "\n".join(diffs)) if source_paths
+                    else {"compact": "", "triggered": [], "error": None})
+        roster = review.reviewers(profile=state["profile"], changed=changed,
+                                  patterns=patterns["triggered"])
+        if patterns["error"] and not any(item["id"] == "correctness" for item in roster):
+            # the selection failed: review the source anyway, never fewer checks
+            roster.insert(0, {"id": "correctness",
+                              "reason": f"review patterns unavailable ({patterns['error']})"})
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
         handouts = []
         expert_root = Path(__file__).resolve().parents[2] / "experts" / "code"
         for item in roster:
             instructions = (expert_root / f"{item['id']}.md").read_text(encoding="utf-8")
+            review_input = "\n\n".join(diffs)
+            if item["id"] == "correctness":
+                review_input = review.patterns_block(patterns) + "\n\n" + review_input
             handouts.append(orchestrator.handout(
                 expert_id=item["id"], stage="review", round=1, attempt=attempt,
                 at=_now(), expert_instructions=instructions,
-                review_input="\n\n".join(diffs)))
+                review_input=review_input))
         if not handouts:
             orchestrator.write_documents()
         return {"reviewers": roster, "handouts": handouts}

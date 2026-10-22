@@ -367,8 +367,10 @@ def test_compact_cells_split_from_the_left_with_pipes_in_later_columns(tmp_path)
     assert "| RP1 | name | trig |" in res.stdout
 
 
+# v13 §C3: the REVIEW card names checks and commands only; the RP rows reach the
+# reviewer through the correctness handout (test_correctness_handout_* below).
 @pytest.mark.parametrize("doc", [
-    "stages/review.md", "stages/ref/review/checks-core.md", "REVIEW_PATTERNS.md",
+    "stages/ref/review/checks-core.md", "REVIEW_PATTERNS.md",
 ])
 def test_review_docs_say_how_to_fetch_full_rows(doc):
     """The rule, not just the flag: verdict every listed row, and fetch the full row
@@ -385,14 +387,14 @@ def test_code_quality_expert_uses_the_compact_listing():
     assert "only if that command fails" in text  # a fallback when the cwd is not the repo root
 
 
-def test_review_card_command_path_exists_from_repo_root():
-    """code-quality review: a shortened path on the card fails from the repo root and
-    sends the agent back to reading the whole file."""
+def test_correctness_handout_command_path_exists_from_repo_root():
+    """The --patterns-rows command the engine puts in the correctness handout runs
+    from the repo root (a shortened path sends the reviewer to the whole file)."""
     import re as _re
-    card = (_SKILL_ROOT / "stages" / "review.md").read_text(encoding="utf-8")
-    paths = _re.findall(r"`python (\S+spawn_prompt\.py) --patterns-for", card)
-    assert paths, "step 4 must give the runnable command"
+    from core.run_protocol import review
+    block = review.patterns_block(review.review_patterns(
+        ["backend/core/x.py"], "+ subprocess.Popen(['git'])"))
+    paths = _re.findall(r"python (\S+spawn_prompt\.py) --patterns-rows", block)
+    assert paths, block[:300]
     assert all((_BACKEND.parent / p).is_file() for p in paths), paths
-    hint = _cli("--patterns-for", _PY).stdout
-    printed = _re.findall(r"python (\S+spawn_prompt\.py) --patterns-rows", hint)
-    assert printed and all((_BACKEND.parent / p).is_file() for p in printed), hint[-300:]
+    assert "| RP1 |" in block and "pass / N/A / fail" not in block

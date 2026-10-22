@@ -116,3 +116,28 @@ def test_review_cache_key_binds_every_reuse_identity():
     for field in args:
         changed = dict(args); changed[field] = str(changed[field]) + "x"
         assert review_cache_key(**changed) != base
+
+
+def test_triggered_review_patterns_dispatch_correctness_even_for_a_small_change():
+    small = [{"path": "backend/core/a.py", "insertions": 2, "deletions": 0}]
+    got = reviewers(profile="direct", changed=small, small_change=True, patterns=["RP1", "RP13"])
+    assert [r["id"] for r in got] == ["correctness"] and "RP1, RP13" in got[0]["reason"]
+    assert reviewers(profile="direct", changed=small, small_change=True, patterns=[]) == []
+
+
+def test_only_specific_evidence_triggers_a_pattern():
+    from core.run_protocol.review import review_patterns
+    # a bare *.py glob fires on every Python file: not evidence about this change
+    assert review_patterns(["a.py"], "-value = 1\n+value = 2")["triggered"] == []
+    hit = review_patterns(["backend/core/a.py"], "+    subprocess.Popen(['git'])")
+    assert "RP1" in hit["triggered"] and hit["error"] is None
+    # every applying row is still listed for the reviewer, incl. the *.py ones
+    assert "| RP1 |" in hit["compact"]
+
+
+def test_a_broken_pattern_table_still_reviews(monkeypatch):
+    from core.run_protocol import review
+    monkeypatch.setattr(review, "_spawn_prompt", lambda: (_ for _ in ()).throw(OSError("gone")))
+    got = review.review_patterns(["backend/core/a.py"], "+x")
+    assert got["triggered"] == [] and "gone" in got["error"]
+    assert "could not select rows" in review.patterns_block(got)
