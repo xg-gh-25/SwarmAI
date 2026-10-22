@@ -189,7 +189,7 @@ export const toSessionCamelCase = (data: Record<string, unknown>): ChatSession =
 };
 
 // Transform message data from snake_case (backend) to camelCase (frontend)
-const toMessageCamelCase = (data: Record<string, unknown>): ChatMessage => {
+export const toMessageCamelCase = (data: Record<string, unknown>): ChatMessage => {
   return {
     id: data.id as string,
     sessionId: data.session_id as string,
