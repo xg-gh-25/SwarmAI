@@ -806,6 +806,35 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
         await self._report(row_id)
         return True
 
+    async def append_to_turn_row(self, session_id: str, client_id: str, blocks: list) -> bool:
+        """Append ``blocks`` to the newest row of a turn (``metadata.client_id``).
+        False when the turn has no row yet. One statement: durable at once."""
+        import json as _json
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                f"SELECT id, content FROM {self.table_name} WHERE session_id = ? AND role = 'assistant' "
+                f"AND json_valid(metadata) AND json_extract(metadata, '$.client_id') = ? "
+                f"ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (session_id, client_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row is None:
+                return False
+            row_id, raw = row
+            try:
+                existing = _json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                return False
+            if not isinstance(existing, list):
+                return False
+            await conn.execute(
+                f"UPDATE {self.table_name} SET content = ?, updated_at = ? WHERE id = ?",
+                (self._serialize_value(existing + list(blocks)), datetime.now().isoformat(), row_id),
+            )
+            await conn.commit()
+        await self._report(row_id)
+        return True
+
     async def update_question_answers(self, session_id: str, tool_use_id: str, answers: dict) -> bool:
         """Set ``answers`` on the stored ``ask_user_question`` block ``tool_use_id``
         (core/question_prompt). True when a row changed; an answered block stays."""

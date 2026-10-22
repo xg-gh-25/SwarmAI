@@ -179,3 +179,16 @@ async def test_a_stop_receipt_lands_after_the_result_already_shown():
     kinds = [b["type"] for r in await db.messages.list_by_session(sid, include_pending=True)
              for b in r["content"] if b["type"] in ("tool_result", "turn_stop")]
     assert kinds == ["tool_result", "turn_stop"]
+
+
+@pytest.mark.asyncio
+async def test_a_result_is_durable_before_the_next_event():
+    """SIGKILL-safe: a step's result is in the DB as soon as it is written, not
+    when the turn's next row (or its close) comes."""
+    sid, hold = "s-tw-durable", asyncio.Event()
+    task = asyncio.ensure_future(_turn(_router(), sid, _tool_then("hang", hold)))
+    await asyncio.wait_for(hold.wait(), 5)
+    assert await _results(sid) == ["toolu_w"]          # the turn is still running
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

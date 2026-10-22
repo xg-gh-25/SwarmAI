@@ -3575,6 +3575,15 @@ class SessionRouter:
             saw_terminal = False
             async for _evt in agen:
                 _t = _evt.get("type") if isinstance(_evt, dict) else None
+                if _t == "assistant" and seqs and _evt.get("content"):
+                    # The model is answering the drained messages: they were
+                    # delivered. Marked sent NOW (not at `result`): a row of the
+                    # answer is already in the record, and a crash before `result`
+                    # must neither hide the messages it answers nor send them again.
+                    await self._finalize_pending_delivery(
+                        session_id, seqs, delivered_ok=True, saw_error=None, unit=unit)
+                    seqs = []
+                    continue
                 if _t == "error":
                     saw_error = (_evt.get("code") or "error") if isinstance(_evt, dict) else "error"
                     # A permanent (non-retriable) error carries terminal=True — the
@@ -4620,7 +4629,15 @@ class SessionRouter:
                 # Only tracked when we actually claimed something this turn.
                 if _coalesced_pending_seqs:
                     _ev_t = event.get("type") if isinstance(event, dict) else None
-                    if _ev_t == "error":
+                    if _ev_t == "assistant" and _coalesce_saw_error is None and event.get("content"):
+                        # answered: delivered (see drain_pending)
+                        _seqs_now = _coalesced_pending_seqs
+                        _coalesced_pending_seqs = []
+                        await self._finalize_pending_delivery(
+                            session_id, _seqs_now, delivered_ok=True, saw_error=None,
+                            terminal=False, unit=unit,
+                        )
+                    elif _ev_t == "error":
                         _coalesce_saw_error = (
                             (event.get("code") or "error")
                             if isinstance(event, dict) else "error"

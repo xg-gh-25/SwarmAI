@@ -16,6 +16,9 @@ the REAL test database (conftest SQLite, real migrations):
   turn then ends without a result;
 - compaction: a real ``insert_compaction`` row between turns;
 - reload: the real ``routers.chat.get_session_messages``;
+- a hard crash (scenarios after the connection ones): a restart mid-turn whose
+  cancelled turn writes nothing more — what a SIGKILL leaves is what the turn had
+  written when it published its last event;
 - connection loss (scenarios ``N_SCENARIOS`` on): the window's subscription drops
   mid-turn and reconnects mid-turn or after the turn (``gap`` / ``gap_late``), with
   the real ``SessionEventHub.subscribe`` answering the client's cursor (a replay
@@ -37,6 +40,7 @@ changed and the fixture was not regenerated (``LIVE_RELOAD_UPDATE=1``).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import itertools
 import json
 import os
@@ -64,6 +68,9 @@ N_SCENARIOS = 40
 #: further scenarios with connection loss / daemon restarts (drawn after the first
 #: N_SCENARIOS, so those stay byte-identical)
 N_NET_SCENARIOS = 30
+#: then scenarios with a HARD crash (SIGKILL): like a restart mid-turn, but nothing
+#: of the dying process's clean-up reaches the DB (no finally block writes)
+N_CRASH_SCENARIOS = 10
 NET_KINDS = ("gap", "gap_late", "restart", "restart_idle")
 
 WORDS = ("checked the gate", "found two issues", "the test is red", "patched the parser",
@@ -142,6 +149,19 @@ def _scenario(rng: random.Random) -> list[dict]:
         if rng.random() < 0.15:
             turns.append({"kind": "compaction"})
     return turns
+
+
+def _crash(rng: random.Random, turns: list[dict]) -> int:
+    """One turn ends in a hard crash, right after a tool result when it has one."""
+    able = [i for i, t in enumerate(turns)
+            if t["kind"] in ("chat", "injected", "busy", "answer", "permission")
+            and not t.get("pause") and len(t["steps"]) >= 2]
+    if able:
+        i = rng.choice(able)
+        n = len(turns[i]["steps"])
+        after_tool = [k for k in range(1, n) if turns[i]["steps"][k - 1][-1]["type"] == "tool_result"]
+        turns[i]["net"] = {"kind": "crash", "at": rng.choice(after_tool or list(range(1, n))), "back": None}
+    return 10_000
 
 
 def _net(rng: random.Random, turns: list[dict]) -> int:
@@ -354,9 +374,11 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
         if not turned:
             step["ended"] = True
 
-    async def drive(coro, killed: asyncio.Event | None) -> None:
+    async def drive(coro, killed: asyncio.Event | None, hard: bool = False) -> None:
         """Run one turn; when ``killed`` fires the process ends: the turn's task is
-        cancelled as the server's shutdown cancels its requests."""
+        cancelled as the server's shutdown cancels its requests. ``hard`` (a
+        SIGKILL): the cancelled turn's clean-up writes nothing — every DB write and
+        publish made after the kill is dropped."""
         task = asyncio.ensure_future(coro)
         if killed is None:
             await task
@@ -366,10 +388,20 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
         waiter.cancel()
         if not task.done():
             task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        frozen = contextlib.ExitStack()
+        if hard:
+            from database import db as _db
+            async def nothing(*_a, **_k):
+                return None
+            for target, name in ((_db.messages, "put"), (_db.messages, "update"),
+                                 (_db.messages, "delete"), (_db, "update_send_request")):
+                frozen.enter_context(patch.object(target, name, nothing))
+            frozen.enter_context(patch.object(hub, "publish", lambda *a, **k: {}))
+        with frozen:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def restart(cursor: int, upto: float) -> None:
         """A new daemon: new hub (new epoch), new router and unit; the window
@@ -400,7 +432,7 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
         at: dict = {}
         killed: asyncio.Event | None = None
         cut = {"seq": 0, "kill": float("inf")}
-        if net and net["kind"] in ("gap", "gap_late", "restart"):
+        if net and net["kind"] in ("gap", "gap_late", "restart", "crash"):
             async def drop():
                 cut["seq"] = disconnect()
             at[frame(net["at"])] = drop
@@ -408,7 +440,7 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
             async def back():
                 await reconnect(cut["seq"])
             at[frame(net["back"])] = back
-        if net and net["kind"] == "restart":
+        if net and net["kind"] in ("restart", "crash"):
             killed = asyncio.Event()
 
             async def die(drop=at[frame(net["at"])]):
@@ -423,7 +455,7 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
 
         if kind == "chat":
             cid, text = f"local-{sid[-2:]}.{n}", f"user message {n}"
-            await drive(chat(cid, text, scripted(_frames(turn, n, sid, session_start=True))), killed)
+            await drive(chat(cid, text, scripted(_frames(turn, n, sid, session_start=True))), killed, hard=bool(net and net["kind"] == "crash"))
         elif kind == "stop":
             cid, text = f"local-{sid[-2:]}.{n}", f"user message {n}"
             receipt: list[dict] = []
@@ -446,14 +478,14 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
                 with patch.object(SessionUnit, "send", side_effect=scripted(frames, None)), \
                         patch.object(SessionUnit, "cli_quiescent", property(lambda _s: True)):
                     await router.drain_pending(sid)
-            await drive(drained(), killed)
+            await drive(drained(), killed, hard=bool(net and net["kind"] == "crash"))
         elif kind == "injected":
             if turn["bg"]:
                 unit.background_agents.launch(f"toolu_agent{n}", f"audit part {n}")
                 unit.background_agents.task_started(f"task{n}", f"toolu_agent{n}")
                 unit.background_agents.task_finished(f"task{n}", "completed", tool_use_id=f"toolu_agent{n}")
             unit._read_formatted_response = scripted(_frames(turn, n, sid, session_start=False))
-            await drive(router.run_injected_turn(unit, object()), killed)
+            await drive(router.run_injected_turn(unit, object()), killed, hard=bool(net and net["kind"] == "crash"))
         elif kind == "answer":
             answers = {"Which one?": "A"}
             steps.append({"kind": "answer", "toolUseId": pending_q["toolUseId"], "answers": answers})
@@ -463,7 +495,7 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
             async def answered(tid=pending_q["toolUseId"]):
                 async for _ in router.continue_with_answer(sid, json.dumps(answers), tool_use_id=tid):
                     pass
-            await drive(answered(), killed)
+            await drive(answered(), killed, hard=bool(net and net["kind"] == "crash"))
             pending_q = None
         elif kind == "permission":
             rid = pending_p["requestId"]
@@ -486,12 +518,12 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
             async def decided(rid=rid, ok=turn["decision"] == "approve"):
                 async for _ in router.continue_with_cmd_permission(sid, rid, ok):
                     pass
-            await drive(decided(), killed)
+            await drive(decided(), killed, hard=bool(net and net["kind"] == "crash"))
             pending_p = None
         elif kind == "compaction":
             from core.compact_summary import build_record
             await db.insert_compaction(sid, build_record({"trigger": "auto"}, f"summary after {n - 1} turns"))
-        if net and net["kind"] == "restart":
+        if net and net["kind"] in ("restart", "crash"):
             await restart(cut["seq"], cut["kill"])
         elif kind != "stop":
             if net and net["kind"] == "gap_late":
@@ -512,9 +544,10 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
 async def _generate() -> dict:
     rng = random.Random(SEED)
     out = []
-    for i in range(N_SCENARIOS + N_NET_SCENARIOS):
+    for i in range(N_SCENARIOS + N_NET_SCENARIOS + N_CRASH_SCENARIOS):
         turns = _scenario(rng)
-        buffer = _net(rng, turns) if i >= N_SCENARIOS else 10_000
+        buffer = (_crash(rng, turns) if i >= N_SCENARIOS + N_NET_SCENARIOS
+                  else _net(rng, turns) if i >= N_SCENARIOS else 10_000)
         sid = f"sess-lr-{i:02d}"
         ids, clock = _Ids(i), _Clock()
         hub = session_events.SessionEventHub(buffer_size=buffer, queue_size=10_000)
@@ -548,7 +581,7 @@ async def test_fixture_is_current():
     assert hash(current) == hash(text), (
         "backend behaviour changed: regenerate with LIVE_RELOAD_UPDATE=1 and rerun "
         "desktop liveReload.property.test.ts")
-    assert len(data["scenarios"]) == N_SCENARIOS + N_NET_SCENARIOS
+    assert len(data["scenarios"]) == N_SCENARIOS + N_NET_SCENARIOS + N_CRASH_SCENARIOS
     assert all(s["history"] for s in data["scenarios"])
     # every connection case is in the fixture (a seed change must not drop one)
     cases = set()

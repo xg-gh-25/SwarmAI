@@ -9,8 +9,11 @@ continue_with_cmd_permission, run_injected_turn) gets ONE ``TurnWriter``:
   assistant rows, step results, the permission prompt, the turn's products) and
   returns the events to deliver before it. A write failure is logged and never
   stops the turn (the event still goes out; the DB layer logs the lost row).
-- ``close()``: writes what the turn still holds — step results waiting to ride
-  the next assistant row. ``SessionRouter._published_turn`` calls it in its
+- A step's results are written as they arrive (appended to the turn's newest
+  row, the one with their tool calls): a process killed right after a result
+  loses nothing it showed.
+- ``close()``: writes what the turn still holds (results whose immediate write
+  failed). ``SessionRouter._published_turn`` calls it in its
   ``finally``, before ``turn_end`` is published, however the turn ends (result,
   Stop, error, abort, cancellation at shutdown), so a tab that reloads on
   ``turn_end`` finds every block it was shown. Idempotent.
@@ -88,16 +91,33 @@ class TurnWriter:
         async with self._lock:
             token = TRANSCRIPT_FEED_SUPPRESSED.set(True)   # the turn's events carry these rows
             try:
-                return await self._router._persist_stream_event(
+                out = await self._router._persist_stream_event(
                     self._session_id, event, self._held, label=self._label,
                     client_id=self._row_key, files=files, changes=changes,
                 ) or []
+                if event.get("type") == "tool_result" and self._held:
+                    # durable now, not with the next row: a process killed between
+                    # a step's result and the model's next message (SIGKILL, no
+                    # finally) must not lose a result the user was shown
+                    await self._write_results_now()
+                return out
             except Exception as exc:  # noqa: BLE001 — persistence never wedges the turn
                 logger.error("turn_writer.write_failed session_id=%s type=%s: %s",
                              self._session_id, event.get("type"), exc)
                 return []
             finally:
                 TRANSCRIPT_FEED_SUPPRESSED.reset(token)
+
+    async def _write_results_now(self) -> None:
+        """The held step results onto the turn's newest row (the one holding their
+        tool calls), else a row of their own."""
+        held, self._held = list(self._held), []
+        from database import db
+        if self._row_key and await db.messages.append_to_turn_row(self._session_id, self._row_key, held):
+            return
+        await self._router._persist_assistant_blocks(
+            self._session_id, held, None,
+            label=f"{self._label or 'turn'}-results", client_id=self._row_key)
 
     async def flush(self) -> None:
         """Write the step results held now; the turn goes on."""
