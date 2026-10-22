@@ -223,6 +223,35 @@ describe('session turn wiring', () => {
     expect(testTabMap.get('t8')!.queuedMessage).toBeTruthy();
   });
 
+  it('a session state pushed on the subscription clears a stale spinner at once (S3), no poll', async () => {
+    vi.useFakeTimers();
+    try {
+      const reads = vi.spyOn(chatService, 'getStreamingState').mockResolvedValue({
+        S: { streaming: true, state: 'streaming', waitingInput: false, pendingCount: 0,
+          pendingQuestion: null, pendingPermission: null, lastDrainedSeqs: [] },
+      } as never);
+      const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+      act(() => { initTestTab('p1'); result.current.setIsStreaming(true, 'p1'); });
+      testTabMap.get('p1')!.sessionId = 'S';
+      testTabMap.get('p1')!._reconcileStreamStart = Date.now() - 60_000;
+      messageStoreRegistry.getOrCreate('p1', { sessionId: 'S' });   // its store is idle: the turn is over here
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_100); });   // the first full read
+      const polled = reads.mock.calls.length;
+      expect(testTabMap.get('p1')!.isStreaming).toBe(true);
+      await act(async () => {
+        fake.emit({ type: 'session_state', sessionId: 'S', turnId: '', eventSeq: 9,
+          state: { streaming: false, state: 'idle', waiting_input: false, pending_count: 0,
+            pending_question: null, last_drained_seqs: [] } });
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(reads.mock.calls.length).toBe(polled);          // no extra read
+      expect(testTabMap.get('p1')!.isStreaming).toBe(false);
+      reads.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a CLI-initiated turn after an assistant message continues that bubble, as the reloaded history does', () => {
     renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => { initTestTab('h1'); });

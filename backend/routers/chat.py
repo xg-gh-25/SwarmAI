@@ -826,14 +826,7 @@ async def get_admission_state_endpoint():
     }
 
 
-def _bg_snapshot(unit) -> list:
-    from core.background_agents import BackgroundAgents
-    reg = getattr(unit, "background_agents", None)
-    try:
-        return reg.snapshot() if isinstance(reg, BackgroundAgents) else []
-    except Exception as exc:  # noqa: BLE001 — a display aid
-        logger.debug("streaming-state: background agents snapshot failed: %s", exc)
-        return []
+from core.session_state import session_state_entry, bg_snapshot as _bg_snapshot  # noqa: E402,F401
 
 
 @router.get("/sessions/streaming-state")
@@ -858,68 +851,7 @@ async def get_streaming_state_endpoint():
     for unit in sr.list_units():
         if not unit.session_id or unit.session_id.startswith(PREWARM_SESSION_PREFIX):
             continue
-        # streaming is simply state==STREAMING; a client disconnect does not
-        # change the unit's state (the turn runs to its own end).
-        is_streaming = unit.state.value == "streaming"
-        # Root-1 SSOT Phase 2 (L5): the frontend mirror reads these directly
-        # instead of inferring. waiting_input surfaces a (possibly SSE-lost)
-        # AskUserQuestion; pending_count drives the "queued" badge; pending_question
-        # lets the FE RE-RENDER the question from authoritative state even when the
-        # original ask_user_question SSE event was dropped (F5).
-        try:
-            from core import session_pending
-            pending_count = await session_pending.count_pending(unit.session_id)
-        except Exception:
-            pending_count = 0
-
-        # The unit's surfaced prompt (WAITING_INPUT), else the oldest open prompt
-        # on the session's board -- the same source the session's stream reads,
-        # so the tab and the stream can never disagree about what is open.
-        pending_question = (
-            getattr(unit, "_pending_question", None)
-            if unit.state.value == "waiting_input" else None
-        )
-        if pending_question is None:
-            try:
-                from core.permission_manager import permission_manager as _pm
-                for item in _pm.open_prompts(unit.session_id):
-                    if item.get("kind") == "ask_user_question":
-                        pending_question = {
-                            "tool_use_id": item.get("tool_use_id"),
-                            "questions": item.get("questions", []),
-                        }
-                    else:
-                        pending_question = {
-                            "tool_use_id": item.get("requestId"),
-                            "request_id": item.get("requestId"),
-                            "tool_call_id": item.get("toolUseId"),
-                            "tool_name": item.get("toolName", "Bash"),
-                            "tool_input": item.get("toolInput", {}),
-                            "reason": item.get("reason", ""),
-                            "options": item.get("options", ["approve", "deny"]),
-                        }
-                    break
-            except Exception:
-                pending_question = None
-
-        result[unit.session_id] = {
-            "streaming": is_streaming,
-            "state": unit.state.value,
-            # pid = the owned Claude subprocess pid (unit.pid → _wrapper.pid),
-            # None when no live subprocess. The session-health-probe's wedged
-            # check needs it to sample tree CPU; a None pid → probe skips the
-            # session (fail-safe). Additive field — frontend ignores unknowns.
-            "pid": unit.pid,
-            # waiting_input must also reflect a re-surfaced durable request, else
-            # the frontend won't render the prompt it was just handed.
-            "waiting_input": unit.state.value == "waiting_input" or pending_question is not None,
-            "pending_count": pending_count,
-            "pending_question": pending_question,
-            "last_drained_seqs": getattr(unit, "_last_drained_seqs", []),
-            # Background agents (core/background_agents.py) of this daemon run: the
-            # live status is also pushed as `background_agents` envelopes on /events.
-            "background_agents": _bg_snapshot(unit),
-        }
+        result[unit.session_id] = await session_state_entry(unit)
     return {"sessions": result}
 
 

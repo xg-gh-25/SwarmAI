@@ -3268,6 +3268,11 @@ class SessionRouter:
             if new_state in (SessionState.IDLE, SessionState.COLD, SessionState.DEAD):
                 self._slot_available.set()
 
+        # The session's state, pushed to its tabs as it changes (core/session_state).
+        if not session_id.startswith(PREWARM_SESSION_PREFIX):
+            from . import session_state
+            session_state.publish(self, session_id)
+
         # H2 single-sink desktop-pool cleanup (方案A, run_f107f442): EVERY kill
         # path (evict / TTL / orphan / crash / poison / shutdown) funnels through
         # _transition(DEAD) → here. Keyed on the `prewarm-` PREFIX (no is_prewarm

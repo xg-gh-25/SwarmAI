@@ -51,6 +51,7 @@ import type {
   SystemPromptMetadata,
   CompactionGuardEvent,
   PendingPermission,
+  StreamingStateEntry,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import { applyCompactionEvent } from '../pages/chat/compaction';
@@ -997,6 +998,9 @@ export interface ChatStreamingLifecycleDeps {
 // Hook implementation
 // ---------------------------------------------------------------------------
 
+/** The reconcile loop's entry point for a pushed session state (set by its effect). */
+const pushedStateRef: { current?: (sid: string, entry: StreamingStateEntry) => void } = {};
+
 /** Rows each store has applied from the transcript feed, with their rev. */
 const feedApplied = new WeakMap<object, Map<string, number>>();
 
@@ -1176,12 +1180,16 @@ export function useChatStreamingLifecycle(
     let timer: ReturnType<typeof setTimeout> | null = null;
     let nextTick: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
+    // The last full read; a pushed `session_state` (backend core/session_state,
+    // the same producer) replaces its session's entry and runs the verdicts now.
+    let lastStates: Record<string, StreamingStateEntry> | null = null;
 
-    const reconcile = async () => {
+    const reconcile = async (pushed?: Record<string, StreamingStateEntry>) => {
       if (cancelled) return;
       try {
-        const states = await chatService.getStreamingState();
+        const states = pushed && lastStates ? { ...lastStates, ...pushed } : await chatService.getStreamingState();
         if (cancelled) return;
+        lastStates = states;
 
         let anyCleared = false;
         // The subscription keeps cursors for the sessions shown in tabs; a newly
@@ -1711,9 +1719,16 @@ export function useChatStreamingLifecycle(
       if (cancelled) return;
       void runReconcile();
     }, RECONCILE_DELAY_MS);
+    // A state change pushed on the subscription: the same verdicts, now (before
+    // the first full read there is nothing to merge it into: that read is soon).
+    pushedStateRef.current = (sid, entry) => {
+      if (cancelled || !lastStates) return;
+      void reconcile({ [sid]: entry });
+    };
 
     return () => {
       cancelled = true;
+      pushedStateRef.current = undefined;
       if (timer) clearTimeout(timer);
       if (nextTick) clearTimeout(nextTick);
     };
@@ -4818,6 +4833,13 @@ export function useChatStreamingLifecycle(
       if (ev.type === 'background_agents') {
         // a background agent changed status: not a turn event (stores/backgroundAgentsStore)
         backgroundAgentsStore.apply(sid, (ev as { agents?: unknown }).agents);
+        return;
+      }
+      if (ev.type === 'session_state') {
+        const raw = (ev as { state?: unknown }).state;
+        if (raw && typeof raw === 'object') {
+          pushedStateRef.current?.(sid, chatService.toStreamingStateEntry(raw as never));
+        }
         return;
       }
       if (ev.type === 'transcript_row' || ev.type === 'transcript_delete') {

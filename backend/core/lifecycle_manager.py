@@ -1129,6 +1129,11 @@ class LifecycleManager:
         - session_events hub replay buffer          (up to 4000 envelopes)
         """
         try:
+            from core import session_state as _ss
+            _ss.forget(session_id)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             from . import session_registry
             session_registry.system_prompt_metadata.pop(session_id, None)
             session_registry.recall_snapshot.pop(session_id, None)

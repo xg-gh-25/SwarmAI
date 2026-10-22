@@ -176,3 +176,26 @@ def test_history_merge_ends_a_bubble_at_a_compaction_between_turns():
     assert [m["id"] for m in merge(rows, ["3"])] == ["u", "a1"]            # inside one turn: one bubble
     assert [m["id"] for m in merge(rows, ["5"])] == ["u", "a1", "i1"]      # a1+a2, then i1 after the divider
     assert [m["id"] for m in merge(rows, [])] == ["u", "a1"]               # no divider: one bubble
+
+
+@pytest.mark.asyncio
+async def test_a_state_change_pushes_the_session_state(hub):
+    """S3: a unit's state change is published as `session_state` (outside any
+    turn), built by the same producer the streaming-state endpoint uses."""
+    import asyncio
+    from core.session_state import session_state_entry
+    sid = "s-state-1"
+    r = _router()
+    unit = r.get_or_create_unit(sid, "default")
+    unit._client = object()
+    unit._transition(SessionState.IDLE)
+    unit._transition(SessionState.STREAMING)
+    for _ in range(100):                        # the push reads the DB off the loop
+        await asyncio.sleep(0.01)
+        log = hub._logs.get(sid)
+        if log and sum(e["type"] == "session_state" for e in log.buf) >= 2:
+            break
+    states = [e for e in hub._logs[sid].buf if e["type"] == "session_state"]
+    assert states and states[-1]["turnId"] == ""
+    assert states[-1]["state"] == await session_state_entry(unit)
+    assert states[-1]["state"]["streaming"] is True

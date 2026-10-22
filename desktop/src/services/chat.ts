@@ -540,6 +540,30 @@ function startSSEFetch(opts: {
   return () => { clearStallTimer(); controller.abort(); };
 }
 
+/** A session state entry, snake_case wire → StreamingStateEntry. */
+function toStreamingStateEntry(raw: RawStreamingStateEntry): StreamingStateEntry {
+  const rawPq = raw.pending_question;
+  // Only an AskUserQuestion payload (non-empty `questions`) is a question: a
+  // command-permission prompt also sets pending_question but has its own path.
+  const isAskUserQuestion =
+    !!rawPq && Array.isArray(rawPq.questions) && rawPq.questions.length > 0;
+  return {
+    streaming: raw.streaming ?? false,
+    state: raw.state ?? 'idle',
+    waitingInput: raw.waiting_input ?? false,
+    pendingCount: raw.pending_count ?? 0,
+    pendingQuestion: isAskUserQuestion
+      ? { toolUseId: rawPq!.tool_use_id, questions: rawPq!.questions! }
+      : null,
+    // A command-permission prompt (request_id, no questions): its own
+    // re-surface path (useChatStreamingLifecycle mirror, core/permission_prompt).
+    pendingPermission: rawPq && !isAskUserQuestion && rawPq.request_id
+      ? toPendingPermission(rawPq)
+      : null,
+    lastDrainedSeqs: raw.last_drained_seqs ?? [],
+  };
+}
+
 export const chatService = {
   // Stream chat messages using SSE
   streamChat(
@@ -624,31 +648,16 @@ export const chatService = {
     const bg: Record<string, unknown> = {};
     for (const [sid, raw] of Object.entries(response.data.sessions ?? {})) {
       bg[sid] = raw.background_agents ?? [];
-      const rawPq = raw.pending_question;
-      // Only map an AskUserQuestion payload (non-empty `questions`). A
-      // command-permission prompt also sets pending_question on WAITING_INPUT but
-      // carries NO questions — it must map to null here so the mirror's AC5
-      // re-surface never mistakes it for a question (it has its own render path).
-      const isAskUserQuestion =
-        !!rawPq && Array.isArray(rawPq.questions) && rawPq.questions.length > 0;
-      out[sid] = {
-        streaming: raw.streaming ?? false,
-        state: raw.state ?? 'idle',
-        waitingInput: raw.waiting_input ?? false,
-        pendingCount: raw.pending_count ?? 0,
-        pendingQuestion: isAskUserQuestion
-          ? { toolUseId: rawPq!.tool_use_id, questions: rawPq!.questions! }
-          : null,
-        // A command-permission prompt (request_id, no questions): its own
-        // re-surface path (useChatStreamingLifecycle mirror, core/permission_prompt).
-        pendingPermission: rawPq && !isAskUserQuestion && rawPq.request_id
-          ? toPendingPermission(rawPq)
-          : null,
-        lastDrainedSeqs: raw.last_drained_seqs ?? [],
-      };
+      out[sid] = toStreamingStateEntry(raw);
     }
     backgroundAgentsStore.applySnapshot(bg);
     return out;
+  },
+
+  /** One session's state as the poll and the subscription's `session_state`
+   *  envelope carry it (backend core/session_state, one producer). */
+  toStreamingStateEntry(raw: RawStreamingStateEntry): StreamingStateEntry {
+    return toStreamingStateEntry(raw);
   },
 
   // Get a specific session
@@ -656,6 +665,7 @@ export const chatService = {
     const response = await api.get<Record<string, unknown>>(`/chat/sessions/${sessionId}`);
     return toSessionCamelCase(response.data);
   },
+
 
   // ── Per-session ETag cache for message endpoint ──
   // Messages are append-only → ETag "session:count" changes only on new

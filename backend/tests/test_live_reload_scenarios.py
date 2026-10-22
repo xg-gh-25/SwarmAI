@@ -558,7 +558,10 @@ async def _generate() -> dict:
                 patch("core.session_router.datetime", stamp), \
                 patch("core.compact_summary.datetime", stamp), \
                 patch("core.turn_stop.datetime", SimpleNamespace(now=lambda tz=None: clock.now())), \
-                patch("core.background_agents._now_ms", lambda: int(clock.t.timestamp() * 1000)):
+                patch("core.background_agents._now_ms", lambda: int(clock.t.timestamp() * 1000)), \
+                patch("core.session_state.publish", lambda *_a, **_k: None):
+            # (session_state pushes are tested on their own, test_transcript_feed:
+            # they are scheduled tasks, and the transcript is what this compares)
             steps, router = await _run(turns, sid, hub)
             history = await _history(router, sid)
         out.append({"name": f"s{i:02d}", "sid": sid,
