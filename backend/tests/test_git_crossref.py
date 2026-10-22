@@ -122,18 +122,75 @@ class TestGitSnapshotCapture:
         commits = _get_session_git_commits(tmp_path, since)
         assert commits == []
 
-    def test_session_files_keep_only_this_sessions_commits(self, git_repo: Path):
-        """Other sessions commit to the same repo: only commits that changed a
-        file this session wrote are its own. Worktree paths match by suffix."""
+    def test_attribution_by_run_sha_run_id_and_own_git_calls(self, git_repo: Path):
+        """Other sessions commit to the same repo. A commit is this session's
+        only on evidence: a run it owns landed it (SHA, or run id in the
+        message), or it was made inside one of its own git-writing calls."""
         from hooks.daily_activity_hook import _get_session_git_commits
 
         since = datetime.now() - timedelta(hours=1)
-        mine = _get_session_git_commits(
-            git_repo, since, session_files=["/scratch/wt-x/signal_fetcher.py"])
-        assert len(mine) == 1 and "signal fetcher" in mine[0]
-        assert _get_session_git_commits(git_repo, since, session_files=[]) == []
+        log = subprocess.run(["git", "log", "--format=%H %ct %s"], cwd=git_repo,
+                             capture_output=True, text=True, check=True).stdout.splitlines()
+        (sha2, ct2, _), (sha1, ct1, _) = (ln.split(" ", 2) for ln in log[:2])
+        ct1, ct2 = int(ct1), int(ct2)
+
+        # a landed SHA
+        got = _get_session_git_commits(git_repo, since, session_shas={sha1}, call_windows=[])
+        assert len(got) == 1 and "proactive intelligence" in got[0]
+        # a git-writing call whose window covers the commit
+        got = _get_session_git_commits(git_repo, since, call_windows=[(ct2 - 1, ct2 + 1, True)])
+        assert any("signal fetcher" in g for g in got)
         assert _get_session_git_commits(
-            git_repo, since, session_files=["/elsewhere/other_fetcher.py"]) == []
+            git_repo, since, call_windows=[(ct2 + 1000, ct2 + 1010, True)]) == []
+        # a read-only call at the same second is not evidence
+        assert _get_session_git_commits(
+            git_repo, since, call_windows=[(ct2 - 1, ct2 + 1, False)]) == []
+        # touched files are not evidence once the transcript is known
+        assert _get_session_git_commits(
+            git_repo, since, session_files=[str(git_repo / "signal_fetcher.py")],
+            call_windows=[]) == []
+        # a run id named in the message
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "land it",
+                        "-m", "(auto local-commit, run run_abcdef12)"],
+                       cwd=git_repo, capture_output=True, check=True)
+        got = _get_session_git_commits(git_repo, since, session_run_ids={"run_abcdef12"},
+                                       call_windows=[])
+        assert len(got) == 1 and "land it" in got[0]
+        assert _get_session_git_commits(git_repo, since, session_run_ids={"run_00000000"},
+                                        call_windows=[]) == []
+
+    def test_file_fallback_without_transcript(self, git_repo: Path):
+        """No transcript: touched files decide, absolute paths only, and a
+        top-level file must be in the repo itself (README.md is everywhere)."""
+        from hooks.daily_activity_hook import _get_session_git_commits
+
+        since = datetime.now() - timedelta(hours=1)
+        assert _get_session_git_commits(
+            git_repo, since, session_files=[str(git_repo / "signal_fetcher.py")])
+        for other in (["/elsewhere/signal_fetcher.py"], ["signal_fetcher.py"], []):
+            assert _get_session_git_commits(git_repo, since, session_files=other) == [], other
+
+    def test_bash_call_windows_from_transcript(self):
+        from hooks.daily_activity_hook import _bash_call_windows
+
+        msgs = [
+            {"created_at": "2026-10-22T10:00:00", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "category": "bash",
+                 "summary": "Running: cd wt && git -C /r commit -q -m x"}]},
+            {"created_at": "2026-10-22T10:00:05", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "outcome": ""}]},
+            {"created_at": "2026-10-22T10:01:00", "content": [
+                {"type": "tool_use", "id": "t2", "name": "Bash", "category": "bash",
+                 "summary": "Running: git log --oneline | grep commit"}]},
+        ]
+        (a1, b1, g1), (a2, b2, g2) = _bash_call_windows(msgs)
+        assert b1 - a1 == 5 and g1 is True
+        assert a2 == b2 and g2 is False
+
+    def test_subject_is_safe_markdown(self):
+        from hooks.daily_activity_hook import _clean_subject
+        assert _clean_subject("fix `x`\tthing") == "fix 'x' thing"
+        assert len(_clean_subject("y" * 500)) == 120
 
     def test_format_entry_includes_git_section(self):
         """Formatted DailyActivity entry should include **Git activity:** section

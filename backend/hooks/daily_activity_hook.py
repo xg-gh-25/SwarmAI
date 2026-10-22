@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -29,23 +30,94 @@ from jobs.paths import STATE_DIR, SWARMWS
 logger = logging.getLogger(__name__)
 
 
-def _touches_session_file(commit_files: list[str], session_files: list[str]) -> bool:
+_SUBJECT_MAX = 120
+
+
+def _clean_subject(subject: str) -> str:
+    """A commit subject safe to put inside a markdown code span on one line."""
+    subject = " ".join(subject.replace("`", "'").split())
+    return subject if len(subject) <= _SUBJECT_MAX else subject[:_SUBJECT_MAX - 1] + "…"
+
+
+def _touches_session_file(commit_files: list[str], session_files: list[str],
+                          repo_path: Path | None = None) -> bool:
     """True when a commit changed a file this session wrote.
 
-    Commit paths are repo-relative (``backend/core/x.py``); session paths are
-    whatever the write tool saw -- often absolute, and often inside a worktree of
-    the same repo (``.../wt-topic/backend/core/x.py``). A suffix match on whole
-    path components covers both.
+    Commit paths are repo-relative (``backend/core/x.py``). Session paths count
+    only when absolute: a relative Bash target (``> out.txt``) has no known
+    directory, so it cannot be tied to a repo. An absolute path matches when it
+    ends with the commit path on a component boundary -- which also covers a
+    worktree of the repo (``.../wt-topic/backend/core/x.py``). A commit path with
+    no directory (``README.md``, ``VERSION``) is too common to match by suffix,
+    so for it the session path must lie in ``repo_path`` itself.
     """
+    root = str(repo_path).rstrip("/") + "/" if repo_path else None
+    abs_files = [sf.strip() for sf in session_files if sf and sf.strip().startswith("/")]
     for cf in commit_files:
-        cf = cf.strip().lstrip("./")
+        cf = cf.strip()
+        if cf.startswith("./"):
+            cf = cf[2:]
         if not cf:
             continue
-        for sf in session_files:
-            sf = sf.strip()
-            if sf == cf or sf.endswith("/" + cf):
+        top_level = "/" not in cf
+        for sf in abs_files:
+            if top_level:
+                if root and sf == root + cf:
+                    return True
+            elif sf.endswith("/" + cf):
                 return True
     return False
+
+
+# A command that writes commits: a git write subcommand (options like -C/-c
+# allowed in between), or a pipeline landing. `git log | grep commit` is not one.
+_GIT_WRITE_RE = re.compile(
+    r"\bgit(?:\s+-[Cc]\s+\S+)*\s+(?:commit|merge|rebase|cherry-pick|revert|am|pull)\b"
+    r"|\bpipeline_v1\.py\b.*\bland\b"
+    r"|\bartifact_cli\.py\b.*\b(?:land|deliver|run-commit|stage-complete)\b")
+_RUN_ID_RE = re.compile(r"\brun_[0-9a-f]{8}\b")
+_SLACK_S = 3.0  # seconds of clock slack around a tool call
+
+
+def _parse_ts(value: str) -> float | None:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def _bash_call_windows(messages: list[dict]) -> "list[tuple[float, float, bool]]":
+    """(start, end, writes_git) for each Bash call in the transcript.
+
+    start = when the tool_use was persisted, end = when its tool_result was;
+    writes_git = the command text names a git write (commit/merge/rebase/...)
+    or a pipeline landing. A commit whose committer time falls inside such a
+    window was made by this session's own command.
+    """
+    import json as _json
+
+    calls: dict[str, list] = {}
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            try:
+                content = _json.loads(content)
+            except ValueError:
+                continue
+        if not isinstance(content, list):
+            continue
+        ts = _parse_ts(m.get("created_at"))
+        if ts is None:
+            continue
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_use" and (b.get("category") == "bash" or b.get("name") == "Bash"):
+                text = str(b.get("summary") or (b.get("input") or {}).get("command") or "")
+                calls[str(b.get("id"))] = [ts, ts, bool(_GIT_WRITE_RE.search(text))]
+            elif b.get("type") == "tool_result" and str(b.get("tool_use_id")) in calls:
+                calls[str(b.get("tool_use_id"))][1] = ts
+    return [tuple(v) for v in calls.values()]
 
 
 def _get_session_git_commits(
@@ -53,6 +125,9 @@ def _get_session_git_commits(
     since: datetime,
     max_commits: int = 15,
     session_files: list[str] | None = None,
+    session_shas: "set[str] | None" = None,
+    call_windows: "list[tuple[float, float, bool]] | None" = None,
+    session_run_ids: "set[str] | None" = None,
 ) -> list[str]:
     """Get git commits from a repo since a given time.
 
@@ -65,10 +140,17 @@ def _get_session_git_commits(
             return empty).
         since: Only include commits after this timestamp.
         max_commits: Maximum number of commits to return.
-        session_files: When given, keep only commits that changed one of these
-            files. Without it every commit in the window is returned, which in a
-            repo several sessions commit to attributes other sessions' work to
-            this one (the DailyActivity "Git activity" leak).
+        session_files / session_shas / session_run_ids / call_windows: when
+            any is given, attribution mode. A commit is this session's when
+            (a) a pipeline run of the session landed it (its SHA is in
+            ``session_shas``, or its message names a run in
+            ``session_run_ids``), or (b) its committer time falls inside one
+            of the session's own git-writing Bash calls. Changed files are
+            NOT evidence when the transcript is known: concurrent sessions edit
+            the same hot files in the same minutes (measured: that rule
+            attributed another session's run commit). Without call windows (no
+            transcript) it falls back to (a) plus touched files. Without any of
+            them every commit in the window is returned -- the old leak.
     """
     if not repo_path.is_dir():
         return []
@@ -80,16 +162,24 @@ def _get_session_git_commits(
         return []
 
     since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
-    if session_files is not None and not session_files:
-        return []  # the session wrote nothing, so no commit is its own
+    attributing = (session_files is not None or session_shas is not None
+                   or call_windows is not None or session_run_ids is not None)
+    files = list(session_files or [])
+    shas = set(session_shas or ())
+    run_ids = set(session_run_ids or ())
+    windows = [w for w in (call_windows or []) if w[2]]
+    if attributing and not shas and not run_ids and not windows \
+            and not (files and call_windows is None):
+        return []  # no evidence that this session made any commit
     try:
-        if session_files is None:
+        if not attributing:
             cmd = ["git", "log", f"--since={since_str}", f"--max-count={max_commits}",
                    "--oneline", "--no-decorate"]
         else:
-            # Scan a wider window, then keep only commits touching session files.
+            # Bounded scan (300 commits, ~0.1-0.3 s here), then attribute.
             cmd = ["git", "log", f"--since={since_str}", "--max-count=300",
-                   "--no-decorate", "--name-only", "--format=\x1e%h %s"]
+                   "--no-decorate", "--no-merges", "--name-only",
+                   "--format=\x1e%H %h %ct %s\x1f%b\x1f"]
         result = subprocess.run(
             cmd,
             cwd=str(repo_path),
@@ -99,21 +189,67 @@ def _get_session_git_commits(
         )
         if result.returncode != 0:
             return []
-        if session_files is None:
+        if not attributing:
             return [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
         out: list[str] = []
         for rec in result.stdout.split("\x1e"):
-            lines = [ln for ln in rec.splitlines() if ln.strip()]
-            if not lines:
+            parts = rec.split("\x1f")
+            if len(parts) < 3:
                 continue
-            if _touches_session_file(lines[1:], session_files):
-                out.append(lines[0].strip())
+            head = parts[0].strip().split(" ", 3)
+            if len(head) < 3 or not head[2].isdigit():
+                continue
+            full, short, ct = head[0], head[1], int(head[2])
+            subject = head[3] if len(head) > 3 else ""
+            names_run = bool(run_ids) and bool(set(_RUN_ID_RE.findall(parts[0] + parts[1])) & run_ids)
+            mine = full in shas or names_run
+            if not mine and windows:
+                mine = any(a - _SLACK_S <= ct <= b + _SLACK_S for (a, b, _g) in windows)
+            if not mine and call_windows is None:
+                changed = [ln for ln in parts[2].splitlines() if ln.strip()]
+                mine = _touches_session_file(changed, files, repo_path)
+            if mine:
+                out.append(f"{short} {_clean_subject(subject)}")
                 if len(out) >= max_commits:
                     break
         return out
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         logger.debug("Git log failed for %s: %s", repo_path, exc)
         return []
+
+
+def _session_run_evidence(session_id: str) -> "tuple[set[str], list[str], set[str]]":
+    """(landed SHAs, touched files, run ids) of the pipeline runs this session owns.
+
+    A run's edits are made by its own agents, not by tool calls in this
+    session's transcript, so without this a session that drove a run gets none
+    of the run's commits. v1 runs record ``commits[].sha`` in run.json; legacy
+    runs record ``files_touched`` and name the run id in the landing commit
+    message. Both carry ``session_id``. Reads the shared
+    incremental run index (one stat per run, parse only on change).
+    """
+    shas: set[str] = set()
+    files: list[str] = []
+    ids: set[str] = set()
+    if not session_id:
+        return shas, files, ids
+    try:
+        from core.run_index import runs
+        for rf in runs(SWARMWS):
+            data = rf.data
+            if data.get("session_id") != session_id:
+                continue
+            if isinstance(data.get("id"), str):
+                ids.add(data["id"])
+            for c in data.get("commits") or []:
+                if isinstance(c, dict) and isinstance(c.get("sha"), str) and len(c["sha"]) == 40:
+                    shas.add(c["sha"])
+            for f in data.get("files_touched") or []:
+                if isinstance(f, str):
+                    files.append(f)
+    except Exception:  # noqa: BLE001 -- evidence is best-effort, never blocks DA
+        logger.debug("run evidence lookup failed for %s", session_id, exc_info=True)
+    return shas, files, ids
 
 
 def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
@@ -249,9 +385,14 @@ class DailyActivityExtractionHook:
 
         # 2b. Capture git ground truth — actual commits during session
         # This prevents COE C005: DailyActivity text claims vs git reality diverging.
+        # Window = the conversation being summarized (a resumed session's
+        # created_at can be days old; other sessions' commits fill that span).
+        _stamps = [m.get("created_at") for m in messages if m.get("created_at")]
+        _window_start = min(_stamps) if _stamps else context.session_start_time
         summary.git_commits = await executors.run_in(
-            "subprocess", self._capture_git_activity, context.session_start_time,
-            list(summary.files_modified or []),
+            "subprocess", self._capture_git_activity, _window_start,
+            list(summary.files_modified or []), context.session_id,
+            _bash_call_windows(messages),
         )
 
         # 2c. Quality filter — skip noise entries that add no insight
@@ -368,14 +509,19 @@ class DailyActivityExtractionHook:
 
     @staticmethod
     def _capture_git_activity(session_start_iso: str,
-                              session_files: list[str] | None = None) -> list[str]:
-        """Capture this session's git commits from source repos.
+                              session_files: list[str] | None = None,
+                              session_id: str = "",
+                              call_windows: "list[tuple[float, float, bool]] | None" = None,
+                              ) -> list[str]:
+        """Capture this session's own git commits from source repos.
 
         Scans ALL projects' TECH.md for repo paths — no hardcoded paths.
-        With ``session_files`` only commits that changed a file the session
-        wrote count (other sessions commit to the same repos). Returns commits
-        from the first repo that has any. Empty list on any failure.
+        Attribution (other sessions commit to the same repos): see
+        ``_get_session_git_commits``. Commits from every distinct repo, at
+        most 15. Empty list on any failure.
         """
+        run_shas, run_files, run_ids = _session_run_evidence(session_id)
+        session_files = list(session_files or []) + run_files
         try:
             since = datetime.fromisoformat(session_start_iso.replace("Z", "+00:00"))
         except (ValueError, TypeError):
@@ -411,10 +557,23 @@ class DailyActivityExtractionHook:
         except Exception:
             pass
 
+        # Every distinct repo once (TECH.md files repeat the same paths), and
+        # commits from all of them: a session can land work in several repos.
+        commits: list[str] = []
+        seen: set[str] = set()
         for repo_path in candidates:
+            try:
+                key = str(repo_path.resolve())
+            except OSError:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
             if repo_path.is_dir() and (repo_path / ".git").exists():
-                commits = _get_session_git_commits(
-                    repo_path, since, session_files=session_files)
-                if commits:
-                    return commits
-        return []
+                commits += _get_session_git_commits(
+                    repo_path, since, session_files=session_files,
+                    session_shas=run_shas, call_windows=call_windows,
+                    session_run_ids=run_ids)
+                if len(commits) >= 15:
+                    break
+        return commits[:15]
