@@ -93,14 +93,19 @@ class SessionRecall:
         finally:
             conn.close()
 
-    def search(self, query: str, max_sessions: int = 3) -> RecallResult:
+    def search(self, query: str, max_sessions: int = 3,
+               exclude_session_id: str | None = None) -> RecallResult:
         """Search messages using FTS5 and return grouped results.
 
         1. FTS5 search for matching rowids
         2. Join with messages table for session_id, created_at, content, role
         3. Group by session_id, count matches per session
         4. Take top max_sessions by match count
-        5. For each session: load +/-10 messages around each match
+        5. For each session: load the text messages around each match
+
+        ``exclude_session_id``: the session asking. Its own first message is
+        persisted before recall runs and contains every query term, so without
+        this the asking session recalls itself as the best match.
         """
         conn = self._open_conn()
         conn.row_factory = sqlite3.Row
@@ -148,9 +153,10 @@ class SessionRecall:
                 JOIN messages m ON m.rowid = fts.rowid
                 WHERE messages_fts MATCH ?
                   AND (m.sent IS NULL OR m.sent != 0)
+                  AND m.session_id != ?
                 ORDER BY fts.rank
                 LIMIT ?
-            """, (safe_query, _SEARCH_ROW_LIMIT)).fetchall()
+            """, (safe_query, exclude_session_id or "", _SEARCH_ROW_LIMIT)).fetchall()
 
             if not rows:
                 return RecallResult(query=query, sessions=[], total_matches=0)
@@ -347,9 +353,17 @@ class SessionRecall:
         conn: sqlite3.Connection,
         session_id: str,
         match_rowids: list[int],
-        window: int = 10,
+        window: int = 3,
     ) -> list[dict]:
-        """Load ±window messages around each match rowid within a session."""
+        """Load the matched messages and ±window TEXT messages around each.
+
+        ``content`` is returned as readable text (text blocks + tool summaries,
+        core/message_search_text.py), not the stored JSON, and rows with no
+        text (a lone tool_result, thinking) are skipped: they are most rows of
+        an agent session and carry nothing a reader can use. The window counts
+        text rows, so it spans real conversation turns.
+        """
+        from core.message_search_text import message_search_text
         if not match_rowids:
             return []
 
@@ -365,6 +379,10 @@ class SessionRecall:
             ORDER BY created_at
         """, (session_id,)).fetchall()
 
+        texts = [message_search_text(row["content"]).strip() for row in all_msgs]
+        keep = [i for i, t in enumerate(texts) if t]
+        all_msgs = [all_msgs[i] for i in keep]
+        texts = [texts[i] for i in keep]
         # Build index map: rowid -> position
         rowid_to_pos = {row["rowid"]: i for i, row in enumerate(all_msgs)}
 
@@ -383,12 +401,13 @@ class SessionRecall:
             row = all_msgs[i]
             result.append({
                 "role": row["role"],
-                "content": row["content"],
+                "content": texts[i],
                 "created_at": row["created_at"],
             })
         return result
 
-    def recall_about(self, topic: str, max_sessions: int = 3, budget_chars: int = 3000) -> str:
+    def recall_about(self, topic: str, max_sessions: int = 3, budget_chars: int = 3000,
+                     exclude_session_id: str | None = None) -> str:
         """Search + format as readable text for system prompt injection.
 
         Returns empty string if no matches found.  Distributes the character
@@ -396,39 +415,33 @@ class SessionRecall:
         contain the search terms.  Truncates individual messages at sentence
         boundaries when possible to preserve readability.
         """
-        result = self.search(topic, max_sessions=max_sessions)
+        result = self.search(topic, max_sessions=max_sessions,
+                             exclude_session_id=exclude_session_id)
         if not result.sessions:
             return ""
 
-        topic_lower = topic.lower()
-        # Build a word-boundary regex for more precise topic matching.
-        # "kubernetes" should not match "mykubernetescluster".
-        try:
-            _topic_pattern = re.compile(
-                r"\b" + re.escape(topic_lower) + r"\b", re.IGNORECASE
-            )
-        except re.error:
-            _topic_pattern = None  # Fallback to substring if regex fails
+        # Rank a session's messages by how many query terms they contain. The
+        # old ranking matched the WHOLE query as one phrase (which a multi-term
+        # query never is), so it fell through to "longest message first".
+        terms = [t.lower() for t in topic.split() if t]
+
+        def _term_hits(content: str) -> int:
+            low = content.lower()
+            return sum(1 for t in terms if t in low)
 
         per_session = max(budget_chars // max(len(result.sessions), 1), 400)
 
-        lines: list[str] = [f'## Session Recall: "{topic}"', ""]
-
-        def _topic_match(content: str) -> bool:
-            """Check if content contains topic as a whole word."""
-            if _topic_pattern is not None:
-                return bool(_topic_pattern.search(content))
-            return topic_lower in content.lower()
+        lines: list[str] = []
 
         for sess in result.sessions:
-            lines.append(f"### Session {sess.session_id} ({sess.date}, {sess.match_count} matches)")
             chars_used = 0
-            # Prefer messages that actually contain the topic terms (word boundary)
             ranked = sorted(
-                sess.key_messages,
-                key=lambda m: (_topic_match(m.get("content", "")), len(m.get("content", ""))),
-                reverse=True,
+                (m for m in sess.key_messages if _term_hits(m.get("content", ""))),
+                key=lambda m: (-_term_hits(m.get("content", "")), len(m.get("content", ""))),
             )
+            if not ranked:
+                continue
+            lines.append(f"**{sess.date} · session {sess.session_id[:8]}**")
             for msg in ranked:
                 if chars_used >= per_session:
                     break
@@ -441,7 +454,7 @@ class SessionRecall:
                 chars_used += len(content)
             lines.append("")
 
-        return "\n".join(lines)
+        return "\n".join(lines).strip()
 
     @staticmethod
     def _truncate_at_sentence(text: str, max_chars: int) -> str:

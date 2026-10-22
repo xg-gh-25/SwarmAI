@@ -45,7 +45,8 @@ class TestUnifiedRecallCfull:
         # 2nd arg is editor_file_path (project detected inside, off-loop).
         _ap = _resolve_active_project("/x/SwarmWS/Projects/SwarmAI/TECH.md",
                                       "session resume timeout")
-        s, _structured = _unified_recall_body("session resume timeout", _ap)
+        # A code-like term: the relevance gate keeps code symbols only for those.
+        s, _structured = _unified_recall_body("session_router resume timeout", _ap)
         assert "Code Symbols" in s, "codeintel is the net-new runtime domain"
         # Assert the RENDERED symbol ref, not just the header: the "Code Symbols"
         # label can also appear in the coverage-gap line (render_recall_body) when a
@@ -64,18 +65,19 @@ class TestUnifiedRecallCfull:
     # needs no corpus. "Do the text domains actually return content" is a deployed-
     # system quality property → eval OS.
 
-    def test_unified_exception_returns_empty_for_fallback(self):
-        """Gate-2 C1: an EXCEPTION in the unified path (not just empty result)
-        must return "" so the caller falls back to legacy — NOT escape and leave
-        recall empty. Fault-inject recall_all to raise; assert "" (fallback trigger)."""
+    def test_unified_exception_returns_none_for_fallback(self):
+        """Gate-2 C1: an EXCEPTION in the unified path must return None so the
+        caller falls back to legacy — NOT escape and leave recall empty. None, not
+        "": an empty body is the relevance gate's "nothing relevant" answer and
+        must NOT trigger the ungated legacy legs."""
         import core.recall_multi as rm
         from core.session_router import _unified_recall_body
         orig = rm.recall_all
         rm.recall_all = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
         try:
             _body, _structured = _unified_recall_body("test query", (None, "no_signal"))
-            assert _body == "", \
-                "unified exception must return '' body so caller falls back to legacy"
+            assert _body is None, \
+                "unified exception must return None so caller falls back to legacy"
             assert _structured is None, "exception path yields no structured hits"
         finally:
             rm.recall_all = orig

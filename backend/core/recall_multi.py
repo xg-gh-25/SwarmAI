@@ -370,6 +370,7 @@ def recall_all(
     allow_embed: bool = False,
     max_sections: int = 3,
     policy_excluded_files: frozenset[str] = frozenset(),
+    exclude_session_id: Optional[str] = None,
 ) -> BucketedRecall:
     """Fan ``query`` across all (or the requested) READ recall domains.
 
@@ -394,6 +395,8 @@ def recall_all(
             A leg whose source file is excluded returns an empty bucket. This
             closes the privacy leak where --domains bypassed the gate that --file
             enforces (run_4358cc95 Gate-2).
+        exclude_session_id: the asking session, left out of the ``session``
+            domain (its own just-persisted message would be the best match).
 
     Returns:
         BucketedRecall with one bucket + hit_layer per requested domain.
@@ -438,7 +441,7 @@ def recall_all(
 
     if "session" in domains:
         result.buckets["session"], result.hit_layers["session"] = \
-            _recall_session(query)
+            _recall_session(query, exclude_session_id)
 
     if "codeintel" in domains:
         hits = _codeintel_recall(query, project=project)
@@ -1234,8 +1237,10 @@ def _recall_library(query: str, allow_embed: bool = False) -> tuple[list, str]:
     return hits, "fts"
 
 
-def _recall_session(query: str) -> tuple[list, str]:
-    """Recall over past sessions via the existing SessionRecall (FTS5)."""
+def _recall_session(query: str,
+                    exclude_session_id: Optional[str] = None) -> tuple[list, str]:
+    """Recall over past sessions via SessionRecall (FTS5): one hit per session,
+    each the matched messages as readable text."""
     try:
         from core.memory_index import _get_session_recall
         from jobs.paths import DB_PATH
@@ -1247,11 +1252,15 @@ def _recall_session(query: str) -> tuple[list, str]:
         return [], "none"
     try:
         recall = _get_session_recall(DB_PATH)
-        text = recall.recall_about(query, max_sessions=2)
+        text = recall.recall_about(query, max_sessions=3, budget_chars=2400,
+                                   exclude_session_id=exclude_session_id)
     except Exception as exc:  # noqa: BLE001
         logger.debug("session recall failed: %s", exc)
         return [], "none"
 
     if not text:
         return [], "none"
-    return [{"text": text[:500]}], "fts"
+    # recall_about separates sessions with a blank line before each bold header.
+    hits = [{"text": part.strip()} for part in re.split(r"\n(?=\*\*\d{4}-)", text)
+            if part.strip()]
+    return hits, "fts"

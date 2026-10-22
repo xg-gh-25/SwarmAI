@@ -217,8 +217,7 @@ def test_recall_about_format(db_path: Path, recall: SessionRecall):
                    created_at="2026-04-08T10:01:00")
 
     text = recall.recall_about("pytest")
-    assert "## Session Recall:" in text
-    assert "sess-fmt" in text
+    assert "**2026-04-08 · session sess-fmt**" in text
     assert "pytest" in text.lower()
 
 
@@ -337,3 +336,27 @@ def test_limit_is_quality_preserving(db_path: Path):
         f"LIMIT changed the top session: full={full_top} limited={limited_top} — "
         "rank-primary should keep the best-BM25 session under any limit"
     )
+
+
+def test_search_excludes_the_asking_session(db_path: Path, recall: SessionRecall):
+    """The asking session's own just-persisted first message contains every
+    query term; it must not come back as the best match."""
+    _insert_message(db_path, "sess-me", "user", "debug the kubernetes ingress")
+    _insert_message(db_path, "sess-old", "user", "kubernetes ingress was broken")
+    ids = {s.session_id for s in recall.search("kubernetes ingress",
+                                               exclude_session_id="sess-me").sessions}
+    assert ids == {"sess-old"}
+
+
+def test_recall_about_renders_text_not_stored_json(db_path: Path, recall: SessionRecall):
+    """Stored content is a JSON block list; recall shows its words, and skips
+    rows with no text (tool results, thinking)."""
+    import json as _json
+    _insert_message(db_path, "sess-j", "user",
+                    _json.dumps([{"type": "text", "text": "why is pytest slow"}]))
+    _insert_message(db_path, "sess-j", "assistant",
+                    _json.dumps([{"type": "tool_result", "tool_use_id": "toolu_x",
+                                  "outcome": "pytest output"}]))
+    text = recall.recall_about("pytest")
+    assert "- User: why is pytest slow" in text
+    assert '"type"' not in text and "toolu_x" not in text

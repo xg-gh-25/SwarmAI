@@ -293,6 +293,8 @@ _DDD_TRUE_FAILURE_PREFIXES: tuple[str, ...] = ("declined:exception:",)
 # vanishes from every signal — the dead-signal recursion Gate-2 flagged, run_e9861490).
 _RECALL_KNOWN_INFORMATIONAL: frozenset[str] = frozenset({
     "empty_with_keywords", "unified_empty_fallback_legacy",
+    # the failure itself is already counted as unified_exception:*
+    "unified_failed_fallback_legacy",
 })
 _DDD_KNOWN_INFORMATIONAL: frozenset[str] = frozenset({
     "injected", "declined:no_ddd_hits",
@@ -414,7 +416,50 @@ _STOP_WORDS: frozenset[str] = frozenset({
     "how", "why", "who", "you", "its", "our", "your", "their", "his", "her",
     "and", "but", "for", "nor", "not", "yet", "are", "was", "were",
     "let", "got", "get", "put", "see", "say", "said", "make", "made",
+    # conversational turn-control words: alone they say nothing about a topic
+    "continue", "okay", "yes", "now", "again", "here", "there", "thing",
 })
+
+# Chinese function words and conversational filler. A CJK run is cut at every
+# occurrence (longest first), and the remaining pieces of 2+ characters are the
+# content words. Without this a whole clause ("的看下我们现在的") became ONE
+# search term whose every bigram had to match -- it matched nothing, while
+# filler-only messages matched everything that shared a filler.
+_CJK_STOP_WORDS: tuple[str, ...] = tuple(sorted({
+    "我们", "你们", "他们", "咱们", "自己", "现在", "目前", "刚才", "之前", "以后",
+    "一下", "看下", "看看", "看一下", "查下", "查一下", "帮我", "给我", "你给我",
+    "什么", "怎么", "怎么样", "为什么", "为啥", "有没有", "是不是", "能不能",
+    "要不要", "可以", "可能", "应该", "需要", "这个", "那个", "这些", "那些",
+    "这样", "那样", "一个", "一些", "还有", "然后", "因为", "所以", "如果",
+    "但是", "不过", "而且", "或者", "已经", "就是", "还是", "只是", "其实",
+    "东西", "情况", "问题", "事情", "地方", "时候", "一点", "有点", "一样",
+    "正好", "继续", "好好", "一次性", "到底", "真的", "直接", "马上", "确定",
+    "上次", "感觉", "总是", "似的", "好像", "明白", "一直", "所有", "整个",
+    "我", "你", "他", "她", "它", "的", "了", "吗", "呢", "吧", "啊", "呀",
+    "嘛", "哦", "噢", "在", "是", "有", "和", "跟", "与", "把", "被", "给",
+    "让", "去", "来", "下", "也", "都", "就", "还", "又", "再", "很", "太",
+    "不", "没", "要", "会", "能", "好", "对", "说", "做", "搞", "帮", "请",
+    "这", "那", "哪", "谁", "个", "们", "着", "过", "得", "地", "从", "向",
+}, key=len, reverse=True))
+_CJK_STOP_RE = re.compile("|".join(re.escape(w) for w in _CJK_STOP_WORDS))
+_CJK_RUN_RE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]+")
+# Longest CJK content piece kept as one term; longer pieces are split, because
+# a term's bigrams are AND-ed and a long piece rarely recurs verbatim.
+_CJK_MAX_TERM = 4
+
+
+def _cjk_terms(text: str) -> list[str]:
+    """Content words from the CJK runs of ``text``, in order, de-duplicated."""
+    out: list[str] = []
+    for run in _CJK_RUN_RE.findall(text):
+        for piece in _CJK_STOP_RE.split(run):
+            if len(piece) < 2:
+                continue
+            for i in range(0, len(piece), _CJK_MAX_TERM):
+                part = piece[i:i + _CJK_MAX_TERM]
+                if len(part) >= 2 and part not in out:
+                    out.append(part)
+    return out
 
 
 def _prepend_ui_state_to_query(
@@ -762,25 +807,26 @@ def _extract_query_keywords(message: str) -> str:
     text = re.sub(r"(?:^|\s)[~/]\S+", " ", text)
 
     # Hyphenated compounds first — preserve "session-router", "pre-tool-use"
-    # as single terms for better FTS5/vector recall on technical queries.
-    compounds = re.findall(r"(?<![a-zA-Z_])([a-zA-Z_]\w+(?:-[a-zA-Z]\w+)+)", text)
+    # as single terms. ASCII-only classes throughout: Python's \w also matches
+    # CJK, so "看下recall机制" used to come out as one "English word".
+    compounds = re.findall(
+        r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]+(?:-[A-Za-z][A-Za-z0-9_]+)+)", text)
     # Strip matched compounds from text to avoid double-counting
     text_stripped = text
     for c in compounds:
         text_stripped = text_stripped.replace(c, " ")
 
-    # English words: keep substantive terms (>2 chars, not stop words).
-    # Use [a-zA-Z_] anchor instead of \b — \b doesn't fire at CJK/ASCII
-    # boundaries (e.g. "的Memory" misses "Memory" with \b).
-    words = [
-        w for w in re.findall(r"(?<![a-zA-Z_])([a-zA-Z_]\w{2,})(?!\w)", text_stripped)
-        if w.lower() not in _STOP_WORDS
-    ]
+    # English words: substantive terms (>2 chars, not stop words), de-duplicated.
+    words: list[str] = []
+    for w in re.findall(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]{2,})(?![A-Za-z0-9_])",
+                        text_stripped):
+        if w.lower() not in _STOP_WORDS and w not in words:
+            words.append(w)
 
-    # CJK + Kana + Hangul: keep contiguous runs as natural search terms
-    cjk = re.findall(r"[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]+", text)
+    # CJK + Kana + Hangul: content words only (function words cut out)
+    cjk = _cjk_terms(text)
 
-    combined = compounds[:3] + words[:10] + cjk[:5]
+    combined = compounds[:3] + words[:10] + cjk[:8]
     return " ".join(combined) if combined else ""
 
 
@@ -950,6 +996,7 @@ def _flatten_recall_hits(result: Any) -> list[dict]:
 
 def _unified_recall_body(
     query: str, active_project: Optional[tuple[Optional[str], str]] = None,
+    prompt_text: str = "", exclude_session_id: Optional[str] = None,
 ) -> tuple[str, Optional[list[dict]]]:
     """Returns (rendered_body_str, structured_hits | None).
 
@@ -999,7 +1046,12 @@ def _unified_recall_body(
         # extracted keywords, which could disagree with the DDD leg's project).
         project = active_project[0] if active_project else None
         non_ddd = tuple(d for d in DOMAINS if d != "ddd")
-        result = recall_all(query, project=project, domains=non_ddd, allow_embed=False)
+        result = recall_all(query, project=project, domains=non_ddd, allow_embed=False,
+                            exclude_session_id=exclude_session_id)
+        # Relevance gate + "not already in the prompt" + size budget
+        # (core/recall_filter.py): ranking alone never says "nothing relevant".
+        from .recall_filter import filter_recall
+        result = filter_recall(result, prompt_text)
         graph_context = _graph_enrich_recall(query)
         body = render_recall_body(result, project=project, graph_context=graph_context)
         # Structured hits from the SAME result object (the real recalled hits with
@@ -1011,7 +1063,7 @@ def _unified_recall_body(
         _record_recall_degraded(f"unified_exception:{type(exc).__name__}")
         logger.warning("unified recall raised (falling back to legacy 3-leg): %s: %s",
                         type(exc).__name__, exc)
-        return "", None
+        return None, None
 
 
 def _graph_enrich_recall(query: str) -> str:
@@ -1309,15 +1361,18 @@ async def _maybe_inject_recall_inner(
             # 'io' pool, not the default one (run_c8ad52f8): FTS5/sqlite recall on
             # the session-init hot path — must not compete for a default-pool worker
             # with bulk work (which would starve the readiness sampler → false offline).
-            executors.run_in("io", _unified_recall_body, keywords, _active_project),
+            executors.run_in("io", _unified_recall_body, keywords, _active_project,
+                             options.system_prompt or "",
+                             getattr(unit, "_app_session_id", None) or unit.session_id),
             timeout=_RECALL_DISASTER_TIMEOUT_S,
         )
         recalled, _structured_hits = _unified_out
-        if not recalled:
-            # Fallback to legacy 3-leg path (strangler-fig safety net). Legacy
-            # returns a bare string and has no structured hits → _structured_hits
-            # stays None (the TSCC Recall tab shows the rendered body without cards).
-            _record_recall_degraded("unified_empty_fallback_legacy")
+        if recalled is None:
+            # Fallback to legacy path ONLY when the unified path FAILED. An empty
+            # body is a real answer ("nothing relevant passed the relevance gate")
+            # and must not be replaced by the ungated legacy legs. Legacy returns
+            # a bare string and has no structured hits.
+            _record_recall_degraded("unified_failed_fallback_legacy")
             recalled = await asyncio.wait_for(
                 executors.run_in("io", _recall_for_query, keywords, _RECALL_MAX_TOKENS, False),
                 timeout=_RECALL_DISASTER_TIMEOUT_S,
