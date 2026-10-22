@@ -27,7 +27,7 @@ def land_bindings(**patch):
 def request(action="land", bindings=None):
     if bindings is None:
         bindings = land_bindings() if action.startswith("land") else (
-            {"snapshot_id": "snap-1"} if action == "discard_snapshot" else
+            {"snapshot_id": "snap-1", "repo_name": "repo"} if action == "discard_snapshot" else
             {"canonical_id": "CF-deadbeef", "state_hash": STATE}
         )
     return auth.make_request(request_id="q1", session_id="s1", run_id="run_x",
@@ -42,7 +42,7 @@ def test_land_request_binds_every_repo_tree_and_report():
 
 
 @pytest.mark.parametrize("action,bindings", [
-    ("discard_snapshot", {"snapshot_id": "snap-1"}),
+    ("discard_snapshot", {"snapshot_id": "snap-1", "repo_name": "repo"}),
     ("accept_finding", {"canonical_id": "CF-deadbeef", "state_hash": STATE}),
 ])
 def test_other_actions_bind_exact_resource_state(action, bindings):
@@ -72,7 +72,7 @@ def issued(action="land", bindings=None):
 def consume(oracle, action="land", bindings=None, **patch):
     if bindings is None:
         bindings = land_bindings() if action.startswith("land") else (
-            {"snapshot_id": "snap-1"} if action == "discard_snapshot" else
+            {"snapshot_id": "snap-1", "repo_name": "repo"} if action == "discard_snapshot" else
             {"canonical_id": "CF-deadbeef", "state_hash": STATE}
         )
     args = {"request_id": "q1", "session_id": "s1", "run_id": "run_x",

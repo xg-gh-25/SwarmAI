@@ -85,7 +85,22 @@ def _runner(engine, wt, target, profile):
                 "ref": "tests/test_x.py::test_value", "result": "pass",
                 "seq": call["seq"]}],
         node_results={"tests/test_x.py::test_value": {"result": "pass", "seq": call["seq"]}},
-        tdd_required=["tests/test_x.py"])
+        tdd_required=["tests/test_x.py"], whole_files=["tests/test_x.py"])
+
+
+def _land_through_the_hook(engine, monkeypatch, message):
+    """A landing carries the hook's one-time token (A7), as run_owner_gate issues it."""
+    from core import hook_token
+    hook_token.stop_oracle()
+    assert hook_token.start_oracle(55000 + __import__("os").getpid() % 1000) \
+        or not hook_token.oracle_supported()
+    try:
+        monkeypatch.setenv(hook_token.TOKEN_ENV,
+                           hook_token.issue(engine.run_dir, "s", engine.run_id, "land"))
+        return engine.normal_land(message=message)
+    finally:
+        hook_token.stop_oracle()
+        monkeypatch.delenv(hook_token.TOKEN_ENV, raising=False)
 
 
 def _run_code(case, profile, run_id, monkeypatch):
@@ -115,7 +130,7 @@ def _run_code(case, profile, run_id, monkeypatch):
     if profile=="goal": pass
     assert engine.review_start()["reviewers"]==[]; assert engine.stage_complete()["ok"]
     _runner(engine,wt,"regression",profile); assert engine.stage_complete()["ok"]
-    engine.normal_land(message=f"feat: {profile}\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"); engine.reflect_complete()
+    _land_through_the_hook(engine, monkeypatch, f"feat: {profile}\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"); engine.reflect_complete()
     audit=json.loads((engine.run_dir/"run_audit.json").read_text())
     assert all(row["verdict"]!="BLOCK" for row in audit["summary"].values()),audit["summary"]
 

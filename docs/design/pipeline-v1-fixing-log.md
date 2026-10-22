@@ -92,3 +92,31 @@ trivial 不变：`tests/fixtures/pipeline_v1_trivial_profile.json` 是改动前 
 审查（独立子代理）发现 3 个 HIGH、1 个 MED，均已修：选择失败时 `_v1_tdd_required` 返回 None、BX-2 失败（不再退化成短名单）；没有选中任何测试时，必须有 agent 自己点名的测试文件整个跑过且通过；只跑某个 node 不能代表整个文件（回执记 `whole_files`，final 记 `tests.whole_files`）；direct 的 `decision-request` 在写事件前拒绝，日志不会被写坏；仍按 direct 有 PLAN 写的旧测试已改。
 
 证明：`test_direct_starts_at_build_and_needs_the_users_words`、`test_a_doc_only_direct_run_lands_without_any_document`（真 CLI，REPORT 含需求，提交带 Swarm trailer）、`test_a_direct_code_change_needs_passing_tdd_to_leave_build`（没跑 / 红 → BUILD 不过，绿 → 进 REVIEW）、`test_one_passing_node_does_not_stand_for_its_file`、`test_a_direct_run_cannot_ask_and_its_log_still_folds`、`test_bx2_fails_closed_when_selection_failed_or_selected_nothing`。`test_pipeline_test.py::test_source_scan_suites_cover_every_test_that_globs_python_files` 在 main 上本来就红（另一个 session 新增的 `test_turn_writer.py`），与本组无关。
+
+## 6. C 组（授权和信任边界，含 A7、F-2）
+
+**根因：** 授权链里有两处信任了 agent 能写的东西：执行人工落地时比对的是工作区里没有封印的 JSON；任何持有密钥的进程（包括 CLI）都能以 hook 的身份签名，而 `auth` 事件正是 CLI 在消费 token 之后自己写的。
+
+| 条目 | 处理 |
+|---|---|
+| C1 | `land_request` 事件带完整 `request`（`auth.make_request` 的结果，含每个 repo 的 code_tree / delivery_tree / report_sha、note、skip_tests）以及 `report_sha`、`bases`、`push_reasons`；lifecycle 重建 request，和 `binding_digest` 不一致就拒。执行（`landing.execute_request`、`execute_authorized_action`）只读这个事件，JSON 只用于显示，删了照样能落地。审批卡（`security_hooks.v1_land_card`）从事件读出 run、动作、两棵树的短 sha、REPORT 第一行、push 理由数、是否跳过测试 |
+| C2 | 已由 `fc6d2ab2` 完成；补回归测试 `test_the_cli_has_no_way_to_answer_a_decision` |
+| C3 | `events.allow_hook_writer()` 只在 `main.py`（以及扮演 daemon 的测试进程）调用；`pipeline_v1.py` 入口 `restrict_process("cli")`，`pipeline_test.py` 入口 `restrict_process("runner")`；检查放在 `WriterCapability` 构造里，绕过 `writer()` 也拿不到。`auth` 改由 `run_owner_gate` 在人批准命令之后写（`landing.approve_from_event`），写不进去就不发 token。strict xfail `test_a_cli_process_cannot_sign_as_the_hook` 转为必须通过 |
+| C4 | worktree_write_gate 拒绝写 v1 run worktree 里的 `.aidlc/deliverables/`；land、`run-land --prepare`、`run-land --request` 持有 run 的 `landing.lock`（非阻塞，第二个调用直接被告知）；`create` 去掉 `--mode`，模式只由 `mode_enabled()` 决定；shared 的 v1 run 也能拿到 token |
+| C5 | CLI 捕获 `LandingError`，输出 JSON。`--skip-tests` 不需要 final：LG-4 比的是 main 的 HEAD 和 run 的分叉点（merge-base）。人工落地的 LG-4 原来拿 final 的 base 比 final 的 base（恒真），现在比 main 的真实 HEAD |
+| C6 | `landing.consume_authorization`：检查和追加在同一把锁里（store 的 validator 折叠整条链）；第二次消费被拒，并记 `integrity`（`auth_consumed_twice`） |
+| A7 | `land` 要求 hook token（gate 为 `land` 发）；没有 token 时追加 `land(not_landed, needs_hooked_session)`，走不落地的路径，main 不动 |
+| F-2 | `answer` 的发生键改回 `tool_use_id`；"一个 handout 一个答案"由 bridge 通过 `AuditStore.append_new(refuse=…)` 在锁内检查 |
+
+**顺带发现并修复：** abandon 之后的 run 恢复 worktree 一直失败（`git worktree add -b` 遇到保留下来的 `run/<id>` 分支）。`run_worktree.create` 在恢复时复用这条分支，前提是它仍指向快照的 base。
+
+**偏离：**
+- 设计 §A4.3 写 `--prepare`"final 没覆盖当前 code_tree 时先跑一次测试"。实现为拒绝，并给出 `pipeline_test.py --mode regression` 命令：runner 的每次调用都受 110 s 上限和续跑机制约束（`pipeline_test_gate`），藏在 CLI 里的长子进程会越过这个上限。五维上 Quality 不变，Autonomy 不变（agent 照命令执行），Speed 不变。
+- hookless 执行器没有单独的标记：代码里没有任何 hookless 执行器，判定就是"`land` 没有 hook token"。
+- `infrastructure_failed` 仍没有生产者：审计区不可写、token 服务不在时，gate 拒绝命令，run 本身不变。要让 run 进入 `failed`，需要 daemon 侧写事件——而那正是写不进去的情况。留到 D 组再看。
+
+**审查（独立子代理 `500ae800081a804f`）：** 3 HIGH、1 MED、1 LOW。
+- **已修：** `discard-snapshot` 原来从可改的 JSON 读 `repo_name` 和 ledger 路径——现在 `repo_name` 进签名的 bindings，ledger 路径由 `(run_id, repo_name)` 推出，`meta.json` 自己的 run / repo 不符就拒（复制别的 repo 的快照无效）；`land_request` 的大小：note 限 600 字（超过会被挪进 blob、request 无法从事件重建），事件写不进（repo 太多超出 4 KiB）时报 `LandingError`；两个落地单元测试补上 `integration_roots`；C3 测试改为真正走 CLI 入口（`runpy` 执行 `pipeline_v1.py` 之后再尝试 `allow_hook_writer` 和 hook writer，必须失败）。
+- **记为已知限制，不在本组修：** 任意 Python 代码（`python -c`）不进 CLI 入口时，仍可自己调用 `allow_hook_writer()`、读出密钥签任何事件，或直接调 `landing.commit_repos` 落地任意树。这就是方案 §9 的"签名只由 daemon 提供"那份单独设计；XG 已定先做 C3（代码层面分开）。§9 里"落地时对账每条 test_call / proof 与 hook 实际看到的 runner 调用"也属于那份设计，尚未做，最后交付时单列。
+
+证明：`test_a_cli_process_cannot_sign_as_the_hook`、`test_landing_reads_its_request_from_the_event_not_the_json`、`test_the_approval_card_shows_what_lands`、`test_an_approval_is_consumed_once_and_a_second_try_is_integrity`、`test_skip_tests_lands_a_run_that_never_ran_tests`、`test_a_guard_failure_on_prepare_is_json_not_a_traceback`、`test_a_tested_prepare_on_an_untested_tree_names_the_runner`、`test_a_land_without_the_hook_ends_not_landed_needs_hooked_session`、`test_create_has_no_mode_option`、`test_an_agent_cannot_write_the_runs_deliverables`、`test_a_second_landing_of_the_same_run_is_refused_while_one_runs`、`test_the_cli_has_no_way_to_answer_a_decision`、`test_a_land_request_whose_request_does_not_match_its_digest_is_refused`、`test_an_unrecorded_approval_never_issues_the_token`。`test_pipeline_v1_real_e2e.py` 已没有 xfail。

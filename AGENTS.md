@@ -253,18 +253,25 @@ implementations in `security_hooks.py`). By category:
    trust this store; the gate cannot be forced.
    Per-run worktrees (`docs/design/pipeline-run-worktree.md`; on by default, turned off only by
    `config.json["pipeline"]["worktree_mode"] = "off"`, a `PUT /api/settings` key): `run_owner_gate`
-   (Bash, right after `commit_gate`; applies only to isolated runs and to the stage-start
+   (Bash, right after `commit_gate`; applies to isolated runs, to v1 token commands, and to the stage-start
    that decides an undecided run's mode — a run recorded `shared` is untouched; takes a crashed
    owner's run over (a v1 takeover is also signed as an `owner_transfer` event, so human
    authorizations follow the new owner), denies while the owner is live, denies a Bash call
    to the human-only `/api/pipelines/<id>/decision`,
    and issues the one-time `SWARM_HOOK_TOKEN` by rewriting a single artifact_cli command via
    `updatedInput` — no other Bash hook may set `updatedInput`; the issuance record lives only
-   in daemon memory, the CLI burns it over the owner-only socket started in `main.py`) and `worktree_write_gate`
+   in daemon memory, the CLI burns it over the owner-only socket started in `main.py`. For v1
+   it also tokens `land` (no token: `not_landed(needs_hooked_session)`) and, shared runs
+   included, `run-land` / `accept-finding` / `discard-snapshot`: after the person approves one,
+   the gate itself writes the signed `auth` event from the run's `land_request` event (the
+   approval card shows the trees from that event; execution reads only it). Only the daemon
+   process may sign as `hook` (`events.allow_hook_writer` in `main.py`; the CLI and runner
+   narrow themselves to `cli` / `runner`)) and `worktree_write_gate`
    (Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep, its own group; keeps an isolated
    run's writes in its own worktrees, denies a write into any other isolatable git repo with
    the `pipeline_v1.py create --repo` command for a run that includes it (v1 repos are fixed at
-   create), denies stash / shared-ref changes from a run worktree). Run liveness everywhere
+   create), denies a write under a v1 run's `.aidlc/deliverables/` (its landing writes it),
+   denies stash / shared-ref changes from a run worktree). Run liveness everywhere
    (`run_index.LIVE_STATUSES`, the worktree sweeper, these gates) counts legacy running/paused
    and every non-terminal v1 status.
 5. **Review-expert scope** (`core/pipeline_expert_agent.py`) — every session defines the

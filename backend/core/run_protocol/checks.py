@@ -519,6 +519,17 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
             return False, f"LG-3 failed: {exc}"
     if check_id == "LG-4":
         landing_bases = context.run.get("landing_bases")
+        run_bases = context.run.get("run_bases")
+        if context.run.get("skip_tests") is True:
+            # a skip-tests landing needs no final (C5): main must still be at the
+            # run's fork point, so the commit is a fast-forward of what was reviewed
+            ok = bool(context.expected_repos) and isinstance(landing_bases, Mapping) \
+                and isinstance(run_bases, Mapping) \
+                and set(landing_bases) == set(run_bases) == set(context.expected_repos) \
+                and all(isinstance(run_bases[n], str) and run_bases[n]
+                        and landing_bases[n] == run_bases[n] for n in run_bases)
+            return _result(ok, "main is still at the run's base" if ok else
+                           "main moved since the run started; restore and rebase first")
         ok = isinstance(repos, Mapping) and bool(context.expected_repos) \
             and set(repos) == set(context.expected_repos) \
             and isinstance(landing_bases, Mapping) \

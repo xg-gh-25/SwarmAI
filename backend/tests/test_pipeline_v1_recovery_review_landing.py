@@ -128,7 +128,7 @@ def test_decision_answer_resumes_same_stage_and_run_land_refuses_fake_oracle(tmp
     answered = engine.answer_decision(request_id="q1", option_id="b")
     assert answered["state"]["status"] == "active"
     assert answered["answer"]["choice"] == "two"
-    with pytest.raises(EngineError, match="prepared land request is missing"):
+    with pytest.raises(EngineError, match="no land_request 'land_1'"):
         engine.execute_land_request("land_1", message="land")
 
 
@@ -287,6 +287,9 @@ def test_accept_finding_requires_and_consumes_exact_token(tmp_path, monkeypatch)
     assert hook_token.start_oracle(53000 + __import__("os").getpid() % 1000) \
         or not hook_token.oracle_supported()
     try:
+        from core.run_protocol import landing   # the daemon, after the person approved
+        landing.approve_from_event(engine.store, "auth_accept",
+                                   now=__import__("time").time(), at="2026-10-23T00:00:00Z")
         token = hook_token.issue(
             engine.run_dir, "session_1", engine.run_id,
             "accept-finding:auth_accept")
@@ -315,6 +318,9 @@ def test_discard_snapshot_requires_authorized_snapshot_identity(tmp_path, monkey
     assert hook_token.start_oracle(54000 + __import__("os").getpid() % 1000) \
         or not hook_token.oracle_supported()
     try:
+        from core.run_protocol import landing   # the daemon, after the person approved
+        landing.approve_from_event(engine.store, "auth_discard",
+                                   now=__import__("time").time(), at="2026-10-23T00:00:00Z")
         token = hook_token.issue(
             engine.run_dir, "session_1", engine.run_id,
             "discard-snapshot:auth_discard")
@@ -325,3 +331,21 @@ def test_discard_snapshot_requires_authorized_snapshot_identity(tmp_path, monkey
         monkeypatch.delenv(hook_token.TOKEN_ENV, raising=False)
     assert result["action"] == "discard_snapshot"
     assert not __import__("pathlib").Path(ledger).exists()
+
+
+def test_a_snapshot_copied_to_another_repo_has_no_identity(tmp_path):
+    """discard-snapshot signs (snapshot_id, repo_name); the ledger is found from the
+    run and repo, and a meta.json copied from repo A under repo B is refused."""
+    import json as _json
+    from core.run_protocol import auth, retention
+    ledger = tmp_path / "ledger" / "run_one"
+    for name in ("a", "b"):
+        (ledger / name).mkdir(parents=True)
+    meta = _json.dumps({"run_id": "run_one", "repo_name": "a", "snapshot": "1" * 40})
+    (ledger / "a" / "meta.json").write_text(meta)
+    (ledger / "b" / "meta.json").write_text(meta)
+    assert retention.snapshot_id(ledger / "a")
+    with pytest.raises(retention.RetentionError, match="another run or repo"):
+        retention.snapshot_id(ledger / "b")
+    with pytest.raises(auth.AuthorizationError):
+        auth.normalize_bindings("discard_snapshot", {"snapshot_id": "x"})

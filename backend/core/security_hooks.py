@@ -321,6 +321,59 @@ def _is_main_claim(command: str) -> bool:
 
 
 
+def v1_land_card(command: str) -> "str | None":
+    """What the approval card shows for a v1 run-land / accept-finding / discard-snapshot
+    (fixing spec C1): read from the signed land_request event, never from the run's
+    JSON — run, action, each repo's code and delivery tree, the REPORT's first line, the
+    push reasons and whether tests are skipped. None when it cannot be read."""
+    from core.run_owner_gate import parse_cli_calls
+    calls, _single = parse_cli_calls(command)
+    call = next((c for c in calls if c.get("tool") == "pipeline_v1"
+                 and c.get("sub") in {"run-land", "accept-finding", "discard-snapshot"}), None)
+    if call is None:
+        return None
+    argv = call.get("argv") or []
+    request_id = next((argv[i + 1] for i, t in enumerate(argv[:-1]) if t == "--request"),
+                      None) or next((t.split("=", 1)[1] for t in argv
+                                     if t.startswith("--request=")), None)
+    run_id = call.get("run_id")
+    if not request_id or not run_id:
+        return None
+    try:
+        from core import pipeline_human
+        from core.run_protocol import landing
+        engine = pipeline_human.load_engine(run_id)
+        if engine is None:
+            return None
+        payload = landing.request_event(engine.store, request_id)
+    except Exception as exc:   # the card falls back to the generic text
+        logger.warning("v1 approval card for %s %s unreadable: %s", run_id, request_id, exc)
+        return None
+    request = payload["request"]
+    lines = [f"Pipeline v1 {request['action']} — run {run_id}, request {request_id}"]
+    repos = (request.get("bindings") or {}).get("repos")
+    if isinstance(repos, dict):
+        for name, row in sorted(repos.items()):
+            lines.append(f"{name}: code {row['code_tree'][:12]} → delivery "
+                         f"{row['delivery_tree'][:12]}")
+        lines.append("skip tests: " + ("yes" if request.get("skip_tests") else "no"))
+        lines.append(f"push reasons: {int(payload.get('push_reasons') or 0)}")
+    else:
+        lines.append("binds: " + ", ".join(f"{k}={str(v)[:16]}" for k, v in
+                                           sorted((request.get("bindings") or {}).items())))
+    sha = payload.get("report_sha")
+    if isinstance(sha, str):
+        try:
+            text = (engine.store.paths.blobs / sha).read_text(encoding="utf-8")
+            first = next((ln.strip("# ").strip() for ln in text.splitlines() if ln.strip()), "")
+            lines.append(f"REPORT: {first[:120]}")
+        except OSError:
+            lines.append("REPORT: (blob missing)")
+    if request.get("note"):
+        lines.append(f"note: {str(request['note'])[:200]}")
+    return "\n".join(lines)
+
+
 def _is_v1_land_request(command: str) -> bool:
     """True for an executed Pipeline v1 action that consumes human authorization."""
     if "pipeline_v1" not in command or "--request" not in command or not any(
@@ -1676,6 +1729,9 @@ def create_dangerous_command_gate(
         actual_session_id = session_context.get("sdk_session_id") or session_key
         request_id = f"perm_{uuid4().hex[:12]}"
         tool_input_data = input_data.get("tool_input", {})
+        # a v1 authorization shows what it binds, read from the signed event (C1)
+        reason_text = (_is_v1_land_request(command) and v1_land_card(command)) \
+            or "Matches dangerous command pattern"
 
         permission_request = {
             "id": request_id,
@@ -1689,7 +1745,7 @@ def create_dangerous_command_gate(
             # by is_resolved((session,tool_call_id)) — that key guards the external
             # gate. This field is for durability + audit, not a second idempotency path.
             "tool_call_id": tool_use_id,
-            "reason": "Matches dangerous command pattern",
+            "reason": reason_text,
             "status": "pending",
             "created_at": datetime.now().isoformat(),
         }
@@ -1706,7 +1762,7 @@ def create_dangerous_command_gate(
             "toolUseId": tool_use_id,
             "toolName": "Bash",
             "toolInput": tool_input_data,
-            "reason": "Matches dangerous command pattern",
+            "reason": reason_text,
             "options": ["approve", "deny"],
         })
         logger.info("User decision for %s: %s", request_id, decision)

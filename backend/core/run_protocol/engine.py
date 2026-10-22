@@ -28,6 +28,8 @@ from core.run_protocol.events import EventAuthority
 from core.run_protocol.final import carry_repo_final, merge_final
 from core.run_protocol.store import AuditStore, StoreError
 
+logger = logging.getLogger(__name__)
+
 
 class EngineError(RuntimeError):
     """The run cannot proceed safely or its durable protocol state is invalid."""
@@ -757,7 +759,12 @@ class RunEngine:
 
     def prepare_land_request(self, *, action: str, note: str | None = None,
                              request_id: str | None = None) -> dict[str, Any]:
-        from core.run_protocol import audit as audit_protocol, findings as finding_protocol, landing
+        with self._landing_lock():
+            return self._prepare_land_request(action=action, note=note, request_id=request_id)
+
+    def _prepare_land_request(self, *, action: str, note: str | None = None,
+                              request_id: str | None = None) -> dict[str, Any]:
+        from core.run_protocol import audit as audit_protocol, findings as finding_protocol, landing, tree
         state = self.projection()
         if self.contract["mode"] == "isolated" and set(self.effective_repos()) != set(self.contract["expected_repos"]):
             if state["status"] == "abandoned" or (
@@ -770,6 +777,20 @@ class RunEngine:
             else:
                 self.ensure_worktrees()
         request_id = request_id or "land_" + secrets.token_hex(8)
+        if action == "land":
+            # design §A4.3: a tested landing needs a final on the CURRENT tree. The run's
+            # tests go through the runner's own bounded calls, not a hidden subprocess
+            current = tree.build_code_trees(self.effective_repos(), self.run_id,
+                                            git_tree.write_tree, git_tree.list_reserved)
+            final = self.final().get("repos") or {}
+            stale = sorted(name for name, code in current.items()
+                           if (final.get(name) or {}).get("code_tree") != code)
+            if stale:
+                raise EngineError(
+                    "the tests have not run on the current tree of " + ", ".join(stale)
+                    + ": run `pipeline_test.py --project " + self.project + " --run-id "
+                    + self.run_id + " --mode regression` (again while it says continue), "
+                    "then --prepare again; or --skip-tests to land untested")
         context = self.check_context()
         push = self.push_status(manual_landing=True)
         def render(_request_id, _results):
@@ -790,7 +811,10 @@ class RunEngine:
         prepared = landing.prepare_request(
             self.store, run_id=self.run_id, session_id=self.owner_session(),
             action=action, repos=self.effective_repos(), context=context, at=_now(),
-            render_report=render, note=note, request_id=request_id)
+            render_report=render, note=note, request_id=request_id,
+            push_reasons=len(push.get("reasons") or []),
+            integration_roots=self.contract["repo_roots"])
+        # display copy only: execution reads the signed land_request event (C1)
         path = self.run_dir / "artifacts" / "land-requests" / f"{request_id}.json"
         _atomic_json(path, prepared)
         self.write_projection()
@@ -798,20 +822,22 @@ class RunEngine:
 
     def execute_land_request(self, request_id: str, *, message: str) -> dict[str, Any]:
         """Consume one daemon-issued approval token and finish a prepared landing."""
+        with self._landing_lock():
+            return self._execute_land_request(request_id, message=message)
+
+    def _execute_land_request(self, request_id: str, *, message: str) -> dict[str, Any]:
         from core.run_protocol.landing import with_trailer
         message = with_trailer(message)
         from core import hook_token
         from core.run_protocol import auth, landing
 
-        path = self.run_dir / "artifacts" / "land-requests" / f"{request_id}.json"
-        prepared = self._read_json(path, None)
-        if not isinstance(prepared, Mapping):
-            raise EngineError("prepared land request is missing")
-        request = prepared.get("request")
-        if not isinstance(request, Mapping) or request.get("request_id") != request_id \
-                or request.get("run_id") != self.run_id \
-                or request.get("session_id") != self.owner_session():
-            raise EngineError("prepared land request identity mismatch")
+        try:
+            payload = landing.request_event(self.store, request_id)
+        except landing.LandingError as exc:
+            raise EngineError(str(exc)) from exc
+        request = payload["request"]
+        if request.get("session_id") != self.owner_session():
+            raise EngineError("land request was prepared by another owner session")
         token = os.environ.get(hook_token.TOKEN_ENV)
         token_scope = f"run-land:{request_id}"
         ok, reason = hook_token.consume(
@@ -820,26 +846,29 @@ class RunEngine:
 
             raise IntegrationRequired("approval_required", reason)
 
-        oracle = auth.AuthorizationOracle()
         now = __import__("time").time()
-        auth_event = landing.approve_request(
-            self.store, oracle, request, decided_at=now,
-            expires_at=now + 30 * 60, at=_now())
         commits = landing.execute_request(
-            self.store, oracle, prepared,
+            self.store, request_id,
             session_id=self.owner_session(), repos=self.effective_repos(),
             integration_roots=self.contract["repo_roots"], message=message,
             at=_now(), now=now,
             progress_path=self.run_dir / "artifacts" / f"landing-progress-{request_id}.json")
         try:
-            report = (self.store.paths.blobs / prepared["report_sha"]).read_text(encoding="utf-8")
+            report = (self.store.paths.blobs / payload["report_sha"]).read_text(encoding="utf-8")
         except OSError as exc:
             raise EngineError(f"prepared REPORT blob is missing after landing: {exc}") from exc
         DocumentStore._atomic(self.run_dir / "REPORT.md", report)
         self._settle()
         self.write_projection()
-        return {"auth_event_id": auth_event["event_id"], "commits": commits,
+        auth_event_id = next(event_id for event_id, row in lifecycle.fold(
+            self.store.read_events(), self.authority)["auth_grants"].items()
+            if row["request_id"] == request_id)
+        return {"auth_event_id": auth_event_id, "commits": commits,
                 "state": self.projection(), "push": self.push_status(manual_landing=True)}
+
+    def _ledger_of(self, repo_name: str) -> Path:
+        """Where run_worktree keeps this run's snapshot of *repo_name* (never from JSON)."""
+        return run_worktree.ledger_root() / self.run_id / repo_name
 
     def prepare_authorized_action(
         self, *, action: str, target: str, note: str | None = None,
@@ -858,13 +887,12 @@ class RunEngine:
                 raise EngineError("accept-finding references an unknown canonical finding")
             bindings = {"canonical_id": target, "state_hash": findings.state_hash(row)}
         elif action == "discard_snapshot":
-            entries = {row.get("repo_name"): row for row in self._retention_entries()}
-            entry = entries.get(target)
-            ledger = entry.get("ledger") if isinstance(entry, Mapping) else None
-            if not isinstance(ledger, str) or not ledger:
+            if target not in self.contract["expected_repos"]:
+                raise EngineError("discard-snapshot names a repo this run does not have")
+            ledger = self._ledger_of(target)
+            if not (ledger / "meta.json").is_file():
                 raise EngineError("discard-snapshot references no retained repo ledger")
-            bindings = {"snapshot_id": retention.snapshot_id(ledger)}
-            metadata = {"repo_name": target, "ledger": ledger}
+            bindings = {"snapshot_id": retention.snapshot_id(ledger), "repo_name": target}
         else:
             raise EngineError("unsupported authorized action")
         request = auth.make_request(
@@ -873,7 +901,7 @@ class RunEngine:
         self.store.append_new(
             writer=self.authority.writer("cli"), kind="land_request", at=_now(),
             payload={"request_id": request_id, "action": action,
-                     "binding_digest": request["binding_digest"]})
+                     "binding_digest": request["binding_digest"], "request": request})
         value = {"request": request, **metadata}
         path = self.run_dir / "artifacts" / "authorized-requests" / f"{request_id}.json"
         _atomic_json(path, value)
@@ -886,12 +914,12 @@ class RunEngine:
         from core.run_protocol import auth, findings, landing, retention
 
         path = self.run_dir / "artifacts" / "authorized-requests" / f"{request_id}.json"
-        prepared = self._read_json(path, None)
-        request = prepared.get("request") if isinstance(prepared, Mapping) else None
-        if not isinstance(request, Mapping) or request.get("request_id") != request_id \
-                or request.get("run_id") != self.run_id \
-                or request.get("session_id") != self.owner_session():
-            raise EngineError("prepared authorization request is missing or mismatched")
+        try:   # everything comes from the signed event; the JSON is display only (C1)
+            request = landing.request_event(self.store, request_id)["request"]
+        except landing.LandingError as exc:
+            raise EngineError(str(exc)) from exc
+        if request.get("session_id") != self.owner_session():
+            raise EngineError("authorization request was prepared by another owner session")
         action = request.get("action")
         bindings = request.get("bindings")
         if action == "accept_finding":
@@ -903,10 +931,16 @@ class RunEngine:
             if row is None or findings.state_hash(row) != normalized.get("state_hash"):
                 raise EngineError("accept-finding request is stale")
         elif action == "discard_snapshot":
-            ledger = prepared.get("ledger")
             normalized = bindings if isinstance(bindings, Mapping) else {}
-            if not isinstance(ledger, str) \
-                    or retention.snapshot_id(ledger) != normalized.get("snapshot_id"):
+            repo_name = normalized.get("repo_name")
+            if repo_name not in self.contract["expected_repos"]:
+                raise EngineError("discard-snapshot request names an unknown repo")
+            ledger = self._ledger_of(repo_name)
+            try:
+                current = retention.snapshot_id(ledger)
+            except retention.RetentionError as exc:
+                raise EngineError(f"discard-snapshot request is stale: {exc}") from exc
+            if current != normalized.get("snapshot_id"):
                 raise EngineError("discard-snapshot request is stale")
         else:
             raise EngineError("prepared authorization action is unsupported")
@@ -917,31 +951,25 @@ class RunEngine:
             self.owner_session(), self.run_id, token_scope)
         if not ok:
             raise IntegrationRequired("approval_required", reason)
-        oracle = auth.AuthorizationOracle()
         now = __import__("time").time()
-        auth_event = landing.approve_request(
-            self.store, oracle, request, decided_at=now,
-            expires_at=now + 30 * 60, at=_now())
-        result = oracle.consume(
-            request_id=request_id, session_id=self.owner_session(),
-            run_id=self.run_id, action=action, bindings=bindings, now=now)
-        if not result.ok or result.consumption is None:
-            raise EngineError(result.reason)
-        consumed, _ = self.store.append_new(
-            writer=self.authority.writer("cli"), kind="auth_consumed", at=_now(),
-            payload=result.consumption)
+        try:
+            done = landing.consume_authorization(
+                self.store, request_id, session_id=self.owner_session(),
+                bindings=bindings, at=_now(), now=now)
+        except landing.LandingError as exc:
+            raise EngineError(str(exc)) from exc
+        consumed = done["consumed"]
         if action == "discard_snapshot":
-            repo_name, ledger = prepared["repo_name"], prepared["ledger"]
             retention.discard_snapshot(
-                consumption=result.consumption, run_id=self.run_id,
+                consumption=done["consumption"], run_id=self.run_id,
                 repo_name=repo_name, main=self.contract["repo_roots"][repo_name],
-                ledger=ledger)
+                ledger=str(ledger))
             self._save_retention([
                 row for row in self._retention_entries()
                 if row.get("repo_name") != repo_name])
         review.ReviewOrchestrator(self.store, self.run_dir).write_documents()
         self.write_projection()
-        return {"auth_event_id": auth_event["event_id"],
+        return {"auth_event_id": consumed["payload"]["auth_event_id"],
                 "consumed_event_id": consumed["event_id"],
                 "action": action, "state": self.projection()}
 
@@ -1274,7 +1302,33 @@ class RunEngine:
             if warning:
                 raise EngineError(warning)
 
+    def _landing_lock(self):
+        """One landing of this run at a time (fixing spec C4): land / run-land hold it
+        from the guards to the land event, so two processes cannot interleave a
+        guard, a consume and a commit. Non-blocking: the second caller is told."""
+        import contextlib
+        from utils.file_lock import flock_exclusive_nb, flock_unlock
+
+        @contextlib.contextmanager
+        def held():
+            path = self.store.paths.run / "landing.lock"
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with open(path, "a+", encoding="utf-8") as handle:
+                try:
+                    flock_exclusive_nb(handle)
+                except OSError as exc:
+                    raise EngineError("another landing of this run is in progress") from exc
+                try:
+                    yield
+                finally:
+                    flock_unlock(handle)
+        return held()
+
     def normal_land(self, *, message: str) -> dict[str, Any]:
+        with self._landing_lock():
+            return self._normal_land(message=message)
+
+    def _normal_land(self, *, message: str) -> dict[str, Any]:
         """Land active DELIVER in the v13 order (design §A3.7).
 
         Every land attempt is closed with a complete check set, success or failure:
@@ -1295,6 +1349,23 @@ class RunEngine:
         resumed = self._resume_normal_landing(message=message)
         if resumed is not None:
             return resumed
+        from core import hook_token
+        ok, why = hook_token.consume(self.run_dir, os.environ.get(hook_token.TOKEN_ENV),
+                                     self.owner_session(), self.run_id, "land")
+        if not ok:
+            # a landing needs the session's hook (fixing spec A7, design §C5.1): a
+            # hookless executor's work is kept and the run ends not_landed
+            logger.info("v1 land of %s without a hook token: %s", self.run_id, why)
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="land", at=_now(),
+                stage="deliver", attempt=self._next_attempt("deliver"),
+                ordinal=len(self.store.read_events()) + 1,
+                payload={"landing": "not_landed", "commit": None,
+                         "reason": "needs_hooked_session"})
+            self._settle(); self.write_projection()
+            finished = self.finish_not_landed()
+            return {**finished, "ok": False, "landing": "not_landed",
+                    "reason": "needs_hooked_session", "detail": why}
         attempt = self._next_attempt("land")
         guard_ids = ["DV-1", "LG-1", "LG-2", "LG-3", "LG-4", "LG-5"]
         opened, _ = self.store.append_new(

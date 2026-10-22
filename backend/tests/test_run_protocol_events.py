@@ -30,6 +30,8 @@ def _sample(expected):
         return 1.0
     if list in types:
         return []
+    if dict in types:
+        return {}
     if type(None) in types:
         return None
     raise AssertionError(expected)
@@ -81,8 +83,8 @@ def _make(kind: str, *, previous=None, **overrides):
 CASES = {
     "handout": ({"stage": "review", "round": 1, "attempt": 1,
                  "payload": {"expert_id": "correctness"}}, "attempt", 2),
-    "answer": ({"payload": {"handout_event_id": "handout-1"}, "producer": "hook"},
-               "payload.handout_event_id", "handout-2"),
+    "answer": ({"payload": {"tool_use_id": "tool-1"}, "producer": "hook"},
+               "payload.tool_use_id", "tool-2"),
     "answer_reuse": ({"payload": {"handout_event_id": "h1"}},
                      "payload.handout_event_id", "h2"),
     "finding_occ": ({"ordinal": 1, "payload": {"answer_event_id": "a1"},
@@ -354,7 +356,7 @@ def test_event_entry_uses_the_shared_safe_run_id(run_id):
 
 def test_occurrence_identity_field_cannot_be_externalized_into_a_different_identity():
     with pytest.raises(ev.EventError, match="occurrence field exceeds"):
-        _make("answer", payload={"handout_event_id": "x" * 1025})
+        _make("answer", payload={"tool_use_id": "x" * 1025})
 
 
 def test_producer_label_from_another_authority_is_not_trusted():

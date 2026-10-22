@@ -60,7 +60,7 @@ def _finalize(runner, target):
         main_red={"sha": "e" * 64, "generated_at": "now"},
         trace=[],     # direct has no exit criteria (execution plan v2 N1)
         node_results={"tests/test_x.py::test_value": {"result": "pass", "seq": call["seq"]}},
-        tdd_required=["tests/test_x.py"])
+        tdd_required=["tests/test_x.py"], whole_files=["tests/test_x.py"])
 
 
 def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
@@ -91,6 +91,9 @@ def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
     assert hook_token.start_oracle(52000 + __import__("os").getpid() % 1000) \
         or not hook_token.oracle_supported()
     try:
+        from core.run_protocol import landing     # the daemon, after the person
+        landing.approve_from_event(engine.store, request_id,
+                                   now=__import__("time").time(), at="2026-10-23T00:00:00Z")
         token = hook_token.issue(
             engine.run_dir, "s", "run_one", f"run-land:{request_id}")
         assert token

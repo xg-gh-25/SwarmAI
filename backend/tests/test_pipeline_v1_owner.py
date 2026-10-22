@@ -112,10 +112,23 @@ def test_run_land_request_is_human_gated_and_token_bound(tmp_path, monkeypatch):
                       run_id=run_id, subcommand=subcommand)
         return "token-1"
     monkeypatch.setattr("core.hook_token.issue", issue)
+    approved = []   # the daemon records the person's approval before the token (C1/C3)
+    monkeypatch.setattr(gate, "_record_approval", lambda rid, req: approved.append((rid, req)))
     result = gate._decide("session-a", command, {"command": command}, phase="approved")
     rewritten = result["hookSpecificOutput"]["updatedInput"]["command"]
     assert rewritten.startswith("SWARM_HOOK_TOKEN=token-1 ")
     assert issued["subcommand"] == "run-land:land_abc"
+    assert approved and approved[0][1] == "land_abc"
+
+
+def test_an_unrecorded_approval_never_issues_the_token(tmp_path, monkeypatch):
+    _run(tmp_path)
+    monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
+    command = _cmd("run-land") + " --request land_abc --message land"
+    monkeypatch.setattr("core.hook_token.issue", lambda *a: "token-1")
+    monkeypatch.setattr(gate, "_record_approval", lambda rid, req: "audit area not writable")
+    result = gate._decide("session-a", command, {"command": command}, phase="approved")
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_every_v1_mutation_is_owner_checked(tmp_path, monkeypatch):

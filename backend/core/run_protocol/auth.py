@@ -60,10 +60,13 @@ def normalize_bindings(action: str, value: Any) -> dict[str, Any]:
     if action in ("land", "land_skip_tests"):
         return {"repos": _land_bindings(value)}
     if action == "discard_snapshot":
-        if not isinstance(value, Mapping) or set(value) != {"snapshot_id"} \
-                or not isinstance(value.get("snapshot_id"), str) or not value["snapshot_id"]:
-            raise AuthorizationError("discard_snapshot binds exactly snapshot_id")
-        return {"snapshot_id": value["snapshot_id"]}
+        # the repo is signed too: the ledger path is derived from (run, repo), never
+        # read from the run's display JSON (C1 review)
+        if not isinstance(value, Mapping) or set(value) != {"snapshot_id", "repo_name"} \
+                or not isinstance(value.get("snapshot_id"), str) or not value["snapshot_id"] \
+                or not isinstance(value.get("repo_name"), str) or not value["repo_name"]:
+            raise AuthorizationError("discard_snapshot binds exactly snapshot_id and repo_name")
+        return {"snapshot_id": value["snapshot_id"], "repo_name": value["repo_name"]}
     if action == "accept_finding":
         if not isinstance(value, Mapping) or set(value) != {"canonical_id", "state_hash"}:
             raise AuthorizationError("accept_finding binding fields must be exact")
@@ -81,6 +84,9 @@ def binding_digest(action: str, bindings: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+NOTE_MAX = 600
+
+
 def make_request(*, request_id: str, session_id: str, run_id: str, action: str,
                  bindings: Mapping[str, Any], note: str | None = None) -> dict[str, Any]:
     """Create the land_request payload shown by the approval card."""
@@ -95,6 +101,10 @@ def make_request(*, request_id: str, session_id: str, run_id: str, action: str,
         raise AuthorizationError(f"unknown action {action!r}")
     if note is not None and not isinstance(note, str):
         raise AuthorizationError("note must be text or null")
+    if note is not None and len(note) > NOTE_MAX:
+        # the signed request lives in one event line; a longer note would be moved to a
+        # blob and the request could no longer be rebuilt from the event
+        raise AuthorizationError(f"note is longer than {NOTE_MAX} characters")
     normalized = normalize_bindings(action, bindings)
     return {
         "request_id": request_id, "session_id": session_id, "run_id": run_id,

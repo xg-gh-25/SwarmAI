@@ -81,6 +81,10 @@ import signal
 import tempfile
 
 import pytest
+
+from core.run_protocol.events import allow_hook_writer as _allow_hook_writer
+
+_allow_hook_writer()   # the test process plays the daemon; CLI subprocesses do not (C3)
 from fastapi.testclient import TestClient
 from httpx import AsyncClient, ASGITransport
 from typing import Generator, AsyncGenerator

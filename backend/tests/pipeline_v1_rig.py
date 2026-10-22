@@ -257,6 +257,11 @@ class Rig:
         return pipeline_human.on_user_stop(SESSION)
 
     # ── reads ───────────────────────────────────────────────────────────────
+    def engine(self):
+        """The run's engine as the daemon loads it (reads only; tests never append)."""
+        from core import pipeline_human
+        return pipeline_human.load_engine(self.run_id)
+
     def events(self) -> list[dict]:
         path = self.data / "state" / "pipeline_agent_audit" / "runs" / str(self.run_id) \
             / "events.jsonl"

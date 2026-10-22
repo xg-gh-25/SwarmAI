@@ -194,6 +194,8 @@ def _ambiguous(rest: list[str]) -> bool:
 def _needs_token(call: dict) -> "str | None":
     if call["tool"] == "pipeline_v1":
         subcommand = call.get("sub")
+        if subcommand == "land":
+            return "land"    # a landing proves it came through this hook (A7)
         if subcommand in {"run-land", "accept-finding", "discard-snapshot"}:
             request_ids = _opt_all(call.get("argv") or [], "--request")
             if len(request_ids) == 1 and request_ids[0]:
@@ -542,7 +544,8 @@ def _decide(sid: str, command: str, tool_input: dict,
         scope = _scope(data) if isinstance(data, dict) else None
         applies = scope == "isolated" or (scope == "undecided" and c["tool"] == "artifact_cli"
                                           and c["sub"] == "stage-start"
-                                          and c.get("stage") in _DECIDING_STAGES)
+                                          and c.get("stage") in _DECIDING_STAGES) \
+            or (c["tool"] == "pipeline_v1" and _needs_token(c) is not None)   # shared too (C4)
         if c.get("ambiguous") and _any_named_run_applies(c):
             # a repeated / abbreviated key option: argparse acts on another value than the
             # one read above, so every value counts — any run the gate applies to, or one
@@ -589,6 +592,10 @@ def _decide(sid: str, command: str, tool_input: dict,
                 if why:
                     return _deny(why)
             continue   # token after the user's approval (phase="approved")
+        if sub.split(":", 1)[0] in _APPROVED_ACTIONS:
+            why = _record_approval(rid, sub.split(":", 1)[1])
+            if why:
+                return _deny(why)
         nonce = hook_token.issue(run_file.parent, sid, rid, sub)
         if nonce is None:  # the daemon's token service is down: never run unproven
             logger.warning("run_owner_gate: hook-token service not running; %s %s denied",
@@ -601,6 +608,31 @@ def _decide(sid: str, command: str, tool_input: dict,
         return None
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
                                    "updatedInput": {**tool_input, "command": rewrite}}}
+
+
+_APPROVED_ACTIONS = frozenset({"run-land", "accept-finding", "discard-snapshot"})
+
+
+def _record_approval(run_id: str, request_id: str) -> "str | None":
+    """The person approved this command: the daemon records the ``auth`` fact for the
+    signed land_request it names (fixing spec C1/C3: no CLI process can write it).
+    Returns a denial reason, or None."""
+    import time
+    try:
+        from core import pipeline_human
+        from core.run_protocol import landing
+        from core.run_protocol.engine import _now
+        engine = pipeline_human.load_engine(run_id)
+        if engine is None:
+            return f"run {run_id} could not be loaded to record the approval"
+        landing.approve_from_event(
+            engine.store, request_id, now=time.time(), at=_now())
+    except Exception as exc:   # an unrecorded approval must never run the command
+        logger.warning("run_owner_gate: approval for %s %s not recorded: %s",
+                       run_id, request_id, exc)
+        return (f"the approval of {request_id} could not be recorded ({exc}); prepare a "
+                "new request with --prepare and approve that one")
+    return None
 
 
 def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check"):

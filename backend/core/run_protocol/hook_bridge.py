@@ -125,10 +125,8 @@ class ReviewHookBridge:
             return None
         del self._pending[pending.nonce]
         events = self.store.read_events()
-        if any(row.get("kind") == "answer"
-               and row.get("payload", {}).get("handout_event_id") == pending.handout_event_id
-               for row in events):
-            return None   # this handout is already answered; a retry needs a new attempt
+        # one answer per handout is checked under the run lock at the append (F-2);
+        # a retry of an answered handout needs a new attempt
         handout = next((row for row in events
                         if row.get("event_id") == pending.handout_event_id), None)
         if handout is None or handout.get("kind") != "handout" \
@@ -149,11 +147,23 @@ class ReviewHookBridge:
             **parsed.answer_payload,
             "raw": final_text,
         }
-        answer, _ = self.store.append_new(
-            writer=self.store.authority.writer("hook"), kind="answer",
-            at=completed_at, stage=handout["stage"], round=review_round,
-            attempt=handout["attempt"], payload=answer_payload,
-        )
+        handout_id = pending.handout_event_id
+
+        def answered(chain):
+            return ("this handout is already answered" if any(
+                row.get("kind") == "answer"
+                and row.get("payload", {}).get("handout_event_id") == handout_id
+                for row in chain) else None)
+        try:
+            answer, _ = self.store.append_new(
+                writer=self.store.authority.writer("hook"), kind="answer",
+                at=completed_at, stage=handout["stage"], round=review_round,
+                attempt=handout["attempt"], payload=answer_payload, refuse=answered,
+            )
+        except StoreError as exc:
+            if "already answered" in str(exc):
+                return None   # a concurrent second answer of the same handout
+            raise
         self.store.copy_to_session(self.session_id, answer)
         if parsed.state not in ("parsed", "partial"):
             # an unparsed answer is no usable output (§A3.2): its lines decide nothing

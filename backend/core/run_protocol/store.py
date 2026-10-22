@@ -264,12 +264,18 @@ class AuditStore:
             lock.close()
 
     def append_new(self, *, writer: ev.WriterCapability, kind: str, at: str,
-                   payload: Any, **envelope: Any) -> tuple[dict[str, Any], str]:
-        """Create and append one event while holding the run lock and current tail."""
+                   payload: Any, refuse: Callable[[list[dict[str, Any]]], str | None] | None = None,
+                   **envelope: Any) -> tuple[dict[str, Any], str]:
+        """Create and append one event while holding the run lock and current tail.
+        *refuse*, when given, sees the chain under that lock and may name a reason not
+        to append (a uniqueness rule no single event's identity can express)."""
         lock = self._locked()
         try:
             self._discard_torn_tail()
             chain = self.read_events()
+            why = refuse(chain) if refuse is not None else None
+            if why:
+                raise StoreError(why)
             event, blobs = ev.make_event(
                 writer=writer, run_id=self.paths.run_id, kind=kind, at=at,
                 payload=payload,

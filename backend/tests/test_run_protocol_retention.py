@@ -25,7 +25,8 @@ def _rig(tmp_path, monkeypatch):
     _git(main, "branch", "run/run_one")
     root = tmp_path / "ledger"; monkeypatch.setenv("SWARM_WORKTREE_LEDGER", str(root))
     ledger = root / "run_one" / "repo"; ledger.mkdir(parents=True)
-    (ledger / "meta.json").write_text(json.dumps({"snapshot": "a" * 40}))
+    (ledger / "meta.json").write_text(json.dumps({"snapshot": "a" * 40, "run_id": "run_one",
+                                                  "repo_name": "repo"}))
     return main, ledger
 
 
@@ -33,11 +34,11 @@ def _consume(ledger, snapshot=None):
     oracle = auth.AuthorizationOracle()
     request = auth.make_request(request_id="q", session_id="s", run_id="run_one",
                                 action="discard_snapshot",
-                                bindings={"snapshot_id": snapshot or snapshot_id(ledger)})
+                                bindings={"snapshot_id": snapshot or snapshot_id(ledger), "repo_name": "repo"})
     oracle.issue(request, auth_event_id="a" * 64, decided_at=0, expires_at=100)
     return oracle.consume(request_id="q", session_id="s", run_id="run_one",
                           action="discard_snapshot",
-                          bindings={"snapshot_id": snapshot or snapshot_id(ledger)}, now=1).consumption
+                          bindings={"snapshot_id": snapshot or snapshot_id(ledger), "repo_name": "repo"}, now=1).consumption
 
 
 def test_only_matching_consumption_deletes_branch_and_ledger(tmp_path, monkeypatch):

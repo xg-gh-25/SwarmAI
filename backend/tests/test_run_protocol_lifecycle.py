@@ -330,6 +330,7 @@ def _authorize_land(stream, action="land"):
     opened = stream.attempt("land", sorted(guards))
     stream.add("land_request", {"request_id": "q-land", "action": action,
                                 "binding_digest": request["binding_digest"],
+                                "request": request,
                                 "guard_attempt_event_id": opened["event_id"],
                                 "guard_check_ids": sorted(guards)}, transition=False)
     grant = stream.add("auth", {"request_id": "q-land", "session_id": "s1",
@@ -371,9 +372,27 @@ def test_human_land_and_skip_tests_require_action_specific_guard_sets():
 
 def test_land_request_without_guards_cannot_reach_authorization():
     stream = Stream()
-    stream.add("land_request", {"request_id": "q", "action": "land",
-                                "binding_digest": "d" * 64}, transition=False)
+    bindings = {"repo": {"code_tree": "1" * 40, "delivery_tree": "2" * 40,
+                         "report_sha": "3" * 64}}
+    request = auth.make_request(request_id="q", session_id="s1", run_id=stream.run_id,
+                                action="land", bindings=bindings)
+    stream.add("land_request", {"request_id": "q", "action": "land", "request": request,
+                                "binding_digest": request["binding_digest"]}, transition=False)
     with pytest.raises(lc.LifecycleError, match="action guards"):
+        stream.projection()
+
+
+def test_a_land_request_whose_request_does_not_match_its_digest_is_refused():
+    stream = Stream()
+    bindings = {"repo": {"code_tree": "1" * 40, "delivery_tree": "2" * 40,
+                         "report_sha": "3" * 64}}
+    request = auth.make_request(request_id="q", session_id="s1", run_id=stream.run_id,
+                                action="land", bindings=bindings)
+    forged = {**request, "bindings": {"repos": {"repo": {**bindings["repo"],
+                                                         "code_tree": "9" * 40}}}}
+    stream.add("land_request", {"request_id": "q", "action": "land", "request": forged,
+                                "binding_digest": request["binding_digest"]}, transition=False)
+    with pytest.raises(lc.LifecycleError, match="request"):
         stream.projection()
 
 

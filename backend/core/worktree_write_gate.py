@@ -154,6 +154,27 @@ def cli_command(cli: "dict | None", args: str, script: str = "artifact_cli.py") 
     return f"backend/.venv/bin/python backend/scripts/{script} {args}"
 
 
+def _v1_reserved(p: str, worktree: str, run_id: str) -> "str | None":
+    """A v1 run's ``.aidlc/deliverables/`` is written only by its landing, which builds
+    the REPORT into the delivery tree itself (fixing spec C4): an agent write there
+    would land unreviewed bytes beside the REPORT or shadow it."""
+    try:
+        rel = os.path.relpath(p, os.path.realpath(worktree)).replace(os.sep, "/")
+    except ValueError:
+        return None
+    if not (rel == ".aidlc/deliverables" or rel.startswith(".aidlc/deliverables/")):
+        return None
+    try:
+        from config import get_app_data_dir
+        from core.run_protocol.runner import is_v1_run
+        if not is_v1_run(get_app_data_dir(), run_id):
+            return None
+    except Exception:   # unknown: the reserved path is still reserved
+        pass
+    return (f"{p} is under .aidlc/deliverables/, which run {run_id}'s landing writes "
+            "(the REPORT goes into the commit from the audit log); do not write it")
+
+
 def _file_verdict(p: str, own: "_Own | None") -> "dict | None":
     from core.run_worktree import run_for_path
     hit = run_for_path(p)
@@ -164,6 +185,9 @@ def _file_verdict(p: str, own: "_Own | None") -> "dict | None":
         if rid != own.id or repo not in own.wts:
             return _deny(f"{p} is inside run {rid}'s worktree, not this session's run "
                          f"({own.id}). Write only under {', '.join(own.wts.values())}.")
+        reserved = _v1_reserved(p, own.wts[repo], rid)
+        if reserved:
+            return _deny(reserved)
         try:
             st = os.lstat(p)
             if st.st_nlink > 1 and not os.path.islink(p):

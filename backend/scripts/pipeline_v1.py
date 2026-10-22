@@ -21,6 +21,8 @@ if str(_BACKEND) not in sys.path:
 
 from config import get_app_data_dir  # noqa: E402
 from core.run_protocol.engine import EngineError, RunEngine  # noqa: E402
+from core.run_protocol.landing import LandingError  # noqa: E402
+from core.run_worktree import mode_enabled  # noqa: E402
 
 
 def _workspace() -> Path:
@@ -66,7 +68,6 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--project", required=True)
     create.add_argument("--profile", default="direct")
     create.add_argument("--session-id", default=os.environ.get("SWARM_APP_SESSION_ID"))
-    create.add_argument("--mode", choices=("isolated", "shared"), default="isolated")
     create.add_argument("--repo", action="append", default=[])
     create.add_argument("--run-id")
     create.add_argument("--risk-test-file-cap", type=int, default=200)
@@ -149,7 +150,9 @@ def execute(args) -> dict[str, Any]:
         engine = RunEngine.create(
             data_dir=get_app_data_dir(), workspace=_workspace(), project=args.project,
             profile=args.profile, session_id=args.session_id, repos=_repos(args.repo),
-            mode=args.mode, risk_test_file_cap=args.risk_test_file_cap,
+            # the mode is a setting, never the agent's choice (C4, design §C5.1)
+            mode="isolated" if mode_enabled() else "shared",
+            risk_test_file_cap=args.risk_test_file_cap,
             run_id=args.run_id, transcript_ids=args.transcript_id,
             requirement=args.requirement)
         return {"ok": True, "pipeline_id": engine.run_id,
@@ -227,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
         result = execute(parser().parse_args(argv))
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 0 if result.get("ok") is not False else 1
-    except (ValueError, EngineError) as exc:
+    except (ValueError, EngineError, LandingError) as exc:   # always JSON (C5)
         payload = {"ok": False, "error": str(exc)}
         code = getattr(exc, "code", None)
         if isinstance(code, str) and code:
@@ -237,4 +240,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    from core.run_protocol.events import restrict_process
+    restrict_process("cli")      # the agent's CLI signs as cli, never hook / runner (C3)
     raise SystemExit(main())

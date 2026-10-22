@@ -234,22 +234,32 @@ def test_a_person_answers_and_the_agent_cannot(rig):
     assert r.kinds().count("human_answer") == 1 and r.state()["status"] == "active"
 
 
-@_xfail("C3", "a CLI process can obtain the hook writer and sign a human_answer")
 def test_a_cli_process_cannot_sign_as_the_hook(rig):
+    """The CLI's own entry narrows the process to the cli writer before it runs any
+    command, so nothing it executes afterwards can sign as the hook (C3). This is a
+    code-level split: a process that never enters the CLI and reads the key itself is
+    the separate daemon-signing design (fixing spec §9)."""
     import subprocess, sys
-    from tests.pipeline_v1_rig import BACKEND, PROJECT
+    from tests.pipeline_v1_rig import PV1
     r = rig("direct")
     r.create()
     code = (
-        "import sys; sys.path.insert(0, %r)\n"
-        "from config import get_app_data_dir\n"
-        "from core.run_protocol.engine import RunEngine\n"
-        "import os\n"
-        "e = RunEngine.load(data_dir=get_app_data_dir(), workspace=__import__('pathlib').Path(os.environ['SWARM_WORKSPACE']), project=%r, run_id=%r)\n"
-        "e.authority.writer('hook')\n" % (str(BACKEND), PROJECT, r.run_id))
-    proc = subprocess.run([sys.executable, "-c", code], env=r.env, capture_output=True, text=True)
-    assert proc.returncode != 0, "the hook writer must not exist outside the daemon"
-
+        "import runpy, sys\n"
+        "sys.argv = [%r, 'status', '--project', %r, '--run-id', %r]\n"
+        "try:\n"
+        "    runpy.run_path(%r, run_name='__main__')\n"
+        "except SystemExit:\n"
+        "    pass\n"
+        "from core.run_protocol.events import EventAuthority, allow_hook_writer\n"
+        "try:\n"
+        "    allow_hook_writer()\n"
+        "except Exception:\n"
+        "    pass\n"
+        "EventAuthority(b'k' * 32).writer('hook')\n"
+        % (str(PV1), "P", r.run_id, str(PV1)))
+    proc = subprocess.run([sys.executable, "-c", code], env=r.env, capture_output=True,
+                          text=True, cwd=str(PV1.parents[1]))
+    assert proc.returncode != 0 and "may not write as 'hook'" in proc.stderr, proc.stderr[-500:]
 
 def test_user_stop_pauses_and_resume_continues(rig):
     r = rig("direct")
@@ -476,3 +486,141 @@ def test_a_direct_run_cannot_ask_and_its_log_still_folds(rig):
     out = r.v1("decision-request", "--artifact", _decision(r), "--document", "REQUIREMENTS")
     assert out.get("ok") is False and "trivial" in out.get("error", ""), out
     assert len(r.events()) == before and r.state()["stage"] == "build"
+
+
+# ── C1 / C6: execution reads the signed land_request event, once ────────────
+
+def test_landing_reads_its_request_from_the_event_not_the_json(rig):
+    r = rig("trivial")
+    _not_landed_tests_red(r)
+    base = _main(r)
+    prepared = _prepare(r)
+    Path(prepared["path"]).unlink()                 # the JSON is a display copy only
+    landed = _request(r, prepared)
+    assert landed.get("ok") is True and _main(r) != base, landed
+
+
+def test_the_approval_card_shows_what_lands(rig):
+    from core import security_hooks
+    r = rig("trivial")
+    _not_landed_tests_red(r)
+    prepared = _prepare(r)
+    request = prepared["prepared"]["request"]
+    command = f"python backend/scripts/pipeline_v1.py run-land --project P --run-id {r.run_id} " \
+              f"--request {request['request_id']} --message m"
+    card = security_hooks.v1_land_card(command)
+    row = request["bindings"]["repos"]["repo"]
+    assert r.run_id in card and "skip tests: yes" in card, card
+    assert row["code_tree"][:12] in card and row["delivery_tree"][:12] in card, card
+    assert "accepted by XG" in card, card
+
+
+def test_an_approval_is_consumed_once_and_a_second_try_is_integrity(rig):
+    from core.run_protocol import landing
+    r = rig("trivial")
+    _not_landed_tests_red(r)
+    prepared = _prepare(r)
+    assert _request(r, prepared).get("ok") is True
+    engine = r.engine()
+    request_id = prepared["prepared"]["request"]["request_id"]
+    with pytest.raises(landing.LandingError, match="already consumed"):
+        landing.consume_authorization(
+            engine.store, request_id, session_id=engine.owner_session(),
+            bindings=prepared["prepared"]["request"]["bindings"]["repos"],
+            at="2026-10-23T00:00:00Z", now=__import__("time").time())
+    assert any(e["kind"] == "integrity" and e["payload"]["conflict_type"] == "auth_consumed_twice"
+               for e in r.events())
+
+
+# ── C5: manual landing without a final, and its errors are JSON ─────────────
+
+def test_skip_tests_lands_a_run_that_never_ran_tests(rig):
+    r = rig("direct")
+    r.create()
+    r.edit(Rig.CHANGE)
+    assert r.v1("abandon", "--reason", "XG takes it from here").get("ok") is True
+    base = _main(r)
+    landed = _request(r, _prepare(r))
+    assert landed.get("ok") is True and _main(r) != base, landed
+
+
+def test_a_guard_failure_on_prepare_is_json_not_a_traceback(rig):
+    from tests.pipeline_v1_rig import _git
+    r = rig("direct")
+    r.create()
+    r.edit(Rig.CHANGE)
+    assert r.v1("abandon", "--reason", "stop").get("ok") is True
+    (r.repo / "other.txt").write_text("moved\n")
+    _git(r.repo, "add", "other.txt"); _git(r.repo, "commit", "-qm", "main moves")
+    out = r.v1("run-land", "--prepare", "--skip-tests", "--note", "n")
+    assert out.get("ok") is False and "LG-4" in out.get("error", ""), out
+
+
+def test_a_tested_prepare_on_an_untested_tree_names_the_runner(rig):
+    r = rig("direct")
+    r.create()
+    r.edit(Rig.CHANGE)
+    assert r.v1("abandon", "--reason", "stop").get("ok") is True
+    out = r.v1("run-land", "--prepare", "--note", "n")
+    assert out.get("ok") is False and "--mode regression" in out.get("error", ""), out
+
+
+# ── A7 / C4: a landing must come through the hook; mode is a setting ────────
+
+def test_a_land_without_the_hook_ends_not_landed_needs_hooked_session(rig):
+    import subprocess, sys
+    from tests.pipeline_v1_rig import PV1
+    r = rig("direct")
+    r.create()
+    r.drive(until="deliver")
+    base = _main(r)
+    argv = [sys.executable, str(PV1), "land", *r._run_args(), "--message",
+            "fix\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"]
+    out, _ = r._exec(argv)                                      # straight, no hook
+    assert out.get("reason") == "needs_hooked_session", out
+    assert _main(r) == base and r.state()["landing"] == "not_landed"
+
+
+def test_create_has_no_mode_option(rig):
+    r = rig("direct")
+    out = r.v1("create", "--project", "P", "--profile", "direct", "--mode", "shared",
+               "--requirement", "x", "--repo", f"repo={r.repo}")
+    assert out.get("ok") is not True, out
+
+
+def test_an_agent_cannot_write_the_runs_deliverables(rig):
+    from core import worktree_write_gate as wg
+    r = rig("direct")
+    r.create()
+    r.edit(Rig.CHANGE)
+    own = wg._Own(r.run_id, [("repo", str(r.worktree))])
+    def verdict(path):
+        out = wg.judge({"tool_name": "Write", "tool_input": {"file_path": str(path)}}, own)
+        return ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecision")
+    assert verdict(r.worktree / ".aidlc" / "deliverables" / r.run_id / "REPORT.md") == "deny"
+    assert verdict(r.worktree / "backend" / "core" / "mod.py") is None
+
+
+def test_a_second_landing_of_the_same_run_is_refused_while_one_runs(rig):
+    import fcntl
+    r = rig("direct")
+    r.create()
+    r.drive(until="deliver")
+    base = _main(r)
+    lock = r.data / "state" / "pipeline_agent_audit" / "runs" / r.run_id / "landing.lock"
+    with open(lock, "a+") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)                 # another process is landing
+        out = r.v1("land", "--message", "fix\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
+    assert out.get("ok") is False and "in progress" in out.get("error", ""), out
+    assert _main(r) == base
+
+
+def test_the_cli_has_no_way_to_answer_a_decision(rig):
+    """C2 (fc6d2ab2): only the daemon records a person's answer."""
+    r = rig("trivial")
+    r.create()
+    asked = r.v1("decision-request", "--artifact", _decision(r), "--document", "REQUIREMENTS")
+    assert asked.get("ok") is True, asked
+    out = r.v1("decision-answer", "--request-id", "q1", "--option", "a")
+    assert out.get("ok") is not True
+    assert "human_answer" not in r.kinds() and r.state()["status"] == "awaiting_human"

@@ -10,7 +10,7 @@ import subprocess
 import pytest
 
 from core.run_protocol import auth, checks, events as ev, git_tree, tree
-from core.run_protocol.landing import (LandingError, approve_request, execute_request,
+from core.run_protocol.landing import (LandingError, approve_from_event, execute_request,
                                        prepare_request)
 from core.run_protocol.store import AuditStore
 
@@ -49,6 +49,7 @@ def test_prepare_approve_execute_binds_report_and_lands(tmp_path):
     prepared = prepare_request(
         store, run_id="run_one", session_id="session_1", action="land",
         repos={"repo": str(worktree)}, context=context, at=AT, request_id="q1",
+        integration_roots={"repo": str(main)},
         render_report=lambda request, results: f"# Report\nrequest: {request}\n".encode())
     assert prepared["request"]["binding_digest"]
     kinds = [row["kind"] for row in store.read_events()]
@@ -56,21 +57,21 @@ def test_prepare_approve_execute_binds_report_and_lands(tmp_path):
     assert kinds.count("check") == 5
     assert kinds.index("land_intent") < kinds.index("render") < len(kinds) - 1
     assert kinds[-1] == "land_request"
-    oracle = auth.AuthorizationOracle()
-    approve_request(store, oracle, prepared["request"], decided_at=0, expires_at=100,
-                    at=AT)
+    approve_from_event(store, "q1", now=0, at=AT)     # the daemon, after the person
     commits = execute_request(
-        store, oracle, prepared, session_id="session_1",
+        store, "q1", session_id="session_1",
         repos={"repo": str(worktree)}, integration_roots={"repo": str(main)},
         message="feat: land\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>", at=AT, now=1)
     assert _git(main, "rev-parse", "HEAD") == commits["repo"]
     assert (main / "a.py").read_text() == "new\n"
     assert (main / ".aidlc/deliverables/run_one/REPORT.md").is_file()
     assert [row["kind"] for row in store.read_events()][-3:] == ["auth", "auth_consumed", "land"]
+    assert prepared["request"] == store.read_events()[-4]["payload"]["request"]   # C1
     with pytest.raises(LandingError, match="already consumed"):
-        execute_request(store, oracle, prepared, session_id="session_1",
+        execute_request(store, "q1", session_id="session_1",
                         repos={"repo": str(worktree)}, integration_roots={"repo": str(main)},
                         message="again", at=AT, now=2)
+    assert [row["kind"] for row in store.read_events()][-1] == "integrity"
 
 
 def test_tree_change_after_prepare_refuses_before_consuming(tmp_path):
@@ -78,15 +79,15 @@ def test_tree_change_after_prepare_refuses_before_consuming(tmp_path):
     prepared = prepare_request(
         store, run_id="run_one", session_id="session_1", action="land",
         repos={"repo": str(worktree)}, context=context, at=AT, request_id="q1",
+        integration_roots={"repo": str(main)},
         render_report=lambda *_: b"# Report\n")
-    oracle = auth.AuthorizationOracle()
-    approve_request(store, oracle, prepared["request"], decided_at=0, expires_at=100, at=AT)
+    approve_from_event(store, "q1", now=0, at=AT)
     (worktree / "a.py").write_text("changed again\n")
     with pytest.raises(LandingError, match="trees changed"):
-        execute_request(store, oracle, prepared, session_id="session_1",
+        execute_request(store, "q1", session_id="session_1",
                         repos={"repo": str(worktree)}, integration_roots={"repo": str(main)},
                         message="x", at=AT, now=1)
-    assert oracle.pending() == 1
+    assert "auth_consumed" not in [row["kind"] for row in store.read_events()]
 
 
 def test_landing_message_always_carries_the_project_trailer():

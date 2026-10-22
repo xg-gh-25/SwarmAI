@@ -21,6 +21,32 @@ from core.run_protocol.identifiers import IdentifierError, validate_run_id
 MAX_INLINE_STRING_BYTES = 1_024
 MAX_EVENT_LINE_BYTES = 4_096
 PRODUCERS = frozenset({"hook", "cli", "runner"})
+
+# Which writers THIS process may hold (fixing spec C3). The hook writer exists only in
+# the daemon (main.py calls allow_hook_writer at import; the test process does too, as
+# it plays the daemon); the CLI and the runner narrow themselves to their own writer
+# at entry. Narrowing is one-way. The signing key itself is a separate design (§9).
+_hook_writer_allowed = False
+_process_producers: frozenset[str] = frozenset({"cli", "runner"})
+
+
+def allow_hook_writer() -> None:
+    """The daemon process: it alone records hook facts (answers, approvals, owner)."""
+    global _hook_writer_allowed, _process_producers
+    if _process_producers != frozenset({"cli", "runner"}) and "hook" not in _process_producers:
+        raise EventError("a process narrowed to its own writer cannot become the daemon")
+    _hook_writer_allowed = True
+    _process_producers = _process_producers | {"hook"}
+
+
+def restrict_process(*producers: str) -> None:
+    """A CLI / runner process: from now on only *producers* may be obtained."""
+    global _hook_writer_allowed, _process_producers
+    wanted = frozenset(producers)
+    if not wanted or not wanted <= PRODUCERS:
+        raise EventError("restrict_process needs known producers")
+    _process_producers = _process_producers & wanted
+    _hook_writer_allowed = _hook_writer_allowed and "hook" in _process_producers
 FORCED_BLOB_KEYS = frozenset({"raw", "prompt", "test_details"})
 
 # Field paths use envelope keys directly and ``payload.<key>`` for payload keys.
@@ -81,7 +107,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
     # one answer per handout: the event id derives from the handout, so a second
     # spawn of the same handout can never add a second answer (a retry needs a new
     # handout attempt)
-    "answer": _spec("hook", ("payload.handout_event_id",), "payload.expert_id",
+    # one answer per tool call (design §A3.1); one per handout is the bridge's rule,
+    # checked under the run lock (F-2)
+    "answer": _spec("hook", ("payload.tool_use_id",), "payload.expert_id",
                     {"handout_event_id": str, "prompt_sha": str, "tool_use_id": str,
                      "expert_id": str, "stage": str, "round": int, "state": str}, {"raw": str, "verdict": (str, type(None)),
                      "n_findings": int, "n_status": int}),
@@ -127,8 +155,11 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "land_intent": _spec("cli", ("payload.stage_attempt_event_id|request_id",), None,
                          {}, {"stage_attempt_event_id": str, "request_id": str}),
     "land_request": _spec("cli", ("payload.request_id",), "payload.request_id",
-                          {"request_id": str, "action": str, "binding_digest": str},
-                          {"guard_attempt_event_id": str, "guard_check_ids": list}),
+                          {"request_id": str, "action": str, "binding_digest": str,
+                           "request": dict},
+                          # landing: what the approval card shows and execute reads (C1)
+                          {"guard_attempt_event_id": str, "guard_check_ids": list,
+                           "report_sha": str, "bases": dict, "push_reasons": int}),
     "auth": _spec("hook", ("payload.request_id",), "payload.request_id",
                   {"request_id": str, "session_id": str, "run_id": str,
                    "action": str, "binding_digest": str, "expires_at": (int, float)}),
@@ -186,7 +217,7 @@ class EventAuthority:
     def writer(self, producer: str) -> "WriterCapability":
         if producer not in PRODUCERS:
             raise EventError(f"unknown producer {producer!r}")
-        return WriterCapability(self, producer)
+        return WriterCapability(self, producer)   # the process check lives there
 
     def _sign(self, event: Mapping[str, Any]) -> str:
         body = {key: value for key, value in event.items() if key != "signature"}
@@ -225,6 +256,9 @@ class WriterCapability:
     def __init__(self, authority: EventAuthority, producer: str):
         if not isinstance(authority, EventAuthority) or producer not in PRODUCERS:
             raise EventError("invalid writer capability")
+        if producer not in _process_producers or (producer == "hook" and not _hook_writer_allowed):
+            raise EventError(f"this process may not write as {producer!r}: hook facts are "
+                             "recorded only by the SwarmAI daemon")
         self._authority = authority
         self.producer = producer
 

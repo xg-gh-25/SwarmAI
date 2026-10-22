@@ -386,6 +386,21 @@ def _authorization(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         request_id = payload["request_id"]
         if request_id in run["land_requests"]:
             raise LifecycleError("land_request id already exists")
+        from core.run_protocol import auth as _auth
+        request = payload["request"]
+        try:
+            rebuilt = _auth.make_request(
+                request_id=request.get("request_id"), session_id=request.get("session_id"),
+                run_id=request.get("run_id"), action=request.get("action"),
+                bindings=(request.get("bindings") or {}).get("repos")
+                if request.get("action") in ("land", "land_skip_tests")
+                else request.get("bindings"), note=request.get("note"))
+        except (_auth.AuthorizationError, AttributeError, TypeError) as exc:
+            raise LifecycleError(f"land_request carries an invalid request: {exc}") from exc
+        if rebuilt != request or request["request_id"] != request_id \
+                or request["run_id"] != run["run_id"] or request["action"] != payload["action"] \
+                or request["binding_digest"] != payload["binding_digest"]:
+            raise LifecycleError("land_request's request does not match its own bindings")
         if payload["action"] in ("land", "land_skip_tests"):
             expected = LG_CHECKS if payload["action"] == "land" else SKIP_LAND_CHECKS
             attempt = run.get("open_attempt")

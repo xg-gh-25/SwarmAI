@@ -5602,4 +5602,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    from core.run_protocol.events import restrict_process
+    restrict_process("runner")   # the runner signs only its own calls (C3)
     sys.exit(main())

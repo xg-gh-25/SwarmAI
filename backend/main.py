@@ -20,6 +20,9 @@ from pathlib import Path
 
 from config import settings, get_app_data_dir, get_log_file_path
 from core import session_registry
+from core.run_protocol.events import allow_hook_writer as _allow_hook_writer
+
+_allow_hook_writer()   # this daemon alone records Pipeline v1 hook facts (fixing spec C3)
 from utils.bundle_paths import get_resource_file
 from routers import agents_router, skills_router, experts_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router, escalations_router, attention_router, voice_router, hive_router
 from routers.autonomous_jobs import router as autonomous_jobs_router

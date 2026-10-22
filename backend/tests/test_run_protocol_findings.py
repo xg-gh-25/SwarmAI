@@ -316,7 +316,8 @@ def _accept(stream, finding, bound_state_hash=None):
     request = auth.make_request(request_id="q", session_id="s", run_id="run_x",
                                 action="accept_finding", bindings=bindings)
     stream.add("land_request", {"request_id": "q", "action": "accept_finding",
-                                "binding_digest": request["binding_digest"]})
+                                "binding_digest": request["binding_digest"],
+                                "request": request})
     grant = stream.add("auth", {"request_id": "q", "session_id": "s",
         "run_id": "run_x", "action": "accept_finding",
         "binding_digest": request["binding_digest"], "expires_at": 1800.0})
@@ -383,7 +384,8 @@ def test_accept_finding_digest_cannot_be_rebound_to_another_finding():
     request = auth.make_request(request_id="q", session_id="s", run_id="run_x",
                                 action="accept_finding", bindings=bindings_a)
     stream.add("land_request", {"request_id": "q", "action": "accept_finding",
-                                "binding_digest": request["binding_digest"]})
+                                "binding_digest": request["binding_digest"],
+                                "request": request})
     grant = stream.add("auth", {"request_id": "q", "session_id": "s",
         "run_id": "run_x", "action": "accept_finding",
         "binding_digest": request["binding_digest"], "expires_at": 1800.0})

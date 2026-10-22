@@ -32,6 +32,10 @@ def snapshot_id(ledger: str | Path) -> str:
         raise RetentionError(f"snapshot metadata unreadable: {exc}") from exc
     if not isinstance(value, dict) or not value.get("snapshot"):
         raise RetentionError("snapshot metadata is malformed")
+    # the snapshot names its own run and repo: copied bytes cannot stand for another
+    if (value.get("run_id"), value.get("repo_name")) != (path.parent.parent.name,
+                                                        path.parent.name):
+        raise RetentionError("snapshot metadata belongs to another run or repo")
     return hashlib.sha256(data).hexdigest()
 
 
@@ -49,6 +53,8 @@ def discard_snapshot(*, consumption: Consumption, run_id: str, repo_name: str,
     bound = consumption.bindings.get("snapshot_id")
     if bound != expected:
         raise RetentionError("authorization is bound to another snapshot")
+    if consumption.bindings.get("repo_name") != repo_name:
+        raise RetentionError("authorization is bound to another repo")
     root = Path(ledger).resolve()
     expected_root = (run_worktree.ledger_root() / run_id / repo_name).resolve()
     if root != expected_root or root.is_symlink():

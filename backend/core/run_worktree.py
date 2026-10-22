@@ -523,8 +523,15 @@ def create(run_id: str, repo_name: str, main: "str | Path",
     path.parent.mkdir(parents=True, exist_ok=True)
     if workspace is not None:
         stamp_workspace(run_id, workspace)
-    p = git(main, "-c", "core.hooksPath=/dev/null", "worktree", "add", "-q", "-b",
-            branch_name(run_id), str(path), head, timeout=120)
+    branch = branch_name(run_id)
+    kept = at is not None and git(main, "rev-parse", "-q", "--verify",
+                                  f"refs/heads/{branch}").returncode == 0
+    if kept and _rev(main, f"refs/heads/{branch}") != head:
+        raise WorktreeError("worktree_create_failed",
+                            f"{branch} moved since the snapshot was taken; restore it by hand")
+    # a restore reuses the run branch a release kept (it still points at the base)
+    p = git(main, "-c", "core.hooksPath=/dev/null", "worktree", "add", "-q",
+            *((str(path), branch) if kept else ("-b", branch, str(path), head)), timeout=120)
     if p.returncode != 0:
         shutil.rmtree(path, ignore_errors=True)
         raise WorktreeError("worktree_create_failed", (p.stderr or p.stdout).strip()[:300])

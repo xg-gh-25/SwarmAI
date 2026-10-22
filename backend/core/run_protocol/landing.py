@@ -2,12 +2,15 @@
 
 Public symbols:
 - ``prepare_request`` — land_intent → REPORT → tree guards → land_request.
-- ``approve_request`` — hook-side auth event plus daemon oracle registration.
-- ``execute_request`` — exact tree recheck, atomic auth consume, commit-tree and land event.
+- ``request_event`` — the signed land_request payload: the only source execution reads.
+- ``approve_from_event`` — the daemon's ``auth`` fact after the person approved (C1, C3).
+- ``consume_authorization`` — one-use consume under the run lock; a second is integrity (C6).
+- ``execute_request`` — exact tree recheck against the event, consume, commit-tree, land.
 - ``LandingError`` — a deterministic guard, authorization, or git failure.
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 import hashlib
 import json
@@ -30,6 +33,16 @@ def _evaluate(ids: list[str], context: checks.CheckContext) -> dict[str, tuple[b
     return {check_id: checks.evaluate(check_id, context) for check_id in ids}
 
 
+def _rev(root: str, ref: str, other: str | None = None) -> str:
+    """``rev-parse <ref>`` in *root*, or the merge-base of *ref* and *other*'s HEAD."""
+    argv = (["git", "-C", str(root), "rev-parse", ref] if other is None else
+            ["git", "-C", str(root), "merge-base", ref, _rev(other, "HEAD")])
+    try:
+        return subprocess.run(argv, check=True, capture_output=True, text=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise LandingError(f"git {' '.join(argv[3:])} failed in {root}: {exc}") from exc
+
+
 def _require(results: Mapping[str, tuple[bool, str]]) -> None:
     failed = {check_id: detail for check_id, (passed, detail) in results.items() if not passed}
     if failed:
@@ -40,11 +53,16 @@ def prepare_request(
     store: AuditStore, *, run_id: str, session_id: str, action: str,
     repos: Mapping[str, str], context: checks.CheckContext, at: str,
     render_report: Callable[[str, Mapping[str, tuple[bool, str]]], bytes],
-    note: str | None = None, request_id: str,
+    note: str | None = None, request_id: str, push_reasons: int = 0,
+    integration_roots: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Prepare a one-use manual landing request without committing anything."""
+    """Prepare a one-use manual landing request without committing anything. Every
+    fact execution and the approval card need is in the signed land_request event
+    (C1); the JSON the CLI also writes is only for display."""
     if action not in ("land", "land_skip_tests"):
         raise LandingError("manual landing action must be land or land_skip_tests")
+    if note is not None and (not isinstance(note, str) or len(note) > auth.NOTE_MAX):
+        raise LandingError(f"--note is limited to {auth.NOTE_MAX} characters")
     guard_ids = (["LG-3", "LG-4"] if action == "land_skip_tests"
                  else ["LG-1", "LG-2", "LG-3", "LG-4", "LG-5"])
     prior_attempts = [event for event in store.read_events()
@@ -54,9 +72,19 @@ def prepare_request(
         writer=store.authority.writer("cli"), kind="stage_attempt", at=at,
         stage="land", attempt=attempt_number, payload={"check_ids": guard_ids})
     code_trees = tree.build_code_trees(repos, run_id, git_tree.write_tree, git_tree.list_reserved)
-    run_facts = {**dict(context.run), "code_trees": code_trees,
-                 "landing_bases": {name: context.final["repos"][name]["base"]
-                                   for name in repos if name in context.final.get("repos", {})}}
+    roots = dict(integration_roots or {})
+    if set(roots) != set(repos):
+        raise LandingError("manual landing needs every repo's integration root")
+    heads = {name: _rev(roots[name], "HEAD") for name in repos}
+    if action == "land_skip_tests":
+        # no final is needed (C5): the run's own fork point is its base, and LG-4 holds
+        # when main has not moved past it
+        run_bases = {name: _rev(repos[name], "HEAD", roots[name]) for name in repos}
+    else:
+        run_bases = {name: context.final["repos"][name]["base"]
+                     for name in repos if name in (context.final.get("repos") or {})}
+    run_facts = {**dict(context.run), "code_trees": code_trees, "landing_bases": heads,
+                 "run_bases": run_bases, "skip_tests": action == "land_skip_tests"}
     current = dataclasses.replace(context, events=tuple(store.read_events()), run=run_facts)
     pre_ids = [] if action == "land_skip_tests" else ["LG-1", "LG-2", "LG-5"]
     pre = _evaluate(pre_ids, current)
@@ -102,35 +130,117 @@ def prepare_request(
     _require({**post, **dv1})
     normalized = {name: {key: row[key] for key in ("code_tree", "delivery_tree", "report_sha")}
                   for name, row in bindings.items()}
+    bases = dict(run_bases)
     request = auth.make_request(request_id=request_id, session_id=session_id,
                                 run_id=run_id, action=action, bindings=normalized, note=note)
     guard_ids = [*pre_ids, *post_ids]
-    event, _ = store.append_new(
-        writer=store.authority.writer("cli"), kind="land_request", at=at,
-        stage="deliver", attempt=attempt_number,
-        payload={"request_id": request_id, "action": action,
-                 "binding_digest": request["binding_digest"],
-                 "guard_attempt_event_id": attempt_event["event_id"],
-                 "guard_check_ids": guard_ids},
-    )
+    from core.run_protocol.store import StoreError
+    try:
+        event, _ = store.append_new(
+            writer=store.authority.writer("cli"), kind="land_request", at=at,
+            stage="deliver", attempt=attempt_number,
+            payload={"request_id": request_id, "action": action,
+                     "binding_digest": request["binding_digest"], "request": request,
+                     "report_sha": report_sha, "bases": bases,
+                     "push_reasons": int(push_reasons),
+                     "guard_attempt_event_id": attempt_event["event_id"],
+                     "guard_check_ids": guard_ids},
+        )
+    except StoreError as exc:   # e.g. too many repos for one signed event line
+        raise LandingError(f"land_request could not be recorded: {exc}") from exc
     return {"request": request, "event": event, "bindings": normalized,
-            "bases": {name: context.final["repos"][name]["base"] for name in repos},
-            "report_sha": report_sha, "render_event_id": render["event_id"]}
+            "bases": bases, "report_sha": report_sha, "render_event_id": render["event_id"]}
 
 
-def approve_request(store: AuditStore, oracle: auth.AuthorizationOracle,
-                    request: Mapping[str, Any], *, decided_at: float,
-                    expires_at: float, at: str) -> dict[str, Any]:
-    """Hook-side approval: persist auth and register the daemon-memory grant."""
+AUTH_TTL_SECONDS = 30 * 60
+
+
+def request_event(store: AuditStore, request_id: str) -> dict[str, Any]:
+    """The land_request payload for *request_id* (C1: the only source). read_events
+    verifies every signature and the hash chain; the lifecycle validated the payload
+    when it was appended."""
+    found = [event for event in store.read_events() if event.get("kind") == "land_request"
+             and event.get("payload", {}).get("request_id") == request_id]
+    if len(found) != 1 or not isinstance(found[0]["payload"].get("request"), Mapping):
+        raise LandingError(f"no land_request {request_id!r} in this run's audit log")
+    return copy.deepcopy(found[0]["payload"])
+
+
+def approve_from_event(store: AuditStore, request_id: str, *, now: float,
+                       at: str) -> dict[str, Any]:
+    """Hook-side approval, written by the DAEMON after the person approved the command:
+    the ``auth`` fact for exactly the request the signed land_request names (C1, C3)."""
+    request = request_event(store, request_id)["request"]
     event, _ = store.append_new(
         writer=store.authority.writer("hook"), kind="auth", at=at,
         payload={"request_id": request["request_id"], "session_id": request["session_id"],
                  "run_id": request["run_id"], "action": request["action"],
-                 "binding_digest": request["binding_digest"], "expires_at": expires_at},
+                 "binding_digest": request["binding_digest"],
+                 "expires_at": now + AUTH_TTL_SECONDS},
     )
-    oracle.issue(request, auth_event_id=event["event_id"],
-                 decided_at=decided_at, expires_at=expires_at)
     return event
+
+
+def consume_authorization(store: AuditStore, request_id: str, *, session_id: str,
+                          bindings: Mapping[str, Any], at: str, now: float) -> dict[str, Any]:
+    """Consume the hook's ``auth`` for *request_id* once: it must exist, be unexpired,
+    unconsumed, and bind exactly *bindings*. The check and the append happen under the
+    run lock (the store's validator folds the chain there); a second consumption is
+    refused and recorded as integrity (C6)."""
+    from core.run_protocol import lifecycle
+    from core.run_protocol.store import StoreError
+    request = request_event(store, request_id)["request"]
+    events = store.read_events()
+    grants = [event for event in events if event.get("kind") == "auth"
+              and event.get("producer") == "hook"
+              and event["payload"].get("request_id") == request_id
+              and event["payload"].get("binding_digest") == request["binding_digest"]]
+    if not grants:
+        raise LandingError("no approval recorded for this request (the hook writes it "
+                           "when the person approves the command)")
+    auth_event_id, grant = grants[-1]["event_id"], grants[-1]["payload"]
+    if any(event.get("kind") == "auth_consumed"
+           and event["payload"].get("auth_event_id") == auth_event_id for event in events):
+        _record_double_consume(store, request_id, auth_event_id, at)
+        raise LandingError("authorization already consumed; prepare a new landing request")
+    oracle = auth.AuthorizationOracle()
+    expires_at = float(grant["expires_at"])
+    oracle.issue(request, auth_event_id=auth_event_id,
+                 decided_at=expires_at - AUTH_TTL_SECONDS, expires_at=expires_at)
+    result = oracle.consume(request_id=request_id, session_id=session_id,
+                            run_id=request["run_id"], action=request["action"],
+                            bindings=bindings, now=now)
+    if not result.ok or result.consumption is None:
+        raise LandingError(result.reason)
+    try:
+        consumed, _ = store.append_new(
+            writer=store.authority.writer("cli"), kind="auth_consumed", at=at,
+            stage="deliver", attempt=1, payload=result.consumption)
+    except (StoreError, lifecycle.LifecycleError, ValueError) as exc:
+        if "already consumed" in str(exc) or "already exists" in str(exc):
+            _record_double_consume(store, request_id, auth_event_id, at)
+            raise LandingError("authorization already consumed; prepare a new landing "
+                               "request") from exc
+        raise
+    return {"request": request, "consumed": consumed, "consumption": result.consumption}
+
+
+def _record_double_consume(store: AuditStore, request_id: str, auth_event_id: str,
+                           at: str) -> None:
+    from core.run_protocol import events as ev
+    from core.run_protocol.store import StoreError
+    try:
+        store.append_new(
+            writer=store.authority.writer("cli"), kind="integrity", at=at,
+            ordinal=len(store.read_events()) + 1,
+            payload={"conflict_id": f"auth_consumed:{auth_event_id}:{len(store.read_events())}",
+                     "conflict_type": "auth_consumed_twice",
+                     "first_hash": auth_event_id, "new_hash": request_id})
+    except (StoreError, ev.EventError, ValueError) as exc:
+        # the refusal still reaches the caller; only the integrity row is lost
+        import logging
+        logging.getLogger(__name__).warning("integrity row for %s not written: %s",
+                                            request_id, exc)
 
 
 TRAILER = "Co-Authored-By: Swarm <swarm@swarmai.dev>"
@@ -247,51 +357,46 @@ def commit_repos(
 
 
 def execute_request(
-    store: AuditStore, oracle: auth.AuthorizationOracle, prepared: Mapping[str, Any], *,
+    store: AuditStore, request_id: str, *,
     session_id: str, repos: Mapping[str, str], integration_roots: Mapping[str, str],
     message: str, at: str, now: float | None = None,
     progress_path: str | Path | None = None,
 ) -> dict[str, str]:
-    """Consume an exact authorization, then durably land every prepared repo."""
-    request = prepared["request"]
-    if set(repos) != set(prepared["bindings"]) or set(integration_roots) != set(repos):
+    """Consume the hook's approval of *request_id*, then durably land every repo.
+    Everything bound — trees, REPORT, bases — is read from the signed land_request
+    event (C1); the trees are rebuilt now and must equal it exactly."""
+    payload = request_event(store, request_id)
+    request = payload["request"]
+    if request["action"] not in ("land", "land_skip_tests"):
+        raise LandingError("this request is not a landing")
+    bound = request["bindings"]["repos"]
+    if set(repos) != set(bound) or set(integration_roots) != set(repos):
         raise LandingError("repo set changed since prepare")
-    report_path = store.paths.blobs / prepared["report_sha"]
+    report_sha = payload.get("report_sha")
+    bases = payload.get("bases")
+    if not isinstance(report_sha, str) or not isinstance(bases, Mapping) or set(bases) != set(repos):
+        raise LandingError("land_request lacks its REPORT or bases")
     try:
-        report = report_path.read_bytes()
+        report = (store.paths.blobs / report_sha).read_bytes()
     except OSError as exc:
         raise LandingError(f"prepared REPORT blob missing: {exc}") from exc
     code_trees = tree.build_code_trees(repos, request["run_id"], git_tree.write_tree,
                                        git_tree.list_reserved)
     current = tree.build_delivery_trees(
-        repos, request["run_id"], code_trees, report, prepared["report_sha"],
+        repos, request["run_id"], code_trees, report, report_sha,
         git_tree.write_tree, git_tree.list_reserved)
     current_bindings = {name: {key: row[key] for key in ("code_tree", "delivery_tree", "report_sha")}
                         for name, row in current.items()}
-    if current_bindings != prepared["bindings"]:
+    if current_bindings != bound:
         raise LandingError("trees changed since authorization request")
-    prior_consumed = next((event for event in store.read_events()
-                           if event.get("kind") == "auth_consumed"
-                           and event.get("payload", {}).get("request_id") == request["request_id"]
-                           and event.get("payload", {}).get("session_id") == session_id
-                           and event.get("payload", {}).get("action") == request["action"]
-                           and event.get("payload", {}).get("binding_digest") == request["binding_digest"]), None)
-    if prior_consumed is not None:
-        raise LandingError("authorization already consumed; prepare a new landing request")
-    result = oracle.consume(request_id=request["request_id"], session_id=session_id,
-                            run_id=request["run_id"], action=request["action"],
-                            bindings=current_bindings, now=time.time() if now is None else now)
-    if not result.ok or result.consumption is None:
-        raise LandingError(result.reason)
-    consumed, _ = store.append_new(
-        writer=store.authority.writer("cli"), kind="auth_consumed", at=at,
-        stage="deliver", attempt=1, payload=result.consumption,
-    )
+    consumed = consume_authorization(
+        store, request_id, session_id=session_id, bindings=current_bindings, at=at,
+        now=time.time() if now is None else now)["consumed"]
     path = Path(progress_path) if progress_path is not None else (
-        store.paths.run / f"landing-progress-{request['request_id']}.json")
+        store.paths.run / f"landing-progress-{request_id}.json")
     commits = commit_repos(
         run_id=request["run_id"], integration_roots=integration_roots,
-        bases=prepared["bases"], bindings=current, message=message, progress_path=path)
+        bases=dict(bases), bindings=current, message=message, progress_path=path)
     if not any(event.get("kind") == "land" and
                event.get("payload", {}).get("auth_consumed_event_id") == consumed["event_id"]
                for event in store.read_events()):
