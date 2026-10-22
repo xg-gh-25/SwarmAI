@@ -180,6 +180,7 @@ export interface UnifiedTab {
     agentId: string;
     userMessage: string | null;
     content: unknown[] | null;
+    clientId?: string | null;
   } | null;
   /** Queued message payload — stored when user sends while streaming.
    *  Drained automatically when the current stream completes or is stopped. */
@@ -188,6 +189,8 @@ export interface UnifiedTab {
     attachments: UnifiedAttachment[];
     displayContent: ContentBlock[];
     messageId: string;
+    /** the message's client_id: every send of it uses this one (services/clientId) */
+    clientId?: string;
   };
   /** Timestamp when queuedMessage was set. Used by reconcile poll to detect
    *  stale queues (>60s = SSE event lost, drain deadlock). */

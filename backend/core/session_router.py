@@ -3587,6 +3587,28 @@ class SessionRouter:
                 session_id, seqs, exc,
             )
 
+    async def _hand_back_send(
+        self, client_id: Optional[str], session_id: str, agent_id: str,
+        user_message: Optional[str], content: Optional[list], user_message_id: Optional[str],
+    ) -> dict:
+        """The server could not keep this send (its row could not be made pending):
+        hand it back for the client to send again — with its client_id, so the
+        resend is the same send. The written row, never delivered, is removed and
+        the ledger released (core/send_requests.release), so that resend runs once
+        and the transcript holds the message once."""
+        from . import send_requests
+        if user_message_id:
+            try:
+                from database import db
+                await db.messages.delete(user_message_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("session_router.hand_back_row_delete_failed session_id=%s msg=%s: %s",
+                             session_id, user_message_id, exc)
+        if client_id:
+            await send_requests.release(client_id)
+        return {"sessionId": session_id, "agentId": agent_id, "userMessage": user_message,
+                "content": content, "clientId": client_id}
+
     async def _finalize_pending_delivery(
         self,
         session_id: str,
@@ -4085,12 +4107,8 @@ class SessionRouter:
                 error_event["pendingSeq"] = queue_pending_seq
                 error_event["pendingId"] = persisted_msg_id
             else:
-                error_event["retryPayload"] = {
-                    "sessionId": session_id,
-                    "agentId": agent_id,
-                    "userMessage": user_message,
-                    "content": content,
-                }
+                error_event["retryPayload"] = await self._hand_back_send(
+                    client_id, session_id, agent_id, user_message, content, persisted_msg_id)
             yield error_event
             return
 
@@ -4841,12 +4859,8 @@ class SessionRouter:
                     busy_event["pendingSeq"] = pending_seq
                     busy_event["pendingId"] = persisted_msg_id
                 else:
-                    busy_event["retryPayload"] = {
-                        "sessionId": session_id,
-                        "agentId": agent_id,
-                        "userMessage": user_message,
-                        "content": content,
-                    }
+                    busy_event["retryPayload"] = await self._hand_back_send(
+                        client_id, session_id, agent_id, user_message, content, persisted_msg_id)
                 yield busy_event
                 return
             raise  # Re-raise non-SessionBusyError exceptions

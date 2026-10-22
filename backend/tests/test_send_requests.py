@@ -188,3 +188,19 @@ async def test_every_taken_send_gets_its_receipt_first():
     assert "turnId" not in first
     busy = await _send(r, "s-acc2", "local-acc2", send=_busy)
     assert [e["type"] for e in busy if e["type"] in ("accepted", "error")] == ["accepted", "error"]
+
+
+@pytest.mark.asyncio
+async def test_a_send_the_server_cannot_keep_is_handed_back_and_resent_once():
+    """SESSION_BUSY whose row cannot be made pending: the row (never delivered) is
+    removed, the payload carries the client_id, and the resend with it runs once."""
+    from core import session_pending
+    r = _router()
+    with patch.object(session_pending, "mark_pending_by_id", AsyncMock(side_effect=RuntimeError("locked"))):
+        ev = await _send(r, "s-hb", "local-hb", send=_busy)
+    busy = [e for e in ev if e.get("code") == "SESSION_BUSY"][0]
+    assert busy["retryPayload"]["clientId"] == "local-hb"
+    assert await _users("s-hb") == []
+    await _send(r, "s-hb", "local-hb")                                   # the client's resend
+    await _send(r, "s-hb", "local-hb")                                   # and a retry of it
+    assert len(await _users("s-hb")) == 1

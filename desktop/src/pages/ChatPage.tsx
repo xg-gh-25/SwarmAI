@@ -28,6 +28,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import type { Message, ContentBlock, Agent, AgentCreateRequest, ChatSession } from '../types';
 import { MAX_ATTACHMENTS } from '../types';
+import { newClientId } from '../services/clientId';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import { agentsService } from '../services/agents';
@@ -2224,6 +2225,8 @@ export default function ChatPage() {
           attachments: combinedAttachments,
           displayContent: combinedDisplayContent,
           messageId: existingQueued.messageId,
+          // still unsent (a drain clears the queue before it sends): one message
+          clientId: existingQueued.clientId,
         };
         activeTabForGuard._queuedAt = activeTabForGuard._queuedAt || Date.now(); // preserve original queue time
 
@@ -2267,6 +2270,7 @@ export default function ChatPage() {
         attachments: (currentAttachments || []).filter((a) => !a.error && !a.isLoading),
         displayContent,
         messageId: queuedMessageId,
+        clientId: newClientId(),   // the queued message's own, for every send of it
       };
       activeTabForGuard._queuedAt = Date.now();
 
@@ -2332,7 +2336,7 @@ export default function ChatPage() {
     // Generate clientId for optimistic message dedup — this ID is sent to
     // backend and echoed in result event so MessageStore can correlate
     // optimistic→DB messages during reconcile (eliminates R2/R4 duplication).
-    const clientId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const clientId = newClientId();
     const userMessage: Message = { id: clientId, role: 'user', content: userMessageContent, timestamp: new Date().toISOString() };
     // NOTE: optimistic insertion is deferred — the user message is appended to
     // the MessageStore (single source of truth) together with the assistant
@@ -2542,8 +2546,9 @@ export default function ChatPage() {
     // numeric-placeholder guard → a full-history reconcile renders TWO user
     // bubbles. `_applyMerge` indexes carried metadata.client_id role-agnostically,
     // so stamping it here makes the queued bubble correlate exactly like the main
-    // path. Generated HERE (before the badge-clear) so both writes are one update.
-    const clientId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // path. The queued message's own client_id (minted when it was queued, or the
+    // one the server handed back with it), so a re-drain is the same send.
+    const clientId = queued.clientId ?? newClientId();
 
     // Remove the "queued" badge from the user message + stamp the correlation key
     // — route through store for consistency (subscription propagates to React + tabState).
@@ -2855,10 +2860,10 @@ export default function ChatPage() {
     setIsStreaming(true, tabId);
     if (tabId) updateTabStatus(tabId, 'streaming');
 
-    // Key this retry like the main send (run_7263ff67): clientId +
-    // `${clientId}-asst` placeholder + clientId on the request — otherwise the
-    // re-sent turn persists keyless and a later reconcile-tail cut duplicates it.
-    const clientId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // The SAME send again: the server handed this message back with its client_id
+    // (it could not keep it) and removed its row, so this resend runs once
+    // (backend core/send_requests). A payload without one predates that.
+    const clientId = retry.clientId ?? newClientId();
     const assistantMessageId = `${clientId}-asst`;
     const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
     // SINGLE-WRITER: clear the error from the store, then append the placeholder

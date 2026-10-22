@@ -19,7 +19,9 @@ running is the session's event hub. The receipt reads them, it does not copy.
   taken over. A ledger that cannot be read or written fails OPEN (the send runs,
   as before the ledger; logged): a broken ledger must not stop chat.
 - ``persisted(client_id, user_message_id)`` / ``failed(client_id)``: the send's
-  user row was written / the send ended before it was.
+  user row was written / the send ended before it was. ``release(client_id)``:
+  the row was written but handed back (it could not be kept as pending) and
+  removed — the client re-sends with the same client_id, which runs again.
 - ``accepted(...)``: the receipt every taken send's POST gets once its user row
   is written; ``receipt(record)``: the same reply for a duplicate (both POST
   only, never published: they are not part of any turn).
@@ -27,7 +29,7 @@ running is the session's event hub. The receipt reads them, it does not copy.
   message id (Slack ``ts`` …), so a redelivery is the same send.
 - ``prune()``: requests older than the messages TTL (no row left to duplicate).
 
-Public: ``Reservation``, ``reserve``, ``persisted``, ``failed``, ``accepted``, ``receipt``,
+Public: ``Reservation``, ``reserve``, ``persisted``, ``failed``, ``release``, ``accepted``, ``receipt``,
 ``channel_client_id``, ``prune``, ``OWNER``.
 """
 from __future__ import annotations
@@ -97,6 +99,11 @@ async def persisted(client_id: str, user_message_id: str) -> None:
 
 async def failed(client_id: str) -> None:
     await _set(client_id, status=FAILED)
+
+
+async def release(client_id: str) -> None:
+    """The send was handed back (its row removed): the same client_id runs again."""
+    await _set(client_id, status=FAILED, user_message_id=None)
 
 
 def accepted(client_id: Optional[str], session_id: str, user_message_id: str) -> dict:

@@ -29,6 +29,8 @@ export interface SessionBusyRetryPayload {
   agentId: string;
   userMessage: string | null;
   content: unknown[] | null;
+  /** the handed-back send's client_id: re-send with it */
+  clientId?: string | null;
 }
 
 /** The queuedMessage shape consumed by drainQueuedMessage. */
@@ -37,6 +39,8 @@ export interface QueuedMessage {
   attachments: UnifiedAttachment[];
   displayContent: ContentBlock[];
   messageId: string;
+  /** the message's client_id: every send of it uses this one (services/clientId) */
+  clientId?: string;
 }
 
 /** Extract the user's text from retryPayload, falling back to content blocks.
@@ -108,6 +112,7 @@ export function queuedMessageFromRetryPayload(
     attachments: [],
     displayContent: [{ type: 'text', text }],
     messageId,
+    ...(payload.clientId ? { clientId: payload.clientId } : {}),
   };
 }
 
