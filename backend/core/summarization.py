@@ -39,6 +39,17 @@ logger = logging.getLogger(__name__)
 # Threshold: sessions with more messages than this get LLM enrichment
 LLM_ENRICHMENT_THRESHOLD = 8
 
+# Output budget for the enrichment JSON. It was 512, and the 12-field JSON
+# (Chinese entries cost ~1 token/char) routinely ran past it: the response was
+# cut mid-JSON, and since the schema has no nested objects a cut response has
+# no closing brace, so _parse_enrichment returned {} WITHOUT logging -- ~90% of
+# entries from 2026-10-20 on had no Delivered/Lessons, and distillation had
+# nothing to promote. 2048 leaves headroom; the hook's budget is 180 s
+# (main.py SessionLifecycleHookManager), so the read timeout below can cover a
+# full-length generation.
+_ENRICHMENT_MAX_TOKENS = 2048
+_ENRICHMENT_READ_TIMEOUT_S = 90
+
 # Centralized patterns — shared with distillation_hook.py to prevent drift.
 # Summarization uses the BROAD variant (runs on raw conversation).
 from .extraction_patterns import (
@@ -244,6 +255,52 @@ def _bash_written_files(cmd: str, *, truncated: bool) -> list[str]:
             continue
         out.append(t)
     return out
+
+
+def _salvage_truncated_json(text: str) -> "dict | None":
+    """Parse the longest complete prefix of a JSON object cut off mid-way.
+
+    Scans once, tracking string/escape state and the open-bracket stack, and
+    records every point where a value has just completed. From the last such
+    point backwards, it closes the open brackets and tries to parse; the first
+    success wins. An unfinished last string or array element is dropped, never
+    guessed. Returns None when nothing usable survives.
+    """
+    stack: list[str] = []
+    cuts: list[tuple[int, str]] = []  # (end index, closing suffix)
+    in_str = esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+                if stack:
+                    cuts.append((i + 1, "".join("}" if c == "{" else "]" for c in reversed(stack))))
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if not stack:
+                break
+            stack.pop()
+            if not stack:
+                cuts.append((i + 1, ""))
+                break
+            cuts.append((i + 1, "".join("}" if c == "{" else "]" for c in reversed(stack))))
+    for end, suffix in reversed(cuts):
+        candidate = text[:end].rstrip().rstrip(",") + suffix
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and data:
+            return data
+    return None
 
 
 class SummarizationPipeline:
@@ -673,11 +730,11 @@ class SummarizationPipeline:
         from core import executors
         raw = await executors.run_in("llm", self._call_enrichment_llm, prompt)
         if not raw or raw == "{}":
-            return summary
+            return summary  # the call failed; _call_enrichment_llm logged why
 
         enriched = self._parse_enrichment(raw)
         if not enriched:
-            return summary
+            return summary  # unparseable; _parse_enrichment logged why
 
         # Merge enriched fields into summary
         summary.deliverables = enriched.get("deliverables", [])
@@ -762,7 +819,9 @@ class SummarizationPipeline:
         boto_config = BotoConfig(
             retries={"max_attempts": 1, "mode": "adaptive"},
             connect_timeout=5,
-            read_timeout=15,
+            # invoke_model is not streamed: the read waits for the WHOLE
+            # generation, so this must cover _ENRICHMENT_MAX_TOKENS of output.
+            read_timeout=_ENRICHMENT_READ_TIMEOUT_S,
         )
         cls._bedrock_client = boto3.client(
             "bedrock-runtime",
@@ -776,12 +835,12 @@ class SummarizationPipeline:
     def _call_enrichment_llm(prompt: str) -> str:
         """Make a Bedrock API call for enrichment extraction.
 
-        Budget constraint: This runs inside DailyActivityExtractionHook
-        which has a 30s timeout.  The DB query + rule-based extraction
-        take ~1-2s, file write ~0.1s.  So the LLM call has ~20s budget.
+        Budget: runs inside DailyActivityExtractionHook, whose per-hook
+        timeout is 180 s (main.py), in the background after the session ends.
 
-        Timeouts are set conservatively:
-        - connect_timeout=5s, read_timeout=15s → worst case 20s per attempt
+        Timeouts:
+        - connect_timeout=5s, read_timeout=_ENRICHMENT_READ_TIMEOUT_S (the
+          response is not streamed, so the read covers the whole generation)
         - Single attempt (no retry) — enrichment is best-effort, rule-based
           summary is the safety net
         - boto3 adaptive retry handles transient AWS errors internally
@@ -812,7 +871,7 @@ class SummarizationPipeline:
                 accept="application/json",
                 body=json.dumps({
                     "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 512,
+                    "max_tokens": _ENRICHMENT_MAX_TOKENS,
                     "temperature": 0,
                     "messages": [
                         {"role": "user", "content": prompt}
@@ -820,9 +879,14 @@ class SummarizationPipeline:
                 }),
             )
             result = json.loads(response["body"].read())
+            if result.get("stop_reason") == "max_tokens":
+                logger.warning(
+                    "Enrichment output hit max_tokens=%d (cut mid-JSON); "
+                    "salvaging the complete part", _ENRICHMENT_MAX_TOKENS)
             content = result.get("content", [])
             if content and isinstance(content, list):
                 return content[0].get("text", "{}")
+            logger.warning("Enrichment LLM returned no text content")
             return "{}"
         except Exception as e:
             # Read/connection timeouts to Bedrock are transient and harmless
@@ -852,15 +916,26 @@ class SummarizationPipeline:
         text = text.strip()
 
         start = text.find("{")
+        if start == -1:
+            logger.warning("Enrichment output has no JSON object (%d chars)", len(text))
+            return {}
         end = text.rfind("}") + 1
-        if start == -1 or end == 0:
-            return {}
-
-        try:
-            data = json.loads(text[start:end])
-        except json.JSONDecodeError as e:
-            logger.warning("Failed to parse enrichment JSON: %s", e)
-            return {}
+        data = None
+        if end > start:
+            try:
+                data = json.loads(text[start:end])
+            except json.JSONDecodeError:
+                data = None
+        if not isinstance(data, dict):
+            # A cut response (max_tokens, dropped connection) has no closing
+            # brace or ends inside a string. Keep every field that completed.
+            data = _salvage_truncated_json(text[start:])
+            if data is None:
+                logger.warning("Failed to parse enrichment JSON (%d chars, unsalvageable)",
+                               len(text))
+                return {}
+            logger.warning("Enrichment JSON was cut; kept %d complete field(s): %s",
+                           len(data), ", ".join(sorted(data)))
 
         result: dict[str, Any] = {}
         for key in ("deliverables", "key_outputs",
