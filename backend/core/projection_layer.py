@@ -33,6 +33,38 @@ from core.manifest_loader import ManifestLoader
 from core.skill_manager import SkillManager
 from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
 
+import queue as _queue
+import threading as _threading
+
+# npm dependency provisioning: one daemon worker thread, FIFO, started lazily.
+_dep_jobs: "_queue.Queue" = _queue.Queue()
+_dep_worker_lock = _threading.Lock()
+_dep_worker: "_threading.Thread | None" = None
+
+
+def _dep_worker_loop() -> None:
+    while True:
+        manifest, folder_name = _dep_jobs.get()
+        try:
+            installed = ManifestLoader.ensure_dependencies(manifest)
+            if installed:
+                logger.info("Provisioned npm deps for '%s': %s", folder_name, installed)
+        except Exception as exc:  # noqa: BLE001 — provisioning is best-effort
+            logger.warning("Failed to provision deps for '%s': %s", folder_name, exc)
+        finally:
+            _dep_jobs.task_done()
+
+
+def _schedule_dep_provision(manifest, folder_name: str) -> None:
+    """Queue a skill's npm dependency check/install for the background worker."""
+    global _dep_worker
+    _dep_jobs.put((manifest, folder_name))
+    with _dep_worker_lock:
+        if _dep_worker is None or not _dep_worker.is_alive():
+            _dep_worker = _threading.Thread(
+                target=_dep_worker_loop, name="skill-npm-deps", daemon=True)
+            _dep_worker.start()
+
 logger = logging.getLogger(__name__)
 
 # Directories inside a skill that are provisioned separately (npm) and must NOT
@@ -355,21 +387,14 @@ class ProjectionLayer:
                 )
                 continue
 
-            # Provision npm dependencies declared in manifest.yaml
+            # Provision npm dependencies declared in manifest.yaml -- OFF this
+            # (startup) path: a check + `npm install -g` can take minutes and the
+            # backend must answer /health meanwhile. One background worker runs
+            # them in order; a skill whose deps are not there yet fails its own
+            # first call, as it would with no npm at all.
             manifest = ManifestLoader.load(skill_path)
             if manifest and manifest.dependencies.get("npm"):
-                try:
-                    installed = ManifestLoader.ensure_dependencies(manifest)
-                    if installed:
-                        logger.info(
-                            "Provisioned npm deps for '%s': %s",
-                            folder_name, installed,
-                        )
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to provision deps for '%s': %s",
-                        folder_name, exc,
-                    )
+                _schedule_dep_provision(manifest, folder_name)
 
         # Project _shared/ utilities (used by skill generators for path resolution).
         # Source resolution order (run_7ec79cc8 / DDD capability-package Run 3):

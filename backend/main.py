@@ -992,6 +992,25 @@ def _run_scheduler_safe() -> None:
         raise
 
 
+def _prewarm_tree_sitter_body() -> None:
+    """Load the tree-sitter grammar libraries once (process-wide dlopen), so the
+    first parse anywhere does not pay the cold extraction. Never raises."""
+    try:
+        from tree_sitter_language_pack import get_language
+    except Exception:  # noqa: BLE001 — not installed: code intel uses its regex path
+        return
+    t0 = time.time()
+    loaded = []
+    for lang in ("python", "typescript", "tsx", "javascript"):
+        try:
+            get_language(lang)
+            loaded.append(lang)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("tree-sitter prewarm %s failed: %s", lang, exc)
+    logger.info("tree-sitter pre-warmed %s in %.1fs", ",".join(loaded) or "-",
+                time.time() - t0)
+
+
 def _prewarm_recall_body() -> None:
     """Warm the two cold-start recall legs so the FIRST session's recall_leg
     doesn't pay the first-in-process penalty (run_16113a9b).
@@ -1240,6 +1259,15 @@ async def lifespan(app: FastAPI):
     async def _prewarm_recall():
         await asyncio.to_thread(_prewarm_recall_body)
     asyncio.create_task(_prewarm_recall())
+
+    # Pre-load the tree-sitter grammars code intel uses. The first
+    # get_language() extracts + dlopens the grammar library from the bundle:
+    # ~9 s on a quiet host, past 30 s under load (verify_build's tree_sitter_ast
+    # probe timed out at 30 s, 2026-10-22, load ~39 on 12 cores) -- and the first
+    # code-intel call in a session paid the same. Off the loop, best-effort.
+    async def _prewarm_tree_sitter():
+        await asyncio.to_thread(_prewarm_tree_sitter_body)
+    asyncio.create_task(_prewarm_tree_sitter())
 
     # Generate permissions.json for user visibility
     try:
@@ -1922,11 +1950,15 @@ async def verify_data(path: str):
 async def verify_native(path: str):
     """Check if a native extension is loadable. Used by verify_build.py.
 
-    Gated behind SWARMAI_VERIFY_BUILD=1.
+    Gated behind SWARMAI_VERIFY_BUILD=1. The probe loads native code (seconds
+    when cold), so it runs in a worker thread, never on the event loop.
     """
     if os.environ.get("SWARMAI_VERIFY_BUILD") != "1":
         return {"loadable": False, "detail": "verify endpoints require SWARMAI_VERIFY_BUILD=1"}
+    return await asyncio.to_thread(_verify_native_probe, path)
 
+
+def _verify_native_probe(path: str) -> dict:
     import sqlite3
     # path format: "sqlite_vec/vec0" (without .dylib suffix)
     parts = path.split("/", 1)

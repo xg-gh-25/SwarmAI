@@ -99,6 +99,32 @@ class SkillManifest(BaseModel):
 # Module-level cache: str(skill_dir.resolve()) → Optional[SkillManifest]
 _manifest_cache: dict[str, Optional[SkillManifest]] = {}
 
+# npm's global package set, read once per process (one `npm list -g` instead of
+# one per skill). Key: npm binary path. Cleared after an install.
+_npm_global_cache: dict[str, frozenset[str]] = {}
+
+
+def _npm_global_packages(npm_bin: str) -> "Optional[frozenset[str]]":
+    """The globally installed npm package names, or None when the check failed
+    (timeout, non-zero exit, unreadable output) -- "unknown", never "none"."""
+    if npm_bin in _npm_global_cache:
+        return _npm_global_cache[npm_bin]
+    try:
+        result = subprocess.run(
+            [npm_bin, "list", "-g", "--depth=0", "--json"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            logger.warning("npm list -g exited %d", result.returncode)
+            return None
+        import json
+        pkgs = frozenset((json.loads(result.stdout).get("dependencies") or {}).keys())
+    except Exception as e:  # noqa: BLE001 — TimeoutExpired, OSError, bad JSON
+        logger.warning("npm list -g failed: %s", e)
+        return None
+    _npm_global_cache[npm_bin] = pkgs
+    return pkgs
+
 # Strict regex for npm package names — blocks git URLs, file:// paths,
 # and other npm-interpretable specs that could install arbitrary code.
 # Matches: lodash, @scope/pkg, @types/node
@@ -204,27 +230,17 @@ class ManifestLoader:
             _manifest_cache[cache_key] = True
             return []
 
-        # Check which packages are missing
-        missing = []
-        try:
-            result = subprocess.run(
-                [npm_bin, "list", "-g", "--depth=0", "--json"],
-                capture_output=True, text=True, timeout=15,
-            )
-            installed = set()
-            if result.returncode == 0:
-                import json
-                data = json.loads(result.stdout)
-                installed = set(data.get("dependencies", {}).keys())
-            missing = [pkg for pkg in npm_deps if pkg not in installed]
-        except Exception as e:
-            # subprocess.TimeoutExpired IS already a subclass of Exception, so the
-            # former `except (subprocess.TimeoutExpired, Exception)` was `except
-            # Exception` with extra words that implied a narrowness it never had.
-            # Behaviour is unchanged; this only removes the misleading tuple
-            # (matches the git_sync_engine cleanup, same class).
-            logger.warning("Failed to check npm deps for %s: %s", manifest.name, e)
-            missing = npm_deps  # Assume all missing, try install
+        # Check which packages are missing. A check that FAILED (npm slow under
+        # load, broken npm) proves nothing: installing then is a 2-minute guess
+        # per skill (2026-10-22: two such guesses held a fresh-home startup for
+        # 4.5 min). Skip, and leave the cache unset so a later projection retries.
+        installed = _npm_global_packages(npm_bin)
+        if installed is None:
+            logger.warning(
+                "npm deps for %s not checked (npm list failed) — will retry later",
+                manifest.name)
+            return []
+        missing = [pkg for pkg in npm_deps if pkg not in installed]
 
         if not missing:
             _manifest_cache[cache_key] = True
@@ -241,6 +257,7 @@ class ManifestLoader:
             if result.returncode == 0:
                 installed_pkgs = missing
                 logger.info("Installed npm deps for %s: %s", manifest.name, missing)
+                _npm_global_cache.clear()  # the global set changed
             else:
                 logger.warning(
                     "npm install failed for %s (exit %d): %s",
