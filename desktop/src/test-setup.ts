@@ -4,6 +4,17 @@
  */
 import '@testing-library/jest-dom/vitest';
 import { afterEach } from 'vitest';
+import { configure } from '@testing-library/react';
+
+/**
+ * DOM waits (waitFor / findBy*) get 5s instead of Testing Library's 1s default.
+ * The full suite runs files in parallel workers and, under that load, a render that
+ * takes ~50ms alone was seen to miss the 1s window (FileViewer.closeguard, twice:
+ * 'Unable to find unsaved-warning-discard'). A passing wait returns as soon as its
+ * condition holds, so this costs nothing unless a test is genuinely failing - it
+ * then reports after 5s instead of 1s. Same reasoning as testTimeout: 15_000.
+ */
+configure({ asyncUtilTimeout: 5000 });
 import { messageStoreRegistry } from './stores/MessageStore';
 import { resetZoneMemory } from './pages/chat/components/TurnZones';
 

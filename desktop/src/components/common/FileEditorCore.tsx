@@ -767,6 +767,9 @@ export default function FileEditorCore({
           params: { path: filePath },
         });
         const freshContent = resp.data.content;
+        // Re-check after the await: the user may have typed while the read was in
+        // flight, and those edits must not be overwritten by the disk copy.
+        if (hasUnsavedEditsRef.current) return;
         if (freshContent !== contentRef.current) {
           // Compute changed lines for highlight
           const oldLines = (contentRef.current || '').split('\n');
@@ -805,6 +808,7 @@ export default function FileEditorCore({
       try {
         const resp = await api.get<{ content: string }>('/workspace/file', { params: { path: filePath } });
         const fresh = resp.data.content;
+        if (hasUnsavedEditsRef.current) return;   // typed during the read: keep the edits
         if (fresh !== contentRef.current) {
           const oldLines = (contentRef.current || '').split('\n');
           const newLines = fresh.split('\n');
