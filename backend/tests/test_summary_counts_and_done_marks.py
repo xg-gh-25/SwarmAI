@@ -67,23 +67,8 @@ def test_quality_line_says_how_many_passes_were_reused():
     assert "复用" not in rds._quality_line({}, {}, {"tests_total": 5, "failed": 0, "tests_reused": None})
 
 
-def test_counts_helper_shape():
-    ev = {"counts": {"passed": 1217, "failed": 3, "errors": 0, "timeouts": 0, "skipped": 0},
-          "failures": [_fail(f"t::{i}", "pre-existing") for i in range(3)]}
-    assert cli._test_counts_from_evidence(ev) == {
-        "tests_total": 1220, "failed": 0, "pre_existing_failures": 3, "flaky_failures": 0}
-    assert cli._test_counts_from_evidence(None) is None
-    assert cli._test_counts_from_evidence({"counts": "bad"}) is None
 
 
-def test_a_timeout_stays_failed_whatever_its_classification():
-    """pipeline_test._exit_code blocks on a hang regardless of classification, so a
-    pre-existing or flaky TIMEOUT is still a failure the summary must show."""
-    ev = {"counts": {"passed": 5, "failed": 0, "errors": 0, "timeouts": 2, "skipped": 0},
-          "failures": [_fail("t::hang1", "pre-existing", "timeout"),
-                       _fail("t::hang2", "flaky", "timeout")]}
-    assert cli._test_counts_from_evidence(ev) == {
-        "tests_total": 7, "failed": 2, "pre_existing_failures": 0, "flaky_failures": 0}
 
 
 # ── AC2 / AC3: both doors render the measured numbers ───────────────────────

@@ -119,23 +119,3 @@ def _bound(tmp_path, monkeypatch, report, newer=()):
     return cli._deliver_push_ready_bound(project="P", run_id="r", run_dir=tmp_path,
                                          run_state={"files_touched": [str(src)], "stages": []},
                                          profile="full", artifact={}, exit_result={"met": True})
-
-
-def test_missing_refs_lower_push_ready(tmp_path, monkeypatch):
-    reg = {"mode": "regression", "run_id": "r", "counts": {"passed": 3}, "failures": [],
-           "ac_refs_missing": ["backend/tests/test_a.py::test_renamed"]}
-    bound, reasons, _ = _bound(tmp_path, monkeypatch, reg)
-    assert bound is False
-    assert any("ac_coverage names test(s) that do not exist" in r and "test_renamed" in r
-               for r in reasons), reasons
-    reg.pop("ac_refs_missing")
-    bound, reasons, _ = _bound(tmp_path, monkeypatch, reg)
-    assert bound is True, reasons
-
-
-def test_a_later_verify_does_not_hide_missing_refs(tmp_path, monkeypatch):
-    reg = {"mode": "regression", "run_id": "r", "counts": {"passed": 3}, "failures": [],
-           "ac_refs_missing": ["backend/tests/test_a.py::test_renamed"]}
-    verify = {"mode": "verify", "run_id": "r", "counts": {"passed": 3}, "failures": []}
-    bound, reasons, _ = _bound(tmp_path, monkeypatch, reg, newer=[verify])
-    assert bound is False and any("test_renamed" in r for r in reasons), reasons

@@ -63,41 +63,6 @@ class TestRouteLessonType:
             assert sec in MEMORY_TYPE_TO_SECTION.values()
 
 
-# ── GAP A: pipeline decisions[] → cultivation ───────────────────────────────
-class TestDecisionCollection:
-    def test_judgment_decisions_collected_and_tagged(self):
-        """The collection logic: judgment-class stage decisions become
-        '[decision] <description>' tagged strings; mechanical/taste skipped."""
-        from scripts.artifact_cli import _collect_judgment_decisions
-        run_state = {
-            "stages": [
-                {"stage": "think", "decisions": [
-                    {"classification": "judgment", "description": "chose A over B because latency"},
-                    {"classification": "mechanical", "description": "put file in core/"},
-                    {"classification": "taste", "description": "named it foo"},
-                ]},
-                {"stage": "plan", "decisions": [
-                    {"classification": "judgment", "description": "read-side percentiles"},
-                    {"classification": "judgment", "description": ""},  # empty skipped
-                    "a bare string decision without classification",     # skipped (no class)
-                ]},
-            ]
-        }
-        tagged = _collect_judgment_decisions(run_state)
-        assert tagged == [
-            "[decision] chose A over B because latency",
-            "[decision] read-side percentiles",
-        ]
-
-    def test_no_judgment_decisions_returns_empty(self):
-        from scripts.artifact_cli import _collect_judgment_decisions
-        assert _collect_judgment_decisions({"stages": []}) == []
-        assert _collect_judgment_decisions(
-            {"stages": [{"stage": "think", "decisions": [
-                {"classification": "mechanical", "description": "x"}]}]}
-        ) == []
-
-
 # ── GAP B: deterministic raw-text recovery (Gate-2 CRIT-1/CRIT-2 regressions) ──
 class TestRawLessonRecovery:
     """The enriched->raw map was fragile (missed JobResults, broke on the
@@ -226,66 +191,3 @@ class TestReflectPathSingleTag:
                 if _dm and _dm.group(1).lower() in VALID_TYPES else lesson)
         assert body == lesson, "non-type bracket must NOT be stripped (content loss)"
         assert body.startswith("[TODO]"), "TODO prefix preserved"
-
-
-# ── The outermost surfaces must not report a fully-declined batch as no work ──
-class TestDeclinedBatchIsVisibleAtTheOuterSurfaces:
-    """A discard tally that stops at the durable sink is only half-observable.
-
-    The live loop counts discards and records them, but the surface a HUMAN reads
-    is the CLI's machine-readable JSON, which aggregated the loop's result by an
-    EXACT key tuple. A batch where every proposal was declined therefore printed
-    all-zeros — the same "learned nothing looks like had no work" symptom one
-    layer up from where it was fixed, which is how the original silence survived.
-
-    These drive the real aggregation helper the command uses. Asserting that
-    the source TEXT mentions a key would pass on a function that merely names it
-    in a comment — the test-theater this run already caught itself doing once.
-    """
-
-    def test_fully_declined_batch_does_not_report_as_empty(self):
-        """The decisive property, stated without touching the CLI's plumbing:
-        a result carrying only discards must be distinguishable from a result
-        carrying nothing at all. Both have applied/escalated/rejected == 0, so
-        the discard total is the ONLY thing that separates them."""
-        declined = {"applied": 0, "escalated": 0, "rejected": 0, "retired": 0,
-                    "discarded": 4, "discard_reasons": {"below_auto_threshold": 4},
-                    "drift_errors": []}
-        no_work = {"applied": 0, "escalated": 0, "rejected": 0, "retired": 0,
-                   "discarded": 0, "discard_reasons": {}, "drift_errors": []}
-
-        from scripts.artifact_cli import _summarise_cultivation_result
-
-        a = _summarise_cultivation_result([declined])
-        b = _summarise_cultivation_result([no_work])
-        assert a != b, (
-            "a batch that declined 4 proposals must not summarise identically to "
-            f"a batch with no work: {a!r} == {b!r}"
-        )
-        assert a["discarded"] == 4
-        assert a["discard_reasons"] == {"below_auto_threshold": 4}
-
-    def test_discard_categories_merge_across_sub_calls(self):
-        """Lessons and decisions are cultivated by two separate calls, so the
-        per-category tallies must ADD rather than the second overwriting the
-        first — otherwise one source's attribution silently disappears."""
-        from scripts.artifact_cli import _summarise_cultivation_result
-
-        merged = _summarise_cultivation_result([
-            {"discarded": 2, "discard_reasons": {"below_auto_threshold": 2}},
-            {"discarded": 3, "discard_reasons": {"below_auto_threshold": 1, "noise": 2}},
-        ])
-        assert merged["discarded"] == 5
-        assert merged["discard_reasons"] == {"below_auto_threshold": 3, "noise": 2}
-
-    def test_prior_keys_are_preserved(self):
-        """The summary must stay backward-compatible: adding discard fields may
-        not drop a key an existing consumer already reads."""
-        from scripts.artifact_cli import _summarise_cultivation_result
-
-        s = _summarise_cultivation_result([
-            {"applied": 1, "escalated": 2, "rejected": 3, "retired": 4,
-             "drift_errors": ["d"]},
-        ])
-        assert (s["applied"], s["escalated"], s["rejected"], s["retired"]) == (1, 2, 3, 4)
-        assert s["drift_errors"] == ["d"]

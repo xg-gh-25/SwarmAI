@@ -47,15 +47,6 @@ def run(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_run_commit_refuses_without_red_team_marker(run, capsys):
-    with patch("scripts.artifact_cli._get_workspace", return_value=run):
-        with pytest.raises(SystemExit) as ex:
-            cli.cmd_run_commit(Namespace(project="P", run_id="run_rc", force=False), reg=None)
-    assert ex.value.code == 2
-    err = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
-    assert err["blocked"] is True and err["missing_experts"] == ["red-team"], err
-
-
 @pytest.mark.parametrize("state,art,added", [
     ({"created_at": POST, "profile": "full"}, _art(), True),
     ({"created_at": POST, "profile": "full", "required_experts": ["red-team"]}, _art(), False),

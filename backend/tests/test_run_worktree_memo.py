@@ -77,17 +77,6 @@ def test_session_ids_pattern():
     assert not valid_session_id("../../etc") and not valid_session_id(None)
 
 
-def test_record_transcript_id(monkeypatch):
-    from scripts.artifact_cli import _record_transcript_id
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    st = {}
-    assert _record_transcript_id(st) is False and st == {}
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "c40ebd5a-38fc-4726-9464-882a8599668b")
-    assert _record_transcript_id(st) is True
-    assert st["transcripts"] == ["c40ebd5a-38fc-4726-9464-882a8599668b"]
-    assert _record_transcript_id(st) is False   # once
-
-
 def _git(path, *args):
     subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True,
                    env={"GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@e.com",

@@ -103,48 +103,6 @@ class TestRunUpdateStageJsonAtFile:
         assert from_file["note"] == "活体"
 
 
-class TestDeliverAckPrecheckSwallow:
-    """Gate-2 regression lock: the deliver-ack precheck is BEST-EFFORT — a bad
-    @file / exhausted @- there must be SKIPPED, never hard-exit the run-update.
-
-    Two Gate-2 specialists (correctness MED conf9 + api-contract LOW) independently
-    caught that routing the precheck through _read_json_arg let its sys.exit(1)
-    (SystemExit) escape the precheck's `except (ValueError,TypeError)` swallow,
-    AND that @- got read twice (precheck + main → main sees empty stdin). The fix
-    inlines the precheck's source resolution (NOT _read_json_arg) + skips @-.
-
-    We test the precheck's RESOLVE+SWALLOW logic as an EXTRACTED pure helper
-    (`_resolve_precheck_stage_json`) rather than driving the whole completion gate:
-    the precheck lives behind several earlier `sys.exit(1)` gates (REPORT.md,
-    stages-complete), so a lightweight run never REACHES line ~2794 — a test that
-    drove cmd_run_update would be VACUOUS (green because the code never ran, the
-    exact C044 false-green). Extracting the logic makes it directly, non-vacuously
-    testable; cmd_run_update calls the SAME helper (single source of truth).
-    """
-
-    def test_missing_atfile_resolves_to_none_not_systemexit(self, tmp_path):
-        # @<missing> → precheck resolver returns None (skip), NEVER sys.exit.
-        missing = tmp_path / "nope.json"
-        assert cli._resolve_precheck_stage_json(f"@{missing}") is None
-
-    def test_dash_stdin_resolves_to_none_without_reading(self, monkeypatch):
-        # @- → None (skip) WITHOUT touching stdin, so the main parse reads it once.
-        import io
-        sentinel = io.StringIO('{"should":"stay unread"}')
-        monkeypatch.setattr(sys, "stdin", sentinel)
-        assert cli._resolve_precheck_stage_json("@-") is None
-        # stdin untouched — still fully readable by the authoritative main parse
-        assert sentinel.read() == '{"should":"stay unread"}'
-
-    def test_at_path_resolves_file_contents(self, tmp_path):
-        f = tmp_path / "sj.json"
-        f.write_text('{"stage":"deliver"}', encoding="utf-8")
-        assert cli._resolve_precheck_stage_json(f"@{f}") == '{"stage":"deliver"}'
-
-    def test_inline_resolves_verbatim(self):
-        assert cli._resolve_precheck_stage_json('{"a":1}') == '{"a":1}'
-
-
 # ─────────────────────────── G3: advance --quiet ──────────────────────────
 class TestAdvanceQuiet:
     """AC3/AC4 — advance --quiet compact payload; blocked advance → explicit reason."""

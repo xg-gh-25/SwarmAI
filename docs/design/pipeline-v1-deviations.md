@@ -4,10 +4,12 @@ date: 2026-10-21
 created: 2026-10-21
 updated: 2026-10-22
 project: SwarmAI
-status: OPEN — 交给 XG 合并进设计
+status: CLOSED — 已并入 v13 设计 §D3.4、§D3.5（2026-10-22）
 related: pipeline-v1-plan.md；v13 设计（~/.swarm-ai/SwarmWS/Projects/SwarmAI/2-understanding/knowledge/designs/2026-10-21-pipeline-structural-decisions.md）
 ---
 # Pipeline v1 偏离记录
+
+> 已关闭：全部条目于 2026-10-22 并入 v13 设计（§D3.4 实施分工、§D3.5 实施中接受的偏离）。本文件只作历史记录，后续偏离直接写进设计文档。
 
 每条：设计章节、问题、实际做法、理由。
 

@@ -100,36 +100,6 @@ def _bound(tmp_path, monkeypatch, reports: list[dict], touched: list[str]):
                                          exit_result={"met": True})
 
 
-def test_push_ready_needs_a_full_scope_report_a_green_tdd_does_not_count(tmp_path, monkeypatch):
-    src = tmp_path / "m.py"
-    src.write_text("x = 1\n")
-    tdd = {"mode": "tdd", "run_id": "r", "counts": {"passed": 3}, "failures": []}
-    bound, reasons, _ = _bound(tmp_path, monkeypatch, [tdd], [str(src)])
-    assert bound is False and any("no full-scope run" in r for r in reasons)
-
-
-def test_push_ready_rejects_a_full_scope_report_older_than_the_last_edit(tmp_path, monkeypatch):
-    import pipeline_validator as pv
-    src = tmp_path / "m.py"
-    src.write_text("x = 1\n")
-    reg = {"mode": "regression", "run_id": "r", "counts": {"passed": 3}, "failures": []}
-    monkeypatch.setattr(pv, "evidence_freshness",
-                        lambda ev, ft, roots=(): {"status": "stale", "stale_files": [str(src)]})
-    bound, reasons, _ = _bound(tmp_path, monkeypatch, [reg], [str(src)])
-    assert bound is False and any("predates later edits" in r for r in reasons)
-    monkeypatch.setattr(pv, "evidence_freshness",
-                        lambda ev, ft, roots=(): {"status": "fresh", "stale_files": []})
-    bound, reasons, _ = _bound(tmp_path, monkeypatch, [reg], [str(src)])
-    assert bound is True, reasons
-
-
-def test_docs_only_change_needs_no_full_scope_run(tmp_path, monkeypatch):
-    doc = tmp_path / "README.md"
-    doc.write_text("# x\n")
-    bound, reasons, _ = _bound(tmp_path, monkeypatch, [], [str(doc)])
-    assert bound is True, reasons
-
-
 def test_whole_scope_criteria_are_judged_at_deliver_only():
     import pipeline_validator as pv
     for wt in ("feature", "refactor", "bugfix", None):

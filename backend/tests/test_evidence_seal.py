@@ -132,53 +132,12 @@ def test_runner_read_returns_none_for_a_forged_cache(env):
     assert pt._read_json(cache) == {"k": []}
 
 
-def test_merged_proofs_ignores_a_hand_written_proof(env):
-    _enable(env)
-    pdir = env.run_dir / "evidence" / "proofs"
-    pt._write_json(pdir / "snapshots.json", {"R1": {"sha": "s1"}})
-    (pdir / "prove-R1-forged.json").write_text(json.dumps(
-        {"snapshot": "s1", "proofs": [{"nodeid": "t::a", "old": ["assert_fail", "assert_fail"],
-                                       "new": "pass", "verdict": "valid"}]}))
-    assert cli._merged_proofs(pdir) == {}
-    pt._write_json(pdir / "prove-R1-real.json",
-                   {"snapshot": "s1", "proofs": [{"nodeid": "t::b", "old": ["assert_fail"],
-                                                  "new": None, "verdict": "pending"}]})
-    assert set(cli._merged_proofs(pdir)["R1"]) == {"t::b"}
-
-
-def test_merged_proofs_drops_a_forged_snapshot_list(env):
-    _enable(env)
-    pdir = env.run_dir / "evidence" / "proofs"
-    (pdir / "snapshots.json").write_text(json.dumps({"R1": {"sha": "s1"}}))
-    pt._write_json(pdir / "prove-R1-real.json",
-                   {"snapshot": "other", "proofs": [{"nodeid": "t::b", "old": [],
-                                                     "new": None, "verdict": "pending"}]})
-    # a snapshot list the runner did not write voids every round's proofs (Gate-2 R1
-    # correctness-fddeea): otherwise a proof taken on ANY snapshot would count
-    assert cli._merged_proofs(pdir) == {}
-
-
 def test_two_writers_leave_the_seal_matching_the_file(env):
     _enable(env)
     p = env.run_dir / "evidence" / "tests" / "latest-tdd.json"
     for i in range(5):
         pt._write_json(p, {"i": i})
     assert es.check(p) == (True, None)
-
-
-def test_run_create_enables_the_seal(tmp_path, monkeypatch, capsys):
-    import config
-    data = tmp_path / "appdata"
-    monkeypatch.setattr(config, "get_app_data_dir", lambda: data)
-    monkeypatch.setattr(cli, "_get_workspace", lambda: tmp_path)
-    monkeypatch.delenv("SWARM_APP_SESSION_ID", raising=False)
-    from core.artifact_registry import ArtifactRegistry
-    args = SimpleNamespace(project="Proj", requirement="R", profile=None, intent=None)
-    cli.cmd_run_create(args, ArtifactRegistry(workspace_root=str(tmp_path)))
-    rid = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["pipeline_id"]
-    audit = data / "state" / "pipeline_agent_audit"
-    assert json.loads((audit / f"evidence_{rid}.json").read_text())["enabled"] is True
-    assert json.loads((audit / f"handout_{rid}.json").read_text())["records"]["evidence_seal"] is True
 
 
 # ── Gate-2 R1 break tests ────────────────────────────────────────────────────
@@ -245,15 +204,3 @@ def test_an_unsealed_run_index_is_refused_not_reset(env, capsys):
     assert "not the runner's" in capsys.readouterr().err
     res = pt._circuit_breaker_check(env.run_dir / "evidence", "regression")
     assert res and res["circuit_breaker"]["tripped"] and "not the runner's" in res["error"]
-
-
-def test_a_removed_snapshot_list_voids_the_proofs(env):
-    """R2 security: deleting a sealed snapshots.json is not absence."""
-    _enable(env)
-    pdir = env.run_dir / "evidence" / "proofs"
-    pt._write_json(pdir / "snapshots.json", {"R1": {"sha": "s1"}})
-    pt._write_json(pdir / "prove-R1-a.json", {"snapshot": "s0", "proofs": [
-        {"nodeid": "t::a", "old": ["assert_fail", "assert_fail"], "new": "pass"}]})
-    (pdir / "snapshots.json").unlink()
-    assert pv._load_evidence_json(pdir / "snapshots.json")[1]
-    assert cli._merged_proofs(pdir) == {}

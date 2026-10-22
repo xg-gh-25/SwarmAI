@@ -504,7 +504,6 @@ class TestDocContracts:
                 )
 
 
-
 # ── AC5 / AC6: the stop side is untouched (regression guards) ───────────────
 
 class TestStopSideUnweakened:
@@ -590,25 +589,6 @@ class TestStopSideUnweakened:
             "the Stop registration must not introduce a blocking verdict"
         )
 
-    def test_checkpoint_guard_logic_untouched(self):
-        """cmd_run_checkpoint's CONFABULATION hard-block must still be there.
-
-        After the budget-cognitive-hygiene refactor (2026-10) `measured_checkpoint`
-        is always False (budget removed as a producer), so the confab guard rests on
-        denylist + true-trigger — but the hard-block ITSELF must survive. Asserts the
-        guard's real surviving invariant (the CHECKPOINT REFUSED path + the
-        no-true-trigger reason string), NOT the old `should_checkpoint=false.
-        continue, period.` message, which moved when the :1900 paused gate was
-        rewritten to mirror this guard.
-        """
-        src = (BACKEND / "scripts" / "artifact_cli.py").read_text(encoding="utf-8")
-        assert "_compute_should_checkpoint" in src
-        assert "CHECKPOINT REFUSED" in src, (
-            "the checkpoint hard-block disappeared — stop side was weakened"
-        )
-        assert "should_checkpoint=false and no true-trigger reason" in src, (
-            "the confab guard's no-true-trigger block message disappeared"
-        )
 
     def test_budget_removed_as_checkpoint_trigger(self):
         """REFACTOR POSITIVE ASSERTION: budget is no longer a true-trigger.

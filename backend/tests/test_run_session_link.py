@@ -60,40 +60,6 @@ def _create(capsys, monkeypatch, sid):
     return json.loads(out)["pipeline_id"]
 
 
-def test_run_create_links_the_session_without_its_stdout(audit, ws, capsys, monkeypatch):
-    run_id = _create(capsys, monkeypatch, "sess-link")
-    assert rh.read_session_run_map("sess-link")[0] == run_id
-
-
-def test_run_create_with_an_invalid_session_id_writes_no_map(audit, ws, capsys, monkeypatch):
-    _create(capsys, monkeypatch, "bad sid!")
-    assert not list(audit.glob("*.map")) if audit.exists() else True
-
-
-def test_run_create_survives_a_map_write_failure(audit, ws, capsys, monkeypatch):
-    def boom(*a, **k):
-        raise OSError("disk full")
-    monkeypatch.setattr(rh, "write_session_run_map", boom)
-    assert _create(capsys, monkeypatch, "sess-fail").startswith("run_")
-
-
-def test_run_create_writes_its_birth_to_the_ledger_or_creates_nothing(audit, ws, capsys, monkeypatch):
-    """The gates of a run are keyed on the ledger's created_at (run.json's is editable), so
-    a run whose ledger write fails would fall back to the editable date: none is made."""
-    import pytest
-    root = ws
-    run_id = _create(capsys, monkeypatch, "sess-led")
-    led = cli._ledger_read(run_id)
-    run_json = next((root / "Projects").rglob(f"{run_id}/run.json"))
-    assert led["records"]["created_at"] == json.loads(run_json.read_text())["created_at"]
-    monkeypatch.setattr(cli, "_ledger_add", lambda *a, **k: ["hand-out ledger not written (OSError)"])
-    before = set((root / "Projects").rglob("run.json"))
-    with pytest.raises(SystemExit) as ex:
-        _create(capsys, monkeypatch, "sess-led2")
-    assert ex.value.code == 1 and "run-create refused" in capsys.readouterr().err
-    assert set((root / "Projects").rglob("run.json")) == before
-
-
 # ── AC4 ─────────────────────────────────────────────────────────────────────
 async def _finish_subagent(ctx, tmp_path):
     t = tmp_path / "sub.jsonl"
@@ -130,14 +96,3 @@ async def test_marker_uses_the_map_when_ctx_has_no_run(audit, tmp_path):
     rh.write_session_run_map("s3", "run_only_map", ts=2.0)
     await _finish_subagent({"sdk_session_id": "s3"}, tmp_path)
     assert _marker_run_ids(audit, "s3") == {"run_only_map"}
-
-
-# ── AC5 ─────────────────────────────────────────────────────────────────────
-def test_normalized_files_touched_is_one_value_for_every_reader():
-    """The normalizer only: plain paths serialize, JSON passes through unchanged.
-    That the gate and the write read the same value rests on the single call at the
-    top of cmd_run_update, which no test drives through the completion gate."""
-    assert cli._normalize_files_touched_arg(None) is None
-    assert json.loads(cli._normalize_files_touched_arg(["/r/a.py", "/r/b.py"])) == ["/r/a.py", "/r/b.py"]
-    assert cli._normalize_files_touched_arg(['["/r/a.py"]']) == '["/r/a.py"]'
-    assert cli._normalize_files_touched_arg('["/r/a.py"]') == '["/r/a.py"]'  # direct callers

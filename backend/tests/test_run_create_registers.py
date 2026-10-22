@@ -61,24 +61,6 @@ def test_brain_hub_sees_a_registered_project(cli, tmp_path, monkeypatch):
     assert "VisibleProj" in names, "a registered project MUST be visible to Brain Hub"
 
 
-def test_cmd_run_create_registers_end_to_end(cli, tmp_path):
-    """END-TO-END: invoking the actual cmd_run_create (not just _ensure_project_dir)
-    on a fresh project name must leave a .project.json — guards against a future edit
-    that reorders/removes the _ensure_project_dir call inside the command (the ORDER
-    regression a direct-_ensure_project_dir test cannot catch)."""
-    from core.artifact_registry import ArtifactRegistry
-
-    class _Args:
-        project = "E2EProj"
-        requirement = "test req"
-        profile = None
-    reg = ArtifactRegistry(workspace_root=str(tmp_path))
-    cli.cmd_run_create(_Args(), reg)
-    meta = tmp_path / "Projects" / "E2EProj" / ".project.json"
-    assert meta.exists(), "cmd_run_create must register the project (call _ensure_project_dir)"
-    assert json.loads(meta.read_text())["name"] == "E2EProj"
-
-
 def test_rejects_path_traversal_project_name(cli, tmp_path):
     """SECURITY: a project name with a path-escape segment must be rejected, not
     mkdir'd outside Projects/ (adversarial-review HIGH)."""

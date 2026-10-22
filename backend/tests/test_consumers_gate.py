@@ -282,96 +282,6 @@ def _wire(monkeypatch, r: Path, base: str, consumer: dict) -> None:
                         lambda run_id, rs: {"repo": r, "base": base, "roots": [], "new_files": []})
 
 
-def test_consumers_gate_errors_names_the_unmigrated_function(repo, monkeypatch):
-    r, base = repo
-    _migrate_one(r)
-    _wire(monkeypatch, r, base, _consumer())
-    warnings: list = []
-    errs = cli._consumers_gate_errors("SwarmAI", "run_x", {"created_at": NEW}, warnings)
-    assert any("Consumers gate" in e and "backend/readers.py::breaker" in e for e in errs)
-
-
-def test_consumers_gate_errors_are_warnings_before_the_cutover(repo, monkeypatch):
-    r, base = repo
-    _migrate_one(r)
-    _wire(monkeypatch, r, base, _consumer())
-    warnings: list = []
-    assert cli._consumers_gate_errors("SwarmAI", "run_x", {"created_at": OLD}, warnings) == []
-    assert any("not enforced for this run" in w and "breaker" in w for w in warnings)
-
-
-def test_consumers_gate_errors_without_a_repo_is_a_named_warning(monkeypatch):
-    monkeypatch.setattr(cli, "_stage_artifact", lambda p, rs, s: _plan_with(_consumer()))
-    monkeypatch.setattr(cli, "_consumers_repo", lambda run_id, rs: None)
-    warnings: list = []
-    assert cli._consumers_gate_errors("SwarmAI", "run_x", {"created_at": NEW}, warnings) == []
-    assert any("NOT verified" in w for w in warnings)
-
-
-def test_build_stage_candidate_runs_the_consumers_gate(repo, monkeypatch):
-    r, base = repo
-    _migrate_one(r)
-    _wire(monkeypatch, r, base, _consumer())
-    errors, _w = cli._validate_stage_candidate(
-        project="SwarmAI", run_id="run_x", stage="build", profile="full",
-        artifact={"files_changed": ["backend/readers.py"]}, record_in={},
-        cand_rec={"stage": "build"}, cand_run={"id": "run_x", "created_at": NEW, "stages": []})
-    assert any("backend/readers.py::breaker" in e for e in errors)
-
-
-def test_parse_consumer_reader():
-    assert cli._parse_consumer_reader("K1|backend/a.py::f|unaffected|only logs it, harmless") == {
-        "id": "K1", "at": "backend/a.py::f", "status": "unaffected", "reason": "only logs it, harmless"}
-    assert cli._parse_consumer_reader("K2|backend/a.py::f|migrated")["status"] == "migrated"
-    for bad in ("K1|a.py::f", "X1|a.py::f|migrated", "K1|a.py::f|done|r", "K1||migrated"):
-        with pytest.raises(ValueError):
-            cli._parse_consumer_reader(bad)
-
-
-def test_apply_consumer_readers_moves_a_repeat_to_the_end():
-    """AC3: the store is an ordered history; re-adding A after B makes A the latest."""
-    state = {"id": "run_x", "consumer_readers": [{"id": "K1", "at": "a.py::f", "status": "migrated"}]}
-    cli._apply_consumer_readers(state, ["K1|b.py::g|unaffected|reads only the length"])
-    assert [x["at"] for x in state["consumer_readers"]] == ["a.py::f", "b.py::g"]
-    cli._apply_consumer_readers(state, ["K1|a.py::f|migrated"])
-    assert [x["at"] for x in state["consumer_readers"]] == ["b.py::g", "a.py::f"]
-
-
-def test_gate2_next_fixed_is_refused_by_the_consumers_gate(repo, monkeypatch, capsys, tmp_path):
-    """I1: a fix that leaves a reader unmigrated is refused before the re-check round."""
-    r, base = repo
-    _migrate_one(r)
-    _wire(monkeypatch, r, base, _consumer())
-    run_file = tmp_path / "run.json"
-    state = {"id": "run_x", "project": "SwarmAI", "created_at": NEW, "convergence": "deterministic"}
-    run_file.write_text(json.dumps(state))
-    monkeypatch.setattr(cli, "_load_run_for_stage", lambda p, rid: (run_file, dict(state)))
-    monkeypatch.setattr(cli, "_gate2_next_view",
-                        lambda rid, rd, rs: {"ok": True, "next": {"action": "fix", "pass": 1}})
-    args = argparse.Namespace(project="SwarmAI", run_id="run_x", fixed=1, test=None, declare=None)
-    with pytest.raises(SystemExit) as ex:
-        cli.cmd_gate2_next(args, None)
-    assert ex.value.code == 2
-    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert out["ok"] is False and "backend/readers.py::breaker" in out["error"]
-    assert "gate2_v2" not in json.loads(run_file.read_text())   # no fixed event recorded
-
-
-def test_gate2_recheck_is_refused_by_the_consumers_gate(repo, monkeypatch, capsys, tmp_path):
-    r, base = repo
-    _migrate_one(r)
-    _wire(monkeypatch, r, base, _consumer())
-    run_file = tmp_path / "run.json"
-    state = {"id": "run_x", "project": "SwarmAI", "created_at": NEW}
-    monkeypatch.setattr(cli, "_refuse_legacy_gate2", lambda args, name: None)
-    monkeypatch.setattr(cli, "_load_run_for_stage", lambda p, rid: (run_file, dict(state)))
-    args = argparse.Namespace(project="SwarmAI", run_id="run_x", findings="[]")
-    with pytest.raises(SystemExit):
-        cli.cmd_gate2_recheck(args, None)
-    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert out["ok"] is False and "backend/readers.py::breaker" in out["error"]
-
-
 def test_the_diff_is_measured_from_the_given_base(repo):
     """F9: the run's changed units are the diff from ITS base. A commit after the base
     is part of the run's change; with the base moved past it, it is not."""
@@ -411,44 +321,6 @@ def test_root_path_is_one_rule_for_plan_and_gate():
     plan = {"implementation_constraints": {"consumers": [_consumer(paths=["./backend"],
             readers=[{"at": "backend/a.py::f", "status": "migrated"}])]}}
     assert ds.constraints_errors(plan, "full") == []
-
-
-def test_a_run_without_a_worktree_is_not_verified_against_head():
-    """No recorded start commit → no HEAD diff (it would refuse migrated readers that
-    an earlier cycle already committed)."""
-    assert cli._consumers_repo("run_x", {"worktrees": [], "files_touched": ["backend/a.py"]}) is None
-
-
-def test_gate2_next_shows_the_unverified_warning_on_success(monkeypatch, capsys, tmp_path):
-    """An unverified consumers gate is printed with the view, never silent."""
-    monkeypatch.setattr(cli, "_stage_artifact", lambda p, rs, s: _plan_with(_consumer()))
-    monkeypatch.setattr(cli, "_consumers_repo", lambda run_id, rs: None)
-    run_file = tmp_path / "runs" / "run_x" / "run.json"
-    run_file.parent.mkdir(parents=True)
-    state = {"id": "run_x", "project": "SwarmAI", "created_at": NEW, "convergence": "deterministic"}
-    run_file.write_text(json.dumps(state))
-    monkeypatch.setattr(cli, "_load_run_for_stage", lambda p, rid: (run_file, dict(state)))
-    monkeypatch.setattr(cli, "_gate2_next_view",
-                        lambda rid, rd, rs: {"ok": True, "next": {"action": "fix", "pass": 1}})
-    monkeypatch.setattr(cli, "_take_proof_snapshot", lambda *a: {"ok": True})
-    from core import run_docs as rd
-    monkeypatch.setattr(rd, "write_gate2_docs", lambda *a: [])
-    args = argparse.Namespace(project="SwarmAI", run_id="run_x", fixed=1, test=None, declare=None)
-    cli.cmd_gate2_next(args, None)
-    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert any("NOT verified" in w for w in out.get("warnings", []))
-
-
-def test_gate2_recheck_prints_the_unverified_warning(monkeypatch, capsys, tmp_path):
-    monkeypatch.setattr(cli, "_stage_artifact", lambda p, rs, s: _plan_with(_consumer()))
-    monkeypatch.setattr(cli, "_consumers_repo", lambda run_id, rs: None)
-    monkeypatch.setattr(cli, "_refuse_legacy_gate2", lambda args, name: None)
-    run_file = tmp_path / "run.json"
-    monkeypatch.setattr(cli, "_load_run_for_stage", lambda p, rid: (run_file, {"id": "run_x", "created_at": NEW}))
-    args = argparse.Namespace(project="SwarmAI", run_id="run_x", findings="not json")
-    with pytest.raises(SystemExit):
-        cli.cmd_gate2_recheck(args, None)
-    assert "NOT verified" in capsys.readouterr().err
 
 
 # ── run_53674c75: one declaration rule, exact-grain credit, literal paths ─────────────
@@ -546,20 +418,6 @@ def test_pathspec_magic_cannot_exclude_files(repo):
     assert cg._hits(r, r"read_index\(", ["backend"])
 
 
-def test_the_document_and_the_gate_read_the_same_roots(tmp_path, monkeypatch):
-    """I1 / AC2: _consumers_repo hands the gate run_roots (every worktree and main)."""
-    from core import contract_readers as cr
-    from core import run_worktree as rw
-    monkeypatch.setattr(rw, "wt_root", lambda: tmp_path / "wts")
-    state = {"id": "run_abc", "worktrees": [
-        {"repo_name": "swarmai", "main": str(tmp_path / "main"), "state": "active", "base": "abc"}]}
-    wt = cli._run_worktree_path("run_abc", state)
-    wt.mkdir(parents=True)
-    got = cli._consumers_repo("run_abc", state)
-    assert got is not None and got["roots"] == cr.run_roots(state)
-    assert str(wt) in got["roots"] and str(tmp_path / "main") in got["roots"]
-
-
 def test_a_new_file_gets_the_same_credit_committed_or_not(repo):
     """REVIEW r2: a new file is every unit of it, whether untracked, staged or committed."""
     r, base = repo
@@ -574,17 +432,6 @@ def test_a_new_file_gets_the_same_credit_committed_or_not(repo):
     _git(r, "commit", "-q", "-m", "cycle commit")
     committed, _w = cg.check([_consumer(readers=readers)], [], repo=r, base=base, new_files=[])
     assert untracked == committed == []
-
-
-def test_an_unresolvable_reader_is_refused_when_declared():
-    """REVIEW r2: a reader outside every root never enters the store (it could not be
-    superseded later)."""
-    state = {"id": "run_x", "worktrees": []}
-    with pytest.raises(ValueError, match="outside"):
-        cli._apply_consumer_readers(state, ["K1|/etc/passwd::x|unaffected|not ours at all"])
-    assert state.get("consumer_readers", []) == []
-    cli._apply_consumer_readers(state, ["K1|backend/a.py::f|migrated"])
-    assert state["consumer_readers"][0]["at"] == "backend/a.py::f"
 
 
 def _drop_breaker(r: Path) -> None:

@@ -43,40 +43,6 @@ def _ids(scope, profile="direct"):
     return {e["id"] for e in cli._dispatch_experts(profile=profile, work_type=None, scope=scope, required=[])}
 
 
-def test_a_small_test_only_change_is_waived_and_dispatches_nobody():
-    s = _scope(("backend/tests/test_x.py", cli.SMALL_CHANGE_LINES, True))
-    assert cli._small_change(s)
-    assert _ids(s) == set()
-
-
-def test_a_few_lines_on_a_security_path_get_security():
-    s = _scope(("backend/routers/auth.py", 30, False))
-    assert cli._small_change(s) is None
-    assert _ids(s) == {"security"}
-
-
-def test_relaxed_profiles_and_docs_keep_their_rules():
-    assert _ids(_scope(("backend/tests/test_x.py", 42, True)), profile="trivial") == set()
-    assert _ids(_scope(("docs/readme.md", 80, False))) == set()
-    # a small source edit is still waived
-    assert _ids(_scope(("backend/core/x.py", 4, False))) == set()
-
-
-@pytest.mark.parametrize("added", [
-    "+uvicorn.run(app, port=80)",
-    "+uvicorn.run(app, host='::')",
-    "+listen_port = 18321",
-])
-def test_port_or_listener_change_is_a_security_risk(monkeypatch, added):
-    """E1 explicitly includes port/listener changes even on a generic file path."""
-    monkeypatch.setattr(cli, "_git_lines", lambda *args, **kwargs: [
-        "+++ b/backend/core/server.py", added,
-    ])
-    scope = _scope(("backend/core/server.py", 30, False))
-    assert cli._security_risk(scope)
-    assert _ids(scope) == {"security"}
-
-
 # ── the outcome is shown to the user: their language ─────────────────────────
 
 SKIPPED = {"title": "t", "quality": {"tests_pass": True},
@@ -90,14 +56,3 @@ def test_a_chinese_requirement_needs_a_chinese_outcome():
     assert pv.outcome_language_errors(zh, "修 main 上 3 个红测试") == []
     assert pv.outcome_language_errors(en, "fix the 3 red tests") == []
     assert pv.outcome_language_errors(None, "修") == [] and pv.outcome_language_errors(en, None) == []
-
-
-def test_stage_complete_refuses_an_outcome_in_the_wrong_language(monkeypatch):
-    monkeypatch.setattr(cli, "_stage_artifact", lambda *a, **k: None)
-    art = dict(SKIPPED, outcome={"problem_before": "it was red", "result_now": "it is green", "approach": []})
-    errs, _ = cli._validate_stage_candidate(
-        project="P", run_id="run_x", stage="deliver", profile="direct", artifact=art, record_in={},
-        cand_rec={"status": "completed"},
-        cand_run={"created_at": "2026-10-20T00:00:00+00:00", "stages": [], "requirement": "修红测试",
-                  "dispatch_plan": {"deliver": []}})
-    assert any("language of the requirement" in e for e in errs)

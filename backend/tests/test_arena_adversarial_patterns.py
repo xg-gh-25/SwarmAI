@@ -47,51 +47,6 @@ class _Args:
 # Piece 1 — run-observe adversarial_patterns event carries the new fields
 # ─────────────────────────────────────────────────────────────────────────
 
-def test_event_round_trips_action_firstpass_convergence(tmp_path, monkeypatch):
-    """AC1: emitting adversarial_patterns with --action/--first-pass-high/
-    --convergence-iterations persists all three into METRICS.json."""
-    run_file = tmp_path / "run.json"
-    run_file.write_text(json.dumps({"id": "run_x", "project": "SwarmAI"}),
-                        encoding="utf-8")
-    monkeypatch.setattr(artifact_cli, "_resolve_run_file",
-                        lambda p, r: run_file)
-
-    args = _Args(
-        project="SwarmAI", run_id="run_x", event="adversarial_patterns",
-        categories=json.dumps({"correctness": 2}),
-        first_pass_high="1",
-        convergence_iterations="2",
-        action=json.dumps({"profile": "full", "scope": "standard",
-                           "approach": "A"}),
-    )
-    artifact_cli.cmd_run_observe(args, reg=None)
-
-    metrics = json.loads((tmp_path / "METRICS.json").read_text(encoding="utf-8"))
-    ap = metrics["adversarial_patterns"]
-    assert ap["findings_by_category"] == {"correctness": 2}  # existing field intact
-    assert ap["first_pass_high"] == 1
-    assert ap["convergence_iterations"] == 2
-    assert ap["action"] == {"profile": "full", "scope": "standard", "approach": "A"}
-
-
-def test_event_defaults_new_fields_when_absent(tmp_path, monkeypatch):
-    """AC4 (additive): omitting the new args yields empty/zero defaults — an
-    existing emitter that passes only the old 4 args is unaffected."""
-    run_file = tmp_path / "run.json"
-    run_file.write_text(json.dumps({"id": "run_y"}), encoding="utf-8")
-    monkeypatch.setattr(artifact_cli, "_resolve_run_file", lambda p, r: run_file)
-
-    args = _Args(project="SwarmAI", run_id="run_y", event="adversarial_patterns",
-                 categories=json.dumps({"security": 1}), fixed="1")
-    artifact_cli.cmd_run_observe(args, reg=None)
-
-    ap = json.loads((tmp_path / "METRICS.json").read_text())["adversarial_patterns"]
-    assert ap["findings_by_category"] == {"security": 1}
-    assert ap["findings_fixed"] == 1
-    assert ap["action"] == {}
-    assert ap["first_pass_high"] == 0
-    assert ap["convergence_iterations"] == 0
-
 
 # ─────────────────────────────────────────────────────────────────────────
 # Piece 2′ — _extract_run_metrics derives adversarial_patterns

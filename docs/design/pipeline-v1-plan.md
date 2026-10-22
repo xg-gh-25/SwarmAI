@@ -2,9 +2,9 @@
 title: Pipeline v1 实施计划（执行 v13 设计）
 date: 2026-10-21
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 project: SwarmAI
-status: IN PROGRESS — cycle 1 未开始
+status: DONE — 2026-10-22 切换落地 main（f5b8b455），生产 daemon 已重建重启
 related: ~/.swarm-ai/SwarmWS/Projects/SwarmAI/2-understanding/knowledge/designs/2026-10-21-pipeline-structural-decisions.md（v13 FINAL，下称"设计"）；pipeline-gate-expert-simplification.md；pipeline-v1-deviations.md
 ---
 # Pipeline v1 实施计划
@@ -36,7 +36,7 @@ related: ~/.swarm-ai/SwarmWS/Projects/SwarmAI/2-understanding/knowledge/designs/
 | 8 | REFLECT 拆分 | **DONE** — DELIVER 前 prepare 验证/evidence/relation/去向；落地后 bounded judge+writer；每条 outcome；失败 degraded；40 tests green | `d6a4b04d` |
 | 9 | `run_audit.json`、指标、REPORT 两版、desktop 卡片、端到端测试 | **DONE** — 五维 audit+共享 renderer；expert token attribution；backend/API/frontend card；profile×mode + isolation + full rehearsal；E7 PASS | `948a8370` |
 | — | **终审修复** | **DONE** — 三路 fresh-context 终审 BLOCK 的五组根因全部修复：Gate-0/R2/proof/resume/restore/abandon/decision/run-land/accept/discard 可执行；nonce 绑定答案；runner 签名 call/proof；冲突 poison 缓存；多 repo 落地可恢复；v1 owner/HITL/API/UI 迁移。分批 targeted ~880 tests、前端 22 tests + tsc + build、358 模块 import、lint、eval gate 全绿；security_scan 与 main 基线相比无新增类别 | 单一 ready commit |
-| 10 | 切换：预演 → 落地 commit → build + 重启（XG 批准）→ direct 冒烟 | **READY COMMIT** — 已 squash 为单一可 revert commit（未合并 main）。merge main、生产 build/restart、active-run drain、post-restart smoke 需 XG Cycle-10 批准 | |
+| 10 | 切换：预演 → 落地 commit → build + 重启（XG 批准）→ direct 冒烟 | **DONE** — XG 2026-10-22 批准：`f5b8b455` ff 合入 main；`./prod.sh build` 验证 47/47、daemon 重启 healthy；重启后 v1 create→status→abandon 冒烟通过；279 个未完成的历史 run 归档到 `~/.swarm-ai/archive/pipeline-runs-2026-10-22/`；偏离并入设计 §D3.4、§D3.5 | |
 
 ## 3. cycle 1 的拆法
 

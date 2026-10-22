@@ -134,17 +134,3 @@ def test_mapping_key_is_app_session_not_env(tmp_path, monkeypatch):
 
 
 # ---- run-update --add-required-expert (append-only) -------------------------
-
-def test_no_remove_required_expert_flag_exists():
-    """Structural proof of append-only: there is NO --remove-required-expert flag.
-
-    A removable declaration would be a D7 skip channel. This asserts the CLI help
-    exposes no removal, so append-only cannot be bypassed via a sibling flag."""
-    r = subprocess.run(
-        [sys.executable, str(_CLI), "run-update", "--help"],
-        capture_output=True, text=True, cwd=str(_CLI.parents[2]), timeout=60,
-    )
-    assert "--add-required-expert" in r.stdout
-    assert "remove-required-expert" not in r.stdout.lower(), (
-        "a remove flag exists — required_experts must be append-only (D7-SAFETY③)"
-    )

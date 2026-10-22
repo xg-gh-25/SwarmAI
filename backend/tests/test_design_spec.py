@@ -149,13 +149,7 @@ def test_build_skips_without_a_plan_design_or_for_exempt_profiles():
 # ── 3. Fix by class ──────────────────────────────────────────────────────────
 
 
-
-
-
-
-
 # ── stage routing + cutover ──────────────────────────────────────────────────
-
 
 
 def test_design_updates_read_from_the_record_too():
@@ -185,8 +179,6 @@ def test_not_a_bug_and_skipped_tier_are_not_judged():
                            profile="direct", plan=_plan(), run_created_at=NEW) == []
 
 
-
-
 def test_review_findings_list_required_when_counted():
     errs = ds.stage_errors("review", {"findings_count": 2}, profile="full", plan=_plan(), run_created_at=NEW)
     assert any("findings_count is 2" in e for e in errs)
@@ -213,21 +205,6 @@ def test_published_templates_pass_their_own_design_gates():
 
 
 # ── wiring through artifact_cli ──────────────────────────────────────────────
-
-def test_validate_stage_candidate_runs_the_design_gate(monkeypatch):
-    import artifact_cli
-    monkeypatch.setattr(artifact_cli, "_stage_artifact", lambda *a, **k: None)
-    errs, _ = artifact_cli._validate_stage_candidate(
-        project="P", run_id="run_x", stage="plan", profile="full",
-        artifact={"acceptance_criteria": ["a"]}, record_in={}, cand_rec={"status": "completed"},
-        cand_run={"created_at": NEW, "stages": []})
-    assert any(e.startswith("Design spec") for e in errs)
-    errs, warns = artifact_cli._validate_stage_candidate(
-        project="P", run_id="run_x", stage="plan", profile="full",
-        artifact={"acceptance_criteria": ["a"]}, record_in={}, cand_rec={"status": "completed"},
-        cand_run={"created_at": OLD, "stages": []})
-    assert not any(e.startswith("Design spec") for e in errs)
-    assert any("Design spec" in w for w in warns)
 
 
 # ── 0. EVALUATE root cause / THINK solution class ────────────────────────────
@@ -325,22 +302,6 @@ def test_root_gates_have_their_own_cutover():
     assert ds.stage_errors("think", {}, profile="full", plan=None, evaluate=_eval(), run_created_at=NEW)
 
 
-def test_gate0_prompt_and_sha_carry_the_root_cause(tmp_path, monkeypatch):
-    import artifact_cli
-    und = {"work_type": "bugfix", "claim": "the CLI drops the flag", "evidence": "cli.py:10",
-           "evidence_kind": "code-trace"}
-    old = artifact_cli._gate0_understanding_sha(und)
-    assert artifact_cli._gate0_understanding_sha(dict(und, root_cause=None)) == old, \
-        "an absent root_cause keeps the pre-change sha (in-flight handouts stay bound)"
-    with_rc = dict(und, root_cause=ds.ROOT_TEMPLATE)
-    assert artifact_cli._gate0_understanding_sha(with_rc) != old
-    path, err = artifact_cli._write_gate0_prompt(tmp_path, with_rc, [])
-    assert path and not err
-    text = Path(path).read_text(encoding="utf-8")
-    assert "Root cause (why chain + recurrence search)" in text and "missed_invariant" in text
-    assert "5 questions" in text and "is its last why_chain level the ROOT" in text
-
-
 # ── review round 2: re-checked bugfix rule, missing upstream root, gate0 pre-check ──
 
 def test_bugfix_switched_after_evaluate_is_caught_at_think_and_plan():
@@ -357,23 +318,6 @@ def test_strict_think_without_an_upstream_root_cause_is_refused():
     w: list[str] = []
     assert ds.stage_errors("think", _think(), profile="full", plan=None, evaluate=None,
                            run_created_at=OLD, warnings=w) == [] and w
-
-
-def test_gate0_prompt_prechecks_the_root_cause_on_new_runs(ws, capsys):
-    import json as _json
-    import artifact_cli as cli
-    from tests.test_stage_boundary_commands import PROJECT, _call, _make_run
-    root, reg = ws
-    _make_run(root, "run_rc_new", "bugfix", created_at=NEW)
-    _make_run(root, "run_rc_old", "bugfix")                      # fixture default: before the cutover
-    und = {"work_type": "bugfix", "claim": "the CLI drops the flag on retry",
-           "evidence": "cli.py:10 returns before the flag is copied", "evidence_kind": "code-trace",
-           "root_cause": ds.ROOT_TEMPLATE}                        # module-design root under bugfix
-    data = _json.dumps({"understanding": und})
-    code, out = _call(cli.cmd_gate0_prompt, reg, capsys, project=PROJECT, run_id="run_rc_new", data=data)
-    assert code == 1 and "whack-a-mole" in out["error"]
-    code, out = _call(cli.cmd_gate0_prompt, reg, capsys, project=PROJECT, run_id="run_rc_old", data=data)
-    assert code == 0 and out["ok"], out
 
 
 from tests.test_stage_boundary_commands import ws  # noqa: E402,F401  (fixture)

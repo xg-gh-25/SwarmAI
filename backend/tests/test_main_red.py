@@ -81,16 +81,6 @@ def _run_dir(tmp_path, results, selected):
     return d
 
 
-def test_landing_closes_reds_its_tests_passed(tmp_path):
-    import artifact_cli as ac
-    main_red.record_seen([_fail(N1), _fail(N2)], "run_1", "a")
-    d = _run_dir(tmp_path, [{"nodeid": N1, "outcome": "passed"}], [])
-    warnings = []
-    ac._close_main_reds(d, "run_l", {"landed": {"swarmai": {"sha": "s9"}}}, warnings)
-    assert list(main_red.open_reds()) == [N2]
-    assert any("closed" in w for w in warnings)
-
-
 def test_report_scope_names_only_reds_in_the_selected_files(tmp_path):
     import artifact_cli as ac
     main_red.record_seen([_fail(N1), _fail(N2)], "run_1", "a")

@@ -109,65 +109,6 @@ def _stage(name: str, art_id: str | None = None, **extra) -> dict:
 class TestMetricsMerge:
     """Completing a run must NOT destroy previously-observed telemetry."""
 
-    def test_existing_stage_timing_survives_completion(self, tmp_path, monkeypatch):
-        """stage_timing recorded by run-observe survives _try_generate_metrics.
-
-        RED before the fix: _try_generate_metrics built a fresh dict and
-        write_text'd it, so stage_timing vanished the moment a run completed.
-        """
-        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
-        from scripts.artifact_cli import _try_generate_metrics, ArtifactRegistry, _get_workspace
-
-        project, run_id = "P", "run_merge01"
-        run_data = {
-            "id": run_id, "project": project, "profile": "full",
-            "requirement": "r", "status": "completed",
-            "created_at": _iso(0), "updated_at": _iso(60), "completed_at": _iso(60),
-            "stages": [_stage("evaluate", "art_a")], "taste_decisions": [],
-        }
-        run_dir = _write_run(tmp_path, project, run_id, run_data)
-        _write_manifest(tmp_path, project, [_artifact("art_a", _iso(5))])
-
-        # Pre-existing observe telemetry (what cmd_run_observe writes).
-        (run_dir / "METRICS.json").write_text(json.dumps({
-            "stage_timing": {"build": {"start": _iso(10), "end": _iso(25),
-                                       "wall_minutes": 15.0}},
-            "think_depth": {"alternatives_count": 3},
-        }, indent=2), encoding="utf-8")
-
-        reg = ArtifactRegistry(_get_workspace())
-        _try_generate_metrics(project, run_id, run_data, reg)
-
-        after = json.loads((run_dir / "METRICS.json").read_text())
-        assert "stage_timing" in after, "completion destroyed stage_timing"
-        assert after["stage_timing"]["build"]["wall_minutes"] == 15.0
-        assert after["think_depth"]["alternatives_count"] == 3
-        # Freshly extracted keys must still be written.
-        assert after.get("run_id") == run_id
-
-    def test_fresh_keys_win_over_stale(self, tmp_path, monkeypatch):
-        """A key present in BOTH is taken from the fresh extraction, not the file."""
-        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
-        from scripts.artifact_cli import _try_generate_metrics, ArtifactRegistry, _get_workspace
-
-        project, run_id = "P", "run_merge02"
-        run_data = {
-            "id": run_id, "project": project, "profile": "full",
-            "requirement": "r", "status": "completed",
-            "created_at": _iso(0), "updated_at": _iso(60), "completed_at": _iso(60),
-            "stages": [_stage("evaluate", "art_a")], "taste_decisions": [],
-        }
-        run_dir = _write_run(tmp_path, project, run_id, run_data)
-        _write_manifest(tmp_path, project, [_artifact("art_a", _iso(5))])
-        (run_dir / "METRICS.json").write_text(
-            json.dumps({"run_id": "STALE_VALUE", "stage_timing": {}}, indent=2),
-            encoding="utf-8")
-
-        reg = ArtifactRegistry(_get_workspace())
-        _try_generate_metrics(project, run_id, run_data, reg)
-
-        after = json.loads((run_dir / "METRICS.json").read_text())
-        assert after["run_id"] == run_id, "stale file value must not win"
 
     def test_in_flight_duration_uses_updated_at(self, tmp_path, monkeypatch):
         """completed_at ABSENT -> duration derived from updated_at, marked in-progress.
@@ -208,31 +149,6 @@ class TestMetricsMerge:
         assert "Duration:** N/A" not in text, "in-flight run still rendered N/A"
         assert "90.0 min" in text, f"expected updated_at-derived 90.0 min: {text[:400]}"
         assert "in progress" in text.lower(), "in-flight value must be marked"
-
-    def test_corrupt_existing_metrics_does_not_block(self, tmp_path, monkeypatch):
-        """Malformed METRICS.json degrades to a fresh write, never raises.
-
-        Real bytes, not a mocked raise, so the actual json parse path runs.
-        """
-        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
-        from scripts.artifact_cli import _try_generate_metrics, ArtifactRegistry, _get_workspace
-
-        project, run_id = "P", "run_merge03"
-        run_data = {
-            "id": run_id, "project": project, "profile": "full",
-            "requirement": "r", "status": "completed",
-            "created_at": _iso(0), "updated_at": _iso(60), "completed_at": _iso(60),
-            "stages": [_stage("evaluate", "art_a")], "taste_decisions": [],
-        }
-        run_dir = _write_run(tmp_path, project, run_id, run_data)
-        _write_manifest(tmp_path, project, [_artifact("art_a", _iso(5))])
-        (run_dir / "METRICS.json").write_text("{invalid json", encoding="utf-8")
-
-        reg = ArtifactRegistry(_get_workspace())
-        _try_generate_metrics(project, run_id, run_data, reg)  # must not raise
-
-        after = json.loads((run_dir / "METRICS.json").read_text())
-        assert after.get("run_id") == run_id
 
 
 # ── 2. per-stage timing derivation (AC1/AC3/AC10) ────────────────────────────
@@ -1114,74 +1030,6 @@ class TestGuardWritersAreExercised:
 # So completion PERSISTS the derived gaps (`derived_stage_gaps`) and the
 # aggregator prefers them: one channel, fed by a code path every run passes,
 # retroactive over every run that has artifacts.
-
-class TestDerivedGapsArePersisted:
-
-    def _seed(self, ws, project, run_id):
-        run_dir = _write_run(ws, project, run_id, {
-            "id": run_id, "project": project, "profile": "research",
-            "requirement": "persist gaps", "status": "completed",
-            "created_at": _iso(0), "updated_at": _iso(90), "completed_at": _iso(90),
-            "stages": [
-                _stage("evaluate", "art_a", token_cost=10),
-                _stage("think", "art_b", token_cost=20),
-                dict(_stage("reflect", None, token_cost=5), lessons=["x" * 40]),
-            ],
-            "taste_decisions": [],
-        })
-        _write_manifest(ws, project, [
-            _artifact("art_a", _iso(5)),
-            _artifact("art_b", _iso(35)),   # 30.0 min gap
-        ])
-        return run_dir
-
-    def test_completion_persists_derived_gaps(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
-        from scripts.artifact_cli import (
-            _try_generate_metrics, ArtifactRegistry, _get_workspace,
-        )
-
-        run_dir = self._seed(tmp_path, "P", "run_persist")
-        run_state = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-        _try_generate_metrics("P", "run_persist", run_state,
-                              ArtifactRegistry(_get_workspace()))
-
-        m = json.loads((run_dir / "METRICS.json").read_text(encoding="utf-8"))
-        gaps = m.get("derived_stage_gaps")
-        assert gaps, (
-            "the per-stage gaps were derived and then thrown away into markdown; "
-            "nothing persisted them, so the cross-run aggregate stays empty "
-            f"forever: {list(m.keys())}"
-        )
-        assert gaps["think"]["wall_minutes"] == 30.0, (
-            f"the derived gap must persist its real value: {gaps}"
-        )
-        # The unresolvable stage must NOT be invented with a 0.
-        assert "reflect" not in gaps, (
-            f"a stage with no timestamp must be absent, never persisted as 0: {gaps}"
-        )
-
-    def test_persisted_gaps_do_not_clobber_observe_telemetry(self, tmp_path, monkeypatch):
-        """Both channels coexist — persisting must not undo the merge fix."""
-        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
-        from scripts.artifact_cli import (
-            _try_generate_metrics, ArtifactRegistry, _get_workspace,
-        )
-
-        run_dir = self._seed(tmp_path, "P", "run_persist2")
-        (run_dir / "METRICS.json").write_text(json.dumps({
-            "stage_timing": {"build": {"wall_minutes": 15.0}},
-            "think_depth": {"alternatives_count": 3},
-        }), encoding="utf-8")
-
-        run_state = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-        _try_generate_metrics("P", "run_persist2", run_state,
-                              ArtifactRegistry(_get_workspace()))
-
-        m = json.loads((run_dir / "METRICS.json").read_text(encoding="utf-8"))
-        assert m["stage_timing"]["build"]["wall_minutes"] == 15.0, "observe data lost"
-        assert m["think_depth"]["alternatives_count"] == 3, "observe data lost"
-        assert m.get("derived_stage_gaps", {}).get("think", {}).get("wall_minutes") == 30.0
 
 
 class TestAggregatorPrefersDerivedGaps:

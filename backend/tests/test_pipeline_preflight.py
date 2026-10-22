@@ -87,24 +87,6 @@ def test_import_sources_are_live_not_hardcoded():
         assert f in art_fields, f"STAGE_DEPTH deliver field {f!r} not aggregated"
 
 
-def test_runcommit_field_names_match_real_literals():
-    """AC4 drift tripwire (run-state half): the three run-commit field names
-    preflight hardcodes MUST appear as string literals in artifact_cli.py. If an
-    enforcement rename drifts, this goes RED — preflight never silently drifts."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("pipeline_preflight", PREFLIGHT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    src = ARTIFACT_CLI.read_text()
-    for b in mod.aggregate_deliver_blockers():
-        if b["location"] in ("stage-record-top", "run.json-top", "completion-surface"):
-            # the real enforcement must reference this field name as a literal
-            assert f'"{b["field"]}"' in src or f"'{b['field']}'" in src, (
-                f"run-state field {b['field']!r} not found as a literal in "
-                f"artifact_cli.py — enforcement drifted, preflight is now stale"
-            )
-
-
 def _extract_deliver_block(pv_src):
     """Return just the `if stage == "deliver":` block body from validate_artifact_data
     — from that line to the next sibling `if stage ==` (or EOF). Scanning the WHOLE

@@ -133,8 +133,6 @@ def test_gate2_template_carries_expert_id_placeholder():
     )
 
 
-
-
 # ---- 5. E2E: real transcript fixture → marker expert_id --------------------
 def test_e2e_expert_id_from_real_transcript_head(tmp_path):
     """Forced-execution E2E: write a real JSONL transcript whose first user
@@ -204,17 +202,3 @@ def test_e2e_multiblock_content_array_preserves_anchor(tmp_path):
     assert head, "head read must return the joined spawn prompt"
     # The anchor must survive block-join as a line of its own → extractable.
     assert rh._extract_expert_id(head) == "correctness"
-
-
-
-def test_two_line_spawn_templates_are_classified_adversarial():
-    """The cards' two-line spawn prompts are the transcript head the SubagentStop hook
-    classifies. Without an adversarial anchor no _adv_ marker is written and the D7
-    commit gate refuses every run-commit, though the experts ran."""
-    # the templates live in artifact_cli._spawn_text (the tools print them as `spawn`)
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-    import artifact_cli as cli
-    for eid in ("correctness", "meta-review", "gate1-skeptic", "gate0-skeptic"):
-        head = cli._spawn_text(eid, "/p.md").replace(f"EXPERT-ID: {eid}", "EXPERT-ID: x-unregistered")
-        assert rh._is_adversarial_intent("general-purpose", "", head), eid

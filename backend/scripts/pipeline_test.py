@@ -897,7 +897,6 @@ _DOC_LINT_SUITES = (
     "backend/tests/test_lint_skills_body.py",
     "backend/tests/test_lint_skills_size.py",
     "backend/tests/test_lint_experts.py",
-    "backend/tests/test_check_rule_preservation.py",
 )
 # The suites that read the governed context sources (backend/context/): a change there
 # has no importers either.

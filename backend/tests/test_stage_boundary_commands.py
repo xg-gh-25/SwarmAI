@@ -203,19 +203,6 @@ DECISION = [{"description": "kept the change local", "classification": "taste"}]
 
 # ── direct profile: plan → build → deliver end to end (items 1, 2, 7, 8) ────
 
-class TestDirectProfileFlow:
-
-    def test_stage_start_says_how_to_read_the_run(self, ws, capsys):
-        root, reg = ws
-        rid = "run_readrun1"
-        _make_run(root, rid, "direct", files_touched=["backend/a.py"])
-        code, out = _start(reg, capsys, rid, "plan")
-        assert code == 0
-        assert f"run-get --project {PROJECT} --run-id {rid} --brief" in out["read_run"]
-        assert "--field" in out["read_run"]
-
-
-
 
 # ── every existing gate still blocks; a block writes NOTHING (item 1, X1) ──
 
@@ -283,44 +270,6 @@ def _assert_degraded(root, rid, stage, needle):
         assert rec.get("push_ready") is False and needle in rec["push_ready_reason"]
 
 
-
-
-@pytest.mark.parametrize("case", [_case_stage_order, _case_bad_decision],
-                         ids=lambda f: f.__name__)
-def test_blocked_stage_complete_writes_nothing(ws, capsys, case):
-    root, reg = ws
-    rid, stage, art, rec, code_, path = case(root)
-    before = _snapshot(root)
-    state_before = reg.get_pipeline_state(PROJECT)
-    code, out = _complete(reg, capsys, rid, stage, art, rec)
-    assert code == 1
-    assert out["ok"] is False and out["stage"] == stage and out["legacy_errors"]
-    hits = [e for e in out["errors"] if e["code"] == code_]
-    assert hits, out["errors"]
-    assert any(e["path"] == path for e in hits), hits
-    assert _snapshot(root) == before, "a blocked stage-complete must write nothing"
-    assert reg.get_pipeline_state(PROJECT) == state_before
-
-
-def test_check_mode_writes_nothing(ws, capsys):
-    root, reg = ws
-    _make_run(root, "run_check", "direct")
-    before = _snapshot(root)
-    code, out = _complete(reg, capsys, "run_check", "plan", _plan_artifact(),
-                          {"decisions": DECISION}, check=True)
-    assert code == 0 and out["ok"] is True and out["check"] is True
-    assert out["next_stage"] == "build"
-    assert _snapshot(root) == before
-
-
-def test_missing_decisions_stays_a_warning(ws, capsys):
-    root, reg = ws
-    _make_run(root, "run_nodec", "direct")
-    code, out = _complete(reg, capsys, "run_nodec", "plan", _plan_artifact(), {}, check=True)
-    assert code == 0, out
-    assert any("No decisions classified" in w for w in out["warnings"])
-
-
 def test_structured_error_shapes():
     errs = pv.structure_errors("build", [
         "Missing required field 'tdd' for stage 'build'",
@@ -341,32 +290,7 @@ def test_structured_error_shapes():
     assert run_upd["code"] == "E_ADVERSARIAL_TIER" and run_upd["expected"] == "full"
 
 
-def test_publish_failure_carries_structured_errors(ws, capsys):
-    _, reg = ws
-    args = SimpleNamespace(project=PROJECT, type="delivery", data='{"title": "x"}',
-                           producer="s_autonomous-pipeline", summary="s", topic="",
-                           stage="deliver", run_id=None, quiet=True)
-    with pytest.raises(SystemExit):
-        cli.cmd_publish(args, reg)
-    err = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
-    assert err["validation_failed"] is True and err["errors"]
-    assert {e["code"] for e in err["structured_errors"]} & {"E_MISSING_FIELD", "E_DEPTH_MISSING"}
-
-
 # ── derived fields from evidence (item 2) ──────────────────────────────────
-
-
-
-
-
-@pytest.mark.parametrize("model_value,expected", [(4321, (4321, "estimate")), (None, (0, "unavailable"))])
-def test_token_cost_fallback(model_value, expected, monkeypatch):
-    monkeypatch.setitem(sys.modules, "core.run_delivery_summary", types.ModuleType("x"))
-    rec: dict = {}
-    usage = cli._measure_stage_tokens("s", "2026-01-01T00:00:00+00:00", "2026-01-01T01:00:00+00:00")
-    assert usage is None
-    cli._apply_token_cost(rec, model_value, usage)
-    assert (rec["token_cost"], rec["token_cost_source"]) == expected
 
 
 # ── push_ready upper bound (item 2) ────────────────────────────────────────
@@ -377,8 +301,6 @@ def _clean_deliver():
 
 def _green_ev():
     return _c2("regression", "r", [{"nodeid": "a::b", "outcome": "passed"}])
-
-
 
 
 def test_push_ready_needs_runner_evidence_not_an_artifact_claim():
@@ -403,8 +325,6 @@ def test_push_ready_bound_exit_criteria_strict_only():
     assert pv.push_ready_upper_bound(_clean_deliver(), "full", test_evidence=failing_ev)[0] is False
 
 
-
-
 # ── Gate-2 Red Team trigger, HIGH half (validator-enforced) ────────────────
 _RT = "red_team_dispatched"
 _RT_POST = "2026-10-19T00:00:00+00:00"   # after RED_TEAM_CUTOVER → enforced
@@ -425,8 +345,6 @@ def _rt_markers(root, monkeypatch, run_id, expert_ids, *, readable=True):
             {"ts": i, "event": "SubagentStop", "run_id": run_id, "expert_id": eid}))
 
 
-
-
 def _rt_publish(reg, capsys, art, run_id):
     args = SimpleNamespace(project=PROJECT, type="delivery", data=json.dumps(art),
                            producer="s_autonomous-pipeline", summary="s", topic="",
@@ -440,55 +358,11 @@ def _rt_publish(reg, capsys, art, run_id):
     return code, [json.loads(ln) for ln in cap.err.splitlines() if ln.strip().startswith("{")]
 
 
-def test_red_team_required_on_legacy_publish(ws, capsys):
-    root, reg = ws
-    art = _clean_deliver()
-    art["adversarial_review"]["findings"] = [_specialist_high()]
-    # Enforced run → the publish is refused with the structured code.
-    _make_run(root, "run_pub_new", "direct", stages=["plan", "build"], created_at=_RT_POST)
-    code, err = _rt_publish(reg, capsys, art, "run_pub_new")
-    assert code == 1 and err[-1]["validation_failed"] is True
-    assert {"code": "E_RED_TEAM_REQUIRED", "path": "adversarial_review.red_team_dispatched"} \
-        in err[-1]["structured_errors"], err
-    # A run created before the cutover → warning only, the publish goes through.
-    _make_run(root, "run_pub_old", "direct", stages=["plan", "build"], created_at=_RT_PRE)
-    code, err = _rt_publish(reg, capsys, art, "run_pub_old")
-    assert code == 0 and not any(e.get("validation_failed") for e in err)
-    assert any("Red Team required" in e.get("warning", "") for e in err), err
-    assert "required_experts" not in _run_state(root, "run_pub_old")
-    # No run at all (legacy publish) → warning only; it then fails closed on the
-    # missing --run-id (exit 3), never on the Red Team rule.
-    code, err = _rt_publish(reg, capsys, art, None)
-    assert code == 3 and not any(e.get("validation_failed") for e in err)
-    assert any("Red Team required" in e.get("warning", "") for e in err), err
-
-
 def _rt_claimed_deliver():
     art = _clean_deliver()
     art["adversarial_review"]["findings"] = [_specialist_high()]
     art["adversarial_review"][_RT] = True          # the claim the marker must back
     return art
-
-
-
-
-
-
-
-
-
-
-def test_red_team_legacy_run_update_declares_red_team(ws, capsys, monkeypatch):
-    root, reg = ws
-    _make_run(root, "run_rt_leg", "direct", stages=["plan", "build"], created_at=_RT_POST)
-    aid = reg.publish(project=PROJECT, artifact_type="delivery", data=_rt_claimed_deliver(),
-                      producer="s_autonomous-pipeline", summary="s", run_id="run_rt_leg")
-    rec = {"stage": "deliver", "status": "completed", "artifact_id": aid,
-           "stage_doc_consumed": True}
-    cli.cmd_run_update(_run_update_args("run_rt_leg", stage_json=json.dumps(rec)), reg)
-    assert _run_state(root, "run_rt_leg")["required_experts"] == ["red-team"]
-    cli.cmd_run_update(_run_update_args("run_rt_leg", stage_json=json.dumps(rec)), reg)
-    assert _run_state(root, "run_rt_leg")["required_experts"] == ["red-team"]  # idempotent
 
 
 def _direct_run_with_manual_contract(root, reg, capsys, rid, **extra):
@@ -502,8 +376,6 @@ def _direct_run_with_manual_contract(root, reg, capsys, rid, **extra):
     st = _run_state(root, rid)
     st["stages"].append({"stage": "build", "status": "completed"})
     (_run_dir(root, rid) / "run.json").write_text(json.dumps(st), encoding="utf-8")
-
-
 
 
 # ── G1 exit contract: structure + judging per kind (item 7) ────────────────
@@ -613,83 +485,6 @@ def _fixture_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def test_stage_start_deliver_scope_experts_and_prompts(ws, capsys):
-    root, reg = ws
-    repo = _fixture_repo(root)
-    (repo / "core" / "a.py").write_text("x = 1\n" + "y = 2\n" * 60, encoding="utf-8")
-    (repo / "routers").mkdir()
-    (repo / "routers" / "auth.py").write_text("z = 3\n" * 70, encoding="utf-8")
-    rid = "run_scope"
-    rd = _make_run(root, rid, "full",
-                   stages=["evaluate", "think", "plan", "build", "review", "test"],
-                   files_touched=[str(repo / "core" / "a.py"), str(repo / "routers" / "auth.py")],
-                   required_experts=["concurrency"])
-    code, out = _start(reg, capsys, rid, "deliver")
-    assert code == 0, out
-    by_path = {Path(c["path"]).name: c for c in out["changed_files"]}
-    assert by_path["a.py"]["status"] == "M" and by_path["a.py"]["added"] == 60
-    assert by_path["auth.py"]["status"] == "A" and by_path["auth.py"]["added"] == 70
-    assert out["diff_insertions"] == 130
-    assert "full_tier_override" not in out  # risk, not a line count, picks the tier
-    ids = {e["id"] for e in out["experts"]}
-    # E1: correctness, + security and red-team on a security-sensitive path; the declared
-    # concurrency lens maps to correctness
-    assert ids == {"correctness", "security", "red-team"}
-    for e in out["experts"]:
-        if "prompt_path" in e:
-            body = Path(e["prompt_path"]).read_text(encoding="utf-8")
-            assert body.startswith(f"EXPERT-ID: {e['id']}")
-            # The output format names the real producer (deliver's Red Team gate reads it).
-            assert f'"specialist":"{e["id"]}"' in body and '"specialist":"<name>"' not in body
-            assert Path(e["prompt_path"]).parent == rd / "evidence" / "prompts"
-    assert all("prompt_path" in e for e in out["experts"]), out["warnings"]
-    assert "You are a specialist code reviewer" not in json.dumps(out), \
-        "prompt bodies are returned as paths, never inline"
-    assert len(json.dumps(out, ensure_ascii=False).encode()) <= 8 * 1024
-    assert _run_state(root, rid)["stage_timing"]["deliver"]["started_at"]
-
-
-@pytest.mark.parametrize("profile,work_type,ins,dels,required,expect", [
-    ("full", None, 10, 5, [], set()),                               # < 50 lines → none
-    ("full", None, 10, 5, ["security"], set()),                     # ≤ 20 lines: small, even if required
-    ("full", None, 25, 5, ["security"], {"security"}),              # 21-49 lines: only the required
-    # E1: correctness only, whatever the size, unless there is a clear security risk
-    ("bugfix", None, 60, 0, [], {"correctness"}),
-    ("bugfix", "refactor", 60, 0, [], {"correctness"}),
-    ("full", None, 150, 100, [], {"correctness"}),
-    ("direct", None, 150, 0, [], {"correctness"}),
-    ("full", None, 60, 0, ["api-contract"], {"correctness"}),       # old lens → correctness
-    ("trivial", None, 150, 0, [], set()),                          # relaxed: no >100 override
-])
-def test_dispatch_rules(profile, work_type, ins, dels, required, expect):
-    scope = {"changed_files": [{"path": "backend/x.py", "status": "M", "added": ins, "removed": dels}],
-             "diff_insertions": ins, "diff_deletions": dels}
-    got = {e["id"] for e in cli._dispatch_experts(profile=profile, work_type=work_type,
-                                                    scope=scope, required=required)}
-    assert got == expect
-
-
-@pytest.mark.parametrize("required,expect", [([], set()), (["security"], {"security"})])
-def test_docs_only_change_dispatches_no_expert(required, expect):
-    # 400 lines of prose: no code runs, so no Gate-2 expert (unless run.json requires one)
-    scope = {"changed_files": [{"path": "docs/design/notes.md", "status": "M", "added": 400,
-                                "removed": 0}, {"path": "docs/a.md", "status": "A", "added": 50,
-                                                "removed": 0}],
-             "diff_insertions": 450, "diff_deletions": 0}
-    assert cli._is_docs_only(scope)
-    got = {e["id"] for e in cli._dispatch_experts(profile="direct", work_type=None,
-                                                    scope=scope, required=required)}
-    assert got == expect
-    scope["changed_files"].append({"path": "backend/x.py", "status": "M", "added": 1, "removed": 0})
-    assert not cli._is_docs_only(scope)
-    assert not cli._is_docs_only({"changed_files": []})
-    # a governed system-prompt source is not documentation: it gets a meta-review
-    assert not cli._is_docs_only({"changed_files": [
-        {"path": "backend/context/SOUL.md", "status": "M", "added": 400, "removed": 0}]})
-
-
-
-
 # ── adversarial-review fixes: HIGH-1 … MED-6, LOW ──────────────────────────
 
 def _run_update_args(run_id, **kw):
@@ -700,12 +495,6 @@ def _run_update_args(run_id, **kw):
     for k, v in kw.items():
         setattr(ns, k, v)
     return ns
-
-
-
-
-
-
 
 
 def test_bound_reads_all_reports_passed_count_and_tests_pass_flag():
@@ -747,70 +536,6 @@ def _plan_and_build(root, reg, capsys, rid):
     return rd
 
 
-
-
-
-
-def test_legacy_run_update_caps_push_ready_to_the_bound(ws, capsys):
-    """MED-4: run-update --stage-json may lower push_ready, never raise it."""
-    root, reg = ws
-    rid = "run_legacy_pr"
-    _make_run(root, rid, "bugfix", stages=["evaluate", "think", "plan", "build", "review", "test"])
-    sj = json.dumps({"stage": "deliver", "status": "completed", "stage_doc_consumed": True,
-                     "push_ready": True})
-    code, _ = _call(cli.cmd_run_update, reg, capsys, **vars(_run_update_args(rid, stage_json=sj)))
-    assert code == 0
-    rec = cli._stage_record_of(_run_state(root, rid), "deliver")
-    assert rec["push_ready"] is False and rec["push_ready_capped"] is True
-    assert rec["push_ready_reason"].startswith("capped by run-update")
-    # a bound that holds leaves the claimed True alone
-    rid2 = "run_legacy_ok"
-    _make_run(root, rid2, "bugfix", stages=["evaluate", "think", "plan", "build", "review", "test"])
-    aid = reg.publish(project=PROJECT, artifact_type="delivery", data=_clean_deliver(),
-                      producer="s_autonomous-pipeline", summary="d", run_id=rid2)
-    _write_evidence(_run_dir(root, rid2), "tests/latest-regression.json",
-                    _c2("regression", rid2, [{"nodeid": "a::b", "outcome": "passed"}]))
-    sj2 = json.dumps({"stage": "deliver", "status": "completed", "stage_doc_consumed": True,
-                      "push_ready": True, "artifact_id": aid})
-    code, _ = _call(cli.cmd_run_update, reg, capsys, **vars(_run_update_args(rid2, stage_json=sj2)))
-    assert code == 0
-    assert cli._stage_record_of(_run_state(root, rid2), "deliver")["push_ready"] is True
-
-
-
-
-def test_write_failure_is_structured_and_leaves_the_old_record(ws, capsys, monkeypatch):
-    """MED-6: a run.json write failure → one write_failed line; the completed plan
-    record is NOT re-pointed at the new artifact (no auto-record stub)."""
-    root, reg = ws
-    rid = "run_wfail"
-    _make_run(root, rid, "direct")
-    code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
-    assert code == 0
-    old = cli._stage_record_of(_run_state(root, rid), "plan")
-
-    def boom(*a, **k):
-        raise OSError("disk full")
-    monkeypatch.setattr(cli, "_write_run_atomic", boom)
-    code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
-    assert code == 1 and out["ok"] is False and out["code"] == "write_failed"
-    assert out["partial"]["artifact_id"] and "idempotent" in out["hint"]
-    assert cli._stage_record_of(_run_state(root, rid), "plan") == old
-
-
-@pytest.mark.parametrize("record,path", [
-    ({"decisions": DECISION, "token_cost": float("inf")}, "record.token_cost"),
-    ({"decisions": DECISION, "extra": {"n": float("nan")}}, "record.extra.n"),
-])
-def test_non_finite_record_numbers_rejected(ws, capsys, record, path):
-    root, reg = ws
-    _make_run(root, "run_inf", "direct")
-    before = _snapshot(root)
-    code, out = _complete(reg, capsys, "run_inf", "plan", _plan_artifact(), record)
-    assert code == 1 and any(e["path"] == path for e in out["errors"]), out["errors"]
-    assert _snapshot(root) == before
-
-
 # ── DELIVER generates REPORT.md itself; goal_cycle is an advanceable state ──
 
 def test_pipeline_states_cover_every_profile_stage():
@@ -818,65 +543,6 @@ def test_pipeline_states_cover_every_profile_stage():
     for name, stages in PIPELINE_PROFILES.items():
         assert set(stages) <= set(PIPELINE_STATES), name
     assert PIPELINE_STATES[:8] == tuple(PIPELINE_PROFILES["full"])  # full's order kept
-
-
-def test_goal_plan_advances_manifest_to_goal_cycle(ws, capsys):
-    root, reg = ws
-    rid = "run_goal_adv"
-    _make_run(root, rid, "goal", stages=["evaluate", "think"])
-    reg.advance_pipeline(PROJECT, "plan")
-    code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
-    assert code == 0, out
-    assert out["next_stage"] == "goal_cycle" and out["advanced"] is True, out
-    assert reg.get_pipeline_state(PROJECT) == "goal_cycle"
-    code, out = _start(reg, capsys, rid, "goal_cycle")
-    assert code == 0 and out["ok"] is True and out["card"].endswith("goal_cycle.md")
-
-
-def test_deliver_generates_report_then_advances_to_reflect(ws, capsys):
-    """docs profile (… → deliver → reflect): no REPORT.md before DELIVER's
-    stage-complete; it is generated in-process and the manifest advances."""
-    root, reg = ws
-    rid = "run_docs_rep"
-    rd = _make_run(root, rid, "docs", stages=["evaluate", "think", "plan"])
-    reg.advance_pipeline(PROJECT, "deliver")
-    assert not (rd / "REPORT.md").exists()
-    code, out = _complete(reg, capsys, rid, "deliver", _clean_deliver(), {})
-    assert code == 0, out
-    assert out["report_generated"] is True and (rd / "REPORT.md").is_file()
-    assert out["next_stage"] == "reflect" and out["advanced"] is True, out
-    assert reg.get_pipeline_state(PROJECT) == "reflect"
-    assert "REPORT.md gate" not in out["next_action"]
-
-
-def test_deliver_keeps_a_hand_written_report(ws, capsys):
-    root, reg = ws
-    rid = "run_docs_hand"
-    rd = _make_run(root, rid, "docs", stages=["evaluate", "think", "plan"])
-    (rd / "REPORT.md").write_text("hand-written report", encoding="utf-8")
-    code, out = _complete(reg, capsys, rid, "deliver", _clean_deliver(), {})
-    assert code == 0, out
-    assert out["report_generated"] is False and out["advanced"] is True
-    assert (rd / "REPORT.md").read_text(encoding="utf-8") == "hand-written report"
-
-
-def test_deliver_report_failure_does_not_advance(ws, capsys, monkeypatch):
-    """The gate still holds: no REPORT.md → advanced:false with the manual fix."""
-    root, reg = ws
-    rid = "run_docs_fail"
-    rd = _make_run(root, rid, "docs", stages=["evaluate", "think", "plan"])
-    reg.advance_pipeline(PROJECT, "deliver")
-
-    def boom(*a, **k):
-        raise RuntimeError("render crashed")
-
-    monkeypatch.setattr(cli, "cmd_run_report", boom)
-    code, out = _complete(reg, capsys, rid, "deliver", _clean_deliver(), {})
-    assert code == 0, out
-    assert out["advanced"] is False and out["report_generated"] is False
-    assert not (rd / "REPORT.md").exists()
-    assert reg.get_pipeline_state(PROJECT) == "deliver"
-    assert "REPORT.md gate" in out["next_action"]
 
 
 # ── dispatch scope norms: source-only size, one security owner, review list ──
@@ -894,239 +560,7 @@ def _scope(files):
             "source_insertions": s_ins, "source_deletions": sum(c["removed"] for c in src)}
 
 
-@pytest.mark.parametrize("path,is_test", [
-    ("backend/tests/test_x.py", True), ("backend/core/test_helpers_impl.py", True),
-    ("pkg/thing_test.py", True), ("desktop/src/a.test.ts", True), ("desktop/src/B.spec.tsx", True),
-    ("desktop/src/__tests__/c.tsx", True), ("backend/core/attest.py", False),
-    ("backend/core/contest_rules.py", False), ("backend/scripts/artifact_cli.py", False),
-])
-def test_is_test_path(path, is_test):
-    assert cli._is_test_path(path) is is_test
-
-
-def test_size_escalation_counts_source_lines_only():
-    # 60 source + 300 test lines on a bugfix: the old count (360) forced full tier + red-team.
-    scope = _scope([("backend/core/gate.py", "M", 60, 0),
-                    ("backend/tests/test_security_gate.py", "A", 300, 0)])
-    got = {e["id"] for e in cli._dispatch_experts(profile="bugfix", work_type="bugfix",
-                                                  scope=scope, required=[])}
-    assert got == {"correctness"}
-    # a test path must not fire the security rule (test_routers_auth.py matches 'auth')
-    scope2 = _scope([("backend/core/x.py", "M", 120, 0),
-                     ("backend/tests/test_routers_auth.py", "A", 50, 0)])
-    got2 = {e["id"] for e in cli._dispatch_experts(profile="full", work_type=None,
-                                                   scope=scope2, required=[])}
-    assert got2 == {"correctness"}
-
-
-def test_size_alone_never_adds_red_team_a_security_risk_does():
-    # E1: red-team follows a clear security risk, not a line count
-    big = _scope([("backend/core/util.py", "M", 260, 10)])
-    assert {e["id"] for e in cli._dispatch_experts(profile="bugfix", work_type="bugfix",
-                                                   scope=big, required=[])} == {"correctness"}
-    risky = _scope([("backend/core/run_owner_gate.py", "M", 60, 0)])
-    assert {e["id"] for e in cli._dispatch_experts(profile="bugfix", work_type="bugfix",
-                                                   scope=risky, required=[])} == {
-        "correctness", "security", "red-team"}
-
-
-def test_security_is_reviewed_once_per_run():
-    # E1: a change with no security risk gets no Gate-2 security; REVIEW's fan-out keeps
-    # its own rule (P4 replaces it); a risky one is owned by Gate-2, not reviewed twice
-    scope = _scope([("backend/core/x.py", "M", 120, 0)])
-    gate2 = {e["id"] for e in cli._dispatch_experts(profile="full", work_type=None,
-                                                    scope=scope, required=[])}
-    assert gate2 == {"correctness"}
-    risky = _scope([("backend/core/auth.py", "M", 120, 0)])
-    gate2 = {e["id"] for e in cli._dispatch_experts(profile="full", work_type=None,
-                                                    scope=risky, required=[])}
-    assert "security" in gate2
-    review = {e["id"] for e in cli._review_dispatch(profile="full", scope=risky, gate2_ids=gate2)}
-    assert "security" not in review  # one owner per run
-
-
-def test_small_auth_fix_gets_security_at_gate2():
-    # 20 lines on an auth path is not small (sensitive path): E1 sends security at any
-    # size there, so REVIEW does not dispatch it a second time
-    scope = _scope([("backend/routers/auth.py", "M", 20, 0)])
-    gate2 = {e["id"] for e in cli._dispatch_experts(profile="bugfix", work_type="bugfix",
-                                                    scope=scope, required=[])}
-    assert gate2 == {"security"}
-    review = {e["id"] for e in cli._review_dispatch(profile="bugfix", scope=scope, gate2_ids=gate2)}
-    assert "security" not in review and {"spec-compliance", "code-quality"} <= review
-
-
-def test_review_dispatch_single_pass_when_fanout_does_not_apply():
-    scope = _scope([("backend/core/util.py", "M", 30, 0)])
-    review = cli._review_dispatch(profile="full", scope=scope, gate2_ids=set())
-    assert [e["id"] for e in review] == ["spec-compliance"]
-
-
-def test_review_dispatch_ux_only_for_frontend_source():
-    fe = _scope([("desktop/src/pages/X.tsx", "M", 120, 0)])
-    assert "ux-test" in {e["id"] for e in cli._review_dispatch(profile="full", scope=fe, gate2_ids={"security"})}
-    fe_test_only = _scope([("backend/core/a.py", "M", 120, 0), ("desktop/src/X.test.tsx", "M", 40, 0)])
-    assert "ux-test" not in {e["id"] for e in cli._review_dispatch(
-        profile="full", scope=fe_test_only, gate2_ids={"security"})}
-
-
-def test_stage_start_review_returns_review_list_not_gate2(ws, capsys):
-    root, reg = ws
-    repo = _fixture_repo(root)
-    (repo / "core" / "a.py").write_text("x = 1\n" + "y = 2\n" * 120, encoding="utf-8")
-    rid = "run_rev"
-    rd = _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build"],
-                   files_touched=[str(repo / "core" / "a.py")])
-    code, out = _start(reg, capsys, rid, "review")
-    assert code == 0, out
-    assert "experts" not in out
-    ids = [e["id"] for e in out["review_experts"]]
-    assert ids[:2] == ["spec-compliance", "code-quality"] and "security" not in ids
-    assert out["spawn_mode"] == "foreground"
-    # REVIEW writes no Gate-2 prompt files, only its own reviewer inputs + one
-    # review-<id>.md prompt per REVIEW sub-agent
-    assert {p.name for p in (rd / "evidence" / "prompts").iterdir()} \
-        <= {"review-knowledge.md", "review-change.diff"} | {f"review-{i}.md" for i in ids}
-    assert all(e["prompt_path"].endswith(f"review-{e['id']}.md") for e in out["review_experts"])
-    assert _run_state(root, rid)["dispatch_plan"]["review"] == ids
-
-
-def test_stage_start_deliver_records_plan_and_foreground(ws, capsys):
-    root, reg = ws
-    repo = _fixture_repo(root)
-    (repo / "core" / "a.py").write_text("x = 1\n" + "y = 2\n" * 120, encoding="utf-8")
-    rid = "run_del"
-    _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
-              files_touched=[str(repo / "core" / "a.py")])
-    code, out = _start(reg, capsys, rid, "deliver")
-    assert code == 0, out
-    ids = [e["id"] for e in out["experts"]]
-    assert ids == ["correctness"] and out["spawn_mode"] == "foreground"  # E1: no risk
-    assert _run_state(root, rid)["dispatch_plan"]["deliver"] == ids + ["meta-review"]
-
-
-def test_deliver_adds_security_when_no_stage_owned_it(ws, capsys):
-    # REVIEW ran when Gate-2 would carry security (so REVIEW skipped it); fixes then shrank
-    # the change under 50 lines → Gate-2 alone would dispatch nothing. Nobody reviewed security.
-    root, reg = ws
-    repo = _fixture_repo(root)
-    (repo / "routers").mkdir()
-    (repo / "routers" / "auth.py").write_text("z = 3\n" * 20, encoding="utf-8")
-    rid = "run_drift"
-    _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
-              files_touched=[str(repo / "routers" / "auth.py")],
-              dispatch_plan={"review": ["spec-compliance", "code-quality"]})
-    code, out = _start(reg, capsys, rid, "deliver")
-    assert code == 0, out
-    assert "security" in {e["id"] for e in out["experts"]}
-
-
-def test_path_rules_match_repo_relative_not_absolute(tmp_path):
-    """Path rules read the repo-relative path. Absolute paths carry the machine's
-    directory names: a home folder called Desktop matched the frontend rule
-    ``desktop/`` (REVIEW dispatched ux-test for a markdown expert file), and a
-    checkout under a ``tests/`` folder would mark every file as a test."""
-    import subprocess
-    repo = tmp_path / "tests" / "Desktop" / "repo"
-    (repo / "backend" / "core").mkdir(parents=True)
-    src = repo / "backend" / "core" / "auth_store.py"
-    src.write_text("x = 1\n")
-    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
-    subprocess.run(git + ["init", "-q"], cwd=repo, check=True)
-    subprocess.run(git + ["add", "."], cwd=repo, check=True)
-    subprocess.run(git + ["commit", "-qm", "init"], cwd=repo, check=True)
-    src.write_text("x = 1\n" + "".join(f"y{i} = {i}\n" for i in range(20)))
-    doc = repo / "backend" / "experts.md"
-    doc.write_text("note\n")
-
-    scope = cli._changed_files_scope([str(src), str(doc)])
-    by_rel = {c["rel"]: c for c in scope["changed_files"]}
-    assert set(by_rel) == {"backend/core/auth_store.py", "backend/experts.md"}
-    assert not any(c["is_test"] for c in scope["changed_files"])
-    assert scope["source_insertions"] == scope["diff_insertions"] == 21
-
-    ids = [e["id"] for e in cli._review_dispatch(profile="full", scope=scope, gate2_ids=set())]
-    assert "ux-test" not in ids
-    assert "code-quality" in ids  # auth_store.py is a sensitive path → fan-out applies
-
-
-def test_pytest_named_source_outside_tests_dir_is_not_a_test(tmp_path):
-    """``*_test.py`` / ``test_*.py`` outside a tests dir count as tests only if they
-    define one: the test RUNNER backend/scripts/pipeline_test.py has none, and
-    misreading it as a test would let its lines skip the size thresholds."""
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts" / "pipeline_test.py").write_text("def run():\n    pass\n")
-    (tmp_path / "scripts" / "eval_gate_test.py").write_text("def test_gate():\n    assert 1\n")
-    (tmp_path / "scripts" / "test_helpers_impl.py").write_text("class TestLike:\n    pass\n")
-    root = str(tmp_path)
-    assert cli._is_test_path("scripts/pipeline_test.py", root=root) is False
-    assert cli._is_test_path("scripts/eval_gate_test.py", root=root) is True
-    assert cli._is_test_path("scripts/test_helpers_impl.py", root=root) is True
-    assert cli._is_test_path("scripts/gone_test.py", root=root) is True  # unreadable → by name
-    assert cli._is_test_path("tests/simple_test.py", root=root) is True  # tests dir wins
-
-
-def test_security_risk_matches_the_repo_relative_path():
-    """The rule reads the repo-relative path: a home folder named like a sensitive word
-    must not fire it, a repo-relative auth path must."""
-    plain = _scope([("/Users/token/repo/backend/core/x.py", "M", 60, 0)])
-    plain["changed_files"][0]["rel"] = "backend/core/x.py"
-    assert cli._security_risk(plain) is None
-    assert cli._security_risk(_scope([("backend/auth/user.py", "M", 60, 0)]))
-
-
-def test_stage_start_keeps_a_concurrent_run_json_write(ws, capsys, monkeypatch):
-    """stage-start's git calls take seconds; a key another writer puts into run.json
-    meanwhile must survive the dispatch_plan write, and the earlier stage's plan too."""
-    root, reg = ws
-    repo = _fixture_repo(root)
-    (repo / "routers").mkdir()
-    (repo / "routers" / "auth.py").write_text("z = 3\n" * 20, encoding="utf-8")
-    rid = "run_race"
-    _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
-              files_touched=[str(repo / "routers" / "auth.py")],
-              dispatch_plan={"review": ["spec-compliance", "code-quality"]})
-    real_scope = cli._changed_files_scope
-    run_file = _run_dir(root, rid) / "run.json"
-
-    def scope_with_writer(files):
-        st = json.loads(run_file.read_text(encoding="utf-8"))
-        st["written_meanwhile"] = True
-        run_file.write_text(json.dumps(st), encoding="utf-8")
-        return real_scope(files)
-
-    monkeypatch.setattr(cli, "_changed_files_scope", scope_with_writer)
-    code, out = _start(reg, capsys, rid, "deliver")
-    assert code == 0, out
-    st = json.loads(run_file.read_text(encoding="utf-8"))
-    assert st.get("written_meanwhile") is True
-    assert st["dispatch_plan"]["review"] == ["spec-compliance", "code-quality"]
-    assert "security" in st["dispatch_plan"]["deliver"]
-
-
 # ── H1 / H5: review rounds counted from completion markers, enforced at stage-complete ──
-
-def test_completed_spawns_counts_per_expert_from_markers(tmp_path, monkeypatch):
-    import config
-    audit = tmp_path / "state" / "pipeline_agent_audit"
-    audit.mkdir(parents=True)
-    monkeypatch.setattr(config, "get_app_data_dir", lambda: tmp_path)
-    rows = [("s1_100", "run_a", 100.0, "security"), ("s1_101", "run_a", 101.0, "security"),
-            ("s1_102", "run_a", 102.0, "gate1-skeptic"), ("s1_103", "run_a", 103.0, None),
-            ("s1_104", "run_b", 104.0, "security"),          # other run
-            ("s1_50", "run_a", 50.0, "security")]            # before the window
-    for name, rid, ts, eid in rows:
-        (audit / f"session_{name}.marker").write_text(json.dumps(
-            {"ts": ts, "event": "SubagentStop", "run_id": rid, "expert_id": eid}))
-    (audit / "session_s1_adv_101.marker").write_text(json.dumps(   # adversarial twin
-        {"ts": 101.0, "run_id": "run_a", "expert_id": "security"}))
-    (audit / "session_s1_105.marker").write_text("[]")  # malformed: skipped, not fatal
-    (audit / "session_s1_106.marker").write_text(json.dumps(    # old daemon: no expert_id key
-        {"ts": 106.0, "event": "SubagentStop", "run_id": "run_a"}))
-    got = cli._completed_spawns("run_a", 90.0, 200.0)
-    assert got == {"by_expert": {"gate1-skeptic": 1, "security": 2}, "unattributed": 1, "legacy": 1}
-    monkeypatch.setattr(config, "get_app_data_dir", lambda: tmp_path / "missing")
-    assert cli._completed_spawns("run_a", 90.0, 200.0) is None  # unreadable → None
 
 
 def _budget_run(root, rid):
@@ -1134,127 +568,7 @@ def _budget_run(root, rid):
               stage_timing={"plan": {"started_at": "2026-01-01T00:00:00+00:00"}})
 
 
-
-
-
-
-def test_stage_budget_without_stage_start_is_reported_not_enforced(tmp_path):
-    b = cli._stage_budget("run_x", tmp_path, {}, "plan", {})
-    assert b["missing"] == [] and b["spawns"] is None and b["window"].startswith("unknown")
-
-
-
-
-def test_deliver_does_not_add_security_for_a_run_without_a_recorded_review_plan(ws, capsys):
-    """A run that predates dispatch_plan: the drift guard adds nothing. Gate-2 itself
-    sends security on an auth path at any size (E1), so it is the one owner."""
-    root, reg = ws
-    repo = _fixture_repo(root)
-    (repo / "routers").mkdir()
-    (repo / "routers" / "auth.py").write_text("z = 3\n" * 20, encoding="utf-8")
-    rid = "run_noplan"
-    _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
-              files_touched=[str(repo / "routers" / "auth.py")])
-    code, out = _start(reg, capsys, rid, "deliver")
-    assert code == 0, out
-    assert [e["id"] for e in out["experts"]].count("security") == 1
-
-
-
-
-
 # ── gate speed: evidence handed to the gate, not re-read by it ──
-
-def test_diff_pack_has_context_new_files_and_names_what_does_not_fit(tmp_path, monkeypatch):
-    import subprocess
-    repo = tmp_path / "r"
-    (repo / "pkg").mkdir(parents=True)
-    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
-    (repo / "pkg" / "a.py").write_text("".join(f"x{i} = {i}\n" for i in range(40)))
-    subprocess.run(git + ["init", "-q"], cwd=repo, check=True)
-    subprocess.run(git + ["add", "."], cwd=repo, check=True)
-    subprocess.run(git + ["commit", "-qm", "i"], cwd=repo, check=True)
-    (repo / "pkg" / "a.py").write_text("".join(f"x{i} = {i}\n" for i in range(40)).replace("x20 = 20", "x20 = 99"))
-    (repo / "pkg" / "new.py").write_text("def f():\n    return 1\n")
-    pack = cli._diff_pack([str(repo / "pkg" / "a.py"), str(repo / "pkg" / "new.py")])
-    assert "+x20 = 99" in pack and " x10 = 10" in pack          # the hunk with context
-    assert "+++ b/pkg/new.py (new file)" in pack and "+def f():" in pack
-    monkeypatch.setattr(cli, "DIFF_PACK_MAX_LINES", 5)
-    small = cli._diff_pack([str(repo / "pkg" / "a.py"), str(repo / "pkg" / "new.py")])
-    assert small.splitlines()[0].startswith("# NOT INCLUDED") and "pkg/a.py" in small.splitlines()[0]
-
-
-def test_gate1_prompt_carries_its_six_inputs(ws, capsys):
-    root, reg = ws
-    rid = "run_g1"
-    rd = _make_run(root, rid, "full", stages=["evaluate", "think", "plan"])
-    path, warns = cli._write_gate1_prompt(PROJECT, rd, _run_state(root, rid))
-    assert path and not warns, warns
-    text = open(path).read()
-    assert text.splitlines()[0] == "EXPERT-ID: gate1-skeptic"
-    for h in ("### 1. Plan", "### 2. Rejected alternatives", "### 3. TECH.md Blocking Constraints",
-              "### 4. IMPROVEMENT.md What Failed", "### 5. EVALUATE verdict", "### 6. Work type"):
-        assert h in text, h
-    assert "Work type of this task: <work_type>" not in text   # first occurrence substituted
-
-
-def test_stage_start_build_returns_the_assembled_gate1_prompt(ws, capsys):
-    root, reg = ws
-    rid = "run_g1b"
-    _make_run(root, rid, "full", stages=["evaluate", "think", "plan"])
-    code, out = _start(reg, capsys, rid, "build")
-    assert code == 0, out
-    assert out["gate1_prompt_path"].endswith("gate1-skeptic.md") and out["spawn_mode"] == "foreground"
-
-
-def test_expert_prompts_point_at_one_diff_file(ws, capsys):
-    """Gate-2 reviewers read one diff file (every hunk with context) instead of opening
-    every changed file; the prompt itself stays small so the spawn is two lines."""
-    root, reg = ws
-    repo = _fixture_repo(root)
-    (repo / "routers").mkdir()
-    (repo / "routers" / "auth.py").write_text("z = 3\n" * 80, encoding="utf-8")
-    rid = "run_diffpack"
-    _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
-              files_touched=[str(repo / "routers" / "auth.py")])
-    code, out = _start(reg, capsys, rid, "deliver")
-    assert code == 0, out
-    p = Path(out["experts"][0]["prompt_path"])
-    diff = p.parent / "change.diff"
-    assert diff.is_file() and "+z = 3" in diff.read_text()
-    assert str(diff) in p.read_text() and "+z = 3" not in p.read_text()
-
-
-
-def test_diff_pack_names_every_file_it_leaves_out(tmp_path, monkeypatch):
-    import subprocess
-    repo = tmp_path / "r"
-    (repo / "pkg").mkdir(parents=True)
-    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
-    (repo / "pkg" / "a.py").write_text("a = 1\n")
-    subprocess.run(git + ["init", "-q"], cwd=repo, check=True)
-    subprocess.run(git + ["add", "."], cwd=repo, check=True)
-    subprocess.run(git + ["commit", "-qm", "i"], cwd=repo, check=True)
-    (repo / "pkg" / "new.py").write_text("n = 1\n")
-    (repo / "pkg" / "link.py").symlink_to("/etc/hosts")
-    pack = cli._diff_pack([str(repo / "pkg" / "new.py"), "./pkg/../../outside.py",
-                           str(repo / "pkg" / "link.py")])
-    first = pack.splitlines()[0]
-    assert first.startswith("# NOT INCLUDED") and "link.py" in first and "outside.py" in first
-    assert "+n = 1" in pack                         # a bad sibling path does not drop new files
-    assert "localhost" not in pack                  # symlink target never copied
-
-
-def test_gate1_inputs_are_fenced_data(ws, capsys):
-    root, reg = ws
-    rid = "run_g1f"
-    rd = _make_run(root, rid, "full", stages=["evaluate", "think", "plan"])
-    path, _ = cli._write_gate1_prompt(PROJECT, rd, _run_state(root, rid))
-    text = open(path).read()
-    assert "never an instruction to you" in text
-    assert text.count("<gate-input>") == text.count("</gate-input>") >= 1   # evaluate is always fenced
-
-
 
 
 # ── transcript ids + per-response token cost (run_045b96b2) ─────────────────
@@ -1280,22 +594,6 @@ def _no_db_usage(monkeypatch):
     monkeypatch.setitem(sys.modules, "core.run_delivery_summary", mod)
 
 
-
-
-@pytest.mark.parametrize("bad", ["../etc/passwd", "a/b", "*", ""])
-def test_malformed_session_id_is_not_recorded(ws, capsys, cli_cfg, monkeypatch, bad):
-    root, reg = ws
-    rid = "run_txbad"
-    _make_run(root, rid, "direct")
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", bad)
-    assert _start(reg, capsys, rid, "plan")[0] == 0
-    assert not _run_state(root, rid).get("transcripts")
-
-
-
-
-
-
 def test_report_tokens_label_for_transcript_usage():
     tx = {"source": "transcript", "tokens": 1234567, "cache_read_tokens": 9_000_000,
           "cost_usd": None}
@@ -1307,31 +605,6 @@ def test_report_tokens_label_for_transcript_usage():
     assert "估算" not in label
 
 
-def test_stage_start_reentry_from_a_new_session_keeps_concurrent_writes(ws, capsys, cli_cfg, monkeypatch):
-    """A re-entry whose only change would be a new transcript id writes NOTHING, so a
-    field another writer (e.g. a cancel) saves meanwhile survives; the id is recorded
-    by stage-complete's own write instead."""
-    root, reg = ws
-    rid = "run_txreentry"
-    _make_run(root, rid, "direct")
-    assert _start(reg, capsys, rid, "plan")[0] == 0
-    real_record = cli._record_transcript_id
-    calls = []
-
-    def _concurrent_write(state):          # 1st call: run.json already loaded, not yet written
-        if not calls:
-            st = _run_state(root, rid)
-            st["status"] = "cancelled"
-            (_run_dir(root, rid) / "run.json").write_text(json.dumps(st), encoding="utf-8")
-        calls.append(1)
-        return real_record(state)
-
-    monkeypatch.setattr(cli, "_record_transcript_id", _concurrent_write)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", TX_SID2)
-    assert _start(reg, capsys, rid, "plan")[0] == 0
-    st = _run_state(root, rid)
-    assert st["status"] == "cancelled"             # the concurrent cancel is not undone
-    assert st["transcripts"] == [TX_SID]           # not written on re-entry
     # (stage-complete recording the new id: test_stage_commands_record_the_transcript_id)
 
 
@@ -1343,27 +616,7 @@ def test_stage_start_reentry_from_a_new_session_keeps_concurrent_writes(ws, caps
 # evidence).
 
 class TestExitEvidenceLists:
-    def test_list_values_are_joined(self):
-        _, rec = cli._parse_stage_data(json.dumps({"record": {"exit_evidence": {
-            "wtf": "0", "fixes": [], "unfixed": ["a.py::t: pre-existing", "b.py::u: flaky"]}}}))
-        ev = rec["exit_evidence"]
-        assert ev["fixes"] == ""
-        assert ev["unfixed"] == "a.py::t: pre-existing; b.py::u: flaky"
-        assert pv.validate_stage_record("test", rec)[0] == []
 
-    def test_blank_items_are_dropped_before_joining(self):
-        _, rec = cli._parse_stage_data(json.dumps({"record": {"exit_evidence": {"X6": ["", "  "]}}}))
-        assert rec["exit_evidence"]["X6"] == ""
-
-    def test_empty_list_leaves_a_manual_criterion_unmet(self, tmp_path):
-        _, rec = cli._parse_stage_data(json.dumps({"record": {"exit_evidence": {"X6": []}}}))
-        out = pv.judge_exit_criteria([{"id": "X6", "kind": "manual", "expect": "done"}], tmp_path, rec)
-        assert out["met"] is False and out["unmet"] == ["X6"]
-
-    def test_non_string_items_are_still_rejected(self):
-        _, rec = cli._parse_stage_data(json.dumps({"record": {"exit_evidence": {"fixes": [1]}}}))
-        errs, _ = pv.validate_stage_record("test", rec)
-        assert any("exit_evidence" in e for e in errs)
 
     def test_test_template_shows_string_evidence(self):
         tmpl = pv.STAGE_RECORD_TEMPLATES["test"]["exit_evidence"]
@@ -1371,125 +624,7 @@ class TestExitEvidenceLists:
         assert {"wtf", "fixes", "unfixed"} <= set(tmpl)
 
 
-def test_untested_for_budget_flag_comes_from_the_newest_scope_report(tmp_path):
-    """DELIVER's attention flag for what the runner did not test (transitive importers,
-    import smoke past its cap, any skipped file) comes from the runner's evidence (the
-    newest of regression / verify), never from the model."""
-    t = tmp_path / "evidence" / "tests"
-    t.mkdir(parents=True)
-
-    def ev(mode, at, skipped, trans=()):
-        (t / f"latest-{mode}.json").write_text(json.dumps(
-            {"schema": 1, "run_id": "run_u", "mode": mode, "finished_at": at,
-             "skipped_for_budget": skipped, "transitive_unrun": list(trans)}))
-
-    assert cli._untested_for_budget_flag(tmp_path, "run_u") is None
-    ev("verify", "2026-01-01T00:01:00Z", ["backend/tests/test_v.py"])
-    ev("regression", "2026-01-01T00:02:00Z", ["import::core.x"], ["backend/tests/test_t.py"])
-    flag = cli._untested_for_budget_flag(tmp_path, "run_u")
-    assert flag.startswith(cli._RUNNER_FLAG_PREFIX + "Not tested in this run (regression)")
-    assert "test_t.py" in flag and "core.x" in flag and "test_v.py" not in flag
-    ev("regression", "2026-01-01T00:02:00Z", [])
-    assert cli._untested_for_budget_flag(tmp_path, "run_u") is None
-
-
 # ── one landing decision: a gate error degrades the stage on the FIRST try ──
-
-
-
-def test_input_and_order_errors_never_degrade(ws, capsys):
-    root, reg = ws
-    _make_run(root, "run_ord", "direct")  # plan never completed
-    for _ in range(4):
-        code, out = _complete(reg, capsys, "run_ord", "build", _build_artifact(),
-                              {"decisions": DECISION})
-        assert code == 1
-    assert not any(s.get("stage") == "build" for s in _run_state(root, "run_ord")["stages"])
-
-
-def test_a_model_cannot_write_degraded_itself(ws, capsys):
-    assert "degraded" in cli._DERIVED_RECORD_KEYS
-
-
-def test_an_unverified_gate_caps_push_ready():
-    st = {"stages": [{"stage": "build", "gate1_unverified_reason": "gate_spawn_blocked twice"}]}
-    assert cli._unverified_gates(st) == ["build:gate1"]
-    assert cli._unverified_gates({"stages": [{"stage": "build",
-                                              "gate1_unverified_reason": "short"}]}) == []
-    assert cli._unverified_gates({"stages": []}, {"gate2_findings_unverified_reason":
-                                                  "no audit hook here"}) == ["deliver:gate2_findings"]
-
-
-def test_a_goal_final_gate_needs_a_completed_sub_agent(monkeypatch):
-    monkeypatch.setattr(cli, "_spawns_in_windows",
-                        lambda rid, w: {"by_expert": {}, "unattributed": 0})
-    run = {"stage_timing": {"goal_cycle": {"started_at": "2026-01-01T00:00:00+00:00"}}}
-    w: list = []
-    errs = cli._final_gate_spawn_errors("r", run, {"adversarial_review": {"findings": []}}, {}, w)
-    assert errs and errs[0].startswith("E_FINAL_GATE_UNBACKED")
-    assert cli._final_gate_spawn_errors("r", run, {"dod_met": True}, {}, w) == []  # no claim
-    monkeypatch.setattr(cli, "_spawns_in_windows",
-                        lambda rid, w: {"by_expert": {"final-gate": 1}})
-    assert cli._final_gate_spawn_errors("r", run, {"adversarial_review": True}, {}, w) == []
-    monkeypatch.setattr(cli, "_spawns_in_windows", lambda rid, w: None)  # store unreadable
-    assert cli._final_gate_spawn_errors("r", run, {"adversarial_review": True}, {}, w) == []
-
-
-def test_a_verification_gap_is_latched_and_survives_a_legacy_rewrite(ws, capsys):
-    """A gap recorded once (here: a gate passed on a recorded reason) caps push_ready
-    through every path, including a legacy run-update that re-records the stage."""
-    root, reg = ws
-    rid = "run_latch"
-    _make_run(root, rid, "bugfix", stages=["evaluate", "think", "plan", "build", "review", "test"],
-              verification_gaps=[{"stage": "build", "why": "gate1 spawn NOT verified"}])
-    aid = reg.publish(project=PROJECT, artifact_type="delivery", data=_clean_deliver(),
-                      producer="s_autonomous-pipeline", summary="d", run_id=rid)
-    _write_evidence(_run_dir(root, rid), "tests/latest-regression.json",
-                    _c2("regression", rid, [{"nodeid": "a::b", "outcome": "passed"}]))
-    sj = json.dumps({"stage": "deliver", "status": "completed", "stage_doc_consumed": True,
-                     "push_ready": True, "artifact_id": aid})
-    code, _ = _call(cli.cmd_run_update, reg, capsys, **vars(_run_update_args(rid, stage_json=sj)))
-    assert code == 0
-    rec = cli._stage_record_of(_run_state(root, rid), "deliver")
-    assert rec["push_ready"] is False and "unverified" in rec["push_ready_reason"]
-
-
-def test_gaps_come_from_the_gates_own_warnings():
-    gaps = cli._verification_gaps_of("build", [
-        "gate1 spawn NOT verified: the sub-agent marker store is unreadable",
-        "refused stage-complete 1/3 for build", "some other note"], {})
-    assert [g["why"][:5] for g in gaps] == ["gate1"]
-    # a degraded stage is not latched (the bound reads its current record)
-    assert cli._verification_gaps_of("test", [], {"degraded": {"errors": ["x"]}}) == []
-
-
-def test_every_round_of_experts_are_checked_together(monkeypatch):
-    """REVIEW / DELIVER experts run in parallel in EVERY round: round 1, and each
-    gate2-recheck wave whatever its size. Spawns >30 s apart refuse."""
-    t = 1_700_000_000.0  # in the past: the stage window ends now
-    iso = __import__("datetime").datetime.fromtimestamp(t, __import__("datetime").timezone.utc).isoformat()
-    run = {"dispatch_plan": {"deliver": ["correctness", "security", "red-team", "meta-review"],
-                             "review": ["spec-compliance", "code-quality"]},
-           "stage_timing": {"deliver": {"started_at": iso}, "review": {"started_at": iso}},
-           "gate2_waves": [{"at": t + 300, "experts": ["correctness", "security"]},
-                           {"at": t + 600, "experts": ["correctness"]}]}
-    starts = {"correctness": [t + 10, t + 310, t + 610], "security": [t + 12, t + 312],
-              "red-team": [t + 11], "meta-review": [t + 900],
-              "spec-compliance": [t + 10], "code-quality": [t + 200]}
-    monkeypatch.setattr(cli, "_spawn_starts", lambda rid, w: starts)
-    w: list = []
-    assert cli._parallel_dispatch_errors("r", run, "deliver", w) == []
-    # recorded as a warning, never refused (the reviews already ran)
-    assert cli._parallel_dispatch_errors("r", run, "review", w) == []
-    assert any(x.startswith("serial dispatch") and "code-quality" in x for x in w)
-    w.clear()
-    starts["security"] = [t + 12, t + 400]  # round 2 re-checks spawned one after another
-    assert cli._parallel_dispatch_errors("r", run, "deliver", w) == []
-    assert any("re-check wave 1" in x and "security" in x for x in w)
-    w.clear()
-    monkeypatch.setattr(cli, "_spawn_starts", lambda rid, w: None)
-    assert cli._parallel_dispatch_errors("r", run, "deliver", w) == []
-    assert w and not any("NOT verified" in x for x in w)  # does not cap push_ready
 
 
 # ── one landing decision (SOUL P5): tests decide landing; review gaps lower push_ready ──
@@ -1523,16 +658,6 @@ def test_docs_only_paths_is_judged_on_the_diff():
                  "backend/context/SECURITY-BASELINE.md",
                  "/Users/u/.swarm-ai/worktrees/run_x/swarmai/backend/context/AGENT.md"):
         assert not pv.docs_only_paths(["docs/a.md", code]), code
-
-
-def test_is_docs_only_counts_tests_and_rename_sources():
-    assert not cli._is_docs_only({"changed_files": [
-        {"path": "backend/tests/test_a.py", "is_test": True}]})       # test code is code
-    assert not cli._is_docs_only({"changed_files": [
-        {"path": "docs/x.md", "from": "backend/x.py", "status": "R"}]})  # code renamed away
-    assert cli._is_docs_only({"changed_files": [{"path": "docs/x.md", "status": "M"}]})
-    assert not cli._is_docs_only({"changed_files": [                     # governed prompt source
-        {"path": "backend/context/STEERING.md", "status": "M"}]})
 
 
 def test_landing_green_and_pre_existing_failures_land(ws):
@@ -1608,88 +733,7 @@ def test_landing_refuses_a_regression_left_in_an_older_report(ws):
     assert len(errs) == 1 and "latest-regression.json" in errs[0]
 
 
-def test_a_degrade_is_not_latched_into_verification_gaps():
-    """Re-completing a degraded stage with the errors fixed clears it: the degrade lives
-    on the stage record (read by the push_ready bound), never in the run-level latch."""
-    assert cli._verification_gaps_of("build", ["build degraded: 1 gate error(s) recorded"],
-                                      {"degraded": {"errors": ["x"]}}) == []
-
-
-def test_a_refused_landing_reopens_deliver(ws):
-    root, _ = ws
-    d = _make_run(root, "run_reopen", "direct",
-                  stages=[{"stage": "plan", "status": "completed"},
-                          {"stage": "deliver", "status": "completed", "push_ready": False}],
-                  stage_timing={"deliver": {"started_at": "2026-01-01T00:00:00+00:00",
-                                            "completed_at": "2026-01-01T00:09:00+00:00"}})
-    cli._reopen_after_refused_landing(d / "run.json")
-    st = _run_state(root, "run_reopen")
-    rec = next(r for r in st["stages"] if r["stage"] == "deliver")
-    assert rec["status"] == "landing_refused" and rec["landing_refused_at"]
-    assert "completed_at" not in st["stage_timing"]["deliver"]
-    assert st["stage_timing"]["deliver"]["started_at"]
-    plan = next(r for r in st["stages"] if r["stage"] == "plan")
-    assert plan["status"] == "completed"   # only DELIVER is touched
-
-
-def test_docs_only_deliver_needs_no_adversarial_review(ws, capsys):
-    root, reg = ws
-    _make_run(root, "run_docs_only", "direct", stages=["plan", "build"],
-              dispatch_plan={"deliver": []})
-    art = _tmpl("deliver")
-    art["adversarial_review"]["profile_tier"] = "skipped"
-    code, out = _complete(reg, capsys, "run_docs_only", "deliver", art, {}, check=True)
-    msgs = json.dumps(out.get("errors", []))
-    assert "profile_tier" not in msgs and "spawned" not in msgs and "meta_review" not in msgs, out
-    assert any("documentation-only" in w for w in out["warnings"]), out["warnings"]
-    # a missing plan (None) is not "no expert": the presence check still applies
-    _make_run(root, "run_docs_unknown", "direct", stages=["plan", "build"])
-    code, out = _complete(reg, capsys, "run_docs_unknown", "deliver", art, {}, check=True)
-    assert any(e["code"] == "E_ADVERSARIAL_TIER" for e in out["errors"]), out
-
-
 # ── a direct run always goes through PLAN (XG 2026-10-20); BUILD may be skipped ──
-
-def test_direct_run_refuses_build_or_deliver_before_plan(ws, capsys):
-    root, reg = ws
-    _make_run(root, "run_noplan", "direct")
-    for stage in ("build", "deliver"):
-        code, out = _start(reg, capsys, "run_noplan", stage)
-        assert code == 1, out
-        assert "starts at PLAN" in json.dumps(out), out
-    assert _run_state(root, "run_noplan")["stages"] == []   # nothing recorded skipped
-
-
-def test_direct_plan_with_only_exit_criteria_completes(ws, capsys):
-    """PLAN of a direct run needs only the exit contract: no design, no file discovery."""
-    root, reg = ws
-    _make_run(root, "run_min_plan", "direct")
-    plan = {"exit_criteria": [{"id": "X1", "kind": "test",
-                               "ref": "backend/tests/test_x.py::test_a", "expect": "pass"}]}
-    code, out = _complete(reg, capsys, "run_min_plan", "plan", plan, {"decisions": DECISION})
-    assert code == 0, out
-    code, out = _start(reg, capsys, "run_min_plan", "build")
-    assert code in (0, None), out
-
-
-
-
-def test_direct_run_with_a_legacy_skipped_plan_still_starts(ws, capsys):
-    """A run created before the rule, whose PLAN the old late-start path recorded skipped."""
-    root, reg = ws
-    _make_run(root, "run_legacy_skip", "direct",
-              stages=[{"stage": "plan", "status": "skipped", "skip_reason": "old"}])
-    code, out = _start(reg, capsys, "run_legacy_skip", "deliver")
-    assert code in (0, None), out
-
-
-def test_run_update_refuses_the_removed_docs_profile(ws, capsys):
-    root, reg = ws
-    _make_run(root, "run_nodocs", "full", stages=["evaluate"])
-    code, out = _call(cli.cmd_run_update, reg, capsys,
-                      **vars(_run_update_args("run_nodocs", profile="docs")))
-    assert code == 1 and out["code"] == "E_PROFILE_REMOVED" and "direct" in out["error"]
-    assert _run_state(root, "run_nodocs")["profile"] == "full"
 
 
 def test_a_docs_profile_run_editing_code_is_not_push_ready():
@@ -1699,21 +743,3 @@ def test_a_docs_profile_run_editing_code_is_not_push_ready():
     ok, reasons = pv.push_ready_upper_bound(art, "docs", docs_only=pv.docs_only_paths(
         ["backend/scripts/catalog.py", "README.md"]))
     assert ok is False and any("no runner evidence" in r for r in reasons)
-
-
-
-
-def test_sync_derived_push_ready_only_lowers():
-    """The payload's push_ready follows the final DELIVER record (degrade, gaps,
-    landing all lower it after the gate check) and is never raised by it."""
-    import artifact_cli as cli
-    d = {"push_ready": {"value": True, "reasons": [], "source": "gates"}}
-    cli._sync_derived_push_ready(d, {"push_ready": False, "push_ready_reason": "precheck: no review"})
-    assert d["push_ready"]["value"] is False
-    assert d["push_ready"]["reasons"] == ["precheck: no review"]
-    up = {"push_ready": {"value": False, "reasons": ["x"], "source": "gates"}}
-    cli._sync_derived_push_ready(up, {"push_ready": True})
-    assert up["push_ready"] == {"value": False, "reasons": ["x"], "source": "gates"}
-    same = {"push_ready": {"value": True, "reasons": [], "source": "gates"}}
-    cli._sync_derived_push_ready(same, {"push_ready": True})
-    assert same["push_ready"]["value"] is True

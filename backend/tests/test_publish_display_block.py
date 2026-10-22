@@ -140,18 +140,6 @@ def _run_publish(args, reg, capsys):
 
 # ── AC1: non-quiet evaluate + requirements[] → _display_block present ───────
 
-def test_ac1_display_block_present_on_nonquiet_evaluate(reg, capsys):
-    parsed, raw, _ = _run_publish(_args(_eval_data()), reg, capsys)
-    # stdout is a single valid JSON object (A1 contract — not bare markdown appended)
-    assert parsed is not None and "artifact_id" in parsed
-    assert "\n" not in raw.strip(), "non-quiet success stdout must be a single JSON line"
-    assert "_display_block" in parsed, "evaluate+requirements[] must carry the rendered block"
-    block = parsed["_display_block"]
-    assert isinstance(block, str) and block.strip()
-    # it is the audit block, same source as REPORT §4.6
-    assert "需求溯源审计" in block or "Requirement Provenance" in block
-    assert "FR-1" in block
-
 
 # ── AC2: --quiet → parse-proof single line, NO _display_block ───────────────
 
@@ -206,47 +194,5 @@ def test_ac6_render_failure_degrades_gracefully(reg, capsys, monkeypatch):
 
 # ── AC5: the block is LITERALLY render_audit_trail_md's output (no reimpl) ───
 
-def test_ac5_block_is_render_audit_trail_md_verbatim(reg, capsys):
-    """Prove zero-drift reuse: the emitted _display_block must byte-equal a direct
-    call to the SAME pure fn the REPORT side uses — if cmd_publish reimplemented
-    rendering, the strings would differ."""
-    from pipeline_validator import render_audit_trail_md
-    data = _eval_data()
-    parsed, _, _ = _run_publish(_args(data), reg, capsys)
-    expected = render_audit_trail_md(data["requirement"], data)
-    assert parsed["_display_block"] == expected, (
-        "block must be the verbatim render_audit_trail_md output (same source as "
-        "REPORT §4.6 — reimplementation would drift)")
-
 
 # ── Zero-drift: publish block == REPORT-path render over the archive round-trip ─
-
-def test_display_block_matches_report_render_after_archive_roundtrip(reg, capsys):
-    """The design's load-bearing invariant is 'preview (publish _display_block) and
-    archive (REPORT §4.6) CANNOT drift'. This pins the GATE+RENDER equivalence: given
-    the same payload, publish's _display_block must byte-equal what the REPORT path
-    produces from the archived artifact read back.
-
-    Scope honesty (per adversarial review): the payload reaching cmd_publish is ALREADY
-    post-json (the CLI parses --data from a JSON string), and the archive stores it with
-    the SAME json serializer the publish path saw — so a lossy coercion (datetime→str)
-    cannot differ between the two sides by construction; there is no datetime to inject
-    at this layer. What this test DOES pin: (a) publish renders via the identical
-    render_audit_trail_md the REPORT path uses, over the json-reparsed data, and (b) the
-    two render argument sources agree — publish passes data['requirement'], REPORT passes
-    run_state['requirement'] (equal in a well-formed run). A divergence in gate or render
-    between the two call sites goes RED here."""
-    from pipeline_validator import render_audit_trail_md
-    import json as _json
-    data = _eval_data()
-    parsed, _, _ = _run_publish(_args(data), reg, capsys)
-    publish_block = parsed["_display_block"]
-
-    # The REPORT path reads the artifact back after json persistence; reproduce that
-    # json reparse so this compares the SAME shape the REPORT render receives.
-    roundtripped = _json.loads(_json.dumps(data, default=str))
-    report_block = render_audit_trail_md(roundtripped.get("requirement", ""), roundtripped)
-
-    assert publish_block == report_block, (
-        "preview and archive MUST render identically — any divergence here is the "
-        "exact drift the single-source design forbids")

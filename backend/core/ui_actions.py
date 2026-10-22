@@ -696,6 +696,12 @@ async def ensure_report_for_run(run_id: object) -> bool:
 
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", run_id):
             return None
+        # Pipeline v1 renders its own REPORT (engine, at DELIVER); the legacy
+        # generator must never write into a v1 run.
+        from config import get_app_data_dir
+        from core.run_protocol.runner import is_v1_run
+        if is_v1_run(get_app_data_dir(), run_id):
+            return None
         ws = Path(str(get_swarmws())).resolve()
         run_json = None
         for hit in (ws / "Projects").glob("*/.artifacts/runs/" + run_id + "/run.json"):

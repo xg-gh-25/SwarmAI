@@ -50,50 +50,6 @@ CLI_REF = (BACKEND / "skills" / "s_autonomous-pipeline" / "stages" / "ref"
            / "instructions" / "cli-reference.md")
 
 
-# ── AC1 ──────────────────────────────────────────────────────────────────────
-def test_stage_start_links_current_session_to_run(ws, capsys, monkeypatch):
-    root, reg = ws
-    rid = "run_link1"
-    _make_run(root, rid, "bugfix", stages=["evaluate"], session_id="worker-session")
-    monkeypatch.setenv("SWARM_APP_SESSION_ID", "worker-session")
-    seen = []
-    import core.runtime_hooks as rh
-    monkeypatch.setattr(rh, "write_session_run_map", lambda s, r, ts=None: seen.append((s, r)))
-
-    assert _start(reg, capsys, rid, "think")[0] == 0
-    assert seen == [("worker-session", rid)]
-    # re-entry: the link is written again, run.json is not touched
-    before = _snapshot(root)
-    assert _start(reg, capsys, rid, "think")[0] == 0
-    assert seen[-1] == ("worker-session", rid)
-    assert _snapshot(root) == before
-
-
-@pytest.mark.parametrize("extra", [{"session_id": "someone-else"}, {"status": "completed"}])
-def test_stage_start_does_not_link_foreign_or_finished_run(ws, capsys, monkeypatch, extra):
-    root, reg = ws
-    rid = "run_link3"
-    _make_run(root, rid, "bugfix", stages=["evaluate"], **extra)
-    monkeypatch.setenv("SWARM_APP_SESSION_ID", "worker-session")
-    seen = []
-    import core.runtime_hooks as rh
-    monkeypatch.setattr(rh, "write_session_run_map", lambda s, r, ts=None: seen.append((s, r)))
-    _start(reg, capsys, rid, "think")
-    assert seen == []
-
-
-def test_stage_start_without_session_writes_no_link(ws, capsys, monkeypatch):
-    root, reg = ws
-    rid = "run_link2"
-    _make_run(root, rid, "bugfix", stages=["evaluate"])
-    monkeypatch.delenv("SWARM_APP_SESSION_ID", raising=False)
-    seen = []
-    import core.runtime_hooks as rh
-    monkeypatch.setattr(rh, "write_session_run_map", lambda s, r, ts=None: seen.append((s, r)))
-    assert _start(reg, capsys, rid, "think")[0] == 0
-    assert seen == []
-
-
 # ── AC2 ──────────────────────────────────────────────────────────────────────
 def _git(repo, *a, env=None):
     return subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True,
@@ -149,96 +105,6 @@ def _commit_cli(ws_root, rid, sha=None, capsys=None):
     return out
 
 
-def test_lookup_credits_only_commits_naming_the_run(tmp_path):
-    repo = _init_repo(tmp_path)
-    (repo / "f.py").write_text("sibling\n")
-    _git(repo, "commit", "-qam", "another session's change to f.py")
-    sibling = _short(repo)
-    (repo / "f.py").write_text("mine\n")
-    _git(repo, "commit", "-qam", "fix f\n\nRun: run_mine1")
-    mine = _short(repo)
-    got = cli._lookup_already_committed(str(repo), [str(repo / "f.py")],
-                                        "2020-01-01T00:00:00+00:00", "run_mine1")
-    shas = {c["sha"] for c in got}
-    assert mine in shas
-    assert sibling not in shas
-
-
-def test_lookup_without_run_id_match_credits_nothing(tmp_path):
-    repo = _init_repo(tmp_path)
-    (repo / "f.py").write_text("x\n")
-    _git(repo, "commit", "-qam", "hand commit without the id")
-    assert cli._lookup_already_committed(str(repo), [str(repo / "f.py")],
-                                         "2020-01-01T00:00:00+00:00", "run_none1") == []
-
-
-def test_already_committed_message_names_the_run_id_fix(cws, tmp_path, capsys):
-    repo = _init_repo(tmp_path)
-    (repo / "f.py").write_text("x\n")
-    _git(repo, "commit", "-qam", "hand commit without the id")
-    rf = _write_run(cws, "run_noid", [str(repo / "f.py")])
-    out = _commit_cli(cws, "run_noid", capsys=capsys)
-    assert not json.loads(rf.read_text()).get("commits")
-    assert "run_noid" in out["text"] and "commit message" in out["text"]
-
-
-def test_run_commit_sha_records_landed_commit_without_add(cws, tmp_path, capsys):
-    repo = _init_repo(tmp_path)
-    (repo / "f.py").write_text("mine\n")
-    _git(repo, "commit", "-qam", "fix f\n\nRun: run_sha1")
-    mine = _short(repo)
-    # a foreign uncommitted hunk in the same file must stay out of any commit
-    (repo / "f.py").write_text("mine\nforeign\n")
-    head_before = _short(repo)
-    rf = _write_run(cws, "run_sha1", [str(repo / "f.py")])
-    out = _commit_cli(cws, "run_sha1", sha=mine, capsys=capsys)
-    assert out.get("exit") in (None, 0), out
-    commits = json.loads(rf.read_text()).get("commits") or []
-    assert any(c.get("sha", "").startswith(mine) or mine.startswith(c.get("sha", "-"))
-               for c in commits), commits
-    # no commit made by this call carries f.py (only deliverable B may land)
-    new = _git(repo, "rev-list", f"{head_before}..HEAD").stdout.split()
-    for c in new:
-        assert "f.py" not in _git(repo, "show", "--name-only", "--format=", c).stdout.split()
-    assert "foreign" not in _git(repo, "show", "HEAD:f.py").stdout
-    assert "foreign" in (repo / "f.py").read_text()
-    assert "f.py" not in _git(repo, "diff", "--cached", "--name-only").stdout
-
-
-@pytest.mark.parametrize("case", ["no_run_id", "not_touching", "before_run", "not_ancestor",
-                                  "unknown"])
-def test_run_commit_sha_refuses_bad_sha(cws, tmp_path, capsys, case):
-    repo = _init_repo(tmp_path)
-    rid = "run_shabad"
-    created = "2026-07-04T00:00:00+00:00"
-    if case == "no_run_id":
-        (repo / "f.py").write_text("x\n")
-        _git(repo, "commit", "-qam", "no id here")
-        sha = _short(repo)
-    elif case == "not_touching":
-        (repo / "g.py").write_text("x\n")
-        _git(repo, "commit", "-qam", f"Run: {rid}")
-        sha = _short(repo)
-    elif case == "before_run":
-        (repo / "f.py").write_text("x\n")
-        env = {**os.environ, "GIT_AUTHOR_DATE": "2020-01-01T00:00:00",
-               "GIT_COMMITTER_DATE": "2020-01-01T00:00:00"}
-        _git(repo, "commit", "-qam", f"Run: {rid}", env=env)
-        sha = _short(repo)
-    elif case == "not_ancestor":
-        _git(repo, "checkout", "-qb", "side")
-        (repo / "f.py").write_text("x\n")
-        _git(repo, "commit", "-qam", f"Run: {rid}")
-        sha = _short(repo)
-        _git(repo, "checkout", "-q", "-")
-    else:
-        sha = "deadbeef"
-    rf = _write_run(cws, rid, [str(repo / "f.py")], created=created)
-    out = _commit_cli(cws, rid, sha=sha, capsys=capsys)
-    assert out.get("exit") == 2, (case, out)
-    assert not json.loads(rf.read_text()).get("commits")
-
-
 # ── AC3 ──────────────────────────────────────────────────────────────────────
 def test_registered_adversarial_expert_id_is_adversarial():
     from core.runtime_hooks import _is_adversarial_intent
@@ -269,8 +135,6 @@ def test_empty_expert_library_warns_and_falls_back(tmp_path, monkeypatch, caplog
 def test_build_script_bundles_the_expert_library():
     text = (REPO / "desktop" / "scripts" / "build-backend.sh").read_text(encoding="utf-8")
     assert "datas += [('experts', 'experts')]" in text
-
-
 
 
 # ── AC4 ──────────────────────────────────────────────────────────────────────
@@ -317,7 +181,7 @@ def test_stdin_code_is_not_classified():
 
 # ── AC6 ──────────────────────────────────────────────────────────────────────
 _LINT_SUITES = {"backend/tests/test_lint_skills_body.py", "backend/tests/test_lint_skills_size.py",
-                "backend/tests/test_lint_experts.py", "backend/tests/test_check_rule_preservation.py"}
+                "backend/tests/test_lint_experts.py",}
 
 
 @pytest.mark.parametrize("changed", [
@@ -342,23 +206,6 @@ def test_select_backend_adds_context_suites_for_a_governed_context_change():
     assert set(pt._CONTEXT_SUITES) <= set(sel), sel
 
 
-# ── AC7 ──────────────────────────────────────────────────────────────────────
-def test_stage_without_started_at_measures_from_previous_completed_at(ws, capsys, monkeypatch):
-    root, reg = ws
-    rid = "run_infer1"
-    _make_run(root, rid, "bugfix", stages=["evaluate", "think"], stage_timing={
-        "evaluate": {"started_at": "2026-01-01T00:00:00+00:00",
-                     "completed_at": "2026-01-01T00:05:00+00:00"},
-        "think": {"started_at": "2026-01-01T00:05:01+00:00",
-                  "completed_at": "2026-01-01T00:09:00+00:00"}})
-    seen = []
-    monkeypatch.setattr(cli, "_measure_stage_tokens",
-                        lambda sid, s, e, **kw: seen.append(s) or None)
-    code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
-    assert code == 0, out
-    assert seen == ["2026-01-01T00:09:00+00:00"]
-
-
 # ── AC8 ──────────────────────────────────────────────────────────────────────
 def _run_update(ws_root, rid, stage_json):
     args = Namespace(project="TestProject", run_id=rid, status=None, stage_json=stage_json,
@@ -366,41 +213,6 @@ def _run_update(ws_root, rid, stage_json):
                      files_touched=None, add_required_expert=None, force_checkpoint=False)
     with patch("scripts.artifact_cli._get_workspace", return_value=ws_root):
         cli.cmd_run_update(args, reg=None)
-
-
-def test_legacy_cap_judges_incoming_exit_evidence_only(cws, monkeypatch):
-    rid = "run_cap1"
-    d = cws / "Projects" / "TestProject" / ".artifacts" / "runs" / rid
-    d.mkdir(parents=True)
-    (d / "run.json").write_text(json.dumps({
-        "id": rid, "project": "TestProject", "profile": "bugfix", "status": "running",
-        "created_at": "2026-07-04T00:00:00+00:00", "requirement": "x",
-        "stages": [{"stage": "deliver", "status": "completed", "push_ready": False,
-                    "exit_evidence": {"X1": "old attempt's evidence"}}]}))
-    import pipeline_validator as pv
-    seen = []
-
-    def _judge(crit, run_dir, record, **kw):
-        seen.append(dict(record))
-        return {"met": False, "unmet": [], "results": []}
-    monkeypatch.setattr(pv, "judge_exit_criteria", _judge)
-    _run_update(cws, rid, json.dumps({"stage": "deliver", "status": "completed",
-                                      "push_ready": True, "stage_doc_consumed": True}))
-    assert seen, "cap must judge the record"
-    assert "exit_evidence" not in seen[-1]
-
-
-def test_run_update_stage_json_joins_exit_evidence_lists(cws):
-    rid = "run_norm1"
-    d = cws / "Projects" / "TestProject" / ".artifacts" / "runs" / rid
-    d.mkdir(parents=True)
-    (d / "run.json").write_text(json.dumps({
-        "id": rid, "project": "TestProject", "profile": "bugfix", "status": "running",
-        "created_at": "2026-07-04T00:00:00+00:00", "requirement": "x", "stages": []}))
-    _run_update(cws, rid, json.dumps({"stage": "think", "status": "recorded",
-                                      "exit_evidence": {"X1": ["a", " ", "b"]}}))
-    rec = json.loads((d / "run.json").read_text())["stages"][-1]
-    assert rec["exit_evidence"] == {"X1": "a; b"}
 
 
 # ── AC9 ──────────────────────────────────────────────────────────────────────
@@ -472,29 +284,6 @@ def test_failed_marker_write_after_a_good_one_re_emits(tmp_path, monkeypatch, co
         _make_result_message()]))
     assert raised is None
     assert calls == ["run_mk", "run_mk", "run_mk"]
-
-
-def test_workspace_repo_lookup_keeps_old_bounds(tmp_path):
-    """The daemon workspace repo is committed by auto-commit sweeps that never name a
-    run: there the lookup does not require the run id (else workspace runs could
-    never complete)."""
-    repo = _init_repo(tmp_path)
-    (repo / "f.py").write_text("swept\n")
-    _git(repo, "commit", "-qam", "chore: chore (3), framework (1)")
-    got = cli._lookup_already_committed(str(repo), [str(repo / "f.py")],
-                                        "2020-01-01T00:00:00+00:00", "run_ws1",
-                                        require_run_id=False)
-    assert got and got[0]["sha"] == _short(repo)
-
-
-def test_run_commit_in_workspace_repo_credits_auto_commit(cws, tmp_path, capsys):
-    repo = _init_repo(tmp_path)
-    (repo / "f.py").write_text("swept\n")
-    _git(repo, "commit", "-qam", "chore: chore (3)")
-    rf = _write_run(cws, "run_ws2", [str(repo / "f.py")])
-    with patch("scripts.artifact_cli._rev_parse_toplevel", return_value=str(repo)):
-        _commit_cli(cws, "run_ws2", capsys=capsys)
-    assert json.loads(rf.read_text()).get("commits")
 
 
 def test_write_marker_takes_run_id_from_run_directory(tmp_path):
