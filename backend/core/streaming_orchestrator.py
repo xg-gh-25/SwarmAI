@@ -1211,6 +1211,50 @@ class StreamingOrchestrator:
         return None
 
     @staticmethod
+    async def _cancel_losers(pending, perm_task) -> Optional[dict]:
+        """Cancel the race's losers; return a queue item the perm_task took late.
+
+        ``asyncio.wait`` returns with the SDK message done and perm_task pending,
+        but the loop yields before the losers are cancelled (``await tick_task``).
+        When the hook enqueues in that window -- it does so right after the Bash
+        tool_use message, so this is the common timing -- perm_task wakes, runs
+        ``get_nowait`` and finishes. ``cancel()`` on a finished task does nothing
+        and the old ``await task`` discarded its result: the item had left the
+        queue (qsize=0, same queue) and only the 30 s rescue surfaced the prompt
+        (incident 2026-10-22, perm_5cfb878b39ba). The item is returned so the
+        caller surfaces it on the next iteration.
+
+        All losers are cancelled BEFORE any is awaited, so a re-raise of our own
+        cancellation cannot leave one running.
+        """
+        for task in pending:
+            task.cancel()
+        late: Optional[dict] = None
+        for task in pending:
+            try:
+                result = await task
+            except asyncio.CancelledError:
+                # The loser's own cancellation is expected. But if THIS task is
+                # being cancelled (consumer closed / teardown), the CancelledError
+                # is ours: swallowing it makes the loop race again forever and
+                # asyncio.run's _cancel_all_tasks never returns (the 21h
+                # unkillable pytest, 2026-10-17).
+                _me = asyncio.current_task()
+                if _me is not None and _me.cancelling():
+                    raise
+                continue
+            except (StopAsyncIteration, asyncio.TimeoutError):
+                continue
+            if task is perm_task and isinstance(result, dict):
+                late = result
+                logger.info(
+                    "session_unit.permission_item_carried request_id=%s — taken by "
+                    "the losing perm_task after the race; surfacing next iteration",
+                    result.get("requestId") or result.get("tool_use_id") or "?",
+                )
+        return late
+
+    @staticmethod
     def _completed_perm_task(item: dict) -> "asyncio.Future":
         """A perm_task stand-in that has already 'received' ``item``."""
         fut = asyncio.get_running_loop().create_future()
@@ -1679,24 +1723,11 @@ class StreamingOrchestrator:
                 perm_task.cancel()
                 raise
 
-            # Cancel the loser(s) — all of them BEFORE awaiting any, so a re-raise
-            # of our own cancellation below can't leave one running.
-            for task in pending:
-                task.cancel()
-            for task in pending:
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    # The loser's own cancellation is expected. But if THIS task
-                    # is being cancelled (consumer closed / teardown), the
-                    # CancelledError is ours: swallowing it makes the loop race
-                    # again forever and asyncio.run's _cancel_all_tasks never
-                    # returns (the 21h unkillable pytest, 2026-10-17).
-                    _me = asyncio.current_task()
-                    if _me is not None and _me.cancelling():
-                        raise
-                except (StopAsyncIteration, asyncio.TimeoutError):
-                    pass
+            # Cancel the loser(s); a perm_task that took its queue item after the
+            # wait returned is carried to the next iteration (see _cancel_losers).
+            _late_perm = await self._cancel_losers(pending, perm_task)
+            if _late_perm is not None:
+                _forced_perm = _late_perm
 
             # ── Permission request OR ask_user_question won the race ──
             if perm_task in done:
