@@ -33,7 +33,6 @@ import { useChangeStatus, type ChangeStatus } from '../../hooks/useChangeStatus'
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 import { copyToClipboard } from '../../utils/clipboard';
 import { fileIcon, fileIconColor } from '../../utils/fileUtils';
-import { radarService } from '../../services/radar';
 
 // run_4de279ca: isBookkeepingPath + BOOKKEEPING_DIRS REMOVED. The backend git
 // verdict (`kind`, needs_human_review) is the SOLE surfacing authority — this
@@ -202,25 +201,6 @@ const OutputRow = memo(function OutputRow({
           {style.label}
         </span>
       )}
-      {/* Artifact-Lifecycle ②: drift signal — a subtle inline badge when the backing
-          file changed / went missing since this row was first seen. Rendered from the
-          single field file.liveDirty (populated by the rail's debounced drift check,
-          OFF the render hot path). A lightweight signal (never a toast/modal); it does
-          NOT gate the row's open handler. */}
-      {file.liveDirty && (
-        <span
-          className="shrink-0 text-[11px] font-medium leading-none"
-          style={{ color: file.liveDirty === 'missing' ? 'var(--color-error, #d9534f)' : 'var(--color-warning, #d59a26)' }}
-          data-testid="canvas-output-drift"
-          title={
-            file.liveDirty === 'missing'
-              ? 'File no longer on disk'
-              : 'Changed on disk since you last saw it'
-          }
-        >
-          {file.liveDirty === 'missing' ? 'gone' : '●'}
-        </span>
-      )}
       {dir && (
         <span className="ml-auto truncate text-[11px] text-[var(--color-text-faint,var(--color-text-muted))]">
           {dir}
@@ -283,72 +263,13 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
   const paths = useMemo(() => outputs.map((f) => f.path), [outputs]);
   const statusMap = useChangeStatus(paths);
 
-  // ── Drift check (Artifact-Lifecycle ②) — OFF the render hot path ─────────────
-  // A debounced effect asks the backend whether each row's backing file drifted
-  // since firstSeen (baseRef for tracked rows, firstSeen-ms for untracked). Result
-  // lands in LOCAL rail state (driftMap) — the rail is the SOLE authority for drift
-  // (the store never owns it), so this is not a second render authority. FAIL-SAFE:
-  // any rejection is swallowed → treated as clean, and drift NEVER blocks row open.
-  const [driftMap, setDriftMap] = useState<Map<string, 'dirty' | 'missing'>>(new Map());
-  useEffect(() => {
-    if (outputs.length === 0) return;
-    let cancelled = false;
-    const snapshot = outputs.map((f) => ({
-      path: f.path,
-      baseRef: f.baseRef,
-      firstSeen: f.firstSeen,
-      deleted: f.deleted,
-    }));
-    const timer = setTimeout(async () => {
-      const next = new Map<string, 'dirty' | 'missing'>();
-      // BOUNDED fan-out: each probe runs a git subprocess on the daemon. Firing all
-      // N rows at once would storm the backend thread pool (a 50-row session = 50
-      // concurrent probes) — the RP53 starvation risk meta-review flagged. Process in
-      // small CHUNKS so at most CHUNK probes are in flight at once (the backend ALSO
-      // caps this with a dedicated CapacityLimiter — defense in depth). A row that
-      // finishes after the effect is superseded is dropped by the `cancelled` guard.
-      const CHUNK = 4;
-      const live = snapshot.filter((r) => !r.deleted); // deleted rows show own state
-      for (let i = 0; i < live.length && !cancelled; i += CHUNK) {
-        await Promise.all(
-          live.slice(i, i + CHUNK).map(async (row) => {
-            try {
-              const d = await radarService.fetchDrift(row.path, row.baseRef, row.firstSeen);
-              if (d.dirty && d.reason === 'missing') next.set(row.path, 'missing');
-              else if (d.dirty) next.set(row.path, 'dirty');
-            } catch {
-              /* fail-safe: treat as clean, never surface a false badge */
-            }
-          }),
-        );
-      }
-      if (!cancelled) setDriftMap(next);
-    }, 400); // debounce — coalesce rapid re-renders (tab switch, stream bursts)
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-    // Re-check when the SET of rows or their baselines change (not on every render).
-  }, [
-    outputs.map((f) => `${f.path}:${f.baseRef ?? ''}:${f.firstSeen}`).join('|'),
-  ]);
-
-  // Merge the drift verdict onto each row (additive; the store is untouched).
-  const withDrift = useMemo(
-    () =>
-      outputs.map((f) =>
-        driftMap.has(f.path) ? { ...f, liveDirty: driftMap.get(f.path) } : f,
-      ),
-    [outputs, driftMap],
-  );
-
   // NEW before UPD before unbadged; newest-first (higher firstSeen) within a rank.
   const ordered = useMemo(() => {
-    return [...withDrift].sort((a, b) => {
+    return [...outputs].sort((a, b) => {
       const r = badgeRank(statusMap.get(a.path)) - badgeRank(statusMap.get(b.path));
       return r !== 0 ? r : b.firstSeen - a.firstSeen;
     });
-  }, [withDrift, statusMap]);
+  }, [outputs, statusMap]);
 
   // Activity rows (DailyActivity, signals, briefs — the session's bookkeeping, by
   // the product catalog's role) fold under one toggle, closed by default; a

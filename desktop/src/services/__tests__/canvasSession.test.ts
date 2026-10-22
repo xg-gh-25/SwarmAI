@@ -3,9 +3,10 @@
  *
  * Invariants: a burst of swarm:file-changed for a tab is ONE artifacts-only request
  * for that tab's session (debounced); an event of a background tab refreshes ITS
- * session, an unmapped tab's event refreshes nothing; an artifacts-only answer keeps
- * the last Changes; a full refresh while an artifacts one is in flight still runs
- * (after it); a stale answer after a reset is dropped.
+ * session, an unmapped tab's event refreshes nothing; Artifacts and Changes are
+ * separate requests and a slow Changes never holds the Artifacts; one part's answer
+ * keeps the other; a refresh asked while one runs runs once more after it; a stale
+ * answer after a reset is dropped.
  *
  * Methodology: services/api mocked; real timers (the debounce is LIVE_REFRESH_MS).
  */
@@ -18,7 +19,7 @@ import {
   cachedArtifacts, refreshCanvasArtifacts, refreshCanvasSession, resetCanvasSession,
   setActiveCanvasSession, useCanvasSession, LIVE_REFRESH_MS,
 } from '../canvasSession';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 
 const art = (path: string) => ({ path, absolutePath: `/ws/${path}`, kind: 'knowledge', role: 'Knowledge', product: true,
   starred: false, displayLabel: path, firstAt: 't', lastAt: 't', writes: 1, deleted: false, exists: true });
@@ -30,7 +31,7 @@ beforeEach(() => {
   resetCanvasSession();
   get.mockReset();
   get.mockImplementation(async (url: string, o?: { params?: { parts?: string } }) => ({
-    data: { artifacts: [art(`${url.split('/').pop()}.md`)], changes: o?.params?.parts === 'artifacts' ? null : [] },
+    data: { artifacts: [art(`${url.split('/').pop()}.md`)], changes: o?.params?.parts === 'changes' ? [] : null },
   }));
 });
 
@@ -46,33 +47,47 @@ describe('canvasSession store', () => {
     expect(cachedArtifacts('s1')?.map((a) => a.path)).toEqual(['s1.md']);
   });
 
-  it('an artifacts-only answer keeps the last Changes; a full refresh after one still runs', async () => {
+  it('the two parts are separate requests; a slow Changes never holds the Artifacts', async () => {
     setActiveCanvasSession('s1', 'A');
-    get.mockImplementationOnce(async () => ({ data: { artifacts: [], changes: [{ root: '/r', repo: 'r', files: [], commits: [] }] } }));
-    await refreshCanvasSession();
-    const p1 = refreshCanvasArtifacts();
-    const p2 = refreshCanvasSession();
-    await Promise.all([p1, p2]);
-    expect(get.mock.calls.map(([, o]) => (o as { params?: { parts?: string } } | undefined)?.params?.parts ?? 'all'))
-      .toEqual(['all', 'artifacts', 'all']);
+    let releaseChanges!: () => void;
+    get.mockImplementation((url: string, o?: { params?: { parts?: string } }) => o?.params?.parts === 'changes'
+      ? new Promise((r) => { releaseChanges = () => r({ data: { artifacts: null, changes: [{ run: 'run_1', repos: [] }] } }); })
+      : Promise.resolve({ data: { artifacts: [art('a.md')], changes: null } }));
     const { result } = renderHook(() => useCanvasSession());
-    expect(result.current.data?.changes).toEqual([]);   // the last full answer
+    let full!: Promise<void>;
+    await act(async () => { full = refreshCanvasSession(); await wait(0); });
+    expect(result.current.data?.artifacts?.map((a) => a.path)).toEqual(['a.md']);
+    expect(result.current.data?.changes).toBeNull();
+    expect(result.current.loading).toEqual({ artifacts: false, changes: true });
+    await act(async () => { releaseChanges(); await full; });
+    expect(result.current.data?.changes?.[0]?.run).toBe('run_1');
+    await act(async () => { await refreshCanvasArtifacts(); });   // an Artifacts answer keeps Changes
+    expect(result.current.data?.changes?.[0]?.run).toBe('run_1');
   });
 
-  it('keeps Changes across an artifacts-only answer', async () => {
+  it('a refresh asked while one runs runs once more after it (its answer is read after the ask)', async () => {
     setActiveCanvasSession('s1', 'A');
-    get.mockImplementationOnce(async () => ({ data: { artifacts: [], changes: [{ root: '/r', repo: 'r', files: [], commits: [] }] } }));
-    await refreshCanvasSession();
-    await refreshCanvasArtifacts();
-    const { result } = renderHook(() => useCanvasSession());
-    expect(result.current.data?.changes?.[0]?.root).toBe('/r');
+    let n = 0;
+    let release!: () => void;
+    get.mockImplementation(() => {
+      n += 1;
+      return n === 1
+        ? new Promise((r) => { release = () => r({ data: { artifacts: [art('old.md')] } }); })
+        : Promise.resolve({ data: { artifacts: [art('new.md')] } });
+    });
+    const ps = [refreshCanvasArtifacts(), refreshCanvasArtifacts(), refreshCanvasArtifacts()];
+    await wait(0);
+    release();
+    await Promise.all(ps);
+    expect(n).toBe(2);
+    expect(cachedArtifacts('s1')?.map((a) => a.path)).toEqual(['new.md']);
   });
 
   it('a stale answer after a reset is dropped', async () => {
     setActiveCanvasSession('s1', 'A');
     let release!: () => void;
-    get.mockImplementationOnce(() => new Promise((r) => { release = () => r({ data: { artifacts: [art('old.md')], changes: [] } }); }));
-    const p = refreshCanvasSession();
+    get.mockImplementation(() => new Promise((r) => { release = () => r({ data: { artifacts: [art('old.md')], changes: [] } }); }));
+    const p = refreshCanvasArtifacts();
     resetCanvasSession();
     await wait(0);
     release();

@@ -1,14 +1,14 @@
 /**
- * CanvasChanges — the Canvas Changes tab: what THIS session changed (nav + detail),
- * and its wiring in FileViewerPanel.
+ * CanvasChanges — the Canvas Changes tab: the code THIS session's pipeline runs
+ * changed (nav + detail), and its wiring in FileViewerPanel.
  *
- * What is tested: a repo card names repo, project and branch and lists the session's
- * files with status letter, net +/- and state (the committing commit's short sha on a
- * committed file), then the commits; a file opens the session's net diff (turn-diff
- * from its first start tree to its last end tree); a commit opens its files, marks
- * the session's own, and a one-file commit opens its patch; an empty session says so;
- * a new opened file brings the Artifacts tab forward; the Changes tab hides (never
- * unmounts) the file viewer.
+ * What is tested: a run card names the run, its project and status; per repo it
+ * lists the files uncommitted in the run's worktree (status letter, +/-), then the
+ * commits it landed (committed / pushed); a worktree released without landing says
+ * so; a file opens its worktree diff (turn-diff between the two trees of its row); a
+ * commit opens its own files and a one-file commit its patch; a session whose runs
+ * changed nothing says so; the tab reads Changes only; a newly opened file brings the
+ * Artifacts tab forward; the Changes tab hides (never unmounts) the file viewer.
  *
  * Methodology: canvasSessionService + chatService.getTurnDiff mocked; the store is
  * pointed at a session and refreshed per test.
@@ -17,98 +17,104 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { useState } from 'react';
 
-const get = vi.fn();
-const commitFiles = vi.fn();
+const artifacts = vi.fn();
+const changes = vi.fn();
 const commitDiff = vi.fn();
 const getTurnDiff = vi.fn();
 vi.mock('../../../services/canvasSession', async (orig) => {
   const real = await orig<typeof import('../../../services/canvasSession')>();
-  real.canvasSessionService.get = (s: string) => get(s);
-  real.canvasSessionService.commitFiles = (r: string, s: string) => commitFiles(r, s);
+  real.canvasSessionService.artifacts = (s: string) => artifacts(s);
+  real.canvasSessionService.changes = (s: string) => changes(s);
   real.canvasSessionService.commitDiff = (r: string, s: string, p: string) => commitDiff(r, s, p);
   return real;
 });
 vi.mock('../../../services/chat', () => ({ chatService: { getTurnDiff: (q: unknown) => getTurnDiff(q) } }));
 
 import { ChangesDetail, ChangesNav, diffLineClass, type ChangesSelection } from '../CanvasChanges';
-import { refreshCanvasSession, resetCanvasSession, setActiveCanvasSession } from '../../../services/canvasSession';
+import { refreshCanvasChanges, resetCanvasSession, setActiveCanvasSession } from '../../../services/canvasSession';
 
 const SHA = 'a'.repeat(40);
-const REPO = {
-  root: '/r/swarmai', repo: 'swarmai', project: 'SwarmAI', branch: 'main', upstream: 'origin/main',
-  files: [
-    { path: 'src/a.ts', status: 'modified', added: 3, deleted: 1, turns: 2, firstAt: 't1', lastAt: 't2',
-      start: 's1', end: 'e2', state: 'committed', commit: SHA },
-    { path: 'src/new.ts', status: 'added', added: 4, deleted: 0, turns: 1, firstAt: 't2', lastAt: 't2',
-      start: 's2', end: 'e2', state: 'uncommitted', commit: null },
-  ],
-  commits: [{ sha: SHA, short: 'aaaaaaaa', subject: 'feat: one', at: 't3', source: 'session', files: ['src/a.ts'] }],
+const RUN = {
+  run: 'run_1', title: 'Make the gate exact', status: 'running', project: 'SwarmAI', createdAt: 't0',
+  repos: [{
+    root: '/r/swarmai', repo: 'swarmai', worktree: '/wts/run_1/swarmai', branch: 'run/run_1', released: false,
+    files: [
+      { path: 'src/a.ts', absolutePath: '/wts/run_1/swarmai/src/a.ts', status: 'modified', added: 3, deleted: 1, start: 'b1', end: 't1' },
+      { path: 'src/new.ts', absolutePath: '/wts/run_1/swarmai/src/new.ts', status: 'added', added: 4, deleted: 0, start: 'b1', end: 't1' },
+    ],
+    commits: [{ sha: SHA, short: 'aaaaaaaa', subject: 'feat: one', at: 't3', pushed: false,
+      files: [{ path: 'src/a.ts', added: 3, deleted: 1 }] }],
+  }],
 };
+const RELEASED = { ...RUN, run: 'run_2', title: 'Gone', status: 'failed',
+  repos: [{ ...RUN.repos[0], worktree: null, branch: null, files: [], commits: [], released: true }] };
 
 function Tab() {
   const [sel, setSel] = useState<ChangesSelection>(null);
   return <><ChangesNav selected={sel} onSelect={setSel} /><ChangesDetail selected={sel} /></>;
 }
 
-async function load(changes: unknown[]) {
-  get.mockResolvedValue({ artifacts: [], changes });
+async function load(runs: unknown[]) {
+  changes.mockResolvedValue(runs);
   setActiveCanvasSession('s1');
-  await act(async () => { await refreshCanvasSession(); });
+  await act(async () => { await refreshCanvasChanges(); });
 }
 
 beforeEach(() => {
   resetCanvasSession();
-  [get, commitFiles, commitDiff, getTurnDiff].forEach((m) => m.mockReset());
+  [artifacts, changes, commitDiff, getTurnDiff].forEach((m) => m.mockReset());
 });
 
-describe('Changes tab (this session)', () => {
-  it('a repo card lists the session files with net counts and state, then the commits', async () => {
-    await load([REPO]);
+describe('Changes tab (this session\'s runs)', () => {
+  it('a run card lists the worktree files, then the landed commits; a released run says so', async () => {
+    await load([RUN, RELEASED]);
     render(<Tab />);
-    const card = await screen.findByTestId('changes-repo');
-    expect(card.textContent).toMatch(/swarmai.*SwarmAI.*main/);
+    const [card, gone] = await screen.findAllByTestId('changes-run');
+    expect(card.textContent).toMatch(/Make the gate exact.*SwarmAI.*running.*run\/run_1/);
     const files = screen.getAllByTestId('changes-file');
-    expect(files[0].textContent).toMatch(/M.*src\/a\.ts.*\+3 −1.*committed aaaaaaaa/);
-    expect(files[1].textContent).toMatch(/A.*src\/new\.ts.*\+4.*uncommitted/);
-    expect(screen.getByTestId('changes-commit').textContent).toContain('feat: one');
-    expect(get).toHaveBeenCalledWith('s1');
+    expect(files[0].textContent).toMatch(/M.*src\/a\.ts.*\+3 −1.*uncommitted/);
+    expect(files[1].textContent).toMatch(/A.*src\/new\.ts.*\+4/);
+    expect(screen.getByTestId('changes-commit').textContent).toMatch(/aaaaaaaa.*feat: one.*committed/);
+    expect(gone.textContent).toMatch(/Gone.*failed/);
+    expect(screen.getByTestId('changes-released').textContent).toContain('Released without landing');
+    expect(changes).toHaveBeenCalledWith('s1');
+    expect(artifacts).not.toHaveBeenCalled();
   });
 
-  it('a file opens the session net diff (first start → last end)', async () => {
-    await load([REPO]);
+  it('a file opens its worktree diff (the two trees of its row)', async () => {
+    await load([RUN]);
     getTurnDiff.mockResolvedValue('diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new');
     render(<Tab />);
     fireEvent.click((await screen.findAllByTestId('changes-file'))[0]);
-    expect(getTurnDiff).toHaveBeenCalledWith({ gitRoot: '/r/swarmai', start: 's1', end: 'e2', path: 'src/a.ts' });
+    expect(getTurnDiff).toHaveBeenCalledWith({ gitRoot: '/r/swarmai', start: 'b1', end: 't1', path: 'src/a.ts' });
     const patch = await screen.findByTestId('changes-patch');
     expect(patch.textContent).toContain('+new');
     expect(patch.textContent).not.toContain('diff --git');
-    expect(screen.getByTestId('changes-detail').textContent).toMatch(/Changes › swarmai › src\/a\.ts.*net change over 2 turns/);
+    expect(screen.getByTestId('changes-detail').textContent).toMatch(/Changes › Make the gate exact › swarmai › src\/a\.ts.*Uncommitted in run\/run_1/);
   });
 
-  it('a pruned diff says so', async () => {
-    await load([REPO]);
+  it('a diff no longer there says so', async () => {
+    await load([RUN]);
     getTurnDiff.mockResolvedValue(null);
     render(<Tab />);
     fireEvent.click((await screen.findAllByTestId('changes-file'))[1]);
     expect(await screen.findByText(/no longer available/)).toBeTruthy();
   });
 
-  it('a commit opens its files, marks the session ones, a one-file commit opens its patch', async () => {
-    await load([REPO]);
-    commitFiles.mockResolvedValue([{ path: 'src/a.ts', insertions: 3, deletions: 1 }]);
+  it('a commit opens its own files, a one-file commit its patch', async () => {
+    await load([RUN]);
     commitDiff.mockResolvedValue({ diff: '@@ -1 +1 @@\n+x', truncated: false });
     render(<Tab />);
     fireEvent.click(await screen.findByTestId('changes-commit'));
-    expect(commitFiles).toHaveBeenCalledWith('/r/swarmai', SHA);
-    expect((await screen.findByTestId('changes-commit-file')).textContent).toContain('this session');
+    expect((await screen.findByTestId('changes-commit-file')).textContent).toMatch(/src\/a\.ts.*\+3 −1/);
     expect((await screen.findByTestId('changes-patch')).textContent).toContain('+x');
+    expect(commitDiff).toHaveBeenCalledWith('/r/swarmai', SHA, 'src/a.ts');
   });
 
-  it('a session with no code changes says so', async () => {
+  it('a session whose runs changed nothing says so', async () => {
     await load([]);
     render(<Tab />);
-    expect(await screen.findByText(/not changed any code/)).toBeTruthy();
+    expect(await screen.findByText(/No pipeline run of this session has changed code/)).toBeTruthy();
   });
 
   it('diff line classes', () => {

@@ -1,22 +1,21 @@
-"""core/canvas_session — a session's Canvas (Artifacts + Changes) from its own turn records.
+"""core/canvas_session — a session's Canvas: Artifacts from its attribution record,
+Changes from the pipeline runs it owns; and core/turn_changes' tree snapshots.
 
-Methodology: real git in tmp_path (a bare origin + a clone); turn_changes blocks are
-made by the real TurnChanges (start → write → note → finish), so their trees are real;
-the messages table is a throwaway SQLite file. No real repository or database is read.
+Methodology: real git in tmp_path (a bare origin + a clone as the "main checkout");
+a run's worktree is made with `git worktree add` at the derived location
+(SWARM_WORKTREE_ROOT) and its run.json written by hand; the messages table is a
+throwaway SQLite file. No real repository, run or database is read.
 
 Invariants:
-- one row per file however many turns wrote it, with the NET change; a file put back
-  as it was is no row;
-- the state follows the CONTENT the session left: uncommitted → committed (its sha,
-  also after the commit is cherry-picked / rebased elsewhere) → pushed; a later edit by
-  someone else reads "changed";
-- another session's commits are not this session's: a commit lists only if it holds
-  a blob this session left;
-- an edit in a linked worktree of a bound repo is recorded (turn_changes snapshots
-  the bound repos' live worktrees) and, after an ff-merge and the worktree's removal,
-  still resolves to its commit;
+- Changes are the runs the session owns (run.json session_id / session_history) and
+  nothing else: an edit in the shared checkout, another session's run, a worktree git
+  does not list on the run's branch, and a path written into run.json are not read;
+- a live worktree shows its change set against its HEAD, untracked new files
+  included and the run's deliverables dir left out, with trees the on-demand diff
+  reads; a landed commit shows its own files, and "pushed" once the upstream has it;
+- a worktree released without landing is said, not guessed;
+- the run index is re-read only for a changed run.json;
 - Artifacts are the session's attribution rows joined with the product catalog;
-  pipeline runs are the ones the session owned (run.json) or surfaced (baseRef);
 - list_session_blocks reads only this session's sent rows.
 """
 from __future__ import annotations
@@ -68,78 +67,6 @@ async def _turn(roots, writes: dict, at: str):
                 "operation": "deleted" if text is None else "written"})
     block = await t.finish()
     return (at, [block] if block else [])
-
-
-def _state(repo, rows):
-    ex = cs.extract(rows)
-    [row] = [cs.git_state(root, files) for root, files in ex["edits"].items()]
-    return row, {f["path"]: f for f in row["files"]}
-
-
-@pytest.mark.asyncio
-async def test_turns_fold_into_one_net_row_and_follow_the_content(repo):
-    r1 = await _turn([str(repo)], {repo / "a.py": "one\nTWO\n"}, "2026-10-22T10:00")
-    r2 = await _turn([str(repo)], {repo / "a.py": "one\nTWO\nthree\n", repo / "new.py": "x\n"}, "2026-10-22T10:05")
-    row, files = _state(repo, [r1, r2])
-    assert files["a.py"]["turns"] == 2 and (files["a.py"]["added"], files["a.py"]["deleted"]) == (2, 1)
-    assert files["a.py"]["state"] == files["new.py"]["state"] == "uncommitted"
-    assert files["new.py"]["status"] == "added" and row["commits"] == []
-
-    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "feat: mine")
-    sha = _git(repo, "rev-parse", "HEAD")
-    row, files = _state(repo, [r1, r2])
-    assert files["a.py"]["state"] == "committed" and files["a.py"]["commit"] == sha
-    assert [c["sha"] for c in row["commits"]] == [sha] and row["commits"][0]["files"] == ["a.py", "new.py"]
-    assert row["commits"][0]["short"] == sha[:8]
-
-    _git(repo, "push", "-q", "origin", "main")
-    row, files = _state(repo, [r1, r2])
-    assert files["a.py"]["state"] == "pushed" and row["commits"] == []
-
-
-@pytest.mark.asyncio
-async def test_a_rewritten_commit_is_still_found_and_a_later_edit_reads_changed(repo):
-    r1 = await _turn([str(repo)], {repo / "a.py": "mine\n"}, "t1")
-    _git(repo, "checkout", "-qb", "work"); _git(repo, "commit", "-qam", "wip")
-    _git(repo, "checkout", "-q", "main"); _git(repo, "cherry-pick", "work")
-    _git(repo, "branch", "-qD", "work")                     # the original sha is gone
-    picked = _git(repo, "rev-parse", "HEAD")
-    _, files = _state(repo, [r1])
-    assert files["a.py"]["commit"] == picked
-    (repo / "a.py").write_text("someone else\n"); _git(repo, "commit", "-qam", "theirs")
-    _, files = _state(repo, [r1])
-    assert files["a.py"]["state"] == "committed" and files["a.py"]["commit"] == picked
-    _git(repo, "reset", "-q", "--hard", "origin/main")       # mine never landed
-    (repo / "a.py").write_text("other\n")
-    _, files = _state(repo, [r1])
-    assert files["a.py"]["state"] == "changed"
-
-
-@pytest.mark.asyncio
-async def test_a_file_put_back_is_no_row_and_other_commits_are_not_listed(repo):
-    r1 = await _turn([str(repo)], {repo / "a.py": "tmp\n", repo / "b.py": "mine\n"}, "t1")
-    r2 = await _turn([str(repo)], {repo / "a.py": "one\ntwo\n"}, "t2")
-    (repo / "c.py").write_text("other session\n"); _git(repo, "add", "c.py"); _git(repo, "commit", "-qm", "other")
-    row, files = _state(repo, [r1, r2])
-    assert set(files) == {"b.py"} and row["commits"] == []
-
-
-@pytest.mark.asyncio
-async def test_an_edit_in_a_linked_worktree_resolves_after_ff_merge_and_removal(repo, tmp_path, monkeypatch):
-    import core.needs_human_review as nhr
-    monkeypatch.undo()                                     # the real code_roots
-    monkeypatch.setattr(nhr, "_worktree_roots", lambda ws: ((str(repo), "swarmai"),))
-    wt = tmp_path / "wt"
-    _git(repo, "worktree", "add", "-q", "-b", "kiro/x", str(wt))
-    wt = Path(os.path.realpath(wt))
-    assert str(wt) in tc.code_roots()
-    r1 = await _turn(None, {wt / "a.py": "from the worktree\n"}, "t1")
-    assert r1[1] and r1[1][0]["files"][0]["gitRoot"] == str(repo)
-    _git(wt, "commit", "-qam", "wt work")
-    _git(repo, "merge", "-q", "--ff-only", "kiro/x")
-    _git(repo, "worktree", "remove", str(wt)); _git(repo, "branch", "-qd", "kiro/x")
-    row, files = _state(repo, [r1])
-    assert files["a.py"]["state"] == "committed" and files["a.py"]["commit"] == _git(repo, "rev-parse", "HEAD")
 
 
 def test_linked_worktrees_are_all_live_ones_and_cached(repo, tmp_path):
@@ -200,6 +127,111 @@ async def _started_turn(roots):
     return t
 
 
+# ── Changes: the session's runs ─────────────────────────────────────────────
+
+def _run(ws, rid, owner, *, worktrees=(), commits=(), history=(), status="running"):
+    d = ws / "Projects" / "P" / ".artifacts" / "runs" / rid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "run.json").write_text(json.dumps({
+        "id": rid, "session_id": owner, "session_history": list(history), "status": status,
+        "project": "P", "requirement": f"Do {rid}\nmore", "created_at": rid,
+        "worktrees": list(worktrees), "commits": list(commits)}))
+    return d / "run.json"
+
+
+@pytest.fixture
+def runs(repo, tmp_path, monkeypatch):
+    wts = Path(os.path.realpath(tmp_path)) / "wts"
+    wts.mkdir()
+    monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(wts))
+    cs._RUN_CACHE.clear(); cs._COMMITS.clear(); cs._PUSHED.clear()
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    def worktree(rid):
+        wt = wts / rid / "swarmai"
+        _git(repo, "worktree", "add", "-q", "-b", f"run/{rid}", str(wt))
+        return wt
+    return ws, worktree
+
+
+def test_a_live_run_worktree_is_its_change_set_and_nothing_else(repo, runs):
+    ws, worktree = runs
+    wt = worktree("run_a1")
+    _run(ws, "run_a1", "s1", worktrees=[{"repo_name": "swarmai", "main": str(repo), "state": "active"}])
+    (wt / "a.py").write_text("one\nTWO\nthree\n")
+    (wt / "new.py").write_text("x\n")
+    (wt / ".aidlc" / "deliverables" / "run_a1").mkdir(parents=True)
+    (wt / ".aidlc" / "deliverables" / "run_a1" / "REPORT.md").write_text("report\n")
+    (repo / "b.py").write_text("another session, in the shared checkout\n")
+    [run] = cs.changes_of("s1", str(ws))
+    assert (run["run"], run["title"], run["project"]) == ("run_a1", "Do run_a1", "P")
+    [row] = run["repos"]
+    assert row["root"] == str(repo) and row["worktree"] == str(wt) and row["branch"] == "run/run_a1"
+    files = {f["path"]: f for f in row["files"]}
+    assert set(files) == {"a.py", "new.py"}
+    assert (files["a.py"]["status"], files["a.py"]["added"], files["a.py"]["deleted"]) == ("modified", 2, 1)
+    assert files["new.py"]["status"] == "added" and row["commits"] == []
+    diff = tc.diff_text(str(repo), files["a.py"]["start"], files["a.py"]["end"], "a.py")
+    assert "+TWO" in diff and "-two" in diff
+    assert cs.changes_of("s2", str(ws)) == []
+
+
+def test_a_worktree_git_does_not_list_or_a_path_in_run_json_is_not_read(repo, runs, tmp_path):
+    ws, worktree = runs
+    elsewhere = tmp_path / "elsewhere"
+    _git(repo, "worktree", "add", "-q", "-b", "kiro/x", str(elsewhere))
+    (elsewhere / "a.py").write_text("not a run's\n")
+    _run(ws, "run_b1", "s1", worktrees=[{"repo_name": "swarmai", "main": str(repo), "state": "active",
+                                          "path": str(elsewhere)}])
+    assert cs.changes_of("s1", str(ws)) == []           # nothing at the derived location
+    wt = worktree("run_b2")
+    _git(wt, "checkout", "-q", "-b", "other")            # no longer on run/run_b2
+    (wt / "a.py").write_text("x\n")
+    _run(ws, "run_b2", "s1", worktrees=[{"repo_name": "swarmai", "main": str(repo), "state": "active"}])
+    assert cs.changes_of("s1", str(ws)) == []
+    _run(ws, "run_b3", "s1", worktrees=[{"repo_name": "swarmai", "main": "/etc", "state": "active"}])
+    assert cs.changes_of("s1", str(ws)) == []           # not a code repo Canvas may read
+
+
+def test_landed_commits_show_their_files_and_turn_pushed(repo, runs):
+    ws, _ = runs
+    (repo / "a.py").write_text("landed\n"); (repo / "c.py").write_text("c\n")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "feat: landed")
+    sha = _git(repo, "rev-parse", "HEAD")
+    _run(ws, "run_c1", "s0", history=[{"session_id": "s1"}], status="completed",
+         worktrees=[{"repo_name": "swarmai", "main": str(repo), "state": "released",
+                     "integrated": {"sha": sha}}],
+         commits=[{"repo": str(repo), "sha": sha[:12]}, {"repo": str(repo), "sha": "f" * 40}])
+    [run] = cs.changes_of("s1", str(ws))                # a run it took over is its own
+    [row] = run["repos"]
+    [c] = row["commits"]
+    assert (c["sha"], c["short"], c["subject"], c["pushed"]) == (sha, sha[:8], "feat: landed", False)
+    assert c["files"] == [{"path": "a.py", "added": 1, "deleted": 2}, {"path": "c.py", "added": 1, "deleted": 0}]
+    assert row["released"] is False and row["files"] == []
+    _git(repo, "push", "-q", "origin", "main")
+    [run] = cs.changes_of("s1", str(ws))
+    assert run["repos"][0]["commits"][0]["pushed"] is True
+
+
+def test_a_worktree_released_without_landing_is_said(repo, runs):
+    ws, _ = runs
+    _run(ws, "run_d1", "s1", status="failed",
+         worktrees=[{"repo_name": "swarmai", "main": str(repo), "state": "released"}])
+    [run] = cs.changes_of("s1", str(ws))
+    assert run["repos"][0]["released"] is True and run["repos"][0]["files"] == []
+
+
+def test_the_run_index_rereads_only_a_changed_run_json(repo, runs):
+    ws, _ = runs
+    f = _run(ws, "run_e1", "s1")
+    _run(ws, "run_e2", "s2", history=[{"session_id": "s1"}])
+    assert sorted(r["run"] for r in cs.session_runs("s1", str(ws))) == ["run_e1", "run_e2"]
+    f.write_text(json.dumps({"id": "run_e1", "session_id": "s9"}))
+    os.utime(f, (1, 1))
+    assert [r["run"] for r in cs.session_runs("s1", str(ws))] == ["run_e2"]
+
+
 def test_artifact_rows_join_the_product_catalog(tmp_path):
     from core.product_registry import ProductRegistry
     ws = tmp_path / "ws"; (ws / "Knowledge" / "Notes").mkdir(parents=True)
@@ -216,30 +248,12 @@ def test_artifact_rows_join_the_product_catalog(tmp_path):
     assert (b["role"], b["product"], b["exists"], b["displayLabel"]) == ("Other", False, False, "x.md")
 
 
-def test_owned_runs_come_from_run_json_and_surfaced_ones_from_base_ref(tmp_path):
-    runs = tmp_path / "ws" / "Projects" / "P" / ".artifacts" / "runs"
-    for rid, owner, hist in (("run_a", "s1", []), ("run_b", "s2", [{"session_id": "s1"}]), ("run_c", "s2", [])):
-        (runs / rid).mkdir(parents=True)
-        (runs / rid / "run.json").write_text(json.dumps({
-            "id": rid, "session_id": owner, "session_history": hist,
-            "commits": [{"repo": "/r", "sha": "a" * 7 + rid[-1] * 33, "files": ["x.py"]}]}))
-    got = cs.session_runs("s1", str(tmp_path / "ws"))
-    assert sorted(c["run"] for c in got) == ["run_a", "run_b"]
-    (runs / "run_a" / "run.json").write_text(json.dumps({"id": "run_a", "session_id": "s9"}))
-    os.utime(runs / "run_a" / "run.json", (1, 1))         # a changed file is re-read
-    assert [c["run"] for c in cs.session_runs("s1", str(tmp_path / "ws"))] == ["run_b"]
-    rows = [{"kind": "source-final", "path": "src/a.py", "absolutePath": "/r/src/a.py", "baseRef": "b" * 40 + "^"},
-            {"kind": "source-final", "path": "src/b.py", "absolutePath": "/r/src/b.py", "baseRef": "b" * 40 + "^"},
-            {"kind": "knowledge", "path": "n.md", "absolutePath": "/ws/n.md"}]
-    assert cs.surfaced_commits(rows) == [{"repoPath": "/r", "sha": "b" * 40, "files": ["src/a.py", "src/b.py"], "run": None}]
-
-
 @pytest.mark.asyncio
 async def test_list_session_blocks_reads_only_this_sessions_sent_rows(tmp_path):
     import aiosqlite
     from database.sqlite import SQLiteMessagesTable
     db = tmp_path / "t.db"
-    blk = json.dumps([{"type": "turn_changes", "files": []}])
+    blk = json.dumps([{"type": "turn_deliverables", "files": []}])
     async with aiosqlite.connect(db) as conn:
         await conn.execute("CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, "
                            "content TEXT, created_at TEXT, sent INTEGER)")
@@ -247,5 +261,5 @@ async def test_list_session_blocks_reads_only_this_sessions_sent_rows(tmp_path):
                     ("m3", "s1", blk, "3", 0), ("m4", "s1", json.dumps([{"type": "text"}]), "4", 1)):
             await conn.execute("INSERT INTO messages VALUES (?,?,'assistant',?,?,?)", row)
         await conn.commit()
-    got = await SQLiteMessagesTable("messages", db).list_session_blocks("s1", cs.NEEDLES)
+    got = await SQLiteMessagesTable("messages", db).list_session_blocks("s1", cs.BACKFILL_NEEDLES)
     assert [at for at, _ in got] == ["1", "2"]

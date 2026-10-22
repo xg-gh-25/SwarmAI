@@ -106,17 +106,21 @@ async def test_build_joins_the_catalog_and_backfills_an_old_session(tmp_path, mo
 
 
 @pytest.mark.asyncio
-async def test_the_live_refresh_skips_changes(monkeypatch):
+async def test_the_parts_are_independent(monkeypatch):
     from core import canvas_session as cs
     so.record("s1", [_ev("a.md")], at="t1")
     so.backfill("s1", [])
 
     async def no_blocks(sid, needles):
-        raise AssertionError("the live refresh reads no turn records")
+        raise AssertionError("an Artifacts refresh reads no turn records")
     monkeypatch.setattr("database.db.messages.list_session_blocks", no_blocks)
     monkeypatch.setattr(cs, "session_runs", lambda *a: (_ for _ in ()).throw(AssertionError("no run index")))
-    out = await cs.build("s1", changes=False)
+    out = await cs.build("s1", "artifacts")
     assert [a["path"] for a in out["artifacts"]] == ["a.md"] and out["changes"] is None
+    monkeypatch.setattr(cs, "changes_of", lambda sid, ws: [{"run": "run_x"}])
+    monkeypatch.setattr(cs, "_artifacts", lambda *a: (_ for _ in ()).throw(AssertionError("no Artifacts read")))
+    out = await cs.build("s1", "changes")
+    assert out == {"artifacts": None, "changes": [{"run": "run_x"}]}
 
 
 def test_external_paths_are_only_the_external_rows(tmp_path):

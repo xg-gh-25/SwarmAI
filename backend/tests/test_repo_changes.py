@@ -1,8 +1,8 @@
-"""core/repo_changes — a commit's files and patches for the Canvas Changes tab.
+"""core/repo_changes — a commit's patches for the Canvas Changes tab.
 
 Methodology: throwaway repos under tmp_path (a bare "origin" + a clone), the bindings
 patched to them; no real repository is read.
-Invariants: commit_files / commit_diff answer only for an allowed root, a hex sha and
+Invariants: commit_diff answers only for an allowed root, a hex sha and
 a repo-relative path; the router maps bad input to 400.
 """
 from __future__ import annotations
@@ -35,11 +35,10 @@ def repo(tmp_path, monkeypatch):
     return work
 
 
-def test_commit_files_and_diff(repo):
+def test_commit_diff(repo):
     (repo / "a.py").write_text("x = 9\n"); _git(repo, "commit", "-qam", "change")
     sha = _git(repo, "rev-parse", "HEAD")
     root = str(repo.resolve())
-    assert rc.commit_files(root, sha) == [{"path": "a.py", "insertions": 1, "deletions": 1}]
     d = rc.commit_diff(root, sha, "a.py")
     assert "-x = 1" in d["diff"] and "+x = 9" in d["diff"] and d["truncated"] is False
 

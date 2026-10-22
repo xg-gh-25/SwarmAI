@@ -91,12 +91,12 @@ _POOL_SPECS: dict[str, int] = {
                       # code repo on EVERY send. Apart from the finish work below, so
                       # a start never runs late behind another session's finish (a
                       # late start bakes the turn's own edit into its baseline).
-    "artifact_drift": 4,  # routers/artifacts drift probes (a git call per Canvas row; the
-                      # frontend fans out one per row): capped apart from io so a 50-row
-                      # fan-out never queues ahead of other work.
-    "canvas_session": 1,  # core/canvas_session: a session's Canvas outputs (git reads
-                      # per repo, ~0.2s) after each turn. Its own pool so it never
-                      # queues ahead of a streaming turn's finish diff on turn_changes.
+    "canvas_session": 1,  # core/canvas_session Artifacts: the session_outputs writes
+                      # and reads, one writer so a read sees every write queued before it.
+    "canvas_changes": 2,  # core/canvas_session Changes: read-only git over the session's
+                      # run worktrees and commits. Apart from canvas_session so an
+                      # Artifacts refresh never waits for git, and from turn_changes so
+                      # it never queues ahead of a streaming turn's finish diff.
     "turn_changes": 2,  # core/turn_changes finish diffs + GET /api/chat/turn-diff. Both
                       # are kept off 'subprocess', whose fail-open safety gates
                       # (worktree write gate, commit gates) must never wait on them.

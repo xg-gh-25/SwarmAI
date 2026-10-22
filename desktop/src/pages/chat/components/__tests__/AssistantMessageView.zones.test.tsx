@@ -82,18 +82,19 @@ describe('AC1 — the first thoughts are the receipt', () => {
     expect(screen.queryByTestId('zone-phase')).toBeNull();
   });
 
-  it('after the turn: THOUGHTS · N stays first, folded FOLD_DELAY_MS later', () => {
+  it('after the turn: THOUGHTS · N stays first, folded FOLD_DELAY_MS later; adjacent thinking blocks are one thought', () => {
     vi.useFakeTimers();
     const blocks = [th('first'), th('second'), tx('I read it as X.'), bash('a', 'ls'), tr('a'), tx('Done.')];
     const r = render(view(blocks, true));
     r.rerender(view(blocks, false));
     act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
     const z = screen.getByTestId('zone-thinking');
-    expect(within(z).getByTestId('thinking-toggle').textContent).toMatch(/Thoughts.*2/);
-    expect(within(z).queryByText('second')).toBeNull();
+    expect(within(z).getByTestId('thinking-toggle').textContent).toMatch(/Thoughts.*1/);
+    expect(within(z).queryByText(/second/)).toBeNull();
     expect(firstLevel(r.container)[0]).toBe('zone-thinking');
     fireEvent.click(within(z).getByTestId('thinking-toggle'));
-    expect(within(screen.getByTestId('zone-thinking')).getByText('second')).toBeTruthy();
+    const [only] = within(screen.getByTestId('zone-thinking')).getAllByTestId('thought');
+    expect(only.textContent).toBe('first\n\nsecond');
   });
 });
 

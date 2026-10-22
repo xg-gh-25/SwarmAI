@@ -1,6 +1,7 @@
 """Canvas tabs of one chat session: GET /session/{id} = its Artifacts and Changes
-(core/canvas_session); /changes/commit and /changes/diff drill into one commit
-(core/repo_changes).
+(core/canvas_session); /changes/diff is one file's patch in a commit
+(core/repo_changes). A live run worktree's file diff is GET /api/chat/turn-diff
+(its rows carry the two trees).
 
 Read-only. Every git call runs on the "turn_changes" pool (core/executors), never on
 'subprocess', whose fail-open safety gates must not wait on it. 400 for bad input
@@ -26,22 +27,16 @@ async def _run(fn, *args):
 
 @router.get("/session/{session_id}")
 async def get_session_outputs(session_id: str = Path(..., min_length=1, max_length=128),
-                              parts: str = Query("all", pattern="^(all|artifacts)$")):
-    """What this session produced: {artifacts, changes} (core/canvas_session).
-    ``parts=artifacts`` = the cheap live refresh (changes is null: not computed).
-    404 for a session id that does not exist."""
+                              parts: str = Query("all", pattern="^(all|artifacts|changes)$")):
+    """What this session produced: {artifacts, changes} (core/canvas_session). The two
+    parts are separate requests (``parts=artifacts`` / ``parts=changes``); a part not
+    asked for is null (not computed). 404 for a session id that does not exist."""
     from core.canvas_session import build
     from database import db
     if not await db.sessions.get(session_id):
         # an unknown id gets no record created for it (build backfills on first read)
         raise HTTPException(status_code=404, detail="unknown session")
-    return await build(session_id, changes=parts == "all")
-
-
-@router.get("/changes/commit")
-async def get_commit(root: str = Query(..., max_length=4096), sha: str = Query(..., max_length=64)):
-    from core.repo_changes import commit_files
-    return {"files": await _run(commit_files, root, sha)}
+    return await build(session_id, parts)
 
 
 @router.get("/changes/diff")

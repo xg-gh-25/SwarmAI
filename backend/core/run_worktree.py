@@ -595,12 +595,16 @@ def _temp_index(wt) -> "tuple[str, dict]":
     return tmp, {"GIT_INDEX_FILE": tmp}
 
 
-def change_tree(wt: "str | Path", run_id: str) -> str:
+def change_tree(wt: "str | Path", run_id: str, add: "Iterable[str]" = ()) -> str:
     """``T``: the tree of the run's change set — index + tracked edits/deletions
-    (``add -u`` on a private index copy), minus B. Untracked files are not in it."""
+    (``add -u`` on a private index copy), minus B. Untracked files are not in it,
+    unless named in *add* (the Canvas view adds ``untracked_new_files``)."""
     tmp, env = _temp_index(wt)
     try:
         _out(wt, "add", "-u", env=env, timeout=120)
+        add = list(add)
+        if add:
+            _out(wt, "add", "--", *add, env={**env, "GIT_LITERAL_PATHSPECS": "1"}, timeout=120)
         _out(wt, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--",
              deliverable_prefix(run_id).rstrip("/"), env=env)
         return _out(wt, "write-tree", env=env).strip()

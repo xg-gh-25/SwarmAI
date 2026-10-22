@@ -16,7 +16,8 @@
  * grouped (XG 2026-10-17: "遵守 streaming response 的顺序").
  * - `process`   — a run of ADJACENT tool calls; each call renders as one strip.
  * - `thought`   — a thinking passage, in its place in the stream (never promoted
- *                 out of the work: there is no intent thought, chat display v8).
+ *                 out of the work: there is no intent thought, chat display v8);
+ *                 adjacent thinking blocks are one passage.
  * - `note`      — text the agent wrote BETWEEN tool calls; a first-level zone between
  *                 two WORKED groups (turnZones).
  * - `landmark`  — a pipeline landmark / gate verdict line. Splits the process into
@@ -561,6 +562,13 @@ export function deriveTurnView(
       const text = block.thinking || '';
       if (!text.trim()) return;
       seg = null;
+      // Two thinking blocks with nothing between them are one passage of thought
+      // (the model thought on before writing or calling anything): one row.
+      const prev = units[units.length - 1];
+      if (prev?.kind === 'thought') {
+        prev.text = `${prev.text.trimEnd()}\n\n${text.trimStart()}`;
+        return;
+      }
       units.push({ kind: 'thought', text, index, ordinal: thoughts, live: false });
       thoughts += 1;
       return;

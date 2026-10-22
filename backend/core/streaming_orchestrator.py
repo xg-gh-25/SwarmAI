@@ -276,7 +276,7 @@ class StreamingOrchestrator:
     def _new_turn_carry() -> dict[str, dict]:
         return {
             "pending_file_changes": {}, "pending_file_deletes": {},
-            "pending_heredoc_writes": {}, "pending_script_sweeps": {},
+            "pending_heredoc_writes": {},
             "tool_names": {}, "tool_parent": {},
             "task_parent": {}, "subagent_last": {}, "pending_stage_watch": {},
             "background_agents": {}, "agent_inputs": {},
@@ -803,23 +803,6 @@ class StreamingOrchestrator:
         # Drop None (unresolvable / not-review-worthy) AND any Exception (a single path's
         # failure must not sink the batch). gather preserves input order.
         return [ev for ev in built if isinstance(ev, dict)]
-
-    async def _script_output_events(
-        self, sweep: tuple[str, float], resolve_cache: "dict[str, dict | None]",
-    ) -> list[dict]:
-        """file_changed events for the files a Bash call's script wrote under its
-        root during the call (core.script_output_sweep), through the normal write
-        gate (resolve, mtime re-check, needs_human_review). Fail-safe: [] on error."""
-        from core.script_output_sweep import recent_outputs
-        root, since = sweep
-        try:
-            paths = await executors.run_in("io", recent_outputs, root, since)
-            if not paths:
-                return []
-            return await self._build_file_write_events(paths, resolve_cache, modified_since=since)
-        except Exception:  # noqa: BLE001 — a display aid must never break the turn
-            logger.debug("script output sweep failed for %r", root, exc_info=True)
-            return []
 
     async def _build_file_delete_events(
         self, raw_paths: list[str], resolve_cache: "dict[str, dict | None]"
@@ -1489,11 +1472,6 @@ class StreamingOrchestrator:
         # are only string literals in the script, so each is emitted as written
         # ONLY if its mtime moved during the call (a read-only literal is dropped).
         _pending_heredoc_writes: dict[str, tuple[list[str], float]] = self._turn_carry["pending_heredoc_writes"]
-        # tool_use_id → (root, start time) for a Bash call whose SCRIPT may write
-        # files its command never names (`python make_deck.py`): the successful
-        # result sweeps root for files written during the call (script_output_sweep)
-        # and emits them through the same write gate.
-        _pending_script_sweeps: dict[str, tuple[str, float]] = self._turn_carry["pending_script_sweeps"]
         # tool_use_id → tool name, so a result can be summarized per tool.
         _tool_names: dict[str, str] = self._turn_carry["tool_names"]
         # tool_use_id → the Agent tool_use it ran under (sub-agent steps only).
@@ -2005,11 +1983,6 @@ class StreamingOrchestrator:
                                 )
                                 for _ev in _hd_events:
                                     yield _ev
-                            if _tuid in _pending_script_sweeps:
-                                for _ev in await self._script_output_events(
-                                    _pending_script_sweeps.pop(_tuid), _resolve_cache
-                                ):
-                                    yield _ev
                             if _tuid in _pending_file_deletes:
                                 _um_dels = _pending_file_deletes.pop(_tuid, None)
                                 if _um_dels:
@@ -2034,7 +2007,6 @@ class StreamingOrchestrator:
                             _pending_file_changes.pop(_tuid, None)
                             _pending_file_deletes.pop(_tuid, None)
                             _pending_heredoc_writes.pop(_tuid, None)
-                            _pending_script_sweeps.pop(_tuid, None)
                             _pending_stage_watch.pop(_tuid, None)
                 # ── Glitch prefix in history → clean + resume at this boundary ──
                 # Tool results just came back, so the model is about to write
@@ -2281,10 +2253,6 @@ class StreamingOrchestrator:
                             ]
                             if _hd_cands:
                                 _pending_heredoc_writes[block.id] = (_hd_cands, time.time())
-                            from core.script_output_sweep import sweep_root as _sweep_root
-                            _sw_root = _sweep_root(_cmd, getattr(self._parent, "_cwd", None))
-                            if _sw_root:
-                                _pending_script_sweeps[block.id] = (_sw_root, time.time())
                             # G1 (run_5a7be540): a Bash rm/mv-SRC deletes files → track
                             # them so the ToolResult(success) emits operation=deleted and
                             # the rail drops the stale row.
@@ -2519,9 +2487,6 @@ class StreamingOrchestrator:
                                 _fc_events += await self._build_file_delete_events(
                                     _deleted_paths, _resolve_cache
                                 )
-                            _sweep = _pending_script_sweeps.pop(block.tool_use_id, None)
-                            if _sweep:
-                                _fc_events += await self._script_output_events(_sweep, _resolve_cache)
                             # ── Pipeline stage rows (successful artifact_cli call) ──
                             # Queued AFTER the content_blocks flush below, so the
                             # stage row lands after the tool_result it came from.
@@ -2536,7 +2501,6 @@ class StreamingOrchestrator:
                             _pending_file_changes.pop(block.tool_use_id, None)
                             _pending_file_deletes.pop(block.tool_use_id, None)
                             _pending_stage_watch.pop(block.tool_use_id, None)
-                            _pending_script_sweeps.pop(block.tool_use_id, None)
                         if _fc_events:
                             # Flush accumulated content blocks first (ordering:
                             # the tool_result must precede its file_changed).

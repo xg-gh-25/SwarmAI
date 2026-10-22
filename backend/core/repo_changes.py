@@ -1,15 +1,15 @@
-"""repo_changes — one commit's files and patches, for the Canvas Changes tab.
+"""repo_changes — one commit's patches, for the Canvas Changes tab.
 
-The tab lists what a SESSION changed (core/canvas_session); a commit row there drills
-down here: ``commit_files(root, sha)`` (the files it changed, +/-) and
-``commit_diff(root, sha, path)`` (one file's patch, size-capped).
+The tab lists what a SESSION's runs changed, with each commit's files
+(core/canvas_session); a file of a commit opens here: ``commit_diff(root, sha, path)``
+(its patch, size-capped).
 
 Read-only (``GIT_OPTIONAL_LOCKS=0``), bounded by GIT_TIMEOUT_S, and only for a root
 that is a bound repo (``allowed_roots()``, Projects/*/bindings.yaml) or a code tree
 turn_changes.allowed_repo accepts (a bound repo's main checkout, a run worktree), a
 hex sha and a repo-relative path after ``--``. Blocking: run it in an executor pool.
 
-Public: ``commit_files``, ``commit_diff``, ``allowed_roots``, ``RepoChangesError``,
+Public: ``commit_diff``, ``allowed_roots``, ``RepoChangesError``,
 ``MAX_DIFF_CHARS``.
 """
 from __future__ import annotations
@@ -87,22 +87,6 @@ def _checked_root(root: str) -> str:
     if os.path.isdir(real) and allowed_repo(real):
         return real
     raise RepoChangesError("unknown repo")
-
-
-def commit_files(root: str, sha: str) -> list[dict[str, Any]]:
-    root = _checked_root(root)
-    if not _SHA.fullmatch(sha or ""):
-        raise RepoChangesError("bad sha")
-    out = _git(root, "show", "--numstat", "--format=", "--no-renames", sha)
-    rows = []
-    for line in out.splitlines():
-        parts = line.split("\t", 2)
-        if len(parts) != 3:
-            continue
-        a, d, path = parts
-        rows.append({"path": path, "insertions": None if a == "-" else int(a),
-                     "deletions": None if d == "-" else int(d)})
-    return rows
 
 
 def commit_diff(root: str, sha: str, path: str) -> dict[str, Any]:

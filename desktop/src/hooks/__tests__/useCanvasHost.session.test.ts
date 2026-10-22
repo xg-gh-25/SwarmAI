@@ -1,6 +1,7 @@
 /**
- * useCanvasHost × canvasSession — the session's persisted outputs are fetched when
- * the session changes and again when a turn ends, and its artifacts join the rail.
+ * useCanvasHost × canvasSession — the session's persisted outputs (Artifacts and
+ * Changes, two requests) are fetched when the session changes and again when a turn
+ * ends, and its artifacts join the rail.
  *
  * Methodology: services/api mocked by URL; the store is the real module.
  */
@@ -26,28 +27,37 @@ beforeEach(() => {
 });
 
 describe('useCanvasHost — session outputs', () => {
-  it('fetches on session change and on turn end; persisted artifacts join the rail', async () => {
+  const parts = () => get.mock.calls.filter(([u]) => String(u).startsWith('/canvas/session/'))
+    .map(([u, o]) => `${String(u).split('/').pop()}:${(o as { params: { parts: string } }).params.parts}`);
+
+  it('fetches both parts on session change and on turn end; persisted artifacts join the rail', async () => {
     const { result, rerender } = renderHook((p: { sid: string; streaming: boolean }) =>
       useCanvasHost({ activeTabId: 'tab1', sessionId: p.sid, isStreaming: p.streaming }),
     { initialProps: { sid: 's1', streaming: false } });
     await waitFor(() => expect(result.current.referencedFiles.written.map((f) => f.path)).toEqual(['Knowledge/n.md']));
-    const calls = () => get.mock.calls.filter(([u]) => String(u).startsWith('/canvas/session/')).map(([u]) => u);
-    expect(calls()).toEqual(['/canvas/session/s1']);
+    expect(parts()).toEqual(['s1:artifacts', 's1:changes']);
     rerender({ sid: 's1', streaming: true });
     rerender({ sid: 's1', streaming: false });
-    await waitFor(() => expect(calls()).toHaveLength(2));
+    await waitFor(() => expect(parts()).toHaveLength(4));
     rerender({ sid: 's2', streaming: false });
-    await waitFor(() => expect(calls()).toEqual(['/canvas/session/s1', '/canvas/session/s1', '/canvas/session/s2']));
+    await waitFor(() => expect(parts().slice(4)).toEqual(['s2:artifacts', 's2:changes']));
   });
 
-  it('a refresh re-renders the host once (the new list), not on its loading flips; concurrent refreshes share one request', async () => {
+  it('a refresh re-renders the host only for a changed list, never on loading flips; one asked during one runs once more', async () => {
     let renders = 0;
     const { result } = renderHook(() => { renders++; return useCanvasHost({ activeTabId: 'tab1', sessionId: 's1', isStreaming: false }); });
     await waitFor(() => expect(result.current.referencedFiles.written).toHaveLength(1));
-    const before = renders;
-    const n = get.mock.calls.length;
-    await act(async () => { await Promise.all([refreshCanvasSession(), refreshCanvasSession()]); });
-    expect(get.mock.calls.length - n).toBe(1);
+    let before = renders;
+    let n = get.mock.calls.length;
+    await act(async () => { await Promise.all([refreshCanvasSession(), refreshCanvasSession(), refreshCanvasSession()]); });
+    expect(get.mock.calls.length - n).toBe(4);           // each part: the request + one more after it
+    expect(renders - before).toBe(0);                    // the same answer: nothing to draw
+    get.mockImplementation(async (url: string) =>
+      url.startsWith('/canvas/session/') ? { data: { artifacts: [ART, { ...ART, path: 'Knowledge/m.md' }], changes: [] } } : { data: {} });
+    before = renders; n = get.mock.calls.length;
+    await act(async () => { await refreshCanvasSession(); });
+    expect(get.mock.calls.length - n).toBe(2);
     expect(renders - before).toBe(1);
+    expect(result.current.referencedFiles.written).toHaveLength(2);
   });
 });
