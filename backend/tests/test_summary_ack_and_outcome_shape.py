@@ -140,9 +140,6 @@ def test_contract_doc_states_the_rejection():
     doc = (Path(__file__).resolve().parent.parent / "skills" / "s_autonomous-pipeline"
            / "stages" / "ref" / "deliver" / "report-and-commit.md").read_text(encoding="utf-8")
     assert "rejected at DELIVER" in doc
-    card = (Path(__file__).resolve().parent.parent / "skills" / "s_autonomous-pipeline"
-            / "stages" / "deliver.md").read_text(encoding="utf-8")
-    assert "`problem_before`, `result_now`, `approach[]`" in card
 
 
 def test_an_outcome_the_validator_accepts_is_one_the_renderer_reads(tmp_path):

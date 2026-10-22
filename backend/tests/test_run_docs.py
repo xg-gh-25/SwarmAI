@@ -131,7 +131,9 @@ def test_renderers_never_raise_on_odd_shapes(bad):
 def test_required_docs_follow_the_profile():
     assert rd.required_docs("full") == ["REQUIREMENTS.md", "DESIGN_SPEC.md", "REVIEW.md", "REPORT.md"]
     assert rd.required_docs("research") == ["REQUIREMENTS.md", "REPORT.md"]
-    assert "DESIGN_SPEC.md" not in rd.required_docs("trivial")
+    # v13: trivial runs PLAN (lite DESIGN_SPEC) and REVIEW (core/pipeline_profiles.py)
+    assert rd.required_docs("trivial") == ["REQUIREMENTS.md", "DESIGN_SPEC.md", "REVIEW.md", "REPORT.md"]
+    assert rd.required_docs("direct") == ["DESIGN_SPEC.md", "REVIEW.md", "REPORT.md"]
 
 
 def test_doc_status_explains_what_is_missing_or_skipped(tmp_path):
@@ -334,7 +336,7 @@ def test_every_reader_shares_one_finished_status_set():
     """I2 across the system: the stage rows / summary count and the documents agree."""
     from core.pipeline_profiles import FINISHED_STATUSES
     assert rd._DONE is FINISHED_STATUSES
-    assert {s for s, v in pse._TERMINAL.items() if v == "completed"} == set(FINISHED_STATUSES)
+    assert {s for s, v in pse._TERMINAL.items() if v == "completed"} == set(FINISHED_STATUSES) | {"degraded"}
     st = {"status": "completed", "profile": "full", "run_dir": None,
           "stages": {"evaluate": {"stage": "evaluate", "status": "done"}}}
     assert pse.summary_block("run_d1", st, "now")["stagesDone"] == 1

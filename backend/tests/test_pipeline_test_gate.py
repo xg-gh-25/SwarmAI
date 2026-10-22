@@ -563,15 +563,16 @@ class TestDirectCommitGateDenies:
         assert _is_deny(res)
         reason = _reason(res)
         assert "21 source lines" in reason
-        assert ('python backend/scripts/artifact_cli.py run-create --project Repo '
-                '--profile direct --requirement "<one line>"') in reason
+        assert ("backend/.venv/bin/python backend/scripts/pipeline_v1.py create "
+                "--project Repo --profile direct") in reason
+        assert "artifact_cli" not in reason
         assert "--project SwarmAI" not in reason
 
     def test_unmapped_repo_gets_a_project_placeholder(self, ws, repo):
         (repo / "a.py").write_text("base = 0\n" + _lines(21))
         _git(repo, "add", "a.py")
         reason = _reason(_direct("git commit -m fix", repo))
-        assert "run-create --project '<project>' --profile direct" in reason
+        assert "pipeline_v1.py create --project '<project>' --profile direct" in reason
 
     def test_force_env_is_described_as_operator_only(self, ws, repo):
         # L1
@@ -765,7 +766,7 @@ class TestRunAmendGate:
         assert _is_deny(res)
         reason = _reason(res)
         assert "run_amend1" in reason
-        assert "deliver title" in reason and "run-commit" in reason
+        assert "pipeline_v1.py land --message" in reason and "run-commit" not in reason
 
     @pytest.mark.parametrize("cmd", [
         "git commit -m 'feat: x'",

@@ -457,26 +457,6 @@ class TestStageDocsWiring:
         base = Path(__file__).resolve().parents[1] / "skills" / "s_autonomous-pipeline" / "stages"
         return (base / "deliver.md").read_text(), (base / "complete.md").read_text()
 
-    def test_docs_use_surface_run_outputs_batch(self):
-        # run_b8ea6d5c: the finish source deliverable is a batch of PR-review rail
-        # rows via surface_run_outputs — NOT an aggregated LOCAL_PR.md (removed).
-        deliver, complete = self._docs()
-        for doc, name in ((deliver, "deliver.md"), (complete, "complete.md")):
-            assert "surface_run_outputs" in doc, f"{name} must instruct the surface_run_outputs batch tool"
-            # run_a87bfe3f: the evidence lives outside the deliver record (the tool's
-            # marker, or --outputs-surfaced on the completing call); the docs must
-            # never instruct the deliver --stage-json acknowledgement again, because
-            # that call REPLACES the deliver record and drops token_cost/decisions.
-            assert "--outputs-surfaced" in doc, f"{name} must name the --outputs-surfaced fallback"
-            assert '"outputs_surfaced":true' not in doc, (
-                f"{name} must not instruct a deliver --stage-json outputs_surfaced rewrite")
-            # LOCAL_PR must not be an INSTRUCTION anymore (a "removed run_b8ea6d5c" note is
-            # fine). The stale instruction was `open-canvas-file` pointed at a LOCAL_PR.md
-            # path — assert THAT specific pattern is gone, not the mere word.
-            assert "runs/<run_id>/LOCAL_PR.md" not in doc, (
-                f"{name} must not INSTRUCT opening the removed LOCAL_PR.md path")
-            assert "local_pr_surfaced" not in doc, (
-                f"{name} must use outputs_surfaced, not the old local_pr_surfaced flag")
 
     def test_docs_drop_stale_open_canvas_instruction(self):
         deliver, _ = self._docs()

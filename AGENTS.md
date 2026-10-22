@@ -226,31 +226,27 @@ implementations in `security_hooks.py`). By category:
    (advisory; Write|Edit, and Bash writes — sed -i, redirects, interpreter heredoc
    patches — to governed context files), the `commit_gate` group (Bash, registered before
    `dangerous_command_gate`, members in order): `run_amend_gate` (in this session's active run,
-   denies `git commit --amend` with "改 deliver title 后重新跑 run-commit" instead of letting
+   denies `git commit --amend` and points at the run's own landing (`pipeline_v1.py land --message`) instead of letting
    `dangerous_command_gate` park the run on an approval prompt), `direct_commit_gate` (a session
    with no run of its own that commits more than 20 changed source lines in the SwarmAI source
-   repo, docs and lockfiles excluded, is sent to `artifact_cli.py run-create --profile direct`;
+   repo, docs and lockfiles excluded, is sent to `pipeline_v1.py create --profile direct`;
    other sessions' and unowned runs never exempt it), `active_run_commit_gate` (files owned by an
-   active pipeline run, and that run's own `.aidlc/deliverables/<run_id>/` REPORT.md, go through
-   run-commit), `adversarial_commit_gate` (no `git commit` without a sub-agent review this
-   session); all fail open. `review_round_gate` (Agent|Task, real app sessions only: a spawn whose
-   prompt starts with `EXPERT-ID:` in this session's active run is denied once that
-   expert has 3 completed rounds in the open stage, review + 2 re-checks, and told to
-   record the open items and continue (never ask the user); it also keeps REVIEW /
-   DELIVER rounds parallel: a solo spawn of a round member after a sibling finished, with
-   ≥2 left, is denied once per round naming the rest to spawn in one message; goal_cycle exempt;
-   fails open), `session_link_gate` (Bash, always on, registered
+   active pipeline run, and that run's own `.aidlc/deliverables/<run_id>/` REPORT.md, land
+   only through the run's DELIVER landing), `adversarial_commit_gate` (no `git commit` without a sub-agent review this
+   session); all fail open. Pipeline v1 review round limits and parallel waves are
+   enforced by signed `handout` / `answer` events in `core/run_protocol/`, not a
+   marker-counting PreToolUse gate. `session_link_gate` (Bash, always on, registered
    right before `test_command_gate`: denies removing or overriding `SWARM_APP_SESSION_ID`,
    the run↔session link both run gates key on; cannot be forced),
    backed by the PostToolUse (Bash) `session_link_stamper` (with its PreToolUse start-time
-   companion `session_link_stamp_start`): after an artifact_cli / run-create call it writes
-   this session's id into running runs with no `session_id` that the call created or names
+   companion `session_link_stamp_start`): after an artifact_cli call it writes
+   this session's id into legacy running runs (v1 runs carry `session_id` in their protected contract) with no `session_id` that the call created or names
    (`session_id_source: backend_stamp`), never overwriting an existing one.
-   `audit_marker_write_gate` (Bash and Write|Edit|MultiEdit|NotebookEdit, always on,
-   right after `background_command_guard`, ahead of every HITL gate): denies writing, moving or deleting anything in
-   `state/pipeline_agent_audit`, the SubagentStop markers that D7, the Red Team check,
-   Gate-0/1 and `adversarial_commit_gate` trust; reads pass; cannot be forced; it reads command text (an unparseable command naming the
-   dir fails closed), so a path built at run time or a standalone script file is not seen.
+   `audit_marker_write_gate` (Bash and Write|Edit|MultiEdit|NotebookEdit|Read|Grep, always on,
+   right after `background_command_guard`, ahead of every HITL gate): denies writes, moves or deletes in
+   `state/pipeline_agent_audit`; it also denies reads of each v1 run's `authority.key` while allowing
+   ordinary audit reads. Signed events, authorization, Gate-0, REVIEW and the adversarial commit gate
+   trust this store; the gate cannot be forced.
    Per-run worktrees (`docs/design/pipeline-run-worktree.md`; on by default, turned off only by
    `config.json["pipeline"]["worktree_mode"] = "off"`, a `PUT /api/settings` key): `run_owner_gate`
    (Bash, right after `commit_gate`; applies only to isolated runs and to the stage-start
@@ -261,8 +257,10 @@ implementations in `security_hooks.py`). By category:
    in daemon memory, the CLI burns it over the owner-only socket started in `main.py`) and `worktree_write_gate`
    (Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep, its own group; keeps an isolated
    run's writes in its own worktrees, denies a write into any other isolatable git repo with
-   the `run-repo-add` command that gives it one, denies stash / shared-ref changes from a run
-   worktree).
+   the `pipeline_v1.py create --repo` command for a run that includes it (v1 repos are fixed at
+   create), denies stash / shared-ref changes from a run worktree). Run liveness everywhere
+   (`run_index.LIVE_STATUSES`, the worktree sweeper, these gates) counts legacy running/paused
+   and every non-terminal v1 status.
 5. **Review-expert scope** (`core/pipeline_expert_agent.py`) — every session defines the
    `pipeline-expert` sub-agent type (Read/Grep/Glob/Bash only, effort medium, maxTurns
    backstop). `expert_type_gate` (Agent|Task, app sessions, main thread) denies an
@@ -388,11 +386,11 @@ commit, a commit made there picks up another session's staged files, and an unco
 there blocks a run's `merge --ff-only` landing. All three happened on 2026-10-19.
 
 - **SwarmAI app sessions** are enforced: with worktree mode on, `worktree_write_gate` denies a
-  write to the main checkout and prints the `run-create --profile direct` command. A direct
-  run always goes plan -> build -> deliver: PLAN writes the exit contract (1-5 acceptance
-  criteria, each with its test) and is never skipped; BUILD may be skipped once PLAN is
-  done. A small change (at most 20 non-test source lines, no new code file, no sensitive
-  path: `SMALL_CHANGE_LINES` in `artifact_cli.py`) gets no Gate-2 expert and no meta-review.
+  write to the main checkout and prints the `pipeline_v1.py create --profile direct` command. A direct
+  run always goes plan -> build -> review -> test -> deliver -> reflect: PLAN writes the
+  structured exit contract and is never skipped. A small change (at most 20 non-test
+  source lines, no new code file, no sensitive path) dispatches no review expert; its
+  deterministic document/test/landing checks still run.
 - **Every other agent** (Claude Code, Kiro, Kiro Crew, Cursor, Codex) is not seen by that
   hook. Nothing enforces this for you; do it yourself:
 
@@ -416,7 +414,7 @@ git worktree remove <scratch>/wt-<topic> && git branch -d <agent>/<topic>
 - Not-fast-forward: `git rebase main` again, re-run the affected tests, retry.
 
 **Write it yourself — nothing enforces it for a manual commit.** Only the pipeline's
-`run-commit` (`backend/scripts/artifact_cli.py`) builds the trailer into its own message. For any commit you make
+landing (`backend/core/run_protocol/landing.py`) builds the trailer into its own message. For any commit you make
 by hand, add the line yourself. `core.hooksPath` on this machine points at the corporate
 git-defender hook set, and a hooksPath override *replaces* `.git/hooks` rather than merging
 with it. So every repo-local hook is shadowed and silently inert:

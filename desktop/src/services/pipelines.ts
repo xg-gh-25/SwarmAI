@@ -40,6 +40,8 @@ export interface PipelineRun {
    * Runs run list. Empty string when absent.
    */
   updatedAt: string;
+  /** Renderer-owned five-dimension audit card, present after completion. */
+  auditCard: string | null;
 }
 
 /** Convert a backend snake_case pipeline run to camelCase PipelineRun. */
@@ -59,6 +61,7 @@ export function pipelineToCamelCase(r: Record<string, unknown>): PipelineRun {
     pauseKind: (r.pause_kind as PipelineRun['pauseKind']) ?? null,
     progress: (r.progress as string) ?? '',
     updatedAt: (r.updated_at as string) ?? '',
+    auditCard: (r.audit_card as string | null) ?? null,
   };
 }
 
@@ -86,6 +89,7 @@ export interface PipelineRunSummary {
    *  report button dispatches swarm:open-file{path} to render it in Canvas. Presence
    *  IS "has a report" — no separate bool (run_929024a8). */
   reportPath: string | null;
+  auditCard: string | null;
 }
 
 export interface PipelineProjectGroup {
@@ -152,6 +156,7 @@ export interface PipelineRunDetail {
   checkpointReason: string | null;
   createdAt: string;
   updatedAt: string;
+  auditCard: string | null;
 }
 
 function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
@@ -170,10 +175,16 @@ function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
     checkpointReason: (r.checkpoint_reason as string | null) ?? null,
     verified: typeof r.verified === 'boolean' ? r.verified : null,
     reportPath: (r.report_path as string | null) ?? null,
+    auditCard: (r.audit_card as string | null) ?? null,
   };
 }
 
 export const pipelinesService = {
+  /** Resume through the backend's protocol-aware transition (v1 event, legacy compatibility). */
+  async resumeRun(runId: string): Promise<void> {
+    await api.patch(`/pipelines/${runId}/resume`);
+  },
+
   /**
    * Fetch active (running + paused) pipeline runs across all projects.
    * Returns [] on any shape surprise — the sidebar must never crash on this.
@@ -284,6 +295,7 @@ export const pipelinesService = {
         checkpointReason: (data.checkpoint_reason as string | null) ?? null,
         createdAt: (data.created_at as string) ?? '',
         updatedAt: (data.updated_at as string) ?? '',
+        auditCard: (data.audit_card as string | null) ?? null,
       };
     } catch {
       return null;

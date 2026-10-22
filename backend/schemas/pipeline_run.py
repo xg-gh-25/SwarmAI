@@ -79,6 +79,8 @@ class PipelineRunResponse(BaseModel):
     )
     created_at: str = Field(..., description="ISO timestamp")
     updated_at: str = Field(..., description="ISO timestamp")
+    audit_card: Optional[str] = Field(
+        None, description="Renderer-owned five-dimension completed run card")
 
 
 class PipelineStatusSummary(BaseModel):
@@ -130,6 +132,7 @@ class PipelineRunSummary(BaseModel):
             "Presence == 'has a report' (frontend derives hasReport = reportPath != null)."
         ),
     )
+    audit_card: Optional[str] = None
 
 
 class PipelineProjectGroup(BaseModel):
@@ -211,3 +214,4 @@ class PipelineRunDetail(BaseModel):
     checkpoint_reason: Optional[str] = None
     created_at: str = ""
     updated_at: str = ""
+    audit_card: Optional[str] = Field(None, description="Renderer-owned final run audit card")

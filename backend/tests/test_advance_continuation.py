@@ -57,10 +57,6 @@ BACKEND = _THIS.parent.parent
 REPO = BACKEND.parent
 SKILL = BACKEND / "skills" / "s_autonomous-pipeline"
 STAGES = SKILL / "stages"
-INSTRUCTIONS = SKILL / "INSTRUCTIONS.md"
-
-# The 7 pipeline stage docs whose last actionable step is `advance`.
-ADVANCE_DOCS = ["evaluate", "think", "plan", "build", "review", "test", "deliver"]
 
 # Sibling skills that also call `advance` (Gate-1 finding #4 — R27 scope).
 SIBLING_DOCS = [
@@ -313,20 +309,11 @@ class TestStageResolution:
             f"off-profile case should name the real problem: {action!r}"
         )
 
-    def test_reflect_doc_carries_a_terminal_continuation_contract(self, cli):
-        """REFLECT issues no advance, so it is the last place the stall can happen.
-
-        Nothing hands the agent a next_action there, so the doc itself must route to
-        Step 6 COMPLETE — otherwise the run does all its work and never surfaces the
-        summary, which is indistinguishable from a crash.
-        """
+    def test_reflect_doc_carries_v1_terminal_commands(self):
+        """REFLECT must route background processing to a bounded terminal command."""
         text = (STAGES / "reflect.md").read_text(encoding="utf-8")
-        assert cli._CONTINUATION_PHRASE in text, (
-            "reflect.md must carry the continuation contract — it is the final boundary"
-        )
-        assert re.search(r"COMPLETE", text), (
-            "reflect.md's contract must route to the COMPLETE step"
-        )
+        assert "pipeline_v1.py reflect-complete" in text
+        assert "reflect-exhausted" in text
 
 
 # ── AC7: budget is NEVER a reason to withhold continuation (post-refactor) ───
@@ -493,39 +480,8 @@ class TestCheckpointConditioning:
 # ── AC3 / AC4 / AC9: the doc side, sharing ONE phrase ───────────────────────
 
 class TestDocContracts:
-    """AC3/AC4/AC9 — the contract sentence exists and is single-sourced."""
+    """AC9 — sibling skills retain the legacy advance contract they still use."""
 
-    @pytest.mark.parametrize("stage", ADVANCE_DOCS)
-    def test_stage_doc_states_the_contract(self, cli, stage):
-        text = (STAGES / f"{stage}.md").read_text(encoding="utf-8")
-        assert cli._CONTINUATION_PHRASE in text, (
-            f"stages/{stage}.md must state the continuation contract at its advance block"
-        )
-
-    @pytest.mark.parametrize("stage", ADVANCE_DOCS)
-    def test_contract_names_the_legal_handback_conditions(self, cli, stage):
-        """Not an unconditional 'never stop' — it must name the legal exits."""
-        text = (STAGES / f"{stage}.md").read_text(encoding="utf-8")
-        idx = text.index(cli._CONTINUATION_PHRASE)
-        window = text[idx: idx + 700]
-        assert re.search(r"\bL2\b", window), f"{stage}.md contract must name the L2 exit"
-        assert re.search(r"checkpoint", window, re.I), (
-            f"{stage}.md contract must name the checkpoint exit"
-        )
-
-    def test_instructions_3f_states_the_symmetric_contract(self, cli):
-        text = INSTRUCTIONS.read_text(encoding="utf-8")
-        assert cli._CONTINUATION_PHRASE in text, (
-            "INSTRUCTIONS.md §3f must carry the same contract phrase as the stage docs"
-        )
-
-    def test_cli_and_docs_share_one_phrase(self, cli):
-        """AC4 — single-sourced, so the two sides cannot drift (R27)."""
-        phrase = cli._CONTINUATION_PHRASE
-        assert len(phrase) > 15, "the shared phrase must be substantive, not a stopword"
-        for stage in ADVANCE_DOCS:
-            assert phrase in (STAGES / f"{stage}.md").read_text(encoding="utf-8")
-        assert phrase in INSTRUCTIONS.read_text(encoding="utf-8")
 
     @pytest.mark.parametrize("doc", SIBLING_DOCS, ids=lambda p: p.parent.name)
     def test_sibling_skills_carry_the_contract(self, cli, doc):
@@ -547,20 +503,6 @@ class TestDocContracts:
                     f"{doc.parent.name}: advance without --run-id skips auto-validation"
                 )
 
-
-# ── AC8: Rule 20 must not mute the very channel carrying the fix ────────────
-
-class TestRule20Exemption:
-    """AC8 — 'Suppress CLI JSON' would otherwise silence next_action."""
-
-    def test_token_conservation_exempts_the_continuation_fields(self):
-        text = INSTRUCTIONS.read_text(encoding="utf-8")
-        idx = text.index("Suppress CLI JSON")
-        window = text[idx: idx + 500]
-        assert "next_action" in window and "next_stage_doc" in window, (
-            "Rule 20's 'Suppress CLI JSON' must explicitly exempt next_action/"
-            "next_stage_doc — otherwise the fix rides a channel the skill mutes"
-        )
 
 
 # ── AC5 / AC6: the stop side is untouched (regression guards) ───────────────

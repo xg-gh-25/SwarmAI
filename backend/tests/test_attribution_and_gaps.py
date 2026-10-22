@@ -271,24 +271,6 @@ def test_build_script_bundles_the_expert_library():
     assert "datas += [('experts', 'experts')]" in text
 
 
-def test_d7_refusal_lists_experts_that_ran_without_adversarial_marker(tmp_path):
-    from tests.test_run_commit_d7 import _audit_dir, _run_cli, _seed_run, _write_marker
-    rid = "run_d7plain"
-    ws_, _repo, _rd = _seed_run(tmp_path, rid, ["correctness", "security"])
-    audit = _audit_dir(tmp_path)
-    _write_marker(audit, "sessX", 1, "correctness", rid)
-    (audit / "session_sessX_2.marker").write_text(json.dumps(
-        {"ts": 2, "event": "SubagentStop", "session_id": "sessX", "run_id": rid,
-         "expert_id": "security"}))
-    env = dict(os.environ, SWARM_DATA_DIR=str(tmp_path), SWARM_WORKSPACE=str(ws_))
-    r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid], env)
-    assert r.returncode == 2
-    blob = r.stdout + r.stderr
-    line = next(ln for ln in blob.splitlines() if '"blocked"' in ln)
-    data = json.loads(line)
-    assert data["missing_experts"] == ["security"]
-    assert data["ran_without_adversarial_marker"] == ["security"]
-    assert "EXPERT-ID was read" in data["error"] and "restart" in data["error"]
 
 
 # ── AC4 ──────────────────────────────────────────────────────────────────────

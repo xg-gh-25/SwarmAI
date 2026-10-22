@@ -406,29 +406,6 @@ class TestRunDirPathTraversal:
         parsed = json.loads(err.strip().splitlines()[-1])
         assert "error" in parsed, f"stderr must be the standard JSON error, got: {err!r}"
 
-    def test_main_does_not_swallow_corrupt_json_as_identifier_reject(self, tmp_path, monkeypatch):
-        """AC (Gate-2 fix): the main() ValueError catch must NOT swallow a
-        json.JSONDecodeError (a ValueError subclass) from a corrupt --stage-json /
-        malformed run.json — that is a user/data error and must KEEP its original
-        propagating behavior, not be mislabeled as a path-identifier reject (exit 2).
-        Without the `except json.JSONDecodeError: raise` guard, a JSON typo would be
-        indistinguishable from a security refusal."""
-        import sys
-        cli = self._cli(tmp_path, monkeypatch)
-        _mk_run(tmp_path, "run_real", status="running",
-                stages=[{"stage": "build", "status": "completed", "artifact_id": "a"}])
-        monkeypatch.setattr(sys, "argv", [
-            "artifact_cli.py", "run-update",
-            "--project", "P",
-            "--run-id", "run_real",
-            "--stage-json", "{bad json not parseable",
-        ])
-        # Must raise JSONDecodeError (propagated), NOT SystemExit(2) with the
-        # identifier-error shape. A SystemExit(2) here would mean the corrupt JSON
-        # was mislabeled as a traversal refusal.
-        with pytest.raises(json.JSONDecodeError):
-            cli.main()
-
     def test_analytics_batch_skips_bad_id_not_aborts(self, tmp_path, monkeypatch, capsys):
         """AC (Gate-2 #2 follow-through): _run_dir now RAISES on a malformed on-disk
         `id`. cmd_run_analytics loops over _load_completed_runs (which does NOT

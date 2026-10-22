@@ -250,19 +250,3 @@ def test_display_block_matches_report_render_after_archive_roundtrip(reg, capsys
     assert publish_block == report_block, (
         "preview and archive MUST render identically — any divergence here is the "
         "exact drift the single-source design forbids")
-
-
-# ── AC7: both pipeline docs instruct RELAY (not hand-type) ──────────────────
-
-def test_ac7_docs_instruct_relay_not_handtype(reg):
-    """The two orchestration docs must tell the agent to relay the publish
-    _display_block, not to hand-type/emit a block from memory (the F004 fix)."""
-    import pathlib
-    root = pathlib.Path(__file__).resolve().parents[1]  # backend/
-    eval_md = (root / "skills" / "s_autonomous-pipeline" / "stages" / "evaluate.md").read_text()
-    instr_md = (root / "skills" / "s_autonomous-pipeline" / "INSTRUCTIONS.md").read_text()
-    # both now reference the _display_block relay mechanism
-    assert "_display_block" in eval_md, "evaluate.md must reference the _display_block relay"
-    assert "_display_block" in instr_md, "INSTRUCTIONS.md must reference the _display_block relay"
-    # evaluate.md explicitly forbids hand-typing from memory
-    assert "Do NOT hand-type" in eval_md

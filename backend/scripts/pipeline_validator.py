@@ -156,13 +156,13 @@ def _blocked_findings(
     The classifier is imported here, not at module top: run_delivery_summary imports
     this module for `_md_cell`, and that import must not depend on the new module.
     """
-    from core.gate2_findings import is_blocking
+    from core.run_protocol.findings import reported_push_effect
     if not isinstance(findings, list):
         return []
     return [f for f in findings
-            if isinstance(f, dict) and not f.get("resolved")
+            if isinstance(f, dict)
             and not (honor_deferred and f.get("deferred_by") == DEFERRED_BY_ROOT_CAUSE)
-            and is_blocking(f, threshold)]
+            and reported_push_effect(f)]
 
 
 # ── Gate-2 Red Team trigger (HIGH half) ──

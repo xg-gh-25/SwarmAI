@@ -11,7 +11,8 @@ asks this module what changed.
 The module is pure and fail-safe (it never raises):
 
 - ``parse_watched_run_id(command)`` — the cheap pre-filter. A Bash command is
-  watched when it invokes ``artifact_cli`` with a ``--run-id``. Any subcommand
+  watched when it invokes ``artifact_cli`` or ``pipeline_v1.py`` with a
+  ``--run-id``. Any subcommand
   qualifies (run-update, publish, advance, stage-complete …), because detection keys
   on what run.json says afterwards, not on which subcommand ran. A ``$VAR`` run id
   is resolved only from an assignment in the SAME command (every Bash tool call is
@@ -86,7 +87,11 @@ STAGE_ORDINALS: dict[str, int] = {
 # Terminal statuses, normalized: "complete" and "done" are legacy spellings found in
 # real run.json records and are shown (and compared) as "completed"
 # (pipeline_profiles.FINISHED_STATUSES, the one set every reader shares).
-_TERMINAL: dict[str, str] = {**{s: "completed" for s in FINISHED_STATUSES}, "skipped": "skipped"}
+_TERMINAL: dict[str, str] = {
+    **{s: "completed" for s in FINISHED_STATUSES},
+    "degraded": "completed",  # v1: terminal stage with exhausted checks
+    "skipped": "skipped",
+}
 SUMMARY_MAX = 160
 
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -97,18 +102,19 @@ _VAR_REF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 
 
 def parse_watched_run_id(command: object) -> Optional[str]:
-    """Return the literal run id of an ``artifact_cli`` invocation, else None.
+    """Return the literal run id of a pipeline CLI invocation, else None.
 
     A pre-filter only: it decides whether a call is worth one run.json read when it
     returns. It never proves anything changed — ``new_stage_blocks`` decides that
     from run.json itself.
     """
-    if not isinstance(command, str) or "artifact_cli" not in command:
+    if not isinstance(command, str) or not any(
+            marker in command for marker in ("artifact_cli", "pipeline_v1.py")):
         return None
-    # The --run-id belonging to the LAST artifact_cli invocation wins (an id quoted
+    # The --run-id belonging to the LAST pipeline CLI invocation wins (an id quoted
     # earlier — in a heredoc, an echo — is not the call that runs); one placed before
-    # it (P="--run-id run_x"; … artifact_cli … $P) is the fallback.
-    last_cli = command.rfind("artifact_cli")
+    # it (P="--run-id run_x"; … CLI … $P) is the fallback.
+    last_cli = max(command.rfind("artifact_cli"), command.rfind("pipeline_v1.py"))
     matches = list(_RUN_ID_ARG_RE.finditer(command))
     ordered = [m for m in matches if m.start() > last_cli] + [
         m for m in reversed(matches) if m.start() < last_cli]
@@ -133,15 +139,20 @@ def parse_watched_run_id(command: object) -> Optional[str]:
 # the id is read from the call's own output, so the run's alignment shows the
 # moment the run exists, not after EVALUATE's first ``--run-id`` call.
 RUN_CREATE_WATCH = "<run-create>"
-_RUN_CREATE_RE = re.compile(r"artifact_cli(?:\.py)?['\"]?\s+(?:[^;&|\n]*\s)?run-create(?=[\s'\";&|)]|$)")
+_RUN_CREATE_RE = re.compile(
+    r"(?:artifact_cli(?:\.py)?[^;&|\n]*\srun-create|pipeline_v1\.py[^;&|\n]*\screate)"
+    r"(?=[\s'\";&|)]|$)"
+)
 _PIPELINE_ID_RE = re.compile(r'"pipeline_id"\s*:\s*"([^"]*)"')
 
 
 def is_run_create(command: object) -> bool:
-    """True when the LAST artifact_cli invocation in ``command`` is ``run-create``."""
-    if not isinstance(command, str) or "artifact_cli" not in command:
+    """True when the last pipeline CLI invocation creates a run."""
+    if not isinstance(command, str) or not any(
+            marker in command for marker in ("artifact_cli", "pipeline_v1.py")):
         return False
-    return bool(_RUN_CREATE_RE.search(command[command.rfind("artifact_cli"):]))
+    last_cli = max(command.rfind("artifact_cli"), command.rfind("pipeline_v1.py"))
+    return bool(_RUN_CREATE_RE.search(command[last_cli:]))
 
 
 def _result_text(content: object) -> str:
@@ -192,18 +203,32 @@ def read_stage_state(run_id: object) -> Optional[dict]:
             if not isinstance(data, dict):
                 return None
             stages: dict[str, dict] = {}
-            for rec in data.get("stages") or []:
-                if isinstance(rec, dict) and isinstance(rec.get("stage"), str):
-                    stages[rec["stage"]] = rec
+            raw_stages = data.get("stages") or []
+            if isinstance(raw_stages, dict):
+                # Pipeline v1 projections are {stage: status}. Adapt that durable
+                # protocol shape to the live block reader's record shape.
+                for name, stage_status in raw_stages.items():
+                    if isinstance(name, str) and isinstance(stage_status, str):
+                        stages[name] = {"stage": name, "status": stage_status}
+            else:
+                for rec in raw_stages:
+                    if isinstance(rec, dict) and isinstance(rec.get("stage"), str):
+                        stages[rec["stage"]] = rec
             profile = data.get("profile")
             req = data.get("requirement")
             timing = data.get("stage_timing") if isinstance(data.get("stage_timing"), dict) else {}
             commits = data.get("commits") if isinstance(data.get("commits"), list) else []
+            raw_status = data.get("status")
+            status = {"active": "running", "reflecting": "running",
+                      "awaiting_human": "paused"}.get(raw_status, raw_status)
             return {"profile": profile if isinstance(profile, str) else None,
+                    "v1": isinstance(raw_stages, dict),
                     "stages": stages,
                     "timing": {k: v for k, v in timing.items()
                                if isinstance(k, str) and isinstance(v, dict)},
-                    "status": data.get("status") if isinstance(data.get("status"), str) else None,
+                    "status": status if isinstance(status, str) else None,
+                    "current_stage": data.get("stage") if isinstance(data.get("stage"), str) else None,
+                    "updated_at": data.get("updated_at") if isinstance(data.get("updated_at"), str) else None,
                     "requirement": req if isinstance(req, str) else None,
                     # An isolated run's change lands in main at deliver stage-complete,
                     # AFTER its deliver record is written (and the landing can still be
@@ -320,7 +345,12 @@ def current_stage(state: Optional[dict]) -> Optional[str]:
         # order as times.
         if best is None or start > best[0]:
             best = (start, name)
-    return best[1] if best else None
+    if best:
+        return best[1]
+    current = (state or {}).get("current_stage")
+    if isinstance(current, str) and _status(state, current) in ("open", "in_progress", "running"):
+        return current
+    return None
 
 
 def new_stage_blocks(
@@ -436,6 +466,22 @@ def new_stage_blocks(
             "position": order.index(name) + 1 if name in order else None,
             "total": len(order), "profile": profile, "next": None, "nextOrdinal": None,
             "gate": None, "summary": None, "at": start,
+        })
+    # Pipeline v1 has no stage_timing map: its projection marks exactly one stage
+    # ``open``. A newly-open stage is the authoritative live-start transition.
+    if not after.get("v1"):
+        return blocks
+    for name in names:
+        if (_status(after, name) not in ("open", "in_progress", "running")
+                or _status(before, name) in ("open", "in_progress", "running")
+                or any(b.get("stage") == name for b in blocks)):
+            continue
+        blocks.append({
+            "type": BLOCK_TYPE, "runId": run_id, "stage": name, "status": "in_progress",
+            "ordinal": STAGE_ORDINALS.get(name),
+            "position": order.index(name) + 1 if name in order else None,
+            "total": len(order), "profile": profile, "next": None, "nextOrdinal": None,
+            "gate": None, "summary": None, "at": after.get("updated_at") or at,
         })
     return blocks
 

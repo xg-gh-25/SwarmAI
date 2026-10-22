@@ -286,6 +286,8 @@ def test_release_unintegrated_snapshots_verified_ledger(env):
     state = {"worktrees": [e]}
     res = rw.release(RUN, state, {"swarmai": env["main"]}, "cancelled")
     assert res[0]["ok"] and not wt.exists()
+    assert _g(env["main"], "branch", "--list", f"run/{RUN}") == f"run/{RUN}"
+    assert state["worktrees"][0]["branch"] == f"run/{RUN}"
     ledger = Path(res[0]["ledger"])
     meta = json.loads((ledger / "meta.json").read_text())
     restore = env["tmp"] / "restore"
@@ -323,6 +325,15 @@ def test_release_mid_rebase_keeps_conflict_work(env):
     assert "half resolved" in diff
 
 
+
+
+def test_ledger_snapshots_never_expire_without_authorized_discard(env):
+    ledger = rw.ledger_root() / RUN / "swarmai"
+    ledger.mkdir(parents=True)
+    marker = ledger / "meta.json"; marker.write_text("{}")
+    report = {"ledgers_purged": 0}
+    rw._purge_ledgers(10**12, report)
+    assert marker.is_file() and report["ledgers_purged"] == 0
 def test_sweep_quarantines_unregistered_and_releases_terminal(env):
     ws = env["tmp"] / "ws"
     rd = ws / "Projects" / "P" / ".artifacts" / "runs" / RUN

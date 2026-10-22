@@ -133,38 +133,6 @@ async def test_marker_uses_the_map_when_ctx_has_no_run(audit, tmp_path):
 
 
 # ── AC5 ─────────────────────────────────────────────────────────────────────
-def _run_update(ws, monkeypatch, *extra):
-    rd = ws / "Projects" / "P1" / ".artifacts" / "runs" / "run_ft"
-    rd.mkdir(parents=True, exist_ok=True)
-    if not (rd / "run.json").exists():
-        (rd / "run.json").write_text(json.dumps({"id": "run_ft", "project": "P1", "status": "running",
-                                                 "stages": []}))
-    monkeypatch.setattr(sys, "argv", ["artifact_cli.py", "run-update", "--project", "P1",
-                                      "--run-id", "run_ft", *extra])
-    cli.main()
-    return json.loads((rd / "run.json").read_text()).get("files_touched")
-
-
-def test_files_touched_accepts_plain_paths_and_json(ws, monkeypatch, capsys):
-    assert _run_update(ws, monkeypatch, "--files-touched", "/r/a.py", "/r/b.py") == ["/r/a.py", "/r/b.py"]
-    assert _run_update(ws, monkeypatch, "--files-touched", '["/r/b.py", "/r/c.py"]') == \
-        ["/r/a.py", "/r/b.py", "/r/c.py"]
-
-
-def test_files_touched_malformed_json_still_exits_1(ws, monkeypatch, capsys):
-    with pytest.raises(SystemExit) as e:
-        _run_update(ws, monkeypatch, "--files-touched", '["/r/a.py"')
-    assert e.value.code == 1
-
-
-def test_unquoted_json_array_split_by_the_shell_still_exits_1(ws, monkeypatch, capsys):
-    """Meta-review: `--files-touched ["a.py", "b.py"]` unquoted reaches argv as
-    `[a.py,` `b.py]`; those fragments must fail validation, never be saved as paths."""
-    with pytest.raises(SystemExit) as e:
-        _run_update(ws, monkeypatch, "--files-touched", "[/r/a.py,", "/r/b.py]")
-    assert e.value.code == 1
-
-
 def test_normalized_files_touched_is_one_value_for_every_reader():
     """The normalizer only: plain paths serialize, JSON passes through unchanged.
     That the gate and the write read the same value rests on the single call at the

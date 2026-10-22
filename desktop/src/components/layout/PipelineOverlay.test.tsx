@@ -16,11 +16,13 @@ import { render, screen, cleanup, act, fireEvent, waitFor, within } from '@testi
 const fetchAnalytics = vi.fn();
 const fetchRunDetail = vi.fn();
 const fetchActivePipelines = vi.fn();
+const resumeRun = vi.fn();
 vi.mock('../../services/pipelines', () => ({
   pipelinesService: {
     fetchAnalytics: (w: string) => fetchAnalytics(w),
     fetchRunDetail: (id: string) => fetchRunDetail(id),
     fetchActivePipelines: () => fetchActivePipelines(),
+    resumeRun: (id: string) => resumeRun(id),
   },
 }));
 
@@ -72,6 +74,7 @@ const DETAIL = {
   stageTokens: [{ stage: 'evaluate', est: 6000, actual: 4000 }],
   commits: [], checkpointReason: 'Gate 1 BLOCK: needs decision',
   createdAt: '2026-08-01T09:00:00+00:00', updatedAt: '2026-08-01T09:30:00+00:00',
+  auditCard: null,
 };
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
@@ -91,6 +94,7 @@ beforeEach(() => {
   fetchActivePipelines.mockResolvedValue([
     { id: 'run_r', status: 'running' }, { id: 'run_p', status: 'paused' },
   ]);
+  resumeRun.mockResolvedValue(undefined);
   apiPatch.mockResolvedValue({});
 });
 
@@ -183,18 +187,15 @@ describe('PipelineOverlay', () => {
     expect(drawer.textContent).not.toContain(start);
   });
 
-  it('Resume routes a run-resume command through onDispatch (Gate-1 #7)', async () => {
+  it('Resume calls the protocol-aware v1 resume endpoint', async () => {
     const { onDispatch } = renderAndOpen();
     await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
     const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
     fireEvent.click(within(grp.getByTestId('pipeline-run-run_paused1')).getByTitle('Aborted thing'));
     await waitFor(() => expect(screen.getByTestId('pipeline-resume-btn')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('pipeline-resume-btn'));
-    expect(onDispatch).toHaveBeenCalledTimes(1);
-    const prompt = onDispatch.mock.calls[0][0];
-    expect(prompt).toContain('run-resume');
-    expect(prompt).toContain('run_paused1');
-    expect(prompt).toContain('SwarmAI');
+    await waitFor(() => expect(resumeRun).toHaveBeenCalledWith('run_paused1'));
+    expect(onDispatch).not.toHaveBeenCalled();
   });
 
   it('Cancel calls PATCH /pipelines/{id}/cancel', async () => {
@@ -329,5 +330,20 @@ describe('PipelineOverlay', () => {
     const row = within(within(screen.getByTestId('pipeline-project-SwarmAI')).getByTestId('pipeline-run-run_done1'));
     expect(row.getByText('unverified')).toBeInTheDocument();
     expect(row.queryByText('completed')).toBeNull();
+  });
+});
+
+
+describe('run audit card', () => {
+  it('renders the backend-provided five-dimension card verbatim', async () => {
+    fetchRunDetail.mockResolvedValueOnce({
+      ...DETAIL,
+      auditCard: 'Run Audit · run_paused1\nQuality        PASS · 2/2 verification',
+    });
+    renderAndOpen();
+    await screen.findByText('Ship feature X');
+    fireEvent.click(screen.getByText('Ship feature X'));
+    const card = await screen.findByTestId('pipeline-detail-audit-card');
+    expect(card.textContent).toContain('Quality        PASS · 2/2 verification');
   });
 });

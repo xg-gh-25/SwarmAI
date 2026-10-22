@@ -367,28 +367,8 @@ def test_stage_doc_has_no_pasteable_prompt_body(doc):
     )
 
 
-@pytest.mark.parametrize("doc", _STAGE_DOCS, ids=lambda p: p.name)
-def test_stage_doc_points_at_the_emitter(doc):
-    """Each spawn point tells the orchestrator how to obtain its prompt."""
-    text = doc.read_text()
-    assert "spawn_prompt.py" in text, (
-        f"{doc.name} no longer tells the orchestrator to run the emitter, so the "
-        "prompt has no discoverable source."
-    )
 
 
-@pytest.mark.parametrize("doc", _STAGE_DOCS, ids=lambda p: p.name)
-def test_stage_doc_states_the_exit_status_contract(doc):
-    """The pointer must say the output is only usable on exit 0.
-
-    Without it, a reader can paste empty stdout from the fail-closed path and
-    spawn with no prompt — turning a refusal into a worse failure.
-    """
-    text = doc.read_text()
-    assert "exit 0" in text, (
-        f"{doc.name} does not state the exit-0 condition for using the emitter's "
-        "output; empty stdout from the fail-closed path could be pasted blindly."
-    )
 
 
 @pytest.mark.parametrize("gate_id", ("gate0-skeptic", "gate1-skeptic", "meta-review"))

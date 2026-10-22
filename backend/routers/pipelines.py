@@ -152,13 +152,27 @@ def _load_pipeline_runs() -> list[dict]:
     return runs
 
 
+def _stage_records(raw: dict) -> list[dict]:
+    """Normalize legacy stage-record lists and v1 ``{stage: status}`` maps."""
+    stages = raw.get("stages") or []
+    if isinstance(stages, dict):
+        return [
+            {"stage": name, "status": status}
+            for name, status in stages.items()
+            if isinstance(name, str) and isinstance(status, str)
+        ]
+    return [row for row in stages if isinstance(row, dict)]
+
+
 def _to_response(raw: dict) -> PipelineRunResponse:
     """Convert raw pipeline-run JSON dict to response model."""
     profile = raw.get("profile") or "full"
     stages = raw.get("stages", [])
-    completed = sum(1 for s in stages if s.get("status") == "completed")
+    stage_rows = [row.get("status") for row in _stage_records(raw)]
+    completed = sum(1 for status_value in stage_rows
+                    if status_value in ("completed", "degraded"))
     total = _get_profile_stage_count(profile)
-    consumed = sum(s.get("token_cost", 0) for s in stages)
+    consumed = sum(s.get("token_cost", 0) for s in _stage_records(raw))
 
     checkpoint_raw = raw.get("checkpoint")
     checkpoint = None
@@ -171,8 +185,11 @@ def _to_response(raw: dict) -> PipelineRunResponse:
             resumed_at=checkpoint_raw.get("resumed_at"),
         )
 
+    raw_status = raw.get("status", "running")
+    raw_status = {"active": "running", "reflecting": "running",
+                  "awaiting_human": "paused"}.get(raw_status, raw_status)
     try:
-        status = PipelineRunStatus(raw.get("status", "running"))
+        status = PipelineRunStatus(raw_status)
     except ValueError:
         status = PipelineRunStatus.RUNNING
 
@@ -226,97 +243,116 @@ def _to_response(raw: dict) -> PipelineRunResponse:
         abandon_reason=raw.get("abandon_reason"),
         created_at=raw.get("created_at", ""),
         updated_at=raw.get("updated_at", ""),
+        audit_card=raw.get("audit_card"),
     )
 
 
-def _apply_cancel_later(run_file: Path, tries: int = 120, every: float = 5.0) -> None:
-    """Apply a pending cancel (``.cancel_requested``) once the busy command releases the
-    run lock — unless a lock holder already applied it (the sidecar is then gone)."""
-    from core.run_lock import RunLockTimeout, update_run
-    side = run_file.parent / ".cancel_requested"
+def _load_v1_engine(run_id: str):
+    """Load a v1 engine from its protected contract and workspace identity."""
+    from config import get_app_data_dir
+    from core.run_protocol.engine import RunEngine, find_run_dir
+    from core.run_protocol.runner import is_v1_run
 
-    def _mut(state: dict) -> None:
-        if state.get("status") in ("running", "paused"):
-            state["status"] = "cancelled"
-            if state.get("worktree_mode") == "isolated":
-                state["release_requested"] = True
-    for _ in range(tries):
-        if not side.exists():
-            return
-        try:
-            update_run(run_file, _mut, timeout=every)
-            side.unlink(missing_ok=True)
-            return
-        except RunLockTimeout:
-            continue
-        except (OSError, ValueError) as e:
-            logger.warning("pending cancel of %s not applied: %s", run_file.parent.name, e)
-            return
-    logger.warning("pending cancel of %s still waiting after %d tries", run_file.parent.name, tries)
+    data_dir = get_app_data_dir()
+    if not is_v1_run(data_dir, run_id):
+        return None
+    workspace = _get_swarmws()
+    run_dir = find_run_dir(workspace, run_id)
+    project = run_dir.parents[2].name
+    engine = RunEngine.load(data_dir=data_dir, workspace=workspace,
+                            project=project, run_id=run_id)
+    if engine.run_dir.resolve() != run_dir.resolve():
+        raise ValueError("v1 run workspace identity mismatch")
+    return engine
+
+
+def _historical_run_exists(run_id: str) -> bool:
+    """True when ``run_id`` names a pre-v1 run.json with no v1 contract."""
+    projects_dir = _get_swarmws() / "Projects"
+    if not projects_dir.exists():
+        return False
+    return any((p / ".artifacts" / "runs" / run_id / "run.json").exists()
+               for p in projects_dir.iterdir() if p.is_dir())
+
+
+def _read_only_or_missing(run_id: str):
+    """410 for a historical run (one-shot cutover: never mutated), else 404."""
+    from fastapi.responses import JSONResponse
+    if _historical_run_exists(run_id):
+        return JSONResponse(status_code=410, content={
+            "status": "read_only", "run_id": run_id,
+            "detail": "historical run predates pipeline v1 and is read-only"})
+    return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
 
 
 @router.patch("/{run_id}/cancel")
 async def cancel_pipeline(run_id: str) -> dict:
-    """Cancel a pipeline run by updating its run.json status to 'cancelled'.
+    """Cancel a v1 run by appending a signed ``abandon`` event.
 
-    Returns 200 on success, 404 if run not found. Atomic write prevents corruption.
+    Historical (pre-v1) runs are read-only after the one-shot cutover: 410.
     """
     from fastapi.responses import JSONResponse
-    from core.run_lock import RunLockTimeout, update_run
 
     if not re.fullmatch(r"run_[A-Za-z0-9_]{1,64}", run_id or ""):
         return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
-    projects_dir = _get_swarmws() / "Projects"
-    if not projects_dir.exists():
-        return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
 
-    # The whole scan (iterdir across projects) + read_text + atomic tmp-write/replace
-    # is blocking FS I/O — run it in ONE worker thread (run_6ea3cb12), not per-call on
-    # the loop. Returns (outcome, project_name_or_error) for the loop to translate.
-    def _cancel() -> tuple[str, str | None]:
-        for project_dir in projects_dir.iterdir():
-            if not project_dir.is_dir():
-                continue
-            run_file = project_dir / ".artifacts" / "runs" / run_id / "run.json"
-            if run_file.exists():
-                try:
-                    # Locked read-modify-write (pipeline-run-worktree §4.1): a cancel can
-                    # no longer be undone by a run-update that read the file earlier.
-                    # An isolated run's worktree is released by its owner or the daemon
-                    # sweep, never here (§8.2).
-                    def _mut(state: dict) -> None:
-                        state["status"] = "cancelled"
-                        if state.get("worktree_mode") == "isolated":
-                            state["release_requested"] = True
-                    try:
-                        update_run(run_file, _mut, timeout=5.0)
-                    except RunLockTimeout:
-                        # A command holds the run lock: leave a lock-free request; that
-                        # command's landing checks it, and the next lock holder applies it.
-                        (run_file.parent / ".cancel_requested").write_text(
-                            datetime.now(timezone.utc).isoformat(), encoding="utf-8")
-                        return ("requested", project_dir.name)
-                    return ("cancelled", project_dir.name)
-                except (json.JSONDecodeError, OSError, ValueError) as e:
-                    return ("error", str(e))
-        return ("not_found", None)
+    def _cancel() -> str:
+        try:
+            engine = _load_v1_engine(run_id)
+            if engine is None:
+                return "missing"
+            if engine.projection().get("status") not in ("completed", "abandoned", "failed"):
+                engine.abandon(reason="cancelled_by_user")
+            return "cancelled"
+        except Exception:  # v1 must fail closed; never rewrite its projection directly
+            logger.exception("Protocol-aware cancellation failed for %s", run_id)
+            return "error"
 
-    outcome, info = await asyncio.to_thread(_cancel)
-    if outcome == "requested":
-        logger.info("Cancel of pipeline %s requested (run busy) in project %s", run_id, info)
-        asyncio.create_task(asyncio.to_thread(
-            _apply_cancel_later, projects_dir / info / ".artifacts" / "runs" / run_id / "run.json"))
-        return {"status": "cancelled", "run_id": run_id, "pending": True}
+    outcome = await asyncio.to_thread(_cancel)
     if outcome == "cancelled":
-        logger.info("Cancelled pipeline %s in project %s", run_id, info)
+        logger.info("Cancelled pipeline %s", run_id)
         return {"status": "cancelled", "run_id": run_id}
     if outcome == "error":
-        logger.error("Failed to cancel %s: %s", run_id, info)
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "run_id": run_id, "detail": info},
-        )
-    return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
+        return JSONResponse(status_code=500, content={
+            "status": "error", "run_id": run_id, "detail": "v1 cancellation failed"})
+    return await asyncio.to_thread(_read_only_or_missing, run_id)
+
+
+@router.patch("/{run_id}/resume")
+async def resume_pipeline(run_id: str) -> dict:
+    """Resume a paused v1 run by appending a signed ``resume`` event.
+
+    Historical (pre-v1) runs are read-only after the one-shot cutover: 410.
+    """
+    from fastapi.responses import JSONResponse
+
+    if not re.fullmatch(r"run_[A-Za-z0-9_]{1,64}", run_id or ""):
+        return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
+
+    def _resume() -> tuple[str, str | None]:
+        try:
+            engine = _load_v1_engine(run_id)
+            if engine is None:
+                return ("missing", None)
+            state = engine.projection()
+            if state.get("status") != "paused":
+                return ("conflict", f"run is {state.get('status')}")
+            resumed = engine.resume()
+            if not resumed.get("ok"):
+                return ("conflict", "worktree is still unavailable")
+            return ("resumed", resumed["state"].get("stage"))
+        except Exception:
+            logger.exception("Protocol-aware resume failed for %s", run_id)
+            return ("error", "v1 resume failed")
+
+    outcome, detail = await asyncio.to_thread(_resume)
+    if outcome == "resumed":
+        return {"status": "running", "run_id": run_id, "resumed_from": detail}
+    if outcome == "missing":
+        return await asyncio.to_thread(_read_only_or_missing, run_id)
+    code = 409 if outcome == "conflict" else 500
+    return JSONResponse(status_code=code, content={"status": outcome, "run_id": run_id,
+                                                   "detail": detail})
 
 
 @router.get("", response_model=PipelineDashboard)
@@ -434,6 +470,13 @@ def _run_metrics_cached(project: str, run_id: str, raw: dict) -> dict:
         return {}
 
 
+def _display_status(raw: dict) -> str:
+    """Map Pipeline v1 lifecycle names onto the existing dashboard vocabulary."""
+    status = _effective_analytics_status(raw)
+    return {"active": "running", "reflecting": "running",
+            "awaiting_human": "paused"}.get(status, status)
+
+
 def _iso_week_start(iso_ts: str) -> Optional[str]:
     """Monday (YYYY-MM-DD) of the ISO week containing iso_ts. None if unparseable."""
     try:
@@ -535,7 +578,7 @@ async def pipeline_analytics(
         # status field, so the analytics endpoint and the live dashboard agree (no
         # split-brain where analytics says completed but the row still reads abandoned
         # — Gate-1 #2).
-        eff_status = _effective_analytics_status(raw)
+        eff_status = _display_status(raw)
         # pause_kind: consume the backend's canonical classification, never re-derive.
         ckpt = raw.get("checkpoint") or {}
         reason = ckpt.get("reason") if isinstance(ckpt, dict) else None
@@ -562,6 +605,7 @@ async def pipeline_analytics(
             pause_kind=pause_kind,
             checkpoint_reason=reason,
             verified=(_completion_verdict(raw)[0] if eff_status == "completed" else None),
+            audit_card=raw.get("audit_card"),
         )
         by_project.setdefault(project, []).append(summary)
 
@@ -729,14 +773,30 @@ async def pipeline_run_detail(run_id: str):
         project = raw.get("_project", raw.get("project", project_dir_name))
         m = _run_metrics_cached(project, run_id, raw)
 
-        # reflect lessons live in the reflect stage record.
+        # Legacy runs embedded lessons in the reflect stage record. Pipeline v1
+        # stores the reflection artifact separately and projects stages as a dict.
         reflect_lessons: list[str] = []
-        for s in raw.get("stages", []):
+        for s in _stage_records(raw):
             if s.get("stage") == "reflect":
                 lessons = s.get("lessons") or []
                 if isinstance(lessons, list):
                     reflect_lessons = [str(x) for x in lessons]
                 break
+        if not reflect_lessons and isinstance(raw.get("stages"), dict):
+            reflect_file = (_get_swarmws() / "Projects" / project_dir_name /
+                            ".artifacts" / "runs" / run_id / "artifacts" / "reflect.json")
+            try:
+                reflect_artifact = json.loads(
+                    await asyncio.to_thread(reflect_file.read_text, encoding="utf-8"))
+                lessons = reflect_artifact.get("lessons") if isinstance(reflect_artifact, dict) else None
+                if isinstance(lessons, list):
+                    reflect_lessons = [
+                        str(item.get("lesson") or item.get("text") or item)
+                        if isinstance(item, dict) else str(item)
+                        for item in lessons
+                    ]
+            except (OSError, json.JSONDecodeError):
+                pass
 
         # per-stage est (budget.stage_estimates) vs actual (METRICS.stage_tokens)
         budget = raw.get("budget") or {}
@@ -765,7 +825,7 @@ async def pipeline_run_detail(run_id: str):
             # a delivered-but-mislabeled run as 'completed' (via _effective_analytics_
             # status). The detail drawer MUST agree, or clicking a "completed" row opens
             # a drawer reading "abandoned" — a split-brain. Same SSOT helper as the list.
-            status=_effective_analytics_status(raw),
+            status=_display_status(raw),
             profile=raw.get("profile") or "",
             cycle_time_min=m.get("duration_minutes"),
             report_md=report_md,
@@ -773,7 +833,9 @@ async def pipeline_run_detail(run_id: str):
             reflect_lessons=reflect_lessons,
             stage_tokens=stage_tokens,
             commits=commits,
-            checkpoint_reason=ckpt.get("reason") if isinstance(ckpt, dict) else None,
+            checkpoint_reason=(ckpt.get("reason") if isinstance(ckpt, dict) else None)
+            or (raw.get("reason") if isinstance(raw.get("stages"), dict) else None),
             created_at=raw.get("created_at", ""),
             updated_at=raw.get("updated_at", ""),
+            audit_card=raw.get("audit_card"),
         )

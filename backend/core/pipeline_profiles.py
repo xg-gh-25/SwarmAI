@@ -23,15 +23,11 @@ Public symbols:
 
 PIPELINE_PROFILES: dict[str, list[str]] = {
     "full": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
-    "trivial": ["evaluate", "think", "build", "review", "test", "deliver", "reflect"],
-    "research": ["evaluate", "think", "reflect"],
     "bugfix": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
-    "goal": ["evaluate", "think", "plan", "goal_cycle", "deliver", "reflect"],
-    # direct (G1, pipeline-speed-systematic-fix §4-G): the lightweight profile for a
-    # direct fix. PLAN carries the exit contract (exit_criteria[]), BUILD implements,
-    # DELIVER runs the same adversarial/completion gates. STRICT (not in
-    # _RELAXED_PROFILES) and DELIVER is non-skippable in the run-update completion gate.
-    "direct": ["plan", "build", "deliver"],
+    "goal": ["evaluate", "think", "plan", "goal_cycle", "review", "test", "deliver", "reflect"],
+    "trivial": ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"],
+    "direct": ["plan", "build", "review", "test", "deliver", "reflect"],
+    "research": ["evaluate", "think", "deliver", "reflect"],
 }
 
 
@@ -114,11 +110,11 @@ def is_relaxed_profile(profile: str | None) -> bool:
 # test_pipeline_run_checklist pins all three rules against the stage lists,
 # is_relaxed_profile and artifact_cli.GATE1_PROFILES.
 PROFILE_GATES: dict[str, tuple[str, ...]] = {
-    "full": ("gate0", "gate1", "gate2"),
-    "bugfix": ("gate0", "gate1", "gate2"),
-    "goal": ("gate0", "gate1", "gate2"),
-    "direct": ("gate2",),  # gate1.md's trigger table does not run Gate 1 for direct
-    "trivial": ("gate2",),
+    "full": ("gate0", "review"),
+    "bugfix": ("gate0", "review"),
+    "goal": ("gate0", "review"),
+    "direct": ("review",),
+    "trivial": ("review",),
     "research": (),
 }
 

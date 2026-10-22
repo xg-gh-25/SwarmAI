@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""Pipeline v1 command line entrypoint.
+
+Commands expose the event-driven RunEngine without caller-supplied verdict fields.
+Every response is one JSON object; no command pushes or deploys.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+_BACKEND = Path(__file__).resolve().parents[1]
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
+
+from config import get_app_data_dir  # noqa: E402
+from core.run_protocol.engine import EngineError, RunEngine  # noqa: E402
+
+
+def _workspace() -> Path:
+    return Path(os.environ.get("SWARM_WORKSPACE") or get_app_data_dir() / "SwarmWS")
+
+
+def _repos(values: list[str]) -> dict[str, str]:
+    out = {}
+    for value in values:
+        name, sep, path = value.partition("=")
+        if not sep or not name or not path:
+            raise ValueError("--repo must be name=/absolute/path")
+        resolved = Path(path).resolve()
+        if not resolved.is_absolute() or not (resolved / ".git").exists():
+            raise ValueError(f"--repo is not a git worktree: {path}")
+        out[name] = str(resolved)
+    return out
+
+
+def _json_arg(value: str | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    path = Path(value)
+    try:
+        raw = path.read_text(encoding="utf-8") if path.is_file() else value
+        result = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"artifact is not JSON: {exc}") from exc
+    if not isinstance(result, dict):
+        raise ValueError("artifact must be a JSON object")
+    return result
+
+
+def _load(args) -> RunEngine:
+    return RunEngine.load(data_dir=get_app_data_dir(), workspace=_workspace(),
+                          project=args.project, run_id=args.run_id)
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(prog="pipeline_v1.py")
+    sub = root.add_subparsers(dest="command", required=True)
+    create = sub.add_parser("create")
+    create.add_argument("--project", required=True)
+    create.add_argument("--profile", default="direct")
+    create.add_argument("--session-id", default=os.environ.get("SWARM_APP_SESSION_ID"))
+    create.add_argument("--mode", choices=("isolated", "shared"), default="isolated")
+    create.add_argument("--repo", action="append", default=[])
+    create.add_argument("--run-id")
+    create.add_argument("--risk-test-file-cap", type=int, default=200)
+    create.add_argument("--transcript-id", action="append", default=[])
+    for command in ("status", "stage-start", "review-start", "push-status", "land",
+                    "measure-usage", "reflect-complete", "reflect-exhausted",
+                    "resume", "restore"):
+        item = sub.add_parser(command)
+        item.add_argument("--project", required=True)
+        item.add_argument("--run-id", required=True)
+        if command == "land":
+            item.add_argument("--message", required=True)
+    gate0 = sub.add_parser("gate0-start")
+    gate0.add_argument("--project", required=True)
+    gate0.add_argument("--run-id", required=True)
+    gate0.add_argument("--artifact")
+    review_address = sub.add_parser("review-address")
+    review_address.add_argument("--project", required=True)
+    review_address.add_argument("--run-id", required=True)
+    review_address.add_argument("--artifact", required=True)
+    review_proof = sub.add_parser("review-proof")
+    review_proof.add_argument("--project", required=True)
+    review_proof.add_argument("--run-id", required=True)
+    review_proof.add_argument("--artifact", required=True)
+    abandon = sub.add_parser("abandon")
+    abandon.add_argument("--project", required=True)
+    abandon.add_argument("--run-id", required=True)
+    abandon.add_argument("--reason", required=True)
+    decision_request = sub.add_parser("decision-request")
+    decision_request.add_argument("--project", required=True)
+    decision_request.add_argument("--run-id", required=True)
+    decision_request.add_argument("--artifact", required=True)
+    decision_request.add_argument("--document", choices=("REQUIREMENTS", "DESIGN_SPEC"), required=True)
+    decision_answer = sub.add_parser("decision-answer")
+    decision_answer.add_argument("--project", required=True)
+    decision_answer.add_argument("--run-id", required=True)
+    decision_answer.add_argument("--request-id", required=True)
+    decision_answer.add_argument("--option-id", required=True)
+    run_land = sub.add_parser("run-land")
+    run_land.add_argument("--project", required=True)
+    run_land.add_argument("--run-id", required=True)
+    mode = run_land.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--prepare", action="store_true")
+    mode.add_argument("--request")
+    run_land.add_argument("--skip-tests", action="store_true")
+    run_land.add_argument("--note")
+    run_land.add_argument("--request-id")
+    run_land.add_argument("--message")
+    complete = sub.add_parser("stage-complete")
+    complete.add_argument("--project", required=True)
+
+    accept = sub.add_parser("accept-finding")
+    accept.add_argument("--project", required=True)
+    accept.add_argument("--run-id", required=True)
+    accept_mode = accept.add_mutually_exclusive_group(required=True)
+    accept_mode.add_argument("--prepare", action="store_true")
+    accept_mode.add_argument("--request")
+    accept.add_argument("--canonical-id")
+    accept.add_argument("--note")
+
+    discard = sub.add_parser("discard-snapshot")
+    discard.add_argument("--project", required=True)
+    discard.add_argument("--run-id", required=True)
+    discard_mode = discard.add_mutually_exclusive_group(required=True)
+    discard_mode.add_argument("--prepare", action="store_true")
+    discard_mode.add_argument("--request")
+    discard.add_argument("--repo")
+    discard.add_argument("--note")
+    complete.add_argument("--run-id", required=True)
+    complete.add_argument("--artifact")
+
+    reflect_prepare = sub.add_parser("reflect-prepare")
+    reflect_prepare.add_argument("--project", required=True)
+    reflect_prepare.add_argument("--run-id", required=True)
+    reflect_prepare.add_argument("--artifact", required=True)
+    return root
+
+
+def execute(args) -> dict[str, Any]:
+    if args.command == "create":
+        if not args.session_id:
+            raise ValueError("create requires --session-id or SWARM_APP_SESSION_ID")
+        engine = RunEngine.create(
+            data_dir=get_app_data_dir(), workspace=_workspace(), project=args.project,
+            profile=args.profile, session_id=args.session_id, repos=_repos(args.repo),
+            mode=args.mode, risk_test_file_cap=args.risk_test_file_cap,
+            run_id=args.run_id, transcript_ids=args.transcript_id)
+        return {"ok": True, "pipeline_id": engine.run_id,
+                "state": engine.projection(), "run_file": str(engine.run_dir / "run.json")}
+    engine = _load(args)
+    if args.command == "status":
+        return {"ok": True, "state": engine.projection(),
+                "push": engine.push_status(), "run_file": str(engine.run_dir / "run.json")}
+    if args.command == "stage-start":
+        return {"ok": True, **engine.stage_start()}
+    if args.command == "gate0-start":
+        return {"ok": True, **engine.gate0_start(
+            _json_arg(args.artifact) if args.artifact else None)}
+    if args.command == "stage-complete":
+        return engine.stage_complete(_json_arg(args.artifact))
+    if args.command == "review-start":
+        return {"ok": True, **engine.review_start()}
+    if args.command == "review-address":
+        return {"ok": True, **engine.review_address(_json_arg(args.artifact))}
+    if args.command == "review-proof":
+        return {"ok": True, **engine.review_proof(_json_arg(args.artifact))}
+    if args.command == "push-status":
+        return {"ok": True, **engine.push_status()}
+    if args.command == "measure-usage":
+        return {"ok": True, "usage": engine.measure_usage()}
+    if args.command == "land":
+        return {"ok": True, **engine.normal_land(message=args.message)}
+    if args.command == "resume":
+        return engine.resume()
+    if args.command == "restore":
+        return {"ok": True, **engine.restore()}
+    if args.command == "abandon":
+        return {"ok": True, **engine.abandon(reason=args.reason)}
+    if args.command == "decision-request":
+        return {"ok": True, **engine.request_decision(
+            _json_arg(args.artifact), document=args.document)}
+    if args.command == "decision-answer":
+        return {"ok": True, **engine.answer_decision(
+            request_id=args.request_id, option_id=args.option_id)}
+    if args.command == "run-land":
+        if args.prepare:
+            if args.message:
+                raise ValueError("--message is only valid with --request")
+            action = "land_skip_tests" if args.skip_tests else "land"
+            return {"ok": True, **engine.prepare_land_request(
+                action=action, note=args.note, request_id=args.request_id)}
+        if args.skip_tests or args.note or args.request_id:
+            raise ValueError("--request cannot be combined with prepare-only options")
+        if not args.message:
+            raise ValueError("--request requires --message")
+        return {"ok": True, **engine.execute_land_request(
+            args.request, message=args.message)}
+    if args.command == "reflect-prepare":
+        artifact = _json_arg(args.artifact)
+        return {"ok": True, "reflect": engine.prepare_reflect(
+            artifact.get("lessons", []), artifact.get("candidates", {}))}
+    if args.command == "reflect-complete":
+        return {"ok": True, "state": engine.reflect_complete()}
+    if args.command in {"accept-finding", "discard-snapshot"}:
+        action = args.command.replace("-", "_")
+        target = args.canonical_id if args.command == "accept-finding" else args.repo
+        if args.prepare:
+            if not target:
+                raise ValueError(f"{args.command} --prepare requires its target")
+            return {"ok": True, **engine.prepare_authorized_action(
+                action=action, target=target, note=args.note)}
+        if target or args.note:
+            raise ValueError("--request cannot be combined with prepare-only options")
+        return {"ok": True, **engine.execute_authorized_action(args.request)}
+    if args.command == "reflect-exhausted":
+        return {"ok": True, "state": engine.reflect_complete(degraded=True)}
+    raise ValueError(f"unknown command {args.command}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        result = execute(parser().parse_args(argv))
+        print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+        return 0 if result.get("ok") is not False else 1
+    except (ValueError, EngineError) as exc:
+        payload = {"ok": False, "error": str(exc)}
+        code = getattr(exc, "code", None)
+        if isinstance(code, str) and code:
+            payload["code"] = code
+        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -36,6 +36,7 @@ function pipe(over: Partial<PipelineRun> = {}): PipelineRun {
     pauseKind: null,
     progress: '8/8',
     updatedAt: '2026-07-02T10:00:00Z',
+    auditCard: null,
     ...over,
   };
 }

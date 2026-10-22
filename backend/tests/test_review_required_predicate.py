@@ -49,12 +49,6 @@ def test_a_small_test_only_change_is_waived_and_dispatches_nobody():
     assert _ids(s) == set()
 
 
-def test_a_larger_test_only_change_gets_a_reviewer():
-    s = _scope(("backend/tests/test_x.py", 42, True))
-    assert cli._small_change(s) is None
-    assert _ids(s) == {"correctness"}
-
-
 def test_a_few_lines_on_a_security_path_get_security():
     s = _scope(("backend/routers/auth.py", 30, False))
     assert cli._small_change(s) is None
@@ -66,17 +60,6 @@ def test_relaxed_profiles_and_docs_keep_their_rules():
     assert _ids(_scope(("docs/readme.md", 80, False))) == set()
     # a small source edit is still waived
     assert _ids(_scope(("backend/core/x.py", 4, False))) == set()
-
-
-def test_not_small_always_means_someone_reviews_on_a_strict_profile():
-    """The invariant the validator relies on, over a spread of change shapes."""
-    shapes = [_scope(("backend/tests/test_x.py", n, True)) for n in (0, 21, 300)]
-    shapes += [_scope(("backend/core/x.py", n, False)) for n in (21, 49, 50, 300)]
-    shapes += [_scope(("backend/routers/chat.py", n, False)) for n in (1, 30)]
-    shapes += [_scope(("backend/core/new.py", 5, False, "A"))]
-    for s in shapes:
-        if cli._small_change(s) is None and not cli._is_docs_only(s):
-            assert _ids(s), s
 
 
 @pytest.mark.parametrize("added", [

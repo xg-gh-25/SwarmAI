@@ -32,7 +32,10 @@ from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
 
-LIVE_STATUSES = ("running", "paused")
+# legacy running/paused plus every non-terminal Pipeline v1 status
+# (core.run_protocol.lifecycle.STATUSES - TERMINAL): sweeper and gates must never
+# treat a live v1 run as finished
+LIVE_STATUSES = ("running", "paused", "active", "awaiting_human", "reflecting")
 
 # run.json path -> ((mtime_ns, size), mtime seconds, parsed dict)
 _CACHE: "dict[str, tuple[tuple[int, int], float, dict]]" = {}

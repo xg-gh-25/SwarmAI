@@ -388,6 +388,10 @@ async def build_hooks(
         "PreToolUse", audit_marker_gate, "audit_marker_write_gate",
         matcher="Write|Edit|MultiEdit|NotebookEdit",
     )
+    registry.register(
+        "PreToolUse", audit_marker_gate, "audit_marker_write_gate",
+        matcher="Read|Grep",
+    )
 
     # ── PreToolUse: session-link gate (Bash-scoped) ──
     # ALWAYS (not only during a run): DENY a command that removes or overrides
@@ -475,21 +479,10 @@ async def build_hooks(
             "run_owner_gate", matcher="Bash",
         )
 
-    # ── PreToolUse: review-round gate (Agent|Task) — 再一再二不再三 ──
-    # Only for a spawn whose prompt starts with EXPERT-ID, in THIS session's active run:
-    # an expert with 3 completed rounds in the open stage (review + 2 re-checks) is
-    # denied a 4th, and told to record the open items and continue. Replaces the
-    # after-the-fact allowance that any over_budget_reasons entry waived (run_d8762bc8:
-    # 7 Gate-2 rounds). goal_cycle exempt. Fail-open; operator bypass
-    # SWARM_GATE_FORCE=review_round_gate. Only for a real app session.
+    # An EXPERT-ID spawn must use the dedicated read-only pipeline-expert type.
+    # R1/R2 round limits are enforced by Pipeline v1 handout events, not a legacy
+    # marker-counting PreToolUse gate.
     if session_context is not None:
-        from core.review_round_gate import create_review_round_gate
-        registry.register(
-            "PreToolUse", create_review_round_gate(session_context),
-            "review_round_gate", matcher="Agent|Task",
-        )
-        # An EXPERT-ID spawn must use the dedicated `pipeline-expert` agent type
-        # (read-only tools, effort medium, tool-call cap): core/pipeline_expert_agent.py.
         from core.pipeline_expert_agent import create_expert_type_gate
         registry.register(
             "PreToolUse", create_expert_type_gate(),

@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "entries": [
+    {
+      "id": "backend-import-smoke",
+      "paths": ["backend/**/*.py"],
+      "cwd": ".",
+      "argv": ["python", "scripts/smoke_import.py"],
+      "call_type": "build"
+    },
+    {
+      "id": "backend-problem-values",
+      "paths": ["backend/**/*.py"],
+      "cwd": ".",
+      "argv": ["python", "scripts/lint_problem_values.py"],
+      "call_type": "lint"
+    },
+    {
+      "id": "backend-security-scan",
+      "paths": ["backend/**/*.py"],
+      "cwd": ".",
+      "argv": ["python", "scripts/security_scan.py"],
+      "call_type": "security_scan"
+    },
+    {
+      "id": "skills-lint",
+      "paths": ["backend/skills/**"],
+      "cwd": ".",
+      "argv": ["python", "scripts/lint_skills.py"],
+      "call_type": "lint"
+    },
+    {
+      "id": "experts-lint",
+      "paths": ["backend/experts/**", "backend/skills/**/experts/**"],
+      "cwd": ".",
+      "argv": ["python", "scripts/lint_experts.py"],
+      "call_type": "lint"
+    },
+    {
+      "id": "desktop-typecheck",
+      "paths": ["desktop/src/**"],
+      "cwd": "desktop",
+      "argv": ["npx", "tsc", "--noEmit"],
+      "call_type": "typecheck"
+    },
+    {
+      "id": "desktop-contract-lint",
+      "paths": ["desktop/src/**"],
+      "cwd": "desktop",
+      "argv": ["npm", "run", "lint:contract"],
+      "call_type": "lint"
+    },
+    {
+      "id": "desktop-build",
+      "paths": ["desktop/src/**"],
+      "cwd": "desktop",
+      "argv": ["npm", "run", "build"],
+      "call_type": "build"
+    },
+    {
+      "id": "tauri-check",
+      "paths": ["desktop/src-tauri/**"],
+      "cwd": "desktop/src-tauri",
+      "argv": ["cargo", "check", "--quiet", "--all-targets"],
+      "call_type": "typecheck"
+    },
+    {
+      "id": "version-check",
+      "paths": ["VERSION", "backend/pyproject.toml", "desktop/package.json", "desktop/src-tauri/tauri.conf.json", "desktop/src-tauri/Cargo.toml"],
+      "cwd": ".",
+      "argv": ["bash", "scripts/sync-version.sh", "check"],
+      "call_type": "lint"
+    }
+  ]
+}

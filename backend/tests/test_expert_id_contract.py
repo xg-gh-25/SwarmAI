@@ -30,7 +30,6 @@ _GATE2 = (
     _REPO_ROOT
     / "skills/s_autonomous-pipeline/data/gate-prompts/gate2-adversarial.md"
 )
-_DELIVER = _REPO_ROOT / "skills/s_autonomous-pipeline/stages/deliver.md"
 
 
 # ---- 1. Contract: inject → extract ----------------------------------------
@@ -134,20 +133,6 @@ def test_gate2_template_carries_expert_id_placeholder():
     )
 
 
-def test_deliver_instructs_lowercase_registry_id():
-    """deliver.md must instruct the orchestrator to fill <EXPERT_ID> with the
-    lowercase registry id (not the Title-case <DOMAIN> name). Closes the
-    free-form drift gap (Gate-1 Check 6, fix a)."""
-    # The spawn text is built by the tool now (artifact_cli._spawn_text, printed as each
-    # entry's `spawn`), from the lowercase registry id stage-start dispatched; the card
-    # only says to use it unchanged (2026-10-19: a hand-written spawn could be steered).
-    assert _DELIVER.exists()
-    text = _DELIVER.read_text(encoding="utf-8")
-    assert "`spawn` text, exactly" in text and "meta_review_spawn" in text
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-    import artifact_cli as cli
-    assert cli._spawn_text("correctness", "/p.md").splitlines()[0] == "EXPERT-ID: correctness"
 
 
 # ---- 5. E2E: real transcript fixture → marker expert_id --------------------

@@ -6,7 +6,7 @@ interpreter script (``python x.py``, ``node``) can still write into the main che
 an isolated run's repo. Such an edit has no owner: landing treats it as another
 session's. After each Bash call this hook lists each of the run's main checkouts
 (``run_worktree.main_dirty``) and tells the agent which files changed since the last
-call, with the ``run-claim-main`` command — marked as not proven to be this session's
+call, with the Pipeline v1 remedy (re-apply in the worktree; no claim command) — marked as not proven to be this session's
 (another session may write main at the same time). It never moves anything.
 
 State: ``<worktree ledger>/<run id>/main-dirty-seen.json`` = {main: {path: [status,
@@ -21,7 +21,7 @@ report. A daemon restart or a new session process loses nothing: the next Bash c
 compared with the last state seen. Scans of all sessions queue on the reporter's own
 single worker thread, at most one in flight per session; a slow scan delays the others,
 whose 3s wait then times out without a report (the change stays unseen and is reported
-by a later call). The suggested claim names no file: the agent lists only those this
+by a later call). The remedy names no file: the agent acts only on those this
 session wrote. A main with no entry
 yet (a run created before this file existed) is baselined without a report. A run with
 no active worktree (not isolated, landed, released) is not scanned; a session with no
@@ -103,12 +103,6 @@ def record_baseline(run_dir: "str | Path", main: "str | Path", rows: "list[dict]
         logger.warning("main_dirty_scan: baseline not recorded for %s", m, exc_info=True)
 
 
-def _claim_command(run: dict, files: "list[str]") -> str:
-    from core import run_worktree as rw
-    from core.worktree_write_gate import cli_command
-    return cli_command(run.get("cli"), rw.claim_args(str(run.get("project") or ""),
-                                                     run["id"], files))
-
 
 _POOL: "list" = []
 
@@ -175,10 +169,9 @@ def create_main_dirty_reporter(session_context: "dict[str, Any]"):
         return ("Uncommitted files changed in the main checkout of this run's repo since the "
                 f"last command (not proven to be this session's): {', '.join(shown)}{more}. "
                 "This run's code belongs in its worktree, and landing refuses a main edit that "
-                "overlaps the run. If THIS session wrote some of them (e.g. through a script), "
-                "claim only those into the run (the user approves): "
-                + _claim_command(run, []) + ". The others may be another session's "
-                "work: then leave them alone."), run_dir, save
+                "overlaps the run. " + __import__(
+                    "core.worktree_write_gate", fromlist=["V1_MAIN_EDIT_REMEDY"]
+                ).V1_MAIN_EDIT_REMEDY), run_dir, save
 
     async def _hook(input_data: "dict[str, Any]", tool_use_id: "str | None",
                     context: Any) -> "dict[str, Any]":

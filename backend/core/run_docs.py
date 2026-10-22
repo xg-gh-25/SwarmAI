@@ -137,7 +137,9 @@ def required_docs(profile: Optional[str]) -> list[str]:
     """The documents a run of ``profile`` must hand back: each whose source stage is in
     the profile's stage list, plus REPORT.md always."""
     stages = set(_profile_stages(profile))
-    return [name for name, stage, _ in DOCS if stage is None or stage in stages]
+    # v13: REVIEW.md is owed only by a profile that runs REVIEW (research does not)
+    return [name for name, stage, _ in DOCS if stage is None or stage in stages
+            and (name != "REVIEW.md" or "review" in stages)]
 
 
 def doc_status(run_dir: Any, profile: Optional[str], run_state: Optional[dict] = None) -> list[dict]:

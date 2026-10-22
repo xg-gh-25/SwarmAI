@@ -24,9 +24,22 @@ import pytest
 
 from core import hook_token
 from core import run_worktree as rw
-from tests.test_pipeline_worktree import (  # noqa: F401 — flow / _hook_token_oracle are fixtures
-    _create, _evidence, _g, _hook_token_oracle, _land, _start, _state, cli, flow)
 from tests.test_run_worktree import env  # noqa: F401 — fixture
+
+
+def _g(cwd, *args):
+    proc = __import__("subprocess").run(
+        ["git", "-C", str(cwd), *args], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+
+
+@pytest.fixture(autouse=True)
+def _hook_token_oracle():
+    hook_token.stop_oracle()
+    assert hook_token.start_oracle(50000 + os.getpid() % 10000) or not hook_token.oracle_supported()
+    yield
+    hook_token.stop_oracle()
 
 RUN = "run_claim01"
 
@@ -470,231 +483,18 @@ def test_owner_gate_issues_claim_token():
     from core import run_owner_gate as og
     assert "run-claim-main" in og.TOKEN_SUBCOMMANDS
     assert og._needs_token({"tool": "artifact_cli", "sub": "run-claim-main"}) == "run-claim-main"
-    import pipeline_worktree as pw
+    from scripts import pipeline_worktree as pw
     assert "run-claim-main" in pw.LOCKED_COMMANDS
 
 
 # ── CLI + creation report + landing (AC1, AC2, AC5, AC6, I6) ──────────────────
-def _claim(flow, rid, *files, token=True, resolve=None):
-    extra = ["--resolve", resolve] if resolve else []
-    return cli("run-claim-main", "--project", "P", "--run-id", rid, "--files", *files, *extra,
-               token_for="run-claim-main" if token else None, run=rid, flow=flow)
-
-
-def test_create_reports_main_uncommitted(flow):
-    (flow["main"] / "a.py").write_text("a = 'left over'\n")
-    (flow["main"] / "n.py").write_text("n = 1\n")
-    rid, f = _create(flow)
-    rc, out = _start(flow, rid, "plan")
-    assert rc == 0, out
-    got = {d["path"]: d["status"] for d in out["main_uncommitted"]["swarmai"]}
-    assert got == {"a.py": "modified", "n.py": "untracked"}
-    assert "run-claim-main" in out["claim_hint"] and "only" in out["claim_hint"]
-
-
-def test_claim_touches_only_listed_files_and_needs_token(flow):
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    (flow["main"] / "a.py").write_text("a = 'mine'\n")
-    (flow["main"] / "z.py").write_text("z = 'someone else'\n")
-    rc, out = _claim(flow, rid, "a.py", token=False)
-    assert rc != 0 and out["code"] == "hookless_session"
-    assert (flow["main"] / "a.py").read_text() == "a = 'mine'\n"
-    rc, out = _claim(flow, rid, "a.py")
-    assert rc == 0, out
-    assert (flow["main"] / "a.py").read_text() == "a = 1\n"
-    assert (flow["main"] / "z.py").read_text() == "z = 'someone else'\n"
-    wt = rw.wt_path(rid, "swarmai")
-    assert (wt / "a.py").read_text() == "a = 'mine'\n" and not (wt / "z.py").exists()
-    rec = _state(f)["worktrees"][0]["claimed"]
-    assert rec[0]["files"] == ["a.py"] and rec[0]["backup"]
-
-
-def test_claim_refused_for_a_run_without_worktree(flow):
-    rid, f = _create(flow)
-    (flow["main"] / "a.py").write_text("a = 'mine'\n")
-    rc, out = _claim(flow, rid, "a.py")
-    assert rc != 0 and out["code"] == "not_isolated"
-
-
-def test_blocked_landing_names_claim_then_lands(flow, capsys):
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    wt = rw.wt_path(rid, "swarmai")
-    (wt / "a.py").write_text("a = 2\n")
-    (flow["main"] / "a.py").write_text("a = 'left over'\n")
-    assert _start(flow, rid, "deliver")[0] == 0
-    _evidence(f, rid, wt)   # landing is decided by runner evidence on the landed tree
-    with pytest.raises(SystemExit):
-        _land(flow, rid, f)
-    err = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert err["code"] == "blocked_by_uncommitted"
-    assert "run-claim-main" in err["next"] and "a.py" in err["next"]
-    assert "keep-worktree" in err["next"]
-    rc, out = _claim(flow, rid, "a.py", resolve="keep-worktree")
-    assert rc == 0, out
-    res = _land(flow, rid, f)
-    assert res["landed"]["swarmai"]["sha"]
-    assert (flow["main"] / "a.py").read_text() == "a = 2\n"
-
-
-def test_blocked_landing_take_main_needs_a_new_review_then_lands(flow, capsys):
-    """AC5 (review round 2): after a blocked landing, a claim that CHANGES the worktree
-    (take-main) brings in code the tests never ran on: the claim says so, the same
-    landing is refused (the runner evidence is for the old tree), and once the tests ran
-    on the new tree, after deliver stage-start, the landing goes through. keep-worktree
-    changes nothing and lands as is."""
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    wt = rw.wt_path(rid, "swarmai")
-    (wt / "a.py").write_text("a = 'run'\n")
-    (flow["main"] / "a.py").write_text("a = 'main'\n")
-    assert _start(flow, rid, "deliver")[0] == 0
-    _evidence(f, rid, wt)
-    with pytest.raises(SystemExit):
-        _land(flow, rid, f)
-    err = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert "stage-start" in err["next"] and "deliver" in err["next"]
-    rc, out = _claim(flow, rid, "a.py", resolve="take-main")
-    assert rc == 0, out
-    assert out["worktree_changed"] == {"swarmai": ["a.py"]} and "stage-start" in out["next"]
-    with pytest.raises(SystemExit):
-        _land(flow, rid, f)
-    assert _state(f)["worktrees"][0]["state"] == "active"
-    assert _start(flow, rid, "deliver")[0] == 0
-    _evidence(f, rid, wt)
-    assert _land(flow, rid, f)["landed"]["swarmai"]["sha"]
-    assert (flow["main"] / "a.py").read_text() == "a = 'main'\n"
-
-
-def test_conflicting_edit_resolves_and_lands(flow):
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    wt = rw.wt_path(rid, "swarmai")
-    (wt / "a.py").write_text("a = 'run'\n")
-    (flow["main"] / "a.py").write_text("a = 'main'\n")
-    rc, out = _claim(flow, rid, "a.py")
-    assert rc != 0 and out["code"] == "claim_refused"
-    assert (flow["main"] / "a.py").read_text() == "a = 'main'\n"
-    rc, out = _claim(flow, rid, "a.py", resolve="take-main")
-    assert rc == 0, out
-    assert _start(flow, rid, "deliver")[0] == 0
-    _evidence(f, rid, wt)
-    assert _land(flow, rid, f)["landed"]["swarmai"]["sha"]
-    assert (flow["main"] / "a.py").read_text() == "a = 'main'\n"
-    assert _g(flow["main"], "status", "--porcelain") == ""
-
-
 # ── post-tool reporter (AC4, F8, S3) ─────────────────────────────────────────
-def _reporter(flow, monkeypatch, sid="s1"):
-    from core import main_dirty_scan as mds
-    monkeypatch.setattr("core.security_hooks._ACTIVE_RUN_GLOB_ROOT", str(flow["ws"]))
-    hook = mds.create_main_dirty_reporter({"sdk_session_id": sid})
-
-    def call():
-        return asyncio.run(hook({"tool_name": "Bash", "tool_input": {"command": "python x.py"}},
-                                "tu", None))
-    return call
-
-
-def _session(f, sid="s1"):
-    d = _state(f)
-    d["session_id"] = sid
-    f.write_text(json.dumps(d))
-
-
-def test_scan_reports_new_main_changes_once(flow, monkeypatch):
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    _session(f)
-    call = _reporter(flow, monkeypatch)
-    assert call() == {}                                   # baseline
-    (flow["main"] / "a.py").write_text("a = 'script wrote me'\n")
-    r = call()
-    ctx = r["hookSpecificOutput"]["additionalContext"]
-    assert r["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
-    assert "a.py" in ctx and "run-claim-main" in ctx and "another session" in ctx
-    assert call() == {}                                   # reported once
-    (flow["main"] / "a.py").write_text("a = 'again'\n")
-    assert "a.py" in call()["hookSpecificOutput"]["additionalContext"]
-
-
-def test_scan_keeps_its_baseline_across_restarts(flow, monkeypatch):
-    """F8/S3 (review finding): the baseline lives in the run dir, so a change made by
-    the first Bash call after worktree creation, or after a daemon restart (a new
-    reporter), is reported, and only once."""
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    _session(f)
-    assert (rw.ledger_root() / rid / "main-dirty-seen.json").is_file()   # at creation
-    assert not (f.parent / "main-dirty-seen.json").exists()    # never in the run dir
-    (flow["main"] / "a.py").write_text("a = 'first call'\n")
-    ctx = _reporter(flow, monkeypatch)()["hookSpecificOutput"]["additionalContext"]
-    assert str(flow["main"].resolve() / "a.py") in ctx or "a.py" in ctx
-    restarted = _reporter(flow, monkeypatch)                    # new process state
-    assert restarted() == {}                                    # already reported
-    (flow["main"] / "a.py").write_text("a = 'after restart'\n")
-    assert "a.py" in restarted()["hookSpecificOutput"]["additionalContext"]
-
-
-def test_scan_silent_without_isolated_run(flow, monkeypatch):
-    rid, f = _create(flow)
-    _session(f)
-    call = _reporter(flow, monkeypatch)
-    assert call() == {}
-    (flow["main"] / "a.py").write_text("a = 2\n")
-    assert call() == {}
-
-
-def test_scan_fails_open(flow, monkeypatch):
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    _session(f)
-    call = _reporter(flow, monkeypatch)
-
-    def boom(*a, **k):
-        raise rw.WorktreeError("git_failed", "x")
-    monkeypatch.setattr(rw, "main_dirty", boom)
-    assert call() == {}
-
-
 def test_reporter_registered():
     import inspect
 
     from core import hook_builder
     src = inspect.getsource(hook_builder.build_hooks)
     assert "create_main_dirty_reporter" in src and '"PostToolUse"' in src
-
-
-def _claim_cmd(flow, rid, f):
-    import pipeline_worktree as pw
-    return pw.claim_command(_state(f), rid, [str(flow["main"] / "a.py")])
-
-
-def test_claim_token_is_issued_only_after_approval(flow, monkeypatch):
-    """AC3 (review finding): the check phase (before dangerous_command_gate) checks but
-    issues no token for run-claim-main; the approved phase (after the user approved)
-    issues it, so a slow approval cannot expire it. Other commands keep their token
-    from the check phase and are untouched by the approved phase."""
-    from core import run_owner_gate as og
-    monkeypatch.setattr("core.security_hooks._ACTIVE_RUN_GLOB_ROOT", str(flow["ws"]))
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    _session(f, "s1")
-    (flow["main"] / "a.py").write_text("a = 'mine'\n")
-    cmd = _claim_cmd(flow, rid, f)
-    assert og._decide("s1", cmd, {"command": cmd}, "check") is None
-    out = og._decide("s1", cmd, {"command": cmd}, "approved")
-    new = out["hookSpecificOutput"]["updatedInput"]["command"]
-    assert new.startswith(hook_token.TOKEN_ENV + "=") and new.endswith(cmd)
-    import pipeline_worktree as pw
-    start = pw.self_cmd(f"stage-start --project P --run-id {rid} --stage build")
-    assert og._decide("s1", start, {"command": start}, "approved") is None
-    got = og._decide("s1", start, {"command": start}, "check")
-    assert got["hookSpecificOutput"]["updatedInput"]["command"].startswith(hook_token.TOKEN_ENV)
-    bad = "cd /tmp && " + cmd                                   # the check phase still denies
-    assert og._decide("s1", bad, {"command": bad}, "check")["hookSpecificOutput"][
-        "permissionDecision"] == "deny"
 
 
 def test_approved_phase_is_registered_right_after_the_approval_gate(monkeypatch):
@@ -718,146 +518,6 @@ def test_approved_phase_is_registered_right_after_the_approval_gate(monkeypatch)
     assert bash[i + 1] == "run_owner_gate_approved"
     assert bash.index("run_owner_gate") < i
     assert ("PostToolUse", "main_dirty_reporter", "Bash") in recorded
-
-
-def test_two_repo_run_claims_by_absolute_path_and_reports_repo_add(flow):
-    """AC1 (review finding): with two repos a relative --files path is refused (it
-    names no main checkout); run-repo-add reports the new repo's uncommitted changes
-    with an absolute-path claim command, which then claims them into that repo."""
-    from tests.test_pipeline_worktree_repos import _git_repo, _repo_add
-    other = _git_repo(flow["tmp"] / "elsewhere" / "other", flow["tmp"] / "hooks")
-    (other / "o.py").write_text("o = 'left over'\n")
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    rc, out = _repo_add(flow, rid, other)
-    assert rc == 0, out
-    assert [r["path"] for rows in out["main_uncommitted"].values() for r in rows] == ["o.py"]
-    target = os.path.join(os.path.realpath(str(other)), "o.py")
-    assert target in out["claim_hint"]
-    rc, out = _claim(flow, rid, "o.py")
-    assert rc != 0 and out["code"] == "claim_refused" and "absolute" in out["next"]
-    assert (other / "o.py").read_text() == "o = 'left over'\n"
-    rc, out = _claim(flow, rid, target)
-    assert rc == 0, out
-    wt = [e for e in _state(f)["worktrees"] if e["repo_name"] != "swarmai"][0]
-    assert (rw.wt_path(rid, wt["repo_name"]) / "o.py").read_text() == "o = 'left over'\n"
-    assert (other / "o.py").read_text() == "o = 1\n"
-
-
-def test_two_repo_claim_is_all_or_nothing(flow):
-    """AC2/I3 across repos (review round 2): one repo's file refused → the other repo's
-    listed file is not moved either."""
-    from tests.test_pipeline_worktree_repos import _git_repo, _repo_add
-    other = _git_repo(flow["tmp"] / "elsewhere" / "other", flow["tmp"] / "hooks")
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    assert _repo_add(flow, rid, other)[0] == 0
-    (flow["main"] / "a.py").write_text("a = 'mine'\n")
-    clean = os.path.join(os.path.realpath(str(other)), "o.py")   # not dirty → refused
-    rc, out = _claim(flow, rid, str(flow["main"] / "a.py"), clean)
-    assert rc != 0 and out["code"] == "claim_refused"
-    assert (flow["main"] / "a.py").read_text() == "a = 'mine'\n"
-    assert (rw.wt_path(rid, "swarmai") / "a.py").read_text() == "a = 1\n"
-
-
-def test_check_phase_refuses_a_doomed_claim_before_asking(flow, monkeypatch):
-    """K1: the user is asked only about a claim that will run — the check phase (before
-    dangerous_command_gate) denies another session's run and a claim the CLI's own
-    planner (rw.plan_claim) refuses; a claim that plans is left to the approval gate."""
-    from core import run_owner_gate as og
-    monkeypatch.setattr("core.security_hooks._ACTIVE_RUN_GLOB_ROOT", str(flow["ws"]))
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    _session(f, "s1")
-    import pipeline_worktree as pw
-    good = pw.claim_command(_state(f), rid, [str(flow["main"] / "a.py")])
-    (flow["main"] / "a.py").write_text("a = 'mine'\n")
-    assert og._decide("s1", good, {"command": good}, "check") is None
-    other = og._decide("s2", good, {"command": good}, "check")["hookSpecificOutput"]
-    assert other["permissionDecision"] == "deny" and "belongs to session" in str(other)
-    clean = pw.claim_command(_state(f), rid, [str(flow["main"] / "c.py")])
-    d = og._decide("s1", clean, {"command": clean}, "check")["hookSpecificOutput"]
-    assert d["permissionDecision"] == "deny" and "claim_refused" in str(d)
-    assert (flow["main"] / "a.py").read_text() == "a = 'mine'\n"   # a dry run moved nothing
-
-
-def test_reporter_never_consumes_an_unreported_change(flow, monkeypatch):
-    """K2/K5: the seen-file is saved only after the report is delivered — a save that
-    fails (or a scan that runs past the wait) leaves the change to be reported next
-    call; the scan runs on the reporter's own thread, never a shared pool, and the
-    save on the loop thread with no await before the report is returned."""
-    import threading
-    from core import main_dirty_scan as mds
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    _session(f)
-    call = _reporter(flow, monkeypatch)
-    threads = []
-    real_save, real_scan_pool = mds._save_seen, mds._scan_pool
-
-    def failing_save(*a):
-        threads.append(threading.current_thread().name)
-        raise OSError("disk full")
-    monkeypatch.setattr(mds, "_save_seen", failing_save)
-    (flow["main"] / "a.py").write_text("a = 'x'\n")
-    assert call() == {}                                  # save failed → nothing reported
-    monkeypatch.setattr(mds, "_save_seen", real_save)
-    assert "a.py" in call()["hookSpecificOutput"]["additionalContext"]   # not lost
-    # the save runs on the loop thread right before the report is returned (no await
-    # in between, so a hook timeout cannot separate them); the scan has its own worker
-    assert threads and not any(t.startswith("main-dirty-scan") for t in threads)
-    assert mds._scan_pool() is real_scan_pool()
-
-
-def test_reporter_skips_while_a_scan_still_runs(flow, monkeypatch):
-    import threading
-    from core import main_dirty_scan as mds
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    _session(f)
-    gate = threading.Event()
-    real = mds.signatures
-
-    def slow(main):
-        gate.wait(10)
-        return real(main)
-    monkeypatch.setattr(mds, "signatures", slow)
-    monkeypatch.setattr(mds, "_SCAN_TIMEOUT", 0.2)
-    monkeypatch.setattr("core.security_hooks._ACTIVE_RUN_GLOB_ROOT", str(flow["ws"]))
-    hook = mds.create_main_dirty_reporter({"sdk_session_id": "s1"})
-    started = []
-    real_light = __import__("core.worktree_write_gate", fromlist=["x"])._session_runs_light
-
-    def light(sid):
-        started.append(sid)
-        return real_light(sid)
-    monkeypatch.setattr("core.worktree_write_gate._session_runs_light", light)
-
-    async def two_calls():
-        a = await hook({"tool_name": "Bash", "tool_input": {"command": "x"}}, "t1", None)
-        b = await hook({"tool_name": "Bash", "tool_input": {"command": "x"}}, "t2", None)
-        gate.set()
-        await asyncio.sleep(0.3)
-        return a, b
-    a, b = asyncio.run(two_calls())
-    assert a == {} and b == {} and len(started) == 1     # the 2nd call did not stack a scan
-
-
-def test_reporter_claim_command_names_only_listed_files(flow, monkeypatch):
-    from core import main_dirty_scan as mds
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    _session(f)
-    monkeypatch.setattr(mds, "MAX_LISTED", 2)
-    call = _reporter(flow, monkeypatch)
-    for n in ("p", "q", "r"):
-        (flow["main"] / f"{n}.py").write_text("x\n")
-    ctx = call()["hookSpecificOutput"]["additionalContext"]
-    cmd = ctx.split("claim only those into the run (the user approves): ")[1]
-    # the list is capped, and the claim command names no file: the agent picks only
-    # the ones this session wrote, nothing is pre-filled for a rubber-stamp approval
-    assert "+1 more" in ctx and "r.py" not in ctx
-    assert not any(f"{n}.py" in cmd for n in ("p", "q", "r"))
 
 
 def test_token_env_not_leaked():
@@ -975,7 +635,7 @@ def test_k6_partially_staged_moves_under_take_main(env):
     assert (keep / "index" / "b.py").read_text() == "b = 2\n"   # the staged version kept
 
 
-def test_k1_creation_hint_does_not_prefill_paths(flow, monkeypatch):
+def test_k1_creation_hint_does_not_prefill_paths(monkeypatch):
     """K1: the copyable claim command names no file; the files are listed apart."""
     from scripts import pipeline_worktree as pw
     files = ["/m/a.py", "/m/b.py"]
@@ -1003,20 +663,7 @@ def test_blob_of_a_glob_named_path_absent_at_rev_is_none(env):
     assert rw._blob(m, "", "app/i.py") == b"other\n"
 
 
-def test_seen_file_lives_in_the_ledger_not_the_run_dir(flow, monkeypatch):
-    """Meta-review MED: the run dir is tracked in SwarmWS, so the seen-file (other
-    sessions' paths) must live in the worktree ledger, outside every repo."""
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    _session(f)
-    call = _reporter(flow, monkeypatch)
-    (flow["main"] / "a.py").write_text("a = 'x'\n")
-    assert "a.py" in call()["hookSpecificOutput"]["additionalContext"]
-    assert (rw.ledger_root() / rid / "main-dirty-seen.json").is_file()
-    assert not (f.parent / "main-dirty-seen.json").exists()
-
-
-def test_report_is_returned_with_no_await_after_the_save(flow, monkeypatch):
+def test_report_is_returned_with_no_await_after_the_save(monkeypatch):
     """Meta-review MED: once the seen-map is saved the hook returns the report without
     awaiting again, so a chain timeout cannot cancel it between save and report."""
     import ast
@@ -1030,43 +677,3 @@ def test_report_is_returned_with_no_await_after_the_save(flow, monkeypatch):
              and getattr(n.func, "id", None) == "_save_seen"]
     awaits = [n.lineno for n in ast.walk(hook) if isinstance(n, ast.Await)]
     assert saves and awaits and max(awaits) < min(saves)
-
-
-def test_own_isolated_run_ids_reads_only_the_named_runs(flow, monkeypatch):
-    """Meta-review recheck MED: the reporter must not parse the whole run history on
-    every Bash call; own_isolated_run(ids=...) skips every other run.json unread."""
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    _session(f)
-    sid = json.loads(f.read_text())["session_id"]
-    root = f.parents[5]
-    assert rw.own_isolated_run(sid, root, with_empty=False, ids={rid})["id"] == rid
-    assert rw.own_isolated_run(sid, root, with_empty=False, ids={"run_other"}) is None
-    read = []
-    real = Path.read_text
-
-    def spy(self, *a, **k):
-        if self.name == "run.json":
-            read.append(self.parent.name)
-        return real(self, *a, **k)
-    monkeypatch.setattr(Path, "read_text", spy)
-    rw.own_isolated_run(sid, root, with_empty=False, ids={"run_other"})
-    assert rid not in read
-
-
-def test_reporter_passes_the_prefiltered_ids(flow, monkeypatch):
-    from core import main_dirty_scan as mds
-    rid, f = _create(flow)
-    assert _start(flow, rid, "plan")[0] == 0
-    _session(f)
-    seen = {}
-    real = rw.own_isolated_run
-
-    def spy(*a, **k):
-        seen.update(k)
-        return real(*a, **k)
-    monkeypatch.setattr(rw, "own_isolated_run", spy)
-    call = _reporter(flow, monkeypatch)
-    (flow["main"] / "a.py").write_text("a = 'x'\n")
-    call()
-    assert seen.get("ids") == {rid}

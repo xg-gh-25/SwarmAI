@@ -18,10 +18,9 @@
  * surface; a running pipeline's live state lives in its chat tab). Trend window
  * defaults to 30d, toggles to YTD.
  *
- * WRITES GO THROUGH CHAT (Gate-1 #7, same as JobsRunsOverlay): Resume injects a
- * `run-resume` command via onDispatch (land+activate a chat tab FIRST, then
- * inject — a bare window event no-ops with no active tab). Cancel calls the
- * existing PATCH /api/pipelines/{id}/cancel directly (reversible, non-destructive).
+ * WRITES use protocol-aware backend endpoints: Resume appends a v1 ``resume``
+ * event (with legacy compatibility), and Cancel appends v1 ``abandon`` (legacy
+ * runs retain their locked run.json transition).
  *
  * Local state ONLY — never MessageStore / active-tab mutation (OT01 safety).
  *
@@ -86,7 +85,7 @@ function openReportInCanvas(reportPath: string, close: () => void) {
   document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: reportPath } }));
 }
 
-export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
+export function PipelineContent({ close }: PipelineContentProps) {
   const [analytics, setAnalytics] = useState<PipelineAnalytics | null>(null);
   const [window, setWindow] = useState<Window>('30d');
   const [loading, setLoading] = useState(false);
@@ -141,18 +140,18 @@ export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
     });
   }, []);
 
-  const dispatchToChat = useCallback((prompt: string) => {
-    const landed = onDispatch(prompt);
-    if (landed) requestAnimationFrame(() => requestAnimationFrame(() => close()));
-  }, [onDispatch, close]);
-
-  const handleResume = useCallback((run: PipelineRunSummary | PipelineRunDetail, project: string) => {
-    // Route through chat (Gate-1 #7) — inject the resume command, user hits enter.
-    dispatchToChat(
-      `Resume the paused pipeline: run-resume --project ${project} --run-id ${run.id}, ` +
-      `then continue with s_autonomous-pipeline --resume --run-id ${run.id} --project ${project}`,
-    );
-  }, [dispatchToChat]);
+  const handleResume = useCallback(async (run: PipelineRunSummary | PipelineRunDetail): Promise<boolean> => {
+    try {
+      await pipelinesService.resumeRun(run.id);
+      const a = await pipelinesService.fetchAnalytics(window);
+      setAnalytics(a);
+      setSelectedRunId(null);
+      setDetail(null);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [window]);
 
   const handleCancel = useCallback(async (runId: string): Promise<boolean> => {
     try {
@@ -453,12 +452,14 @@ function RunDetailDrawer({
   detail: PipelineRunDetail | null;
   loading: boolean;
   onClose: () => void;
-  onResume: (run: PipelineRunDetail, project: string) => void;
+  onResume: (run: PipelineRunDetail) => Promise<boolean>;
   onCancel: (runId: string) => Promise<boolean>;
   /** Host-owned overlay close — the report button closes the WHOLE overlay (not just
    *  the drawer) before dispatching swarm:open-file, so Canvas isn't under the host. */
   hostClose: () => void;
 }) {
+  const [resumeErr, setResumeErr] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [cancelErr, setCancelErr] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   return (
@@ -507,11 +508,17 @@ function RunDetailDrawer({
             <div className="flex gap-2">
               {isResumable(detail.status, detailPauseKind(detail.status, detail.checkpointReason)) && (
                 <button
-                  onClick={() => onResume(detail, detail.project)}
+                  disabled={resuming}
+                  onClick={async () => {
+                    setResumeErr(false);
+                    setResuming(true);
+                    const ok = await onResume(detail);
+                    if (!ok) { setResuming(false); setResumeErr(true); }
+                  }}
                   data-testid="pipeline-resume-btn"
-                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors disabled:opacity-50"
                 >
-                  <span className="material-symbols-outlined text-[15px]">play_arrow</span>Resume
+                  <span className="material-symbols-outlined text-[15px]">play_arrow</span>{resuming ? 'Resuming…' : 'Resume'}
                 </button>
               )}
               {(detail.status === 'running' || detail.status === 'paused') && (
@@ -533,10 +540,24 @@ function RunDetailDrawer({
                 </button>
               )}
             </div>
+            {resumeErr && (
+              <div data-testid="pipeline-resume-error" className="text-[11px] text-rose-500">
+                Could not resume this run — its state may have changed.
+              </div>
+            )}
             {cancelErr && (
               <div data-testid="pipeline-cancel-error" className="text-[11px] text-rose-500">
                 Could not cancel this run — please try again.
               </div>
+            )}
+
+            {detail.auditCard && (
+              <pre
+                data-testid="pipeline-detail-audit-card"
+                className="whitespace-pre-wrap rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-2 text-[11px] leading-relaxed text-[var(--color-text-muted)] font-mono"
+              >
+                {detail.auditCard}
+              </pre>
             )}
 
             {/* Est-vs-actual token bars */}

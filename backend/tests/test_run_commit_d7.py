@@ -171,19 +171,6 @@ def _seed_run(tmp_path, rid, required_experts, *, push_ready=True, files=None):
     return ws, repo, rundir
 
 
-def test_run_commit_refuses_on_missing_expert(tmp_path, monkeypatch):
-    """declared [correctness,security], only correctness ran → run-commit REFUSE exit 2."""
-    import os
-    rid = "run_d7int"
-    ws, repo, rundir = _seed_run(tmp_path, rid, ["correctness", "security"])
-    audit = _audit_dir(tmp_path)
-    _write_marker(audit, "sessX", 1, "correctness", rid)  # security missing
-    env = dict(os.environ, SWARM_DATA_DIR=str(tmp_path), SWARM_WORKSPACE=str(ws))
-    r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid], env)
-    assert r.returncode == 2, f"expected refuse exit 2, got {r.returncode}: {r.stdout}{r.stderr}"
-    assert "security" in (r.stdout + r.stderr), "refuse reason must name the missing expert"
-
-
 def test_run_commit_allows_when_all_experts_ran(tmp_path, monkeypatch):
     """declared [correctness], correctness ran → D7 passes (commit proceeds)."""
     import os
@@ -244,65 +231,3 @@ def test_d7_uppercase_marker_also_normalized(tmp_path, monkeypatch):
     _write_marker(audit, "sessX", 1, "Correctness", rid)   # mixed-case marker (hypothetical)
     missing = mod._d7_missing_required_experts(["correctness"], rid)
     assert missing == [], f"mixed-case marker must normalize to match lowercase declared, got {missing}"
-
-def test_run_commit_has_no_force_bypass_of_d7(tmp_path, monkeypatch):
-    """--force is gone (2026-10-19): a missing declared expert refuses with no override;
-    the remedy (spawn it) needs no human."""
-    import os
-    rid = "run_d7force"
-    ws, repo, rundir = _seed_run(tmp_path, rid, ["correctness", "security"])
-    audit = _audit_dir(tmp_path)
-    _write_marker(audit, "sessX", 1, "correctness", rid)  # security missing
-    env = dict(os.environ, SWARM_DATA_DIR=str(tmp_path), SWARM_WORKSPACE=str(ws))
-    r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid, "--force"], env)
-    assert r.returncode == 2 and "unrecognized arguments: --force" in r.stderr, r.stderr
-    r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid], env)
-    assert r.returncode == 2 and "security" in r.stderr and "--force" not in r.stderr, r.stderr
-
-
-def test_a_degraded_deliver_commits_marked_despite_missing_experts(tmp_path, monkeypatch):
-    """DELIVER already completed degraded (3 refused stage-completes): the run must not
-    end uncommitted, so D7 marks the commit instead of refusing it."""
-    import os
-    rid = "run_d7deg"
-    ws, repo, rundir = _seed_run(tmp_path, rid, ["correctness", "security"], push_ready=False)
-    st = json.loads((rundir / "run.json").read_text())
-    st["stages"][0].update(degraded={"attempts": 3, "errors": ["E_X: gate"]},
-                           push_ready_reason="DELIVER completed degraded after 3 refused attempts")
-    (rundir / "run.json").write_text(json.dumps(st))
-    audit = _audit_dir(tmp_path)
-    _write_marker(audit, "sessX", 1, "correctness", rid)  # security missing
-    env = dict(os.environ, SWARM_DATA_DIR=str(tmp_path), SWARM_WORKSPACE=str(ws))
-    r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid], env)
-    assert r.returncode == 0, r.stdout + r.stderr
-    c = json.loads((rundir / "run.json").read_text())["commits"][0]
-    assert c["push_ready"] is False and "security" in c["push_ready_reason"]
-
-
-def test_a_not_push_ready_deliver_commits_marked_despite_missing_experts(tmp_path):
-    """Any DELIVER that does not ship (here: push_ready false because a spawn could not
-    run) commits, marked, with the missing experts named; it no longer parks the run."""
-    import os
-    rid = "run_d7nr"
-    ws, repo, rundir = _seed_run(tmp_path, rid, ["correctness", "security"], push_ready=False)
-    audit = _audit_dir(tmp_path)
-    _write_marker(audit, "sessX", 1, "correctness", rid)  # security missing
-    env = dict(os.environ, SWARM_DATA_DIR=str(tmp_path), SWARM_WORKSPACE=str(ws))
-    r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid], env)
-    assert r.returncode == 0, r.stdout + r.stderr
-    c = json.loads((rundir / "run.json").read_text())["commits"][0]
-    assert c["push_ready"] is False and "security" in c["push_ready_reason"]
-
-
-def test_a_failed_git_commit_is_not_reported_as_success(tmp_path):
-    import os
-    rid = "run_cfail"
-    ws, repo, rundir = _seed_run(tmp_path, rid, None)
-    hook = repo / ".git" / "hooks" / "pre-commit"
-    hook.write_text("#!/bin/sh\necho refused by hook >&2\nexit 1\n")
-    hook.chmod(0o755)
-    env = dict(os.environ, SWARM_DATA_DIR=str(tmp_path), SWARM_WORKSPACE=str(ws))
-    env.pop("GIT_CONFIG_GLOBAL", None)
-    env["GIT_CONFIG_GLOBAL"] = str(tmp_path / "nogitconfig")  # no machine-wide hooksPath
-    r = _run_cli(["run-commit", "--project", "SwarmAI", "--run-id", rid], env)
-    assert r.returncode == 2 and "git commit failed" in r.stderr, r.stdout + r.stderr

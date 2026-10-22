@@ -1639,6 +1639,9 @@ def _delivered_by_stages(data: dict) -> bool:
     if not isinstance(data, dict):
         return False
     stages = data.get("stages") or []
+    if isinstance(stages, dict):
+        return stages.get("reflect") in ("completed", "degraded") \
+            or stages.get("deliver") in ("completed", "degraded")
     if not isinstance(stages, list) or not stages:
         return False
     return any(
@@ -1685,12 +1688,11 @@ def _is_garbage_run(raw: dict) -> bool:
 
 
 def _completion_verdict(run_state: dict) -> "tuple[bool | None, list[str]]":
-    """Was a run's delivery VERIFIED → (verified, reasons). ``completed`` only says the
-    stages ended; 12 of 35 runs completed 10-18..10-20 landed code Gate-2 had not
-    reviewed, or tests that did not cover it, under the same status. The one signal
-    that already sums every gate and the test evidence is DELIVER's push_ready, so a
-    completed run is verified iff its last completed deliver record is push_ready.
-    None: the run has no completed deliver (research / docs / not finished)."""
+    """Whether delivery is verified; v1 reads the generated audit projection."""
+    if isinstance(run_state.get("stages"), dict):
+        ready = run_state.get("push_ready")
+        return (ready, [] if ready is True else ["run_audit push_ready is false"]
+                if ready is False else [])
     recs = [s for s in run_state.get("stages") or [] if isinstance(s, dict)
             and s.get("stage") == "deliver" and s.get("status") == "completed"]
     if not recs:
@@ -1716,6 +1718,9 @@ def _effective_analytics_status(raw: dict) -> str:
     if not isinstance(raw, dict):
         return ""
     status = raw.get("status") or ""
+    if isinstance(raw.get("stages"), dict):
+        return {"active": "running", "awaiting_human": "paused",
+                "reflecting": "running"}.get(status, status)
     if status in ("completed", "complete"):
         return "completed"
     if status in ("abandoned", "paused") and _delivered_by_stages(raw):
@@ -8620,6 +8625,36 @@ def _extract_run_metrics(project: str, run_id: str, run_state: dict) -> dict:
     stages = run_state.get("stages", [])
     profile = run_state.get("profile", "full")
 
+
+    if isinstance(stages, dict):
+        audit = run_state.get("audit_summary") if isinstance(run_state.get("audit_summary"), dict) else {}
+        speed = audit.get("speed") if isinstance(audit.get("speed"), dict) else {}
+        token = audit.get("token_cost") if isinstance(audit.get("token_cost"), dict) else {}
+        quality = audit.get("quality") if isinstance(audit.get("quality"), dict) else {}
+        autonomy = audit.get("autonomy") if isinstance(audit.get("autonomy"), dict) else {}
+        completed = sum(value in ("completed", "degraded") for value in stages.values())
+        return {
+            "run_id": run_id, "project": project, "profile": profile,
+            "status": run_state.get("status", "?"), "stages_completed": completed,
+            "stages_total": len(stages),
+            "duration_minutes": (round(float(speed["wall_seconds"]) / 60, 1)
+                                 if isinstance(speed.get("wall_seconds"), (int, float)) else None),
+            "total_tokens": int(token.get("total_tokens") or 0), "stage_tokens": {},
+            "decisions": {"mechanical": 0, "taste": 0,
+                          "judgment": int(autonomy.get("human_decisions") or 0),
+                          "total": int(autonomy.get("human_decisions") or 0)},
+            "catches": {"review_findings": int(quality.get("findings_total") or 0),
+                        "review_rp_checked": 0, "adversarial_findings": 0,
+                        "adversarial_high": 0, "adversarial_resolved": 0,
+                        "validation_blocks": 0, "test_regressions": 0},
+            "quality": {"confidence_score": 0,
+                        "completion_all_green": quality.get("verdict") == "PASS",
+                        "test_passed": int(quality.get("verification_passed") or 0),
+                        "test_failed": max(0, int(quality.get("verification_required") or 0)
+                                           - int(quality.get("verification_passed") or 0))},
+            "build": {"files_changed": 0, "tests_generated": 0},
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
     # --- Token metrics ---
     total_tokens = sum(s.get("token_cost", 0) for s in stages)
     stage_tokens = {
@@ -15252,11 +15287,6 @@ def main() -> None:
     p_run_create.add_argument("--project", required=True)
     p_run_create.add_argument("--requirement", required=True, help="Requirement text")
     p_run_create.add_argument("--profile", default=None, help="Pipeline profile: full/trivial/research/docs/bugfix/goal/direct")
-    p_run_create.add_argument("--convergence", default=None, choices=("legacy", "deterministic"),
-                              help="Gate-2 flow: deterministic = gate2-next (models find, tests "
-                                   "decide), the default while worktree mode is on; legacy = "
-                                   "gate2-ledger / gate2-fixspec / gate2-recheck, the default "
-                                   "with worktree mode off and the shared-checkout fallback")
     p_run_create.add_argument("--intent", default=None,
                               help="The user's original words (fallback when the session's message cannot be read)")
 
@@ -15527,6 +15557,25 @@ def main() -> None:
     import pipeline_worktree as _pw
     _pw.refuse_if_worktree_copy(__file__)
     args = parser.parse_args()
+
+    retired_run_commands = {
+        "run-create", "run-update", "run-commit", "run-checkpoint", "run-resume",
+        "run-report", "run-metrics", "run-cultivate", "run-observe", "stage-start",
+        "stage-complete", "gate0-prompt", "gate2-recheck", "gate2-fixspec",
+        "gate2-ledger", "gate2-next", "run-diff", "run-repo-add", "run-claim-main",
+        "cleanup-orphans", "purge-garbage",
+    }
+    retired = args.command in retired_run_commands \
+        or (args.command == "advance" and getattr(args, "run_id", None)) \
+        or (args.command == "publish" and (getattr(args, "run_id", None)
+                                            or getattr(args, "stage", None)))
+    if retired:
+        print(json.dumps({
+            "error": "legacy pipeline mutation command removed by Pipeline v1; use "
+                     "backend/scripts/pipeline_v1.py (runs without protected contract.json "
+                     "are read-only historical records)"
+        }), file=sys.stderr)
+        raise SystemExit(2)
     _pw.lock_command(args.command, getattr(args, "project", None),
                      getattr(args, "run_id", None), _run_dir)
     reg = ArtifactRegistry(_get_workspace())

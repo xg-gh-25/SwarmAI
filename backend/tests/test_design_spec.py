@@ -148,51 +148,14 @@ def test_build_skips_without_a_plan_design_or_for_exempt_profiles():
 
 # ── 3. Fix by class ──────────────────────────────────────────────────────────
 
-def test_fixed_blocking_finding_needs_the_class_fields():
-    plan = _plan()
-    assert ds.finding_errors([_good_finding()], plan, None, "full", "review") == []
-    bad = _good_finding(invariant="", root_cause="typo", class_fix="", break_test="nope")
-    errs = ds.finding_errors([bad], plan, None, "full", "review")
-    assert len(errs) == 4
 
 
-def test_missed_invariant_is_accepted_only_via_design_updates():
-    plan = _plan()
-    f = _good_finding(invariant="I9")
-    assert ds.finding_errors([f], plan, None, "full", "review")
-    upd = [{"id": "I9", "statement": "the marker never outlives its run",
-            "why_missed": "the lifecycle after landing was not designed"}]
-    assert ds.finding_errors([f], plan, upd, "full", "review") == []
-    thin = [{"id": "I9", "statement": "the marker never outlives its run"}]   # no why_missed
-    assert ds.finding_errors([f], plan, thin, "full", "review")
 
 
-def test_only_resolved_blocking_findings_are_judged():
-    plan = _plan()
-    bare = {"severity": "HIGH", "confidence": 9, "resolved": True}
-    assert ds.finding_errors([bare], plan, None, "full", "r")
-    assert ds.finding_errors([dict(bare, resolved=False)], plan, None, "full", "r") == []
-    assert ds.finding_errors([dict(bare, severity="LOW")], plan, None, "full", "r") == []
-    assert ds.finding_errors([dict(bare, severity="MEDIUM", confidence=6)], plan, None, "full", "r") == []
-    assert ds.finding_errors([dict(bare, severity="MEDIUM", confidence="8/10")], plan, None, "full", "r")
-    assert ds.finding_errors([dict(bare, severity="MED", confidence="high")], plan, None, "full", "r"), \
-        "an unreadable confidence on a MED is judged, not waved through"
 
 
 # ── stage routing + cutover ──────────────────────────────────────────────────
 
-def test_stage_routing():
-    plan = _plan()
-    assert ds.stage_errors("plan", {}, profile="full", plan=None, run_created_at=NEW)
-    assert ds.stage_errors("build", {}, profile="full", plan=plan, run_created_at=NEW)
-    bad = [{"severity": "HIGH", "confidence": 9, "resolved": True}]
-    assert ds.stage_errors("review", {"findings": bad}, profile="full", plan=plan, run_created_at=NEW)
-    assert ds.stage_errors("deliver", {"adversarial_review": {"findings": bad}}, profile="full",
-                           plan=plan, run_created_at=NEW)
-    gc = ds.stage_errors("goal_cycle", {"adversarial_review": {"findings": bad}}, profile="goal",
-                         plan=plan, run_created_at=NEW)
-    assert any(e.startswith("Break tests") for e in gc) and any(e.startswith("Fix by class") for e in gc)
-    assert ds.stage_errors("test", {}, profile="full", plan=plan, run_created_at=NEW) == []
 
 
 def test_design_updates_read_from_the_record_too():
@@ -222,9 +185,6 @@ def test_not_a_bug_and_skipped_tier_are_not_judged():
                            profile="direct", plan=_plan(), run_created_at=NEW) == []
 
 
-def test_shared_blocking_rule_catches_decorated_severities():
-    f = {"severity": "HIGH (conf 9)", "confidence": 9, "resolved": True}
-    assert ds.finding_errors([f], _plan(), None, "full", "r")
 
 
 def test_review_findings_list_required_when_counted():

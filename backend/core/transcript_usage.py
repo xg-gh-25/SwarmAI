@@ -150,3 +150,21 @@ def usage_in_window(paths: Iterable[str], lo: float, hi: float,
     out["responses"] = len(inside)
     out["source"] = "transcript"
     return out
+
+
+def usage_for_subagent(path: str) -> Optional[dict]:
+    """Token sums for one completed sub-agent transcript, without sidechain filtering."""
+    if not isinstance(path, str) or not os.path.isfile(path):
+        return None
+    best: dict = {}
+    _scan(path, False, best)
+    if not best:
+        return None
+    out = {name: 0 for _, name in _USAGE_KEYS}
+    for _first, usage in best.values():
+        for raw, name in _USAGE_KEYS:
+            out[name] += _int(usage.get(raw))
+    out["tokens"] = out["input_tokens"] + out["output_tokens"] + out["cache_creation_tokens"]
+    out["responses"] = len(best)
+    out["source"] = "subagent-transcript"
+    return out

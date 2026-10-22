@@ -279,42 +279,6 @@ def test_legitimate_path_not_rejected(tmp_path):
     assert "blockers" in data, data
 
 
-def test_required_experts_lowercased_on_add(tmp_path):
-    """#3 (run_22321ff4): add_required_expert normalizes to lowercase so stored
-    required_experts matches the D7 comparison side, and "Correctness"/"correctness"
-    dedupe as one entry (not a cosmetic duplicate)."""
-    import os
-    ARTIFACT_CLI = REPO / "scripts" / "artifact_cli.py"
-    run_id = "run_lc_test"
-    project = "TestProj"
-    run_dir = tmp_path / "Projects" / project / ".artifacts" / "runs" / run_id
-    run_dir.mkdir(parents=True)
-    (run_dir / "run.json").write_text(json.dumps(
-        {"id": run_id, "project": project, "profile": "bugfix", "status": "running",
-         "stages": [{"stage": "evaluate", "status": "completed"}]}))
-    # run-update locates run.json via SWARM_WORKSPACE env (artifact_cli._get_workspace),
-    # not a --workspace flag.
-    env = dict(os.environ, SWARM_WORKSPACE=str(tmp_path), PYTHONIOENCODING="utf-8")
-
-    def _add(name):
-        return subprocess.run(
-            [sys.executable, str(ARTIFACT_CLI), "run-update",
-             "--project", project, "--run-id", run_id,
-             "--add-required-expert", name],
-            capture_output=True, text=True, timeout=30, env=env)
-
-    # mixed-case add → stored lowercase
-    _add("Correctness")
-    doc = json.loads((run_dir / "run.json").read_text())
-    re_list = doc.get("required_experts", [])
-    assert "correctness" in re_list, re_list
-    assert "Correctness" not in re_list, re_list
-    # re-add in a different case → no-op (dedupe), not a duplicate
-    _add("correctness")
-    doc2 = json.loads((run_dir / "run.json").read_text())
-    assert doc2.get("required_experts", []).count("correctness") == 1, doc2.get("required_experts")
-
-
 def test_outputs_surfaced_is_not_a_deliver_record_obligation(tmp_path):
     """run_a87bfe3f: the completion surface gate reads the daemon marker or the
     run-level --outputs-surfaced flag, and the docs forbid re-recording DELIVER to

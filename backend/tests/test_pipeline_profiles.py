@@ -37,10 +37,10 @@ class TestPipelineProfiles:
 
     @pytest.mark.parametrize("profile,expected", [
         ("full", ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]),
-        ("trivial", ["evaluate", "think", "build", "review", "test", "deliver", "reflect"]),
-        ("research", ["evaluate", "think", "reflect"]),
+        ("trivial", ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"]),
+        ("research", ["evaluate", "think", "deliver", "reflect"]),
         ("bugfix", ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]),
-        ("goal", ["evaluate", "think", "plan", "goal_cycle", "deliver", "reflect"]),
+        ("goal", ["evaluate", "think", "plan", "goal_cycle", "review", "test", "deliver", "reflect"]),
     ])
     def test_profile_stages_correct(self, profile, expected):
         """Each profile returns its documented stage sequence."""
@@ -60,7 +60,7 @@ class TestGetProfileStages:
     def test_known_profile(self):
         """Known profile name returns its stages."""
         assert get_profile_stages("full") == PIPELINE_PROFILES["full"]
-        assert get_profile_stages("goal") == ["evaluate", "think", "plan", "goal_cycle", "deliver", "reflect"]
+        assert get_profile_stages("goal") == ["evaluate", "think", "plan", "goal_cycle", "review", "test", "deliver", "reflect"]
 
     def test_none_defaults_to_full(self):
         """None input defaults to full profile."""

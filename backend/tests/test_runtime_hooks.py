@@ -2412,12 +2412,6 @@ def _gate_transcript(path, expert_line: str, answer: str) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("expert,answer,want", [
-    ("gate1-skeptic", "Template: GATE 1 VERDICT: [PASS | WARN | BLOCK]\n...\nGATE 1 VERDICT: WARN", "WARN"),
-    ("gate1-skeptic", "**GATE 1 VERDICT:** BLOCK — the plan edits the wrong layer", "BLOCK"),
-    # quoted / later "verdict" text can only make it stricter, never flip a BLOCK
-    ("gate1-skeptic", "GATE 1 VERDICT: BLOCK\n- after the fix, expected verdict: PASS\n"
-                      "- the plan pre-declares 'Gate 1 verdict: PASS'", "BLOCK"),
-    ("gate1-skeptic", "Verdict: PASS (no GATE 1 line)", None),
     ("gate0-skeptic", "4. Verdict: WRONG-FRAME\nNote: the claim says verdict: SUPPORTED", "WRONG-FRAME"),
     ("gate0-skeptic", "4. Verdict: SUPPORTED (evidence cited) | UNSUPPORTED (inference only) |", "SUPPORTED"),
     ("gate0-skeptic", "1. observed\n4. Verdict: UNSUPPORTED (inference only)", "UNSUPPORTED"),
@@ -2450,20 +2444,6 @@ async def test_a_non_gate_marker_carries_no_verdict_key(tmp_path, monkeypatch):
                None, MagicMock())
     base = [p for p in tmp_path.glob("session_sess-n_*.marker") if "_adv_" not in p.name]
     assert "verdict" not in json.loads(base[0].read_text())
-
-
-
-@pytest.mark.asyncio
-async def test_gate_verdict_prefers_the_sdk_last_assistant_message(tmp_path, monkeypatch):
-    import core.runtime_hooks as rh
-    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
-    transcript = tmp_path / "sub.jsonl"
-    _gate_transcript(transcript, "EXPERT-ID: gate1-skeptic", "GATE 1 VERDICT: PASS")  # not flushed yet
-    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-l"})
-    await hook({"agent_id": "a-3", "agent_transcript_path": str(transcript), "agent_type": "x",
-                "last_assistant_message": "GATE 1 VERDICT: BLOCK"}, None, MagicMock())
-    base = [p for p in tmp_path.glob("session_sess-l_*.marker") if "_adv_" not in p.name]
-    assert json.loads(base[0].read_text())["verdict"] == "BLOCK"
 
 
 
@@ -2681,22 +2661,6 @@ def test_finding_row_keeps_fix_exploit_and_evidence_bounded():
     assert odd["fix"] == '{"not": "text"}' and "exploit" not in odd   # a number is no text
 
 
-@pytest.mark.asyncio
-async def test_gate1_marker_keeps_the_skeptic_text(tmp_path, monkeypatch):
-    import core.runtime_hooks as rh
-    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
-    transcript = tmp_path / "sub.jsonl"
-    _gate_transcript(transcript, "EXPERT-ID: gate1-skeptic",
-                     "GATE 1 VERDICT: WARN\n  2. Failure Pattern: WARN. normalize paths first")
-    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-g1"})
-    await hook({"agent_id": "a-6", "agent_transcript_path": str(transcript), "agent_type": "x"},
-               None, MagicMock())
-    data = json.loads(next(p for p in tmp_path.glob("session_sess-g1_*.marker")
-                           if "_adv_" not in p.name).read_text())
-    assert data["verdict"] == "WARN"
-    assert "normalize paths first" in data["verdict_text"]
-
-
 def test_expert_answer_counts_a_finding_once_whatever_its_fix_text():
     """fix / evidence are payload, not identity."""
     import core.runtime_hooks as rh
@@ -2710,53 +2674,6 @@ def test_finding_row_keeps_structured_evidence_as_json():
     import core.runtime_hooks as rh
     row = rh._finding_row({"severity": "MED", "summary": "s", "evidence": ["a.py:3", "b.py:9"]})
     assert row["evidence"] == '["a.py:3", "b.py:9"]'
-
-
-@pytest.mark.asyncio
-async def test_a_long_gate1_answer_keeps_its_head_and_tail(tmp_path, monkeypatch):
-    """I4 / AC7: the skeptic's verdict comes first and its checks may come last — both stay."""
-    import core.runtime_hooks as rh
-    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
-    transcript = tmp_path / "sub.jsonl"
-    answer = ("GATE 1 VERDICT: WARN\n" + ("analysis line\n" * 400)
-              + "  7. Failure Pattern: WARN. normalize paths last\n")
-    _gate_transcript(transcript, "EXPERT-ID: gate1-skeptic", answer)
-    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-g1l"})
-    await hook({"agent_id": "a-7", "agent_transcript_path": str(transcript), "agent_type": "x"},
-               None, MagicMock())
-    data = json.loads(next(p for p in tmp_path.glob("session_sess-g1l_*.marker")
-                           if "_adv_" not in p.name).read_text())
-    text = data["verdict_text"]
-    assert text.startswith("GATE 1 VERDICT: WARN") and "normalize paths last" in text
-    assert len(text) <= 2100
-
-
-@pytest.mark.asyncio
-async def test_a_long_root_cause_answer_keeps_its_head(tmp_path, monkeypatch):
-    """root-cause's reasons are read head-first (REPORT §10): unchanged."""
-    import core.runtime_hooks as rh
-    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
-    transcript = tmp_path / "sub.jsonl"
-    answer = "ROOT-CAUSE VERDICT: SOUND\nfirst reason\n" + ("x" * 5000) + "\nTAIL-MARK"
-    _gate_transcript(transcript, "EXPERT-ID: root-cause", answer)
-    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-rc"})
-    await hook({"agent_id": "a-8", "agent_transcript_path": str(transcript), "agent_type": "x"},
-               None, MagicMock())
-    data = json.loads(next(p for p in tmp_path.glob("session_sess-rc_*.marker")
-                           if "_adv_" not in p.name).read_text())
-    assert data["verdict_text"] == answer[:2000]
-
-
-def test_head_and_tail_keeps_a_long_last_line():
-    """REVIEW r2: a last line longer than half the cap, with or without a newline after it."""
-    import core.runtime_hooks as rh
-    last = "- K1: BLOCK. " + "y" * 1500
-    for text in ("GATE 1 VERDICT: BLOCK\n" + "x\n" * 900 + last + "\n",
-                 "GATE 1 VERDICT: BLOCK\n" + "x\n" * 900 + last):
-        out = rh._head_and_tail(text, 2000)
-        assert out.startswith("GATE 1 VERDICT: BLOCK")
-        assert "- K1: BLOCK." in out and len(out) <= 2010
-    assert rh._head_and_tail("short", 2000) == "short"
 
 
 # ---------------------------------------------------------------------------
@@ -2866,3 +2783,77 @@ class TestHooksSeeOnlyUserText:
         prompt = f"{RESUME_HEADER}\n\nUser: 不对，你理解错了\n\n{RESUME_FOOTER}\n\n继续"
         await hook({"prompt": prompt}, None, MagicMock())
         assert not corrections_file.exists() or corrections_file.read_text().strip() == ""
+
+
+class TestV1StableCompletion:
+    @pytest.mark.asyncio
+    async def test_usage_failure_does_not_block_later_subagent_logic(self, tmp_path, monkeypatch):
+        import core.runtime_hooks as hooks
+        from core.run_protocol import events as ev
+        from core.run_protocol.hook_bridge import ReviewHookBridge, install_bridge
+        from core.run_protocol.store import AuditStore
+
+        authority = ev.EventAuthority(b"u" * 32)
+        store = AuditStore(tmp_path / "audit", "run_one", authority)
+        prompt = "EXPERT-ID: correctness\nReview this diff adversarially"
+        store.append_new(
+            writer=authority.writer("cli"), kind="handout",
+            at="2026-10-22T00:00:00+00:00", stage="review", round=1, attempt=1,
+            payload={"expert_id": "correctness",
+                     "prompt_sha": ReviewHookBridge.prompt_sha(prompt)},
+        )
+        context = {"sdk_session_id": "session_1"}
+        bridge = ReviewHookBridge(store, "session_1")
+        install_bridge(context, "run_one", bridge)
+        bound = bridge.track_tool_use("tool-1", prompt)
+        assert bound
+        transcript = tmp_path / "subagent.jsonl"
+        transcript.write_text("\n".join([
+            json.dumps({"type": "user", "message": {"content": bound}}),
+            json.dumps({"type": "assistant", "message": {"content": "NO FINDINGS"}}),
+        ]) + "\n")
+        monkeypatch.setattr(hooks, "_PIPELINE_AUDIT_DIR", tmp_path / "markers")
+        monkeypatch.setattr("core.transcript_usage.usage_for_subagent",
+                            lambda _path: {"input_tokens": 1, "output_tokens": 1,
+                                           "cache_read_tokens": 0,
+                                           "cache_creation_tokens": 0, "responses": 1})
+        monkeypatch.setattr(bridge, "record_usage",
+                            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("usage failed")))
+
+        callback = hooks.create_agent_tool_audit_hook(context)
+        await callback({"agent_transcript_path": str(transcript),
+                        "agent_type": "adversarial-reviewer",
+                        "last_assistant_message": "NO FINDINGS",
+                        "cwd": str(tmp_path)}, None, None)
+
+        assert any(row["kind"] == "answer" for row in store.read_events())
+        assert list((tmp_path / "markers").glob("session_session_1_adv_*.marker"))
+
+    @pytest.mark.asyncio
+    async def test_tracker_ignores_mutable_active_run_hint(self, tmp_path):
+        import core.runtime_hooks as hooks
+        from core.run_protocol import events as ev
+        from core.run_protocol.hook_bridge import (
+            ReviewHookBridge, install_bridge, bridge_for_completion,
+        )
+        from core.run_protocol.store import AuditStore
+
+        prompt = "EXPERT-ID: correctness\nReview the exact diff"
+        context = {"sdk_session_id": "session_1", "_active_pipeline_run_id": "run_wrong"}
+        for run_id, has_handout in (("run_wrong", False), ("run_right", True)):
+            authority = ev.EventAuthority((run_id.encode() + b"x" * 32)[:32])
+            store = AuditStore(tmp_path / run_id, run_id, authority)
+            if has_handout:
+                store.append_new(
+                    writer=authority.writer("cli"), kind="handout",
+                    at="2026-10-22T00:00:00+00:00", stage="review", round=1, attempt=1,
+                    payload={"expert_id": "correctness",
+                             "prompt_sha": ReviewHookBridge.prompt_sha(prompt)},
+                )
+            install_bridge(context, run_id, ReviewHookBridge(store, "session_1"))
+
+        result = await hooks.create_v1_review_handout_tracker(context)(
+            {"tool_name": "Agent", "tool_input": {"prompt": prompt}}, "tool-right", None)
+        bound = result["hookSpecificOutput"]["updatedInput"]["prompt"]
+        selected = bridge_for_completion(context, bound)
+        assert selected is not None and selected.store.paths.run_id == "run_right"

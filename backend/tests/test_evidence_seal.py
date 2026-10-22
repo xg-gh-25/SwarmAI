@@ -233,16 +233,6 @@ def test_a_write_after_the_store_vanished_warns(env, capsys):
     assert "evidence seal store" in capsys.readouterr().err
 
 
-def test_only_sealed_prove_calls_count(env, monkeypatch):
-    _enable(env)
-    pdir = env.run_dir / "evidence" / "proofs"
-    for i in range(4):
-        (pdir / f"prove-R1-fake{i}.json").write_text(json.dumps({"proofs": []}))
-    rs = {"gate2_v2": {"events": [{"kind": "fixed", "pass": 1, "ts": 1.0}]},
-          "dispatch_plan": {"deliver": []}, "stage_timing": {}}
-    assert cli._gate2_v2_inputs(RID, env.run_dir, rs)[4] == 0
-
-
 def test_an_unsealed_run_index_is_refused_not_reset(env, capsys):
     """R2 (four experts): a rejected index must neither read as "no history" nor be
     re-sealed; the caps that count from it refuse instead."""

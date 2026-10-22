@@ -13,6 +13,7 @@ Key public symbols:
 """
 
 import asyncio
+import datetime
 import json
 import logging
 import os
@@ -756,7 +757,7 @@ _PIPELINE_AUDIT_DIR = _STATE_DIR / "pipeline_agent_audit"
 # the pipeline_id field rather than regex-sniffing a bare run_xxx so a run id quoted
 # elsewhere in the output (an error echoing a prior id) can't be mistaken for THIS
 # call's result.
-_RUN_CREATE_CMD_RE = re.compile(r"artifact_cli\.py\s+run-create\b")
+_RUN_CREATE_CMD_RE = re.compile(r"(?:artifact_cli\.py\s+run-create|pipeline_v1\.py\s+create)\b")
 
 
 def _session_run_map_path(session_id: str) -> Path:
@@ -1060,6 +1061,71 @@ def _is_adversarial_intent(subagent_type: str, description: str, prompt: str) ->
     return bool(_ADVERSARIAL_INTENT_RE.search(blob))
 
 
+def create_v1_review_handout_tracker(session_context: Optional[dict] = None):
+    """PreToolUse Agent|Task: bind a spawn to one signed v1 handout and run."""
+    ctx = session_context if session_context is not None else {}
+
+    def _resolve(prompt: str):
+        from core.run_protocol.hook_bridge import (
+            ReviewHookBridge, bridge_for_prompt, install_bridge,
+        )
+        bridge = bridge_for_prompt(ctx, prompt)
+        if bridge is not None:
+            return bridge
+        session_id = str(ctx.get("sdk_session_id") or "")
+        if not session_id:
+            return None
+        from config import get_app_data_dir
+        from core.run_protocol.engine import RunEngine
+        data = get_app_data_dir()
+        workspace = Path(os.environ.get("SWARM_WORKSPACE") or data / "SwarmWS")
+        matches = []
+        for run_file in workspace.glob("Projects/*/.artifacts/runs/*/run.json"):
+            try:
+                projection = json.loads(run_file.read_text(encoding="utf-8"))
+                if projection.get("session_id") != session_id:
+                    continue
+                run_id = run_file.parent.name
+                project = run_file.parents[3].name
+                candidate = ReviewHookBridge(
+                    RunEngine.load(data_dir=data, workspace=workspace,
+                                   project=project, run_id=run_id).store,
+                    session_id,
+                )
+                if candidate.matching_handouts(prompt):
+                    matches.append((run_id, candidate))
+            except Exception as exc:  # one unreadable run must not hide the others
+                logger.debug("v1 bridge: run %s skipped: %s", run_file.parent.name, exc)
+                continue
+        if len(matches) != 1:
+            return None
+        run_id, bridge = matches[0]
+        install_bridge(ctx, run_id, bridge)
+        return bridge
+
+    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        try:
+            tool = _extract_field(input_data, "tool_name", "")
+            if tool not in ("Agent", "Task"):
+                return {}
+            tool_input = _extract_field(input_data, "tool_input", {})
+            prompt = tool_input.get("prompt", "") if isinstance(tool_input, dict) else ""
+            bridge = await asyncio.to_thread(_resolve, prompt)
+            bound = bridge.track_tool_use(str(tool_use_id or ""), prompt) if bridge else None
+            if bound is None:
+                return {}
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {**tool_input, "prompt": bound},
+            }}
+        except Exception:
+            logger.warning("v1 review handout tracking failed", exc_info=True)
+            return {}
+
+    return _hook
+
+
 def create_agent_tool_audit_hook(
     session_context: Optional[dict] = None,
 ):
@@ -1192,29 +1258,45 @@ def create_agent_tool_audit_hook(
                     # stage-complete require one round's experts to start together
                     "started_at": _subagent_started_at(transcript_path) if transcript_path else None,
                 }
+                final = (last_message if isinstance(last_message, str) and last_message.strip()
+                         else (_read_subagent_final_text(transcript_path)
+                               if transcript_path else ""))
                 if expert_id in _GATE_VERDICT_RE:
-                    # Key present = this daemon captures verdicts (None = unparsed answer).
-                    # The SDK hands the sub-agent's last assistant text in; the transcript
-                    # tail is the fallback for an input without it.
-                    final = last_message if isinstance(last_message, str) and last_message.strip() \
-                        else (_read_subagent_final_text(transcript_path) if transcript_path else "")
                     base["verdict"] = _gate_verdict(expert_id, final)
-                    if expert_id == "root-cause":
-                        # its reasons go into REPORT §10 / the PLAN redesign verbatim,
-                        # read from the top
-                        base["verdict_text"] = (final or "")[:2000]
-                    elif expert_id == "gate1-skeptic":
-                        # its BLOCK / WARN points go into the build record and REVIEW.md
-                        # (artifact_cli._gate1_points): the verdict comes first and the
-                        # check lines may come last, so a long answer keeps both ends
-                        base["verdict_text"] = _head_and_tail(final or "", 2000)
                 elif expert_id:
                     # Key present = this daemon records the expert's own findings and
                     # re-check answers (DELIVER stage-complete compares the record).
-                    final = last_message if isinstance(last_message, str) and last_message.strip() \
-                        else (_read_subagent_final_text(transcript_path) if transcript_path else "")
                     base.update(_expert_answer(final))
                 session_marker.write_text(json.dumps(base))
+
+                # Pipeline v1 path: resolve the exact run from the nonce-bound prompt
+                # injected at Agent PreToolUse. Legacy mutable session ownership and
+                # expert/FIFO guesses are not inputs to this authority path.
+                from core.run_protocol.hook_bridge import bridge_for_completion
+                bridge = bridge_for_completion(ctx, prompt_head)
+                if bridge is not None:
+                    recorded = bridge.record_answer(
+                        prompt_head, final,
+                        completed_at=datetime.datetime.fromtimestamp(
+                            ts, datetime.timezone.utc
+                        ).isoformat(),
+                    )
+                    if recorded is not None and transcript_path:
+                        try:
+                            from core import transcript_usage
+                            measured = transcript_usage.usage_for_subagent(transcript_path)
+                            if measured is not None:
+                                bridge.record_usage(
+                                    measured,
+                                    completed_at=datetime.datetime.fromtimestamp(
+                                        ts, datetime.timezone.utc
+                                    ).isoformat(),
+                                )
+                        except Exception:
+                            # Usage is optional accounting. A malformed transcript or
+                            # metric persistence failure must not suppress legacy
+                            # completion/adversarial markers below.
+                            logger.warning("v1 subagent usage recording failed", exc_info=True)
 
                 # DISTINCT adversarial marker — consumed by the live commit gate
                 # `_session_adversarial_coverage` (security_hooks.py), which matches the
@@ -1327,14 +1409,6 @@ _GATE_VERDICT_RE = {
     "gate0-skeptic": re.compile(
         r"^[^\n]{0,40}?\bverdict\W{0,6}(UNSUPPORTED|ALREADY-SATISFIED|WRONG-FRAME|SUPPORTED)\b"
         r"(?!\s*\|)", re.I | re.M),
-    "gate1-skeptic": re.compile(
-        r"^\W*GATE\s*1\s*VERDICT\W{0,6}(PASS|WARN|PARTIAL|BLOCK)\b(?!\s*\|)", re.I | re.M),
-    # Gate-2 fixing-spec skeptic (core/gate2_fixspec): judges the spec, not the code.
-    "fixspec-skeptic": re.compile(
-        r"^\W*FIXSPEC\s*VERDICT\W{0,6}(PASS|BLOCK)\b(?!\s*\|)", re.I | re.M),
-    # Gate-2 root-cause review after a capped, unconverged loop (core/gate2_convergence).
-    "root-cause": re.compile(
-        r"^\W*ROOT[-\s]?CAUSE\s*VERDICT\W{0,6}(SOUND|WRONG-APPROACH)\b(?!\s*\|)", re.I | re.M),
 }
 # Severity: the most severe token on the anchored lines is the skeptic's verdict.
 GATE_VERDICT_RANK = {"PASS": 0, "WARN": 1, "PARTIAL": 1, "BLOCK": 2,
@@ -1586,30 +1660,6 @@ _CODE_BLOCK_RE = re.compile(r"```[\w-]*\n([\s\S]*?)```")
 # on the six.
 _FINDING_TEXT_FIELDS = ("fix", "exploit", "evidence")
 _FINDING_TEXT_MAX = 600
-
-
-def _head_and_tail(text: str, n: int) -> str:
-    """*text* if it fits in *n* chars, else its first and last whole lines (about n/2
-    chars each) around a '…' line. A line longer than n/2 keeps its start, so the
-    level prefix a reader matches ('- K1: BLOCK.') survives."""
-    text = text.rstrip()
-    if len(text) <= n:
-        return text
-    half = n // 2
-    lines = text.split("\n")
-
-    def take(seq):
-        kept, size = [], 0
-        for ln in seq:
-            if size + len(ln) + 1 > half:
-                break
-            kept.append(ln)
-            size += len(ln) + 1
-        return kept or [next(iter(seq), "")[:half]]
-
-    head = take(lines)
-    tail = take(lines[::-1])[::-1]
-    return "\n".join(head) + "\n…\n" + "\n".join(tail)
 
 
 def _finding_row(d: dict) -> Optional[dict]:
@@ -2502,6 +2552,16 @@ def register_runtime_hooks(
         "PostToolUse",
         create_pipeline_run_mapping_hook(session_context),
         "pipeline_run_mapping",
+    )
+
+    # Pipeline v1: bind each exact handed-out review prompt to the Agent tool_use_id.
+    # The SubagentStop callback lacks that id, so this PreToolUse observation is the
+    # only non-heuristic correlation path. Inert when no v1 bridge is installed.
+    registry.register(
+        "PreToolUse",
+        create_v1_review_handout_tracker(session_context),
+        "v1_review_handout_tracker",
+        matcher="Agent|Task",
     )
 
     # Phase 2: PostToolUse session checkpoint

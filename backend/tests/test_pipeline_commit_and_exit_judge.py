@@ -48,11 +48,6 @@ for _p in (str(_BACKEND / "scripts"), str(_BACKEND)):
 
 import pipeline_validator as pv  # noqa: E402
 import scripts.artifact_cli as cli  # noqa: E402
-from tests.test_pipeline_worktree import flow  # noqa: E402,F401 — a fixture
-from tests.test_stage_boundary_commands import (  # noqa: E402,F401 — `ws` is a fixture
-    DECISION, _build_artifact, _c2, _complete, _make_run, _plan_artifact, _run_state,
-    _start, _write_evidence, ws,
-)
 
 TRAILER = "Co-Authored-By: Swarm <swarm@swarmai.dev>"
 
@@ -163,63 +158,6 @@ class TestRunCommitUsesTheBuilder:
         body = self._git(repo, "log", "-1", "--format=%B").stdout.strip()
         assert body.splitlines()[0] == "Redact credentials in every displayed tool string"
         assert body.splitlines()[-1] == TRAILER
-
-
-@pytest.fixture
-def token_oracle():
-    """The worktree tests' token service (their autouse fixture does not travel with
-    an imported ``flow``): CLI subprocesses burn their tokens through its socket."""
-    import os
-
-    from core import hook_token
-    hook_token.stop_oracle()
-    assert hook_token.start_oracle(50000 + (os.getpid() + 7) % 10000) or not hook_token.oracle_supported()
-    yield
-    hook_token.stop_oracle()
-
-
-def _land_with(flow, message):
-    import os
-
-    import pipeline_worktree as pw
-    from core import hook_token
-    from tests.test_pipeline_worktree import _evidence, _g, _prepared, _state
-
-    rid, f, wt = _prepared(flow)
-    _evidence(f, rid, wt)
-    os.environ[hook_token.TOKEN_ENV] = hook_token.issue(f.parent, "s1", rid, "stage-complete")
-    try:
-        pw.land_deliver(run_id=rid, run_file=f, run_state=_state(f), push_ready=True,
-                        workspace=flow["ws"], self_repo=flow["main"],
-                        gen_b=lambda wt, files: [], requirement="do x", message=message)
-    finally:
-        os.environ.pop(hook_token.TOKEN_ENV, None)
-    return _g(flow["main"], "log", "-1", "--format=%B")
-
-
-def test_worktree_landing_without_a_message_uses_the_builder(flow, token_oracle):
-    body = _land_with(flow, None).strip()
-    assert body.splitlines()[0] == "do x" and body.splitlines()[-1] == TRAILER
-
-
-def test_worktree_landing_uses_the_given_message(flow, token_oracle):
-    import os
-
-    import pipeline_worktree as pw
-    from core import hook_token
-    from tests.test_pipeline_worktree import _evidence, _g, _prepared, _state
-
-    rid, f, wt = _prepared(flow)
-    _evidence(f, rid, wt)
-    msg = cli._commit_message(rid, "do x", _deliver())
-    os.environ[hook_token.TOKEN_ENV] = hook_token.issue(f.parent, "s1", rid, "stage-complete")
-    try:
-        pw.land_deliver(run_id=rid, run_file=f, run_state=_state(f), push_ready=True,
-                        workspace=flow["ws"], self_repo=flow["main"],
-                        gen_b=lambda wt, files: [], requirement="do x", message=msg)
-    finally:
-        os.environ.pop(hook_token.TOKEN_ENV, None)
-    assert _g(flow["main"], "log", "-1", "--format=%s") == "Redact credentials in every displayed tool string"
 
 
 # ── judge_exit_criteria on mode: refs ────────────────────────────────────
@@ -351,24 +289,6 @@ def test_run_c5eb0858_shape_is_met(tmp_path):
 
 # ── BUILD records declared files_changed into files_touched ──────────────
 
-def _to_build(reg, capsys, root, rid, **run_extra):
-    rd = _make_run(root, rid, "direct", **run_extra)
-    _start(reg, capsys, rid, "plan")
-    code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
-    assert code == 0, out
-    _write_evidence(rd, "tests/latest-tdd.json", _c2("tdd", rid, [
-        {"nodeid": "tests/test_x.py::test_a", "outcome": "passed", "file": "tests/test_x.py"}]))
-    _start(reg, capsys, rid, "build")
-    return rd
-
-
-def _complete_build(reg, capsys, rid, files_changed):
-    art = _build_artifact()
-    art["files_changed"] = list(files_changed)
-    return _complete(reg, capsys, rid, "build", art,
-                     {"decisions": DECISION, "exit_evidence": {"X2": "checked the page"}})
-
-
 def _git_repo(path):
     """A git repo at ``path`` with one committed file (base.py)."""
     path.mkdir(parents=True)
@@ -380,149 +300,6 @@ def _git_repo(path):
     return path
 
 
-def test_declared_files_reach_files_touched_when_none_were_recorded(ws, capsys, tmp_path):
-    root, reg = ws
-    real = _git_repo(tmp_path / "src") / "changed.py"
-    real.write_text("x = 1\n")
-    _to_build(reg, capsys, root, "run_ft1")
-    code, out = _complete_build(reg, capsys, "run_ft1", [str(real), "path/to/file.py"])
-    assert code == 0, out
-    assert _run_state(root, "run_ft1")["files_touched"] == [os.path.realpath(real)]
-
-
-def test_recorded_duplicates_collapse(ws, capsys, tmp_path):
-    root, reg = ws
-    real = tmp_path / "src" / "dup.py"
-    real.parent.mkdir()
-    real.write_text("x\n")
-    _to_build(reg, capsys, root, "run_ft7", files_touched=[str(real), str(real)])
-    code, out = _complete_build(reg, capsys, "run_ft7", ["path/to/file.py"])
-    assert code == 0, out
-    assert _run_state(root, "run_ft7")["files_touched"] == [str(real)]
-
-
-def test_declared_files_are_added_to_recorded_ones(ws, capsys, tmp_path):
-    root, reg = ws
-    real = _git_repo(tmp_path / "src") / "extra.py"
-    real.write_text("x = 1\n")
-    _to_build(reg, capsys, root, "run_ft2", files_touched=["backend/a.py"])
-    code, out = _complete_build(reg, capsys, "run_ft2", [str(real), str(real)])
-    assert code == 0, out
-    assert _run_state(root, "run_ft2")["files_touched"] == ["backend/a.py", os.path.realpath(real)]
-
-
-def test_recorded_only_run_is_unchanged(ws, capsys):
-    root, reg = ws
-    _to_build(reg, capsys, root, "run_ft3", files_touched=["backend/a.py", "backend/tests/test_x.py"])
-    code, out = _complete_build(reg, capsys, "run_ft3", ["path/to/file.py"])
-    assert code == 0, out
-    assert _run_state(root, "run_ft3")["files_touched"] == ["backend/a.py", "backend/tests/test_x.py"]
-    assert out["derived"]["files_changed"]["source"] == "run.json files_touched"
-
-
-def test_deleted_tracked_file_is_kept(ws, capsys, tmp_path):
-    root, reg = ws
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    for a in (["init", "-q"], ["config", "user.email", "t@t.co"], ["config", "user.name", "t"]):
-        subprocess.run(["git", "-C", str(repo), *a], check=True, timeout=30)
-    (repo / "gone.py").write_text("x\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, timeout=30)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "b"], check=True, timeout=30)
-    (repo / "gone.py").unlink()
-    _to_build(reg, capsys, root, "run_ft4")
-    code, out = _complete_build(reg, capsys, "run_ft4", [str(repo / "gone.py")])
-    assert code == 0, out
-    assert _run_state(root, "run_ft4")["files_touched"] == [os.path.realpath(repo / "gone.py")]
-
-
-def test_deleted_file_with_its_directory_reaches_the_delivery_scope(ws, capsys, tmp_path):
-    # `git rm -r pkg/`: the file's directory is gone too. The DELIVER scope (and the
-    # Gate-2 diff) must still see the deletion run-commit will commit.
-    root, reg = ws
-    repo = tmp_path / "repo"
-    (repo / "pkg").mkdir(parents=True)
-    for a in (["init", "-q"], ["config", "user.email", "t@t.co"], ["config", "user.name", "t"]):
-        subprocess.run(["git", "-C", str(repo), *a], check=True, timeout=30)
-    (repo / "keep.py").write_text("k\n")
-    (repo / "pkg" / "gone.py").write_text("x\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, timeout=30)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "b"], check=True, timeout=30)
-    subprocess.run(["git", "-C", str(repo), "rm", "-rq", "pkg"], check=True, timeout=30)
-    gone = str(repo / "pkg" / "gone.py")
-    _to_build(reg, capsys, root, "run_ft11")
-    code, out = _complete_build(reg, capsys, "run_ft11", [gone])
-    assert code == 0, out
-    assert _run_state(root, "run_ft11")["files_touched"] == [os.path.realpath(gone)]
-    assert cli._repo_root_for_file(gone) == cli._git_repo_root(gone) is not None
-    scope = cli._changed_files_scope([gone])
-    assert [(c["rel"], c["status"]) for c in scope["changed_files"]] == [("pkg/gone.py", "D")]
-    pack = cli._diff_pack([os.path.realpath(gone)])
-    assert "NOT INCLUDED" not in pack and "-x" in pack, pack
-
-
-def test_declared_list_that_filters_to_nothing_fails_loud(ws, capsys):
-    root, reg = ws
-    _to_build(reg, capsys, root, "run_ft6")
-    code, out = _complete_build(reg, capsys, "run_ft6", ["path/to/file.py", "no/such.py"])
-    assert code != 0, out
-    assert "none of the declared paths is a file on disk or a tracked deleted file" in json.dumps(out)
-    assert not _run_state(root, "run_ft6").get("files_touched")
-
-
-def test_declared_file_already_swept_into_a_commit_is_kept(ws, capsys, tmp_path):
-    # The workspace auto-commit sweeps a script-written file within minutes: by BUILD
-    # stage-complete git may show it unchanged, and it is still this run's change.
-    root, reg = ws
-    repo = _git_repo(tmp_path / "wsrepo")
-    swept = repo / "Projects" / "X" / "notes.md"
-    swept.parent.mkdir(parents=True)
-    swept.write_text("written by a script\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, timeout=30)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "chore: sweep"], check=True, timeout=30)
-    _to_build(reg, capsys, root, "run_ft12")
-    code, out = _complete_build(reg, capsys, "run_ft12", [str(swept), "path/to/file.py"])
-    assert code == 0, out
-    assert _run_state(root, "run_ft12")["files_touched"] == [os.path.realpath(swept)]
-    assert out["derived"]["files_changed"]["dropped_from_declared"] == ["path/to/file.py"]
-
-
-def _repo_with_changed_dir(path):
-    """A repo whose pkg/ directory holds a modified and an untracked file: the
-    directory exists and holds real changes, so a check on "exists" or on "git shows
-    it changed" would let it in."""
-    repo = _git_repo(path)
-    (repo / "pkg").mkdir()
-    (repo / "pkg" / "a.py").write_text("a\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, timeout=30)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "pkg"], check=True, timeout=30)
-    (repo / "pkg" / "a.py").write_text("a2\n")
-    (repo / "pkg" / "n.py").write_text("n\n")
-    assert subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--", "pkg"],
-                          capture_output=True, text=True, timeout=30).stdout.strip()
-    return repo
-
-
-def test_declared_directory_is_dropped(ws, capsys, tmp_path):
-    root, reg = ws
-    repo = _repo_with_changed_dir(tmp_path / "src")
-    _to_build(reg, capsys, root, "run_ft8", files_touched=["backend/a.py"])
-    code, out = _complete_build(reg, capsys, "run_ft8",
-                                [str(repo / "pkg"), str(repo), str(repo / "pkg" / "n.py")])
-    assert code == 0, out
-    assert _run_state(root, "run_ft8")["files_touched"] == [
-        "backend/a.py", os.path.realpath(repo / "pkg" / "n.py")]
-
-
-def test_only_a_directory_declared_fails_loud(ws, capsys, tmp_path):
-    root, reg = ws
-    repo = _repo_with_changed_dir(tmp_path / "src")
-    _to_build(reg, capsys, root, "run_ft9")
-    code, out = _complete_build(reg, capsys, "run_ft9", [str(repo / "pkg")])
-    assert code != 0, out
-    assert not _run_state(root, "run_ft9").get("files_touched")
-
-
 def test_symlinked_spelling_is_stored_by_realpath_and_reaches_the_scope(tmp_path):
     repo = _git_repo(tmp_path / "real")
     (repo / "new.py").write_text("n\n")
@@ -532,35 +309,6 @@ def test_symlinked_spelling_is_stored_by_realpath_and_reaches_the_scope(tmp_path
     assert got == [os.path.realpath(repo / "new.py")]
     rows = cli._changed_files_scope(got)["changed_files"]
     assert [(c["rel"], c["status"]) for c in rows] == [("new.py", "A")]
-
-
-def test_declared_relative_path_is_stored_absolute(ws, capsys, tmp_path, monkeypatch):
-    root, reg = ws
-    base = _git_repo(tmp_path / "wsroot")
-    (base / "Projects" / "X").mkdir(parents=True)
-    (base / "Projects" / "X" / "a.md").write_text("x\n")
-    monkeypatch.setattr(cli, "_touched_bases", lambda: [str(tmp_path / "nowhere"), str(base)])
-    _to_build(reg, capsys, root, "run_ft10", files_touched=["backend/a.py"])
-    code, out = _complete_build(reg, capsys, "run_ft10", ["Projects/X/a.md"])
-    assert code == 0, out
-    want = os.path.realpath(base / "Projects" / "X" / "a.md")
-    assert _run_state(root, "run_ft10")["files_touched"] == ["backend/a.py", want]
-    assert out["derived"]["files_changed"]["added_from_declared"] == [want]
-
-
-def test_isolated_run_keeps_the_worktree_derivation(ws, capsys, tmp_path, monkeypatch):
-    import pipeline_worktree as pw
-
-    root, reg = ws
-    real = tmp_path / "src" / "declared.py"
-    real.parent.mkdir()
-    real.write_text("x\n")
-    _to_build(reg, capsys, root, "run_ft5")
-    monkeypatch.setattr(pw, "derive_files_touched", lambda *a, **k: ["/wt/run_ft5/a.py"])
-    monkeypatch.setattr(pw, "is_isolated", lambda *a, **k: True)
-    code, out = _complete_build(reg, capsys, "run_ft5", [str(real)])
-    assert code == 0, out
-    assert _run_state(root, "run_ft5")["files_touched"] == ["/wt/run_ft5/a.py"]
 
 
 # ── _lookup_already_committed: the run's note, not a mention ─────────────

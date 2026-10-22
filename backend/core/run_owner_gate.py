@@ -49,8 +49,22 @@ logger = logging.getLogger(__name__)
 _RUN_ID_RE = re.compile(r"^run_[A-Za-z0-9_]{1,64}$")
 # Commands that act as the run's owner: only these take a run over (an incidental
 # report / observe / test call from another tab must not steal it).
-_TAKEOVER = frozenset({"stage-start", "stage-complete", "run-resume", "run-update",
-                       "run-checkpoint", "run-commit"})
+_TAKEOVER = frozenset({
+    "stage-start", "stage-complete", "run-resume", "run-update",
+    "run-checkpoint", "run-commit", "review-start", "land", "measure-usage",
+    "reflect-prepare", "reflect-complete", "reflect-exhausted", "gate0-start",
+    "review-address", "review-proof", "resume", "restore", "abandon",
+    "decision-request", "decision-answer", "run-land", "accept-finding",
+    "discard-snapshot",
+})
+_V1_MUTATIONS = frozenset({
+    "create", "stage-start", "stage-complete", "review-start", "land",
+    "measure-usage", "reflect-prepare", "reflect-complete", "reflect-exhausted",
+    "gate0-start", "review-address", "review-proof", "resume", "restore",
+    "abandon", "decision-request", "decision-answer", "run-land",
+    "accept-finding", "discard-snapshot",
+})
+_V1_READS = frozenset({"status", "push-status"})
 
 
 def _safe_project(p: str) -> bool:
@@ -81,7 +95,8 @@ TOKEN_SUBCOMMANDS = ("stage-start", "stage-complete", "run-update", "run-repo-ad
                      "run-claim-main")
 # Token subcommands the user approves first: their token is issued by the
 # phase="approved" registration, after dangerous_command_gate (module docstring).
-AFTER_APPROVAL = frozenset({"run-claim-main"})
+AFTER_APPROVAL = frozenset({
+    "run-claim-main", "run-land", "accept-finding", "discard-snapshot"})
 _DECIDE_TIMEOUT = 4.0
 # Variables that change where / whether the CLI isolates: the gate and the CLI must agree.
 _STEERING_ENV = ("SWARM_WORKTREE_MODE", "SWARM_WORKTREE_ROOT", "SWARM_WORKTREE_LEDGER",
@@ -141,18 +156,23 @@ def parse_cli_calls(command: str) -> "tuple[list[dict], bool]":
             continue
         tool = os.path.basename(prog[j])[:-3]
         rest = prog[j + 1:]
-        sub = next((t for t in rest if not t.startswith("-")), None) if tool == "artifact_cli" else "run"
+        sub = next((t for t in rest if not t.startswith("-")), None)
+        if tool == "pipeline_test":
+            sub = "run"
         calls.append({"tool": tool, "sub": sub, "run_id": _opt(rest, "--run-id"),
                       "project": _opt(rest, "--project"), "stage": _opt(rest, "--stage"),
-                      "status": _opt(rest, "--status"), "ambiguous": _ambiguous(rest),
+                      "status": _opt(rest, "--status"),
+                      "session_id": _opt(rest, "--session-id"),
+                      "ambiguous": _ambiguous(rest),
                       "assigns": [t.split("=", 1)[0] for t in lead if "=" in t],
                       "argv": list(rest), "run_ids": _opt_all(rest, "--run-id"),
-                      "projects": _opt_all(rest, "--project")})
+                      "projects": _opt_all(rest, "--project"),
+                      "session_ids": _opt_all(rest, "--session-id")})
     return calls, single
 
 
-_SCRIPTS = ("artifact_cli.py", "pipeline_test.py")
-_KEY_OPTS = ("--run-id", "--project", "--stage", "--status")
+_SCRIPTS = ("artifact_cli.py", "pipeline_test.py", "pipeline_v1.py")
+_KEY_OPTS = ("--run-id", "--project", "--stage", "--status", "--session-id")
 
 
 def _ambiguous(rest: list[str]) -> bool:
@@ -170,6 +190,15 @@ def _ambiguous(rest: list[str]) -> bool:
 
 
 def _needs_token(call: dict) -> "str | None":
+    if call["tool"] == "pipeline_v1":
+        subcommand = call.get("sub")
+        if subcommand in {"run-land", "accept-finding", "discard-snapshot"}:
+            request_ids = _opt_all(call.get("argv") or [], "--request")
+            if len(request_ids) == 1 and request_ids[0]:
+                action = {"run-land": "run-land", "accept-finding": "accept-finding",
+                          "discard-snapshot": "discard-snapshot"}[subcommand]
+                return f"{action}:{request_ids[0]}"
+        return None
     if call["tool"] != "artifact_cli":
         return None
     sub = call["sub"]
@@ -406,6 +435,51 @@ def _claim_refusal(sid: str, rid: str, data: dict, c: dict) -> "str | None":
     return None
 
 
+
+def _v1_run(command: dict) -> "tuple[Path, dict] | tuple[None, None]":
+    """Resolve a v1 run by run_id alone; caller-supplied project is not trusted."""
+    from core.security_hooks import _pipeline_runs_root
+    rid = command.get("run_id")
+    if not isinstance(rid, str) or not _RUN_ID_RE.fullmatch(rid):
+        return None, None
+    matches = list(Path(_pipeline_runs_root()).glob(
+        f"Projects/*/.artifacts/runs/{rid}/run.json"))
+    if len(matches) != 1:
+        return None, None
+    try:
+        data = json.loads(matches[0].read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None
+    return (matches[0], data) if isinstance(data, dict) else (None, None)
+
+
+def _v1_mutation_check(sid: str, call: dict) -> "str | None":
+    """Return a denial reason for an unbound or cross-project/session v1 mutation."""
+    sub = call.get("sub")
+    if sub not in _V1_MUTATIONS:
+        return None
+    projects = call.get("projects") or []
+    if len(projects) != 1 or not _safe_project(projects[0]):
+        return "Pipeline v1 mutations require one explicit, safe --project"
+    if sub == "create":
+        session_ids = call.get("session_ids") or []
+        if session_ids and (len(session_ids) != 1 or session_ids[0] != sid):
+            return "Pipeline v1 create --session-id must equal this app session"
+        return None
+    run_file, data = _v1_run(call)
+    if run_file is None or data is None:
+        return "Pipeline v1 mutation cannot resolve exactly one canonical --run-id"
+    actual_project = run_file.parents[3].name
+    if projects[0] != actual_project or data.get("project") != actual_project:
+        return (f"Pipeline v1 mutation project mismatch: run belongs to {actual_project}, "
+                f"not {projects[0]}")
+    owner = data.get("session_id")
+    if not isinstance(owner, str) or not owner:
+        return "Pipeline v1 mutation has no durable owning session"
+    if owner != sid and sub not in _TAKEOVER:
+        return f"Pipeline v1 run {call.get('run_id')} belongs to session {owner}"
+    return None
+
 def _decide(sid: str, command: str, tool_input: dict,
             phase: str = "check") -> "dict | None":
     from core import hook_token
@@ -416,6 +490,34 @@ def _decide(sid: str, command: str, tool_input: dict,
     for c in calls:
         if c["tool"] == "foreign":
             continue
+        if c["tool"] == "pipeline_v1":
+            reason = _v1_mutation_check(sid, c)
+            if reason:
+                return _deny(reason)
+            if c.get("sub") in _V1_MUTATIONS and c.get("sub") != "create":
+                run_file, data = _v1_run(c)
+                # _v1_mutation_check proved both values and owner identity above.
+                if run_file is None or data is None:
+                    return _deny("Pipeline v1 mutation lost its canonical run binding")
+                if data.get("session_id") != sid:
+                    reason = _takeover(run_file, str(c.get("run_id")), sid)
+                    if reason:
+                        return _deny(reason)
+                    try:
+                        owner_after = json.loads(run_file.read_text(encoding="utf-8")).get("session_id")
+                    except (OSError, ValueError):
+                        owner_after = None
+                    if owner_after != sid:
+                        return _deny("Pipeline v1 takeover could not prove this session owns the run")
+                # Ordinary v1 mutations need only owner/project binding. A run-land
+                # request additionally falls through to the post-approval one-time
+                # hook-token path below.
+                if _needs_token(c) is None:
+                    continue
+            if c.get("sub") == "create":
+                continue
+            if c.get("sub") in _V1_READS:
+                continue
         rid, proj = c.get("run_id"), c.get("project")
         known = bool(rid and proj and _RUN_ID_RE.fullmatch(rid) and _safe_project(proj))
         data = None
@@ -441,7 +543,9 @@ def _decide(sid: str, command: str, tool_input: dict,
             continue
         if c["tool"] == "artifact_cli" and c["sub"] not in _WRITING:
             continue
-        late = _needs_token(c) in AFTER_APPROVAL
+        token_sub = _needs_token(c)
+        late = token_sub == "run-claim-main" or bool(
+            c.get("tool") == "pipeline_v1" and token_sub)
         if phase == "approved" and not late:
             continue   # the check phase already handled it
         if c["tool"] == "artifact_cli" and c["sub"] in _TAKEOVER:
@@ -469,9 +573,10 @@ def _decide(sid: str, command: str, tool_input: dict,
                          "`source …`, subshells or `$(...)`), so the hook can hand it its "
                          f"one-time token.\nRun instead: {_single_form(data, c)}")
         if late and phase != "approved":
-            why = _claim_refusal(sid, rid, data, c)
-            if why:
-                return _deny(why)
+            if sub == "run-claim-main":
+                why = _claim_refusal(sid, rid, data, c)
+                if why:
+                    return _deny(why)
             continue   # token after the user's approval (phase="approved")
         nonce = hook_token.issue(run_file.parent, sid, rid, sub)
         if nonce is None:  # the daemon's token service is down: never run unproven
@@ -502,14 +607,16 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
             return {"decision": "approve"}
         tool_input = input_data.get("tool_input") or {}
         command = tool_input.get("command") or ""
-        if not isinstance(command, str) or (
-                "artifact_cli" not in command and "pipeline_test" not in command):
+        if not isinstance(command, str) or not any(
+                name in command for name in ("artifact_cli", "pipeline_test", "pipeline_v1")):
             return {"decision": "approve"}  # cheap path: no IO
         if phase == "approved" and not any(c in command for c in AFTER_APPROVAL):
             return {"decision": "approve"}  # nothing of this phase in the command
         if phase == "approved":
-            from core.security_hooks import _is_main_claim, consume_claim_approval
-            if _is_main_claim(command) and not consume_claim_approval(tool_use_id, command):
+            from core.security_hooks import (_is_main_claim, _is_v1_land_request,
+                                             consume_claim_approval)
+            if (_is_main_claim(command) or _is_v1_land_request(command)) \
+                    and not consume_claim_approval(tool_use_id, command):
                 return _deny("this claim was not approved by the user (no approval was "
                              "recorded for this command); rerun it as ONE command so the "
                              "user is asked")

@@ -42,8 +42,7 @@ REPO_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 COMMIT_TIMEOUT_S = 300.0
 INTEGRATE_LOCK_TIMEOUT_S = 30.0
 STALE_DAYS = 14
-LEDGER_KEEP_DAYS = 90
-_LIVE = ("running", "paused")
+_LIVE = ("running", "paused", "active", "awaiting_human", "reflecting")   # = run_index.LIVE_STATUSES
 _IN_PROGRESS = ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply")
 # Dependency dirs of the main checkout made visible in a new worktree as symlinks (the
 # worktree holds tracked files only). Each link is excluded from git (info/exclude:
@@ -747,14 +746,15 @@ def _patch_id(wt, a: str, b: str, run_id: str) -> str:
 
 
 def carries_over(wt: "str | Path", run_id: str, old_base: str, old_tree: str,
-                 new_base: str, new_tree: str) -> bool:
-    """A review or test of the change (old_base → old_tree) still holds for
-    (new_base → new_tree): every path that differs between the two trees was changed by
-    main's commits since old_base, and none of those is a path the run changed — so
-    each of the run's files is byte-identical in both trees. Main moves every few
-    minutes; without this every rebase voided the review and the tests and the landing
-    retry rebased again, a loop that never landed. Compared by blob, never by
-    ``git patch-id`` (it ignores whitespace, so a re-indent would pass). False on doubt."""
+                 new_base: str, new_tree: str, *,
+                 dependency_scope: "set[str] | None" = None) -> bool:
+    """Whether old-tree evidence remains valid after the integration base moves.
+
+    Pipeline v1 callers MUST pass ``dependency_scope`` containing the run's changed
+    files, selected tests, and their direct imports. Legacy callers omit it until the
+    one-shot cutover and retain the old non-overlap rule. All comparisons use git blob
+    identities; any missing or malformed evidence fails closed.
+    """
     if not all((old_base, old_tree, new_base, new_tree)):
         return False
     if (old_base, old_tree) == (new_base, new_tree):
@@ -766,6 +766,13 @@ def carries_over(wt: "str | Path", run_id: str, old_base: str, old_tree: str,
         mine = set(changed_paths(wt, old_base, old_tree)) | set(changed_paths(wt, new_base, new_tree))
     except WorktreeError:
         return False
+    if dependency_scope is not None:
+        if not isinstance(dependency_scope, set) or any(
+            not isinstance(path, str) or not path or path.startswith("/")
+            or path == ".." or path.startswith("../") for path in dependency_scope
+        ):
+            return False
+        return differs <= moved and not (moved & dependency_scope)
     return differs <= moved and not (moved & mine)
 
 
@@ -1612,16 +1619,16 @@ only after this snapshot was verified to restore the same tree.
 
 - base: `{base}` (integration branch {integration_branch})
 - snapshot commit: `{snapshot}` (tree `{tree}`), inside `worktree.bundle`
+- preserved branch: `run/{run_id}`
 - `changes.diff`: the same change as a binary diff, for reading
 
 Restore:
 
-    git worktree add -b restore/{run_id} /tmp/restore-{run_id} {base}
-    git -C /tmp/restore-{run_id} fetch {ledger_hint} 'refs/swarm-ledger/*:refs/swarm-ledger/*'
-    git -C /tmp/restore-{run_id} read-tree -u --reset {snapshot}
+    git worktree add /path/chosen-by-user run/{run_id}
 
-Ignored files (.gitignore) are not in the snapshot. Kept 90 days.
-""".replace("{ledger_hint}", "<this dir>/worktree.bundle")
+The branch, bundle and diff have no time-based expiry. Only an explicitly authorized
+`discard_snapshot` action may delete them.
+"""
 
 
 def _admin_dir_for(main: Path, path: Path) -> "Path | None":
@@ -1665,7 +1672,8 @@ def is_listed(main, path: "str | Path") -> "bool | None":
     return any(w.get("path") == want for w in items[1:]) and items[0].get("path") != want
 
 
-def _remove(run_id: str, entry: dict, main: Path, merged: bool) -> None:
+def _remove(run_id: str, entry: dict, main: Path, merged: bool,
+            *, keep_branch: bool = False) -> None:
     path = _safe_to_touch(run_id, entry["repo_name"], main)
     for rel in DEP_LINKS:  # the dependency links point INTO main: drop them first
         link = path / rel
@@ -1680,7 +1688,8 @@ def _remove(run_id: str, entry: dict, main: Path, merged: bool) -> None:
     admin = _admin_dir_for(main, path)
     if admin is not None:
         shutil.rmtree(admin, ignore_errors=True)
-    git(main, "branch", "-q", "-d" if merged else "-D", branch_name(run_id))
+    if not keep_branch:
+        git(main, "branch", "-q", "-d" if merged else "-D", branch_name(run_id))
     drop_srcgraph_cache(path)
     refs = git(main, "for-each-ref", "--format=%(refname)", f"refs/run/{run_id}/").stdout
     for r in refs.split():
@@ -1718,8 +1727,9 @@ def release(run_id: str, run_state: dict, mains: "dict[str, Path]", reason: str)
             ledger = None
             if path.exists():
                 ledger = snapshot_to_ledger(run_id, entry, main, reason)
-            _remove(run_id, entry, main, merged=False)
+            _remove(run_id, entry, main, merged=False, keep_branch=True)
             entry.update(state="released", released_at=_now_iso(),
+                         branch=branch_name(run_id),
                          ledger=str(ledger) if ledger else None, release_reason=reason)
             results.append({"repo": name, "ok": True, "integrated": False,
                             "ledger": str(ledger) if ledger else None})
@@ -2160,19 +2170,15 @@ def _sweep_branches(runs: dict, report: dict) -> None:
                         or git(main, "bundle", "verify", str(b)).returncode != 0:
                     report["errors"].append(f"{ref}: bundle failed — branch kept")
                     continue
+                report["branches"].append(f"{ref} (unmerged; branch + bundle kept)")
+                continue
             git(main, "branch", "-q", "-D", ref[len("refs/heads/"):])
-            report["branches"].append(f"{ref} ({'merged' if merged else 'bundled'})")
+            report["branches"].append(f"{ref} (merged)")
 
 
 def _purge_ledgers(now: float, report: dict) -> None:
-    root = ledger_root()
-    for d in root.iterdir() if root.is_dir() else []:
-        try:
-            if d.is_dir() and now - d.stat().st_mtime > LEDGER_KEEP_DAYS * 86400:
-                shutil.rmtree(d)
-                report["ledgers_purged"] += 1
-        except OSError:
-            continue
+    """V1 snapshots never expire; only authorized discard_snapshot deletes them."""
+    report.setdefault("ledgers_purged", 0)
 
 
 # ── after release (§6.4, §8.1, §8.3) ─────────────────────────────────────────

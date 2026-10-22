@@ -165,7 +165,7 @@ CIRCUIT_STALL_ROUNDS = 4   # consecutive verify/recheck runs with the SAME block
 # goal profile: the cycle loop's stop rules are code, not card prose (run_a2f2c171 ran 236
 # tdd calls / 232 min). tdd is the per-cycle RED/GREEN step, so its count bounds the loop.
 GOAL_TDD_MAX = 80
-ALL_MODES = TEST_MODES + ("probe", "mutation", "snapshot", "prove")
+ALL_MODES = TEST_MODES + ("validation", "probe", "mutation", "snapshot", "prove")
 PROOF_MODES = ("snapshot", "prove")
 TDD_MAX_FILES = 5
 SMOKE_CAP = 40
@@ -919,6 +919,7 @@ _SOURCE_SCAN_SUITES = (
     "backend/tests/test_handler_log_safety.py",
     "backend/tests/test_job_model_ssot.py",
     "backend/tests/test_output_degeneration.py",
+    "backend/tests/test_pipeline_v1_cutover.py",
     "backend/tests/test_r6a_ceiling_decouple.py",
     "backend/tests/test_router_async_blocking.py",
     "backend/tests/test_silent_except_baseline.py",
@@ -3667,6 +3668,70 @@ def _tree_digest(inputs: dict[str, str], changed: list[str], run_files) -> dict[
     return {f: d for f, d in sorted(inputs.items()) if f in keep}
 
 
+def _v1_cache_key(ctx, runner, mode: str, plan: dict, targets: dict,
+                  inputs: dict[str, str], extra: list[str], frontend_key: str) -> str:
+    """Complete immutable identity for the active v1 whole-call result cache."""
+    from core.run_protocol.cache import cache_key
+    from core.run_protocol.risk_selection import RISK_RULES_VERSION
+    selectors = {path: (sorted(nodeids) if nodeids is not None else None)
+                 for path, nodeids in sorted(targets.items())}
+    return cache_key({
+        "kind": "test_result", "repo": runner.repo_name, "tree": runner.code_tree,
+        "pipeline_code_hash": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "protocol_version": 1,
+        "rules_version": f"runner-{RUNNER_VERSION}/{RISK_RULES_VERSION}",
+        "mode": mode, "python": _python_id(ctx.python), "selectors": selectors,
+        "smoke": dict(sorted(plan.get("smoke", {}).items())),
+        "dependency_scope": sorted(plan.get("l2") or []),
+        "risk_rules": list(plan.get("risk_rules") or []),
+        "manifest": runner.manifest_identity(plan.get("changed") or []),
+        "inputs": dict(sorted(inputs.items())), "extra": list(extra),
+        "frontend_key": frontend_key or None,
+        "runner_code_hash": hashlib.sha256(
+            (_BACKEND_DIR / "core" / "run_protocol" / "runner.py").read_bytes()).hexdigest(),
+    })
+
+
+def _v1_cache_value(ev: dict) -> dict:
+    """Remove invocation-local data before cross-run immutable comparison/storage."""
+    drop = {"run_id", "started_at", "finished_at", "duration_s", "cached", "warnings",
+            "logs", "worktree", "reused_from", "repo_mutations", "tdd_repeats"}
+    value = {key: val for key, val in ev.items() if key not in drop}
+    value["results"] = [{key: val for key, val in row.items() if key != "duration"}
+                        for row in value.get("results") or [] if isinstance(row, dict)]
+    return value
+
+
+def _v1_cache_conflict(ctx, runner, key: str, new_value=None) -> None:
+    from core.run_protocol.cache import conflict_hashes, value_hash
+    hashes = conflict_hashes(ctx.cache / "v1", "test", key)
+    if hashes is None:
+        first_hash = "0" * 64
+        new_hash = value_hash(new_value) if new_value is not None else "0" * 64
+    else:
+        first_hash, new_hash = hashes
+    runner.record_cache_conflict(key=key, first_hash=first_hash, new_hash=new_hash)
+    ctx.warnings.append(f"v1 cache key {key[:12]} is poisoned by conflicting cross-run values; ignored")
+
+
+def _v1_cache_read(ctx, runner, key: str):
+    from core.run_protocol.cache import CacheError, read
+    try:
+        return read(ctx.cache / "v1", "test", key)
+    except CacheError as exc:
+        if "poisoned" not in str(exc):
+            raise
+        _v1_cache_conflict(ctx, runner, key)
+        return None
+
+
+def _v1_cache_put(ctx, runner, key: str, ev: dict) -> None:
+    from core.run_protocol.cache import put_once
+    value = _v1_cache_value(ev)
+    if put_once(ctx.cache / "v1", "test", key, value) == "conflict":
+        _v1_cache_conflict(ctx, runner, key, value)
+
+
 # ── per-file reuse between verify / regression runs of one pipeline run ────
 # Measured on the recorded runs (2026-10-18): of 49,049 L2 test executions in
 # consecutive verify / regression calls of one run, 9,548 (301 files) were of an
@@ -4028,6 +4093,22 @@ def _plan_ac_refs(ctx, plan: dict) -> "tuple[list[str], list[str]]":
     return ac_files, probe_refs
 
 
+
+
+def _risk_expansion(ns, changed: list[str], repo: Path) -> tuple[list[str], list[str], list[str]]:
+    """V13 risk table; inert for legacy runs, bounded by protected contract.json."""
+    if not ns.run_id:
+        return [], [], []
+    from config import get_app_data_dir
+    from core.run_protocol.risk_selection import expand
+    from core.run_protocol.runner import read_contract
+    contract = read_contract(get_app_data_dir(), ns.run_id)
+    if contract is None:
+        return [], [], []
+    cap = contract.get("risk_test_file_cap")
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
+        raise ValueError("v1 contract lacks a positive risk_test_file_cap")
+    return expand(repo, changed, cap=cap)
 def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
           sgraph: dict | None = None) -> tuple[dict, str | None]:
     plan = {"targets": {}, "skipped": [], "smoke": {}, "ac_entries": [], "l2": [],
@@ -4117,6 +4198,16 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                 if r.startswith(PROBE_REF_PREFIX)], changed)
     recent = _recent_failure_files(ev_root) if mode != "recheck" else []
     sel, skipped, _ = select_backend(ctx.repo, scope, graph, None, recent, sgraph)
+    risk_selected, risk_rules, risk_overflow = _risk_expansion(ns, scope, ctx.repo)
+    sel = list(dict.fromkeys([*sel, *risk_selected]))
+    skipped = [*skipped, *risk_overflow]
+    if risk_rules:
+        plan["risk_rules"] = risk_rules
+    if risk_overflow:
+        plan["risk_overflow"] = risk_overflow
+        ctx.warnings.append(
+            f"risk expansion exceeded contract cap by {len(risk_overflow)} test file(s); "
+            "the final is incomplete, not partially green")
     for f in sel:
         _add_target(plan["targets"], f, None)
     plan["l2"], plan["skipped"] = sel, list(skipped)
@@ -4181,7 +4272,7 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
 
 # ── test-mode execution ─────────────────────────────────────────────────────
 def _auto_recheck(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
-                  prev: dict) -> "tuple[dict, int] | None":
+                  prev: dict, v1=None) -> "tuple[dict, int] | None":
     """Same inputs as the last ``ns.mode`` run (same cache key) and the deadline left
     tests unrun: CONTINUE it. A recheck runs only those unrun tests and is overlaid onto
     the ``ns.mode`` evidence; tests that ran and failed keep their result (never re-run
@@ -4192,7 +4283,7 @@ def _auto_recheck(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
             "ran a recheck of its failed / not-run tests and overlaid the results")
     ctx.warnings.append(note)  # lands in the overlaid evidence; withdrawn on fallback
     ns2 = argparse.Namespace(**{**vars(ns), "mode": "recheck", "auto_recheck_of": ns.mode})
-    out, code = _run_test_mode(ctx, ns2, ev_root, run_state, deadline)
+    out, code = _run_test_mode(ctx, ns2, ev_root, run_state, deadline, v1=v1)
     merged = _read_json(ev_root / "tests" / f"latest-{ns.mode}.json")
     if out.get("error") or out.get("overlaid_onto") != ns.mode or not isinstance(merged, dict):
         if note in ctx.warnings:
@@ -4366,7 +4457,8 @@ def _ref_nodeids(repo: Path, project: str, run_state: dict, ac_entries: list) ->
     return list(dict.fromkeys(out))
 
 
-def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> tuple[dict, int]:
+def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
+                   v1=None) -> tuple[dict, int]:
     started_at = _now_iso()
     if ns.run_id:
         tripped = _circuit_breaker_check(ev_root, ns.mode,
@@ -4393,14 +4485,16 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     head = _head_sha(ctx.repo)
     changed_in = list(dict.fromkeys(plan["changed"] + plan["desktop"]))
     inputs = _key_inputs(ctx, {**ord_files, **targets}, plan["smoke"], changed_in, sgraph)
-    key = _cache_key(ctx, ns.mode, targets, plan["smoke"],
-                     plan["explicit"] + [json.dumps(plan["ac_entries"]),
-                                         json.dumps(plan.get("probe_rows") or []),
-                                         json.dumps(plan["skipped"])]
-                     + ([json.dumps(ordered)] if ordered else [])
-                     # a continuation that leaves desktop files out is not the same run
-                     + ([json.dumps(plan["desktop_done"])] if plan.get("desktop_done") else []),
-                     inputs, head)
+    fmode = ns.mode + ("+tsc" if plan.get("desktop_tsc") else "")
+    fkey = _frontend_key(ctx, fmode, plan["desktop"], plan["changed"]) if plan["desktop"] else ""
+    key_extra = (plan["explicit"] + [json.dumps(plan["ac_entries"]),
+                                     json.dumps(plan.get("probe_rows") or []),
+                                     json.dumps(plan["skipped"])]
+                 + ([json.dumps(ordered)] if ordered else [])
+                 + ([json.dumps(plan["desktop_done"])] if plan.get("desktop_done") else []))
+    legacy_key = _cache_key(ctx, ns.mode, targets, plan["smoke"], key_extra, inputs, head)
+    key = (_v1_cache_key(ctx, v1, ns.mode, plan, targets, inputs, key_extra, fkey)
+           if v1 is not None else legacy_key)
     tree = _tree_digest(inputs, changed_in, list(targets) + list(ord_files)
                         + list(plan["smoke"].values()))
     if ns.mode in ("verify", "regression") and not getattr(ns, "auto_recheck_of", None):
@@ -4415,7 +4509,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                     "its result stands as reported (not re-run). Fix the code, then run again"]
                 return _test_output(ev, ev_root / "tests" / f"latest-{ns.mode}.json"), _exit_code(ev)
             # Tests that never got to run before the deadline: continue only those.
-            auto = _auto_recheck(ctx, ns, ev_root, run_state, deadline, prev)
+            auto = _auto_recheck(ctx, ns, ev_root, run_state, deadline, prev, v1=v1)
             if auto is not None:
                 return auto
     fix = None
@@ -4430,10 +4524,8 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     idx_info = {"auto_recheck_of": getattr(ns, "auto_recheck_of", None),
                 "rechecked_from": plan.get("base_finished_at") if ns.mode == "recheck" else None,
                 "fix": fix}
-    fmode = ns.mode + ("+tsc" if plan.get("desktop_tsc") else "")
-    fkey = _frontend_key(ctx, fmode, plan["desktop"], plan["changed"]) if plan["desktop"] else ""
-    cpath = ctx.cache / "results" / f"{key}{fkey[:16]}.json"
-    hit = _read_json(cpath)
+    cpath = ctx.cache / "results" / f"{legacy_key}{fkey[:16]}.json"
+    hit = (_v1_cache_read(ctx, v1, key) if v1 is not None else _read_json(cpath))
     if isinstance(hit, dict) and hit.get("schema") == 1 and _cacheable(hit):
         ev = dict(hit)
         ev.pop("reused_from", None)  # names evidence of the call that wrote the cache entry
@@ -4464,7 +4556,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                 + ": nothing they import or may read changed since; not re-run")
     plan["l2_file_keys"] = keys
     bvt_keys: dict = {}
-    if ns.mode == "regression" and plan.get("bvt"):
+    if v1 is None and ns.mode == "regression" and plan.get("bvt"):
         bvt_hit, bvt_keys = _bvt_cache_reuse(ctx, plan, sgraph)
         if bvt_hit:
             reused.update(bvt_hit)
@@ -4482,7 +4574,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     try:
         jobs: list[_Job] = []
         fpath = ctx.cache / "results" / f"frontend-{fkey}.json"
-        fhit = _read_json(fpath) if fkey else None
+        fhit = _read_json(fpath) if fkey and v1 is None else None
         if fkey and not isinstance(fhit, list):
             jobs += _frontend_jobs(ctx, plan["desktop"],
                                    ns.mode in ("verify", "regression") or bool(plan.get("desktop_tsc")),
@@ -4528,7 +4620,8 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
             fres = [r for r in results if r.get("layer") in ("vitest", "tsc")]
             # Cache only an all-green frontend result: a failure (flaky or real) is
             # always re-run, never served from frontend-{fkey}.json.
-            if fres and not any(r["outcome"] in _FAIL for r in fres) and not plan.get("desktop_done"):
+            if (v1 is None and fres and not any(r["outcome"] in _FAIL for r in fres)
+                    and not plan.get("desktop_done")):
                 _write_json(fpath, fres)
         cls = classify_failures(ctx, results)
     finally:
@@ -4547,7 +4640,10 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
         if plan.get("bvt_reused"):
             ev["bvt_reused"] = plan["bvt_reused"]
     if _cacheable(ev) and not (mutated and mutated["left"]):  # tests ran on a moving tree
-        _write_json(cpath, ev)
+        if v1 is not None:
+            _v1_cache_put(ctx, v1, key, ev)
+        else:
+            _write_json(cpath, ev)
     wtev = _worktree_evidence(ctx)  # after the cache write: it describes THIS worktree
     if wtev:
         ev["worktree"] = wtev
@@ -4666,6 +4762,9 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
                                    | {"backend/" + a.split("::")[0] for o in plan.get("ordered") or []
                                       for a in o if not a.startswith(_SHARD_MODIFIERS)}),
           "skipped_for_budget": plan["skipped"], "counts": counts,
+          "dependency_scope": sorted(l2),
+          **({"risk_rules": list(plan["risk_rules"])} if plan.get("risk_rules") else {}),
+          **({"risk_overflow": list(plan["risk_overflow"])} if plan.get("risk_overflow") else {}),
           "transitive_unrun": list(plan.get("transitive_unrun") or []),
           **({"bvt_files": list(plan["bvt"])} if plan.get("bvt") else {}),
           **({"context_unverified": sorted(set(plan["context_unverified"]))}
@@ -4752,9 +4851,18 @@ def _test_output(ev: dict, path: Path) -> dict:
     # Tolerant reads: an overlay's base may be hand-written / older evidence.
     fails = [f for f in ev.get("failures") or [] if isinstance(f, dict)]
     skipped = list(ev.get("skipped_for_budget") or [])
+    selected_files = sorted(set(ev.get("selected_files") or []))
+    selected_nodeids = sorted({str(row.get("nodeid")) for row in ev.get("results") or []
+                               if isinstance(row, dict) and row.get("nodeid")})
     out = {"mode": ev.get("mode"), "cached": bool(ev.get("cached")), "ok": _exit_code(ev) == 0,
            "counts": ev.get("counts") or {}, "duration_s": ev.get("duration_s", 0),
-           "selected": len(ev.get("selected_files") or []),
+           "selected": len(selected_files), "selected_files": selected_files,
+           "selected_nodeids": selected_nodeids, "cache_key": ev.get("cache_key"),
+           "dependency_scope": {"files": list(ev.get("dependency_scope") or []),
+                                "unrun": sorted(set(ev.get("transitive_unrun") or [])),
+                                "layer": (ev.get("layers") or {}).get("dependency_scoped") or {}},
+           "risk_rules": list(ev.get("risk_rules") or []),
+           "risk_overflow": list(ev.get("risk_overflow") or []),
            "failures": [{"nodeid": f.get("nodeid"), "classification": f.get("classification", "unknown"),
                          "summary": _short(str(f.get("summary") or ""), SUMMARY_LINES),
                          **{k: f[k] for k in ("order_dependent", "culprit") if k in f}}
@@ -5167,7 +5275,7 @@ def run_prove(ctx, ns, ev_root: Path) -> tuple[dict, int]:
     batch, so a deadline between the two runs loses nothing and a later call (or a
     call after a rebase) re-runs only the new side. ``continue: true`` when some
     verdict is still pending; the next call of the same command finishes it."""
-    from core import finding_ledger as fl
+    from core.run_protocol import findings as fl
     from core import run_worktree as rw
     out: dict = {"mode": "prove", "round": ns.round}
     ids, err = _prove_ids(ctx, ns.files)
@@ -5269,7 +5377,9 @@ def _compact(out: dict) -> dict:
     """Shrink the printed object toward OUTPUT_BUDGET bytes; evidence keeps everything."""
     out = json.loads(json.dumps(out))
     steps = [("summary", 5), ("summary", 2), ("warnings", 3), ("failures", 5),
-             ("summary", 0), ("skipped_for_budget", 3), ("failures", 3), ("warnings", 1)]
+             ("summary", 0), ("skipped_for_budget", 3), ("failures", 3), ("warnings", 1),
+             # the v1 selection lists are recorded in full by the runner before printing
+             ("selected_nodeids", 0), ("selected_files", 0), ("risk_rules", 0)]
     for field, n in steps:
         if _size(out) <= OUTPUT_BUDGET:
             break
@@ -5302,6 +5412,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--name")
     p.add_argument("--mutations")
     p.add_argument("--round", help="snapshot / prove: the review round label (R1, R2)")
+    p.add_argument(
+        "--finding", action="append", default=[], metavar="CF-ID=NODEID",
+        help="prove mode: bind one canonical finding to its exact break-test nodeid")
     p.add_argument("--deadline", default=DEFAULT_DEADLINE)
     p.add_argument("--json", action="store_true", help="accepted for clarity; output is always JSON")
     return p
@@ -5334,6 +5447,133 @@ def _clamp_seconds(raw) -> tuple[float | None, list[str]]:
                     f"{d + 10:g}s or the runner is killed before it reports")
     return d, warn
 
+
+def _v1_runner(ns, run_dir: Path, run_state: dict, ctx):
+    """Build the v1 adapter only when protected contract.json says protocol v1."""
+    if not ns.run_id:
+        return None
+    from config import get_app_data_dir
+    from core.run_protocol import git_tree
+    from core.run_protocol.runner import V1Runner, read_contract
+    contract = read_contract(get_app_data_dir(), ns.run_id)
+    if contract is None:
+        return None
+    repo_name = str(_WORKTREE.get("name") or ctx.repo.name)
+    code_tree = git_tree.write_tree(
+        str(ctx.repo), (f".aidlc/deliverables/{ns.run_id}/",), {})
+    base = _head_sha(ctx.repo)
+    if base is None:
+        raise RuntimeError("v1 runner cannot resolve repo base")
+    return V1Runner(
+        run_dir=run_dir, repo_root=ctx.repo, repo_name=repo_name,
+        run_id=ns.run_id, base=base, code_tree=code_tree,
+        contract=contract, python=ctx.python,
+    )
+
+
+def _v1_trace(ns, run_state: dict, seq: int, result: str) -> list[dict]:
+    """Trace every matching DESIGN_SPEC exit criterion to this runner invocation."""
+    plan = _stage_data(ns.project, run_state, "plan")
+    exits = plan.get("exit_criteria") if isinstance(plan, dict) else []
+    rows = []
+    for exit_row in exits if isinstance(exits, list) else []:
+        if not isinstance(exit_row, dict) or exit_row.get("kind") not in {"test", "probe", "mutation"}:
+            continue
+        if exit_row.get("kind") != ("test" if ns.mode in TEST_MODES else ns.mode):
+            continue
+        rows.append({"exit": str(exit_row.get("id") or ""), "kind": exit_row["kind"],
+                     "covers": list(exit_row.get("covers") or []),
+                     "ref": str(exit_row.get("ref") or exit_row.get("argv") or ""),
+                     "result": result, "seq": seq})
+    return rows
+
+
+def _v1_main_red_provenance() -> dict[str, str | None]:
+    from core import main_red
+    path = main_red.registry_path()
+    try:
+        data = path.read_bytes()
+        generated = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+    except FileNotFoundError:
+        data, generated = b"", None
+    return {"sha": hashlib.sha256(data).hexdigest(), "generated_at": generated}
+
+
+def _v1_finalize(ns, run_state: dict, runner, *, call: dict, result: str,
+                 changed: list[str], cache_keys: list[str],
+                 risk_status: str = "within_cap", selection: dict | None = None) -> dict:
+    runner_hash = hashlib.sha256(
+        (_BACKEND_DIR / "core" / "run_protocol" / "runner.py").read_bytes()).hexdigest()
+    pipeline_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    actual = dict(selection or {})
+    actual.setdefault("files", [])
+    actual.setdefault("nodeids", [])
+    actual.setdefault("summary", {})
+    actual.setdefault("dependency_scope", {})
+    actual.setdefault("risk_rules", [])
+    actual.update(mode=ns.mode, rules_version=RUNNER_VERSION, risk_status=risk_status)
+    final = runner.finalize(
+        changed_paths=changed, runner_code_hash=runner_hash,
+        pipeline_code_hash=pipeline_hash,
+        runner_argv=[str(Path(__file__).resolve()), *sys.argv[1:]],
+        selection=actual,
+        cache_keys=cache_keys, main_red=_v1_main_red_provenance(),
+        trace=_v1_trace(ns, run_state, call["seq"], result),
+    )
+    return {"repo": runner.repo_name, "tests": final["tests"],
+            "validations": final["validations"],
+            "final": str(runner.run_dir / "evidence" / "tests" /
+                         f"final-{runner.repo_name}.json")}
+
+
+def _run_v1_validation(ns, run_state: dict, runner, changed: list[str]) -> tuple[dict, int]:
+    entries = {entry["id"]: entry for entry in runner.required_validations(changed)}
+    if not ns.name or ns.name not in entries:
+        return {"mode": "validation", "error": "--name must identify a required base validation",
+                "required": sorted(entries)}, 2
+    call = runner.run_validation(entries[ns.name])
+    prior = runner.prior_selection()
+    selection = prior or {"files": [], "nodeids": [], "summary": {"validation": ns.name},
+                          "dependency_scope": {}, "risk_rules": []}
+    summary = _v1_finalize(ns, run_state, runner, call=call, result=call["result"],
+                           changed=changed, cache_keys=[], selection=selection,
+                           risk_status=str(prior.get("risk_status") or "within_cap"))
+    return {"mode": "validation", "name": ns.name, "ok": call["result"] == "pass",
+            "call": call, **summary}, (0 if call["result"] == "pass" else 1)
+
+
+
+def _record_v1_test_result(ns, run_state: dict, runner, output: dict, code: int,
+                           changed: list[str]) -> dict:
+    call = runner.record_pipeline_call(
+        argv=[str(Path(__file__).resolve()), *sys.argv[1:]],
+        tool_version=f"pipeline-test-{RUNNER_VERSION}", target=ns.mode,
+        output=output, exit_code=code)
+    result = call["result"]
+    selection = {"files": list(output.get("selected_files") or []),
+                 "nodeids": list(output.get("selected_nodeids") or []),
+                 "summary": dict(output.get("counts") or {}),
+                 "dependency_scope": dict(output.get("dependency_scope") or {}),
+                 "risk_rules": list(output.get("risk_rules") or [])}
+    summary = _v1_finalize(ns, run_state, runner, call=call, result=result,
+                           changed=changed, selection=selection,
+                           cache_keys=[str(output.get("cache_key"))]
+                           if output.get("cache_key") else [],
+                           risk_status=("incomplete" if output.get("risk_overflow")
+                                        or output.get("skipped_for_budget_total") else "within_cap"))
+    return {**output, "v1": summary}
+
+
+def _v1_proof_bindings(values: list[str]) -> dict[str, str]:
+    bindings: dict[str, str] = {}
+    for value in values:
+        finding_id, sep, nodeid = value.partition("=")
+        if not sep or not re.fullmatch(r"CF-[0-9a-f]{8}", finding_id) \
+                or "::" not in nodeid or finding_id in bindings:
+            raise ValueError(
+                "--finding must uniquely use CF-1234abcd=backend/tests/test_x.py::test_name")
+        bindings[finding_id] = nodeid
+    return bindings
 
 def execute(ns) -> tuple[dict, int]:
     """Run one parsed invocation; returns (output dict, exit code)."""
@@ -5375,6 +5615,12 @@ def execute(ns) -> tuple[dict, int]:
     ctx.warnings.extend(dl_warn)
     for w in dl_warn:
         print(f"pipeline_test.py: warning: {w}", file=sys.stderr)
+    v1 = _v1_runner(ns, run_dir, run_state, ctx) if ns.run_id else None
+    changed = changed_files(ctx.repo, run_state, ctx.warnings, (ns.project, ns.run_id))
+    if ns.mode == "validation":
+        if v1 is None:
+            return {"mode": "validation", "error": "validation mode requires a v1 contract"}, 2
+        return _run_v1_validation(ns, run_state, v1, changed)
     if ns.mode in PROOF_MODES and not _isolated(ctx):
         shutil.rmtree(ctx.workdir, ignore_errors=True)
         return {"mode": ns.mode, "error": f"--mode {ns.mode} needs an isolated run worktree "
@@ -5384,12 +5630,21 @@ def execute(ns) -> tuple[dict, int]:
         if ns.mode == "snapshot":
             return run_snapshot(ctx, ns, ev_root)
         if ns.mode == "prove":
-            return run_prove(ctx, ns, ev_root)
+            output, code = run_prove(ctx, ns, ev_root)
+            if v1 is not None:
+                bindings = _v1_proof_bindings(list(getattr(ns, "finding", []) or []))
+                recorded = v1.record_proof_result(
+                    output=output, exit_code=code, bindings=bindings)
+                output = {**output, "v1": recorded}
+            return output, code
         if ns.mode == "probe":
             return run_probe(ctx, ns, ev_root, run_state)
         if ns.mode == "mutation":
             return run_mutations(ctx, ns, ev_root, run_state)
-        return _run_test_mode(ctx, ns, ev_root, run_state, deadline)
+        output, code = _run_test_mode(ctx, ns, ev_root, run_state, deadline, v1=v1)
+        if v1 is not None:
+            output = _record_v1_test_result(ns, run_state, v1, output, code, changed)
+        return output, code
     finally:
         shutil.rmtree(ctx.workdir, ignore_errors=True)
 

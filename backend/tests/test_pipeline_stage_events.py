@@ -109,6 +109,17 @@ class TestParseWatchedRunId:
         assert pse.parse_watched_run_id(["artifact_cli.py", "--run-id", "run_x"]) is None
 
 
+def test_pipeline_v1_commands_are_watched():
+    assert pse.is_run_create("python backend/scripts/pipeline_v1.py create --project P")
+    assert not pse.is_run_create(
+        "python backend/scripts/pipeline_v1.py status --project P --run-id run_v1")
+    for command in ("status", "stage-start", "stage-complete", "review-start",
+                    "push-status", "land", "measure-usage", "reflect-prepare",
+                    "reflect-complete", "reflect-exhausted"):
+        cmd = f"python backend/scripts/pipeline_v1.py {command} --project P --run-id run_v1"
+        assert pse.parse_watched_run_id(cmd) == "run_v1", command
+
+
 # ── run.json reading (real files) ────────────────────────────────────────────
 
 def _write_run(ws: Path, run_id: str, data: dict, project: str = "SwarmAI") -> Path:
@@ -151,6 +162,19 @@ class TestReadStageState:
         _write_run(tmp_path, "run_g", {"profile": "full", "stages": [
             "nope", {"no_stage": 1}, {"stage": 5}, {"stage": "think", "status": "completed"}]})
         assert list(pse.read_stage_state("run_g")["stages"]) == ["think"]
+
+    def test_reads_v1_stage_dict_and_live_identity(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+        _write_run(tmp_path, "run_v1", {
+            "profile": "direct", "status": "active", "stage": "build",
+            "updated_at": "2026-10-22T01:02:03+00:00",
+            "stages": {"plan": "completed", "build": "open", "review": "pending"},
+        })
+        state = pse.read_stage_state("run_v1")
+        assert state["status"] == "running"
+        assert state["current_stage"] == "build"
+        assert state["stages"]["plan"] == {"stage": "plan", "status": "completed"}
+        assert pse.current_stage(state) == "build"
 
 
 # ── diff → blocks ────────────────────────────────────────────────────────────
@@ -223,15 +247,15 @@ class TestNewStageBlocks:
         assert b["ordinal"] == 5 and b["nextOrdinal"] == 6 and b["next"] == "review"
         assert b["gate"] is None  # the verdict lives on the ④ row only
 
-    def test_plan_hands_over_to_gate1_on_strict_profiles(self):
+    def test_plan_hands_over_to_build_on_v13_profiles(self):
         before = _state("full", evaluate="completed", think="completed")
         after = _state("full", evaluate="completed", think="completed", plan="completed")
         (b,) = pse.new_stage_blocks("run_t1", before, after, self.AT)
-        assert (b["next"], b["nextOrdinal"]) == ("gate1", 4)
+        assert (b["next"], b["nextOrdinal"]) == ("build", 5)
         gb = _state("goal", evaluate="completed", think="completed")
         ga = _state("goal", evaluate="completed", think="completed", plan="completed")
         (g,) = pse.new_stage_blocks("run_t1", gb, ga, self.AT)
-        assert g["next"] == "gate1"
+        assert g["next"] == "goal_cycle"
 
     def test_gate1_verdict_before_build_finishes_is_its_own_row(self):
         before = _state("full", evaluate="completed", think="completed", plan="completed")
@@ -251,14 +275,14 @@ class TestNewStageBlocks:
         after = _state("research", evaluate="completed", think="completed", reflect="completed")
         (b,) = pse.new_stage_blocks("run_t1", before, after, self.AT)
         assert (b["ordinal"], b["position"], b["total"], b["next"], b["nextOrdinal"]) == (
-            10, 3, 3, None, None)
+            10, 4, 4, None, None)
 
     def test_goal_cycle_maps_to_build_slot(self):
         before = _state("goal", evaluate="completed", think="completed", plan="completed")
         after = _state("goal", evaluate="completed", think="completed", plan="completed",
                        goal_cycle="completed")
         (b,) = pse.new_stage_blocks("run_t1", before, after, self.AT)
-        assert (b["ordinal"], b["next"], b["nextOrdinal"]) == (5, "deliver", 9)
+        assert (b["ordinal"], b["next"], b["nextOrdinal"]) == (5, "review", 6)
 
     def test_legacy_complete_status_counts_as_completed(self):
         # 13 real run.json records say "complete" (data replay); show them as done
@@ -651,3 +675,22 @@ def test_every_ended_run_gets_a_summary_direct_and_abandoned_included():
     full = dict(state, profile="full", status="completed")
     sb = pse.summary_block("run_x", full, "now")
     assert sb is not None and sb["type"] == "pipeline_summary"
+
+
+def test_v1_stage_dict_transition_emits_completion_and_next_live_stage():
+    before = {
+        "profile": "direct", "v1": True, "stages": {
+            "plan": {"stage": "plan", "status": "open"},
+            "build": {"stage": "build", "status": "pending"},
+        }, "current_stage": "plan", "updated_at": "2026-10-22T01:00:00+00:00",
+    }
+    after = {
+        "profile": "direct", "v1": True, "stages": {
+            "plan": {"stage": "plan", "status": "completed"},
+            "build": {"stage": "build", "status": "open"},
+        }, "current_stage": "build", "updated_at": "2026-10-22T01:01:00+00:00",
+    }
+    blocks = pse.new_stage_blocks("run_v1", before, after, "fallback")
+    assert [(row["stage"], row["status"]) for row in blocks] == [
+        ("plan", "completed"), ("build", "in_progress")]
+    assert blocks[1]["at"] == "2026-10-22T01:01:00+00:00"

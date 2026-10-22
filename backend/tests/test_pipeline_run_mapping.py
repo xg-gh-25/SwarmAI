@@ -135,69 +135,6 @@ def test_mapping_key_is_app_session_not_env(tmp_path, monkeypatch):
 
 # ---- run-update --add-required-expert (append-only) -------------------------
 
-def _mk_run(tmp_path):
-    """Create a minimal run via the real CLI, return (project_dir_env, run_id)."""
-    # Use the real run-create so the run.json shape is authentic.
-    r = subprocess.run(
-        [sys.executable, str(_CLI), "run-create", "--project", "SwarmAI",
-         "--requirement", "test-run for required_experts append-only"],
-        capture_output=True, text=True, cwd=str(_CLI.parents[2]), timeout=60,
-    )
-    assert r.returncode == 0, r.stderr
-    return json.loads(r.stdout)["pipeline_id"]
-
-
-def _run_update(run_id, *args):
-    return subprocess.run(
-        [sys.executable, str(_CLI), "run-update", "--project", "SwarmAI",
-         "--run-id", run_id, *args],
-        capture_output=True, text=True, cwd=str(_CLI.parents[2]), timeout=60,
-    )
-
-
-def _read_run(run_id):
-    """Read the run via the CLI's OWN run-get (resolves the run file the same way
-    run-update did — no path guessing, which was wrong across cwd/workspaces)."""
-    r = subprocess.run(
-        [sys.executable, str(_CLI), "run-get", "--project", "SwarmAI", "--run-id", run_id],
-        capture_output=True, text=True, cwd=str(_CLI.parents[2]), timeout=60,
-    )
-    assert r.returncode == 0, f"run-get failed: {r.stderr}"
-    return json.loads(r.stdout)
-
-
-def _cleanup_run(run_id):
-    """Best-effort: remove the test run's dir if it is under the standard workspace.
-    A leftover test run is harmless, so this never fails the test."""
-    import shutil
-    for base in (Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "SwarmAI" / ".artifacts" / "runs",):
-        d = base / run_id
-        if d.exists():
-            shutil.rmtree(d, ignore_errors=True)
-
-
-def test_add_required_expert_append_only_and_idempotent():
-    """AC4: --add-required-expert appends; re-adding is idempotent; no remove path."""
-    run_id = _mk_run(None)
-    try:
-        r = _run_update(run_id, "--add-required-expert", "security",
-                        "--add-required-expert", "concurrency")
-        assert r.returncode == 0, r.stderr
-        rs = _read_run(run_id)
-        assert rs["required_experts"] == ["security", "concurrency"]
-
-        # idempotent re-add + one new
-        r = _run_update(run_id, "--add-required-expert", "security",
-                        "--add-required-expert", "state-machine")
-        assert r.returncode == 0, r.stderr
-        rs = _read_run(run_id)
-        assert rs["required_experts"] == ["security", "concurrency", "state-machine"], (
-            "re-adding 'security' duplicated it, or order was not preserved"
-        )
-    finally:
-        _cleanup_run(run_id)
-
-
 def test_no_remove_required_expert_flag_exists():
     """Structural proof of append-only: there is NO --remove-required-expert flag.
 

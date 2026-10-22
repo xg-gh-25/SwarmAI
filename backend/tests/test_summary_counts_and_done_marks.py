@@ -17,7 +17,6 @@ Two inaccuracies in what the completion summary and REPORT show:
 Methodology: the TEST derive is driven through the real ``cmd_stage_complete`` on a
 tmp workspace; the renderers and the predicate are called directly.
 """
-import copy
 import json
 import sys
 from pathlib import Path
@@ -31,7 +30,6 @@ for _p in (str(_BACKEND / "scripts"), str(_BACKEND)):
         sys.path.insert(0, _p)
 
 import scripts.artifact_cli as cli  # noqa: E402
-import pipeline_validator as pv  # noqa: E402
 from core import run_delivery_summary as rds  # noqa: E402
 from core.artifact_registry import ArtifactRegistry  # noqa: E402
 
@@ -57,91 +55,16 @@ def _make_run(root: Path, run_id: str) -> Path:
     return d
 
 
-def _evidence(run_dir: Path, run_id: str, counts: dict, failures: list) -> None:
-    p = run_dir / "evidence" / "tests" / "latest-regression.json"
-    p.parent.mkdir(parents=True)
-    p.write_text(json.dumps({
-        "schema": 1, "mode": "regression", "run_id": run_id,
-        "started_at": "2026-01-01T00:10:00+00:00", "finished_at": "2026-01-01T00:10:00+00:00",
-        "duration_s": 1.0, "cached": False, "selected_files": [], "skipped_for_budget": [],
-        "counts": counts, "results": [], "failures": failures,
-        "layers": {"ac_driven": {"run": True, "pass": 1, "fail": 0},
-                   "dependency_scoped": {"run": True, "tests": 1, "pass": 1},
-                   "import_smoke": {"run": True, "modules": 1, "pass": 1}}}), encoding="utf-8")
-
-
-def _complete_test(reg, capsys, run_id, artifact):
-    code = 0
-    try:
-        cli.cmd_stage_complete(SimpleNamespace(
-            project=PROJECT, run_id=run_id, stage="test", check=False,
-            data=json.dumps({"artifact": artifact, "record": {"decisions": DECISION}})), reg)
-    except SystemExit as e:
-        code = e.code
-    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
-    return code, json.loads(lines[-1])
-
-
-def _stored(root: Path, artifact_id: str) -> dict:
-    base = root / "Projects" / PROJECT / ".artifacts"
-    entry = next(e for e in json.loads((base / "manifest.json").read_text())["artifacts"]
-                 if e["id"] == artifact_id)
-    return json.loads((base / entry["file"]).read_text())
-
-
 def _fail(nodeid, cls, outcome="failed"):
     return {"nodeid": nodeid, "classification": cls, "outcome": outcome, "summary": "x"}
 
 
 # ── AC1: counts derived from the runner's evidence ──────────────────────────
 
-def test_counts_overwritten_from_evidence(ws, capsys):
-    root, reg = ws
-    rd = _make_run(root, "run_cnt")
-    _evidence(rd, "run_cnt",
-              {"passed": 10, "failed": 3, "errors": 1, "timeouts": 0, "skipped": 2},
-              [_fail("a::1", "pre-existing"), _fail("a::2", "pre-existing"),
-               _fail("a::3", "flaky"), _fail("a::4", "regression", "error")])
-    art = copy.deepcopy(pv.STAGE_TEMPLATES["test"])
-    art.update(tests_total=999, failed=0)            # the author's claim
-    code, out = _complete_test(reg, capsys, "run_cnt", art)
-    assert code == 0, out
-    stored = _stored(root, out["artifact_id"])
-    assert stored["tests_total"] == 14               # 10 + 3 + 1 + 0, skipped excluded
-    assert stored["pre_existing_failures"] == 2
-    assert stored["flaky_failures"] == 1
-    assert stored["failed"] == 1                     # only the regression
-    assert out["derived"]["test_counts"]["source"] == "evidence/tests/latest-regression.json"
-
-
-def test_an_author_written_tests_reused_never_survives_the_evidence(ws, capsys):
-    root, reg = ws
-    rd = _make_run(root, "run_reuse_claim")
-    _evidence(rd, "run_reuse_claim",
-              {"passed": 4, "failed": 0, "errors": 0, "timeouts": 0, "skipped": 0}, [])
-    art = copy.deepcopy(pv.STAGE_TEMPLATES["test"])
-    art.update(tests_reused=900)                     # the author's claim; nothing was reused
-    code, out = _complete_test(reg, capsys, "run_reuse_claim", art)
-    assert code == 0, out
-    assert "tests_reused" not in _stored(root, out["artifact_id"])
-
-
 def test_quality_line_says_how_many_passes_were_reused():
     line = rds._quality_line({}, {}, {"tests_total": 1220, "failed": 0, "tests_reused": 900})
     assert "测试 1220/1220 通过" in line and "其中 900 个复用（输入未变）" in line
     assert "复用" not in rds._quality_line({}, {}, {"tests_total": 5, "failed": 0, "tests_reused": None})
-
-
-def test_counts_kept_without_evidence(ws, capsys):
-    root, reg = ws
-    _make_run(root, "run_noev")
-    art = copy.deepcopy(pv.STAGE_TEMPLATES["test"])
-    art.update(tests_total=42, failed=0)
-    code, out = _complete_test(reg, capsys, "run_noev", art)
-    assert code == 0, out
-    stored = _stored(root, out["artifact_id"])
-    assert stored["tests_total"] == 42 and stored["failed"] == 0
-    assert "pre_existing_failures" not in stored
 
 
 def test_counts_helper_shape():

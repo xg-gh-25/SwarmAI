@@ -115,12 +115,6 @@ class _Own:
         m = os.path.realpath(str(m))
         return None if m in self.mains.values() else m
 
-    def repo_add_command(self, main: str) -> str:
-        args = (f"run-repo-add --project {shlex.quote(str(self.project or '<project>'))} "
-                f"--run-id {shlex.quote(str(self.id))} --path {shlex.quote(main)}")
-        return cli_command(self.cli, args)
-
-
     def main_hit(self, p: str) -> "tuple[str, str] | None":
         """(repo, worktree twin of p) when p lies in one of this run's main checkouts."""
         from core.run_worktree import wt_root
@@ -179,49 +173,13 @@ def _file_verdict(p: str, own: "_Own | None") -> "dict | None":
     if own is not None:
         m = own.main_hit(p)
         if m is not None:
-            from core.run_worktree import claim_args
-            note = _claim_note(own.mains[m[0]], p, cli_command(
-                own.cli, claim_args(own.project or "", own.id, [p])), "")
+            note = _claim_note(own.mains[m[0]], p, "", "")
             return _deny(f"this session's run {own.id} works in its own worktree; do not "
                          f"write the main checkout. Use {m[1]} instead of {p}." + note)
         repo = own.unisolated_repo(p)
         if repo is not None:
             return _repo_add_deny(own, repo, p)
     return None
-
-
-_CLI_CACHE: "list" = [0.0, None]
-
-
-def _latest_cli() -> "dict | None":
-    """The newest run's recorded CLI (absolute python + artifact_cli.py), for printing a
-    runnable command to a session that has no run of its own. Newest-first by mtime,
-    parsing stops at the first record; cached 60 s."""
-    import glob
-    import json
-    now = time.monotonic()
-    if now - _CLI_CACHE[0] < 60:
-        return _CLI_CACHE[1]
-    from core.security_hooks import _pipeline_runs_root
-    files = []
-    for f in glob.glob(os.path.join(_pipeline_runs_root(), "Projects", "*", ".artifacts",
-                                    "runs", "*", "run.json")):
-        try:
-            files.append((os.path.getmtime(f), f))
-        except OSError:
-            continue
-    found = None
-    for _t, f in sorted(files, reverse=True)[:50]:
-        try:
-            with open(f, encoding="utf-8") as fh:
-                cli = json.load(fh).get("cli")
-        except (OSError, ValueError, AttributeError):
-            continue
-        if isinstance(cli, dict):
-            found = cli
-            break
-    _CLI_CACHE[:] = [now, found]
-    return found
 
 
 class _NoRun:
@@ -354,32 +312,27 @@ def _no_run_verdict(p: str, nr: "_NoRun", what: "str | None" = None) -> "dict | 
         head += ("In a shared checkout this git command can move or discard other sessions' "
                  "work (read-only forms, --abort and --ff-only syncs are allowed). If it is "
                  "part of a code change, make the change in a run: ")
-    from core.run_worktree import claim_args
     r = nr.run
+    pq = shlex.quote(project)
     if r is not None:
-        note = "" if what is not None else _claim_note(main, p, cli_command(
-            r.get("cli"), claim_args(r["project"] or project, r["id"], [p])),
-            " once the worktree exists")
+        note = "" if what is not None else _claim_note(main, p, "", "")
         rid = shlex.quote(r["id"])
-        nxt = ("resume it: " + cli_command(r.get("cli"), f"run-resume --project "
-                                           f"{shlex.quote(r['project'] or project)} --run-id {rid}")
+        rp = shlex.quote(r["project"] or project)
+        nxt = ("resume it: " + v1_command(f"resume --project {rp} --run-id {rid}")
                if r.get("status") == "paused" else
-               "start its next plan/build stage (that creates the worktree), or give this repo "
-               "one: " + cli_command(r.get("cli"), f"run-repo-add --project "
-                                     f"{shlex.quote(r['project'] or project)} --run-id {rid} "
-                                     f"--path {shlex.quote(main)}"))
+               "start its next stage (that creates the worktree): " + v1_command(
+                   f"stage-start --project {rp} --run-id {rid}") +
+               "\nIf this repo is not one of the run's repos, it needs a new run: "
+               + v1_command(f"create --project {pq} --profile direct --repo "
+                            f"{shlex.quote(main)}"))
         return _deny(head + f"This session's run {r['id']} ({r.get('status')}) has no worktree "
                      f"for this repo yet: {nxt}\nThen make this change at the same relative "
                      "path under the worktree it prints." + note)
-    cli = _latest_cli()
-    pq = shlex.quote(project)
-    create = cli_command(cli, f"run-create --project {pq} --profile direct --requirement "
-                              "'<what you are changing and how to tell it is done>'")
-    start = cli_command(cli, f"stage-start --project {pq} --run-id <run_id> --stage plan")
-    note = "" if what is not None else _claim_note(main, p, cli_command(
-        cli, claim_args(project, "<run_id>", [p])), " after stage-start")
+    create = v1_command(f"create --project {pq} --profile direct --repo {shlex.quote(main)}")
+    start = v1_command(f"stage-start --project {pq} --run-id <run_id>")
+    note = "" if what is not None else _claim_note(main, p, "", "")
     return _deny(head + "Start a run (each as ONE simple command; `--profile direct` for a "
-                 "small, fully specified change, otherwise leave --profile out):\n"
+                 "small, fully specified change, otherwise pick the matching profile):\n"
                  f"Run: {create}\nThen: {start}\nand make this change at the same relative "
                  "path under the worktree stage-start prints." + note)
 
@@ -413,17 +366,30 @@ def _claim_note(main: str, p: str, claim: str, when: str) -> str:
     if r.returncode != 0 or not r.stdout.strip("\0"):
         return ""
     return (f"\n{p} is already an uncommitted change in the main checkout, so the worktree "
-            "does not have it. If this session wrote it, move it into the run first"
-            f"{when} (the user approves): {claim}\nthen edit or delete it in the worktree. "
-            "If another session wrote it, leave it alone.")
+            f"does not have it. {V1_MAIN_EDIT_REMEDY}")
+
+
+# Pipeline v1 has no claim or repo-add command (repos are fixed at `create --repo`), so
+# every hint about a main-checkout edit points at this one executable remedy.
+V1_MAIN_EDIT_REMEDY = (
+    "If this session wrote it, re-apply that change at the same relative path in the "
+    "run's worktree and tell the user the main-checkout copy is theirs to discard; never "
+    "delete or restore it yourself. If another session wrote it, leave it alone.")
+
+
+def v1_command(args: str) -> str:
+    """``<python> backend/scripts/pipeline_v1.py <args>``: the only mutation CLI after
+    the v1 cutover (a run.json "cli" record names the retired artifact_cli)."""
+    return f"backend/.venv/bin/python backend/scripts/pipeline_v1.py {args}"
 
 
 def _repo_add_deny(own: "_Own", repo: str, what: str) -> dict:
-    return _deny(f"{what} is in the git repo {repo}, which run {own.id} has no worktree for "
-                 "yet. Give it one first (one simple command, nothing chained):\n"
-                 f"Run: {own.repo_add_command(repo)}\n"
-                 "then make this change at the same relative path under the worktree it "
-                 "prints.")
+    return _deny(f"{what} is in the git repo {repo}, which run {own.id} has no worktree for. "
+                 "A v1 run's repos are fixed when it is created, so this change belongs in "
+                 "a new run that includes it (one simple command, nothing chained):\n"
+                 "Run: " + v1_command(
+                     f"create --project {shlex.quote(str(own.project or '<project>'))} "
+                     f"--profile direct --repo {shlex.quote(repo)}"))
 
 
 def _git_segments(command: str, cwd: str) -> "list[dict]":

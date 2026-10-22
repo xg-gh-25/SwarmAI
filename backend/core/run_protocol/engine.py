@@ -1,0 +1,1184 @@
+"""Direct-first execution engine for the Pipeline v1 protocol.
+
+Public symbols:
+- ``RunEngine.create`` / ``RunEngine.load`` — durable v1 run lifecycle.
+- ``stage_start`` / ``stage_complete`` — cards, documents, checks and transitions.
+- ``review_start`` — lightweight R1 handouts bound to the current code trees.
+- ``find_run_dir`` — resolve one v1 run without trusting caller-supplied project state.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import secrets
+import subprocess
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+from core import evidence_seal, run_worktree
+from core.run_protocol import checks, git_tree, lifecycle, review
+from core.run_protocol.documents import DocumentStore, complete_stage
+from core.run_protocol.events import EventAuthority
+from core.run_protocol.final import carry_repo_final, merge_final
+from core.run_protocol.store import AuditStore, StoreError
+
+
+class EngineError(RuntimeError):
+    """The run cannot proceed safely or its durable protocol state is invalid."""
+
+    code = "engine_error"
+
+
+class IntegrationRequired(EngineError):
+    """A safe operation requires wiring owned outside the v1 CLI process."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _atomic_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(temp, "x", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False, sort_keys=True, indent=2)
+            handle.flush(); os.fsync(handle.fileno())
+        os.replace(temp, path)
+    finally:
+        try: temp.unlink()
+        except FileNotFoundError: pass
+
+
+def _git(root: str | Path, *args: str) -> str:
+    try:
+        return subprocess.run(["git", "-C", str(root), *args], check=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, timeout=60).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise EngineError(f"git {' '.join(args[:2])} failed: {exc}") from exc
+
+
+def find_run_dir(workspace: str | Path, run_id: str) -> Path:
+    matches = list((Path(workspace) / "Projects").glob(f"*/.artifacts/runs/{run_id}"))
+    matches = [path for path in matches if path.is_dir()]
+    if len(matches) != 1:
+        raise EngineError(f"run {run_id} resolved to {len(matches)} directories")
+    return matches[0]
+
+
+class RunEngine:
+    """One v1 run, projected from signed events and immutable contract metadata."""
+
+    def __init__(self, *, data_dir: Path, workspace: Path, project: str,
+                 run_id: str, authority: EventAuthority):
+        self.data_dir, self.workspace = data_dir, workspace
+        self.project, self.run_id = project, run_id
+        self.run_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
+        self.audit_root = data_dir / "state" / "pipeline_agent_audit"
+        self.store = AuditStore(self.audit_root, run_id, authority)
+        self.authority = authority
+        try:
+            self.contract = json.loads(self.store.paths.contract.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise EngineError(f"contract unreadable: {exc}") from exc
+
+    @classmethod
+    def create(cls, *, data_dir: str | Path, workspace: str | Path, project: str,
+               profile: str, session_id: str, repos: Mapping[str, str],
+               mode: str = "isolated", decision_cap: int = 2,
+               risk_test_file_cap: int = 200, run_id: str | None = None,
+               transcript_ids: Sequence[str] = ()) -> "RunEngine":
+        if profile not in lifecycle.PROFILE_STAGES or mode not in {"isolated", "shared"}:
+            raise EngineError("unknown profile or mode")
+        if mode == "isolated" and profile != "research" and not repos:
+            raise EngineError("code profile requires at least one repo")
+        run_id = run_id or "run_" + secrets.token_hex(4)
+        from core.session_ids import valid_session_id
+        if any(not valid_session_id(value) for value in transcript_ids):
+            raise EngineError("invalid transcript id")
+        workspace_path, data_path = Path(workspace), Path(data_dir)
+        run_dir = workspace_path / "Projects" / project / ".artifacts" / "runs" / run_id
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError as exc:
+            raise EngineError("run already exists") from exc
+        audit = data_path / "state" / "pipeline_agent_audit" / "runs" / run_id
+        audit.mkdir(parents=True, exist_ok=False, mode=0o700)
+        key = secrets.token_bytes(32)
+        key_path = audit / "authority.key"
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(key); handle.flush(); os.fsync(handle.fileno())
+        authority = EventAuthority(key)
+        engine = cls.__new__(cls)
+        engine.data_dir, engine.workspace = data_path, workspace_path
+        engine.project, engine.run_id, engine.run_dir = project, run_id, run_dir
+        engine.audit_root, engine.authority = data_path / "state" / "pipeline_agent_audit", authority
+        engine.store = AuditStore(engine.audit_root, run_id, authority)
+        pipeline_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        contract = {"run_id": run_id, "project": project,
+                    "protocol_version": 1, "profile": profile,
+                    "session_id": session_id, "mode": mode,
+                    "expected_repos": sorted(repos),
+                    "repo_roots": {name: str(Path(root).resolve()) for name, root in repos.items()},
+                    "decision_cap": decision_cap, "risk_test_file_cap": risk_test_file_cap,
+                    "transcript_ids": list(dict.fromkeys(transcript_ids)),
+                    "pipeline_code_hash": pipeline_hash,
+                    "event_authority_id": authority.authority_id,
+                    "created_at": _now(), "stage_attempt_cap": 3,
+                    "regression_round_cap": 2, "recheck_cap": 3}
+        engine.contract = contract
+        engine.store.write_contract_once(contract)
+        engine.store.append_new(
+            writer=authority.writer("cli"), kind="run_create", at=contract["created_at"],
+            payload={"run_id": run_id, "profile": profile, "decision_cap": decision_cap})
+        evidence_seal.enable(run_id)
+        engine.write_projection()
+        return engine
+
+    @classmethod
+    def load(cls, *, data_dir: str | Path, workspace: str | Path,
+             project: str, run_id: str) -> "RunEngine":
+        workspace_path = Path(workspace)
+        resolved_run = find_run_dir(workspace_path, run_id)
+        actual_project = resolved_run.parents[2].name
+        if project != actual_project:
+            raise EngineError(f"run {run_id} belongs to project {actual_project}, not {project}")
+        key_path = Path(data_dir) / "state" / "pipeline_agent_audit" / "runs" / run_id / "authority.key"
+        try:
+            key = key_path.read_bytes()
+        except OSError as exc:
+            raise EngineError(f"authority unavailable: {exc}") from exc
+        engine = cls(data_dir=Path(data_dir), workspace=workspace_path,
+                     project=actual_project, run_id=run_id, authority=EventAuthority(key))
+        contract_project = engine.contract.get("project")
+        if contract_project is not None and contract_project != actual_project:
+            raise EngineError("contract project identity mismatch")
+        return engine
+
+    def projection(self, *, allow_pending: bool = False) -> dict[str, Any]:
+        return lifecycle.fold(self.store.read_events(), self.authority,
+                              allow_pending_transition=allow_pending)
+
+    def _settle(self) -> None:
+        state = self.projection(allow_pending=True)
+        expected = state.get("expected_transition")
+        if expected:
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="transition", at=_now(),
+                payload=expected)
+
+    def effective_repos(self) -> dict[str, str]:
+        roots = self.contract["repo_roots"]
+        if self.contract["mode"] == "shared":
+            return dict(roots)
+        out = {}
+        for name in self.contract["expected_repos"]:
+            path = run_worktree.wt_path(self.run_id, name)
+            if path.is_dir():
+                out[name] = str(path)
+        return out
+
+    def ensure_worktrees(self) -> dict[str, str]:
+        if self.contract["mode"] == "shared" or self.contract["profile"] == "research":
+            return self.effective_repos()
+        current = self.effective_repos()
+        if set(current) == set(self.contract["expected_repos"]):
+            return current
+        created: list[tuple[str, dict]] = []
+        try:
+            for name in self.contract["expected_repos"]:
+                if name in current:
+                    continue
+                entry = run_worktree.create(
+                    self.run_id, name, self.contract["repo_roots"][name], workspace=self.workspace)
+                created.append((name, entry))
+        except run_worktree.WorktreeError as exc:
+            for name, entry in created:
+                try:
+                    run_worktree._remove(self.run_id, entry,
+                                         Path(self.contract["repo_roots"][name]), merged=False)
+                except run_worktree.WorktreeError:
+                    pass
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="worktree_unavailable", at=_now(),
+                ordinal=len(self.store.read_events()) + 1, payload={"reason": exc.message})
+            self._settle(); self.write_projection()
+            raise EngineError(f"worktree unavailable: {exc.message}") from exc
+        return self.effective_repos()
+
+    def _read_json(self, path: Path, default: Any) -> Any:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return default
+        except json.JSONDecodeError as exc:
+            raise EngineError(f"malformed {path.name}: {exc}") from exc
+
+    def final(self) -> dict[str, Any]:
+        if self.contract["profile"] == "research":
+            return {}
+        rows = {}
+        for name in self.contract["expected_repos"]:
+            path = self.run_dir / "evidence" / "tests" / f"final-{name}.json"
+            raw, ok, why = evidence_seal.read_checked(path) if path.exists() else (None, False, "missing")
+            if not ok or raw is None:
+                return {}
+            try:
+                rows[name] = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise EngineError(f"malformed final for {name}: {exc}") from exc
+        return merge_final(self.run_id, self.contract["expected_repos"], rows)
+
+    def _changed_paths(self, repos: Mapping[str, str]) -> list[str]:
+        out = []
+        for root in repos.values():
+            out += [line for line in _git(root, "status", "--porcelain=v1").splitlines()
+                    for line in [line[3:]] if line]
+        return sorted(set(out))
+
+    def check_context(self) -> checks.CheckContext:
+        requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
+        design = self._read_json(self.run_dir / "artifacts" / "design_spec.json", None)
+        final = self.final()
+        events = self.store.read_events()
+        repos = self.effective_repos() or self.contract["repo_roots"]
+        code_trees = {}
+        existing: set[str] = set()
+        for name, root in repos.items():
+            try:
+                code_trees[name] = git_tree.write_tree(
+                    root, (f".aidlc/deliverables/{self.run_id}/",), {})
+                existing |= set(_git(root, "ls-files").splitlines())
+            except Exception as exc:  # a missing tree fails its checks below, not here
+                logging.getLogger(__name__).warning(
+                    "run %s: code tree of %s unavailable for checks: %s", self.run_id, name, exc)
+        results: dict[str, str] = {}
+        covers: set[str] = set()
+        validation_manifest: dict[str, set[str]] = {}
+        for name, row in final.get("repos", {}).items():
+            validation_manifest[name] = {item["id"] for item in row.get("validations", [])}
+            for trace in row.get("trace", []):
+                results[str(trace.get("ref") or trace.get("exit"))] = trace.get("result")
+                covers |= set(trace.get("covers") or [])
+        profile = self.contract["profile"]
+        req_variant = "lite" if profile == "direct" else "full"
+        design_variant = None if profile == "research" else (
+            "lite" if profile in {"direct", "trivial"} else "full")
+        run = {**self.projection(), "mode": self.contract["mode"],
+               "code_trees": code_trees, "changed_paths": self._changed_paths(repos),
+               "validation_rule_paths": ["validations.json", "backend/core/run_protocol/risk_selection.py"],
+               "lessons": self._read_json(self.run_dir / "artifacts" / "reflect.json", {}).get("lessons", [])}
+        return checks.make_context(
+            profile=profile, requirement_variant=req_variant, design_variant=design_variant,
+            requirements=requirements, design=design, events=events, authority=self.authority,
+            final=final, run=run, test_results=results, trace_covers=covers,
+            expected_repos=set(self.contract["expected_repos"]),
+            validation_manifest=validation_manifest, existing_files=existing,
+            collected_tests=set(results), decision_documents={}, known_refs={})
+
+    def write_projection(self) -> Path:
+        state = self.projection()
+        value = {key: val for key, val in state.items()
+                 if key not in {"expected_transition", "open_attempt", "auth_grants"}}
+        value.update({"id": self.run_id, "project": self.project,
+                      "session_id": self.contract["session_id"],
+                      "worktree_mode": self.contract["mode"],
+                      "worktrees": [{"repo_name": name, "main": self.contract["repo_roots"][name],
+                                     "path": root, "state": "active"}
+                                    for name, root in self.effective_repos().items()],
+                      "updated_at": _now(), "created_at": self.contract["created_at"]})
+        audit_value = self._read_json(self.run_dir / "run_audit.json", {})
+        if isinstance(audit_value, Mapping):
+            value["audit_card"] = audit_value.get("card")
+            value["audit_summary"] = audit_value.get("summary")
+            value["push_ready"] = (audit_value.get("outcome") or {}).get("push_ready")
+        retention = self._read_json(self._retention_path(), {})
+        if isinstance(retention, Mapping) and retention.get("worktrees"):
+            value["retention"] = retention["worktrees"]
+        projected_commits: dict[str, str] = {}
+        for progress_path in sorted((self.run_dir / "artifacts").glob("landing-progress-*.json")):
+            progress = self._read_json(progress_path, {})
+            if not isinstance(progress, Mapping):
+                continue
+            for name, commit in (progress.get("commits") or {}).items():
+                if isinstance(name, str) and isinstance(commit, str):
+                    projected_commits[name] = commit
+        if projected_commits:
+            value["commits"] = [
+                {"repo": name, "sha": commit, "landed": True}
+                for name, commit in sorted(projected_commits.items())
+            ]
+        requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
+        rows = requirements.get("requirements") if isinstance(requirements, Mapping) else []
+        if isinstance(rows, list) and rows:
+            value["requirement"] = str(rows[0].get("story") or rows[0].get("id") or "")
+        path = self.run_dir / "run.json"
+        _atomic_json(path, value)
+        return path
+
+    def _retention_path(self) -> Path:
+        return self.run_dir / "artifacts" / "retention.json"
+
+    def _retention_entries(self) -> list[dict[str, Any]]:
+        value = self._read_json(self._retention_path(), {"worktrees": []})
+        rows = value.get("worktrees") if isinstance(value, Mapping) else None
+        if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
+            raise EngineError("retention metadata is malformed")
+        return [dict(row) for row in rows]
+
+    def _save_retention(self, entries: Sequence[Mapping[str, Any]]) -> None:
+        _atomic_json(self._retention_path(), {"schema": 1, "run_id": self.run_id,
+                                             "worktrees": [dict(row) for row in entries]})
+
+    def _active_entries(self) -> list[dict[str, Any]]:
+        entries = []
+        for name, root in self.effective_repos().items():
+            main = self.contract["repo_roots"][name]
+            common = _git(root, "rev-parse", "--git-common-dir")
+            common_path = Path(common)
+            if not common_path.is_absolute():
+                common_path = Path(root) / common_path
+            entries.append({"repo_name": name, "main": main,
+                            "git_common_dir": str(common_path.resolve()),
+                            "integration_branch": _git(main, "symbolic-ref", "HEAD"),
+                            "base": _git(root, "rev-parse", "HEAD"),
+                            "pre_sync_tip": None, "state": "active",
+                            "created_at": self.contract["created_at"], "dep_links": []})
+        return entries
+
+    def gate0_start(self, requirements: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        state = self.projection()
+        if state["status"] != "active" or state["stage"] != "evaluate" \
+                or state["profile"] not in {"full", "bugfix", "goal"}:
+            raise EngineError("Gate-0 requires active EVALUATE on full, bugfix, or goal")
+        docs = DocumentStore(self.run_dir)
+        if requirements is not None:
+            docs.write_requirements(requirements, variant="full", profile=state["profile"])
+        value = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
+        readings = ((value.get("understanding") or {}).get("readings")
+                    if isinstance(value, Mapping) else None)
+        required = state["profile"] == "bugfix" or (isinstance(readings, list) and len(readings) >= 2)
+        if not required:
+            return {"required": False, "handout": None}
+        prior = [event for event in self.store.read_events()
+                 if event.get("kind") == "handout" and event.get("stage") == "evaluate"
+                 and event.get("payload", {}).get("expert_id") == "gate0-skeptic"]
+        if len(prior) >= 2:
+            raise EngineError("Gate-0 has reached its two-round cap")
+        round_number = len(prior) + 1
+        prompt_path = (Path(__file__).resolve().parents[2] / "skills" /
+                       "s_autonomous-pipeline" / "data" / "gate-prompts" /
+                       "gate0-skeptic.md")
+        handout = review.ReviewOrchestrator(self.store, self.run_dir).handout(
+            expert_id="gate0-skeptic", stage="evaluate", round=1,
+            attempt=round_number, at=_now(),
+            expert_instructions=prompt_path.read_text(encoding="utf-8"),
+            review_input=(f"GATE-0 ATTEMPT {round_number} OF 2\n" +
+                          json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)))
+        return {"required": True, "round": round_number, "handout": handout}
+
+    def _gate0_disposition(self) -> str:
+        handouts = [event for event in self.store.read_events()
+                    if event.get("kind") == "handout" and event.get("stage") == "evaluate"
+                    and event.get("payload", {}).get("expert_id") == "gate0-skeptic"]
+        answers = [event for event in self.store.read_events()
+                   if event.get("kind") in {"answer", "answer_reuse"}
+                   and event.get("payload", {}).get("expert_id") == "gate0-skeptic"]
+        if not handouts or len(answers) < len(handouts):
+            return "awaiting_answer"
+        verdicts = [event.get("payload", {}).get("verdict") for event in answers
+                    if event.get("payload", {}).get("state") == "parsed"]
+        if "ALREADY-SATISFIED" in verdicts:
+            return "already_satisfied"
+        negatives = [value for value in verdicts if value in {"WRONG-FRAME", "UNSUPPORTED"}]
+        if len(negatives) >= 2:
+            return "framing_rejected"
+        latest_parsed = answers[-1].get("payload", {}).get("state") == "parsed"
+        if (negatives or not latest_parsed) and len(handouts) < 2:
+            return "needs_round_2"
+        return "continue"
+
+    def review_address(self, artifact: Mapping[str, Any]) -> dict[str, Any]:
+        state = self.projection()
+        if state["status"] != "active" or state["stage"] != "review":
+            raise EngineError("review-address requires active REVIEW")
+        orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
+        prior = [event for event in self.store.read_events() if event.get("kind") == "address"]
+        handoff = orchestrator.record_fix_handoff(artifact, at=_now(), attempt=len(prior) + 1)
+        roster = orchestrator.r2_roster(set(handoff["addressed"]))
+        expert_root = Path(__file__).resolve().parents[2] / "experts" / "code"
+        handouts = []
+        for expert, ids in roster.items():
+            review_input = orchestrator.r2_input(
+                expert, ids, hunks=handoff["hunks"], proofs=handoff["proofs"],
+                reclassifications=handoff["reclassifications"])
+            handouts.append(orchestrator.handout(
+                expert_id=expert, stage="review", round=2, attempt=2, at=_now(),
+                expert_instructions=(expert_root / f"{expert}.md").read_text(encoding="utf-8"),
+                review_input=review_input, finding_ids=ids))
+        orchestrator.write_documents()
+        return {"handoff": handoff, "reviewers": sorted(roster), "handouts": handouts}
+
+    def review_proof(self, artifact: Mapping[str, Any]) -> dict[str, Any]:
+        state = self.projection()
+        if state["status"] != "active" or state["stage"] != "review":
+            raise EngineError("review-proof requires active REVIEW")
+        if not isinstance(artifact, Mapping) or set(artifact) != {"pass", "proofs"} \
+                or not isinstance(artifact.get("proofs"), list):
+            raise EngineError("review-proof artifact must contain pass and proofs")
+        orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
+        findings = {row["canonical_id"]: row for row in orchestrator.findings()}
+        repos = self.effective_repos()
+        import re
+        hunk_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
+        derived = []
+        for index, supplied in enumerate(artifact["proofs"], 1):
+            if not isinstance(supplied, Mapping):
+                raise EngineError(f"review proof {index} must be an object")
+            finding_id = supplied.get("finding_id")
+            evidence_type = supplied.get("evidence_type")
+            row = findings.get(finding_id)
+            if row is None or evidence_type not in {"diff_assertion", "refuted"}:
+                raise EngineError(f"review proof {index} has unknown finding/evidence type")
+            allowed = ({"finding_id", "evidence_type"} if evidence_type == "diff_assertion"
+                       else {"finding_id", "evidence_type", "refs"})
+            if set(supplied) != allowed:
+                raise EngineError(f"review proof {index} contains caller-derived fields")
+            file = row["file"]
+            candidates = []
+            for name, root in repos.items():
+                try:
+                    exists = (Path(root) / file).exists()
+                    tracked = _git(root, "ls-files", "--error-unmatch", "--", file) == file
+                except EngineError:
+                    tracked = False
+                if exists or tracked:
+                    candidates.append((name, root))
+            if len(candidates) != 1:
+                raise EngineError(f"{finding_id}: finding file resolves to {len(candidates)} repos")
+            _name, root = candidates[0]
+            code_tree = git_tree.write_tree(
+                root, (f".aidlc/deliverables/{self.run_id}/",), {})
+            if evidence_type == "refuted":
+                refs = supplied.get("refs")
+                if not isinstance(refs, list) or not refs or any(
+                        not isinstance(ref, str) or not ref for ref in refs):
+                    raise EngineError(f"{finding_id}: refutation requires concrete refs")
+                derived.append({"finding_id": finding_id, "evidence_type": "refuted",
+                                "code_tree": code_tree, "result": "refuted",
+                                "refs": list(refs)})
+                continue
+            diff = _git(root, "diff", "--unified=0", "HEAD", "--", file)
+            line = int(row["line"])
+            touches = False
+            for match in hunk_re.finditer(diff):
+                old_start, old_count = int(match.group(1)), int(match.group(2) or 1)
+                new_start, new_count = int(match.group(3)), int(match.group(4) or 1)
+                if (old_count and old_start <= line < old_start + old_count) \
+                        or (new_count and new_start <= line < new_start + new_count):
+                    touches = True
+                    break
+            non_executable = Path(file).suffix.lower() in {".md", ".txt", ".rst"}
+            derived.append({"finding_id": finding_id,
+                            "evidence_type": "diff_assertion",
+                            "code_tree": code_tree, "result": "asserted",
+                            "touches_finding": touches,
+                            "touches_executable": not non_executable})
+        events = orchestrator.record_cli_proofs(
+            {"pass": artifact["pass"], "proofs": derived}, at=_now(),
+            attempt=1 + sum(event.get("kind") == "proof"
+                            for event in self.store.read_events()))
+        orchestrator.write_documents()
+        return {"proofs": events, "findings": orchestrator.findings()}
+
+    def request_decision(self, value: Mapping[str, Any], *, document: str) -> dict[str, Any]:
+        from core.run_protocol.documents import record_decision
+        refs: dict[str, Mapping[str, Any]] = {
+            event["event_id"]: event for event in self.store.read_events()}
+        requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
+        for index, row in enumerate(requirements.get("analysis", []) if isinstance(requirements, Mapping) else [], 1):
+            if isinstance(row, Mapping):
+                refs[f"A{index}"] = {**dict(row), "analysis_kind": row.get("kind"),
+                                     "kind": "analysis"}
+        for row in review.ReviewOrchestrator(self.store, self.run_dir).findings():
+            refs[row["canonical_id"]] = row
+        state = self.projection()
+        event = record_decision(self.store, value, known_refs=refs, document=document,
+                                at=_now(), decisions_answered=state["human_decisions"],
+                                cap=state["decision_cap"])
+        _atomic_json(self.run_dir / "artifacts" / f"decision-{value['request_id']}.json", dict(value))
+        self._settle(); self.write_projection()
+        return {"event": event, "decision": dict(value), "state": self.projection()}
+
+    def answer_decision(self, *, request_id: str, option_id: str) -> dict[str, Any]:
+        from core.run_protocol import decision
+        state = self.projection()
+        if state["status"] != "awaiting_human" or state.get("pending_decision") != request_id:
+            raise EngineError("decision answer is not for the current pending decision")
+        value = self._read_json(self.run_dir / "artifacts" / f"decision-{request_id}.json", None)
+        if not isinstance(value, Mapping):
+            raise EngineError("pending decision document is missing")
+        answer = decision.answer(value, request_id=request_id, option_id=option_id)
+        event, _ = self.store.append_new(
+            writer=self.authority.writer("hook"), kind="human_answer", at=_now(),
+            payload={"request_id": request_id, "option_id": option_id})
+        self._settle()
+        answers = self._read_json(self.run_dir / "artifacts" / "decision-answers.json", [])
+        if not isinstance(answers, list):
+            raise EngineError("decision answer projection is malformed")
+        _atomic_json(self.run_dir / "artifacts" / "decision-answers.json", [*answers, answer])
+        self.write_projection()
+        return {"event": event, "answer": answer, "state": self.projection()}
+
+    def abandon(self, *, reason: str) -> dict[str, Any]:
+        if not isinstance(reason, str) or not reason.strip():
+            raise EngineError("abandon requires a reason")
+        state = self.projection()
+        if state["status"] in lifecycle.TERMINAL:
+            raise EngineError(f"cannot abandon {state['status']} run")
+        entries = self._active_entries()
+        if entries:
+            results = run_worktree.release(
+                self.run_id, {"worktrees": entries},
+                {name: Path(root) for name, root in self.contract["repo_roots"].items()},
+                reason.strip())
+            failed = [row for row in results if not row.get("ok")]
+            if failed:
+                raise EngineError(f"snapshot preservation failed: {failed}")
+            self._save_retention(entries)
+        event, _ = self.store.append_new(
+            writer=self.authority.writer("cli"), kind="abandon", at=_now(),
+            ordinal=len(self.store.read_events()) + 1, payload={"reason": reason.strip()})
+        self._settle(); self.write_projection()
+        return {"event": event, "retention": entries, "state": self.projection()}
+
+    def restore(self) -> dict[str, Any]:
+        state = self.projection()
+        if not (state["status"] == "abandoned" or
+                (state["status"] == "completed" and state.get("landing") == "not_landed")):
+            raise EngineError("restore requires abandoned or completed(not_landed)")
+        entries = self._retention_entries()
+        by_name = {row.get("repo_name"): row for row in entries}
+        restored = []
+        for name in self.contract["expected_repos"]:
+            if name in self.effective_repos():
+                continue
+            entry = by_name.get(name)
+            if entry is None:
+                raise EngineError(f"{name}: no retained snapshot")
+            try:
+                new = __import__("core.run_protocol.retention", fromlist=["restore_snapshot"]).restore_snapshot(
+                    self.run_id, entry, self.contract["repo_roots"][name], workspace=self.workspace)
+            except Exception as exc:
+                raise EngineError(f"{name}: restore failed: {exc}") from exc
+            by_name[name] = new; restored.append(new)
+        self._save_retention([by_name[name] for name in self.contract["expected_repos"]])
+        event, _ = self.store.append_new(
+            writer=self.authority.writer("cli"), kind="restore", at=_now(),
+            ordinal=len(self.store.read_events()) + 1, payload={"snapshot_exists": True})
+        self._settle(); self.write_projection()
+        return {"event": event, "restored": restored, "state": self.projection()}
+
+    def resume(self) -> dict[str, Any]:
+        state = self.projection()
+        if state["status"] != "paused":
+            raise EngineError("resume requires paused")
+        ready = True
+        if state.get("reason") == "worktree_unavailable":
+            try:
+                for name in self.contract["expected_repos"]:
+                    if name not in self.effective_repos():
+                        run_worktree.create(self.run_id, name, self.contract["repo_roots"][name],
+                                            workspace=self.workspace)
+            except run_worktree.WorktreeError:
+                ready = False
+        event, _ = self.store.append_new(
+            writer=self.authority.writer("cli"), kind="resume", at=_now(),
+            ordinal=len(self.store.read_events()) + 1, payload={"worktree_ready": ready})
+        self._settle(); self.write_projection()
+        return {"ok": ready, "event": event, "state": self.projection()}
+
+    def _commit_report(self, audit_value: Mapping[str, Any], *, guards: Sequence[str],
+                       request_id: str | None = None, note: str | None = None) -> bytes:
+        from core.run_protocol import audit as audit_protocol
+        text = audit_protocol.render(audit_value, fmt="report")
+        marker = "Landing guards: PASS (" + ", ".join(guards) + ")."
+        lines = text.splitlines()
+        lines.insert(3 if len(lines) >= 3 else len(lines), marker)
+        if request_id:
+            lines.insert(4 if len(lines) >= 4 else len(lines),
+                         f"Manual landing request: {request_id}" + (f" — {note}" if note else ""))
+        return ("\n".join(lines).rstrip() + "\n").encode()
+
+    def prepare_land_request(self, *, action: str, note: str | None = None,
+                             request_id: str | None = None) -> dict[str, Any]:
+        from core.run_protocol import audit as audit_protocol, findings as finding_protocol, landing
+        state = self.projection()
+        if self.contract["mode"] == "isolated" and set(self.effective_repos()) != set(self.contract["expected_repos"]):
+            if state["status"] == "abandoned" or (
+                    state["status"] == "completed" and state.get("landing") == "not_landed"):
+                self.restore()
+            elif state["status"] == "paused" and state.get("reason") == "worktree_unavailable":
+                resumed = self.resume()
+                if not resumed["ok"]:
+                    raise EngineError("run-land prepare could not recreate worktrees")
+            else:
+                self.ensure_worktrees()
+        request_id = request_id or "land_" + secrets.token_hex(8)
+        context = self.check_context()
+        push = self.push_status(manual_landing=True)
+        def render(_request_id, _results):
+            events = self.store.read_events()
+            cutoff = next(index for index, event in enumerate(events)
+                          if event.get("kind") == "land_intent"
+                          and event.get("payload", {}).get("request_id") == request_id)
+            prior = events[:cutoff]
+            audit_value = audit_protocol.build(
+                run_id=self.run_id,
+                projection=lifecycle.fold(prior, self.authority), events=prior,
+                final=self.final(), findings=finding_protocol.fold(prior, self.authority),
+                contract=self.contract, push=push, audit_through="DELIVER")
+            guards = ("LG-3", "LG-4") if action == "land_skip_tests" else (
+                "LG-1", "LG-2", "LG-3", "LG-4", "LG-5")
+            return self._commit_report(audit_value, guards=guards,
+                                       request_id=request_id, note=note)
+        prepared = landing.prepare_request(
+            self.store, run_id=self.run_id, session_id=self.contract["session_id"],
+            action=action, repos=self.effective_repos(), context=context, at=_now(),
+            render_report=render, note=note, request_id=request_id)
+        path = self.run_dir / "artifacts" / "land-requests" / f"{request_id}.json"
+        _atomic_json(path, prepared)
+        self.write_projection()
+        return {"prepared": prepared, "path": str(path), "push": push}
+
+    def execute_land_request(self, request_id: str, *, message: str) -> dict[str, Any]:
+        """Consume one daemon-issued approval token and finish a prepared landing."""
+        from core.run_protocol.landing import with_trailer
+        message = with_trailer(message)
+        from core import hook_token
+        from core.run_protocol import auth, landing
+
+        path = self.run_dir / "artifacts" / "land-requests" / f"{request_id}.json"
+        prepared = self._read_json(path, None)
+        if not isinstance(prepared, Mapping):
+            raise EngineError("prepared land request is missing")
+        request = prepared.get("request")
+        if not isinstance(request, Mapping) or request.get("request_id") != request_id \
+                or request.get("run_id") != self.run_id \
+                or request.get("session_id") != self.contract["session_id"]:
+            raise EngineError("prepared land request identity mismatch")
+        token = os.environ.get(hook_token.TOKEN_ENV)
+        token_scope = f"run-land:{request_id}"
+        ok, reason = hook_token.consume(
+            self.run_dir, token, self.contract["session_id"], self.run_id, token_scope)
+        if not ok:
+
+            raise IntegrationRequired("approval_required", reason)
+
+        oracle = auth.AuthorizationOracle()
+        now = __import__("time").time()
+        auth_event = landing.approve_request(
+            self.store, oracle, request, decided_at=now,
+            expires_at=now + 30 * 60, at=_now())
+        commits = landing.execute_request(
+            self.store, oracle, prepared,
+            session_id=self.contract["session_id"], repos=self.effective_repos(),
+            integration_roots=self.contract["repo_roots"], message=message,
+            at=_now(), now=now,
+            progress_path=self.run_dir / "artifacts" / f"landing-progress-{request_id}.json")
+        try:
+            report = (self.store.paths.blobs / prepared["report_sha"]).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise EngineError(f"prepared REPORT blob is missing after landing: {exc}") from exc
+        DocumentStore._atomic(self.run_dir / "REPORT.md", report)
+        self._settle()
+        self.write_projection()
+        return {"auth_event_id": auth_event["event_id"], "commits": commits,
+                "state": self.projection(), "push": self.push_status(manual_landing=True)}
+
+    def prepare_authorized_action(
+        self, *, action: str, target: str, note: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Prepare a non-landing human authorization without performing the action."""
+        from core.run_protocol import auth, findings, retention
+
+        request_id = request_id or "auth_" + secrets.token_hex(8)
+        metadata: dict[str, Any] = {}
+        if action == "accept_finding":
+            rows = {row["canonical_id"]: row for row in
+                    findings.fold(self.store.read_events(), self.authority)}
+            row = rows.get(target)
+            if row is None:
+                raise EngineError("accept-finding references an unknown canonical finding")
+            bindings = {"canonical_id": target, "state_hash": findings.state_hash(row)}
+        elif action == "discard_snapshot":
+            entries = {row.get("repo_name"): row for row in self._retention_entries()}
+            entry = entries.get(target)
+            ledger = entry.get("ledger") if isinstance(entry, Mapping) else None
+            if not isinstance(ledger, str) or not ledger:
+                raise EngineError("discard-snapshot references no retained repo ledger")
+            bindings = {"snapshot_id": retention.snapshot_id(ledger)}
+            metadata = {"repo_name": target, "ledger": ledger}
+        else:
+            raise EngineError("unsupported authorized action")
+        request = auth.make_request(
+            request_id=request_id, session_id=self.contract["session_id"],
+            run_id=self.run_id, action=action, bindings=bindings, note=note)
+        self.store.append_new(
+            writer=self.authority.writer("cli"), kind="land_request", at=_now(),
+            payload={"request_id": request_id, "action": action,
+                     "binding_digest": request["binding_digest"]})
+        value = {"request": request, **metadata}
+        path = self.run_dir / "artifacts" / "authorized-requests" / f"{request_id}.json"
+        _atomic_json(path, value)
+        self.write_projection()
+        return {"request": request, "path": str(path)}
+
+    def execute_authorized_action(self, request_id: str) -> dict[str, Any]:
+        """Consume a daemon-issued token, append auth facts, then perform one action."""
+        from core import hook_token
+        from core.run_protocol import auth, findings, landing, retention
+
+        path = self.run_dir / "artifacts" / "authorized-requests" / f"{request_id}.json"
+        prepared = self._read_json(path, None)
+        request = prepared.get("request") if isinstance(prepared, Mapping) else None
+        if not isinstance(request, Mapping) or request.get("request_id") != request_id \
+                or request.get("run_id") != self.run_id \
+                or request.get("session_id") != self.contract["session_id"]:
+            raise EngineError("prepared authorization request is missing or mismatched")
+        action = request.get("action")
+        bindings = request.get("bindings")
+        if action == "accept_finding":
+            normalized = bindings if isinstance(bindings, Mapping) else {}
+            rows = {row["canonical_id"]: row for row in
+                    findings.fold(self.store.read_events(), self.authority)}
+            canonical_id = normalized.get("canonical_id")
+            row = rows.get(canonical_id)
+            if row is None or findings.state_hash(row) != normalized.get("state_hash"):
+                raise EngineError("accept-finding request is stale")
+        elif action == "discard_snapshot":
+            ledger = prepared.get("ledger")
+            normalized = bindings if isinstance(bindings, Mapping) else {}
+            if not isinstance(ledger, str) \
+                    or retention.snapshot_id(ledger) != normalized.get("snapshot_id"):
+                raise EngineError("discard-snapshot request is stale")
+        else:
+            raise EngineError("prepared authorization action is unsupported")
+
+        token_scope = f"{str(action).replace('_', '-')}:{request_id}"
+        ok, reason = hook_token.consume(
+            self.run_dir, os.environ.get(hook_token.TOKEN_ENV),
+            self.contract["session_id"], self.run_id, token_scope)
+        if not ok:
+            raise IntegrationRequired("approval_required", reason)
+        oracle = auth.AuthorizationOracle()
+        now = __import__("time").time()
+        auth_event = landing.approve_request(
+            self.store, oracle, request, decided_at=now,
+            expires_at=now + 30 * 60, at=_now())
+        result = oracle.consume(
+            request_id=request_id, session_id=self.contract["session_id"],
+            run_id=self.run_id, action=action, bindings=bindings, now=now)
+        if not result.ok or result.consumption is None:
+            raise EngineError(result.reason)
+        consumed, _ = self.store.append_new(
+            writer=self.authority.writer("cli"), kind="auth_consumed", at=_now(),
+            payload=result.consumption)
+        if action == "discard_snapshot":
+            repo_name, ledger = prepared["repo_name"], prepared["ledger"]
+            retention.discard_snapshot(
+                consumption=result.consumption, run_id=self.run_id,
+                repo_name=repo_name, main=self.contract["repo_roots"][repo_name],
+                ledger=ledger)
+            self._save_retention([
+                row for row in self._retention_entries()
+                if row.get("repo_name") != repo_name])
+        review.ReviewOrchestrator(self.store, self.run_dir).write_documents()
+        self.write_projection()
+        return {"auth_event_id": auth_event["event_id"],
+                "consumed_event_id": consumed["event_id"],
+                "action": action, "state": self.projection()}
+
+    def stage_start(self) -> dict[str, Any]:
+        state = self.projection()
+        if state["status"] != "active":
+            raise EngineError(f"run is {state['status']}")
+        if state["stage"] in {"plan", "build", "goal_cycle", "review", "test", "deliver"}:
+            self.ensure_worktrees()
+            # run.json is what the live hooks read (worktree_write_gate, main_dirty_scan):
+            # it must name the worktrees the moment they exist
+            self.write_projection()
+        card = Path(__file__).resolve().parents[2] / "skills" / "s_autonomous-pipeline" / "stages" / f"{state['stage']}.md"
+        return {"run_id": self.run_id, "stage": state["stage"], "card": str(card),
+                "card_text": card.read_text(encoding="utf-8"), "repos": self.effective_repos()}
+
+    def stage_complete(self, artifact: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        state = self.projection()
+        if state["status"] != "active":
+            raise EngineError(f"run is {state['status']}")
+        stage, profile = state["stage"], state["profile"]
+        docs = DocumentStore(self.run_dir)
+        artifact = dict(artifact or {})
+
+        if stage == "deliver" and profile == "research" and not any(
+                event.get("kind") == "render" and event.get("payload", {}).get("document") == "REPORT"
+                for event in self.store.read_events()):
+            from core.run_protocol import audit as audit_protocol
+            value = self.build_audit(through="DELIVER", persist=True)
+            report = audit_protocol.render(value, fmt="report")
+            report_sha = self.store.put_blob(report.encode())
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="render", at=_now(),
+                stage="deliver", attempt=1,
+                payload={"document": "REPORT", "blob_sha": report_sha})
+            DocumentStore._atomic(self.run_dir / "REPORT.md", report)
+        if stage == "evaluate":
+            docs.write_requirements(artifact, variant="full", profile=profile)
+        elif stage == "plan":
+            requirements = artifact.get("requirements") if profile == "direct" else self._read_json(
+                self.run_dir / "artifacts" / "requirements.json", {})
+            design = artifact.get("design") if profile == "direct" else artifact
+            if profile == "direct":
+                docs.write_requirements(requirements, variant="lite", profile=profile)
+            docs.write_design(design, variant="lite" if profile in {"direct", "trivial"} else "full",
+                              profile=profile, requirements=requirements,
+                              requirement_variant="lite" if profile == "direct" else "full",
+                              existing_files=self.check_context().existing_files)
+        if stage == "evaluate" and profile in {"full", "bugfix", "goal"}:
+            readings = ((artifact.get("understanding") or {}).get("readings")
+                        if isinstance(artifact, Mapping) else None)
+            gate_required = profile == "bugfix" or (isinstance(readings, list) and len(readings) >= 2)
+            if gate_required:
+                disposition = self._gate0_disposition()
+                if disposition in {"awaiting_answer", "needs_round_2"}:
+                    self.write_projection()
+                    return {"ok": False, "gate0": disposition, "state": self.projection()}
+                if disposition in {"framing_rejected", "already_satisfied"}:
+                    self.store.append_new(
+                        writer=self.authority.writer("cli"), kind="gate0_exhausted", at=_now(),
+                        ordinal=len(self.store.read_events()) + 1,
+                        payload={"reason": disposition})
+                    self._settle(); self.write_projection()
+                    return {"ok": False, "gate0": disposition, "state": self.projection()}
+        context = self.check_context()
+        variant = ("lite" if stage == "plan" and profile in {"direct", "trivial"}
+                   else "full" if stage in {"evaluate", "plan"} else None)
+        result = complete_stage(self.store, profile=profile, stage=stage,
+                                variant=variant, context=context, at=_now())
+        self._settle()
+        if not result["passed"]:
+            self.write_projection()
+            return {"ok": False, **result, "state": self.projection()}
+        payload = {"stage_attempt_event_id": result["stage_attempt_event_id"]}
+        if stage == "test":
+            final = self.final()
+            verdicts = [row["tests"]["verdict"] for row in final.get("repos", {}).values()]
+            payload["final_verdict"] = ("incomplete" if not verdicts or "incomplete" in verdicts
+                                        else "red" if "red" in verdicts else "green")
+        self.store.append_new(writer=self.authority.writer("cli"), kind="stage_complete",
+                              at=_now(), stage=stage, attempt=result["attempt"], payload=payload)
+        self._settle(); self.write_projection()
+        return {"ok": True, **result, "state": self.projection()}
+
+    def review_start(self, *, attempt: int = 1) -> dict[str, Any]:
+        state = self.projection()
+        if state["stage"] != "review" or state["status"] != "active":
+            raise EngineError("review-start requires active REVIEW")
+        repos = self.effective_repos()
+        changed = []
+        diffs = []
+        for name, root in repos.items():
+            for line in _git(root, "diff", "--numstat", "HEAD").splitlines():
+                ins, delete, path = line.split("\t", 2)
+                changed.append({"path": path, "insertions": int(ins or 0),
+                                "deletions": int(delete or 0),
+                                "is_test": "/tests/" in path or path.startswith("tests/")})
+            diffs.append(f"## {name}\n" + _git(root, "diff", "--no-ext-diff", "HEAD"))
+        roster = review.reviewers(profile=state["profile"], changed=changed)
+        orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
+        handouts = []
+        expert_root = Path(__file__).resolve().parents[2] / "experts" / "code"
+        for item in roster:
+            instructions = (expert_root / f"{item['id']}.md").read_text(encoding="utf-8")
+            handouts.append(orchestrator.handout(
+                expert_id=item["id"], stage="review", round=1, attempt=attempt,
+                at=_now(), expert_instructions=instructions,
+                review_input="\n\n".join(diffs)))
+        if not handouts:
+            orchestrator.write_documents()
+        return {"reviewers": roster, "handouts": handouts}
+
+    def build_audit(self, *, through: str, commits: Mapping[str, str] | None = None,
+                    persist: bool = True,
+                    event_rows: Sequence[Mapping[str, Any]] | None = None,
+                    push: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        from core.run_protocol import audit as audit_protocol
+        from core.run_protocol import findings as finding_protocol
+        rows = list(event_rows) if event_rows is not None else self.store.read_events()
+        projected_findings = finding_protocol.fold(rows, self.authority)
+        value = audit_protocol.build(
+            run_id=self.run_id, projection=lifecycle.fold(rows, self.authority),
+            events=rows, final=self.final(), findings=projected_findings,
+            contract=self.contract, push=dict(push or self.push_status()), audit_through=through,
+            commits=commits)
+        if persist:
+            audit_protocol.write(self.run_dir / "run_audit.json", value)
+        return value
+
+    def push_status(self, *, manual_landing: bool = False) -> dict[str, Any]:
+        import dataclasses
+        context = self.check_context()
+        if manual_landing:
+            context = dataclasses.replace(
+                context, run={**dict(context.run), "landing": "human_override"})
+        results = {}
+        for spec in checks.push_checks(self.contract["profile"]):
+            if spec.check_id == "MD-3" and not manual_landing:
+                continue  # normal land evaluates no manual-landing penalty
+            try:
+                results[spec.check_id] = checks.evaluate(spec.check_id, context)
+            except Exception as exc:
+                results[spec.check_id] = (False, f"{type(exc).__name__}: {exc}")
+        failed = {key: detail for key, (passed, detail) in results.items() if not passed}
+        return {"push_ready": not failed, "reasons": failed, "checks": results}
+
+    def prepare_reflect(self, lessons: Sequence[Mapping[str, Any]],
+                        candidates: Mapping[str, Sequence[str]]) -> dict[str, Any]:
+        from core.run_protocol import reflect
+        event_ids = {event["event_id"] for event in self.store.read_events()}
+        document = reflect.prepare(lessons, event_ids=event_ids, candidates=candidates)
+        DocumentStore._atomic(
+            self.run_dir / "artifacts" / "reflect.json",
+            json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2))
+        return document
+
+    def measure_usage(self) -> dict[str, Any]:
+        from core.run_protocol import usage
+        return usage.measure(self.store,
+                             transcript_ids=self.contract.get("transcript_ids", []),
+                             created_at=self.contract["created_at"])
+
+    def _resume_normal_landing(self, *, message: str) -> dict[str, Any] | None:
+        from core.run_protocol import landing
+        path = self.run_dir / "artifacts" / "landing-progress-normal.json"
+        progress = self._read_json(path, None)
+        if not isinstance(progress, Mapping) or not progress.get("commits"):
+            return None
+        if any(event.get("kind") == "land" and event.get("payload", {}).get("landing") == "landed"
+               for event in self.store.read_events()):
+            return None
+        state = self.projection()
+        attempt = state.get("open_attempt")
+        intent, rendered = state.get("last_land_intent"), state.get("last_report_render")
+        if not isinstance(attempt, Mapping) or attempt.get("stage") != "land" \
+                or not isinstance(intent, Mapping) or not isinstance(rendered, Mapping) \
+                or intent.get("stage_attempt_event_id") != attempt.get("event_id") \
+                or rendered.get("stage_attempt_event_id") != attempt.get("event_id"):
+            raise EngineError("normal landing progress has no matching open land attempt")
+        plan = progress.get("plan")
+        if not isinstance(plan, Mapping) or set(plan) != set(self.contract["expected_repos"]):
+            raise EngineError("normal landing progress has an invalid repo plan")
+        bindings = {name: {"delivery_tree": row["delivery_tree"]}
+                    for name, row in plan.items() if isinstance(row, Mapping)}
+        bases = {name: row["base"] for name, row in plan.items() if isinstance(row, Mapping)}
+        commits = landing.commit_repos(
+            run_id=self.run_id, integration_roots=self.contract["repo_roots"],
+            bases=bases, bindings=bindings, message=message, progress_path=path)
+        render_event = next((event for event in reversed(self.store.read_events())
+                             if event.get("event_id") == rendered.get("event_id")), None)
+        if render_event is None:
+            raise EngineError("normal landing REPORT render event is missing")
+        report_sha = render_event["payload"]["blob_sha"]
+        try:
+            report = (self.store.paths.blobs / report_sha).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise EngineError(f"normal landing REPORT blob is missing: {exc}") from exc
+        DocumentStore._atomic(self.run_dir / "REPORT.md", report)
+        self.store.append_new(
+            writer=self.authority.writer("cli"), kind="land", at=_now(),
+            stage="deliver", attempt=attempt["attempt"],
+            ordinal=len(self.store.read_events()) + 1,
+            payload={"landing": "landed", "commit": next(iter(commits.values())),
+                     "stage_attempt_event_id": attempt["event_id"]})
+        self._settle(); self.write_projection()
+        return {"commits": commits, "push": self.push_status(), "state": self.projection(),
+                "resumed": True}
+
+    def _carry_moved_finals(self) -> None:
+        from core.run_protocol.carry import CarryError, carry_decision
+        finals = self.final().get("repos", {})
+        repos = self.effective_repos()
+        for name in self.contract["expected_repos"]:
+            row = finals[name]
+            main, root = self.contract["repo_roots"][name], repos[name]
+            old_base, new_base = row["base"], _git(main, "rev-parse", "HEAD")
+            if old_base == new_base:
+                continue
+            selection = ((row.get("provenance") or {}).get("selection") or {})
+            dependencies = selection.get("test_dependencies") or selection.get("dependency_scope")
+            if not isinstance(dependencies, Mapping):
+                raise IntegrationRequired(
+                    "final_recheck_required",
+                    f"{name}: integration base moved and final lacks test_dependencies provenance")
+            main_changed = [path for path in _git(
+                main, "diff", "--name-only", "--no-renames", old_base, new_base).splitlines() if path]
+            run_changed = [path for path in _git(
+                root, "diff-tree", "-r", "--name-only", "--no-renames",
+                old_base, row["code_tree"]).splitlines() if path]
+            selected = selection.get("files") or []
+            entry = next(item for item in self._active_entries() if item["repo_name"] == name)
+            entry["base"] = old_base
+            try:
+                sync = run_worktree.sync(self.run_id, entry, main)
+            except run_worktree.WorktreeError as exc:
+                raise IntegrationRequired("final_recheck_required",
+                                          f"{name}: base sync failed: {exc.message}") from exc
+            new_tree = git_tree.write_tree(
+                root, (f".aidlc/deliverables/{self.run_id}/",), {})
+            try:
+                decision = carry_decision(
+                    old_base=old_base, new_base=new_base,
+                    old_tree=row["code_tree"], new_tree=new_tree,
+                    main_changed=main_changed, run_changed=run_changed,
+                    selected_tests=selected, test_dependencies=dependencies)
+            except CarryError as exc:
+                raise IntegrationRequired("final_recheck_required", f"{name}: {exc}") from exc
+            if sync.get("patch_changed") or not decision.reusable:
+                affected = ", ".join(decision.affected_tests) or "the run regression scope"
+                raise IntegrationRequired(
+                    "final_recheck_required",
+                    f"{name}: integration changes intersect final dependencies; rerun {affected}")
+            carried = carry_repo_final(row, new_base=new_base, new_code_tree=new_tree)
+            path = self.run_dir / "evidence" / "tests" / f"final-{name}.json"
+            warning = evidence_seal.write_sealed(path, json.dumps(carried, sort_keys=True))
+            if warning:
+                raise EngineError(warning)
+
+    def normal_land(self, *, message: str) -> dict[str, Any]:
+        """Land active DELIVER in the v13 order; no human authorization is involved."""
+        from core.run_protocol.landing import with_trailer
+        message = with_trailer(message)
+        import dataclasses
+        from core.run_protocol import landing, tree
+        state = self.projection()
+        if state["status"] != "active" or state["stage"] != "deliver":
+            raise EngineError("normal land requires active DELIVER")
+        resumed = self._resume_normal_landing(message=message)
+        if resumed is not None:
+            return resumed
+        self._carry_moved_finals()
+        repos = self.effective_repos()
+        code_trees = tree.build_code_trees(
+            repos, self.run_id, git_tree.write_tree, git_tree.list_reserved)
+        context = self.check_context()
+        run_facts = {**dict(context.run), "code_trees": code_trees,
+                     "landing_bases": {name: context.final["repos"][name]["base"] for name in repos}}
+        context = dataclasses.replace(context, run=run_facts, events=tuple(self.store.read_events()))
+        guard_ids = ["DV-1", "LG-1", "LG-2", "LG-3", "LG-4", "LG-5",
+                     "RF-1", "RF-2", "RF-3", "RF-4"]
+        prior = [event for event in self.store.read_events()
+                 if event.get("kind") == "stage_attempt" and event.get("stage") == "land"]
+        attempt = len(prior) + 1
+        opened, _ = self.store.append_new(
+            writer=self.authority.writer("cli"), kind="stage_attempt", at=_now(),
+            stage="land", attempt=attempt, payload={"check_ids": guard_ids})
+        results: dict[str, tuple[bool, str]] = {}
+        for check_id in ("LG-1", "LG-2", "LG-5", "RF-1", "RF-2", "RF-3", "RF-4"):
+            results[check_id] = checks.evaluate(check_id, context)
+            passed, detail = results[check_id]
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="check", at=_now(),
+                stage="land", attempt=attempt,
+                payload={"stage_attempt_event_id": opened["event_id"], "check_id": check_id,
+                         "passed": passed, "detail": detail})
+        if not all(passed for passed, _ in results.values()):
+            self._settle(); self.write_projection()
+            raise EngineError(f"pre-landing checks failed: {results}")
+        push = self.push_status()
+        report_events = self.store.read_events()
+        self.store.append_new(
+            writer=self.authority.writer("cli"), kind="land_intent", at=_now(),
+            stage="deliver", attempt=attempt,
+            payload={"stage_attempt_event_id": opened["event_id"]})
+        audit_value = self.build_audit(
+            through="DELIVER", persist=True, event_rows=report_events, push=push)
+        report = self._commit_report(
+            audit_value, guards=("LG-1", "LG-2", "LG-3", "LG-4", "LG-5", "DV-1"))
+        report_sha = self.store.put_blob(report)
+        self.store.append_new(
+            writer=self.authority.writer("cli"), kind="render", at=_now(),
+            stage="deliver", attempt=attempt,
+            payload={"document": "REPORT", "blob_sha": report_sha})
+        bindings = tree.build_delivery_trees(
+            repos, self.run_id, code_trees, report, report_sha,
+            git_tree.write_tree, git_tree.list_reserved)
+        run_facts["lg3_args"] = {"repos": repos, "run_id": self.run_id,
+                                 "bindings": bindings, "rendered_report_sha": report_sha,
+                                 "diff_trees": git_tree.diff_trees}
+        context = dataclasses.replace(self.check_context(), run=run_facts,
+                                      events=tuple(self.store.read_events()))
+        for check_id in ("DV-1", "LG-3", "LG-4"):
+            results[check_id] = checks.evaluate(check_id, context)
+            passed, detail = results[check_id]
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="check", at=_now(),
+                stage="land", attempt=attempt,
+                payload={"stage_attempt_event_id": opened["event_id"], "check_id": check_id,
+                         "passed": passed, "detail": detail})
+        if not all(passed for passed, _ in results.values()):
+            self._settle(); self.write_projection()
+            raise EngineError(f"post-render landing checks failed: {results}")
+        bases = {name: self.final()["repos"][name]["base"]
+                 for name in self.contract["expected_repos"]}
+        commits = landing.commit_repos(
+            run_id=self.run_id, integration_roots=self.contract["repo_roots"],
+            bases=bases, bindings=bindings, message=message,
+            progress_path=self.run_dir / "artifacts" / "landing-progress-normal.json")
+        DocumentStore._atomic(self.run_dir / "REPORT.md", report.decode("utf-8"))
+        self.store.append_new(
+            writer=self.authority.writer("cli"), kind="land", at=_now(),
+            stage="deliver", attempt=attempt, ordinal=len(self.store.read_events()) + 1,
+            payload={"landing": "landed", "commit": next(iter(commits.values())),
+                     "stage_attempt_event_id": opened["event_id"]})
+        self._settle(); self.write_projection()
+        return {"commits": commits, "push": push, "state": self.projection()}
+
+    def reflect_complete(self, *, degraded: bool = False, reason: str = "") -> dict[str, Any]:
+        state = self.projection()
+        if state["status"] != "reflecting":
+            raise EngineError("reflect completion requires reflecting")
+        kind = "reflect_exhausted" if degraded else "reflect_complete"
+        payload = {"reason": reason or "background reflection exhausted"} if degraded else {}
+        self.store.append_new(writer=self.authority.writer("cli"), kind=kind, at=_now(),
+                              ordinal=len(self.store.read_events()) + 1, payload=payload)
+        self._settle()
+        commits: dict[str, str] = {}
+        for progress_path in sorted((self.run_dir / "artifacts").glob("landing-progress-*.json")):
+            progress = self._read_json(progress_path, {})
+            if not isinstance(progress, Mapping):
+                continue
+            for name, commit in (progress.get("commits") or {}).items():
+                if name in commits and commits[name] != commit:
+                    raise EngineError(f"conflicting landing commit for {name}")
+                if isinstance(name, str) and isinstance(commit, str):
+                    commits[name] = commit
+        if not commits:
+            commits = {"primary": event["payload"]["commit"] for event in self.store.read_events()
+                       if event.get("kind") == "land" and event.get("payload", {}).get("commit")}
+        value = self.build_audit(through="COMPLETED", commits=commits, persist=True)
+        from core.run_protocol import audit as audit_protocol
+        DocumentStore._atomic(self.run_dir / "REPORT.md",
+                              audit_protocol.render(value, fmt="report"))
+        self.write_projection()
+        return self.projection()

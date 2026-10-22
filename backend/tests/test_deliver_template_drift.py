@@ -48,11 +48,6 @@ def _spawn_budget():
 #: old location — R27: a reader of a moved contract must be migrated with it.
 _DELIVER_MD = _SKILL / "data" / "gate-prompts" / "gate2-adversarial.md"
 
-#: The DELIVER stage doc itself. Distinct from the prompt above on purpose: the
-#: prompt is what a sub-agent receives, while this file holds the orchestrator's
-#: own spawn instructions. Only the prompt body moved.
-_DELIVER_STAGE_MD = _SKILL / "stages" / "deliver.md"
-
 
 def _extract_specialist_template_head(text: str) -> str:
     """Return the HEAD of the specialist prompt — the leading instruction block
@@ -104,22 +99,6 @@ def test_specialist_template_is_classified_adversarial():
 _SKILL_ROOT = Path(__file__).resolve().parents[1] / "skills" / "s_autonomous-pipeline"
 
 _BUDGET_MARKER = "SCOPE BUDGET"
-_INSTRUCTIONS_MD = _SKILL_ROOT / "INSTRUCTIONS.md"
-
-# The three rules the caller-side authority must state. Each entry is
-# (label, regex) — whitespace-insensitive because the source is prose wrapped at
-# ~78 cols, so a newline can fall anywhere inside a phrase.
-_AUTHORITY_RULES = (
-    ("finite item list", r"[Ff]inite\s+item\s+list"),
-    ("cap on item count", r"N\s*(?:<=|\u2264)\s*3-4"),
-    ("never prove a negative", r"prove\s+a\s+negative"),
-    ("do not delegate your grep", r"delegate\s+your\s+own\s+grep"),
-    ("state the scope budget", r"State\s+the\s+scope\s+budget"),
-    ("bound scope not the clock", r"[Bb]ound\s+SCOPE,\s+never\s+the\s+clock"),
-    ("N/A wording", r"`N/A:"),
-    ("UNCHECKED wording", r"UNCHECKED"),
-    ("budget never authorizes skipping", r"[Nn]ever\s+let\s+the\s+budget\s+authorize\s+skipping"),
-)
 
 # The prompts that reach a sub-agent VERBATIM, so their concrete numbers are what
 # actually bound it. These are now whole files under data/gate-prompts/ rather than
@@ -152,24 +131,6 @@ _PATH_REFERENCED_TEMPLATES = (
 )
 
 
-def test_caller_side_authority_states_every_rule():
-    """INSTRUCTIONS.md is the single authority for the bounded-spawn contract."""
-    text = _INSTRUCTIONS_MD.read_text()
-    start = text.find("[MUST] Every spawn prompt is BOUNDED")
-    assert start != -1, (
-        "INSTRUCTIONS.md lost the caller-side bounded-spawn rule. This is the ONLY "
-        "layer the orchestrator reliably reads when it hand-writes a spawn prompt; "
-        "without it nothing bounds the prompts that actually run."
-    )
-    end = text.find("**Spawn REJECTION", start)
-    block = text[start: end if end != -1 else start + 4000]
-    missing = [label for label, pat in _AUTHORITY_RULES
-               if not re.search(pat, block, re.S)]
-    assert not missing, (
-        f"the caller-side authority no longer states: {missing}. Restore it in "
-        "INSTRUCTIONS.md — a rule that lives only in a template file does not "
-        "reach a hand-written spawn prompt."
-    )
 
 
 def test_in_fence_templates_state_concrete_caps():
@@ -270,51 +231,4 @@ def test_adversarial_phrase_stays_inside_the_prompt_head_window():
     assert _BUDGET_MARKER in head, (
         f"{_BUDGET_MARKER} must appear in the specialist template HEAD (before the "
         "first '## ' section), so the spawned sub-agent actually reads it."
-    )
-
-
-def test_no_hardcoded_model_directive_in_spawn_config():
-    """deliver.md must not hardcode a model for review sub-agents.
-
-    The retired line read "Use default model (opus) — adversarial review needs
-    strongest reasoning". Measured across the recorded sub-agent corpus that
-    premise did not hold, and model identity was confounded with era and diff
-    size — so the evidence licensed DELETING the unsupported claim, not naming a
-    replacement, which would decay identically at the next default change.
-    Review quality comes from bounded scope plus fresh context, not a model name.
-    """
-    # Reads the STAGE DOC, not the prompt file: the "Sub-agent configuration"
-    # block is orchestrator-facing prose about how to spawn, and it stayed in
-    # deliver.md when the prompt BODY moved to data/gate-prompts/.
-    text = _DELIVER_STAGE_MD.read_text()
-    assert "default model (opus)" not in text, (
-        "deliver.md re-introduced the exact retired model directive. Sub-agent "
-        "review quality is governed by bounded scope + fresh context, not by "
-        "pinning a model name that silently decays when the session default moves."
-    )
-    # Guard the INTENT, not just the one retired wording (REVIEW finding, CHECK 2):
-    # a reworded 'Use model X' / 'default model (sonnet)' would sail past a literal
-    # substring check. Scope the scan to the Sub-agent configuration block so the
-    # surrounding PROSE explaining WHY the directive was retired (which necessarily
-    # names opus and sonnet) does not self-trigger.
-    cfg_start = text.find("**Sub-agent configuration:**")
-    assert cfg_start != -1, "deliver.md lost its Sub-agent configuration block"
-    cfg_end = text.find("\n**", cfg_start + 10)
-    cfg_block = text[cfg_start: cfg_end if cfg_end != -1 else len(text)]
-    # The negative lookahead is load-bearing (Gate-2 finding): without it a
-    # NEGATED bullet — "- Do NOT use model opus" — false-triggers, since the
-    # pattern only sees the verb, not its polarity. The current block genuinely
-    # contains such a bullet ("Do NOT pin a model"), so this guard must
-    # distinguish a prohibition from a directive or it blocks the correct state.
-    directive = re.compile(
-        r"^\s*[-*]\s+(?![^\n]*\b(?:do not|don't|never|no longer|avoid)\b)"
-        r"(?:use|set|pin|prefer)\b[^\n]*\b(opus|sonnet|haiku|fable)\b",
-        re.IGNORECASE | re.MULTILINE,
-    )
-    hit = directive.search(cfg_block)
-    assert hit is None, (
-        "deliver.md's Sub-agent configuration block pins a model again: "
-        f"{hit.group(0).strip()!r}. Omit `model` and inherit the session default; "
-        "a hardcoded tier decays at the next default change (the retired directive "
-        "named a tier and silently became wrong when the default moved)."
     )

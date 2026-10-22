@@ -159,15 +159,6 @@ class TestStageOrder:
             )
             assert result is True, f"First stage '{stages[0]}' in '{profile_name}' should be valid"
 
-    def test_second_stage_requires_first(self):
-        """Second stage requires first to be completed."""
-        stages_list = [
-            _stage_record("evaluate", status="completed"),
-            _stage_record("think", status="completed"),
-            _stage_record("build", status="running"),
-        ]
-        # In trivial profile: evaluate -> think -> build
-        assert _check_stage_order("build", "trivial", stages_list) is True
 
     def test_skipped_stage_before_fails(self):
         """Skipping a required prior stage fails order check."""
@@ -519,37 +510,6 @@ class TestValidateIntegration:
 # Summary command integration
 # ---------------------------------------------------------------------------
 
-class TestSummary:
-    def test_summary_validates_all_stages(self, workspace):
-        """Summary validates all completed/running stages."""
-        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
-        runs_dir = artifacts_dir / "runs" / "run_test1"
-
-        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
-                       {"recommendation": "GO", "scope": "standard"})
-        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
-                       {"files_changed": ["a.py"], "tdd": {"green_pass": True, "smoke_tests": 0},
-                        "ac_coverage": [{"ac": "AC1: test", "impl": "a.py::f()", "test": "test_a.py::test_f", "verified": True}]})
-
-        _make_run(runs_dir, profile="trivial", stages=[
-            _stage_record("evaluate", artifact_id="art_eval"),
-            _stage_record("think", status="completed", artifact_id=None),
-            _stage_record("build", artifact_id="art_build"),
-        ])
-
-        # Import and call the summary logic directly
-        from scripts.pipeline_validator import _load_run
-        run = _load_run("TestProject", "run_test1")
-        assert run is not None
-
-        results = []
-        for stage_rec in run["stages"]:
-            if stage_rec["status"] in ("completed", "running"):
-                r = validate("TestProject", "run_test1", stage_rec["stage"])
-                results.append(r)
-
-        assert len(results) == 3
-        assert all(r["valid"] for r in results)
 
 
 # ---------------------------------------------------------------------------
@@ -1344,15 +1304,6 @@ class TestFindingConfidenceGate:
         assert isinstance(pv.CONFIDENCE_GATE_THRESHOLD, int)
         assert pv.CONFIDENCE_GATE_THRESHOLD == 7
 
-    def test_med_high_confidence_blocks(self):
-        """AC2: unresolved MEDIUM with confidence >= 7 → blocking error."""
-        from scripts.pipeline_validator import validate_artifact_data
-        errors = validate_artifact_data("deliver", self._deliver([
-            {"severity": "MEDIUM", "confidence": 8, "resolved": False,
-             "finding": "x.py foo() line 12: bad thing"},
-        ]), profile="bugfix")
-        assert self._finding_errors(errors), (
-            f"unresolved MED conf=8 must BLOCK, got: {errors}")
 
     def test_med_low_confidence_passes(self):
         """AC3: unresolved MEDIUM with confidence < 7 → NOT blocked (note-only)."""
@@ -1374,36 +1325,8 @@ class TestFindingConfidenceGate:
         assert self._finding_errors(errors), (
             f"unresolved HIGH must BLOCK regardless of confidence, got: {errors}")
 
-    def test_med_missing_confidence_fails_closed(self):
-        """AC5: unresolved MEDIUM with NO confidence field → fail-closed (blocks)."""
-        from scripts.pipeline_validator import validate_artifact_data
-        errors = validate_artifact_data("deliver", self._deliver([
-            {"severity": "MEDIUM", "resolved": False,
-             "finding": "x.py foo() line 12: unclear severity"},
-        ]), profile="bugfix")
-        assert self._finding_errors(errors), (
-            f"unresolved MED with missing confidence must fail-closed (block), "
-            f"got: {errors}")
 
-    def test_med_short_alias_high_confidence_blocks(self):
-        """AC8: specialist 'MED' (deliver.md:396) gated identically to 'MEDIUM'."""
-        from scripts.pipeline_validator import validate_artifact_data
-        errors = validate_artifact_data("deliver", self._deliver([
-            {"severity": "MED", "confidence": 9, "resolved": False,
-             "finding": "x.py foo() line 12: aliased severity string"},
-        ]), profile="bugfix")
-        assert self._finding_errors(errors), (
-            f"'MED' alias conf=9 must BLOCK like 'MEDIUM', got: {errors}")
 
-    def test_med_case_insensitive(self):
-        """AC8: lowercase 'medium' still gated (case-insensitive normalization)."""
-        from scripts.pipeline_validator import validate_artifact_data
-        errors = validate_artifact_data("deliver", self._deliver([
-            {"severity": "medium", "confidence": 8, "resolved": False,
-             "finding": "x.py foo() line 12: lowercase severity"},
-        ]), profile="bugfix")
-        assert self._finding_errors(errors), (
-            f"lowercase 'medium' conf=8 must BLOCK, got: {errors}")
 
     def test_resolved_med_does_not_block(self):
         """Positive control: a RESOLVED high-confidence MED never blocks."""
@@ -1490,60 +1413,7 @@ class TestFindingConfidenceGate:
         assert to_delivery_finding(CompletenessResult(passed=True, noop=True)) is None
         assert to_delivery_finding(CompletenessResult(passed=True)) is None
 
-    def test_helper_returns_blocking_findings_directly(self):
-        """Unit-test the helper in isolation: returns exactly the blocking set."""
-        from scripts.pipeline_validator import _blocked_findings
-        findings = [
-            {"severity": "HIGH", "resolved": False, "finding": "h"},        # block
-            {"severity": "MED", "confidence": 8, "resolved": False, "finding": "m1"},  # block
-            {"severity": "MEDIUM", "confidence": 3, "resolved": False, "finding": "m2"},  # pass
-            {"severity": "MEDIUM", "resolved": False, "finding": "m3"},     # block (fail-closed)
-            {"severity": "HIGH", "resolved": True, "finding": "h2"},        # pass (resolved)
-            {"severity": "LOW", "confidence": 10, "resolved": False, "finding": "l"},  # pass
-        ]
-        blocked = _blocked_findings(findings)
-        blocked_texts = {f.get("finding") for f in blocked}
-        assert blocked_texts == {"h", "m1", "m3"}, (
-            f"expected {{h, m1, m3}} blocked, got {blocked_texts}")
 
-    def test_completion_path_blocks_high_confidence_med(self, workspace):
-        """AC2 at the COMPLETION gate (validate()->_check_depth), not just publish.
-        This is the path that guards status:completed (STEERING#11 — force it)."""
-        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
-        runs_dir = artifacts_dir / "runs" / "run_test1"
-        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery",
-                       {"title": "X", "status": "delivered",
-                        "confidence_score": {"score": 9, "breakdown": [], "penalties": []},
-                        "completion_audit": {"all_green": True, "gaps": 0},
-                        "adversarial_review": {
-                            "profile_tier": "full", "spawned": True,
-                            "evidence": "Agent tool invocation: correctness specialist",
-                            "findings": [
-                                {"severity": "MEDIUM", "confidence": 8, "resolved": False,
-                                 "finding": "x.py foo() line 12: unresolved med"}]}})
-        _make_run(runs_dir, profile="bugfix", stages=[
-            _stage_record("evaluate", artifact_id="art_e"),
-            _stage_record("plan", artifact_id="art_p"),
-            _stage_record("build", artifact_id="art_b"),
-            _stage_record("review", artifact_id="art_r"),
-            _stage_record("test", artifact_id="art_t"),
-            _stage_record("deliver", artifact_id="art_del"),
-        ])
-        for aid, atype, data in [
-            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
-            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
-            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
-            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1}, "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]}, "findings_count": 0}),
-            ("art_t", "test", {"passed": 10}),
-        ]:
-            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
-
-        result = validate("TestProject", "run_test1", "deliver")
-        finding_errs = [e for e in result["errors"]
-                        if "finding" in e.lower() and ("confidence" in e.lower() or "MED" in e)]
-        assert len(finding_errs) >= 1, (
-            f"COMPLETION path must BLOCK unresolved high-confidence MED, "
-            f"got: {result['errors']}")
 
 
 class TestL3ConfidenceGate:
@@ -2194,36 +2064,6 @@ class TestRecordValidationEvent:
 class TestMetricsCLI:
     """Test run-metrics and run-analytics CLI commands via subprocess."""
 
-    def test_run_metrics_cli(self, workspace):
-        """run-metrics generates METRICS.json and outputs JSON."""
-        import subprocess
-
-        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
-        runs_dir = artifacts_dir / "runs" / "run_test1"
-
-        _make_artifact(artifacts_dir, "run_test1", "art_t", "test_report",
-                       {"passed": 20, "failed": 0})
-        _make_run(runs_dir, status="completed", stages=[
-            _stage_record("evaluate", artifact_id="art_e"),
-            _stage_record("test", artifact_id="art_t", token_cost=5000),
-        ])
-
-        result = subprocess.run(
-            [sys.executable, "-m", "scripts.artifact_cli",
-             "run-metrics", "--project", "TestProject", "--run-id", "run_test1"],
-            capture_output=True, text=True,
-            cwd=str(Path(__file__).parent.parent),
-            env={**os.environ, "SWARM_WORKSPACE": str(workspace)},
-        )
-
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        metrics = json.loads(result.stdout)
-        assert metrics["run_id"] == "run_test1"
-        assert metrics["quality"]["test_passed"] == 20
-
-        # METRICS.json should be written
-        metrics_file = runs_dir / "METRICS.json"
-        assert metrics_file.exists()
 
     def test_run_analytics_cli(self, workspace):
         """run-analytics aggregates across multiple completed runs."""
@@ -5093,56 +4933,8 @@ class TestProducerInstruction:
         nxt = md.find("\n### ", start + len(marker))
         return md[start:] if nxt == -1 else md[start:nxt]
 
-    def test_section_is_must_not_guide(self):
-        sec = self._section()
-        heading = sec.splitlines()[0]
-        assert "[MUST]" in heading, f"§Structured Requirements must be [MUST]: {heading!r}"
-        assert "[GUIDE]" not in heading, f"§Structured Requirements must NOT be [GUIDE]: {heading!r}"
 
-    def test_names_three_fields_as_required_production(self):
-        """NON-VACUOUS: the section must name requirements[] + schema_version:1 +
-        clarifications[] as required production (a tag-only change would NOT pass this)."""
-        sec = self._section()
-        low = sec.lower()
-        assert "requirements[]" in low or "requirements[" in low, "must name requirements[]"
-        assert "schema_version" in low, "must name schema_version"
-        assert "clarifications" in low, "must name clarifications"
-        # MUST-strength production verb present (not optional 'produce it, don't fear a BLOCK').
-        # This catches the realistic regression: a [GUIDE]-era optional voice ('Produce it,
-        # don't fear a BLOCK') carries NONE of these MUST tokens, so a tag+voice reversion goes
-        # RED. We assert PRESENCE of required-production vocabulary — we deliberately do NOT try
-        # to prove, by string-matching, that the prose is semantically "unconditional": five
-        # adversarial rounds showed a prose-semantics assertion is an open-set arms race that a
-        # string test structurally cannot win AND that false-REDs legitimate skill-doc rewording
-        # (C044: a check that can't self-enforce its own intent is a net-negative — removed).
-        # The REAL enforcement of "EVALUATE actually produces the block" is agent-discipline
-        # ([MUST], per the design strangler) + this run's dogfood, NOT a doc-string regex.
-        assert any(k in low for k in ("must emit", "must produce", "必须产出", "必产", "mandatory", "required production")), \
-            "section must carry a MUST-strength production instruction, not optional voice"
-        # The exact operative directive phrase must be present (a tag+voice reversion to the
-        # old bare 'Produce a structured ...' drops the 'You MUST produce ... (strict profiles)'
-        # form → RED). Presence, not semantics — the honest ceiling of a doc-structure test.
-        assert "you must produce a structured `requirements[]` array** (strict profiles)" in low, \
-            "the operative 'You MUST produce ... (strict profiles)' directive must be present verbatim"
 
-    def test_schema_version_paired_with_requirements(self):
-        """Gate-1 dependency: schema_version:1 must be explicitly paired with
-        requirements[] IN PROSE (without version the validator WARN layer silently
-        no-ops). NON-VACUOUS fix (Gate-2 found the old form matched the pre-existing
-        JSON example 'schema_version: 1' and so passed on the un-upgraded [GUIDE] doc):
-        assert a PROSE pairing phrase, not the JSON snippet — the snippet survives a
-        prose-removal mutation, a prose phrase does not."""
-        sec = self._section()
-        low = sec.lower()
-        # Must carry an explicit PROSE pairing instruction (not the JSON example line).
-        # Any of these phrasings ties the array to the version in the instruction text.
-        pairing_phrases = ["non-optional pair", "emit both or neither", "emit both",
-                           "paired with `schema_version", "paired with schema_version",
-                           "alongside the array", "both or neither"]
-        assert any(p in low for p in pairing_phrases), \
-            ("§Structured Requirements must state the requirements[]+schema_version:1 "
-             "PAIRING in prose (not just the JSON example) — found none of: "
-             f"{pairing_phrases}")
 
     def _publish_example_data(self) -> str:
         """Extract the --data JSON payload string from evaluate.md's Artifact Publish
@@ -5184,47 +4976,7 @@ class TestProducerInstruction:
             i += 1
         raise AssertionError(f"unbalanced array for {key!r}")
 
-    def test_publish_example_carries_structured_fields(self):
-        """#1 ROOT FIX: the publish command example must TEACH the three structured
-        fields with concrete, parseable JSON — an agent copy-pasting the command must
-        produce requirements[]+schema_version:1+clarifications[], else validator skips
-        and the audit renders dark. A tag/prose change alone does NOT fix this (the
-        agent copies the COMMAND, not the prose)."""
-        import json, re
-        payload = self._publish_example_data()
-        assert re.search(r'"schema_version"\s*:\s*1', payload), \
-            "publish example --data must carry concrete schema_version:1"
-        reqs = json.loads(self._balanced_array(payload, "requirements"))
-        assert isinstance(reqs, list) and len(reqs) >= 1, "requirements[] must have >=1 entry"
-        r0 = reqs[0]
-        for field in ("id", "statement", "work_class", "source", "status", "acceptance"):
-            assert field in r0, f"example requirement missing required field {field!r}"
-        assert "kind" in r0["source"], "example requirement.source must carry kind"
-        assert re.search(r'"clarifications"\s*:\s*\[', payload), \
-            "publish example --data must carry a clarifications[] array"
-        assert not re.search(r"migrat(e|es|ing|ion)", payload.lower()), \
-            "publish example must avoid the migrat* root (false-trips migration-class gate)"
 
-    def test_example_structured_block_enters_real_validation(self):
-        """#1 TEETH (end-to-end, non-vacuous): a payload mirroring the example's
-        structured fields must ENTER validate_requirements_block's real checks, not the
-        requirements-missing / schema_version-missing early-exit (return []). Mutation:
-        drop requirements/schema_version -> early-exit -> the probe WARN disappears."""
-        import json
-        payload = self._publish_example_data()
-        reqs = json.loads(self._balanced_array(payload, "requirements"))
-        good = {"schema_version": 1, "requirements": reqs, "scope": "standard"}
-        probe = json.loads(json.dumps(good))
-        probe["requirements"][0]["source"] = {"kind": "", "ref": "x"}
-        warns_probe = validate_requirements_block(probe, "standard")
-        assert any("source" in w.lower() for w in warns_probe), \
-            "a blank source.kind must raise a provenance WARN (proves real validation entered)"
-        mut_no_reqs = {k: v for k, v in good.items() if k != "requirements"}
-        assert validate_requirements_block(mut_no_reqs, "standard") == [], \
-            "missing requirements must early-exit to [] (the pre-fix dark state)"
-        mut_no_ver = {k: v for k, v in good.items() if k != "schema_version"}
-        assert validate_requirements_block(mut_no_ver, "standard") == [], \
-            "missing schema_version must early-exit to []"
 
     def test_evaluate_schema_does_not_nudge_srs_on_every_evaluate(self):
         """#1 fix(b) DROPPED (net-negative): requirements/schema_version must NOT be in

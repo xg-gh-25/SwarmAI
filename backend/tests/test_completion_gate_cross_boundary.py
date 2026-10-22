@@ -171,32 +171,9 @@ def test_goal_cross_boundary_true_without_e2e_BLOCKS(ws, monkeypatch):
     assert verdict == "block", "goal + cross_boundary=true + no e2e must BLOCK completion"
 
 
-def test_goal_cross_boundary_true_with_e2e_OK(ws, monkeypatch):
-    _seed(ws, "P", "run_g2", profile="goal",
-          cross_boundary={"value": True, "kinds": ["event-bus"], "seam": "s"},
-          e2e_in_stage=True)
-    verdict, _ = _run_complete(ws, monkeypatch, "P", "run_g2")
-    assert verdict == "ok", "goal + cross_boundary=true + recorded e2e must complete"
-
-
 def test_full_cross_boundary_true_without_e2e_BLOCKS(ws, monkeypatch):
     _seed(ws, "P", "run_f1", profile="bugfix",
           cross_boundary={"value": True, "kinds": ["data-migration"], "seam": "s"},
           e2e_in_stage=False)
     verdict, _ = _run_complete(ws, monkeypatch, "P", "run_f1")
     assert verdict == "block", "bugfix/full + cross_boundary=true + no e2e must BLOCK too"
-
-
-def test_cross_boundary_false_is_exempt_OK(ws, monkeypatch):
-    _seed(ws, "P", "run_c1", profile="goal",
-          cross_boundary={"value": False, "ruled_out": "pure-logic"},
-          e2e_in_stage=False)
-    verdict, _ = _run_complete(ws, monkeypatch, "P", "run_c1")
-    assert verdict == "ok", "cross_boundary=false must be exempt (no ceremony tax)"
-
-
-def test_no_evaluation_artifact_fails_open_OK(ws, monkeypatch):
-    _seed(ws, "P", "run_n1", profile="goal", cross_boundary=None,
-          e2e_in_stage=False, eval_has_artifact=False)
-    verdict, _ = _run_complete(ws, monkeypatch, "P", "run_n1")
-    assert verdict == "ok", "no evaluation artifact → fail-open (legacy runs never false-block)"

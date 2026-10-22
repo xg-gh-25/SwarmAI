@@ -514,17 +514,7 @@ def build_errors(build: dict, plan: "dict | None", profile: str) -> "list[str]":
     return errs
 
 
-try:  # the ONE blocking rule every Gate-2 reader uses (core/gate2_findings.py)
-    from core.gate2_findings import is_blocking as _blocking
-except ImportError:  # pragma: no cover - standalone use without backend/ on sys.path
-    def _blocking(f: dict) -> bool:
-        sev = str(f.get("severity") or "").strip().upper()
-        if sev.startswith(("HIGH", "CRIT", "BLOCK", "P0", "P1")):
-            return True
-        if sev.startswith("MED"):
-            m = re.match(r"\s*(\d+(?:\.\d+)?)", str(f.get("confidence") or ""))
-            return m is None or float(m.group(1)) >= 7
-        return False
+from core.run_protocol.findings import reported_push_effect as _blocking
 
 # A reported finding judged a false positive stays recorded (ref/deliver/gate2-findings.md):
 # `finding` = "Not a bug: <evidence>"; its specialist's re-check rules on it. Not a defect →

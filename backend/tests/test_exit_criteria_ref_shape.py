@@ -158,7 +158,7 @@ def test_leading_space_mode_ref_is_a_path_to_both_validator_and_judge():
 
 # ── AC5: documented ──────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("doc", ["plan.md", "ref/plan/exit-contract.md"])
+@pytest.mark.parametrize("doc", ["ref/plan/exit-contract.md"])
 def test_docs_state_the_rule(doc):
     text = (_STAGES / doc).read_text(encoding="utf-8")
     assert "directory" in text and "glob" in text and "mode:regression" in text

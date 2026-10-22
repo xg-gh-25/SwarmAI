@@ -204,9 +204,6 @@ DECISION = [{"description": "kept the change local", "classification": "taste"}]
 # ── direct profile: plan → build → deliver end to end (items 1, 2, 7, 8) ────
 
 class TestDirectProfileFlow:
-    def test_profile_shape_is_strict(self):
-        assert PIPELINE_PROFILES["direct"] == ["plan", "build", "deliver"]
-        assert is_relaxed_profile("direct") is False
 
     def test_stage_start_says_how_to_read_the_run(self, ws, capsys):
         root, reg = ws
@@ -217,86 +214,7 @@ class TestDirectProfileFlow:
         assert f"run-get --project {PROJECT} --run-id {rid} --brief" in out["read_run"]
         assert "--field" in out["read_run"]
 
-    def test_plan_build_deliver(self, ws, capsys):
-        root, reg = ws
-        rid = "run_direct1"
-        rd = _make_run(root, rid, "direct",
-                       files_touched=["backend/a.py", "backend/tests/test_x.py"],
-                       stage_timing={"plan": {"observed_events": 3}})
 
-        code, out = _start(reg, capsys, rid, "plan")
-        assert code == 0 and out["ok"] is True
-        assert out["card"].endswith("stages/plan.md")
-        assert out["exit_criteria_default"], "plan stage-start must hand out a default contract"
-        timing = _run_state(root, rid)["stage_timing"]["plan"]
-        assert timing["started_at"] and timing["observed_events"] == 3  # C4 merge
-
-        code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
-        assert code == 0, out
-        assert out["next_stage"] == "build"
-        assert cli._CONTINUATION_PHRASE in out["next_action"]
-        assert "stages/build.md" in out["next_action"] and out["next_card"].endswith("build.md")
-        assert reg.get_pipeline_state(PROJECT) == "build"
-        plan_rec = cli._stage_record_of(_run_state(root, rid), "plan")
-        assert plan_rec["status"] == "completed" and plan_rec["stage_doc_consumed"] is True
-        assert plan_rec["artifact_id"] == out["artifact_id"]
-        st = _run_state(root, rid)["stage_timing"]["plan"]
-        assert st["completed_at"] and st["observed_events"] == 3
-
-        # Evidence for the exit contract: X1 test passed; X2 manual in the record.
-        _write_evidence(rd, "tests/latest-tdd.json", _c2("tdd", rid, [
-            {"nodeid": "tests/test_x.py::test_a", "outcome": "passed", "file": "tests/test_x.py"}]))
-        _start(reg, capsys, rid, "build")
-        code, out = _complete(reg, capsys, rid, "build", _build_artifact(),
-                              {"decisions": DECISION, "exit_evidence": {"X2": "checked the page"}})
-        assert code == 0, out
-        assert out["exit_criteria"]["met"] is True
-        assert cli._EXIT_MET_DIRECTIVE in out["next_action"]
-        build_rec = cli._stage_record_of(_run_state(root, rid), "build")
-        assert build_rec["consumed_artifacts"] == [{"type": "design_doc", "id": plan_rec["artifact_id"]}]
-        built = _artifact_on_disk(root, build_rec["artifact_id"])
-        assert built["files_changed"] == ["backend/a.py", "backend/tests/test_x.py"]  # from files_touched
-        assert out["derived"]["files_changed"]["source"] == "run.json files_touched"
-
-        # the ONE full-scope run, at DELIVER after the last change: push_ready needs it
-        _write_evidence(rd, "tests/latest-regression.json", _c2("regression", rid, [
-            {"nodeid": "tests/test_x.py::test_a", "outcome": "passed", "file": "tests/test_x.py"}]))
-        deliver = _tmpl("deliver")
-        deliver["adversarial_review"]["findings_total"] = 99  # model value — overridden
-        deliver["adversarial_review"]["findings"] = [
-            {"severity": "LOW", "confidence": 3, "resolved": True, "finding": "a.py x() line 3: nit. Fixed: renamed."},
-            {"severity": "LOW", "confidence": 3, "resolved": False, "finding": "a.py x() line 9: note only."},
-        ]
-        code, out = _complete(reg, capsys, rid, "deliver", deliver,
-                              {"exit_evidence": {"X2": "checked the page"}})
-        assert code == 0, out
-        assert out["next_stage"] is None and cli._CONTINUATION_PHRASE in out["next_action"]
-        rec = cli._stage_record_of(_run_state(root, rid), "deliver")
-        ar = _artifact_on_disk(root, rec["artifact_id"])["adversarial_review"]
-        assert (ar["findings_total"], ar["findings_fixed"], ar["findings_remaining"]) == (2, 1, 1)
-        assert rec["push_ready"] is True, out["derived"]["push_ready"]
-        assert rec["token_cost_source"] in ("estimate", "unavailable", "measured")
-        # DELIVER is direct's last stage: stage-complete itself generates REPORT.md
-        # (run-report code path, auto flag) so COMPLETE needs no extra run-report call.
-        report = rd / "REPORT.md"
-        assert out["report_generated"] is True and report.is_file()
-        assert report.stat().st_size >= 500  # the run-update completion gate's floor
-        assert _run_state(root, rid)["report_autogenerated"] is True
-        assert "run-report" not in out["next_action"]
-
-    def test_completion_gate_deliver_not_skippable(self, ws):
-        root, _ = ws
-        rid = "run_direct2"
-        _make_run(root, rid, "direct", stages=[
-            "plan", "build",
-            {"stage": "deliver", "status": "skipped", "skip_reason": "no time to run the deliver gates"}])
-        env = {**os.environ, "SWARM_WORKSPACE": str(root), "SWARM_TODO_DB": str(root / "t.db")}
-        r = subprocess.run([sys.executable, str(_BACKEND / "scripts" / "artifact_cli.py"),
-                            "run-update", "--project", PROJECT, "--run-id", rid,
-                            "--status", "completed"],
-                           capture_output=True, text=True, env=env, cwd=str(_BACKEND), timeout=60)
-        assert r.returncode != 0
-        assert "cannot be skipped" in (r.stdout + r.stderr)
 
 
 # ── every existing gate still blocks; a block writes NOTHING (item 1, X1) ──
@@ -365,25 +283,6 @@ def _assert_degraded(root, rid, stage, needle):
         assert rec.get("push_ready") is False and needle in rec["push_ready_reason"]
 
 
-@pytest.mark.parametrize("case", [
-    _case_missing_field, _case_invalid_litmus, _case_tier_skipped,
-    _case_exit_contract_missing, _case_red_team_missing,
-], ids=lambda f: f.__name__)
-def test_gate_error_completes_degraded_first_try(ws, capsys, case):
-    """--check still reports the error with its code; the real call completes the stage
-    degraded on the FIRST refusal (no 3-strike wait) and names the error on the record."""
-    root, reg = ws
-    rid, stage, art, rec, code_, path = case(root)
-    code, out = _complete(reg, capsys, rid, stage, art, rec, check=True)
-    assert code == 1 and any(e["code"] == code_ and e["path"] == path for e in out["errors"]), out
-    code, out = _complete(reg, capsys, rid, stage, art, rec)
-    assert code in (0, None) and out["ok"] is True, out
-    assert any(f"{stage} degraded:" in w for w in out["warnings"]), out["warnings"]
-    rec_ = next(r for r in _run_state(root, rid)["stages"] if r.get("stage") == stage)
-    assert rec_.get("degraded", {}).get("errors"), rec_
-    if stage == "deliver":   # one answer: the payload says what the record says
-        assert out["derived"]["push_ready"]["value"] is False, out["derived"]["push_ready"]
-        assert rec_["push_ready"] is False
 
 
 @pytest.mark.parametrize("case", [_case_stage_order, _case_bad_decision],
@@ -456,53 +355,8 @@ def test_publish_failure_carries_structured_errors(ws, capsys):
 
 # ── derived fields from evidence (item 2) ──────────────────────────────────
 
-def test_test_layers_and_regressions_come_from_evidence(ws, capsys):
-    root, reg = ws
-    rid = "run_testev"
-    rd = _make_run(root, rid, "trivial", stages=["evaluate", "think", "build", "review"])
-    layers = {"ac_driven": {"run": True, "pass": 7, "fail": 0},
-              "dependency_scoped": {"run": True, "tests": 4, "pass": 4},
-              "import_smoke": {"run": True, "modules": 2, "pass": 2}}
-    _write_evidence(rd, "tests/latest-regression.json", _c2(
-        "regression", rid,
-        [{"nodeid": "tests/test_y.py::test_b", "outcome": "failed", "file": "tests/test_y.py"}],
-        failures=[{"nodeid": "tests/test_y.py::test_b", "classification": "regression",
-                   "summary": "assert 1 == 2"}],
-        layers=layers))
-    art = _tmpl("test")
-    art["regressions"] = 0                                 # model claims 0 — evidence says 1
-    art["layers"]["ac_driven"]["pass"] = 1
-    code, out = _complete(reg, capsys, rid, "test", art, {"decisions": DECISION})
-    assert code == 0, out
-    stored = _artifact_on_disk(root, out["artifact_id"])
-    assert stored["regressions"] == 1
-    assert stored["layers"]["ac_driven"]["pass"] == 7
-    assert out["derived"]["test_layers"]["source"] == "evidence/tests/latest-regression.json"
-    rec = cli._stage_record_of(_run_state(root, rid), "test")
-    assert rec["derived_sources"]["test_layers"] == "evidence/tests/latest-regression.json"
 
 
-def test_token_cost_measured_when_c5_available(ws, capsys, monkeypatch):
-    root, reg = ws
-    rid = "run_tokens"
-    _make_run(root, rid, "direct", session_id="sess_1",
-              stage_timing={"plan": {"started_at": "2026-01-01T00:00:00+00:00"}})
-    seen = {}
-
-    def _fake(session_id, start_iso, end_iso, db_path=None):
-        seen.update(session_id=session_id, start=start_iso, end=end_iso)
-        return {"cost_usd": 0.1, "input_tokens": 100, "output_tokens": 20,
-                "cache_read_tokens": 9999, "cache_creation_tokens": 5, "rows": 2}
-
-    mod = types.ModuleType("core.run_delivery_summary")
-    mod.token_usage_for_window = _fake
-    monkeypatch.setitem(sys.modules, "core.run_delivery_summary", mod)
-    code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
-    assert code == 0, out
-    rec = cli._stage_record_of(_run_state(root, rid), "plan")
-    assert rec["token_cost"] == 125 and rec["token_cost_source"] == "measured"
-    assert rec["token_usage"]["rows"] == 2
-    assert seen["session_id"] == "sess_1" and seen["start"] == "2026-01-01T00:00:00+00:00"
 
 
 @pytest.mark.parametrize("model_value,expected", [(4321, (4321, "estimate")), (None, (0, "unavailable"))])
@@ -525,24 +379,6 @@ def _green_ev():
     return _c2("regression", "r", [{"nodeid": "a::b", "outcome": "passed"}])
 
 
-@pytest.mark.parametrize("mutate,expect_ok", [
-    (lambda a: None, True),
-    (lambda a: a["adversarial_review"]["findings"].append(
-        {"severity": "HIGH", "resolved": False, "finding": "x"}), False),
-    (lambda a: a["adversarial_review"]["findings"].append(
-        {"severity": "MEDIUM", "confidence": 8, "resolved": False, "finding": "x"}), False),
-    (lambda a: a["adversarial_review"]["findings"].append(
-        {"severity": "MEDIUM", "confidence": 3, "resolved": False, "finding": "x"}), True),
-    (lambda a: a["completion_audit"].update(all_green=False), False),
-    (lambda a: a["quality"].update(regressions=2), False),
-    (lambda a: a["meta_review"].update(risks=[{"severity": "HIGH", "risk": "x"}]), False),
-    (lambda a: a["quality"].update(tests_pass=False), False),
-])
-def test_push_ready_bound_gates(mutate, expect_ok):
-    art = _clean_deliver()
-    mutate(art)
-    ok, reasons = pv.push_ready_upper_bound(art, "full", test_evidence=_green_ev())
-    assert ok is expect_ok, reasons
 
 
 def test_push_ready_needs_runner_evidence_not_an_artifact_claim():
@@ -567,19 +403,6 @@ def test_push_ready_bound_exit_criteria_strict_only():
     assert pv.push_ready_upper_bound(_clean_deliver(), "full", test_evidence=failing_ev)[0] is False
 
 
-def test_deliver_push_ready_stored_false_when_bound_false(ws, capsys):
-    root, reg = ws
-    rid = "run_prbound"
-    _make_run(root, rid, "direct", stages=["plan", "build"])
-    art = _clean_deliver()
-    art["quality"]["regressions"] = 0
-    art["quality"]["tests_pass"] = True
-    # bound false via meta_review HIGH (not a validator block) — model says True
-    art["meta_review"]["risks"] = [{"severity": "HIGH", "risk": "untested path"}]
-    code, out = _complete(reg, capsys, rid, "deliver", art, {"push_ready": True})
-    assert code == 0, out
-    rec = cli._stage_record_of(_run_state(root, rid), "deliver")
-    assert rec["push_ready"] is False and "meta_review" in rec["push_ready_reason"]
 
 
 # ── Gate-2 Red Team trigger, HIGH half (validator-enforced) ────────────────
@@ -602,43 +425,6 @@ def _rt_markers(root, monkeypatch, run_id, expert_ids, *, readable=True):
             {"ts": i, "event": "SubagentStop", "run_id": run_id, "expert_id": eid}))
 
 
-@pytest.mark.parametrize("profile,findings,extra,blocked", [
-    ("direct", [_specialist_high()], {_RT: True}, False),           # red team ran
-    ("direct", [_specialist_high()], {}, True),                     # ran nowhere
-    ("direct", [_specialist_high()], {_RT: False}, True),
-    ("direct", [_specialist_high()], {_RT: 1}, False),               # a count
-    ("direct", [_specialist_high("CRITICAL", "correctness")], {}, True),
-    ("direct", [_specialist_high("high", "Correctness")], {}, True),  # case-normalized
-    ("direct", [{**_specialist_high(), "specialist": ""}], {}, True),  # unattributed
-    ("direct", [{"severity": "MEDIUM", "confidence": 8, "resolved": True,
-                 "specialist": "correctness", "finding": "a.py x() line 2: y. Fixed: z."}],
-     {}, False),                                                      # MED only
-    ("direct", [_specialist_high(who="red-team")], {}, False),       # own HIGH
-    ("direct", [_specialist_high(who="Red Team")], {}, False),
-    ("direct", [_specialist_high(), _specialist_high("LOW", "red-team")], {}, False),
-    ("direct", [_specialist_high(who="correctness + red-team")], {}, False),
-    ("trivial", [_specialist_high()], {}, False),                    # relaxed profile
-])
-def test_red_team_required_after_specialist_high(ws, capsys, monkeypatch, profile, findings,
-                                                 extra, blocked):
-    root, reg = ws
-    rid = "run_rt"
-    stages = PIPELINE_PROFILES[profile]
-    prior = stages[:stages.index("deliver")]
-    _make_run(root, rid, profile, stages=prior, created_at=_RT_POST)
-    _rt_markers(root, monkeypatch, rid, ["red-team"])   # the Red Team really ran
-    art = _clean_deliver()
-    art["adversarial_review"]["findings"] = findings
-    art["adversarial_review"].pop(_RT, None)
-    art["adversarial_review"].update(extra)
-    code, out = _complete(reg, capsys, rid, "deliver", art, {})
-    hits = [e for e in out.get("errors", []) if e["code"] == "E_RED_TEAM_REQUIRED"]
-    if blocked:
-        assert code in (0, None), out   # a gate error degrades the stage, never stops it
-        _assert_degraded(root, rid, "deliver", "Red Team required")
-    else:
-        assert not hits, hits
-        assert code == 0, out
 
 
 def _rt_publish(reg, capsys, art, run_id):
@@ -684,51 +470,12 @@ def _rt_claimed_deliver():
     return art
 
 
-def test_red_team_claim_without_marker_is_refused(ws, capsys, monkeypatch):
-    root, reg = ws
-    _make_run(root, "run_rt_nomark", "direct", stages=["plan", "build"], created_at=_RT_POST)
-    _rt_markers(root, monkeypatch, "run_rt_nomark", ["correctness", "security"])
-    _rt_markers(root, monkeypatch, "run_sibling", ["red-team"])  # another run's marker
-    code, out = _complete(reg, capsys, "run_rt_nomark", "deliver", _rt_claimed_deliver(), {},
-                          check=True)
-    hits = [e for e in out["errors"] if e["code"] == "E_RED_TEAM_REQUIRED"]
-    assert code == 1 and hits and "EXPERT-ID marker" in hits[0]["message"], out
-    code, out = _complete(reg, capsys, "run_rt_nomark", "deliver", _rt_claimed_deliver(), {})
-    assert code in (0, None), out
-    _assert_degraded(root, "run_rt_nomark", "deliver", "EXPERT-ID marker")
 
 
-def test_red_team_marker_passes_and_is_declared_for_run_commit(ws, capsys, monkeypatch):
-    root, reg = ws
-    _make_run(root, "run_rt_ok", "direct", stages=["plan", "build"], created_at=_RT_POST,
-              required_experts=["correctness"])
-    _rt_markers(root, monkeypatch, "run_rt_ok", ["correctness", "red-team"])
-    code, out = _complete(reg, capsys, "run_rt_ok", "deliver", _rt_claimed_deliver(), {})
-    assert code == 0, out
-    assert _run_state(root, "run_rt_ok")["required_experts"] == ["correctness", "red-team"]
 
 
-def test_red_team_marker_store_unreadable_fails_open(ws, capsys, monkeypatch):
-    root, reg = ws
-    _make_run(root, "run_rt_open", "direct", stages=["plan", "build"], created_at=_RT_POST)
-    _rt_markers(root, monkeypatch, "run_rt_open", [], readable=False)
-    code, out = _complete(reg, capsys, "run_rt_open", "deliver", _rt_claimed_deliver(), {})
-    assert code == 0, out
-    assert any("Red Team marker NOT verified" in w for w in out["warnings"]), out
-    assert "red-team" in _run_state(root, "run_rt_open")["required_experts"]
 
 
-def test_red_team_grandfathered_run_warns_and_completes(ws, capsys, monkeypatch):
-    root, reg = ws
-    _make_run(root, "run_rt_old", "direct", stages=["plan", "build"], created_at=_RT_PRE)
-    _rt_markers(root, monkeypatch, "run_rt_old", [])
-    art = _clean_deliver()
-    art["adversarial_review"]["findings"] = [_specialist_high()]   # no claim, no marker
-    art["adversarial_review"].pop(_RT, None)
-    code, out = _complete(reg, capsys, "run_rt_old", "deliver", art, {})
-    assert code == 0, out
-    assert any("Red Team required" in w and "grandfathered" in w for w in out["warnings"])
-    assert "required_experts" not in _run_state(root, "run_rt_old")
 
 
 def test_red_team_legacy_run_update_declares_red_team(ws, capsys, monkeypatch):
@@ -757,20 +504,6 @@ def _direct_run_with_manual_contract(root, reg, capsys, rid, **extra):
     (_run_dir(root, rid) / "run.json").write_text(json.dumps(st), encoding="utf-8")
 
 
-def test_model_may_only_lower_push_ready_with_reason(ws, capsys):
-    root, reg = ws
-    _direct_run_with_manual_contract(root, reg, capsys, "run_lower")
-    _write_evidence(_run_dir(root, "run_lower"), "tests/latest-regression.json",
-                    _c2("regression", "run_lower", [{"nodeid": "a::b", "outcome": "passed"}]))
-    ev = {"exit_evidence": {"X2": "opened the page"}}
-    code, out = _complete(reg, capsys, "run_lower", "deliver", _clean_deliver(),
-                          {**ev, "push_ready": False})
-    assert code == 1 and any(e["path"] == "record.push_ready_reason" for e in out["errors"])
-    code, out = _complete(reg, capsys, "run_lower", "deliver", _clean_deliver(),
-                          {**ev, "push_ready": False, "push_ready_reason": "waiting on a design call"})
-    assert code == 0, out
-    rec = cli._stage_record_of(_run_state(root, "run_lower"), "deliver")
-    assert rec["push_ready"] is False and out["derived"]["push_ready"]["upper_bound"] is True
 
 
 # ── G1 exit contract: structure + judging per kind (item 7) ────────────────
@@ -955,11 +688,6 @@ def test_docs_only_change_dispatches_no_expert(required, expect):
         {"path": "backend/context/SOUL.md", "status": "M", "added": 400, "removed": 0}]})
 
 
-def test_stage_start_rejects_off_profile_stage(ws, capsys):
-    root, reg = ws
-    _make_run(root, "run_off", "direct")
-    code, out = _start(reg, capsys, "run_off", "review")
-    assert code == 1 and out["errors"][0]["code"] == "E_PROFILE"
 
 
 # ── adversarial-review fixes: HIGH-1 … MED-6, LOW ──────────────────────────
@@ -974,62 +702,10 @@ def _run_update_args(run_id, **kw):
     return ns
 
 
-@pytest.mark.parametrize("current,stages,new,blocked", [
-    ("bugfix", ["evaluate", "think", "plan", "build"], "direct", True),   # same rank (HIGH-1)
-    ("full", ["evaluate"], "direct", True),
-    ("trivial", ["evaluate", "think"], "full", False),                    # upgrade keeps all
-    ("goal", ["evaluate", "think", "plan", "goal_cycle"], "full", False), # dropped stage done
-])
-def test_profile_change_may_not_drop_pending_stages(ws, capsys, current, stages, new, blocked):
-    root, reg = ws
-    rid = f"run_pc_{current}"
-    _make_run(root, rid, current, stages=stages)
-    code, out = _call(cli.cmd_run_update, reg, capsys,
-                      **vars(_run_update_args(rid, profile=new)))
-    if blocked:
-        assert code == 1 and _run_state(root, rid)["profile"] == current
-        if current == "bugfix":
-            assert out["code"] == "E_PROFILE_CHANGE" and out["ok"] is False
-            assert {"review", "test", "reflect"} <= set(out["missing_stages"])
-    else:
-        assert code == 0, out
-        assert _run_state(root, rid)["profile"] == new
 
 
-def test_push_ready_false_when_evidence_predates_a_later_edit(ws, capsys, monkeypatch):
-    """MED-2: a green report whose digests no longer match files_touched caps it."""
-    import hashlib
-    root, reg = ws
-    monkeypatch.setenv("SWARM_TEST_REPO_ROOT", str(root))
-    src = root / "backend" / "a.py"
-    src.parent.mkdir(parents=True)
-    src.write_text("x = 1\n", encoding="utf-8")
-    rid = "run_fresh"
-    _direct_run_with_manual_contract(root, reg, capsys, rid, files_touched=["backend/a.py"])
-    ev = _c2("verify", rid, [{"nodeid": "tests/test_x.py::test_a", "outcome": "passed",
-                              "file": "tests/test_x.py"}])
-    ev["tree_digest"] = {"backend/a.py": hashlib.sha256(src.read_bytes()).hexdigest()}
-    _write_evidence(_run_dir(root, rid), "tests/latest-verify.json", ev)
-    rec = {"exit_evidence": {"X2": "opened the page"}}
-    code, out = _complete(reg, capsys, rid, "deliver", _clean_deliver(), rec, check=True)
-    assert code == 0 and out["derived"]["push_ready"]["upper_bound"] is True, out
-    src.write_text("x = 2  # edited after the test run\n", encoding="utf-8")
-    code, out = _complete(reg, capsys, rid, "deliver", _clean_deliver(), rec, check=True)
-    pr = out["derived"]["push_ready"]
-    assert pr["upper_bound"] is False
-    assert any("predates later edits" in r for r in pr["reasons"]), pr
 
 
-def test_undigested_evidence_keeps_behavior_with_a_warning(ws, capsys):
-    root, reg = ws
-    rid = "run_nodigest"
-    _direct_run_with_manual_contract(root, reg, capsys, rid, files_touched=["backend/a.py"])
-    _write_evidence(_run_dir(root, rid), "tests/latest-verify.json", _c2("verify", rid, [
-        {"nodeid": "tests/test_x.py::test_a", "outcome": "passed", "file": "tests/test_x.py"}]))
-    code, out = _complete(reg, capsys, rid, "deliver", _clean_deliver(),
-                          {"exit_evidence": {"X2": "opened the page"}}, check=True)
-    assert code == 0 and out["derived"]["push_ready"]["upper_bound"] is True, out
-    assert any("no tree_digest" in w for w in out["warnings"]), out["warnings"]
 
 
 def test_bound_reads_all_reports_passed_count_and_tests_pass_flag():
@@ -1071,36 +747,8 @@ def _plan_and_build(root, reg, capsys, rid):
     return rd
 
 
-def test_replan_after_build_may_not_weaken_the_exit_contract(ws, capsys):
-    """MED-3: dropping / changing a criterion after BUILD is reported (--check) and, on a
-    real call, recorded as a degraded PLAN (push_ready false), never a silent pass."""
-    root, reg = ws
-    rid = "run_replan"
-    _plan_and_build(root, reg, capsys, rid)
-    weak = _plan_artifact(exit_criteria=[{"id": "X1", "kind": "manual", "ref": "eyeballed",
-                                          "expect": "done"}])
-    code, out = _complete(reg, capsys, rid, "plan", weak, {"decisions": DECISION}, check=True)
-    assert code == 1 and any(e["code"] == "E_EXIT_CRITERIA" for e in out["errors"]), out
-    added = _plan_artifact()
-    added["exit_criteria"].append({"id": "X3", "kind": "manual", "ref": "log line", "expect": "done"})
-    code, out = _complete(reg, capsys, rid, "plan", added, {"decisions": DECISION}, check=True)
-    assert code == 1 and any("reason" in e["path"] for e in out["errors"]), out
-    code, out = _complete(reg, capsys, rid, "plan", weak, {"decisions": DECISION})
-    assert code in (0, None), out
-    _assert_degraded(root, rid, "plan", "replan")
 
 
-def test_replan_superset_is_allowed_and_manifest_never_moves_back(ws, capsys):
-    root, reg = ws
-    rid = "run_replan_ok"
-    _plan_and_build(root, reg, capsys, rid)
-    added = _plan_artifact()
-    added["exit_criteria"].append({"id": "X3", "kind": "manual", "ref": "log line",
-                                   "expect": "done", "reason": "found an edge in BUILD"})
-    code, out = _complete(reg, capsys, rid, "plan", added, {"decisions": DECISION})
-    assert code == 0, out
-    assert out["advanced"] is False and reg.get_pipeline_state(PROJECT) == "deliver"
-    assert any("never moves it backwards" in w for w in out["warnings"])
 
 
 def test_legacy_run_update_caps_push_ready_to_the_bound(ws, capsys):
@@ -1129,14 +777,6 @@ def test_legacy_run_update_caps_push_ready_to_the_bound(ws, capsys):
     assert cli._stage_record_of(_run_state(root, rid2), "deliver")["push_ready"] is True
 
 
-def test_direct_deliver_without_exit_contract_is_unmet(ws, capsys):
-    """MED-5: met is None at a direct DELIVER caps the bound."""
-    root, reg = ws
-    _make_run(root, "run_nocontract", "direct", stages=["plan", "build"])
-    code, out = _complete(reg, capsys, "run_nocontract", "deliver", _clean_deliver(), {}, check=True)
-    assert code == 0, out
-    pr = out["derived"]["push_ready"]
-    assert pr["upper_bound"] is False and any("no exit contract" in r for r in pr["reasons"])
 
 
 def test_write_failure_is_structured_and_leaves_the_old_record(ws, capsys, monkeypatch):
@@ -1494,38 +1134,8 @@ def _budget_run(root, rid):
               stage_timing={"plan": {"started_at": "2026-01-01T00:00:00+00:00"}})
 
 
-def test_stage_complete_refuses_a_fourth_round_without_a_reason(ws, capsys, monkeypatch):
-    root, reg = ws
-    _budget_run(root, "run_budget")
-    monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {
-        "by_expert": {"gate1-skeptic": 4, "security": 3}, "unattributed": 1})
-    code, out = _complete(reg, capsys, "run_budget", "plan", _plan_artifact(), {"decisions": DECISION},
-                          check=True)
-    assert code != 0
-    msgs = json.dumps(out)
-    assert "E_OVER_BUDGET" in msgs and "gate1-skeptic" in msgs and "'security'" not in msgs
-    code, out = _complete(reg, capsys, "run_budget", "plan", _plan_artifact(), {"decisions": DECISION})
-    assert code in (0, None), out   # an exhausted budget is a push_ready reason, not a stop
-    _assert_degraded(root, "run_budget", "plan", "E_OVER_BUDGET")
 
 
-def test_stage_complete_refuses_a_fourth_round_even_with_a_reason(ws, capsys, monkeypatch):
-    """AC6 (再一再二不再三): over_budget_reasons no longer buys an extra round."""
-    root, reg = ws
-    _budget_run(root, "run_budget2")
-    monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {
-        "by_expert": {"gate1-skeptic": 4}, "unattributed": 1})
-    art = _plan_artifact()
-    art["over_budget_reasons"] = {"gate1-skeptic": "second BLOCK on a different constraint"}
-    code, out = _complete(reg, capsys, "run_budget2", "plan", art, {"decisions": DECISION},
-                          check=True)
-    assert code != 0
-    msgs = json.dumps(out, ensure_ascii=False)
-    assert "E_OVER_BUDGET" in msgs and "root-cause" in msgs
-    b = cli._stage_budget("run_budget2", _run_dir(root, "run_budget2"),
-                          _run_state(root, "run_budget2"), "plan", art)
-    assert b["allowance_per_expert"] == 3 and b["over"] == {"gate1-skeptic": 4}
-    assert b["missing"] == ["gate1-skeptic"] and b["reasons"] == {}
 
 
 def test_stage_budget_without_stage_start_is_reported_not_enforced(tmp_path):
@@ -1533,26 +1143,6 @@ def test_stage_budget_without_stage_start_is_reported_not_enforced(tmp_path):
     assert b["missing"] == [] and b["spawns"] is None and b["window"].startswith("unknown")
 
 
-def test_stage_budget_clamps_cycles_and_does_not_count_overlays(tmp_path, monkeypatch):
-    import time as _t
-    monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {"by_expert": {}, "unattributed": 0})
-    tdir = tmp_path / "evidence" / "tests"
-    tdir.mkdir(parents=True)
-    (tdir / "regression-1.json").write_text(json.dumps({"mode": "regression"}))
-    (tdir / "recheck-1.json").write_text(json.dumps({"mode": "recheck"}))
-    (tdir / "regression-2.json").write_text(json.dumps(
-        {"mode": "regression", "rechecked_from": {"auto": True}}))      # an overlay write
-    (tdir / "latest-regression.json").write_text("{}")
-    first = "2026-01-01T00:00:00+00:00"
-    state = {"stage_timing": {"goal_cycle": {"first_started_at": first,
-                                             "started_at": "2099-01-01T00:00:00+00:00"}}}
-    b = cli._stage_budget("r", tmp_path, state, "goal_cycle", {"cycles_run": 1e6})
-    assert b["allowance_per_expert"] == 3 * 50
-    assert b["test_runs"] == {"recheck": 1, "regression": 1} and b["auto_rechecks"] == 1
-    # the window starts at the FIRST start: a later re-entry does not reset the allowance
-    assert b["stage_seconds"] >= _t.time() - cli._iso_epoch(first) - 5
-    b2 = cli._stage_budget("r", tmp_path, state, "goal_cycle", {"cycles_run": "inf"})
-    assert b2["allowance_per_expert"] == 3
 
 
 def test_deliver_does_not_add_security_for_a_run_without_a_recorded_review_plan(ws, capsys):
@@ -1570,14 +1160,6 @@ def test_deliver_does_not_add_security_for_a_run_without_a_recorded_review_plan(
     assert [e["id"] for e in out["experts"]].count("security") == 1
 
 
-def test_stage_complete_names_an_old_daemon_instead_of_blaming_prompts(ws, capsys, monkeypatch):
-    root, reg = ws
-    _budget_run(root, "run_legacy")
-    monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {
-        "by_expert": {}, "unattributed": 0, "legacy": 3})
-    code, out = _complete(reg, capsys, "run_legacy", "plan", _plan_artifact(), {"decisions": DECISION})
-    assert code == 0, out
-    assert any("predates per-expert counting" in w for w in out.get("warnings") or []), out
 
 
 
@@ -1673,26 +1255,6 @@ def test_gate1_inputs_are_fenced_data(ws, capsys):
     assert text.count("<gate-input>") == text.count("</gate-input>") >= 1   # evaluate is always fenced
 
 
-def test_stage_budget_counts_from_the_runner_run_index(tmp_path, monkeypatch):
-    """pipeline_test.py prunes timestamped evidence to 3 per mode, so the budget
-    counts from its append-only tests/run_index.json: every run in the stage window,
-    overlays as auto-rechecks, entries outside the window skipped."""
-    import time as _t
-    monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {"by_expert": {}, "unattributed": 0})
-    tdir = tmp_path / "evidence" / "tests"
-    tdir.mkdir(parents=True)
-    now = _t.time()
-    index = [{"kind": "run", "mode": "verify", "ts": now - 10 - i} for i in range(5)]
-    index += [{"kind": "run", "mode": "recheck", "ts": now - 5, "auto_recheck_of": "verify"},
-              {"kind": "overlay", "mode": "verify", "ts": now - 4},
-              {"kind": "run", "mode": "verify", "ts": now - 10 ** 6},   # before the stage
-              "garbage", {"kind": "run", "mode": "tdd"}]               # no ts: skipped
-    (tdir / "run_index.json").write_text(json.dumps(index))
-    (tdir / "verify-20260101T000000.json").write_text("{}")             # pruned remnant
-    state = {"stage_timing": {"test": {"first_started_at": "2026-01-01T00:00:00+00:00"}}}
-    monkeypatch.setattr(cli, "_iso_epoch", lambda s: now - 3600 if s else None)
-    b = cli._stage_budget("r", tmp_path, state, "test", {})
-    assert b["test_runs"] == {"recheck": 1, "verify": 5} and b["auto_rechecks"] == 1
 
 
 # ── transcript ids + per-response token cost (run_045b96b2) ─────────────────
@@ -1718,18 +1280,6 @@ def _no_db_usage(monkeypatch):
     monkeypatch.setitem(sys.modules, "core.run_delivery_summary", mod)
 
 
-def test_stage_commands_record_the_transcript_id(ws, capsys, cli_cfg, monkeypatch):
-    root, reg = ws
-    rid = "run_txid"
-    _make_run(root, rid, "direct")
-    assert _start(reg, capsys, rid, "plan")[0] == 0
-    assert _start(reg, capsys, rid, "plan")[0] == 0           # re-entry: no duplicate
-    assert _run_state(root, rid)["transcripts"] == [TX_SID]
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", TX_SID2)     # resumed in a new CLI session
-    code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
-    assert code == 0, out
-    assert _run_state(root, rid)["transcripts"] == [TX_SID, TX_SID2]
-    assert _run_state(root, rid).get("session_id") is None   # never the app-session field
 
 
 @pytest.mark.parametrize("bad", ["../etc/passwd", "a/b", "*", ""])
@@ -1742,36 +1292,8 @@ def test_malformed_session_id_is_not_recorded(ws, capsys, cli_cfg, monkeypatch, 
     assert not _run_state(root, rid).get("transcripts")
 
 
-def test_token_cost_measured_from_the_transcript(ws, capsys, cli_cfg, monkeypatch):
-    root, reg = ws
-    rid = "run_txcost"
-    _make_run(root, rid, "direct", session_id="sess_1",
-              stage_timing={"plan": {"started_at": "2026-01-01T00:00:00+00:00"}})
-    cli_cfg.mkdir(parents=True)
-    usage = {"input_tokens": 3, "output_tokens": 40, "cache_read_input_tokens": 5000,
-             "cache_creation_input_tokens": 700}
-    (cli_cfg / f"{TX_SID}.jsonl").write_text("\n".join(json.dumps(r) for r in [
-        {"type": "assistant", "timestamp": "2025-12-31T23:59:00Z", "message": {"id": "m0", "usage": usage}},
-        {"type": "assistant", "timestamp": "2026-01-01T00:05:00Z", "message": {"id": "m1", "usage": usage}},
-        {"type": "assistant", "timestamp": "2026-01-01T00:05:01Z", "message": {"id": "m1", "usage": usage}},
-    ]) + "\n", encoding="utf-8")
-    _no_db_usage(monkeypatch)                                 # no turn row in the window
-    code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
-    assert code == 0, out
-    rec = cli._stage_record_of(_run_state(root, rid), "plan")
-    assert rec["token_cost_source"] == "measured" and rec["token_cost"] == 3 + 40 + 700
-    assert rec["token_usage"]["source"] == "transcript" and rec["token_usage"]["responses"] == 1
 
 
-def test_token_cost_falls_back_without_a_transcript(ws, capsys, cli_cfg, monkeypatch):
-    root, reg = ws
-    rid = "run_txnone"
-    _make_run(root, rid, "direct", session_id="sess_1",
-              stage_timing={"plan": {"started_at": "2026-01-01T00:00:00+00:00"}})
-    _no_db_usage(monkeypatch)                                 # transcript file absent too
-    code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
-    assert code == 0, out
-    assert cli._stage_record_of(_run_state(root, rid), "plan")["token_cost_source"] == "unavailable"
 
 
 def test_report_tokens_label_for_transcript_usage():
@@ -1873,20 +1395,6 @@ def test_untested_for_budget_flag_comes_from_the_newest_scope_report(tmp_path):
 
 # ── one landing decision: a gate error degrades the stage on the FIRST try ──
 
-def test_first_refusal_completes_the_stage_degraded(ws, capsys):
-    root, reg = ws
-    _make_run(root, "run_deg", "direct", stages=["plan", "build"])
-    art = _tmpl("deliver")
-    art["adversarial_review"]["profile_tier"] = "skipped"
-    code, out = _complete(reg, capsys, "run_deg", "deliver", art, {})
-    assert code in (0, None), out
-    st = _run_state(root, "run_deg")
-    rec = next(s for s in st["stages"] if s["stage"] == "deliver")
-    assert rec["degraded"]["errors"] and "attempts" not in rec["degraded"]
-    assert rec["push_ready"] is False and "profile_tier" in rec["push_ready_reason"]
-    assert "stage_complete_failures" not in st
-    assert any("[degraded] deliver" in f for f in
-               _artifact_on_disk(root, rec["artifact_id"]).get("attention_flags", []))
 
 
 def test_input_and_order_errors_never_degrade(ws, capsys):
@@ -2164,18 +1672,6 @@ def test_direct_plan_with_only_exit_criteria_completes(ws, capsys):
     assert code in (0, None), out
 
 
-def test_direct_deliver_after_plan_records_build_skipped(ws, capsys):
-    root, reg = ws
-    _make_run(root, "run_late2", "direct", stages=["plan"])
-    code, out = _start(reg, capsys, "run_late2", "deliver")
-    assert code in (0, None), out
-    recs = {r["stage"]: r for r in _run_state(root, "run_late2")["stages"]}
-    assert recs["plan"]["status"] == "completed" and recs["build"]["status"] == "skipped"
-    import pipeline_validator as pv
-    assert pv._check_stage_order("deliver", "direct", _run_state(root, "run_late2")["stages"])
-    _make_run(root, "run_full_late", "full")
-    _start(reg, capsys, "run_full_late", "build")
-    assert _run_state(root, "run_full_late")["stages"] == []   # only direct is touched
 
 
 def test_direct_run_with_a_legacy_skipped_plan_still_starts(ws, capsys):
@@ -2205,26 +1701,6 @@ def test_a_docs_profile_run_editing_code_is_not_push_ready():
     assert ok is False and any("no runner evidence" in r for r in reasons)
 
 
-def test_deliver_payload_push_ready_matches_a_degraded_record(ws, capsys, monkeypatch):
-    """The only gap is fix-by-class (a resolved HIGH with no invariant / root_cause /
-    class_fix): the push-ready bound is true when derived is computed, then the gap
-    degrades the stage. The payload must report the record's push_ready (one DELIVER
-    once said derived true while its own warning said not PUSH-READY)."""
-    root, reg = ws
-    rid = "run_pr_sync"
-    # after design_spec.CUTOVER, so fix by class is enforced (not a warning)
-    _direct_run_with_manual_contract(root, reg, capsys, rid, created_at="2026-10-20T00:00:00+00:00")
-    _write_evidence(_run_dir(root, rid), "tests/latest-regression.json",
-                    _c2("regression", rid, [{"nodeid": "a::b", "outcome": "passed"}]))
-    _rt_markers(root, monkeypatch, rid, ["red-team"])
-    art = _clean_deliver()
-    art["adversarial_review"]["findings"] = [_specialist_high(who="red-team")]
-    code, out = _complete(reg, capsys, rid, "deliver", art,
-                          {"exit_evidence": {"X2": "opened the page"}})
-    assert code in (0, None) and out["ok"] is True, out
-    rec = cli._stage_record_of(_run_state(root, rid), "deliver")
-    assert rec["push_ready"] is False and "Fix by class" in rec["push_ready_reason"], rec
-    assert out["derived"]["push_ready"]["value"] is False, out["derived"]["push_ready"]
 
 
 def test_sync_derived_push_ready_only_lowers():
