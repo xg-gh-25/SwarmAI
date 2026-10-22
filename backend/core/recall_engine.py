@@ -198,4 +198,11 @@ class RecallEngine:
         if heading:
             header += f" — {heading}"
 
+        # Same rule as the unified path (recall_multi.render_recall_body):
+        # fetched third-party text is marked untrusted, never left looking like
+        # the user's own knowledge.
+        from core.recall_multi import EXTERNAL_BLOCK_NOTE, is_external_source
+        if is_external_source(source):
+            header = f"**[EXTERNAL — UNTRUSTED]** {header}\n{EXTERNAL_BLOCK_NOTE}"
+
         return f"{header}\n{content}"
