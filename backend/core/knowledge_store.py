@@ -63,6 +63,20 @@ _ARCHIVE_ENTRY_RE = re.compile(r"(?m)^(?=- \[|- \d{4}-\d{2}-\d{2}:|\[[a-z]+\])")
 
 # ── Chunking ──────────────────────────────────────────────────────────
 
+# A section whose body has fewer word characters than this is a bare heading
+# (a "## Section" immediately followed by its "### Subsection", an empty
+# template slot like "## 🔴 Act Now", a lone "---"). Indexed, it matches any
+# query that names the heading and carries nothing; 1873 of 22830 chunks
+# (2026-10-22) were these, and the same template headings repeated 60+ times.
+_MIN_BODY_WORD_CHARS = 3
+_WORD_CHAR_RE = re.compile(r"\w")
+
+
+def _has_body(section_text: str) -> bool:
+    """True when the section has content beyond its heading line."""
+    body = section_text.split("\n", 1)[1] if "\n" in section_text else ""
+    return len(_WORD_CHAR_RE.findall(body)) >= _MIN_BODY_WORD_CHARS
+
 
 def chunk_markdown(
     content: str,
@@ -127,7 +141,7 @@ def chunk_markdown(
         end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
 
         text = content[start:end].strip()
-        if not text:
+        if not text or not _has_body(text):
             continue
 
         if is_archive:
