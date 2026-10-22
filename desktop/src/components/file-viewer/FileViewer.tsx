@@ -123,6 +123,17 @@ function LoadingFallback() {
 /*  FileViewer                                                         */
 /* ------------------------------------------------------------------ */
 
+
+/** The header breadcrumb before a file name: "Artifacts › …/a/b ›" (the folder's
+ *  last two levels). Exported for tests. */
+export function crumbOf(filePath: string): string {
+  const parts = (filePath || '').replace(/\\/g, '/').split('/').filter(Boolean);
+  parts.pop();                                    // the file name is shown on its own
+  if (!parts.length) return 'Artifacts ›';
+  const tail = parts.slice(-2).join(' › ');
+  return `Artifacts › ${parts.length > 2 ? '… › ' : ''}${tail} ›`;
+}
+
 function FileViewerImpl({
   initialFile,
   onClose,
@@ -792,10 +803,18 @@ function FileViewerImpl({
           >
             {fileIcon(activeTab.fileName)}
           </span>
-          <span className="text-[13px] font-medium truncate min-w-0 flex-1 text-[var(--color-text)]" title={activeTab.filePath}>
-            {/* Fallback for a nameless / dir-like path so the header never shows an empty
-                label (Gate-2 LOW): fileName can be '' for a trailing-slash path. */}
-            {activeTab.fileName || activeTab.filePath || 'Untitled'}
+          {/* Breadcrumb: where the file lives (Artifacts › its folder, the last two
+              levels; the full path is the tooltip), then the file name. The folder
+              gives way first when the header is narrow. */}
+          <span className="flex items-baseline gap-1 min-w-0 flex-1" title={activeTab.filePath}>
+            <span data-testid="file-chrome-crumb" className="truncate min-w-0 shrink text-[12px] text-[var(--color-text-muted)]">
+              {crumbOf(activeTab.filePath)}
+            </span>
+            <span className="text-[13px] font-medium truncate min-w-0 shrink-0 max-w-[70%] text-[var(--color-text)]">
+              {/* Fallback for a nameless / dir-like path so the header never shows an empty
+                  label (Gate-2 LOW): fileName can be '' for a trailing-slash path. */}
+              {activeTab.fileName || activeTab.filePath || 'Untitled'}
+            </span>
           </span>
           {activeTab.isDirty && (
             <span

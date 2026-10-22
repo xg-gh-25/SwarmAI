@@ -350,6 +350,13 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
     });
   }, [withDrift, statusMap]);
 
+  // Activity rows (DailyActivity, signals, briefs — the session's bookkeeping, by
+  // the product catalog's role) fold under one toggle, closed by default; a
+  // selected one opens it so the row in view is never hidden.
+  const [activityShown, setActivityShown] = useState(false);
+  const main = useMemo(() => ordered.filter((f) => f.role !== 'Activity'), [ordered]);
+  const activity = useMemo(() => ordered.filter((f) => f.role === 'Activity'), [ordered]);
+
   // ── Browsing row ────────────────────────────────────────────────────────────
   // Canvas is used two ways: (1) the agent WRITES a file → it lands in `outputs`
   // above; (2) the user clicks a file link in chat to BROWSE a file NOT written
@@ -408,17 +415,38 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
     );
   }
 
+  const renderRow = (file: ReferencedFile) => (
+    <OutputRow
+      key={file.path}
+      file={file}
+      badge={statusMap.get(file.path)}
+      selected={selectedPath === file.path}
+      fresh={file.firstSeen > mountedAtRef.current}
+    />
+  );
+  const activityOpen = activityShown || activity.some((f) => f.path === selectedPath);
+
   return (
     <ul className="flex flex-col gap-px py-0.5 list-none m-0 p-0" data-testid="canvas-output-rail">
-      {ordered.map((file) => (
-        <OutputRow
-          key={file.path}
-          file={file}
-          badge={statusMap.get(file.path)}
-          selected={selectedPath === file.path}
-          fresh={file.firstSeen > mountedAtRef.current}
-        />
-      ))}
+      {main.map(renderRow)}
+      {activity.length > 0 && (
+        <li className="list-none">
+          <button
+            type="button"
+            data-testid="canvas-activity-toggle"
+            aria-expanded={activityOpen}
+            onClick={() => setActivityShown((v) => !v)}
+            className="w-full flex items-center gap-1.5 h-[24px] pl-2.5 pr-2 rounded-md text-left text-[11.5px] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]"
+          >
+            <span className="material-symbols-outlined text-[14px] leading-none" aria-hidden="true">
+              {activityOpen ? 'expand_more' : 'chevron_right'}
+            </span>
+            Activity
+            <span className="tabular-nums">· {activity.length}</span>
+          </button>
+        </li>
+      )}
+      {activityOpen && activity.map(renderRow)}
       {browsingFile && (
         <BrowsingRow
           path={browsingFile.path}

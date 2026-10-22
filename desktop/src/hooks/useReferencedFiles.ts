@@ -97,6 +97,9 @@ export interface ReferencedFile {
    *  file is gone (surfaced, not silent). Undefined = not-yet-checked / clean.
    *  Additive-optional: the write/delete reducers do NOT set it (only the drift check does). */
   liveDirty?: 'dirty' | 'missing';
+  /** Product catalog role (core/product_registry): Deliverables | Knowledge |
+   *  Pipeline | Activity | Other. The rail folds Activity rows. */
+  role?: string;
 }
 
 /** Detail shape of the unified `swarm:file-changed` event (from the SSE bridge). */
@@ -167,6 +170,7 @@ export function toReferencedFile(a: SessionArtifact, sessionId?: string): Refere
     baseRef: a.baseRef,
     sessionId,
     deleted: a.deleted || !a.exists,
+    role: a.role,
   };
 }
 
