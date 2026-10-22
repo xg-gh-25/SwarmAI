@@ -15,7 +15,14 @@ the REAL test database (conftest SQLite, real migrations):
 - Stop: the real ``_persist_stop_receipt`` mid-turn (written, not published), the
   turn then ends without a result;
 - compaction: a real ``insert_compaction`` row between turns;
-- reload: the real ``routers.chat.get_session_messages``.
+- reload: the real ``routers.chat.get_session_messages``;
+- connection loss (scenarios ``N_SCENARIOS`` on): the window's subscription drops
+  mid-turn and reconnects mid-turn or after the turn (``gap`` / ``gap_late``), with
+  the real ``SessionEventHub.subscribe`` answering the client's cursor (a replay
+  from the buffer, or — scenarios with a short buffer — a ``resync``); and a daemon
+  restart mid-turn or between turns (``restart`` / ``restart_idle``): the turn's
+  task is cancelled as the server's shutdown cancels it, a new hub (new epoch) and
+  a new router take over, and the client's stale cursor gets the hub's ``resync``.
 
 Output: ``desktop/src/__tests__/fixtures/liveReload/scenarios.json`` — per scenario
 its session id, the ordered steps a tab sees (its own user bubbles and POST-only
@@ -29,6 +36,7 @@ changed and the fixture was not regenerated (``LIVE_RELOAD_UPDATE=1``).
 """
 from __future__ import annotations
 
+import asyncio
 import itertools
 import json
 import os
@@ -53,6 +61,10 @@ FIXTURE = (Path(__file__).resolve().parents[2] / "desktop" / "src" / "__tests__"
            / "fixtures" / "liveReload" / "scenarios.json")
 SEED = 20261022
 N_SCENARIOS = 40
+#: further scenarios with connection loss / daemon restarts (drawn after the first
+#: N_SCENARIOS, so those stay byte-identical)
+N_NET_SCENARIOS = 30
+NET_KINDS = ("gap", "gap_late", "restart", "restart_idle")
 
 WORDS = ("checked the gate", "found two issues", "the test is red", "patched the parser",
          "all green", "looking at the log", "reading session_router", "agent three is back")
@@ -132,6 +144,30 @@ def _scenario(rng: random.Random) -> list[dict]:
     return turns
 
 
+def _net(rng: random.Random, turns: list[dict]) -> int:
+    """Give 1-2 turns a connection event (``turn["net"]``); returns the hub's
+    per-session buffer size: a short one makes a reconnect's cursor fall out of the
+    buffer, so the hub answers with a ``resync`` instead of a replay.
+
+    Only turns that do not pause qualify: after a restart nothing may still wait on
+    the unit's pending question."""
+    able = [i for i, t in enumerate(turns)
+            if t["kind"] in ("chat", "injected", "busy", "answer", "permission")
+            and not t.get("pause") and len(t["steps"]) >= 2]
+    for i in sorted(rng.sample(able, min(len(able), rng.randint(1, 2)))):
+        kind = rng.choice(NET_KINDS)
+        n = len(turns[i]["steps"])
+        at = rng.randint(1, n - 1)
+        after_tool = [k for k in range(1, n) if turns[i]["steps"][k - 1][-1]["type"] == "tool_result"]
+        if kind == "restart" and after_tool:
+            # the process ending right after a step's result, before the model's next
+            # message: the commonest place for it, and the one a stream flush misses
+            at = rng.choice(after_tool)
+        turns[i]["net"] = {"kind": kind, "at": at,
+                           "back": rng.randint(at + 1, n) if kind == "gap" else None}
+    return rng.choice((4, 10_000))
+
+
 def _pause_event(turn: dict, n: int, sid: str) -> dict:
     if turn["pause"] == "question":
         return {"type": "ask_user_question", "toolUseId": f"toolu_q{n}", "sessionId": sid,
@@ -186,22 +222,49 @@ async def _history(router: SessionRouter, sid: str) -> list[dict]:
     return [_reduce(r) for r in json.loads(resp.body)]
 
 
-def _scripted(unit: SessionUnit, frames: list[dict], *, pause: dict | None, after=None):
-    """The CLI's events for one turn, with the state changes the orchestrator makes."""
+def _scripted(unit: SessionUnit, frames: list[dict], *, pause: dict | None, after=None,
+              at: dict | None = None):
+    """The CLI's events for one turn, with the state changes the orchestrator makes.
+    ``at[i]`` runs before frame ``i`` is yielded (``at[len(frames)]`` after the last):
+    the frames before it are published by then."""
     async def gen(*_a, **_k):
         if unit.state != SessionState.STREAMING:
             unit._transition(SessionState.STREAMING)
-        for ev in frames:
+        for i, ev in enumerate(frames):
+            if at and i in at:
+                await at[i]()
             if pause is not None and ev is frames[-1]:
                 key = "request_id" if ev["type"] == "cmd_permission_request" else "tool_use_id"
                 unit._pending_question = {key: ev.get("requestId") or ev.get("toolUseId")}
                 unit._transition(SessionState.WAITING_INPUT)
             yield ev
+        if at and len(frames) in at:
+            await at[len(frames)]()
         if after is not None:
             await after()
         if pause is None and unit.state == SessionState.STREAMING:
             unit._transition(SessionState.IDLE)
     return gen
+
+
+async def _resubscribe(hub, cursors: dict, epoch: str | None) -> list[dict]:
+    """What the real ``SessionEventHub.subscribe`` sends a reconnecting client before
+    its live envelopes: the buffered replay after its cursor, or a ``resync`` and the
+    active turn's replay. ``events_hello`` stays in the client (it carries a random
+    epoch), as ``sessionEvents`` keeps it from its listeners."""
+    out: list[dict] = []
+    agen = hub.subscribe(cursors, epoch)
+    try:
+        while True:
+            try:
+                env = await asyncio.wait_for(agen.__anext__(), 0.01)
+            except (asyncio.TimeoutError, TimeoutError, StopAsyncIteration):
+                break
+            if env.get("type") != "events_hello":
+                out.append(json.loads(json.dumps(env)))
+    finally:
+        await agen.aclose()
+    return out
 
 
 def _busy_send(**_k):
@@ -213,21 +276,66 @@ def _busy_send(**_k):
 
 async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRouter]:
     from database import db
-    router = _router()
-    unit = router.get_or_create_unit(sid, "default")
-    unit._client = object()
-    unit._transition(SessionState.IDLE)
+
+    def new_backend():
+        r = _router()
+        u = r.get_or_create_unit(sid, "default")
+        u._client = object()
+        u._transition(SessionState.IDLE)
+        return r, u
+
+    def record(h) -> list[dict]:
+        """Every envelope ``h`` publishes, in order (the buffer may be short)."""
+        sink: list[dict] = []
+        orig = h.publish
+
+        def publish(*a, **k):
+            env = orig(*a, **k)
+            sink.append(json.loads(json.dumps(env)))
+            return env
+        h.publish = publish
+        return sink
+
+    router, unit = new_backend()
+    published = record(hub)
     steps: list[dict] = []
     seen = 0
+    gap_open = False
+    # connection steps, each placed after the envelope with seq <= its key
+    marks: list[tuple[int, dict]] = []
     pending_q = pending_p = None
 
-    def collect():
+    def flush(limit: float) -> None:
+        nonlocal gap_open
+        while marks and marks[0][0] < limit:
+            _, m = marks.pop(0)
+            gap_open = m["kind"] == "disconnect"
+            steps.append(m)
+
+    def collect(upto: float = float("inf")) -> None:
+        """The envelopes published since the last call, in seq order, with the
+        connection steps between them; one published after ``upto`` reached no one."""
         nonlocal seen
-        log = hub._logs.get(sid)
-        buf = list(log.buf) if log else []
-        for env in buf[seen:]:
-            steps.append({"kind": "event", "env": json.loads(json.dumps(env))})
-        seen = len(buf)
+        for env in published[seen:]:
+            if env["eventSeq"] > upto:
+                continue
+            flush(env["eventSeq"])
+            steps.append({"kind": "event", "env": env, **({"sub": False} if gap_open else {})})
+        seen = len(published)
+        flush(upto + 1 if upto != float("inf") else upto)
+
+    def disconnect() -> int:
+        head = hub.current_seq(sid)
+        marks.append((head, {"kind": "disconnect"}))
+        return head
+
+    async def reconnect(cursor: int) -> None:
+        """The window's subscription back, with the cursor of the last envelope it got;
+        ``history`` is what its resync's DB read returns at this moment."""
+        head = hub.current_seq(sid)
+        envs = await _resubscribe(hub, {sid: cursor}, hub.epoch)
+        marks.append((head, {"kind": "reconnect", "envs": envs,
+                             "history": await _history(router, sid)}))
 
     async def chat(cid: str, text: str, gen) -> list[dict]:
         out = []
@@ -237,13 +345,75 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
                 out.append(ev)
         return out
 
+    async def drive(coro, killed: asyncio.Event | None) -> None:
+        """Run one turn; when ``killed`` fires the process ends: the turn's task is
+        cancelled as the server's shutdown cancels its requests."""
+        task = asyncio.ensure_future(coro)
+        if killed is None:
+            await task
+            return
+        waiter = asyncio.ensure_future(killed.wait())
+        await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+        waiter.cancel()
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def restart(cursor: int, upto: float) -> None:
+        """A new daemon: new hub (new epoch), new router and unit; the window
+        reconnects with its old cursor and epoch."""
+        nonlocal router, unit, hub, published, seen, gap_open
+        collect(upto)
+        gap_open = False          # the restart step is the window's reconnect
+        old_epoch = hub.epoch
+        hub = session_events.SessionEventHub(buffer_size=hub._buffer_size, queue_size=10_000)
+        session_events._hub = hub
+        published, seen = record(hub), 0
+        router, unit = new_backend()
+        steps.append({"kind": "restart",
+                      "envs": await _resubscribe(hub, {sid: cursor}, old_epoch),
+                      "history": await _history(router, sid)})
+
     for n, turn in enumerate(turns, 1):
         kind = turn["kind"]
         pause = _pause_event(turn, n, sid) if turn.get("pause") else None
+        net = turn.get("net")
+        # frame index of step `net["at"]` (and `back`) in this turn's frames
+        lead = 1 if kind in ("chat", "busy", "stop") else 0
+
+        def frame(k: int) -> int:
+            return lead + sum(len(st) for st in turn["steps"][:k])
+        at: dict = {}
+        killed: asyncio.Event | None = None
+        cut = {"seq": 0, "kill": float("inf")}
+        if net and net["kind"] in ("gap", "gap_late", "restart"):
+            async def drop():
+                cut["seq"] = disconnect()
+            at[frame(net["at"])] = drop
+        if net and net["kind"] == "gap":
+            async def back():
+                await reconnect(cut["seq"])
+            at[frame(net["back"])] = back
+        if net and net["kind"] == "restart":
+            killed = asyncio.Event()
+
+            async def die(drop=at[frame(net["at"])]):
+                await drop()
+                cut["kill"] = hub.current_seq(sid)
+                killed.set()
+                await asyncio.Event().wait()   # the process is gone
+            at[frame(net["at"])] = die
+
+        def scripted(frames, p=pause):
+            return _scripted(unit, frames, pause=p, at=at or None)
+
         if kind == "chat":
             cid, text = f"local-{n}", f"user message {n}"
             steps.append({"kind": "user", "clientId": cid, "text": text})
-            await chat(cid, text, _scripted(unit, _frames(turn, n, sid, session_start=True), pause=pause))
+            await drive(chat(cid, text, scripted(_frames(turn, n, sid, session_start=True))), killed)
         elif kind == "stop":
             cid, text = f"local-{n}", f"user message {n}"
             steps.append({"kind": "user", "clientId": cid, "text": text})
@@ -264,30 +434,34 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
                 steps.append({"kind": "user", "clientId": cid, "text": text,
                               "post": json.loads(json.dumps(post))})
             frames = _frames(turn, n, sid, session_start=True)
-            with patch.object(SessionUnit, "send", side_effect=_scripted(unit, frames, pause=None)), \
-                    patch.object(SessionUnit, "cli_quiescent", property(lambda _s: True)):
-                await router.drain_pending(sid)
+
+            async def drained(frames=frames):
+                with patch.object(SessionUnit, "send", side_effect=scripted(frames, None)), \
+                        patch.object(SessionUnit, "cli_quiescent", property(lambda _s: True)):
+                    await router.drain_pending(sid)
+            await drive(drained(), killed)
         elif kind == "injected":
             if turn["bg"]:
                 unit.background_agents.launch(f"toolu_agent{n}", f"audit part {n}")
                 unit.background_agents.task_started(f"task{n}", f"toolu_agent{n}")
                 unit.background_agents.task_finished(f"task{n}", "completed", tool_use_id=f"toolu_agent{n}")
-            unit._read_formatted_response = _scripted(unit, _frames(turn, n, sid, session_start=False),
-                                                      pause=pause)
-            await router.run_injected_turn(unit, object())
+            unit._read_formatted_response = scripted(_frames(turn, n, sid, session_start=False))
+            await drive(router.run_injected_turn(unit, object()), killed)
         elif kind == "answer":
             answers = {"Which one?": "A"}
             steps.append({"kind": "answer", "toolUseId": pending_q["toolUseId"], "answers": answers})
             unit._pending_question = None
-            unit.continue_with_answer = _scripted(unit, _frames(turn, n, sid, session_start=False), pause=None)
-            async for _ in router.continue_with_answer(sid, json.dumps(answers),
-                                                       tool_use_id=pending_q["toolUseId"]):
-                pass
+            unit.continue_with_answer = scripted(_frames(turn, n, sid, session_start=False), None)
+
+            async def answered(tid=pending_q["toolUseId"]):
+                async for _ in router.continue_with_answer(sid, json.dumps(answers), tool_use_id=tid):
+                    pass
+            await drive(answered(), killed)
             pending_q = None
         elif kind == "permission":
             rid = pending_p["requestId"]
             steps.append({"kind": "decide", "requestId": rid, "decision": turn["decision"]})
-            inner = _scripted(unit, _frames(turn, n, sid, session_start=False), pause=None)
+            inner = scripted(_frames(turn, n, sid, session_start=False), None)
 
             def contp(request_id, allowed, inner=inner):
                 async def gen():
@@ -301,14 +475,23 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
                         yield ev
                 return gen()
             unit.continue_with_permission = contp
-            async for _ in router.continue_with_cmd_permission(sid, rid, turn["decision"] == "approve"):
-                pass
+
+            async def decided(rid=rid, ok=turn["decision"] == "approve"):
+                async for _ in router.continue_with_cmd_permission(sid, rid, ok):
+                    pass
+            await drive(decided(), killed)
             pending_p = None
         elif kind == "compaction":
             from core.compact_summary import build_record
             await db.insert_compaction(sid, build_record({"trigger": "auto"}, f"summary after {n - 1} turns"))
-        if kind != "stop":
+        if net and net["kind"] == "restart":
+            await restart(cut["seq"], cut["kill"])
+        elif kind != "stop":
+            if net and net["kind"] == "gap_late":
+                await reconnect(cut["seq"])          # back after the turn ended
             collect()
+        if net and net["kind"] == "restart_idle":
+            await restart(hub.current_seq(sid), float("inf"))
         if pause is not None:
             if turn["pause"] == "question":
                 pending_q = pause
@@ -322,11 +505,12 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
 async def _generate() -> dict:
     rng = random.Random(SEED)
     out = []
-    for i in range(N_SCENARIOS):
+    for i in range(N_SCENARIOS + N_NET_SCENARIOS):
         turns = _scenario(rng)
+        buffer = _net(rng, turns) if i >= N_SCENARIOS else 10_000
         sid = f"sess-lr-{i:02d}"
         ids, clock = _Ids(i), _Clock()
-        hub = session_events.SessionEventHub(buffer_size=10_000, queue_size=10_000)
+        hub = session_events.SessionEventHub(buffer_size=buffer, queue_size=10_000)
         stamp = SimpleNamespace(now=clock.now, fromisoformat=datetime.fromisoformat)
         with patch.object(session_events, "_hub", hub), \
                 patch("core.session_router.uuid4", ids.uuid4), \
@@ -339,7 +523,8 @@ async def _generate() -> dict:
             history = await _history(router, sid)
         out.append({"name": f"s{i:02d}", "sid": sid,
                     "shape": [t["kind"] + (f"/{t['pause']}" if t.get("pause") else "")
-                              + (f"x{t['queued']}" if t.get("queued") else "") for t in turns],
+                              + (f"x{t['queued']}" if t.get("queued") else "")
+                              + (f"!{t['net']['kind']}" if t.get("net") else "") for t in turns],
                     "steps": steps, "history": history})
     return {"seed": SEED, "scenarios": out}
 
@@ -356,5 +541,22 @@ async def test_fixture_is_current():
     assert hash(current) == hash(text), (
         "backend behaviour changed: regenerate with LIVE_RELOAD_UPDATE=1 and rerun "
         "desktop liveReload.property.test.ts")
-    assert len(data["scenarios"]) == N_SCENARIOS
+    assert len(data["scenarios"]) == N_SCENARIOS + N_NET_SCENARIOS
     assert all(s["history"] for s in data["scenarios"])
+    # every connection case is in the fixture (a seed change must not drop one)
+    cases = set()
+    for s in data["scenarios"]:
+        steps = s["steps"]
+        for i, st in enumerate(steps):
+            if st["kind"] == "reconnect":
+                types = [e["type"] for e in st["envs"]]
+                cases.add("resync+replay" if types[:2] == ["resync", "turn_start"]
+                          else "resync" if types == ["resync"] else "replay")
+            if st["kind"] == "restart":
+                prev = [x for x in steps[:i] if x["kind"] == "event"]
+                mid = bool(prev) and prev[-1]["env"]["type"] != "turn_end"
+                cases.add("restart mid-turn" if mid else "restart idle")
+                if mid and prev[-1]["env"]["type"] == "tool_result":
+                    cases.add("restart after a tool result")
+    assert cases >= {"replay", "resync", "resync+replay", "restart mid-turn", "restart idle",
+                     "restart after a tool result"}, cases

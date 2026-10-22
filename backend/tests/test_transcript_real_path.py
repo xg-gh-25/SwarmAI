@@ -164,3 +164,32 @@ async def test_pages_by_turns_join_to_the_whole_history():
         before = page[0]["id"]
     strip = lambda ms: [(m["role"], [b.get("text") for b in m["content"]]) for m in ms]
     assert strip(pages) == strip(whole)
+
+
+# ── R10: a tool's result shown live is kept when the turn ends right after it ──
+
+R10 = pytest.mark.xfail(strict=True, reason=(
+    "R10: run_conversation keeps step results pending until the next assistant row or a "
+    "terminal event; a turn that ends without one (Stop, daemon restart) never writes them "
+    "(run_injected_turn flushes them in its finally; this path does not)"))
+
+
+def _tool_then_stop(**kwargs: Any):
+    """The CLI ran a step and the turn ends there (Stop) — no result event."""
+    async def gen():
+        yield {"type": "session_start", "sessionId": kwargs.get("app_session_id")}
+        yield {"type": "assistant", "model": "test", "content": [
+            {"type": "tool_use", "id": "toolu_r10", "name": "Bash", "summary": "Running: ls"}]}
+        yield {"type": "tool_result", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_r10", "content": "out", "is_error": False}]}
+    return gen()
+
+
+@R10
+@pytest.mark.asyncio
+async def test_a_result_shown_live_survives_a_turn_that_ends_after_it():
+    r = _router()
+    events = await _send(r, "s-r10", "list it", "local-r10", send=_tool_then_stop)
+    assert any(e.get("type") == "tool_result" for e in events)        # shown live
+    blocks = [b for m in await _history("s-r10") for b in m["content"]]
+    assert any(b.get("type") == "tool_result" and b.get("tool_use_id") == "toolu_r10" for b in blocks)

@@ -16,6 +16,16 @@
  * - RECONCILED: the stream view after MessageStore.reconcile(history), what a tab
  *   shows once its turn-end reconcile lands.
  *
+ * Plus one property over the whole run: a keyed block (tool step, result, question,
+ * permission, background notice, Stop receipt) that either tab ever showed is in the
+ * reload ("shown live, gone on reload").
+ *
+ * Connection steps: `disconnect` (the window's subscription drops; envelopes marked
+ * `sub: false` reach only the sending tab's POST), `reconnect` (what the real hub sent
+ * for the window's cursor — a replay, or a resync and the active turn — then the DB read
+ * a resync makes, as it was at that moment), `restart` (the daemon went away: the open
+ * POST fails with a network error; the new daemon's hub answers the stale cursor).
+ *
  * Both for the tab that sends (T) and for another tab showing the same session (T2,
  * "other tab:" signatures): T2 gets every session event but none of T's own writes.
  *
@@ -31,18 +41,22 @@ import type { Message, ContentBlock, StreamEvent } from '../types';
 
 const fake = vi.hoisted(() => {
   const listeners = new Set<(e: unknown) => void>();
+  const conn = new Set<(c: boolean) => void>();
   return {
     listeners,
+    conn,
+    connected: true,
     emit(e: unknown) { for (const l of listeners) l(e); },
+    setConnected(c: boolean) { this.connected = c; for (const l of conn) l(c); },
   };
 });
 vi.mock('../services/sessionEvents', () => ({
   sessionEvents: {
     start: () => {},
     stop: () => {},
-    isConnected: () => true,
+    isConnected: () => fake.connected,
     subscribe: (l: (e: unknown) => void) => { fake.listeners.add(l); return () => fake.listeners.delete(l); },
-    onConnectionChange: () => () => {},
+    onConnectionChange: (l: (c: boolean) => void) => { fake.conn.add(l); return () => fake.conn.delete(l); },
     watch: () => {},
     cursorFor: () => undefined,
   },
@@ -53,7 +67,7 @@ vi.mock('../contexts/ToastContext', () => ({
 
 import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
 import { messageStoreRegistry } from '../stores/MessageStore';
-import { parseSSEEvent, toMessageCamelCase } from '../services/chat';
+import { chatService, parseSSEEvent, toMessageCamelCase } from '../services/chat';
 import { toDisplayMessage } from '../pages/chat/utils';
 import { withStopReceipt } from '../pages/chat/stopReceipt';
 import { testTabMap, createMockDeps, initTestTab, resetTestState } from './helpers/streamingTestUtils';
@@ -61,7 +75,9 @@ import { testTabMap, createMockDeps, initTestTab, resetTestState } from './helpe
 type Step =
   | { kind: 'user'; clientId: string; text: string; post?: Record<string, unknown>[] }
   | { kind: 'stop'; receipt: Record<string, unknown>[] }
-  | { kind: 'event'; env: Record<string, unknown> }
+  | { kind: 'event'; env: Record<string, unknown>; sub?: false }
+  | { kind: 'disconnect' }
+  | { kind: 'reconnect' | 'restart'; envs: Record<string, unknown>[]; history: Record<string, unknown>[] }
   | { kind: 'decide'; requestId: string; decision: 'approve' | 'deny' }
   | { kind: 'answer'; toolUseId: string; answers: Record<string, string> }
   | { kind: 'reconcile'; history: Record<string, unknown>[] };
@@ -84,6 +100,19 @@ function seen(b: ContentBlock): string {
     default: return String(x.type);
   }
 }
+/** A block with an identity of its own (its id / request id), or undefined: text and
+ * thinking are shown while still streaming, so a partial one has no stable key. */
+const KEYED = new Set(['tool_use', 'tool_result', 'question', 'permission', 'background_finished', 'turn_stop']);
+function blockKey(b: ContentBlock): string | undefined {
+  const v = seen(b);
+  const kind = v.split(':')[0];
+  if (!KEYED.has(kind)) return undefined;
+  return kind === 'tool_use' || kind === 'background_finished' || kind === 'turn_stop'
+    ? v : v.split(':').slice(0, 2).join(':');
+}
+const keysOf = (ms: readonly Message[]) =>
+  new Set(ms.flatMap((m) => (m.content ?? []).map(blockKey).filter((k): k is string => !!k)));
+
 const view = (ms: readonly Message[]) =>
   ms.map((m) => ({ role: m.role, blocks: (m.content ?? []).map(seen),
     source: String((m.metadata as { turn_source?: string } | undefined)?.turn_source ?? '') }));
@@ -140,9 +169,23 @@ function divergences(live: ReturnType<typeof view>, reload: ReturnType<typeof vi
 }
 
 type Lifecycle = ReturnType<typeof useChatStreamingLifecycle>;
-function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }, withReconcile: boolean) {
+async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }, withReconcile: boolean) {
   resetTestState();
   fake.listeners.clear();
+  fake.conn.clear();
+  fake.connected = true;
+  // a resync's DB read (resyncTabFromDb) returns the history as it was at that moment
+  let dbNow: Record<string, unknown>[] = [];
+  vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
+  vi.spyOn(chatService, 'getSessionMessagesReconcileTail')
+    .mockImplementation(async () => dbNow.map((r) => toMessageCamelCase(r)) as never);
+  // the window's subscription back: what the hub sent for its cursor, then the DB read
+  const resubscribe = async (envs: Record<string, unknown>[], history: Record<string, unknown>[]) => {
+    dbNow = history;
+    act(() => { fake.setConnected(true); });
+    for (const env of envs) act(() => { fake.emit(parseSSEEvent(JSON.stringify(env))); });
+    await act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); });
+  };
   const hook = renderLifecycle();
   const SID = s.sid;
   act(() => { initTestTab('T'); initTestTab('T2'); });
@@ -154,10 +197,11 @@ function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }, with
   // The sending tab's own POST stream, as ChatPage opens it for a send / an answer /
   // a decision: it receives the same envelopes as the subscription (the turn router
   // renders each once) and completes at the turn's end.
-  let post: { handler: (e: StreamEvent) => void; complete: () => void; open: boolean } | null = null;
+  let post: { handler: (e: StreamEvent) => void; complete: () => void; error: (e: Error) => void; open: boolean } | null = null;
   const openPost = (bubbleId: string) => {
     post = { handler: hook.current.createStreamHandler(bubbleId, 'T'),
-             complete: hook.current.createCompleteHandler('T'), open: true };
+             complete: hook.current.createCompleteHandler('T'),
+             error: hook.current.createErrorHandler(bubbleId, 'T'), open: true };
   };
   const endPost = () => { if (post?.open) { post.open = false; act(() => { post!.complete(); }); } post = null; };
   // ChatPage.handleAnswerQuestion / handlePermissionDecision: the continuation's
@@ -169,7 +213,14 @@ function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }, with
     });
     openPost(id);
   };
+  // every keyed block either tab ever showed (property: what was shown is not lost)
+  const shown = [new Set<string>(), new Set<string>()] as const;
+  const noteShown = () => {
+    for (const k of keysOf(store.messages)) shown[0].add(k);
+    for (const k of keysOf(store2.messages)) shown[1].add(k);
+  };
   for (const st of s.steps) {
+    noteShown();
     if (st.kind === 'user') {
       // ChatPage send: the user bubble and the turn's assistant placeholder
       act(() => {
@@ -200,8 +251,25 @@ function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }, with
           store2.reconcile(st.history.map((r) => toMessageCamelCase(r)));
         });
       }
+    } else if (st.kind === 'disconnect') {
+      // the window's subscription drops (sessionEvents: connected → false)
+      act(() => { fake.setConnected(false); });
+    } else if (st.kind === 'reconnect') {
+      await resubscribe(st.envs, st.history);
+    } else if (st.kind === 'restart') {
+      // the daemon went away: subscription down, this tab's open POST fails
+      // (fetch: a network error), then the new daemon answers the reconnect
+      if (fake.connected) act(() => { fake.setConnected(false); });
+      if (post?.open) {
+        const p = post;
+        p.open = false;
+        post = null;
+        act(() => { p.error(new TypeError('network error')); });
+      }
+      await resubscribe(st.envs, st.history);
     } else if (st.kind === 'event') {
-      act(() => { fake.emit(parseSSEEvent(JSON.stringify(st.env))); });
+      // missed by the subscription while it was down (`sub: false`): only the POST gets it
+      if (st.sub !== false) act(() => { fake.emit(parseSSEEvent(JSON.stringify(st.env))); });
       // the same envelope on the POST of the send that started this turn
       if (post?.open && st.env.source !== 'drain' && st.env.source !== 'injected') {
         const ev = parseSSEEvent(JSON.stringify(st.env));
@@ -229,7 +297,9 @@ function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }, with
       continuationPlaceholder();
     }
   }
-  return [store, store2] as const;
+  noteShown();
+  vi.restoreAllMocks();
+  return [store, store2, shown] as const;
 }
 
 /**
@@ -243,11 +313,15 @@ const KNOWN = new Set<string>([
   // ChatPage's numeric placeholder: its own bubble, while the reload merges it (19/40). Two render paths
   // with two bubble rules; S1 / P4 (only the subscription renders) removes it.
   'stream: assistant bubbles: a unlabelled turn has its own bubble',
-  // R2 ask_user_question is never stored: the question and its answer vanish on reload (7/40).
+  // R2 ask_user_question is never stored: the question and its answer vanish on reload (17/70).
   'stream: only live: question',
   'reconciled: only live: question',
   'stream: other tab: only live: question',
   'reconciled: other tab: only live: question',
+  'stream: shown live, gone on reload: question',
+  'reconciled: shown live, gone on reload: question',
+  'stream: other tab: shown live, gone on reload: question',
+  'reconciled: other tab: shown live, gone on reload: question',
   // R4 user messages are not session events: another tab has no user bubbles until its reconcile,
   // and consecutive turns run together (40/40).
   'stream: other tab: user bubbles: live fewer than reload',
@@ -301,6 +375,17 @@ const KNOWN = new Set<string>([
   'reconciled: other tab: live repeats: tool_result',
   'stream: other tab: assistant bubbles: a injected turn has its own bubble',
   'reconciled: other tab: assistant bubbles: a injected turn has its own bubble',
+  // R10 a step's result is written with the NEXT assistant row or a terminal event; a turn
+  // that ends right after a tool result without one — Stop, a daemon restart — never writes
+  // it (run_conversation / continue_with_answer / continue_with_cmd_permission; the injected
+  // path flushes in its finally). Shown live, gone on reload (5/70). After a restart the
+  // resync's DB read takes it off the screen too, so only "shown live" catches it there.
+  'stream: only live: tool_result',
+  'stream: other tab: only live: tool_result',
+  'stream: shown live, gone on reload: tool_result',
+  'reconciled: shown live, gone on reload: tool_result',
+  'stream: other tab: shown live, gone on reload: tool_result',
+  'reconciled: other tab: shown live, gone on reload: tool_result',
 ]);
 
 const scenarios = (fixture as { scenarios: Scenario[] }).scenarios;
@@ -324,21 +409,26 @@ describe('live == reload (generated scenarios from the real backend)', () => {
     console.log(`\n[liveReload]\n${lines.join('\n')}\n`);
   });
 
-  it.each(scenarios.map((s) => [s.name, s] as const))('%s', (_name, s) => {
+  it.each(scenarios.map((s) => [s.name, s] as const))('%s', async (_name, s) => {
     const reloadMsgs = s.history.map((r) => toDisplayMessage(toMessageCamelCase(r) as never));
     const reload = view(reloadMsgs);
-    const run = (withReconcile: boolean) => {
-      const [store, store2] = replay(s, () => renderHook(() => useChatStreamingLifecycle(createMockDeps())).result, withReconcile);
+    const run = async (withReconcile: boolean) => {
+      const [store, store2, shown] = await replay(s, () => renderHook(() => useChatStreamingLifecycle(createMockDeps())).result, withReconcile);
       const v = view(store.messages);
       if (process.env.LR_DUMP === s.name) {
         // eslint-disable-next-line no-console
         console.log(withReconcile ? 'RECONCILED' : 'STREAM', JSON.stringify({ live: v, other: view(store2.messages), reload }));
       }
-      return [...divergences(v, reload), ...divergences(view(store2.messages), reload).map((x) => `other tab: ${x}`)];
+      // shown at some point, absent from the reload: the user saw it, the record lost it
+      const kept = keysOf(reloadMsgs);
+      const lost = (set: Set<string>, prefix: string) =>
+        [...new Set([...set].filter((k) => !kept.has(k)).map((k) => `${prefix}shown live, gone on reload: ${k.split(':')[0]}`))];
+      return [...divergences(v, reload), ...divergences(view(store2.messages), reload).map((x) => `other tab: ${x}`),
+        ...lost(shown[0], ''), ...lost(shown[1], 'other tab: ')];
     };
-    const stream = run(false);
+    const stream = await run(false);
     for (const sig of stream) note(report.stream, sig, s.name);
-    const reconciled = run(true);
+    const reconciled = await run(true);
     for (const sig of reconciled) note(report.reconciled, sig, s.name);
     const unknown = [...stream.map((x) => `stream: ${x}`), ...reconciled.map((x) => `reconciled: ${x}`)]
       .filter((x) => !KNOWN.has(x));
