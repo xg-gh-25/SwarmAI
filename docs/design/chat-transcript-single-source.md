@@ -160,12 +160,21 @@ v2：**版本号在库里分配，和写入同一个事务。**
 - **乐观状态只有一种**：发送时插入用户气泡（id = client_id），快照或 `turn_start` 里出现这个
   client_id 后由投影接管。
 
-#### 3.5 删除清单（P4 完成时这些都不应存在）
+#### 3.5 删除清单（2026-10-23 逐项核对的结果）
 
-`_mergePreservingInteractive`、`_INTERACTIVE_BLOCK_TYPES`、`isStalePlaceholder` 与数字 id 占位、
-`hostedTurn` / `hostForInjectedTurn` / `turnStart`、轮询补卡片的分支与 `shouldResurface*`、
-`drainSyntheticId`、`sessionTurnRouter` 的 POST 渲染和 shadow 部分、`_confirmed` 标记、
-流式路径上的 `collapseAdjacentDuplicateBlocks`、前端生成的错误消息行。
+已删：`pages/chat/stopReceipt.ts`（Stop 回执走记录变更流）；`updateMessages` 的"重发"规则 b 和
+"已确认同文就丢流式副本"（R6）；续接回合的数字 id 占位（ChatPage `continuationHostId`：续接直接渲染
+进放着提问/审批的那个气泡），以及开始回合时按"纯数字 id"删占位的分支。
+
+仍在用，不删（每项的理由）：
+- `hostedTurn` / `hostForInjectedTurn` / `turnStart`：这就是"续接、CLI 自开回合并进前一个气泡"的实现。
+- `sessionTurnRouter` 的 POST 渲染与 shadow：订阅流断开时的兜底（断线场景靠它）。
+- `_mergePreservingInteractive`：回合结束对账读到的库可能早于答案/决定写入，本地刚做的答案要带过去。
+- `drainSyntheticId`：排队消息送出时标 sent 走 `session_pending` 的原生 SQL，不经过变更流，排队气泡
+  仍由它退场。
+- `shouldResurface*`：现在由推送的 `session_state` 立即触发，轮询兜底，同一套判定。
+- `_confirmed`、`collapseAdjacentDuplicateBlocks`：流式副本与确认块的配对，已收窄到只处理流式副本。
+- `isStalePlaceholder`：插件命令等其他路径仍用数字 id。
 
 #### 3.7 实际落地的形状（2026-10-23）
 

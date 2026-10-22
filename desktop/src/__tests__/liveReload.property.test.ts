@@ -208,13 +208,11 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
   };
   const endPost = () => { if (post?.open) { post.open = false; act(() => { post!.complete(); }); } post = null; };
   // ChatPage.handleAnswerQuestion / handlePermissionDecision: the continuation's
-  // own POST placeholder, a numeric id
-  const continuationPlaceholder = () => {
-    const id = String(numericId++);
-    act(() => {
-      store.append({ id, role: 'assistant', content: [], timestamp: new Date().toISOString() } as Message);
-    });
-    openPost(id);
+  // POST renders into the bubble holding its question / prompt (continuationHostId)
+  const continuationPost = (holds: (b: Record<string, unknown>) => boolean) => {
+    const asst = [...store.messages].reverse().filter((m) => m.role === 'assistant');
+    const host = asst.find((m) => (m.content ?? []).some((b) => holds(b as unknown as Record<string, unknown>))) ?? asst[0];
+    openPost(host ? host.id : `local-sub-continuation-${numericId++}`);
   };
   // every keyed block either tab ever showed (property: what was shown is not lost)
   const shown = [new Set<string>(), new Set<string>()] as const;
@@ -284,7 +282,7 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
           return x.type === 'cmd_permission_request' && x.requestId === st.requestId ? { ...b, decision: st.decision } as ContentBlock : b;
         }) }), (m) => m.content.some((b) => (b as unknown as { requestId?: string }).requestId === st.requestId));
       });
-      continuationPlaceholder();
+      continuationPost((b) => b.type === 'cmd_permission_request' && b.requestId === st.requestId);
     } else {
       // ChatPage.handleAnswerQuestion: the answers onto its block
       act(() => {
@@ -294,7 +292,7 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
         }) }), (m) => m.content.some((b) => (b as unknown as { toolUseId?: string; type: string }).type === 'ask_user_question'
           && (b as unknown as { toolUseId?: string }).toolUseId === st.toolUseId));
       });
-      continuationPlaceholder();
+      continuationPost((b) => b.type === 'ask_user_question' && b.toolUseId === st.toolUseId);
     }
   }
   noteShown();

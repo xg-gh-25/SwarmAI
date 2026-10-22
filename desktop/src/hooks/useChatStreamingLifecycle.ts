@@ -4687,13 +4687,13 @@ export function useChatStreamingLifecycle(
     // endpoint merges consecutive assistant rows into one message; live == reload,
     // liveReload.property.test.ts). A turn that does not follow a user message — a
     // CLI-initiated one (a background agent finished), or the continuation after a
-    // question / permission — renders INTO the bubble before it. Its own POST
-    // placeholder (the numeric bubble ChatPage adds for a continuation) is dropped
-    // first: the subscription renders this turn.
+    // question / permission — renders INTO the bubble before it (ChatPage gives a
+    // continuation's POST that same bubble). An empty bubble of this turn from an
+    // earlier start (a replay) goes first.
     const hosts = source === 'injected' || continuation;
     if (hosts) {
       store.remove((m) => m.role === 'assistant' && (m.content?.length ?? 0) === 0
-        && (m.id === postBubble || /^\d+$/.test(m.id) || m.id === `local-sub-${ev.turnId}`));
+        && (m.id === postBubble || m.id === `local-sub-${ev.turnId}`));
     }
     const host = hosts ? hostForInjectedTurn(store.getSnapshot(), ev.turnId, handlers.hostedTurn) : null;
     if (host) {

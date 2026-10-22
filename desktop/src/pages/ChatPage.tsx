@@ -2705,6 +2705,15 @@ export default function ChatPage() {
   }, [setMessages, setInputValue, tabMapRef, restoreAttachments]);
 
   // Handle answering AskUserQuestion
+  /** The assistant bubble a continuation renders into: the one holding its
+   *  question / prompt, else the tab's last assistant message. */
+  const continuationHostId = (tabId: string | undefined, holds: (m: Message) => boolean): string => {
+    const msgs = (tabId ? messageStoreRegistry.get(tabId)?.messages : undefined) ?? [];
+    const host = [...msgs].reverse().find((m) => m.role === 'assistant' && holds(m))
+      ?? [...msgs].reverse().find((m) => m.role === 'assistant');
+    return host?.id ?? `local-sub-continuation-${Date.now()}`;
+  };
+
   const handleAnswerQuestion = (toolUseId: string, answers: Record<string, string>) => {
     const tabId = activeTabIdRef.current ?? undefined;
     const tabSessionId = tabId ? tabMapRef.current.get(tabId)?.sessionId : undefined;
@@ -2792,11 +2801,11 @@ export default function ChatPage() {
     // Fix 8: Transition tab status from waiting_input → streaming
     if (tabId) updateTabStatus(tabId, 'streaming');
 
-    const assistantMessageId = Date.now().toString();
-    const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
-    // SINGLE-WRITER: route through the store so streaming deltas land
-    // (see insertOptimisticMessages).
-    insertOptimisticMessages(tabId, [assistantPlaceholder]);
+    // The continuation renders into the bubble that holds the question: the turn
+    // that continues it is the same bubble on reload (one render target).
+    const assistantMessageId = continuationHostId(tabId, (m) => m.content.some(
+      (b) => (b as { type?: string; toolUseId?: string }).type === 'ask_user_question'
+        && (b as { toolUseId?: string }).toolUseId === toolUseId));
 
     const abort = chatService.streamAnswerQuestion(
       { agentId: selectedAgentId, sessionId: tabSessionId, toolUseId, answers, enableSkills, enableMCP },
@@ -3026,11 +3035,11 @@ export default function ChatPage() {
     // Fix 8: Transition tab status from permission_needed → streaming
     if (tabId) updateTabStatus(tabId, 'streaming');
 
-    const assistantMessageId = (Date.now() + 1).toString();
-    const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
-    // SINGLE-WRITER: route through the store so streaming deltas land
-    // (see insertOptimisticMessages).
-    insertOptimisticMessages(tabId, [assistantPlaceholder]);
+    // The continuation renders into the bubble that holds the prompt (as the
+    // answer does): no placeholder of its own.
+    const assistantMessageId = continuationHostId(tabId, (m) => m.content.some(
+      (b) => (b as { type?: string; requestId?: string }).type === 'cmd_permission_request'
+        && (b as { requestId?: string }).requestId === requestId));
 
     // Capture tabId for cleanup in async callbacks (closure safety).
     // Create the stream handler ONCE now (captures tabId at creation time)
