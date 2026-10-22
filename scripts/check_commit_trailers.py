@@ -1,35 +1,39 @@
 #!/usr/bin/env python3
 """Enforce the project's Co-Authored-By identity on new commits.
 
-WHY THIS EXISTS — the local hook that was supposed to do this is DEAD
---------------------------------------------------------------------
+WHY THIS EXISTS — the local hook rewrites, it never adds
+--------------------------------------------------------
 AGENTS.md / the project rules require EVERY commit to end with
 
     Co-Authored-By: Swarm <swarm@swarmai.dev>
 
-and explicitly forbid the Claude/Anthropic identity. The repo ships
-``.git/hooks/prepare-commit-msg`` to rewrite an SDK-injected Claude trailer into
-the Swarm one automatically. That hook NEVER RUNS on this machine:
+and explicitly forbid the Claude/Anthropic identity. The repo has a
+``.git/hooks/prepare-commit-msg`` that sed-rewrites an SDK-injected
+``Co-Authored-By: Claude…<noreply@anthropic.com>`` line into the Swarm one.
 
-    $ git config --get core.hooksPath
-    /usr/local/amazon/var/git-defender/hooks
+That hook is LIVE on this machine. ``core.hooksPath`` points at the corporate
+git-defender hook set, and git-defender then runs the repo-local ``.git/hooks``
+too (observed 2026-10-22: in a scratch repo all four of pre-commit,
+prepare-commit-msg, commit-msg and post-commit fired, and in this repo the hook
+rewrote 0df04c34's Claude trailer to Swarm). Earlier versions of this file said a
+hooksPath override REPLACES ``.git/hooks`` so every repo-local hook was shadowed;
+that was wrong, at least for the git-defender in use on 2026-10-22.
 
-``core.hooksPath`` redirects git to the corporate git-defender hook set, which has
-its OWN ``prepare-commit-msg`` and ``pre-commit``. A hooksPath override does not
-merge with ``.git/hooks`` — it REPLACES it. So every repo-local hook is shadowed:
-the trailer rewrite, the CMHK SDK-drift check, the doc-frontmatter lint, and the
-discussions mirror-drift check have all been silently inert.
+What the hook cannot do is why a verifier is still useful:
+- It only rewrites a Claude trailer that is already there, spelled exactly
+  ``Co-Authored-By:`` (the sed is case-sensitive). A commit written with NO
+  trailer stays without one.
+- ``.git/hooks`` is not versioned, so a fresh clone or another machine has no hook.
 
-Result: 22 of the last 80 commits carry no trailer at all (0 carried a wrong
-identity, so the rule was never actively violated — just unenforced).
+Result as first measured: 22 of the last 80 commits carried no trailer at all (0
+carried a wrong identity, so the rule was never actively violated — just
+unenforced).
 
-WHY CI AND NOT A HOOK
----------------------
-The hooksPath value is machine/corporate policy and the project rules say never to
-modify git config, so re-pointing it is off the table. A guard has to live where it
-actually executes — CI — which is the same conclusion this repo reached for the
-async-blocking class and the URL-contract lint rule. CI cannot REWRITE a commit
-message, so this VERIFIES instead of fixing: write the trailer when you commit.
+WHERE IT RUNS
+-------------
+It ran in CI until 2026-08-16, when the CI step was removed (b493577a); it is now
+for optional local use. CI cannot REWRITE a commit message, so this VERIFIES
+instead of fixing: write the trailer when you commit.
 
 GRANDFATHERED HISTORY (the ratchet, not a rewrite)
 -------------------------------------------------
@@ -95,6 +99,13 @@ FORBIDDEN_MARKERS = ("claude", "anthropic")
 # commit after it (incl. this file's) stays enforced. 4th amnesty in 3 days from the
 # same root — a durable fix (stamp the trailer regardless of core.hooksPath) is the
 # real cure; tracked as a ToDo.
+#
+# 2026-10-22 correction to the four notes above: their stated cause ("the
+# prepare-commit-msg trailer rewrite never fired because core.hooksPath shadowed it")
+# is wrong. git-defender runs the repo-local hooks, and that hook only rewrites an
+# existing Claude trailer: it never adds a missing one. Those commits were written
+# without any trailer, which no version of the hook would have fixed. The notes are
+# kept as the record of each amnesty; ENFORCED_FROM is unchanged.
 ENFORCED_FROM = "6af0955e"
 
 _REC = "\x1e"
@@ -180,10 +191,10 @@ def main(argv: list[str]) -> int:
     print("\nViolations:")
     for sha, subj, kind in bad:
         print(f"  [{kind:>14}] {sha}  {subj[:64]}")
-    print("\nWhy this is not auto-fixed for you: .git/hooks/prepare-commit-msg would")
-    print("have rewritten it, but core.hooksPath redirects git to the corporate")
-    print("git-defender hook set, which SHADOWS every repo-local hook. Add the")
-    print("trailer in the commit message yourself.")
+    print("\nWhy this is not auto-fixed for you: .git/hooks/prepare-commit-msg only")
+    print("rewrites an existing Claude trailer to Swarm; it never adds a missing")
+    print("trailer, and a fresh clone has no .git/hooks at all. Add the trailer in")
+    print("the commit message yourself.")
     return 0 if audit else 1
 
 
