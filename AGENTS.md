@@ -371,6 +371,29 @@ Volatile numbers (commit count, LOC, file counts) live in
 doc on purpose, since they change constantly. That file is auto-refreshed by
 `backend/scripts/refresh_ai_docs.py` and each row carries the command to reproduce it.
 
+## Change Discipline — design first, no patching
+
+A fix that lands one day and needs a follow-up fix the next is a design miss, not
+iteration. For a change that spans backend + frontend, several files, or adds a store,
+endpoint or hot-path hook:
+
+1. **Design before code.** Write a one-page design and get it agreed first: where each
+   fact lives (exactly one source), who writes and who reads it and when, the
+   invariants, and the MEASURED cost it adds on the hot paths (send, each streamed
+   token, each file write).
+2. **Find the existing source of truth first.** Search for the store / endpoint / hook
+   that already owns the fact (e.g. `product_registry` for what a file is) before adding
+   one. A second source for the same fact is a bug unless the design says why.
+3. **Never guess.** What cannot be computed exactly is left off or marked unknown, never
+   filled by a heuristic ("newest 4", "last 24h"). A resource cap is fine, but what falls
+   past it is left off too, not guessed.
+4. **Measure hot paths before merging.** Anything on send or the stream comes with
+   measured timings and proof it runs off the event loop and off the pools the chat path
+   waits on (`core/executors`).
+5. **Self-review before merging.** List every heuristic, second source and temporary
+   workaround in the commit message. Resolve each one first; if one cannot be resolved,
+   say so to the user.
+
 ## Git Commits
 
 All commits in this repo MUST end with:
