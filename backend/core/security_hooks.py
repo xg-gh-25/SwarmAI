@@ -6853,12 +6853,11 @@ _SYNTAX_CHECK_MAX_CMD_BYTES = 256 * 1024
 _BASH_SYNTAX_CHECK_TIMEOUT_S = 1.0
 
 
-# Fast path (F3, 2026-10-21): a command can only be parse-incomplete through an
-# open quote / backtick / substitution / brace / bracket / heredoc / compound
-# keyword, or a trailing operator or backslash. A command with none of these is
-# complete: approve it without starting a shell (most Bash calls: ls, git status,
-# a path-only grep).
-_SYNTAX_RISK_CHARS = frozenset("'\"`(){}[]\\")
+# Fast path (F3, 2026-10-21; quote-aware 2026-10-22): a command can only be
+# parse-incomplete through an open quote / backtick / substitution / brace /
+# bracket / heredoc / compound keyword, or a trailing operator or backslash.
+# _syntax_cannot_be_incomplete approves a command none of these can leave open
+# without starting a shell.
 _SYNTAX_KEYWORDS = frozenset({"if", "then", "elif", "else", "fi", "for", "while", "until",
                               "do", "done", "case", "esac", "select", "function", "repeat",
                               "coproc", "time", "!"})
