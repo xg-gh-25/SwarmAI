@@ -29,10 +29,30 @@ from jobs.paths import STATE_DIR, SWARMWS
 logger = logging.getLogger(__name__)
 
 
+def _touches_session_file(commit_files: list[str], session_files: list[str]) -> bool:
+    """True when a commit changed a file this session wrote.
+
+    Commit paths are repo-relative (``backend/core/x.py``); session paths are
+    whatever the write tool saw -- often absolute, and often inside a worktree of
+    the same repo (``.../wt-topic/backend/core/x.py``). A suffix match on whole
+    path components covers both.
+    """
+    for cf in commit_files:
+        cf = cf.strip().lstrip("./")
+        if not cf:
+            continue
+        for sf in session_files:
+            sf = sf.strip()
+            if sf == cf or sf.endswith("/" + cf):
+                return True
+    return False
+
+
 def _get_session_git_commits(
     repo_path: Path,
     since: datetime,
     max_commits: int = 15,
+    session_files: list[str] | None = None,
 ) -> list[str]:
     """Get git commits from a repo since a given time.
 
@@ -45,6 +65,10 @@ def _get_session_git_commits(
             return empty).
         since: Only include commits after this timestamp.
         max_commits: Maximum number of commits to return.
+        session_files: When given, keep only commits that changed one of these
+            files. Without it every commit in the window is returned, which in a
+            repo several sessions commit to attributes other sessions' work to
+            this one (the DailyActivity "Git activity" leak).
     """
     if not repo_path.is_dir():
         return []
@@ -56,15 +80,18 @@ def _get_session_git_commits(
         return []
 
     since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
+    if session_files is not None and not session_files:
+        return []  # the session wrote nothing, so no commit is its own
     try:
+        if session_files is None:
+            cmd = ["git", "log", f"--since={since_str}", f"--max-count={max_commits}",
+                   "--oneline", "--no-decorate"]
+        else:
+            # Scan a wider window, then keep only commits touching session files.
+            cmd = ["git", "log", f"--since={since_str}", "--max-count=300",
+                   "--no-decorate", "--name-only", "--format=\x1e%h %s"]
         result = subprocess.run(
-            [
-                "git", "log",
-                f"--since={since_str}",
-                f"--max-count={max_commits}",
-                "--oneline",
-                "--no-decorate",
-            ],
+            cmd,
             cwd=str(repo_path),
             capture_output=True,
             text=True,
@@ -72,8 +99,18 @@ def _get_session_git_commits(
         )
         if result.returncode != 0:
             return []
-        lines = [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
-        return lines
+        if session_files is None:
+            return [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
+        out: list[str] = []
+        for rec in result.stdout.split("\x1e"):
+            lines = [ln for ln in rec.splitlines() if ln.strip()]
+            if not lines:
+                continue
+            if _touches_session_file(lines[1:], session_files):
+                out.append(lines[0].strip())
+                if len(out) >= max_commits:
+                    break
+        return out
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         logger.debug("Git log failed for %s: %s", repo_path, exc)
         return []
@@ -213,7 +250,8 @@ class DailyActivityExtractionHook:
         # 2b. Capture git ground truth — actual commits during session
         # This prevents COE C005: DailyActivity text claims vs git reality diverging.
         summary.git_commits = await executors.run_in(
-            "subprocess", self._capture_git_activity, context.session_start_time
+            "subprocess", self._capture_git_activity, context.session_start_time,
+            list(summary.files_modified or []),
         )
 
         # 2c. Quality filter — skip noise entries that add no insight
@@ -329,12 +367,14 @@ class DailyActivityExtractionHook:
         return False
 
     @staticmethod
-    def _capture_git_activity(session_start_iso: str) -> list[str]:
-        """Capture git commits made since session start from source repos.
+    def _capture_git_activity(session_start_iso: str,
+                              session_files: list[str] | None = None) -> list[str]:
+        """Capture this session's git commits from source repos.
 
         Scans ALL projects' TECH.md for repo paths — no hardcoded paths.
-        Returns commits from the first repo that has recent activity.
-        Empty list on any failure (non-blocking, best-effort).
+        With ``session_files`` only commits that changed a file the session
+        wrote count (other sessions commit to the same repos). Returns commits
+        from the first repo that has any. Empty list on any failure.
         """
         try:
             since = datetime.fromisoformat(session_start_iso.replace("Z", "+00:00"))
@@ -373,7 +413,8 @@ class DailyActivityExtractionHook:
 
         for repo_path in candidates:
             if repo_path.is_dir() and (repo_path / ".git").exists():
-                commits = _get_session_git_commits(repo_path, since)
+                commits = _get_session_git_commits(
+                    repo_path, since, session_files=session_files)
                 if commits:
                     return commits
         return []

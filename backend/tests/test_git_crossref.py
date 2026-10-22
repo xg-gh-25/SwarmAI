@@ -122,6 +122,19 @@ class TestGitSnapshotCapture:
         commits = _get_session_git_commits(tmp_path, since)
         assert commits == []
 
+    def test_session_files_keep_only_this_sessions_commits(self, git_repo: Path):
+        """Other sessions commit to the same repo: only commits that changed a
+        file this session wrote are its own. Worktree paths match by suffix."""
+        from hooks.daily_activity_hook import _get_session_git_commits
+
+        since = datetime.now() - timedelta(hours=1)
+        mine = _get_session_git_commits(
+            git_repo, since, session_files=["/scratch/wt-x/signal_fetcher.py"])
+        assert len(mine) == 1 and "signal fetcher" in mine[0]
+        assert _get_session_git_commits(git_repo, since, session_files=[]) == []
+        assert _get_session_git_commits(
+            git_repo, since, session_files=["/elsewhere/other_fetcher.py"]) == []
+
     def test_format_entry_includes_git_section(self):
         """Formatted DailyActivity entry should include **Git activity:** section
         when git commits are available."""
