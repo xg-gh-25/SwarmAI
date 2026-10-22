@@ -1,25 +1,16 @@
-"""repo_changes — the Canvas "Changes" tab: each code repo's local state, read-only.
+"""repo_changes — one commit's files and patches, for the Canvas Changes tab.
 
-One row per bound code repo (Projects/*/bindings.yaml, the same set
-turn_changes.code_roots starts from) that has something not yet on its upstream:
-commits ahead, uncommitted files, or extra worktrees. Facts only, from git:
+The tab lists what a SESSION changed (core/canvas_session); a commit row there drills
+down here: ``commit_files(root, sha)`` (the files it changed, +/-) and
+``commit_diff(root, sha, path)`` (one file's patch, size-capped).
 
-- ``repos()`` — [{name, project, root, branch, upstream, ahead, dirty[], worktrees[],
-  commits[]}]. ``ahead`` is None when the branch has no upstream. ``commits`` are the
-  newest MAX_COMMITS of ``@{u}..HEAD`` (all of HEAD's history when there is no
-  upstream is NOT listed: without an upstream there is no "not yet pushed" set).
-- ``commit_files(root, sha)`` — the files one commit changed, with +/- counts.
-- ``commit_diff(root, sha, path)`` — one file's patch in that commit, size-capped.
+Read-only (``GIT_OPTIONAL_LOCKS=0``), bounded by GIT_TIMEOUT_S, and only for a root
+that is a bound repo (``allowed_roots()``, Projects/*/bindings.yaml) or a code tree
+turn_changes.allowed_repo accepts (a bound repo's main checkout, a run worktree), a
+hex sha and a repo-relative path after ``--``. Blocking: run it in an executor pool.
 
-Which session made a commit is NOT known here (commits from every session carry the
-same Co-Authored-By trailer), so nothing claims "this session's commits".
-
-Every call is read-only (``GIT_OPTIONAL_LOCKS=0``: a status never takes index.lock),
-bounded by GIT_TIMEOUT_S, and accepts only a root from ``allowed_roots()``, a hex sha
-and a repo-relative path after ``--``. Blocking: run it in an executor pool.
-
-Public: ``repos``, ``commit_files``, ``commit_diff``, ``allowed_roots``,
-``RepoChangesError``, ``MAX_COMMITS``, ``MAX_DIFF_CHARS``.
+Public: ``commit_files``, ``commit_diff``, ``allowed_roots``, ``RepoChangesError``,
+``MAX_DIFF_CHARS``.
 """
 from __future__ import annotations
 
@@ -27,12 +18,10 @@ import logging
 import os
 import re
 import subprocess
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-MAX_COMMITS = 50
-MAX_DIRTY = 50
 MAX_DIFF_CHARS = 400_000
 GIT_TIMEOUT_S = 10.0
 _SHA = re.compile(r"[0-9a-f]{7,40}")
@@ -91,100 +80,12 @@ def _bindings() -> dict[str, tuple[str, str]]:
 
 def _checked_root(root: str) -> str:
     real = os.path.realpath(root or "")
-    if real not in allowed_roots():
-        raise RepoChangesError("unknown repo")
-    return real
-
-
-def _project_of(root: str) -> Optional[str]:
-    hit = _bindings().get(root)
-    return hit[1] if hit else None
-
-
-def _dirty(root: str) -> list[dict[str, str]]:
-    out = _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames")
-    rows = []
-    for rec in out.split("\0"):
-        if len(rec) < 4:
-            continue
-        x, y, path = rec[0], rec[1], rec[3:]
-        status = "?" if x == "?" else ("D" if "D" in (x, y) else "A" if "A" in (x, y) else "M")
-        rows.append({"path": path, "status": status})
-    return rows
-
-
-def _worktrees(root: str) -> list[dict[str, Any]]:
-    """Worktrees other than *root* itself: path, branch, prunable (dir gone)."""
-    out = _git(root, "worktree", "list", "--porcelain")
-    rows, cur = [], {}
-    for line in out.splitlines() + [""]:
-        if not line:
-            if cur and os.path.realpath(cur.get("path", "")) != root:
-                rows.append(cur)
-            cur = {}
-            continue
-        key, _, val = line.partition(" ")
-        if key == "worktree":
-            cur = {"path": val, "branch": None, "prunable": False, "detached": False}
-        elif key == "branch":
-            cur["branch"] = val.removeprefix("refs/heads/")
-        elif key == "detached":
-            cur["detached"] = True
-        elif key == "prunable":
-            cur["prunable"] = True
-    # pipeline-test caches are runner scratch, not anyone's work in progress
-    return [w for w in rows if "/cache/pipeline_test/" not in w["path"]]
-
-
-def _commits(root: str, rng: str) -> list[dict[str, Any]]:
-    out = _git(root, "log", rng, f"-n{MAX_COMMITS}", "--format=%x1e%H%x1f%h%x1f%s%x1f%cI",
-               "--shortstat")
-    rows = []
-    for chunk in out.split("\x1e"):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        head, _, stat = chunk.partition("\n")
-        parts = head.split("\x1f")
-        if len(parts) != 4:
-            continue
-        ins = re.search(r"(\d+) insertion", stat)
-        dels = re.search(r"(\d+) deletion", stat)
-        files = re.search(r"(\d+) files? changed", stat)
-        rows.append({"sha": parts[0], "short": parts[1], "subject": parts[2], "at": parts[3],
-                     "files": int(files.group(1)) if files else 0,
-                     "insertions": int(ins.group(1)) if ins else 0,
-                     "deletions": int(dels.group(1)) if dels else 0})
-    return rows
-
-
-def _repo(root: str, name: str) -> Optional[dict[str, Any]]:
-    branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
-    upstream = _git(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
-                    ok=(0, 128)).strip() or None
-    ahead = int(_git(root, "rev-list", "--count", "@{u}..HEAD").strip()) if upstream else None
-    dirty = _dirty(root)
-    worktrees = _worktrees(root)
-    if not ahead and not dirty and not worktrees:
-        return None  # nothing local: not a Changes row
-    return {"name": name, "project": _project_of(root), "root": root, "branch": branch,
-            "upstream": upstream, "ahead": ahead,
-            "dirty_count": len(dirty), "dirty": dirty[:MAX_DIRTY], "worktrees": worktrees,
-            "commits": _commits(root, "@{u}..HEAD") if ahead else []}
-
-
-def repos() -> list[dict[str, Any]]:
-    """Every bound repo with local state (module docstring); a repo whose git call
-    fails is reported with ``error`` instead of being dropped."""
-    rows = []
-    for root, name in sorted(allowed_roots().items(), key=lambda kv: kv[1]):
-        try:
-            row = _repo(root, name)
-        except RepoChangesError as exc:
-            row = {"name": name, "project": _project_of(root), "root": root, "error": str(exc)}
-        if row is not None:
-            rows.append(row)
-    return rows
+    if real in allowed_roots():
+        return real
+    from core.turn_changes import allowed_repo
+    if os.path.isdir(real) and allowed_repo(real):
+        return real
+    raise RepoChangesError("unknown repo")
 
 
 def commit_files(root: str, sha: str) -> list[dict[str, Any]]:

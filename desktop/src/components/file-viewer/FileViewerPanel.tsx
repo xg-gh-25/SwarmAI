@@ -186,6 +186,14 @@ function FileViewerPanelImpl({
   // viewer stays MOUNTED while Changes shows: it holds open files and unsaved edits.
   const [canvasTab, setCanvasTab] = useState<'artifacts' | 'changes'>('artifacts');
   const [changesSel, setChangesSel] = useState<ChangesSelection>(null);
+  // A file opened from anywhere (a chat link, an Artifacts row, the left-nav
+  // Artifacts / Library overlays, a workspace click — every one lands as a new
+  // initialFile via useCanvasHost's single swarm:open-file path) shows in the
+  // document card: bring the Artifacts tab forward, or it opens behind Changes.
+  const openedFile = props.initialFile;
+  useEffect(() => {
+    if (openedFile) setCanvasTab('artifacts');
+  }, [openedFile]);
 
   const [width, setWidth] = useState(getStoredWidth);
   const [isDragging, setIsDragging] = useState(false);

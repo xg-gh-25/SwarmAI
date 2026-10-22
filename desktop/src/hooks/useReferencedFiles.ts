@@ -407,3 +407,48 @@ export function useReferencedFiles(tabId: string | undefined) {
 
   return { files: grouped, totalCount, clear };
 }
+
+/** A persisted artifact of the session (core/canvas_session), as merge input. */
+export interface PersistedArtifact {
+  path: string;
+  absolutePath: string;
+  kind?: string;
+  firstAt: string;
+  turns: number;
+  exists: boolean;
+}
+
+/** The rail's rows = the live rows (this window's swarm:file-changed events) plus
+ *  the session's PERSISTED artifacts (its turn records, so a reloaded or restarted
+ *  session still lists what it produced). A live row wins over a persisted one for
+ *  the same file; a persisted file that no longer exists is shown deleted. Pure. */
+export function mergeSessionArtifacts(
+  live: GroupedReferencedFiles,
+  persisted: PersistedArtifact[] | undefined,
+  sessionId?: string,
+): GroupedReferencedFiles {
+  if (!persisted?.length) return live;
+  const seen = new Set<string>();
+  for (const f of live.written) {
+    seen.add(f.absolutePath);
+    seen.add(f.path);
+  }
+  const extra: ReferencedFile[] = [];
+  for (const a of persisted) {
+    if (seen.has(a.absolutePath) || seen.has(a.path) || !isRailKind(a.kind as ReviewKind | undefined)) continue;
+    const t = Date.parse(a.firstAt);
+    extra.push({
+      path: a.path,
+      absolutePath: a.absolutePath,
+      fileName: basename(a.path),
+      operation: 'written',
+      firstSeen: Number.isNaN(t) ? 0 : t,
+      count: a.turns,
+      kind: a.kind as ReviewKind | undefined,
+      sessionId,
+      deleted: !a.exists,
+    });
+  }
+  if (!extra.length) return live;
+  return { written: [...live.written, ...extra].sort((a, b) => b.firstSeen - a.firstSeen) };
+}

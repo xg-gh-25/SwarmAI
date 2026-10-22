@@ -174,14 +174,46 @@ def _parse_name_status(out: str) -> dict[str, str]:
 
 
 def code_roots() -> list[str]:
-    """Every tree whose files classify as ``source``: bound checkouts + live run worktrees."""
+    """Every code tree a turn may write: bound checkouts + live run worktrees, plus
+    the other live worktrees of the bound repos (``_linked_worktrees``)."""
     try:
         from core.needs_human_review import _worktree_roots
         from core.project_registry import get_swarmws
-        return [os.path.realpath(p) for p, _repo in _worktree_roots(str(get_swarmws())) if Path(p).is_dir()]
+        roots = [os.path.realpath(p) for p, _repo in _worktree_roots(str(get_swarmws())) if Path(p).is_dir()]
     except Exception as exc:  # noqa: BLE001 — no roots = no card
         logger.debug("turn_changes: code roots unavailable: %s", exc)
         return []
+    return roots + [w for w in _linked_worktrees(roots) if w not in roots]
+
+
+# A session that follows the repo's worktree rule edits in a `git worktree add` tree
+# outside the bound checkout; without a start snapshot of it, its edits never reach
+# the turn's card (nor the session's Canvas Changes). The newest few are enough: a
+# turn writes in the worktree it is working in, which is fresh.
+MAX_LINKED_WORKTREES = 12
+
+
+def _linked_worktrees(roots: list[str]) -> list[str]:
+    """Live linked worktrees of the bound checkouts among *roots*, newest index first
+    (capped). Pipeline-test caches and worktrees whose directory is gone are skipped."""
+    found: dict[str, float] = {}
+    for root in roots:
+        try:
+            out = _git(root, "worktree", "list", "--porcelain")
+        except (RuntimeError, OSError, subprocess.SubprocessError):
+            continue
+        for line in out.splitlines():
+            if not line.startswith("worktree "):
+                continue
+            path = os.path.realpath(line[len("worktree "):])
+            if path in roots or "/cache/pipeline_test/" in path or not os.path.isdir(path):
+                continue
+            try:
+                index = _git(path, "rev-parse", "--path-format=absolute", "--git-path", "index").strip()
+                found[path] = os.stat(index).st_mtime
+            except (RuntimeError, OSError, subprocess.SubprocessError):
+                continue
+    return sorted(found, key=lambda p: -found[p])[:MAX_LINKED_WORKTREES]
 
 
 def _pool(name: str = "turn_changes"):

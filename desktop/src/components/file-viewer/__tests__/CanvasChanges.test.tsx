@@ -1,41 +1,48 @@
 /**
- * CanvasChanges — the Canvas Changes tab (nav + detail), and its wiring in
- * FileViewerPanel.
+ * CanvasChanges — the Canvas Changes tab: what THIS session changed (nav + detail),
+ * and its wiring in FileViewerPanel.
  *
- * What is tested: a repo card shows name, project, branch and ahead / uncommitted /
- * worktrees counts; no upstream reads "no upstream", a git error is shown on its
- * card; clicking a commit opens its files in the detail card, a single-file commit
- * opens its patch at once and the patch lines carry add/del classes; the
- * uncommitted and worktree counts open their lists; the panel's Changes tab hides
- * (never unmounts) the file viewer and the Artifacts tab brings it back.
+ * What is tested: a repo card names repo, project and branch and lists the session's
+ * files with status letter, net +/- and state (the committing commit's short sha on a
+ * committed file), then the commits; a file opens the session's net diff (turn-diff
+ * from its first start tree to its last end tree); a commit opens its files, marks
+ * the session's own, and a one-file commit opens its patch; an empty session says so;
+ * a new opened file brings the Artifacts tab forward; the Changes tab hides (never
+ * unmounts) the file viewer.
  *
- * Methodology: canvasChangesService mocked; the module store reset per test.
+ * Methodology: canvasSessionService + chatService.getTurnDiff mocked; the store is
+ * pointed at a session and refreshed per test.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { useState } from 'react';
 
-const repos = vi.fn();
+const get = vi.fn();
 const commitFiles = vi.fn();
 const commitDiff = vi.fn();
-vi.mock('../../../services/canvasChanges', () => ({
-  canvasChangesService: {
-    repos: () => repos(),
-    commitFiles: (r: string, s: string) => commitFiles(r, s),
-    commitDiff: (r: string, s: string, p: string) => commitDiff(r, s, p),
-  },
-}));
+const getTurnDiff = vi.fn();
+vi.mock('../../../services/canvasSession', async (orig) => {
+  const real = await orig<typeof import('../../../services/canvasSession')>();
+  real.canvasSessionService.get = (s: string) => get(s);
+  real.canvasSessionService.commitFiles = (r: string, s: string) => commitFiles(r, s);
+  real.canvasSessionService.commitDiff = (r: string, s: string, p: string) => commitDiff(r, s, p);
+  return real;
+});
+vi.mock('../../../services/chat', () => ({ chatService: { getTurnDiff: (q: unknown) => getTurnDiff(q) } }));
 
-import { ChangesDetail, ChangesNav, diffLineClass, resetRepoChanges, type ChangesSelection } from '../CanvasChanges';
+import { ChangesDetail, ChangesNav, diffLineClass, type ChangesSelection } from '../CanvasChanges';
+import { refreshCanvasSession, resetCanvasSession, setActiveCanvasSession } from '../../../services/canvasSession';
 
+const SHA = 'a'.repeat(40);
 const REPO = {
-  name: 'swarmai', project: 'SwarmAI', root: '/r/swarmai', branch: 'main', upstream: 'origin/main',
-  ahead: 2, dirty_count: 1, dirty: [{ path: 'a.md', status: '?' }],
-  worktrees: [{ path: '/s/wt', branch: 'kiro/x', prunable: true, detached: false }],
-  commits: [
-    { sha: 'a'.repeat(40), short: 'aaaaaaaa', subject: 'feat: one', at: '2026-10-22T10:00:00+08:00', files: 1, insertions: 3, deletions: 1 },
-    { sha: 'b'.repeat(40), short: 'bbbbbbbb', subject: 'fix: two', at: '2026-10-22T09:00:00+08:00', files: 2, insertions: 5, deletions: 0 },
+  root: '/r/swarmai', repo: 'swarmai', project: 'SwarmAI', branch: 'main', upstream: 'origin/main',
+  files: [
+    { path: 'src/a.ts', status: 'modified', added: 3, deleted: 1, turns: 2, firstAt: 't1', lastAt: 't2',
+      start: 's1', end: 'e2', state: 'committed', commit: SHA },
+    { path: 'src/new.ts', status: 'added', added: 4, deleted: 0, turns: 1, firstAt: 't2', lastAt: 't2',
+      start: 's2', end: 'e2', state: 'uncommitted', commit: null },
   ],
+  commits: [{ sha: SHA, short: 'aaaaaaaa', subject: 'feat: one', at: 't3', source: 'session', files: ['src/a.ts'] }],
 };
 
 function Tab() {
@@ -43,50 +50,65 @@ function Tab() {
   return <><ChangesNav selected={sel} onSelect={setSel} /><ChangesDetail selected={sel} /></>;
 }
 
+async function load(changes: unknown[]) {
+  get.mockResolvedValue({ artifacts: [], changes });
+  setActiveCanvasSession('s1');
+  await act(async () => { await refreshCanvasSession(); });
+}
+
 beforeEach(() => {
-  resetRepoChanges();
-  repos.mockReset(); commitFiles.mockReset(); commitDiff.mockReset();
+  resetCanvasSession();
+  [get, commitFiles, commitDiff, getTurnDiff].forEach((m) => m.mockReset());
 });
 
-describe('Changes tab', () => {
-  it('a repo card names the repo, project and branch, with its counts', async () => {
-    repos.mockResolvedValue([REPO, { ...REPO, name: 'other', project: null, root: '/r/o', ahead: null, commits: [], dirty_count: 0, worktrees: [] }]);
+describe('Changes tab (this session)', () => {
+  it('a repo card lists the session files with net counts and state, then the commits', async () => {
+    await load([REPO]);
     render(<Tab />);
-    const cards = await screen.findAllByTestId('changes-repo');
-    expect(cards[0].textContent).toMatch(/swarmai.*SwarmAI.*main/);
-    expect(cards[0].textContent).toMatch(/2ahead.*1uncommitted.*1worktrees · 1 stale/);
-    expect(cards[0].getAttribute('title') ?? cards[0].querySelector('[title]')?.getAttribute('title')).toBe('/r/swarmai');
-    expect(cards[1].textContent).toContain('no upstream');
+    const card = await screen.findByTestId('changes-repo');
+    expect(card.textContent).toMatch(/swarmai.*SwarmAI.*main/);
+    const files = screen.getAllByTestId('changes-file');
+    expect(files[0].textContent).toMatch(/M.*src\/a\.ts.*\+3 −1.*committed aaaaaaaa/);
+    expect(files[1].textContent).toMatch(/A.*src\/new\.ts.*\+4.*uncommitted/);
+    expect(screen.getByTestId('changes-commit').textContent).toContain('feat: one');
+    expect(get).toHaveBeenCalledWith('s1');
   });
 
-  it('a git error is shown on its card', async () => {
-    repos.mockResolvedValue([{ name: 'x', project: null, root: '/r/x', error: 'git status: boom' }]);
+  it('a file opens the session net diff (first start → last end)', async () => {
+    await load([REPO]);
+    getTurnDiff.mockResolvedValue('diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new');
     render(<Tab />);
-    expect((await screen.findByTestId('changes-repo')).textContent).toContain('git status: boom');
-  });
-
-  it('a commit opens its files; a one-file commit opens its patch with add/del lines', async () => {
-    repos.mockResolvedValue([REPO]);
-    commitFiles.mockResolvedValue([{ path: 'src/a.ts', insertions: 3, deletions: 1 }]);
-    commitDiff.mockResolvedValue({ diff: 'diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new\n ctx', truncated: false });
-    render(<Tab />);
-    fireEvent.click((await screen.findAllByTestId('changes-commit'))[0]);
-    expect(commitFiles).toHaveBeenCalledWith('/r/swarmai', 'a'.repeat(40));
-    expect((await screen.findByTestId('changes-detail')).textContent).toContain('Changes › swarmai › aaaaaaaa');
+    fireEvent.click((await screen.findAllByTestId('changes-file'))[0]);
+    expect(getTurnDiff).toHaveBeenCalledWith({ gitRoot: '/r/swarmai', start: 's1', end: 'e2', path: 'src/a.ts' });
     const patch = await screen.findByTestId('changes-patch');
     expect(patch.textContent).toContain('+new');
     expect(patch.textContent).not.toContain('diff --git');
-    expect(commitDiff).toHaveBeenCalledWith('/r/swarmai', 'a'.repeat(40), 'src/a.ts');
+    expect(screen.getByTestId('changes-detail').textContent).toMatch(/Changes › swarmai › src\/a\.ts.*net change over 2 turns/);
   });
 
-  it('the uncommitted and worktree counts open their lists', async () => {
-    repos.mockResolvedValue([REPO]);
+  it('a pruned diff says so', async () => {
+    await load([REPO]);
+    getTurnDiff.mockResolvedValue(null);
     render(<Tab />);
-    await screen.findAllByTestId('changes-repo');
-    fireEvent.click(screen.getByText('uncommitted'));
-    expect(screen.getByTestId('changes-detail').textContent).toContain('a.md');
-    fireEvent.click(screen.getByText(/worktrees/));
-    expect(screen.getByTestId('changes-detail').textContent).toMatch(/kiro\/x.*stale/);
+    fireEvent.click((await screen.findAllByTestId('changes-file'))[1]);
+    expect(await screen.findByText(/no longer available/)).toBeTruthy();
+  });
+
+  it('a commit opens its files, marks the session ones, a one-file commit opens its patch', async () => {
+    await load([REPO]);
+    commitFiles.mockResolvedValue([{ path: 'src/a.ts', insertions: 3, deletions: 1 }]);
+    commitDiff.mockResolvedValue({ diff: '@@ -1 +1 @@\n+x', truncated: false });
+    render(<Tab />);
+    fireEvent.click(await screen.findByTestId('changes-commit'));
+    expect(commitFiles).toHaveBeenCalledWith('/r/swarmai', SHA);
+    expect((await screen.findByTestId('changes-commit-file')).textContent).toContain('this session');
+    expect((await screen.findByTestId('changes-patch')).textContent).toContain('+x');
+  });
+
+  it('a session with no code changes says so', async () => {
+    await load([]);
+    render(<Tab />);
+    expect(await screen.findByText(/not changed any code/)).toBeTruthy();
   });
 
   it('diff line classes', () => {
@@ -98,7 +120,7 @@ describe('Changes tab', () => {
 });
 
 describe('FileViewerPanel Canvas tabs', () => {
-  it('Changes hides the file viewer without unmounting it; Artifacts brings it back', async () => {
+  it('Changes hides the viewer (mounted); a newly opened file brings Artifacts back', async () => {
     vi.resetModules();
     let mounts = 0;
     function ViewerStub() {
@@ -107,18 +129,18 @@ describe('FileViewerPanel Canvas tabs', () => {
     }
     vi.doMock('../FileViewer', () => ({ default: ViewerStub }));
     vi.doMock('../CanvasOutputRail', () => ({ CanvasOutputRail: () => <div data-testid="rail-stub" /> }));
-    repos.mockResolvedValue([REPO]);
     const { default: FileViewerPanel } = await import('../FileViewerPanel');
-    render(<FileViewerPanel onClose={() => {}} pinned={false} onTogglePin={() => {}} muted={false}
-      onToggleMute={() => {}} referencedFiles={{ written: [] } as never} tabScopeKey="t1"
-      collapse={{ railed: false, outputsCollapsed: false }} setCollapse={() => {}} isOpen onRevealCanvas={() => {}} />);
-    const viewer = screen.getByTestId('file-viewer-stub');
+    const base = {
+      onClose: () => {}, pinned: false, onTogglePin: () => {}, muted: false, onToggleMute: () => {},
+      referencedFiles: { written: [] } as never, tabScopeKey: 't1',
+      collapse: { railed: false, outputsCollapsed: false }, setCollapse: () => {}, isOpen: true, onRevealCanvas: () => {},
+    };
+    const { rerender } = render(<FileViewerPanel {...base} />);
     await act(async () => { fireEvent.click(screen.getByTestId('canvas-tab-changes')); });
-    expect(viewer.parentElement?.className).toContain('hidden');
-    expect(await screen.findByText(/Select a commit/)).toBeTruthy();
-    expect(await screen.findAllByTestId('changes-repo')).toHaveLength(1);
-    fireEvent.click(screen.getByTestId('canvas-tab-artifacts'));
+    expect(screen.getByTestId('file-viewer-stub').parentElement?.className).toContain('hidden');
+    rerender(<FileViewerPanel {...base} initialFile={{ filePath: 'Knowledge/x.md', fileName: 'x.md' }} />);
     expect(screen.getByTestId('file-viewer-stub').parentElement?.className).not.toContain('hidden');
+    expect(screen.getByTestId('canvas-tab-artifacts').getAttribute('aria-selected')).toBe('true');
     expect(mounts).toBe(1);
   });
 });

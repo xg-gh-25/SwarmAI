@@ -15,6 +15,14 @@ vi.mock('../../services/api', () => ({
   default: { get: vi.fn(async (_url: string, opts?: { params?: { path?: string } }) => ({ data: { resolved_path: opts?.params?.path ?? '' } })) },
 }));
 
+// The session-outputs fetch (services/canvasSession) is not what these tests drive;
+// stubbed so it never consumes the api.get mocks queued for /resolve.
+vi.mock('../../services/canvasSession', () => ({
+  refreshCanvasSession: async () => {},
+  setActiveCanvasSession: () => {},
+  useCanvasSession: () => ({ sessionId: null, data: null, error: null, loading: false }),
+}));
+
 function openFile(path: string, tabId?: string) {
   document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: tabId ? { path, tabId } : { path } }));
 }

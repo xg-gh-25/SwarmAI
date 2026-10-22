@@ -1,4 +1,6 @@
-"""Canvas "Changes" tab: local state of each bound code repo (core/repo_changes).
+"""Canvas tabs of one chat session: GET /session/{id} = its Artifacts and Changes
+(core/canvas_session); /changes/commit and /changes/diff drill into one commit
+(core/repo_changes).
 
 Read-only. Every git call runs on the "turn_changes" pool (core/executors), never on
 'subprocess', whose fail-open safety gates must not wait on it. 400 for bad input
@@ -6,7 +8,7 @@ Read-only. Every git call runs on the "turn_changes" pool (core/executors), neve
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Path, Query
 
 router = APIRouter(prefix="/api/canvas", tags=["canvas"])
 
@@ -22,10 +24,11 @@ async def _run(fn, *args):
         raise HTTPException(status_code=400 if bad_input else 503, detail=msg)
 
 
-@router.get("/changes")
-async def get_changes():
-    from core.repo_changes import repos
-    return {"repos": await _run(repos)}
+@router.get("/session/{session_id}")
+async def get_session_outputs(session_id: str = Path(..., min_length=1, max_length=128)):
+    """What this session produced: {artifacts, changes} (core/canvas_session)."""
+    from core.canvas_session import build
+    return await build(session_id)
 
 
 @router.get("/changes/commit")

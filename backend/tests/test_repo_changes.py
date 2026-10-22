@@ -1,16 +1,13 @@
-"""core/repo_changes — the Canvas Changes tab's repo state (read-only git).
+"""core/repo_changes — a commit's files and patches for the Canvas Changes tab.
 
-Methodology: throwaway repos under tmp_path (a bare "origin" + a clone), allowed_roots
+Methodology: throwaway repos under tmp_path (a bare "origin" + a clone), the bindings
 patched to them; no real repository is read.
-Invariants: a repo row reports branch, ahead-of-upstream, dirty files, extra
-worktrees and the unpushed commits with +/-; a clean, pushed repo is not a row;
-commit_files / commit_diff answer only for an allowed root, a hex sha and a
-repo-relative path; nothing writes the index (GIT_OPTIONAL_LOCKS=0, read-only verbs).
+Invariants: commit_files / commit_diff answer only for an allowed root, a hex sha and
+a repo-relative path; the router maps bad input to 400.
 """
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -33,32 +30,9 @@ def repo(tmp_path, monkeypatch):
     _git(work, "push", "-q", "origin", "HEAD:main"); _git(work, "branch", "-u", "origin/main")
     real = str(work.resolve())
     monkeypatch.setattr(rc, "_bindings", lambda: {real: ("swarmai", "SwarmAI")})
+    from core import turn_changes as tc
+    monkeypatch.setattr(tc, "code_roots", lambda: [real])   # the other allowlist
     return work
-
-
-def test_a_clean_pushed_repo_is_not_a_row(repo):
-    assert rc.repos() == []
-
-
-def test_row_reports_ahead_dirty_worktrees_and_commits(repo, tmp_path):
-    (repo / "a.py").write_text("x = 2\ny = 3\n"); _git(repo, "commit", "-qam", "feat: two")
-    (repo / "b.md").write_text("new\n")
-    _git(repo, "worktree", "add", "-q", "-b", "kiro/x", str(tmp_path / "wt"))
-    [row] = rc.repos()
-    assert (row["name"], row["project"], row["branch"]) == ("swarmai", "SwarmAI", "main")
-    assert row["upstream"] == "origin/main" and row["ahead"] == 1
-    assert row["dirty_count"] == 1 and row["dirty"] == [{"path": "b.md", "status": "?"}]
-    assert [w["branch"] for w in row["worktrees"]] == ["kiro/x"]
-    [c] = row["commits"]
-    assert c["subject"] == "feat: two" and (c["insertions"], c["deletions"], c["files"]) == (2, 1, 1)
-
-
-def test_a_removed_worktree_dir_is_prunable(repo, tmp_path):
-    import shutil
-    _git(repo, "worktree", "add", "-q", "-b", "kiro/y", str(tmp_path / "wt2"))
-    shutil.rmtree(tmp_path / "wt2")
-    [row] = rc.repos()
-    assert row["worktrees"][0]["prunable"] is True
 
 
 def test_commit_files_and_diff(repo):
@@ -82,20 +56,10 @@ def test_bad_input_is_refused(repo, root, sha, path, msg):
         rc.commit_diff(root or str(repo.resolve()), sha, path)
 
 
-def test_reading_never_writes_the_index(repo):
-    (repo / "a.py").write_text("x = 5\n")
-    index = Path(repo) / ".git" / "index"
-    before = index.stat().st_mtime_ns
-    rc.repos()
-    assert index.stat().st_mtime_ns == before
-    assert not (Path(repo) / ".git" / "index.lock").exists()
-
-
-def test_router_maps_bad_input_to_400_and_lists_repos(repo):
+def test_router_maps_bad_input_to_400(repo):
     import asyncio
     from fastapi import HTTPException
     from routers import canvas_changes as r
     with pytest.raises(HTTPException) as e:
         asyncio.run(r.get_diff(root="/etc", sha="a" * 40, path="x"))
     assert e.value.status_code == 400
-    assert asyncio.run(r.get_changes()) == {"repos": []}

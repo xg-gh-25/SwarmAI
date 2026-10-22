@@ -657,6 +657,32 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                 rows = await cursor.fetchall()
                 return [self._row_to_dict(row) for row in rows]
 
+    async def list_session_blocks(self, session_id: str, needles: list[str]) -> list[tuple[str, list]]:
+        """``(created_at, blocks)`` of a session's sent rows whose content contains any
+        of *needles* (a SQL prefilter on the raw JSON text, e.g. ``'"type": "turn_changes"'``;
+        callers check the decoded blocks exactly), oldest first."""
+        import json as _json
+        if not needles:
+            return []
+        likes = " OR ".join("content LIKE ?" for _ in needles)
+        args = [session_id, *(f"%{n}%" for n in needles)]
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                f"SELECT created_at, content FROM {self.table_name} WHERE session_id = ? "
+                f"AND {self._PENDING_EXCLUDE_SQL} AND ({likes}) ORDER BY created_at ASC",
+                args,
+            ) as cursor:
+                rows = await cursor.fetchall()
+        out: list[tuple[str, list]] = []
+        for created_at, raw in rows:
+            try:
+                blocks = _json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                continue
+            if isinstance(blocks, list):
+                out.append((str(created_at), blocks))
+        return out
+
     async def update_agent_result(self, session_id: str, tool_use_id: str, subagent: dict) -> bool:
         """Set the ``subagent`` outcome on the stored Agent tool_result ``tool_use_id``
         of a session (a background agent's final status arrives turns later).

@@ -30,7 +30,8 @@
 import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import api from '../services/api';
 import { useCanvasAutoSurface } from './useCanvasAutoSurface';
-import { useReferencedFiles, countOutputs, countStoredOutputs, type GroupedReferencedFiles } from './useReferencedFiles';
+import { useReferencedFiles, countOutputs, countStoredOutputs, mergeSessionArtifacts, type GroupedReferencedFiles } from './useReferencedFiles';
+import { refreshCanvasSession, setActiveCanvasSession, useCanvasSession } from '../services/canvasSession';
 import type { GitStatus } from '../types';
 import type { CanvasSnapshot } from '../utils/uiContext';
 
@@ -181,7 +182,26 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // panel's CanvasOutputRail receives these rows via a prop instead of running a
   // second (panel-gated) listener. outputCount is derived via the shared SSOT
   // predicate so the ChatHeader pill and the rail rows can never drift apart.
-  const { files: referencedFiles } = useReferencedFiles(activeTabId ?? undefined);
+  const { files: liveFiles } = useReferencedFiles(activeTabId ?? undefined);
+  // The session's PERSISTED outputs (services/canvasSession → core/canvas_session):
+  // its Artifacts survive a reload / restart, and the Changes tab reads the same
+  // store. Fetched when the session changes and again when a turn ends (a turn's
+  // records are written at its result); the live rail covers the turn in flight.
+  const canvasSession = useCanvasSession();
+  useEffect(() => {
+    setActiveCanvasSession(sessionId ?? null);
+    void refreshCanvasSession();
+  }, [sessionId]);
+  const wasStreamingRef = useRef(isStreaming);
+  useEffect(() => {
+    if (wasStreamingRef.current && !isStreaming) void refreshCanvasSession();
+    wasStreamingRef.current = isStreaming;
+  }, [isStreaming]);
+  const persisted = canvasSession.sessionId === (sessionId ?? null) ? canvasSession.data?.artifacts : undefined;
+  const referencedFiles = useMemo(
+    () => mergeSessionArtifacts(liveFiles, persisted, sessionId ?? undefined),
+    [liveFiles, persisted, sessionId],
+  );
   const outputCount = countOutputs(referencedFiles);
 
 

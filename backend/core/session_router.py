@@ -2160,9 +2160,12 @@ class SessionRouter:
     _RESULT_FLUSH_EVENTS = frozenset({"result", "error", "ask_user_question", "cmd_permission_request"})
 
     # file_changed kinds that are a turn's PRODUCTS (needs_human_review): content
-    # (docs, decks, pages, images) and knowledge. Source edits show as the turn's
-    # changed-file chips; process / bookkeeping files are machine noise.
-    _DELIVERABLE_KINDS = frozenset({"content", "knowledge"})
+    # (docs, decks, pages, images), knowledge, and a file the session wrote outside
+    # SwarmWS (external-diff in a git repo, external-nodiff on a plain FS) — the
+    # same kinds the live Canvas rail lists, so the persisted record the session's
+    # Canvas is rebuilt from (core/canvas_session) matches what the rail showed.
+    # Source edits are the turn_changes card; process / bookkeeping files are noise.
+    _DELIVERABLE_KINDS = frozenset({"content", "knowledge", "external-diff", "external-nodiff"})
 
     @staticmethod
     def _turn_files_of(unit: object) -> Optional[dict]:
