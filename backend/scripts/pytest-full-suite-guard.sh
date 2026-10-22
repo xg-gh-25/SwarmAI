@@ -8,7 +8,17 @@
 # WRONG PYTHON; that part was removed (2026-10-21). The wall-clock cap is checked by
 # the backend's pytest_command_guard, not here.
 
-INPUT=$(cat)
+# `read` is a builtin: no `cat` process. It returns 1 at EOF, which is expected.
+IFS= read -r -d '' INPUT || true
+
+# Fast path with bash builtins only (no jq / grep process): this hook runs on EVERY
+# Bash call, and a command that does not even mention pytest or make cannot be a test
+# run. Matching the raw JSON is a superset of matching the command inside it.
+case "$INPUT" in
+  *pytest*|*make*) ;;
+  *) exit 0 ;;
+esac
+
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 
 # Only act on an actual pytest run or a make test target, not grep / echo / python -c.
