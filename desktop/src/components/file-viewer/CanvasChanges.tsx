@@ -48,7 +48,7 @@ const SHOWN = 10;
 
 function useRepos(): SessionRepo[] | null {
   const { data } = useCanvasSession();
-  return data ? data.changes : null;
+  return data?.changes ?? null;
 }
 
 /** The Changes tab's count badge: files this session changed. */
@@ -161,7 +161,7 @@ export function ChangesNav({ selected, onSelect }: {
       </div>
     );
   }
-  if (!data) return <div className={msg}>Loading…</div>;
+  if (!data?.changes) return <div className={msg}>Loading…</div>;
   if (!data.changes.length) return <div className={msg}>This session has not changed any code.</div>;
   return (
     <div data-testid="changes-nav" aria-busy={loading}>

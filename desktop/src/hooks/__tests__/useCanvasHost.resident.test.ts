@@ -14,9 +14,13 @@
  * Mutation check: revert useCanvasHost to not call useReferencedFiles (or gate the
  * listener on isOpen) → the "captured while closed" test goes RED.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
+import type { Mock } from 'vitest';
 import { useCanvasHost } from '../useCanvasHost';
+import api from '../../services/api';
+import { resetCanvasSession } from '../../services/canvasSession';
+import { installFakeCanvasBackend, settleCanvas } from '../../test-utils/fakeCanvasBackend';
 
 vi.mock('../../services/api', () => ({
   default: { get: vi.fn().mockResolvedValue({ data: { resolved_path: 'resolved.md' } }) },
@@ -37,12 +41,15 @@ function fileChanged(detail: {
 }
 
 describe('useCanvasHost — resident output-rail store (capture while CLOSED)', () => {
+  let fake: ReturnType<typeof installFakeCanvasBackend>;
   beforeEach(() => {
-    sessionStorage.clear();
     vi.clearAllMocks();
+    resetCanvasSession();
+    fake = installFakeCanvasBackend(api.get as Mock);
   });
+  afterEach(() => fake.uninstall());
 
-  it('captures a source-final write that arrives while Canvas is CLOSED', () => {
+  it('captures a source-final write that arrives while Canvas is CLOSED', async () => {
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
@@ -55,6 +62,7 @@ describe('useCanvasHost — resident output-rail store (capture while CLOSED)', 
       fileChanged({ path: 'backend/bar.py', tabId: 'A', kind: 'source-final' });
     });
 
+    await settleCanvas();
     // The resident store captured both, and outputCount reflects them —
     // even though the panel (and its old listener) never mounted.
     expect(result.current.outputCount).toBe(2);
@@ -64,7 +72,7 @@ describe('useCanvasHost — resident output-rail store (capture while CLOSED)', 
     ]);
   });
 
-  it('outputCount excludes process/source machine-noise (SSOT parity with the rail)', () => {
+  it('outputCount excludes process/source machine-noise (SSOT parity with the rail)', async () => {
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
@@ -74,17 +82,19 @@ describe('useCanvasHost — resident output-rail store (capture while CLOSED)', 
       fileChanged({ path: '.artifacts/run.json', tabId: 'A', kind: 'process' }); // noise → NOT an output
       fileChanged({ path: 'src/y.ts', tabId: 'A', kind: 'source-final' }); // finish batch → output
     });
+    await settleCanvas();
     // knowledge + source-final = 2; source + process excluded.
     expect(result.current.outputCount).toBe(2);
   });
 
-  it('ignores a write stamped for a DIFFERENT tab (no cross-tab bleed)', () => {
+  it('ignores a write stamped for a DIFFERENT tab (no cross-tab bleed)', async () => {
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
     act(() => {
       fileChanged({ path: 'other.py', tabId: 'B', kind: 'source-final' }); // background tab
     });
+    await settleCanvas();
     expect(result.current.outputCount).toBe(0);
   });
 });

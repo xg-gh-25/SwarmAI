@@ -18,13 +18,19 @@
  * - countStoredOutputs counts a background tab's stored rows with the same
  *   predicate and grouping the pill uses.
  *
- * Methodology: renderHook(useCanvasHost) with only the HTTP layer mocked; outputs
- * arrive through the real swarm:file-changed capture path (sessionStorage-backed).
+ * Methodology: renderHook(useCanvasHost) with only the HTTP layer mocked (the
+ * backend's Canvas record is test-utils/fakeCanvasBackend); outputs arrive through
+ * the real swarm:file-changed → store refresh path. A tab is mapped to its session
+ * once it has been active (it was, to send from it).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Mock } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useCanvasHost } from '../useCanvasHost';
 import { countStoredOutputs } from '../useReferencedFiles';
+import api from '../../services/api';
+import { resetCanvasSession } from '../../services/canvasSession';
+import { installFakeCanvasBackend, settleCanvas } from '../../test-utils/fakeCanvasBackend';
 
 vi.mock('../../services/api', () => ({
   default: { get: vi.fn().mockResolvedValue({ data: { resolved_path: 'resolved.md' } }) },
@@ -40,28 +46,39 @@ function emitOutputs(tabId: string, n: number, prefix = 'out') {
   }
 }
 
-function mount(initial: string) {
-  return renderHook(
+function mount(initial: string, visited: string[] = []) {
+  const r = renderHook(
     ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
     { initialProps: { t: initial } },
   );
+  for (const t of visited) r.rerender({ t });
+  if (visited.length) r.rerender({ t: initial });
+  return r;
+}
+
+async function emit(tabId: string, n: number, prefix = 'out') {
+  act(() => emitOutputs(tabId, n, prefix));
+  await settleCanvas();
 }
 
 describe('useCanvasHost — send-time snapshot is never a stale closure', () => {
+  let fake: ReturnType<typeof installFakeCanvasBackend>;
   beforeEach(() => {
     vi.clearAllMocks();
-    sessionStorage.clear();
+    resetCanvasSession();
+    fake = installFakeCanvasBackend(api.get as Mock);
   });
+  afterEach(() => fake.uninstall());
 
-  it('AC1: a snapshot function captured on tab A reports tab B after the switch', () => {
+  it('AC1: a snapshot function captured on tab A reports tab B after the switch', async () => {
     const { result, rerender } = mount('A');
     act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
-    act(() => emitOutputs('A', 2));
+    await emit('A', 2);
     const captured = result.current.getCanvasSnapshot; // what a memoized send callback holds
     const capturedFor = result.current.getCanvasSnapshotFor;
 
     rerender({ t: 'B' });
-    act(() => emitOutputs('B', 23));
+    await emit('B', 23);
 
     const snap = captured();
     expect(snap).not.toBeNull();
@@ -72,29 +89,29 @@ describe('useCanvasHost — send-time snapshot is never a stale closure', () => 
     expect(result.current.getCanvasSnapshotFor).toBe(capturedFor);
   });
 
-  it('AC1: switching to a tab whose rows were stored while it was in the background', () => {
-    const { result, rerender } = mount('A');
-    act(() => emitOutputs('B', 4)); // B is a background tab: rows go to its storage
+  it('AC1: switching to a tab whose rows were stored while it was in the background', async () => {
+    const { result, rerender } = mount('A', ['B']);
+    await emit('B', 4); // B is a background tab now: its session is refreshed
     const captured = result.current.getCanvasSnapshot;
     rerender({ t: 'B' });
     expect(captured()!.outputCount).toBe(4);
   });
 
-  it('AC2: a captured snapshot function sees a count that grew after capture', () => {
+  it('AC2: a captured snapshot function sees a count that grew after capture', async () => {
     const { result } = mount('A');
-    act(() => emitOutputs('A', 1));
+    await emit('A', 1);
     const captured = result.current.getCanvasSnapshot;
-    act(() => emitOutputs('A', 4, 'later'));
+    await emit('A', 4, 'later');
     expect(captured()!.outputCount).toBe(5);
   });
 
-  it('AC3: an explicit tab id snapshots that tab, not the active one', () => {
+  it('AC3: an explicit tab id snapshots that tab, not the active one', async () => {
     const { result, rerender } = mount('A');
     act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
     act(() => result.current.setPinned(true));
-    act(() => emitOutputs('A', 3));
+    await emit('A', 3);
     rerender({ t: 'B' });
-    act(() => emitOutputs('B', 7));
+    await emit('B', 7);
 
     const forA = result.current.getCanvasSnapshotFor('A');
     expect(forA).toEqual({ open: true, outputCount: 3, pinned: true, muted: false, collapsed: false });
@@ -102,31 +119,32 @@ describe('useCanvasHost — send-time snapshot is never a stale closure', () => 
     expect(result.current.getCanvasSnapshot()!.outputCount).toBe(7); // the active tab
   });
 
-  it('AC3: a background tab that receives outputs while inactive reports them', () => {
-    const { result } = mount('A');
-    act(() => emitOutputs('BG', 4)); // stamped for a tab that is not active
+  it('AC3: a background tab that receives outputs while inactive reports them', async () => {
+    const { result } = mount('A', ['BG']);
+    await emit('BG', 4); // stamped for a tab that is not active
     expect(result.current.getCanvasSnapshotFor('BG')).toEqual(
       { open: false, outputCount: 4, pinned: false, muted: false, collapsed: false },
     );
   });
 
-  it('AC3: an empty tab id yields no snapshot instead of falling back to the active tab', () => {
+  it('AC3: an empty tab id yields no snapshot instead of falling back to the active tab', async () => {
     const { result } = mount('A');
     act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
-    act(() => emitOutputs('A', 2));
+    await emit('A', 2);
     expect(result.current.getCanvasSnapshotFor('')).toBeNull();
     expect(result.current.getCanvasSnapshotFor(null)).toBeNull();
     expect(result.current.getCanvasSnapshotFor('never-seen')).toBeNull();
   });
 
-  it('countStoredOutputs counts a tab\'s stored rail rows like the pill does', () => {
-    renderHook(() => useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }));
-    act(() => emitOutputs('BG2', 3));
+  it('countStoredOutputs counts a tab\'s stored rail rows like the pill does', async () => {
+    mount('A', ['BG2']);
+    await emit('BG2', 3);
     act(() => {
       window.dispatchEvent(new CustomEvent('swarm:file-changed', {
         detail: { path: 'noise.py', tabId: 'BG2', operation: 'written', relevance: 'deliverable', kind: 'source' },
       }));
     });
+    await settleCanvas();
     expect(countStoredOutputs('BG2')).toBe(3); // mid-run `source` rows are not outputs
     expect(countStoredOutputs('nothing-here')).toBe(0);
   });

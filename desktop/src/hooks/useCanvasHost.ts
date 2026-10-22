@@ -30,8 +30,8 @@
 import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import api from '../services/api';
 import { useCanvasAutoSurface } from './useCanvasAutoSurface';
-import { useReferencedFiles, countOutputs, countStoredOutputs, mergeSessionArtifacts, type GroupedReferencedFiles } from './useReferencedFiles';
-import { refreshCanvasSession, setActiveCanvasSession, useCanvasSessionArtifacts } from '../services/canvasSession';
+import { useReferencedFiles, countOutputs, countStoredOutputs, type GroupedReferencedFiles } from './useReferencedFiles';
+import { refreshCanvasSession, setActiveCanvasSession } from '../services/canvasSession';
 import type { GitStatus } from '../types';
 import type { CanvasSnapshot } from '../utils/uiContext';
 
@@ -182,26 +182,23 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // panel's CanvasOutputRail receives these rows via a prop instead of running a
   // second (panel-gated) listener. outputCount is derived via the shared SSOT
   // predicate so the ChatHeader pill and the rail rows can never drift apart.
-  const { files: liveFiles } = useReferencedFiles(activeTabId ?? undefined);
-  // The session's PERSISTED outputs (services/canvasSession → core/canvas_session):
-  // its Artifacts survive a reload / restart, and the Changes tab reads the same
-  // store. Fetched when the session changes and again when a turn ends (a turn's
-  // records are written at its result); the live rail covers the turn in flight.
+  // The rail = the active session's rows in the backend's record
+  // (services/canvasSession → core/session_outputs), the one source for live,
+  // reloaded and restarted sessions. The store refreshes on swarm:file-changed
+  // (artifacts only, debounced); a full refresh (with Changes) runs when the
+  // session changes and when a turn ends. The tab → session report is what lets a
+  // background tab's event refresh ITS session.
   useEffect(() => {
-    setActiveCanvasSession(sessionId ?? null);
-    void refreshCanvasSession();
-  }, [sessionId]);
+    setActiveCanvasSession(sessionId ?? null, activeTabId ?? null);
+    void refreshCanvasSession(sessionId ?? null);
+  }, [sessionId, activeTabId]);
   const wasStreamingRef = useRef(isStreaming);
   useEffect(() => {
-    if (wasStreamingRef.current && !isStreaming) void refreshCanvasSession();
+    if (wasStreamingRef.current && !isStreaming) void refreshCanvasSession(sessionId ?? null);
     wasStreamingRef.current = isStreaming;
-  }, [isStreaming]);
+  }, [isStreaming, sessionId]);
   // artifacts only: ChatPage re-renders when the list changes, not on fetch flags
-  const persisted = useCanvasSessionArtifacts(sessionId ?? null);
-  const referencedFiles = useMemo(
-    () => mergeSessionArtifacts(liveFiles, persisted, sessionId ?? undefined),
-    [liveFiles, persisted, sessionId],
-  );
+  const { files: referencedFiles } = useReferencedFiles(sessionId ?? null);
   const outputCount = countOutputs(referencedFiles);
 
 

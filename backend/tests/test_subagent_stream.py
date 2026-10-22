@@ -134,6 +134,7 @@ class _Router:
     _persist_assistant_blocks = staticmethod(SessionRouter._persist_assistant_blocks)
     _RESULT_FLUSH_EVENTS = SessionRouter._RESULT_FLUSH_EVENTS
     _persist_stream_event = SessionRouter._persist_stream_event
+    _record_canvas_output = staticmethod(SessionRouter._record_canvas_output)
 
 
 @pytest.mark.asyncio

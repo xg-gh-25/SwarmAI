@@ -1385,6 +1385,12 @@ async def delete_session(session_id: str):
     # 4. Clean up per-session state to prevent unbounded memory growth
     from core.lifecycle_manager import LifecycleManager
     LifecycleManager._release_session_state(session_id)
+    # 5. The session's Canvas record (core/session_outputs) goes with it.
+    try:
+        from core import executors, session_outputs
+        await executors.run_in("canvas_session", session_outputs.forget, session_id)
+    except Exception:  # noqa: BLE001 — a leftover record is invisible without the session
+        logger.warning("canvas record cleanup failed session=%s", session_id, exc_info=True)
 
 
 # NOTE: the non-streaming /cmd-permission-response endpoint was removed in

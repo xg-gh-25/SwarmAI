@@ -25,10 +25,12 @@ async def _run(fn, *args):
 
 
 @router.get("/session/{session_id}")
-async def get_session_outputs(session_id: str = Path(..., min_length=1, max_length=128)):
-    """What this session produced: {artifacts, changes} (core/canvas_session)."""
+async def get_session_outputs(session_id: str = Path(..., min_length=1, max_length=128),
+                              parts: str = Query("all", pattern="^(all|artifacts)$")):
+    """What this session produced: {artifacts, changes} (core/canvas_session).
+    ``parts=artifacts`` = the cheap live refresh (changes is null: not computed)."""
     from core.canvas_session import build
-    return await build(session_id)
+    return await build(session_id, changes=parts == "all")
 
 
 @router.get("/changes/commit")

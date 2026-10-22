@@ -15,8 +15,8 @@ Invariants:
 - an edit in a linked worktree of a bound repo is recorded (turn_changes snapshots
   the bound repos' live worktrees) and, after an ff-merge and the worktree's removal,
   still resolves to its commit;
-- Artifacts aggregate turn_deliverables per file; pipeline runs are found from the
-  session's surface_run_outputs calls;
+- Artifacts are the session's attribution rows joined with the product catalog;
+  pipeline runs are the ones the session owned (run.json) or surfaced (baseRef);
 - list_session_blocks reads only this session's sent rows.
 """
 from __future__ import annotations
@@ -141,43 +141,96 @@ async def test_an_edit_in_a_linked_worktree_resolves_after_ff_merge_and_removal(
     assert files["a.py"]["state"] == "committed" and files["a.py"]["commit"] == _git(repo, "rev-parse", "HEAD")
 
 
-def test_linked_worktrees_only_active_ones_capped_and_cached(repo, tmp_path, monkeypatch):
-    keep, gone, stale = tmp_path / "keep", tmp_path / "gone", tmp_path / "stale"
+def test_linked_worktrees_are_all_live_ones_and_cached(repo, tmp_path):
+    keep, gone, old = tmp_path / "keep", tmp_path / "gone", tmp_path / "old"
     cache = tmp_path / "cache" / "pipeline_test" / "x"
-    for p, b in ((keep, "k"), (gone, "g"), (cache, "c"), (stale, "s")):
+    for p, b in ((keep, "k"), (gone, "g"), (cache, "c"), (old, "o")):
         _git(repo, "worktree", "add", "-q", "-b", b, str(p))
     import shutil
-    import time
     shutil.rmtree(gone)
-    old = time.time() - tc.LINKED_ACTIVE_S - 60
-    os.utime(_git(stale, "rev-parse", "--path-format=absolute", "--git-path", "index"), (old, old))
-    assert tc._linked_worktrees([str(repo)]) == [os.path.realpath(keep)]
-    extra = [tmp_path / f"n{i}" for i in range(tc.MAX_LINKED_WORKTREES + 2)]
-    for i, p in enumerate(extra):
-        _git(repo, "worktree", "add", "-q", "-b", f"n{i}", str(p))
-    assert tc._linked_worktrees([str(repo)]) == [os.path.realpath(keep)]      # cached
+    os.utime(_git(old, "rev-parse", "--path-format=absolute", "--git-path", "index"), (1, 1))
+    assert tc._linked_worktrees([str(repo)]) == [os.path.realpath(keep), os.path.realpath(old)]
+    _git(repo, "worktree", "add", "-q", "-b", "n", str(tmp_path / "n"))
+    assert len(tc._linked_worktrees([str(repo)])) == 2          # cached
     tc._linked_cache.clear()
-    assert len(tc._linked_worktrees([str(repo)])) == tc.MAX_LINKED_WORKTREES
+    assert len(tc._linked_worktrees([str(repo)])) == 3
 
 
-def test_extract_artifacts_and_runs():
-    d = {"type": "turn_deliverables", "files": [{"path": "Knowledge/n.md", "absolutePath": "/ws/Knowledge/n.md", "kind": "knowledge"}]}
-    run = {"type": "tool_use", "name": "mcp__swarm__surface_run_outputs", "input": {"run_id": "run_ab12"}}
-    ex = cs.extract([("t1", [d]), ("t2", [d, run, {**run, "input": {"run_id": "../x"}}])])
-    a = ex["artifacts"]["/ws/Knowledge/n.md"]
-    assert (a["firstAt"], a["lastAt"], a["turns"], a["kind"]) == ("t1", "t2", 2, "knowledge")
-    assert ex["runs"] == ["run_ab12"]
+@pytest.mark.asyncio
+async def test_a_worktree_created_during_the_turn_diffs_from_its_head(repo, tmp_path, monkeypatch):
+    import core.needs_human_review as nhr
+    monkeypatch.undo()
+    monkeypatch.setattr(nhr, "_worktree_roots", lambda ws: ((str(repo), "swarmai"),))
+    tc._linked_cache.clear()
+    t = TurnChanges.start(None)
+    await t.ready()
+    wt = tmp_path / "fresh"
+    _git(repo, "worktree", "add", "-q", "-b", "kiro/fresh", str(wt))   # made by the turn
+    tc._linked_cache.clear()
+    (wt / "a.py").write_text("new in fresh\n")
+    t.note({"type": "file_changed", "absolutePath": str(wt / "a.py"), "path": "a.py", "operation": "written"})
+    block = await t.finish()
+    [row] = block["files"]
+    assert row["path"] == "a.py" and row["status"] == "modified" and row["gitRoot"] == str(repo)
 
 
-def test_artifact_rows_role_and_existence(tmp_path):
+@pytest.mark.asyncio
+async def test_a_tree_snapshotted_after_the_first_tool_call_is_left_off(repo, monkeypatch):
+    t = TurnChanges.start([str(repo)])
+    t.note_tool({"type": "tool_use", "name": "Bash", "input": {"command": "echo"}})   # before the snapshot ran
+    await t.ready()
+    (repo / "a.py").write_text("changed\n")
+    t.note({"type": "file_changed", "absolutePath": str(repo / "a.py"), "path": "a.py", "operation": "written"})
+    assert await t.finish() is None
+
+
+@pytest.mark.asyncio
+async def test_trees_past_the_cap_are_left_off_not_guessed(repo, monkeypatch):
+    monkeypatch.setattr(tc, "MAX_START_SNAPSHOTS", 0)
+    t = await _started_turn([str(repo)])
+    (repo / "a.py").write_text("changed\n")
+    t.note({"type": "file_changed", "absolutePath": str(repo / "a.py"), "path": "a.py", "operation": "written"})
+    assert await t.finish() is None
+
+
+async def _started_turn(roots):
+    t = TurnChanges.start(roots)
+    await t.ready()
+    return t
+
+
+def test_artifact_rows_join_the_product_catalog(tmp_path):
+    from core.product_registry import ProductRegistry
     ws = tmp_path / "ws"; (ws / "Knowledge" / "Notes").mkdir(parents=True)
     f = ws / "Knowledge" / "Notes" / "n.md"; f.write_text("x")
-    rows = cs.artifact_rows({str(f): {"path": "n.md", "absolutePath": str(f), "kind": "knowledge",
-                                      "firstAt": "t1", "lastAt": "t1", "turns": 1},
-                             "/elsewhere/x.md": {"path": "x.md", "absolutePath": "/elsewhere/x.md",
-                                                 "kind": "external-nodiff", "firstAt": "t0", "lastAt": "t0", "turns": 1}},
-                            str(ws))
-    assert [(r["role"], r["exists"]) for r in rows] == [("Knowledge", True), ("Other", False)]
+    ProductRegistry(ws).register_batch([str(f)])
+    ProductRegistry(ws).set_starred("Knowledge/Notes/n.md", True)
+    rows = cs.artifact_rows([
+        {"path": "Knowledge/Notes/n.md", "absolutePath": str(f), "kind": "knowledge", "firstAt": "t1",
+         "lastAt": "t1", "writes": 2, "deleted": False},
+        {"path": "x.md", "absolutePath": "/elsewhere/x.md", "kind": "external-nodiff", "firstAt": "t0",
+         "lastAt": "t0", "writes": 1, "deleted": False}], str(ws))
+    a, b = rows
+    assert (a["role"], a["product"], a["starred"], a["exists"], a["turns"]) == ("Knowledge", True, True, True, 2)
+    assert (b["role"], b["product"], b["exists"], b["displayLabel"]) == ("Other", False, False, "x.md")
+
+
+def test_owned_runs_come_from_run_json_and_surfaced_ones_from_base_ref(tmp_path):
+    runs = tmp_path / "ws" / "Projects" / "P" / ".artifacts" / "runs"
+    for rid, owner, hist in (("run_a", "s1", []), ("run_b", "s2", [{"session_id": "s1"}]), ("run_c", "s2", [])):
+        (runs / rid).mkdir(parents=True)
+        (runs / rid / "run.json").write_text(json.dumps({
+            "id": rid, "session_id": owner, "session_history": hist,
+            "commits": [{"repo": "/r", "sha": "a" * 7 + rid[-1] * 33, "files": ["x.py"]}]}))
+    got = cs.session_runs("s1", str(tmp_path / "ws"))
+    assert sorted(c["run"] for c in got) == ["run_a", "run_b"]
+    (runs / "run_a" / "run.json").write_text(json.dumps({"id": "run_a", "session_id": "s9"}))
+    os.utime(runs / "run_a" / "run.json", (1, 1))         # a changed file is re-read
+    assert [c["run"] for c in cs.session_runs("s1", str(tmp_path / "ws"))] == ["run_b"]
+    rows = [{"kind": "source-final", "path": "src/a.py", "absolutePath": "/r/src/a.py", "baseRef": "b" * 40 + "^"},
+            {"kind": "source-final", "path": "src/b.py", "absolutePath": "/r/src/b.py", "baseRef": "b" * 40 + "^"},
+            {"kind": "knowledge", "path": "n.md", "absolutePath": "/ws/n.md"}]
+    assert cs.surfaced_commits(rows) == [{"repoPath": "/r", "sha": "b" * 40, "files": ["src/a.py", "src/b.py"], "run": None}]
 
 
 @pytest.mark.asyncio

@@ -518,53 +518,9 @@ def _schedule_backfill(workspace_path: str) -> None:
 
 
 def _display_label(product, workspace_path: str, cache: dict) -> str:
-    """Run-3 AC8: a human label for a product row.
-
-    Pipeline REPORT.md rows: the task NAME from the run's run.json ``requirement``
-    (truncated), not the raw run-id ("who can read run_7220ff2a?"). Every other row:
-    the basename. Path-traversal-safe: the run-id is used ONLY to build a path UNDER
-    ``<ws>/Projects/*/.artifacts/runs/<run-id>/run.json`` and the resolved path is
-    confirmed to stay inside the workspace (Gate-1 escalated boundary). Per-request
-    cache keyed by run-id avoids re-reading a run.json for sibling rows.
-    """
-    path = product.path
-    base = path.rsplit("/", 1)[-1]
-    # Robust role check (Gate-2 F2/F5): a Role is a str-Enum, and str(Role.PIPELINE)
-    # is 'Role.PIPELINE' (not 'Pipeline') on Py3.11+ — so compare the .value if it's an
-    # enum member, else the plain string. Works whether the Product came from JSON
-    # rehydration (plain str) or a fresh classification (enum member).
-    role_str = getattr(product.role, "value", product.role)
-    if role_str != "Pipeline":
-        return base
-
-    parts = [seg for seg in path.replace("\\", "/").split("/") if seg]
-    try:
-        runs_idx = parts.index("runs")
-    except ValueError:
-        return base
-    if runs_idx + 1 >= len(parts):
-        return base
-    run_id = parts[runs_idx + 1]
-    if run_id in cache:
-        return cache[run_id]
-
-    label = run_id  # fallback = the run-id if run.json is unreadable
-    try:
-        ws_root = Path(workspace_path).resolve()
-        # Rebuild the run dir from the product's OWN path prefix (up to + incl run_id),
-        # never from caller input — then confine to the workspace.
-        run_dir = (ws_root / Path(*parts[: runs_idx + 2])).resolve()
-        if run_dir.is_relative_to(ws_root):
-            run_json = run_dir / "run.json"
-            if run_json.is_file():
-                import json as _json
-                req = _json.loads(run_json.read_text()).get("requirement", "")
-                if req:
-                    label = req[:60].strip()
-    except (OSError, ValueError):  # JSONDecodeError subclasses ValueError
-        pass
-    cache[run_id] = label
-    return label
+    """Run-3 AC8: a product row's human label (ProductRegistry.display_label)."""
+    from core.product_registry import display_label
+    return display_label(product, workspace_path, cache)
 
 
 @router.get("/artifacts/products", response_model=list[ProductResponse])

@@ -316,6 +316,7 @@ class _Router:
     _DELIVERABLE_KINDS = SessionRouter._DELIVERABLE_KINDS
     _note_deliverable = classmethod(SessionRouter._note_deliverable.__func__)
     _persist_stream_event = SessionRouter._persist_stream_event
+    _record_canvas_output = staticmethod(SessionRouter._record_canvas_output)
 
 
 def _fc(path, kind, op="created"):

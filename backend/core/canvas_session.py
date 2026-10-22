@@ -1,12 +1,12 @@
 """canvas_session — what ONE chat session produced, for its Canvas tabs.
 
-Built only from the session's own persisted turn records, so it is the same after a
-reload or a restart and never shows another session's work:
+Never shows another session's work, and is the same live, after a reload or a restart:
 
-- **Artifacts** ← every ``turn_deliverables`` block (session_router: the content /
-  knowledge files each turn wrote). One row per file: kind, product role
-  (product_registry.derive_role), first / last turn time, how many turns wrote it,
-  whether it still exists.
+- **Artifacts** ← core/session_outputs (the session's attribution record, written as
+  its turns run), each row joined with the workspace product catalog
+  (ProductRegistry.lookup: role, label, favorite — the same answer the left-nav
+  Artifacts overlay gives for that file). A session recorded before that store
+  existed is imported once from its ``turn_deliverables`` blocks.
 - **Changes** ← every ``turn_changes`` block (core/turn_changes: per turn, the code
   files it wrote, with the change trees before and after). Per repo, one row per file:
   the session's NET change (first turn's start tree → last turn's end tree, so a file
@@ -21,15 +21,18 @@ reload or a restart and never shows another session's work:
     ``uncommitted`` — the file on disk still is that blob, not yet committed.
     ``changed``   — none of these: edited (or reverted) after the session.
 
-  The repo's commits are the ones found above plus the commits of pipeline runs
-  this session surfaced (``surface_run_outputs`` → run.json ``commits``).
+  The repo's commits are those found above, plus the commits of the pipeline runs
+  the session OWNED (run.json ``session_id`` / ``session_history``, the owner gate's
+  record — core/run_owner_gate) and of the runs whose output it surfaced (its
+  ``source-final`` rows carry the commit as ``baseRef`` = ``<sha>^``).
 
-A turn still streaming has no block yet: the live rail (swarm:file-changed) covers
-it until its ``result``. Git is read-only (core/turn_changes._git, literal
-pathspecs) and only for a repo turn_changes.allowed_repo accepts. Blocking: run
-``git_state`` in an executor pool; ``build`` does.
+A code edit of a turn still streaming has no turn_changes block yet; it shows at the
+turn's result. Git is read-only (core/turn_changes._git, literal pathspecs) and only
+for a repo turn_changes.allowed_repo accepts. Blocking parts run on the single-worker
+``canvas_session`` pool, behind the session_outputs writes the router submitted first.
 
-Public: ``build``, ``extract``, ``git_state``, ``artifact_rows``, ``MAX_FILES``.
+Public: ``build``, ``extract``, ``git_state``, ``artifact_rows``, ``session_runs``,
+``MAX_FILES``.
 """
 from __future__ import annotations
 
@@ -48,81 +51,73 @@ _LOG_DEPTH = 400         # local-only commits searched per repo
 _ZERO = "0" * 40
 _SHA = re.compile(r"[0-9a-fA-F]{7,40}")
 _RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
-NEEDLES = ['"type": "turn_deliverables"', '"type": "turn_changes"', "surface_run_outputs"]
+NEEDLES = ['"type": "turn_changes"']
+BACKFILL_NEEDLES = ['"type": "turn_deliverables"']
 
 
 # ── extraction (pure) ───────────────────────────────────────────────────────
 
 def extract(rows: Iterable[tuple[str, list]]) -> dict[str, Any]:
-    """The session's records from ``(created_at, blocks)`` rows, oldest first:
-    ``artifacts`` {absolutePath: row}, ``edits`` {gitRoot: {path: row}},
-    ``runs`` [run_id] (first-seen order)."""
-    artifacts: dict[str, dict] = {}
+    """The session's code edits from ``(created_at, blocks)`` rows, oldest first:
+    ``edits`` {gitRoot: {path: row}}."""
     edits: dict[str, dict[str, dict]] = {}
-    runs: list[str] = []
     for at, blocks in rows:
         for blk in blocks:
-            if not isinstance(blk, dict):
+            if not isinstance(blk, dict) or blk.get("type") != "turn_changes":
                 continue
-            kind = blk.get("type")
-            if kind == "turn_deliverables":
-                for f in blk.get("files") or []:
-                    if not isinstance(f, dict):
-                        continue
-                    ap = f.get("absolutePath") or f.get("path")
-                    if not isinstance(ap, str) or not ap:
-                        continue
-                    row = artifacts.get(ap)
-                    if row is None:
-                        artifacts[ap] = {"path": str(f.get("path") or ap), "absolutePath": ap,
-                                         "kind": f.get("kind"), "firstAt": at, "lastAt": at, "turns": 1}
-                    else:
-                        row.update(lastAt=at, turns=row["turns"] + 1, kind=f.get("kind") or row["kind"])
-            elif kind == "turn_changes":
-                for f in blk.get("files") or []:
-                    if not isinstance(f, dict):
-                        continue
-                    root, rel = f.get("gitRoot"), f.get("path")
-                    start, end = f.get("start"), f.get("end")
-                    if not all(isinstance(v, str) and v for v in (root, rel, start, end)):
-                        continue
-                    by = edits.setdefault(root, {})
-                    row = by.get(rel)
-                    if row is None:
-                        by[rel] = {"path": rel, "repo": f.get("repo") or os.path.basename(root),
-                                   "absolutePath": f.get("absolutePath"), "start": start, "end": end,
-                                   "firstStatus": f.get("status"), "firstAt": at, "lastAt": at, "turns": 1,
-                                   "added": f.get("added"), "deleted": f.get("deleted")}
-                    else:
-                        row.update(end=end, lastAt=at, turns=row["turns"] + 1,
-                                   absolutePath=f.get("absolutePath") or row["absolutePath"])
-                        for k in ("added", "deleted"):   # turn sums: the fallback count only
-                            if isinstance(f.get(k), int) and isinstance(row[k], int):
-                                row[k] += f[k]
-            elif kind == "tool_use" and str(blk.get("name") or "").endswith("surface_run_outputs"):
-                rid = (blk.get("input") or {}).get("run_id") if isinstance(blk.get("input"), dict) else None
-                if isinstance(rid, str) and _RUN_ID.fullmatch(rid) and rid not in runs:
-                    runs.append(rid)
-    return {"artifacts": artifacts, "edits": edits, "runs": runs}
+            for f in blk.get("files") or []:
+                if not isinstance(f, dict):
+                    continue
+                root, rel = f.get("gitRoot"), f.get("path")
+                start, end = f.get("start"), f.get("end")
+                if not all(isinstance(v, str) and v for v in (root, rel, start, end)):
+                    continue
+                by = edits.setdefault(root, {})
+                row = by.get(rel)
+                if row is None:
+                    by[rel] = {"path": rel, "repo": f.get("repo") or os.path.basename(root),
+                               "absolutePath": f.get("absolutePath"), "start": start, "end": end,
+                               "firstStatus": f.get("status"), "firstAt": at, "lastAt": at, "turns": 1,
+                               "added": f.get("added"), "deleted": f.get("deleted")}
+                else:
+                    row.update(end=end, lastAt=at, turns=row["turns"] + 1,
+                               absolutePath=f.get("absolutePath") or row["absolutePath"])
+                    for k in ("added", "deleted"):   # turn sums: the fallback count only
+                        if isinstance(f.get(k), int) and isinstance(row[k], int):
+                            row[k] += f[k]
+    return {"edits": edits}
 
 
-def artifact_rows(artifacts: dict[str, dict], workspace: Optional[str]) -> list[dict]:
-    """Artifacts newest first, with role and existence."""
-    from core.product_registry import derive_role
-    ws = os.path.realpath(workspace) if workspace else None
+def deliverable_turns(rows: Iterable[tuple[str, list]]) -> list[tuple[str, list[dict]]]:
+    """``(created_at, files)`` of each turn_deliverables block (backfill input)."""
     out = []
-    for row in artifacts.values():
-        ap = row["absolutePath"]
-        real = os.path.realpath(ap)
-        role = "Other"
-        if ws and real.startswith(ws + os.sep):
-            try:
-                role = derive_role(os.path.relpath(real, ws), None).value
-            except Exception:  # noqa: BLE001 — a role is a grouping aid
-                logger.debug("canvas_session: derive_role failed for %s", ap, exc_info=True)
-        out.append({**row, "role": role, "exists": os.path.exists(ap)})
-    out.sort(key=lambda r: r["lastAt"], reverse=True)
-    return out[:MAX_FILES]
+    for at, blocks in rows:
+        for blk in blocks:
+            if isinstance(blk, dict) and blk.get("type") == "turn_deliverables":
+                out.append((at, [f for f in blk.get("files") or [] if isinstance(f, dict)]))
+    return out
+
+
+def artifact_rows(rows: list[dict], workspace: Optional[str]) -> list[dict]:
+    """Attribution rows (session_outputs.read) joined with the product catalog, with
+    existence. Blocking."""
+    rows = rows[:MAX_FILES]
+    facts: dict[str, dict] = {}
+    if workspace and rows:
+        try:
+            from core.product_registry import ProductRegistry
+            facts = ProductRegistry(workspace).lookup([r["absolutePath"] for r in rows])
+        except Exception:  # noqa: BLE001 — the catalog is a label aid; rows still list
+            logger.warning("canvas_session: product lookup failed", exc_info=True)
+    out = []
+    for r in rows:
+        f = facts.get(r["absolutePath"], {})
+        out.append({**r, "role": f.get("role", "Other"), "product": bool(f.get("product")),
+                    "starred": bool(f.get("starred")),
+                    "displayLabel": f.get("displayLabel") or os.path.basename(r["path"]),
+                    "exists": os.path.exists(r["absolutePath"]),
+                    "turns": r.get("writes", 1)})
+    return out
 
 
 # ── git state (blocking) ────────────────────────────────────────────────────
@@ -270,50 +265,108 @@ def git_state(root: str, files: dict[str, dict]) -> dict[str, Any]:
     return row
 
 
-def run_commits(run_id: str, workspace: str) -> list[dict]:
-    """A pipeline run's recorded commits (run.json ``commits``): [{repoPath, sha, files}]."""
-    if not _RUN_ID.fullmatch(run_id or ""):
-        return []
-    for run_json in Path(workspace).glob(f"Projects/*/.artifacts/runs/{run_id}/run.json"):
-        try:
-            data = json.loads(run_json.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return []
-        return [{"repoPath": str(c.get("repo") or ""), "sha": str(c.get("sha") or ""),
-                 "files": [str(f) for f in c.get("files") or [] if f], "run": run_id}
-                for c in data.get("commits") or []
-                if isinstance(c, dict) and _SHA.fullmatch(str(c.get("sha") or ""))]
-    return []
+# run.json files are many (hundreds) and change rarely: parsed once per mtime.
+_RUN_CACHE: dict[str, tuple[float, set[str], list[dict]]] = {}
 
 
-def _with_runs(repos: dict[str, dict], extracted_runs: list[str], workspace: Optional[str]) -> None:
-    """Add the session's pipeline-run commits to their repos (a repo only a run
-    touched gets its own row)."""
+def _run_facts(run_json: Path) -> tuple[set[str], list[dict]]:
+    """(sessions that owned the run, its recorded commits) of one run.json, cached
+    by mtime."""
+    key = str(run_json)
+    try:
+        mtime = run_json.stat().st_mtime
+    except OSError:
+        _RUN_CACHE.pop(key, None)
+        return set(), []
+    hit = _RUN_CACHE.get(key)
+    if hit and hit[0] == mtime:
+        return hit[1], hit[2]
+    try:
+        data = json.loads(run_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    owners = {data.get("session_id")} if isinstance(data.get("session_id"), str) else set()
+    for h in data.get("session_history") or []:
+        if isinstance(h, dict) and isinstance(h.get("session_id"), str):
+            owners.add(h["session_id"])
+    run_id = str(data.get("id") or run_json.parent.name)
+    commits = [{"repoPath": str(c.get("repo") or ""), "sha": str(c.get("sha") or ""),
+                "files": [str(f) for f in c.get("files") or [] if f], "run": run_id}
+               for c in data.get("commits") or []
+               if isinstance(c, dict) and _SHA.fullmatch(str(c.get("sha") or ""))]
+    _RUN_CACHE[key] = (mtime, owners, commits)
+    return owners, commits
+
+
+# The run.json list itself (hundreds of dirs) is re-globbed at most every few seconds.
+_RUN_LIST_TTL_S = 10.0
+_run_list: dict[str, tuple[float, list[Path]]] = {}
+
+
+def _run_jsons(workspace: str) -> list[Path]:
+    import time
+    hit = _run_list.get(workspace)
+    if hit and time.monotonic() - hit[0] < _RUN_LIST_TTL_S:
+        return hit[1]
+    found = list(Path(workspace).glob("Projects/*/.artifacts/runs/*/run.json"))
+    _run_list[workspace] = (time.monotonic(), found)
+    return found
+
+
+def session_runs(session_id: str, workspace: str) -> list[dict]:
+    """Commits of the pipeline runs *session_id* owned (run.json session_id or
+    session_history). Blocking (a stat per run.json; parses only changed ones)."""
+    out = []
+    for run_json in _run_jsons(workspace):
+        owners, commits = _run_facts(run_json)
+        if session_id in owners:
+            out.extend(commits)
+    return out
+
+
+def surfaced_commits(artifacts: list[dict]) -> list[dict]:
+    """Commits behind the session's source-final rows (baseRef = ``<sha>^``)."""
+    by: dict[tuple[str, str], dict] = {}
+    for a in artifacts:
+        ref = a.get("baseRef") or ""
+        if a.get("kind") != "source-final" or not ref.endswith("^") or not _SHA.fullmatch(ref[:-1]):
+            continue
+        ap = a.get("absolutePath") or ""
+        rel = a.get("path") or ""
+        repo = ap[: -len(rel)].rstrip(os.sep) if rel and ap.endswith(rel) else os.path.dirname(ap)
+        c = by.setdefault((repo, ref[:-1]), {"repoPath": repo, "sha": ref[:-1], "files": [], "run": None})
+        if rel:
+            c["files"].append(rel)
+    return list(by.values())
+
+
+def _with_runs(repos: dict[str, dict], run_commits: list[dict]) -> None:
+    """Add pipeline-run commits to their repos (a repo only a run touched gets its
+    own row)."""
     from core.turn_changes import _main_checkout, allowed_repo
-    if not workspace:
-        return
-    for rid in extracted_runs:
-        for c in run_commits(rid, workspace):
-            if not c["repoPath"] or not os.path.isdir(c["repoPath"]):
-                continue
-            root = _main_checkout(os.path.realpath(c["repoPath"]))
-            if not allowed_repo(root):
-                continue
-            try:
-                head = _git(root, "log", "-1", "--format=%H%x1f%h%x1f%s%x1f%cI", c["sha"]).strip().split("\x1f")
-            except RuntimeError:
-                continue   # the run's commit is gone (rewritten): nothing to show
-            if len(head) != 4:
-                continue
-            row = repos.setdefault(root, {"root": root, "repo": os.path.basename(root), "files": [], "commits": []})
-            if any(x["sha"] == head[0] for x in row.get("commits", [])):
-                continue
-            row.setdefault("commits", []).append(
-                {"sha": head[0], "short": head[1], "subject": head[2], "at": head[3],
-                 "source": "run", "run": rid, "files": c["files"][:MAX_FILES]})
+    for c in run_commits:
+        if not c["repoPath"] or not os.path.isdir(c["repoPath"]):
+            continue
+        root = _main_checkout(os.path.realpath(c["repoPath"]))
+        if not allowed_repo(root):
+            continue
+        try:
+            head = _git(root, "log", "-1", "--format=%H%x1f%h%x1f%s%x1f%cI", c["sha"]).strip().split("\x1f")
+        except RuntimeError:
+            continue   # the run's commit is gone (rewritten): nothing to show
+        if len(head) != 4:
+            continue
+        row = repos.setdefault(root, {"root": root, "repo": os.path.basename(root), "files": [], "commits": []})
+        if any(x["sha"] == head[0] for x in row.get("commits", [])):
+            continue
+        commit = {"sha": head[0], "short": head[1], "subject": head[2], "at": head[3],
+                  "source": "run", "files": c["files"][:MAX_FILES]}
+        if c.get("run"):
+            commit["run"] = c["run"]
+        row.setdefault("commits", []).append(commit)
 
 
-def changes_rows(extracted: dict[str, Any], workspace: Optional[str]) -> list[dict]:
+def changes_rows(extracted: dict[str, Any], run_commits: list[dict]) -> list[dict]:
     """Changes per repo (blocking): files + commits, repos named and projected."""
     from core.repo_changes import _bindings
     from core.turn_changes import _main_checkout, allowed_repo
@@ -323,7 +376,7 @@ def changes_rows(extracted: dict[str, Any], workspace: Optional[str]) -> list[di
         if not os.path.isdir(real) or not allowed_repo(real):
             continue    # not a known code repo any more: its object store is not read
         repos[real] = git_state(real, files)
-    _with_runs(repos, extracted["runs"], workspace)
+    _with_runs(repos, run_commits)
     bound = _bindings()
     by_main = {}
     for r, (name, project) in bound.items():
@@ -345,19 +398,48 @@ def changes_rows(extracted: dict[str, Any], workspace: Optional[str]) -> list[di
     return out
 
 
-async def build(session_id: str) -> dict[str, Any]:
-    """{artifacts, changes} of one session (module docstring)."""
-    from core import executors
+def _artifacts_only(session_id: str, workspace: Optional[str], backfill_turns: Optional[list]) -> list[dict]:
+    from core import session_outputs
+    if backfill_turns is not None:
+        session_outputs.backfill(session_id, backfill_turns)
+    return artifact_rows(session_outputs.read(session_id)["rows"], workspace)
+
+
+def _artifacts_and_runs(session_id: str, workspace: Optional[str],
+                        backfill_turns: Optional[list]) -> tuple[list[dict], list[dict]]:
+    """Blocking, on the canvas_session pool (after the router's queued writes)."""
+    from core import session_outputs
+    if backfill_turns is not None:
+        session_outputs.backfill(session_id, backfill_turns)
+    rows = session_outputs.read(session_id)["rows"]
+    artifacts = artifact_rows(rows, workspace)
+    runs = surfaced_commits(rows)
+    if workspace:
+        runs = session_runs(session_id, workspace) + runs
+    return artifacts, runs
+
+
+async def build(session_id: str, changes: bool = True) -> dict[str, Any]:
+    """{artifacts, changes} of one session (module docstring). ``changes=False``
+    (the live refresh while a turn streams) skips the git work and the run index:
+    ``changes`` is then None, meaning "not computed", not "none"."""
+    from core import executors, session_outputs
     from core.project_registry import get_swarmws
     from database import db
-    rows = await db.messages.list_session_blocks(session_id, NEEDLES)
-    extracted = extract(rows)
     try:
         workspace: Optional[str] = str(get_swarmws())
-    except Exception as exc:  # noqa: BLE001 — no workspace: no roles, no runs
-        logger.debug("canvas_session: no workspace for %s: %s", session_id, exc)
+    except Exception:  # noqa: BLE001 — no workspace: no roles, no runs
         workspace = None
-    artifacts = artifact_rows(extracted["artifacts"], workspace)
-    changes = (await executors.run_in("canvas_session", changes_rows, extracted, workspace)
-               if extracted["edits"] or extracted["runs"] else [])
-    return {"artifacts": artifacts, "changes": changes}
+    backfill_turns = None
+    if not await executors.run_in("canvas_session", lambda: session_outputs.read(session_id)["backfilled"]):
+        backfill_turns = deliverable_turns(await db.messages.list_session_blocks(session_id, BACKFILL_NEEDLES))
+    if not changes:
+        artifacts = await executors.run_in("canvas_session", _artifacts_only, session_id, workspace,
+                                           backfill_turns)
+        return {"artifacts": artifacts, "changes": None}
+    artifacts, runs = await executors.run_in("canvas_session", _artifacts_and_runs, session_id, workspace,
+                                             backfill_turns)
+    extracted = extract(await db.messages.list_session_blocks(session_id, NEEDLES))
+    rows = (await executors.run_in("canvas_session", changes_rows, extracted, runs)
+            if extracted["edits"] or runs else [])
+    return {"artifacts": artifacts, "changes": rows}

@@ -958,6 +958,16 @@ async def get_workspace_file(
         except Exception:  # noqa: BLE001 — fail-safe: no allowlist → home-only guard
             logger.debug("get_workspace_file: suppressed exception on a fail-safe path", exc_info=True)
             _allowed_external = None
+        # The same paths survive a restart in the session's Canvas record
+        # (core/session_outputs: the external rows that emit gate admitted), so a
+        # persisted rail row stays renderable — still only for that session.
+        try:
+            from core import executors, session_outputs
+            _rec = await executors.run_in("canvas_session", session_outputs.external_paths, session_id)
+            if _rec:
+                _allowed_external = (_allowed_external or set()) | _rec
+        except Exception:  # noqa: BLE001 — fail-safe: the live set alone
+            logger.debug("get_workspace_file: canvas record unavailable", exc_info=True)
     target, is_external = _resolve_file_path(path, workspace_root, allowed_external=_allowed_external,
                                              map_landed=True)
 

@@ -2084,6 +2084,12 @@ async def _convert_unsupported_blocks_to_path_hints(
     return converted
 
 
+def _log_canvas_record_failure(fut) -> None:
+    """Done-callback of a canvas record write (a concurrent.futures.Future)."""
+    if not fut.cancelled() and fut.exception() is not None:
+        logger.warning("canvas record write failed: %s", fut.exception())
+
+
 class SessionRouter:
     """Routes chat requests to SessionUnits with RAM-based spawn admission.
 
@@ -2335,6 +2341,25 @@ class SessionRouter:
         files = getattr(unit, "_turn_files", None)
         return files if isinstance(files, dict) else None
 
+    @staticmethod
+    def _record_canvas_output(session_id: str, event: dict) -> None:
+        """Record a rail-kind file_changed in the session's Canvas record
+        (core/session_outputs). SUBMITTED to the single-worker canvas_session pool
+        before this event goes on to the client, so a Canvas refresh the client sends
+        on it is queued behind the write. Never awaited: the stream does not wait on
+        disk, and a failure only costs a Canvas row."""
+        from core import session_outputs
+        if event.get("kind") not in session_outputs.RAIL_KINDS and event.get("operation") != "deleted":
+            return
+        try:
+            from core import executors
+            # pool.submit, not loop.run_in_executor: the write must not depend on
+            # this loop being alive when it completes; FIFO order is the pool's.
+            fut = executors.get_pool("canvas_session").submit(session_outputs.record, session_id, [dict(event)])
+            fut.add_done_callback(_log_canvas_record_failure)
+        except Exception:  # noqa: BLE001 — a display aid never breaks the stream
+            logger.debug("canvas record submit failed", exc_info=True)
+
     @classmethod
     def _note_deliverable(cls, files: dict, event: dict) -> None:
         """Remember a file_changed event that is a product of this turn (latest
@@ -2381,6 +2406,7 @@ class SessionRouter:
         """
         etype = event.get("type")
         if etype == "file_changed":
+            self._record_canvas_output(session_id, event)
             if changes is not None:
                 try:
                     changes.note(event)

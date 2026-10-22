@@ -16,12 +16,17 @@
  * RED (0 rows after a closed-state batch). Verified in-run: gating on isOpen made
  * the resident-capture assertions fail.
  *
- * Only the far leaf is mocked (api.get + useChangeStatus git badges) — the event
- * bus, the useReferencedFiles listener, and the rail are ALL real.
+ * Only the far leaf is mocked (api.get + useChangeStatus git badges; the backend's
+ * Canvas record is test-utils/fakeCanvasBackend) — the event bus, the store's
+ * refresh, useReferencedFiles and the rail are ALL real.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { Mock } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import { useCanvasHost } from '../useCanvasHost';
+import api from '../../services/api';
+import { resetCanvasSession } from '../../services/canvasSession';
+import { installFakeCanvasBackend, settleCanvas } from '../../test-utils/fakeCanvasBackend';
 import { CanvasOutputRail } from '../../components/file-viewer/CanvasOutputRail';
 
 // Far-leaf mocks ONLY (never the seam): the file-resolve API + the git-status badge
@@ -54,10 +59,13 @@ function fileChanged(path: string, tabId: string, kind = 'source-final') {
 }
 
 describe('Layer-4 E2E — swarm:file-changed → resident store → rail rows (AC1+AC3)', () => {
+  let fake: ReturnType<typeof installFakeCanvasBackend>;
   beforeEach(() => {
-    sessionStorage.clear();
     vi.clearAllMocks();
+    resetCanvasSession();
+    fake = installFakeCanvasBackend(api.get as Mock);
   });
+  afterEach(() => fake.uninstall());
 
   it('a source-final batch arriving while CLOSED is captured and RENDERS in the rail', async () => {
     await act(async () => {
@@ -71,6 +79,7 @@ describe('Layer-4 E2E — swarm:file-changed → resident store → rail rows (A
       fileChanged('backend/alpha.py', 'A');
       fileChanged('backend/beta.py', 'A');
     });
+    await settleCanvas();
 
     // Resident store captured both (the count the ChatHeader pill reads)…
     expect(screen.getByTestId('output-count').textContent).toBe('2');
@@ -86,6 +95,7 @@ describe('Layer-4 E2E — swarm:file-changed → resident store → rail rows (A
     await act(async () => {
       fileChanged('other/leak.py', 'B'); // stamped for a different tab
     });
+    await settleCanvas();
     expect(screen.getByTestId('output-count').textContent).toBe('0');
     expect(screen.queryByText('leak.py')).toBeNull();
   });

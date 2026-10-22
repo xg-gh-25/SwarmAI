@@ -12,17 +12,21 @@
  * The file-resolve + auto-surface paths are exercised in integration; here we
  * pin the per-tab STATE machine, which is the OT01-sensitive core.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Mock } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useCanvasHost } from '../useCanvasHost';
+import api from '../../services/api';
+import { resetCanvasSession } from '../../services/canvasSession';
+import { installFakeCanvasBackend, settleCanvas } from '../../test-utils/fakeCanvasBackend';
 
 vi.mock('../../services/api', () => ({
   default: { get: vi.fn().mockResolvedValue({ data: { resolved_path: 'resolved.md' } }) },
 }));
 
-// outputCount now derives from the RESIDENT useReferencedFiles store (run_9e42c066),
-// not the removed onCanvasMeta round-trip. Drive it via the real swarm:file-changed
-// event — this exercises the actual production capture path. Each event = one output
+// outputCount derives from the session's backend record (services/canvasSession;
+// test-utils/fakeCanvasBackend stands in for the backend). Drive it via the real
+// swarm:file-changed event + the store's refresh — the production path. Each event = one output
 // row (kind defaults to source-final = a counted output) for the given tab.
 function emitOutputs(tabId: string, n: number) {
   for (let i = 0; i < n; i++) {
@@ -35,12 +39,15 @@ function emitOutputs(tabId: string, n: number) {
 }
 
 describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
+  let fake: ReturnType<typeof installFakeCanvasBackend>;
   beforeEach(() => {
     vi.clearAllMocks();
-    sessionStorage.clear(); // the resident referenced-files store persists per-tab in sessionStorage
+    resetCanvasSession();
+    fake = installFakeCanvasBackend(api.get as Mock);
   });
+  afterEach(() => fake.uninstall());
 
-  it('keeps Canvas state independent per tab and restores on switch-back', () => {
+  it('keeps Canvas state independent per tab and restores on switch-back', async () => {
     let tabId = 'A';
     const { result, rerender } = renderHook(
       ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
@@ -72,7 +79,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.muted).toBe(false); // A was never muted; B's mute must not bleed
   });
 
-  it('keeps collapse state (railed/outputsCollapsed) independent per tab and restores on switch-back', () => {
+  it('keeps collapse state (railed/outputsCollapsed) independent per tab and restores on switch-back', async () => {
     // Bug 2: railed/outputsCollapsed were panel-local + GLOBAL localStorage, and the
     // panel never remounts on tab switch → collapse state bled across all chat tabs.
     // They now live in the per-tab slice via setCollapse.
@@ -100,7 +107,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.collapse.outputsCollapsed).toBe(true);
   });
 
-  it('setFile un-rails on a new file (no-bypass — the public API carries the write-side invariant)', () => {
+  it('setFile un-rails on a new file (no-bypass — the public API carries the write-side invariant)', async () => {
     const { result } = renderHook(
       ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
       { initialProps: { t: 'A' } },
@@ -112,7 +119,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.collapse.railed).toBe(false);
   });
 
-  it('reopen-after-close on a previously-railed tab renders un-railed (cross-fix composition)', () => {
+  it('reopen-after-close on a previously-railed tab renders un-railed (cross-fix composition)', async () => {
     // Meta-review invariant lock: rail → open F1 (un-rails) → close (file=null, railed
     // stays false because close only clears file) → open F2 → still un-railed. The
     // 'railed:true + closed' state is unreachable, so a reopened tab is never a stuck rail.
@@ -129,7 +136,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.file?.fileName).toBe('f2.md');
   });
 
-  it('setCollapse is a referentially stable callback (memo-safe for FileViewerPanel)', () => {
+  it('setCollapse is a referentially stable callback (memo-safe for FileViewerPanel)', async () => {
     const { result, rerender } = renderHook(
       ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
       { initialProps: { t: 'A' } },
@@ -141,7 +148,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.setCollapse).toBe(first);
   });
 
-  it('manual open (swarm:open-canvas) sets manuallyOpen on the active tab only', () => {
+  it('manual open (swarm:open-canvas) sets manuallyOpen on the active tab only', async () => {
     const { result, rerender } = renderHook(
       ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
       { initialProps: { t: 'A' } },
@@ -156,7 +163,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.isOpen).toBe(false);
   });
 
-  it('canvas-state emit re-fires when outputCount changes (Gate-2 MED: no stale count)', () => {
+  it('canvas-state emit re-fires when outputCount changes (Gate-2 MED: no stale count)', async () => {
     const events: Array<{ outputCount?: number } | null> = [];
     const onState = (e: Event) => events.push((e as CustomEvent).detail);
     window.addEventListener('swarm:canvas-state', onState);
@@ -165,12 +172,13 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     );
     act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' })); // isOpen → emit
     act(() => emitOutputs('A', 3)); // 3 outputs land → count → must re-emit
+    await settleCanvas();
     window.removeEventListener('swarm:canvas-state', onState);
     const counts = events.filter(Boolean).map((d) => d!.outputCount);
     expect(counts).toContain(3); // the updated count reached a fresh emit (not frozen)
   });
 
-  it('getCanvasSnapshot() reflects open SYNCHRONOUSLY after swarm:open-canvas (race fix)', () => {
+  it('getCanvasSnapshot() reflects open SYNCHRONOUSLY after swarm:open-canvas (race fix)', async () => {
     // The proprioception race (run_e45a04d3): the async swarm:canvas-state emit
     // could lag behind a fast send, so the SENSE snapshot read canvas.open=stale.
     // getCanvasSnapshot() must read the LIVE ref at call time — no waiting for a
@@ -191,18 +199,19 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(snap!.open).toBe(true);
   });
 
-  it('getCanvasSnapshot() carries the latest outputCount (no stale-closure count)', () => {
+  it('getCanvasSnapshot() carries the latest outputCount (no stale-closure count)', async () => {
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
     act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
     act(() => emitOutputs('A', 5));
+    await settleCanvas();
     const snap = result.current.getCanvasSnapshot();
     expect(snap!.outputCount).toBe(5); // Gate-1 BLOCK1: not a frozen closure value
     expect(snap!.open).toBe(true);
   });
 
-  it('outputCount is PER-TAB — a count on tab A does not bleed into tab B', () => {
+  it('outputCount is PER-TAB — a count on tab A does not bleed into tab B', async () => {
     let tabId = 'A';
     const { result, rerender } = renderHook(
       ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
@@ -211,34 +220,36 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     // Tab A: open + 5 outputs
     act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
     act(() => emitOutputs('A', 5));
+    await settleCanvas();
     expect(result.current.getCanvasSnapshot()!.outputCount).toBe(5);
 
     // Switch to tab B: fresh Canvas → its count must NOT be A's 5 (resident store
-    // is keyed by tabId, so B loads its own — empty — sessionStorage bucket)
+    // is per session, so B reads its own — empty — record)
     tabId = 'B';
     rerender({ t: tabId });
     act(() => result.current.setFile({ filePath: 'b.md', fileName: 'b.md' }));
     const snapB = result.current.getCanvasSnapshot();
     expect(snapB!.outputCount).toBe(0); // B has its own count, not A's stale 5
 
-    // Switch back to A: its 5 is restored (re-loaded from A's sessionStorage bucket)
+    // Switch back to A: its 5 is restored (A's cached record)
     tabId = 'A';
     rerender({ t: tabId });
     expect(result.current.getCanvasSnapshot()!.outputCount).toBe(5);
   });
 
-  it('close() does NOT discard outputCount — outputs persist so the pill still shows them (run_9e42c066)', () => {
+  it('close() does NOT discard outputCount — outputs persist so the pill still shows them (run_9e42c066)', async () => {
     // Behavior change from the pre-resident design: outputCount now derives from the
-    // RESIDENT store (useReferencedFiles, per-tab sessionStorage), which must SURVIVE a
+    // session's backend record (services/canvasSession), which must SURVIVE a
     // Canvas close — otherwise closing the panel would erase the knowledge that N
     // outputs exist, and the ChatHeader "N outputs" pill (shown when !isOpen) would be
     // wrong. So a run's outputs are retained across close; they clear only on a new tab
-    // / new session (a fresh sessionStorage bucket), not on close.
+    // / new session (a fresh record), not on close.
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
     act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
     act(() => emitOutputs('A', 7));
+    await settleCanvas();
     expect(result.current.outputCount).toBe(7);
     act(() => result.current.close());
     // Closed → outputs still counted (the pill relies on this), NOT wiped to 0.
@@ -248,7 +259,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.getCanvasSnapshot()!.outputCount).toBe(7);
   });
 
-  it('getCanvasSnapshot() returns null after close (no stale open) — when there are NO outputs', () => {
+  it('getCanvasSnapshot() returns null after close (no stale open) — when there are NO outputs', async () => {
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
@@ -258,7 +269,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.getCanvasSnapshot()).toBeNull();
   });
 
-  it('SENSE gap fix (run_9e42c066): closed Canvas WITH pending outputs still reports a snapshot (open=false, outputCount>0)', () => {
+  it('SENSE gap fix (run_9e42c066): closed Canvas WITH pending outputs still reports a snapshot (open=false, outputCount>0)', async () => {
     // The ChatHeader pill shows the user "N outputs" on a closed Canvas; the agent
     // must SENSE the same. Before the fix getCanvasSnapshot returned null when closed,
     // hiding pending outputs from the agent even as the pill advertised them.
@@ -267,6 +278,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     );
     // Never open Canvas; a finish batch arrives while closed.
     act(() => emitOutputs('A', 4));
+    await settleCanvas();
     expect(result.current.isOpen).toBe(false);
     const snap = result.current.getCanvasSnapshot();
     expect(snap).not.toBeNull();          // NOT hidden from SENSE anymore
@@ -274,7 +286,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(snap!.outputCount).toBe(4);     // …but the count reaches the agent
   });
 
-  it('SENSE: a pristine tab (closed, zero outputs) still reports null (no noise)', () => {
+  it('SENSE: a pristine tab (closed, zero outputs) still reports null (no noise)', async () => {
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'PRISTINE', sessionId: 's-P', isStreaming: false }),
     );
@@ -283,7 +295,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.getCanvasSnapshot()).toBeNull(); // truly-empty-and-closed → null
   });
 
-  it('close clears the active tab Canvas (file + manuallyOpen) without touching other tabs', () => {
+  it('close clears the active tab Canvas (file + manuallyOpen) without touching other tabs', async () => {
     const { result, rerender } = renderHook(
       ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
       { initialProps: { t: 'A' } },
@@ -301,25 +313,33 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
 });
 
 describe('useCanvasHost — pill lastSeenOutputCount (run_9dd59523, no nagging)', () => {
-  beforeEach(() => { vi.clearAllMocks(); sessionStorage.clear(); });
+  let fake: ReturnType<typeof installFakeCanvasBackend>;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetCanvasSession();
+    fake = installFakeCanvasBackend(api.get as Mock);
+  });
+  afterEach(() => fake.uninstall());
 
-  it('opening Canvas marks the current outputs as seen (lastSeen catches up to outputCount)', () => {
+  it('opening Canvas marks the current outputs as seen (lastSeen catches up to outputCount)', async () => {
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
     act(() => emitOutputs('A', 3));       // 3 outputs while closed
+    await settleCanvas();
     expect(result.current.outputCount).toBe(3);
     expect(result.current.lastSeenOutputCount).toBe(0); // not seen yet → pill would show
     act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); }); // user opens
     expect(result.current.lastSeenOutputCount).toBe(3); // now seen → pill hides
   });
 
-  it('outputs arriving WHILE open are marked seen immediately (no stale pill on close)', () => {
+  it('outputs arriving WHILE open are marked seen immediately (no stale pill on close)', async () => {
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
     act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); }); // open first
     act(() => emitOutputs('A', 2));       // outputs arrive while open
+    await settleCanvas();
     // lastSeen tracked them (fires on [isOpen,outputCount]) → on close the pill won't flash.
     expect(result.current.outputCount).toBe(2);
     expect(result.current.lastSeenOutputCount).toBe(2);
@@ -328,11 +348,12 @@ describe('useCanvasHost — pill lastSeenOutputCount (run_9dd59523, no nagging)'
     expect(result.current.lastSeenOutputCount).toBe(2);
   });
 
-  it('a NEW output after review pushes outputCount above lastSeen (pill reappears)', () => {
+  it('a NEW output after review pushes outputCount above lastSeen (pill reappears)', async () => {
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
     act(() => emitOutputs('A', 2));
+    await settleCanvas();
     act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); }); // seen=2
     act(() => result.current.close());
     // a DISTINCT new file (emitOutputs reuses out-A-0.. which would dedup) → outputCount 2→3
@@ -341,11 +362,12 @@ describe('useCanvasHost — pill lastSeenOutputCount (run_9dd59523, no nagging)'
         detail: { path: 'brand-new.py', tabId: 'A', operation: 'written', relevance: 'deliverable', kind: 'source-final' },
       }));
     });
+    await settleCanvas();
     expect(result.current.outputCount).toBe(3);
     expect(result.current.lastSeenOutputCount).toBe(2); // 3 > 2 → pill shows again
   });
 
-  it('SHRINK clamp: outputCount dropping below lastSeen while CLOSED pulls lastSeen down (REVIEW MED)', () => {
+  it('SHRINK clamp: outputCount dropping below lastSeen while CLOSED pulls lastSeen down (REVIEW MED)', async () => {
     // Without the clamp, a shrink-while-closed (clear() / cap eviction) would leave
     // lastSeen stuck HIGH, so a later new output at/below the stale mark would never
     // re-show the pill. The clamp pulls lastSeen down to outputCount.
@@ -354,6 +376,7 @@ describe('useCanvasHost — pill lastSeenOutputCount (run_9dd59523, no nagging)'
     );
     // 3 distinct tracked files (out-A-0/1/2.py from emitOutputs), Canvas opened → seen=3.
     act(() => emitOutputs('A', 3));
+    await settleCanvas();
     act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); }); // seen=3
     act(() => result.current.close());
     expect(result.current.lastSeenOutputCount).toBe(3);
@@ -365,23 +388,26 @@ describe('useCanvasHost — pill lastSeenOutputCount (run_9dd59523, no nagging)'
         }));
       }
     });
+    await settleCanvas();
     expect(result.current.outputCount).toBe(1);           // genuinely shrank
     expect(result.current.lastSeenOutputCount).toBe(1);   // clamp pulled it down from 3 (not stuck high)
   });
 
-  it('lastSeen is PER-TAB — opening tab A does not mark tab B outputs seen', () => {
+  it('lastSeen is PER-TAB — opening tab A does not mark tab B outputs seen', async () => {
     let tabId = 'A';
     const { result, rerender } = renderHook(
       ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
       { initialProps: { t: tabId } },
     );
     act(() => emitOutputs('A', 2));
+    await settleCanvas();
     act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); }); // A seen=2
     expect(result.current.lastSeenOutputCount).toBe(2);
     // Switch to B (its own outputs, never opened)
     tabId = 'B';
     rerender({ t: tabId });
     act(() => emitOutputs('B', 1));
+    await settleCanvas();
     expect(result.current.outputCount).toBe(1);
     expect(result.current.lastSeenOutputCount).toBe(0); // B not seen — A's open didn't bleed
   });

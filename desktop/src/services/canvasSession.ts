@@ -1,31 +1,46 @@
 /**
- * canvasSession — what ONE chat session produced, for its Canvas tabs (backend
- * routers/canvas_changes → core/canvas_session), plus a small module store so the
- * tabs read it without re-rendering the Canvas panel.
+ * canvasSession — what each chat session produced, for its Canvas tabs (backend
+ * routers/canvas_changes → core/canvas_session), and the ONE frontend store of it.
  *
- * The data is rebuilt from the session's persisted turn records, so it is the same
- * after a reload or restart: Artifacts = the files its turns delivered, Changes = per
- * repo, the code files it changed (net, with where that content is now) and the
- * commits that hold them. A turn still streaming is not in it yet (the live rail
- * covers that); useCanvasHost refreshes when the session changes and a turn ends.
+ * The backend is the only source: Artifacts = the session's attribution record
+ * (core/session_outputs, written as its turns run) joined with the product catalog;
+ * Changes = per repo, the code files it changed (net, with where that content is now)
+ * and the commits that hold them. The store caches it per session and keeps it fresh:
  *
- * @exports canvasSessionService, refreshCanvasSession, setActiveCanvasSession,
- *   useCanvasSession, useCanvasSessionArtifacts, resetCanvasSession, SessionArtifact, SessionRepo,
- *   SessionFileChange, SessionCommit, CommitFile, FileState
+ * - `swarm:file-changed` (the live signal) → a debounced `parts=artifacts` refresh of
+ *   the owning tab's session. The backend queues that read behind the write the event
+ *   came from, so the refresh always holds the new row.
+ * - a turn ending / the session changing / the Changes tab opening → a full refresh
+ *   (`refreshCanvasSession`), which also recomputes Changes.
+ *
+ * Tabs map to sessions as useCanvasHost reports them (`setActiveCanvasSession`), so a
+ * background tab's event refreshes ITS session and its count stays right.
+ *
+ * @exports canvasSessionService, refreshCanvasSession, refreshCanvasArtifacts,
+ *   setActiveCanvasSession, sessionForTab, cachedArtifacts, useCanvasSession,
+ *   useCanvasSessionArtifacts, resetCanvasSession, LIVE_REFRESH_MS, and the types
  */
 import { useSyncExternalStore } from 'react';
 import api from './api';
+import { subscribeFileChanged } from '../hooks/fileChangedBroker';
 
 export interface SessionArtifact {
   path: string;
   absolutePath: string;
   kind?: string;
-  /** product_registry role: Deliverables | Knowledge | Pipeline | Activity | Other */
+  /** product catalog role: Deliverables | Knowledge | Pipeline | Activity | Other */
   role: string;
+  /** In the workspace product catalog (the left-nav Artifacts lists it too). */
+  product: boolean;
+  starred: boolean;
+  displayLabel: string;
   firstAt: string;
   lastAt: string;
   turns: number;
+  /** Deleted by the session (a later write clears it). */
+  deleted: boolean;
   exists: boolean;
+  baseRef?: string;
 }
 
 /** Where the content the session left is now (core/canvas_session). */
@@ -53,7 +68,7 @@ export interface SessionCommit {
   short: string;
   subject: string;
   at: string;
-  /** session: holds content this session left; run: a pipeline run it surfaced. */
+  /** session: holds content this session left; run: a pipeline run it owned or surfaced. */
   source: 'session' | 'run';
   run?: string;
   files: string[];
@@ -78,13 +93,15 @@ export interface CommitFile {
 
 export interface SessionOutputs {
   artifacts: SessionArtifact[];
-  changes: SessionRepo[];
+  /** null: not computed (an artifacts-only refresh) */
+  changes: SessionRepo[] | null;
 }
 
 export const canvasSessionService = {
-  async get(sessionId: string): Promise<SessionOutputs> {
-    const r = await api.get<SessionOutputs>(`/canvas/session/${encodeURIComponent(sessionId)}`);
-    return { artifacts: r.data?.artifacts ?? [], changes: r.data?.changes ?? [] };
+  async get(sessionId: string, parts: 'all' | 'artifacts' = 'all'): Promise<SessionOutputs> {
+    const r = await api.get<SessionOutputs>(`/canvas/session/${encodeURIComponent(sessionId)}`,
+      parts === 'all' ? undefined : { params: { parts } });
+    return { artifacts: r.data?.artifacts ?? [], changes: r.data?.changes ?? (parts === 'all' ? [] : null) };
   },
   async commitFiles(root: string, sha: string): Promise<CommitFile[]> {
     const r = await api.get<{ files: CommitFile[] }>('/canvas/changes/commit', { params: { root, sha } });
@@ -103,45 +120,110 @@ export interface CanvasSessionState {
   error: string | null;
   loading: boolean;
 }
-let state: CanvasSessionState = { sessionId: null, data: null, error: null, loading: false };
+interface Entry { data: SessionOutputs | null; error: string | null; loading: boolean }
+
+const EMPTY: Entry = { data: null, error: null, loading: false };
+let active: string | null = null;
+let entries = new Map<string, Entry>();
+const tabSession = new Map<string, string>();
 const listeners = new Set<() => void>();
-let seq = 0;
-function set(next: Partial<CanvasSessionState>) {
-  state = { ...state, ...next };
+const inflight = new Map<string, { parts: 'all' | 'artifacts'; p: Promise<void> }>();
+const timers = new Map<string, ReturnType<typeof setTimeout>>();
+let gen = 0;
+let unsubscribe: (() => void) | null = null;
+let activeSnap: CanvasSessionState = { sessionId: null, ...EMPTY };
+
+function emit() {
+  const e = (active && entries.get(active)) || EMPTY;
+  activeSnap = { sessionId: active, data: e.data, error: e.error, loading: e.loading };
   listeners.forEach((l) => l());
 }
-function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l); }; }
-const snapshot = () => state;
-
-/** Point the store at a session (null: none yet); clears the other session's data. */
-export function setActiveCanvasSession(sessionId: string | null) {
-  if (sessionId === state.sessionId) return;
-  seq++;
-  set({ sessionId, data: null, error: null, loading: false });
+function put(sid: string, patch: Partial<Entry>) {
+  entries.set(sid, { ...(entries.get(sid) ?? EMPTY), ...patch });
+  emit();
 }
 
-let inflight: { sid: string; p: Promise<void> } | null = null;
+/** Debounce of the live refresh: a burst of writes is one request. */
+export const LIVE_REFRESH_MS = 250;
 
-/** Refetch the active session's outputs. Calls while one is in flight for the same
- *  session share it (a turn end and the Changes tab opening at once = one request);
- *  a stale answer (the session switched meanwhile) is dropped. */
-export function refreshCanvasSession(): Promise<void> {
-  const sid = state.sessionId;
-  if (!sid) return Promise.resolve();
-  if (inflight && inflight.sid === sid) return inflight.p;
-  const mine = ++seq;
-  set({ loading: true });
-  const p = canvasSessionService.get(sid)
-    .then((data) => { if (mine === seq) set({ data, error: null, loading: false }); })
-    .catch((e) => { if (mine === seq) set({ error: e instanceof Error ? e.message : String(e), loading: false }); })
-    .finally(() => { if (inflight?.p === p) inflight = null; });
-  inflight = { sid, p };
+function onFileChanged(e: Event) {
+  const d = (e as CustomEvent<{ tabId?: string }>).detail ?? {};
+  const sid = (d.tabId && tabSession.get(d.tabId)) || (!d.tabId ? active : null);
+  if (!sid) return;
+  const t = timers.get(sid);
+  if (t) clearTimeout(t);
+  timers.set(sid, setTimeout(() => { timers.delete(sid); void refreshCanvasArtifacts(sid); }, LIVE_REFRESH_MS));
+}
+
+function subscribe(l: () => void) {
+  listeners.add(l);
+  if (!unsubscribe) unsubscribe = subscribeFileChanged(onFileChanged);
+  return () => { listeners.delete(l); };
+}
+
+/** The tab's session as useCanvasHost reported it. */
+export function sessionForTab(tabId: string | null | undefined): string | null {
+  return (tabId && tabSession.get(tabId)) || null;
+}
+
+/** The cached artifacts of a session (undefined: never loaded). */
+export function cachedArtifacts(sessionId: string | null | undefined): SessionArtifact[] | undefined {
+  return sessionId ? entries.get(sessionId)?.data?.artifacts : undefined;
+}
+
+/** Point the store at the active tab's session (null: none yet). */
+export function setActiveCanvasSession(sessionId: string | null, tabId?: string | null) {
+  if (tabId && sessionId) tabSession.set(tabId, sessionId);
+  if (sessionId === active) return;
+  active = sessionId;
+  emit();
+}
+
+function load(sid: string, parts: 'all' | 'artifacts'): Promise<void> {
+  const cur = inflight.get(sid);
+  // one request at a time per session; a full one already covers artifacts
+  if (cur && (cur.parts === 'all' || parts === 'artifacts')) return cur.p;
+  const mine = gen;
+  put(sid, { loading: true });
+  const p = (cur ? cur.p.catch(() => {}) : Promise.resolve())
+    .then(() => canvasSessionService.get(sid, parts))
+    .then((data) => {
+      if (mine !== gen) return;
+      const prev = entries.get(sid)?.data;
+      // an artifacts-only answer keeps the last Changes
+      put(sid, { data: { artifacts: data.artifacts, changes: data.changes ?? prev?.changes ?? null }, error: null, loading: false });
+    })
+    .catch((e) => { if (mine === gen) put(sid, { error: e instanceof Error ? e.message : String(e), loading: false }); })
+    .finally(() => { if (inflight.get(sid)?.p === p) inflight.delete(sid); });
+  inflight.set(sid, { parts, p });
   return p;
 }
 
-/** Test seam. */
-export function resetCanvasSession() { seq++; inflight = null; state = { sessionId: null, data: null, error: null, loading: false }; }
+/** Full refresh (artifacts + changes) of a session, the active one by default. */
+export function refreshCanvasSession(sessionId?: string | null): Promise<void> {
+  const sid = sessionId ?? active;
+  return sid ? load(sid, 'all') : Promise.resolve();
+}
 
+/** The cheap live refresh: artifacts only. */
+export function refreshCanvasArtifacts(sessionId?: string | null): Promise<void> {
+  const sid = sessionId ?? active;
+  return sid ? load(sid, 'artifacts') : Promise.resolve();
+}
+
+/** Test seam. */
+export function resetCanvasSession() {
+  gen++;
+  active = null;
+  entries = new Map();
+  tabSession.clear();
+  inflight.clear();
+  timers.forEach((t) => clearTimeout(t));
+  timers.clear();
+  activeSnap = { sessionId: null, ...EMPTY };
+}
+
+const snapshot = () => activeSnap;
 export function useCanvasSession(): CanvasSessionState {
   return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
@@ -150,6 +232,6 @@ export function useCanvasSession(): CanvasSessionState {
  *  re-renders when that array changes, never on loading / error flips. For the chat
  *  page host, whose re-render is the expensive one. */
 export function useCanvasSessionArtifacts(sessionId: string | null): SessionArtifact[] | undefined {
-  const pick = () => (state.sessionId === sessionId ? state.data?.artifacts : undefined);
+  const pick = () => cachedArtifacts(sessionId);
   return useSyncExternalStore(subscribe, pick, pick);
 }

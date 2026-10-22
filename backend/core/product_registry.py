@@ -365,6 +365,56 @@ class Product:
     starred: bool = False
 
 
+def display_label(product, workspace_path: str, cache: dict) -> str:
+    """Run-3 AC8: a human label for a product row.
+
+    Pipeline REPORT.md rows: the task NAME from the run's run.json ``requirement``
+    (truncated), not the raw run-id ("who can read run_7220ff2a?"). Every other row:
+    the basename. Path-traversal-safe: the run-id is used ONLY to build a path UNDER
+    ``<ws>/Projects/*/.artifacts/runs/<run-id>/run.json`` and the resolved path is
+    confirmed to stay inside the workspace (Gate-1 escalated boundary). Per-request
+    cache keyed by run-id avoids re-reading a run.json for sibling rows.
+    """
+    path = product.path
+    base = path.rsplit("/", 1)[-1]
+    # Robust role check (Gate-2 F2/F5): a Role is a str-Enum, and str(Role.PIPELINE)
+    # is 'Role.PIPELINE' (not 'Pipeline') on Py3.11+ — so compare the .value if it's an
+    # enum member, else the plain string. Works whether the Product came from JSON
+    # rehydration (plain str) or a fresh classification (enum member).
+    role_str = getattr(product.role, "value", product.role)
+    if role_str != "Pipeline":
+        return base
+
+    parts = [seg for seg in path.replace("\\", "/").split("/") if seg]
+    try:
+        runs_idx = parts.index("runs")
+    except ValueError:
+        return base
+    if runs_idx + 1 >= len(parts):
+        return base
+    run_id = parts[runs_idx + 1]
+    if run_id in cache:
+        return cache[run_id]
+
+    label = run_id  # fallback = the run-id if run.json is unreadable
+    try:
+        ws_root = Path(workspace_path).resolve()
+        # Rebuild the run dir from the product's OWN path prefix (up to + incl run_id),
+        # never from caller input — then confine to the workspace.
+        run_dir = (ws_root / Path(*parts[: runs_idx + 2])).resolve()
+        if run_dir.is_relative_to(ws_root):
+            run_json = run_dir / "run.json"
+            if run_json.is_file():
+                import json as _json
+                req = _json.loads(run_json.read_text()).get("requirement", "")
+                if req:
+                    label = req[:60].strip()
+    except (OSError, ValueError):  # JSONDecodeError subclasses ValueError
+        pass
+    cache[run_id] = label
+    return label
+
+
 class ProductRegistry:
     """Workspace-level product store. Reads are lock-free; every mutation is
     flock-serialized + atomically written."""
@@ -618,6 +668,43 @@ class ProductRegistry:
         return {rp: (rp in ignored_set) for rp in rel_paths}
 
     # ── write (public, sync — callable from an off-loop seam, AC6) ─────────────
+
+    def lookup(self, abs_paths: list[str]) -> dict[str, dict]:
+        """What each path IS, by the same classification the store is written with
+        (one door), WITHOUT writing: ``{abs_path: {role, kind, starred, product,
+        displayLabel}}``. A stored row answers for its path (its role / favorite /
+        first time); an unstored one is classified now (``product`` False when the
+        store would not keep it: not a product, or outside SwarmWS → role Other).
+        Blocking (one check-ignore per tree for the unstored ones)."""
+        stored = {e.get("path"): e for e in self._read().get("products", [])}
+        out: dict[str, dict] = {}
+        pending: dict[Path, list[tuple[str, str, Optional[str]]]] = {}
+        cache: dict[str, str] = {}
+        for ap in abs_paths:
+            r = self._resolve(ap)
+            if r is None:
+                out[ap] = {"role": Role.OTHER.value, "kind": None, "starred": False, "product": False,
+                           "displayLabel": os.path.basename(ap)}
+                continue
+            tree_root, rel, repo = r
+            row = stored.get(rel)
+            if row is not None:
+                prod = Product(**row)
+                out[ap] = {"role": getattr(prod.role, "value", prod.role), "kind": prod.kind,
+                           "starred": bool(prod.starred), "product": True,
+                           "displayLabel": display_label(prod, str(self.workspace_root), cache)}
+            else:
+                pending.setdefault(tree_root, []).append((ap, rel, repo))
+        for tree_root, items in pending.items():
+            ignored = self._batch_gitignored(tree_root, [rel for _ap, rel, _repo in items])
+            for ap, rel, repo in items:
+                prod = self._classify(tree_root, rel, repo, ignored.get(rel))
+                role = prod.role if prod else derive_role(rel, repo)
+                out[ap] = {"role": getattr(role, "value", role), "kind": prod.kind if prod else None,
+                           "starred": False, "product": prod is not None,
+                           "displayLabel": display_label(prod, str(self.workspace_root), cache) if prod
+                           else os.path.basename(rel)}
+        return out
 
     def register_product(self, abs_path: str) -> None:
         """Register ONE product path (no-op if not a product)."""

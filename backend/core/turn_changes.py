@@ -174,8 +174,8 @@ def _parse_name_status(out: str) -> dict[str, str]:
 
 
 def code_roots() -> list[str]:
-    """Every code tree a turn may write: bound checkouts + live run worktrees, plus
-    the other live worktrees of the bound repos (``_linked_worktrees``)."""
+    """Every code tree a turn may write: bound checkouts + live run worktrees, then
+    every live linked worktree of the bound repos (``_linked_worktrees``)."""
     try:
         from core.needs_human_review import _worktree_roots
         from core.project_registry import get_swarmws
@@ -187,15 +187,11 @@ def code_roots() -> list[str]:
 
 
 # A session that follows the repo's worktree rule edits in a `git worktree add` tree
-# outside the bound checkout; without a start snapshot of it, its edits never reach
-# the turn's card (nor the session's Canvas Changes). Only ACTIVE ones (index touched
-# within LINKED_ACTIVE_S: a worktree being worked in is created, statused, added or
-# committed in that window) and only the newest few: every one is a `git add -u` on
-# the 2-worker turn_snapshot pool on EVERY send, and a start snapshot that runs late
-# bakes the turn's own edit into its baseline. The list is cached briefly
-# (_LINKED_TTL_S) because allowed_repo asks for it on every diff request.
-MAX_LINKED_WORKTREES = 4
-LINKED_ACTIVE_S = 24 * 3600.0
+# outside the bound checkout. Every live one is a code root: snapshotted at the start
+# like the checkout, so its edits reach the turn's card (and the session's Canvas
+# Changes) with an exact baseline. A linked worktree missing from the start list was
+# therefore created DURING the turn, and diffs from its HEAD (_group). The list is
+# cached briefly because allowed_repo asks for it on every diff request.
 _LINKED_TTL_S = 5.0
 _linked_cache: dict[tuple[str, ...], tuple[float, list[str]]] = {}
 
@@ -212,9 +208,8 @@ def _linked_worktrees(roots: list[str]) -> list[str]:
 
 
 def _scan_linked(roots: list[str]) -> list[str]:
-    """Active linked worktrees of the bound checkouts among *roots*, newest index first
-    (capped). Pipeline-test caches, stale and gone worktrees are skipped."""
-    cutoff = time.time() - LINKED_ACTIVE_S
+    """Live linked worktrees of the checkouts among *roots*, newest index first.
+    Pipeline-test caches and worktrees whose directory is gone are skipped."""
     found: dict[str, float] = {}
     for root in roots:
         try:
@@ -225,16 +220,24 @@ def _scan_linked(roots: list[str]) -> list[str]:
             if not line.startswith("worktree "):
                 continue
             path = os.path.realpath(line[len("worktree "):])
-            if path in roots or "/cache/pipeline_test/" in path or not os.path.isdir(path):
+            if path in roots or path in found or "/cache/pipeline_test/" in path or not os.path.isdir(path):
                 continue
             try:
                 index = _git(path, "rev-parse", "--path-format=absolute", "--git-path", "index").strip()
-                mtime = os.stat(index).st_mtime
+                found[path] = os.stat(index).st_mtime
             except (RuntimeError, OSError, subprocess.SubprocessError):
-                continue
-            if mtime >= cutoff:
-                found[path] = mtime
-    return sorted(found, key=lambda p: -found[p])[:MAX_LINKED_WORKTREES]
+                found[path] = 0.0
+    return sorted(found, key=lambda p: -found[p])
+
+
+def _is_linked(root: str) -> bool:
+    """A linked worktree (its .git is a file), not a main checkout."""
+    return os.path.isfile(os.path.join(root, ".git"))
+
+
+# Start snapshots per send are bounded: past this many trees the rest are not
+# snapshotted, and their edits are left off the card (never diffed from a guess).
+MAX_START_SNAPSHOTS = 32
 
 
 def _pool(name: str = "turn_changes"):
@@ -255,8 +258,8 @@ def _cooling(root: str) -> bool:
     return _cool_off.get(root, 0.0) > time.monotonic()
 
 
-def _snapshot_root(root: str) -> tuple[str, str]:
-    """(toplevel, start tree) of one code tree. A job that ran as long as a git
+def _snapshot_root(root: str) -> tuple[str, str, float]:
+    """(toplevel, start tree, monotonic time it was taken) of one code tree. A job that ran as long as a git
     timeout — whatever it raised: _toplevel turns a timeout into "not a tree" —
     puts the root in cool-off."""
     if _cooling(root):
@@ -266,7 +269,7 @@ def _snapshot_root(root: str) -> tuple[str, str]:
         top = _toplevel(root)
         if not top:
             raise RuntimeError("not a git tree")
-        return top, _tree(top)
+        return top, _tree(top), time.monotonic()
     except Exception:
         if time.monotonic() - began >= GIT_TIMEOUT_S * 0.9:
             _cool_off[root] = time.monotonic() + _COOL_OFF_S
@@ -290,6 +293,10 @@ class TurnChanges:
         self._discovery: Optional[asyncio.Future] = None
         self._raw: dict[str, str] = {}                  # path as noted -> last operation
         self._partial: list[dict] = []
+        self._skipped: set[str] = set()                 # live at the start, not snapshotted
+        # When the turn's first tool call was seen: a start snapshot taken after it
+        # may already hold the turn's own edit, so that tree is left off.
+        self._first_tool_at: Optional[float] = None
 
     @classmethod
     def start(cls, roots: Optional[Iterable[str]] = None) -> "TurnChanges":
@@ -300,7 +307,10 @@ class TurnChanges:
 
         async def kick() -> None:
             found = tc._given if tc._given is not None else await loop.run_in_executor(pool, code_roots)
-            for root in found:
+            tc._skipped = set(found[MAX_START_SNAPSHOTS:])
+            if tc._skipped:
+                logger.warning("turn_changes: %d code trees not snapshotted (cap %d)", len(tc._skipped), MAX_START_SNAPSHOTS)
+            for root in found[:MAX_START_SNAPSHOTS]:
                 fut = loop.run_in_executor(pool, _snapshot_root, root)
                 fut.add_done_callback(_retrieve)
                 tc._jobs[root] = fut
@@ -327,8 +337,13 @@ class TurnChanges:
             self._raw[path] = str(event.get("operation") or "written")
 
     def note_tool(self, block: dict) -> None:
-        """Remember the file an Edit/Write tool_use names."""
-        if not isinstance(block, dict) or block.get("type") != "tool_use" or block.get("name") not in WRITE_TOOLS:
+        """Remember the file an Edit/Write tool_use names, and when the turn's first
+        tool call (any tool: a Bash write is only seen after it ran) went out."""
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            return
+        if self._first_tool_at is None:
+            self._first_tool_at = time.monotonic()
+        if block.get("name") not in WRITE_TOOLS:
             return
         inp = block.get("input") if isinstance(block.get("input"), dict) else {}
         path = inp.get("file_path") or inp.get("notebook_path")
@@ -354,17 +369,23 @@ class TurnChanges:
         pool = _pool()
         if self._discovery is not None:
             await self._discovery
-        known = sorted(self._jobs, key=len, reverse=True)
+        known = sorted([*self._jobs, *self._skipped], key=len, reverse=True)
         by_root, later = await loop.run_in_executor(pool, _group, raw, known)
         for root, paths in sorted(by_root.items()):
+            if root not in self._jobs:
+                logger.info("turn_changes: %s was not snapshotted (cap) — left off", root)
+                continue
             try:
                 # shield: a timed-out finish must not cancel the shared job
-                top, start = await asyncio.shield(self._jobs[root])
+                top, start, taken = await asyncio.shield(self._jobs[root])
             except Exception as exc:  # noqa: BLE001 — no start: this tree stays off
                 logger.info("turn_changes: no start snapshot for %s (%s) — left off", root, exc)
                 continue
+            if self._first_tool_at is not None and taken > self._first_tool_at:
+                logger.info("turn_changes: start snapshot of %s came after the first tool call — left off", root)
+                continue
             await self._diff_into(loop, pool, top, paths, start)
-        # Trees that went live during the turn (a run worktree it created): from HEAD.
+        # Trees that went live during the turn (a run or linked worktree it created): from HEAD.
         for top, paths in sorted(later.items()):
             await self._diff_into(loop, pool, top, paths, None)
 
@@ -393,11 +414,14 @@ def _group(raw: dict[str, str], known: list[str]) -> tuple[dict[str, list[str]],
             rest.append(path)
     later: dict[str, list[str]] = {}
     wt_home = _run_worktree_home()
-    if rest and wt_home:
-        # Only a run worktree may diff from HEAD (its HEAD is the run's base); any
-        # other tree missing at the start (a binding added mid-turn) is left off —
-        # HEAD would show earlier uncommitted work as this turn's.
-        new = sorted((r for r in code_roots() if r not in known and r.startswith(wt_home + os.sep)),
+    if rest:
+        # Only a tree the turn CREATED may diff from HEAD (its HEAD is its base): a run
+        # worktree, or a linked worktree — every linked worktree live at the start is
+        # in *known*, so one missing from it is new. Any other tree missing at the start
+        # (a binding added mid-turn) is left off: HEAD would show earlier uncommitted
+        # work as this turn's.
+        new = sorted((r for r in code_roots() if r not in known
+                      and ((wt_home and r.startswith(wt_home + os.sep)) or _is_linked(r))),
                      key=len, reverse=True)
         for path in rest:
             root = next((r for r in new if path.startswith(r + os.sep)), None)

@@ -350,6 +350,7 @@ class _Router:
     _DELIVERABLE_KINDS = _SR._DELIVERABLE_KINDS
     _note_deliverable = classmethod(_SR._note_deliverable.__func__)
     _persist_stream_event = _SR._persist_stream_event
+    _record_canvas_output = staticmethod(_SR._record_canvas_output)
 
 
 class _FakeChanges:
