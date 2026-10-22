@@ -40,9 +40,9 @@ DIGESTS = {
     "_full_scope_refusal": "0e054d7718481d65",  # 10-20: recheck past the cap; tampered index refused (2c05cfbc, §11)
     "_smoke_modules": "1ea6c7b77910e927",
     "_recent_failure_files": "7173dd3412333fa3",
-    "_plan": "c90ec185d1b3d3b0",  # 10-22: v13 approved risk expansion + explicit overflow (§11)
+    "_plan": "1d6784388fa070b4",  # 10-22: probe: refs removed (v1 fixing spec B4, §11)
     "_risk_expansion": "4dc4d9b14e4de507",  # 10-22: v13 §B3.3, contract-capped
-    "_plan_ac_refs": "0fc3e865d5f7a0a0",  # 10-21: split out of _plan by 0fde9f38, frozen with it (§11)
+    "_plan_ac_refs": "4cb596d98ebdbe6f",  # 10-22: probe: refs removed (v1 fixing spec B4, §11)
     "build_source_graph": "e581602ee29be082",  # 10-21: bare script imports resolved (§11)
     "_resolve_script_imports": "3009fba168114713",  # 10-21: new, decides import edges (§11)
 }

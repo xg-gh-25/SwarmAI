@@ -123,7 +123,8 @@ Public symbols:
 - ``reverse_distances(repo, sgraph, roots, depth)`` — file → import distance to the roots
 - ``select_backend(repo, changed, graph, cap, recent, sgraph)`` — scoped selection + overflow
 - ``classify_failures(ctx, results)`` — new / flaky / pre-existing / regression / unknown
-- ``run_probe(ctx, ns, ev_root, run_state)`` / ``run_mutations(ctx, ns, ev_root, run_state)``
+- ``_run_v1_probes`` — ``--mode probe``: a v1 run's DESIGN_SPEC probe exits (§A2.5);
+  ``run_mutations(ctx, ns, ev_root, run_state)``
 """
 from __future__ import annotations
 
@@ -195,8 +196,6 @@ SUMMARY_LINES = 10
 STACK_LINES = 40
 OUTPUT_BUDGET = 3000
 _ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
-# ac_coverage refs of the form probe:<name> are verified from evidence/probes/<name>.json.
-PROBE_REF_PREFIX = "probe:"
 # Desktop vitest files an ac_coverage ref may name (file-level only, see _resolve_desktop_ref).
 _DESKTOP_TEST_RE = re.compile(r"\.(test|spec)\.(ts|tsx|js|jsx)$")
 # Suites known to deadlock when sharing a process with others: one shard each.
@@ -3021,50 +3020,11 @@ def _resolve_desktop_ref(repo: Path, ref: str, warnings: list | None = None):
 
 def _ac_ref_target(repo: Path, ref: str):
     """ac_coverage ref -> (file, nodeid|None) for _ref_matches, or None if unresolvable.
-    probe:<name> matches the synthetic probe row _probe_row adds to the results."""
-    if ref.startswith(PROBE_REF_PREFIX):
-        return ref, None
+    """
     drv = _resolve_desktop_ref(repo, ref)
     if drv is not None:
         return drv if drv[0] else None
     return _resolve_ref(repo, ref)
-
-
-def _probe_row(ev_root: Path, repo: Path, ref: str, changed: list[str]) -> dict:
-    """Verdict for a ``probe:<name>`` AC ref, as a result row (layer "probe").
-
-    Passes only if the probe's evidence is converged, its latest EXECUTED round saw
-    zero current findings, and it converged on THIS run's current changed files (the
-    target digest run_probe computes when called without --files). Anything else fails
-    closed with the re-run command: a probe run on a narrower --files set, old evidence
-    without current_findings, a latest round whose probe exited non-zero (a crashed
-    probe that printed no findings checked nothing), or any edit to the changed files
-    since (another session's included).
-    """
-    name = ref[len(PROBE_REF_PREFIX):]
-    rerun = f"re-run it: --mode probe --name {name} -- <probe command> (without --files)"
-
-    def failed(msg: str) -> dict:
-        return _res(ref, "failed", [msg], file=ref, layer="probe")
-    if not _ID_RE.fullmatch(name):
-        return failed(f"invalid probe name {name!r}")
-    st = _read_json(ev_root / "probes" / f"{name}.json")
-    if not isinstance(st, dict):
-        return failed(f"no evidence for probe {name}; {rerun}")
-    if not st.get("converged"):
-        return failed(f"probe {name} has not converged; {rerun}")
-    executed = [r for r in st.get("rounds") or [] if isinstance(r, dict) and not r.get("cached")]
-    current = executed[-1].get("current_findings") if executed else None
-    if current is None:
-        return failed(f"probe {name} evidence has no current_findings (older runner); {rerun}")
-    if executed[-1].get("rc") != 0:
-        return failed(f"probe {name}: its latest round exited rc={executed[-1].get('rc')}; {rerun}")
-    if current:
-        return failed(f"probe {name}: its latest round still reports {current} finding(s)")
-    if (st.get("state") or {}).get("converged_target") != _digest_files(repo, changed):
-        return failed(f"probe {name} is stale: this run's changed files changed since it "
-                      f"converged; {rerun}")
-    return _res(ref, "passed", file=ref, layer="probe")
 
 
 def _ac_layer(repo: Path, entries: list[list[str]], results: list[dict]) -> dict:
@@ -3956,17 +3916,6 @@ def _smoke_modules(ctx, changed: list[str]) -> dict[str, str]:
     return dict(sorted(out.items()))
 
 
-def _probe_rows(ctx, ev_root: Path, refs: list[str], changed: list[str]) -> list[dict]:
-    """Evaluate every probe:<name> ref now; a failing one is also a warning (its summary
-    names the re-run command). A recheck of a regression calls this too, so a probe
-    that went stale (or re-converged) since the base is never carried over by overlay."""
-    rows = [_probe_row(ev_root, ctx.repo, r, changed) for r in dict.fromkeys(refs)]
-    for row in rows:
-        if row["outcome"] != "passed":
-            ctx.warnings.append(f"ac_coverage {row['nodeid']}: {row['summary']}")
-    return rows
-
-
 CONTEXT_REPLAY_MAX_S = 45.0  # recorded seconds of earlier same-file tests a continuation replays
 
 
@@ -4063,9 +4012,6 @@ def _plan_ac_refs(ctx, plan: dict) -> "tuple[list[str], list[str]]":
     probe_refs: list[str] = []
     for refs in plan["ac_entries"]:
         for ref in refs:
-            if ref.startswith(PROBE_REF_PREFIX):
-                probe_refs.append(ref)
-                continue
             drv = _resolve_desktop_ref(ctx.repo, ref, ctx.warnings)
             if drv is not None:  # desktop: vitest file list only, never a pytest target
                 if drv[0]:
@@ -4155,8 +4101,6 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                 mod = n[len("import::"):]
                 plan["smoke"][mod] = _module_file(ctx.repo, mod)
                 plan["rechecked"] += 1
-            elif n.startswith(PROBE_REF_PREFIX):
-                plan["rechecked"] += 1  # re-evaluated below with every other probe ref
             elif n in ("desktop::vitest", "desktop::tsc") or n.startswith("desktop/"):
                 plan["desktop_recheck"] = True
                 if _DESKTOP_TEST_RE.search(n.split("::")[0]):
@@ -4191,10 +4135,6 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
             plan["fresh_first"] = True
         before = prev.get("changed_files") if isinstance(prev.get("changed_files"), dict) else {}
         scope = [f for f in changed if before.get(f) != _file_digest(ctx.repo / f)]
-        if plan["base_mode"] == "regression":
-            plan["probe_rows"] = _probe_rows(ctx, ev_root, [
-                r for refs in _ac_entries(ns.project, run_state) for r in refs
-                if r.startswith(PROBE_REF_PREFIX)], changed)
     recent = _recent_failure_files(ev_root) if mode != "recheck" else []
     sel, skipped, _ = select_backend(ctx.repo, scope, graph, None, recent, sgraph)
     risk_selected, risk_rules, risk_overflow = _risk_expansion(ns, scope, ctx.repo)
@@ -4215,7 +4155,6 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
     if mode == "regression":
         plan["ac_entries"] = _ac_entries(ns.project, run_state)
         ac_files, probe_refs = _plan_ac_refs(ctx, plan)
-        plan["probe_rows"] = _probe_rows(ctx, ev_root, probe_refs, changed)
         # AC targets first in priority order (a whole-file AC ref is not split out).
         plan["targets"] = {**{f: plan["targets"][f] for f in dict.fromkeys(ac_files)},
                            **plan["targets"]}
@@ -4258,7 +4197,7 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
         return plan, f"auto-recheck cannot re-target: {', '.join(lost[:5])}"
     if mode == "recheck" and prev_failures:
         if not (plan["targets"] or plan["smoke"] or plan["desktop"]
-                or plan.get("probe_rows") or plan.get("ordered")):
+                or plan.get("ordered")):
             # Never green: there were failures and nothing here re-runs them.
             return plan, (f"recheck found {len(prev_failures)} previous failure(s) but could not "
                           f"re-target any of them ({', '.join(lost[:5]) or 'none matched'}); "
@@ -4487,7 +4426,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
     fmode = ns.mode + ("+tsc" if plan.get("desktop_tsc") else "")
     fkey = _frontend_key(ctx, fmode, plan["desktop"], plan["changed"]) if plan["desktop"] else ""
     key_extra = (plan["explicit"] + [json.dumps(plan["ac_entries"]),
-                                     json.dumps(plan.get("probe_rows") or []),
+                                     "[]",
                                      json.dumps(plan["skipped"])]
                  + ([json.dumps(ordered)] if ordered else [])
                  + ([json.dumps(plan["desktop_done"])] if plan.get("desktop_done") else []))
@@ -4714,12 +4653,12 @@ def _not_run_count(failures) -> int:
 
 
 def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
-    results = list(results) + list(plan.get("probe_rows") or [])
+    results = list(results)
     counts = {"passed": 0, "failed": 0, "errors": 0, "timeouts": 0, "skipped": 0}
     for r in results:
         counts[_COUNT_KEY[r["outcome"]]] += 1
     # a failing probe verdict is definite ("new"); the cache key already holds the verdict
-    cls = {**cls, **{r["nodeid"]: "new" for r in plan.get("probe_rows") or []}}
+    cls = dict(cls)
     refs = getattr(ctx, "ref_ids", None) or ()
     failures = [{**_capped_id(r["nodeid"], refs), "classification": cls.get(r["nodeid"], "unknown"),
                  "summary": "\n".join(r["summary"][:STACK_LINES + 1]),
@@ -4891,28 +4830,6 @@ def _digest_files(repo: Path, files: list[str]) -> str:
     return h.hexdigest()[:32]
 
 
-def _probe_digest(repo: Path, argv: list[str]) -> str:
-    """argv + contents of every argv element that names an existing file."""
-    h = hashlib.sha256()
-    for a in argv:
-        h.update(a.encode() + b"\0")
-        p = Path(a) if Path(a).is_absolute() else repo / a
-        try:
-            if p.is_file():
-                h.update(_file_digest(p).encode() + b"\0")
-        except OSError:
-            pass
-    return h.hexdigest()[:32]
-
-
-def _probe_out(st: dict, path: Path, **kw) -> dict:
-    out = {"mode": "probe", "name": st["name"], "converged": st["converged"],
-           "rounds": len(st["rounds"]), "findings_total": len(st["findings"]),
-           "evidence": str(path)}
-    out.update(kw)
-    return out
-
-
 def _parse_findings(text: str) -> list | None:
     cands = [text.strip()] + [ln.strip() for ln in reversed(text.splitlines()) if ln.strip()]
     for c in cands:
@@ -4923,80 +4840,6 @@ def _parse_findings(text: str) -> list | None:
         if isinstance(data, dict) and isinstance(data.get("findings"), list):
             return data["findings"]
     return None
-
-
-def run_probe(ctx, ns, ev_root: Path, run_state: dict) -> tuple[dict, int]:
-    """One probe round under the G2 convergence rules (see module docstring)."""
-    name, argv = ns.name or "", list(ns.probe_argv or [])
-    if not _ID_RE.fullmatch(name):
-        return {"mode": "probe", "error": "--name must match [A-Za-z0-9_-]{1,64}"}, 2
-    if not argv:
-        return {"mode": "probe", "error": "probe needs its command after `--` (list form)"}, 2
-    files = []
-    for raw in ns.files or []:
-        rel = _input_path(ctx.repo, raw)
-        if rel is None:
-            return {"mode": "probe", "error": f"--files entry not found: {raw}"}, 2
-        files.append(rel.split("::")[0])
-    target = _digest_files(ctx.repo, files or changed_files(
-        ctx.repo, run_state, ctx.warnings, (ns.project, ns.run_id)))
-    probe = _probe_digest(ctx.repo, argv)
-    path = ev_root / "probes" / f"{name}.json"
-    fd = _try_lock(ev_root / "probes" / f".{name}.lock", 10)
-    try:
-        st = _read_json(path)
-        if not isinstance(st, dict) or not isinstance(st.get("rounds"), list):
-            st = {"schema": 1, "name": name, "rounds": [], "converged": False, "findings": []}
-        s = st.setdefault("state", {})
-        if st["converged"] and s.get("converged_target") != target:
-            st["converged"] = False
-            s.update(extension_used=False, seen_probes=[])
-            ctx.warnings.append("target changed since convergence: convergence reset")
-        extension = bool(st["converged"])
-        if st["converged"] and probe in (s.get("seen_probes") or []):
-            st["rounds"].append({"at": _now_iso(), "target_digest": target, "probe_digest": probe,
-                                 "new_findings": 0, "findings_total": len(st["findings"]),
-                                 "duration_s": 0, "cached": True})
-            _write_json(path, st)
-            return _probe_out(st, path, cached=True, new_findings=0, warnings=ctx.warnings,
-                              message="converged and target + probe unchanged: returned the "
-                                      "last result without running"), 0
-        if st["converged"] and s.get("extension_used"):
-            return _probe_out(st, path, cached=False, refused=True, new_findings=0,
-                              error="refused: this probe already converged and its one extra "
-                                    "round after a probe change found nothing. Further probe "
-                                    "changes need a new finding first (or a target change)."), 2
-        job = _Job("probe", argv, ctx.repo, dict(os.environ), ctx.workdir, "probe")
-        _run_jobs([job], 1, ctx.deadline_at)
-        if job.killed or not job.started:
-            return _probe_out(st, path, cached=False, error="probe hit the global deadline",
-                              stack=_stack(job)[:SUMMARY_LINES] if job.started else []), 2
-        findings = _parse_findings(_read_text(job.out))
-        if findings is None:
-            return _probe_out(st, path, cached=False,
-                              error=f'probe stdout is not JSON {{"findings": [...]}} (rc={job.rc})',
-                              tail=_lines(job.text())[-SUMMARY_LINES:]), 2
-        new, known = _new_findings(st, findings, ctx.warnings)
-        st["findings"].extend(new)
-        st["rounds"].append({"at": _now_iso(), "target_digest": target, "probe_digest": probe,
-                             "new_findings": len(new), "findings_total": len(st["findings"]),
-                             "duration_s": round(job.duration, 2), "cached": False, "rc": job.rc,
-                             "current_findings": len(findings)})
-        if new:
-            st["converged"] = False
-            s.update(extension_used=False, seen_probes=[])
-            s.pop("converged_target", None)
-        else:
-            seen = list(s.get("seen_probes") or []) if extension else []
-            st["converged"] = True
-            s.update(converged_target=target, extension_used=extension, seen_probes=seen + [probe])
-        _write_json(path, st)
-    finally:
-        _unlock(fd)
-    msg = (f"{len(new)} new finding(s); not converged" if new else
-           "0 new findings: converged" + (" (final: extension round)" if extension else ""))
-    return _probe_out(st, path, cached=False, new_findings=len(new), warnings=ctx.warnings,
-                      new_finding_ids=[str(f["id"]) for f in new[:10]], message=msg), (1 if new else 0)
 
 
 def _new_findings(st: dict, findings: list, warnings: list) -> tuple[list, set]:
@@ -5470,21 +5313,16 @@ def _v1_runner(ns, run_dir: Path, run_state: dict, ctx):
     )
 
 
-def _v1_trace(ns, run_state: dict, seq: int, result: str) -> list[dict]:
-    """Trace every matching DESIGN_SPEC exit criterion to this runner invocation."""
-    plan = _stage_data(ns.project, run_state, "plan")
-    exits = plan.get("exit_criteria") if isinstance(plan, dict) else []
-    rows = []
-    for exit_row in exits if isinstance(exits, list) else []:
-        if not isinstance(exit_row, dict) or exit_row.get("kind") not in {"test", "probe", "mutation"}:
-            continue
-        if exit_row.get("kind") != ("test" if ns.mode in TEST_MODES else ns.mode):
-            continue
-        rows.append({"exit": str(exit_row.get("id") or ""), "kind": exit_row["kind"],
-                     "covers": list(exit_row.get("covers") or []),
-                     "ref": str(exit_row.get("ref") or exit_row.get("argv") or ""),
-                     "result": result, "seq": seq})
-    return rows
+def _v1_exits(runner) -> list[dict]:
+    """DESIGN_SPEC's exit criteria, read from the v1 run's own document (B1): never
+    from run.json, whose v1 ``stages`` is a status dict, not stage data."""
+    try:
+        design = json.loads((runner.run_dir / "artifacts" / "design_spec.json")
+                            .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    exits = design.get("exit_criteria") if isinstance(design, dict) else None
+    return [row for row in exits if isinstance(row, dict)] if isinstance(exits, list) else []
 
 
 def _v1_main_red_provenance() -> dict[str, str | None]:
@@ -5511,13 +5349,14 @@ def _v1_finalize(ns, run_state: dict, runner, *, call: dict, result: str,
     actual.setdefault("dependency_scope", {})
     actual.setdefault("risk_rules", [])
     actual.update(mode=ns.mode, rules_version=RUNNER_VERSION, risk_status=risk_status)
+    nodes = runner.node_results()
     final = runner.finalize(
         changed_paths=changed, runner_code_hash=runner_hash,
         pipeline_code_hash=pipeline_hash,
         runner_argv=[str(Path(__file__).resolve()), *sys.argv[1:]],
         selection=actual,
         cache_keys=cache_keys, main_red=_v1_main_red_provenance(),
-        trace=_v1_trace(ns, run_state, call["seq"], result),
+        trace=runner.trace(_v1_exits(runner), nodes), node_results=nodes,
     )
     return {"repo": runner.repo_name, "tests": final["tests"],
             "validations": final["validations"],
@@ -5554,6 +5393,9 @@ def _record_v1_test_result(ns, run_state: dict, runner, output: dict, code: int,
                  "summary": dict(output.get("counts") or {}),
                  "dependency_scope": dict(output.get("dependency_scope") or {}),
                  "risk_rules": list(output.get("risk_rules") or [])}
+    deps = _v1_test_dependencies(runner.repo_root, selection["files"])
+    if deps is not None:
+        selection["test_dependencies"] = deps
     summary = _v1_finalize(ns, run_state, runner, call=call, result=result,
                            changed=changed, selection=selection,
                            cache_keys=[str(output.get("cache_key"))]
@@ -5561,6 +5403,48 @@ def _record_v1_test_result(ns, run_state: dict, runner, output: dict, code: int,
                            risk_status=("incomplete" if output.get("risk_overflow")
                                         or output.get("skipped_for_budget_total") else "within_cap"))
     return {**output, "v1": summary}
+
+
+def _run_v1_probes(ns, run_state: dict, runner, changed: list[str]) -> tuple[dict, int]:
+    """Run the DESIGN_SPEC probe exits (all, or ``--name <exit id>``) through the
+    runner's §A2.5 executor, then refresh the final so its trace carries them."""
+    exits = [row for row in _v1_exits(runner) if row.get("kind") == "probe"]
+    if ns.name:
+        exits = [row for row in exits if row.get("id") == ns.name]
+    if not exits:
+        return {"mode": "probe", "error": "no matching probe exit in DESIGN_SPEC"}, 2
+    from core.run_protocol.probe import ProbeError
+    calls = []
+    for row in exits:
+        try:
+            call = runner.run_probe(row)
+        except ProbeError as exc:
+            return {"mode": "probe", "error": f"{row.get('id')}: {exc}"}, 2
+        calls.append({"exit": row["id"], "result": call["result"], "seq": call["seq"]})
+    prior = runner.prior_selection()
+    selection = prior or {"files": [], "nodeids": [], "summary": {"probes": len(calls)},
+                          "dependency_scope": {}, "risk_rules": []}
+    summary = _v1_finalize(ns, run_state, runner, call=calls[-1], result=calls[-1]["result"],
+                           changed=changed, cache_keys=[], selection=selection,
+                           risk_status=str(prior.get("risk_status") or "within_cap"))
+    ok = all(row["result"] == "pass" for row in calls)
+    return {"mode": "probe", "ok": ok, "probes": calls, **summary}, (0 if ok else 1)
+
+
+def _v1_test_dependencies(repo: Path, files: list[str]) -> "dict[str, list[str]] | None":
+    """``{selected backend test file: the repo files it imports, transitively}`` —
+    what the engine's carry decision reads when main moves (fixing spec B3). None
+    (no carry: the next land reruns) when there is nothing to map or it is invalid."""
+    from core.run_protocol.carry import CarryError, test_dependency_map
+    tests = [f for f in files if _is_backend_test(f)]
+    if not tests:
+        return None
+    try:
+        sg = build_source_graph(Path(repo), _cache_dir())
+        return test_dependency_map({f: sorted(import_closure(Path(repo), sg, [f]) - {f})
+                                    for f in tests})
+    except (CarryError, OSError, ValueError):
+        return None
 
 
 def _v1_proof_bindings(values: list[str]) -> dict[str, str]:
@@ -5637,9 +5521,23 @@ def execute(ns) -> tuple[dict, int]:
                 output = {**output, "v1": recorded}
             return output, code
         if ns.mode == "probe":
-            return run_probe(ctx, ns, ev_root, run_state)
+            if v1 is None:
+                return {"mode": "probe", "error": "probe mode runs a v1 run's DESIGN_SPEC "
+                                                  "probe exits: give --run-id"}, 2
+            return _run_v1_probes(ns, run_state, v1, changed)
         if ns.mode == "mutation":
-            return run_mutations(ctx, ns, ev_root, run_state)
+            output, code = run_mutations(ctx, ns, ev_root, run_state)
+            if v1 is not None and code in (0, 1) and not output.get("error"):
+                # B5: the mutation result is evidence of the run, so it is a signed call
+                import time as _time
+                now = _time.time()
+                v1._record_result(
+                    call_type="mutation", argv=[str(Path(__file__).resolve()), *sys.argv[1:]],
+                    tool_version=f"pipeline-test-{RUNNER_VERSION}",
+                    result="pass" if code == 0 else "fail", target=str(ns.name or "mutation"),
+                    details={"evidence": output.get("evidence")}, started_at=now,
+                    finished_at=now)
+            return output, code
         output, code = _run_test_mode(ctx, ns, ev_root, run_state, deadline, v1=v1)
         if v1 is not None:
             output = _record_v1_test_result(ns, run_state, v1, output, code, changed)
@@ -5655,16 +5553,11 @@ def main(argv: list[str] | None = None) -> int:
                                    "the main checkout's backend/scripts/pipeline_test.py"}))
         return 2
     args = list(sys.argv[1:] if argv is None else argv)
-    probe_argv: list[str] = []
-    if "--" in args:
-        i = args.index("--")
-        args, probe_argv = args[:i], args[i + 1:]
     try:
         ns = _parser().parse_args(args)
     except _ArgError as exc:
         print(json.dumps({"error": f"usage: {exc}"}))
         return 2
-    ns.probe_argv = probe_argv
     prev = _install_signal_handlers()
     try:
         try:

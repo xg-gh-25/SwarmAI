@@ -27,5 +27,5 @@ def test_cards_never_mention_deleted_reviewers_or_legacy_commands():
     text = "\n".join((ROOT / f"{name}.md").read_text(encoding="utf-8")
                      for name in EXPECTED)
     for deleted in ("gate1-skeptic", "meta-review", "fixspec-skeptic", "root-cause",
-                    "run-update --stage-json", "advance --run-id", "--mode probe"):
+                    "run-update --stage-json", "advance --run-id", "probe:", " -- sh"):
         assert deleted not in text

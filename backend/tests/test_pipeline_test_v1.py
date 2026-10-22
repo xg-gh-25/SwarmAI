@@ -13,6 +13,7 @@ from scripts import pipeline_test
 class FakeRunner:
     repo_name = "repo"
     run_dir = Path("/run")
+    repo_root = Path("/nonexistent-repo")   # no backend tests → no dependency map
     code_tree = "1" * 40
 
     def __init__(self):

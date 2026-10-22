@@ -58,8 +58,7 @@ def _landed_clean(state: dict) -> None:
 # ── happy paths ─────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("profile", [
-    pytest.param(p, marks=_xfail("B1", "_v1_trace reads v1 run.json as legacy, BX-1 never passes"))
-    for p in CODE_PROFILES])
+    pytest.param(p) for p in CODE_PROFILES])
 def test_every_code_profile_lands(rig, profile):
     r = rig(profile)
     r.create()
@@ -102,7 +101,6 @@ BREAK_OTHER = {"backend/core/other.py": "def other():\n    return 2\n"}
 FIX_OTHER = {"backend/core/other.py": "def other():\n    return 1\n"}
 
 
-@_xfail("B1+A1/A2", "BUILD never passes; a red final has no not-landed producer")
 def test_tests_red_ends_not_landed_tests_red(rig):
     r = rig("direct")
     r.create()
@@ -115,7 +113,6 @@ def test_tests_red_ends_not_landed_tests_red(rig):
     assert _main(r) == base
 
 
-@_xfail("B1+B2", "BUILD never passes; a later green run does not replace the red verdict")
 def test_red_then_green_rerun_lands(rig):
     r = rig("direct")
     r.create()
@@ -128,7 +125,6 @@ def test_red_then_green_rerun_lands(rig):
     _landed_clean(r.drive())
 
 
-@_xfail("B1+B3", "BUILD never passes; a disjoint main move is not carried")
 def test_main_moves_disjoint_lands_on_new_main(rig):
     r = rig("direct")
     r.create()
@@ -139,7 +135,6 @@ def test_main_moves_disjoint_lands_on_new_main(rig):
     assert _git(r.repo, "merge-base", "--is-ancestor", moved, "main") == ""
 
 
-@_xfail("B1+B3+A1", "BUILD never passes; an intersecting main move is neither rerun nor bounded")
 def test_main_moves_into_dependency_scope_reruns_then_lands(rig):
     r = rig("direct")
     r.create()
@@ -156,7 +151,6 @@ def test_main_moves_into_dependency_scope_reruns_then_lands(rig):
     _landed_clean(r.drive())
 
 
-@_xfail("B1+A1", "BUILD never passes; a merge conflict leaves the land attempt open")
 def test_merge_conflict_three_times_ends_land_conflict(rig):
     r = rig("direct")
     r.create()
@@ -290,7 +284,6 @@ def _request(r: Rig, prepared: dict) -> dict:
                 "Co-Authored-By: Swarm <swarm@swarmai.dev>")
 
 
-@_xfail("B1+A1", "BUILD never passes; an expired approval leaves the land attempt open")
 def test_expired_approval_is_refused_and_a_fresh_one_lands(rig, monkeypatch):
     from core import hook_token
     r = rig("direct")
@@ -306,7 +299,6 @@ def test_expired_approval_is_refused_and_a_fresh_one_lands(rig, monkeypatch):
     assert landed.get("ok") is True and _main(r) != base, landed
 
 
-@_xfail("B1+C1", "BUILD never passes; run-land trusts the editable land-request JSON")
 def test_code_changed_after_prepare_cannot_land_even_with_edited_json(rig):
     import json
     from tests.pipeline_v1_rig import _git
@@ -317,20 +309,18 @@ def test_code_changed_after_prepare_cannot_land_even_with_edited_json(rig):
     r.edit({"backend/core/mod.py": "def add(a, b):\n    return 42\n"})   # untested tree
     path = Path(prepared["path"])
     value = json.loads(path.read_text())
-    from core.run_protocol import git_tree
-    tree = git_tree.write_tree(str(r.worktree), (f".aidlc/deliverables/{r.run_id}/",), {})
-
-    def retarget(node):
-        if isinstance(node, dict):
-            for key, item in node.items():
-                if key == "code_tree" and isinstance(item, str):
-                    node[key] = tree
-                else:
-                    retarget(item)
-        elif isinstance(node, list):
-            for item in node:
-                retarget(item)
-    retarget(value)
+    from core.run_protocol import git_tree, tree
+    repos = {"repo": str(r.worktree)}
+    report_sha = value["report_sha"]
+    report = (r.data / "state" / "pipeline_agent_audit" / "runs" / r.run_id / "blobs"
+              / report_sha).read_bytes()
+    code_trees = tree.build_code_trees(repos, r.run_id, git_tree.write_tree,
+                                       git_tree.list_reserved)
+    forged = tree.build_delivery_trees(repos, r.run_id, code_trees, report, report_sha,
+                                       git_tree.write_tree, git_tree.list_reserved)
+    value["bindings"] = {name: {key: row[key] for key in ("code_tree", "delivery_tree",
+                                                         "report_sha")}
+                         for name, row in forged.items()}       # the JSON now "matches"
     path.write_text(json.dumps(value))
     out = _request(r, prepared)
     assert out.get("ok") is not True and _main(r) == base, out
@@ -382,3 +372,49 @@ def test_any_command_sequence_leaves_a_foldable_log(tmp_path, monkeypatch):
         finally:
             r.close()
     assert not failures, failures
+
+
+# ── B4: probe exits run through the §A2.5 executor ─────────────────────────
+
+def _probe_design(r: Rig, expect: dict) -> dict:
+    docs = documents("direct")
+    design = dict(docs["plan"]["design"])
+    design["exit_criteria"] = [*design["exit_criteria"], {
+        "id": "X2", "kind": "probe", "covers": ["R1.1"], "expect": expect,
+        "argv": ["git", "grep", "-n", "-e", "return b + a", "--", "backend/core/"]}]
+    return {**docs["plan"], "design": design}
+
+
+def test_a_probe_exit_runs_and_counts_by_its_row_id(rig):
+    r = rig("direct")
+    r.create()
+    r.v1("stage-start")
+    r.edit(Rig.CHANGE)
+    out = r.v1("stage-complete", "--artifact",
+               r.artifact("design", _probe_design(r, {"rc": 0, "stdout": "nonempty"})))
+    assert out.get("ok") is True, out
+    probed = r.pt("probe")
+    assert probed.get("ok") is True and probed["probes"][0]["exit"] == "X2", probed
+    r.pt("tdd", "--files", "backend/tests/test_x.py")
+    assert r.v1("stage-complete").get("ok") is True     # DS-9b sees X2 pass
+    assert "test_call" in r.kinds()
+
+
+def test_a_probe_whose_expectation_fails_blocks_build(rig):
+    r = rig("direct")
+    r.create()
+    r.v1("stage-start")
+    r.edit(Rig.CHANGE)
+    r.v1("stage-complete", "--artifact",
+         r.artifact("design", _probe_design(r, {"rc": 1, "stdout": "empty"})))
+    assert r.pt("probe").get("ok") is False
+    r.pt("tdd", "--files", "backend/tests/test_x.py")
+    out = r.v1("stage-complete")
+    assert out.get("ok") is False and "X2" in str(out.get("checks")), out
+
+
+def test_the_old_free_argv_probe_mode_is_gone(rig):
+    r = rig("direct")
+    r.create()
+    out = r.pt("probe", "--name", "x", "--", "sh", "-c", "exit 0")
+    assert out.get("ok") is not True and out.get("_rc") == 2, out

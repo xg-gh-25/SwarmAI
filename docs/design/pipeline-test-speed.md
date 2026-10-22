@@ -213,6 +213,7 @@ break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连�
   recheck 跳过全部通过的前端文件，有失败的文件照常重跑；摘要不一致时旧的前端结果整体作废、重新标记为未跑。
   选哪些测试没变，只改了续跑时哪些已完成的文件可以不重跑。
 - 2026-10-22 `_risk_expansion` / `_plan`（XG 在 pipeline v13 FINAL §B3.3 批准）：最终范围按路径确定性扩展：pipeline 协议、gate/权限、选测器、共享配置、持久化、公共契约和动态导入各自加选对应套件；上限只读受保护的 `contract.json.risk_test_file_cap`。超过上限时把全部 overflow 写入 evidence，并将 final 记为 `incomplete`，绝不只跑前 N 个后报 green。新增 `_risk_expansion` 到冻结函数集合。
+- 2026-10-22 `_plan` / `_plan_ac_refs`（XG 在 pipeline v1 修复方案 B4 批准："删除旧的 `--mode probe` 和 `probe:` 引用"）：`probe:<name>` 形式的 ac_coverage 引用及其合成结果行删除，`--mode probe` 改为执行 v1 DESIGN_SPEC 的 probe exit（v13 §A2.5）。被删的只是 probe 行；测试文件的选法（改动的测试、直接 importer、AC 点名、import smoke、BVT）不变。
 
 ## 12. main 上已有的红：登记，单独修（2026-10-21，XG 决定）
 

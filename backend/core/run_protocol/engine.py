@@ -1206,7 +1206,7 @@ class RunEngine:
                 "resumed": True}
 
     def _carry_moved_finals(self) -> None:
-        from core.run_protocol.carry import CarryError, carry_decision
+        from core.run_protocol.carry import CarryError, carry_decision, test_dependency_map
         finals = self.final().get("repos", {})
         repos = self.effective_repos()
         for name in self.contract["expected_repos"]:
@@ -1219,11 +1219,13 @@ class RunEngine:
             if old_base == new_base:
                 continue
             selection = ((row.get("provenance") or {}).get("selection") or {})
-            dependencies = selection.get("test_dependencies") or selection.get("dependency_scope")
-            if not isinstance(dependencies, Mapping):
+            try:
+                dependencies = test_dependency_map(selection.get("test_dependencies"))
+            except CarryError as exc:
                 raise IntegrationRequired(
                     "final_recheck_required",
-                    f"{name}: integration base moved and final lacks test_dependencies provenance")
+                    f"{name}: integration base moved and the final has no usable "
+                    f"test_dependencies ({exc}); rerun the regression") from exc
             main_changed = [path for path in _git(
                 main, "diff", "--name-only", "--no-renames", old_base, new_base).splitlines() if path]
             run_changed = [path for path in _git(

@@ -4,6 +4,8 @@ Public symbols:
 - ``carry_decision`` — decide whether a final survives a moving integration base.
 - ``affected_tests`` — select only test dependency scopes intersecting main changes.
 - ``CarryDecision`` — explicit reusable/recheck result with evidence.
+- ``test_dependency_map`` — the ONE schema of ``selection.test_dependencies``: the
+  runner validates what it writes with it, the engine what it reads (fixing spec B3).
 """
 from __future__ import annotations
 
@@ -30,6 +32,19 @@ def _paths(values: Sequence[str], field: str) -> set[str]:
     ):
         raise CarryError(f"{field} has unsafe paths")
     return set(values)
+
+
+def test_dependency_map(value: object) -> dict[str, list[str]]:
+    """``{selected test file: [repo files it imports, transitively]}``; raises
+    CarryError on anything else, so a malformed map never reaches a carry decision."""
+    if not isinstance(value, Mapping) or not value:
+        raise CarryError("test_dependencies must be a non-empty mapping")
+    out: dict[str, list[str]] = {}
+    for test, deps in value.items():
+        if not isinstance(test, str) or not test or test.startswith("/") or ".." in test.split("/"):
+            raise CarryError("test_dependencies key is not a repo path")
+        out[test] = sorted(_paths(deps, f"dependencies of {test}"))
+    return out
 
 
 def affected_tests(main_changed: Sequence[str], test_dependencies: Mapping[str, Sequence[str]]) -> tuple[str, ...]:

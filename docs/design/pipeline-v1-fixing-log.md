@@ -58,3 +58,19 @@ status: OPEN
 | A9 | **问 XG**：方案说"按设计 §A1.2"让 awaiting_human 时的 session_lost 进入 paused，但 §A1.2 表里 `崩溃 / 用户停止 → paused` 只从 `active` 出发；`fc6d2ab2`（人机交互设计 `docs/design/pipeline-v1-human-loop.md`）有意让等人的 run 继续等，问题不丢。两者冲突，属于协议本身，暂不改 |
 
 证明：`tests/test_pipeline_v1_real_e2e.py` 中 A 组的用例全部转为必须通过（熔断不落地、Gate-0 两轮否定、Gate-0 否定后人回答、失败尝试后提 decision、任意命令序列后日志可折叠）。其余用例仍依赖 B1 或 C 组。
+
+## 4. B1、B2、B4（含 B3 的依赖映射、B5）
+
+**根因：** runner 记下的证据和它声称证明的东西没有逐项对上。trace 从旧格式的 run.json 读、整体盖章；verdict 看的是"有没有一次调用没跑完"，不是每个测试在当前树上的结果；probe 只有校验没有执行器；依赖映射的格式两边不一致。
+
+| 条目 | 处理 |
+|---|---|
+| B1 | `_v1_trace` 删除。exit 从 run 目录的 `artifacts/design_spec.json` 读（`_v1_exits`），`V1Runner.trace` 让每条 exit 只匹配自己的 key：test 匹配自己的 nodeid 在当前树上的最后结果，probe / mutation 匹配 target 等于 exit 行 id 的调用。从没跑过的 exit 不出现在 trace 里，DS-9b / BX-1 / TS-2 按缺失判失败 |
+| B2 | `V1Runner.node_results()` 按调用顺序读当前树上每次调用的封印回执，同一个 node 后面的结果覆盖前面的；没回执的调用记 `call:<seq>` 为 incomplete，直到后面有回执的调用；被预算跳过的文件记 `<file>::*` 为 incomplete，直到后面跑了它。`build_repo_final(node_results=...)` 按 node 求 verdict。基线分类为 `unknown` 的失败算 incomplete，不算 red |
+| B3（部分） | 新增 `carry.test_dependency_map`，是 `selection.test_dependencies` 唯一的 schema：runner 写入时用它校验（测试文件 → 它传递 import 的仓库文件，来自现有的 source graph），engine 读取时也用它。LG-4 用落地时集成分支的真实 HEAD（A 组已做）。与依赖范围不相交时复用 final，相交时要求重跑 |
+| B4 | `V1Runner.run_probe` 按 §A2.5 执行：执行前再校验一次、argv 列表、固定环境、stdin /dev/null、30 s 计时器强制结束、stdout 超过 256 KB 判 error、执行前后比对 code_tree（不一致判 error 并记 integrity）。结果是 runner 签名的 `probe` 调用，target 是 exit 行 id。`pipeline_test.py --mode probe` 改为执行 DESIGN_SPEC 的 probe exit（可用 `--name` 选一条）；旧的任意 argv 模式、`--` 之后的 argv、`probe:<name>` 引用及其合成结果行全部删除。这改动了冻结的 `_plan` / `_plan_ac_refs`，按方案 B4 的批准记入 `pipeline-test-speed.md` §11 |
+| B5 | mutation 的结果也记成 runner 签名的调用（target 为 `--name`），可以进 final 的 trace |
+
+证明：`test_every_code_profile_lands[direct/trivial/full/bugfix/goal]`、`test_tests_red_ends_not_landed_tests_red`、`test_red_then_green_rerun_lands`、`test_main_moves_disjoint_lands_on_new_main`、`test_main_moves_into_dependency_scope_reruns_then_lands`、`test_merge_conflict_three_times_ends_land_conflict`、`test_expired_approval_is_refused_and_a_fresh_one_lands`、新增的三个 probe 用例。
+
+**C1 的现状（由 G 组用例发现，不是本组改的）：** `test_code_changed_after_prepare_cannot_land_even_with_edited_json` 现在已经通过——改了代码、再把 land-request JSON 改成和新树一致，`execute_request` 在 `auth` 比对 binding_digest 时拒绝（"authorization action/bindings mismatch"）。所以方案 C1 说的"没测过的树能落地"在当前代码上不成立；C1 剩下的是让执行只读事件、不读 JSON，以及审批卡显示树，放在 C 组。

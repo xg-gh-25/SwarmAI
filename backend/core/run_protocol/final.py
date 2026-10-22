@@ -149,8 +149,14 @@ def build_repo_final(
     runner_argv: Sequence[str], selection: Mapping[str, Any], cache_keys: Sequence[str],
     main_red: Mapping[str, Any], trace: Sequence[Mapping[str, Any]],
     carried_from: str | None = None, tests_required: bool = True,
+    node_results: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Fold current-tree, runner-signed calls into one repo final row."""
+    """Fold current-tree, runner-signed calls into one repo final row.
+
+    With *node_results* (each node's last outcome on this tree, from the runner's
+    sealed receipts) the verdict is per node: a later run replaces an earlier one, so
+    a continuation's not_run does not stick (fixing spec B2). Without it, the
+    aggregate call results decide (callers that record no receipts)."""
     if not repo or not SHA40.fullmatch(code_tree or "") or not SHA40.fullmatch(base or ""):
         raise FinalError("repo, code_tree and base are required")
     for name, value in (("runner_code_hash", runner_code_hash),
@@ -167,7 +173,17 @@ def build_repo_final(
     rows = _calls(calls, repo=repo, code_tree=code_tree)
     actual_selection = _selection(selection)
     tests = [row for row in rows if row["call_type"] == "test"]
-    if any(row["result"] in {"error", "not_run"} for row in tests) or (tests_required and not tests):
+    if node_results is not None:
+        results = [str((row or {}).get("result")) for row in node_results.values()]
+        if any(value not in {"pass", "fail", "incomplete"} for value in results):
+            raise FinalError("node results must be pass / fail / incomplete")
+        if "incomplete" in results or (tests_required and not results):
+            verdict = "incomplete"
+        elif "fail" in results:
+            verdict = "red"
+        else:
+            verdict = "green"
+    elif any(row["result"] in {"error", "not_run"} for row in tests) or (tests_required and not tests):
         verdict = "incomplete"
     elif any(row["result"] == "fail" for row in tests):
         verdict = "red"

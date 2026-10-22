@@ -1,7 +1,9 @@
 """Pipeline-test adapter for v1 call evidence and final reports.
 
 Public symbols:
-- ``V1Runner`` — execute/record runner calls and rebuild one repo's final row.
+- ``V1Runner`` — execute/record runner calls and rebuild one repo's final row:
+  ``node_results`` (each node's last outcome on the tree), ``trace`` (exits matched on
+  their own key), ``run_probe`` (the §A2.5 probe executor).
 - ``contract_path`` — locate protected v1 contract metadata for a run.
 - ``is_v1_run`` — authoritative contract-based protocol detection.
 """
@@ -12,6 +14,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -405,7 +408,8 @@ class V1Runner:
                  pipeline_code_hash: str, runner_argv: Sequence[str],
                  selection: Mapping[str, Any], cache_keys: Sequence[str],
                  main_red: Mapping[str, Any],
-                 trace: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+                 trace: Sequence[Mapping[str, Any]],
+                 node_results: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
         manifest = load_manifest(str(self.repo_root), self.base)
         required = required_for(manifest, changed_paths)
         final = build_repo_final(
@@ -419,12 +423,187 @@ class V1Runner:
             main_red=main_red, trace=trace,
             tests_required=any(not path.endswith((".md", ".txt", ".rst"))
                                for path in changed_paths),
+            node_results=node_results,
         )
         path = self.run_dir / "evidence" / "tests" / f"final-{self.repo_name}.json"
         warning = evidence_seal.write_sealed(path, json.dumps(final, sort_keys=True))
         if warning:
             raise RunnerError(warning)
         return final
+
+    def node_results(self) -> dict[str, dict[str, Any]]:
+        """Each test node's LAST outcome on the current code tree (fixing spec B2).
+
+        Read from the sealed receipts of this tree's pipeline calls, in call order: a
+        later run of a node replaces an earlier one, so a continuation's ``not_run``
+        is cleared by the call that finishes it. Keys are nodeids; a file skipped for
+        budget is ``<file>::*`` until a later call runs that file; a call that left no
+        receipt is ``call:<seq>`` until a later call with a receipt. Values:
+        ``{"result": pass | fail | incomplete, "seq": n}`` — a failure whose base
+        classification is unknown is ``incomplete``, not red."""
+        out: dict[str, dict[str, Any]] = {}
+        for call in self._calls(current_tree_only=True):
+            if call.get("call_type") != "test":
+                continue
+            seq = int(call["seq"])
+            details = call.get("details") if isinstance(call.get("details"), Mapping) else {}
+            evidence = (self._receipt(str(details["evidence"]), str(details.get("evidence_sha256")))
+                        if details.get("evidence") else None)
+            if evidence is None:
+                if call.get("result") in {"error", "not_run"}:
+                    out[f"call:{seq}"] = {"result": "incomplete", "seq": seq}
+                continue
+            for key in [k for k in out if k.startswith("call:")]:
+                del out[key]
+            classes = {row.get("nodeid"): row.get("classification")
+                       for row in evidence.get("failures") or [] if isinstance(row, Mapping)}
+            for row in evidence.get("results") or []:
+                if not isinstance(row, Mapping) or not isinstance(row.get("nodeid"), str):
+                    continue
+                node, outcome = row["nodeid"], row.get("outcome")
+                if outcome in {"passed", "skipped"}:
+                    result = "pass"
+                elif classes.get(node) in {"pre-existing", "flaky"} and outcome != "timeout":
+                    result = "pass"
+                elif classes.get(node) == "unknown":
+                    result = "incomplete"
+                elif outcome == "timeout":
+                    result = "incomplete"
+                else:
+                    result = "fail"
+                out[node] = {"result": result, "seq": seq}
+                out.pop(f"{row.get('file') or node.split('::')[0]}::*", None)
+            for path in evidence.get("skipped_for_budget") or []:
+                if isinstance(path, str) and not any(
+                        key.startswith(path + "::") for key in out if not key.endswith("::*")):
+                    out[f"{path}::*"] = {"result": "incomplete", "seq": seq}
+        return out
+
+    def _receipt(self, path_text: str, digest: str) -> dict[str, Any] | None:
+        """The sealed receipt at *path_text* inside this run's evidence, only if its
+        content still hashes to the *digest* the signed call recorded."""
+        try:
+            path = Path(path_text).resolve()
+            root = (self.run_dir / "evidence").resolve()
+            if root not in path.parents:
+                return None
+            raw, ok, _why = evidence_seal.read_checked(path)
+            evidence = json.loads(raw) if ok and raw is not None else None
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(evidence, dict) or _sha_json(evidence) != digest:
+            return None
+        return evidence
+
+    def trace(self, exits: Sequence[Mapping[str, Any]],
+              nodes: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """One row per test / probe exit of DESIGN_SPEC, matched ONLY on the exit's own
+        key (fixing spec B1): a test exit on its nodeid, a probe exit on its row id (the
+        target of the probe call). An exit with no result on this tree gets no row."""
+        probes = {}
+        for call in self._calls(current_tree_only=True):
+            if call.get("call_type") in ("probe", "mutation") \
+                    and isinstance(call.get("target"), str):
+                probes[(call["call_type"], call["target"])] = call
+        rows = []
+        for exit_row in exits:
+            if not isinstance(exit_row, Mapping):
+                continue
+            if exit_row.get("kind") in ("probe", "mutation"):
+                call = probes.get((exit_row["kind"], str(exit_row.get("id") or "")))
+                if call is not None:
+                    rows.append({"exit": str(exit_row["id"]), "kind": exit_row["kind"],
+                                 "covers": list(exit_row.get("covers") or []),
+                                 "ref": str(exit_row["id"]), "result": call["result"],
+                                 "seq": int(call["seq"])})
+                continue
+            if exit_row.get("kind") != "test":
+                continue
+            node = nodes.get(str(exit_row.get("ref") or ""))
+            if node is None:
+                continue
+            rows.append({"exit": str(exit_row.get("id") or ""), "kind": "test",
+                         "covers": list(exit_row.get("covers") or []),
+                         "ref": str(exit_row.get("ref")),
+                         "result": {"pass": "pass", "fail": "fail"}.get(node["result"], "not_run"),
+                         "seq": int(node["seq"])})
+        return rows
+
+    def run_probe(self, exit_row: Mapping[str, Any]) -> dict[str, Any]:
+        """Execute one DESIGN_SPEC probe exit under the frozen §A2.5 protocol.
+
+        Validated again right before execution; argv list, no shell; only the fixed
+        environment; stdin /dev/null; 30 s; stdout capped at 256 KB (more is error);
+        code_tree computed before and after — a change is error plus an integrity
+        event. The result is recorded as a runner-signed ``probe`` call whose target is
+        the exit's row id, so the trace matches it by that id (fixing spec B1/B4)."""
+        import tempfile
+        from core.run_protocol import git_tree, probe as probe_protocol
+        exit_id = str(exit_row.get("id") or "")
+        if not exit_id or exit_row.get("kind") != "probe":
+            raise RunnerError("run_probe needs a probe exit with an id")
+        probe = probe_protocol.validate(exit_row.get("argv"), exit_row.get("expect") or {})
+        excludes = (f".aidlc/deliverables/{self.run_id}/",)
+        before = git_tree.write_tree(str(self.repo_root), excludes, {})
+        if before != self.code_tree:
+            raise RunnerError("the worktree moved since this runner was built")
+        started = time.time()
+        with tempfile.TemporaryDirectory(prefix="v1-probe-") as temp_root:
+            home = os.path.join(temp_root, "home")
+            os.mkdir(home, 0o700)
+            spec = probe_protocol.execution_spec(
+                probe, repo_root=str(Path(self.repo_root).resolve()),
+                allowed_repo_roots=[str(Path(self.repo_root).resolve())],
+                temp_home=home, temp_root=temp_root)
+            rc, stdout, overflow = None, b"", False
+            timed_out = threading.Event()
+            proc = subprocess.Popen(spec["argv"], cwd=spec["cwd"], env=spec["env"],
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, shell=False)
+
+            def _expire() -> None:
+                timed_out.set()
+                proc.kill()
+            timer = threading.Timer(spec["timeout_seconds"], _expire)
+            timer.start()
+            try:
+                chunks: list[bytes] = []
+                size = 0
+                assert proc.stdout is not None
+                while True:
+                    chunk = proc.stdout.read(65536)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > spec["stdout_limit_bytes"]:
+                        overflow = True
+                        proc.kill()
+                        break
+                    chunks.append(chunk)
+                stdout = b"".join(chunks)
+                rc = proc.wait()
+            finally:
+                timer.cancel()
+                proc.stdout.close()
+        timed_out = timed_out.is_set()
+        after = git_tree.write_tree(str(self.repo_root), excludes, {})
+        if after != before:
+            self._store.append_new(
+                writer=self._writer, kind="integrity", at=_now(),
+                payload={"conflict_id": hashlib.sha256(f"probe:{exit_id}:{after}".encode()).hexdigest(),
+                         "conflict_type": "probe_changed_tree",
+                         "first_hash": hashlib.sha256(before.encode()).hexdigest(),
+                         "new_hash": hashlib.sha256(after.encode()).hexdigest()},
+                ordinal=len(self._store.read_events()) + 1)
+        verdict = probe_protocol.evaluate_result(
+            probe, rc=None if timed_out else rc, stdout=stdout, timed_out=timed_out,
+            overflow=overflow, tree_changed=after != before)
+        return self._record_result(
+            call_type="probe", argv=spec["argv"], tool_version="git", result=verdict["result"],
+            target=exit_id, details={"reason": verdict["reason"], "rc": rc,
+                                     "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+                                     "stdout_bytes": len(stdout)},
+            started_at=started, finished_at=time.time())
 
     def required_validations(self, changed_paths: Sequence[str]) -> list[dict[str, Any]]:
         return required_for(load_manifest(str(self.repo_root), self.base), changed_paths)
