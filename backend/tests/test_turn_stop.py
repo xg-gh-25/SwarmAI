@@ -68,6 +68,48 @@ def test_build_caps_rows_and_counts_the_rest():
     assert len(block["calls"]) == turn_stop.MAX_ROWS and block["omitted"] == 5
 
 
+# ── leftovers: what stopped work leaves (measured: no output; transcripts kept) ──
+
+def _sub_transcript(tmp_path, monkeypatch, sid="11111111-2222-3333-4444-555555555555", task="a56b2f871d7a776d7", calls=3):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    proj = tmp_path / "projects" / "-Users-x-SwarmWS"
+    (proj / sid / "subagents").mkdir(parents=True)
+    (proj / f"{sid}.jsonl").write_text("{}\n")
+    p = proj / sid / "subagents" / f"agent-{task}.jsonl"
+    p.write_text("".join('{"message":{"content":[{"type":"tool_use","id":"t%d"}]}}\n' % i for i in range(calls)))
+    return sid, task, p
+
+
+def test_agent_transcript_found_and_counted(tmp_path, monkeypatch):
+    sid, task, p = _sub_transcript(tmp_path, monkeypatch)
+    assert turn_stop.agent_transcript(sid, task) == {"path": str(p), "toolCalls": 3}
+    assert turn_stop.agent_transcript(sid, "../../etc") is None, "an id never becomes a path"
+    assert turn_stop.agent_transcript(sid, "missing0") is None
+    assert turn_stop.agent_transcript(None, task) is None
+
+
+def test_existing_write_targets(tmp_path):
+    (tmp_path / "out.log").write_text("half")
+    got = turn_stop.existing_write_targets(["out.log", str(tmp_path / "nope.txt"), "", str(tmp_path / "out.log")], str(tmp_path))
+    assert got == [str(tmp_path / "out.log")]
+    assert turn_stop.existing_write_targets(["out.log"], None) == [], "a relative path needs the cwd"
+
+
+def test_build_and_note_carry_the_leftovers():
+    block = turn_stop.build(
+        open_tool_uses={"b1": (0.0, "Bash"), "a1": (0.0, "Agent")}, agent_tools={},
+        background=[{"toolUseId": "g1", "description": "phase3"}], now=300.0,
+        writes={"b1": ["/w/out.log"]},
+        transcripts={"a1": {"path": "/t/a.jsonl", "toolCalls": 4}, "g1": {"path": "/t/g.jsonl", "toolCalls": 55}})
+    rows = {c["toolUseId"]: c for c in block["calls"]}
+    assert rows["b1"]["writes"] == ["/w/out.log"] and rows["a1"]["transcript"]["toolCalls"] == 4
+    assert block["agents"][0]["transcript"] == {"path": "/t/g.jsonl", "toolCalls": 55}
+    note = turn_stop.continuation_note(block)
+    assert "A stopped call's output was not kept." in note
+    assert "may have written, fully or partly: /w/out.log" in note
+    assert "/t/a.jsonl" in note and "its work so far: /t/g.jsonl" in note
+
+
 def test_note_names_what_stopped_and_says_check_before_rerun():
     block = {"at": "2026-10-22T09:00:00+00:00",
              "calls": [{"toolUseId": "b1", "name": "Bash", "elapsedMs": 252000}],
@@ -113,6 +155,20 @@ def test_receipt_marks_the_call_behind_an_open_permission_not_run():
     unit._pending_question = {"request_id": "r1", "tool_use_id": "r1", "tool_call_id": "b1"}
     calls = {c["toolUseId"]: c for c in unit.begin_stop_receipt()["calls"]}
     assert calls["b1"].get("ran") is False and "ran" not in calls["b0"]
+
+
+def test_receipt_reads_the_leftovers_from_the_turn(tmp_path, monkeypatch):
+    sid, task, p = _sub_transcript(tmp_path, monkeypatch, calls=2)
+    (tmp_path / "half.txt").write_text("x")
+    unit = _streaming_unit()
+    unit._sdk_session_id = sid
+    unit._cwd = str(tmp_path)
+    unit._open_tool_uses = {"b1": (0.0, "Bash"), "a1": (0.0, "Agent")}
+    unit._streaming_orchestrator._turn_carry["pending_file_changes"]["b1"] = ["half.txt", "gone.txt"]
+    unit.background_agents.task_started(task, "a1")
+    calls = {c["toolUseId"]: c for c in unit.begin_stop_receipt()["calls"]}
+    assert calls["b1"]["writes"] == [str(tmp_path / "half.txt")]
+    assert calls["a1"]["transcript"] == {"path": str(p), "toolCalls": 2}
 
 
 def test_no_receipt_when_nothing_runs():
@@ -208,6 +264,20 @@ async def test_interrupt_session_persists_the_receipt_before_the_stop_and_return
     assert persist.await_args.kwargs["client_id"] == "c1"
     assert unit._turn_files == {}, "deliverables are written once"
     assert [c.args for c in unit.background_agents.user_stop.call_args_list] == [(True,), (False,)]
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_bash_writes_join_the_changes_card():
+    unit = _fake_unit(SessionState.STREAMING)
+    unit.begin_stop_receipt = MagicMock(return_value={"type": "turn_stop", "agents": [],
+        "calls": [{"toolUseId": "b1", "name": "Bash", "writes": ["/w/out.log"]}]})
+    unit.interrupt = AsyncMock(return_value=True)
+    unit._turn_changes = MagicMock()
+    unit._turn_changes.finish = AsyncMock(return_value=None)
+    router = _router_with(unit)
+    with patch.object(type(router), "_persist_assistant_blocks", AsyncMock(side_effect=lambda s, b, m, **k: b)):
+        await router.interrupt_session("s1")
+    unit._turn_changes.note.assert_called_once_with({"absolutePath": "/w/out.log", "operation": "written"})
 
 
 @pytest.mark.asyncio

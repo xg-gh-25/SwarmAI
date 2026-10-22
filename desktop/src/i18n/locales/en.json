@@ -374,6 +374,11 @@
         "stopAgent": "background agent {{name}} stopped",
         "stopAgents": "{{count}} background agents stopped",
         "stopOmitted": "+{{count}} more",
+        "stopKeptCalls": "{{count}} calls kept, no conclusion",
+        "stopKeptNone": "no conclusion",
+        "stopNoOutput": "output not kept",
+        "stopMayHaveWritten": "may have written",
+        "stopNotRunWhy": "not run (it was waiting for your approval)",
         "stopContinueHint": "Continue picks up from here: the agent is told what was stopped and checks what it already did before going on."
       },
       "doc": {

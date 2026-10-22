@@ -518,8 +518,14 @@ export interface TurnStopContent {
   at?: string;
   calls: Array<{ toolUseId: string; name: string; elapsedMs?: number; description?: string;
     /** false: it was waiting for the user's approval and never started. */
-    ran?: boolean }>;
-  agents: Array<{ toolUseId: string; description?: string; status: string; background?: boolean; summary?: string }>;
+    ran?: boolean;
+    /** Files its command names as write targets that exist now: it may have
+     *  written them, fully or partly (a stopped call keeps no output). */
+    writes?: string[];
+    /** An Agent's own transcript: its calls so far, no conclusion. */
+    transcript?: { path: string; toolCalls?: number } }>;
+  agents: Array<{ toolUseId: string; description?: string; status: string; background?: boolean; summary?: string;
+    transcript?: { path: string; toolCalls?: number } }>;
   /** Rows beyond the cap that are not listed. */
   omitted?: number;
   /** false: no turn was running; only background agents were stopped (the turn

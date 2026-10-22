@@ -320,14 +320,17 @@ export const ToolStripV6 = memo(function ToolStripV6({ item }: { item: StripItem
   );
 }, sameStrip);
 
-/** One line for a stop: the call(s) it cut, the call(s) it kept from running, the
- *  background agents it ended. Each call already shows `stopped` on its own strip,
- *  so this only sums up (several calls of a kind are counted, not listed). */
-function stopSummary(t: Parameters<typeof tf>[0], r: StopReceiptView): { line: string; full: string } {
+/** A stop in one line (the call(s) it cut, the call(s) it kept from running, the
+ *  background agents it ended; several of a kind are counted, not listed: each call
+ *  already shows `stopped` on its own strip) and, for the detail, each item with what
+ *  it left: an Agent's transcript, the files a Bash may have written, else "output not
+ *  kept" (a stopped call keeps none). */
+interface StopDetailRow { text: string; path?: boolean; label?: string }
+function stopSummary(t: Parameters<typeof tf>[0], r: StopReceiptView): { line: string; full: StopDetailRow[] } {
   const cut = r.calls.filter((c) => c.ran !== false);
   const waiting = r.calls.filter((c) => c.ran === false);
   const parts: string[] = [];
-  const full: string[] = [];
+  const full: StopDetailRow[] = [];
   const at = (ms?: number) => (ms !== undefined && ms >= MIN_SECONDS * 1000 ? fmt(Math.round(ms / 1000)) : '');
   if (cut.length === 1) {
     const d = at(cut[0].elapsedMs);
@@ -341,22 +344,54 @@ function stopSummary(t: Parameters<typeof tf>[0], r: StopReceiptView): { line: s
     { name: agents[0].description || tf(t, 'chat.turn.zone.backgroundAgent', 'background agent') }));
   else if (agents.length > 1) parts.push(tf(t, 'chat.turn.zone.stopAgents', '{{count}} background agents stopped', { count: agents.length }));
   if (r.omitted) parts.push(tf(t, 'chat.turn.zone.stopOmitted', '+{{count}} more', { count: r.omitted }));
-  for (const c of cut) full.push(`${c.name}${c.description ? ` ${c.description}` : ''} · stopped${at(c.elapsedMs) ? ` at ${at(c.elapsedMs)}` : ''}`);
-  for (const c of waiting) full.push(`${c.name} · not run (was waiting for approval)`);
-  for (const a of agents) full.push(`Agent ${a.description || a.toolUseId} · background · ${a.status}`);
-  return { line: parts.join(' · '), full: full.join('\n') };
+  // The detail rows (one item per line; a leftover path on its own line under it).
+  const kept = (n?: number) => (n ? tf(t, 'chat.turn.zone.stopKeptCalls', '{{count}} calls kept, no conclusion', { count: n })
+    : tf(t, 'chat.turn.zone.stopKeptNone', 'no conclusion'));
+  for (const c of cut) {
+    const head = `${c.name}${c.description ? ` · ${c.description}` : ''} · stopped${at(c.elapsedMs) ? ` at ${at(c.elapsedMs)}` : ''}`;
+    if (c.transcript) {
+      full.push({ text: `${head} · ${kept(c.transcript.toolCalls)}` });
+      full.push({ text: c.transcript.path, path: true });
+    } else {
+      full.push({ text: `${head} · ${tf(t, 'chat.turn.zone.stopNoOutput', 'output not kept')}` });
+      for (const w of c.writes ?? []) full.push({ text: w, path: true, label: tf(t, 'chat.turn.zone.stopMayHaveWritten', 'may have written') });
+    }
+  }
+  for (const c of waiting) full.push({ text: `${c.name} · ${tf(t, 'chat.turn.zone.stopNotRunWhy', 'not run (it was waiting for your approval)')}` });
+  for (const a of agents) {
+    full.push({ text: `Agent · ${a.description || a.toolUseId} · background · ${a.status}${a.transcript ? ` · ${kept(a.transcript.toolCalls)}` : ''}` });
+    if (a.transcript) full.push({ text: a.transcript.path, path: true });
+  }
+  return { line: parts.join(' · '), full };
 }
 
 /** The end of a turn the user stopped while something ran (backend turn_stop):
- *  "Stopped by you · …" in one line (the full list on hover) and what Continue does. */
+ *  "Stopped by you · …" in one line; a click opens what each stopped item left (its
+ *  transcript, the files it may have written); then what Continue does. */
 function StopReceiptBlock({ receipt }: { receipt: StopReceiptView }) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
   const { line, full } = stopSummary(t, receipt);
   return (
     <div data-testid="turn-stopped" data-receipt="" {...ANCHOR_PROPS}>
-      <div data-testid="stop-summary" title={full} className="truncate text-[12.5px] text-[var(--color-text-dim)]">
-        {tf(t, 'chat.turn.zone.stoppedByYouPlain', 'Stopped by you')}{line ? ` · ${line}` : ''}
-      </div>
+      <button
+        type="button"
+        data-testid="stop-summary"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="w-full min-w-0 truncate text-left text-[12.5px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50 rounded-[4px]"
+      >
+        {open ? '▾ ' : '▸ '}{tf(t, 'chat.turn.zone.stoppedByYouPlain', 'Stopped by you')}{line ? ` · ${line}` : ''}
+      </button>
+      {open && (
+        <div data-testid="stop-detail" className="mt-1 ml-4 space-y-0.5 font-mono text-[11.5px] text-[var(--color-text-dim)] select-text">
+          {full.map((r, i) => (
+            <div key={i} data-testid={r.path ? 'stop-detail-path' : 'stop-detail-row'} className={r.path ? 'pl-4 break-all text-[var(--color-text-muted)]' : 'truncate'}>
+              {r.label ? `${r.label}: ` : ''}{r.text}
+            </div>
+          ))}
+        </div>
+      )}
       <div data-testid="stop-continue-hint" className="mt-0.5 text-[12px] text-[var(--color-text-dim)]">
         {tf(t, 'chat.turn.zone.stopContinueHint', 'Continue picks up from here: the agent is told what was stopped and checks what it already did before going on.')}
       </div>

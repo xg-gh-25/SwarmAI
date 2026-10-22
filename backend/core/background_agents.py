@@ -16,6 +16,7 @@ or ``lost`` (the CLI process went away first: its result will never come), or
   without a turn open. A task that finishes before its launch was recorded (the reader
   runs ahead of the orchestrator) is kept and applied at launch.
 - ``lose_all()``: the CLI process is gone; ``user_stop(on)`` frames a user Stop.
+- ``task_id_of(tool_use_id)``: the task (agent) id of any Agent call a frame named.
 - Every change calls ``on_change(entry)``; ``take_unannounced()`` returns the agents
   that finished since the last CLI turn took them (recent ones only).
 
@@ -119,6 +120,14 @@ class BackgroundAgents:
 
     def snapshot(self) -> list[dict]:
         return [dict(e) for e in self._agents.values()]
+
+    def task_id_of(self, tool_use_id: str) -> Optional[str]:
+        """The SDK task id (the agent id) a stream frame gave this Agent call, any
+        Agent (foreground or background), or None if no frame named it yet."""
+        for task_id, tid in reversed(list(self._task_tool.items())):
+            if tid == tool_use_id:
+                return task_id
+        return None
 
     def running(self) -> list[dict]:
         return [dict(e) for e in self._agents.values() if e["status"] == "running"]

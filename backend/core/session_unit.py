@@ -4268,13 +4268,41 @@ class SessionUnit:
             return None
         from . import turn_stop
         pending = self._pending_question if self.state == SessionState.WAITING_INPUT else None
+        calls = self._open_tool_uses if active else {}
+        # What the stopped work leaves behind (core/turn_stop): a Bash's write
+        # targets that exist now, an Agent's own transcript. Display aids.
+        writes: dict = {}
+        transcripts: dict = {}
+        try:
+            carry = getattr(self._streaming_orchestrator, "_turn_carry", {}) or {}
+            fc = carry.get("pending_file_changes") or {}
+            hd = carry.get("pending_heredoc_writes") or {}
+            for tid, (_start, name) in list(calls.items()):
+                if name == "Bash":
+                    paths = list(fc.get(tid) or []) + list((hd.get(tid) or ((), 0))[0])
+                    w = turn_stop.existing_write_targets(paths, self._cwd)
+                    if w:
+                        writes[tid] = w
+                elif name in ("Agent", "Task"):
+                    tr = turn_stop.agent_transcript(self._sdk_session_id, self.background_agents.task_id_of(tid))
+                    if tr:
+                        transcripts[tid] = tr
+            for e in background:
+                tid = e.get("toolUseId")
+                tr = turn_stop.agent_transcript(self._sdk_session_id, self.background_agents.task_id_of(tid)) if tid else None
+                if tr:
+                    transcripts[tid] = tr
+        except Exception:  # noqa: BLE001 — never blocks the stop
+            logger.debug("session_unit.stop_leftovers_failed session_id=%s", self.session_id, exc_info=True)
         block = turn_stop.build(
-            open_tool_uses=self._open_tool_uses if active else {},
+            open_tool_uses=calls,
             agent_tools=self._active_agent_tools if active else {},
             background=background,
             now=awake_time(),
             # a permission prompt still open: the call it gates never started
             not_run=(pending or {}).get("tool_call_id") if (pending or {}).get("request_id") else None,
+            writes=writes,
+            transcripts=transcripts,
         )
         if not active:
             block["turn"] = False  # no turn was running: only background agents stopped

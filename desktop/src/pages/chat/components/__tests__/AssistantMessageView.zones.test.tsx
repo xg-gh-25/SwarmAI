@@ -578,7 +578,7 @@ describe('AC9 — one signal; a stopped turn says so', () => {
     expect(container.querySelector('[data-zone="failure"]')).toBeNull();
     const stopped = screen.getByTestId('turn-stopped');
     expect(stopped.hasAttribute('data-receipt')).toBe(true);
-    expect(within(stopped).getByTestId('stop-summary').textContent)
+    expect(within(stopped).getByTestId('stop-summary').textContent?.replace(/^[▸▾] /, ''))
       .toBe('Stopped by you · Bash stopped at 4m 12s · background agent phase3 experiment stopped');
     expect(within(stopped).queryByTestId('tool-strip')).toBeNull(); // the call is not listed twice
     expect(within(stopped).getByTestId('stop-continue-hint')).toBeTruthy();
@@ -587,10 +587,29 @@ describe('AC9 — one signal; a stopped turn says so', () => {
     expect(screen.getByTestId('strip-time').textContent).toBe('stopped');
   });
 
+  it('the summary opens what each stopped item left: written files, an agent transcript, else output not kept', () => {
+    const r = { type: 'turn_stop', calls: [
+      { toolUseId: 'a', name: 'Bash', elapsedMs: 252000, writes: ['/w/out.log'] },
+      { toolUseId: 'b', name: 'Bash', elapsedMs: 1000 }],
+      agents: [{ toolUseId: 'g1', description: 'phase3', status: 'stopped', background: true,
+        transcript: { path: '/t/agent-g1.jsonl', toolCalls: 55 } }] } as ContentBlock;
+    render(view([tx('go'), bash('a', 'make'), bash('b', 'ls'), r], false));
+    expect(screen.queryByTestId('stop-detail')).toBeNull();
+    fireEvent.click(screen.getByTestId('stop-summary'));
+    const rows = screen.getAllByTestId('stop-detail-row').map((e) => e.textContent);
+    expect(rows).toEqual([
+      'Bash · stopped at 4m 12s · output not kept',
+      'Bash · stopped · output not kept',
+      'Agent · phase3 · background · stopped · 55 calls kept, no conclusion',
+    ]);
+    expect(screen.getAllByTestId('stop-detail-path').map((e) => e.textContent))
+      .toEqual(['may have written: /w/out.log', '/t/agent-g1.jsonl']);
+  });
+
   it('a call still waiting for approval at the Stop is "not run", never "stopped"', () => {
     const r = { type: 'turn_stop', calls: [{ toolUseId: 'a', name: 'Bash', ran: false }], agents: [] } as ContentBlock;
     render(view([tx('go'), bash('a', 'rm -rf build'), r], false));
-    expect(screen.getByTestId('stop-summary').textContent).toBe('Stopped by you · Bash not run');
+    expect(screen.getByTestId('stop-summary').textContent?.replace(/^[▸▾] /, '')).toBe('Stopped by you · Bash not run');
   });
 
   it('background agents stopped after the turn ended: said at its end, its RESULT kept', () => {
@@ -598,7 +617,7 @@ describe('AC9 — one signal; a stopped turn says so', () => {
       agents: [{ toolUseId: 'g1', description: 'phase3', status: 'stopped', background: true }] } as ContentBlock;
     render(view([tx('go'), bash('a', 'make'), tr('a'), tx('done'), r], false));
     expect(screen.getByTestId('turn-result')).toBeTruthy();
-    expect(screen.getByTestId('stop-summary').textContent).toBe('Stopped by you · background agent phase3 stopped');
+    expect(screen.getByTestId('stop-summary').textContent?.replace(/^[▸▾] /, '')).toBe('Stopped by you · background agent phase3 stopped');
   });
 
   it('live, before the receipt: the marker alone makes the last call stopped, not failed', () => {

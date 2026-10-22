@@ -4619,7 +4619,7 @@ class SessionRouter:
             return {"success": False, "message": f"Session {session_id} not found"}
         turn_running = unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT)
         stop_rows = await self._persist_stop_receipt(session_id, unit)
-        products = (asyncio.ensure_future(self._turn_products_at_stop(unit))
+        products = (asyncio.ensure_future(self._turn_products_at_stop(unit, stop_rows))
                     if stop_rows and turn_running else None)
         bg = getattr(unit, "background_agents", None)
         if stop_rows and bg is not None:
@@ -4667,13 +4667,22 @@ class SessionRouter:
             client_id=getattr(unit, "_turn_client_id", None),
         )
 
-    async def _turn_products_at_stop(self, unit: SessionUnit) -> list[dict]:
+    async def _turn_products_at_stop(self, unit: SessionUnit, stop_rows: list[dict] | None = None) -> list[dict]:
         """What the stopped turn changed and produced so far (``turn_changes`` /
         ``turn_deliverables``): otherwise only written at a ``result``, which a
-        stopped turn never gets. [] on any failure."""
+        stopped turn never gets. The files a stopped Bash may have written (the
+        receipt's ``writes``) join the changes: a stopped call never reports its
+        writes itself. [] on any failure."""
         blocks: list[dict] = []
         changes = getattr(unit, "_turn_changes", None)
         if changes is not None:
+            for row in stop_rows or []:
+                for call in (row.get("calls") or []) if row.get("type") == "turn_stop" else []:
+                    for path in call.get("writes") or []:
+                        try:
+                            changes.note({"absolutePath": path, "operation": "written"})
+                        except Exception as exc:  # noqa: BLE001 — a display aid
+                            logger.debug("turn_changes note at stop failed: %s", exc)
             try:
                 cblock = await changes.finish()
                 if cblock:
