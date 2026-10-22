@@ -156,13 +156,8 @@ const TAG = 'text-[11px] font-semibold uppercase tracking-[0.08em]';
 const MARK_COL = 'w-4 shrink-0 text-center';
 
 function Chevron({ open }: { open: boolean }) {
-  // Size, line height and display are inline styles on purpose: the unlayered
-  // `.material-symbols-outlined` rule in index.css beats Tailwind v4 utilities
-  // (they live in @layer utilities), so text-[15px] / leading-none / inline-flex
-  // never applied and the glyph rendered at 24px, sitting low beside the label.
   return (
-    <span aria-hidden="true" className={`material-symbols-outlined items-center justify-center h-4 ${MARK_COL} text-[var(--color-text-dim)] transition-transform duration-150`}
-      style={{ fontSize: 15, lineHeight: 1, display: 'inline-flex', transform: open ? 'rotate(90deg)' : 'none' }}>
+    <span aria-hidden="true" className={`material-symbols-outlined inline-flex items-center justify-center h-4 text-[15px] leading-none ${MARK_COL} text-[var(--color-text-dim)] transition-transform duration-150`} style={{ transform: open ? 'rotate(90deg)' : 'none' }}>
       chevron_right
     </span>
   );
