@@ -129,7 +129,10 @@ describe('stream order', () => {
         expect(bad.join(' ; ')).toBe('');
       },
     ), { numRuns: 80 });
-  });
+    // ~1s alone; 80 random turns × up to 12 rendered frames each ran past the global
+    // 15s under the full suite's parallel load (seen twice). A counterexample fails
+    // at once, so a longer budget hides no failure, only the contention.
+  }, 60_000);
 
   it('regression: a thought after a note that settled empty is shown at once (the step working now)', () => {
     // found by the property above: [call, tx, th] — the note settled with no work, so

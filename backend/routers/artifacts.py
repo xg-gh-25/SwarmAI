@@ -28,7 +28,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-import anyio
+from core import executors
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -261,7 +261,7 @@ async def get_recent_artifacts(
         )
 
     try:
-        result = await anyio.to_thread.run_sync(_run_git_log)
+        result = await executors.run_in("subprocess", _run_git_log)
     except subprocess.TimeoutExpired:
         logger.warning("git log timed out for workspace %s", workspace_id)
         return []
@@ -305,13 +305,12 @@ class DriftResponse(BaseModel):
 
 
 # Drift probes run git subprocesses. The frontend fans out one probe PER Canvas row,
-# so a 50-row session would otherwise dispatch 50 concurrent probes onto the SHARED
-# default anyio thread pool (~40 tokens) that /health + streaming also use — the
-# RP53/RP35 event-loop-starvation failure this codebase has hit before. A DEDICATED
-# small limiter caps drift's slice of the pool so it can NEVER starve the shared one:
-# excess probes queue on the limiter (a bounded wait), health/streaming stay free.
-# (Frontend ALSO chunks its fan-out — defense in depth; this is the backend backstop.)
-_DRIFT_LIMITER = anyio.CapacityLimiter(4)
+# so they run on their own 4-worker pool (core/executors "artifact_drift"): excess
+# probes queue there, never on the pools /health, streaming and the gates use — the
+# RP53/RP35 event-loop-starvation class. (Frontend ALSO chunks its fan-out.) Every
+# blocking call in this router goes through core/executors, like the rest of the
+# backend (anyio's to_thread workers outlived the test loops that made them, so the
+# test process could not exit).
 
 
 @router.get("/artifacts/drift", response_model=DriftResponse)
@@ -384,7 +383,7 @@ async def get_artifact_drift(
 
     try:
         # Dedicated limiter (not the shared pool) — see _DRIFT_LIMITER rationale.
-        resolved_p, early = await anyio.to_thread.run_sync(_resolve, limiter=_DRIFT_LIMITER)
+        resolved_p, early = await executors.run_in("artifact_drift", _resolve)
     except Exception:  # noqa: BLE001 — fail-safe: never surface a false dirty on error
         logger.exception("drift resolve failed for %s — degrading to clean", path)
         return DriftResponse(dirty=False, reason="clean")
@@ -444,7 +443,7 @@ async def get_artifact_drift(
 
     try:
         # Dedicated limiter (not the shared pool) — see _DRIFT_LIMITER rationale.
-        return await anyio.to_thread.run_sync(_probe, limiter=_DRIFT_LIMITER)
+        return await executors.run_in("artifact_drift", _probe)
     except Exception:  # noqa: BLE001 — fail-safe: never surface a false dirty on error
         logger.exception("drift probe failed for %s — degrading to clean", path)
         return DriftResponse(dirty=False, reason="clean")
@@ -501,8 +500,8 @@ def _schedule_backfill(workspace_path: str) -> None:
 
     async def _run() -> None:
         try:
-            await anyio.to_thread.run_sync(
-                lambda: ProductRegistry(workspace_path).backfill_from_gitlog(days=30)
+            await executors.run_in(
+                "io", lambda: ProductRegistry(workspace_path).backfill_from_gitlog(days=30)
             )
         except Exception:  # noqa: BLE001 — a bg backfill failure must never crash the loop
             logger.exception("products: background backfill failed for %s", workspace_path)
@@ -554,7 +553,7 @@ async def get_products(
         return reg.list_products(), (not reg.has_backfilled())
 
     try:
-        products, needs_backfill = await anyio.to_thread.run_sync(_load)
+        products, needs_backfill = await executors.run_in("io", _load)
     except Exception:  # noqa: BLE001 — fail-safe: never surface a 500 to the overlay
         logger.exception("products: registry read failed")
         return []
@@ -609,7 +608,7 @@ async def set_product_starred(
     def _toggle() -> bool:
         return ProductRegistry(workspace_path).set_starred(body.path, body.starred)
 
-    matched = await anyio.to_thread.run_sync(_toggle)
+    matched = await executors.run_in("io", _toggle)
     if not matched:
         raise HTTPException(status_code=404, detail="product not found")
     return {"path": body.path, "starred": body.starred}
@@ -694,7 +693,7 @@ async def get_pipeline_projects() -> list[PipelineProjectStatus]:
     def _list():
         return reg.list_projects()
 
-    statuses = await anyio.to_thread.run_sync(_list)
+    statuses = await executors.run_in("io", _list)
     return [
         PipelineProjectStatus(
             project=s.project,
@@ -722,7 +721,7 @@ async def discover_pipeline_artifacts(
     def _discover():
         return reg.discover(project, *type_list)
 
-    artifacts = await anyio.to_thread.run_sync(_discover)
+    artifacts = await executors.run_in("io", _discover)
     return [
         PipelineArtifactResponse(
             id=a.id, type=a.type, producer=a.producer,
@@ -743,7 +742,7 @@ async def get_pipeline_state(
     def _get():
         return reg.get_pipeline_state(project)
 
-    state = await anyio.to_thread.run_sync(_get)
+    state = await executors.run_in("io", _get)
     return {"project": project, "pipeline_state": state}
 
 
@@ -781,7 +780,7 @@ async def publish_pipeline_artifact(req: PublishRequest) -> dict:
         )
 
     try:
-        artifact_id = await anyio.to_thread.run_sync(_publish)
+        artifact_id = await executors.run_in("io", _publish)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except FileNotFoundError as exc:
@@ -799,7 +798,7 @@ async def advance_pipeline(req: AdvanceRequest) -> dict:
         reg.advance_pipeline(req.project, req.state)
 
     try:
-        await anyio.to_thread.run_sync(_advance)
+        await executors.run_in("io", _advance)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -814,7 +813,7 @@ async def supersede_artifact(req: SupersedeRequest) -> dict:
     def _supersede():
         reg.supersede(req.project, req.old_id, req.new_id)
 
-    await anyio.to_thread.run_sync(_supersede)
+    await executors.run_in("io", _supersede)
     return {"old_id": req.old_id, "new_id": req.new_id, "project": req.project}
 
 
@@ -841,5 +840,5 @@ async def record_learn_outcome(req: LearnRequest) -> dict:
             lessons=req.lessons or None,
         )
 
-    await anyio.to_thread.run_sync(_learn)
+    await executors.run_in("io", _learn)
     return {"project": req.project, "outcome": req.outcome, "recorded": True}

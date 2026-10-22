@@ -56,9 +56,10 @@ describe('HiveFleetOverlay', () => {
     await waitFor(() => expect(screen.getByTestId('hive-overview')).toBeInTheDocument());
     expect(listInstances).toHaveBeenCalled();
     expect(listAccounts).toHaveBeenCalled();
-    // both instances render (My + Shared sections)
-    expect(screen.getByText('xg-hive')).toBeInTheDocument();
-    expect(screen.getByText('teammate-hive')).toBeInTheDocument();
+    // both instances render (My + Shared sections). They come from their own fetch,
+    // which can land after the overview: wait for them, do not read them at once.
+    expect(await screen.findByText('xg-hive')).toBeInTheDocument();
+    expect(await screen.findByText('teammate-hive')).toBeInTheDocument();
   });
 
   it('overview reflects real counts (1 running)', async () => {

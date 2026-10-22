@@ -91,6 +91,9 @@ _POOL_SPECS: dict[str, int] = {
                       # code repo on EVERY send. Apart from the finish work below, so
                       # a start never runs late behind another session's finish (a
                       # late start bakes the turn's own edit into its baseline).
+    "artifact_drift": 4,  # routers/artifacts drift probes (a git call per Canvas row; the
+                      # frontend fans out one per row): capped apart from io so a 50-row
+                      # fan-out never queues ahead of other work.
     "canvas_session": 1,  # core/canvas_session: a session's Canvas outputs (git reads
                       # per repo, ~0.2s) after each turn. Its own pool so it never
                       # queues ahead of a streaming turn's finish diff on turn_changes.

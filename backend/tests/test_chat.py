@@ -168,33 +168,27 @@ class TestChatSessionsLimit:
 class TestChatStreamAsync:
     """Async tests for chat streaming functionality."""
 
-    async def test_chat_stream_format(self, async_client: AsyncClient):
-        """Test that stream endpoint is routable and responds.
+    async def test_chat_stream_format(self, async_client: AsyncClient, monkeypatch):
+        """The stream endpoint is routed and streams each conversation message as an
+        SSE ``data:`` line. The conversation itself is stubbed: a real one spawns the
+        AI CLI (present on a dev machine), which then outlived the test and kept its
+        loop from closing."""
+        import json
+        from routers import chat as chat_router
 
-        Note: In test env there is no Claude CLI subprocess, so the
-        streaming endpoint will either return quickly (error/404) or
-        hang waiting for CLI.  We use asyncio.wait_for to cap the
-        wait — any response code proves the endpoint exists and the
-        router is wired correctly.
-        """
-        import asyncio
-        try:
-            response = await asyncio.wait_for(
-                async_client.post(
-                    "/api/chat/stream",
-                    json={
-                        "agent_id": "default",
-                        "message": "Say hello",
-                    }
-                ),
-                timeout=5.0,
-            )
-            # Any response proves the endpoint is routable
-            assert response.status_code in [200, 404, 500]
-        except asyncio.TimeoutError:
-            # Expected in test env: endpoint blocks waiting for CLI subprocess.
-            # The timeout itself proves the endpoint exists (didn't 404 on route).
-            pass
+        class _Router:
+            async def run_conversation(self, **kw):
+                assert kw["agent_id"] == "default" and kw["user_message"] == "Say hello"
+                yield {"type": "session_start", "sessionId": "s-stub"}
+                yield {"type": "result", "sessionId": "s-stub"}
+
+        monkeypatch.setattr(chat_router, "_get_router", lambda: _Router())
+        response = await async_client.post("/api/chat/stream", json={"agent_id": "default", "message": "Say hello"})
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        events = [json.loads(line[len("data: "):]) for line in response.text.splitlines()
+                  if line.startswith("data: ") and line[len("data: "):].startswith("{")]
+        assert [e.get("type") for e in events][:2] == ["session_start", "result"]
 
 
 class TestChatErrorHandling:
