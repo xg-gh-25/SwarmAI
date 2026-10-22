@@ -914,12 +914,23 @@ body {
 /* Canvas OUTPUTS nav-bar: an accent-tinted top bar (gradient from --color-primary)
    above the --canvas-edge bottom hairline — reads as "belonging to the active tab",
    the same visual language as the active chat-tab chip. All theme-var driven. */
+/* Canvas two layers: the navigation layer (tab bar + Artifacts / Changes list) sits
+   on the recessed --color-bg surface; the content (file viewer / change detail) is a
+   raised --color-card card inset below it. Without the two surfaces the list and the
+   document read as one block. */
 .canvas-outputs-navbar {
-  background: linear-gradient(
-    to bottom,
-    color-mix(in srgb, var(--color-primary) 18%, var(--color-card)),
-    color-mix(in srgb, var(--color-primary) 9%, var(--color-card))
-  );
+  background: var(--color-bg);
+}
+[data-testid="canvas-content-column"] {
+  background: var(--color-bg);
+}
+.canvas-content-card {
+  margin: 2px 8px 8px;
+  border: 1px solid var(--color-border);
+  border-top: 2px solid color-mix(in srgb, var(--color-primary) 70%, var(--color-border));
+  border-radius: 10px;
+  background: var(--color-card);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
 }
 
 /* Collapsed rail: the whole Canvas as a thin vertical strip. Vertical text reads

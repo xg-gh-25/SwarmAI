@@ -401,7 +401,7 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
           <span className="canvas-bee">🐝</span>
         </div>
         <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed max-w-full">
-          No outputs yet — keep chatting; whatever I create or edit lands here and
+          No artifacts yet — keep chatting; whatever I create or edit lands here and
           flies out to you.
         </p>
       </div>

@@ -1773,6 +1773,8 @@ app.include_router(ddd_brain_router, prefix="/api/ddd", tags=["ddd-brain"])
 
 from routers.library_api import router as library_router
 app.include_router(library_router, tags=["library"])  # prefix set in router
+from routers.canvas_changes import router as canvas_changes_router
+app.include_router(canvas_changes_router, tags=["canvas"])  # prefix set in router
 
 # Recall metrics visibility (Run 3): read-only count/p50/p95 by context+domain.
 from routers.recall_metrics_api import router as recall_metrics_router

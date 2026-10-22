@@ -14,6 +14,7 @@ import { memo, useState, useCallback, useEffect, useRef, useReducer, type CSSPro
 import FileViewer from './FileViewer';
 import type { FileViewerProps } from './FileViewer';
 import { CanvasOutputRail } from './CanvasOutputRail';
+import { ChangesCount, ChangesDetail, ChangesNav, ChangesRefresh, type ChangesSelection } from './CanvasChanges';
 import type { GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
 import type { CanvasCollapse } from '../../hooks/useCanvasHost';
 import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
@@ -180,6 +181,11 @@ function FileViewerPanelImpl({
   // sessionId's undefined flicker, BUG1/run_26981f66) is now dead code and DELETED.
   // A stable key means the rail neither flashes empty on the flicker NOR bleeds.
   const railTabId = props.tabScopeKey;
+  // Canvas tabs: Artifacts (this session's written files, the existing rail + file
+  // viewer) and Changes (each code repo's local state, CanvasChanges). The file
+  // viewer stays MOUNTED while Changes shows: it holds open files and unsaved edits.
+  const [canvasTab, setCanvasTab] = useState<'artifacts' | 'changes'>('artifacts');
+  const [changesSel, setChangesSel] = useState<ChangesSelection>(null);
 
   const [width, setWidth] = useState(getStoredWidth);
   const [isDragging, setIsDragging] = useState(false);
@@ -484,7 +490,7 @@ function FileViewerPanelImpl({
           data-testid="canvas-resident-rail"
         >
           <span className="material-symbols-outlined text-[18px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">chevron_left</span>
-          <span className="canvas-rail-text text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--color-text)]">Canvas · Outputs</span>
+          <span className="canvas-rail-text text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--color-text)]">Canvas · Artifacts</span>
           {counts.total > 0 && (
             <span
               className="canvas-rail-text text-[11px] text-[var(--color-text-muted)]"
@@ -528,7 +534,7 @@ function FileViewerPanelImpl({
           data-testid="canvas-rail"
         >
           <span className="material-symbols-outlined text-[18px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">chevron_left</span>
-          <span className="canvas-rail-text text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--color-text)]">Canvas · Outputs</span>
+          <span className="canvas-rail-text text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--color-text)]">Canvas · Artifacts</span>
           {counts.total > 0 && (
             // Consistent with the expanded-header count (Gate-1 F1): git-semantic
             // color vars (not literal green/yellow), both new AND mod, shared
@@ -645,56 +651,44 @@ function FileViewerPanelImpl({
               <button
                 onClick={toggleOutputs}
                 className="shrink-0 p-0.5 -ml-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-all"
-                title={outputsCollapsed ? 'Show outputs' : 'Hide outputs list'}
-                aria-label={outputsCollapsed ? 'Show outputs list' : 'Hide outputs list'}
+                title={outputsCollapsed ? 'Show list' : 'Hide list'}
+                aria-label={outputsCollapsed ? 'Show list' : 'Hide list'}
                 aria-expanded={!outputsCollapsed}
                 data-testid="canvas-outputs-caret"
               >
                 <span className={`material-symbols-outlined text-[18px] block transition-transform duration-200 ${outputsCollapsed ? '-rotate-90' : ''}`}>expand_more</span>
               </button>
-              {/* Brand + count: "Canvas · Outputs  N files · M new" */}
-              <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
-                <span className="font-bold tracking-[0.09em] uppercase shrink-0 text-[var(--color-text)]">
-                  Canvas<span className="text-[color-mix(in_srgb,var(--color-primary)_60%,var(--color-text-muted))]"> · Outputs</span>
-                </span>
-                {counts.total > 0 && (
-                  // Compact git-colored count: total, then new(green)/mod(yellow)
-                  // split. When narrow → "N a·b" with the words in the tooltip;
-                  // when expanded → the words inline. Each part gated on >0 so an
-                  // unbadged batch (neu=upd=0) shows just the total (Gate-1 F2).
-                  // Git SEMANTIC color vars only (never --color-primary — the accent
-                  // is header-identity-only; counts carry git meaning). SSOT tooltip
-                  // via canvasCountTitle so it never drifts from the rail (F1).
-                  <span
-                    className="truncate text-[var(--color-text-muted)]"
-                    title={canvasCountTitle(counts.neu, counts.upd) || undefined}
-                  >
-                    {counts.total}
-                    {(counts.neu > 0 || counts.upd > 0) && (
-                      <span className="ml-1">
-                        {counts.neu > 0 && (
-                          <span className="text-[var(--color-git-added)]">
-                            {expanded ? `${counts.neu} new` : counts.neu}
-                          </span>
-                        )}
-                        {counts.neu > 0 && counts.upd > 0 && (
-                          <span className="text-[var(--color-text-dim)]">{expanded ? ' · ' : '·'}</span>
-                        )}
-                        {counts.upd > 0 && (
-                          <span className="text-[var(--color-git-modified)]">
-                            {expanded ? `${counts.upd} mod` : counts.upd}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                  </span>
-                )}
+              {/* Tabs: Artifacts (this session's files) | Changes (code repos' local state). */}
+              <div className="flex items-center min-w-0 flex-1">
+                <div role="tablist" aria-label="Canvas" className="inline-flex p-[2px] rounded-lg bg-[color-mix(in_srgb,var(--color-text)_6%,transparent)]">
+                  {([
+                    ['artifacts', 'Artifacts'],
+                    ['changes', 'Changes'],
+                  ] as const).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="tab"
+                      aria-selected={canvasTab === id}
+                      data-testid={`canvas-tab-${id}`}
+                      onClick={() => setCanvasTab(id)}
+                      title={id === 'artifacts' ? (canvasCountTitle(counts.neu, counts.upd) || undefined) : undefined}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-[2px] rounded-md text-[12px] transition-colors ${canvasTab === id ? 'bg-[var(--color-bg)] text-[var(--color-text)] shadow-[0_1px_2px_rgba(0,0,0,.3)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
+                    >
+                      {label}
+                      {id === 'artifacts'
+                        ? counts.total > 0 && <span className="text-[10.5px] px-1.5 rounded-full tabular-nums bg-[color-mix(in_srgb,var(--color-text)_10%,transparent)]">{counts.total}</span>
+                        : <ChangesCount />}
+                    </button>
+                  ))}
+                </div>
+                {canvasTab === 'changes' && <ChangesRefresh />}
               </div>
               {/* CONTENT controls (pin + mute) — act on WHAT is shown, grouped
                   left beside "Outputs". Pin = THIS file (keep it open, don't let
                   a new output replace the view). Mute = THIS SESSION (stop
                   auto-surfacing new outputs). Distinct scopes → two controls. */}
-              <div className="flex items-center gap-0.5 shrink-0" data-testid="canvas-content-controls">
+              <div className={`flex items-center gap-0.5 shrink-0 ${canvasTab === 'changes' ? 'invisible' : ''}`} data-testid="canvas-content-controls">
                 <button
                   onClick={onTogglePin}
                   // Idle vs active are MUTUALLY EXCLUSIVE in one color slot (NOT two
@@ -762,19 +756,28 @@ function FileViewerPanelImpl({
                 setCounts) stay live — the bar's "N files · M new" summary keeps
                 updating while folded. */}
             <div
-              className={outputsCollapsed ? 'hidden' : 'max-h-[140px] overflow-y-auto px-1.5 pb-1.5'}
+              className={outputsCollapsed || canvasTab !== 'artifacts' ? 'hidden' : 'max-h-[140px] overflow-y-auto px-1.5 pb-1.5'}
               data-testid="canvas-outputs-list"
             >
               <CanvasOutputRail files={referencedFiles} onCounts={setCounts} selectedPath={selectedPath} />
             </div>
+            {canvasTab === 'changes' && !outputsCollapsed && (
+              <div className="max-h-[220px] overflow-y-auto px-1.5 pb-1.5" data-testid="canvas-changes-list">
+                <ChangesNav selected={changesSel} onSelect={setChangesSel} />
+              </div>
+            )}
           </div>
         )}
-        {/* FileViewer surface */}
-        <div className="flex-1 min-w-0 overflow-hidden">
-          <FileViewer
-            {...props}
-            variant="panel"
-          />
+        {/* Content layer: a raised card below the navigation layer (the header and
+            its list sit on the recessed canvas surface). */}
+        <div className={`flex-1 min-w-0 overflow-hidden ${railTabId !== undefined ? 'canvas-content-card' : ''}`}>
+          <div className={canvasTab === 'changes' ? 'hidden' : 'h-full'}>
+            <FileViewer
+              {...props}
+              variant="panel"
+            />
+          </div>
+          {canvasTab === 'changes' && <ChangesDetail selected={changesSel} />}
         </div>
       </div>
     </div>
