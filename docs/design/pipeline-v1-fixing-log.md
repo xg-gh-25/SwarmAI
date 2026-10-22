@@ -192,3 +192,15 @@ trivial 不变：`tests/fixtures/pipeline_v1_trivial_profile.json` 是改动前 
 **对抗审查（29988622faae386c，3 MED + 1 LOW）：** 全部已修（上表的 INSTRUCTIONS、stash 文本、lint 范围、runtime_hooks docstring）。lint 只校验字段名出现在协议源码中，没有对照结构化 schema，记为遗留。
 
 **遗留：** v1 缓存 GC 没有做（缓存按 key 不可变，目前只增长，需要按 run 终态和时间回收的设计）。
+
+## 10. 按 v13 §E7 的审核表（整次修复：G、A、B、N2、N1、C、D、E）
+
+| 维度 | 当前基线 | 本次变化 | 证据 | 判定 | 处理 |
+|---|---|---|---|---|---|
+| Run Isolation | worktree 创建失败会退回共享 checkout；验证清单和 review / proof diff 读 main 的 HEAD；`discard-snapshot` 只按 id 绑定；hook 写者可被 CLI 进程签名 | 失败即 pause、mode 在 create 时固定；run base = 记录的集成分支 fork point（B6）；land 在 run 锁内（C4）；`.aidlc/deliverables/` 写保护；snapshot 绑定 `{snapshot_id, repo_name}`；CLI / runner 进程只能拿到自己的 writer（C3）；REFLECT 路由只写 `Projects/` 内（D） | `test_pipeline_v1_real_e2e.py`（0 xfail）、`test_pipeline_v1_rehearsal.py`、landing / worktree gate 测试；各组宽回归（c_all2、b_all2、d_fix3、e_all2，只有已知红，E 组已修） | WARN | 已知限制：进程内任意 Python 仍可自己 `allow_hook_writer()` 签 hook 事件（§6、§8 遗留，需把 hook 签名移到 daemon IPC 后）。没有跨 run 读写的新增路径 |
+| Quality | 落地读 `latest-*`；BX 没有整文件运行要求；collect 不真实；finding 由模型声明关闭；拒绝提示指向退役命令 | BX-2 要求选中文件整文件运行且全过（N1）；DS-2b/DS-4b 真实 collect（B8）；缓存 key 含 runner 代码哈希和规则版本（B7）；聚类整体处理（F-9）；双 VERDICT 判 unparsed（F-5）；卡片和拒绝提示的命令用真实 parser 校验（E） | 每组先写失败测试再修；每组一次独立对抗审查（N1 3H+1M、C 3H+1M+1L、B 1H+6M+2L、D 3H+6M、E 3M+1L）且已修或记为遗留；card lint 变异验证 | PASS | 未做 v1 缓存 GC；字段 lint 只按名称 |
+| Autonomy | 3 个 run 因 DELIVER 被拒 3 次放弃；REFLECT 由 agent 自己宣布完成；人工审批不计数；direct 需要 PLAN | direct 去掉 PLAN 和设计文档（N1）；纯文档改动不开 run（N2）；REFLECT 由 daemon 后台完成，agent 无命令（D1）；`required_approval`、`accept_finding` 计入审计（D4）；人工落地是两步、绑定树的一次性授权（C1、C6） | real_e2e 的 direct / 人工落地 / 拒绝路径；`test_the_agent_cannot_complete_reflect_and_the_daemon_does` | PASS | `manual_rescue` 生产者未做（没有可靠信号，不推测） |
+| Speed | 无 p95 基线；验证 Gate-2 多派；每次判定扫描大量文件 | 按 profile 的 wall p95 基线写入 contract（D2）；结果按不可变 key 复用（B7）；REFLECT 不在关键路径（后台，单线程，有上限） | `core/run_protocol/baselines.json`（bugfix 8355 s、direct 3363 s、full 32691 s、goal 66502 s、research 1048 s、trivial 2710 s，均为旧 run 的 p95） | PARTIAL | v1 改进还没有实测：重建后跑满 10 个 v1 run，重跑 `scripts/pipeline_baseline.py` 对比 |
+| Token Cost | 有阶段级估算；measure-usage 累加；专家用量重复计算 | 最新一次计量替换之前的；有 transcript 计量时不再加专家记录；没计量为 BLOCK（D3）；handout prompt 进 blob（F-4） | `test_run_protocol_audit.py` 的替换 / 未知 / BLOCK 测试 | PARTIAL | Token 基线为 null（旧 run 没有实测）；需要 v1 run 的实测数据；跨 run 答案复用（F-7）待模型 id |
+
+**总体：PARTIAL。** 没有 BLOCK：Run Isolation 只有一项已知、已记录的进程内签名限制（WARN），Quality 和 Autonomy 有测试证据。Speed 和 Token Cost 的改进要在 XG 重建、重启后由真实 v1 run 实测，现在不能声称已验证。
