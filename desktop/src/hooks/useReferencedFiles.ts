@@ -162,7 +162,7 @@ export function toReferencedFile(a: SessionArtifact, sessionId?: string): Refere
     fileName: basename(a.path),
     operation: 'written',
     firstSeen: Number.isNaN(t) ? 0 : t,
-    count: a.turns,
+    count: a.writes,
     kind: a.kind as ReviewKind | undefined,
     baseRef: a.baseRef,
     sessionId,

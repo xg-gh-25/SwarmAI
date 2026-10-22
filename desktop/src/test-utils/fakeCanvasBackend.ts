@@ -36,7 +36,7 @@ export function installFakeCanvasBackend(apiGet: Mock) {
     m.set(ap, {
       path: d.path ?? ap, absolutePath: ap, kind: d.kind, role: 'Other', product: false, starred: false,
       displayLabel: (d.path ?? ap).split('/').pop() ?? ap, firstAt: cur?.firstAt ?? at, lastAt: at,
-      turns: (cur?.turns ?? 0) + 1, deleted: false, exists: true, ...(d.baseRef ? { baseRef: d.baseRef } : {}),
+      writes: (cur?.writes ?? 0) + 1, deleted: false, exists: true, ...(d.baseRef ? { baseRef: d.baseRef } : {}),
     });
   };
   // capture phase: recorded before any store listener sees the event (the backend

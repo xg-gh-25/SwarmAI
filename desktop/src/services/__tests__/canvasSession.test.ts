@@ -21,7 +21,7 @@ import {
 import { renderHook } from '@testing-library/react';
 
 const art = (path: string) => ({ path, absolutePath: `/ws/${path}`, kind: 'knowledge', role: 'Knowledge', product: true,
-  starred: false, displayLabel: path, firstAt: 't', lastAt: 't', turns: 1, deleted: false, exists: true });
+  starred: false, displayLabel: path, firstAt: 't', lastAt: 't', writes: 1, deleted: false, exists: true });
 const fire = (tabId?: string) => window.dispatchEvent(new CustomEvent('swarm:file-changed', {
   detail: { path: 'x.md', tabId, operation: 'written', kind: 'knowledge' } }));
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));

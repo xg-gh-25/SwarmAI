@@ -15,7 +15,7 @@ import { refreshCanvasSession, resetCanvasSession } from '../../services/canvasS
 import { act } from '@testing-library/react';
 
 const ART = { path: 'Knowledge/n.md', absolutePath: '/ws/Knowledge/n.md', kind: 'knowledge', role: 'Knowledge',
-  firstAt: '2026-10-22T10:00:00', lastAt: '2026-10-22T10:00:00', turns: 1, exists: true };
+  firstAt: '2026-10-22T10:00:00', lastAt: '2026-10-22T10:00:00', writes: 1, deleted: false, exists: true, product: true, starred: false, displayLabel: 'n.md' };
 
 beforeEach(() => {
   sessionStorage.clear();

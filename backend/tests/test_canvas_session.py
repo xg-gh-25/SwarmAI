@@ -90,6 +90,7 @@ async def test_turns_fold_into_one_net_row_and_follow_the_content(repo):
     row, files = _state(repo, [r1, r2])
     assert files["a.py"]["state"] == "committed" and files["a.py"]["commit"] == sha
     assert [c["sha"] for c in row["commits"]] == [sha] and row["commits"][0]["files"] == ["a.py", "new.py"]
+    assert row["commits"][0]["short"] == sha[:8]
 
     _git(repo, "push", "-q", "origin", "main")
     row, files = _state(repo, [r1, r2])
@@ -211,7 +212,7 @@ def test_artifact_rows_join_the_product_catalog(tmp_path):
         {"path": "x.md", "absolutePath": "/elsewhere/x.md", "kind": "external-nodiff", "firstAt": "t0",
          "lastAt": "t0", "writes": 1, "deleted": False}], str(ws))
     a, b = rows
-    assert (a["role"], a["product"], a["starred"], a["exists"], a["turns"]) == ("Knowledge", True, True, True, 2)
+    assert (a["role"], a["product"], a["starred"], a["exists"], a["writes"]) == ("Knowledge", True, True, True, 2)
     assert (b["role"], b["product"], b["exists"], b["displayLabel"]) == ("Other", False, False, "x.md")
 
 

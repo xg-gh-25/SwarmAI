@@ -116,7 +116,7 @@ def artifact_rows(rows: list[dict], workspace: Optional[str]) -> list[dict]:
                     "starred": bool(f.get("starred")),
                     "displayLabel": f.get("displayLabel") or os.path.basename(r["path"]),
                     "exists": os.path.exists(r["absolutePath"]),
-                    "turns": r.get("writes", 1)})
+                    "writes": r.get("writes", 1)})
     return out
 
 
@@ -160,7 +160,8 @@ def _local_commits(root: str, rels: list[str]) -> list[dict]:
             m = meta.split()
             if len(m) >= 4:
                 blobs[path] = m[3]
-        commits.append({"sha": parts[0], "short": parts[1], "subject": parts[2], "at": parts[3],
+        # %h is the FULL id under --no-abbrev (needed for the raw blob ids)
+        commits.append({"sha": parts[0], "short": parts[0][:8], "subject": parts[2], "at": parts[3],
                         "blobs": blobs})
     return commits
 

@@ -36,7 +36,8 @@ export interface SessionArtifact {
   displayLabel: string;
   firstAt: string;
   lastAt: string;
-  turns: number;
+  /** How many writes of the session touched it. */
+  writes: number;
   /** Deleted by the session (a later write clears it). */
   deleted: boolean;
   exists: boolean;
