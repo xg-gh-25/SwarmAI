@@ -257,11 +257,8 @@
       "result": "结果",
       "attention": {
         "title": "待你确认",
-        "heading": "待你确认 · {{count}} 项",
-        "assumption": "假设 {{id}}",
         "notPushReady": "还不能 push",
         "more": "其余 {{count}} 项见 run 报告",
-        "decidedFor": "{{name}} 替你定了 · {{count}}",
         "reason": "理由：{{text}}",
         "reasonCode": {
           "design_states": "设计没有写明这次改动新增或涉及哪些状态",
@@ -379,7 +376,17 @@
         "landed": "已落 main · {{sha}}",
         "asked": "你要的",
         "before": "原来",
-        "now": "现在"
+        "now": "现在",
+        "details": "运行详情"
+      },
+      "bgAgentLabel": "Agent",
+      "viewOriginalAgent": "查看原 Agent",
+      "viewOriginalAgentNamed": "查看原 Agent：{{name}}",
+      "bgResult": "结果",
+      "assumptions": {
+        "title": "待核对的假设",
+        "decision": "决定",
+        "assumption": "假设"
       }
     },
     "nextSteps": {

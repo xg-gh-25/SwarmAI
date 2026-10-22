@@ -257,11 +257,8 @@
       "result": "Result",
       "attention": {
         "title": "For you to check",
-        "heading": "For you to check · {{count}}",
-        "assumption": "Assumed {{id}}",
         "notPushReady": "Not ready to push",
         "more": "+{{count}} more in the run report",
-        "decidedFor": "{{name}} decided for you · {{count}}",
         "reason": "Why: {{text}}",
         "reasonCode": {
           "design_states": "The design does not say which state the change adds or touches",
@@ -379,7 +376,17 @@
         "landed": "on main · {{sha}}",
         "asked": "Asked",
         "before": "Before",
-        "now": "Now"
+        "now": "Now",
+        "details": "Run details"
+      },
+      "bgAgentLabel": "Agent",
+      "viewOriginalAgent": "View original agent",
+      "viewOriginalAgentNamed": "View original agent: {{name}}",
+      "bgResult": "Result",
+      "assumptions": {
+        "title": "Assumptions to verify",
+        "decision": "Decision",
+        "assumption": "Assumption"
       }
     },
     "nextSteps": {
