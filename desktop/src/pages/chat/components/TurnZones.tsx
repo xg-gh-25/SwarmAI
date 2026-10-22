@@ -192,6 +192,11 @@ function statsMeta(t: ReturnType<typeof useTranslation>['t'], s: { steps: number
 
 // ── Thoughts ────────────────────────────────────────────────────────────────────
 
+/** An opened strip row's body (a thought's text, a tool's detail): just inside the
+ *  row's own inset, with a hairline guide, not under the preview column, so a long
+ *  body keeps most of the width. */
+const DETAIL_INSET = 'mt-0.5 mb-1 ml-2 pl-3 border-l border-[var(--color-border)]';
+
 const THOUGHT_TEXT = 'text-[12.5px] italic leading-relaxed text-[var(--color-text-muted)] whitespace-pre-wrap break-words';
 
 /** A thought inside a phase: one row in the strip column, `✻ Thought`, its first line
@@ -218,7 +223,7 @@ function PhaseThought({ unit, scope, open, onToggle }: { unit: ThoughtUnit; scop
           {seconds !== undefined && seconds >= MIN_SECONDS ? fmt(seconds) : ''}
         </span>
       </button>
-      {open && <div data-testid="thought-text" className={`${THOUGHT_TEXT} mt-0.5 mb-1 ml-[calc(10ch+20px)]`}>{unit.text}</div>}
+      {open && <div data-testid="thought-text" className={`${THOUGHT_TEXT} ${DETAIL_INSET}`}>{unit.text}</div>}
     </div>
   );
 }
@@ -311,7 +316,7 @@ export const ToolStripV6 = memo(function ToolStripV6({ item }: { item: StripItem
         <span data-testid="strip-time" className={`ml-auto w-[7ch] shrink-0 text-right tabular-nums ${stopped ? 'text-[var(--color-text-dim)]' : 'text-[var(--color-text-muted)]'}`}>{time}</span>
       </button>
       {open && (
-        <div data-testid="strip-detail" className="mt-0.5 mb-1 ml-[calc(10ch+20px)] space-y-0.5 font-mono text-[11.5px] text-[var(--color-text-dim)]">
+        <div data-testid="strip-detail" className={`${DETAIL_INSET} space-y-0.5 font-mono text-[11.5px] text-[var(--color-text-dim)]`}>
           {n > 1
             ? item.steps.map((s) => <ToolStripV6 key={`tu-${s.block.id}`} item={{ key: `tu-${s.block.id}`, steps: [s], objects: [] }} />)
             : <div className="whitespace-pre-wrap break-words">{step.result?.outcome}</div>}
