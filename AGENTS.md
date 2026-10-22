@@ -442,27 +442,39 @@ git worktree remove <scratch>/wt-<topic> && git branch -d <agent>/<topic>
   committed version, put its file back (`git merge-file` 3-way) and check its hunks survived.
 - Not-fast-forward: `git rebase main` again, re-run the affected tests, retry.
 
-**Write it yourself — nothing enforces it for a manual commit.** Only the pipeline's
-landing (`backend/core/run_protocol/landing.py`) builds the trailer into its own message. For any commit you make
-by hand, add the line yourself. `core.hooksPath` on this machine points at the corporate
-git-defender hook set, and a hooksPath override *replaces* `.git/hooks` rather than merging
-with it. So every repo-local hook is shadowed and silently inert:
+**Write it yourself.** Only the pipeline's landing (`backend/core/run_protocol/landing.py`)
+builds the trailer into its own message. For any commit you make by hand, add the Swarm line
+yourself, and never a `Co-Authored-By: Claude … <noreply@anthropic.com>` line.
 
-| repo-local hook | what it was guarding | status |
+`core.hooksPath` on this machine points at the corporate git-defender hook set, and
+git-defender then runs the repo-local `.git/hooks` too. So the repo-local hooks are LIVE
+(observed 2026-10-22: in a scratch repo all four of `pre-commit`, `prepare-commit-msg`,
+`commit-msg`, `post-commit` fired; in this repo `prepare-commit-msg` rewrote a commit's
+Claude trailer to Swarm). An earlier version of this file called them dead; that was wrong.
+
+| repo-local hook | what it guards | status |
 |---|---|---|
-| `prepare-commit-msg` | rewrite SDK `Claude` trailer → `Swarm` | dead |
-| `pre-commit` | CMHK SDK-drift check | dead |
-| `pre-commit` | `scripts/lint_doc_frontmatter.py --staged` | dead (currently 0 errors) |
-| `pre-commit` | `scripts/sync_discussions.py --check` mirror drift | dead |
+| `prepare-commit-msg` | sed-rewrites `Co-Authored-By: Claude…<noreply@anthropic.com>` → `Co-Authored-By: Swarm <swarm@swarmai.dev>` | live |
+| `pre-commit` | CMHK SDK-drift check | live |
+| `pre-commit` | `scripts/lint_doc_frontmatter.py --staged` (when `docs/*.md` is staged) | live |
+| `pre-commit` | `scripts/sync_discussions.py --check` mirror drift (when `docs/discussions/` is staged) | live |
 
-There is **no automated enforcement** any more. The PreToolUse `commit_trailer_gate`
-was removed 2026-08-16 (`73378945`: a project's private convention must not be a
-product-wide runtime hook), and the CI trailer check was removed the same day
-(`b493577a`). `scripts/check_commit_trailers.py` remains for optional local use:
+What these hooks do NOT cover:
+- `prepare-commit-msg` only rewrites a Claude trailer that is already there, spelled exactly
+  `Co-Authored-By:` (the sed is case-sensitive). It never adds a missing Swarm line.
+- It also runs on `--amend` and is not skipped by `--no-verify`. A Claude trailer cannot be
+  put back with an amend, and that is intended.
+- `.git/hooks` is not versioned. A fresh clone or another machine has none of these hooks.
+- `--no-verify` skips `pre-commit` and `commit-msg` (git-defender logs a bypass warning).
+
+There is no CI or PreToolUse trailer check. The PreToolUse `commit_trailer_gate` was removed
+2026-08-16 (`73378945`: a project's private convention must not be a product-wide runtime
+hook), and the CI trailer check was removed the same day (`b493577a`).
+`scripts/check_commit_trailers.py` remains for optional local use:
 `python3 scripts/check_commit_trailers.py`.
 
-Do NOT "fix" this by changing `core.hooksPath` — it is machine/corporate policy, and the
-project rules forbid modifying git config. Any check that must actually run belongs in CI.
+Do NOT change `core.hooksPath`: it is machine/corporate policy, and the project rules forbid
+modifying git config. Any check that must run on every machine belongs in CI.
 (git-defender runs its hooks synchronously on every commit. Measured 2026-10-18 in this repo:
 0.4–0.8 s for commits of 4–162 files, 2.3 s for an amend, 1.4 s for a rebase, 0.3 s for an
 ff-only merge. The old "allow ~600 s" no longer holds; a commit that takes minutes is a symptom
