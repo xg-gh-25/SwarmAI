@@ -4,7 +4,7 @@ date: 2026-10-22
 created: 2026-10-22
 updated: 2026-10-22
 project: SwarmAI
-status: DRAFT — §5 的问题待 XG 回答后开工
+status: IN PROGRESS — §5 已由 XG 决定
 related: v1 修复方案（~/.swarm-ai/SwarmWS/Projects/SwarmAI/2-understanding/knowledge/designs/2026-10-22-pipeline-v1-fixing-spec.md）；v13 设计（同目录 2026-10-21-pipeline-structural-decisions.md）；修复记录 docs/design/pipeline-v1-fixing-log.md
 ---
 
@@ -28,7 +28,7 @@ related: v1 修复方案（~/.swarm-ai/SwarmWS/Projects/SwarmAI/2-understanding/
 |---|---|---|
 | 阶段 | direct 改为 `build → review → test → deliver → reflect`；其他 profile 一律不变，trivial 仍有 PLAN 和 lite design | XG 原文 |
 | 需求 | `create --requirement <原话>`：direct 必填，缺了就报错，不默认空串；其他 profile 可选。写进 `contract.json` 的 `requirement` 字段（不可变、绑定 run），REPORT 和 run.json 从这里读 | Isolation：需求是 run 的输入，必须不可变、只属于这个 run。只放 contract，不改事件 schema |
-| 检查清单 | direct 不登记任何读 REQUIREMENTS / DESIGN_SPEC 的检查：RQ-\*、DS-\*、BX-1、TS-2、TS-3；DC-1、DC-2 也不登记（direct 没有可以提 decision 的阶段，见 §5 Q4）。做法是从 registry 的 `profiles` 里去掉 direct，并在 `EXEMPTIONS` 写明理由，不是跑了再放行 | XG 原文"根本不在清单里"；按 registry 的 input 列逐条判定"依赖 design/requirements"，不靠猜 |
+| 检查清单 | direct 不登记任何读 REQUIREMENTS / DESIGN_SPEC 的检查：RQ-\*、DS-\*、BX-1、TS-2、TS-3；DC-1、DC-2 也不登记（direct 没有可以提 decision 的阶段；有歧义时 abandon 并改用 trivial，§5 Q4）。direct 永远没有 exit criteria（§5 Q3）。做法是从 registry 的 `profiles` 里去掉 direct，并在 `EXEMPTIONS` 写明理由，不是跑了再放行 | XG 原文"根本不在清单里"；按 registry 的 input 列逐条判定"依赖 design/requirements"，不靠猜 |
 | BUILD 通过条件 | 新检查 **BX-2**（stage 效果，只登记给 direct）：有改动（changed_paths 非空）；且 runner 现有选测规则对 changed_paths 选中的每个测试文件（改动的测试 + 改动模块的直接 importer，冻结的 `select_backend`，不改它）在当前 code_tree 上都有 `--mode tdd` 结果，并且全部通过（`node_results`）。选不出任何测试（纯文档）时，tdd 不作为条件 | Quality：tdd 失败不能过；"改动涉及的测试"用已冻结的选测函数计算，不新造一份规则 |
 | TEST | 不变：一次 regression（TS-1），加上 base 版本验证清单（LG-5）。TS-2 / TS-3 对 direct 不登记，测试红由 LG-2 拦 | Quality 由落地守卫保证，不依赖 exit criteria |
 | REVIEW、DELIVER、REFLECT | 不变 | — |
@@ -96,23 +96,16 @@ related: v1 修复方案（~/.swarm-ai/SwarmWS/Projects/SwarmAI/2-understanding/
 
 - **每组一个 commit**，N1、N2 各一个。都在本 session 自己的 worktree 里做，`merge --ff-only` 进 main，不 push。worktree 需要一个本地分支，这是 git 的要求；落地后删除，main 上看到的就是直接提交（AGENTS.md"Code changes outside a pipeline run"）。
 - **一次重启：** N1、N2、C、D4 和已经落地的 A、B 都会改 daemon 加载的代码（hook、lifecycle 折叠、store 校验）。daemon 和 CLI 版本不一致时，daemon 侧写入的事件（`human_answer`、`user_stop`、`owner_transfer`）会用旧规则校验新日志。所以**在 XG 重建之前，不要用 v1 跑真实的 run**；全部做完后统一交 XG build 和重启一次。
-- 每个 commit 前：受影响的测试文件全部跑绿（`perl -e 'alarm N; exec @ARGV'` 包 pytest）；adversarial 审查覆盖全部改动路径；build 见 §5 Q2。
+- 每个 commit 前：受影响的测试文件全部跑绿（`perl -e 'alarm N; exec @ARGV'` 包 pytest）；adversarial 审查覆盖全部改动路径；不跑 `./prod.sh build`（§5 Q2）。
 
-## 5. 需要 XG 决定的问题
+## 5. XG 的决定（2026-10-22）
 
-**Q1 commit trailer。** XG 原文要求 `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`。AGENTS.md 规定本仓库的 commit 不得使用 Claude / Anthropic 身份，只能用 `Co-Authored-By: Swarm <swarm@swarmai.dev>`；而且本机的 `prepare-commit-msg` hook 会把 Claude trailer 改写成 Swarm 那行。这不是五维能推断的问题，是两条规则冲突。建议：照旧用 Swarm trailer。
-
-**Q2 每个 commit 前的 `./prod.sh build`。** 它会部署并重启 daemon（`prod.sh` 第 4 行），与"不重启生产 daemon、hook 改动攒成一批交 XG"冲突。建议：每个 commit 前只跑受影响的测试和 `./prod.sh verify`（不部署）；全部做完后由 XG 跑一次 `./prod.sh build`。
-
-**Q3 direct 的 exit criteria"可选"。** 去掉 PLAN 之后，direct 没有任何阶段可以提交 design，"可选"实际上永远是"没有"。两种做法：
-- A：direct 永远没有 exit criteria；需要 exit criteria 的改动用 trivial。规则最简单。
-- B：`create` 时可以附带一份 lite design；附带了就登记 DS-\* / BX-1 / TS-2，不附带就走 §1.1。
-- 五维上：A 的 Speed、Token 更好；B 保留了 Quality 的可追溯性，但同一个 profile 有两套检查清单。Quality 的 BLOCK 条件里没有"缺追溯"，所以 A 不触发 BLOCK。建议 A。
-
-**Q4 direct 不能再问人。** decision 只能在 EVALUATE / THINK / PLAN 提出，去掉 PLAN 后 direct 一个都没有。E3 要求"需求有两种以上合理解释时问人"，并且不能为了自主跳过这一步。两种做法：
-- A：允许 direct 在 BUILD 开始前（还没有任何 stage_attempt 时）提一次 decision。这要改 lifecycle 的转移表，是协议改动。
-- B：direct 的需求被认定为没有歧义；agent 遇到歧义时 abandon，改用 trivial 重开 run 并在那里问。
-- 建议 B：direct 的定位就是"小而明确"，有歧义本身就说明选错了 profile；B 不改协议。但这会让 E3 的"可避免问题"统计里多出一类"选错 profile 后重开"的情况，需要 XG 确认能接受。
+| # | 问题 | 决定 |
+|---|---|---|
+| Q1 | commit trailer | 只用 `Co-Authored-By: Swarm <swarm@swarmai.dev>`，这是有意的设计；任何 commit 都不得出现 `Co-Authored-By: Claude … <noreply@anthropic.com>` |
+| Q2 | 每个 commit 前跑 `./prod.sh build` | 不允许。`./prod.sh build` 会部署并重启 daemon，只由 XG 执行。每个 commit 前只跑受影响的测试（带 wall-clock cap） |
+| Q3 | direct 的 exit criteria | direct 永远没有 exit criteria；需要 exit criteria 的改动用 trivial |
+| Q4 | direct 遇到需求歧义 | abandon，改用 trivial 重开 run，在 trivial 里问。不改 lifecycle 协议 |
 
 ## 6. 交付标准
 

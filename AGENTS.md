@@ -231,7 +231,9 @@ implementations in `security_hooks.py`). By category:
    denies `git commit --amend` and points at the run's own landing (`pipeline_v1.py land --message`) instead of letting
    `dangerous_command_gate` park the run on an approval prompt), `direct_commit_gate` (a session
    with no run of its own that commits more than 20 changed source lines in the SwarmAI source
-   repo, docs and lockfiles excluded, is sent to `pipeline_v1.py create --profile direct`;
+   repo — any source line with worktree mode on — is sent to `pipeline_v1.py create --profile
+   direct`; pure-doc paths are not source (`*.md` and `backend/context/`, defined once in
+   `backend/core/doc_paths.py::is_doc_only_path`);
    other sessions' and unowned runs never exempt it), `active_run_commit_gate` (files owned by an
    active pipeline run, and that run's own `.aidlc/deliverables/<run_id>/` REPORT.md, land
    only through the run's DELIVER landing), `adversarial_commit_gate` (no `git commit` without a sub-agent review this
@@ -415,7 +417,10 @@ commit, a commit made there picks up another session's staged files, and an unco
 there blocks a run's `merge --ff-only` landing. All three happened on 2026-10-19.
 
 - **SwarmAI app sessions** are enforced: with worktree mode on, `worktree_write_gate` denies a
-  write to the main checkout and prints the `pipeline_v1.py create --profile direct` command. A direct
+  write to the main checkout and prints the `pipeline_v1.py create --profile direct` command;
+  pure-doc files (`*.md` and `backend/context/`, as defined by
+  `backend/core/doc_paths.py::is_doc_only_path`) are the exception and may be edited and
+  committed there without a run (the adversarial review is still required). A direct
   run always goes plan -> build -> review -> test -> deliver -> reflect: PLAN writes the
   structured exit contract and is never skipped. A small change (at most 20 non-test
   source lines, no new code file, no sensitive path) dispatches no review expert; its

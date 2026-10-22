@@ -22,7 +22,9 @@ while worktree mode is off and no run worktree exists. Judgments:
    shared-mode run is exempt) → DENY file writes to the main checkout of a project's
    code repo (run_worktree.repo_for_write, and the repo is a workspace project's or the
    SwarmAI source; never SwarmWS; gitignored and ``.git/`` paths pass) and writes into
-   any run's worktree. A direct code change goes through a run too, so it lands from its
+   any run's worktree. Pure-doc files (``core.doc_paths.is_doc_only_path``: ``*.md``
+   and ``backend/context/``) are the exception: they may be written in the main checkout.
+   A direct code change goes through a run too, so it lands from its
    own worktree instead of sharing the checkout with every other session; the deny
    prints the commands (resume the session's own run when it has one). Git commands
    that write that checkout (``_GIT_WRITES_MAIN``) are denied the same way; a write the
@@ -48,6 +50,7 @@ import threading
 import time
 from typing import Any
 
+from core.doc_paths import is_doc_only_path
 from core.gate_force import force_enabled
 
 logger = logging.getLogger(__name__)
@@ -320,6 +323,8 @@ def _no_run_verdict(p: str, nr: "_NoRun", what: "str | None" = None) -> "dict | 
     project = _project_repo(main)
     if project is None or (what is None and _ignored(main, p)):
         return None
+    if what is None and is_doc_only_path(os.path.relpath(p, main)):
+        return None   # a pure-doc file may be edited in the main checkout (core/doc_paths)
     head = (f"{what or p} is in the main checkout of {main}, which every session shares. With "
             "worktree mode on, a code change — through the pipeline or direct — is made in a "
             "run's own worktree and lands from there by itself. ")

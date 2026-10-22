@@ -29,9 +29,9 @@ Invariants:
     carries the runner command and the run-update --status abandoned escape, filled
     with the real project and run id, and calls the force env operator-only.
   • direct_commit_gate: only for the SwarmAI source repo; no own run + >20 changed
-    source lines (docs and lockfiles excluded) → deny with run-create --profile
+    source lines (pure-doc paths excluded, core/doc_paths.py) → deny with run-create --profile
     direct for the repo's project; unowned / other-session runs do not exempt;
-    docs-only, lockfile-only, ≤20 lines, other repos, session in a run, git errors
+    docs-only, ≤20 lines, other repos, session in a run, git errors
     and force envs → approve.
 """
 import asyncio
@@ -589,12 +589,22 @@ class TestDirectCommitGateDenies:
         _git(repo, "add", "a.py")
         assert _is_deny(_direct("git commit -m fix", repo))
 
-    def test_lockfiles_do_not_count_but_source_still_does(self, ws, repo):
+    def test_docs_do_not_count_but_source_still_does(self, ws, repo):
         (repo / "a.py").write_text("base = 0\n" + _lines(21))
-        (repo / "package-lock.json").write_text(_lines(200, "k"))
+        (repo / "README.md").write_text(_lines(200, "k"))
         _git(repo, "add", "-A")
         reason = _reason(_direct("git commit -m fix", repo))
         assert "21 source lines" in reason
+
+    def test_a_lockfile_is_not_a_doc(self, ws, repo):
+        # one definition of "doc" (core/doc_paths.py, execution plan v2 §2): a lockfile,
+        # or a non-.md file under docs/ / .kiro/, counts like any other source file
+        for rel in ("package-lock.json", "docs/x.txt", ".kiro/steering/s.txt"):
+            p = repo / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(_lines(30, "k"))
+        _git(repo, "add", "-A")
+        assert _is_deny(_direct("git commit -m 'chore: deps'", repo))
 
     def test_dash_a_form_counts_unstaged_changes(self, ws, repo):
         (repo / "a.py").write_text("base = 0\n" + _lines(30))
@@ -624,7 +634,8 @@ class TestDirectCommitGateApproves:
 
     def test_docs_only_change_is_approved(self, ws, repo):
         (repo / "README.md").write_text(_lines(50))
-        for rel in ("docs/x.txt", "Knowledge/k.py", ".kiro/steering/s.txt", ".context/c.json"):
+        for rel in ("docs/x.md", ".kiro/steering/s.md", "backend/context/AGENT.md",
+                    "backend/context/EVOLUTION_CHANGELOG.jsonl"):
             p = repo / rel
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(_lines(30))
@@ -653,14 +664,6 @@ class TestDirectCommitGateApproves:
         (other / "a.py").write_text("base = 0\n" + _lines(40))
         _git(other, "add", "a.py")
         assert _direct("git commit -m fix", other) == {"decision": "approve"}
-
-    def test_lockfile_only_change_is_approved(self, ws, repo):
-        for rel in ("package-lock.json", "uv.lock", "desktop/pnpm-lock.yaml", "yarn.lock"):
-            p = repo / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(_lines(60, "k"))
-        _git(repo, "add", "-A")
-        assert _direct("git commit -m 'chore: bump deps'", repo) == {"decision": "approve"}
 
     def test_other_sessions_run_does_not_exempt(self, ws, repo):
         _seed(ws, session_id="someone-else")
@@ -858,6 +861,61 @@ class TestDirectCommitGateWorktreeMode:
         (repo / "a.py").write_text("base = 1\n")
         _git(repo, "add", "a.py")
         assert _direct("git commit -m tiny", repo) == {"decision": "approve"}
+
+    def test_pure_doc_commit_passes_any_other_path_is_refused(self, ws, repo, monkeypatch):
+        """Execution plan v2 §2: a commit of only *.md / backend/context/ needs no run;
+        one non-doc path among them — even a binary or 0-line one — refuses it."""
+        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+        ctx = repo / "backend" / "context"
+        ctx.mkdir(parents=True)
+        (ctx / "AGENT.md").write_text(_lines(40))
+        (repo / "README.md").write_text(_lines(40))
+        _git(repo, "add", "-A")
+        assert _direct("git commit -m docs", repo) == {"decision": "approve"}
+        (repo / "a.py").write_text("base = 1\n")
+        _git(repo, "add", "a.py")
+        assert _is_deny(_direct("git commit -m 'docs and code'", repo))
+        _git(repo, "reset", "-q", "a.py")
+        (repo / "a.py").write_text("base = 0\n")
+        (repo / "blob.bin").write_bytes(b"\x00\x01\x02")
+        _git(repo, "add", "blob.bin")
+        assert _is_deny(_direct("git commit -m 'docs and a binary'", repo))
+
+    def test_a_binary_counts_only_with_worktree_mode_on(self, ws, repo, monkeypatch):
+        """Mode off keeps the 20-LINE rule (a binary is 0 lines); mode on (limit 0)
+        any non-doc path refuses the commit."""
+        (repo / "a.py").write_text("base = 0\n" + _lines(20))
+        (repo / "blob.bin").write_bytes(b"\x00\x01\x02")
+        _git(repo, "add", "a.py", "blob.bin")
+        monkeypatch.setenv("SWARM_WORKTREE_MODE", "off")
+        assert _direct("git commit -m small", repo) == {"decision": "approve"}
+        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+        assert _is_deny(_direct("git commit -m small", repo))
+
+    def test_a_pure_doc_commit_still_needs_an_adversarial_review(self, ws, repo, tmp_path,
+                                                                  monkeypatch):
+        """direct_commit_gate lets it through; adversarial_commit_gate is unchanged and
+        refuses it until a review marker covers every committed path."""
+        import asyncio
+        import json as _json
+        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+        audit = tmp_path / "audit"
+        audit.mkdir()
+        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", audit)
+        (repo / "README.md").write_text(_lines(5))
+        _git(repo, "add", "README.md")
+        assert _direct("git commit -m docs", repo) == {"decision": "approve"}
+        gate = sh.create_adversarial_commit_gate({"sdk_session_id": SID})
+
+        def adversarial():
+            return asyncio.run(gate({"tool_name": "Bash", "cwd": str(repo),
+                                     "tool_input": {"command": "git commit -m docs"}},
+                                    None, None))
+        assert _is_deny(adversarial())
+        (audit / f"session_{SID}_adv_1.marker").write_text(_json.dumps({
+            "adversarial": True,
+            "reviewed_paths": [os.path.realpath(str(repo / "README.md"))]}))
+        assert not _is_deny(adversarial())
 
     def test_a_project_code_repo_counts_a_scratch_repo_does_not(self, ws, repo, tmp_path, monkeypatch):
         monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")

@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from .permission_manager import PermissionManager
     from .ask_question_manager import AskQuestionManager
 
+from .doc_paths import is_doc_only_path
 from .gate_force import force_enabled
 
 logger = logging.getLogger(__name__)
@@ -3654,7 +3655,7 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 #     at pytest, python -X faulthandler) are DENIED with a copyable runner command.
 #     A session with no active run is never affected.
 #   • direct_commit_gate (G1): a session with NO active run of its own that commits
-#     more than 20 changed SOURCE lines (docs and lockfiles excluded) in the SwarmAI
+#     more than 20 changed SOURCE lines (pure-doc paths, core/doc_paths.py, excluded) in the SwarmAI
 #     source repo is DENIED and pointed at `run-create --profile direct`, so a direct
 #     fix also gets an exit contract. Commits in other repos are never gated.
 #
@@ -3693,7 +3694,6 @@ _RUN_SCAN_TIMEOUT = _GATE_GIT_TIMEOUT
 # _pending_commit_paths (≤4 git calls) + rev-parse + 2 numstat calls, each ≤ _GATE_GIT_TIMEOUT.
 _DIRECT_GATE_TIMEOUT = _GATE_GIT_TIMEOUT * 7 + 3
 _DIRECT_COMMIT_MAX_SOURCE_LINES = 20
-_DIRECT_GATE_DOC_DIRS = frozenset({"docs", "Knowledge", ".kiro", ".context"})
 
 try:
     # backend/core/security_hooks.py → repo root = parents[2] (NOT cwd: daemon cwd is backend/).
@@ -6719,22 +6719,6 @@ def create_session_link_stamper(session_context: dict[str, Any]):
     return _stamp
 
 
-_DIRECT_GATE_LOCKFILES = frozenset({"package-lock.json", "npm-shrinkwrap.json",
-                                    "pnpm-lock.yaml"})
-
-
-def _is_doc_path(rel: str) -> bool:
-    """Paths exempt from the direct-commit line count: docs (*.md, or any path under
-    a docs/, Knowledge/, .kiro/ or .context/ directory) and generated lockfiles
-    (package-lock.json, npm-shrinkwrap.json, pnpm-lock.yaml, *.lock such as uv.lock,
-    yarn.lock, poetry.lock, Cargo.lock)."""
-    rel = rel.replace("\\", "/")
-    base = rel.rsplit("/", 1)[-1]
-    if rel.lower().endswith(".md") or base in _DIRECT_GATE_LOCKFILES or base.endswith(".lock"):
-        return True
-    return any(part in _DIRECT_GATE_DOC_DIRS for part in rel.split("/")[:-1])
-
-
 def _project_for_repo(root: str) -> str:
     """Name of the workspace project for repo *root*: the Projects/<P> directory whose
     name equals the repo directory name case-insensitively (swarmai → SwarmAI), else
@@ -6776,7 +6760,9 @@ def _numstat_lines(root: str, *extra: str) -> "dict[str, int] | None":
 
 def _pending_source_line_count(cwd: str, command: str,
                                project_repos: bool = False) -> "int | None":
-    """Changed SOURCE lines (added+removed, docs excluded) the `git commit` in
+    """Changed SOURCE lines (added+removed; pure-doc paths excluded; with
+    *project_repos* — worktree mode — any other path counts at least 1, so a binary or
+    mode-only change is never free) the `git commit` in
     *command* is about to record; None if uncomputable (→ caller fails open).
 
     The path set is _pending_commit_paths (staged + -a + pathspec + -o). Lines come
@@ -6816,8 +6802,10 @@ def _pending_source_line_count(cwd: str, command: str,
         ap = os.path.realpath(os.path.join(root, rel))
         if _in_pending(ap):
             seen.add(ap)
-            if not _is_doc_path(rel):
-                total += n
+            if not is_doc_only_path(rel):
+                # worktree mode (limit 0): a binary / mode-only change is still a
+                # source path; the mode-off 20-line rule counts lines only
+                total += max(n, 1) if project_repos else n
     if pending_dirs or any(p not in seen for p in pending):
         worktree = _numstat_lines(root)
         if worktree is None:
@@ -6826,8 +6814,10 @@ def _pending_source_line_count(cwd: str, command: str,
             ap = os.path.realpath(os.path.join(root, rel))
             if ap in seen or not _in_pending(ap):
                 continue
-            if not _is_doc_path(rel):
-                total += n
+            if not is_doc_only_path(rel):
+                # worktree mode (limit 0): a binary / mode-only change is still a
+                # source path; the mode-off 20-line rule counts lines only
+                total += max(n, 1) if project_repos else n
     return total
 
 
@@ -6851,7 +6841,8 @@ def _direct_gate_mode(cwd: str, session_id: str) -> "tuple[bool | None, str | No
 def create_direct_commit_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse (Bash) gate on `git commit` (design §4-G1). When this
     session has NO active run of its own (C6), a commit in the SwarmAI source repo
-    recording more than 20 changed SOURCE lines (docs and lockfiles excluded) is
+    recording more than 20 changed SOURCE lines (pure-doc paths excluded:
+    ``core.doc_paths.is_doc_only_path``, the same definition rule 4 uses) is
     DENIED with a copyable `run-create --profile direct` command for the repo's
     project. With worktree mode on the limit is 0 and every project code repo counts:
     a code change lands from a run's worktree, so a source commit in a main checkout
@@ -6932,7 +6923,7 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
                     "DELIVER landing commit:\n"
                     "backend/.venv/bin/python backend/scripts/pipeline_v1.py create --project "
                     + project + " --profile direct\n"
-                    "Docs (*.md, docs/, Knowledge/, .kiro/, .context/) and lockfiles are "
+                    "Pure-doc files (*.md, and anything under backend/context/) are "
                     "exempt" + (" here" if mode_on else ", and so are changes of at most "
                                 + str(limit) + " source lines") + ". Only the operator can make a deliberate "
                     "exception, by setting SWARM_GATE_FORCE=direct_commit_gate in the backend/daemon "

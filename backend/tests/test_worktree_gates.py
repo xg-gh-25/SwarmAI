@@ -515,6 +515,24 @@ def test_no_run_session_writing_main_is_sent_to_a_run(r4):
         assert not _denied(g(ok))
 
 
+def test_no_run_rule_spares_pure_doc_files_in_main(r4):
+    """Execution plan v2 §2: *.md and backend/context/ are written in the main checkout
+    without a run; a code file in the same session is still sent to a run."""
+    g = _gate("s5")
+    ctx = r4["main"] / "backend" / "context" / "AGENT.md"
+    for target in (ctx, r4["main"] / "backend" / "context" / "EVOLUTION_CHANGELOG.jsonl",
+                   r4["main"] / "docs" / "design" / "x.md"):
+        assert not _denied(g(_call("Edit", file_path=str(target)))), target
+    assert not _denied(g(_call("Bash", cwd=str(r4["main"]),
+                               command=f"printf 'x\\n' >> {r4['main']}/README.md")))
+    v = g(_call("Edit", file_path=str(r4["main"] / "backend" / "core" / "x.py")))
+    assert _denied(v)
+    why = v["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _v1_args(why.split("Run: ", 1)[1].split("\n")[0]).command == "create"
+    for code in ("scripts/x.sh", ".claude/skills/s/run.py", "docs/notes.txt"):
+        assert _denied(g(_call("Write", file_path=str(r4["main"] / code)))), code
+
+
 def test_no_run_rule_spares_ignored_unbound_scratch_and_shared(r4, tmp_path):
     (r4["main"] / ".gitignore").write_text("build/\n")
     assert not _denied(_gate("s5")(_call("Write", file_path=str(r4["main"] / "build" / "x"))))
