@@ -20,5 +20,7 @@ The three rules people get wrong most often (full detail in AGENTS.md):
 2. **pytest needs a wall-clock cap:**
    `perl -e 'alarm 90; exec @ARGV' python -m pytest tests/test_<module>.py -v --timeout=60`
    (from `backend/`). Keep the cap under the 120s Bash timeout, or the run is backgrounded.
+   `addopts` stops at 3 failures (`--maxfail=3`): re-run a red scope with `--maxfail=1000`
+   before reading its counts.
 3. **Every commit ends with `Co-Authored-By: Swarm <swarm@swarmai.dev>`**, never a
    Claude/Anthropic identity. Nothing enforces this for a manual commit — write it yourself.

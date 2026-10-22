@@ -313,7 +313,9 @@ obvious story, read logs LAST. A stale comment is legibility decay, not evidence
 
 ## Design System
 
-- **Font**: Inter (UI), JetBrains Mono (code)
+- **Font**: system stack — SF Pro + PingFang SC on macOS (`--font-family-sans`); SF Mono,
+  JetBrains Mono as fallback, for code only (`--font-family-mono`). One definition, in
+  `desktop/src/index.css`
 - **Icons**: Material Symbols Outlined
 - **Themes**: light, dark, system (CSS custom properties in index.css)
 - **Colors**: Always use `bg-[var(--color-*)]`, never hardcoded dark theme colors
@@ -462,7 +464,13 @@ change is fully green on THREE checks — any one unrun or red blocks the push:
    (the `exec @ARGV` is required — without it perl exits 0 and pytest never runs; `gtimeout`
    is not installed here; a per-test `--timeout` alone is not a cap and `pytest_command_guard`
    denies it; so does a cap of 110s or more). Frontend: `cd desktop && npm test -- --run`.
-   Last-failed: add `--lf`. Full suite (`SWARMAI_SUITE=1`, cap ≥120s per
+   Last-failed: add `--lf`.
+   **A red run is truncated:** `backend/pyproject.toml` `addopts` carries `--maxfail=3`,
+   so after the 3rd failure pytest stops and every later test never runs — the
+   "N passed, 3 failed" summary is not the scope's real count, and the 3 failures may be
+   one cause hiding 30 more. Before you judge a red result or report numbers, re-run that
+   scope with `--maxfail=1000` (2026-10-22: a findings file showed 3 failures; all 33 of
+   its tests were red, and a 40-file "233 passed" was really 597). Full suite (`SWARMAI_SUITE=1`, cap ≥120s per
    test) only on explicit request or when the blast radius clearly warrants it — never as a
    reflex.
 3. **Eval** — `cd backend && python scripts/ci_eval_gate.py`. This is a *pure check* (zero
