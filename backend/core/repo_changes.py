@@ -66,7 +66,8 @@ def _bindings() -> dict[str, tuple[str, str]]:
             continue
         try:
             doc = load_bindings(path)
-        except Exception:  # noqa: BLE001 — one bad project never hides the others
+        except Exception as exc:  # noqa: BLE001 — one bad project never hides the others
+            logger.warning("repo_changes: %s unreadable, skipped: %s", path, exc)
             continue
         for b in doc.bindings:
             wt = getattr(b, "worktree", None)

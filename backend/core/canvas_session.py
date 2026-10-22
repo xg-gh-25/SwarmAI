@@ -329,7 +329,8 @@ def changes_rows(extracted: dict[str, Any], workspace: Optional[str]) -> list[di
     for r, (name, project) in bound.items():
         try:
             by_main.setdefault(_main_checkout(r), (name, project))
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — an unreadable binding groups under its own name
+            logger.debug("canvas_session: main checkout of %s unknown: %s", r, exc)
             continue
     out = []
     for root, row in repos.items():
@@ -353,7 +354,8 @@ async def build(session_id: str) -> dict[str, Any]:
     extracted = extract(rows)
     try:
         workspace: Optional[str] = str(get_swarmws())
-    except Exception:  # noqa: BLE001 — no workspace: no roles, no runs
+    except Exception as exc:  # noqa: BLE001 — no workspace: no roles, no runs
+        logger.debug("canvas_session: no workspace for %s: %s", session_id, exc)
         workspace = None
     artifacts = artifact_rows(extracted["artifacts"], workspace)
     changes = (await executors.run_in("turn_changes", changes_rows, extracted, workspace)

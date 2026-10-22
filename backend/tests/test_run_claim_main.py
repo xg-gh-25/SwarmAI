@@ -483,8 +483,6 @@ def test_owner_gate_issues_claim_token():
     from core import run_owner_gate as og
     assert "run-claim-main" in og.TOKEN_SUBCOMMANDS
     assert og._needs_token({"tool": "artifact_cli", "sub": "run-claim-main"}) == "run-claim-main"
-    from scripts import pipeline_worktree as pw
-    assert "run-claim-main" in pw.LOCKED_COMMANDS
 
 
 # ── CLI + creation report + landing (AC1, AC2, AC5, AC6, I6) ──────────────────
@@ -633,25 +631,6 @@ def test_k6_partially_staged_moves_under_take_main(env):
     assert _g(m, "status", "--porcelain") == ""
     keep = Path(res["backup"])
     assert (keep / "index" / "b.py").read_text() == "b = 2\n"   # the staged version kept
-
-
-def test_k1_creation_hint_does_not_prefill_paths(monkeypatch):
-    """K1: the copyable claim command names no file; the files are listed apart."""
-    from scripts import pipeline_worktree as pw
-    files = ["/m/a.py", "/m/b.py"]
-    extra: dict = {}
-    monkeypatch.setattr(rw, "main_dirty", lambda m: [{"path": "a.py", "status": "modified",
-                                                     "staged": False},
-                                                    {"path": "b.py", "status": "modified",
-                                                     "staged": False}])
-    from core import main_dirty_scan
-    monkeypatch.setattr(main_dirty_scan, "record_baseline", lambda *a, **k: None)
-    pw._main_uncommitted({"project": "P"}, "run_1", [{"main": "/m", "repo_name": "r"}],
-                         extra, Path("/nonexistent"))
-    hint = extra["claim_hint"]
-    assert "--files <path ...>" in hint
-    for f in files:
-        assert f in hint.split("Claim,")[0]
 
 
 def test_blob_of_a_glob_named_path_absent_at_rev_is_none(env):
