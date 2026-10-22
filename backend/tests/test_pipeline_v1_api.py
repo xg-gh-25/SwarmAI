@@ -50,11 +50,8 @@ def _real_v1(tmp_path, monkeypatch, run_id: str) -> tuple[RunEngine, TestClient]
 
 
 def _pause(engine: RunEngine) -> None:
-    events = engine.store.read_events()
-    engine.store.append_new(
-        writer=engine.authority.writer("cli"), kind="user_stop", at="2026-10-22T00:00:00Z",
-        ordinal=len(events) + 1, payload={"reason": "user requested pause"})
-    engine._settle()
+    """Pause through the real producer: the daemon's Stop handler records user_stop."""
+    assert engine.record_stop("user_stop", reason="user requested pause")
     engine.write_projection()
 
 
