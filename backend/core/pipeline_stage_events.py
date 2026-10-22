@@ -134,13 +134,13 @@ def parse_watched_run_id(command: object) -> Optional[str]:
     return None
 
 
-# ``run-create`` names no run in its command — artifact_cli mints the id and prints
-# it (``{"pipeline_id": "run_…", …}``). Its call is watched with this sentinel and
+# ``pipeline_v1.py create`` names no run in its command — the CLI mints the id and
+# prints it (``{"pipeline_id": "run_…", …}``). Its call is watched with this sentinel and
 # the id is read from the call's own output, so the run's alignment shows the
 # moment the run exists, not after EVALUATE's first ``--run-id`` call.
 RUN_CREATE_WATCH = "<run-create>"
 _RUN_CREATE_RE = re.compile(
-    r"(?:artifact_cli(?:\.py)?[^;&|\n]*\srun-create|pipeline_v1\.py[^;&|\n]*\screate)"
+    r"pipeline_v1\.py[^;&|\n]*\screate"
     r"(?=[\s'\";&|)]|$)"
 )
 _PIPELINE_ID_RE = re.compile(r'"pipeline_id"\s*:\s*"([^"]*)"')
@@ -170,7 +170,7 @@ def _result_text(content: object) -> str:
 
 
 def run_id_from_create_output(content: object) -> Optional[str]:
-    """The run id a ``run-create`` call printed, else None. The LAST ``pipeline_id``
+    """The run id a ``create`` call printed, else None. The LAST ``pipeline_id``
     wins (the CLI prints its result line last). A pre-filter only: the id still has
     to name a real run.json before anything is shown (read_stage_state)."""
     ids = _PIPELINE_ID_RE.findall(_result_text(content))
@@ -178,7 +178,7 @@ def run_id_from_create_output(content: object) -> Optional[str]:
 
 
 def resolve_watch(watch: Optional[str], content: object) -> Optional[str]:
-    """The run id a watched call refers to: its ``--run-id``, or for ``run-create``
+    """The run id a watched call refers to: its ``--run-id``, or for ``create``
     the id it printed."""
     if watch == RUN_CREATE_WATCH:
         return run_id_from_create_output(content)
@@ -491,7 +491,7 @@ def new_stage_blocks(
 # Two more backend-written blocks, both persisted and both non-conversational
 # (context_injector _TOOL_ONLY_TYPES):
 #   pipeline_run       — once per run per TURN, the first time a call names it
-#                        (normally ``run-create`` itself, via RUN_CREATE_WATCH),
+#                        (normally ``create`` itself, via RUN_CREATE_WATCH),
 #                        and again when the run's profile is set or changes
 #                        (new_stage_blocks): the run's requirement, its planned
 #                        stages, its checklist (stages + gates) and the stage in

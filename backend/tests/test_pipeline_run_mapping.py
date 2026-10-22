@@ -5,7 +5,7 @@ never a mock of the subject. Mutation-proof points are called out: reverting the
 production line makes the named test go RED.
 
 Covered:
-  * create_pipeline_run_mapping_hook — parses run-create stdout, sets
+  * create_pipeline_run_mapping_hook — parses `pipeline_v1.py create` stdout, sets
     _active_pipeline_run_id in ctx, persists the session->run map keyed by the
     APP-LEVEL session_id (NOT an env value — the identity correctness AC7).
   * _extract_pipeline_id — dict / str / list / wrapped-stdout shapes.
@@ -23,7 +23,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # backend/
 from core import runtime_hooks as rh  # noqa: E402
 
-_CLI = Path(__file__).resolve().parents[2] / "backend" / "scripts" / "artifact_cli.py"
 
 
 def _run_hook(hook, input_data):
@@ -54,14 +53,14 @@ def test_extract_pipeline_id_takes_last_object():
 # ---- the rendezvous hook ----------------------------------------------------
 
 def test_hook_sets_active_run_and_persists_map(tmp_path, monkeypatch):
-    """AC1/AC2/AC7: a run-create tool_response sets ctx['_active_pipeline_run_id']
+    """AC1/AC2/AC7: a create tool_response sets ctx['_active_pipeline_run_id']
     AND writes a session->run map keyed by the ctx (app-level) session_id."""
     monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
     ctx = {"sdk_session_id": "app-sess-123"}
     hook = rh.create_pipeline_run_mapping_hook(ctx)
     _run_hook(hook, {
         "tool_name": "Bash",
-        "tool_input": {"command": "python backend/scripts/artifact_cli.py run-create --project P --requirement x"},
+        "tool_input": {"command": "python backend/scripts/pipeline_v1.py create --project P --requirement x"},
         "tool_response": {"pipeline_id": "run_deadbeef"},
     })
     # ctx half (revives the dead consumer)
@@ -87,12 +86,12 @@ def test_hook_ignores_non_run_create_bash(tmp_path, monkeypatch):
 
 
 def test_hook_ignores_failed_run_create(tmp_path, monkeypatch):
-    """run-create that printed no pipeline_id (failure) → no mapping."""
+    """a create that printed no pipeline_id (failure) → no mapping."""
     monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
     ctx = {"sdk_session_id": "s"}
     hook = rh.create_pipeline_run_mapping_hook(ctx)
     _run_hook(hook, {"tool_name": "Bash",
-                     "tool_input": {"command": "python backend/scripts/artifact_cli.py run-create --project P"},
+                     "tool_input": {"command": "python backend/scripts/pipeline_v1.py create --project P"},
                      "tool_response": "Error: boom"})
     assert "_active_pipeline_run_id" not in ctx
     assert not list(tmp_path.glob("*.map"))
@@ -104,7 +103,7 @@ def test_hook_sets_ctx_even_without_session(tmp_path, monkeypatch):
     ctx = {"sdk_session_id": ""}
     hook = rh.create_pipeline_run_mapping_hook(ctx)
     _run_hook(hook, {"tool_name": "Bash",
-                     "tool_input": {"command": "artifact_cli.py run-create --project P"},
+                     "tool_input": {"command": "pipeline_v1.py create --project P"},
                      "tool_response": {"pipeline_id": "run_q"}})
     assert ctx["_active_pipeline_run_id"] == "run_q"
     assert not list(tmp_path.glob("*.map"))
@@ -118,7 +117,7 @@ def test_mapping_key_is_app_session_not_env(tmp_path, monkeypatch):
     ctx = {"sdk_session_id": "app-sess-CORRECT"}
     hook = rh.create_pipeline_run_mapping_hook(ctx)
     _run_hook(hook, {"tool_name": "Bash",
-                     "tool_input": {"command": "artifact_cli.py run-create --project P"},
+                     "tool_input": {"command": "pipeline_v1.py create --project P"},
                      "tool_response": {"pipeline_id": "run_z"}})
     assert (tmp_path / "session_app-sess-CORRECT_run.map").exists()
     assert not (tmp_path / "session_env-sess-DIFFERENT_run.map").exists(), (

@@ -209,7 +209,7 @@ def test_a_new_turn_announces_a_running_run_again(monkeypatch):
 
 
 RUN_CREATE = ("cd /x/swarmai && source backend/.venv/bin/activate && python "
-              "backend/scripts/artifact_cli.py run-create --project SwarmAI --requirement 'Do X'")
+              "backend/scripts/pipeline_v1.py create --project SwarmAI --requirement 'Do X'")
 
 
 def _created(tu, out):
@@ -272,10 +272,11 @@ def test_run_create_result_inside_an_assistant_message_also_announces(monkeypatc
 
 @pytest.mark.parametrize("command,expected", [
     (RUN_CREATE, True),
-    ("python artifact_cli.py run-create --project P --requirement R", True),
-    ('python "backend/scripts/artifact_cli.py" run-create --project P', True),
+    ("python pipeline_v1.py create --project P --requirement R", True),
+    ('python "backend/scripts/pipeline_v1.py" create --project P', True),
+    ("python artifact_cli.py run-create --project P --requirement R", False),
     ("python artifact_cli.py run-update --project P --run-id run_a --stage-json '{\"s\":\"run-create\"}'", False),
-    ("python artifact_cli.py run-create --project P && python artifact_cli.py run-update --run-id run_a", False),
+    ("python pipeline_v1.py create --project P && python pipeline_v1.py status --run-id run_a", False),
     ("echo run-create", False),
     (None, False),
 ])

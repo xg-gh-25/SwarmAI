@@ -736,8 +736,8 @@ _PIPELINE_AUDIT_DIR = _STATE_DIR / "pipeline_agent_audit"
 # ---------------------------------------------------------------------------
 # The future D7 commit-gate must resolve "which pipeline run does the committing
 # SESSION belong to". The two ids never meet anywhere else: a pipeline run_id is
-# minted by the `artifact_cli.py run-create` CLI SUBPROCESS (printed to stdout as
-# {"pipeline_id": "run_xxx"}), while the session_id the gate keys on is the
+# minted by the `pipeline_v1.py create` CLI SUBPROCESS (printed to stdout as
+# {"ok": true, "pipeline_id": "run_xxx", ...}), while the session_id the gate keys on is the
 # APP-LEVEL id in `session_context['sdk_session_id']` — set in the DAEMON at
 # session_router.py:3421, NOT the SDK subprocess's own CLAUDE_CODE_SESSION_ID env
 # (a DIFFERENT namespace — a CLI reading that env would write the mapping under the
@@ -745,19 +745,18 @@ _PIPELINE_AUDIT_DIR = _STATE_DIR / "pipeline_agent_audit"
 #
 # Two writers produce the map. (a) A PostToolUse-Bash hook: it runs in the daemon (so
 # ctx carries the correct app-level session_id) AND the SDK hands it the Bash
-# tool_response (so it sees run-create's stdout). (b) `run-create` itself, keyed on
-# SWARM_APP_SESSION_ID — the daemon injects the SAME app-level id into the agent's
-# env, unlike CLAUDE_CODE_SESSION_ID above — so the link holds even when run-create's
-# stdout is redirected and (a) sees nothing. The hook (1) revives the EXISTING-but-
+# tool_response (so it sees create's stdout). (b) run_owner_gate, when it hands a run
+# to this session at stage-start, so the link holds even when create's stdout is
+# redirected and (a) sees nothing. The hook (1) revives the EXISTING-but-
 # -set-nowhere `_active_pipeline_run_id` consumer (read at the marker writer below +
 # the compaction briefing) and (2) persists a session_<sid>_run.map file into the
 # SAME _PIPELINE_AUDIT_DIR the gate already scans by session_id.
 
-# Matches the run-create stdout line. The CLI prints a compact JSON object; we read
+# Matches a `pipeline_v1.py create` call. The CLI prints a compact JSON object; we read
 # the pipeline_id field rather than regex-sniffing a bare run_xxx so a run id quoted
 # elsewhere in the output (an error echoing a prior id) can't be mistaken for THIS
 # call's result.
-_RUN_CREATE_CMD_RE = re.compile(r"(?:artifact_cli\.py\s+run-create|pipeline_v1\.py\s+create)\b")
+_RUN_CREATE_CMD_RE = re.compile(r"pipeline_v1\.py\s+create\b")
 
 
 def _session_run_map_path(session_id: str) -> Path:
@@ -765,7 +764,7 @@ def _session_run_map_path(session_id: str) -> Path:
 
     Lives in _PIPELINE_AUDIT_DIR (the same dir the adversarial commit gate scans by
     session_id), so a future cross-process reader resolves it the identical way it
-    already finds markers. One file per session; last run-create in a session wins
+    already finds markers. One file per session; last create in a session wins
     (a session runs one pipeline at a time — sibling sessions get distinct ids).
     """
     return _PIPELINE_AUDIT_DIR / f"session_{session_id}_run.map"
@@ -775,9 +774,8 @@ def write_session_run_map(session_id: str, run_id: str, ts: float | None = None)
     """Atomically write the session->run rendezvous (tmp sibling + os.replace).
 
     The ONE writer of the .map shape ``{session_id, run_id, ts}``: the PostToolUse hook
-    below (live, parses run-create stdout), ``artifact_cli run-create`` itself (so a
-    run whose stdout was redirected is still linked) and ``artifact_cli stage-start``
-    (so a session working on an older run credits reviews to it) all call it. Raises on I/O
+    below (parses ``pipeline_v1.py create`` stdout) and run_owner_gate at stage-start
+    (so a session working on an older run credits reviews to it) both call it. Raises on I/O
     error; callers decide whether that is fatal."""
     _PIPELINE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
     dest = _session_run_map_path(session_id)
@@ -813,7 +811,7 @@ def read_session_run_map(session_id: str) -> "tuple[str, float] | None":
 
 
 def _extract_pipeline_id(tool_response: Any) -> Optional[str]:
-    """Pull `pipeline_id` out of a run-create tool_response (stdout), or None.
+    """Pull `pipeline_id` out of a `pipeline_v1.py create` tool_response (stdout), or None.
 
     tool_response may be a dict, a str (raw stdout), or a list of content blocks
     depending on how the SDK surfaces it — handle all three, never raise."""
@@ -854,7 +852,7 @@ def _extract_pipeline_id(tool_response: Any) -> Optional[str]:
 def create_pipeline_run_mapping_hook(session_context: Optional[dict] = None):
     """PostToolUse-Bash hook: join the just-created run_id with THIS session.
 
-    On a `artifact_cli.py run-create` Bash call, parses the printed pipeline_id from
+    On a `pipeline_v1.py create` Bash call, parses the printed pipeline_id from
     tool_response, sets ``session_context['_active_pipeline_run_id']`` (reviving the
     existing-but-dead consumer the marker writer reads), and persists a
     session_<sid>_run.map rendezvous file. The disk write runs OFF-LOOP
@@ -875,7 +873,7 @@ def create_pipeline_run_mapping_hook(session_context: Optional[dict] = None):
         tool_response = _extract_field(input_data, "tool_response", None)
         run_id = _extract_pipeline_id(tool_response)
         if not run_id:
-            return {}  # run-create failed / unparseable → nothing to map
+            return {}  # create failed / unparseable → nothing to map
 
         session_id = ctx.get("sdk_session_id", "") or ""
         # Revive the in-process consumer immediately (marker writer + compaction
@@ -1184,8 +1182,8 @@ def create_agent_tool_audit_hook(
             # mid-record.
             def _classify_and_write() -> None:
                 # The run this marker belongs to: the NEWER of the session ctx and the
-                # session's .map. run-create writes the .map itself, so a run whose
-                # stdout was redirected (the PostToolUse hook saw nothing and ctx still
+                # session's .map. run_owner_gate writes the .map at stage-start, so a
+                # run whose create stdout was redirected (the PostToolUse hook saw nothing and ctx still
                 # names the previous run) still gets its own reviewers in the same turn.
                 owner = run_id
                 linked = read_session_run_map(session_id) if session_id else None
@@ -2544,8 +2542,8 @@ def register_runtime_hooks(
         "file_tracker",
     )
 
-    # R1.5a: PostToolUse session<->run rendezvous. Detects `artifact_cli.py
-    # run-create`, revives _active_pipeline_run_id in ctx, and persists a
+    # R1.5a: PostToolUse session<->run rendezvous. Detects `pipeline_v1.py
+    # create`, revives _active_pipeline_run_id in ctx, and persists a
     # session_<sid>_run.map file for the future D7 commit-gate. Pure plumbing.
     registry.register(
         "PostToolUse",

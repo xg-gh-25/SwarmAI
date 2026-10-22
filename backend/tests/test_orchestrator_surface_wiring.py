@@ -290,9 +290,8 @@ def test_surface_tool_survives_ensure_failure(monkeypatch):
 
 def test_surface_tool_builds_off_loop(monkeypatch):
     """REGRESSION (audit Finding 2): the explicit surface_run_outputs branch MUST run
-    build_surface_events (glob+read+stat) OFF the event loop via asyncio.to_thread —
-    SYMMETRIC with the two completion branches (8103fc37 moved those off-loop but
-    missed this third one). Running it inline stalls the shared daemon loop (+/health)
+    build_surface_events (glob+read+stat) OFF the event loop via asyncio.to_thread.
+    Running it inline stalls the shared daemon loop (+/health)
     on cold-cache/slow-disk mid-streaming-turn.
 
     Assert build_surface_events executed in a DIFFERENT thread than the event loop —
@@ -328,35 +327,10 @@ def test_surface_tool_builds_off_loop(monkeypatch):
     assert len(fc) == 1 and fc[0]["kind"] == "source-final"
 
 
-# ── (g) BACKEND-AUTO surface on pipeline COMPLETION (run_beff6754) ──────────────
-#    The regression this run fixes: a docs-only pipeline (0 source commits) never
-#    calls surface_run_outputs (complete.md tells it to skip), so the REPORT.md
-#    kind=knowledge event was never emitted and Canvas never auto-opened on
-#    completion. The orchestrator must OBSERVE the `run-update --status completed`
-#    Bash command and auto-fire build_surface_events — WITHOUT the agent calling any
-#    surface tool. Authority is run.json status=="completed" (a blocked completion
-#    exits 0, so the command string is only a pre-filter). These drive the REAL
-#    generator; the only mocks are the two leaf helpers (ensure/build) + a run.json
-#    status reader, exactly like the surface_run_outputs tests above.
-
-def _bash_complete_tool_use(run_id="run_done1", tool_use_id="tu-c1",
-                            status="completed"):
-    """AssistantMessage carrying the Bash `run-update --status <status>` command the
-    pipeline emits at COMPLETE (INSTRUCTIONS.md step 6)."""
-    from claude_agent_sdk import AssistantMessage, ToolUseBlock
-    cmd = (f"python backend/scripts/artifact_cli.py run-update "
-           f"--project SwarmAI --run-id {run_id} --status {status}")
-    return AssistantMessage(
-        content=[ToolUseBlock(id=tool_use_id, name="Bash", input={"command": cmd})],
-        model="test-model",
-    )
-
-
-def _patch_completion_helpers(monkeypatch, *, status="completed", run_id_seen=None,
-                              build_calls=None):
-    """Stub the three leaves the completion branch touches: ensure_report_for_run,
-    build_surface_events, and the run.json status read. Records build_surface_events
-    invocations into build_calls (a list) so idempotency can be asserted."""
+def _patch_surface_helpers(monkeypatch, *, build_calls=None):
+    """Stub the two leaves the explicit surface branch touches: ensure_report_for_run
+    and build_surface_events. Records build_surface_events invocations into
+    build_calls (a list) so idempotency can be asserted."""
     async def _ensure(run_id):
         return True
 
@@ -366,197 +340,12 @@ def _patch_completion_helpers(monkeypatch, *, status="completed", run_id_seen=No
         return [{"type": "file_changed", "path": f"Projects/P/.artifacts/runs/{run_id}/REPORT.md",
                  "operation": "written", "relevance": "deliverable", "kind": "knowledge"}]
 
-    def _status(run_id):
-        return status  # authority: the orchestrator trusts run.json, not the cmd string
-
     monkeypatch.setattr("core.streaming_orchestrator.ensure_report_for_run", _ensure)
-    monkeypatch.setattr("core.ui_actions.build_surface_events",_build)
-    # The status reader is a new helper the orchestrator uses; patch it at the
-    # orchestrator import site (it imports the name).
-    monkeypatch.setattr("core.streaming_orchestrator.read_run_status", _status,
-                        raising=False)
-
-
-def test_docs_only_completion_auto_emits_knowledge_event(monkeypatch):
-    """THE golden case. A docs-only run completes via `run-update --status completed`
-    (no surface_run_outputs call at all). The orchestrator must auto-emit the
-    kind=knowledge REPORT.md file_changed event — the exact event the frontend needs
-    to auto-open Canvas. RED on current code (no completion-observation branch)."""
-    build_calls = []
-    _patch_completion_helpers(monkeypatch, status="completed", build_calls=build_calls)
-    orch = _make_orchestrator()
-    events, raised = asyncio.run(
-        _drive(orch, [_bash_complete_tool_use(run_id="run_docs1"),
-                      _tool_result(tool_use_id="tu-c1"), _make_result_message()])
-    )
-    assert raised is None
-    fc = [e for e in events if e.get("type") == "file_changed"]
-    assert len(fc) == 1, f"expected 1 auto-surfaced event on completion, got {fc}"
-    assert fc[0]["kind"] == "knowledge", "must be the REPORT.md knowledge event (frontend auto-pop)"
-    assert str(fc[0]["path"]).endswith("REPORT.md")
-    assert build_calls == ["run_docs1"], "build_surface_events must run for the completed run"
-
-
-def test_completion_not_completed_status_does_not_emit(monkeypatch):
-    """AC4: run.json status is the AUTHORITY. A `--status completed` command whose
-    run.json status is NOT 'completed' (e.g. the gate BLOCKED it — CLI still exits 0)
-    must NOT surface. Guards the exit-code-is-useless finding (Gate-1 FLAW 2)."""
-    build_calls = []
-    _patch_completion_helpers(monkeypatch, status="paused", build_calls=build_calls)
-    orch = _make_orchestrator()
-    events, raised = asyncio.run(
-        _drive(orch, [_bash_complete_tool_use(run_id="run_blocked"),
-                      _tool_result(tool_use_id="tu-c1"), _make_result_message()])
-    )
-    assert raised is None
-    assert not [e for e in events if e.get("type") == "file_changed"], \
-        "a completion command that did NOT actually complete (run.json != completed) must not surface"
-    assert build_calls == [], "build_surface_events must NOT run when run.json status != completed"
-
-
-def test_failed_completion_tool_result_does_not_emit(monkeypatch):
-    """A FAILED completion tool_result (is_error) must not surface — mirrors the
-    write/delete emit gating on `not is_error`."""
-    build_calls = []
-    _patch_completion_helpers(monkeypatch, status="completed", build_calls=build_calls)
-    orch = _make_orchestrator()
-    events, raised = asyncio.run(
-        _drive(orch, [_bash_complete_tool_use(run_id="run_err"),
-                      _tool_result(tool_use_id="tu-c1", is_error=True), _make_result_message()])
-    )
-    assert raised is None
-    assert not [e for e in events if e.get("type") == "file_changed"]
-    assert build_calls == []
-
-
-def test_completion_idempotent_after_explicit_surface(monkeypatch):
-    """AC2: if the agent ALSO called surface_run_outputs for the same run earlier this
-    session, the completion observation must NOT double-emit. Drive surface THEN
-    completion for the same run_id; build_surface_events runs exactly once."""
-    build_calls = []
-    _patch_completion_helpers(monkeypatch, status="completed", build_calls=build_calls)
-    orch = _make_orchestrator()
-    events, raised = asyncio.run(
-        _drive(orch, [
-            _surface_tool_use(run_id="run_dup", tool_use_id="tu-s1"),
-            _bash_complete_tool_use(run_id="run_dup", tool_use_id="tu-c1"),
-            _tool_result(tool_use_id="tu-c1"),
-            _make_result_message(),
-        ])
-    )
-    assert raised is None
-    assert build_calls == ["run_dup"], \
-        f"build_surface_events must run exactly once (explicit surface then completion), got {build_calls}"
-
-
-def test_completion_first_then_explicit_surface_no_double_emit(monkeypatch):
-    """AC2 (symmetric idempotency — Gate-2 correctness finding): if the backend-auto
-    completion surfaces FIRST, a subsequent explicit surface_run_outputs for the SAME
-    run must NOT re-emit. Drives completion THEN surface; build_surface_events runs
-    exactly once. Guards the asymmetry the adversarial reviewer caught."""
-    build_calls = []
-    _patch_completion_helpers(monkeypatch, status="completed", build_calls=build_calls)
-    orch = _make_orchestrator()
-    events, raised = asyncio.run(
-        _drive(orch, [
-            _bash_complete_tool_use(run_id="run_ce", tool_use_id="tu-c1"),
-            _tool_result(tool_use_id="tu-c1"),
-            _surface_tool_use(run_id="run_ce", tool_use_id="tu-s1"),
-            _make_result_message(),
-        ])
-    )
-    assert raised is None
-    assert build_calls == ["run_ce"], \
-        f"completion-first then explicit surface must emit exactly once, got {build_calls}"
-
-
-def test_completion_build_failure_does_not_break_turn(monkeypatch):
-    """AC4: build_surface_events raising in the completion branch must be swallowed —
-    the streaming turn survives (fail-safe on the hot path)."""
-    async def _ensure(run_id):
-        return True
-
-    def _build_boom(run_id, workspace_root=None):
-        raise RuntimeError("build exploded")
-
-    monkeypatch.setattr("core.streaming_orchestrator.ensure_report_for_run", _ensure)
-    monkeypatch.setattr("core.ui_actions.build_surface_events",_build_boom)
-    monkeypatch.setattr("core.streaming_orchestrator.read_run_status",
-                        lambda run_id: "completed", raising=False)
-    orch = _make_orchestrator()
-    events, raised = asyncio.run(
-        _drive(orch, [_bash_complete_tool_use(run_id="run_boom"),
-                      _tool_result(tool_use_id="tu-c1"), _make_result_message()])
-    )
-    assert raised is None, "a build_surface_events crash must not kill the streaming turn"
-
-
-# ── (h) Layer-4 CROSS-BOUNDARY E2E — drive the REAL seam end-to-end ─────────────
-#    cross_boundary.value == true (SSE/event-bus/ACT-SENSE). The seam is:
-#      completion command → orchestrator observation → REAL build_surface_events
-#      → file_changed(kind=knowledge) SSE → (frontend useCanvasAutoSurface gate).
-#    This test does NOT stub build_surface_events or read_run_status — it runs the
-#    REAL functions against a REAL on-disk run.json + REPORT.md for a DOCS-ONLY run
-#    (0 commits). Only get_swarmws (the workspace-root leaf) is redirected to tmp.
-#    Mutation-verified: reverting the completion-emit branch → this goes RED (proven
-#    manually during BUILD; the wiring tests above are the automated mutation guards).
-
-def test_layer4_docs_only_completion_drives_real_surface_e2e(tmp_path, monkeypatch):
-    """E2E: a docs-only run (commits=[]) with a real REPORT.md on disk, completed via
-    the real `run-update --status completed` observation, drives the REAL
-    build_surface_events + read_run_status (NOT mocked) and emits the kind=knowledge
-    REPORT.md event the frontend needs. This is the true seam, unmocked."""
-    import json
-    # Real docs-only run on disk: 0 commits, status=completed, healthy REPORT.md.
-    run_dir = tmp_path / "Projects" / "SwarmAI" / ".artifacts" / "runs" / "run_e2e_docs"
-    run_dir.mkdir(parents=True)
-    (run_dir / "run.json").write_text(json.dumps({"commits": [], "status": "completed"}))
-    (run_dir / "REPORT.md").write_text("# Pipeline Report\n" + ("x" * 600))
-
-    # Redirect BOTH resolvers that the real functions use to the tmp workspace.
-    monkeypatch.setattr("core.ui_actions.get_swarmws", lambda: str(tmp_path))
-    # ensure_report_for_run early-returns for 0-commit runs (correct — no source batch
-    # to pair); the report already exists, so build_surface_events appends it anyway.
-
-    orch = _make_orchestrator()
-    events, raised = asyncio.run(
-        _drive(orch, [_bash_complete_tool_use(run_id="run_e2e_docs"),
-                      _tool_result(tool_use_id="tu-c1"), _make_result_message()])
-    )
-    assert raised is None
-    fc = [e for e in events if e.get("type") == "file_changed"]
-    assert len(fc) == 1, f"real seam must emit exactly the REPORT.md event, got {fc}"
-    assert fc[0]["kind"] == "knowledge"
-    assert fc[0]["relevance"] == "deliverable"
-    assert str(fc[0]["path"]).endswith("REPORT.md")
-
-
-def test_layer4_real_status_authority_blocks_incomplete_run(tmp_path, monkeypatch):
-    """E2E mutation-companion: the SAME real path, but run.json status is NOT
-    'completed' (a gate-BLOCKED completion — the CLI still exited 0). The REAL
-    read_run_status must return the real status and the orchestrator must NOT surface.
-    Proves the status-authority gate is load-bearing against real data, not the mock."""
-    import json
-    run_dir = tmp_path / "Projects" / "SwarmAI" / ".artifacts" / "runs" / "run_e2e_blocked"
-    run_dir.mkdir(parents=True)
-    # status=running: the completion gate blocked it, but the command string said
-    # --status completed. Real read_run_status returns 'running' → no surface.
-    (run_dir / "run.json").write_text(json.dumps({"commits": [], "status": "running"}))
-    (run_dir / "REPORT.md").write_text("# Pipeline Report\n" + ("x" * 600))
-    monkeypatch.setattr("core.ui_actions.get_swarmws", lambda: str(tmp_path))
-
-    orch = _make_orchestrator()
-    events, raised = asyncio.run(
-        _drive(orch, [_bash_complete_tool_use(run_id="run_e2e_blocked"),
-                      _tool_result(tool_use_id="tu-c1"), _make_result_message()])
-    )
-    assert raised is None
-    assert not [e for e in events if e.get("type") == "file_changed"], \
-        "real run.json status != completed must NOT surface (authority is run.json, not the cmd)"
+    monkeypatch.setattr("core.ui_actions.build_surface_events", _build)
 
 
 def test_layer4_frontend_gate_accepts_the_emitted_kind():
-    """Cross-language contract binding: the kind the completion path emits
+    """Cross-language contract binding: the kind a REPORT.md surface emits
     ('knowledge', from build_surface_events) MUST be in the frontend auto-pop accepted
     set parsed from useCanvasAutoSurface.ts — else Canvas would never open on it. Binds
     the backend emit to the REAL frontend gate source (a divergence goes RED)."""
@@ -568,13 +357,12 @@ def test_layer4_frontend_gate_accepts_the_emitted_kind():
     # `kind !== 'x'` comparisons to a named `AUTO_POP_KINDS = [...]` array (so the
     # external-diff/external-nodiff kinds could join without a 5-clause line). Parse
     # that array — still binds to the REAL frontend source, still goes RED if the
-    # gate ever drops 'knowledge' (the completion-path emit).
+    # gate ever drops 'knowledge' (the REPORT.md surface emit).
     arr_line = next(l for l in ts.splitlines() if "AUTO_POP_KINDS" in l and "[" in l)
     accepted = set(_re.findall(r"'([a-z-]+)'", arr_line))
     assert "knowledge" in accepted, (
-        f"the completion path emits kind=knowledge; frontend AUTO_POP_KINDS are "
-        f"{accepted} — if 'knowledge' is missing, Canvas would never auto-open on "
-        f"pipeline completion (the whole point of this fix)")
+        f"a REPORT.md surface emits kind=knowledge; frontend AUTO_POP_KINDS are "
+        f"{accepted} — if 'knowledge' is missing, Canvas would never auto-open on it")
 
 
 # ── run_a87bfe3f Gate-2: the marker attests only rows this session EMITTED ──────
@@ -650,28 +438,6 @@ def test_second_surface_without_new_commit_does_not_re_emit(tmp_path, monkeypatc
     assert calls == ["run_mk"]
 
 
-def test_completion_first_then_explicit_surface_no_double_emit_with_real_run_json(tmp_path, monkeypatch):
-    """Gate-2 recheck (run_a87bfe3f): with a real run.json the explicit branch takes a
-    snapshot, but the backend-auto completion path tracks no commits — the explicit
-    call after it must still not re-emit."""
-    import json as _json
-    d = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_ce2"
-    d.mkdir(parents=True)
-    (d / "run.json").write_text(_json.dumps({"id": "run_ce2", "commits": [{"sha": "c1", "files": ["b.py"]}]}),
-                                encoding="utf-8")
-    monkeypatch.setattr("core.ui_actions.get_swarmws", lambda: str(tmp_path))
-    build_calls = []
-    _patch_completion_helpers(monkeypatch, status="completed", build_calls=build_calls)
-    orch = _make_orchestrator()
-    events, raised = asyncio.run(_drive(orch, [
-        _bash_complete_tool_use(run_id="run_ce2", tool_use_id="tu-c1"),
-        _tool_result(tool_use_id="tu-c1"),
-        _surface_tool_use(run_id="run_ce2", tool_use_id="tu-s1"),
-        _make_result_message()]))
-    assert raised is None
-    assert build_calls == ["run_ce2"], build_calls
-
-
 def test_docs_only_repeated_explicit_surface_emits_once(tmp_path, monkeypatch):
     """A batch with no source rows writes no marker; repeated explicit calls must still
     emit once (the in-memory commit set, not the marker, decides)."""
@@ -681,7 +447,7 @@ def test_docs_only_repeated_explicit_surface_emits_once(tmp_path, monkeypatch):
     (d / "run.json").write_text(_json.dumps({"id": "run_doc", "commits": []}), encoding="utf-8")
     monkeypatch.setattr("core.ui_actions.get_swarmws", lambda: str(tmp_path))
     build_calls = []
-    _patch_completion_helpers(monkeypatch, status="running", build_calls=build_calls)
+    _patch_surface_helpers(monkeypatch, build_calls=build_calls)
     orch = _make_orchestrator()
     asyncio.run(_drive(orch, [
         _surface_tool_use(run_id="run_doc", tool_use_id="tu-a"),
@@ -692,7 +458,7 @@ def test_docs_only_repeated_explicit_surface_emits_once(tmp_path, monkeypatch):
 
 def test_surface_without_snapshot_then_with_new_commit_re_emits(tmp_path, monkeypatch):
     """Recheck LOW: a first call that could not read run.json must not make a later
-    call (that can) look like the completion path's no-entry case."""
+    call (that can) look already emitted for its commits."""
     import json as _json
     d = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_ns"
     monkeypatch.setattr("core.ui_actions.get_swarmws", lambda: str(tmp_path))
