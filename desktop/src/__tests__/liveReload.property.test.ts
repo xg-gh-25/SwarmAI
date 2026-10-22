@@ -14,7 +14,12 @@
  *
  * - STREAM: what the stream alone rendered (no timer runs: no reconcile, no mirror);
  * - RECONCILED: the stream view after MessageStore.reconcile(history), what a tab
- *   shows once its turn-end reconcile lands.
+ *   shows once its turn-end reconcile lands;
+ * - POLLED: the real reconcile loop runs (fake timers advanced 16 s per step): the
+ *   streaming-state poll (the backend streams while a turn is open), the turn-end
+ *   and desync reconciles reading the record as the generator snapshotted it
+ *   (from a turn's `result` on, the snapshot after that turn: TurnWriter writes
+ *   each event's rows before publishing it), then 130 s idle with the final record.
  *
  * Plus one property over the whole run: a keyed block (tool step, result, question,
  * permission, background notice, Stop receipt) that either tab ever showed is in the
@@ -168,7 +173,9 @@ function divergences(live: ReturnType<typeof view>, reload: ReturnType<typeof vi
 }
 
 type Lifecycle = ReturnType<typeof useChatStreamingLifecycle>;
-async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }, withReconcile: boolean) {
+type Mode = 'stream' | 'reconciled' | 'polled';
+async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }, mode: Mode) {
+  const withReconcile = mode === 'reconciled';
   resetTestState();
   fake.listeners.clear();
   fake.conn.clear();
@@ -184,6 +191,18 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
   // the harness always answers "changed" (the reload then reads it)
   vi.spyOn(chatService, 'getTranscriptSince')
     .mockImplementation(async () => ({ rev: 0, reset: true, rows: [] }));
+  // POLLED: the real reconcile loop runs (timers advanced between steps). The
+  // backend's state is "streaming" while a turn is open; a DB read returns the
+  // record as of the last snapshot the generator took (a real, possibly stale,
+  // state of the record), the final record once the scenario is over.
+  let activeTurns = 0;
+  const polls = vi.spyOn(chatService, 'getStreamingState').mockImplementation(async () => ({
+    [s.sid]: { streaming: activeTurns > 0, state: activeTurns > 0 ? 'streaming' : 'idle', waitingInput: false,
+      pendingCount: 0, pendingQuestion: null, pendingPermission: null, lastDrainedSeqs: [] },
+  }) as never);
+  const tick = async (ms: number) => {
+    if (mode === 'polled') await act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  };
   // the window's subscription back: what the hub sent for its cursor, then the DB read
   const resubscribe = async (envs: Record<string, unknown>[], history: Record<string, unknown>[]) => {
     dbNow = history;
@@ -222,8 +241,9 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
     for (const k of keysOf(store.messages)) shown[0].add(k);
     for (const k of keysOf(store2.messages)) shown[1].add(k);
   };
-  for (const st of s.steps) {
+  for (const [i, st] of s.steps.entries()) {
     noteShown();
+    await tick(16_000);
     if (st.kind === 'user') {
       // ChatPage send: the user bubble and the turn's assistant placeholder
       act(() => {
@@ -243,6 +263,7 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
       // receipt it persists comes back on the transcript feed (an event step)
     } else if (st.kind === 'reconcile') {
       // the turn-end reconcile (useChatStreamingLifecycle scheduleTurnEndReconcile)
+      dbNow = st.history;
       if (withReconcile) {
         act(() => {
           store.reconcile(st.history.map((r) => toMessageCamelCase(r)));
@@ -267,6 +288,15 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
       await resubscribe(st.envs, st.history);
     } else if (st.kind === 'event') {
       // missed by the subscription while it was down (`sub: false`): only the POST gets it
+      if (st.env.type === 'turn_start') activeTurns += 1;
+      if (st.env.type === 'turn_end') activeTurns = Math.max(0, activeTurns - 1);
+      if (st.env.type === 'result' || st.env.type === 'turn_end') {
+        // TurnWriter writes each event's rows BEFORE the event is published, so
+        // from the turn's result on the record holds the whole turn: a read now
+        // sees the snapshot the generator took right after the turn
+        const after = s.steps.slice(i + 1).find((x) => x.kind !== 'event' || x.env.type === 'turn_start');
+        if (after?.kind === 'reconcile') dbNow = after.history;
+      }
       if (st.sub !== false) act(() => { fake.emit(parseSSEEvent(JSON.stringify(st.env))); });
       // the same envelope on the POST of the send that started this turn
       // (a transcript_row / background_agents envelope is published outside any
@@ -298,6 +328,15 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
     }
   }
   noteShown();
+  if (mode === 'polled') {
+    // the scenario is over: the backend is idle, the record is what a reload reads
+    activeTurns = 0;
+    dbNow = s.history;
+    await tick(130_000);
+    noteShown();
+    // the mode is not a no-op: the real reconcile loop polled
+    expect(polls.mock.calls.length, `${s.name}: the poll never ran`).toBeGreaterThan(0);
+  }
   vi.restoreAllMocks();
   return [store, store2, shown] as const;
 }
@@ -309,8 +348,8 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
 const KNOWN = new Set<string>([]);
 
 const scenarios = (fixture as { scenarios: Scenario[] }).scenarios;
-const report: { stream: Map<string, string[]>; reconciled: Map<string, string[]> } = {
-  stream: new Map(), reconciled: new Map(),
+const report: { stream: Map<string, string[]>; reconciled: Map<string, string[]>; polled: Map<string, string[]> } = {
+  stream: new Map(), reconciled: new Map(), polled: new Map(),
 };
 const note = (m: Map<string, string[]>, sig: string, name: string) => m.set(sig, [...(m.get(sig) ?? []), name]);
 
@@ -332,12 +371,12 @@ describe('live == reload (generated scenarios from the real backend)', () => {
   it.each(scenarios.map((s) => [s.name, s] as const))('%s', async (_name, s) => {
     const reloadMsgs = s.history.map((r) => toDisplayMessage(toMessageCamelCase(r) as never));
     const reload = view(reloadMsgs);
-    const run = async (withReconcile: boolean) => {
-      const [store, store2, shown] = await replay(s, () => renderHook(() => useChatStreamingLifecycle(createMockDeps())).result, withReconcile);
+    const run = async (mode: Mode) => {
+      const [store, store2, shown] = await replay(s, () => renderHook(() => useChatStreamingLifecycle(createMockDeps())).result, mode);
       const v = view(store.messages);
       if (process.env.LR_DUMP === s.name) {
         // eslint-disable-next-line no-console
-        console.log(withReconcile ? 'RECONCILED' : 'STREAM', JSON.stringify({ live: v, other: view(store2.messages), reload }));
+        console.log(mode.toUpperCase(), JSON.stringify({ live: v, other: view(store2.messages), reload }));
       }
       // shown at some point, absent from the reload: the user saw it, the record lost it
       const kept = keysOf(reloadMsgs);
@@ -346,11 +385,14 @@ describe('live == reload (generated scenarios from the real backend)', () => {
       return [...divergences(v, reload), ...divergences(view(store2.messages), reload).map((x) => `other tab: ${x}`),
         ...lost(shown[0], ''), ...lost(shown[1], 'other tab: ')];
     };
-    const stream = await run(false);
+    const stream = await run('stream');
     for (const sig of stream) note(report.stream, sig, s.name);
-    const reconciled = await run(true);
+    const reconciled = await run('reconciled');
     for (const sig of reconciled) note(report.reconciled, sig, s.name);
-    const unknown = [...stream.map((x) => `stream: ${x}`), ...reconciled.map((x) => `reconciled: ${x}`)]
+    const polled = await run('polled');
+    for (const sig of polled) note(report.polled, sig, s.name);
+    const unknown = [...stream.map((x) => `stream: ${x}`), ...reconciled.map((x) => `reconciled: ${x}`),
+      ...polled.map((x) => `polled: ${x}`)]
       .filter((x) => !KNOWN.has(x));
     expect(unknown, `${s.name} ${s.shape.join(' > ')}`).toEqual([]);
   });
