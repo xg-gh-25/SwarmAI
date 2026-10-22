@@ -218,12 +218,19 @@ def _get_session_git_commits(
         return []
 
 
-def _session_run_evidence(session_id: str) -> "tuple[set[str], list[str], set[str]]":
+def _session_run_evidence(session_id: str, workspace: "Path | None" = None,
+                          ) -> "tuple[set[str], list[str], set[str]]":
     """(landed SHAs, touched files, run ids) of the pipeline runs this session owns.
 
     A run's edits are made by its own agents, not by tool calls in this
     session's transcript, so without this a session that drove a run gets none
-    of the run's commits. v1 runs record ``commits[].sha`` in run.json; legacy
+    of the run's commits. Pipeline v1 (the current protocol): both landing
+    paths -- the normal DELIVER landing and ``run-land`` -- persist the landed
+    SHAs to ``<run_dir>/artifacts/landing-progress-*.json`` and then
+    ``RunEngine.write_projection`` publishes them as ``run.json`` ``commits[]``
+    beside the contract's ``session_id``; the landing is ``commit-tree`` +
+    ``merge --ff-only`` into the contract's repo roots, so the SHA in run.json
+    is the SHA on main. Legacy (pre-cutover) runs record ``files_touched``
     runs record ``files_touched`` and name the run id in the landing commit
     message. Both carry ``session_id``. Reads the shared
     incremental run index (one stat per run, parse only on change).
@@ -235,7 +242,7 @@ def _session_run_evidence(session_id: str) -> "tuple[set[str], list[str], set[st
         return shas, files, ids
     try:
         from core.run_index import runs
-        for rf in runs(SWARMWS):
+        for rf in runs(workspace or SWARMWS):
             data = rf.data
             if data.get("session_id") != session_id:
                 continue
