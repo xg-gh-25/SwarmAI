@@ -369,7 +369,7 @@ function OverviewTab() {
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium truncate">{dim.replace(/_/g, ' ')}</div>
                 </div>
-                <div className="text-sm font-mono font-semibold">{score}%</div>
+                <div className="text-sm tabular-nums font-semibold">{score}%</div>
               </div>
             ))}
           </div>
@@ -392,7 +392,7 @@ function OverviewTab() {
           <tbody>
             {(history || []).slice(0, 10).map((run) => (
               <tr key={run.run_id} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-hover)]">
-                <td className="px-3 py-2 font-mono">{run.triggered_at?.slice(0, 10)}</td>
+                <td className="px-3 py-2 tabular-nums">{run.triggered_at?.slice(0, 10)}</td>
                 <td className="px-3 py-2">{run.triggered_by}</td>
                 <td className="px-3 py-2">
                   <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-semibold ${
@@ -401,14 +401,14 @@ function OverviewTab() {
                     {run.overall_score}%
                   </span>
                 </td>
-                <td className="px-3 py-2 font-mono">
+                <td className="px-3 py-2 tabular-nums">
                   <span className="text-green-500">{run.cases_passed}</span>
                   {' / '}
                   <span className="text-red-500">{run.cases_failed}</span>
                   {' / '}
                   <span className="text-[var(--color-text-muted)]">{run.cases_skipped}</span>
                 </td>
-                <td className="px-3 py-2 font-mono">{run.duration_seconds?.toFixed(1)}s</td>
+                <td className="px-3 py-2 tabular-nums">{run.duration_seconds?.toFixed(1)}s</td>
               </tr>
             ))}
           </tbody>
@@ -933,8 +933,8 @@ export function TrendsTab() {
               className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] hover:border-[var(--color-primary)] transition-colors text-left"
             >
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[11px] font-mono text-[var(--color-text-muted)]">{r.triggered_at?.slice(0, 10)}</span>
-                <span className="text-sm font-mono font-semibold" style={{ color: sc }}>{Math.round(score)}%</span>
+                <span className="text-[11px] tabular-nums text-[var(--color-text-muted)]">{r.triggered_at?.slice(0, 10)}</span>
+                <span className="text-sm tabular-nums font-semibold" style={{ color: sc }}>{Math.round(score)}%</span>
               </div>
               <div className="text-[11px] text-[var(--color-text-muted)]">{r.triggered_by}</div>
               <div className="flex gap-2 mt-1 text-[11px]">
@@ -956,7 +956,7 @@ export function TrendsTab() {
           height={48}
           color="var(--color-primary)"
         />
-        <div className="flex justify-between text-[11px] text-[var(--color-text-muted)] mt-1 font-mono">
+        <div className="flex justify-between text-[11px] text-[var(--color-text-muted)] mt-1 tabular-nums">
           <span>{runs[0]?.triggered_at?.slice(0, 10)}</span>
           <span>{runs[runs.length - 1]?.triggered_at?.slice(0, 10)}</span>
         </div>
@@ -1026,7 +1026,7 @@ function RunDetailPanel({ runId, onClose }: { runId: string; onClose: () => void
           <div className="p-4">
             {/* Run summary */}
             <div className="flex gap-3 mb-4 text-xs">
-              <span className="font-mono font-semibold" style={{ color: (run.overall_score ?? 0) >= 80 ? '#22c55e' : '#eab308' }}>{Math.round(run.overall_score ?? 0)}%</span>
+              <span className="tabular-nums font-semibold" style={{ color: (run.overall_score ?? 0) >= 80 ? '#22c55e' : '#eab308' }}>{Math.round(run.overall_score ?? 0)}%</span>
               <span className="text-green-500">{run.cases_passed ?? 0} passed</span>
               <span className="text-red-500">{run.cases_failed ?? 0} failed</span>
               <span className="text-[var(--color-text-muted)]">{run.cases_skipped ?? 0} skipped</span>
@@ -1180,8 +1180,8 @@ function ContextHealthTab() {
                   <tr key={i} className="hover:bg-[var(--color-hover)]">
                     <td className="px-3 py-2 text-[var(--color-text)]">{s.project}</td>
                     <td className="px-3 py-2 text-[var(--color-text-muted)]">{s.doc}</td>
-                    <td className="px-3 py-2 text-right font-mono text-amber-500">{s.days_stale}d</td>
-                    <td className="px-3 py-2 text-right font-mono">{s.recent_commits}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-amber-500">{s.days_stale}d</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{s.recent_commits}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1351,7 +1351,7 @@ export function ReportsTab() {
                       <span className="font-medium">{label}</span>
                     </div>
                   </td>
-                  <td className="px-4 py-2.5 text-[var(--color-text-muted)] font-mono">{dateStr}</td>
+                  <td className="px-4 py-2.5 text-[var(--color-text-muted)] tabular-nums">{dateStr}</td>
                   <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">{sizeKb} KB</td>
                 </tr>
               );
@@ -1429,7 +1429,7 @@ export function SessionQualityTab() {
         <div className="flex items-center gap-3 mt-3 text-xs text-[var(--color-text-muted)]">
           <span>Weekly low-rate trend</span>
           <div className="w-[120px]"><Sparkline values={overview?.trend ?? []} height={28} /></div>
-          {overview?.last_run && <span className="ml-auto font-mono">last run: {overview.last_run}</span>}
+          {overview?.last_run && <span className="ml-auto tabular-nums">last run: {overview.last_run}</span>}
         </div>
       </div>
 
@@ -1757,7 +1757,7 @@ export function GuideTab() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
                     <span className="text-xs font-semibold">{dim[t].name}</span>
-                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] font-mono">{dim.share}</span>
+                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] tabular-nums">{dim.share}</span>
                   </div>
                   <div className="text-[11px] text-[var(--color-text-secondary)] italic mb-1">"{dim[t].question}"</div>
                   <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">{dim[t].method}</div>
@@ -1926,7 +1926,7 @@ export function GuideTab() {
               {guideContent.triggerItems.map((item, i) => (
                 <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
                   <td className="px-3 py-2 font-medium">{item[t].trigger}</td>
-                  <td className="px-3 py-2 text-[var(--color-primary)] font-mono text-[11px]">{item[t].cadence}</td>
+                  <td className="px-3 py-2 text-[var(--color-primary)] tabular-nums text-[11px]">{item[t].cadence}</td>
                   <td className="px-3 py-2 text-[var(--color-text-muted)]">{item[t].desc}</td>
                 </tr>
               ))}
@@ -2077,7 +2077,7 @@ function MetricCard({ label, value, color, sub }: { label: string; value: string
   return (
     <div className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
       <div className="text-[11px] text-[var(--color-text-muted)] mb-1">{label}</div>
-      <div className={`text-xl font-bold font-mono ${colorClass}`}>{value}</div>
+      <div className={`text-xl font-bold tabular-nums ${colorClass}`}>{value}</div>
       <div className="text-[11px] text-[var(--color-text-muted)] mt-1">{sub}</div>
     </div>
   );
@@ -2154,7 +2154,7 @@ function Sparkline({ values, height = 32, color = 'var(--color-primary)', dates,
     <div className={axis ? 'flex items-stretch gap-1.5' : ''}>
       {/* Optional y-axis min/max labels (only when axis requested) */}
       {axis && (
-        <div className="flex flex-col justify-between text-[8px] text-[var(--color-text-muted)] font-mono py-0.5 shrink-0" style={{ height }}>
+        <div className="flex flex-col justify-between text-[8px] text-[var(--color-text-muted)] tabular-nums py-0.5 shrink-0" style={{ height }}>
           <span>{Math.round(max)}</span>
           <span>{Math.round(min)}</span>
         </div>
@@ -2373,7 +2373,7 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
                 {detail.history.map((h, i) => (
                   <div key={i} className="flex items-center gap-2 p-1.5 rounded bg-[var(--color-bg)]">
                     <StatusBadge status={h.status} />
-                    <span className="font-mono text-[11px]">{h.triggered_at?.slice(0, 10)}</span>
+                    <span className="tabular-nums text-[11px]">{h.triggered_at?.slice(0, 10)}</span>
                     {h.notes && <span className="text-[11px] text-[var(--color-text-muted)] truncate">{h.notes}</span>}
                   </div>
                 ))}
