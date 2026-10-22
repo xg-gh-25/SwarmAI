@@ -11,7 +11,8 @@ const get = vi.fn();
 vi.mock('../../services/api', () => ({ default: { get: (url: string, o?: unknown) => get(url, o) } }));
 
 import { useCanvasHost } from '../useCanvasHost';
-import { resetCanvasSession } from '../../services/canvasSession';
+import { refreshCanvasSession, resetCanvasSession } from '../../services/canvasSession';
+import { act } from '@testing-library/react';
 
 const ART = { path: 'Knowledge/n.md', absolutePath: '/ws/Knowledge/n.md', kind: 'knowledge', role: 'Knowledge',
   firstAt: '2026-10-22T10:00:00', lastAt: '2026-10-22T10:00:00', turns: 1, exists: true };
@@ -37,5 +38,16 @@ describe('useCanvasHost — session outputs', () => {
     await waitFor(() => expect(calls()).toHaveLength(2));
     rerender({ sid: 's2', streaming: false });
     await waitFor(() => expect(calls()).toEqual(['/canvas/session/s1', '/canvas/session/s1', '/canvas/session/s2']));
+  });
+
+  it('a refresh re-renders the host once (the new list), not on its loading flips; concurrent refreshes share one request', async () => {
+    let renders = 0;
+    const { result } = renderHook(() => { renders++; return useCanvasHost({ activeTabId: 'tab1', sessionId: 's1', isStreaming: false }); });
+    await waitFor(() => expect(result.current.referencedFiles.written).toHaveLength(1));
+    const before = renders;
+    const n = get.mock.calls.length;
+    await act(async () => { await Promise.all([refreshCanvasSession(), refreshCanvasSession()]); });
+    expect(get.mock.calls.length - n).toBe(1);
+    expect(renders - before).toBe(1);
   });
 });

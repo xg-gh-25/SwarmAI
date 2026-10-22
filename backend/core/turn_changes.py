@@ -188,14 +188,33 @@ def code_roots() -> list[str]:
 
 # A session that follows the repo's worktree rule edits in a `git worktree add` tree
 # outside the bound checkout; without a start snapshot of it, its edits never reach
-# the turn's card (nor the session's Canvas Changes). The newest few are enough: a
-# turn writes in the worktree it is working in, which is fresh.
-MAX_LINKED_WORKTREES = 12
+# the turn's card (nor the session's Canvas Changes). Only ACTIVE ones (index touched
+# within LINKED_ACTIVE_S: a worktree being worked in is created, statused, added or
+# committed in that window) and only the newest few: every one is a `git add -u` on
+# the 2-worker turn_snapshot pool on EVERY send, and a start snapshot that runs late
+# bakes the turn's own edit into its baseline. The list is cached briefly
+# (_LINKED_TTL_S) because allowed_repo asks for it on every diff request.
+MAX_LINKED_WORKTREES = 4
+LINKED_ACTIVE_S = 24 * 3600.0
+_LINKED_TTL_S = 5.0
+_linked_cache: dict[tuple[str, ...], tuple[float, list[str]]] = {}
 
 
 def _linked_worktrees(roots: list[str]) -> list[str]:
-    """Live linked worktrees of the bound checkouts among *roots*, newest index first
-    (capped). Pipeline-test caches and worktrees whose directory is gone are skipped."""
+    key = tuple(roots)
+    hit = _linked_cache.get(key)
+    now = time.monotonic()
+    if hit and now - hit[0] < _LINKED_TTL_S:
+        return list(hit[1])
+    found = _scan_linked(roots)
+    _linked_cache[key] = (now, found)
+    return list(found)
+
+
+def _scan_linked(roots: list[str]) -> list[str]:
+    """Active linked worktrees of the bound checkouts among *roots*, newest index first
+    (capped). Pipeline-test caches, stale and gone worktrees are skipped."""
+    cutoff = time.time() - LINKED_ACTIVE_S
     found: dict[str, float] = {}
     for root in roots:
         try:
@@ -210,9 +229,11 @@ def _linked_worktrees(roots: list[str]) -> list[str]:
                 continue
             try:
                 index = _git(path, "rev-parse", "--path-format=absolute", "--git-path", "index").strip()
-                found[path] = os.stat(index).st_mtime
+                mtime = os.stat(index).st_mtime
             except (RuntimeError, OSError, subprocess.SubprocessError):
                 continue
+            if mtime >= cutoff:
+                found[path] = mtime
     return sorted(found, key=lambda p: -found[p])[:MAX_LINKED_WORKTREES]
 
 

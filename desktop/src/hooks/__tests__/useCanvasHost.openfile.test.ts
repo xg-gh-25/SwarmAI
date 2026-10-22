@@ -20,7 +20,7 @@ vi.mock('../../services/api', () => ({
 vi.mock('../../services/canvasSession', () => ({
   refreshCanvasSession: async () => {},
   setActiveCanvasSession: () => {},
-  useCanvasSession: () => ({ sessionId: null, data: null, error: null, loading: false }),
+  useCanvasSessionArtifacts: () => undefined,
 }));
 
 function openFile(path: string, tabId?: string) {

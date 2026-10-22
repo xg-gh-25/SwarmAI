@@ -10,7 +10,7 @@
  * covers that); useCanvasHost refreshes when the session changes and a turn ends.
  *
  * @exports canvasSessionService, refreshCanvasSession, setActiveCanvasSession,
- *   useCanvasSession, resetCanvasSession, SessionArtifact, SessionRepo,
+ *   useCanvasSession, useCanvasSessionArtifacts, resetCanvasSession, SessionArtifact, SessionRepo,
  *   SessionFileChange, SessionCommit, CommitFile, FileState
  */
 import { useSyncExternalStore } from 'react';
@@ -120,23 +120,36 @@ export function setActiveCanvasSession(sessionId: string | null) {
   set({ sessionId, data: null, error: null, loading: false });
 }
 
-/** Refetch the active session's outputs; a stale answer (session switched) is dropped. */
-export async function refreshCanvasSession(): Promise<void> {
+let inflight: { sid: string; p: Promise<void> } | null = null;
+
+/** Refetch the active session's outputs. Calls while one is in flight for the same
+ *  session share it (a turn end and the Changes tab opening at once = one request);
+ *  a stale answer (the session switched meanwhile) is dropped. */
+export function refreshCanvasSession(): Promise<void> {
   const sid = state.sessionId;
-  if (!sid) return;
+  if (!sid) return Promise.resolve();
+  if (inflight && inflight.sid === sid) return inflight.p;
   const mine = ++seq;
   set({ loading: true });
-  try {
-    const data = await canvasSessionService.get(sid);
-    if (mine === seq) set({ data, error: null, loading: false });
-  } catch (e) {
-    if (mine === seq) set({ error: e instanceof Error ? e.message : String(e), loading: false });
-  }
+  const p = canvasSessionService.get(sid)
+    .then((data) => { if (mine === seq) set({ data, error: null, loading: false }); })
+    .catch((e) => { if (mine === seq) set({ error: e instanceof Error ? e.message : String(e), loading: false }); })
+    .finally(() => { if (inflight?.p === p) inflight = null; });
+  inflight = { sid, p };
+  return p;
 }
 
 /** Test seam. */
-export function resetCanvasSession() { seq++; state = { sessionId: null, data: null, error: null, loading: false }; }
+export function resetCanvasSession() { seq++; inflight = null; state = { sessionId: null, data: null, error: null, loading: false }; }
 
 export function useCanvasSession(): CanvasSessionState {
   return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
+/** Only the artifacts of *sessionId* (undefined until loaded): the subscriber
+ *  re-renders when that array changes, never on loading / error flips. For the chat
+ *  page host, whose re-render is the expensive one. */
+export function useCanvasSessionArtifacts(sessionId: string | null): SessionArtifact[] | undefined {
+  const pick = () => (state.sessionId === sessionId ? state.data?.artifacts : undefined);
+  return useSyncExternalStore(subscribe, pick, pick);
 }

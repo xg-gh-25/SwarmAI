@@ -51,6 +51,7 @@ def repo(tmp_path, monkeypatch):
     _git(work, "branch", "-q", "-u", "origin/main")
     real = os.path.realpath(work)
     monkeypatch.setattr(tc, "code_roots", lambda: [real])
+    tc._linked_cache.clear()
     return Path(real)
 
 
@@ -140,14 +141,23 @@ async def test_an_edit_in_a_linked_worktree_resolves_after_ff_merge_and_removal(
     assert files["a.py"]["state"] == "committed" and files["a.py"]["commit"] == _git(repo, "rev-parse", "HEAD")
 
 
-def test_linked_worktrees_skip_test_caches_and_gone_dirs(repo, tmp_path):
-    keep, gone = tmp_path / "keep", tmp_path / "gone"
+def test_linked_worktrees_only_active_ones_capped_and_cached(repo, tmp_path, monkeypatch):
+    keep, gone, stale = tmp_path / "keep", tmp_path / "gone", tmp_path / "stale"
     cache = tmp_path / "cache" / "pipeline_test" / "x"
-    for p, b in ((keep, "k"), (gone, "g"), (cache, "c")):
+    for p, b in ((keep, "k"), (gone, "g"), (cache, "c"), (stale, "s")):
         _git(repo, "worktree", "add", "-q", "-b", b, str(p))
     import shutil
+    import time
     shutil.rmtree(gone)
+    old = time.time() - tc.LINKED_ACTIVE_S - 60
+    os.utime(_git(stale, "rev-parse", "--path-format=absolute", "--git-path", "index"), (old, old))
     assert tc._linked_worktrees([str(repo)]) == [os.path.realpath(keep)]
+    extra = [tmp_path / f"n{i}" for i in range(tc.MAX_LINKED_WORKTREES + 2)]
+    for i, p in enumerate(extra):
+        _git(repo, "worktree", "add", "-q", "-b", f"n{i}", str(p))
+    assert tc._linked_worktrees([str(repo)]) == [os.path.realpath(keep)]      # cached
+    tc._linked_cache.clear()
+    assert len(tc._linked_worktrees([str(repo)])) == tc.MAX_LINKED_WORKTREES
 
 
 def test_extract_artifacts_and_runs():

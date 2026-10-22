@@ -358,6 +358,6 @@ async def build(session_id: str) -> dict[str, Any]:
         logger.debug("canvas_session: no workspace for %s: %s", session_id, exc)
         workspace = None
     artifacts = artifact_rows(extracted["artifacts"], workspace)
-    changes = (await executors.run_in("turn_changes", changes_rows, extracted, workspace)
+    changes = (await executors.run_in("canvas_session", changes_rows, extracted, workspace)
                if extracted["edits"] or extracted["runs"] else [])
     return {"artifacts": artifacts, "changes": changes}

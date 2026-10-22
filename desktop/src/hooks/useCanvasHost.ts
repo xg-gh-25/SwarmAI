@@ -31,7 +31,7 @@ import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } fr
 import api from '../services/api';
 import { useCanvasAutoSurface } from './useCanvasAutoSurface';
 import { useReferencedFiles, countOutputs, countStoredOutputs, mergeSessionArtifacts, type GroupedReferencedFiles } from './useReferencedFiles';
-import { refreshCanvasSession, setActiveCanvasSession, useCanvasSession } from '../services/canvasSession';
+import { refreshCanvasSession, setActiveCanvasSession, useCanvasSessionArtifacts } from '../services/canvasSession';
 import type { GitStatus } from '../types';
 import type { CanvasSnapshot } from '../utils/uiContext';
 
@@ -187,7 +187,6 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // its Artifacts survive a reload / restart, and the Changes tab reads the same
   // store. Fetched when the session changes and again when a turn ends (a turn's
   // records are written at its result); the live rail covers the turn in flight.
-  const canvasSession = useCanvasSession();
   useEffect(() => {
     setActiveCanvasSession(sessionId ?? null);
     void refreshCanvasSession();
@@ -197,7 +196,8 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     if (wasStreamingRef.current && !isStreaming) void refreshCanvasSession();
     wasStreamingRef.current = isStreaming;
   }, [isStreaming]);
-  const persisted = canvasSession.sessionId === (sessionId ?? null) ? canvasSession.data?.artifacts : undefined;
+  // artifacts only: ChatPage re-renders when the list changes, not on fetch flags
+  const persisted = useCanvasSessionArtifacts(sessionId ?? null);
   const referencedFiles = useMemo(
     () => mergeSessionArtifacts(liveFiles, persisted, sessionId ?? undefined),
     [liveFiles, persisted, sessionId],

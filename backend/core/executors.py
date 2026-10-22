@@ -91,6 +91,9 @@ _POOL_SPECS: dict[str, int] = {
                       # code repo on EVERY send. Apart from the finish work below, so
                       # a start never runs late behind another session's finish (a
                       # late start bakes the turn's own edit into its baseline).
+    "canvas_session": 1,  # core/canvas_session: a session's Canvas outputs (git reads
+                      # per repo, ~0.2s) after each turn. Its own pool so it never
+                      # queues ahead of a streaming turn's finish diff on turn_changes.
     "turn_changes": 2,  # core/turn_changes finish diffs + GET /api/chat/turn-diff. Both
                       # are kept off 'subprocess', whose fail-open safety gates
                       # (worktree write gate, commit gates) must never wait on them.
