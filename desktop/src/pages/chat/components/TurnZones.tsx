@@ -6,7 +6,12 @@
  * - `THINKING` / `THOUGHTS · N` (ThinkingGroup): the thoughts before anything was
  *   written or called, in full; open while the turn streams, folded after it, header kept.
  * - `WORKING` / `WORKED · N steps · N commands · time` (PhaseGroup): one per phase;
- *   open while live, folded FOLD_DELAY_MS after; the header toggles it.
+ *   open for as long as the turn is open, folded in the turn's ending frame; the
+ *   header toggles it.
+ *
+ * NOTHING FOLDS WHILE THE TURN STREAMS (XG 2026-10-22): every group, every text's work,
+ * every thought is open and no calls merge into `×N` until the turn ends; then all of
+ * it folds in one frame (the settle window) and the user's toggles decide.
  * - a pipeline stage (StageGroup): `✓ BUILD · stats · time`, the running one
  *   `● DELIVER · stats · next: REFLECT`, `round N`, `Stopped at X`; a gate is one
  *   verdict row (GateRow) with its earlier rounds' verdicts.
@@ -16,8 +21,8 @@
  * the first line, open for all of it), light strips (one call each; `Read ×N` /
  * `Bash ×N` merges) and Agents panels (one per batch of sub-agents that ran at the
  * same time). The text the agent wrote between calls stands where it was written and
- * carries the work after it under a ▸: while live only the latest text's work is open
- * (the fold moves on only while the user follows the bottom); opened later, all fold.
+ * carries the work after it under a ▸: open while the turn is open; a group opened
+ * after the turn shows its texts folded.
  *
  * Strips carry no failure mark and no red: a call that returned an error looks like the
  * others and shows its error when opened. Only what needs the user is a card. The one
@@ -643,16 +648,21 @@ function PhaseNote({ text, renderKey, hasWork, open, onToggle, ctx }: {
 /**
  * A phase's body. The calls before the first text show as they are; each text the
  * agent wrote carries the work after it (up to the next text) under a ▸. While the
- * phase is live the latest text with work is open; an earlier one folds FOLD_DELAY_MS
- * after a later text started work (never on the spot), unless it holds a background
- * Agent still running, and only while the user follows the
- * bottom (ReadingContext). A folded phase opened later shows its texts folded. The
- * user's own toggle wins.
+ * turn is open every text's work and every thought is open and nothing merges
+ * (XG 2026-10-22). Once it ended, a phase body that is still live-lingering keeps the
+ * older rule (an earlier text folds FOLD_DELAY_MS after a later one started work,
+ * unless it holds a running background Agent, only while the user follows the bottom);
+ * a folded phase opened later shows its texts folded. The user's own toggle wins.
  */
 export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live: boolean; ctx: ZoneContext }) {
   const lingering = useLinger(live);
   const active = live || lingering;
   const reading = useContext(ReadingContext);
+  // While the turn is open (streaming or settling) everything shows in full: every
+  // segment's work open, every thought open, no ×N merge (XG 2026-10-22). It all
+  // folds in the turn's ending frame; after that the user's toggles decide.
+  const turnOpen = ctx.isStreaming || ctx.settling;
+  const mergeable = (id: string) => !turnOpen && settled(id);
   const steps = members.flatMap((m) => (m.kind === 'process' ? m.steps : []));
   const settled = useSettled(steps.map((s) => ({ id: s.block.id, done: s.status !== 'pending' })), active);
   const batchOf = agentBatches(steps);
@@ -686,7 +696,7 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
     const columnRow = (it: BodyItem) => {
       if ('thought' in it) {
         const k = `th-${it.thought.ordinal}`;
-        return <PhaseThought key={it.key} unit={it.thought} scope={ctx.scope} open={ctx.choice(k) === true} onToggle={(o) => ctx.choose(k, o)} />;
+        return <PhaseThought key={it.key} unit={it.thought} scope={ctx.scope} open={ctx.choice(k) ?? turnOpen} onToggle={(o) => ctx.choose(k, o)} />;
       }
       if ('strips' in it) return it.strips.map((s) => <ToolStripV6 key={s.key} item={s} />);
       return null;
@@ -701,16 +711,16 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
 
   return (
     <div data-testid="phase-body" className="space-y-2">
-      {lead.length > 0 && <div className="space-y-2">{renderItems(bodyItems(lead, settled, batchOf))}</div>}
+      {lead.length > 0 && <div className="space-y-2">{renderItems(bodyItems(lead, mergeable, batchOf))}</div>}
       {segments.map((seg) => {
         const key = `seg-tx-${seg.note.textOrdinal}`;
         const hasWork = seg.members.length > 0;
-        const open = hasWork && (ctx.choice(key) ?? !segSettled(key));
+        const open = hasWork && (ctx.choice(key) ?? (turnOpen || !segSettled(key)));
         return (
           <div key={key} data-testid="phase-segment" className="space-y-2">
             <PhaseNote text={seg.note.text} renderKey={`tx-${seg.note.textOrdinal}-b`} hasWork={hasWork} open={open}
               onToggle={(o) => ctx.choose(key, o)} ctx={ctx} />
-            {open && <div className="space-y-2 ml-[22px]">{renderItems(bodyItems(seg.members, settled, batchOf))}</div>}
+            {open && <div className="space-y-2 ml-[22px]">{renderItems(bodyItems(seg.members, mergeable, batchOf))}</div>}
           </div>
         );
       })}
@@ -720,14 +730,14 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
 
 export function PhaseGroup({ zone, ctx }: { zone: Extract<Zone, { kind: 'phase' }>; ctx: ZoneContext }) {
   const { t } = useTranslation();
-  const lingering = useLinger(zone.live);
   const seconds = useSpanSeconds(ctx.scope, zone.id, zone.live);
   const choice = ctx.choice(zone.id);
   // One clock for the turn's ending: the phase the turn ended in is `held` open for
   // the message's settle window and folds in the same frame the RESULT lands. Its own
   // linger only counts while the turn is still open (a phase that ended mid-stream).
   const turnOpen = ctx.isStreaming || ctx.settling;
-  const open = choice ?? (zone.live || !!zone.held || (turnOpen && lingering));
+  // nothing folds while the turn is open: the phase folds with the turn's ending (XG 2026-10-22)
+  const open = choice ?? (zone.live || !!zone.held || turnOpen);
   const stats = zoneStats(zone.members);
   const meta = stats.steps === 0 && stats.thoughts > 0
     ? [tf(t, 'chat.turn.zone.thoughtCount', stats.thoughts === 1 ? '{{count}} thought' : '{{count}} thoughts', { count: stats.thoughts })]
@@ -769,10 +779,10 @@ export function GateRow({ zone }: { zone: Extract<Zone, { kind: 'gate' }> }) {
 
 export function StageGroup({ zone, ctx, mustOpen }: { zone: StageZone; ctx: ZoneContext; mustOpen: boolean }) {
   const { t } = useTranslation();
-  const lingering = useLinger(zone.live);
   const choice = ctx.choice(zone.id);
   const turnOpen = ctx.isStreaming || ctx.settling; // same single ending clock as PhaseGroup
-  const open = mustOpen || (choice ?? (zone.live || !!zone.held || (turnOpen && lingering) || zone.stoppedHere));
+  // nothing folds while the turn is open: a stage folds with the turn's ending (XG 2026-10-22)
+  const open = mustOpen || (choice ?? (zone.live || !!zone.held || turnOpen || zone.stoppedHere));
   const seconds = zone.status !== 'running' ? sinceIso(zone.startedAt, zone.endedAt) : undefined;
   const meta = [
     ...statsMeta(t, zoneStats(zone.body), seconds),

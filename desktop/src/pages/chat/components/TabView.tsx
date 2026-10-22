@@ -35,7 +35,7 @@
  */
 import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { Message, TurnPhase } from '../../../types';
+import type { ContentBlock, Message, TurnPhase } from '../../../types';
 import { useMessageStore } from '../../../stores/useMessageStore';
 import {
   ANCHOR_PROPS, activationLanding, anchorChainFor, anchorDelta, isToggleClick, pickAnchor,
@@ -54,6 +54,11 @@ import { CompactNotice } from './CompactNotice';
 import { TurnPhaseLine } from './TurnPhaseLine';
 import { tf } from '../tf';
 import { focusAgent } from '../agentFocus';
+import { StreamingBee } from './StreamingBee';
+
+/** The bee's "new content" input while no turn streams: nothing ever arrives, so
+ *  its 45s line says how long the background agents have been working. Stable. */
+const NO_CONTENT: ContentBlock[] = [];
 
 /** Bottom-proximity threshold (px): within this of the bottom counts as "at
  *  bottom" for both auto-scroll and the resize re-pin. */
@@ -825,6 +830,14 @@ function TabViewImpl({
         <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
           <Spinner size="sm" />
           <span className="text-sm">{t('chat.thinking')}</span>
+        </div>
+      )}
+      {/* No turn streams but background agents still work for this session: the bee
+          keeps flying where the streaming one was, so the tab never looks finished
+          while work goes on (XG 2026-10-22); after 45s its line says how long. */}
+      {!isStreaming && bgRunning.length > 0 && (
+        <div data-testid="background-bee">
+          <StreamingBee content={NO_CONTENT} sessionId={sessionId} />
         </div>
       )}
       {/* SESSION_BUSY recovery indicator — polling for backend completion.

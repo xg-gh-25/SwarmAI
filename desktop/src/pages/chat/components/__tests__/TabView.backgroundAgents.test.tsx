@@ -5,7 +5,8 @@
  * background agent running for the tab's session, one line says how many — also when
  * no turn streams; it goes when they end; another session's agents do not show; a
  * click brings the first running agent's row into view; with no turn running it has a
- * Stop for those agents (onStopBackground), none while a turn streams.
+ * Stop for those agents (onStopBackground), none while a turn streams; and the bee
+ * keeps flying while they run with no turn streaming (the tab never looks finished).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, act } from '@testing-library/react';
@@ -105,5 +106,18 @@ describe('TabView — background agents line', () => {
     expect(focused).toEqual([]); // Stop is its own button, it does not scroll
     rerender(<TabView {...props} onStopBackground={onStop} isStreaming />);
     expect(queryByTestId('background-agents-stop')).toBeNull();
+  });
+
+  it('the bee flies while background agents run and no turn streams; it goes when they end', async () => {
+    const { queryByTestId, rerender } = render(<TabView {...props} />);
+    await afterActivation();
+    expect(queryByTestId('background-bee')).toBeNull();
+    act(() => { backgroundAgentsStore.apply('s1', [{ toolUseId: 'ag1', description: 'Measure', status: 'running' }]); });
+    expect(queryByTestId('background-bee')?.querySelector('[data-testid="streaming-bee"]')).not.toBeNull();
+    rerender(<TabView {...props} isStreaming />); // the turn's own bee takes over
+    expect(queryByTestId('background-bee')).toBeNull();
+    rerender(<TabView {...props} />);
+    act(() => { backgroundAgentsStore.apply('s1', [{ toolUseId: 'ag1', status: 'completed' }]); });
+    expect(queryByTestId('background-bee')).toBeNull();
   });
 });
