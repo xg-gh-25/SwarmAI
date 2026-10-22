@@ -432,6 +432,16 @@ failing 3+×, a rule contradicting observed behavior/a directive, or stale conte
   approval; trash > rm; read before overwrite, back up before delete. Irreversible-external ops
   (repo-visibility, force-push, deleting non-gitignored user data) → approval + a direct
   observation, never on inference.
+- **A destructive step in shipped code is held to the same bar as one I type.** An automatic
+  migration or startup cleanup that drops, deletes or overwrites stored data first takes a
+  backup of the store and checks that the backup opens and is complete; with no backup, the
+  step does not run. "It is only a derived copy / an index / a cache" is a claim to check, not
+  a reason to skip: a copy is replaceable only if its source still holds every row now, and
+  sources get pruned on their own (the CLI deletes old session transcripts). So compare the
+  source's oldest record with the copy's before treating the copy as disposable. (Earned: a
+  schema migration dropped a transcript index on every install at startup, with no backup,
+  because a comment called it a second copy of the transcripts; transcripts older than about
+  a month had already been deleted, so for that window the index was the only copy.)
 
 ---
 
