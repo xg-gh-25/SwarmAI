@@ -428,7 +428,8 @@ async def build(session_id: str, changes: bool = True) -> dict[str, Any]:
     from database import db
     try:
         workspace: Optional[str] = str(get_swarmws())
-    except Exception:  # noqa: BLE001 — no workspace: no roles, no runs
+    except Exception as exc:  # noqa: BLE001 — no workspace: no roles, no runs
+        logger.debug("canvas_session: no workspace for %s: %s", session_id, exc)
         workspace = None
     backfill_turns = None
     if not await executors.run_in("canvas_session", lambda: session_outputs.read(session_id)["backfilled"]):
