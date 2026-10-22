@@ -276,3 +276,33 @@ async def test_subscribe_sends_each_cursors_session_state_snapshot_before_live()
         await sub.aclose()
     finally:
         session_events.set_state_provider(old)
+
+
+async def test_a_turn_past_the_active_limit_still_replays_whole(monkeypatch):
+    """§7.1: at ACTIVE_TURN_LIMIT the deltas an `assistant` envelope already
+    carries are dropped, so a JOIN of a very long turn gets its turn_start, every
+    assistant / tool envelope and the in-flight deltas — nothing of substance is
+    missing even though the ring buffer no longer holds the turn's middle."""
+    from core import session_events
+    monkeypatch.setattr(session_events, "ACTIVE_TURN_LIMIT", 20)
+    hub = SessionEventHub(buffer_size=5, queue_size=100)
+    hub.publish("A", {"type": "turn_start", "source": "chat"}, turn_id="t")
+    for msg in range(6):                       # 6 messages x (5 deltas + assistant + tool_result)
+        for i in range(5):
+            hub.publish("A", {"type": "text_delta", "index": 0, "text": f"{msg}.{i}"}, turn_id="t")
+        hub.publish("A", {"type": "assistant", "content": [{"type": "text", "text": f"m{msg}"}]}, turn_id="t")
+        hub.publish("A", {"type": "tool_result", "content": [], "n": msg}, turn_id="t")
+    hub.publish("A", {"type": "text_delta", "index": 0, "text": "live"}, turn_id="t")
+    sub = hub.subscribe({"A": JOIN}, epoch=hub.epoch)
+    envs = [await asyncio.wait_for(sub.__anext__(), 1)]
+    while envs[-1].get("text") != "live":
+        envs.append(await asyncio.wait_for(sub.__anext__(), 1))
+    await sub.aclose()
+    body = envs[1:]
+    assert len(body) <= 20                     # it fits the (patched) limit
+    assert body[0]["type"] == "turn_start"
+    assert [e["content"][0]["text"] for e in body if e["type"] == "assistant"] == [f"m{i}" for i in range(6)]
+    assert [e["n"] for e in body if e["type"] == "tool_result"] == list(range(6))
+    assert body[-1]["text"] == "live"
+    seqs = [e["eventSeq"] for e in body]
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)
