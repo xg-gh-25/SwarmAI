@@ -521,7 +521,7 @@ function SecurityTab({ scan, state }: { scan: SecurityScanResult | null; state: 
           const sc = pass ? '#4ade80' : (SEV_COLOR[f.severity] ?? '#8b93a7');
           return (
             <li key={i} className="flex items-start gap-2 p-2 rounded bg-[var(--color-hover)]/40">
-              <span className="material-symbols-outlined text-sm mt-0.5" style={{ color: sc }}>
+              <span className="material-symbols-outlined text-[14px] mt-0.5" style={{ color: sc }}>
                 {pass ? 'check_circle' : 'warning'}
               </span>
               <div className="flex-1 min-w-0">

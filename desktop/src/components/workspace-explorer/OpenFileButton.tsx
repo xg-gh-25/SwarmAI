@@ -60,7 +60,7 @@ export function OpenFileButton() {
       aria-label="Open file from disk"
       data-testid="open-file-button"
     >
-      <span className="material-symbols-outlined text-sm">folder_open</span>
+      <span className="material-symbols-outlined text-[14px]">folder_open</span>
     </button>
   );
 }

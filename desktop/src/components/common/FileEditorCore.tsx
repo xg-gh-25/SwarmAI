@@ -310,7 +310,7 @@ function SelectionCommentPopover({
           onClick={onCancel}
           className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
         >
-          <span className="material-symbols-outlined text-sm">close</span>
+          <span className="material-symbols-outlined text-[14px]">close</span>
         </button>
       </div>
       <div className="p-2">
@@ -1390,7 +1390,7 @@ export default function FileEditorCore({
                 )}
                 data-testid="markdown-preview-toggle"
               >
-                <span className="material-symbols-outlined text-sm">
+                <span className="material-symbols-outlined text-[14px]">
                   {showMarkdownPreview ? 'edit' : 'visibility'}
                 </span>
                 {!iconOnly && (showMarkdownPreview ? 'Edit' : 'Preview')}
@@ -1409,7 +1409,7 @@ export default function FileEditorCore({
                 )}
                 data-testid="svg-preview-toggle"
               >
-                <span className="material-symbols-outlined text-sm">
+                <span className="material-symbols-outlined text-[14px]">
                   {showSvgPreview ? 'edit' : 'image'}
                 </span>
                 {!iconOnly && (showSvgPreview ? 'Edit' : 'Preview')}
@@ -1437,7 +1437,7 @@ export default function FileEditorCore({
               title="Reload file from disk"
               data-testid="file-editor-reload"
             >
-              <span className="material-symbols-outlined text-sm">refresh</span>
+              <span className="material-symbols-outlined text-[14px]">refresh</span>
             </button>
             {/* Review Mode toggle (L3) */}
             <button
@@ -1451,7 +1451,7 @@ export default function FileEditorCore({
               data-testid="review-mode-toggle"
               title={review.isReviewMode ? 'Exit review mode' : 'Review — click line numbers to add comments'}
             >
-              <span className="material-symbols-outlined text-sm">rate_review</span>
+              <span className="material-symbols-outlined text-[14px]">rate_review</span>
               {!iconOnly && (review.isReviewMode ? 'Exit Review' : 'Review')}
               {review.comments.length > 0 && (
                 <span className="ml-0.5 px-1 py-px rounded-full bg-amber-500/30 text-[11px] font-bold">
@@ -1473,7 +1473,7 @@ export default function FileEditorCore({
               data-testid="show-changes-toggle"
               title={showDiff ? 'Back to edit' : 'Show changes (diff)'}
             >
-              <span className="material-symbols-outlined text-sm">
+              <span className="material-symbols-outlined text-[14px]">
                 {showDiff ? 'edit' : 'difference'}
               </span>
               {!iconOnly && (showDiff ? 'Back to Edit' : 'Show Changes')}
@@ -1504,7 +1504,7 @@ export default function FileEditorCore({
                   data-testid="open-in-browser-btn"
                   title={useBrowser ? 'Open in browser' : 'Open with system app'}
                 >
-                  <span className="material-symbols-outlined text-sm">open_in_browser</span>
+                  <span className="material-symbols-outlined text-[14px]">open_in_browser</span>
                   {!iconOnly && 'Open'}
                 </button>
               );
@@ -1531,7 +1531,7 @@ export default function FileEditorCore({
               title={copyPathFeedback ? 'Copied!' : 'Copy absolute file path'}
               data-testid="copy-path-btn"
             >
-              <span className="material-symbols-outlined text-sm">
+              <span className="material-symbols-outlined text-[14px]">
                 {copyPathFeedback ? 'check' : 'content_copy'}
               </span>
               {!iconOnly && (copyPathFeedback ? 'Copied' : 'Copy Path')}
@@ -1550,7 +1550,7 @@ export default function FileEditorCore({
                 data-testid="attach-to-chat-btn"
                 title={isAttached || attachFeedback ? 'Attached to chat' : 'Attach to chat'}
               >
-                <span className="material-symbols-outlined text-sm">
+                <span className="material-symbols-outlined text-[14px]">
                   {isAttached || attachFeedback ? 'check_circle' : 'attach_file'}
                 </span>
                 {!iconOnly && (isAttached || attachFeedback ? 'Attached' : 'Attach')}
@@ -1655,7 +1655,7 @@ export default function FileEditorCore({
                 data-testid="large-md-preview-fallback"
               >
                 <div className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0">
-                  <span className="material-symbols-outlined text-sm">info</span>
+                  <span className="material-symbols-outlined text-[14px]">info</span>
                   <span>Large file — markdown preview disabled to keep the panel responsive. Showing raw source.</span>
                 </div>
                 <pre className="m-0 p-4 font-mono text-sm leading-6 whitespace-pre-wrap break-words [word-break:break-all]">
@@ -1683,7 +1683,7 @@ export default function FileEditorCore({
                 data-testid="large-svg-preview-fallback"
               >
                 <div className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0">
-                  <span className="material-symbols-outlined text-sm">info</span>
+                  <span className="material-symbols-outlined text-[14px]">info</span>
                   <span>Large file — SVG preview disabled to keep the panel responsive. Showing raw source.</span>
                 </div>
                 <pre className="m-0 p-4 font-mono text-sm leading-6 whitespace-pre-wrap break-words [word-break:break-all]">
@@ -1888,7 +1888,7 @@ export default function FileEditorCore({
                     onClick={() => setShowSelectionComment(true)}
                     data-testid="selection-comment-btn"
                   >
-                    <span className="material-symbols-outlined text-sm">comment</span>
+                    <span className="material-symbols-outlined text-[14px]">comment</span>
                     Comment
                   </button>
                 )}
@@ -1909,7 +1909,7 @@ export default function FileEditorCore({
         {/* Diff review hint — shown when in diff mode with no comments yet */}
         {showDiff && review.comments.length === 0 && (
           <div className="flex items-center gap-2 px-4 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-hover)]/50 shrink-0">
-            <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)]">touch_app</span>
+            <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">touch_app</span>
             <span className="text-xs text-[var(--color-text-muted)]">
               Click any line to add review comments
             </span>

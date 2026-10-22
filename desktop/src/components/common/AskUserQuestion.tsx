@@ -197,7 +197,7 @@ export default function AskUserQuestion({
                       }`}
                     >
                       {isSelected && (
-                        <span className="material-symbols-outlined text-[var(--color-text)] text-sm">
+                        <span className="material-symbols-outlined text-[var(--color-text)] text-[14px]">
                           {q.multiSelect ? 'check' : 'circle'}
                         </span>
                       )}
@@ -229,7 +229,7 @@ export default function AskUserQuestion({
                     }`}
                   >
                     {showCustom[q.question] && (
-                      <span className="material-symbols-outlined text-[var(--color-text)] text-sm">circle</span>
+                      <span className="material-symbols-outlined text-[var(--color-text)] text-[14px]">circle</span>
                     )}
                   </div>
                   <span className="text-[var(--color-text)] text-sm">Other (custom answer)</span>

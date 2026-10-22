@@ -613,7 +613,7 @@ export function GoldenSetTab() {
                   onClick={() => toggleCat(cat)}
                   className="w-full flex items-center gap-2 px-3 py-2 bg-[var(--color-bg)] border-b border-[var(--color-border)] sticky top-0 z-10 hover:bg-[var(--color-hover)] transition-colors text-left"
                 >
-                  <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)]">
+                  <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">
                     {collapsed ? 'chevron_right' : 'expand_more'}
                   </span>
                   <span className="font-semibold text-xs">{cat}</span>
@@ -646,7 +646,7 @@ export function GoldenSetTab() {
                               className="text-[var(--color-text-muted)] hover:text-red-500 transition-colors"
                               title="Archive"
                             >
-                              <span className="material-symbols-outlined text-sm">archive</span>
+                              <span className="material-symbols-outlined text-[14px]">archive</span>
                             </button>
                           </td>
                         </tr>
@@ -1347,7 +1347,7 @@ export function ReportsTab() {
                 >
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-2">
-                      <span className="material-symbols-outlined text-sm text-[var(--color-primary)]">description</span>
+                      <span className="material-symbols-outlined text-[14px] text-[var(--color-primary)]">description</span>
                       <span className="font-medium">{label}</span>
                     </div>
                   </td>
@@ -2212,7 +2212,7 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-card)] z-10">
         <span className="text-xs font-semibold font-mono">{caseId}</span>
         <button onClick={onClose} className="p-1 rounded hover:bg-[var(--color-hover)]">
-          <span className="material-symbols-outlined text-sm">close</span>
+          <span className="material-symbols-outlined text-[14px]">close</span>
         </button>
       </div>
 

@@ -134,7 +134,7 @@ export default function CommentPopover({
           className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
           aria-label="Close"
         >
-          <span className="material-symbols-outlined text-sm">close</span>
+          <span className="material-symbols-outlined text-[14px]">close</span>
         </button>
       </div>
 

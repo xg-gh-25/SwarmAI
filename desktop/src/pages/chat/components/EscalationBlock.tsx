@@ -104,7 +104,7 @@ export function EscalationBlock({
                 )}
               </div>
               {onSelectOption && (
-                <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)] opacity-0 group-hover/opt:opacity-100 shrink-0 mt-0.5">
+                <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)] opacity-0 group-hover/opt:opacity-100 shrink-0 mt-0.5">
                   send
                 </span>
               )}

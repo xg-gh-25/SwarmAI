@@ -228,13 +228,13 @@ const CsvRenderer = memo(function CsvRenderer({
         <div className="flex items-center gap-2">
           {isTruncated && (
             <span className="flex items-center gap-1 text-xs text-amber-500">
-              <span className="material-symbols-outlined text-sm">warning</span>
+              <span className="material-symbols-outlined text-[14px]">warning</span>
               Showing {MAX_DISPLAY_ROWS.toLocaleString()} of {totalRows.toLocaleString()} rows
             </span>
           )}
           {parseResult && parseResult.errors.length > 0 && headers.length > 0 && (
             <span className="flex items-center gap-1 text-xs text-amber-500" title={parseResult.errors.map(e => e.message).join('; ')}>
-              <span className="material-symbols-outlined text-sm">warning</span>
+              <span className="material-symbols-outlined text-[14px]">warning</span>
               {parseResult.errors.length} parse warning{parseResult.errors.length > 1 ? 's' : ''}
             </span>
           )}
@@ -291,7 +291,7 @@ const CsvRenderer = memo(function CsvRenderer({
                       <span className="inline-flex items-center gap-1">
                         {header}
                         <span
-                          className={`material-symbols-outlined text-sm ${
+                          className={`material-symbols-outlined text-[14px] ${
                             sort.column === header && sort.direction !== 'none'
                               ? 'text-[var(--color-text)]'
                               : 'text-[var(--color-text-muted)] opacity-40'

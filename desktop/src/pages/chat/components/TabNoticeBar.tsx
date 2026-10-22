@@ -85,7 +85,7 @@ export function TabNoticeBar({ tabId, getTab }: TabNoticeBarProps) {
             data-notice-id={n.id}
             className="flex items-center gap-2 px-3 py-1.5 rounded-md text-xs border border-[var(--color-border)] bg-[var(--color-card)] text-[var(--color-text)]"
           >
-            <span className={clsx('material-symbols-outlined text-sm flex-shrink-0', TONE[n.severity])}>
+            <span className={clsx('material-symbols-outlined text-[14px] flex-shrink-0', TONE[n.severity])}>
               {ICON[n.severity]}
             </span>
             <span className="flex-1 min-w-0">{n.message}</span>
@@ -104,7 +104,7 @@ export function TabNoticeBar({ tabId, getTab }: TabNoticeBarProps) {
               aria-label={tf(t, 'chat.notice.dismiss', 'Dismiss')}
               className="flex-shrink-0 p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]"
             >
-              <span className="material-symbols-outlined text-sm">close</span>
+              <span className="material-symbols-outlined text-[14px]">close</span>
             </button>
           </div>
         ))}

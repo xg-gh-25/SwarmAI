@@ -147,7 +147,7 @@ export default function ImageRenderer({
           className="flex items-center gap-1 px-2 py-1 rounded text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
           title="Fit to panel"
         >
-          <span className="material-symbols-outlined text-sm">fit_screen</span>
+          <span className="material-symbols-outlined text-[14px]">fit_screen</span>
           Fit
         </button>
         <button
@@ -165,7 +165,7 @@ export default function ImageRenderer({
           className="flex items-center justify-center w-6 h-6 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
           title="Zoom out"
         >
-          <span className="material-symbols-outlined text-sm">remove</span>
+          <span className="material-symbols-outlined text-[14px]">remove</span>
         </button>
         <span className="text-xs text-[var(--color-text-muted)] min-w-[3rem] text-center tabular-nums">
           {Math.round(scale * 100)}%
@@ -175,7 +175,7 @@ export default function ImageRenderer({
           className="flex items-center justify-center w-6 h-6 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
           title="Zoom in"
         >
-          <span className="material-symbols-outlined text-sm">add</span>
+          <span className="material-symbols-outlined text-[14px]">add</span>
         </button>
       </div>
 

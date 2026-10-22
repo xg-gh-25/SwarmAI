@@ -119,7 +119,7 @@ export default function MultiSelect({
                     onClick={(e) => handleRemove(option.id, e)}
                     className="hover:bg-primary/20 rounded-full p-0.5"
                   >
-                    <span className="material-symbols-outlined text-sm">close</span>
+                    <span className="material-symbols-outlined text-[14px]">close</span>
                   </button>
                 )}
               </span>
@@ -192,7 +192,7 @@ export default function MultiSelect({
                         )}
                       >
                         {isSelected && (
-                          <span className="material-symbols-outlined text-[var(--color-text)] text-sm">
+                          <span className="material-symbols-outlined text-[var(--color-text)] text-[14px]">
                             check
                           </span>
                         )}

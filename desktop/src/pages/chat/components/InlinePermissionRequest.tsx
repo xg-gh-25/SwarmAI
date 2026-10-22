@@ -115,7 +115,7 @@ export function InlinePermissionRequest({
           ? 'bg-green-500/10 border border-green-500/20'
           : 'bg-red-500/10 border border-red-500/20'
       }`}>
-        <span className={`material-symbols-outlined text-sm ${isApproved ? 'text-green-500' : 'text-red-500'}`}>
+        <span className={`material-symbols-outlined text-[14px] ${isApproved ? 'text-green-500' : 'text-red-500'}`}>
           {isApproved ? 'check_circle' : 'cancel'}
         </span>
         <span className="text-sm text-[var(--color-text-muted)]">
@@ -136,7 +136,7 @@ export function InlinePermissionRequest({
   if (readOnly || expired) {
     return (
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-md my-1 bg-[var(--color-hover)] border border-[var(--color-border)]">
-        <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)]">{expired ? 'timer_off' : 'shield'}</span>
+        <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">{expired ? 'timer_off' : 'shield'}</span>
         <span className="text-sm text-[var(--color-text-muted)]">
           <code className="text-xs bg-[var(--color-bg)] px-1 py-0.5 rounded">{command.length > 60 ? command.slice(0, 60) + '...' : command}</code>
         </span>
@@ -183,14 +183,14 @@ export function InlinePermissionRequest({
           onClick={handleDeny}
           className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-md transition-colors"
         >
-          <span className="material-symbols-outlined text-sm">close</span>
+          <span className="material-symbols-outlined text-[14px]">close</span>
           Deny
         </button>
         <button
           onClick={handleApprove}
           className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-green-400 bg-green-500/10 hover:bg-green-500/20 border border-green-500/20 rounded-md transition-colors"
         >
-          <span className="material-symbols-outlined text-sm">check</span>
+          <span className="material-symbols-outlined text-[14px]">check</span>
           Approve
         </button>
         <span className="ml-auto text-[11px] text-[var(--color-text-muted)]">

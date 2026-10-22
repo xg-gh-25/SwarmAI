@@ -236,7 +236,7 @@ export default function SkillsPage({ embedded = false }: SkillsPageProps) {
                     const source = getSourceDisplay(skill);
                     return (
                       <div className="flex items-center gap-1.5">
-                        <span className={`material-symbols-outlined text-sm ${source.color}`}>
+                        <span className={`material-symbols-outlined text-[14px] ${source.color}`}>
                           {source.icon}
                         </span>
                         <span className={`text-sm ${source.color}`}>{source.label}</span>
@@ -893,7 +893,7 @@ function GenerateSkillForm({
               }`}
             >
               <span
-                className={`material-symbols-outlined text-sm ${
+                className={`material-symbols-outlined text-[14px] ${
                   message.role === 'user' ? 'text-orange-400' : 'text-primary'
                 }`}
               >
@@ -961,7 +961,7 @@ function GenerateSkillForm({
                   } disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors`}
                   title={isStreaming ? 'Stop generation' : 'Send message'}
                 >
-                  <span className="material-symbols-outlined text-white text-sm">
+                  <span className="material-symbols-outlined text-white text-[14px]">
                     {isStreaming ? 'stop' : 'send'}
                   </span>
                 </button>
@@ -990,7 +990,7 @@ function GenerateSkillForm({
               } disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors`}
               title={isStreaming ? 'Stop generation' : 'Send message'}
             >
-              <span className="material-symbols-outlined text-white text-sm">
+              <span className="material-symbols-outlined text-white text-[14px]">
                 {isStreaming ? 'stop' : 'send'}
               </span>
             </button>
@@ -1026,7 +1026,7 @@ function ContentBlockRenderer({ block, onAnswerQuestion, pendingToolUseId, isStr
       <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg overflow-hidden text-sm">
         <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--color-hover)]">
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary text-sm">terminal</span>
+            <span className="material-symbols-outlined text-primary text-[14px]">terminal</span>
             <span className="font-medium text-[var(--color-text)]">{block.name}</span>
           </div>
         </div>
@@ -1043,7 +1043,7 @@ function ContentBlockRenderer({ block, onAnswerQuestion, pendingToolUseId, isStr
     return (
       <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-3 text-sm">
         <div className="flex items-center gap-2 mb-1">
-          <span className="material-symbols-outlined text-status-success text-sm">check_circle</span>
+          <span className="material-symbols-outlined text-status-success text-[14px]">check_circle</span>
           <span className="font-medium text-[var(--color-text)]">Result</span>
         </div>
         <pre className="text-xs text-[var(--color-text-muted)] overflow-x-auto whitespace-pre-wrap break-words max-h-24 overflow-y-auto">

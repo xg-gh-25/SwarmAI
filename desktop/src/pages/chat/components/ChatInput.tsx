@@ -905,7 +905,7 @@ export function ChatInput({
                     className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors p-0.5 rounded hover:bg-[var(--color-hover)]"
                     title={tf(t, 'chat.input.closeEsc', 'Close (Esc)')}
                   >
-                    <span className="material-symbols-outlined text-sm">close</span>
+                    <span className="material-symbols-outlined text-[14px]">close</span>
                   </button>
                 </div>
               </div>

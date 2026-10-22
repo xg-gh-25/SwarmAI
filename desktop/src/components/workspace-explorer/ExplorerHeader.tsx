@@ -50,7 +50,7 @@ function HeaderIconButton({
           : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
       }`}
     >
-      <span className="material-symbols-outlined text-sm">{icon}</span>
+      <span className="material-symbols-outlined text-[14px]">{icon}</span>
     </button>
   );
 }

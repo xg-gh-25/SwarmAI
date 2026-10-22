@@ -150,7 +150,7 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
                 'bg-[var(--color-card)] text-[var(--color-text-muted)] border border-[var(--color-border)]'
               }`}>
                 {s.done ? (
-                  <span className="material-symbols-outlined text-sm">check</span>
+                  <span className="material-symbols-outlined text-[14px]">check</span>
                 ) : s.num}
               </div>
               <span className={`text-sm ${

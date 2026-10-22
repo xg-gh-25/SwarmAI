@@ -134,7 +134,7 @@ export function UserMessageView({ message, onCancelQueued }: UserMessageViewProp
         {/* Queued message badge with cancel button */}
         {message.isQueued && (
           <div className="flex items-center gap-1.5 mt-1 text-xs text-[var(--color-text-muted)] justify-end">
-            <span className="material-symbols-outlined text-sm">schedule_send</span>
+            <span className="material-symbols-outlined text-[14px]">schedule_send</span>
             <span>{tf(t, 'chat.queued.label', 'Queued — will send when ready')}</span>
             {onCancelQueued && (
               <button
@@ -142,7 +142,7 @@ export function UserMessageView({ message, onCancelQueued }: UserMessageViewProp
                 className="ml-2 hover:text-[var(--color-text)] transition-colors"
                 title={tf(t, 'chat.queued.cancel', 'Cancel queued message')}
               >
-                <span className="material-symbols-outlined text-sm">close</span>
+                <span className="material-symbols-outlined text-[14px]">close</span>
               </button>
             )}
           </div>

@@ -248,7 +248,7 @@ export function AttachedFileChips({ files, onRemoveFile }: AttachedFileChipsProp
       data-testid="attached-file-chips"
     >
       {/* Attachment indicator icon */}
-      <span className="material-symbols-outlined text-sm text-[var(--color-primary)] flex-shrink-0">
+      <span className="material-symbols-outlined text-[14px] text-[var(--color-primary)] flex-shrink-0">
         attach_file
       </span>
       

@@ -465,7 +465,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
     return (
       <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-4 my-4">
         <div className="flex items-center gap-2 text-status-error mb-2">
-          <span className="material-symbols-outlined text-sm">error</span>
+          <span className="material-symbols-outlined text-[14px]">error</span>
           <span className="text-sm font-medium">Mermaid Diagram Error</span>
         </div>
         <pre className="text-xs text-[var(--color-text-muted)] overflow-x-auto">{error}</pre>
@@ -491,7 +491,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
         {/* Toolbar */}
         <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-hover)] border-b border-[var(--color-border)]">
           <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-sm">schema</span>
+            <span className="material-symbols-outlined text-[14px]">schema</span>
             Mermaid Diagram
           </span>
           <div className="flex items-center gap-1">
@@ -501,7 +501,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
               className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
               title="View fullscreen"
             >
-              <span className="material-symbols-outlined text-sm">fullscreen</span>
+              <span className="material-symbols-outlined text-[14px]">fullscreen</span>
               Zoom
             </button>
             {/* Download SVG button */}
@@ -510,7 +510,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
               className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
               title="Download as SVG"
             >
-              <span className="material-symbols-outlined text-sm">download</span>
+              <span className="material-symbols-outlined text-[14px]">download</span>
               SVG
             </button>
             {/* Download PNG button */}
@@ -520,7 +520,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
               className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors disabled:opacity-50"
               title="Download as PNG"
             >
-              <span className="material-symbols-outlined text-sm">
+              <span className="material-symbols-outlined text-[14px]">
                 {isDownloading ? 'hourglass_empty' : 'image'}
               </span>
               PNG

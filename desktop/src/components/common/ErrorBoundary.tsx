@@ -135,7 +135,7 @@ export function ErrorFallback({ error, onRetry }: ErrorFallbackProps): React.Rea
           onClick={onRetry}
           className="flex items-center gap-2 px-4 py-2 bg-primary text-[var(--color-text)] rounded-lg hover:bg-primary/80 transition-colors"
         >
-          <span className="material-symbols-outlined text-sm">refresh</span>
+          <span className="material-symbols-outlined text-[14px]">refresh</span>
           Try again
         </button>
       )}
@@ -172,13 +172,13 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
   if (compact) {
     return (
       <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
-        <span className={`material-symbols-outlined text-sm ${getErrorColor(error.code)}`}>
+        <span className={`material-symbols-outlined text-[14px] ${getErrorColor(error.code)}`}>
           {getErrorIcon(error.code)}
         </span>
         <span className="text-sm text-[var(--color-text-muted)] flex-1">{error.message}</span>
         {onDismiss && (
           <button onClick={onDismiss} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-            <span className="material-symbols-outlined text-sm">close</span>
+            <span className="material-symbols-outlined text-[14px]">close</span>
           </button>
         )}
       </div>
@@ -200,7 +200,7 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
           )}
           {error.suggestedAction && (
             <p className="text-sm text-[var(--color-text-muted)] mb-4 flex items-center gap-1">
-              <span className="material-symbols-outlined text-sm">lightbulb</span>
+              <span className="material-symbols-outlined text-[14px]">lightbulb</span>
               {error.suggestedAction}
             </p>
           )}
@@ -210,7 +210,7 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
                 onClick={onRetry}
                 className="flex items-center gap-2 px-4 py-2 bg-primary text-[var(--color-text)] rounded-lg hover:bg-primary/80 transition-colors text-sm"
               >
-                <span className="material-symbols-outlined text-sm">refresh</span>
+                <span className="material-symbols-outlined text-[14px]">refresh</span>
                 Try again
               </button>
             )}

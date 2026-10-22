@@ -276,7 +276,7 @@ export function FolderPickerModal({
                       >
                         {dir.name}
                       </span>
-                      <span className="material-symbols-outlined text-[var(--color-text-muted)] text-sm">
+                      <span className="material-symbols-outlined text-[var(--color-text-muted)] text-[14px]">
                         chevron_right
                       </span>
                     </button>
@@ -291,7 +291,7 @@ export function FolderPickerModal({
         <div className="border-t border-[var(--color-border)] px-4 py-3">
           {/* Selected path display */}
           <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-[var(--color-hover)]/50 rounded-lg">
-            <span className="material-symbols-outlined text-primary text-sm">folder</span>
+            <span className="material-symbols-outlined text-primary text-[14px]">folder</span>
             <span className="text-sm text-[var(--color-text-muted)]">{t('chat.selectedFolder') || 'Selected'}:</span>
             <span className="text-sm text-[var(--color-text)] font-medium truncate flex-1">
               {getSelectedPath()}

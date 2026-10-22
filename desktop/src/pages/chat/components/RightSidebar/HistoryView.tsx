@@ -138,7 +138,7 @@ export function HistoryView({
           text-[var(--color-text-muted)] hover:text-[var(--color-text)]
           transition-opacity"
       >
-        <span className="material-symbols-outlined text-sm">delete</span>
+        <span className="material-symbols-outlined text-[14px]">delete</span>
       </button>
     </div>
   );
