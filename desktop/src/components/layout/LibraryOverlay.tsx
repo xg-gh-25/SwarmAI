@@ -252,7 +252,7 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
                   onClick={() => h.source && document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: h.source } }))}
                   className="flex items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-[var(--color-hover)]"
                 >
-                  <span className="shrink-0 rounded px-1.5 py-[1px] text-[11px] font-mono"
+                  <span className="shrink-0 rounded px-1.5 py-[1px] text-[11px] tabular-nums"
                     style={{ background: h.domain === 'codeintel' ? 'color-mix(in srgb,#4a8fb0 16%,transparent)' : 'color-mix(in srgb,#5fc99a 16%,transparent)',
                              color: h.domain === 'codeintel' ? '#4a8fb0' : '#5fc99a' }}>
                     {h.domain === 'codeintel' ? 'code' : 'docs'}{h.mount_id ? '·mount' : ''}
@@ -342,8 +342,8 @@ function MountRowView({ m }: { m: MountRow }) {
           </div>
         )}
       </div>
-      <span className="shrink-0 rounded px-1.5 py-[1px] text-[11px] font-mono self-start" style={{ background: 'color-mix(in srgb, #4a8fb0 16%, transparent)', color: '#4a8fb0' }}>{m.kind}</span>
-      <span className="shrink-0 text-[11px] font-mono text-[var(--color-text-faint)] self-start">Local</span>
+      <span className="shrink-0 rounded px-1.5 py-[1px] text-[11px] tabular-nums self-start" style={{ background: 'color-mix(in srgb, #4a8fb0 16%, transparent)', color: '#4a8fb0' }}>{m.kind}</span>
+      <span className="shrink-0 text-[11px] tabular-nums text-[var(--color-text-faint)] self-start">Local</span>
     </div>
   );
 }
@@ -462,7 +462,7 @@ function RecentTab({
                 <span className="shrink-0 text-sm" title={meta.label}>{meta.icon}</span>
                 <span className="flex-1 min-w-0 truncate text-sm text-[var(--color-text)]">{it.path.replace('Knowledge/', '')}</span>
                 <span className="shrink-0 text-[11px] text-[var(--color-text-faint)]">{it.category}</span>
-                <span className="w-16 shrink-0 text-right font-mono text-[11px] text-[var(--color-text-faint)]">{fmtWhen(it.mtime)}</span>
+                <span className="w-16 shrink-0 text-right tabular-nums text-[11px] text-[var(--color-text-faint)]">{fmtWhen(it.mtime)}</span>
               </button>
             );
           })}

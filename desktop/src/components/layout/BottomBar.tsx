@@ -40,11 +40,11 @@ function CodeIntelPopover({ summary, onReindex, isReindexing, onViewGraph }: {
       <div className="font-medium text-[12px] mb-2">Code Intelligence — SwarmAI</div>
       <table className="w-full">
         <tbody className="[&_td]:py-0.5">
-          <tr><td className="text-[var(--color-text-muted)]">Symbols</td><td className="text-right font-mono">{summary.symbolCount.toLocaleString()}</td></tr>
-          <tr><td className="text-[var(--color-text-muted)]">Edges</td><td className="text-right font-mono">{summary.edgeCount.toLocaleString()}</td></tr>
-          <tr><td className="text-[var(--color-text-muted)]">Files</td><td className="text-right font-mono">{summary.fileCount.toLocaleString()}</td></tr>
-          <tr><td className="text-[var(--color-text-muted)]">Entry Points</td><td className="text-right font-mono">{summary.entryPoints.toLocaleString()}</td></tr>
-          <tr><td className="text-[var(--color-text-muted)]">Unused Exports</td><td className="text-right font-mono">{summary.unusedExportsCount.toLocaleString()} ({summary.unusedExportsPct}%)</td></tr>
+          <tr><td className="text-[var(--color-text-muted)]">Symbols</td><td className="text-right tabular-nums">{summary.symbolCount.toLocaleString()}</td></tr>
+          <tr><td className="text-[var(--color-text-muted)]">Edges</td><td className="text-right tabular-nums">{summary.edgeCount.toLocaleString()}</td></tr>
+          <tr><td className="text-[var(--color-text-muted)]">Files</td><td className="text-right tabular-nums">{summary.fileCount.toLocaleString()}</td></tr>
+          <tr><td className="text-[var(--color-text-muted)]">Entry Points</td><td className="text-right tabular-nums">{summary.entryPoints.toLocaleString()}</td></tr>
+          <tr><td className="text-[var(--color-text-muted)]">Unused Exports</td><td className="text-right tabular-nums">{summary.unusedExportsCount.toLocaleString()} ({summary.unusedExportsPct}%)</td></tr>
           <tr><td className="text-[var(--color-text-muted)]">Languages</td><td className="text-right">{topLang}</td></tr>
           <tr><td className="text-[var(--color-text-muted)]">Last Indexed</td><td className="text-right">{summary.lastIndexedAt ? _formatAge(summary.lastIndexedAt) : '—'}</td></tr>
         </tbody>
@@ -242,7 +242,7 @@ export function BottomBar() {
               data-testid="code-intel-indicator"
             >
               <span className="text-[11px]">🧠</span>
-              <span className="font-mono">{codeIntel.symbolCount.toLocaleString()}</span>
+              <span className="tabular-nums">{codeIntel.symbolCount.toLocaleString()}</span>
               <span className="opacity-60">|</span>
               <span>{codeIntel.lastIndexedAt ? _formatAge(codeIntel.lastIndexedAt) : '—'}</span>
             </button>
@@ -287,7 +287,7 @@ export function BottomBar() {
       {/* Right: keyboard hints with badge-style kbd — overflow-hidden allows graceful
           clipping at extreme narrow widths instead of rigid flex-shrink-0 which would
           push the left status section off-screen. pr-1.5 avoids window edge clip. */}
-      <div className="flex items-center gap-3 pr-1.5 font-mono text-[11px] overflow-x-hidden">
+      <div className="flex items-center gap-3 pr-1.5 tabular-nums text-[11px] overflow-x-hidden">
         <span className="flex items-center gap-1">
           <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">Enter</kbd>
           <span>send</span>

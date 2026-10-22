@@ -352,7 +352,7 @@ function HotTopicRow({ topic, widthPct }: { topic: CommunityHotTopic; widthPct: 
       title={topic.topTitle || topic.topic}
       className="group flex items-center gap-3 px-2 py-1.5 rounded-lg text-left hover:bg-[var(--color-hover)] transition-colors disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
     >
-      <span className="font-mono text-[11px] text-[var(--color-text-faint)] w-3.5 text-right shrink-0">{topic.rank}</span>
+      <span className="tabular-nums text-[11px] text-[var(--color-text-faint)] w-3.5 text-right shrink-0">{topic.rank}</span>
       <span className="flex-1 min-w-0 text-[13px] text-[var(--color-text)] truncate group-hover:text-[var(--panel-accent,var(--color-primary))]">
         {topic.topic}
         {topic.threads > 0 && (
@@ -819,7 +819,7 @@ function FollowupRow({ item }: { item: CommunityEngagementItem }) {
         </div>
       )}
       <div className="mt-1 text-[11px] text-[var(--color-text-faint)]">
-        {item.topic && <span className="font-mono">{item.topic}</span>}
+        {item.topic && <span className="tabular-nums">{item.topic}</span>}
         {item.postedAt && <span> · posted {item.postedAt.slice(0, 10)}</span>}
         {item.confidence != null && <span> · conf {item.confidence}</span>}
       </div>

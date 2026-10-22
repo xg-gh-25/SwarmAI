@@ -257,6 +257,14 @@ const MermaidModal = memo(function MermaidModal({
 // into its RESULT zone, a tab re-opening) shows its SVG on the first frame instead of
 // flashing "Loading diagram..." while mermaid renders the same source again. Bounded:
 // a streaming diagram renders every partial source, so the oldest entries go first.
+/** The app's sans stack, read from --font-family-sans (index.css is the one definition).
+ *  The fallback only applies where the variable cannot be read (tests without the CSS). */
+const SANS_FALLBACK = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif";
+function appSansStack(): string {
+  if (typeof document === 'undefined') return SANS_FALLBACK;
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--font-family-sans').trim();
+  return v || SANS_FALLBACK;
+}
 const MERMAID_CACHE_MAX = 64;
 const mermaidSvgCache = new Map<string, string>();
 function cacheMermaidSvg(key: string, svg: string): void {
@@ -314,8 +322,9 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
         titleColor: '#1e293b',
         edgeLabelBackground: '#ffffff',
       },
-      // mermaid measures labels with a concrete stack (no CSS variables): the app's.
-      fontFamily: '-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif',
+      // mermaid measures labels with a concrete stack (no CSS variables), so resolve
+      // the app's single definition (--font-family-sans in index.css) at init.
+      fontFamily: appSansStack(),
     });
   }, [resolvedTheme]);
 

@@ -226,7 +226,7 @@ function LeftSidebar() {
           data-testid="history-row"
         >
           <span data-testid="history-row-icon" className="w-4 flex items-center justify-center opacity-85"><NavSvgIcon name="history" /></span>
-          <span className="flex-1 text-left text-[11.5px] font-mono tracking-wide">History</span>
+          <span className="flex-1 text-left text-[11.5px] tabular-nums tracking-wide">History</span>
           <span className="text-[13px] text-[var(--color-text-faint)]">›</span>
         </button>
 
@@ -245,7 +245,7 @@ function LeftSidebar() {
               currentColor, so an inline color on the wrapper tints the glyph. */}
           <span data-testid="artifacts-row-icon" className="w-4 flex items-center justify-center" style={{ color: 'var(--color-primary)' }}><NavSvgIcon name="gallery" /></span>
           <span
-            className="flex-1 text-left text-[11.5px] font-mono font-medium tracking-wide"
+            className="flex-1 text-left text-[11.5px] tabular-nums font-medium tracking-wide"
             style={{ color: 'var(--color-primary)' }}
           >Artifacts</span>
           <span className="text-[13px] text-[var(--color-text-faint)]">›</span>

@@ -370,7 +370,7 @@ function BrainSearchRow({ name, onOpenFile }: { name: string; onOpenFile: (p: st
             >
               <div className="flex items-baseline gap-2">
                 <span className="text-[12px] font-medium text-[var(--color-text)] truncate">{h.title || h.source}</span>
-                <span className="ml-auto text-[11px] font-mono text-[var(--color-text-faint)] flex-shrink-0">{h.domain}</span>
+                <span className="ml-auto text-[11px] tabular-nums text-[var(--color-text-faint)] flex-shrink-0">{h.domain}</span>
               </div>
               {h.source && <div className="text-[11px] font-mono text-[var(--color-text-faint)] truncate">{h.source}</div>}
               {h.content && <div className="text-[11px] text-[var(--color-text-muted)] line-clamp-2 mt-0.5">{h.content}</div>}
@@ -1097,7 +1097,7 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
           (empty for .md — Gate-1), shown only when git gave a non-empty heading. */}
       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-[var(--color-border)]" data-testid={`hunk-summary-${sig}`}>
         <span className="font-mono text-[11px] text-[var(--color-text)]">{fileName}</span>
-        <span className="text-[11px] font-mono">
+        <span className="text-[11px] tabular-nums">
           <span className="text-[#7ee787]">+{s.adds}</span>
           <span className="text-[var(--color-text-faint)]"> / </span>
           <span className="text-[#ff9a94]">-{s.dels}</span>
@@ -1238,7 +1238,7 @@ function DistributeView(
           <div className="flex items-center gap-2 mb-3 text-[12px]">
             <span className="material-symbols-outlined text-[16px] text-[#3fb950]">outbound</span>
             <span className="font-semibold text-[var(--color-text)]">Distributable</span>
-            <span className={`text-[11px] px-1.5 py-0.5 rounded font-mono ${data.visibility === 'external' ? 'bg-[#3a2412] text-[#f0a500]' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]'}`}>
+            <span className={`text-[11px] px-1.5 py-0.5 rounded tabular-nums ${data.visibility === 'external' ? 'bg-[#3a2412] text-[#f0a500]' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]'}`}>
               {data.visibility}
             </span>
           </div>

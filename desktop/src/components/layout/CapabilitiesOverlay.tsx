@@ -438,7 +438,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                     style={{ background: 'linear-gradient(135deg, color-mix(in srgb, var(--panel-accent, var(--color-primary)) 12%, transparent), transparent)' }}
                     data-testid={`cap-skill-${h.folderName}`}
                   >
-                    <div className="text-[11px] font-mono tracking-wider text-[var(--color-primary)]">⭐ SIGNATURE</div>
+                    <div className="text-[11px] tabular-nums tracking-wider text-[var(--color-primary)]">⭐ SIGNATURE</div>
                     <div className="text-base font-semibold mt-2 flex items-center gap-2">
                       <span>{SIGNATURE[h.folderName]?.icon ?? '✨'}</span>{h.name}
                     </div>
@@ -591,7 +591,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                 <div className="text-[13px]">Say what you want in chat — Swarm invokes it automatically.</div>
               </div>
               {/* Demoted dev metadata */}
-              <div className="pt-3 border-t border-[var(--color-border)] text-[12px] text-[var(--color-text-faint)] font-mono space-y-1">
+              <div className="pt-3 border-t border-[var(--color-border)] text-[12px] text-[var(--color-text-faint)] tabular-nums space-y-1">
                 <div>source: {selected.sourceTier}</div>
                 <div>version: {selected.version}</div>
                 <div>load: {selected.tier}{selected.tier === 'always' ? ' (at startup)' : ' (on use)'}</div>
@@ -629,7 +629,7 @@ function ConnGroup({
     <div className="mb-6" data-testid={`cap-conn-${statusLabel.toLowerCase()}`}>
       <h2 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1 flex items-baseline gap-2">
         {title}
-        <span className="text-[11px] font-mono text-[var(--color-text-faint)]">{tag}</span>
+        <span className="text-[11px] tabular-nums text-[var(--color-text-faint)]">{tag}</span>
       </h2>
       {entries.map((m) => (
         <div key={m.id} className="flex items-center gap-3 px-2 py-3 rounded-md hover:bg-[var(--color-hover)]">
@@ -662,7 +662,7 @@ function ConnGroup({
             {m.description && <div className="text-xs text-[var(--color-text-faint)] truncate">{m.description}</div>}
           </div>
           <div className="flex-1" />
-          <span className={`text-[11px] font-mono font-medium ${statusClass}`}>{statusLabel}</span>
+          <span className={`text-[11px] tabular-nums font-medium ${statusClass}`}>{statusLabel}</span>
           <button
             data-testid={`cap-toggle-${m.id}`}
             onClick={() => onToggle(m)}

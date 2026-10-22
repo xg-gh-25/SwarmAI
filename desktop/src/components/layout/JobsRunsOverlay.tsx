@@ -201,7 +201,7 @@ function GuideBanner() {
       <span className="material-symbols-outlined text-[16px] text-primary mt-0.5 shrink-0">auto_awesome</span>
       <div className="flex-1 min-w-0 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
         <span className="text-[var(--color-text)] font-medium">Just ask Swarm in chat</span> — the AI-native way.
-        Say <span className="font-mono text-[var(--color-text)]">“schedule a job to … every weekday 9am”</span> and it
+        Say <span className="tabular-nums text-[var(--color-text)]">“schedule a job to … every weekday 9am”</span> and it
         sets up the cron, prompt, tools, and budget for you (via the job-manager skill). Chat also handles{' '}
         <span className="text-[var(--color-text)]">edits</span> (“pause the stock-analysis job”) and{' '}
         <span className="text-[var(--color-text)]">deletes</span>.
@@ -262,7 +262,7 @@ function JobCard({ job, onSelect }: { job: JobRosterRow; onSelect: (j: JobRoster
       <span className="w-2 h-2 rounded-full shrink-0" style={{ background: healthColor(job) }} data-testid="job-health-dot" />
       <span className="flex-1 min-w-0 text-[12.5px] text-[var(--color-text)] truncate">{job.name}</span>
       <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0">{job.schedule || '—'}</span>
-      <span className="text-[11px] font-mono text-[var(--color-text-muted)] shrink-0 w-[110px] text-right">{fmtTs(job.lastRun)}</span>
+      <span className="text-[11px] tabular-nums text-[var(--color-text-muted)] shrink-0 w-[110px] text-right">{fmtTs(job.lastRun)}</span>
       <span className={`text-[11px] uppercase px-1.5 py-0.5 rounded shrink-0 ${
         job.source === 'system' ? 'text-[var(--color-text-faint)] bg-[var(--color-hover)]' : 'text-primary bg-primary/10'
       }`}>{job.source}</span>
@@ -293,9 +293,9 @@ function RunsView({ roster }: { roster: JobRosterRow[] }) {
           {rows.map((r) => (
             <div key={r.key} className="flex items-center gap-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5" data-testid="run-row">
               <span className="flex-1 min-w-0 text-[12px] text-[var(--color-text)] truncate">{r.name}</span>
-              <span className="text-[11px] font-mono text-[var(--color-text-muted)] shrink-0">{r.detail}</span>
+              <span className="text-[11px] tabular-nums text-[var(--color-text-muted)] shrink-0">{r.detail}</span>
               <StatusBadge status={r.status} />
-              <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0 w-[110px] text-right">{fmtTs(r.ts)}</span>
+              <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-[110px] text-right">{fmtTs(r.ts)}</span>
             </div>
           ))}
         </div>
@@ -308,7 +308,7 @@ function StatusBadge({ status }: { status: string }) {
   const ok = status === 'success' || status === 'completed';
   const bad = status === 'failed' || status === 'cancelled' || status === 'abandoned';
   const cls = ok ? 'text-emerald-400 bg-emerald-500/10' : bad ? 'text-red-400 bg-red-500/10' : 'text-[var(--color-text-muted)] bg-[var(--color-hover)]';
-  return <span className={`text-[11px] font-mono px-1.5 py-0.5 rounded shrink-0 ${cls}`}>{status}</span>;
+  return <span className={`text-[11px] tabular-nums px-1.5 py-0.5 rounded shrink-0 ${cls}`}>{status}</span>;
 }
 
 // ── Detail drawer ───────────────────────────────────────────────────
@@ -342,7 +342,7 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
         <span className="mt-1 w-2 h-2 rounded-full shrink-0" style={{ background: healthColor(job) }} />
         <div className="flex-1 min-w-0">
           <div className="text-[13px] font-semibold text-[var(--color-text)] leading-snug break-words">{job.name}</div>
-          <div className="mt-0.5 flex items-center gap-2 text-[11px] font-mono text-[var(--color-text-faint)]">
+          <div className="mt-0.5 flex items-center gap-2 text-[11px] tabular-nums text-[var(--color-text-faint)]">
             <span>{job.type || '—'}</span><span>·</span><span>{job.source}</span><span>·</span><span>{job.lastStatus}</span>
           </div>
         </div>
@@ -353,8 +353,8 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
 
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-4 text-[12px]">
         <Section label="Schedule">
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-[11px]">
-            <dt className="text-[var(--color-text-faint)]">Cron</dt><dd className="text-[var(--color-text)] break-all">{job.schedule || '—'}</dd>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 tabular-nums text-[11px]">
+            <dt className="text-[var(--color-text-faint)]">Cron</dt><dd className="font-mono text-[var(--color-text)] break-all">{job.schedule || '—'}</dd>
             <dt className="text-[var(--color-text-faint)]">Total runs</dt><dd className="text-[var(--color-text)]">{job.totalRuns}</dd>
             <dt className="text-[var(--color-text-faint)]">Last run</dt><dd className="text-[var(--color-text)]">{fmtTs(job.lastRun)}</dd>
           </dl>
@@ -375,7 +375,7 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
           {runs && runs.recent.length > 0 ? (
             <ul className="flex flex-col gap-0.5">
               {runs.recent.map((r, i) => (
-                <li key={i} className="flex items-center gap-2 text-[11px] font-mono">
+                <li key={i} className="flex items-center gap-2 text-[11px] tabular-nums">
                   <span className="text-[var(--color-text-faint)] w-[80px]">{r.date}</span>
                   <StatusBadge status={r.status} />
                   <span className="text-[var(--color-text-muted)]">{r.tokens ?? 0} tok</span>

@@ -368,7 +368,7 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
   return (
     <div className={`rounded-md border px-2.5 py-1.5 ${accent ? 'border-amber-500/50 bg-amber-500/10' : 'border-[var(--color-border)] bg-[var(--color-card)]'}`}>
       <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">{label}</div>
-      <div className={`text-sm font-mono ${accent ? 'text-amber-500' : 'text-[var(--color-text)]'}`}>{value}</div>
+      <div className={`text-sm tabular-nums ${accent ? 'text-amber-500' : 'text-[var(--color-text)]'}`}>{value}</div>
     </div>
   );
 }
@@ -406,9 +406,9 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
           {expanded ? 'expand_more' : 'chevron_right'}
         </span>
         <span className="text-sm font-medium text-[var(--color-text)] truncate flex-1 min-w-0">{card.topic}</span>
-        {card.domain && <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0">[{card.domain}]</span>}
-        <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0">{fmtDate(card.createdAt)}</span>
-        <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0">
+        {card.domain && <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0">[{card.domain}]</span>}
+        <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0">{fmtDate(card.createdAt)}</span>
+        <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0">
           {card.publishedCount > 0 && <span className="text-emerald-500">🟢{card.publishedCount} </span>}
           ⚪{card.readyCount}
         </span>
@@ -557,7 +557,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
         <button onClick={onClose} className="material-symbols-outlined text-[18px] text-[var(--color-text-faint)] hover:text-[var(--color-text)]">close</button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
-        <div className="text-[11px] font-mono text-[var(--color-text-faint)]">
+        <div className="text-[11px] tabular-nums text-[var(--color-text-faint)]">
           {card.topic} · {fmtDate(card.createdAt)}
         </div>
         {asset.isImage ? (
@@ -796,7 +796,7 @@ function BarList({ entries, sub }: { entries: [string, number][]; sub?: (k: stri
         <div key={k} className="text-[11px]">
           <div className="flex justify-between text-[var(--color-text-muted)]">
             <span>{k}</span>
-            <span className="font-mono">{sub ? sub(k) : v}</span>
+            <span className="tabular-nums">{sub ? sub(k) : v}</span>
           </div>
           <div className="h-1.5 rounded bg-[var(--color-hover)]">
             <div className="h-full rounded bg-primary/50" style={{ width: `${(v / max) * 100}%` }} />
@@ -811,7 +811,7 @@ function FunnelBar({ label, value, max }: { label: string; value: number; max: n
   const pct = max > 0 ? (value / max) * 100 : 0;
   return (
     <div className="flex-1 flex flex-col items-center">
-      <div className="text-sm font-mono text-[var(--color-text)]">{value}</div>
+      <div className="text-sm tabular-nums text-[var(--color-text)]">{value}</div>
       <div className="w-full h-16 flex items-end">
         <div className="w-full rounded-t bg-primary/40" style={{ height: `${Math.max(pct, 3)}%` }} />
       </div>

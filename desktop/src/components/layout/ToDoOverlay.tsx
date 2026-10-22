@@ -539,7 +539,7 @@ function SourceBars({ data }: { data: ReturnType<typeof sourceDist> }) {
           <div className="flex-1 h-2.5 rounded-sm bg-[var(--color-bg)] overflow-hidden">
             <div className="h-full bg-primary/70 rounded-sm" style={{ width: `${(d.count / total) * 100}%` }} />
           </div>
-          <span className="w-6 shrink-0 text-right font-mono text-[var(--color-text-faint)] tabular-nums">{d.count}</span>
+          <span className="w-6 shrink-0 text-right text-[var(--color-text-faint)] tabular-nums">{d.count}</span>
         </div>
       ))}
     </div>
@@ -631,11 +631,11 @@ function TodoRow({ todo, onDispatch, onWithdraw, onSelect }: {
       <td className="px-3 py-2.5 max-w-[320px]">
         <span className="block truncate font-medium text-[var(--color-text)]">{todo.title}</span>
       </td>
-      <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--color-text-muted)]">{todo.sourceType}</td>
+      <td className="px-3 py-2.5 tabular-nums text-[11px] text-[var(--color-text-muted)]">{todo.sourceType}</td>
       <td className="px-3 py-2.5"><StatusBadge status={status} /></td>
-      <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.createdAt)}</td>
-      <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.updatedAt)}</td>
-      <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.completedAt)}</td>
+      <td className="px-3 py-2.5 tabular-nums text-[11px] text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.createdAt)}</td>
+      <td className="px-3 py-2.5 tabular-nums text-[11px] text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.updatedAt)}</td>
+      <td className="px-3 py-2.5 tabular-nums text-[11px] text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.completedAt)}</td>
       {/* Actions must not open the drawer. Quiet until row-hover (opacity) so the
           table scans clean; the primary Dispatch stays accent-colored on reveal. */}
       <td className="px-3 py-2.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
@@ -763,7 +763,7 @@ function GuideBanner() {
       <span className="material-symbols-outlined text-[16px] text-primary mt-0.5 shrink-0">auto_awesome</span>
       <div className="flex-1 min-w-0 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
         <span className="text-[var(--color-text)] font-medium">Just ask Swarm in chat</span> — the AI-native way.
-        Say <span className="font-mono text-[var(--color-text)]">“add a todo to …”</span> and it captures full context
+        Say <span className="tabular-nums text-[var(--color-text)]">“add a todo to …”</span> and it captures full context
         (files, design docs, next step) automatically. Chat also handles{' '}
         <span className="text-[var(--color-text)]">bulk import</span> (e.g. “import my open tasks from another tool”),{' '}
         <span className="text-[var(--color-text)]">updates</span> (“mark the auth todo done”), and{' '}
@@ -814,7 +814,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
         <div className="mt-2 flex items-center gap-2 flex-wrap pl-3.5">
           <StatusSelect todo={todo} onSetZone={onSetZone} />
           <PriorityPill priority={todo.priority} />
-          <span className="text-[11px] font-mono text-[var(--color-text-faint)]">{todo.sourceType}</span>
+          <span className="text-[11px] tabular-nums text-[var(--color-text-faint)]">{todo.sourceType}</span>
         </div>
       </div>
 
@@ -837,14 +837,14 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
         )}
 
         <Section label="Timeline">
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-[11px]">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 tabular-nums text-[11px]">
             <TsRow label="Created" iso={todo.createdAt} />
             <TsRow label="Dispatched" iso={todo.dispatchedAt} />
             <TsRow label="Completed" iso={todo.completedAt} />
             <TsRow label="Reviewed" iso={todo.reviewedAt} />
           </dl>
           {todo.dispatchedTabLabel && (
-            <div className="mt-1 text-[11px] font-mono text-[var(--color-text-muted)]">→ {todo.dispatchedTabLabel}</div>
+            <div className="mt-1 text-[11px] tabular-nums text-[var(--color-text-muted)]">→ {todo.dispatchedTabLabel}</div>
           )}
         </Section>
 
@@ -878,7 +878,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
                   >
                     <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">attach_file</span>
                     <span className="flex-1 truncate">{a.filename}</span>
-                    <span className="font-mono text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
+                    <span className=" text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
                     <span className="material-symbols-outlined text-[13px] text-[var(--color-text-faint)]">open_in_new</span>
                   </button>
                 </li>
@@ -1198,7 +1198,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
                     >
                       <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">attach_file</span>
                       <span className="flex-1 truncate text-[var(--color-text)]">{a.filename}</span>
-                      <span className="font-mono text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
+                      <span className=" text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
                     </button>
                     <button onClick={() => void removeExisting(a)} title="Remove" className="text-[var(--color-text-muted)] hover:text-red-400 shrink-0">
                       <span className="material-symbols-outlined text-[14px]">close</span>
@@ -1209,7 +1209,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
                   <li key={s.key} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-[11px]" data-testid="todo-form-staged">
                     <span className="material-symbols-outlined text-[14px] text-[var(--color-text-faint)]">schedule</span>
                     <span className="flex-1 truncate text-[var(--color-text-muted)]">{s.file.name}</span>
-                    <span className="font-mono text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(s.file.size)}</span>
+                    <span className=" text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(s.file.size)}</span>
                     <button onClick={() => setStaged((prev) => prev.filter((x) => x.key !== s.key))} title="Remove" className="text-[var(--color-text-muted)] hover:text-red-400">
                       <span className="material-symbols-outlined text-[14px]">close</span>
                     </button>

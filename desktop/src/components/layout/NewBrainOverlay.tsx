@@ -266,11 +266,11 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
             A brain is a <span className="text-[var(--color-text)] font-semibold">domain that gets smarter every time you work in it</span> — its knowledge, skills &amp; memory compound. Not a folder. Name it, give me what you already have; I set it up with you in chat.
           </p>
           <div className="mt-2.5 inline-flex items-center gap-2 text-[11px] text-[var(--color-text-muted)] bg-[var(--color-bg)] border border-[var(--color-border)] rounded-full px-3 py-1">
-            <span><span className="text-[var(--color-primary)] font-mono">1</span> tell me</span>
+            <span><span className="text-[var(--color-primary)] tabular-nums">1</span> tell me</span>
             <span className="text-[var(--color-text-faint)]">→</span>
-            <span><span className="text-[var(--color-primary)] font-mono">2</span> Create — I take it to chat</span>
+            <span><span className="text-[var(--color-primary)] tabular-nums">2</span> Create — I take it to chat</span>
             <span className="text-[var(--color-text-faint)]">→</span>
-            <span><span className="text-[var(--color-primary)] font-mono">3</span> it lives in Brain Hub</span>
+            <span><span className="text-[var(--color-primary)] tabular-nums">3</span> it lives in Brain Hub</span>
           </div>
         </div>
 

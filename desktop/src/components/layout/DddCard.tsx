@@ -123,7 +123,7 @@ function CardHeader({ name, kind, verdict }: { name: string; kind: string; verdi
     <div className="flex items-center gap-2 mb-2">
       <span className="material-symbols-outlined text-[16px] text-[#f0a500]">psychology</span>
       <span className="text-[13px] font-semibold">{name}</span>
-      <span className="text-[11px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{kind}</span>
+      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{kind}</span>
       {verdict != null && <span className="ml-auto">{verdict}</span>}
     </div>
   );
@@ -170,7 +170,7 @@ function NeedsActionable({ health }: { health: BrainHealth }) {
 function CalmMeta({ lifecycleStage, health }: { lifecycleStage: LifecycleStage; health: BrainHealth }) {
   const bits = [lifecycleStage, `${health.sinking} sinking`, health.lastChangeRelative];
   return (
-    <div data-testid="dddcard-calm-meta" className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-faint)] mt-1.5 font-mono">
+    <div data-testid="dddcard-calm-meta" className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-faint)] mt-1.5 tabular-nums">
       {bits.map((b, i) => (
         <span key={i}>{i > 0 ? '· ' : ''}{b}</span>
       ))}

@@ -493,7 +493,7 @@ function NeedsList({
     <>
       <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-2.5">
         <button data-testid="cm-needs-back" onClick={onBack} className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]">← Back to {backLabel}</button>
-        <span className="text-sm font-semibold text-[var(--color-text)]">{qm.label} <span className="font-mono text-[var(--color-text-faint)]">({meta.count})</span></span>
+        <span className="text-sm font-semibold text-[var(--color-text)]">{qm.label} <span className="tabular-nums text-[var(--color-text-faint)]">({meta.count})</span></span>
       </div>
       {/* AC1: one-line explainer — what this queue governs + what its conf means here. */}
       <div data-testid="cm-needs-explainer" className="border-b border-[var(--color-border)] px-4 py-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
@@ -573,7 +573,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           className="grid w-full items-center gap-3 rounded-md px-3 py-2 max-w-3xl text-left hover:bg-[var(--color-hover)]"
           style={{ gridTemplateColumns: '2rem 0.375rem 1fr 4rem 4rem 6rem 4rem 1.5rem' }}
         >
-          <span className="font-mono text-xs text-[var(--color-text-faint)]">P{f.priority}</span>
+          <span className="tabular-nums text-xs text-[var(--color-text-faint)]">P{f.priority}</span>
           <span
             className="w-1.5 h-4 rounded-full"
             style={{ background: OWNER_TINT[f.owner] }}
@@ -590,7 +590,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
             {f.health_counts && (f.health_counts.dormant > 0 || f.health_counts.reclaimable > 0 || f.health_counts.duplicate > 0) && (
               <span
                 data-testid={`cm-health-counts-${f.name}`}
-                className="mt-0.5 flex gap-2 text-[11px] font-mono text-[var(--color-text-faint)]"
+                className="mt-0.5 flex gap-2 text-[11px] tabular-nums text-[var(--color-text-faint)]"
                 title="Knowledge health — auto decay+dedup sweep targets these (dormant = no longer injected · reclaimable = archivable noise · duplicate = exact-dup a sweep removes)"
               >
                 {f.health_counts.dormant > 0 && <span>{f.health_counts.dormant} dormant</span>}
@@ -601,7 +601,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           </span>
           <span className="text-right text-[11px] text-[var(--color-text-faint)]">{OWNER_LABEL[f.owner]}</span>
           {/* Tokens — DISK size, right-aligned, fixed col */}
-          <span className="text-right font-mono text-xs text-[var(--color-text-muted)]" title={tokenTitle}>
+          <span className="text-right tabular-nums text-xs text-[var(--color-text-muted)]" title={tokenTitle}>
             {fmtTokens(f.tokens)}
           </span>
           {/* AC4: SHARE — an explicit visible bar + % number (user-requested; this
@@ -697,8 +697,8 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
                   boxShadow: sel ? `0 0 0 3px color-mix(in srgb, ${tint} 40%, transparent)` : 'none',
                 }}
               >
-                <span className="font-mono text-sm font-extrabold" style={{ color: tint }}>{n.count}</span>
-                <span className="font-mono text-[11px] font-bold" style={{ color: tint }}>{n.type.slice(0, 4)}</span>
+                <span className="tabular-nums text-sm font-extrabold" style={{ color: tint }}>{n.count}</span>
+                <span className="tabular-nums text-[11px] font-bold" style={{ color: tint }}>{n.type.slice(0, 4)}</span>
               </button>
             );
           })}
@@ -723,11 +723,11 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
                 onClick={() => setSelType(n.type)}
                 className="flex items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-[var(--color-hover)]"
               >
-                <span className="w-24 shrink-0 font-mono text-[11px] text-[var(--color-text-muted)]">{n.type}</span>
+                <span className="w-24 shrink-0 tabular-nums text-[11px] text-[var(--color-text-muted)]">{n.type}</span>
                 <span className="flex-1 h-2 rounded-full bg-[var(--color-border)] max-w-md">
                   <span className="block h-2 rounded-full" style={{ width: `${Math.max(3, (n.count / maxCount) * 100)}%`, background: tint }} />
                 </span>
-                <span className="w-8 shrink-0 text-right font-mono text-[11px] text-[var(--color-text-faint)]">{n.count}</span>
+                <span className="w-8 shrink-0 text-right tabular-nums text-[11px] text-[var(--color-text-faint)]">{n.count}</span>
               </button>
             );
           })}
@@ -749,7 +749,7 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
                   <div key={i} className="flex items-center gap-2 text-xs">
                     <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: e.status === 'active' ? '#5fc99a' : '#7c8194' }} />
                     <span className="min-w-0 flex-1 truncate text-[var(--color-text)]">{e.title}</span>
-                    {e.meta && <span className="shrink-0 font-mono text-[11px] text-[var(--color-text-faint)]">{e.meta}</span>}
+                    {e.meta && <span className="shrink-0 tabular-nums text-[11px] text-[var(--color-text-faint)]">{e.meta}</span>}
                   </div>
                 ))}
               </div>
@@ -868,10 +868,10 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
                 className="flex items-baseline gap-3 rounded-md px-2 py-1.5 text-left hover:bg-[var(--color-hover)]"
               >
                 {/* period is the primary scannable key; filename demoted to mono detail */}
-                <span className="w-16 shrink-0 font-mono text-xs font-medium text-[var(--color-text)]">{f.period}</span>
+                <span className="w-16 shrink-0 tabular-nums text-xs font-medium text-[var(--color-text)]">{f.period}</span>
                 <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text-muted)]" title={f.name}>{f.name}</span>
                 <span className="shrink-0 text-[11px] text-[var(--color-text-muted)]">{f.entry_count} entr{f.entry_count === 1 ? 'y' : 'ies'}</span>
-                <span className="w-14 shrink-0 text-right font-mono text-[11px] text-[var(--color-text-faint)]">{fmtBytes(f.bytes)}</span>
+                <span className="w-14 shrink-0 text-right tabular-nums text-[11px] text-[var(--color-text-faint)]">{fmtBytes(f.bytes)}</span>
               </button>
             ))}
           </div>
@@ -1135,7 +1135,7 @@ function AmColumn({
     <div data-testid={testid} className="rounded-lg border border-[var(--color-border)] p-3">
       <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
         {head}
-        <span className="rounded-full px-2 py-[1px] font-mono text-[11px] tracking-wider" style={{ background: `color-mix(in srgb, ${accent} 16%, transparent)`, color: accent }}>{badge}</span>
+        <span className="rounded-full px-2 py-[1px] tabular-nums text-[11px] tracking-wider" style={{ background: `color-mix(in srgb, ${accent} 16%, transparent)`, color: accent }}>{badge}</span>
       </div>
       <div className="flex flex-col gap-1.5">
         {items.map((it) => (
@@ -1145,7 +1145,7 @@ function AmColumn({
               <div className="text-xs font-medium text-[var(--color-text)]">{it.name}</div>
               <div className="truncate text-[11px] text-[var(--color-text-muted)]">{it.desc}</div>
             </div>
-            <span className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-[1px] font-mono text-[11px] text-[var(--color-text-faint)]">{it.tag}</span>
+            <span className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-[1px] tabular-nums text-[11px] text-[var(--color-text-faint)]">{it.tag}</span>
           </div>
         ))}
       </div>
@@ -1188,7 +1188,7 @@ function NeedsBtn({ testid, label, count, tint, active, onClick }: { testid: str
     >
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: tint }} aria-hidden />
       <span className="flex-1 text-[var(--color-text-muted)]">{label}</span>
-      <span className="font-mono font-semibold text-[var(--color-text)]">{count}</span>
+      <span className="tabular-nums font-semibold text-[var(--color-text)]">{count}</span>
     </button>
   );
 }

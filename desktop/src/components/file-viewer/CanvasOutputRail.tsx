@@ -194,7 +194,7 @@ const OutputRow = memo(function OutputRow({
       </span>
       {style && (
         <span
-          className="shrink-0 text-[11px] font-semibold leading-none font-mono"
+          className="shrink-0 text-[11px] font-semibold leading-none tabular-nums"
           style={{ color: style.color }}
           data-testid="canvas-output-badge"
           title={badge === 'new' ? 'added' : 'modified'}

@@ -239,7 +239,7 @@ export function OverlayHost() {
           )}
           <h2 className="font-semibold text-[15px] tracking-tight text-[var(--color-text)]">{renderSpec.title}</h2>
           <div className="ml-auto flex items-center gap-3">
-            <span className="hidden sm:flex items-center gap-1.5 font-mono text-[11px] text-[var(--color-text-faint)]">
+            <span className="hidden sm:flex items-center gap-1.5 tabular-nums text-[11px] text-[var(--color-text-faint)]">
               <kbd className="border border-[var(--color-border)] rounded px-1.5 py-0.5 bg-[var(--color-bg)]">ESC</kbd>
               to close
             </span>

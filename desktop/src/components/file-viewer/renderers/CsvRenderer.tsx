@@ -328,7 +328,7 @@ const CsvRenderer = memo(function CsvRenderer({
                     >
                       {/* Row number */}
                       <td
-                        className="px-2 text-right text-[var(--color-text-muted)] font-mono border-r border-[var(--color-border)] select-none"
+                        className="px-2 text-right text-[var(--color-text-muted)] tabular-nums border-r border-[var(--color-border)] select-none"
                         style={{ width: 52, minWidth: 52 }}
                       >
                         {rowIdx + 1}

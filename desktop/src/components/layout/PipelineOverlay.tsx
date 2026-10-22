@@ -271,7 +271,7 @@ export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
                 <div className="flex items-center gap-2 px-3 py-2 border-b border-rose-500/30">
                   <span className="material-symbols-outlined text-[16px] text-rose-500">priority_high</span>
                   <span className="text-sm font-medium text-[var(--color-text)]">Needs you</span>
-                  <span className="text-[11px] font-mono text-rose-500">{o?.abortedCount ?? needy.length}</span>
+                  <span className="text-[11px] tabular-nums text-rose-500">{o?.abortedCount ?? needy.length}</span>
                 </div>
                 <div>
                   {needy.map(({ run, project }) => (
@@ -323,8 +323,8 @@ function Stat({ label, value, sub, accent, onClick, active, testid }: {
         {label}
         {onClick && <span className="material-symbols-outlined text-[12px]">{active ? 'filter_alt_off' : 'filter_alt'}</span>}
       </div>
-      <div className={`text-sm font-mono ${accent ? 'text-rose-500' : 'text-[var(--color-text)]'}`}>{value}</div>
-      {sub && <div className="text-[11px] text-[var(--color-text-faint)] font-mono">{sub}</div>}
+      <div className={`text-sm tabular-nums ${accent ? 'text-rose-500' : 'text-[var(--color-text)]'}`}>{value}</div>
+      {sub && <div className="text-[11px] text-[var(--color-text-faint)] tabular-nums">{sub}</div>}
     </>
   );
   return onClick
@@ -372,13 +372,13 @@ function RunRow({ r, onOpenRun, close, showProject }: {
         {showProject && <span className="text-[var(--color-text-faint)]">{showProject} · </span>}
         {r.requirement || r.id}
       </button>
-      <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0">{r.profile}</span>
+      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0">{r.profile}</span>
       {/* Run-time column (run_0e68e235): when this run last updated (= finish time
           for a terminal run). Rows arrive newest-first from the backend
           (summaries.sort updated_at reverse). Absolute stamp, no "N ago" (fmtTs). */}
-      <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0 w-28 text-right" title={r.updatedAt || r.createdAt}>{fmtTs(r.updatedAt || r.createdAt)}</span>
-      <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0 w-12 text-right">{fmtCycle(r.cycleTimeMin)}</span>
-      <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0 w-16 text-right">
+      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-28 text-right" title={r.updatedAt || r.createdAt}>{fmtTs(r.updatedAt || r.createdAt)}</span>
+      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-12 text-right">{fmtCycle(r.cycleTimeMin)}</span>
+      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-16 text-right">
         {fmtTokens(r.tokensActual)}/{fmtTokens(r.tokensEst)}
       </span>
       {/* Report button (AC2) — only when this run has a REPORT.md. Opens it in Canvas. */}
@@ -428,11 +428,11 @@ function ProjectGroup({ group, onOpenRun, close, defaultExpanded = false, needsY
           {isOpen ? 'expand_more' : 'chevron_right'}
         </span>
         <span className="text-sm font-medium text-[var(--color-text)]">{group.project}</span>
-        <span className="text-[11px] text-[var(--color-text-faint)] font-mono">
+        <span className="text-[11px] text-[var(--color-text-faint)] tabular-nums">
           {group.runCount} runs · {Math.round(group.completionRate * 100)}% · avg {fmtCycle(group.avgCycleMin)}
         </span>
         {group.abortedCount > 0 && (
-          <span className="text-[11px] font-mono text-rose-500">· {group.abortedCount} need you</span>
+          <span className="text-[11px] tabular-nums text-rose-500">· {group.abortedCount} need you</span>
         )}
       </button>
       {isOpen && (
@@ -488,7 +488,7 @@ function RunDetailDrawer({
                   <span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} />{pill.label}
                 </span>
               </div>
-              <div className="text-[11px] font-mono text-[var(--color-text-faint)] mt-1">
+              <div className="text-[11px] tabular-nums text-[var(--color-text-faint)] mt-1">
                 {detail.project} · {detail.profile} · {fmtCycle(detail.cycleTimeMin)} · {fmtTs(detail.updatedAt || detail.createdAt)}
               </div>
             </div>
@@ -547,7 +547,7 @@ function RunDetailDrawer({
                   {detail.stageTokens.map((s) => {
                     const max = Math.max(...detail.stageTokens.flatMap((x) => [x.est, x.actual]), 1);
                     return (
-                      <div key={s.stage} className="text-[11px] font-mono">
+                      <div key={s.stage} className="text-[11px] tabular-nums">
                         <div className="flex justify-between text-[var(--color-text-faint)]">
                           <span>{s.stage}</span><span>{fmtTokens(s.actual)}/{fmtTokens(s.est)}</span>
                         </div>

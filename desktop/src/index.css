@@ -269,6 +269,13 @@ code, pre, kbd, samp, .font-mono {
   font-variant-ligatures: none;
 }
 
+/* Never fake an italic. PingFang SC has no italic face, so `*强调*` / blockquote
+   italics were drawn as slanted, blurry CJK. With synthesis off, Latin glyphs still
+   use SF Pro's real italic and CJK glyphs stay upright. Weight synthesis stays on. */
+html {
+  font-synthesis: weight small-caps;
+}
+
 /* Base styles */
 html {
   font-size: 13px; /* Dense UI chrome; content surfaces set their own reading size. */
