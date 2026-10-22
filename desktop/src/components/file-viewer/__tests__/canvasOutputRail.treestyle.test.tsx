@@ -18,10 +18,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { ReferencedFile } from '../../../hooks/useReferencedFiles';
-import type { ChangeStatus } from '../../../hooks/useChangeStatus';
 
 let mockFiles: ReferencedFile[] = [];
-let mockStatus = new Map<string, ChangeStatus>();
 vi.mock('../../../hooks/useReferencedFiles', () => ({
   useReferencedFiles: () => ({
     files: { written: mockFiles },
@@ -29,24 +27,21 @@ vi.mock('../../../hooks/useReferencedFiles', () => ({
     clear: () => {},
   }),
 }));
-vi.mock('../../../hooks/useChangeStatus', () => ({
-  useChangeStatus: () => mockStatus,
-}));
 
 import { CanvasOutputRail } from '../CanvasOutputRail';
 
-const mkFile = (name: string, firstSeen = 1000): ReferencedFile => ({
+const mkFile = (name: string, firstSeen = 1000, change?: 'new' | 'upd'): ReferencedFile => ({
   path: `src/components/${name}`,
   absolutePath: `/ws/src/components/${name}`,
   fileName: name,
   operation: 'written',
   firstSeen,
   count: 1,
+  change,
 });
 
 beforeEach(() => {
   mockFiles = [];
-  mockStatus = new Map();
 });
 
 describe('CanvasOutputRail — tree-list row style', () => {
@@ -60,11 +55,7 @@ describe('CanvasOutputRail — tree-list row style', () => {
   });
 
   it('shows a COMPACT single-letter status chip (A/M), never the words NEW/UPD', () => {
-    mockFiles = [mkFile('added.ts', 2000), mkFile('mod.ts', 1000)];
-    mockStatus = new Map([
-      ['src/components/added.ts', 'new'],
-      ['src/components/mod.ts', 'upd'],
-    ]);
+    mockFiles = [mkFile('added.ts', 2000, 'new'), mkFile('mod.ts', 1000, 'upd')];
     render(<CanvasOutputRail files={{ written: mockFiles }} />);
     // Word-tags must be gone.
     expect(screen.queryByText('NEW')).toBeNull();
@@ -76,8 +67,7 @@ describe('CanvasOutputRail — tree-list row style', () => {
   });
 
   it('the status chip uses the git SEMANTIC color, not the primary accent', () => {
-    mockFiles = [mkFile('added.ts')];
-    mockStatus = new Map([['src/components/added.ts', 'new']]);
+    mockFiles = [mkFile('added.ts', 1000, 'new')];
     render(<CanvasOutputRail files={{ written: mockFiles }} />);
     const chip = screen.getByTestId('canvas-output-badge');
     // green (git-added) semantic color — NOT --color-primary

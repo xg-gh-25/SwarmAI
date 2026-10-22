@@ -45,6 +45,8 @@ export interface SessionArtifact {
   /** Deleted by the session (a later write clears it). */
   deleted: boolean;
   exists: boolean;
+  /** In its repo's HEAD (UPD) / not (NEW); null: cannot be told. */
+  inHead?: boolean | null;
   baseRef?: string;
 }
 

@@ -91,10 +91,16 @@ export interface ReferencedFile {
    *  Show-Changes disabled) instead of being removed — "the user should see what I
    *  deleted" (XG). Undefined/false = a live written row. */
   deleted?: boolean;
+  /** NEW (not in its repo's HEAD) / UPD (in HEAD), from the backend's `inHead`;
+   *  undefined when it cannot be told (no repo, no file). */
+  change?: ChangeStatus;
   /** Product catalog role (core/product_registry): Deliverables | Knowledge |
    *  Pipeline | Activity | Other. The rail folds Activity rows. */
   role?: string;
 }
+
+/** The rail's git badge: NEW = not in the repo's HEAD, UPD = in it. */
+export type ChangeStatus = 'new' | 'upd';
 
 /** Detail shape of the unified `swarm:file-changed` event (from the SSE bridge). */
 export interface FileChangedDetail {
@@ -165,6 +171,7 @@ export function toReferencedFile(a: SessionArtifact, sessionId?: string): Refere
     sessionId,
     deleted: a.deleted || !a.exists,
     role: a.role,
+    change: a.inHead === true ? 'upd' : a.inHead === false ? 'new' : undefined,
   };
 }
 

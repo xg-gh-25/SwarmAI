@@ -5,8 +5,10 @@ Never shows another session's work, and is the same live, after a reload or a re
 - **Artifacts** ← core/session_outputs (the session's attribution record, written as
   its turns run), each row joined with the workspace product catalog
   (ProductRegistry.lookup: role, label, favorite — the same answer the left-nav
-  Artifacts overlay gives for that file). A session recorded before that store
-  existed is imported once from its ``turn_deliverables`` blocks.
+  Artifacts overlay gives for that file) and with whether the file is in its repo's
+  HEAD (``inHead``: the rail's NEW / UPD badge; one ``git ls-tree`` per repo). A
+  session recorded before that store existed is imported once from its
+  ``turn_deliverables`` blocks.
 - **Changes** ← the pipeline runs the session OWNS (run.json ``session_id`` /
   ``session_history``, the owner gate's record — core/run_owner_gate). A run's code
   lives in trees only that run writes (docs/design/pipeline-run-worktree.md), so
@@ -29,7 +31,7 @@ single-worker ``canvas_session`` pool (behind the session_outputs writes the rou
 submitted first); Changes run their git on the ``canvas_changes`` pool, so an
 Artifacts refresh never waits for git. Commit facts are immutable and cached by sha.
 
-Public: ``build``, ``artifact_rows``, ``session_runs``, ``run_changes``,
+Public: ``build``, ``artifact_rows``, ``in_head``, ``session_runs``, ``run_changes``,
 ``deliverable_turns``, ``MAX_FILES``.
 """
 from __future__ import annotations
@@ -60,9 +62,63 @@ def deliverable_turns(rows: Iterable[tuple[str, list]]) -> list[tuple[str, list[
     return out
 
 
+# ── in HEAD? (the rail's NEW / UPD) ─────────────────────────────────────────
+# A directory's repo root, found the way git finds it (the nearest `.git` entry
+# upward); memoised per directory, a repo root does not move.
+_ROOT_OF: dict[str, Optional[str]] = {}
+
+
+def _repo_root(directory: str) -> Optional[str]:
+    seen = []
+    d = directory
+    while True:
+        if d in _ROOT_OF:
+            root = _ROOT_OF[d]
+            break
+        seen.append(d)
+        if os.path.lexists(os.path.join(d, ".git")):
+            root = d
+            break
+        parent = os.path.dirname(d)
+        if parent == d:
+            root = None
+            break
+        d = parent
+    if len(_ROOT_OF) > 4096:
+        _ROOT_OF.clear()
+    for x in seen:
+        _ROOT_OF[x] = root
+    return root
+
+
+def in_head(paths: list[str]) -> dict[str, Optional[bool]]:
+    """{absolute path: is it in its repo's HEAD} — True (tracked: the rail's UPD),
+    False (not in HEAD: NEW), None (no repo, no file, or git could not say). One
+    ``git ls-tree`` per repo. Blocking."""
+    from core.run_worktree import git
+    out: dict[str, Optional[bool]] = {p: None for p in paths}
+    by_root: dict[str, dict[str, str]] = {}
+    for p in paths:
+        real = os.path.realpath(p)
+        if not os.path.isfile(real):
+            continue
+        root = _repo_root(os.path.dirname(real))
+        if root:
+            by_root.setdefault(root, {})[os.path.relpath(real, root)] = p
+    for root, rels in by_root.items():
+        r = git(root, "ls-tree", "-z", "--name-only", "--full-tree", "HEAD", "--", *rels,
+                env={"GIT_LITERAL_PATHSPECS": "1"})
+        if r.returncode != 0:
+            continue          # no HEAD yet / git error: unknown, not NEW
+        tracked = set(r.stdout.split("\0"))
+        for rel, p in rels.items():
+            out[p] = rel in tracked
+    return out
+
+
 def artifact_rows(rows: list[dict], workspace: Optional[str]) -> list[dict]:
     """Attribution rows (session_outputs.read) joined with the product catalog, with
-    existence. Blocking."""
+    existence and whether the file is in its repo's HEAD. Blocking."""
     rows = rows[:MAX_FILES]
     facts: dict[str, dict] = {}
     if workspace and rows:
@@ -71,6 +127,11 @@ def artifact_rows(rows: list[dict], workspace: Optional[str]) -> list[dict]:
             facts = ProductRegistry(workspace).lookup([r["absolutePath"] for r in rows])
         except Exception:  # noqa: BLE001 — the catalog is a label aid; rows still list
             logger.warning("canvas_session: product lookup failed", exc_info=True)
+    try:
+        heads = in_head([r["absolutePath"] for r in rows if not r.get("deleted")])
+    except Exception:  # noqa: BLE001 — the badge is an aid; rows still list
+        logger.warning("canvas_session: in-HEAD lookup failed", exc_info=True)
+        heads = {}
     out = []
     for r in rows:
         f = facts.get(r["absolutePath"], {})
@@ -78,6 +139,7 @@ def artifact_rows(rows: list[dict], workspace: Optional[str]) -> list[dict]:
                     "starred": bool(f.get("starred")),
                     "displayLabel": f.get("displayLabel") or os.path.basename(r["path"]),
                     "exists": os.path.exists(r["absolutePath"]),
+                    "inHead": heads.get(r["absolutePath"]),
                     "writes": r.get("writes", 1)})
     return out
 

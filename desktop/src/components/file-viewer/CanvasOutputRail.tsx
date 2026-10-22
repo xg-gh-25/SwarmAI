@@ -8,7 +8,7 @@
  * "outputs shown to the user", not "every file the agent touched".
  *
  * Reuse, not duplication of logic: the EXTRACTION (useReferencedFiles written
- * filter + useChangeStatus git NEW/UPD badge) lives in hooks/ and is shared
+ * filter; each row's NEW/UPD badge is the backend's inHead) lives in hooks/ and is shared
  * with Radar. Only this ~presentation shell is Canvas-owned — it imports
  * NOTHING from pages/chat/components/RightSidebar/ (R29: the Radar sidebar is
  * owned by a parallel session; Canvas must not touch it).
@@ -27,9 +27,8 @@
  * @exports outputRowOpenDetail — pure builder for the open-file event detail (unit-tested)
  */
 import { memo, useCallback, useMemo, useEffect, useRef, useState } from 'react';
-import { type ReferencedFile, type GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
+import { type ChangeStatus, type ReferencedFile, type GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
 import { isRailKind } from '../../hooks/railSsot';
-import { useChangeStatus, type ChangeStatus } from '../../hooks/useChangeStatus';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 import { copyToClipboard } from '../../utils/clipboard';
 import { fileIcon, fileIconColor } from '../../utils/fileUtils';
@@ -260,16 +259,14 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
     [grouped?.written],
   );
 
-  const paths = useMemo(() => outputs.map((f) => f.path), [outputs]);
-  const statusMap = useChangeStatus(paths);
 
   // NEW before UPD before unbadged; newest-first (higher firstSeen) within a rank.
   const ordered = useMemo(() => {
     return [...outputs].sort((a, b) => {
-      const r = badgeRank(statusMap.get(a.path)) - badgeRank(statusMap.get(b.path));
+      const r = badgeRank(a.change) - badgeRank(b.change);
       return r !== 0 ? r : b.firstSeen - a.firstSeen;
     });
-  }, [outputs, statusMap]);
+  }, [outputs]);
 
   // Activity rows (DailyActivity, signals, briefs — the session's bookkeeping, by
   // the product catalog's role) fold under one toggle, closed by default; a
@@ -306,12 +303,12 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
     if (!onCounts) return;
     let neu = 0, upd = 0;
     for (const f of outputs) {
-      const b = statusMap.get(f.path);
+      const b = f.change;
       if (b === 'new') neu++;
       else if (b === 'upd') upd++;
     }
     onCounts({ total: outputs.length, neu, upd });
-  }, [outputs, statusMap, onCounts]);
+  }, [outputs, onCounts]);
 
   if (ordered.length === 0 && !browsingFile) {
     // Empty state: a friendly reminder + a pure-CSS bee (🐝 Swarm identity)
@@ -340,7 +337,7 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
     <OutputRow
       key={file.path}
       file={file}
-      badge={statusMap.get(file.path)}
+      badge={file.change}
       selected={selectedPath === file.path}
       fresh={file.firstSeen > mountedAtRef.current}
     />

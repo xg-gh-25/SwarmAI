@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Optional, Protocol
 
 from . import executors
 from . import pipeline_stage_events as _pse
+from . import write_snapshot as _write_snapshot
 from .compaction_guard import EscalationLevel
 from .session_healing import get_process_rss_mb
 from . import ui_actions as _ua
@@ -276,7 +277,6 @@ class StreamingOrchestrator:
     def _new_turn_carry() -> dict[str, dict]:
         return {
             "pending_file_changes": {}, "pending_file_deletes": {},
-            "pending_heredoc_writes": {},
             "tool_names": {}, "tool_parent": {},
             "task_parent": {}, "subagent_last": {}, "pending_stage_watch": {},
             "background_agents": {}, "agent_inputs": {},
@@ -674,7 +674,6 @@ class StreamingOrchestrator:
         self,
         raw_paths: list[str],
         resolve_cache: "dict[str, dict | None]",
-        modified_since: "float | None" = None,
     ) -> list[dict]:
         """Turn a tool's WRITTEN raw path(s) into unified file_changed(operation=written)
         events — the EVENT-DRIVEN live-surfacing emit (run_cce6f4b9, the symmetric twin
@@ -725,16 +724,6 @@ class StreamingOrchestrator:
             # Layer-1 emit gate: unresolvable → not a real file → DROP.
             if not resolved:
                 return None
-            # Candidate paths (interpreter heredoc literals) only count if the file
-            # really changed during the tool call — a script that READ it names it
-            # too. 1s slack covers coarse filesystem mtime resolution.
-            if modified_since is not None:
-                try:
-                    _mtime = os.stat(resolved["absolute"]).st_mtime
-                except OSError:
-                    return None
-                if _mtime < modified_since - 1.0:
-                    return None
             # Unified review verdict. needs_human_review does its own owning-tree
             # resolution on the ABSOLUTE path + a `git check-ignore` subprocess → off-loop
             # via to_thread. Fail-safe: on error, fall back to kind="content" (still
@@ -1467,11 +1456,11 @@ class StreamingOrchestrator:
         # run_5a7be540). Separate from _pending_file_changes because one Bash command
         # can both write and delete.
         _pending_file_deletes: dict[str, list[str]] = self._turn_carry["pending_file_deletes"]
-        # tool_use_id → (candidate raw paths, tool_use start time) for a Bash
-        # interpreter heredoc patch (`python3 - <<'PY' … open(p,'w')`). The paths
-        # are only string literals in the script, so each is emitted as written
-        # ONLY if its mtime moved during the call (a read-only literal is dropped).
-        _pending_heredoc_writes: dict[str, tuple[list[str], float]] = self._turn_carry["pending_heredoc_writes"]
+        # A Bash interpreter heredoc patch (`python3 - <<'PY' … open(p,'w')`) names its
+        # paths only as string literals: a PreToolUse hook recorded their content
+        # before the command ran (core/write_snapshot) and the result emits the ones
+        # whose content changed — a literal the script only read is not a write.
+        _hook_ctx = getattr(self._parent, "_hook_session_context", None)
         # tool_use_id → tool name, so a result can be summarized per tool.
         _tool_names: dict[str, str] = self._turn_carry["tool_names"]
         # tool_use_id → the Agent tool_use it ran under (sub-agent steps only).
@@ -1976,13 +1965,12 @@ class StreamingOrchestrator:
                                     )
                                     for _ev in _wr_events:
                                         yield _ev
-                            if _tuid in _pending_heredoc_writes:
-                                _hd_paths, _hd_t0 = _pending_heredoc_writes.pop(_tuid)
-                                _hd_events = await self._build_file_write_events(
-                                    _hd_paths, _resolve_cache, modified_since=_hd_t0
-                                )
-                                for _ev in _hd_events:
-                                    yield _ev
+                            _hd_snap = _write_snapshot.take(_hook_ctx, _tuid)
+                            if _hd_snap:
+                                _hd_paths = await executors.run_in("io", _write_snapshot.changed, _hd_snap)
+                                if _hd_paths:
+                                    for _ev in await self._build_file_write_events(_hd_paths, _resolve_cache):
+                                        yield _ev
                             if _tuid in _pending_file_deletes:
                                 _um_dels = _pending_file_deletes.pop(_tuid, None)
                                 if _um_dels:
@@ -2006,7 +1994,7 @@ class StreamingOrchestrator:
                             # behave identically.
                             _pending_file_changes.pop(_tuid, None)
                             _pending_file_deletes.pop(_tuid, None)
-                            _pending_heredoc_writes.pop(_tuid, None)
+                            _write_snapshot.take(_hook_ctx, _tuid)
                             _pending_stage_watch.pop(_tuid, None)
                 # ── Glitch prefix in history → clean + resume at this boundary ──
                 # Tool results just came back, so the model is about to write
@@ -2239,7 +2227,6 @@ class StreamingOrchestrator:
                                 _pending_file_changes[block.id] = [_fp]
                         elif block.name == "Bash" and isinstance(block.input, dict):
                             from core.file_change_classifier import (
-                                parse_bash_heredoc_write_candidates,
                                 parse_bash_write_targets,
                                 parse_bash_delete_targets,
                             )
@@ -2247,12 +2234,6 @@ class StreamingOrchestrator:
                             _write_targets = parse_bash_write_targets(_cmd)
                             if _write_targets:
                                 _pending_file_changes[block.id] = _write_targets
-                            _hd_cands = [
-                                p for p in parse_bash_heredoc_write_candidates(_cmd)
-                                if p not in _write_targets
-                            ]
-                            if _hd_cands:
-                                _pending_heredoc_writes[block.id] = (_hd_cands, time.time())
                             # G1 (run_5a7be540): a Bash rm/mv-SRC deletes files → track
                             # them so the ToolResult(success) emits operation=deleted and
                             # the rail drops the stale row.

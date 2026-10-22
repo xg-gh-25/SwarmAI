@@ -6,13 +6,12 @@
  * a selected Activity row keeps the group open. The header crumb is
  * "Artifacts › <last two folder levels> ›", with "…" when deeper.
  *
- * Methodology: the real CanvasOutputRail with rows passed in (git badges mocked).
+ * Methodology: the real CanvasOutputRail with rows passed in.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import type { ReferencedFile } from '../../../hooks/useReferencedFiles';
 
-vi.mock('../../../hooks/useChangeStatus', () => ({ useChangeStatus: () => new Map() }));
 
 import { CanvasOutputRail } from '../CanvasOutputRail';
 import { crumbOf } from '../FileViewer';

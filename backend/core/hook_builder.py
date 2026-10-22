@@ -393,6 +393,16 @@ async def build_hooks(
         matcher="Read|Grep",
     )
 
+    # What an interpreter heredoc script writes is decided by content: its named
+    # paths' digests before the command runs, compared at the result by the stream
+    # (core/write_snapshot). Observes only — never denies, fails open. Needs the
+    # unit's own context (the stream reads it back), so only a real app session.
+    if session_context is not None:
+        from core.write_snapshot import create_heredoc_snapshot_hook
+        registry.register(
+            "PreToolUse", create_heredoc_snapshot_hook(session_context),
+            "heredoc_write_snapshot", matcher="Bash",
+        )
     # ── PreToolUse: session-link gate (Bash-scoped) ──
     # ALWAYS (not only during a run): DENY a command that removes or overrides
     # SWARM_APP_SESSION_ID (unset, env -u/-i in front of python, VAR=… prefixes,

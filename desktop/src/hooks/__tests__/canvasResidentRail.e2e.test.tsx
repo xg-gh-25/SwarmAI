@@ -16,7 +16,7 @@
  * RED (0 rows after a closed-state batch). Verified in-run: gating on isOpen made
  * the resident-capture assertions fail.
  *
- * Only the far leaf is mocked (api.get + useChangeStatus git badges; the backend's
+ * Only the far leaf is mocked (api.get; the backend's
  * Canvas record is test-utils/fakeCanvasBackend) — the event bus, the store's
  * refresh, useReferencedFiles and the rail are ALL real.
  */
@@ -34,7 +34,6 @@ import { CanvasOutputRail } from '../../components/file-viewer/CanvasOutputRail'
 vi.mock('../../services/api', () => ({
   default: { get: vi.fn().mockResolvedValue({ data: { resolved_path: 'r.md', content: '' } }) },
 }));
-vi.mock('../../hooks/useChangeStatus', () => ({ useChangeStatus: () => new Map() }));
 
 // A tiny host: mounts useCanvasHost (the RESIDENT owner) and feeds its captured
 // referencedFiles into the REAL rail — exactly the ChatPage → FileViewerPanel →

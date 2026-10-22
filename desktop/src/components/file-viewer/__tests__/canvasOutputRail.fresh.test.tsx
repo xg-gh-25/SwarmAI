@@ -21,9 +21,6 @@ vi.mock('../../../hooks/useReferencedFiles', () => ({
     clear: () => {},
   }),
 }));
-vi.mock('../../../hooks/useChangeStatus', () => ({
-  useChangeStatus: () => new Map(),
-}));
 
 import { CanvasOutputRail } from '../CanvasOutputRail';
 

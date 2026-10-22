@@ -15,7 +15,9 @@ Invariants:
   reads; a landed commit shows its own files, and "pushed" once the upstream has it;
 - a worktree released without landing is said, not guessed;
 - the run index is re-read only for a changed run.json;
-- Artifacts are the session's attribution rows joined with the product catalog;
+- Artifacts are the session's attribution rows joined with the product catalog, and
+  carry whether the file is in its repo's HEAD (one git call per repo; no repo or
+  no file = unknown);
 - list_session_blocks reads only this session's sent rows.
 """
 from __future__ import annotations
@@ -230,6 +232,24 @@ def test_the_run_index_rereads_only_a_changed_run_json(repo, runs):
     f.write_text(json.dumps({"id": "run_e1", "session_id": "s9"}))
     os.utime(f, (1, 1))
     assert [r["run"] for r in cs.session_runs("s1", str(ws))] == ["run_e2"]
+
+
+def test_in_head_is_the_repo_head_one_call_per_repo(repo, tmp_path, monkeypatch):
+    from core import run_worktree as rw
+    calls = []
+    real_git = rw.git
+    monkeypatch.setattr(rw, "git", lambda *a, **k: (calls.append(a), real_git(*a, **k))[1])
+    (repo / "sub").mkdir()
+    (repo / "sub" / "new.md").write_text("x")
+    outside = tmp_path / "plain" / "n.md"
+    outside.parent.mkdir()
+    outside.write_text("x")
+    got = cs.in_head([str(repo / "a.py"), str(repo / "sub" / "new.md"), str(outside), str(repo / "gone.py")])
+    assert got == {str(repo / "a.py"): True, str(repo / "sub" / "new.md"): False,
+                   str(outside): None, str(repo / "gone.py"): None}
+    assert len(calls) == 1
+    _git(repo, "add", "sub/new.md"); _git(repo, "commit", "-qm", "add")
+    assert cs.in_head([str(repo / "sub" / "new.md")]) == {str(repo / "sub" / "new.md"): True}
 
 
 def test_artifact_rows_join_the_product_catalog(tmp_path):

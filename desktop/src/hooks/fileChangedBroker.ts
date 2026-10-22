@@ -4,7 +4,7 @@
  * ## Why (the OT01 fragmentation this collapses)
  *
  * Five independent consumers each attached their own `window.addEventListener(
- * 'swarm:file-changed', ...)` — FileEditorCore, FileViewer, useChangeStatus,
+ * 'swarm:file-changed', ...)` — FileEditorCore, FileViewer,
  * useReferencedFiles, useCanvasAutoSurface. Every backend file-change event woke all
  * five, each re-parsing the detail and re-implementing its own path match. As the
  * Canvas grows to multi-repo (many files, many events), N-listeners × N-events is the
