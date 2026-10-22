@@ -85,6 +85,13 @@ def _is_blank_api_result(
     )
 
 
+def _is_injected_turn(unit: Any) -> bool:
+    """True when the unit's current turn is CLI-initiated (the reader's
+    ``injected`` stream, run by the session's sink), not a message we sent."""
+    ts = getattr(unit, "_turn_stream", None)
+    return getattr(ts, "kind", None) == "injected"
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Callbacks Protocol (Phase 3 target — not used yet)
 # ═══════════════════════════════════════════════════════════════════
@@ -3123,7 +3130,26 @@ class StreamingOrchestrator:
                 # triggers the send() retry loop (string matched by
                 # _is_retriable_error). Predicate shared with the regression
                 # test via _is_blank_api_result so the two can never drift.
-                if _is_blank_api_result(
+                #
+                # Not for a CLI-initiated turn: nobody sent it, so there is
+                # nothing to retry (that path has no retry loop, and raising
+                # there crash-killed the CLI). The CLI ends such a turn with a
+                # zero-usage success and no model call when a queued message
+                # takes over (session e4f3397f 2026-10-22: a stopped agent's
+                # notification turn, run 40s later by the sink). It just ends.
+                if _is_injected_turn(self._parent) and _is_blank_api_result(
+                    content_emitted=self._parent._content_emitted,
+                    is_error=is_error,
+                    interrupted=self._parent._interrupted,
+                    output_tokens=output_tok,
+                    subtype=subtype,
+                ):
+                    logger.info(
+                        "session_unit.injected_turn_empty session_id=%s — the CLI "
+                        "ended its own turn with no output; ending it quietly",
+                        self._parent.session_id,
+                    )
+                elif _is_blank_api_result(
                     content_emitted=self._parent._content_emitted,
                     is_error=is_error,
                     interrupted=self._parent._interrupted,
