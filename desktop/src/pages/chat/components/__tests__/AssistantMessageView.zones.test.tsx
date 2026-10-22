@@ -118,26 +118,29 @@ describe('AC2 — notes stay in their group', () => {
     expect(within(screen.getAllByTestId('zone-phase')[0]).getByText(/so the store writes/)).toBeTruthy();
   });
 
-  it('a thought is one ✻ Thought row in the strips’ column; while the turn streams it is open in full', () => {
-    const blocks = [tx('go'), bash('a', 'cat a.ts'), tr('a'), th('first line\nsecond line'), bash('b', 'make'), tr('b')];
-    const r = render(view(blocks, true));
-    let thought = screen.getByTestId('thought');
-    expect(thought.textContent).toContain('✻ Thought');
-    expect(thought.getAttribute('data-folded')).toBe('false');
+  it('a thought is one ✻ Thought row in the strips’ column; the one being written is open, it folds 2s after', () => {
+    vi.useFakeTimers();
+    const head = [tx('go'), bash('a', 'cat a.ts'), tr('a'), th('first line\nsecond line')];
+    const r = render(view(head, true));
+    // being written: the step working now, in full
+    expect(screen.getByTestId('thought').getAttribute('data-folded')).toBe('false');
     expect(screen.getByTestId('thought-text').textContent).toContain('second line');
-    // open, the first line is shown once (in the text), not again in the row
-    expect(thought.textContent!.split('first line')).toHaveLength(2);
-    // the same column as the strips around it: no gap breaks the strips apart
-    expect(within(thought.parentElement!).getAllByTestId('tool-strip')).toHaveLength(2);
-    // a turn read later: the row is folded to its first line, and opens to all of it
-    r.unmount();
-    render(view([...blocks, tx('done')], false));
-    fireEvent.click(screen.getByTestId('group-toggle'));
-    thought = screen.getByTestId('thought');
+    // the next call starts: the thought is done, it folds FOLD_DELAY_MS later (never on the spot)
+    const blocks = [...head, bash('b', 'make'), tr('b')];
+    r.rerender(view(blocks, true));
+    expect(screen.getByTestId('thought').getAttribute('data-folded')).toBe('false');
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(blocks, true));
+    const thought = screen.getByTestId('thought');
+    expect(thought.textContent).toContain('✻ Thought');
     expect(thought.textContent).toContain('first line');
     expect(thought.textContent).not.toContain('second line');
+    // the same column as the strips around it: no gap breaks the strips apart
+    expect(within(thought.parentElement!).getAllByTestId('tool-strip')).toHaveLength(2);
     fireEvent.click(within(thought).getByTestId('thought-toggle'));
     expect(screen.getByTestId('thought-text').textContent).toContain('second line');
+    // open, the first line is shown once (in the text), not again in the row
+    expect(screen.getByTestId('thought').textContent!.split('first line')).toHaveLength(2);
   });
 });
 
@@ -147,33 +150,24 @@ describe('AC2b — a note carries the work after it; earlier ones fold', () => {
   const strips = () => screen.queryAllByTestId('tool-strip').map((s) => s.textContent ?? '');
   const isShown = (cmd: string) => strips().some((t) => t.includes(cmd));
 
-  it('while streaming nothing folds: every note keeps its work open, however long it runs', () => {
+  it('while streaming: the latest note is open, an earlier one folds FOLD_DELAY_MS after the next (not on the spot)', () => {
     vi.useFakeTimers();
     const r = render(view(blocks.slice(0, 6), true));
-    r.rerender(view(blocks, true));
-    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 10); });
-    r.rerender(view(blocks, true));
-    expect(isShown('lead.ts')).toBe(true);
     expect(isShown('runner.py')).toBe(true);
-    expect(isShown('land.py')).toBe(true);
+    r.rerender(view(blocks, true));
+    expect(isShown('runner.py')).toBe(true); // never on the spot
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(blocks, true));
+    expect(isShown('runner.py')).toBe(false);
+    expect(isShown('land.py')).toBe(true); // the latest stays open
+    expect(isShown('lead.ts')).toBe(true); // the work before the first note has no note to hang under
     const notes = screen.getAllByTestId('phase-text').map((n) => n.textContent ?? '');
     expect(notes).toHaveLength(2);
-    // the user's own ▸ still folds one
+    expect(notes[0]).toContain('Now the runner:');
+    expect(notes[1]).toContain('Now the landing:');
+    // ▸ opens it again, under the note
     fireEvent.click(screen.getAllByTestId('segment-toggle')[0]);
-    expect(isShown('runner.py')).toBe(false);
-  });
-
-  it('while streaming identical calls are not merged into ×N; once the turn ended they are', () => {
-    vi.useFakeTimers();
-    const same = [tx('go'), bash('a', 'make'), tr('a'), bash('b', 'make'), tr('b'), bash('c', 'make'), tr('c')];
-    const r = render(view(same, true));
-    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 3); });
-    r.rerender(view(same, true));
-    expect(screen.getAllByTestId('tool-strip')).toHaveLength(3);
-    r.unmount();
-    render(view([...same, tx('done')], false));
-    fireEvent.click(screen.getByTestId('group-toggle'));
-    expect(screen.getAllByTestId('tool-strip')[0].textContent).toContain('×3');
+    expect(isShown('runner.py')).toBe(true);
   });
 
   it('a finished group opened later shows every note folded', () => {
@@ -189,15 +183,68 @@ describe('AC2b — a note carries the work after it; earlier ones fold', () => {
     expect(screen.getAllByTestId('segment-toggle')).toHaveLength(2);
   });
 
-  it('while streaming a phase closed by a question stays open too', () => {
+  it('a later note with no work yet does not fold the work before it', () => {
     vi.useFakeTimers();
-    const q = { type: 'ask_user_question', toolUseId: 'q1', questions: [{ question: 'Which?', options: [] }] } as unknown as ContentBlock;
-    const live = [tx('go'), bash('a', 'cat lead.ts'), tr('a'), q, bash('b', 'edit x.py'), tr('b')];
+    const live = [...blocks, tx('Now checking the result:')];
     const r = render(view(live, true));
-    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 5); });
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
     r.rerender(view(live, true));
-    expect(isShown('lead.ts')).toBe(true);
-    expect(isShown('x.py')).toBe(true);
+    expect(isShown('land.py')).toBe(true); // the latest work stays open
+    expect(isShown('runner.py')).toBe(false);
+    // the newest note starts work: the one before folds FOLD_DELAY_MS later
+    const working = [...live, bash('d', 'make check'), tr('d')];
+    r.rerender(view(working, true));
+    expect(isShown('land.py')).toBe(true);
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(working, true));
+    expect(isShown('land.py')).toBe(false);
+    expect(isShown('make check')).toBe(true);
+  });
+
+  it('a segment with a background agent still running does not fold, until it ends', () => {
+    vi.useFakeTimers();
+    act(() => {
+      backgroundAgentsStore.apply('s1', [
+        { toolUseId: 'g1', description: 'blind review A', status: 'running' },
+        { toolUseId: 'g2', description: 'blind review B', status: 'running' },
+      ]);
+    });
+    // the launch acks return at once: in the stream the calls look finished
+    const live = [tx('go'), bash('a', 'cat lead.ts'), tr('a'), tx('Two blind reviews:'),
+      agent('g1', 'blind review A'), agent('g2', 'blind review B'), tr('g1'), tr('g2'),
+      tx('Meanwhile, the next part:'), bash('n', 'edit next.py'), tr('n')];
+    const panels = () => screen.queryAllByText(/blind review A/).length;
+    const r = render(view(live, true));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(live, true));
+    expect(panels()).toBeGreaterThan(0); // still running: the AGENTS panel stays where it started
+    act(() => {
+      backgroundAgentsStore.apply('s1', [
+        { toolUseId: 'g1', description: 'blind review A', status: 'completed' },
+        { toolUseId: 'g2', description: 'blind review B', status: 'completed' },
+      ]);
+    });
+    r.rerender(view(live, true));
+    expect(panels()).toBeGreaterThan(0); // never on the spot
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(live, true));
+    expect(panels()).toBe(0);
+    act(() => { backgroundAgentsStore.apply('s1', []); });
+  });
+
+  it('while the user reads (scrolled up), nothing new folds', () => {
+    vi.useFakeTimers();
+    const reading = (n: number) => <ReadingContext.Provider value>{view(blocks.slice(0, n), true)}</ReadingContext.Provider>;
+    const r = render(reading(6));
+    r.rerender(reading(blocks.length));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(reading(blocks.length));
+    expect(isShown('runner.py')).toBe(true);
+    // back to following: it folds FOLD_DELAY_MS later
+    r.rerender(view(blocks, true));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(blocks, true));
+    expect(isShown('runner.py')).toBe(false);
   });
 });
 
