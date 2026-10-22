@@ -16,6 +16,9 @@
  * - RECONCILED: the stream view after MessageStore.reconcile(history), what a tab
  *   shows once its turn-end reconcile lands.
  *
+ * Both for the tab that sends (T) and for another tab showing the same session (T2,
+ * "other tab:" signatures): T2 gets every session event but none of T's own writes.
+ *
  * Blocks are compared on what the user sees (type + text / ids / status /
  * decision), not on incidental fields. Every divergence gets a signature; the
  * report lists them all. KNOWN holds the signatures already accepted or queued
@@ -72,7 +75,8 @@ function seen(b: ContentBlock): string {
     case 'thinking': return `thinking:${String(x.thinking ?? '').trim()}`;
     case 'tool_use': return `tool_use:${x.id}:${x.name}`;
     case 'tool_result': return `tool_result:${x.toolUseId}:${x.isError ? 'error' : 'ok'}`;
-    case 'ask_user_question': return `question:${x.toolUseId}:${x.answers ? 'answered' : 'open'}`;
+    case 'ask_user_question':
+      return `question:${x.toolUseId}:${x.answers ? `answered=${JSON.stringify(x.answers)}` : 'open'}`;
     case 'cmd_permission_request': return `permission:${x.requestId}:${x.decision ?? 'undecided'}`;
     case 'background_finished':
       return `background_finished:${((x.agents as { toolUseId: string }[]) ?? []).map((a) => a.toolUseId).join(',')}`;
@@ -135,9 +139,11 @@ function replay(s: Scenario, renderLifecycle: () => void, withReconcile: boolean
   resetTestState();
   fake.listeners.clear();
   renderLifecycle();
-  act(() => { initTestTab('T'); });
+  act(() => { initTestTab('T'); initTestTab('T2'); });
   testTabMap.get('T')!.sessionId = SID;
+  testTabMap.get('T2')!.sessionId = SID;   // another tab showing the same session; it sends nothing
   const store = messageStoreRegistry.getOrCreate('T', { sessionId: SID });
+  const store2 = messageStoreRegistry.getOrCreate('T2', { sessionId: SID });
   for (const st of s.steps) {
     if (st.kind === 'user') {
       act(() => {
@@ -146,7 +152,12 @@ function replay(s: Scenario, renderLifecycle: () => void, withReconcile: boolean
       });
     } else if (st.kind === 'reconcile') {
       // the turn-end reconcile (useChatStreamingLifecycle scheduleTurnEndReconcile)
-      if (withReconcile) act(() => { store.reconcile(st.history.map((r) => toMessageCamelCase(r))); });
+      if (withReconcile) {
+        act(() => {
+          store.reconcile(st.history.map((r) => toMessageCamelCase(r)));
+          store2.reconcile(st.history.map((r) => toMessageCamelCase(r)));
+        });
+      }
     } else if (st.kind === 'event') {
       act(() => { fake.emit(parseSSEEvent(JSON.stringify(st.env))); });
     } else if (st.kind === 'decide') {
@@ -168,7 +179,7 @@ function replay(s: Scenario, renderLifecycle: () => void, withReconcile: boolean
       });
     }
   }
-  return store;
+  return [store, store2] as const;
 }
 
 /**
@@ -182,6 +193,20 @@ const KNOWN = new Set<string>([
   // permission prompts): after a reload the question and its answer are gone.
   'stream: only live: question',
   'reconciled: only live: question',
+  'stream: other tab: only live: question',
+  'reconciled: other tab: only live: question',
+  // R4 — user messages are not session events: another tab showing the session
+  // has no user bubbles until its reconcile, and consecutive turns run together.
+  // (S1: the user message is a transcript record with a rev, like any block.)
+  'stream: other tab: user bubbles: live fewer than reload',
+  'stream: other tab: only reload: text',
+  'stream: other tab: assistant bubbles: a chat turn has its own bubble',
+  // R5 — a permission decision made in one tab is not published: the other tab
+  // keeps the card undecided until its reconcile. (S1: the decision is an update
+  // with a rev, announced by transcript_rev.)
+  'stream: other tab: only live: permission',
+  'stream: other tab: state differs: permission (live undecided, reload deny)',
+  'stream: other tab: state differs: permission (live undecided, reload approve)',
 ]);
 
 const scenarios = (fixture as { scenarios: Scenario[] }).scenarios;
@@ -209,13 +234,13 @@ describe('live == reload (generated scenarios from the real backend)', () => {
     const reloadMsgs = s.history.map((r) => toDisplayMessage(toMessageCamelCase(r) as never));
     const reload = view(reloadMsgs);
     const run = (withReconcile: boolean) => {
-      const store = replay(s, () => { renderHook(() => useChatStreamingLifecycle(createMockDeps())); }, withReconcile);
+      const [store, store2] = replay(s, () => { renderHook(() => useChatStreamingLifecycle(createMockDeps())); }, withReconcile);
       const v = view(store.messages);
       if (process.env.LR_DUMP === s.name) {
         // eslint-disable-next-line no-console
-        console.log(withReconcile ? 'RECONCILED' : 'STREAM', JSON.stringify({ live: v, reload }));
+        console.log(withReconcile ? 'RECONCILED' : 'STREAM', JSON.stringify({ live: v, other: view(store2.messages), reload }));
       }
-      return divergences(v, reload);
+      return [...divergences(v, reload), ...divergences(view(store2.messages), reload).map((x) => `other tab: ${x}`)];
     };
     const stream = run(false);
     for (const sig of stream) note(report.stream, sig, s.name);
