@@ -20,13 +20,14 @@ running is the session's event hub. The receipt reads them, it does not copy.
   as before the ledger; logged): a broken ledger must not stop chat.
 - ``persisted(client_id, user_message_id)`` / ``failed(client_id)``: the send's
   user row was written / the send ended before it was.
-- ``receipt(record)``: the ``accepted`` reply for a duplicate (POST only, never
-  published: it is not part of any turn).
+- ``accepted(...)``: the receipt every taken send's POST gets once its user row
+  is written; ``receipt(record)``: the same reply for a duplicate (both POST
+  only, never published: they are not part of any turn).
 - ``channel_client_id(...)``: a channel message's client_id from its platform
   message id (Slack ``ts`` …), so a redelivery is the same send.
 - ``prune()``: requests older than the messages TTL (no row left to duplicate).
 
-Public: ``Reservation``, ``reserve``, ``persisted``, ``failed``, ``receipt``,
+Public: ``Reservation``, ``reserve``, ``persisted``, ``failed``, ``accepted``, ``receipt``,
 ``channel_client_id``, ``prune``, ``OWNER``.
 """
 from __future__ import annotations
@@ -96,6 +97,13 @@ async def persisted(client_id: str, user_message_id: str) -> None:
 
 async def failed(client_id: str) -> None:
     await _set(client_id, status=FAILED)
+
+
+def accepted(client_id: Optional[str], session_id: str, user_message_id: str) -> dict:
+    """The receipt of a send just taken: the message is the server's now."""
+    return {"type": "accepted", "duplicate": False, "clientId": client_id,
+            "sessionId": session_id, "status": PERSISTED,
+            "userMessageId": user_message_id, "queued": False}
 
 
 async def receipt(record: dict) -> dict:

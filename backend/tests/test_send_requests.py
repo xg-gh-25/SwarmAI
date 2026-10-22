@@ -173,3 +173,18 @@ async def test_a_broken_ledger_fails_open():
         events = await _send(r, "s-open", "local-open")
     assert any(e.get("type") == "result" for e in events)
     assert len(await _users("s-open")) == 1
+
+
+@pytest.mark.asyncio
+async def test_every_taken_send_gets_its_receipt_first():
+    """The POST's first reply once the row is written: unpublished (no turnId),
+    before session_start, naming the row — and before a SESSION_BUSY too."""
+    r = _router()
+    ok = await _send(r, "s-acc", "local-acc")
+    (row,) = await _users("s-acc")
+    first = [e for e in ok if e.get("type") not in ("turn_phase",)][0]
+    assert first == {"type": "accepted", "duplicate": False, "clientId": "local-acc", "sessionId": "s-acc",
+                     "status": sr.PERSISTED, "userMessageId": row["id"], "queued": False}
+    assert "turnId" not in first
+    busy = await _send(r, "s-acc2", "local-acc2", send=_busy)
+    assert [e["type"] for e in busy if e["type"] in ("accepted", "error")] == ["accepted", "error"]

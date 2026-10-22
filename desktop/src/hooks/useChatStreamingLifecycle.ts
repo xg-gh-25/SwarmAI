@@ -2524,6 +2524,10 @@ export function useChatStreamingLifecycle(
         }
       }
 
+      // The send's acceptance receipt (backend core/send_requests): once it
+      // arrived, the message is the server's — kept whatever follows (SESSION_BUSY,
+      // QUEUE_TIMEOUT, a dropped stream), so this tab never removes or re-sends it.
+      let accepted = false;
       const inner = (event: StreamEvent) => {
         // ╔══════════════════════════════════════════════════════════════╗
         // ║ CRITICAL — watchdog liveness reset. Keep this FIRST.           ║
@@ -2545,6 +2549,17 @@ export function useChatStreamingLifecycle(
         // is a NO-OP unless the store is streaming, so idle/stale pings are
         // harmless. Do NOT move this below the guards.
         if (capturedTabId) messageStoreRegistry.get(capturedTabId)?.touch();
+
+        if (event.type === 'accepted') {
+          accepted = true;
+          // a resend of a send the server already queued: wait for its delivery
+          if (event.duplicate && event.queued && capturedTabId) {
+            const tab = tabMapRef.current.get(capturedTabId);
+            if (tab) tab.isWaitingForBusy = true;
+            if (capturedTabId === activeTabIdRef.current) setIsWaitingForBusy(true);
+          }
+          return;
+        }
 
         // thinking_progress writes no content: record it so the streaming wait
         // hint (useStreamingWait) can say "Thinking · 1m 05s", not "waiting".
@@ -3447,21 +3462,15 @@ export function useChatStreamingLifecycle(
             return;
           }
 
-          // SESSION_BUSY: Backend rejected our send because the session is
-          // still actively streaming (SSE disconnect caused a race). The backend
-          // deletes the orphaned user message from DB (cold-resume hygiene) but
-          // hands the text back via event.retryPayload so we can RE-QUEUE it —
-          // the message is never silently lost. (The frontend send-guard
-          // shouldQueueSend should normally prevent the send from escaping in
-          // the first place; this re-queue is the backend safety net for the
-          // window where the guard didn't catch it.)
-          // See: 2026-04-02 SSE disconnect kill chain diagnosis.
-          //
-          // Recovery: the server persisted the rejected message as pending and
-          // drains it when the session is idle. The running turn and the drained
-          // one reach this tab on the session subscription (or the reconcile's
-          // drain surface while it is down); the re-queued bubble is only a
-          // mirror and is never re-sent while a session exists.
+          // SESSION_BUSY: the session is running another turn. The server KEPT
+          // the message (its row is pending, `pendingId`; the send's `accepted`
+          // receipt came first) and delivers it when the session is idle: the
+          // drained turn reaches this tab on the session subscription. So the
+          // user bubble stays where it is — it is the server's row — and only
+          // this send's assistant placeholder goes (its turn is the drained one).
+          // Only when the server could not keep it (no row: `retryPayload`, the
+          // persist-failed fallback) is the text re-queued locally and the bubble
+          // removed, as before.
           if (event.code === 'SESSION_BUSY') {
             console.log('[StreamHandler] SESSION_BUSY — message pending on the server', { capturedTabId });
             const busyEndStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
@@ -3472,11 +3481,12 @@ export function useChatStreamingLifecycle(
               updateTabStatus(capturedTabId, 'streaming');
               const tabState = tabMapRef.current.get(capturedTabId);
               if (tabState) {
-                // Re-queue the rejected message from retryPayload so it is sent
-                // when the current response completes — NEVER lose user input.
+                const kept = accepted || !!event.pendingId;
+                // Re-queue the rejected message from retryPayload (the server could
+                // not keep it) so it is sent when the current response completes.
                 // Skip if a message is already queued (don't clobber an existing
                 // queue) — the existing one drains first, this is idempotent.
-                if (!tabState.queuedMessage) {
+                if (!kept && !tabState.queuedMessage) {
                   const requeued = queuedMessageFromRetryPayload(
                     event.retryPayload,
                     `queued-${crypto.randomUUID()}`,
@@ -3503,14 +3513,9 @@ export function useChatStreamingLifecycle(
                 // disconnect-timeout fix for the same root cause.
                 setIsStreaming(false, capturedTabId);
                 tabState.isWaitingForBusy = true;
-                // Remove the orphan DISPLAY messages from this failed send:
-                // the assistant placeholder (known ID) + the user message
-                // immediately before it. The backend deleted the user row from
-                // DB (cold-resume hygiene) — but we already preserved the text
-                // above via the retryPayload re-queue, so removing the stale
-                // display bubbles here loses nothing. Without this, orphans
-                // display for 6-9s until polling overwrites with DB truth.
-                // Remove orphan messages via store or fallback
+                // Remove this send's assistant placeholder, and — only when the
+                // server did not keep the message (re-queued above) — its user
+                // bubble too.
                 const removeStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
                 const storeOrTab = removeStore?.messages ?? tabState.messages;
                 const assistantIdx = storeOrTab.findIndex(
@@ -3518,7 +3523,7 @@ export function useChatStreamingLifecycle(
                 );
                 if (assistantIdx >= 0) {
                   const removeIds = new Set([assistantMessageId]);
-                  if (assistantIdx > 0 && storeOrTab[assistantIdx - 1].role === 'user') {
+                  if (!kept && assistantIdx > 0 && storeOrTab[assistantIdx - 1].role === 'user') {
                     removeIds.add(storeOrTab[assistantIdx - 1].id);
                   }
                   if (removeStore) {

@@ -180,6 +180,47 @@ describe('session turn wiring', () => {
     getMsgs.mockRestore();
   });
 
+  it('a send the server accepted keeps its user bubble on SESSION_BUSY (R7); only its placeholder goes', () => {
+    const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+    act(() => { initTestTab('t7'); result.current.setIsStreaming(true, 't7'); });
+    testTabMap.get('t7')!.sessionId = 'S';
+    const store = messageStoreRegistry.getOrCreate('t7');
+    act(() => {
+      store.appendMany([
+        makeMessage({ id: 'local-k', role: 'user', content: [{ type: 'text', text: 'wait for me' }] }),
+        makeMessage({ id: 'local-k-asst', role: 'assistant', content: [] }),
+      ]);
+    });
+    const post = result.current.createStreamHandler('local-k-asst', 't7');
+    act(() => {
+      post({ type: 'accepted', clientId: 'local-k', sessionId: 'S', userMessageId: 'm1', duplicate: false } as StreamEvent);
+      post({ type: 'error', code: 'SESSION_BUSY', message: 'busy', pendingId: 'm1', pendingSeq: 3 } as StreamEvent);
+    });
+    expect(store.messages.map((m) => m.id)).toEqual(['local-k']);
+    expect(testTabMap.get('t7')!.queuedMessage).toBeUndefined();   // the server delivers it
+    expect(testTabMap.get('t7')!.isWaitingForBusy).toBe(true);
+  });
+
+  it('SESSION_BUSY without a kept row (retryPayload) still re-queues the text locally', () => {
+    const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+    act(() => { initTestTab('t8'); result.current.setIsStreaming(true, 't8'); });
+    testTabMap.get('t8')!.sessionId = 'S';
+    const store = messageStoreRegistry.getOrCreate('t8');
+    act(() => {
+      store.appendMany([
+        makeMessage({ id: 'local-r', role: 'user', content: [{ type: 'text', text: 'lost?' }] }),
+        makeMessage({ id: 'local-r-asst', role: 'assistant', content: [] }),
+      ]);
+    });
+    const post = result.current.createStreamHandler('local-r-asst', 't8');
+    act(() => {
+      post({ type: 'error', code: 'SESSION_BUSY', message: 'busy',
+        retryPayload: { sessionId: 'S', agentId: 'a', userMessage: 'lost?' } } as StreamEvent);
+    });
+    expect(store.messages).toEqual([]);
+    expect(testTabMap.get('t8')!.queuedMessage).toBeTruthy();
+  });
+
   it('a CLI-initiated turn after an assistant message continues that bubble, as the reloaded history does', () => {
     renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => { initTestTab('h1'); });

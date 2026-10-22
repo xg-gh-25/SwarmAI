@@ -73,7 +73,7 @@ import { withStopReceipt } from '../pages/chat/stopReceipt';
 import { testTabMap, createMockDeps, initTestTab, resetTestState } from './helpers/streamingTestUtils';
 
 type Step =
-  | { kind: 'user'; clientId: string; text: string; post?: Record<string, unknown>[] }
+  | { kind: 'user'; clientId: string; text: string; post?: Record<string, unknown>[]; ended?: boolean }
   | { kind: 'stop'; receipt: Record<string, unknown>[] }
   | { kind: 'event'; env: Record<string, unknown>; sub?: false }
   | { kind: 'disconnect' }
@@ -231,11 +231,10 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
         ]);
       });
       openPost(`${st.clientId}-asst`);
-      if (st.post) {
-        // what came back on this send's POST only (SESSION_BUSY: kept pending server-side)
-        for (const ev of st.post) act(() => { post!.handler(parseSSEEvent(JSON.stringify(ev))); });
-        endPost();
-      }
+      // what only this send's POST got: the acceptance receipt, then (SESSION_BUSY,
+      // kept pending server-side) the reply that ended it without a turn
+      for (const ev of st.post ?? []) act(() => { post!.handler(parseSSEEvent(JSON.stringify(ev))); });
+      if (st.ended) endPost();
     } else if (st.kind === 'stop') {
       // ChatPage.handleStop: the /chat/stop receipt into the stopped message
       const last = [...store.messages].reverse().find((m) => m.role === 'assistant');
@@ -338,18 +337,13 @@ const KNOWN = new Set<string>([
   'stream: live drops a repeated text',
   'stream: other tab: live drops a repeated thinking',
   'stream: other tab: live drops a repeated text',
-  // R7 SESSION_BUSY: the handler removes the queued user bubble (written for the old contract, when the
-  // backend deleted the row; it now keeps it pending), so the queued messages vanish until reconcile and
-  // the drained turn gets its own bubble (12/40).
-  'stream: user bubbles: live fewer than reload',
-  'stream: only reload: text',
-  'stream: assistant bubbles: a drain turn has its own bubble',
   // R8 the Stop receipt is written, not published: only the tab that pressed Stop shows it (10/40).
   'stream: other tab: only reload: turn_stop',
   // R9 compaction rows exist only on read (spliced into history): live never shows the divider (12/40);
   // the splice places it after the merged message, so a later CLI turn reloads BEFORE the divider and
   // the reconcile cannot correlate it: its content shows twice (2/40).
   'stream: system rows (compaction): live fewer than reload',
+  'stream: only reload: text',   // the divider's own text
   'stream: other tab: system rows (compaction): live fewer than reload',
   'stream: live repeats: background_finished',
   'reconciled: live repeats: background_finished',

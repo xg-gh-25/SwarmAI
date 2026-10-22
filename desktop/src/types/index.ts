@@ -772,7 +772,7 @@ export interface CompactionGuardEvent {
 export type TurnPhase = 'preparing' | 'starting' | 'waiting';
 
 export interface StreamEvent {
-  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacting' | 'context_compacted' | 'compaction_guard' | 'mcp_health_warning' | 'recovery_exhausted' | 'still_working' | 'turn_phase' | (string & {});
+  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'accepted' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacting' | 'context_compacted' | 'compaction_guard' | 'mcp_health_warning' | 'recovery_exhausted' | 'still_working' | 'turn_phase' | (string & {});
   content?: ContentBlock[];
   model?: string;
   sessionId?: string;
@@ -830,6 +830,13 @@ export interface StreamEvent {
   pendingSeq?: number;
   /** DB id of the server-side pending message (pairs with pendingSeq). */
   pendingId?: string;
+  // `accepted` (the send's receipt, backend core/send_requests): the message is the
+  // server's. `duplicate`: this client_id was sent before; `queued`: its row still
+  // waits to be delivered.
+  duplicate?: boolean;
+  queued?: boolean;
+  userMessageId?: string;
+  clientId?: string;
   // Context warning fields (context_warning event = the backend context-usage
   // snapshot, hooks/contextUsage.ts ContextUsageSnapshot). pct is null when the
   // backend has no context to report (source 'none').

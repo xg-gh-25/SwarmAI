@@ -4019,6 +4019,14 @@ class SessionRouter:
                 # reservation is released, so a retry of this client_id runs.
                 if reserved_send and not row_written:
                     await send_requests.failed(reserved_send)
+            if row_written:
+                # The acceptance receipt (design S1 3.4 / S2): the first thing this
+                # send's POST gets once the message is the server's — its session
+                # and its row. Unpublished (before session_start, not part of the
+                # turn). From here the server owns the message: whatever comes next
+                # (SESSION_BUSY, QUEUE_TIMEOUT, a dropped stream) it is kept, and the
+                # client never removes or re-sends it.
+                yield send_requests.accepted(client_id, session_id, persisted_msg_id)
 
         # Acquire concurrency slot — may queue with SSE indicator
         # Check if we need to queue BEFORE blocking, so we can emit the

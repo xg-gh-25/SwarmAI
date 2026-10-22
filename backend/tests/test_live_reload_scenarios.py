@@ -337,13 +337,22 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
         marks.append((head, {"kind": "reconnect", "envs": envs,
                              "history": await _history(router, sid)}))
 
-    async def chat(cid: str, text: str, gen) -> list[dict]:
-        out = []
+    async def chat(cid: str, text: str, gen) -> None:
+        """One send: its user step, with the replies only its POST gets (``post``:
+        the unstamped ones — the acceptance receipt, SESSION_BUSY …); ``ended``
+        when the POST ended without a turn of its own."""
+        step = {"kind": "user", "clientId": cid, "text": text, "post": []}
+        steps.append(step)
+        turned = False
         with patch.object(SessionUnit, "send", side_effect=gen):
             async for ev in router.run_conversation(agent_id="default", user_message=text,
                                                     session_id=sid, client_id=cid):
-                out.append(ev)
-        return out
+                if "turnId" in ev:
+                    turned = True
+                elif not turned:
+                    step["post"].append(json.loads(json.dumps(ev)))
+        if not turned:
+            step["ended"] = True
 
     async def drive(coro, killed: asyncio.Event | None) -> None:
         """Run one turn; when ``killed`` fires the process ends: the turn's task is
@@ -414,11 +423,9 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
 
         if kind == "chat":
             cid, text = f"local-{sid[-2:]}.{n}", f"user message {n}"
-            steps.append({"kind": "user", "clientId": cid, "text": text})
             await drive(chat(cid, text, scripted(_frames(turn, n, sid, session_start=True))), killed)
         elif kind == "stop":
             cid, text = f"local-{sid[-2:]}.{n}", f"user message {n}"
-            steps.append({"kind": "user", "clientId": cid, "text": text})
             receipt: list[dict] = []
 
             async def press_stop():
@@ -432,9 +439,7 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
         elif kind == "busy":
             for k in range(turn["queued"]):
                 cid, text = f"local-{sid[-2:]}.{n}-{k}", f"queued message {n}.{k}"
-                post = await chat(cid, text, _busy_send)
-                steps.append({"kind": "user", "clientId": cid, "text": text,
-                              "post": json.loads(json.dumps(post))})
+                await chat(cid, text, _busy_send)
             frames = _frames(turn, n, sid, session_start=True)
 
             async def drained(frames=frames):
