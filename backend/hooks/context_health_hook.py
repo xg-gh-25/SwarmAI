@@ -340,16 +340,11 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: knowledge library sync skipped: %s", exc)
 
-        # Transcript indexing (incremental, <10s) — P1 Memory Architecture v2.
         # Budget gate: the knowledge-library embed above can run long on a large
         # changeset; if we're past the refresh budget, defer the remaining heavy
         # syncs to the next session instead of overrunning the 30s executor timeout.
+        # (Transcript indexing was removed with transcript_chunks, schema v13.)
         if time.monotonic() <= _refresh_deadline:
-            try:
-                self._sync_transcript_index(root)
-            except Exception as exc:
-                logger.debug("context_health: transcript sync skipped: %s", exc)
-
             # Code Intelligence — incremental graph refresh (<2s typical changeset)
             if time.monotonic() <= _refresh_deadline:
                 try:
@@ -364,7 +359,7 @@ class ContextHealthHook:
         else:
             logger.info(
                 "context_health: refresh budget reached after knowledge sync — "
-                "deferring transcript + code_intel indexing to next session",
+                "deferring code_intel indexing to next session",
             )
 
 
@@ -2601,100 +2596,6 @@ class ContextHealthHook:
                 "%d files scanned, %d chunks added, %d skipped, %d removed",
                 stats["files_scanned"], stats["chunks_added"],
                 stats["chunks_skipped"], stats["files_removed"],
-            )
-
-    def _sync_transcript_index(self, root: Path) -> None:
-        """Incremental sync of JSONL transcripts into the FTS5 keyword index.
-
-        Indexes Claude Code session transcripts for verbatim recall via
-        the Recall Engine (Memory Architecture v2, Phase 5 / P1).
-        MemPalace benchmark: raw verbatim scores 96.6% vs 84.2% for summaries.
-
-        Follows the same pattern as _sync_knowledge_library: open vec DB,
-        create store, embed, sync. Failures are silent.
-        """
-        from core.transcript_indexer import TranscriptStore, sync_transcript_index
-        from core.vec_db import open_vec_db
-
-        # Derive transcript dir from the authoritative workspace path
-        # (initialization_manager — always set at startup) rather than
-        # config.json (which may not have workspace_path yet on first run).
-        #
-        # NEVER fall back to scanning ~/.claude/projects/ base dir — it
-        # contains dirs with "Desktop" in the path, triggering macOS TCC
-        # "would like to access Desktop" permission popups.
-        base = Path.home() / ".claude" / "projects"
-        transcripts_dir = None
-
-        def _path_to_slug(p: str) -> str:
-            """Convert a filesystem path to Claude SDK project slug.
-
-            SDK format: replace / with - (keeping leading -), replace . with -.
-            e.g. ~/.swarm-ai/SwarmWS -> -Users-gawan--swarm-ai-SwarmWS
-            """
-            return str(Path(p).resolve()).replace("/", "-").replace(".", "-")
-
-        # Primary: derive from initialization_manager (always available)
-        ws_path = initialization_manager.get_cached_workspace_path()
-        if ws_path:
-            slug = _path_to_slug(ws_path)
-            candidate = base / slug
-            if candidate.is_dir():
-                transcripts_dir = candidate
-
-        # Secondary: also check swarmai repo path from config
-        if transcripts_dir is None:
-            try:
-                from core.app_config_manager import AppConfigManager
-                swarmai_dir = AppConfigManager.instance().get("swarmai_dir")
-                if swarmai_dir:
-                    candidate = base / _path_to_slug(swarmai_dir)
-                    if candidate.is_dir():
-                        transcripts_dir = candidate
-            except Exception as exc:
-                logger.debug("swarmai_dir lookup skipped: %s", exc)
-
-        if transcripts_dir is None:
-            logger.debug(
-                "context_health: no matching transcript dir found for workspace %s, "
-                "skipping transcript indexing this cycle", ws_path,
-            )
-            return
-
-        if not transcripts_dir.is_dir():
-            return
-
-        with open_vec_db() as conn:
-            if conn is None:
-                logger.debug("context_health: recall DB connect failed, skipping transcript sync")
-                return
-
-            store = TranscriptStore(conn)
-            store.ensure_tables()
-
-            # Self-heal a malformed transcript_fts (same external-content FTS5
-            # corruption class as knowledge_fts, run_1d198980). Maintenance layer
-            # is the RIGHT place — off the event loop, single-flight, already a
-            # write context — NOT the recall read path. A corrupt index otherwise
-            # makes transcript recall silently empty until the next full re-index.
-            if not store._fts_is_healthy():
-                logger.warning("context_health: transcript_fts malformed — rebuilding index")
-                try:
-                    store.repair_fts_index()
-                    logger.info("context_health: transcript_fts rebuilt from content table")
-                except Exception as exc:  # noqa: BLE001 — repair is best-effort
-                    logger.error("context_health: transcript_fts repair failed: %s: %s",
-                                 type(exc).__name__, exc)
-
-            # WRITER STOPPED (pure-filesystem recall design §5.5/DoD8, 2026-06-28):
-            # transcript recall is FTS5-only (vector leg removed 2026-08-14, PRI11) —
-            # no embedding step.
-            stats = sync_transcript_index(store, transcripts_dir)
-
-        if stats.get("files_indexed", 0) > 0:
-            logger.info(
-                "context_health: transcripts synced — %d indexed, %d skipped, %d chunks",
-                stats["files_indexed"], stats["files_skipped"], stats["chunks_added"],
             )
 
     # ------------------------------------------------------------------

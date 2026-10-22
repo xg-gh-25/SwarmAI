@@ -785,7 +785,7 @@ def _extract_query_keywords(message: str) -> str:
 
 
 def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) -> str:
-    """Run keyword FTS5+BM25 recall across Knowledge + Transcript + Memory.
+    """Run keyword FTS5+BM25 recall across Knowledge + Memory.
 
     Thin wrapper around RecallEngine. Uses ``open_vec_db()`` for a thread-safe
     sqlite3 connection (this runs in ``asyncio.to_thread``).
@@ -819,17 +819,10 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
 
             store = KnowledgeStore(conn)
 
-            # Include TranscriptStore for verbatim conversation recall (L3)
+            # No transcript leg: transcript_chunks was dropped in schema v13.
+            # Past conversations are recalled from messages_fts by the unified
+            # path's `session` domain.
             additional_stores = []
-            try:
-                from .transcript_indexer import TranscriptStore
-                ts = TranscriptStore(conn)
-                ts.ensure_tables()
-                additional_stores.append(ts)
-            except Exception:
-                logger.debug("_recall_for_query: suppressed exception on a fail-safe path", exc_info=True)
-                pass  # Transcript recall unavailable — Knowledge-only is fine
-
             # Include MemoryRecallStore so the user's real query also recalls
             # MEMORY.md entries. Memory had NO keyword leg before this adapter
             # (memory has no fts table); the adapter provides a real one.

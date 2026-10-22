@@ -1794,7 +1794,7 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 8 — index recall_metrics(timestamp) so the retention prune range-seeks (2026-08-10)
 # 9-11 — hive custom_ami_id; CJK-searchable messages (content_seg + FTS rebuild)
 # 12 — compactions table: one row per context compaction + its summary (2026-10-18)
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 
 
 class SQLiteDatabase(BaseDatabase):
@@ -2959,6 +2959,28 @@ class SQLiteDatabase(BaseDatabase):
                 await conn.execute("PRAGMA user_version = 12")
             await conn.commit()
             logger.info("Migration v12: compactions table")
+
+        if current_version < 13:
+            # Version 13: drop the transcript recall index. transcript_chunks was a
+            # second copy of the SDK jsonl transcripts (~470 MB with its FTS),
+            # indexed once per session and never updated or pruned, and read only
+            # by the legacy recall fallback. Past conversations are recalled from
+            # messages_fts. The orphan vec0 table `transcript_vec` (vector leg,
+            # removed 2026-08-14) needs the sqlite-vec module to drop and holds no
+            # data, so it is left alone. Freed pages are reused; the file shrinks
+            # only on a VACUUM.
+            try:
+                for _tbl in ("transcript_fts", "transcript_chunks",
+                             "transcript_chunks_index_state"):
+                    await conn.execute(f"DROP TABLE IF EXISTS {_tbl}")
+                cursor = await conn.execute("PRAGMA user_version")
+                if (await cursor.fetchone())[0] >= 12:
+                    await conn.execute("PRAGMA user_version = 13")
+                await conn.commit()
+                logger.info("Migration v13: dropped transcript_chunks / transcript_fts")
+            except Exception as exc:
+                logger.error("Migration v13: transcript drop failed (will retry on "
+                             "next startup): %s: %s", type(exc).__name__, exc)
 
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.

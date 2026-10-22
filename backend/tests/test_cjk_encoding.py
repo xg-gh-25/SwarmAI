@@ -1221,44 +1221,6 @@ class TestSegColumnIntegrity:
         self._integrity(conn, "messages_fts")
         conn.close()
 
-    def test_delete_from_fts_stays_consistent(self):
-        """`DELETE FROM <fts>` must remain legal AND consistent.
-
-        It is ILLEGAL on a contentless table — that is why contentless was
-        rejected — and `transcript_indexer.remove_session` uses exactly this
-        form. Modelled on the table that actually runs it: transcript_chunks and
-        knowledge_chunks carry ZERO triggers (verified against the live DB);
-        only `messages` is trigger-backed. Using a trigger-backed fixture here
-        would double-delete and test sqlite's bookkeeping, not this change.
-        """
-        import sqlite3
-        from core.cjk_index import expand_cjk, expand_cjk_query
-
-        conn = sqlite3.connect(":memory:")
-        conn.execute(
-            "CREATE TABLE transcript_chunks(id INTEGER PRIMARY KEY, "
-            "content TEXT, content_seg TEXT)")
-        conn.execute(
-            "CREATE VIRTUAL TABLE transcript_fts USING fts5(content_seg, "
-            "content=transcript_chunks, content_rowid=id)")
-        conn.execute("INSERT INTO transcript_chunks VALUES(1, ?, ?)",
-                     ("部署重启完成", expand_cjk("部署重启完成")))
-        conn.execute("INSERT INTO transcript_fts(rowid, content_seg) "
-                     "SELECT id, content_seg FROM transcript_chunks")
-
-        def hits(term):
-            return conn.execute(
-                "SELECT count(*) FROM transcript_fts WHERE transcript_fts MATCH ?",
-                (expand_cjk_query(term),)).fetchone()[0]
-
-        assert hits("部署") == 1
-        # The production sequence in remove_session: FTS row, then base rows.
-        conn.execute("DELETE FROM transcript_fts WHERE rowid = 1")
-        conn.execute("DELETE FROM transcript_chunks WHERE id = 1")
-        assert hits("部署") == 0
-        self._integrity(conn, "transcript_fts")
-        conn.close()
-
     def test_indexing_the_raw_column_is_provably_broken(self):
         """The negative control. Without this, the _seg column looks like
         gratuitous indirection — this is the evidence that it is load-bearing."""
@@ -1419,92 +1381,6 @@ class TestKnowledgeStoreCjk:
         assert cols[0] == "content_seg", cols
         store.ensure_tables()  # idempotent — must not raise or re-drop
         assert [r[1] for r in conn.execute("PRAGMA table_info(knowledge_fts)")] == cols
-        conn.close()
-
-
-class TestTranscriptStoreCjk:
-    """AC1/AC3/AC5 — the `session` transcript leg, driven through the real store."""
-
-    def _store(self):
-        import sqlite3
-        from core.transcript_indexer import TranscriptStore
-        conn = sqlite3.connect(":memory:")
-        store = TranscriptStore(conn)
-        store.ensure_tables()
-        return store, conn
-
-    @staticmethod
-    def _integrity(conn):
-        conn.execute(
-            "INSERT INTO transcript_fts(transcript_fts, rank) "
-            "VALUES('integrity-check', 1)")
-
-    def test_a_two_char_cjk_term_finds_the_chunk(self):
-        store, conn = self._store()
-        store.upsert_chunk("s1", "t.jsonl", 0, "user", "帮我看下部署有没有生效", "h1")
-        assert len(store.fts5_search("部署")) == 1
-        self._integrity(conn)
-        conn.close()
-
-    def test_english_search_still_works(self):
-        store, conn = self._store()
-        store.upsert_chunk("s1", "t.jsonl", 0, "user", "check the recall engine", "h1")
-        assert len(store.fts5_search("recall")) == 1
-        conn.close()
-
-    def test_reindexing_a_chunk_leaves_no_stale_match(self):
-        """AC5 — upsert_chunk's UPDATE branch reverses postings with the OLD
-        _seg values; handing it raw text here is what corrupted the index in the
-        rejected design (and caused a real malformed-index bug historically)."""
-        store, conn = self._store()
-        store.upsert_chunk("s1", "t.jsonl", 0, "user", "第一版的配置文件", "h1")
-        assert len(store.fts5_search("配置")) == 1
-        store.upsert_chunk("s1", "t.jsonl", 0, "user", "第二版的部署说明", "h2")
-        assert len(store.fts5_search("配置")) == 0, "stale posting survived"
-        assert len(store.fts5_search("部署")) == 1
-        assert store._fts_is_healthy() is True
-        self._integrity(conn)
-        conn.close()
-
-    def test_remove_session_leaves_the_index_consistent(self):
-        """remove_session uses `DELETE FROM transcript_fts` — the statement that
-        is ILLEGAL on a contentless table (why that design was rejected)."""
-        store, conn = self._store()
-        store.upsert_chunk("s1", "t.jsonl", 0, "user", "配置文件说明", "h1")
-        store.remove_session("s1")
-        assert len(store.fts5_search("配置")) == 0
-        self._integrity(conn)
-        conn.close()
-
-    def test_repair_preserves_cjk_searchability(self):
-        """AC3 — repair runs SQL 'rebuild', which re-derives from the content
-        source. Safe only because the source is the segmented column."""
-        store, conn = self._store()
-        store.upsert_chunk("s1", "t.jsonl", 0, "user", "配置文件的说明", "h1")
-        store.repair_fts_index()
-        assert len(store.fts5_search("配置")) == 1, "repair erased the expansion"
-        self._integrity(conn)
-        conn.close()
-
-    def test_a_legacy_index_is_migrated_in_place(self):
-        import sqlite3
-        from core.transcript_indexer import TranscriptStore
-        conn = sqlite3.connect(":memory:")
-        conn.execute("""CREATE TABLE transcript_chunks(
-            id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
-            source_file TEXT NOT NULL, chunk_index INTEGER NOT NULL, role TEXT,
-            content TEXT NOT NULL, content_hash TEXT NOT NULL, metadata TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')))""")
-        conn.execute("""CREATE VIRTUAL TABLE transcript_fts USING fts5(
-            content, source_file,
-            content=transcript_chunks, content_rowid=id)""")
-        conn.commit()
-        store = TranscriptStore(conn)
-        store.ensure_tables()
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(transcript_fts)")]
-        assert cols[0] == "content_seg", cols
-        store.ensure_tables()  # idempotent
-        assert [r[1] for r in conn.execute("PRAGMA table_info(transcript_fts)")] == cols
         conn.close()
 
 
@@ -2071,29 +1947,6 @@ class TestFreshIndexReconciliation:
             "VALUES('integrity-check', 1)")
         conn.close()
 
-    def test_a_fresh_transcript_index_over_existing_rows_is_reconciled(self, tmp_path):
-        import sqlite3
-        from core.transcript_indexer import TranscriptStore
-
-        conn = sqlite3.connect(str(tmp_path / "t.db"))
-        conn.execute("""CREATE TABLE transcript_chunks(
-            id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
-            source_file TEXT NOT NULL, chunk_index INTEGER NOT NULL, role TEXT,
-            content TEXT NOT NULL, content_hash TEXT NOT NULL, metadata TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')))""")
-        conn.executemany(
-            "INSERT INTO transcript_chunks(session_id, source_file, chunk_index, "
-            "role, content, content_hash) VALUES(?,?,?,?,?,?)",
-            [("s1", "a.jsonl", i, "user", "部署说明", f"h{i}") for i in range(5)])
-        conn.commit()
-
-        TranscriptStore(conn).ensure_tables()
-
-        conn.execute(
-            "INSERT INTO transcript_fts(transcript_fts, rank) "
-            "VALUES('integrity-check', 1)")
-        conn.close()
-
     def test_reconciliation_does_not_rebuild_a_healthy_index(self, tmp_path):
         """Guard against re-tokenizing the whole corpus on every startup."""
         import sqlite3
@@ -2430,17 +2283,6 @@ class TestReviewHardening:
         assert calls == [], f"re-probed or rebuilt on a later startup: {calls}"
         conn.close()
 
-    def test_a_malformed_index_signal_is_not_swallowed_on_delete(self):
-        """MEDIUM — the delete path caught only OperationalError, but a corrupt
-        index raises DatabaseError, so the real signal escaped uncaught AND the
-        base-table delete never ran."""
-        import inspect
-        from core import transcript_indexer
-        src = inspect.getsource(transcript_indexer.TranscriptStore.remove_session)
-        assert "sqlite3.DatabaseError" in src, src
-        assert "logger.error" in src, src
-
-
 class TestSecurityHardening:
     """SECURITY REVIEW findings — controls that looked present but did not hold."""
 
@@ -2637,38 +2479,6 @@ class TestGate2Hardening:
             "VALUES('integrity-check', 1)")
         conn.close()
 
-    def test_the_transcript_migration_preserves_historical_search(self):
-        """HIGH, same shape on the transcript index."""
-        import sqlite3
-        from core.cjk_index import expand_cjk_query
-        from core.transcript_indexer import TranscriptStore
-
-        conn = sqlite3.connect(":memory:")
-        conn.execute("""CREATE TABLE transcript_chunks(
-            id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
-            source_file TEXT NOT NULL, chunk_index INTEGER NOT NULL, role TEXT,
-            content TEXT NOT NULL, content_hash TEXT NOT NULL, metadata TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')))""")
-        conn.execute("""CREATE VIRTUAL TABLE transcript_fts USING fts5(
-            content, source_file,
-            content=transcript_chunks, content_rowid=id)""")
-        conn.execute(
-            "INSERT INTO transcript_chunks(session_id, source_file, chunk_index, "
-            "role, content, content_hash) VALUES('s1','a.jsonl',0,'user',?,'h1')",
-            ("daemon crash 部署完成",))
-        conn.execute("INSERT INTO transcript_fts(transcript_fts) VALUES('rebuild')")
-
-        def hits(term):
-            return conn.execute(
-                "SELECT count(*) FROM transcript_fts WHERE transcript_fts MATCH ?",
-                (expand_cjk_query(term),)).fetchone()[0]
-
-        assert hits("daemon") == 1
-        TranscriptStore(conn).ensure_tables()
-        assert hits("daemon") == 1, "the migration killed historical search"
-        assert hits("部署") == 1, "history did not become CJK-searchable"
-        conn.close()
-
     def test_the_messages_migration_preserves_historical_search(self, tmp_path):
         """HIGH — the same defect in schema migration v10."""
         import asyncio
@@ -2717,20 +2527,6 @@ class TestGate2Hardening:
         assert imported is authority, "memory_index re-declared the CJK class"
         for text in ("설정파일", "コンフィグ", "配置文件"):
             assert _bm25_tokenize(text) == expand_cjk(text.lower()).split(), text
-
-    def test_a_failed_transcript_migration_is_not_reported_as_already_exists(self):
-        """MED — the CREATE's `except OperationalError` also swallowed the
-        migration, so a DROP followed by a failing CREATE left NO index while
-        logging 'already exists' at debug level."""
-        import inspect
-        from core import transcript_indexer
-        src = inspect.getsource(transcript_indexer.TranscriptStore.ensure_tables)
-        create_block = src[:src.index("_migrate_fts_to_seg_columns")]
-        assert "already exists or FTS5 unavailable" in create_block, (
-            "the debug handler moved — re-check that the migration is outside it")
-        # The migration calls must NOT sit inside that handler's try block.
-        after = src[src.index("_migrate_fts_to_seg_columns"):]
-        assert "except sqlite3.OperationalError" not in after, after
 
     def test_connector_only_tokens_tokenize_the_same_on_both_sides(self):
         """LOW — `expand_cjk('___')` stored the token `___`, which FTS5 discards,

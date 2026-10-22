@@ -40,7 +40,7 @@ class RecallEngine:
     2026-08-14 — see the module docstring). Formats output with provenance
     for system prompt injection.
 
-    Supports additional stores (e.g. TranscriptStore) for unified search.
+    Supports additional stores (e.g. MemoryRecallStore) for unified search.
     """
 
     def __init__(self, store: "KnowledgeStore", additional_stores: list = None):
@@ -48,7 +48,7 @@ class RecallEngine:
         Args:
             store: KnowledgeStore instance with tables already ensured.
             additional_stores: Optional list of additional stores (e.g.
-                TranscriptStore) that implement fts5_search() with the same
+                MemoryRecallStore) that implement fts5_search() with the same
                 return format (recall is FTS5-only; no vector_search).
         """
         self._store = store

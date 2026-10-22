@@ -1,6 +1,6 @@
 """Integration tests for Memory Architecture v2 production wiring (W1-W5).
 
-Verifies that the core modules (transcript_indexer, temporal validity,
+Verifies that the core modules (temporal validity,
 multi-store RecallEngine) are actually wired into production hooks.
 """
 import sqlite3
@@ -25,36 +25,40 @@ def _make_conn():
     return conn
 
 
-# ── W1: context_health_hook calls sync_transcript_index ──────────────
+# ── W1: transcript indexing is gone (schema v13) ─────────────────────
 
 
-class TestW1TranscriptSyncHook:
-    """Verify context_health_hook has _sync_transcript_index wired."""
+class TestW1TranscriptIndexRemoved:
+    """transcript_chunks was dropped: nothing may write or read it again."""
 
-    def test_method_exists(self):
-        from hooks.context_health_hook import ContextHealthHook
-        hook = ContextHealthHook()
-        assert hasattr(hook, "_sync_transcript_index"), \
-            "_sync_transcript_index method must exist on ContextHealthHook"
-
-    def test_sync_called_in_light_refresh(self):
-        """_light_refresh should call _sync_transcript_index."""
+    def test_hook_no_longer_indexes_transcripts(self):
         import inspect
         from hooks.context_health_hook import ContextHealthHook
-        source = inspect.getsource(ContextHealthHook._light_refresh)
-        assert "_sync_transcript_index" in source, \
-            "_light_refresh must call _sync_transcript_index"
+        assert not hasattr(ContextHealthHook, "_sync_transcript_index")
+        assert "transcript_index" not in inspect.getsource(ContextHealthHook._light_refresh)
 
-    @patch("hooks.context_health_hook.Path.home")
-    def test_sync_uses_transcript_store(self, mock_home, tmp_path):
-        """_sync_transcript_index should not crash with empty transcript dir."""
-        from hooks.context_health_hook import ContextHealthHook
+    def test_v13_migration_drops_the_tables(self, tmp_path):
+        import asyncio
+        from database.sqlite import SQLiteDatabase
 
-        # Point home to a tmp_path with no .claude/projects/
-        mock_home.return_value = tmp_path
-        hook = ContextHealthHook()
-        # Should not crash — no transcript dir = no-op (graceful degradation)
-        hook._sync_transcript_index(tmp_path)
+        db_file = tmp_path / "t.db"
+        asyncio.run(SQLiteDatabase(str(db_file)).initialize())
+        conn = sqlite3.connect(str(db_file))
+        conn.execute("CREATE TABLE transcript_chunks(id INTEGER PRIMARY KEY, content TEXT)")
+        conn.execute("CREATE VIRTUAL TABLE transcript_fts USING fts5("
+                     "content, content=transcript_chunks, content_rowid=id)")
+        conn.execute("PRAGMA user_version = 12")
+        conn.commit()
+        conn.close()
+
+        asyncio.run(SQLiteDatabase(str(db_file)).initialize())
+        conn = sqlite3.connect(str(db_file))
+        names = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE name LIKE 'transcript_%'")}
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        conn.close()
+        assert names == set(), names
+        assert version == 13
 
 
 # ── W2: select_memory_sections applies temporal weight ───────────────
@@ -190,8 +194,8 @@ class TestW4MemoryHealthSupersede:
 # ── W5: prompt_builder RecallEngine gets additional_stores ───────────
 
 
-class TestW5PromptBuilderTranscriptStore:
-    """Verify prompt_builder constructs RecallEngine with TranscriptStore."""
+class TestW5RecallFallbackStores:
+    """The legacy fallback recall passes additional stores, but no transcript."""
 
     def test_recall_for_query_uses_additional_stores(self):
         """_recall_for_query must create RecallEngine with additional_stores."""
@@ -200,5 +204,4 @@ class TestW5PromptBuilderTranscriptStore:
         source = inspect.getsource(_recall_for_query)
         assert "additional_stores" in source, \
             "_recall_for_query must pass additional_stores to RecallEngine"
-        assert "TranscriptStore" in source or "transcript" in source.lower(), \
-            "_recall_for_query must reference TranscriptStore"
+        assert "TranscriptStore" not in source and "transcript_indexer" not in source
