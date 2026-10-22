@@ -201,7 +201,10 @@ def _row_to_pending(row: aiosqlite.Row | tuple) -> PendingMessage:
         ):
             user_message = first.get("text")
         else:
-            content = parsed
+            # Re-sent to the model: restore attachment bytes from their files.
+            from core.message_attachments import (
+                attachments_dir, rehydrate_attachments)
+            content = rehydrate_attachments(parsed, attachments_dir(_get_db_path()))
     # parsed is None (malformed/empty) or [] → both user_message and content stay
     # None; the row is a degenerate pending message (persist_pending rejects
     # fully-empty input, so this only arises from corrupt/legacy data).
@@ -280,6 +283,15 @@ async def persist_pending(
     now = datetime.now().isoformat()
     expires_at = int(time.time()) + _PENDING_TTL_SECONDS
     msg_id = str(uuid4())
+    # Attachment bytes go to files, the row keeps a reference; the drain
+    # (_row_to_pending) turns it back into base64 before re-sending.
+    from core.message_attachments import attachments_dir, externalize_attachments
+    if content:
+        try:
+            content = externalize_attachments(content, attachments_dir(db_path))
+        except OSError as exc:
+            logger.warning("persist_pending: attachment externalize failed, "
+                           "storing inline: %s", exc)
     payload = _payload_json(user_message, content)
     # Same single-authority encoder as the payload — a client_id is ASCII today,
     # but the policy must not fork per call site (that is how door 2 drifted).

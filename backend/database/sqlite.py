@@ -611,8 +611,19 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
             # Imported lazily: `core/__init__` eagerly imports the session stack,
             # which imports `database`, so a module-level import here would be
             # circular.
+            from core.message_attachments import (
+                attachments_dir, externalize_attachments)
             from core.message_search_text import message_content_seg
 
+            # Attachment bytes go to files; the row keeps a reference
+            # (core/message_attachments.py). A disk failure must not lose the
+            # message, so it falls back to storing the block as it came.
+            try:
+                item["content"] = externalize_attachments(
+                    item["content"], attachments_dir(self.db_path))
+            except OSError as exc:
+                logger.warning("messages.put: attachment externalize failed, "
+                               "storing inline: %s", exc)
             item["content_seg"] = message_content_seg(item["content"])
 
         return await super().put(item)
