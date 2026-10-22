@@ -24,6 +24,10 @@ R2_PROVEN = frozenset({"ADEQUATE", "TEST_INADEQUATE"})
 _SEVERITY_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 
 
+# An answer whose lines parsed; ``partial`` is an R2 answer missing some status lines
+# (its present lines count, the missing ones stay OPEN — design §A3.2).
+USABLE_STATES = frozenset({"parsed", "partial"})
+
 class FindingError(ValueError):
     """The event stream violates finding identity, status or evidence rules."""
 
@@ -268,7 +272,7 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority) -> list[
         elif kind == "finding_occ":
             answer = answers.get(event["payload"]["answer_event_id"])
             if answer is None or answer["payload"]["expert_id"] != event["payload"]["expert"] \
-                    or answer["payload"]["state"] != "parsed" \
+                    or answer["payload"]["state"] not in USABLE_STATES \
                     or answer["payload"]["round"] != event.get("round"):
                 raise FindingError("finding_occ does not match a parsed expert answer")
             row = _occurrence(event)
@@ -283,7 +287,7 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority) -> list[
                 raise FindingError("finding_status canonical id was not in the R2 handout")
             answer = answers.get(event["payload"]["answer_event_id"])
             if answer is None or answer["payload"]["expert_id"] != row["expert"] \
-                    or answer["payload"]["state"] != "parsed" \
+                    or answer["payload"]["state"] not in USABLE_STATES \
                     or answer["payload"]["round"] != 2 or event.get("round") != 2:
                 raise FindingError("finding_status does not match this expert's parsed R2 answer")
             _status(row, event)

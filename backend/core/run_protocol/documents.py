@@ -19,7 +19,24 @@ from core.run_protocol.store import AuditStore
 
 
 class DocumentError(ValueError):
-    """A pipeline document or stage completion is invalid."""
+    """A pipeline document or stage completion is invalid. ``issues`` maps each
+    refusing check id to its message (empty for errors that are not a check)."""
+
+    def __init__(self, message: str, issues: Mapping[str, str] | None = None):
+        super().__init__(message)
+        self.issues = dict(issues or {})
+
+
+def _refuse(issues, blocking) -> None:
+    """Raise for the issues whose check may stop the write (``stage`` effect);
+    other checks are only recorded, so their issues let the document through."""
+    stopping = [row for row in issues if blocking is None or row.check_id in blocking]
+    if stopping:
+        by_check: dict[str, str] = {}
+        for row in stopping:
+            by_check.setdefault(row.check_id, f"{row.path}: {row.message}")
+        raise DocumentError("; ".join(f"{row.check_id} {row.path}: {row.message}"
+                                      for row in stopping), by_check)
 
 
 def _ears(row: Mapping[str, Any]) -> str:
@@ -108,10 +125,9 @@ class DocumentStore:
             try: temp.unlink()
             except FileNotFoundError: pass
 
-    def write_requirements(self, value: Mapping[str, Any], *, variant: str, profile: str) -> list[str]:
-        issues = schemas.validate_requirements(value, variant=variant, profile=profile)
-        if issues:
-            raise DocumentError("; ".join(f"{row.check_id} {row.path}: {row.message}" for row in issues))
+    def write_requirements(self, value: Mapping[str, Any], *, variant: str, profile: str,
+                           blocking: set[str] | None = None) -> list[str]:
+        _refuse(schemas.validate_requirements(value, variant=variant, profile=profile), blocking)
         source = self.run_dir / "artifacts" / "requirements.json"
         rendered = self.run_dir / "REQUIREMENTS.md"
         self._atomic(source, json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
@@ -120,12 +136,10 @@ class DocumentStore:
 
     def write_design(self, value: Mapping[str, Any], *, variant: str, profile: str,
                      requirements: Mapping[str, Any], requirement_variant: str,
-                     existing_files: set[str]) -> list[str]:
-        issues = schemas.validate_contract(
+                     existing_files: set[str], blocking: set[str] | None = None) -> list[str]:
+        _refuse(schemas.validate_contract(
             requirements, value, requirement_variant=requirement_variant,
-            design_variant=variant, profile=profile, existing_files=existing_files)
-        if issues:
-            raise DocumentError("; ".join(f"{row.check_id} {row.path}: {row.message}" for row in issues))
+            design_variant=variant, profile=profile, existing_files=existing_files), blocking)
         source = self.run_dir / "artifacts" / "design_spec.json"
         rendered = self.run_dir / "DESIGN_SPEC.md"
         self._atomic(source, json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
@@ -133,28 +147,39 @@ class DocumentStore:
         return [str(source), str(rendered)]
 
 
-def complete_stage(store: AuditStore, *, profile: str, stage: str, variant: str,
-                   context: checks.CheckContext, at: str) -> dict[str, Any]:
-    """Evaluate every stage-effect check once and append attempt/check events."""
-    roster = checks.stage_checks(profile, stage, variant)
-    prior = [row for row in store.read_events()
-             if row.get("kind") == "stage_attempt" and row.get("stage") == stage]
-    attempt = len(prior) + 1
+def complete_stage(store: AuditStore, *, profile: str, stage: str, variant: str | None,
+                   context: checks.CheckContext, at: str, attempt: int,
+                   check_ids: list[str] | None = None,
+                   forced: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Open one stage attempt and close it: every declared check gets a result.
+
+    *attempt* comes from the lifecycle projection (the one place that numbers
+    attempts). *check_ids* defaults to the registry roster. A check named in *forced*
+    is recorded failed with that detail instead of being evaluated (a document the
+    schema refused); when anything is forced, the other checks are recorded
+    ``not evaluated`` — their inputs were never written."""
+    roster = list(check_ids) if check_ids is not None else [
+        spec.check_id for spec in checks.stage_checks(profile, stage, variant)]
+    forced = dict(forced or {})
     attempt_event, _ = store.append_new(
         writer=store.authority.writer("cli"), kind="stage_attempt", at=at,
-        stage=stage, attempt=attempt,
-        payload={"check_ids": [spec.check_id for spec in roster]},
+        stage=stage, attempt=attempt, payload={"check_ids": roster},
     )
     results: list[dict[str, Any]] = []
-    for spec in roster:
-        passed, detail = checks.evaluate(spec.check_id, context)
+    for check_id in roster:
+        if check_id in forced:
+            passed, detail = False, forced[check_id]
+        elif forced:
+            passed, detail = False, "not evaluated: the document was refused"
+        else:
+            passed, detail = checks.evaluate(check_id, context)
         event, _ = store.append_new(
             writer=store.authority.writer("cli"), kind="check", at=at,
             stage=stage, attempt=attempt,
             payload={"stage_attempt_event_id": attempt_event["event_id"],
-                     "check_id": spec.check_id, "passed": passed, "detail": detail},
+                     "check_id": check_id, "passed": passed, "detail": detail},
         )
-        results.append({"id": spec.check_id, "passed": passed,
+        results.append({"id": check_id, "passed": passed,
                         "detail": detail, "event_id": event["event_id"]})
     return {"attempt": attempt, "stage_attempt_event_id": attempt_event["event_id"],
             "passed": all(row["passed"] for row in results), "checks": results}

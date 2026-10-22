@@ -80,7 +80,6 @@ def test_research_completes_without_code(rig):
 
 # ── BUILD fails three times: the not-landed path, nothing reaches main ──────
 
-@_xfail("A2", "after checks_exhausted, `land` commits untested code to main (G found it)")
 def test_checks_exhausted_ends_not_landed_and_never_commits(rig):
     r = rig("direct")
     r.create()
@@ -185,7 +184,6 @@ def _decision(r: Rig, request_id: str = "q1") -> str:
              "risk": "high"}]})
 
 
-@_xfail("A2", "a code profile's not-landed path (framing_rejected) cannot finish DELIVER")
 def test_gate0_two_negative_rounds_end_framing_rejected(rig):
     r = rig("bugfix")
     r.create()
@@ -198,7 +196,6 @@ def test_gate0_two_negative_rounds_end_framing_rejected(rig):
     assert state["landing"] == "not_landed" and _reason(state) == "framing_rejected", state
 
 
-@_xfail("A4", "an answered decision does not override the earlier Gate-0 rejection")
 def test_gate0_rejection_then_answered_decision_continues(rig):
     r = rig("bugfix")
     r.create()
@@ -212,7 +209,6 @@ def test_gate0_rejection_then_answered_decision_continues(rig):
     assert out.get("ok") is True and r.state()["stage"] == "think", out
 
 
-@_xfail("A5+A3", "a failing PLAN check writes no attempt; a decision after one breaks numbering")
 def test_decision_after_a_failed_attempt_then_stage_completes(rig):
     r = rig("direct")
     r.create()
@@ -369,7 +365,6 @@ def _step(r: Rig, step: str) -> None:
         r.v1(step)
 
 
-@_xfail("A1-A9", "some command orders leave an open stage_attempt and the log stops folding")
 def test_any_command_sequence_leaves_a_foldable_log(tmp_path, monkeypatch):
     import random
     rng = random.Random(20261022)

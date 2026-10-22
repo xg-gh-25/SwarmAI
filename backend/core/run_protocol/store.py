@@ -14,7 +14,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from core.run_protocol import events as ev
 from core.run_protocol.identifiers import IdentifierError, validate_run_id
@@ -65,9 +65,18 @@ class AuditPaths:
 
 
 class AuditStore:
-    """Append-only storage for events signed by one injected run authority."""
+    """Append-only storage for events signed by one injected run authority.
 
-    def __init__(self, root: str | Path, run_id: str, authority: ev.EventAuthority):
+    *validator*, when given, is called under the run lock with the chain plus the
+    candidate event before anything is written. It raises to refuse an event that
+    would make the log unreadable (an illegal lifecycle step), and may return the
+    payload of the ``transition`` the event triggers; the store then appends that
+    transition, signed by *transition_writer*, inside the same lock — so no other
+    writer can land between a trigger and its transition."""
+
+    def __init__(self, root: str | Path, run_id: str, authority: ev.EventAuthority, *,
+                 validator: Callable[[list[dict[str, Any]]], Any] | None = None,
+                 transition_writer: ev.WriterCapability | None = None):
         try:
             safe_id = validate_run_id(run_id)
         except IdentifierError as exc:
@@ -76,6 +85,8 @@ class AuditStore:
             raise StoreError("EventAuthority is required")
         self.paths = AuditPaths(Path(root), safe_id)
         self.authority = authority
+        self.validator = validator
+        self.transition_writer = transition_writer
 
     def _ensure(self) -> None:
         self.paths.run.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -217,6 +228,27 @@ class AuditStore:
                 os.fsync(handle.fileno())
         return status
 
+    def _validated_append(self, chain: list[dict[str, Any]], event: dict[str, Any],
+                          blobs: Mapping[str, bytes]) -> str:
+        """Validate (when configured), append, and append the triggered transition —
+        all under the caller's lock."""
+        if self.validator is None or any(
+                item.get("event_id") == event.get("event_id") for item in chain):
+            return self._append_locked(chain, event, blobs)
+        expected = self.validator([*chain, event])
+        status = self._append_locked(chain, event, blobs)
+        if expected:
+            if self.transition_writer is None:
+                raise StoreError("a transition is due but no transition writer is configured")
+            chain = self.read_events()
+            transition, extra = ev.make_event(
+                writer=self.transition_writer, run_id=self.paths.run_id, kind="transition",
+                at=event.get("at"), payload=expected,
+                prev_hash=ev.event_digest(chain[-1]) if chain else None)
+            self.validator([*chain, transition])
+            self._append_locked(chain, transition, extra)
+        return status
+
     def append(self, event: dict[str, Any], blobs: Mapping[str, bytes] | None = None) -> str:
         """Persist a prebuilt event; callers needing concurrency use ``append_new``."""
         if event.get("run_id") != self.paths.run_id:
@@ -224,7 +256,7 @@ class AuditStore:
         lock = self._locked()
         try:
             self._discard_torn_tail()
-            return self._append_locked(self.read_events(), event, blobs or {})
+            return self._validated_append(self.read_events(), event, blobs or {})
         except (ev.EventError, OSError) as exc:
             raise StoreError(str(exc)) from exc
         finally:
@@ -244,7 +276,7 @@ class AuditStore:
                 prev_hash=ev.event_digest(chain[-1]) if chain else None,
                 **envelope,
             )
-            return event, self._append_locked(chain, event, blobs)
+            return event, self._validated_append(chain, event, blobs)
         except (ev.EventError, OSError) as exc:
             raise StoreError(str(exc)) from exc
         finally:

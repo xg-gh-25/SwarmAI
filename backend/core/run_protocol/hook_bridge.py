@@ -155,6 +155,9 @@ class ReviewHookBridge:
             attempt=handout["attempt"], payload=answer_payload,
         )
         self.store.copy_to_session(self.session_id, answer)
+        if parsed.state not in ("parsed", "partial"):
+            # an unparsed answer is no usable output (§A3.2): its lines decide nothing
+            return {"answer": answer, "parsed": parsed}
 
         for ordinal, finding in enumerate(parsed.findings, 1):
             self.store.append_new(

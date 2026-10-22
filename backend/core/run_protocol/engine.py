@@ -3,6 +3,8 @@
 Public symbols:
 - ``RunEngine.create`` / ``RunEngine.load`` — durable v1 run lifecycle.
 - ``stage_start`` / ``stage_complete`` — cards, documents, checks and transitions.
+- ``normal_land`` / ``finish_not_landed`` — landing; every not-landed outcome's path.
+- ``_store`` — the run's store: an event after which the log would not fold is refused.
 - ``review_start`` — lightweight R1 handouts bound to the current code trees.
 - ``find_run_dir`` — resolve one v1 run without trusting caller-supplied project state.
 """
@@ -75,6 +77,39 @@ def find_run_dir(workspace: str | Path, run_id: str) -> Path:
     return matches[0]
 
 
+def _agent_after_cap(requirements: Any, design: Any) -> bool:
+    """DC-2's fact (design §A1.2): after the decision cap the agent's own choice is
+    written into the documents as ``decided_by: agent_after_cap`` (a clarification of
+    REQUIREMENTS, or DESIGN_SPEC ``chosen``). Read from there — no flag to trust."""
+    rows = requirements.get("clarifications") if isinstance(requirements, Mapping) else None
+    if any(isinstance(row, Mapping) and row.get("decided_by") == "agent_after_cap"
+           for row in rows or []):
+        return True
+    chosen = design.get("chosen") if isinstance(design, Mapping) else None
+    return isinstance(chosen, Mapping) and chosen.get("decided_by") == "agent_after_cap"
+
+
+def _store(root: Path, run_id: str, authority: EventAuthority) -> AuditStore:
+    """The run's store, refusing any event after which the log would not fold.
+
+    One rule for every writer (fixing spec A): an event the lifecycle or the finding
+    ledger cannot apply is never written, and the transition an event triggers is
+    appended in the same lock."""
+    from core.run_protocol import findings as finding_protocol
+
+    def validate(chain: list[dict[str, Any]]) -> Any:
+        state = lifecycle.fold(chain, authority, allow_pending_transition=True)
+        if chain[-1].get("kind") in _FINDING_KINDS:
+            finding_protocol.fold(chain, authority)
+        return state.get("expected_transition")
+    return AuditStore(root, run_id, authority, validator=validate,
+                      transition_writer=authority.writer("cli"))
+
+
+_FINDING_KINDS = frozenset({"answer", "answer_reuse", "finding_occ", "finding_status",
+                            "reclassify", "address", "proof"})
+
+
 class RunEngine:
     """One v1 run, projected from signed events and immutable contract metadata."""
 
@@ -84,7 +119,7 @@ class RunEngine:
         self.project, self.run_id = project, run_id
         self.run_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
         self.audit_root = data_dir / "state" / "pipeline_agent_audit"
-        self.store = AuditStore(self.audit_root, run_id, authority)
+        self.store = _store(self.audit_root, run_id, authority)
         self.authority = authority
         try:
             self.contract = json.loads(self.store.paths.contract.read_text(encoding="utf-8"))
@@ -123,7 +158,7 @@ class RunEngine:
         engine.data_dir, engine.workspace = data_path, workspace_path
         engine.project, engine.run_id, engine.run_dir = project, run_id, run_dir
         engine.audit_root, engine.authority = data_path / "state" / "pipeline_agent_audit", authority
-        engine.store = AuditStore(engine.audit_root, run_id, authority)
+        engine.store = _store(engine.audit_root, run_id, authority)
         pipeline_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         contract = {"run_id": run_id, "project": project,
                     "protocol_version": 1, "profile": profile,
@@ -341,7 +376,8 @@ class RunEngine:
         run = {**self.projection(), "mode": self.contract["mode"],
                "code_trees": code_trees, "changed_paths": self._changed_paths(repos),
                "validation_rule_paths": ["validations.json", "backend/core/run_protocol/risk_selection.py"],
-               "lessons": self._read_json(self.run_dir / "artifacts" / "reflect.json", {}).get("lessons", [])}
+               "lessons": self._read_json(self.run_dir / "artifacts" / "reflect.json", {}).get("lessons", []),
+               "agent_after_cap": _agent_after_cap(requirements, design)}
         return checks.make_context(
             profile=profile, requirement_variant=req_variant, design_variant=design_variant,
             requirements=requirements, design=design, events=events, authority=self.authority,
@@ -434,7 +470,7 @@ class RunEngine:
         required = state["profile"] == "bugfix" or (isinstance(readings, list) and len(readings) >= 2)
         if not required:
             return {"required": False, "handout": None}
-        prior = [event for event in self.store.read_events()
+        prior = [event for event in self._since_last_answer()
                  if event.get("kind") == "handout" and event.get("stage") == "evaluate"
                  and event.get("payload", {}).get("expert_id") == "gate0-skeptic"]
         if len(prior) >= 2:
@@ -451,11 +487,24 @@ class RunEngine:
                           json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)))
         return {"required": True, "round": round_number, "handout": handout}
 
+    def _since_last_answer(self) -> list[dict[str, Any]]:
+        """Events after the latest human answer: a person's answer restarts the
+        Gate-0 rounds (design §A1.2: "审查轮次重新计数"), so an earlier rejection no
+        longer decides the run."""
+        events = self.store.read_events()
+        last = max((index for index, event in enumerate(events)
+                    if event.get("kind") == "human_answer"), default=-1)
+        return events[last + 1:]
+
     def _gate0_disposition(self) -> str:
-        handouts = [event for event in self.store.read_events()
+        events = self._since_last_answer()
+        answered = len(events) != len(self.store.read_events())
+        handouts = [event for event in events
                     if event.get("kind") == "handout" and event.get("stage") == "evaluate"
                     and event.get("payload", {}).get("expert_id") == "gate0-skeptic"]
-        answers = [event for event in self.store.read_events()
+        if answered and not handouts:
+            return "continue"      # the person decided after the gate; nothing newer to wait for
+        answers = [event for event in events
                    if event.get("kind") in {"answer", "answer_reuse"}
                    and event.get("payload", {}).get("expert_id") == "gate0-skeptic"]
         if not handouts or len(answers) < len(handouts):
@@ -891,38 +940,49 @@ class RunEngine:
         return {"run_id": self.run_id, "stage": state["stage"], "card": str(card),
                 "card_text": card.read_text(encoding="utf-8"), "repos": self.effective_repos()}
 
+    def _next_attempt(self, stage: str) -> int:
+        """The lifecycle numbers attempts (a human answer restarts the count)."""
+        return int(self.projection()["stage_attempts"].get(stage, 0)) + 1
+
     def stage_complete(self, artifact: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        from core.run_protocol.documents import DocumentError
         state = self.projection()
         if state["status"] != "active":
             raise EngineError(f"run is {state['status']}")
         stage, profile = state["stage"], state["profile"]
+        if stage == "deliver":
+            if state.get("pending_landing") is None and profile != "research":
+                raise EngineError("DELIVER finishes with `land`; stage-complete is only for "
+                                  "the not-landed path")
+            return self.finish_not_landed()
         docs = DocumentStore(self.run_dir)
         artifact = dict(artifact or {})
-
-        if stage == "deliver" and profile == "research" and not any(
-                event.get("kind") == "render" and event.get("payload", {}).get("document") == "REPORT"
-                for event in self.store.read_events()):
-            from core.run_protocol import audit as audit_protocol
-            value = self.build_audit(through="DELIVER", persist=True)
-            report = audit_protocol.render(value, fmt="report")
-            report_sha = self.store.put_blob(report.encode())
-            self.store.append_new(
-                writer=self.authority.writer("cli"), kind="render", at=_now(),
-                stage="deliver", attempt=1,
-                payload={"document": "REPORT", "blob_sha": report_sha})
-            DocumentStore._atomic(self.run_dir / "REPORT.md", report)
-        if stage == "evaluate":
-            docs.write_requirements(artifact, variant="full", profile=profile)
-        elif stage == "plan":
-            requirements = artifact.get("requirements") if profile == "direct" else self._read_json(
-                self.run_dir / "artifacts" / "requirements.json", {})
-            design = artifact.get("design") if profile == "direct" else artifact
-            if profile == "direct":
-                docs.write_requirements(requirements, variant="lite", profile=profile)
-            docs.write_design(design, variant="lite" if profile in {"direct", "trivial"} else "full",
-                              profile=profile, requirements=requirements,
-                              requirement_variant="lite" if profile == "direct" else "full",
-                              existing_files=self.check_context().existing_files)
+        variant = ("lite" if stage == "plan" and profile in {"direct", "trivial"}
+                   else "full" if stage in {"evaluate", "plan"} else None)
+        roster = {spec.check_id for spec in checks.stage_checks(profile, stage, variant)}
+        try:
+            if stage == "evaluate":
+                docs.write_requirements(artifact, variant="full", profile=profile,
+                                        blocking=roster)
+            elif stage == "plan":
+                requirements = artifact.get("requirements") if profile == "direct" else self._read_json(
+                    self.run_dir / "artifacts" / "requirements.json", {})
+                design = artifact.get("design") if profile == "direct" else artifact
+                if profile == "direct":
+                    docs.write_requirements(requirements, variant="lite", profile=profile,
+                                            blocking=roster)
+                docs.write_design(design, variant="lite" if profile in {"direct", "trivial"} else "full",
+                                  profile=profile, requirements=requirements,
+                                  requirement_variant="lite" if profile == "direct" else "full",
+                                  existing_files=self.check_context().existing_files,
+                                  blocking=roster)
+        except DocumentError as exc:
+            forced = exc.issues or {next(iter(sorted(roster))): str(exc)}
+            result = complete_stage(self.store, profile=profile, stage=stage, variant=variant,
+                                    context=self.check_context(), at=_now(),
+                                    attempt=self._next_attempt(stage), forced=forced)
+            self._settle(); self.write_projection()
+            return {"ok": False, "error": str(exc), **result, "state": self.projection()}
         if stage == "evaluate" and profile in {"full", "bugfix", "goal"}:
             readings = ((artifact.get("understanding") or {}).get("readings")
                         if isinstance(artifact, Mapping) else None)
@@ -940,10 +1000,9 @@ class RunEngine:
                     self._settle(); self.write_projection()
                     return {"ok": False, "gate0": disposition, "state": self.projection()}
         context = self.check_context()
-        variant = ("lite" if stage == "plan" and profile in {"direct", "trivial"}
-                   else "full" if stage in {"evaluate", "plan"} else None)
         result = complete_stage(self.store, profile=profile, stage=stage,
-                                variant=variant, context=context, at=_now())
+                                variant=variant, context=context, at=_now(),
+                                attempt=self._next_attempt(stage))
         self._settle()
         if not result["passed"]:
             self.write_projection()
@@ -958,6 +1017,39 @@ class RunEngine:
                               at=_now(), stage=stage, attempt=result["attempt"], payload=payload)
         self._settle(); self.write_projection()
         return {"ok": True, **result, "state": self.projection()}
+
+    def finish_not_landed(self) -> dict[str, Any]:
+        """The not-landed path (design §A1.2): render the run-directory REPORT, then a
+        DELIVER attempt whose only stage check is DV-1, then ``reflecting``. Every
+        not_landed outcome (and research's no_code) ends here."""
+        from core.run_protocol import audit as audit_protocol
+        state = self.projection()
+        if state["status"] != "active" or state["stage"] != "deliver" or (
+                state.get("pending_landing") is None and state["profile"] != "research"):
+            raise EngineError("the not-landed path needs active DELIVER with a not-landed reason")
+        value = self.build_audit(through="DELIVER", persist=True)
+        report = audit_protocol.render(value, fmt="report")
+        report_sha = self.store.put_blob(report.encode())
+        self.store.append_new(
+            writer=self.authority.writer("cli"), kind="render", at=_now(),
+            stage="deliver", attempt=self._next_attempt("deliver"),
+            payload={"document": "REPORT", "blob_sha": report_sha})
+        DocumentStore._atomic(self.run_dir / "REPORT.md", report)
+        attempt = self._next_attempt("deliver")
+        result = complete_stage(self.store, profile=state["profile"], stage="deliver",
+                                variant=None, context=self.check_context(), at=_now(),
+                                attempt=attempt, check_ids=["DV-1"])
+        self._settle()
+        if not result["passed"]:
+            self.write_projection()
+            return {"ok": False, **result, "state": self.projection()}
+        self.store.append_new(
+            writer=self.authority.writer("cli"), kind="stage_complete", at=_now(),
+            stage="deliver", attempt=attempt,
+            payload={"stage_attempt_event_id": result["stage_attempt_event_id"]})
+        self._settle(); self.write_projection()
+        return {"ok": True, "landing": self.projection()["landing"], **result,
+                "state": self.projection()}
 
     def review_start(self, *, attempt: int = 1) -> dict[str, Any]:
         state = self.projection()
@@ -1035,13 +1127,30 @@ class RunEngine:
 
     def prepare_reflect(self, lessons: Sequence[Mapping[str, Any]],
                         candidates: Mapping[str, Sequence[str]]) -> dict[str, Any]:
+        """Write reflect.json and evaluate RF-1~4 as a DELIVER attempt (design §A1.2).
+        RF never blocks landing: the third failure drops the lessons to zero and
+        records ``reflect: degraded``; DELIVER continues."""
         from core.run_protocol import reflect
+        state = self.projection()
+        if state["status"] != "active" or state["stage"] != "deliver":
+            raise EngineError("reflect-prepare requires active DELIVER")
+        if state.get("reflect") == "degraded":
+            return {"lessons": [], "degraded": True}
         event_ids = {event["event_id"] for event in self.store.read_events()}
         document = reflect.prepare(lessons, event_ids=event_ids, candidates=candidates)
-        DocumentStore._atomic(
-            self.run_dir / "artifacts" / "reflect.json",
-            json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2))
-        return document
+        path = self.run_dir / "artifacts" / "reflect.json"
+        DocumentStore._atomic(path, json.dumps(document, ensure_ascii=False, sort_keys=True,
+                                               indent=2))
+        result = complete_stage(self.store, profile=state["profile"], stage="deliver",
+                                variant=None, context=self.check_context(), at=_now(),
+                                attempt=self._next_attempt("deliver"),
+                                check_ids=sorted(lifecycle.RF_CHECKS))
+        self._settle(); self.write_projection()
+        if self.projection().get("reflect") == "degraded":
+            document = {**document, "lessons": []}
+            DocumentStore._atomic(path, json.dumps(document, ensure_ascii=False,
+                                                   sort_keys=True, indent=2))
+        return {**document, "checks": result["checks"], "passed": result["passed"]}
 
     def measure_usage(self) -> dict[str, Any]:
         from core.run_protocol import usage
@@ -1054,6 +1163,7 @@ class RunEngine:
         path = self.run_dir / "artifacts" / "landing-progress-normal.json"
         progress = self._read_json(path, None)
         if not isinstance(progress, Mapping) or not progress.get("commits"):
+            self._discard_empty_progress()   # a failed attempt committed nothing
             return None
         if any(event.get("kind") == "land" and event.get("payload", {}).get("landing") == "landed"
                for event in self.store.read_events()):
@@ -1100,7 +1210,10 @@ class RunEngine:
         finals = self.final().get("repos", {})
         repos = self.effective_repos()
         for name in self.contract["expected_repos"]:
-            row = finals[name]
+            row = finals.get(name)
+            if not isinstance(row, Mapping):
+                raise IntegrationRequired("final_missing", f"{name}: no test final; run "
+                                          "pipeline_test.py --mode regression first")
             main, root = self.contract["repo_roots"][name], repos[name]
             old_base, new_base = row["base"], _git(main, "rev-parse", "HEAD")
             if old_base == new_base:
@@ -1122,8 +1235,8 @@ class RunEngine:
             try:
                 sync = run_worktree.sync(self.run_id, entry, main)
             except run_worktree.WorktreeError as exc:
-                raise IntegrationRequired("final_recheck_required",
-                                          f"{name}: base sync failed: {exc.message}") from exc
+                code = "merge_conflict" if exc.code == "conflict" else "final_recheck_required"
+                raise IntegrationRequired(code, f"{name}: base sync failed: {exc.message}") from exc
             new_tree = git_tree.write_tree(
                 root, (f".aidlc/deliverables/{self.run_id}/",), {})
             try:
@@ -1146,85 +1259,113 @@ class RunEngine:
                 raise EngineError(warning)
 
     def normal_land(self, *, message: str) -> dict[str, Any]:
-        """Land active DELIVER in the v13 order; no human authorization is involved."""
-        from core.run_protocol.landing import with_trailer
+        """Land active DELIVER in the v13 order (design §A3.7).
+
+        Every land attempt is closed with a complete check set, success or failure:
+        a guard that could not be evaluated is recorded ``not evaluated``, so the log
+        never holds an open attempt. A retryable failure (LG-1 / LG-4, a merge
+        conflict) returns ``retry``; the lifecycle turns the third one, and any
+        non-retryable guard, into the not-landed path, which this call then finishes.
+        A run already on the not-landed path never commits."""
+        from core.run_protocol.landing import LandingError, with_trailer
         message = with_trailer(message)
         import dataclasses
         from core.run_protocol import landing, tree
         state = self.projection()
         if state["status"] != "active" or state["stage"] != "deliver":
             raise EngineError("normal land requires active DELIVER")
+        if state.get("pending_landing") is not None:
+            return self.finish_not_landed()
         resumed = self._resume_normal_landing(message=message)
         if resumed is not None:
             return resumed
-        self._carry_moved_finals()
-        repos = self.effective_repos()
-        code_trees = tree.build_code_trees(
-            repos, self.run_id, git_tree.write_tree, git_tree.list_reserved)
-        context = self.check_context()
-        run_facts = {**dict(context.run), "code_trees": code_trees,
-                     "landing_bases": {name: context.final["repos"][name]["base"] for name in repos}}
-        context = dataclasses.replace(context, run=run_facts, events=tuple(self.store.read_events()))
-        guard_ids = ["DV-1", "LG-1", "LG-2", "LG-3", "LG-4", "LG-5",
-                     "RF-1", "RF-2", "RF-3", "RF-4"]
-        prior = [event for event in self.store.read_events()
-                 if event.get("kind") == "stage_attempt" and event.get("stage") == "land"]
-        attempt = len(prior) + 1
+        attempt = self._next_attempt("land")
+        guard_ids = ["DV-1", "LG-1", "LG-2", "LG-3", "LG-4", "LG-5"]
         opened, _ = self.store.append_new(
             writer=self.authority.writer("cli"), kind="stage_attempt", at=_now(),
             stage="land", attempt=attempt, payload={"check_ids": guard_ids})
         results: dict[str, tuple[bool, str]] = {}
-        for check_id in ("LG-1", "LG-2", "LG-5", "RF-1", "RF-2", "RF-3", "RF-4"):
-            results[check_id] = checks.evaluate(check_id, context)
-            passed, detail = results[check_id]
+
+        def record(check_id: str, passed: bool, detail: str) -> None:
+            results[check_id] = (passed, detail)
             self.store.append_new(
                 writer=self.authority.writer("cli"), kind="check", at=_now(),
                 stage="land", attempt=attempt,
                 payload={"stage_attempt_event_id": opened["event_id"], "check_id": check_id,
                          "passed": passed, "detail": detail})
-        if not all(passed for passed, _ in results.values()):
-            self._settle(); self.write_projection()
-            raise EngineError(f"pre-landing checks failed: {results}")
-        push = self.push_status()
-        report_events = self.store.read_events()
-        self.store.append_new(
-            writer=self.authority.writer("cli"), kind="land_intent", at=_now(),
-            stage="deliver", attempt=attempt,
-            payload={"stage_attempt_event_id": opened["event_id"]})
-        audit_value = self.build_audit(
-            through="DELIVER", persist=True, event_rows=report_events, push=push)
-        report = self._commit_report(
-            audit_value, guards=("LG-1", "LG-2", "LG-3", "LG-4", "LG-5", "DV-1"))
-        report_sha = self.store.put_blob(report)
-        self.store.append_new(
-            writer=self.authority.writer("cli"), kind="render", at=_now(),
-            stage="deliver", attempt=attempt,
-            payload={"document": "REPORT", "blob_sha": report_sha})
-        bindings = tree.build_delivery_trees(
-            repos, self.run_id, code_trees, report, report_sha,
-            git_tree.write_tree, git_tree.list_reserved)
-        run_facts["lg3_args"] = {"repos": repos, "run_id": self.run_id,
-                                 "bindings": bindings, "rendered_report_sha": report_sha,
-                                 "diff_trees": git_tree.diff_trees}
-        context = dataclasses.replace(self.check_context(), run=run_facts,
-                                      events=tuple(self.store.read_events()))
-        for check_id in ("DV-1", "LG-3", "LG-4"):
-            results[check_id] = checks.evaluate(check_id, context)
-            passed, detail = results[check_id]
+
+        def close(why: str) -> None:
+            for check_id in guard_ids:
+                if check_id not in results:
+                    record(check_id, False, f"not evaluated: {why}")
+
+        try:
+            carry_error: IntegrationRequired | None = None
+            try:
+                self._carry_moved_finals()
+            except IntegrationRequired as exc:
+                carry_error = exc
+            repos = self.effective_repos()
+            code_trees = tree.build_code_trees(
+                repos, self.run_id, git_tree.write_tree, git_tree.list_reserved)
+            context = self.check_context()
+            run_facts = {**dict(context.run), "code_trees": code_trees,
+                         "landing_bases": {name: _git(root, "rev-parse", "HEAD")
+                                           for name, root in self.contract["repo_roots"].items()}}
+            context = dataclasses.replace(context, run=run_facts,
+                                          events=tuple(self.store.read_events()))
+            for check_id in ("LG-1", "LG-2", "LG-5"):
+                record(check_id, *checks.evaluate(check_id, context))
+            if carry_error is not None:
+                prefix = "merge_conflict: " if carry_error.code == "merge_conflict" else ""
+                record("LG-4", False, prefix + str(carry_error))
+            if not all(passed for passed, _ in results.values()):
+                close("an earlier landing guard failed")
+                return self._land_failed(results)
+            push = self.push_status()
+            report_events = self.store.read_events()
             self.store.append_new(
-                writer=self.authority.writer("cli"), kind="check", at=_now(),
-                stage="land", attempt=attempt,
-                payload={"stage_attempt_event_id": opened["event_id"], "check_id": check_id,
-                         "passed": passed, "detail": detail})
-        if not all(passed for passed, _ in results.values()):
+                writer=self.authority.writer("cli"), kind="land_intent", at=_now(),
+                stage="deliver", attempt=attempt,
+                payload={"stage_attempt_event_id": opened["event_id"]})
+            audit_value = self.build_audit(
+                through="DELIVER", persist=True, event_rows=report_events, push=push)
+            report = self._commit_report(
+                audit_value, guards=("LG-1", "LG-2", "LG-3", "LG-4", "LG-5", "DV-1"))
+            report_sha = self.store.put_blob(report)
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="render", at=_now(),
+                stage="deliver", attempt=attempt,
+                payload={"document": "REPORT", "blob_sha": report_sha})
+            bindings = tree.build_delivery_trees(
+                repos, self.run_id, code_trees, report, report_sha,
+                git_tree.write_tree, git_tree.list_reserved)
+            run_facts["lg3_args"] = {"repos": repos, "run_id": self.run_id,
+                                     "bindings": bindings, "rendered_report_sha": report_sha,
+                                     "diff_trees": git_tree.diff_trees}
+            context = dataclasses.replace(self.check_context(), run=run_facts,
+                                          events=tuple(self.store.read_events()))
+            for check_id in ("DV-1", "LG-3", "LG-4"):
+                record(check_id, *checks.evaluate(check_id, context))
+            if not all(passed for passed, _ in results.values()):
+                return self._land_failed(results)
+            bases = {name: self.final()["repos"][name]["base"]
+                     for name in self.contract["expected_repos"]}
+            try:
+                commits = landing.commit_repos(
+                    run_id=self.run_id, integration_roots=self.contract["repo_roots"],
+                    bases=bases, bindings=bindings, message=message,
+                    progress_path=self.run_dir / "artifacts" / "landing-progress-normal.json")
+            except LandingError as exc:
+                # the guards passed and the attempt is closed; the next land supersedes it
+                self._discard_empty_progress()
+                self.write_projection()
+                return {"ok": False, "retry": True, "error": f"commit failed: {exc}",
+                        "state": self.projection()}
+        except Exception as exc:
+            close(f"{type(exc).__name__}: {exc}"[:300])
             self._settle(); self.write_projection()
-            raise EngineError(f"post-render landing checks failed: {results}")
-        bases = {name: self.final()["repos"][name]["base"]
-                 for name in self.contract["expected_repos"]}
-        commits = landing.commit_repos(
-            run_id=self.run_id, integration_roots=self.contract["repo_roots"],
-            bases=bases, bindings=bindings, message=message,
-            progress_path=self.run_dir / "artifacts" / "landing-progress-normal.json")
+            raise
         DocumentStore._atomic(self.run_dir / "REPORT.md", report.decode("utf-8"))
         self.store.append_new(
             writer=self.authority.writer("cli"), kind="land", at=_now(),
@@ -1232,7 +1373,22 @@ class RunEngine:
             payload={"landing": "landed", "commit": next(iter(commits.values())),
                      "stage_attempt_event_id": opened["event_id"]})
         self._settle(); self.write_projection()
-        return {"commits": commits, "push": push, "state": self.projection()}
+        return {"ok": True, "commits": commits, "push": push, "state": self.projection()}
+
+    def _land_failed(self, results: Mapping[str, tuple[bool, str]]) -> dict[str, Any]:
+        self._settle(); self.write_projection()
+        failed = {cid: detail for cid, (passed, detail) in results.items() if not passed}
+        if self.projection().get("pending_landing") is not None:
+            finished = self.finish_not_landed()
+            return {**finished, "ok": False, "landing": "not_landed",
+                    "reason": self.projection().get("reason"), "failed": failed}
+        return {"ok": False, "retry": True, "failed": failed, "state": self.projection()}
+
+    def _discard_empty_progress(self) -> None:
+        path = self.run_dir / "artifacts" / "landing-progress-normal.json"
+        progress = self._read_json(path, None)
+        if isinstance(progress, Mapping) and not progress.get("commits"):
+            path.unlink(missing_ok=True)
 
     def reflect_complete(self, *, degraded: bool = False, reason: str = "") -> dict[str, Any]:
         state = self.projection()

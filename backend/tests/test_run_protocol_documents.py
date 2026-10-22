@@ -57,7 +57,7 @@ def test_complete_stage_writes_exact_roster_and_results(tmp_path):
         requirements=REQ, design=DESIGN, events=[], authority=authority,
         existing_files={"tests/x.py"})
     result = complete_stage(store, profile="direct", stage="plan", variant="lite",
-                            context=context, at=AT)
+                            context=context, at=AT, attempt=1)
     assert result["passed"] is True
     chain = store.read_events()
     assert chain[0]["kind"] == "stage_attempt"

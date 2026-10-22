@@ -173,7 +173,7 @@ def test_restore_completed_not_landed_reopens_deliver():
            stage="test", attempt=1)
     _event(authority, rows, "land", {"landing": "not_landed", "commit": None,
                                      "reason": "tests_red"}, ordinal=1)
-    roster = [item.check_id for item in checks.stage_checks("direct", "deliver")]
+    roster = ["DV-1"]          # the not-landed path's only DELIVER check (§A1.2)
     opened = _event(authority, rows, "stage_attempt", {"check_ids": roster},
                     stage="deliver", attempt=1)
     for check_id in roster:

@@ -63,16 +63,17 @@ class Stream:
     def roster(self, stage=None):
         from core.run_protocol import checks as registry
         stage = stage or self.projection()["stage"]
-        return sorted(lc.LAND_CHECKS if stage == "land" else
-                      {spec.check_id for spec in registry.stage_checks(
-                          self.projection()["profile"], stage)})
+        state = self.projection()
+        if stage == "land":
+            return sorted(lc.LAND_CHECKS)
+        if stage == "deliver":   # the not-landed path's DV-1, else RF-1~4
+            report_only = state["pending_landing"] is not None or state["profile"] == "research"
+            return sorted(lc.REPORT_ONLY if report_only else lc.RF_CHECKS)
+        return sorted({spec.check_id for spec in registry.stage_checks(state["profile"], stage)})
 
     def attempt(self, stage, checks=None, results=None):
         if checks is None:
-            from core.run_protocol import checks as registry
-            checks = sorted(lc.LAND_CHECKS if stage == "land" else
-                            {spec.check_id for spec in registry.stage_checks(
-                                self.projection()["profile"], stage)})
+            checks = self.roster(stage)
         projection = self.projection()
         number = projection["stage_attempts"].get(stage, 0) + 1
         opened = self.add("stage_attempt", {"check_ids": list(checks)}, stage=stage,
@@ -192,7 +193,14 @@ def test_validated_decision_and_answer_return_to_same_stage_and_reset_attempts()
     stream.add("human_answer", {"request_id": "q1", "option_id": "A"})
     run = stream.projection()
     assert run["status"] == "active" and run["stage"] == "evaluate"
-    assert run["stage_attempts"]["evaluate"] == 0 and run["human_decisions"] == 1
+    # numbers keep growing (event identity); the breaker restarts from the answer
+    assert run["stage_attempts"]["evaluate"] == 1 and run["attempt_base"]["evaluate"] == 1
+    assert run["human_decisions"] == 1
+    for _ in range(2):
+        stream.attempt("evaluate", results={"RQ-1": False})
+    assert stream.projection()["pending_landing"] is None, "two attempts since the answer"
+    stream.attempt("evaluate", results={"RQ-1": False})
+    assert stream.projection()["pending_landing"]["reason"] == "checks_exhausted"
 
 
 def test_decision_cap_is_enforced_from_folded_answers():
@@ -221,11 +229,12 @@ def test_rf_exception_is_derived_only_from_actual_failed_check_ids():
         stream.attempt("deliver", results={"RF-1": False})
     run = stream.projection()
     assert run["stage"] == "deliver" and run["reflect"] == "degraded"
+    # RF never trips the breaker, and a DV-1-only DELIVER attempt exists only on the
+    # not-landed path (design §A1.2): on a landable run it is refused outright
     stream = Stream("direct")
     stream.to_stage("deliver")
-    for _ in range(3):
-        stream.attempt("deliver", results={"DV-1": False})
-    assert stream.projection()["pending_landing"]["reason"] == "checks_exhausted"
+    with pytest.raises(lc.LifecycleError, match="DV-1 on the not-landed path"):
+        stream.attempt("deliver", checks=["DV-1"])
 
 
 @pytest.mark.parametrize("profile", ["direct", "trivial", "research"])
@@ -248,7 +257,7 @@ def _land_checks(stream):
     number = run["stage_attempts"].get("land", 0) + 1
     opened = stream.add("stage_attempt", {"check_ids": sorted(lc.LAND_CHECKS)},
                         stage="land", attempt=number, transition=False)
-    for check_id in ("LG-1", "LG-2", "LG-5", "RF-1", "RF-2", "RF-3", "RF-4"):
+    for check_id in ("LG-1", "LG-2", "LG-5"):
         stream.add("check", {"stage_attempt_event_id": opened["event_id"],
                              "check_id": check_id, "passed": True, "detail": "pass"},
                    transition=False)
@@ -496,10 +505,11 @@ def test_reflecting_landed_cannot_be_human_overridden():
 def test_stale_land_intent_from_failed_attempt_cannot_authorize_next_attempt():
     stream = Stream("direct")
     stream.to_stage("deliver")
-    # Attempt 1 reaches intent/render, then LG-3 fails.
+    # Attempt 1 reaches intent/render, then LG-4 fails (retryable: no not-landed
+    # outcome; LG-3 would end the run as report_mismatch).
     opened1 = stream.add("stage_attempt", {"check_ids": sorted(lc.LAND_CHECKS)},
                          stage="land", attempt=1, transition=False)
-    for cid in ("LG-1", "LG-2", "LG-5", "RF-1", "RF-2", "RF-3", "RF-4"):
+    for cid in ("LG-1", "LG-2", "LG-5"):
         stream.add("check", {"stage_attempt_event_id": opened1["event_id"],
                              "check_id": cid, "passed": True, "detail": "pass"},
                    transition=False)
@@ -507,7 +517,7 @@ def test_stale_land_intent_from_failed_attempt_cannot_authorize_next_attempt():
                transition=False)
     stream.add("render", {"document": "REPORT", "blob_sha": "a" * 64},
                stage="deliver", attempt=1, transition=False)
-    for cid, passed in (("LG-3", False), ("LG-4", True), ("DV-1", True)):
+    for cid, passed in (("LG-3", True), ("LG-4", False), ("DV-1", True)):
         stream.add("check", {"stage_attempt_event_id": opened1["event_id"],
                              "check_id": cid, "passed": passed, "detail": "result"},
                    transition=False)

@@ -30,7 +30,8 @@ QUALITY_BLOCK_REASONS = frozenset({
 })
 RF_CHECKS = frozenset({"RF-1", "RF-2", "RF-3", "RF-4"})
 LG_CHECKS = frozenset({"LG-1", "LG-2", "LG-3", "LG-4", "LG-5"})
-NORMAL_LAND_CHECKS = LG_CHECKS | {"DV-1"} | RF_CHECKS
+NORMAL_LAND_CHECKS = LG_CHECKS | {"DV-1"}   # RF-1~4 are DELIVER stage checks, not guards
+REPORT_ONLY = frozenset({"DV-1"})            # the not-landed path's DELIVER attempt
 SKIP_LAND_CHECKS = frozenset({"LG-3", "LG-4"})
 LAND_CHECKS = NORMAL_LAND_CHECKS  # public compatibility name for cycle-1 tests
 PROFILE_STAGES = {
@@ -81,7 +82,7 @@ def _initial(event: Mapping[str, Any]) -> dict[str, Any]:
         "stage": sequence[0], "stages": stages, "landing": None, "reason": None,
         "reflect": None, "decision_cap": cap, "human_decisions": 0,
         "pending_decision": None, "pending_landing": None,
-        "stage_attempts": {}, "open_attempt": None,
+        "stage_attempts": {}, "attempt_base": {}, "open_attempt": None,
         "last_land_intent": None, "last_report_render": None,
         "land_requests": {}, "auth_grants": {},
         "auth_consumed": {}, "expected_transition": None,
@@ -121,8 +122,14 @@ def _attempt(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     stage = event["stage"]
     if stage not in (run["stage"], "land"):
         raise LifecycleError("stage_attempt is not for the current stage or land")
-    if run["open_attempt"] is not None:
-        raise LifecycleError("previous stage_attempt is incomplete")
+    previous = run["open_attempt"]
+    if previous is not None:
+        complete = set(previous["results"]) == set(previous["check_ids"]) \
+            and all(value is True for value in previous["results"].values())
+        # A passing land / RF attempt waits for its land event or the next step; a
+        # new attempt supersedes it. Anything else is genuinely unfinished.
+        if not (complete and previous["stage"] in ("land", "deliver")):
+            raise LifecycleError("previous stage_attempt is incomplete")
     expected = run["stage_attempts"].get(stage, 0) + 1
     if event["attempt"] != expected:
         raise LifecycleError(f"stage_attempt must be sequential ({expected})")
@@ -135,6 +142,11 @@ def _attempt(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         valid_land_sets = {NORMAL_LAND_CHECKS, LG_CHECKS, SKIP_LAND_CHECKS}
         if frozenset(check_ids) not in valid_land_sets:
             raise LifecycleError("land attempt check_ids are not a valid action guard set")
+    elif stage == "deliver":
+        ids = frozenset(check_ids)
+        report_only = run.get("pending_landing") is not None or run["profile"] == "research"
+        if ids != RF_CHECKS and not (ids == REPORT_ONLY and report_only):
+            raise LifecycleError("DELIVER attempts are RF-1~4, or DV-1 on the not-landed path")
     else:
         from core.run_protocol import checks as check_registry
         expected_ids = {spec.check_id for spec in check_registry.stage_checks(
@@ -147,33 +159,48 @@ def _attempt(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     run["stage_attempts"][stage] = expected
     run["open_attempt"] = {
         "event_id": event["event_id"], "stage": stage, "attempt": expected,
-        "check_ids": tuple(check_ids), "results": {},
+        "check_ids": tuple(check_ids), "results": {}, "details": {},
     }
+
+
+def _set_pending(run: dict[str, Any], reason: str) -> None:
+    """The not-landed outcome is written once: the first cause is the reason."""
+    if run.get("pending_landing") is None:
+        run["pending_landing"] = {"landing": "not_landed", "reason": reason}
+    if run.get("reason") is None:
+        run["reason"] = run["pending_landing"]["reason"]
 
 
 def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str]) -> None:
     attempt = run["open_attempt"]
     stage, number = attempt["stage"], attempt["attempt"]
+    details = attempt.get("details") or {}
     run["open_attempt"] = None
-    if stage == "deliver" and failed and failed <= RF_CHECKS:
-        if number >= 3:
-            run["reflect"] = "degraded"
-        return
+    # a guard recorded "not evaluated" did not fail on its own: classify by the rest
+    evaluated = {cid for cid in failed if not details.get(cid, "").startswith("not evaluated")}
+    failed = evaluated or failed
+    if stage == "deliver":
+        if failed <= RF_CHECKS and number >= 3 and run.get("reflect") is None:
+            run["reflect"] = "degraded"    # lessons drop to zero; DELIVER continues
+        return                             # a DV-1 attempt is simply retried
     if stage == "land":
-        if "LG-3" in failed:
-            run["pending_landing"] = {"landing": "not_landed", "reason": "report_mismatch"}
+        # the attempt is closed: its intent and render belong to it
+        run["last_land_intent"], run["last_report_render"] = None, None
+        if failed & {"LG-3", "DV-1"}:
+            _set_pending(run, "report_mismatch")
         elif failed & {"LG-1", "LG-4"}:
             if number >= 3:
-                run["pending_landing"] = {"landing": "not_landed", "reason": "final_stale"}
+                conflict = str(details.get("LG-4", "")).startswith("merge_conflict")
+                _set_pending(run, "land_conflict" if conflict else "final_stale")
         elif "LG-2" in failed:
-            run["pending_landing"] = {"landing": "not_landed", "reason": "tests_red"}
+            incomplete = "incomplete" in str(details.get("LG-2", ""))
+            _set_pending(run, "tests_incomplete" if incomplete else "tests_red")
         elif "LG-5" in failed:
-            run["pending_landing"] = {"landing": "not_landed", "reason": "validation_failed"}
+            _set_pending(run, "validation_failed")
         return
-    if number >= 3:
+    if number - run["attempt_base"].get(stage, 0) >= 3:
         run["stages"][run["stage"]] = "degraded"
-        run["pending_landing"] = {"landing": "not_landed", "reason": "checks_exhausted"}
-        run["reason"] = "checks_exhausted"
+        _set_pending(run, "checks_exhausted")
         run["stage"] = "deliver"
         run["stages"]["deliver"] = "open"
         _schedule(run, event, "active")
@@ -187,6 +214,7 @@ def _check(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     if check_id not in attempt["check_ids"] or check_id in attempt["results"]:
         raise LifecycleError("check is undeclared or duplicated")
     attempt["results"][check_id] = event["payload"]["passed"]
+    attempt["details"][check_id] = str(event["payload"].get("detail") or "")
     if len(attempt["results"]) == len(attempt["check_ids"]):
         failed = {cid for cid, passed in attempt["results"].items() if passed is not True}
         if failed:
@@ -210,6 +238,8 @@ def _complete(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         raise LifecycleError("TEST requires a terminal final verdict")
     run["open_attempt"] = None
     if stage == "deliver":
+        if frozenset(attempt["check_ids"]) != REPORT_ONLY:
+            raise LifecycleError("DELIVER stage_complete is the not-landed path's DV-1 attempt")
         outcome = run.get("pending_landing")
         if run["profile"] == "research" and outcome is None:
             outcome = {"landing": "no_code", "reason": None}
@@ -240,7 +270,9 @@ def _human_answer(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         raise LifecycleError("human_answer is not for the current decision")
     run["pending_decision"] = None
     run["human_decisions"] += 1
-    run["stage_attempts"][run["stage"]] = 0
+    # attempt numbers only grow (they are part of event identity); the breaker
+    # counts the attempts made since the person answered
+    run["attempt_base"][run["stage"]] = run["stage_attempts"].get(run["stage"], 0)
     _schedule(run, event, "active")
 
 
@@ -269,6 +301,9 @@ def _land(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     if landing == "landed":
         if run["status"] != "active" or run["stage"] != "deliver":
             raise LifecycleError("normal land requires active DELIVER")
+        if run.get("pending_landing") is not None:
+            raise LifecycleError("a run on the not-landed path cannot land "
+                                 f"({run['pending_landing']['reason']})")
         attempt = run.get("open_attempt")
         if attempt is None or attempt["stage"] != "land" \
                 or set(attempt["check_ids"]) != LAND_CHECKS \
@@ -425,9 +460,7 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         run["stages"]["evaluate"] = "degraded"
         run["stage"] = "deliver"
         run["stages"]["deliver"] = "open"
-        run["pending_landing"] = {"landing": "not_landed",
-                                  "reason": event["payload"]["reason"]}
-        run["reason"] = event["payload"]["reason"]
+        _set_pending(run, event["payload"]["reason"])
         _schedule(run, event, "active")
     elif kind == "land_intent":
         attempt = run.get("open_attempt")
@@ -437,7 +470,8 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
                 and run.get("landing") == "not_landed")
         normal_ready = (not human and run["status"] == "active" and run["stage"] == "deliver"
                         and attempt is not None and attempt["stage"] == "land"
-                        and set(attempt["results"]) == {"LG-1", "LG-2", "LG-5", *RF_CHECKS}
+                        and run.get("pending_landing") is None
+                        and set(attempt["results"]) == {"LG-1", "LG-2", "LG-5"}
                         and all(value is True for value in attempt["results"].values())
                         and event["payload"].get("stage_attempt_event_id") == attempt["event_id"])
         human_ready = (human and eligible and attempt is not None and attempt["stage"] == "land"
@@ -464,10 +498,13 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         attempt = run.get("open_attempt")
         intent = run.get("last_land_intent")
         if event["payload"]["document"] == "REPORT":
+            passed_rf = (attempt is not None and attempt["stage"] == "deliver"
+                         and set(attempt["results"]) == set(attempt["check_ids"])
+                         and all(value is True for value in attempt["results"].values()))
             terminal_report = (run["status"] == "active" and run["stage"] == "deliver"
                                and (run.get("pending_landing") is not None
                                     or run["profile"] == "research")
-                               and attempt is None and intent is None)
+                               and (attempt is None or passed_rf) and intent is None)
             human = bool(intent and intent.get("request_id"))
             eligible = run["status"] in ("active", "paused", "awaiting_human", "abandoned") \
                 or (run["status"] in ("reflecting", "completed")
@@ -491,8 +528,9 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     elif kind in ("reflect_complete", "reflect_exhausted"):
         if run["status"] != "reflecting":
             raise LifecycleError("reflect completion requires reflecting")
-        run["stages"]["reflect"] = "completed" if kind == "reflect_complete" else "degraded"
-        run["reflect"] = "ok" if kind == "reflect_complete" else "degraded"
+        degraded = kind == "reflect_exhausted" or run.get("reflect") == "degraded"
+        run["stages"]["reflect"] = "degraded" if degraded else "completed"
+        run["reflect"] = "degraded" if degraded else "ok"   # degraded is never undone
         _schedule(run, event, "completed")
     elif kind == "run_create":
         raise LifecycleError("run_create must be the first event")
