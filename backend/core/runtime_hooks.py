@@ -1140,8 +1140,8 @@ def create_agent_tool_audit_hook(
        ``<run_id>.marker`` (precise match — pipeline orchestrator sets this).
     2. Always: writes ``session_<session_id>_<ts>.marker`` as session-level
        evidence. The validator (Check 9b) accepts either form. It carries the
-       ``expert_id`` of the prompt's EXPERT-ID line and, for a gate skeptic
-       (Gate-0), the ``verdict`` its final answer gave.
+       ``expert_id`` of the prompt's EXPERT-ID line. A Gate-0 verdict is never
+       written here: it exists only in the run's signed v1 answer event.
     3. CONDITIONAL: if THIS sub-agent's intent is adversarial-review (classified
        via _is_adversarial_intent on agent_type + the transcript-head spawn
        prompt), ALSO writes ``session_<session_id>_adv_<ts>.marker`` carrying a
@@ -1259,9 +1259,9 @@ def create_agent_tool_audit_hook(
                 final = (last_message if isinstance(last_message, str) and last_message.strip()
                          else (_read_subagent_final_text(transcript_path)
                                if transcript_path else ""))
-                if expert_id in _GATE_VERDICT_RE:
-                    base["verdict"] = _gate_verdict(expert_id, final)
-                elif expert_id:
+                # Gate-0 verdicts are parsed from the signed answer event (run_protocol
+                # answers / hook_bridge), never from this legacy marker (E)
+                if expert_id and expert_id != "gate0-skeptic":
                     # Key present = this daemon records the expert's own findings and
                     # re-check answers (DELIVER stage-complete compares the record).
                     base.update(_expert_answer(final))
@@ -1394,23 +1394,6 @@ def _read_subagent_prompt_head(transcript_path: str) -> str:
         return ""
 
 
-# A gate skeptic's OWN verdict, read from its final answer, so stage-complete can compare
-# the verdict the orchestrator records with what the skeptic said (artifact_cli
-# `_gate_verdict_mismatch`). Only LINE-ANCHORED verdict lines count: Gate-0 uses a line whose
-# first ≤40 chars lead to "verdict:" ("4. Verdict: …", "Claim 2 — Verdict: …") — and a
-# template line listing the options ("PASS | WARN | BLOCK") never counts. When several
-# lines give different tokens the MOST SEVERE wins: quoted plan / claim text (DATA the
-# orchestrator wrote) can then only make the parsed verdict stricter, never turn a BLOCK
-# into a PASS (red-team 2026-10-18). No such line → None (stage-complete warns).
-_GATE_VERDICT_RE = {
-    "gate0-skeptic": re.compile(
-        r"^[^\n]{0,40}?\bverdict\W{0,6}(UNSUPPORTED|ALREADY-SATISFIED|WRONG-FRAME|SUPPORTED)\b"
-        r"(?!\s*\|)", re.I | re.M),
-}
-# Severity: the most severe token on the anchored lines is the skeptic's verdict.
-GATE_VERDICT_RANK = {"PASS": 0, "WARN": 1, "PARTIAL": 1, "BLOCK": 2,
-                     "SUPPORTED": 0, "UNSUPPORTED": 1, "ALREADY-SATISFIED": 1, "WRONG-FRAME": 1,
-                     "SOUND": 0, "WRONG-APPROACH": 1}
 _GATE_ANSWER_TAIL_BYTES = 256 * 1024  # fallback transcript read; the SDK input carries the text
 
 
@@ -1746,16 +1729,6 @@ def _expert_answer(final_text: str) -> dict:
         state = "unparsed"
     return {"reported": uniq[:_REPORTED_MAX], "reported_state": state,
             "recheck_answers": answers}
-
-
-def _gate_verdict(expert_id: Optional[str], final_text: str) -> Optional[str]:
-    """The verdict a gate skeptic gave in ``final_text`` (upper-case): the most severe
-    token on its anchored verdict lines (first such line on a tie), else None."""
-    rx = _GATE_VERDICT_RE.get(expert_id or "")
-    found = [t.upper() for t in rx.findall(final_text or "")] if rx else []
-    if not found:
-        return None
-    return max(found, key=lambda t: (GATE_VERDICT_RANK.get(t, 0), -found.index(t)))
 
 
 # Git timeout for the diff-relevance capture (Plan A). Bounded so a hung/locked git

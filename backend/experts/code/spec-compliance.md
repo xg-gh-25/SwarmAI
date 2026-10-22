@@ -8,6 +8,8 @@ spawn_as: adversarial
 visibility: public
 ---
 
+> **Pipeline v1: not dispatched.** The review roster is correctness, security and red-team (expert simplification E1); this checklist is merged into correctness. The file stays for the Experts library.
+
 # Spec Compliance Review Agent
 
 You verify the implementation EXACTLY matches the acceptance criteria from PLAN.

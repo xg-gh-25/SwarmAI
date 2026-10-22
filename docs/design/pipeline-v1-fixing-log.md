@@ -172,3 +172,23 @@ trivial 不变：`tests/fixtures/pipeline_v1_trivial_profile.json` 是改动前 
 **对抗审查（1c1e2c20bd672ecd，3 HIGH + 6 MED）：**
 - 已修：`domain:<project>` 只接受项目名（不能是路径），路由时再确认目标在 `Projects/` 下且存在；writer 的结果分为已写入（`applied` / `created_section` / `duplicate` / 入队）、拒绝（记 `rejected`，不算 applied）、忙（`locked`，重试后 degraded）；后台任务异常时以 `degraded` 结束 REFLECT，不会一直停在 reflecting；`measure-usage` 在 run 已 completed 时重建最终审计、REPORT 和卡片（REFLECT 可能先完成）；人工落地的 request_id 和原话改为每次从签名的 `auth_consumed` / `land_request` 事件推出，COMPLETED 重建不再丢；结论里"交付了什么"对非 direct 取 REQUIREMENTS 的 understanding.claim（否则第一条 story）；基线脚本对 v1 run 用终态的 `updated_at` 作结束时间，Token 样本只取有整段计量（calls 已知）的审计。
 - 遗留（§9）：进程内任意 Python 可以自己调 `allow_hook_writer()` 再签 hook 事件（与 C 组相同的已知限制；需要把 hook 签名移到 daemon 的 IPC 后面）。60 秒上限只在每条经验前检查，阻塞的文件写不能中断；completed 之后重建审计失败不会自动修复。
+
+## 9. E 组（残留）
+
+**根因：** 退役命令和旧流程的文字没有跟着代码改，卡片 lint 只校验检查 ID，所以提示指向不存在的命令也不会变红。
+
+| 条目 | 处理 |
+|---|---|
+| 拒绝提示 | active-run commit gate 指向 `pipeline_v1.py land`；session-link gate 写 `pipeline_v1.py create`；worktree stash 拒绝改为只读 git（`git diff <base>...HEAD` 等，`<base>` 由 `git worktree list` 得到）；runner 的共享树拒绝和 files_touched 提示改为开 v1 run。新测试 `test_deny_text_commands.py` 渲染真实文本，用 `pipeline_v1.parser()` 解析其中每条命令，并确认没有退役的 `artifact_cli run-*` |
+| SKILL.md | 流程改为按 profile 的阶段表（来自 `pipeline_profiles`），Verification 改为 v1 的证据（status、engine 生成的 REPORT、run_audit、push-status、runner 结果） |
+| 专家 | `experts/code/` 下 9 个不再派发的专家文件标注"Pipeline v1: not dispatched"（并入 correctness，E1），保留给 Experts 库；`pipeline-expert` 的描述不再提 Gate-1/2、meta-review、root-cause |
+| docstring | `run_worktree.mode_enabled` / `create` 不再说有 shared 回退 |
+| RV-1c | `review.md` 改为只记录（与 checks 注册的效果一致，v13 §B5） |
+| Gate-0 marker | `runtime_hooks` 不再把 Gate-0 verdict 解析进旧的 session marker（没有读者；verdict 只在签名的 answer 事件里） |
+| 卡片 lint | 新增三条：卡片、INSTRUCTIONS、SKILL 里的每条 `pipeline_v1.py` 命令用真实 parser 解析；每个 `--flag` 必须是两个 CLI 的真实选项，`--mode` 的值必须是 runner 的模式；direct 的 create 必须带 `--requirement`；反引号里的字段名必须在协议代码里出现。审查发现 INSTRUCTIONS 里的 `--mode shared`（已删）和缺 `--requirement` 的 direct create（已补），lint 现在能抓到（已做变异验证） |
+| 风险扩展 | 共享配置还包括 backend 下任意 `conftest.py` 和 desktop 下任意 `vitest.config.*` / `vite.config.*`；`RISK_RULES_VERSION` 升到 `v13-2026-10-23`（进入缓存 key 和 provenance） |
+| 其他 | runner 的 `_SOURCE_SCAN_SUITES` 补上 `test_guard_contracts`、`test_transcript_event_schema`、`test_turn_writer`、`test_pipeline_v1_cards`（之前 main 上的已知红）；`test_pipeline_v1_real_e2e.py` 去掉已无用的 `_xfail` 辅助，0 个 xfail |
+
+**对抗审查（29988622faae386c，3 MED + 1 LOW）：** 全部已修（上表的 INSTRUCTIONS、stash 文本、lint 范围、runtime_hooks docstring）。lint 只校验字段名出现在协议源码中，没有对照结构化 schema，记为遗留。
+
+**遗留：** v1 缓存 GC 没有做（缓存按 key 不可变，目前只增长，需要按 run 终态和时间回收的设计）。

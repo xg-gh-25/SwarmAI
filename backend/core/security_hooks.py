@@ -3622,6 +3622,22 @@ def _active_run_deliverables(pending: set, run_ids: set) -> list:
                   if (m := _DELIVERABLE_PATH_RE.search(p)) and m.group(1) in run_ids)
 
 
+def active_run_commit_deny_text(offending: "list[str]", run_ids: "list[str]") -> str:
+    """The active-run commit gate's deny (E): names the landing command that exists."""
+    run = run_ids[0] if len(run_ids) == 1 else "<run_id>"
+    return (
+        "git commit → DENY: this commit touches file(s) owned by an ACTIVE pipeline run ("
+        + ", ".join(list(offending)[:5]) + "; run " + ", ".join(list(run_ids)[:3]) + "). "
+        "A run's code and its REPORT.md land together in ONE commit made by the run's "
+        "DELIVER landing; a commit by hand splits them. FIX: do not `git commit` the run's "
+        "code yourself: in DELIVER run `python backend/scripts/pipeline_v1.py land "
+        f"--project <project> --run-id {run} --message '<message>'`. A run's own "
+        "REPORT.md (.aidlc/deliverables/<run_id>/) is never committed by hand either. If "
+        "this is genuinely NOT a pipeline-run file (false match), tell the user: only the "
+        "operator can bypass this gate, with SWARM_GATE_FORCE=active_run_commit_gate in "
+        "the backend/daemon environment.")
+
+
 def create_active_run_commit_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse (Bash) gate that DENYs an agent `git commit` whose pending
     paths belong to an ACTIVE pipeline run's files_touched — routing it to run-commit
@@ -3679,29 +3695,15 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
             return {"decision": "approve"}
 
         logger.warning(
-            "[BLOCKED] git commit of active-run path(s) %s — must go through run-commit "
-            "so code + REPORT.md land in ONE commit (command=%s)",
-            offending[:5], command[:80],
+            "[BLOCKED] git commit of active-run path(s) %s — lands only through the "
+            "run's DELIVER landing (command=%s)", offending[:5], command[:80],
         )
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    "git commit → DENY: this commit touches file(s) owned by an ACTIVE "
-                    "pipeline run (" + ", ".join(offending[:5]) + "). Committing the run's "
-                    "code manually here SPLITS it from its REPORT.md audit projection (which "
-                    "run-commit generates and co-commits LATER) → two separate commits, "
-                    "defeating the single-commit review purpose. FIX: do NOT `git commit` the "
-                    "run's code yourself — let the pipeline's `run-commit` make the one commit "
-                    "(it bundles code + REPORT.md together). A run's own REPORT.md "
-                    "(.aidlc/deliverables/<run_id>/) is never committed by hand either: "
-                    "on its own it is the second half of a split delivery — run-commit "
-                    "adds it to the code's commit. If this is genuinely NOT a "
-                    "pipeline-run file (false match), tell the user: only the operator can "
-                    "bypass this gate, with SWARM_GATE_FORCE=active_run_commit_gate in the "
-                    "backend/daemon environment."
-                ),
+                "permissionDecisionReason": active_run_commit_deny_text(
+                    offending, sorted(run_ids)),
             }
         }
 
@@ -5657,7 +5659,7 @@ def create_session_link_gate(session_context: dict[str, Any]):
                     "DENY (" + hit + "): this command removes or overrides "
                     + _SESSION_LINK_VAR + ", or may (the checker could not rule it "
                     "out). The backend sets that variable for every command; it links "
-                    "a pipeline run to this session (artifact_cli.py run-create records "
+                    "a pipeline run to this session (`pipeline_v1.py create` records "
                     "it as the run's session_id). A run without this session's id is "
                     "not this session's run, so the pipeline test gate and the "
                     "direct-commit gate stop applying to it. Leave the variable as the "

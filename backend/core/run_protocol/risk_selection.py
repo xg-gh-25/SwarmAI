@@ -10,7 +10,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Sequence
 
-RISK_RULES_VERSION = "v13-2026-10-21"
+RISK_RULES_VERSION = "v13-2026-10-23"
 
 _RULES = (
     ("pipeline-protocol", (
@@ -37,6 +37,22 @@ _RULES = (
 )
 _SHARED_CONFIG = ("backend/conftest.py", "backend/pyproject.toml", "backend/pytest.ini",
                   "desktop/vitest.config.ts", "desktop/package.json")
+
+
+
+def _is_shared_config(path: str) -> bool:
+    """A file every test of its area depends on (E): the exact roots above, any
+    ``conftest.py`` under backend/, and any ``vitest.config.*`` / ``vite.config.*``
+    under desktop/ (nested ones included)."""
+    item = PurePosixPath(path)
+    if path in _SHARED_CONFIG:
+        return True
+    if item.name == "conftest.py" and path.startswith("backend/"):
+        return True
+    return path.startswith("desktop/") and re.fullmatch(
+        r"(?:vitest|vite)\.config\.[cm]?[jt]s", item.name) is not None
+
+
 _DYNAMIC_RE = re.compile(r"\b(?:import\s+importlib\b|from\s+importlib\b|importlib\.|__import__\s*\()")
 
 
@@ -69,7 +85,7 @@ def expand(repo: str | Path, changed: Sequence[str], *, cap: int) -> tuple[list[
         if any(_match(path, pattern) for path in changed_paths for pattern in path_patterns):
             hits.append(rule)
             selected |= _files(root, test_patterns)
-    shared = [path for path in changed_paths if path in _SHARED_CONFIG]
+    shared = [path for path in changed_paths if _is_shared_config(path)]
     if shared:
         hits.append("shared-config")
         for path in shared:

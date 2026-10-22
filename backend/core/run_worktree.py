@@ -350,9 +350,9 @@ def _symbolic_head(cwd) -> "str | None":
 def mode_enabled() -> bool:
     """True unless ``config.json["pipeline"]["worktree_mode"]`` is ``"off"`` (any case or
     whitespace) or JSON false (read-only).
-    On is the default: a missing key or an unreadable config means on, and a run that
-    cannot get a worktree still falls back to the shared checkout at stage-start
-    (pipeline_worktree._shared). $SWARM_WORKTREE_MODE (on/off) overrides — tests and
+    On is the default: a missing key or an unreadable config means on. A v1 run that
+    cannot get a worktree pauses (no shared fallback; the mode is fixed at create).
+    $SWARM_WORKTREE_MODE (on/off) overrides — tests and
     operator use."""
     env = (os.environ.get("SWARM_WORKTREE_MODE") or "").strip().lower()
     if env in ("on", "off"):
@@ -506,7 +506,7 @@ def create(run_id: str, repo_name: str, main: "str | Path",
     """Create ``WT_ROOT/<run_id>/<repo_name>`` on a new ``run/<run_id>`` branch at the
     main checkout's HEAD (other sessions' uncommitted edits stay out), or at commit
     *at* (a ledger restore). Returns the run.json ``worktrees[]`` entry. Raises
-    WorktreeError (caller falls back to shared)."""
+    WorktreeError; the v1 engine then pauses the run, it never falls back to shared."""
     main = Path(os.path.realpath(str(main)))
     head_ref = _symbolic_head(main)
     if not head_ref or not head_ref.startswith("refs/heads/"):

@@ -8,6 +8,8 @@ spawn_as: adversarial
 visibility: public
 ---
 
+> **Pipeline v1: not dispatched.** The review roster is correctness, security and red-team (expert simplification E1); this checklist is merged into correctness. The file stays for the Experts library.
+
 # Integration Specialist Review
 <!-- version: 2026-10-18 | origin: PE Finding #1 (governance gate dead code); §6 consumer trace added from the compaction-summary review (RP89-RP91) -->
 

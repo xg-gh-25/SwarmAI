@@ -57,9 +57,9 @@ def agent_definitions() -> dict[str, Any]:
     """``{name: AgentDefinition}`` for ClaudeAgentOptions(agents=...)."""
     from claude_agent_sdk.types import AgentDefinition
     return {PIPELINE_EXPERT: AgentDefinition(
-        description=("Pipeline review expert (Gate-0/1/2 skeptics, Gate-2 specialists, "
-                     "red-team, meta-review, root-cause). Use for every spawn whose prompt "
-                     "starts with EXPERT-ID."),
+        description=("Pipeline v1 review expert (correctness, security, red-team; the "
+                     "Gate-0 decision reviewer). Use for every spawn whose prompt starts "
+                     "with EXPERT-ID."),
         prompt=_SYSTEM_PROMPT,
         tools=list(EXPERT_TOOLS),
         model="inherit",

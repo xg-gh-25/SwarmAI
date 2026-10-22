@@ -72,6 +72,14 @@ _CONFIG_READ = frozenset({"--get", "--get-all", "--get-regexp", "-l", "--list",
                           "--get-urlmatch", "--show-origin", "--show-scope", "--name-only"})
 
 
+# E: the stash deny names read-only git commands that exist (no retired run-diff)
+STASH_DENY = ("git stash is shared by every worktree (refs/stash): a stash made here can be "
+              "popped into the main checkout. To look at the base without moving anything, "
+              "use read-only git in this worktree against the branch the run forked from "
+              "(`git worktree list` shows the main checkout and its branch <base>): "
+              "`git diff <base>...HEAD`, `git show <base>:<path>`.")
+
+
 def _deny(msg: str) -> dict:
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                    "permissionDecisionReason": "DENY (worktree gate): " + msg}}
@@ -526,9 +534,7 @@ def _git_verdict(g: dict, own: "_Own | None") -> "dict | None":
     root = os.path.realpath(str(wt_root()))
     # `stash list` / `stash show` only read refs/stash (denied 10-20 and 10-21)
     if sub == "stash" and in_wt is not None and not (args and args[0] in ("list", "show")):
-        return _deny("git stash is shared by every worktree (refs/stash): a stash made here "
-                     "can be popped into the main checkout. To look at base, use "
-                     "`artifact_cli.py run-diff --mark <name>` and `run-diff --since <name>`.")
+        return _deny(STASH_DENY)
     if sub == "worktree" and args and args[0] in ("add", "remove", "move", "prune"):
         if strict or any(_under(_real(a, d), root) for a in args[1:] if not a.startswith("-")):
             return _deny("run worktrees are created and removed by the pipeline tools only")

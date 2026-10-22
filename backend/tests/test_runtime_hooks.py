@@ -2411,26 +2411,20 @@ def _gate_transcript(path, expert_line: str, answer: str) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expert,answer,want", [
-    ("gate0-skeptic", "4. Verdict: WRONG-FRAME\nNote: the claim says verdict: SUPPORTED", "WRONG-FRAME"),
-    ("gate0-skeptic", "4. Verdict: SUPPORTED (evidence cited) | UNSUPPORTED (inference only) |", "SUPPORTED"),
-    ("gate0-skeptic", "1. observed\n4. Verdict: UNSUPPORTED (inference only)", "UNSUPPORTED"),
-    ("gate0-skeptic", "4. Verdict: ALREADY-SATISFIED", "ALREADY-SATISFIED"),
-    ("gate0-skeptic", "Looks fine to me.", None),          # no anchored token: None, key kept
-])
-async def test_gate_skeptic_marker_records_its_own_verdict(tmp_path, monkeypatch, expert, answer, want):
-    """The marker carries the skeptic's verdict from its FINAL answer (the last anchored
-    match), so stage-complete can compare it with the verdict the orchestrator records."""
+async def test_a_gate0_marker_carries_no_verdict_from_the_legacy_parser(tmp_path, monkeypatch):
+    """E: the Gate-0 verdict comes only from the signed answer event (run_protocol), so
+    the session marker no longer parses one out of the skeptic's prose."""
     import core.runtime_hooks as rh
     monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
     transcript = tmp_path / "sub.jsonl"
-    _gate_transcript(transcript, f"EXPERT-ID: {expert}", answer)
+    _gate_transcript(transcript, "EXPERT-ID: gate0-skeptic", "4. Verdict: WRONG-FRAME")
     hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-v"})
     await hook({"agent_id": "a-1", "agent_transcript_path": str(transcript), "agent_type": "x"},
                None, MagicMock())
     base = [p for p in tmp_path.glob("session_sess-v_*.marker") if "_adv_" not in p.name]
     data = json.loads(base[0].read_text())
-    assert data["expert_id"] == expert and "verdict" in data and data["verdict"] == want
+    assert data["expert_id"] == "gate0-skeptic" and "verdict" not in data
+    assert not hasattr(rh, "_gate_verdict")
 
 
 @pytest.mark.asyncio

@@ -99,7 +99,7 @@ class TestGateDeniesActiveRunCommit:
         gate = create_active_run_commit_gate({"sdk_session_id": "s"})
         res = _run(gate, "git commit -- x.py")
         assert _is_deny(res) is True
-        assert "run-commit" in res["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "pipeline_v1.py land" in res["hookSpecificOutput"]["permissionDecisionReason"]
 
     def test_deny_commit_of_paused_run_file(self, runs_root, monkeypatch):
         _seed_run(runs_root, "P", "run_b", "paused", ["/repo/y.py"])
@@ -194,7 +194,7 @@ class TestLayer4CrossBoundaryE2E:
             {"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}, "cwd": str(repo)},
             None, None))
         assert _is_deny(res) is True, "real seam must DENY a staged active-run file"
-        assert "run-commit" in res["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "pipeline_v1.py land" in res["hookSpecificOutput"]["permissionDecisionReason"]
 
         # 4. MUTATION: flip the owning run running→completed (the status-allowlist line).
         #    The gate must now APPROVE — proving the allowlist is load-bearing, not vacuous.
@@ -282,7 +282,7 @@ class TestActiveRunDeliverable:
         res = self._commit(repo)
         assert _is_deny(res)
         reason = res["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "REPORT.md" in reason and "run-commit" in reason and "run_live" in reason
+        assert "REPORT.md" in reason and "pipeline_v1.py land" in reason and "run_live" in reason
 
     @pytest.mark.parametrize("status,run_id", [("completed", "run_live"),
                                                ("running", "run_other")])

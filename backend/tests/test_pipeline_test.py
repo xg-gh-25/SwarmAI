@@ -839,7 +839,9 @@ def test_changed_files_scopes_to_files_touched_and_warns(rig):
     assert got == ["backend/core/mod.py"]
     assert len(warnings) == 1
     assert "backend/core/other_session.py" in warnings[0]
-    assert "--project P1 --run-id run_t1 --files-touched" in warnings[0]
+    # a legacy run cannot register files any more: the warning names a v1 run instead (E)
+    assert "pipeline_v1.py create --project P1" in warnings[0]
+    assert "artifact_cli" not in warnings[0].replace("artifact_cli run commands", "")
     assert warnings[0].startswith("1 changed file(s)")
     # nothing outside files_touched → no warning
     warnings.clear()
@@ -882,8 +884,8 @@ def test_verify_without_files_touched_refuses_in_a_tree_shared_with_a_live_run(r
     sib.mkdir()
     (sib / "run.json").write_text(json.dumps({"status": "running"}), encoding="utf-8")
     out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
-    assert code != 0 and "run_sib1" in out["error"] and "--files-touched" in out["error"], out
-    assert f"--project {PROJECT} --run-id {RUN_ID}" in out["error"]
+    assert code != 0 and "run_sib1" in out["error"] and "pipeline_v1.py create" in out["error"], out
+    assert f"pipeline_v1.py create --project {PROJECT}" in out["error"]
     assert not (runs / RUN_ID / "evidence" / "tests" / "latest-verify.json").exists()
     # a sibling that is not running, or whose run.json is stale, does not count
     (sib / "run.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")

@@ -2,9 +2,8 @@
 
 Every run here is driven only through ``pipeline_v1.py`` / ``pipeline_test.py`` and the
 real hook functions (``tests/pipeline_v1_rig.py``); no test appends an event. Each
-negative path asserts the outcome the v13 design requires; a path the current code
-gets wrong is ``xfail(strict=True)`` naming the fixing-spec item, and that item's
-commit turns it into a required pass.
+negative path asserts the outcome the v13 design requires; every fixing-spec item
+has landed, so no case is marked as expected to fail.
 
 Invariant checked after every case: the run's event log folds (``status`` succeeds).
 """
@@ -19,10 +18,6 @@ from tests.pipeline_v1_rig import Rig, documents
 pytestmark = pytest.mark.timeout(300)
 
 CODE_PROFILES = ("direct", "trivial", "full", "bugfix", "goal")
-
-
-def _xfail(item: str, why: str):
-    return pytest.mark.xfail(strict=True, reason=f"fixing spec {item}: {why}")
 
 
 @pytest.fixture

@@ -41,3 +41,20 @@ def test_shared_config_overflow_is_explicit_not_silently_partial(tmp_path):
     selected, rules, overflow = expand(tmp_path, ["backend/conftest.py"], cap=2)
     assert rules == ["shared-config"] and len(selected) == 2 and len(overflow) == 3
     assert sorted(selected + overflow) == [f"backend/tests/test_{n}.py" for n in range(5)]
+
+
+def test_nested_conftest_and_other_vitest_configs_are_shared_config(tmp_path):
+    """E: shared config is not only the exact roots: a nested backend conftest.py and
+    any desktop vitest.config.* / vite.config.* change every test of the area."""
+    from core.run_protocol.risk_selection import expand
+    for rel in ("backend/tests/test_a.py", "backend/tests/sub/test_b.py",
+                "desktop/src/x.test.ts"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x\n")
+    for changed, want in (("backend/tests/sub/conftest.py", "backend/tests/test_a.py"),
+                          ("desktop/vitest.config.mts", "desktop/src/x.test.ts"),
+                          ("desktop/packages/ui/vite.config.ts", "desktop/src/x.test.ts")):
+        selected, hits, _ = expand(tmp_path, [changed], cap=50)
+        assert "shared-config" in hits and want in selected, (changed, hits, selected)
+    _, hits, _ = expand(tmp_path, ["desktop/src/conftest.py"], cap=50)
+    assert "shared-config" not in hits

@@ -621,10 +621,11 @@ def shared_tree_scope_error(repo: Path, run_state: dict | None, run_id: str | No
     return (f"this run has no files_touched yet, and the working tree is shared with "
             f"{len(siblings)} other live run(s) ({', '.join(siblings[:4])}): the "
             f"{len(git_set)} changed file(s) here ({shown}) are not all yours, and testing "
-            f"all of them does not fit the deadline. Register the files THIS run changed, "
-            f"then run the same command again: python backend/scripts/artifact_cli.py "
-            f"run-update --project {project} --run-id {run_id} "
-            f"--files-touched '[\"<path>\", ...]'")
+            f"all of them does not fit the deadline. This legacy run cannot register its "
+            f"files any more (the artifact_cli run commands are retired): test the change "
+            f"in its own isolated run, python backend/scripts/pipeline_v1.py create "
+            f"--project {project} --profile direct --requirement '<the request>' "
+            f"--repo <name>=<absolute repo path>")
 
 
 def changed_files(repo: Path, run_state: dict | None, warnings: list | None = None,
@@ -658,9 +659,11 @@ def changed_files(repo: Path, run_state: dict | None, warnings: list | None = No
         shown = ", ".join(extra[:8]) + (f" (+{len(extra) - 8} more)" if len(extra) > 8 else "")
         warnings.append(
             f"{len(extra)} changed file(s) outside this run's files_touched were not used "
-            f"for test selection: {shown}. If this run changed any of them, register them: "
-            f"python backend/scripts/artifact_cli.py run-update --project {project} "
-            f"--run-id {run_id} --files-touched '[\"<path>\"]'")
+            f"for test selection: {shown}. A legacy run cannot register more files (the "
+            f"artifact_cli run commands are retired); if this run changed them, re-run the "
+            f"change as a v1 run, python backend/scripts/pipeline_v1.py create "
+            f"--project {project} --profile direct --requirement '<the request>' "
+            f"--repo <name>=<absolute repo path>, whose change set is the run's fork point")
     return sorted(owned)
 
 
@@ -931,13 +934,17 @@ _SOURCE_SCAN_SUITES = (
     "backend/tests/test_ddd_canonical_docs_single_source.py",
     "backend/tests/test_ddd_paths_single_source.py",
     "backend/tests/test_gate_decision_log.py",
+    "backend/tests/test_guard_contracts.py",
     "backend/tests/test_handler_log_safety.py",
     "backend/tests/test_job_model_ssot.py",
     "backend/tests/test_output_degeneration.py",
+    "backend/tests/test_pipeline_v1_cards.py",
     "backend/tests/test_pipeline_v1_cutover.py",
     "backend/tests/test_r6a_ceiling_decouple.py",
     "backend/tests/test_router_async_blocking.py",
     "backend/tests/test_silent_except_baseline.py",
+    "backend/tests/test_transcript_event_schema.py",
+    "backend/tests/test_turn_writer.py",
 )
 # Glob *.py but not over backend source (a tmp_path or a generated tree).
 _NOT_SOURCE_SCANS = ("backend/tests/test_gate_scaffold.py",)
