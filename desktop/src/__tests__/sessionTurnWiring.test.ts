@@ -180,6 +180,77 @@ describe('session turn wiring', () => {
     getMsgs.mockRestore();
   });
 
+  it('a CLI-initiated turn after an assistant message continues that bubble, as the reloaded history does', () => {
+    renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+    act(() => { initTestTab('h1'); });
+    const store = messageStoreRegistry.getOrCreate('h1');
+    store.appendMany([
+      makeMessage({ id: 'u-1', role: 'user', content: [{ type: 'text', text: 'audit it' }] }),
+      makeMessage({ id: 'a-1', role: 'assistant', content: [{ type: 'text', text: 'four agents started' }], metadata: { client_id: 'local-u-asst' } }),
+    ]);
+    testTabMap.get('h1')!.sessionId = 'S';
+    const agentTurn = (turnId: string, seq: number, body: string) => {
+      act(() => { fake.emit(env(turnId, seq, { type: 'turn_start', source: 'injected', turnClientId: `injected-${turnId}-asst` })); });
+      act(() => { fake.emit(env(turnId, seq + 1, text(body))); });
+      act(() => { fake.emit(env(turnId, seq + 2, { type: 'result' })); });
+      act(() => { fake.emit(env(turnId, seq + 3, { type: 'turn_end' })); });
+    };
+    agentTurn('I1', 1, 'agent one is back');
+    agentTurn('I2', 5, 'agent two is back');
+    const assistants = (messageStoreRegistry.get('h1')?.messages ?? []).filter((m) => m.role === 'assistant');
+    expect(assistants.map((m) => m.id)).toEqual(['a-1']);
+    const body = JSON.stringify(assistants[0].content);
+    for (const t of ['four agents started', 'agent one is back', 'agent two is back']) {
+      expect(body.match(new RegExp(t, 'g'))?.length).toBe(1);
+    }
+    expect(body.indexOf('four agents')).toBeLessThan(body.indexOf('agent one'));
+    expect(body.indexOf('agent one')).toBeLessThan(body.indexOf('agent two'));
+    expect(testTabMap.get('h1')!.isStreaming).toBe(false);
+  });
+
+  it('a CLI-initiated turn after a user message, and a user turn, each get their own bubble', () => {
+    renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+    act(() => { initTestTab('h2'); });
+    const store = messageStoreRegistry.getOrCreate('h2');
+    store.appendMany([
+      makeMessage({ id: 'a-0', role: 'assistant', content: [{ type: 'text', text: 'earlier' }] }),
+      makeMessage({ id: 'u-2', role: 'user', content: [{ type: 'text', text: 'next' }] }),
+    ]);
+    testTabMap.get('h2')!.sessionId = 'S';
+    act(() => { fake.emit(env('J', 1, { type: 'turn_start', source: 'injected', turnClientId: 'injected-J-asst' })); });
+    act(() => { fake.emit(env('J', 2, text('cli turn'))); });
+    act(() => { fake.emit(env('J', 3, { type: 'turn_end' })); });
+    act(() => { fake.emit(env('K', 4, { type: 'turn_start', source: 'chat', turnClientId: 'injected-K-asst' })); });
+    act(() => { fake.emit(env('K', 5, text('user turn'))); });
+    act(() => { fake.emit(env('K', 6, { type: 'turn_end' })); });
+    const ids = (messageStoreRegistry.get('h2')?.messages ?? []).filter((m) => m.role === 'assistant').map((m) => m.id);
+    expect(ids).toEqual(['a-0', 'local-sub-J', 'local-sub-K']);
+  });
+
+  it('a replay of a hosted CLI turn re-renders it once into the same bubble', () => {
+    renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+    act(() => { initTestTab('h3'); });
+    messageStoreRegistry.getOrCreate('h3').appendMany([
+      makeMessage({ id: 'u-3', role: 'user', content: [{ type: 'text', text: 'go' }] }),
+      makeMessage({ id: 'a-3', role: 'assistant', content: [{ type: 'text', text: 'started' }] }),
+    ]);
+    testTabMap.get('h3')!.sessionId = 'S';
+    act(() => { fake.emit(env('L', 1, { type: 'turn_start', source: 'injected', turnClientId: 'injected-L-asst' })); });
+    act(() => { fake.emit(env('L', 2, text('half of agent L'))); });
+    // resync: the subscription replays the running turn from its turn_start
+    act(() => { fake.emit({ type: 'resync', sessionId: 'S', eventSeq: 0, activeTurnId: 'L' }); });
+    act(() => { fake.emit(env('L', 1, { type: 'turn_start', source: 'injected', turnClientId: 'injected-L-asst' })); });
+    act(() => { fake.emit(env('L', 2, text('half of agent L'))); });
+    act(() => { fake.emit(env('L', 3, text('all of agent L'))); });
+    act(() => { fake.emit(env('L', 4, { type: 'turn_end' })); });
+    const assistants = (messageStoreRegistry.get('h3')?.messages ?? []).filter((m) => m.role === 'assistant');
+    expect(assistants.map((m) => m.id)).toEqual(['a-3']);
+    const body = JSON.stringify(assistants[0].content);
+    expect(body.match(/started/g)?.length).toBe(1);
+    expect(body.match(/half of agent L/g)?.length ?? 0).toBeLessThanOrEqual(1);
+    expect(body).toContain('all of agent L');
+  });
+
   it('a tab that joins a running turn after a reload replaces the partial bubble, no duplicate (F8)', () => {
     renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => { initTestTab('t7'); });

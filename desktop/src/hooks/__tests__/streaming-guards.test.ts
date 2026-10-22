@@ -17,6 +17,8 @@ import {
   shouldResurfaceQuestion,
   shouldResurfacePermission,
   queuedBehindApprovalText,
+  isServerQueuedErrorCode,
+  hostForInjectedTurn,
   computeDrainRetirement,
   shouldArmSpinnerFromBackend,
   forceClearStreamVerdict,
@@ -862,5 +864,28 @@ describe('queuedBehindApprovalText (why a sent message is not moving)', () => {
     expect(long).toContain(`Bash: ${'x'.repeat(79)}…`);
     expect(queuedBehindApprovalText({ ...base, backendPendingPermission: { ...perm, toolName: 'Write', toolInput: {} } }))
       .toContain('approval of Write.');
+  });
+});
+
+describe('isServerQueuedErrorCode', () => {
+  it('SESSION_BUSY / QUEUE_TIMEOUT only', () => {
+    expect(isServerQueuedErrorCode('SESSION_BUSY')).toBe(true);
+    expect(isServerQueuedErrorCode('QUEUE_TIMEOUT')).toBe(true);
+    for (const c of ['TURN_ABANDONED', '', undefined, null]) expect(isServerQueuedErrorCode(c)).toBe(false);
+  });
+});
+
+describe('hostForInjectedTurn', () => {
+  const u = { id: 'u', role: 'user' };
+  const a = { id: 'a', role: 'assistant' };
+  it('the last message when it is an assistant one; else none', () => {
+    expect(hostForInjectedTurn([u, a], 'T', undefined)).toBe(a);
+    expect(hostForInjectedTurn([a, u], 'T', undefined)).toBeNull();
+    expect(hostForInjectedTurn([], 'T', undefined)).toBeNull();
+  });
+  it('a replay returns the bubble that hosted it, even if it is no longer last', () => {
+    const b = { id: 'b', role: 'assistant' };
+    expect(hostForInjectedTurn([a, u, b], 'T', { turnId: 'T', hostId: 'a' })).toBe(a);
+    expect(hostForInjectedTurn([a, u, b], 'X', { turnId: 'T', hostId: 'a' })).toBe(b);
   });
 });

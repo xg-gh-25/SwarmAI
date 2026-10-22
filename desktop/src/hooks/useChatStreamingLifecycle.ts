@@ -52,7 +52,7 @@ import type {
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import { applyCompactionEvent } from '../pages/chat/compaction';
-import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, shouldResurfacePermission, queuedBehindApprovalText, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
+import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, shouldResurfacePermission, queuedBehindApprovalText, isServerQueuedErrorCode, hostForInjectedTurn, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
 import { errorFieldsFromEvent } from './errorFields';
 import { chatService } from '../services/chat';
 import { sessionEvents } from '../services/sessionEvents';
@@ -3362,10 +3362,17 @@ export function useChatStreamingLifecycle(
           // instead of showing a scary error. This catches a send that fails
           // before it produces any output (e.g. the first send after a Stop).
           // The user never sees the error — just a brief delay.
+          //
+          // Never for SESSION_BUSY / QUEUE_TIMEOUT: the backend already stored
+          // the message as pending and delivers it itself. Retrying re-POSTed
+          // the same clientId 300ms later and stored it a second time — the
+          // model got every message twice (19 duplicate user rows since
+          // 10-15; e4f3397f 2026-10-22 18:52:20, "你咋没返回啊" x2).
           if (
             tabState &&
             !tabState.hasReceivedData &&
             tabState.retryStreamFn &&
+            !isServerQueuedErrorCode(event.code) &&
             (tabState.reconnectionAttempt ?? 0) < 1
           ) {
             tabState.reconnectionAttempt = 1;
@@ -4664,25 +4671,48 @@ export function useChatStreamingLifecycle(
     // it gets a bubble of its own, and that turn's bubble and rows stay.
     const source = (ev as { source?: TurnSource }).source;
     const continuation = source === 'answer' || source === 'permission';
-    const id = !continuation && cid && cid.startsWith('local-') ? cid : `local-sub-${ev.turnId}`;
     const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: tab.sessionId });
     if (store.phase === 'streaming') store.endStreaming();
-    // The replay rebuilds this turn from its start: drop what was shown of it —
-    // its placeholder, the POST bubble when it is this tab's own send, and (for a
-    // turn that is not a continuation) its persisted rows.
-    const route = turnStateOf(tab);
-    const postBubble = route.postTurnId === ev.turnId ? turnHandlersOf(tab).postBubbleId : undefined;
-    store.remove((m) => m.role === 'assistant' && (
-      m.id === id || (!!postBubble && m.id === postBubble)
-      || (!continuation && !!cid && m.metadata?.client_id === cid)));
-    store.appendMany([{
-      id, role: 'assistant', content: [], timestamp: new Date().toISOString(),
-      metadata: {
-        ...(cid ? { client_id: cid } : {}),
-        ...(source ? { turn_source: source } : {}),
-      },
-    } as Message]);
     const handlers = turnHandlersOf(tab);
+    // A CLI-initiated turn (a background agent finished) right after an assistant
+    // message continues THAT bubble, as the reloaded history shows it: the history
+    // endpoint merges consecutive assistant rows into one message. A new bubble
+    // per turn showed N avatars for one piece of work (2026-10-22).
+    const host = source === 'injected' ? hostForInjectedTurn(store.getSnapshot(), ev.turnId, handlers.hostedTurn) : null;
+    if (host) {
+      const replay = handlers.hostedTurn?.turnId === ev.turnId;
+      const baseLen = replay ? handlers.hostedTurn!.baseLen : host.content.length;
+      // What the host shows so far belongs to turns that have ended: final. Marked
+      // confirmed so this turn's assistant events never take it for their own
+      // streamed (provisional) text and replace it.
+      store.updateById(host.id, (m) => ({
+        ...m,
+        content: m.content.slice(0, baseLen).map((b) =>
+          (b.type === 'text' || b.type === 'thinking') ? { ...b, _confirmed: true } as typeof b : b),
+      }));
+      handlers.hostedTurn = { turnId: ev.turnId!, hostId: host.id, baseLen };
+    } else {
+      handlers.hostedTurn = undefined;
+    }
+    const id = host ? host.id
+      : !continuation && cid && cid.startsWith('local-') ? cid : `local-sub-${ev.turnId}`;
+    if (!host) {
+      // The replay rebuilds this turn from its start: drop what was shown of it —
+      // its placeholder, the POST bubble when it is this tab's own send, and (for a
+      // turn that is not a continuation) its persisted rows.
+      const route = turnStateOf(tab);
+      const postBubble = route.postTurnId === ev.turnId ? turnHandlersOf(tab).postBubbleId : undefined;
+      store.remove((m) => m.role === 'assistant' && (
+        m.id === id || (!!postBubble && m.id === postBubble)
+        || (!continuation && !!cid && m.metadata?.client_id === cid)));
+      store.appendMany([{
+        id, role: 'assistant', content: [], timestamp: new Date().toISOString(),
+        metadata: {
+          ...(cid ? { client_id: cid } : {}),
+          ...(source ? { turn_source: source } : {}),
+        },
+      } as Message]);
+    }
     // A drained turn delivers the message the tab shows as queued: the backend
     // owns that drain, so the queue mirror must never re-send it.
     handlers.drainSyntheticId = undefined;

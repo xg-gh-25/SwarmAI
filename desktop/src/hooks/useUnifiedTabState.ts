@@ -296,6 +296,10 @@ export interface UnifiedTab {
     subComplete?: () => void;
     /** id of the synthetic queued bubble a drained subscription turn delivers */
     drainSyntheticId?: string;
+    /** A CLI-initiated turn rendered INTO the previous assistant bubble: which
+     *  turn, which bubble, and how many blocks it had before (a replay of the
+     *  same turn truncates back to that before re-rendering). Runtime-only. */
+    hostedTurn?: { turnId: string; hostId: string; baseLen: number };
     /** the bubble the tab's latest POST send streams into */
     postBubbleId?: string;
   };

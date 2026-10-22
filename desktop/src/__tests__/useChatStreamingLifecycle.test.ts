@@ -1819,6 +1819,44 @@ describe('Fix 6: Per-tab state isolation', () => {
 
     // 2026-10-22 incident (core/permission_prompt): a CLI-initiated turn stopped on a
     // permission the tab never got; the session waited 18 min with nothing on screen.
+    // 2026-10-22: a SESSION_BUSY reply went through the connection-phase silent
+    // retry, re-POSTing the same clientId 300ms later -> the message was stored
+    // and answered twice. The server keeps that message pending itself.
+    describe('connection-phase silent retry never re-sends a server-queued message', () => {
+      beforeEach(() => { vi.useFakeTimers(); });
+      afterEach(() => { vi.useRealTimers(); });
+
+      const run = (code: string) => {
+        const retry = vi.fn(() => () => {});
+        const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+        act(() => {
+          initTestTab('tab-r');
+          const ts = testTabMap.get('tab-r')!;
+          ts.sessionId = 'sess-r';
+          ts.hasReceivedData = false;
+          ts.reconnectionAttempt = 0;
+          ts.retryStreamFn = retry;
+          messageStoreRegistry.getOrCreate('tab-r', { sessionId: 'sess-r' })
+            .replace([makeMessage({ id: 'r-asst', role: 'assistant', content: [] })]);
+        });
+        const handler = result.current.createStreamHandler('r-asst', 'tab-r');
+        act(() => {
+          handler({ type: 'error', code, error: 'x', message: 'x', sessionId: 'sess-r' } as unknown as StreamEvent);
+        });
+        act(() => { vi.advanceTimersByTime(1000); });
+        return retry;
+      };
+
+      it('SESSION_BUSY and QUEUE_TIMEOUT: not retried', () => {
+        expect(run('SESSION_BUSY')).not.toHaveBeenCalled();
+        expect(run('QUEUE_TIMEOUT')).not.toHaveBeenCalled();
+      });
+
+      it('any other early error is still retried once', () => {
+        expect(run('SOME_TRANSIENT')).toHaveBeenCalledTimes(1);
+      });
+    });
+
     describe('mirror re-surfaces a lost permission prompt', () => {
       beforeEach(() => { vi.useFakeTimers(); });
       afterEach(() => { vi.useRealTimers(); });

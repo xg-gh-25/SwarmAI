@@ -251,6 +251,15 @@ export function queuedBehindApprovalText(input: QueuedBehindApprovalInput): stri
   return `${msgs} waiting for your approval of ${what}. ${after} after you decide.`;
 }
 
+/**
+ * True for an error whose message the backend kept as pending and will deliver
+ * itself (SESSION_BUSY, QUEUE_TIMEOUT): the send must never be re-POSTed, or the
+ * message is stored and answered twice.
+ */
+export function isServerQueuedErrorCode(code: string | undefined | null): boolean {
+  return code === 'SESSION_BUSY' || code === 'QUEUE_TIMEOUT';
+}
+
 // ── Root-1 SSOT Phase 3: AC4 — server pending_count / last_drained_seqs mirror ──
 
 /** Inputs to the drain-retirement decision. */
@@ -682,4 +691,26 @@ export const RECONCILE_FAST_MS = 3_000;
 export const RECONCILE_IDLE_MS = 15_000;
 export function nextReconcileDelay(anyTabStreaming: boolean): number {
   return anyTabStreaming ? RECONCILE_FAST_MS : RECONCILE_IDLE_MS;
+}
+
+/**
+ * The bubble a CLI-initiated (``injected``) turn continues, or null for a new one.
+ *
+ * The reloaded history merges consecutive assistant rows into one message
+ * (routers/chat.py _merge_consecutive_assistant_messages), so the live view does
+ * the same: an injected turn right after an assistant message renders into it.
+ * A replay of a turn already hosted returns its host again. After a user message
+ * (or with nothing shown) the turn gets its own bubble.
+ */
+export function hostForInjectedTurn<M extends { id: string; role: string }>(
+  messages: readonly M[],
+  turnId: string | undefined,
+  hosted: { turnId: string; hostId: string } | undefined,
+): M | null {
+  if (hosted && turnId && hosted.turnId === turnId) {
+    const again = messages.find((m) => m.id === hosted.hostId);
+    if (again) return again;
+  }
+  const last = messages[messages.length - 1];
+  return last && last.role === 'assistant' ? last : null;
 }
