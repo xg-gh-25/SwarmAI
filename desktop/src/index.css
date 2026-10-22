@@ -1206,6 +1206,32 @@ body {
   line-height: 1.55;
 }
 
+/* Canvas markdown preview (FileEditorCore): one step below chat's reading size.
+   Chat is the primary reading surface; Canvas is the side reference panel, narrower
+   and denser (tables, code, paths), so it reads at 13px and its headings scale with
+   it. Same font family as everywhere; 13px is the floor for CJK body text. */
+.markdown-content.canvas-doc {
+  font-size: 1rem;         /* 13px */
+  line-height: 1.6;
+}
+.markdown-content.canvas-doc p,
+.markdown-content.canvas-doc li {
+  line-height: 1.6;
+}
+.markdown-content.canvas-doc h1 {
+  font-size: 1.23rem;      /* ≈16px */
+}
+.markdown-content.canvas-doc h2 {
+  font-size: 1.12rem;      /* ≈14.5px */
+}
+.markdown-content.canvas-doc h3 {
+  font-size: 1.04rem;      /* ≈13.5px */
+}
+.markdown-content.canvas-doc code,
+.markdown-content.canvas-doc pre {
+  font-size: 0.92rem;      /* ≈12px */
+}
+
 /* ── Assistant response — edited-answer hierarchy ─────────────────────────
    Every assistant prose block, including the still-streaming candidate for the
    final answer, uses this same hierarchy. Moving that block into RESULT at turn

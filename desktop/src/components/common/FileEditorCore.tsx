@@ -1639,7 +1639,7 @@ export default function FileEditorCore({
               <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]">
                 <MarkdownRenderer
                   content={content}
-                  className="max-w-4xl mx-auto"
+                  className="canvas-doc max-w-4xl mx-auto"
                   basePath={filePath.includes('/') ? filePath.replace(/\/[^/]*$/, '') : ''}
                 />
               </div>
