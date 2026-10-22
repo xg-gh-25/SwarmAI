@@ -31,7 +31,6 @@
   "core/git_sync_engine.py": 1,
   "core/heartbeat.py": 3,
   "core/library_mounts.py": 4,
-  "core/lifecycle_manager.py": 4,
   "core/memory_extractor.py": 2,
   "core/needs_human_review.py": 4,
   "core/observation_hooks.py": 2,

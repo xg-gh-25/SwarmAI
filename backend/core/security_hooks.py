@@ -6935,7 +6935,7 @@ async def bash_syntax_guard(
 
     if _syntax_cannot_be_incomplete(command):
         return {"decision": "approve"}
-    key = hashlib.sha1(cmd_bytes).digest()
+    key = hashlib.sha1(cmd_bytes, usedforsecurity=False).digest()  # cache key
     cached = _SYNTAX_VERDICTS.get(key)
     if cached is not None:
         rc, stderr = cached

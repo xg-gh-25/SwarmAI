@@ -485,7 +485,8 @@ def tool_display(name: str, input_data: Optional[dict]) -> dict:
         logger.debug("tool_display: suppressed exception on a fail-safe path", exc_info=True)
         obj = ""
     try:
-        key = hashlib.sha1(f"{tool}\0{obj}".encode("utf-8", "replace")).hexdigest()[:16] if obj else ""
+        key = hashlib.sha1(f"{tool}\0{obj}".encode("utf-8", "replace"),
+                           usedforsecurity=False).hexdigest()[:16] if obj else ""  # display key
     except Exception:  # noqa: BLE001
         logger.debug("tool_display: suppressed exception on a fail-safe path", exc_info=True)
         key = ""

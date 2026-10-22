@@ -119,8 +119,8 @@ class LifecycleManager:
             dispatcher = get_dispatcher()
             if dispatcher.loop is None:
                 dispatcher.loop = asyncio.get_running_loop()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("cultivation dispatcher loop not bound at start: %s", exc)
         # Defer reaping to background — never block startup
         asyncio.create_task(self._startup_background_tasks())
         self._loop_task = asyncio.create_task(
@@ -318,8 +318,8 @@ class LifecycleManager:
                                 payload={"cycle": cycle},
                                 priority=3,
                             )
-                        except Exception:
-                            pass  # Non-blocking
+                        except Exception as exc:  # Non-blocking
+                            logger.debug("TIMER_30MIN cultivation event not emitted: %s", exc)
                         # Process queued cultivation events (PE-1 fix)
                         await self._process_cultivation_events()
                     # Workspace backup check every 60th cycle (~60 min)
@@ -1559,8 +1559,8 @@ class LifecycleManager:
                 )
                 if dropped_delta:
                     dispatcher.dropped_count = 0
-            except Exception:  # observability must never break the organ (O030)
-                pass
+            except Exception as exc:  # observability must never break the organ (O030)
+                logger.debug("cultivation health record skipped: %s", exc)
 
         except Exception as exc:
             logger.debug("lifecycle_manager.cultivation_events failed: %s", exc)
@@ -1784,8 +1784,8 @@ class LifecycleManager:
             da_content = ""
             try:
                 da_content = await asyncio.to_thread(_read_da)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("DailyActivity read failed: %s", exc)
 
             fired = 0
             # Cap startup backlog to prevent flooding the hook queue.
@@ -1885,7 +1885,8 @@ class LifecycleManager:
                 try:
                     import psutil  # no fork (a `ps` per pid ran the reaper past 30s)
                     return psutil.Process(pid).ppid() == 1  # Reparented to launchd = orphan
-                except Exception:  # noqa: BLE001 — gone / denied: not an orphan (fail safe)
+                except Exception as exc:  # noqa: BLE001 — gone / denied: not an orphan (fail safe)
+                    logger.debug("orphan check for pid %s: %s", pid, exc)
                     return False
 
             # Owner is a different PID — check if that backend is still alive
