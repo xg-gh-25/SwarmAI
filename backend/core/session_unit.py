@@ -4455,6 +4455,24 @@ class SessionUnit:
         returns allow/deny to the SDK, the SDK continues processing,
         and we resume reading the response stream.
         """
+        from core.permission_manager import permission_manager as _pm
+        decision = "approve" if allowed else "deny"
+        if self.state == SessionState.STREAMING and _pm.has_live_waiter(request_id):
+            # The prompt reached the user before this turn's stream surfaced it
+            # (the tab's streaming-state mirror shows a prompt the backend is
+            # blocked on; the stream may surface it late, or never, when its queue
+            # item was taken). The hook is blocked and the turn's stream is still
+            # being read, so: hand the hook its decision and let that stream go
+            # on. Raising here dropped the decision while the tab showed it as
+            # made -- the hook then waited forever and every later message queued
+            # behind it (incident 2026-10-22, session 2b67fbbc).
+            _pm.update_pending_request(request_id, {"status": decision})
+            _pm.set_permission_decision(request_id, decision)
+            logger.info(
+                "session_unit.permission_decision_mid_stream session_id=%s "
+                "request_id=%s decision=%s (delivered to the blocked hook; the "
+                "running stream continues)", self.session_id, request_id, decision)
+            return
         if self.state != SessionState.WAITING_INPUT:
             raise RuntimeError(
                 f"Cannot continue_with_permission in state {self.state.value} "
@@ -4468,8 +4486,6 @@ class SessionUnit:
 
         # Signal the blocked hook — this unblocks
         # dangerous_command_gate's await on wait_for_permission_decision().
-        from core.permission_manager import permission_manager as _pm
-        decision = "approve" if allowed else "deny"
         # Flip status OUT of "pending" BEFORE signalling. Otherwise a
         # /sessions/streaming-state poll landing between set_permission_decision
         # and the awaiting coroutine's finally would see status=="pending" + a

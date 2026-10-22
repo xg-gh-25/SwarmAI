@@ -579,6 +579,43 @@ def _segment_is_irreversible(tokens: list[str]) -> bool:
     return False
 
 
+# What a `find -exec/-execdir/-ok` may run without being a destroy: readers and
+# reporters. Anything else (rm, mv, cp, sh -c ..., an unknown binary) counts as a
+# possible destroy, so the gate stays fail-closed for what it cannot judge.
+_FIND_EXEC_READERS = frozenset({
+    "ls", "stat", "cat", "head", "tail", "wc", "file", "du", "grep", "egrep", "fgrep",
+    "rg", "md5", "md5sum", "shasum", "sha1sum", "sha256sum", "basename", "dirname",
+    "realpath", "readlink", "echo", "printf", "test", "[", "true", "jq", "less",
+    "strings", "xxd", "od", "diff", "cmp", "sqlite3", "git",
+})
+
+
+def _find_destroys(tokens: list) -> bool:
+    """True when a ``find`` deletes or may modify what it matches.
+
+    ``-delete`` always counts. ``-exec`` / ``-execdir`` / ``-ok`` / ``-okdir`` count
+    unless the program they run is a known reader (``-exec ls -la {} ;`` lists
+    files; it used to be gated like ``-exec rm``). A reader with a write flag
+    (``sqlite3 db 'DELETE ...'``, ``git rm``) is still judged by the reader set
+    only for ``ls``-like tools: ``sqlite3`` and ``git`` count when followed by a
+    mutating word.
+    """
+    if "-delete" in tokens:
+        return True
+    for i, tok in enumerate(tokens):
+        if tok not in ("-exec", "-execdir", "-ok", "-okdir"):
+            continue
+        prog = tokens[i + 1].rsplit("/", 1)[-1] if i + 1 < len(tokens) else ""
+        if prog not in _FIND_EXEC_READERS:
+            return True
+        rest = " ".join(tokens[i + 2:i + 8]).lower()
+        if prog in ("sqlite3", "git") and any(
+                w in rest for w in ("delete", "drop", "update", "insert", "vacuum",
+                                    " rm", "clean", "reset", "checkout", "restore")):
+            return True
+    return False
+
+
 def _targets_irreplaceable_store(command: str) -> bool:
     """Fail-closed predicate: does this command DESTROY/TRUNCATE an irreplaceable store?
 
@@ -619,8 +656,7 @@ def _targets_irreplaceable_store(command: str) -> bool:
     # `find <store> ... -delete` / `-exec rm` deletes a store TREE while the verb
     # is `find`. Gate it when a store operand co-occurs with a delete action.
     if verb == "find":
-        has_delete = "-delete" in tokens or "-exec" in tokens or "-execdir" in tokens
-        if not has_delete:
+        if not _find_destroys(tokens):
             return False
         # fall through: judge find's path operands below (verb handled as store-scan)
     elif verb not in _DESTRUCTIVE_VERBS:
