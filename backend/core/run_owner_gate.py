@@ -54,17 +54,19 @@ _TAKEOVER = frozenset({
     "run-checkpoint", "run-commit", "review-start", "land", "measure-usage",
     "reflect-prepare", "reflect-complete", "reflect-exhausted", "gate0-start",
     "review-address", "review-proof", "resume", "restore", "abandon",
-    "decision-request", "decision-answer", "run-land", "accept-finding",
+    "decision-request", "run-land", "accept-finding",
     "discard-snapshot",
 })
 _V1_MUTATIONS = frozenset({
     "create", "stage-start", "stage-complete", "review-start", "land",
     "measure-usage", "reflect-prepare", "reflect-complete", "reflect-exhausted",
     "gate0-start", "review-address", "review-proof", "resume", "restore",
-    "abandon", "decision-request", "decision-answer", "run-land",
+    "abandon", "decision-request", "run-land",
     "accept-finding", "discard-snapshot",
 })
 _V1_READS = frozenset({"status", "push-status"})
+# The daemon's human-only pipeline endpoint (docs/design/pipeline-v1-human-loop.md).
+_HUMAN_ONLY_API_RE = re.compile(r"/api/pipelines/[^\s/'\"]+/decision\b")
 
 
 def _safe_project(p: str) -> bool:
@@ -485,6 +487,10 @@ def _decide(sid: str, command: str, tool_input: dict,
     from core import hook_token
     from core.run_worktree import mode_enabled
     from core.security_hooks import _pipeline_runs_root
+    if _HUMAN_ONLY_API_RE.search(command or ""):
+        return _deny("a pipeline decision is answered by a person (the chat question card "
+                     "or the dashboard), never by a command. Ask with AskUserQuestion using "
+                     "the run's ask_user_question payload, then wait for the answer.")
     calls, single = parse_cli_calls(command)
     rewrite = None
     for c in calls:
@@ -503,6 +509,11 @@ def _decide(sid: str, command: str, tool_input: dict,
                     reason = _takeover(run_file, str(c.get("run_id")), sid)
                     if reason:
                         return _deny(reason)
+                    # The engine projects its owner from signed events: record the
+                    # takeover there too, or the next projection hands the run (and
+                    # every human authorization) back to the old owner.
+                    from core import pipeline_human
+                    pipeline_human.record_owner(str(c.get("run_id")), sid)
                     try:
                         owner_after = json.loads(run_file.read_text(encoding="utf-8")).get("session_id")
                     except (OSError, ValueError):
@@ -608,7 +619,8 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
         tool_input = input_data.get("tool_input") or {}
         command = tool_input.get("command") or ""
         if not isinstance(command, str) or not any(
-                name in command for name in ("artifact_cli", "pipeline_test", "pipeline_v1")):
+                name in command for name in ("artifact_cli", "pipeline_test", "pipeline_v1",
+                                             "/api/pipelines/")):
             return {"decision": "approve"}  # cheap path: no IO
         if phase == "approved" and not any(c in command for c in AFTER_APPROVAL):
             return {"decision": "approve"}  # nothing of this phase in the command

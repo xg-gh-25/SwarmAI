@@ -24,6 +24,7 @@ import { CommunityContent } from './CommunityOverlay';
 import { JobsRunsContent } from './JobsRunsOverlay';
 import { CapabilitiesContent } from './CapabilitiesOverlay';
 import { PipelineContent } from './PipelineOverlay';
+import { continueInSession } from './continueInSession';
 import { PollinateContent } from './PollinateOverlay';
 import { HiveFleetContent } from './HiveFleetOverlay';
 import { useLayout } from '../../contexts/LayoutContext';
@@ -259,8 +260,9 @@ registerOverlay({
   width: 'xl',
   sourceCardTestId: 'nav-pipeline',
   tint: TINT_WORK,
-  render: ({ close, dispatchPrompt }) => (
-    <PipelineContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
+  render: ({ close, dispatchPrompt, resumeSession }) => (
+    <PipelineContent onDispatch={dispatchPrompt ?? (() => false)} close={close}
+                     onContinue={(sessionId, prompt) => continueInSession(sessionId, prompt, resumeSession)} />
   ),
 });
 

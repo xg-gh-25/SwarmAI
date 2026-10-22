@@ -5030,17 +5030,19 @@ class SessionRouter:
 
     async def continue_with_answer(
         self, session_id: str, answer: str,
-        tool_use_id: str | None = None,
+        tool_use_id: str | None = None, answered_by: str = "person",
     ) -> AsyncIterator[dict]:
         """Continue a turn with the user's answer, published to the session hub.
 
         No unit → the SESSION_NOT_FOUND reply goes to the caller only (no turn)."""
         if self.get_unit(session_id) is None:
-            async for ev in self._continue_with_answer_impl(session_id, answer, tool_use_id=tool_use_id):
+            async for ev in self._continue_with_answer_impl(session_id, answer, tool_use_id=tool_use_id,
+                                            answered_by=answered_by):
                 yield ev
             return
         async with aclosing(self._published_turn(
-            self._continue_with_answer_impl(session_id, answer, tool_use_id=tool_use_id),
+            self._continue_with_answer_impl(session_id, answer, tool_use_id=tool_use_id,
+                                            answered_by=answered_by),
             session_id=session_id,
             turn_client_id=self._continuation_client_id(session_id),
             source="answer", start_on_session_start=False,
@@ -5050,7 +5052,7 @@ class SessionRouter:
 
     async def _continue_with_answer_impl(
         self, session_id: str, answer: str,
-        tool_use_id: str | None = None,
+        tool_use_id: str | None = None, answered_by: str = "person",
     ) -> AsyncIterator[dict]:
         """Delegate to SessionUnit.continue_with_answer().
 
@@ -5072,7 +5074,8 @@ class SessionRouter:
             return
 
         _pending_results: list[dict] = []
-        async for event in unit.continue_with_answer(answer, tool_use_id=tool_use_id):
+        async for event in unit.continue_with_answer(answer, tool_use_id=tool_use_id,
+                                                     answered_by=answered_by):
             # Write cleaned blocks back → stream == DB bytes (bug 2d).
             for _extra in await self._persist_stream_event(
                 session_id, event, _pending_results, label="answer", files=self._turn_files_of(unit), changes=getattr(unit, "_turn_changes", None),

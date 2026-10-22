@@ -221,7 +221,9 @@ implementations in `security_hooks.py`). By category:
    `PermissionManager` (`permission_manager.py`): an SSE approval dialog, approvals tracked
    per session by command hash, pending requests persisted to
    `~/.swarm-ai/pending_approvals.json`, 4h answer timeout. `ask_question_gate` blocks for
-   AskUserQuestion answers.
+   AskUserQuestion answers; a person's pick (not the channel gateway's unattended one) on a
+   Pipeline v1 decision card is recorded there as the run's `human_answer` — the agent's CLI
+   has no answer command (`docs/design/pipeline-v1-human-loop.md`).
 4. **Scope + commit discipline** — `skill_access_checker` (Skill), `governance_file_gate`
    (advisory; Write|Edit, and Bash writes — sed -i, redirects, interpreter heredoc
    patches — to governed context files), the `commit_gate` group (Bash, registered before
@@ -251,7 +253,9 @@ implementations in `security_hooks.py`). By category:
    `config.json["pipeline"]["worktree_mode"] = "off"`, a `PUT /api/settings` key): `run_owner_gate`
    (Bash, right after `commit_gate`; applies only to isolated runs and to the stage-start
    that decides an undecided run's mode — a run recorded `shared` is untouched; takes a crashed
-   owner's run over, denies while the owner is live,
+   owner's run over (a v1 takeover is also signed as an `owner_transfer` event, so human
+   authorizations follow the new owner), denies while the owner is live, denies a Bash call
+   to the human-only `/api/pipelines/<id>/decision`,
    and issues the one-time `SWARM_HOOK_TOKEN` by rewriting a single artifact_cli command via
    `updatedInput` — no other Bash hook may set `updatedInput`; the issuance record lives only
    in daemon memory, the CLI burns it over the owner-only socket started in `main.py`) and `worktree_write_gate`

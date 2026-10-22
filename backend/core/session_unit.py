@@ -4345,6 +4345,7 @@ class SessionUnit:
 
     async def continue_with_answer(
         self, answer: str, tool_use_id: str | None = None,
+        answered_by: str = "person",
     ) -> AsyncIterator[dict]:
         """Continue after ask_user_question.
 
@@ -4425,7 +4426,7 @@ class SessionUnit:
             # (even {}) lets the agent proceed ("no selection") rather than
             # WEDGING the session on a blocked hook until the 4h answer timeout. The
             # channel gateway builds a non-empty answers dict before calling this.
-            _aqm.set_answer(_answer_tool_use_id, parsed_answers)
+            _aqm.set_answer(_answer_tool_use_id, parsed_answers, answered_by=answered_by)
         else:
             logger.warning(
                 "session_unit.continue_with_answer: no tool_use_id to signal "

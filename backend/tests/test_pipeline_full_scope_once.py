@@ -18,14 +18,12 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 _BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_BACKEND / "scripts"))
 import pipeline_test as pt  # noqa: E402
-import artifact_cli as cli  # noqa: E402
 
 
 def _state(stage: str | None, profile: str = "full") -> dict:
@@ -88,16 +86,6 @@ def test_continuation_retargets_only_unrun_tests(tmp_path):
 
 
 # ── DELIVER push_ready bound: the one full-scope report on the final code ──────
-def _bound(tmp_path, monkeypatch, reports: list[dict], touched: list[str]):
-    import pipeline_validator as pv
-    monkeypatch.setattr(pv, "load_test_evidence", lambda _d: reports)
-    monkeypatch.setattr(pv, "push_ready_upper_bound", lambda *a, **k: (True, []))
-    monkeypatch.setattr(cli, "_stage_artifact", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "_unverified_gates", lambda _s: [])
-    state = {"files_touched": touched, "stages": []}
-    return cli._deliver_push_ready_bound(project="P", run_id="r", run_dir=tmp_path,
-                                         run_state=state, profile="full", artifact={},
-                                         exit_result={"met": True})
 
 
 # ── the cap and the landing check never lock each other (XG 2026-10-20) ───────

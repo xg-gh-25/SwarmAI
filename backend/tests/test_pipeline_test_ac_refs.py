@@ -22,7 +22,6 @@ import pytest
 _BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_BACKEND / "scripts"))
 import pipeline_test as pt  # noqa: E402
-import artifact_cli as cli  # noqa: E402
 
 SRC = '''
 import pytest
@@ -104,18 +103,3 @@ def test_a_stale_ref_is_recorded_not_targeted(repo):
     assert ac_files == ["backend/tests/test_a.py", "backend/tests/test_a.py"] and probes == []
     assert sum("not found" in w for w in ctx.warnings) == 3   # the word "and" is warned too
     assert any("renamed or deleted" in w for w in ctx.warnings)
-
-
-def _bound(tmp_path, monkeypatch, report, newer=()):
-    import pipeline_validator as pv
-    src = tmp_path / "m.py"
-    src.write_text("x = 1\n")
-    monkeypatch.setattr(pv, "load_test_evidence", lambda _d: [*newer, report])
-    monkeypatch.setattr(pv, "push_ready_upper_bound", lambda *a, **k: (True, []))
-    monkeypatch.setattr(pv, "evidence_freshness",
-                        lambda ev, ft, roots=(): {"status": "fresh", "stale_files": []})
-    monkeypatch.setattr(cli, "_stage_artifact", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "_unverified_gates", lambda _s: [])
-    return cli._deliver_push_ready_bound(project="P", run_id="r", run_dir=tmp_path,
-                                         run_state={"files_touched": [str(src)], "stages": []},
-                                         profile="full", artifact={}, exit_result={"met": True})

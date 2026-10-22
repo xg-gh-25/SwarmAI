@@ -31,6 +31,8 @@ from schemas.pipeline_run import (
     PipelineCheckpoint,
     PipelineCommit,
     PipelineDashboard,
+    PipelineDecision,
+    PipelineDecisionAnswer,
     PipelineOverall,
     PipelineProjectGroup,
     PipelineRunDetail,
@@ -164,6 +166,57 @@ def _stage_records(raw: dict) -> list[dict]:
     return [row for row in stages if isinstance(row, dict)]
 
 
+def _is_v1(raw: dict) -> bool:
+    """A Pipeline v1 projection (stages as a dict, a decision cap)."""
+    return isinstance(raw.get("stages"), dict) and "decision_cap" in raw
+
+
+def _v1_pause_kind(raw: dict) -> Optional[str]:
+    """What a v1 run needs from the user (docs/design/pipeline-v1-human-loop.md):
+    'decision' / 'stopped' / 'worktree' / 'idle' (active, but its owner session is
+    neither streaming nor waiting for input), else None."""
+    status = raw.get("status")
+    if status == "awaiting_human":
+        return "decision"
+    if status == "paused":
+        return "worktree" if raw.get("reason") == "worktree_unavailable" else "stopped"
+    if status in ("active", "reflecting"):
+        from core import pipeline_human
+        owner = raw.get("session_id")
+        if isinstance(owner, str) and owner and pipeline_human.owner_live(owner) is False:
+            return "idle"
+    return None
+
+
+def _pause_kind(raw: dict, display_status: str) -> Optional[str]:
+    """One classification for list, summary and detail."""
+    if _is_v1(raw):
+        return _v1_pause_kind(raw)
+    if display_status != "paused":
+        return None
+    ckpt = raw.get("checkpoint")
+    reason = ckpt.get("reason") if isinstance(ckpt, dict) else None
+    return "crash_residue" if reason == _CRASH_ZOMBIE_REASON else "decision"
+
+
+def _v1_decision(run_dir: Path, raw: dict) -> Optional[PipelineDecision]:
+    """The pending decision document of a v1 run waiting on a person, or None."""
+    request_id = raw.get("pending_decision")
+    if raw.get("status") != "awaiting_human" or not isinstance(request_id, str) \
+            or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", request_id):
+        return None
+    try:
+        value = json.loads((run_dir / "artifacts" / f"decision-{request_id}.json")
+                           .read_text(encoding="utf-8"))
+        return PipelineDecision(**{key: value.get(key) for key in (
+            "request_id", "kind", "question", "why_evidence_insufficient")},
+            options=[row for row in value.get("options") or [] if isinstance(row, dict)])
+    except Exception:  # noqa: BLE001 — a malformed document shows no card, never a 500
+        logger.warning("pending decision %s of %s is unreadable", request_id, raw.get("id"),
+                       exc_info=True)
+        return None
+
+
 def _to_response(raw: dict) -> PipelineRunResponse:
     """Convert raw pipeline-run JSON dict to response model."""
     profile = raw.get("profile") or "full"
@@ -222,10 +275,7 @@ def _to_response(raw: dict) -> PipelineRunResponse:
     # Everything-not-crash → "decision" is intentional: budget / retry-exhausted /
     # gate_spawn_blocked / Gate BLOCK are ALL real pauses the user should act on
     # (mirrors artifact_cli._abandon_verdict, which reaps ONLY _CRASH_ZOMBIE_REASON).
-    pause_kind: Optional[str] = None
-    if status == PipelineRunStatus.PAUSED:
-        reason = checkpoint_raw.get("reason") if isinstance(checkpoint_raw, dict) else None
-        pause_kind = "crash_residue" if reason == _CRASH_ZOMBIE_REASON else "decision"
+    pause_kind = _pause_kind(raw, status.value)
 
     return PipelineRunResponse(
         id=raw.get("id", "unknown"),
@@ -249,21 +299,8 @@ def _to_response(raw: dict) -> PipelineRunResponse:
 
 def _load_v1_engine(run_id: str):
     """Load a v1 engine from its protected contract and workspace identity."""
-    from config import get_app_data_dir
-    from core.run_protocol.engine import RunEngine, find_run_dir
-    from core.run_protocol.runner import is_v1_run
-
-    data_dir = get_app_data_dir()
-    if not is_v1_run(data_dir, run_id):
-        return None
-    workspace = _get_swarmws()
-    run_dir = find_run_dir(workspace, run_id)
-    project = run_dir.parents[2].name
-    engine = RunEngine.load(data_dir=data_dir, workspace=workspace,
-                            project=project, run_id=run_id)
-    if engine.run_dir.resolve() != run_dir.resolve():
-        raise ValueError("v1 run workspace identity mismatch")
-    return engine
+    from core import pipeline_human
+    return pipeline_human.load_engine(run_id, _get_swarmws())
 
 
 def _historical_run_exists(run_id: str) -> bool:
@@ -340,14 +377,57 @@ async def resume_pipeline(run_id: str) -> dict:
             resumed = engine.resume()
             if not resumed.get("ok"):
                 return ("conflict", "worktree is still unavailable")
-            return ("resumed", resumed["state"].get("stage"))
+            return ("resumed", (resumed["state"].get("stage"), engine.owner_session()))
         except Exception:
             logger.exception("Protocol-aware resume failed for %s", run_id)
             return ("error", "v1 resume failed")
 
     outcome, detail = await asyncio.to_thread(_resume)
     if outcome == "resumed":
-        return {"status": "running", "run_id": run_id, "resumed_from": detail}
+        stage, owner = detail
+        # Nothing drives the run until its session continues it: the dashboard
+        # opens owner_session_id with a "continue" prompt for the user to send.
+        return {"status": "running", "run_id": run_id, "resumed_from": stage,
+                "owner_session_id": owner}
+    if outcome == "missing":
+        return await asyncio.to_thread(_read_only_or_missing, run_id)
+    code = 409 if outcome == "conflict" else 500
+    return JSONResponse(status_code=code, content={"status": outcome, "run_id": run_id,
+                                                   "detail": detail})
+
+
+@router.post("/{run_id}/decision")
+async def answer_pipeline_decision(run_id: str, body: PipelineDecisionAnswer) -> dict:
+    """A person answers a v1 run's pending decision from the dashboard.
+
+    Human-only: run_owner_gate denies an agent's Bash call to this route, and the
+    agent's CLI has no answer command (docs/design/pipeline-v1-human-loop.md).
+    """
+    from fastapi.responses import JSONResponse
+
+    if not re.fullmatch(r"run_[A-Za-z0-9_]{1,64}", run_id or ""):
+        return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
+
+    def _answer():
+        from core import pipeline_human
+        from core.run_protocol.decision import DecisionError
+        from core.run_protocol.engine import EngineError
+        try:
+            return ("answered", pipeline_human.answer_from_dashboard(
+                run_id, body.request_id, body.option_id, _get_swarmws()))
+        except LookupError:
+            return ("missing", None)
+        except (EngineError, DecisionError) as exc:
+            return ("conflict", str(exc))
+        except Exception:
+            logger.exception("Dashboard decision answer failed for %s", run_id)
+            return ("error", "v1 decision answer failed")
+
+    outcome, detail = await asyncio.to_thread(_answer)
+    if outcome == "answered":
+        return {"status": "answered", "run_id": run_id,
+                "option_id": detail["answer"]["option_id"],
+                "owner_session_id": detail["owner_session_id"]}
     if outcome == "missing":
         return await asyncio.to_thread(_read_only_or_missing, run_id)
     code = 409 if outcome == "conflict" else 500
@@ -582,9 +662,9 @@ async def pipeline_analytics(
         # pause_kind: consume the backend's canonical classification, never re-derive.
         ckpt = raw.get("checkpoint") or {}
         reason = ckpt.get("reason") if isinstance(ckpt, dict) else None
-        pause_kind = None
-        if eff_status == "paused":
-            pause_kind = "crash_residue" if reason == _CRASH_ZOMBIE_REASON else "decision"
+        if reason is None and _is_v1(raw):
+            reason = raw.get("reason")
+        pause_kind = _pause_kind(raw, eff_status)
         # After garbage exclusion, a surviving abandoned/decision-pause is a REAL
         # needs-you item (genuine decision-pause). A mislabeled-done run became
         # eff_status=='completed', so it is NOT aborted.
@@ -604,6 +684,7 @@ async def pipeline_analytics(
             updated_at=raw.get("updated_at", ""),
             pause_kind=pause_kind,
             checkpoint_reason=reason,
+            owner_session_id=(raw.get("session_id") if _is_v1(raw) else None),
             verified=(_completion_verdict(raw)[0] if eff_status == "completed" else None),
             audit_card=raw.get("audit_card"),
         )
@@ -817,6 +898,11 @@ async def pipeline_run_detail(run_id: str):
         ]
 
         ckpt = raw.get("checkpoint") or {}
+        display_status = _display_status(raw)
+        v1 = _is_v1(raw)
+        decision = (await asyncio.to_thread(
+            _v1_decision, _get_swarmws() / "Projects" / project_dir_name / ".artifacts"
+            / "runs" / run_id, raw) if v1 else None)
         return PipelineRunDetail(
             id=run_id,
             project=project,
@@ -835,6 +921,9 @@ async def pipeline_run_detail(run_id: str):
             commits=commits,
             checkpoint_reason=(ckpt.get("reason") if isinstance(ckpt, dict) else None)
             or (raw.get("reason") if isinstance(raw.get("stages"), dict) else None),
+            pause_kind=_pause_kind(raw, display_status),
+            decision=decision,
+            owner_session_id=(raw.get("session_id") if v1 else None),
             created_at=raw.get("created_at", ""),
             updated_at=raw.get("updated_at", ""),
             audit_card=raw.get("audit_card"),

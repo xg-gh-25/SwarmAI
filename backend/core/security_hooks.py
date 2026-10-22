@@ -1380,6 +1380,7 @@ def create_ask_question_gate(
         )
 
         answer = await ask_question_mgr.wait_for_answer(tool_use_id)
+        answered_by = ask_question_mgr.pop_answered_by(tool_use_id)
 
         # Timeout (default 4h): the user never answered. DENY the tool — do NOT
         # inject a fabricated empty answer and proceed. Injecting {} + allowing
@@ -1404,6 +1405,17 @@ def create_ask_question_gate(
                     ),
                 }
             }
+
+        # A PERSON's pick on a pipeline decision card is the run's human_answer
+        # (docs/design/pipeline-v1-human-loop.md). Recorded here, in the daemon,
+        # because the agent has no answer command; an unattended channel pick
+        # (answered_by="auto") or free text records nothing, so the run keeps
+        # waiting and the agent re-asks.
+        if answered_by == "person" and isinstance(answer, dict) and any(
+                isinstance(q, dict) and "[" in str(q.get("question", "")) for q in questions):
+            from . import pipeline_human
+            await asyncio.to_thread(pipeline_human.record_card_answer,
+                                    actual_session_id, answer)
 
         # answer is the user's answers dict.
         return {

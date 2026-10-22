@@ -2040,6 +2040,7 @@ class ChannelGateway:
                             session_registry.session_router.continue_with_answer(
                                 session_id, answer_text,
                                 tool_use_id=ask_tool_use_id,
+                                answered_by="auto",
                             )
                         ):
                             fe_type = follow_event.get("type", "")

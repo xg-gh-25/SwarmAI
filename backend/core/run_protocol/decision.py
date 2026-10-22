@@ -5,6 +5,8 @@ Public symbols:
 - ``may_ask`` — bounded decision count.
 - ``answer`` — bind a human answer to the current request.
 - ``resolve_after_cap`` — record the agent's evidence-based choice and DC-2 failure.
+- ``ask_payload`` — the exact AskUserQuestion input that asks a pending decision.
+- ``option_from_answer`` — the option a person picked on that question card, or None.
 """
 from __future__ import annotations
 
@@ -143,3 +145,46 @@ def resolve_after_cap(decision: Mapping[str, Any], *, option_id: str,
     result.update({"decided_by": "agent_after_cap",
                    "evidence_refs": list(evidence_refs), "dc2_passed": False})
     return result
+
+
+def _marker(request_id: str) -> str:
+    return f"[{request_id}]"
+
+
+def _label(option: Mapping[str, Any]) -> str:
+    return f"{option.get('id')} — {option.get('choice')}"
+
+
+def ask_payload(decision: Mapping[str, Any]) -> dict[str, Any]:
+    """The AskUserQuestion input for *decision*. The question text carries the
+    request-id marker the daemon correlates on; each label starts with the option id
+    so two options can never share a label."""
+    options = []
+    for row in decision.get("options") or []:
+        if not isinstance(row, Mapping):
+            continue
+        notes = [str(row.get("consequence") or "").strip()]
+        if row.get("reversible") is False:
+            notes.append("irreversible")
+        if row.get("risk") == "high":
+            notes.append("high risk")
+        options.append({"label": _label(row),
+                        "description": " · ".join(note for note in notes if note)})
+    question = f"{str(decision.get('question') or '').strip()} {_marker(str(decision.get('request_id')))}"
+    return {"questions": [{"question": question, "header": "Decision",
+                           "multiSelect": False, "options": options}]}
+
+
+def option_from_answer(decision: Mapping[str, Any], answers: Any) -> str | None:
+    """The option id a person picked for *decision* on its question card, or None
+    (another question, free text, or a label that is not one of the options)."""
+    if not isinstance(answers, Mapping):
+        return None
+    marker = _marker(str(decision.get("request_id")))
+    labels = {_label(row): row.get("id") for row in decision.get("options") or []
+              if isinstance(row, Mapping)}
+    for question, value in answers.items():
+        if isinstance(question, str) and question.rstrip().endswith(marker) \
+                and isinstance(value, str) and value.strip() in labels:
+            return labels[value.strip()]
+    return None

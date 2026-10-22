@@ -165,6 +165,70 @@ class RunEngine:
             raise EngineError("contract project identity mismatch")
         return engine
 
+    def owner_session(self) -> str:
+        """The session that drives this run now: the creator, then each signed
+        ``owner_transfer`` in order (a transfer that does not start from the current
+        owner is ignored). Every human authorization binds to this session."""
+        owner = self.contract["session_id"]
+        for event in self.store.read_events():
+            if event.get("kind") != "owner_transfer":
+                continue
+            payload = event.get("payload") or {}
+            if payload.get("from_session") == owner and payload.get("to_session"):
+                owner = payload["to_session"]
+        return owner
+
+    def transfer_owner(self, to_session: str, *, reason: str) -> bool:
+        """Record that *to_session* now drives the run (daemon-written). False when it
+        already owns it or the run is terminal; the caller decides liveness first."""
+        from core.session_ids import valid_session_id
+        if not valid_session_id(to_session):
+            raise EngineError("owner transfer needs a valid session id")
+        if self.projection()["status"] in lifecycle.TERMINAL:
+            return False
+        current = self.owner_session()
+        if current == to_session:
+            return False
+        self.store.append_new(
+            writer=self.authority.writer("hook"), kind="owner_transfer", at=_now(),
+            ordinal=len(self.store.read_events()) + 1,
+            payload={"from_session": current, "to_session": to_session,
+                     "reason": reason})
+        self.write_projection()
+        return True
+
+    def record_stop(self, kind: str, *, reason: str) -> bool:
+        """Record ``user_stop`` / ``session_lost``: an ACTIVE run becomes paused; a run
+        waiting for a human keeps waiting (no event). Returns whether it paused."""
+        if kind not in ("user_stop", "session_lost"):
+            raise EngineError(f"unknown stop kind {kind!r}")
+        if self.projection()["status"] != "active":
+            return False
+        self.store.append_new(
+            writer=self.authority.writer("cli"), kind=kind, at=_now(),
+            ordinal=len(self.store.read_events()) + 1, payload={"reason": reason})
+        self._settle(); self.write_projection()
+        return True
+
+    def pending_decision(self) -> dict[str, Any] | None:
+        """The open decision as the human sees it, with the exact AskUserQuestion
+        payload the agent must ask (``ask_user_question``), or None."""
+        state = self.projection()
+        request_id = state.get("pending_decision")
+        if state["status"] != "awaiting_human" or not request_id:
+            return None
+        value = self._read_json(self.run_dir / "artifacts" / f"decision-{request_id}.json", None)
+        if not isinstance(value, Mapping):
+            return None
+        from core.run_protocol import decision as decision_protocol
+        return {"request_id": request_id, "kind": value.get("kind"),
+                "question": value.get("question"),
+                "why_evidence_insufficient": value.get("why_evidence_insufficient"),
+                "options": [{key: row.get(key) for key in
+                             ("id", "choice", "consequence", "reversible", "risk")}
+                            for row in value.get("options") or [] if isinstance(row, Mapping)],
+                "ask_user_question": decision_protocol.ask_payload(value)}
+
     def projection(self, *, allow_pending: bool = False) -> dict[str, Any]:
         return lifecycle.fold(self.store.read_events(), self.authority,
                               allow_pending_transition=allow_pending)
@@ -291,7 +355,7 @@ class RunEngine:
         value = {key: val for key, val in state.items()
                  if key not in {"expected_transition", "open_attempt", "auth_grants"}}
         value.update({"id": self.run_id, "project": self.project,
-                      "session_id": self.contract["session_id"],
+                      "session_id": self.owner_session(),
                       "worktree_mode": self.contract["mode"],
                       "worktrees": [{"repo_name": name, "main": self.contract["repo_roots"][name],
                                      "path": root, "state": "active"}
@@ -518,9 +582,13 @@ class RunEngine:
                                 cap=state["decision_cap"])
         _atomic_json(self.run_dir / "artifacts" / f"decision-{value['request_id']}.json", dict(value))
         self._settle(); self.write_projection()
-        return {"event": event, "decision": dict(value), "state": self.projection()}
+        return {"event": event, "decision": dict(value), "state": self.projection(),
+                "ask_user_question": __import__("core.run_protocol.decision",
+                                                fromlist=["ask_payload"]).ask_payload(value)}
 
     def answer_decision(self, *, request_id: str, option_id: str) -> dict[str, Any]:
+        """Record a HUMAN's answer. Called only from the daemon (the chat question card
+        or the dashboard decision card); the agent's CLI has no answer command."""
         from core.run_protocol import decision
         state = self.projection()
         if state["status"] != "awaiting_human" or state.get("pending_decision") != request_id:
@@ -653,7 +721,7 @@ class RunEngine:
             return self._commit_report(audit_value, guards=guards,
                                        request_id=request_id, note=note)
         prepared = landing.prepare_request(
-            self.store, run_id=self.run_id, session_id=self.contract["session_id"],
+            self.store, run_id=self.run_id, session_id=self.owner_session(),
             action=action, repos=self.effective_repos(), context=context, at=_now(),
             render_report=render, note=note, request_id=request_id)
         path = self.run_dir / "artifacts" / "land-requests" / f"{request_id}.json"
@@ -675,12 +743,12 @@ class RunEngine:
         request = prepared.get("request")
         if not isinstance(request, Mapping) or request.get("request_id") != request_id \
                 or request.get("run_id") != self.run_id \
-                or request.get("session_id") != self.contract["session_id"]:
+                or request.get("session_id") != self.owner_session():
             raise EngineError("prepared land request identity mismatch")
         token = os.environ.get(hook_token.TOKEN_ENV)
         token_scope = f"run-land:{request_id}"
         ok, reason = hook_token.consume(
-            self.run_dir, token, self.contract["session_id"], self.run_id, token_scope)
+            self.run_dir, token, self.owner_session(), self.run_id, token_scope)
         if not ok:
 
             raise IntegrationRequired("approval_required", reason)
@@ -692,7 +760,7 @@ class RunEngine:
             expires_at=now + 30 * 60, at=_now())
         commits = landing.execute_request(
             self.store, oracle, prepared,
-            session_id=self.contract["session_id"], repos=self.effective_repos(),
+            session_id=self.owner_session(), repos=self.effective_repos(),
             integration_roots=self.contract["repo_roots"], message=message,
             at=_now(), now=now,
             progress_path=self.run_dir / "artifacts" / f"landing-progress-{request_id}.json")
@@ -733,7 +801,7 @@ class RunEngine:
         else:
             raise EngineError("unsupported authorized action")
         request = auth.make_request(
-            request_id=request_id, session_id=self.contract["session_id"],
+            request_id=request_id, session_id=self.owner_session(),
             run_id=self.run_id, action=action, bindings=bindings, note=note)
         self.store.append_new(
             writer=self.authority.writer("cli"), kind="land_request", at=_now(),
@@ -755,7 +823,7 @@ class RunEngine:
         request = prepared.get("request") if isinstance(prepared, Mapping) else None
         if not isinstance(request, Mapping) or request.get("request_id") != request_id \
                 or request.get("run_id") != self.run_id \
-                or request.get("session_id") != self.contract["session_id"]:
+                or request.get("session_id") != self.owner_session():
             raise EngineError("prepared authorization request is missing or mismatched")
         action = request.get("action")
         bindings = request.get("bindings")
@@ -779,7 +847,7 @@ class RunEngine:
         token_scope = f"{str(action).replace('_', '-')}:{request_id}"
         ok, reason = hook_token.consume(
             self.run_dir, os.environ.get(hook_token.TOKEN_ENV),
-            self.contract["session_id"], self.run_id, token_scope)
+            self.owner_session(), self.run_id, token_scope)
         if not ok:
             raise IntegrationRequired("approval_required", reason)
         oracle = auth.AuthorizationOracle()
@@ -788,7 +856,7 @@ class RunEngine:
             self.store, oracle, request, decided_at=now,
             expires_at=now + 30 * 60, at=_now())
         result = oracle.consume(
-            request_id=request_id, session_id=self.contract["session_id"],
+            request_id=request_id, session_id=self.owner_session(),
             run_id=self.run_id, action=action, bindings=bindings, now=now)
         if not result.ok or result.consumption is None:
             raise EngineError(result.reason)

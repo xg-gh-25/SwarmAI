@@ -1184,6 +1184,17 @@ async def _compaction_signature(session_id: str) -> str:
         return "0.0"
 
 
+async def _pipeline_session_signal(kind: str, session_id: str) -> None:
+    """Record a user Stop / a closed tab on the pipeline runs *session_id* owns.
+    Off-loop and fail-safe: a pipeline problem never fails the chat request."""
+    try:
+        from core import pipeline_human
+        fn = pipeline_human.on_user_stop if kind == "stop" else pipeline_human.on_session_lost
+        await asyncio.to_thread(fn, session_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("pipeline %s signal failed for %s", kind, session_id, exc_info=True)
+
+
 @router.post("/stop/{session_id}")
 async def stop_session(session_id: str):
     """Stop a running chat session.
@@ -1195,6 +1206,9 @@ async def stop_session(session_id: str):
     result = await _get_router().interrupt_session(session_id)
 
     if result["success"]:
+        # A user Stop pauses the pipeline runs this session drives (a run waiting
+        # for a human keeps waiting) — docs/design/pipeline-v1-human-loop.md.
+        await _pipeline_session_signal("stop", session_id)
         return {"status": "stopped", "message": result["message"],
                 "receipt": result.get("receipt") or []}
     else:
@@ -1252,6 +1266,8 @@ async def release_session(session_id: str, request: Request):
         force = False  # malformed body → best-effort unforced release
     logger.info("Received release request for session %s (force=%s)", session_id, force)
     result = await _get_router().release_session(session_id, force=force)
+    if isinstance(result, dict) and result.get("status") in ("released", "not_found"):
+        await _pipeline_session_signal("lost", session_id)  # the owner's tab is closed
     return result
 
 
@@ -1354,6 +1370,7 @@ async def delete_session(session_id: str):
                 _lifecycle_manager.enqueue_hooks(context)
     except Exception as exc:
         logger.warning("Hook fire failed for delete_session %s: %s", session_id, exc)
+    await _pipeline_session_signal("lost", session_id)
 
     # 2. Clean up SessionUnit subprocess
     unit = _get_router().get_unit(session_id)

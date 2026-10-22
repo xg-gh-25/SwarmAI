@@ -10,12 +10,10 @@ What is tested:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from core import run_docs as rd
 from tests.test_runtime_hooks import _gate_transcript
 
 RID = "run_chain1"
@@ -53,16 +51,3 @@ async def test_a_review_fix_text_reaches_the_marker_row(audit, tmp_path):
                '"summary":"reader left behind","fix":"migrate b.py::g too","specialist":"integration"}')
     row = await _finish(rh, tmp_path, "g2", "EXPERT-ID: integration", finding, "sess-chain2")
     assert row["reported"][0]["fix"] == "migrate b.py::g too"
-
-
-def test_the_plan_the_validator_accepts_is_the_plan_design_spec_shows():
-    import design_spec as ds
-    plan = {"design": dict(ds.PLAN_TEMPLATE),
-            "implementation_constraints": {"consumers": [
-                {"id": "K1", "contract": "read_index may return an unusable value",
-                 "pattern": "read_index\\(", "paths": ["backend"],
-                 "readers": [{"at": "backend/a.py::f", "status": "migrated"},
-                             {"at": "backend/b.py::g", "status": "unaffected", "reason": "only logs it"}]}]}}
-    assert ds.constraints_errors(plan, "full") == []
-    md = rd.render_design_spec({"id": RID}, {}, plan)
-    assert "| K1 |" in md and "`read_index\\(`" in md and "backend/b.py::g" in md

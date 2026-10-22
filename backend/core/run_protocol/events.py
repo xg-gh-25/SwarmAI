@@ -155,6 +155,10 @@ EVENT_SPECS: dict[str, EventSpec] = {
                        "conflict_type": str, "first_hash": str, "new_hash": str}),
     "session_lost": _spec("cli", ("ordinal",), None, {"reason": str}),
     "user_stop": _spec("cli", ("ordinal",), None, {"reason": str}),
+    # Ownership moves only by this daemon-written event (run_owner_gate takeover):
+    # every human authorization binds to the CURRENT owner, not the creator.
+    "owner_transfer": _spec("hook", ("ordinal",), None,
+                            {"from_session": str, "to_session": str, "reason": str}),
     "stage_complete": _spec("cli", ("stage", "attempt"), "stage",
                             {"stage_attempt_event_id": str},
                             {"final_verdict": str, "degraded": bool}),

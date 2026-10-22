@@ -44,6 +44,7 @@ PROFILE_STAGES = {
 IGNORED = frozenset({
     "handout", "answer", "answer_reuse", "finding_occ", "finding_status",
     "reclassify", "address", "proof", "test_call", "metric", "turn", "integrity",
+    "owner_transfer",
 })
 
 
@@ -244,8 +245,8 @@ def _human_answer(run: dict[str, Any], event: Mapping[str, Any]) -> None:
 
 
 def _pause(run: dict[str, Any], event: Mapping[str, Any]) -> None:
-    if run["status"] == "awaiting_human" and event["kind"] == "session_lost":
-        return  # the next session asks the same pending decision
+    if run["status"] == "awaiting_human" and event["kind"] in ("session_lost", "user_stop"):
+        return  # still waiting for the same human answer; any later session re-asks it
     if run["status"] not in ("active", "awaiting_human"):
         raise LifecycleError(f"{event['kind']} cannot pause {run['status']}")
     run["reason"] = event["kind"]

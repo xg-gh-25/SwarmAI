@@ -130,7 +130,6 @@ def test_every_v1_mutation_is_owner_checked(tmp_path, monkeypatch):
         "restore": "",
         "abandon": " --reason stop",
         "decision-request": " --artifact {} --document REQUIREMENTS",
-        "decision-answer": " --request-id q --option-id a",
         "run-land": " --prepare",
         "accept-finding": " --prepare --canonical-id CF-1234abcd",
         "discard-snapshot": " --prepare --repo repo",

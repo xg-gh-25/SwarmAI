@@ -10,9 +10,13 @@ Create one run:
 
 Use `--mode shared` only when worktree mode is explicitly off or the executor is hookless. Worktree creation failure pauses the run; it never falls back to shared.
 
-Read state with `pipeline_v1.py status --project <P> --run-id <R>`. Resume a paused run with `resume`; restore an abandoned or completed-not-landed snapshot with `restore`; explicitly stop a nonterminal run with `abandon --reason <reason>`. A run without protected `contract.json` is unsupported; create a v1 run instead of migrating it.
+Read state with `pipeline_v1.py status --project <P> --run-id <R>` before anything else in a turn that continues a run. `paused` with reason `user_stop` / `session_lost` means the user stopped it: continue only when the user asks, then `resume`. Restore an abandoned or completed-not-landed snapshot with `restore`; explicitly stop a nonterminal run with `abandon --reason <reason>`. Continuing another session's run is allowed once that session is not streaming: your first owner command records the takeover. A run without protected `contract.json` is unsupported; create a v1 run instead of migrating it.
 
-Gate-0 is executable only through `gate0-start`; requirement/design choices are executable only through `decision-request` followed by hook-recorded `decision-answer`. Never edit `run.json` to simulate any transition.
+Gate-0 is executable only through `gate0-start`. Never edit `run.json` to simulate any transition.
+
+## Asking a person
+
+A requirement/design choice goes through `decision-request` only. Its output (and `status` while the run is `awaiting_human`) carries `ask_user_question`: call AskUserQuestion with exactly that input, then end the turn. A person's pick on that card is recorded by the daemon and the run returns to `active`; run `status` and continue. You never record an answer: there is no answer command, and the dashboard's decision endpoint is for the person. Free text, an expired card or an unattended channel pick records nothing; the run keeps waiting, so ask the same `ask_user_question` again. The person may also answer on the dashboard.
 
 ## Execute
 

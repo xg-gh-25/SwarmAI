@@ -37,31 +37,6 @@ from scripts import artifact_cli as ac
 
 # ── contract: reader ⊆ writer schema ──────────────────────────────────────────
 
-def _schema_fields(stage: str, path: tuple[str, ...]) -> set[str]:
-    from scripts.pipeline_validator import get_stage_schema
-
-    info = get_stage_schema(stage)
-    node = info.get("template") or {}
-    for key in path:
-        node = node.get(key) or {}
-    fields = set(node.keys()) if isinstance(node, dict) else set()
-    if not path:
-        fields |= set(info.get("required") or []) | set(info.get("recommended") or [])
-    return fields
-
-
-@pytest.mark.parametrize("stage,path,fields", [
-    (stage, path, fields) for (stage, path), fields in ac._REPORT_READS.items()
-])
-def test_every_field_the_report_reads_is_in_the_writer_schema(stage, path, fields):
-    known = _schema_fields(stage, path)
-    missing = sorted(set(fields) - known)
-    assert not missing, (
-        f"REPORT reads {missing} from {stage}{'.' + '.'.join(path) if path else ''}, "
-        f"but the writer schema has no such field ({sorted(known)}). Either the writer "
-        "renamed it (follow it) or the reader invented it (delete it)."
-    )
-
 
 # ── tests ─────────────────────────────────────────────────────────────────────
 

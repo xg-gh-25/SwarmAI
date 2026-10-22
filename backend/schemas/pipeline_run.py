@@ -118,6 +118,8 @@ class PipelineRunSummary(BaseModel):
     updated_at: str = ""
     pause_kind: Optional[str] = None
     checkpoint_reason: Optional[str] = None
+    owner_session_id: Optional[str] = Field(
+        None, description="Pipeline v1: the chat session that drives the run now")
     verified: Optional[bool] = Field(
         None,
         description=("completed runs only: True when DELIVER was push-ready (every gate and "
@@ -192,6 +194,30 @@ class PipelineCommit(BaseModel):
     files: list[str] = Field(default_factory=list)
 
 
+class PipelineDecisionOption(BaseModel):
+    """One option of a pending Pipeline v1 decision (core/run_protocol/decision.py)."""
+    id: str
+    choice: str = ""
+    consequence: str = ""
+    reversible: Optional[bool] = None
+    risk: Optional[str] = None
+
+
+class PipelineDecision(BaseModel):
+    """The question a Pipeline v1 run is waiting on a person to answer."""
+    request_id: str
+    kind: Optional[str] = None
+    question: str = ""
+    why_evidence_insufficient: Optional[str] = None
+    options: list[PipelineDecisionOption] = Field(default_factory=list)
+
+
+class PipelineDecisionAnswer(BaseModel):
+    """POST /api/pipelines/{run_id}/decision — a person's pick on the dashboard."""
+    request_id: str
+    option_id: str
+
+
 class PipelineRunDetail(BaseModel):
     """GET /api/pipelines/{run_id} — one run's full retrospective."""
     id: str
@@ -212,6 +238,16 @@ class PipelineRunDetail(BaseModel):
     stage_tokens: list[PipelineStageTokens] = Field(default_factory=list)
     commits: list[PipelineCommit] = Field(default_factory=list)
     checkpoint_reason: Optional[str] = None
+    pause_kind: Optional[str] = Field(
+        None, description=("What the run needs from the user: 'decision' (answer the "
+                           "question), 'stopped' (Stop / tab closed; Resume), 'worktree' "
+                           "(worktree unavailable; Resume retries), 'idle' (active but no "
+                           "session drives it; continue in its session), 'crash_residue' "
+                           "(pre-v1), else None"))
+    decision: Optional[PipelineDecision] = Field(
+        None, description="Pipeline v1: the pending human decision, when pause_kind is 'decision'")
+    owner_session_id: Optional[str] = Field(
+        None, description="Pipeline v1: the chat session that drives the run now")
     created_at: str = ""
     updated_at: str = ""
     audit_card: Optional[str] = Field(None, description="Renderer-owned final run audit card")

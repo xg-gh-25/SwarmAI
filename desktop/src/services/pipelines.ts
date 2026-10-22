@@ -7,11 +7,61 @@
  * existed backend-side with zero UI consumers.
  *
  * Exports:
- * - pipelinesService  — object with fetchActivePipelines()
+ * - pipelinesService  — fetch runs / analytics / detail; resumeRun, answerDecision
  * - PipelineRun       — camelCase frontend representation of one run
+ * - PipelinePauseKind, PipelineDecision — what a run needs from the user
+ *   (docs/design/pipeline-v1-human-loop.md)
  */
 
 import api from './api';
+
+/**
+ * What a run needs from the user (backend ``pause_kind``):
+ * - 'decision'      — waiting for a person to answer a question (answer it)
+ * - 'stopped'       — v1: the user pressed Stop / closed the owner's tab (Resume)
+ * - 'worktree'      — v1: its worktree could not be created (Resume retries)
+ * - 'idle'          — v1: active, but no session is driving it (continue in its session)
+ * - 'crash_residue' — pre-v1 dead-session residue (the Radar drops it)
+ * - null            — nothing needed
+ */
+export type PipelinePauseKind = 'crash_residue' | 'decision' | 'stopped' | 'worktree' | 'idle' | null;
+
+/** One option of a pending v1 decision. */
+export interface PipelineDecisionOption {
+  id: string;
+  choice: string;
+  consequence: string;
+  reversible: boolean | null;
+  risk: string | null;
+}
+
+/** The question a v1 run is waiting on a person to answer. */
+export interface PipelineDecision {
+  requestId: string;
+  kind: string | null;
+  question: string;
+  whyEvidenceInsufficient: string | null;
+  options: PipelineDecisionOption[];
+}
+
+function decisionToCamel(d: unknown): PipelineDecision | null {
+  if (!d || typeof d !== 'object') return null;
+  const r = d as Record<string, unknown>;
+  if (typeof r.request_id !== 'string') return null;
+  return {
+    requestId: r.request_id,
+    kind: (r.kind as string | null) ?? null,
+    question: (r.question as string) ?? '',
+    whyEvidenceInsufficient: (r.why_evidence_insufficient as string | null) ?? null,
+    options: ((r.options as Record<string, unknown>[]) ?? []).map((o) => ({
+      id: (o.id as string) ?? '',
+      choice: (o.choice as string) ?? '',
+      consequence: (o.consequence as string) ?? '',
+      reversible: typeof o.reversible === 'boolean' ? o.reversible : null,
+      risk: (o.risk as string | null) ?? null,
+    })),
+  };
+}
 
 /** camelCase frontend representation of a pipeline run (subset the Radar needs). */
 export interface PipelineRun {
@@ -22,15 +72,8 @@ export interface PipelineRun {
   currentStage: string;
   /** checkpoint.reason — WHY it paused (the decision text). Null if not paused. */
   checkpointReason: string | null;
-  /**
-   * Semantic pause classification from the backend (pause_kind):
-   * - 'crash_residue' — paused by the orphan-transition when a session died
-   *   (NOT a real decision — the Radar attention queue drops these).
-   * - 'decision'      — a genuine pause the user must act on (Gate BLOCK / L2 /
-   *   budget / retry-exhausted).
-   * - null            — not a paused run (running/completed/etc.).
-   */
-  pauseKind: 'crash_residue' | 'decision' | null;
+  /** What the run needs from the user (see PipelinePauseKind). */
+  pauseKind: PipelinePauseKind;
   /** Stage progress string "N/M" (backend key ``progress``), e.g. "5/8". */
   progress: string;
   /**
@@ -80,8 +123,10 @@ export interface PipelineRunSummary {
   tokensEst: number;
   createdAt: string;
   updatedAt: string;
-  pauseKind: 'crash_residue' | 'decision' | null;
+  pauseKind: PipelinePauseKind;
   checkpointReason: string | null;
+  /** v1: the chat session that drives the run now. */
+  ownerSessionId: string | null;
   /** Completed runs only: false = completed but DELIVER was not push-ready (a gate or the
    *  test evidence did not hold on the final code); null = not applicable. */
   verified: boolean | null;
@@ -154,6 +199,11 @@ export interface PipelineRunDetail {
   stageTokens: PipelineStageTokens[];
   commits: PipelineCommit[];
   checkpointReason: string | null;
+  pauseKind: PipelinePauseKind;
+  /** The pending question when pauseKind is 'decision'. */
+  decision: PipelineDecision | null;
+  /** v1: the chat session that drives the run now. */
+  ownerSessionId: string | null;
   createdAt: string;
   updatedAt: string;
   auditCard: string | null;
@@ -173,6 +223,7 @@ function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
     updatedAt: (r.updated_at as string) ?? '',
     pauseKind: (r.pause_kind as PipelineRunSummary['pauseKind']) ?? null,
     checkpointReason: (r.checkpoint_reason as string | null) ?? null,
+    ownerSessionId: (r.owner_session_id as string | null) ?? null,
     verified: typeof r.verified === 'boolean' ? r.verified : null,
     reportPath: (r.report_path as string | null) ?? null,
     auditCard: (r.audit_card as string | null) ?? null,
@@ -180,9 +231,21 @@ function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
 }
 
 export const pipelinesService = {
-  /** Resume through the backend's protocol-aware transition (v1 event, legacy compatibility). */
-  async resumeRun(runId: string): Promise<void> {
-    await api.patch(`/pipelines/${runId}/resume`);
+  /** Resume a stopped v1 run (appends a signed ``resume`` event). Nothing drives the
+   *  run until its session continues it: returns that session's id, or null. */
+  async resumeRun(runId: string): Promise<{ ownerSessionId: string | null }> {
+    const { data } = await api.patch<Record<string, unknown>>(`/pipelines/${runId}/resume`);
+    return { ownerSessionId: (data?.owner_session_id as string | null) ?? null };
+  },
+
+  /** A person answers a run's pending decision. Throws on a stale request (409). */
+  async answerDecision(
+    runId: string, requestId: string, optionId: string,
+  ): Promise<{ ownerSessionId: string | null }> {
+    const { data } = await api.post<Record<string, unknown>>(`/pipelines/${runId}/decision`, {
+      request_id: requestId, option_id: optionId,
+    });
+    return { ownerSessionId: (data?.owner_session_id as string | null) ?? null };
   },
 
   /**
@@ -293,6 +356,9 @@ export const pipelinesService = {
           files: (c.files as string[]) ?? [],
         })),
         checkpointReason: (data.checkpoint_reason as string | null) ?? null,
+        pauseKind: (data.pause_kind as PipelinePauseKind) ?? null,
+        decision: decisionToCamel(data.decision),
+        ownerSessionId: (data.owner_session_id as string | null) ?? null,
         createdAt: (data.created_at as string) ?? '',
         updatedAt: (data.updated_at as string) ?? '',
         auditCard: (data.audit_card as string | null) ?? null,

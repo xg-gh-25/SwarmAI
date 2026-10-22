@@ -19,8 +19,10 @@
  * defaults to 30d, toggles to YTD.
  *
  * WRITES use protocol-aware backend endpoints: Resume appends a v1 ``resume``
- * event (with legacy compatibility), and Cancel appends v1 ``abandon`` (legacy
- * runs retain their locked run.json transition).
+ * event, a decision click appends the run's ``human_answer``, and Cancel appends v1
+ * ``abandon``. A run only moves when its session drives it, so Resume / Continue /
+ * answering open the owner session with a "continue" prompt in its composer
+ * (docs/design/pipeline-v1-human-loop.md).
  *
  * Local state ONLY — never MessageStore / active-tab mutation (OT01 safety).
  *
@@ -34,6 +36,7 @@ import {
   type PipelineProjectGroup,
   type PipelineRunSummary,
   type PipelineRunDetail,
+  type PipelinePauseKind,
 } from '../../services/pipelines';
 import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
 
@@ -44,6 +47,9 @@ export interface PipelineContentProps {
   onDispatch: (prompt: string) => boolean;
   /** Host-owned close (called after a successful dispatch). */
   close: () => void;
+  /** Open *sessionId* in a tab with *prompt* in its composer (not sent). Returns
+   *  false when the session cannot be opened (busy tabs, deleted session). */
+  onContinue?: (sessionId: string, prompt: string) => Promise<boolean>;
 }
 
 type Window = '30d' | 'ytd';
@@ -60,19 +66,30 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
-function isResumable(s: string, pauseKind: string | null): boolean {
-  return s === 'abandoned' || (s === 'paused' && pauseKind !== 'crash_residue');
+/** Only a stopped run (Stop / closed tab) or one whose worktree failed can Resume:
+ *  a run waiting for a decision is answered, an idle one is continued. */
+function isResumable(pauseKind: PipelinePauseKind): boolean {
+  return pauseKind === 'stopped' || pauseKind === 'worktree';
 }
 
-// The canonical crash-residue marker (mirrors artifact_cli._CRASH_ZOMBIE_REASON).
-// The detail payload omits pause_kind but carries checkpoint_reason, so we
-// re-derive the classification the SAME way the backend does — a crash-residue
-// paused run is a dead-session zombie, NOT a resumable decision-pause.
-const CRASH_ZOMBIE_REASON = 'session_crash_auto_detected';
-function detailPauseKind(status: string, checkpointReason: string | null): string | null {
-  if (status !== 'paused') return null;
-  return checkpointReason === CRASH_ZOMBIE_REASON ? 'crash_residue' : 'decision';
+/** Runs the user has to act on (the pinned region and the focus filter). */
+function needsYou(r: { status: string; pauseKind: PipelinePauseKind }): boolean {
+  return r.status === 'abandoned' || r.pauseKind === 'decision' || r.pauseKind === 'stopped'
+    || r.pauseKind === 'worktree' || r.pauseKind === 'idle';
 }
+
+/** The "continue" prompt put in the owner session's composer. */
+function continuePrompt(runId: string, project: string, answered?: string): string {
+  const lead = answered ? `${answered} ` : '';
+  return `${lead}Continue pipeline run ${runId} (project ${project}): run pipeline_v1.py status first, then carry on from its current stage.`;
+}
+
+/** What the drawer says about a run that needs the user. */
+const PAUSE_NOTE: Partial<Record<NonNullable<PipelinePauseKind>, string>> = {
+  stopped: 'Stopped (Stop pressed or its chat tab closed). Resume, then send the prompt in its chat.',
+  worktree: 'Paused: its worktree could not be created. Resume retries it.',
+  idle: 'No chat session is working on this run right now. Continue it in its chat.',
+};
 
 /** Open a run's REPORT.md in Canvas. Mirrors the swarmws overlay precedent
  *  (overlaySurfaces.tsx): close the overlay FIRST (so Canvas isn't rendered under
@@ -85,7 +102,7 @@ function openReportInCanvas(reportPath: string, close: () => void) {
   document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: reportPath } }));
 }
 
-export function PipelineContent({ close }: PipelineContentProps) {
+export function PipelineContent({ close, onContinue }: PipelineContentProps) {
   const [analytics, setAnalytics] = useState<PipelineAnalytics | null>(null);
   const [window, setWindow] = useState<Window>('30d');
   const [loading, setLoading] = useState(false);
@@ -140,18 +157,59 @@ export function PipelineContent({ close }: PipelineContentProps) {
     });
   }, []);
 
-  const handleResume = useCallback(async (run: PipelineRunSummary | PipelineRunDetail): Promise<boolean> => {
-    try {
-      await pipelinesService.resumeRun(run.id);
-      const a = await pipelinesService.fetchAnalytics(window);
-      setAnalytics(a);
-      setSelectedRunId(null);
-      setDetail(null);
-      return true;
-    } catch {
-      return false;
-    }
+  // Hand the run to its session: open it with a continue prompt, close the overlay.
+  // False → the drawer says where to continue instead (no tab could be opened).
+  const continueRun = useCallback(async (run: PipelineRunDetail, owner: string | null,
+                                         answered?: string): Promise<boolean> => {
+    const sessionId = owner ?? run.ownerSessionId;
+    if (!sessionId || !onContinue) return false;
+    const landed = await onContinue(sessionId, continuePrompt(run.id, run.project, answered));
+    if (landed) requestAnimationFrame(() => requestAnimationFrame(() => close()));
+    return landed;
+  }, [onContinue, close]);
+
+  const refreshDetail = useCallback(async (runId: string) => {
+    const [a, d] = await Promise.all([pipelinesService.fetchAnalytics(window),
+                                      pipelinesService.fetchRunDetail(runId)]);
+    setAnalytics(a);
+    setDetail(d);
   }, [window]);
+
+  /** 'continued' (owner session opened), 'done' (state changed, open its chat
+   *  yourself) or 'failed' (the run's state changed under us). */
+  const handleResume = useCallback(async (run: PipelineRunDetail): Promise<ActionOutcome> => {
+    let owner: string | null;
+    try {
+      ({ ownerSessionId: owner } = await pipelinesService.resumeRun(run.id));
+    } catch {
+      return 'failed';
+    }
+    if (await continueRun(run, owner)) return 'continued';
+    await refreshDetail(run.id);
+    return 'done';
+  }, [continueRun, refreshDetail]);
+
+  const handleAnswer = useCallback(async (run: PipelineRunDetail, optionId: string): Promise<ActionOutcome> => {
+    const decision = run.decision;
+    if (!decision) return 'failed';
+    let owner: string | null;
+    try {
+      ({ ownerSessionId: owner } = await pipelinesService.answerDecision(
+        run.id, decision.requestId, optionId));
+    } catch {
+      await refreshDetail(run.id);
+      return 'failed';
+    }
+    const choice = decision.options.find((o) => o.id === optionId)?.choice ?? optionId;
+    const answered = `I answered decision ${decision.requestId} on the dashboard: ${optionId} — ${choice}.`;
+    if (await continueRun(run, owner, answered)) return 'continued';
+    await refreshDetail(run.id);
+    return 'done';
+  }, [continueRun, refreshDetail]);
+
+  const handleContinue = useCallback(async (run: PipelineRunDetail): Promise<ActionOutcome> => (
+    (await continueRun(run, null)) ? 'continued' : 'done'
+  ), [continueRun]);
 
   const handleCancel = useCallback(async (runId: string): Promise<boolean> => {
     try {
@@ -262,7 +320,7 @@ export function PipelineContent({ close }: PipelineContentProps) {
           {analytics && !needsYouFocus && (() => {
             const needy = analytics.byProject.flatMap((g) =>
               g.runs
-                .filter((r) => r.status === 'abandoned' || r.pauseKind === 'decision')
+                .filter(needsYou)
                 .map((r) => ({ run: r, project: g.project })));
             if (needy.length === 0) return null;
             return (
@@ -301,6 +359,8 @@ export function PipelineContent({ close }: PipelineContentProps) {
             loading={detailLoading}
             onClose={() => { setSelectedRunId(null); setDetail(null); }}
             onResume={handleResume}
+            onAnswer={handleAnswer}
+            onContinue={handleContinue}
             onCancel={handleCancel}
             hostClose={close}
           />
@@ -335,8 +395,12 @@ function Stat({ label, value, sub, accent, onClick, active, testid }: {
  *  status: abandoned OR paused-decision → needs you (rose); paused-crash-residue is a
  *  finished zombie → shows "paused" faint; else the raw status. Kept consistent with
  *  statusDot's colors so the pill and any dot never disagree (Gate-1 #5 label table). */
-function statusPill(s: string, pauseKind: string | null, verified: boolean | null = null): { label: string; dot: string; text: string } {
-  if (s === 'abandoned' || pauseKind === 'decision') return { label: 'needs you', dot: 'bg-rose-500', text: 'text-rose-500' };
+function statusPill(s: string, pauseKind: PipelinePauseKind, verified: boolean | null = null): { label: string; dot: string; text: string } {
+  if (pauseKind === 'decision') return { label: 'needs your decision', dot: 'bg-rose-500', text: 'text-rose-500' };
+  if (pauseKind === 'stopped') return { label: 'stopped', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
+  if (pauseKind === 'worktree') return { label: 'worktree unavailable', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
+  if (pauseKind === 'idle') return { label: 'idle', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
+  if (s === 'abandoned') return { label: 'needs you', dot: 'bg-rose-500', text: 'text-rose-500' };
   // completed ≠ verified: DELIVER was not push-ready on the final code (backend _completion_verdict)
   if (s === 'completed' && verified === false) return { label: 'unverified', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
   if (s === 'completed') return { label: 'completed', dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400' };
@@ -394,7 +458,7 @@ function RunRow({ r, onOpenRun, close, showProject }: {
       ) : (
         <span className="w-[15px] shrink-0" aria-hidden />
       )}
-      {isResumable(r.status, r.pauseKind) && (
+      {isResumable(r.pauseKind) && (
         <span className="material-symbols-outlined text-[14px] text-rose-500 shrink-0" title="resumable">play_circle</span>
       )}
     </div>
@@ -409,7 +473,7 @@ function ProjectGroup({ group, onOpenRun, close, defaultExpanded = false, needsY
   // project, all-expanded was a wall of buttons on open. The header shows the
   // rollup; click to drill in. In needs-you focus, filter rows to needs-you only.
   const rows = needsYouOnly
-    ? group.runs.filter((r) => r.status === 'abandoned' || r.pauseKind === 'decision')
+    ? group.runs.filter(needsYou)
     : group.runs;
   // In focus mode, force-expand (the point is to SEE the needy runs) and drop
   // groups that have none.
@@ -445,14 +509,18 @@ function ProjectGroup({ group, onOpenRun, close, defaultExpanded = false, needsY
   );
 }
 
+type ActionOutcome = 'continued' | 'done' | 'failed';
+
 function RunDetailDrawer({
-  runId, detail, loading, onClose, onResume, onCancel, hostClose,
+  runId, detail, loading, onClose, onResume, onAnswer, onContinue, onCancel, hostClose,
 }: {
   runId: string;
   detail: PipelineRunDetail | null;
   loading: boolean;
   onClose: () => void;
-  onResume: (run: PipelineRunDetail) => Promise<boolean>;
+  onResume: (run: PipelineRunDetail) => Promise<ActionOutcome>;
+  onAnswer: (run: PipelineRunDetail, optionId: string) => Promise<ActionOutcome>;
+  onContinue: (run: PipelineRunDetail) => Promise<ActionOutcome>;
   onCancel: (runId: string) => Promise<boolean>;
   /** Host-owned overlay close — the report button closes the WHOLE overlay (not just
    *  the drawer) before dispatching swarm:open-file, so Canvas isn't under the host. */
@@ -462,6 +530,10 @@ function RunDetailDrawer({
   const [resuming, setResuming] = useState(false);
   const [cancelErr, setCancelErr] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [answering, setAnswering] = useState<string | null>(null);
+  const [answerErr, setAnswerErr] = useState(false);
+  // An action changed the run but no chat tab could be opened for it: say where.
+  const [openChatNote, setOpenChatNote] = useState(false);
   return (
     <OverlayDrawer widthPx={420} maxWidthPct={90} z={10} testid="pipeline-run-drawer" stopPropagation={false}>
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
@@ -478,7 +550,8 @@ function RunDetailDrawer({
           // rest (profile · cycle · finish-time) is demoted secondary meta. Timestamp is
           // FINISH (updatedAt, fallback createdAt) to match the list row for this run —
           // was createdAt/START, a list-vs-drawer inconsistency.
-          const pill = statusPill(detail.status, detailPauseKind(detail.status, detail.checkpointReason));
+          const pill = statusPill(detail.status, detail.pauseKind);
+          const note = detail.pauseKind ? PAUSE_NOTE[detail.pauseKind] : undefined;
           return (
           <>
             <div>
@@ -498,27 +571,100 @@ function RunDetailDrawer({
                 A delivered-then-superseded run carries a stale checkpointReason but now
                 shows a "completed" verdict pill — don't contradict it with a pause banner
                 (Gate-2 note, run_403a5864). Suppress once the effective verdict is done. */}
-            {detail.checkpointReason && detail.status !== 'completed' && detail.status !== 'complete' && (
+            {note ? (
+              <div data-testid="pipeline-pause-note"
+                   className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-[var(--color-text)]">
+                ⏸ {note}
+              </div>
+            ) : detail.checkpointReason && !detail.decision
+                && detail.status !== 'completed' && detail.status !== 'complete' && (
               <div className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-[var(--color-text)]">
                 ⏸ {detail.checkpointReason}
               </div>
             )}
 
+            {/* The pending human decision: the question and one button per option.
+                A click records the answer, then opens the run's chat to continue. */}
+            {detail.decision && (
+              <div data-testid="pipeline-decision"
+                   className="rounded-md border border-rose-500/40 bg-rose-500/5 px-2.5 py-2 space-y-2">
+                <div className="text-[11px] uppercase tracking-wide text-rose-500">Needs your decision</div>
+                <div className="text-sm text-[var(--color-text)]">{detail.decision.question}</div>
+                {detail.decision.whyEvidenceInsufficient && (
+                  <div className="text-[11px] text-[var(--color-text-muted)]">{detail.decision.whyEvidenceInsufficient}</div>
+                )}
+                <div className="space-y-1.5">
+                  {detail.decision.options.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      disabled={answering !== null}
+                      data-testid={`pipeline-decision-option-${opt.id}`}
+                      onClick={async () => {
+                        setAnswerErr(false);
+                        setOpenChatNote(false);
+                        setAnswering(opt.id);
+                        const outcome = await onAnswer(detail, opt.id);
+                        if (outcome !== 'continued') setAnswering(null);
+                        if (outcome === 'failed') setAnswerErr(true);
+                        if (outcome === 'done') setOpenChatNote(true);
+                      }}
+                      className="w-full text-left rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2 py-1.5 hover:border-primary/60 transition-colors disabled:opacity-50"
+                    >
+                      <div className="text-xs font-medium text-[var(--color-text)]">
+                        {opt.id} — {opt.choice}
+                        {opt.reversible === false && <span className="ml-1.5 text-[10px] text-rose-500">irreversible</span>}
+                        {opt.risk === 'high' && <span className="ml-1.5 text-[10px] text-rose-500">high risk</span>}
+                      </div>
+                      {opt.consequence && <div className="text-[11px] text-[var(--color-text-muted)]">{opt.consequence}</div>}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-[11px] text-[var(--color-text-faint)]">You can also answer on the question card in the run's chat.</div>
+              </div>
+            )}
+            {answerErr && (
+              <div data-testid="pipeline-answer-error" className="text-[11px] text-rose-500">
+                Could not record the answer — the question may already be answered.
+              </div>
+            )}
+            {openChatNote && (
+              <div data-testid="pipeline-open-chat-note" className="text-[11px] text-[var(--color-text-muted)]">
+                Done. Open the run's chat session and ask it to continue run {detail.id}.
+              </div>
+            )}
+
             {/* Action row */}
             <div className="flex gap-2">
-              {isResumable(detail.status, detailPauseKind(detail.status, detail.checkpointReason)) && (
+              {isResumable(detail.pauseKind) && (
                 <button
                   disabled={resuming}
                   onClick={async () => {
                     setResumeErr(false);
+                    setOpenChatNote(false);
                     setResuming(true);
-                    const ok = await onResume(detail);
-                    if (!ok) { setResuming(false); setResumeErr(true); }
+                    const outcome = await onResume(detail);
+                    if (outcome !== 'continued') setResuming(false);
+                    if (outcome === 'failed') setResumeErr(true);
+                    if (outcome === 'done') setOpenChatNote(true);
                   }}
                   data-testid="pipeline-resume-btn"
                   className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-[15px]">play_arrow</span>{resuming ? 'Resuming…' : 'Resume'}
+                </button>
+              )}
+              {detail.pauseKind === 'idle' && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setOpenChatNote(false);
+                    if ((await onContinue(detail)) !== 'continued') setOpenChatNote(true);
+                  }}
+                  data-testid="pipeline-continue-btn"
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[15px]">forum</span>Continue in its chat
                 </button>
               )}
               {(detail.status === 'running' || detail.status === 'paused') && (

@@ -5,8 +5,10 @@
  * - opens on `swarm:show-pipeline`, fetches analytics ONCE, renders overall strip
  *   + by-project groups one screen (AC5).
  * - clicking a run opens the detail drawer → fetchRunDetail (AC6).
- * - Resume on a paused/aborted run routes through onDispatch (Gate-1 #7) with a
- *   run-resume command (AC6).
+ * - a run waiting for a decision shows the question; a click records the answer and
+ *   continues in the owner session (docs/design/pipeline-v1-human-loop.md);
+ * - Resume only on a stopped run, then continues in the owner session; an idle run
+ *   offers "Continue in its chat"; no Resume on a decision / crash residue / completed.
  * - Cancel calls PATCH /pipelines/{id}/cancel (AC6).
  * - NO polling: fetchAnalytics called once per open (not on an interval).
  */
@@ -17,12 +19,14 @@ const fetchAnalytics = vi.fn();
 const fetchRunDetail = vi.fn();
 const fetchActivePipelines = vi.fn();
 const resumeRun = vi.fn();
+const answerDecision = vi.fn();
 vi.mock('../../services/pipelines', () => ({
   pipelinesService: {
     fetchAnalytics: (w: string) => fetchAnalytics(w),
     fetchRunDetail: (id: string) => fetchRunDetail(id),
     fetchActivePipelines: () => fetchActivePipelines(),
     resumeRun: (id: string) => resumeRun(id),
+    answerDecision: (id: string, req: string, opt: string) => answerDecision(id, req, opt),
   },
 }));
 
@@ -73,9 +77,19 @@ const DETAIL = {
   profile: 'goal', cycleTimeMin: null, reportMd: '', reportPath: null, reflectLessons: [],
   stageTokens: [{ stage: 'evaluate', est: 6000, actual: 4000 }],
   commits: [], checkpointReason: 'Gate 1 BLOCK: needs decision',
+  pauseKind: 'decision', ownerSessionId: 'owner-1',
+  decision: {
+    requestId: 'q1', kind: 'design_tradeoff', question: 'Which storage?',
+    whyEvidenceInsufficient: 'both fit',
+    options: [
+      { id: 'a', choice: 'files', consequence: 'simple', reversible: true, risk: 'low' },
+      { id: 'b', choice: 'sqlite', consequence: 'migration', reversible: false, risk: 'high' },
+    ],
+  },
   createdAt: '2026-08-01T09:00:00+00:00', updatedAt: '2026-08-01T09:30:00+00:00',
   auditCard: null,
 };
+const STOPPED = { ...DETAIL, pauseKind: 'stopped', decision: null, checkpointReason: 'user_stop' };
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 beforeEach(() => {
@@ -94,14 +108,23 @@ beforeEach(() => {
   fetchActivePipelines.mockResolvedValue([
     { id: 'run_r', status: 'running' }, { id: 'run_p', status: 'paused' },
   ]);
-  resumeRun.mockResolvedValue(undefined);
+  resumeRun.mockResolvedValue({ ownerSessionId: 'owner-1' });
+  answerDecision.mockResolvedValue({ ownerSessionId: 'owner-1' });
   apiPatch.mockResolvedValue({});
 });
 
-function renderAndOpen(onDispatch = vi.fn().mockReturnValue(true)) {
+function renderAndOpen(onDispatch = vi.fn().mockReturnValue(true),
+                       onContinue = vi.fn().mockResolvedValue(true)) {
   // M4: PipelineContent renders immediately (host owns open + fresh mount per open).
-  render(<PipelineContent onDispatch={onDispatch} close={() => {}} />);
-  return { onDispatch };
+  render(<PipelineContent onDispatch={onDispatch} close={() => {}} onContinue={onContinue} />);
+  return { onDispatch, onContinue };
+}
+
+async function openPausedRun() {
+  await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
+  const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
+  fireEvent.click(within(grp.getByTestId('pipeline-run-run_paused1')).getByTitle('Aborted thing'));
+  await waitFor(() => expect(screen.getByTestId('pipeline-run-drawer')).toBeInTheDocument());
 }
 
 describe('PipelineOverlay', () => {
@@ -153,6 +176,8 @@ describe('PipelineOverlay', () => {
   });
 
   it('opens the detail drawer on run click and fetches its retro', async () => {
+    // a paused run with no decision document shows its pause reason
+    fetchRunDetail.mockResolvedValueOnce({ ...DETAIL, decision: null });
     renderAndOpen();
     // run_paused1 is a needs-you run → appears in BOTH the pinned Needs-you region
     // and its project group. Click the row inside the project group (scoped).
@@ -187,15 +212,24 @@ describe('PipelineOverlay', () => {
     expect(drawer.textContent).not.toContain(start);
   });
 
-  it('Resume calls the protocol-aware v1 resume endpoint', async () => {
-    const { onDispatch } = renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
-    const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
-    fireEvent.click(within(grp.getByTestId('pipeline-run-run_paused1')).getByTitle('Aborted thing'));
-    await waitFor(() => expect(screen.getByTestId('pipeline-resume-btn')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pipeline-resume-btn'));
+  it('Resume on a stopped run calls the v1 resume endpoint, then continues in its owner session', async () => {
+    fetchRunDetail.mockResolvedValueOnce(STOPPED);
+    const { onDispatch, onContinue } = renderAndOpen();
+    await openPausedRun();
+    expect(screen.getByTestId('pipeline-pause-note').textContent).toMatch(/Stopped/);
+    fireEvent.click(await screen.findByTestId('pipeline-resume-btn'));
     await waitFor(() => expect(resumeRun).toHaveBeenCalledWith('run_paused1'));
+    await waitFor(() => expect(onContinue).toHaveBeenCalledWith(
+      'owner-1', expect.stringContaining('Continue pipeline run run_paused1')));
     expect(onDispatch).not.toHaveBeenCalled();
+  });
+
+  it('when no chat tab can be opened, Resume says where to continue', async () => {
+    fetchRunDetail.mockResolvedValue(STOPPED);
+    renderAndOpen(vi.fn(), vi.fn().mockResolvedValue(false));
+    await openPausedRun();
+    fireEvent.click(await screen.findByTestId('pipeline-resume-btn'));
+    await waitFor(() => expect(screen.getByTestId('pipeline-open-chat-note')).toBeInTheDocument());
   });
 
   it('Cancel calls PATCH /pipelines/{id}/cancel', async () => {
@@ -212,8 +246,8 @@ describe('PipelineOverlay', () => {
     // The Gate-2 HIGH: the drawer must re-derive pause_kind from checkpoint_reason,
     // not assume every paused run is resumable. A crash-residue zombie is NOT.
     fetchRunDetail.mockResolvedValueOnce({
-      ...DETAIL, id: 'run_paused1', status: 'paused',
-      checkpointReason: 'session_crash_auto_detected',  // canonical crash marker
+      ...DETAIL, id: 'run_paused1', status: 'paused', pauseKind: 'crash_residue',
+      decision: null, checkpointReason: 'session_crash_auto_detected',  // canonical crash marker
     });
     renderAndOpen();
     await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
@@ -223,14 +257,42 @@ describe('PipelineOverlay', () => {
     expect(screen.queryByTestId('pipeline-resume-btn')).toBeNull();
   });
 
-  it('a decision-paused run DOES show Resume in the drawer', async () => {
-    // (regression companion: a genuine decision-pause IS resumable — DETAIL default
-    //  has checkpointReason 'Gate 1 BLOCK: needs decision', not the crash marker)
+  it('a run waiting for a decision shows the question and its options, not Resume', async () => {
     renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
-    const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
-    fireEvent.click(within(grp.getByTestId('pipeline-run-run_paused1')).getByTitle('Aborted thing'));
-    await waitFor(() => expect(screen.getByTestId('pipeline-resume-btn')).toBeInTheDocument());
+    await openPausedRun();
+    const card = await screen.findByTestId('pipeline-decision');
+    expect(card.textContent).toContain('Which storage?');
+    expect(within(card).getByTestId('pipeline-decision-option-b').textContent).toMatch(/irreversible/);
+    expect(screen.queryByTestId('pipeline-resume-btn')).toBeNull();
+  });
+
+  it('clicking an option records the answer, then continues in the owner session', async () => {
+    const { onContinue } = renderAndOpen();
+    await openPausedRun();
+    fireEvent.click(await screen.findByTestId('pipeline-decision-option-b'));
+    await waitFor(() => expect(answerDecision).toHaveBeenCalledWith('run_paused1', 'q1', 'b'));
+    await waitFor(() => expect(onContinue).toHaveBeenCalledWith(
+      'owner-1', expect.stringContaining('I answered decision q1 on the dashboard: b — sqlite.')));
+  });
+
+  it('a stale answer shows an error and no continue prompt', async () => {
+    answerDecision.mockRejectedValueOnce(new Error('409'));
+    const { onContinue } = renderAndOpen();
+    await openPausedRun();
+    fireEvent.click(await screen.findByTestId('pipeline-decision-option-a'));
+    await waitFor(() => expect(screen.getByTestId('pipeline-answer-error')).toBeInTheDocument());
+    expect(onContinue).not.toHaveBeenCalled();
+  });
+
+  it('an idle run offers "Continue in its chat"', async () => {
+    fetchRunDetail.mockResolvedValueOnce({ ...DETAIL, status: 'running', pauseKind: 'idle',
+                                           decision: null, checkpointReason: null });
+    const { onContinue } = renderAndOpen();
+    await openPausedRun();
+    expect(screen.queryByTestId('pipeline-resume-btn')).toBeNull();
+    fireEvent.click(await screen.findByTestId('pipeline-continue-btn'));
+    await waitFor(() => expect(onContinue).toHaveBeenCalledWith(
+      'owner-1', expect.stringContaining('run_paused1')));
   });
 
   it('a completed run has no Resume button (not resumable)', async () => {
@@ -313,11 +375,11 @@ describe('PipelineOverlay', () => {
     await waitFor(() => expect(screen.getByTestId('pipeline-needsyou-region')).toBeInTheDocument());
   });
 
-  it('AC5(pill): a decision-paused run renders a "needs you" status pill, a completed run "completed"', async () => {
+  it('AC5(pill): a decision-paused run renders a "needs your decision" status pill, a completed run "completed"', async () => {
     renderAndOpen();
     await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
     const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
-    expect(within(grp.getByTestId('pipeline-run-run_paused1')).getByText('needs you')).toBeInTheDocument();
+    expect(within(grp.getByTestId('pipeline-run-run_paused1')).getByText('needs your decision')).toBeInTheDocument();
     expect(within(grp.getByTestId('pipeline-run-run_done1')).getByText('completed')).toBeInTheDocument();
   });
 

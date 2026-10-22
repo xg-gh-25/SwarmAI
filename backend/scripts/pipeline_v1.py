@@ -2,7 +2,9 @@
 """Pipeline v1 command line entrypoint.
 
 Commands expose the event-driven RunEngine without caller-supplied verdict fields.
-Every response is one JSON object; no command pushes or deploys.
+Every response is one JSON object; no command pushes or deploys. There is no
+answer command: a human decision is recorded by the daemon (chat question card or
+dashboard), never by the agent.
 """
 from __future__ import annotations
 
@@ -98,11 +100,6 @@ def parser() -> argparse.ArgumentParser:
     decision_request.add_argument("--run-id", required=True)
     decision_request.add_argument("--artifact", required=True)
     decision_request.add_argument("--document", choices=("REQUIREMENTS", "DESIGN_SPEC"), required=True)
-    decision_answer = sub.add_parser("decision-answer")
-    decision_answer.add_argument("--project", required=True)
-    decision_answer.add_argument("--run-id", required=True)
-    decision_answer.add_argument("--request-id", required=True)
-    decision_answer.add_argument("--option-id", required=True)
     run_land = sub.add_parser("run-land")
     run_land.add_argument("--project", required=True)
     run_land.add_argument("--run-id", required=True)
@@ -156,7 +153,8 @@ def execute(args) -> dict[str, Any]:
                 "state": engine.projection(), "run_file": str(engine.run_dir / "run.json")}
     engine = _load(args)
     if args.command == "status":
-        return {"ok": True, "state": engine.projection(),
+        return {"ok": True, "state": engine.projection(), "owner": engine.owner_session(),
+                "decision": engine.pending_decision(),
                 "push": engine.push_status(), "run_file": str(engine.run_dir / "run.json")}
     if args.command == "stage-start":
         return {"ok": True, **engine.stage_start()}
@@ -186,9 +184,6 @@ def execute(args) -> dict[str, Any]:
     if args.command == "decision-request":
         return {"ok": True, **engine.request_decision(
             _json_arg(args.artifact), document=args.document)}
-    if args.command == "decision-answer":
-        return {"ok": True, **engine.answer_decision(
-            request_id=args.request_id, option_id=args.option_id)}
     if args.command == "run-land":
         if args.prepare:
             if args.message:

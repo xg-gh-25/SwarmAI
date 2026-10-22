@@ -69,6 +69,10 @@ class AskQuestionManager:
     def __init__(self) -> None:
         self._answer_events: dict[str, asyncio.Event] = {}
         self._answer_results: dict[str, dict[str, Any]] = {}
+        # Who answered (``person`` or ``auto``, the channel gateway's unattended
+        # pick). Kept past wait_for_answer's cleanup; the hook pops it with
+        # pop_answered_by, so a pipeline decision is recorded only for a person.
+        self._answered_by: dict[str, str] = {}
 
     def has_live_waiter(self, tool_use_id: str) -> bool:
         """True iff a waiter event exists for this id (a hook is — or is about to
@@ -152,16 +156,24 @@ class AskQuestionManager:
         self._answer_events.pop(tool_use_id, None)
         self._answer_results.pop(tool_use_id, None)
 
-    def set_answer(self, tool_use_id: str, answers: dict[str, Any]) -> None:
-        """Record the user's answers and signal the waiting hook."""
+    def set_answer(self, tool_use_id: str, answers: dict[str, Any],
+                   answered_by: str = "person") -> None:
+        """Record the user's answers and signal the waiting hook. *answered_by* is
+        ``person`` (a human clicked) or ``auto`` (an unattended channel pick)."""
         self._answer_results[tool_use_id] = answers
         event = self._answer_events.get(tool_use_id)
         if event is not None:
+            self._answered_by[tool_use_id] = "auto" if answered_by == "auto" else "person"
             event.set()
         else:
             # No waiter — clean up immediately to prevent a leak (mirrors
             # PermissionManager.set_permission_decision).
             self._answer_results.pop(tool_use_id, None)
+
+
+    def pop_answered_by(self, tool_use_id: str) -> str | None:
+        """``person`` / ``auto`` for an answered question (once), else None."""
+        return self._answered_by.pop(tool_use_id, None)
 
 
 # Module-level singleton
