@@ -1210,9 +1210,23 @@ class StreamingOrchestrator:
             )
         return None
 
+    # Stands for a read loop's local _STREAM_EXHAUSTED sentinel in the turn
+    # carry (each _read_formatted_response call has its own sentinel object).
+    _LATE_EXHAUSTED = object()
+
     @staticmethod
-    async def _cancel_losers(pending, perm_task) -> Optional[dict]:
-        """Cancel the race's losers; return a queue item the perm_task took late.
+    def _completed_future(value: Any) -> "asyncio.Future":
+        fut = asyncio.get_running_loop().create_future()
+        fut.set_result(value)
+        return fut
+
+    @classmethod
+    async def _cancel_losers(cls, pending, perm_task, sdk_task=None,
+                             exhausted: Any = None) -> "tuple[Optional[dict], Any]":
+        """Cancel the race's losers; return what a loser read after the race.
+
+        Returns ``(perm_item, sdk_message)``; each is None unless that loser
+        finished with a result between the wait returning and its cancel.
 
         ``asyncio.wait`` returns with the SDK message done and perm_task pending,
         but the loop yields before the losers are cancelled (``await tick_task``).
@@ -1224,12 +1238,19 @@ class StreamingOrchestrator:
         (incident 2026-10-22, perm_5cfb878b39ba). The item is returned so the
         caller surfaces it on the next iteration.
 
+        The SDK side has the same window: the permission wins the wait, and the
+        losing sdk_task's ``__anext__`` completes with a message during the
+        yield. That message has left the turn stream; discarding it would lose
+        an event of the turn, so it is returned too (the stream end is returned
+        as ``_LATE_EXHAUSTED``). A loser that timed out read nothing.
+
         All losers are cancelled BEFORE any is awaited, so a re-raise of our own
         cancellation cannot leave one running.
         """
         for task in pending:
             task.cancel()
         late: Optional[dict] = None
+        late_msg: Any = None
         for task in pending:
             try:
                 result = await task
@@ -1245,6 +1266,13 @@ class StreamingOrchestrator:
                 continue
             except (StopAsyncIteration, asyncio.TimeoutError):
                 continue
+            if sdk_task is not None and task is sdk_task:
+                late_msg = cls._LATE_EXHAUSTED if result is exhausted else result
+                logger.info(
+                    "session_unit.sdk_message_carried type=%s — read by the losing "
+                    "sdk_task after the race; delivering it next",
+                    type(result).__name__)
+                continue
             if task is perm_task and isinstance(result, dict):
                 late = result
                 logger.info(
@@ -1252,7 +1280,7 @@ class StreamingOrchestrator:
                     "the losing perm_task after the race; surfacing next iteration",
                     result.get("requestId") or result.get("tool_use_id") or "?",
                 )
-        return late
+        return late, late_msg
 
     @staticmethod
     def _completed_perm_task(item: dict) -> "asyncio.Future":
@@ -1633,12 +1661,20 @@ class StreamingOrchestrator:
             current_timeout = INIT_TIMEOUT if is_first_message else MESSAGE_TIMEOUT
 
             # Race: SDK message vs permission request from hook
-            sdk_task = asyncio.ensure_future(
-                asyncio.wait_for(
-                    _next_or_sentinel(),
-                    timeout=current_timeout,
+            _late_sdk = self._turn_carry.setdefault("late_sdk", [])
+            if _late_sdk:
+                # An SDK message a losing sdk_task read after the race (see
+                # _cancel_losers): deliver it before reading the next one.
+                _msg = _late_sdk.pop(0)
+                sdk_task = self._completed_future(
+                    _STREAM_EXHAUSTED if _msg is self._LATE_EXHAUSTED else _msg)
+            else:
+                sdk_task = asyncio.ensure_future(
+                    asyncio.wait_for(
+                        _next_or_sentinel(),
+                        timeout=current_timeout,
+                    )
                 )
-            )
             if _forced_perm is not None:
                 # A rescued permission (see the timeout branch) wins this race
                 # immediately; the fresh sdk_task is cancelled as the loser.
@@ -1725,9 +1761,15 @@ class StreamingOrchestrator:
 
             # Cancel the loser(s); a perm_task that took its queue item after the
             # wait returned is carried to the next iteration (see _cancel_losers).
-            _late_perm = await self._cancel_losers(pending, perm_task)
+            _late_perm, _late_msg = await self._cancel_losers(
+                pending, perm_task, sdk_task, _STREAM_EXHAUSTED)
             if _late_perm is not None:
                 _forced_perm = _late_perm
+            if _late_msg is not None:
+                # Kept in the turn carry, not a local: when the permission is
+                # surfaced this stream returns (WAITING_INPUT) and the
+                # continuation's stream must deliver the message first.
+                self._turn_carry.setdefault("late_sdk", []).append(_late_msg)
 
             # ── Permission request OR ask_user_question won the race ──
             if perm_task in done:
