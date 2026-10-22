@@ -35,12 +35,40 @@ class Stream:
         self.rows.append(row)
         return row
 
+    def answer(self, expert="correctness", round=1, *, state="parsed", tool_use_id=None):
+        """An answer bound to its handout, as the v1 contract requires (one answer per
+        handout: the answer's ckey is the handout id). Reuses this expert's unanswered
+        handout of the round (an R2 handout _status emitted), else emits a new attempt."""
+        answered = {row["payload"]["handout_event_id"] for row in self.rows if row["kind"] == "answer"}
+        free = [row for row in self.rows if row["kind"] == "handout" and row.get("round") == round
+                and row["payload"]["expert_id"] == expert and row["event_id"] not in answered]
+        if free:
+            handout = free[-1]
+        else:
+            payload = {"expert_id": expert, "prompt_sha": "0" * 64}
+            hround = round
+            if round == 2:
+                # an R2 handout lists this expert's canonical findings; an expert with
+                # none (a wrong-expert answer under test) is bound to an R1 attempt
+                ids = ["CF-" + row["event_id"][:8] for row in self.rows
+                       if row["kind"] == "finding_occ" and row["payload"]["expert"] == expert]
+                if ids:
+                    payload["finding_ids"] = ids
+                else:
+                    hround = 1
+            attempt = 1 + sum(1 for row in self.rows if row["kind"] == "handout"
+                              and row.get("round") == hround and row["payload"]["expert_id"] == expert)
+            handout = self.add("handout", payload, stage="review", round=hround, attempt=attempt)
+        return self.add("answer", {
+            "handout_event_id": handout["event_id"],
+            "prompt_sha": handout["payload"].get("prompt_sha") or "0" * 64,
+            "tool_use_id": tool_use_id or f"tool-{self.ordinal}", "expert_id": expert,
+            "stage": "review", "round": round, "state": state,
+        })
+
     def finding(self, *, expert="correctness", severity="HIGH", kind="behavior",
                 file="backend/x.py", line=10, claim="crashes", answer=None):
-        answer = answer or self.add("answer", {
-            "tool_use_id": f"tool-{self.ordinal}", "expert_id": expert,
-            "stage": "review", "round": 1, "state": "parsed",
-        })
+        answer = answer or self.answer(expert, 1)
         return self.add("finding_occ", {
             "answer_event_id": answer["event_id"], "expert": expert,
             "severity": severity, "finding_kind": kind, "file": file,
@@ -97,8 +125,7 @@ def test_canonical_id_is_the_finding_occ_event_id_not_text():
 
 def test_finding_occ_wrong_producer_or_forged_ckey_is_rejected_by_event_contract():
     stream = Stream()
-    answer = stream.add("answer", {"tool_use_id": "t", "expert_id": "correctness",
-                                   "stage": "review", "round": 1, "state": "parsed"})
+    answer = stream.answer("correctness", 1, tool_use_id="t")
     payload = {"answer_event_id": answer["event_id"], "expert": "correctness",
                "severity": "HIGH", "finding_kind": "behavior", "file": "x.py",
                "line": 1, "claim": "x"}
@@ -124,8 +151,7 @@ def test_malformed_finding_payload_is_rejected(payload):
 
 
 def _r2_answer(stream, expert="correctness"):
-    return stream.add("answer", {"tool_use_id": f"r2-{stream.ordinal}",
-        "expert_id": expert, "stage": "review", "round": 2, "state": "parsed"})
+    return stream.answer(expert, 2, tool_use_id=f"r2-{stream.ordinal}")
 
 
 def _status(stream, finding, status, *, kind_confirm=None, answer=None):
@@ -165,8 +191,7 @@ def test_proven_finding_with_missing_r2_status_is_open_not_assumed_adequate():
 
 def test_finding_occ_requires_existing_matching_expert_answer():
     stream = Stream()
-    answer = stream.add("answer", {"tool_use_id": "t", "expert_id": "security",
-                                   "stage": "review", "round": 1, "state": "parsed"})
+    answer = stream.answer("security", 1, tool_use_id="t")
     stream.add("finding_occ", {"answer_event_id": answer["event_id"],
                "expert": "correctness", "severity": "HIGH", "finding_kind": "behavior",
                "file": "x.py", "line": 1, "claim": "x"}, round=1)
@@ -179,8 +204,7 @@ def test_finding_status_requires_this_experts_real_r2_answer():
     stream.add("handout", {"expert_id": "correctness",
                            "finding_ids": [finding["canonical_id"]]},
                stage="review", round=2, attempt=1)
-    wrong = stream.add("answer", {"tool_use_id": "r2", "expert_id": "security",
-                                  "stage": "review", "round": 2, "state": "parsed"})
+    wrong = stream.answer("security", 2, tool_use_id="r2")
     stream.add("finding_status", {"answer_event_id": wrong["event_id"],
                "canonical_id": finding["canonical_id"], "status": "OPEN"}, round=2)
     with pytest.raises(fd.FindingError, match="parsed R2"):
