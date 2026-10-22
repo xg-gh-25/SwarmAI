@@ -169,6 +169,20 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
+    # --- Daily log patrol (design chat-transcript-single-source S5) ---
+    # New or doubling WARNING/ERROR kinds, 4xx/5xx routes and gates timing out
+    # (failing open), compared with the previous 7 days; one Slack message.
+    Job(
+        id="log-patrol",
+        name="Daily log patrol",
+        type="log_patrol",
+        schedule="0 6 * * 1-5",         # weekdays UTC 06:00 = ICT 13:00 (job window policy)
+        enabled=True,
+        category="system",
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
+        config={},
+    ),
+
     # --- Library mount freshness (keep the overlay's 🟢/🟡/🔴 dots accurate) ---
     # Light read-only sweep: re-probe each registered mount's source (exists +
     # edited-after-index) and persist health. No LLM, sub-second for a handful of

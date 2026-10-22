@@ -178,6 +178,8 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
   vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
   vi.spyOn(chatService, 'getSessionMessagesReconcileTail')
     .mockImplementation(async () => dbNow.map((r) => toMessageCamelCase(r)) as never);
+  vi.spyOn(chatService, 'getReconcileTailWithRev')
+    .mockImplementation(async () => ({ messages: dbNow.map((r) => toMessageCamelCase(r)) as never, rev: 0 }));
   // the since_rev check: the recorded snapshot is the record at that moment, so
   // the harness always answers "changed" (the reload then reads it)
   vi.spyOn(chatService, 'getTranscriptSince')

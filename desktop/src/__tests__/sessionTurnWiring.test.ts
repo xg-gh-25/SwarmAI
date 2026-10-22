@@ -384,14 +384,21 @@ describe('session turn wiring', () => {
     expect(result.current).toBeTruthy();
   });
 
-  it('a resync reloads the tab from the DB', () => {
-    const tail = vi.spyOn(chatService, 'getSessionMessagesReconcileTail').mockResolvedValue([]);
+  it('a resync reloads the tab from the DB; the reload\'s rev lets the next resync skip an unchanged record', async () => {
+    const tail = vi.spyOn(chatService, 'getReconcileTailWithRev').mockResolvedValue({ messages: [], rev: 42 });
+    const since = vi.spyOn(chatService, 'getTranscriptSince').mockResolvedValue({ rev: 42, reset: false, rows: [] });
     renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => { initTestTab('r1'); });
     testTabMap.get('r1')!.sessionId = 'S';
-    act(() => { fake.emit({ type: 'resync', sessionId: 'S', eventSeq: 99 }); });
+    await act(async () => { fake.emit({ type: 'resync', sessionId: 'S', eventSeq: 99 }); await Promise.resolve(); });
     expect(tail).toHaveBeenCalledWith('S', expect.any(Number));
+    expect(testTabMap.get('r1')!.transcriptRev).toBe(42);
+    tail.mockClear();
+    await act(async () => { fake.emit({ type: 'resync', sessionId: 'S', eventSeq: 120 }); await Promise.resolve(); });
+    expect(since).toHaveBeenCalledWith('S', 42);
+    expect(tail).not.toHaveBeenCalled();
     tail.mockRestore();
+    since.mockRestore();
   });
 
   it('a POST stream error while the subscription carries the turn is not shown as an error', () => {

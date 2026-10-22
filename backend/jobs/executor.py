@@ -407,6 +407,20 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "log_patrol":
+            from .handlers.log_patrol import run_log_patrol
+            lp = run_log_patrol(dry_run=bool((job.config or {}).get("dry_run", False)))
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                # findings are the patrol succeeding (they are notified inside)
+                status=_monitor_result_status(lp.get("status", "unknown"), ok={"success"},
+                                              benign=set()),
+                summary=(lp.get("error") or ("baseline recorded" if lp.get("baseline_only") else
+                         f"{len(lp.get('findings', []))} new/growing of {lp.get('kinds', 0)} kinds")),
+                duration_seconds=duration,
+            )
+
         elif job.type == "library_health":
             from .handlers.library_health import run_library_health
             health_result = run_library_health()

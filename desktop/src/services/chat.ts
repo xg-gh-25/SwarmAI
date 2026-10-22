@@ -817,13 +817,24 @@ export const chatService = {
     sessionId: string,
     limit: number,
   ): Promise<ChatMessage[]> {
+    return (await this.getReconcileTailWithRev(sessionId, limit)).messages;
+  },
+
+  /** The reconcile tail plus the transcript rev of that snapshot (the backend's
+   *  `X-Transcript-Rev`, read before the rows: every change at or below it is in
+   *  them). 0 when the header is missing. */
+  async getReconcileTailWithRev(
+    sessionId: string,
+    limit: number,
+  ): Promise<{ messages: ChatMessage[]; rev: number }> {
     // No If-None-Match header → backend never returns 304 → always 200 with the
     // capped tail. No cache write → the shared slot stays owned by initial-load.
     const response = await api.get<Record<string, unknown>[]>(
       `/chat/sessions/${sessionId}/messages?limit=${limit}`,
       { validateStatus: (s: number) => s === 200 },
     );
-    return (response.data ?? []).map(toMessageCamelCase);
+    const rev = Number(response.headers?.['x-transcript-rev'] ?? 0);
+    return { messages: (response.data ?? []).map(toMessageCamelCase), rev: Number.isFinite(rev) ? rev : 0 };
   },
 
   // Invalidate ETag cache for a session (call after sending a message)

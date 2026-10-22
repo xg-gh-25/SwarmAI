@@ -4750,9 +4750,14 @@ export function useChatStreamingLifecycle(
     const tab = tabMapRef.current.get(tabId);
     const sid = tab?.sessionId;
     if (!tab || !sid) return;
+    // the reload's snapshot rev becomes the tab's: the next resync asks only
+    // for what changed after it
     const reload = () => {
       chatService.invalidateMessageCache(sid);
-      return chatService.getSessionMessagesReconcileTail(sid, RECONCILE_TAIL);
+      return chatService.getReconcileTailWithRev(sid, RECONCILE_TAIL).then(({ messages, rev }) => {
+        if (rev > (tab.transcriptRev ?? 0)) tab.transcriptRev = rev;
+        return messages;
+      });
     };
     // A tab that knows its transcript rev first asks what changed after it: an
     // unchanged record needs no reload (the replay that follows the resync

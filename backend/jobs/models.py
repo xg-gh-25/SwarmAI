@@ -38,6 +38,7 @@ class JobType(str, Enum):
     LIBRARY_FRESHNESS = "library_freshness"
     LIBRARY_HEALTH = "library_health"
     WORKTREE_SWEEP = "worktree_sweep"
+    LOG_PATROL = "log_patrol"
 
 
 class FeedType(str, Enum):
