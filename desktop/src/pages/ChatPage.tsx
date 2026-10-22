@@ -3422,9 +3422,9 @@ export default function ChatPage() {
                 <p className="text-[var(--color-text-muted)] mb-4">{agentLoadError}</p>
                 <button
                   onClick={() => window.location.reload()}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
+                  className="btn-lg btn-primary transition-colors"
                 >
-                  <span className="material-symbols-outlined icon-sm">refresh</span>
+                  <span className="material-symbols-outlined icon-md">refresh</span>
                   {t('common.button.retry', 'Retry')}
                 </button>
               </div>

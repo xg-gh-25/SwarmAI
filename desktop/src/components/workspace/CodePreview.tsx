@@ -156,7 +156,7 @@ export const CodePreview = memo(function CodePreview({
         </span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
+          className="btn-sm btn-secondary transition-colors"
         >
           <span className="material-symbols-outlined icon-xs">
             {copied ? 'check' : 'content_copy'}

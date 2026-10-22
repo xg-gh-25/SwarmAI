@@ -191,11 +191,9 @@ export function HistoryContent({ agentId, onDeleteSession, onResume, close }: Hi
                 <button
                   onClick={handleResume}
                   disabled={previewLoading}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md
-                    bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-colors shrink-0
-                    disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="btn-md btn-soft transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <span className="material-symbols-outlined icon-xs">open_in_new</span>
+                  <span className="material-symbols-outlined icon-sm">open_in_new</span>
                   Resume in tab
                 </button>
               </div>

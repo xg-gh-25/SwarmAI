@@ -498,7 +498,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
             {/* Zoom button */}
             <button
               onClick={() => setIsModalOpen(true)}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
+              className="btn-sm btn-secondary transition-colors"
               title="View fullscreen"
             >
               <span className="material-symbols-outlined icon-xs">fullscreen</span>
@@ -507,7 +507,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
             {/* Download SVG button */}
             <button
               onClick={handleDownloadSvg}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
+              className="btn-sm btn-secondary transition-colors"
               title="Download as SVG"
             >
               <span className="material-symbols-outlined icon-xs">download</span>
@@ -517,7 +517,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
             <button
               onClick={handleDownloadPng}
               disabled={isDownloading}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors disabled:opacity-50"
+              className="btn-sm btn-secondary transition-colors disabled:opacity-50"
               title="Download as PNG"
             >
               <span className="material-symbols-outlined icon-xs">
@@ -630,7 +630,7 @@ const CodeBlock = memo(function CodeBlock({
         </span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors bg-transparent border-none cursor-pointer"
+          className="btn-sm btn-secondary transition-colors cursor-pointer"
         >
           <span className="material-symbols-outlined icon-xs">
             {copied ? 'check' : 'content_copy'}

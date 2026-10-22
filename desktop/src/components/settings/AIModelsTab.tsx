@@ -269,10 +269,10 @@ export default function AIModelsTab() {
               <button
                 onClick={handleRefreshFromBedrock}
                 disabled={discovering}
-                className="flex items-center gap-1 px-3 py-1.5 text-sm bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] hover:border-[var(--color-primary)] disabled:opacity-50"
+                className="btn-md btn-secondary disabled:opacity-50"
                 title="List Claude models available on your Bedrock account"
               >
-                <span className={`material-symbols-outlined icon-xs ${discovering ? 'animate-spin' : ''}`}>
+                <span className={`material-symbols-outlined icon-sm ${discovering ? 'animate-spin' : ''}`}>
                   {discovering ? 'progress_activity' : 'cloud_sync'}
                 </span>
                 {discovering ? 'Refreshing…' : 'Refresh from Bedrock'}
@@ -289,7 +289,7 @@ export default function AIModelsTab() {
               />
               <button
                 onClick={handleAddModel}
-                className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80"
+                className="btn-lg btn-primary"
               >
                 {t('settings.modelConfig.addModel')}
               </button>
@@ -319,7 +319,7 @@ export default function AIModelsTab() {
                     ) : (
                       <button
                         onClick={() => handleAddDiscovered(m)}
-                        className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80"
+                        className="btn-md btn-primary"
                       >
                         {t('settings.modelConfig.addModel')}
                       </button>

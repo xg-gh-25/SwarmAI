@@ -305,14 +305,14 @@ function OverviewTab() {
         <button
           onClick={() => runCanary.mutate()}
           disabled={runCanary.isPending}
-          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors disabled:opacity-50"
+          className="btn-md btn-secondary transition-colors disabled:opacity-50"
         >
           {runCanary.isPending ? 'Running...' : '⚡ Run Canary'}
         </button>
         <button
           onClick={() => triggerRun.mutate({})}
           disabled={triggerRun.isPending}
-          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+          className="btn-md btn-primary hover:opacity-90 transition-opacity disabled:opacity-50"
         >
           {triggerRun.isPending ? 'Starting...' : '▶ Run Full Eval'}
         </button>
@@ -663,7 +663,7 @@ export function GoldenSetTab() {
         <div className="flex gap-2 mt-3 pt-3 border-t border-[var(--color-border)]">
           <button
             onClick={() => setShowAddForm(true)}
-            className="px-2.5 py-1.5 text-[11px] font-medium rounded-md bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
+            className="btn-md btn-primary hover:opacity-90 transition-opacity"
           >
             + Add Case
           </button>
@@ -673,7 +673,7 @@ export function GoldenSetTab() {
           <button
             disabled
             title="Coming soon — not yet available"
-            className="px-2.5 py-1.5 text-[11px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] opacity-50 cursor-not-allowed"
+            className="btn-md btn-secondary opacity-50 cursor-not-allowed"
           >
             Import from Correction
             <span className="ml-1 text-[8px] uppercase tracking-wide opacity-70">soon</span>
@@ -681,14 +681,14 @@ export function GoldenSetTab() {
           <button
             disabled
             title="Coming soon — not yet available"
-            className="px-2.5 py-1.5 text-[11px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] opacity-50 cursor-not-allowed"
+            className="btn-md btn-secondary opacity-50 cursor-not-allowed"
           >
             Archive Stable
             <span className="ml-1 text-[8px] uppercase tracking-wide opacity-70">soon</span>
           </button>
           <button
             onClick={() => triggerRun.mutate({})}
-            className="px-2.5 py-1.5 text-[11px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-colors"
+            className="btn-md btn-secondary transition-colors"
           >
             Run All
           </button>
@@ -716,7 +716,7 @@ export function GoldenSetTab() {
               <p data-testid="eval-archive-error" className="text-xs text-red-400 mb-3">Could not archive — please try again.</p>
             )}
             <div className="flex justify-end gap-2">
-              <button disabled={deleteCase.isPending} onClick={() => { setArchiveId(null); setArchiveErr(false); }} className="px-3 py-1.5 text-xs rounded border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50">Cancel</button>
+              <button disabled={deleteCase.isPending} onClick={() => { setArchiveId(null); setArchiveErr(false); }} className="btn-md btn-secondary disabled:opacity-50">Cancel</button>
               <button
                 data-testid="eval-archive-confirm"
                 disabled={deleteCase.isPending}
@@ -729,7 +729,7 @@ export function GoldenSetTab() {
                     onError: () => setArchiveErr(true),
                   });
                 }}
-                className="px-3 py-1.5 text-xs rounded bg-red-500 text-white hover:opacity-90 disabled:opacity-50"
+                className="btn-md btn-danger hover:opacity-90 disabled:opacity-50"
               >
                 {deleteCase.isPending ? 'Archiving…' : 'Archive'}
               </button>
@@ -831,21 +831,21 @@ export function GovernanceProposalCard({
         <button
           onClick={() => onAct(p.id, 'accept')}
           disabled={pending}
-          className="px-2 py-1 text-xs rounded bg-green-500/10 text-green-600 hover:bg-green-500/20 disabled:opacity-50"
+          className="btn-sm btn-success disabled:opacity-50"
         >
           Accept
         </button>
         <button
           onClick={() => onAct(p.id, 'reject')}
           disabled={pending}
-          className="px-2 py-1 text-xs rounded bg-red-500/10 text-red-600 hover:bg-red-500/20 disabled:opacity-50"
+          className="btn-sm btn-danger disabled:opacity-50"
         >
           Reject
         </button>
         <button
           onClick={() => onAct(p.id, 'defer')}
           disabled={pending}
-          className="px-2 py-1 text-xs rounded border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+          className="btn-sm btn-secondary disabled:opacity-50"
         >
           Defer
         </button>
@@ -2230,8 +2230,8 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
                   className="flex-1 px-2 py-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
                   autoFocus
                 />
-                <button onClick={saveEdit} className="px-2 py-1 rounded bg-[var(--color-primary)] text-white text-[11px]">Save</button>
-                <button onClick={() => setEditing(false)} className="px-2 py-1 rounded border border-[var(--color-border)] text-[11px]">Cancel</button>
+                <button onClick={saveEdit} className="btn-sm btn-primary">Save</button>
+                <button onClick={() => setEditing(false)} className="btn-sm btn-secondary">Cancel</button>
               </div>
             ) : (
               <div className="flex items-center gap-2">
@@ -2498,11 +2498,11 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
             />
           </label>
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="px-3 py-1.5 text-xs rounded border border-[var(--color-border)] hover:bg-[var(--color-hover)]">Cancel</button>
+            <button type="button" onClick={onClose} className="btn-md btn-secondary">Cancel</button>
             <button
               type="submit"
               disabled={createCase.isPending}
-              className="px-3 py-1.5 text-xs rounded bg-[var(--color-primary)] text-white hover:opacity-90 disabled:opacity-50"
+              className="btn-md btn-primary hover:opacity-90 disabled:opacity-50"
             >
               {createCase.isPending ? 'Creating...' : 'Create Case'}
             </button>

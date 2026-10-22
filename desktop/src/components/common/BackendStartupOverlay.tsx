@@ -692,9 +692,9 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
             </div>
             <button
               onClick={handleRetry}
-              className="mt-4 px-6 py-2 bg-primary hover:bg-primary-hover text-[var(--color-text)] rounded-lg transition-colors flex items-center gap-2"
+              className="btn-lg btn-primary mt-4 transition-colors"
             >
-              <span className="material-symbols-outlined icon-sm">refresh</span>
+              <span className="material-symbols-outlined icon-md">refresh</span>
               Retry
             </button>
           </div>

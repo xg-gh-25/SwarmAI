@@ -329,7 +329,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                   data-testid="new-brain-add-files"
                   onClick={() => pickAndAdd('file')}
                   disabled={picking}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-card)] text-[12.5px] font-medium text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="btn-md btn-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <span className="text-sm leading-none">📄</span> Add files…
                 </button>
@@ -338,7 +338,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                   data-testid="new-brain-add-folder"
                   onClick={() => pickAndAdd('folder')}
                   disabled={picking}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-card)] text-[12.5px] font-medium text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="btn-md btn-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <span className="text-sm leading-none">📁</span> Add folder…
                 </button>
@@ -358,7 +358,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                   type="button"
                   data-testid="new-brain-material-add"
                   onClick={commitDraft}
-                  className="px-3 py-1.5 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-card)] text-[12px] font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors shrink-0"
+                  className="btn-md btn-secondary transition-colors shrink-0"
                 >
                   Add
                 </button>
@@ -391,7 +391,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                     <button
                       data-testid={`new-brain-role-${it.id}`}
                       onClick={() => cycleRole(it.id)}
-                      className={`text-[11px] font-bold tracking-wide px-2 py-1 rounded border ${ROLE_STYLE[it.role].cls}`}
+                      className={`btn-sm btn-secondary tracking-wide ${ROLE_STYLE[it.role].cls}`}
                       title="Click to change the role"
                     >
                       {ROLE_STYLE[it.role].label} ▾
@@ -420,7 +420,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
             data-testid="new-brain-create"
             onClick={handleCreate}
             disabled={!name.trim()}
-            className="bg-[var(--color-primary)] text-[#0b1712] font-bold text-[13px] rounded-lg px-4 py-2 disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition"
+            className="btn-lg btn-primary disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition"
           >
             Create Brain →
           </button>

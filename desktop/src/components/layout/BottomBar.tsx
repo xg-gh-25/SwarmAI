@@ -52,14 +52,14 @@ function CodeIntelPopover({ summary, onReindex, isReindexing, onViewGraph }: {
       <div className="mt-2.5 flex gap-1.5">
         <button
           onClick={onViewGraph}
-          className="flex-1 text-center py-1 px-2 rounded border border-indigo-500/50 hover:bg-indigo-500/20 text-[11px] text-indigo-300"
+          className="btn-sm btn-soft flex-1 text-center"
         >
           View Graph
         </button>
         <button
           onClick={onReindex}
           disabled={isReindexing}
-          className="flex-1 text-center py-1 px-2 rounded border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-[11px]"
+          className="btn-sm btn-secondary flex-1 text-center disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isReindexing ? 'Indexing...' : 'Re-index'}
         </button>

@@ -416,7 +416,7 @@ body {
      btn-lg 32px  13px   icon-md  dialog footers, form submits
 
    Looks: btn-primary (accent fill), btn-secondary (bordered), btn-ghost (flat, hover
-   tint), btn-soft (accent tint), btn-danger, btn-success. */
+   tint), btn-soft (accent tint), btn-danger, btn-warning, btn-success. */
 :root {
   --btn-sm: 24px;
   --btn-md: 28px;
@@ -458,6 +458,11 @@ body {
   background: color-mix(in srgb, var(--color-status-error) 10%, transparent); color: var(--color-status-error);
   border: 1px solid color-mix(in srgb, var(--color-status-error) 22%, transparent);
   &:hover:not(:disabled) { background: color-mix(in srgb, var(--color-status-error) 18%, transparent); }
+}
+@utility btn-warning {
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent); color: var(--color-warning);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 26%, transparent);
+  &:hover:not(:disabled) { background: color-mix(in srgb, var(--color-warning) 20%, transparent); }
 }
 @utility btn-success {
   background: color-mix(in srgb, var(--color-status-success) 10%, transparent); color: var(--color-status-success);

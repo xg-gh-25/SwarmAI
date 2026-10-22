@@ -308,7 +308,7 @@ export function FolderPickerModal({
             </button>
             <button
               onClick={handleConfirm}
-              className="px-4 py-2 text-sm bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
+              className="btn-lg btn-primary transition-colors"
             >
               {t('chat.selectThisFolder') || 'Select This Folder'}
             </button>

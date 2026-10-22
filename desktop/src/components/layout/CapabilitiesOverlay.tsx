@@ -565,7 +565,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
           <button
             data-testid="cap-teach-skill"
             onClick={teachNewSkill}
-            className="px-3 py-2 rounded-lg bg-[var(--color-primary)] text-white text-sm font-medium"
+            className="btn-lg btn-primary"
           >
             ✨ Teach Swarm a new skill
           </button>

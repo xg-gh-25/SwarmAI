@@ -120,7 +120,7 @@ export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
         </button>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-hover)] rounded transition-colors"
+          className="btn-sm btn-secondary transition-colors"
         >
           <span className="material-symbols-outlined icon-xs">content_copy</span>
           Copy

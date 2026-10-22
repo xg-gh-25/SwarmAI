@@ -286,14 +286,14 @@ export default function ExplorerToolbar({
             <div className="flex justify-end gap-2 mt-4">
               <button
                 onClick={handleCancel}
-                className="px-3 py-1.5 text-sm rounded border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+                className="btn-md btn-secondary transition-colors"
                 data-testid="creation-dialog-cancel"
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirm}
-                className="px-3 py-1.5 text-sm rounded bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
+                className="btn-md btn-primary hover:opacity-90 transition-opacity"
                 data-testid="creation-dialog-confirm"
               >
                 Create

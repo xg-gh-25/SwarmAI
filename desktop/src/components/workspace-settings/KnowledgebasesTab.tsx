@@ -223,7 +223,7 @@ export default function KnowledgebasesTab({ workspaceId }: KnowledgebasesTabProp
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => deleteMutation.mutate(kb.id)}
-                    className="px-2 py-1 text-xs rounded bg-status-error/20 text-status-error hover:bg-status-error/30 transition-colors"
+                    className="btn-sm btn-danger transition-colors"
                   >
                     {t('common.button.confirm')}
                   </button>

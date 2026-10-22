@@ -109,7 +109,7 @@ export default function ChannelConfigForm({
         <button
           onClick={handleSave}
           disabled={!isValid || saving}
-          className="px-4 py-1.5 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+          className="btn-lg btn-primary disabled:opacity-50"
         >
           {saving ? 'Verifying...' : 'Verify & Connect'}
         </button>

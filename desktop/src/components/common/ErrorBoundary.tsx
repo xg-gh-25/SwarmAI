@@ -58,7 +58,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </div>
             <button
               onClick={this.handleRetry}
-              className="px-3 py-1.5 text-sm bg-primary text-[var(--color-text)] rounded-lg hover:bg-primary/80"
+              className="btn-md btn-primary"
             >
               Reload Tab
             </button>
@@ -78,7 +78,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </p>
             <button
               onClick={() => window.location.reload()}
-              className="px-6 py-3 bg-primary text-[var(--color-text)] rounded-lg hover:bg-primary/80"
+              className="btn-lg btn-primary"
             >
               Reload App
             </button>
@@ -133,9 +133,9 @@ export function ErrorFallback({ error, onRetry }: ErrorFallbackProps): React.Rea
       {onRetry && (
         <button
           onClick={onRetry}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-[var(--color-text)] rounded-lg hover:bg-primary/80 transition-colors"
+          className="btn-lg btn-primary transition-colors"
         >
-          <span className="material-symbols-outlined icon-xs">refresh</span>
+          <span className="material-symbols-outlined icon-md">refresh</span>
           Try again
         </button>
       )}
@@ -208,9 +208,9 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
             {onRetry && (
               <button
                 onClick={onRetry}
-                className="flex items-center gap-2 px-4 py-2 bg-primary text-[var(--color-text)] rounded-lg hover:bg-primary/80 transition-colors text-sm"
+                className="btn-lg btn-primary transition-colors"
               >
-                <span className="material-symbols-outlined icon-xs">refresh</span>
+                <span className="material-symbols-outlined icon-md">refresh</span>
                 Try again
               </button>
             )}

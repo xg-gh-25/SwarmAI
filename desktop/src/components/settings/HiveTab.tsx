@@ -56,9 +56,9 @@ export default function HiveTab() {
           <h3 className="text-sm font-semibold text-[var(--color-text)]">AWS Accounts</h3>
           <button
             onClick={() => setShowAddAccount(true)}
-            className="px-3 py-1.5 text-xs bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded-lg hover:bg-[var(--color-primary)] hover:text-white transition-colors flex items-center gap-1.5"
+            className="btn-md btn-secondary transition-colors"
           >
-            <span className="material-symbols-outlined icon-xs">add</span>
+            <span className="material-symbols-outlined icon-sm">add</span>
             Add Account
           </button>
         </div>

@@ -253,7 +253,7 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
               <button
                 onClick={() => setToPublishOnly((v) => !v)}
                 data-testid="pollinate-chip-to-publish"
-                className={`px-2.5 py-1 text-[11px] font-medium rounded-full border transition-colors whitespace-nowrap ${
+                className={`btn-sm btn-secondary rounded-full transition-colors whitespace-nowrap ${
                   toPublishOnly
                     ? 'bg-primary/15 text-primary border-primary'
                     : 'text-[var(--color-text-muted)] border-[var(--color-border)] hover:bg-[var(--color-hover)]'
@@ -277,7 +277,7 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
                     key={d}
                     onClick={() => setDomain((cur) => (cur === d ? '' : d))}
                     data-testid={`pollinate-domain-chip-${d}`}
-                    className={`px-2.5 py-0.5 text-[11px] font-medium rounded-full border transition-colors whitespace-nowrap ${
+                    className={`btn-sm btn-secondary rounded-full transition-colors whitespace-nowrap ${
                       domainFilter === d
                         ? 'bg-emerald-500/15 text-emerald-500 border-emerald-500/60'
                         : 'text-emerald-500/80 border-emerald-500/30 hover:bg-emerald-500/10'
@@ -640,9 +640,9 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
               onClick={async () => { setMarking(true); setMarkErr(false); const ok = await onMarkPublished(true, urlInput.trim() || null); setMarking(false); if (ok) setUrlInput(''); else setMarkErr(true); }}
               disabled={marking}
               data-testid="pollinate-mark-published-btn"
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25 transition-colors disabled:opacity-50"
+              className="btn-sm btn-success dark:text-emerald-400 transition-colors disabled:opacity-50"
             >
-              <span className="material-symbols-outlined icon-sm">{markErr ? 'error' : 'check_circle'}</span>
+              <span className="material-symbols-outlined icon-xs">{markErr ? 'error' : 'check_circle'}</span>
               {marking ? 'Marking…' : markErr ? 'Failed — retry' : 'Mark published'}
             </button>
           </div>
@@ -651,9 +651,9 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
           <button
             onClick={doCopy}
             data-testid="pollinate-copy-btn"
-            className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+            className="btn-sm btn-soft transition-colors"
           >
-            <span className="material-symbols-outlined icon-sm">{copyErr ? 'error' : copied ? 'check' : 'content_copy'}</span>
+            <span className="material-symbols-outlined icon-xs">{copyErr ? 'error' : copied ? 'check' : 'content_copy'}</span>
             {copyErr ? 'Copy blocked' : copied ? 'Copied' : (body ? 'Copy caption' : 'Copy path')}
           </button>
           {asset.platform && (
@@ -677,7 +677,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
                   key={p}
                   onClick={() => onProduce(p)}
                   data-testid={`pollinate-produce-platform-${p}`}
-                  className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md text-[var(--color-text-muted)] border border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors"
+                  className="btn-sm btn-secondary transition-colors"
                 >
                   <span className="material-symbols-outlined icon-xs">add</span>{p}
                 </button>

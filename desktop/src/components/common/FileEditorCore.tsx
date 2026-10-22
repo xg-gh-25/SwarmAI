@@ -335,7 +335,7 @@ function SelectionCommentPopover({
         <button
           onClick={() => { const trimmed = text.trim(); if (trimmed) onSubmit(trimmed); }}
           disabled={!text.trim()}
-          className="px-3 py-1 text-xs rounded bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+          className="btn-sm btn-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           data-testid="selection-comment-send"
         >
           <span className="material-symbols-outlined icon-xs">send</span>
@@ -1784,7 +1784,7 @@ export default function FileEditorCore({
                       </span>
                       <button
                         onClick={() => setHighlightedLines(new Set())}
-                        className="px-1.5 py-0.5 text-xs rounded bg-green-500/20 text-green-700 dark:text-green-300 hover:bg-green-500/30 transition-colors"
+                        className="btn-sm btn-success dark:text-green-300 transition-colors"
                         title="Dismiss highlights"
                       >
                         ✓
@@ -1806,7 +1806,7 @@ export default function FileEditorCore({
                           });
                           setHighlightedLines(new Set());
                         }}
-                        className="px-1.5 py-0.5 text-xs rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 hover:bg-amber-500/30 transition-colors"
+                        className="btn-sm btn-warning dark:text-amber-300 transition-colors"
                         title="Request changes to these lines"
                       >
                         ↩ Redo
@@ -1889,7 +1889,7 @@ export default function FileEditorCore({
                 {/* Floating "Comment" button — appears on text selection */}
                 {selectionText && selectionPopoverPos && !showSelectionComment && (
                   <button
-                    className="fixed z-[999] px-2 py-1 text-xs font-medium rounded-lg bg-[var(--color-primary)] text-white shadow-lg hover:bg-[var(--color-primary-hover)] transition-colors flex items-center gap-1"
+                    className="btn-sm btn-primary fixed z-[999] shadow-lg transition-colors"
                     style={{ top: selectionPopoverPos.top, left: selectionPopoverPos.left }}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setShowSelectionComment(true)}

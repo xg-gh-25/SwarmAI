@@ -649,9 +649,9 @@ function RunDetailDrawer({
                     if (outcome === 'done') setOpenChatNote(true);
                   }}
                   data-testid="pipeline-resume-btn"
-                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors disabled:opacity-50"
+                  className="btn-sm btn-soft transition-colors disabled:opacity-50"
                 >
-                  <span className="material-symbols-outlined icon-sm">play_arrow</span>{resuming ? 'Resuming…' : 'Resume'}
+                  <span className="material-symbols-outlined icon-xs">play_arrow</span>{resuming ? 'Resuming…' : 'Resume'}
                 </button>
               )}
               {detail.pauseKind === 'idle' && (
@@ -662,9 +662,9 @@ function RunDetailDrawer({
                     if ((await onContinue(detail)) !== 'continued') setOpenChatNote(true);
                   }}
                   data-testid="pipeline-continue-btn"
-                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+                  className="btn-sm btn-soft transition-colors"
                 >
-                  <span className="material-symbols-outlined icon-sm">forum</span>Continue in its chat
+                  <span className="material-symbols-outlined icon-xs">forum</span>Continue in its chat
                 </button>
               )}
               {(detail.status === 'running' || detail.status === 'paused') && (
@@ -761,9 +761,9 @@ function RunDetailDrawer({
                 type="button"
                 onClick={() => openReportInCanvas(detail.reportPath as string, hostClose)}
                 data-testid="pipeline-detail-report-btn"
-                className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+                className="btn-sm btn-soft transition-colors"
               >
-                <span className="material-symbols-outlined icon-sm">description</span>View report in Canvas
+                <span className="material-symbols-outlined icon-xs">description</span>View report in Canvas
               </button>
             )}
           </>

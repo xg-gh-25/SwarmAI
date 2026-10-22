@@ -111,17 +111,17 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
             title={accounts.length === 0 ? 'Add an AWS account first (Accounts tab) to deploy a Hive' : 'Deploy a new Hive'}
             aria-label={accounts.length === 0 ? 'Deploy Hive — disabled: add an AWS account first' : 'Deploy Hive'}
             data-testid="hive-deploy-btn"
-            className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="btn-sm btn-soft transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <span className="material-symbols-outlined icon-sm">add</span>Deploy Hive
+            <span className="material-symbols-outlined icon-xs">add</span>Deploy Hive
           </button>
         ) : (
           <button
             onClick={() => setShowAddAccount(true)}
             data-testid="hive-add-account-btn"
-            className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+            className="btn-sm btn-soft transition-colors"
           >
-            <span className="material-symbols-outlined icon-sm">add</span>Add Account
+            <span className="material-symbols-outlined icon-xs">add</span>Add Account
           </button>
         )}
       />

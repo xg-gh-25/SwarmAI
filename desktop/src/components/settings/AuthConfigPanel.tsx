@@ -197,16 +197,16 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       <button
         onClick={handleVerify}
         disabled={verifyState === 'verifying'}
-        className="w-full px-4 py-2.5 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50 flex items-center justify-center gap-2 font-medium"
+        className="btn-lg btn-primary w-full disabled:opacity-50"
       >
         {verifyState === 'verifying' ? (
           <>
-            <span className="material-symbols-outlined icon-xs animate-spin">progress_activity</span>
+            <span className="material-symbols-outlined icon-md animate-spin">progress_activity</span>
             Verifying...
           </>
         ) : (
           <>
-            <span className="material-symbols-outlined icon-xs">play_arrow</span>
+            <span className="material-symbols-outlined icon-md">play_arrow</span>
             Verify Connection
           </>
         )}

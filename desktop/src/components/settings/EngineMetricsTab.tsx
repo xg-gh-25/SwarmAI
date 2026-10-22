@@ -99,7 +99,7 @@ export default function EngineMetricsTab() {
         <button
           onClick={refresh}
           disabled={loading}
-          className="px-3 py-1 text-xs bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:bg-[var(--color-primary)] hover:text-white transition-colors disabled:opacity-50"
+          className="btn-sm btn-secondary transition-colors disabled:opacity-50"
         >
           {loading ? 'Refreshing...' : 'Refresh'}
         </button>

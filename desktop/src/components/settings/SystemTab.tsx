@@ -109,7 +109,7 @@ export default function SystemTab() {
             <button
               onClick={checkDeps}
               disabled={checking}
-              className="px-3 py-1 text-xs bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:bg-[var(--color-primary)] hover:text-white transition-colors disabled:opacity-50"
+              className="btn-sm btn-secondary transition-colors disabled:opacity-50"
             >
               {checking ? 'Checking...' : 'Refresh'}
             </button>

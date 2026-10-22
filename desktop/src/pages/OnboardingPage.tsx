@@ -214,7 +214,7 @@ function Step1SystemCheck({ ok, failed, onSkip }: { ok: boolean; failed: boolean
           </div>
           <button
             onClick={onSkip}
-            className="px-4 py-2 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80"
+            className="btn-lg btn-primary"
           >
             Continue anyway
           </button>
@@ -309,7 +309,7 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
             {!slackDone && (
               <button
                 onClick={() => setShowSlack(!showSlack)}
-                className="px-3 py-1 text-sm bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] transition-colors"
+                className="btn-md btn-secondary transition-colors"
               >
                 {showSlack ? 'Cancel' : 'Set Up'}
               </button>
@@ -340,7 +340,7 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
         {slackDone && (
           <button
             onClick={onContinue}
-            className="px-6 py-2 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80"
+            className="btn-lg btn-primary"
           >
             Continue
           </button>
@@ -417,7 +417,7 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
           </span>
         </div>
         <button onClick={onRestored}
-          className="px-6 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:opacity-90">
+          className="btn-lg btn-primary hover:opacity-90">
           Continue
         </button>
       </div>
@@ -447,7 +447,7 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
           </div>
           <div className="flex gap-3">
             <button onClick={handleRestore} disabled={!repoUrl}
-              className="px-6 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:opacity-90 disabled:opacity-50">
+              className="btn-lg btn-primary hover:opacity-90 disabled:opacity-50">
               Restore
             </button>
             <button onClick={onSkip}
@@ -491,7 +491,7 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
           {!restoring && events.some(e => e.error) && (
             <div className="flex gap-3 pt-2">
               <button onClick={() => { setEvents([]); }}
-                className="px-4 py-2 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:opacity-90">
+                className="btn-lg btn-primary hover:opacity-90">
                 Try Again
               </button>
               <button onClick={onSkip}
@@ -564,7 +564,7 @@ function Step4Ready({ onStart }: { onStart: () => void }) {
       <button
         onClick={() => { if (!starting) { setStarting(true); onStart(); } }}
         disabled={starting}
-        className="w-full px-6 py-3 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 font-medium text-lg disabled:opacity-50"
+        className="btn-lg btn-primary w-full disabled:opacity-50"
       >
         {starting ? 'Starting...' : 'Start Using SwarmAI'}
       </button>

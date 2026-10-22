@@ -97,9 +97,9 @@ export default function AboutTab() {
               {updateState === 'idle' && (
                 <button
                   onClick={handleCheckForUpdates}
-                  className="w-full px-4 py-2 bg-[var(--color-bg)] text-[var(--color-text)] rounded-lg hover:bg-[var(--color-primary)] hover:text-white transition-colors flex items-center justify-center gap-2"
+                  className="btn-lg btn-secondary w-full transition-colors"
                 >
-                  <span className="material-symbols-outlined icon-sm">update</span>
+                  <span className="material-symbols-outlined icon-md">update</span>
                   Check for Updates
                 </button>
               )}
@@ -117,7 +117,7 @@ export default function AboutTab() {
                   </div>
                   <button
                     onClick={handleDownload}
-                    className="w-full px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg"
+                    className="btn-lg btn-primary w-full"
                   >
                     Download & Install
                   </button>
@@ -135,7 +135,7 @@ export default function AboutTab() {
                 </div>
               )}
               {updateState === 'ready' && (
-                <button onClick={() => restartApp()} className="w-full px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg">
+                <button onClick={() => restartApp()} className="btn-lg btn-primary w-full">
                   Restart Now
                 </button>
               )}
@@ -190,7 +190,7 @@ export default function AboutTab() {
         </p>
         <button
           onClick={handleRerunSetup}
-          className="px-4 py-2 bg-[var(--color-bg)] text-[var(--color-text)] rounded-lg hover:bg-[var(--color-primary)] hover:text-white transition-colors text-sm"
+          className="btn-lg btn-secondary transition-colors"
         >
           Re-run Setup Wizard
         </button>

@@ -158,9 +158,9 @@ export function JobsRunsContent({ onDispatch, close }: JobsRunsContentProps) {
             <button
               onClick={() => { setSelectedId(null); setCreating(true); }}
               data-testid="jobs-new-btn"
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+              className="btn-sm btn-soft transition-colors"
             >
-              <span className="material-symbols-outlined icon-sm">add</span>New Job
+              <span className="material-symbols-outlined icon-xs">add</span>New Job
             </button>
           )}
         />
@@ -518,7 +518,7 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
           <div className="flex gap-1">
             {CRON_TYPES.map((t) => (
               <button key={t} onClick={() => setType(t)} data-testid={`jobs-new-type-${t}`}
-                className={`px-2 py-1 text-[11px] rounded-md border transition-colors ${
+                className={`btn-sm btn-secondary transition-colors ${
                   type === t ? 'border-primary/50 bg-primary/10 text-primary' : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
                 }`}>{t}</button>
             ))}
@@ -533,7 +533,7 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
       </div>
       <div className="flex items-center gap-2 px-4 py-3 border-t border-[var(--color-border)] shrink-0">
         <button onClick={submit} data-testid="jobs-new-submit"
-          className="flex-1 px-3 py-1.5 text-[12px] font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors">
+          className="btn-md btn-soft flex-1 transition-colors">
           Create in chat
         </button>
         <button onClick={onCancel} className="px-3 py-1.5 text-[12px] font-medium rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors">Cancel</button>

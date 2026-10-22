@@ -678,7 +678,7 @@ function CoreDocCards(
         <button
           data-testid="coredocs-weekly"
           onClick={onToggleWeekly}
-          className="ml-auto flex items-center gap-1 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded px-1.5 py-0.5 hover:bg-[#12233a]"
+          className="btn-sm btn-soft ml-auto"
         >
           <span className="material-symbols-outlined icon-xs">summarize</span>
           {showWeekly ? 'Hide report' : 'Weekly Report'}
@@ -998,7 +998,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
           <span className="material-symbols-outlined icon-xs">warning</span>
           The review diff timed out — this queue may be incomplete. "Mark all seen" is disabled to avoid skipping unreviewed changes.
           <button onClick={() => load()} disabled={busy} data-testid="review-diff-retry"
-            className="ml-auto flex items-center gap-1 text-[11px] text-[#f0a500] border border-[#5a4a1f] rounded px-1.5 py-0.5 hover:bg-[#2e2814] disabled:opacity-40">
+            className="btn-sm btn-warning ml-auto disabled:opacity-40">
             <span className="material-symbols-outlined icon-xs">refresh</span>Retry
           </button>
         </div>
@@ -1049,9 +1049,9 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
                 </span>
                 <div className="ml-auto flex gap-1">
                   <button onClick={() => onProposal(p, true)} disabled={busy}
-                    className="text-[11px] text-[#3fb950] border border-[#1f5a2a] rounded px-1.5 py-0.5 hover:bg-[#132918] disabled:opacity-40">Approve</button>
+                    className="btn-sm btn-success disabled:opacity-40">Approve</button>
                   <button onClick={() => onProposal(p, false)} disabled={busy}
-                    className="text-[11px] text-[#ef4444] border border-[#5a1f1f] rounded px-1.5 py-0.5 hover:bg-[#2a1214] disabled:opacity-40">Reject</button>
+                    className="btn-sm btn-danger disabled:opacity-40">Reject</button>
                 </div>
               </div>
               <div className="text-[11px] text-[var(--color-text-muted)] line-clamp-2">{p.content}</div>
@@ -1112,7 +1112,7 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
           <button
             onClick={() => setShowDiff((v) => !v)}
             data-testid={`hunk-toggle-diff-${sig}`}
-            className="flex items-center gap-1 text-[11px] text-[var(--color-text-muted)] border border-[var(--color-border)] rounded px-1.5 py-0.5 hover:bg-[var(--color-hover)]"
+            className="btn-sm btn-secondary"
           >
             <span className="material-symbols-outlined icon-xs">{showDiff ? 'expand_less' : 'code'}</span>
             {showDiff ? 'Hide diff' : 'View diff'}
@@ -1120,7 +1120,7 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
           <button
             onClick={onOpenFile}
             data-testid={`hunk-open-file-${sig}`}
-            className="flex items-center gap-1 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded px-1.5 py-0.5 hover:bg-[#12233a]"
+            className="btn-sm btn-soft"
             title="Open this file in the Canvas"
           >
             <span className="material-symbols-outlined icon-xs">open_in_new</span>
@@ -1130,7 +1130,7 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
             onClick={onReject}
             disabled={busy}
             data-testid="review-reject-hunk"
-            className="flex items-center gap-1 text-[11px] text-[#ef4444] border border-[#5a1f1f] rounded px-1.5 py-0.5 hover:bg-[#2a1214] disabled:opacity-40"
+            className="btn-sm btn-danger disabled:opacity-40"
           >
             <span className="material-symbols-outlined icon-xs">undo</span>
             Revert hunk
@@ -1278,7 +1278,7 @@ function DistributeView(
           <button
             onClick={openAimJson}
             data-testid="distribute-edit-aim"
-            className="mb-4 flex items-center gap-1.5 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-1 hover:bg-[#12233a]"
+            className="btn-sm btn-soft mb-4"
             title="Open aim.json in the Canvas to edit the declared reach (targets / visibility)"
           >
             <span className="material-symbols-outlined icon-xs">edit</span>
@@ -1323,7 +1323,7 @@ function DistributeView(
           <button
             onClick={openAimJson}
             data-testid="distribute-open-aim"
-            className="mt-2.5 flex items-center gap-1.5 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-1 hover:bg-[#12233a]"
+            className="btn-sm btn-soft mt-2.5"
             title="Open aim.json in the Canvas to declare the distribution block"
           >
             <span className="material-symbols-outlined icon-xs">open_in_new</span>
@@ -1347,7 +1347,7 @@ function DistributeView(
             onClick={onDistribute}
             disabled={!data.distributable}
             data-testid="distribute-button"
-            className="flex items-center gap-1.5 text-[11px] text-[#3fb950] border border-[#1f5a2a] rounded-md px-2.5 py-1 hover:bg-[#132918] disabled:opacity-40 disabled:cursor-not-allowed"
+            className="btn-sm btn-success disabled:opacity-40 disabled:cursor-not-allowed"
             title={
               !data.distributable ? 'Declare a distribution block first'
                 : onDispatch ? 'Send the distribute command to chat (runs s_ddd-distribute — you confirm targets there)'

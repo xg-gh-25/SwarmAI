@@ -179,7 +179,7 @@ export default function CommentPopover({
                 if (trimmed) onSendSingle(trimmed);
               }}
               disabled={!text.trim()}
-              className="px-2 py-1 text-xs rounded text-[var(--color-primary)] border border-[var(--color-primary)]/40 hover:bg-[var(--color-primary)]/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-0.5"
+              className="btn-sm btn-soft disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               data-testid="comment-send-single"
               title="Send this comment to agent immediately"
             >
@@ -190,7 +190,7 @@ export default function CommentPopover({
           <button
             onClick={handleSubmit}
             disabled={!text.trim()}
-            className="px-3 py-1 text-xs rounded bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="btn-sm btn-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             data-testid="comment-submit"
           >
             {initialText ? 'Update' : 'Add'}

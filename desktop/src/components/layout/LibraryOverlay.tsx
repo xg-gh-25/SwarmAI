@@ -566,7 +566,7 @@ function TabBtn({
       }
     >
       {label}
-      {badge != null && <span className="rounded-full bg-[var(--color-hover)] px-1.5 text-[11px] text-[var(--color-text-faint)]">{badge}</span>}
+      {badge != null && <span className="btn-sm btn-secondary rounded-full">{badge}</span>}
     </button>
   );
 }

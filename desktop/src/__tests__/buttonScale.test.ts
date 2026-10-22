@@ -1,16 +1,17 @@
 /**
- * Button scale guard (chat + Canvas) — labelled buttons use the ONE scale in index.css.
+ * Button scale guard — labelled buttons use the ONE scale in index.css.
  *
  * Invariants, for every <button> in the scoped folders:
  * - a button that looks like a button (a surface: a border or a resting background)
  *   and sets its own padding or type size uses btn-sm / btn-md / btn-lg instead;
  * - an icon inside a btn-* button has that tier's glyph: icon-xs in btn-sm, icon-sm in
  *   btn-md, icon-md in btn-lg.
- * Rows, tabs and links that are buttons only for semantics (no surface) are not
- * buttons in the visual sense and are not checked here.
+ * Rows, tabs and links that are buttons only for semantics (no surface), and
+ * clickable cards / list rows (`text-left`: a control centres its label, a card or a
+ * row aligns its content left), are not buttons in the visual sense and are not
+ * checked here.
  *
- * Scope grows with the migration: chat (pages/chat, components/chat) and Canvas
- * (components/file-viewer) so far.
+ * Scope: all of desktop/src.
  *
  * Methodology: a static scan; a failure names file:line.
  */
@@ -19,7 +20,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const SRC = join(__dirname, '..');
-const SCOPE = ['pages/chat', 'components/chat', 'components/file-viewer'];
+const SCOPE = ['.'];   // the whole app
 
 function files(dir: string): string[] {
   const out: string[] = [];
@@ -36,8 +37,9 @@ function files(dir: string): string[] {
 
 const SIZE = /(?<![\w-])btn-(sm|md|lg)(?![\w-])/;
 const OWN_GEOMETRY = /(?<![\w:-])(px-|py-|text-(xs|sm|base|\[\d+(?:\.\d+)?px\]))/;
-// a resting surface: a border, or a background that is not only on hover/focus/active
-const SURFACE = /(?<![\w:-])(border(?![\w-]*-(?:b|t|l|r)\b)(?:\s|$|-\[)|bg-)/;
+// a resting surface: an all-sides border (`border`, `border-2`), or a background.
+// A one-sided border (border-t, a section divider) or a border colour alone is not.
+const SURFACE = /(?<![\w:-])(border(?=[\s'"`]|$)|border-[0-9](?![\w-])|bg-)/;
 
 function buttons(): { where: string; cls: string; body: string }[] {
   const out: { where: string; cls: string; body: string }[] = [];
@@ -71,10 +73,10 @@ function resting(cls: string): string {
     .replace(/(hover|focus|active|group-hover|focus-visible|disabled)[\w/-]*:[^\s'"`]+/g, ' ');
 }
 
-describe('button scale (chat + Canvas)', () => {
+describe('button scale', () => {
   it('a button with a surface takes its size from btn-*, not its own padding / type', () => {
     const bad = buttons()
-      .filter((b) => !SIZE.test(b.cls) && !/icon-btn/.test(b.cls))
+      .filter((b) => !SIZE.test(b.cls) && !/icon-btn/.test(b.cls) && !/(?<![\w-])text-left(?![\w-])/.test(b.cls))
       .filter((b) => SURFACE.test(resting(b.cls)) && OWN_GEOMETRY.test(b.cls))
       .map((b) => `${b.where}: ${b.cls.replace(/\s+/g, ' ').trim().slice(0, 120)}`);
     expect(bad).toEqual([]);

@@ -112,13 +112,13 @@ export default function BackupTab() {
           <button
             onClick={handleBackup}
             disabled={backing}
-            className="px-3 py-1.5 text-sm font-medium rounded-md bg-[var(--color-primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+            className="btn-md btn-primary hover:opacity-90 disabled:opacity-50 transition-opacity"
           >
             {backing ? t('settings.backup.backingUp') : t('settings.backup.backupNow')}
           </button>
           <button
             onClick={() => setConfigOpen(!configOpen)}
-            className="px-3 py-1.5 text-sm font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            className="btn-md btn-secondary transition-colors"
           >
             {t('settings.backup.configure')}
           </button>
@@ -157,7 +157,7 @@ export default function BackupTab() {
 
           <button
             onClick={handleSaveConfig}
-            className="px-3 py-1.5 text-sm font-medium rounded-md bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
+            className="btn-md btn-primary hover:opacity-90 transition-opacity"
           >
             {t('settings.backup.saveConfig')}
           </button>
@@ -195,7 +195,7 @@ export default function BackupTab() {
                 await fetchStatus();
               }
             }}
-            className="px-3 py-1.5 text-sm font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            className="btn-md btn-secondary transition-colors"
           >
             {restoreEvents.length > 0 ? t('settings.backup.retryRestore') : t('settings.backup.restore')}
           </button>

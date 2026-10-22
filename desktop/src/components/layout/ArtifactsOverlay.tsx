@@ -382,7 +382,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
             onClick={() => setStarredOnly((v) => !v)}
             data-testid="artifacts-chip-Starred"
             aria-pressed={starredOnly}
-            className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
+            className={`btn-sm btn-secondary rounded-full transition-colors ${
               starredOnly
                 ? 'border-[var(--color-git-modified,#d59a26)] text-[var(--color-git-modified,#d59a26)] bg-[color-mix(in_srgb,var(--color-git-modified,#d59a26)_14%,transparent)]'
                 : 'border-[var(--color-git-modified,#d59a26)] text-[var(--color-git-modified,#d59a26)] hover:bg-[color-mix(in_srgb,var(--color-git-modified,#d59a26)_8%,transparent)]'
@@ -401,7 +401,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
                 }}
                 data-testid={`artifacts-chip-${role}`}
                 aria-pressed={on}
-                className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
+                className={`btn-sm btn-secondary rounded-full transition-colors ${
                   on
                     ? 'border-[var(--color-primary)] text-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_12%,transparent)]'
                     : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'

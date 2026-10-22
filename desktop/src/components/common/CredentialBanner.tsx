@@ -131,7 +131,7 @@ export default function CredentialBanner() {
           onClick={() => window.dispatchEvent(
             new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: 'ai-models' } }),
           )}
-          className="px-2.5 py-1 text-xs rounded bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary)]/80"
+          className="btn-sm btn-primary"
         >
           Open Settings
         </button>

@@ -81,9 +81,9 @@ export function HiveSection({
           <button
             onClick={onDeploy}
             disabled={!accounts || accounts.length === 0}
-            className="px-3 py-1.5 text-xs bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+            className="btn-md btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <span className="material-symbols-outlined icon-xs">add</span>
+            <span className="material-symbols-outlined icon-sm">add</span>
             Deploy New Hive
           </button>
         )}
@@ -145,7 +145,7 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
             onClick={() => url && openExternal(url)}
             disabled={!url}
             title={url || 'URL not available yet — CloudFront still provisioning'}
-            className="px-2 py-1 text-xs bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded hover:bg-[var(--color-primary)]/30 disabled:opacity-30 disabled:cursor-not-allowed"
+            className="btn-sm btn-soft disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Open {'↗'}
           </button>
@@ -153,7 +153,7 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
             <button
               onClick={() => doAction(() => hiveService.stopInstance(inst.id))}
               disabled={acting}
-              className="px-2 py-1 text-xs bg-yellow-500/20 text-yellow-400 rounded hover:bg-yellow-500/30 disabled:opacity-50"
+              className="btn-sm btn-warning disabled:opacity-50"
             >
               Stop
             </button>
@@ -162,7 +162,7 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
             <button
               onClick={() => doAction(() => hiveService.startInstance(inst.id))}
               disabled={acting}
-              className="px-2 py-1 text-xs bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 disabled:opacity-50"
+              className="btn-sm btn-success disabled:opacity-50"
             >
               Start
             </button>
@@ -171,7 +171,7 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
             <button
               onClick={() => doAction(() => hiveService.retryInstance(inst.id))}
               disabled={acting}
-              className="px-2 py-1 text-xs bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 disabled:opacity-50"
+              className="btn-sm btn-secondary disabled:opacity-50"
             >
               Retry
             </button>
@@ -180,7 +180,7 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
             <button
               onClick={() => { if (confirm(`Delete ${inst.name}?`)) doAction(() => hiveService.deleteInstance(inst.id)); }}
               disabled={acting}
-              className="px-2 py-1 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 disabled:opacity-50"
+              className="btn-sm btn-danger disabled:opacity-50"
             >
               Delete
             </button>
@@ -352,11 +352,11 @@ export function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
         <span className="text-[var(--color-text-muted)]">/</span>
         <code className="text-[var(--color-text)] select-all">{passDisplay}</code>
         <button onClick={togglePass} disabled={loadingPass}
-          className="px-1.5 py-0.5 text-[11px] bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] disabled:opacity-50">
+          className="btn-sm btn-secondary disabled:opacity-50">
           {loadingPass ? '...' : showPass ? 'Hide' : 'Show'}
         </button>
         <button onClick={handleCopyPassword}
-          className="px-1.5 py-0.5 text-[11px] bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)]">
+          className="btn-sm btn-secondary">
           {copied === 'password' ? 'Copied!' : 'Copy'}
         </button>
       </div>
@@ -366,9 +366,9 @@ export function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
       <div className="flex items-center gap-2">
         <button
           onClick={handleShare}
-          className="px-2 py-1 bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded hover:bg-[var(--color-primary)]/30 flex items-center gap-1"
+          className="btn-md btn-soft"
         >
-          <span className="material-symbols-outlined icon-xs">share</span>
+          <span className="material-symbols-outlined icon-sm">share</span>
           {copied === 'share' ? 'Copied!' : 'Share'}
         </button>
         <span className="text-[var(--color-text-muted)]">Copy URL + credentials for the Hive user</span>
@@ -434,7 +434,7 @@ export function AccountCard({ account: acc, onDelete }: { account: HiveAccount; 
           <button
             onClick={handleVerify}
             disabled={verifying}
-            className="px-2 py-1 text-xs bg-[var(--color-card)] text-[var(--color-text-muted)] rounded hover:bg-[var(--color-primary)] hover:text-white disabled:opacity-50"
+            className="btn-sm btn-secondary disabled:opacity-50"
           >
             {verifying ? '...' : 'Verify'}
           </button>
@@ -556,7 +556,7 @@ export function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; on
         <div className="flex justify-end gap-2 mt-6">
           <button onClick={onClose} disabled={saving} className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50">Cancel</button>
           <button onClick={handleSave} disabled={saving || !accountId}
-            className="px-4 py-2 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50">
+            className="btn-lg btn-primary disabled:opacity-50">
             {saving ? 'Saving...' : 'Add Account'}
           </button>
         </div>
@@ -654,7 +654,7 @@ export function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: 
         <div className="flex justify-end gap-2 mt-6">
           <button onClick={onClose} disabled={deploying} className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50">Cancel</button>
           <button onClick={handleDeploy} disabled={deploying || !name || !accountRef}
-            className="px-4 py-2 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50">
+            className="btn-lg btn-primary disabled:opacity-50">
             {deploying ? 'Deploying...' : 'Deploy'}
           </button>
         </div>

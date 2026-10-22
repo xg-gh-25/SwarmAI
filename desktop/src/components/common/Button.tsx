@@ -1,6 +1,11 @@
 import clsx from 'clsx';
 import LoadingSpinner from './LoadingSpinner';
 
+/**
+ * Button — a labelled button on the app's button scale (index.css: btn-sm / btn-md /
+ * btn-lg for size, btn-primary / -secondary / -ghost / -danger for look). The icon
+ * takes the tier glyph of its size (icon-xs / icon-sm / icon-md).
+ */
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   size?: 'sm' | 'md' | 'lg';
@@ -9,18 +14,11 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   children: React.ReactNode;
 }
 
-const variantClasses = {
-  primary: 'bg-primary hover:bg-primary-hover text-white',
-  secondary: 'bg-[var(--color-card)] border border-[var(--color-border)] hover:bg-[var(--color-hover)] text-[var(--color-text)]',
-  ghost: 'hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]',
-  danger: 'bg-status-error/20 hover:bg-status-error/30 text-status-error',
-};
-
-const sizeClasses = {
-  sm: 'px-3 py-1.5 text-sm',
-  md: 'px-4 py-2 text-sm',
-  lg: 'px-6 py-2.5 text-base',
-};
+const ICON = {
+  sm: 'material-symbols-outlined icon-xs',
+  md: 'material-symbols-outlined icon-sm',
+  lg: 'material-symbols-outlined icon-md',
+} as const;
 
 export default function Button({
   variant = 'primary',
@@ -35,9 +33,9 @@ export default function Button({
   return (
     <button
       className={clsx(
-        'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-        variantClasses[variant],
-        sizeClasses[size],
+        `btn-${size}`,
+        `btn-${variant}`,
+        'transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
         className
       )}
       disabled={disabled || isLoading}
@@ -46,7 +44,7 @@ export default function Button({
       {isLoading ? (
         <LoadingSpinner size="sm" />
       ) : icon ? (
-        <span className="material-symbols-outlined icon-sm">{icon}</span>
+        <span className={ICON[size]}>{icon}</span>
       ) : null}
       {children}
     </button>

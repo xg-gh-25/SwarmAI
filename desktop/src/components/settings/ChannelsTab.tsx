@@ -89,7 +89,7 @@ export default function ChannelsTab() {
               <>
                 <button
                   onClick={() => setEditingId(slackChannel?.id || null)}
-                  className="px-3 py-1 text-xs bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] transition-colors"
+                  className="btn-sm btn-secondary transition-colors"
                 >
                   Edit
                 </button>
@@ -105,13 +105,13 @@ export default function ChannelsTab() {
               <>
                 <button
                   onClick={() => slackChannel && handleReconnect(slackChannel)}
-                  className="px-3 py-1 text-xs bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 transition-colors"
+                  className="btn-sm btn-primary transition-colors"
                 >
                   Reconnect
                 </button>
                 <button
                   onClick={() => setEditingId(slackChannel?.id || null)}
-                  className="px-3 py-1 text-xs bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] transition-colors"
+                  className="btn-sm btn-secondary transition-colors"
                 >
                   Edit
                 </button>
@@ -126,7 +126,7 @@ export default function ChannelsTab() {
             {!slackChannel && !addingSlack && (
               <button
                 onClick={() => setAddingSlack(true)}
-                className="px-3 py-1 text-xs bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 transition-colors"
+                className="btn-sm btn-primary transition-colors"
               >
                 Set Up
               </button>

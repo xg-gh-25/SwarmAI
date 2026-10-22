@@ -106,9 +106,9 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
     const RevealButton = () => (
       <button
         onClick={handleRevealInFinder}
-        className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-[var(--color-text)] rounded-lg transition-colors"
+        className="btn-lg btn-primary transition-colors"
       >
-        <span className="material-symbols-outlined icon-sm">folder_open</span>
+        <span className="material-symbols-outlined icon-md">folder_open</span>
         Reveal in Finder
       </button>
     );

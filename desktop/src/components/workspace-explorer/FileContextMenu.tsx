@@ -377,7 +377,7 @@ export default function FileContextMenu({
           <button
             onClick={handleDeleteCancel}
             disabled={isDeleting}
-            className="px-3 py-1.5 text-sm rounded border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors disabled:opacity-50"
+            className="btn-md btn-secondary transition-colors disabled:opacity-50"
             data-testid="delete-cancel-button"
           >
             Cancel
@@ -385,7 +385,7 @@ export default function FileContextMenu({
           <button
             onClick={handleDeleteConfirm}
             disabled={isDeleting}
-            className="px-3 py-1.5 text-sm rounded bg-[var(--color-error)] text-white hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center gap-1"
+            className="btn-md btn-danger hover:opacity-90 transition-opacity disabled:opacity-50"
             data-testid="delete-confirm-button"
           >
             {isDeleting && (

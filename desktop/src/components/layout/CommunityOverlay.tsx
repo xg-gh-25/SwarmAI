@@ -484,7 +484,7 @@ function SourcesTab() {
                 disabled={busy === s.id}
                 onClick={() => mutate(s.id, () => communityService.deleteSource(s.id))}
                 aria-label={`Confirm delete source ${s.name}`}
-                className="text-[11px] px-2 py-1 rounded bg-red-500/15 text-red-400 border border-red-500/40"
+                className="btn-sm btn-danger"
               >
                 confirm?
               </button>
@@ -565,7 +565,7 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
               disabled={busy}
               onClick={() => run(() => communityService.deleteMember(source.id, m), true)}
               aria-label={`Confirm remove member ${m}`}
-              className="text-[11px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/40"
+              className="btn-sm btn-danger"
             >
               confirm?
             </button>
@@ -678,7 +678,7 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
         <span className="flex-1" />
         <button type="button" onClick={() => setOpen(false)} className="text-[11.5px] text-[var(--color-text-muted)] px-2 py-1">cancel</button>
         <button type="button" data-testid="add-submit" disabled={saving || busy} onClick={submit}
-          className="text-[11.5px] px-3 py-1 rounded bg-[var(--panel-accent,var(--color-primary))] text-white disabled:opacity-50">
+          className="btn-sm btn-secondary disabled:opacity-50">
           {saving ? 'adding…' : 'add'}
         </button>
       </div>

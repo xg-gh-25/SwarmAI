@@ -355,7 +355,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
           <button
             onClick={() => { setSelected(null); setCreating(true); }}
             data-testid="todo-new-btn"
-            className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-md bg-primary text-white hover:opacity-90 transition-opacity shrink-0 shadow-sm"
+            className="btn-md btn-primary hover:opacity-90 transition-opacity shrink-0 shadow-sm"
           >
             <span className="material-symbols-outlined icon-sm">add</span>New ToDo
           </button>
@@ -896,7 +896,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
           <button
             onClick={() => onDispatch(todo)}
             data-testid="todo-drawer-dispatch"
-            className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-[12px] font-semibold rounded-md bg-primary text-white hover:opacity-90 transition-opacity shadow-sm"
+            className="btn-md btn-primary flex-1 hover:opacity-90 transition-opacity shadow-sm"
           >
             <span className="material-symbols-outlined icon-sm">play_arrow</span>Dispatch to chat
           </button>
@@ -1132,7 +1132,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
                   key={p}
                   onClick={() => setPriority(p)}
                   data-testid={`todo-form-pri-${p}`}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium capitalize rounded-md border transition-colors ${
+                  className={`btn-sm btn-secondary capitalize transition-colors ${
                     active ? 'border-primary/50 bg-primary/10 text-primary' : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
                   }`}
                 >
@@ -1180,7 +1180,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
               onClick={() => fileInputRef.current?.click()}
               disabled={busy}
               data-testid="todo-form-attach-btn"
-              className="self-start inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium rounded-md border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+              className="btn-md btn-secondary self-start transition-colors disabled:opacity-50"
             >
               <span className="material-symbols-outlined icon-sm">upload_file</span>
               Add files
@@ -1230,7 +1230,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
           onClick={submit}
           disabled={busy}
           data-testid="todo-form-submit"
-          className="flex-1 px-3 py-1.5 text-[12px] font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 disabled:opacity-50 transition-colors"
+          className="btn-md btn-soft flex-1 disabled:opacity-50 transition-colors"
         >{busy ? (isEdit ? 'Saving…' : 'Creating…') : (isEdit ? 'Save changes' : 'Create ToDo')}</button>
         <button
           onClick={onCancel}

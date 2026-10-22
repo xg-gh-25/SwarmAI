@@ -467,8 +467,8 @@ function ProposalCard({
           <div className="flex gap-1.5">
             {/* Gate-2 MEDIUM: disabled during an in-flight decision — no double-submit. */}
             <button disabled={state != null} data-testid="cm-card-accept" onClick={() => act('accept')} className="rounded px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50" style={{ color: '#5fc99a', background: 'color-mix(in srgb, #5fc99a 16%, transparent)', border: '1px solid color-mix(in srgb, #5fc99a 45%, var(--color-border))' }}>Accept</button>
-            <button disabled={state != null} data-testid="cm-card-reject" onClick={() => act('reject')} className="rounded border border-[var(--color-border)] px-2.5 py-1 text-[11px] text-[var(--color-text-muted)] disabled:opacity-50">Reject</button>
-            {kind === 'approve' && <button disabled={state != null} data-testid="cm-card-defer" onClick={() => act('defer')} className="rounded border border-[var(--color-border)] px-2.5 py-1 text-[11px] text-[var(--color-text-faint)] disabled:opacity-50">Defer</button>}
+            <button disabled={state != null} data-testid="cm-card-reject" onClick={() => act('reject')} className="btn-sm btn-secondary disabled:opacity-50">Reject</button>
+            {kind === 'approve' && <button disabled={state != null} data-testid="cm-card-defer" onClick={() => act('defer')} className="btn-sm btn-secondary disabled:opacity-50">Defer</button>}
           </div>
         )}
       </div>
@@ -492,7 +492,7 @@ function NeedsList({
   return (
     <>
       <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-2.5">
-        <button data-testid="cm-needs-back" onClick={onBack} className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]">← Back to {backLabel}</button>
+        <button data-testid="cm-needs-back" onClick={onBack} className="btn-sm btn-secondary">← Back to {backLabel}</button>
         <span className="text-sm font-semibold text-[var(--color-text)]">{qm.label} <span className="tabular-nums text-[var(--color-text-faint)]">({meta.count})</span></span>
       </div>
       {/* AC1: one-line explainer — what this queue governs + what its conf means here. */}
@@ -1168,7 +1168,7 @@ function TabBtn({
       }
     >
       {label}
-      {badge != null && <span className="rounded-full bg-[var(--color-hover)] px-1.5 text-[11px] text-[var(--color-text-faint)]">{badge}</span>}
+      {badge != null && <span className="btn-sm btn-secondary rounded-full">{badge}</span>}
     </button>
   );
 }
