@@ -9,7 +9,7 @@ import shutil
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, TypeVar, Generic, ClassVar
+from typing import Any, Optional, TypeVar, Generic, ClassVar
 from uuid import uuid4
 
 from config import get_app_data_dir
@@ -1855,7 +1855,9 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 8 — index recall_metrics(timestamp) so the retention prune range-seeks (2026-08-10)
 # 9-11 — hive custom_ami_id; CJK-searchable messages (content_seg + FTS rebuild)
 # 12 — compactions table: one row per context compaction + its summary (2026-10-18)
-CURRENT_SCHEMA_VERSION = 13
+# 13 — drop transcript_chunks / transcript_fts
+# 14 — send_requests: one row per send (client_id), the idempotency ledger (2026-10-22)
+CURRENT_SCHEMA_VERSION = 14
 
 
 class SQLiteDatabase(BaseDatabase):
@@ -3043,6 +3045,38 @@ class SQLiteDatabase(BaseDatabase):
                 logger.error("Migration v13: transcript drop failed (will retry on "
                              "next startup): %s: %s", type(exc).__name__, exc)
 
+        if current_version < 14:
+            # Version 14: send_requests (core/send_requests.py, design
+            # chat-transcript-single-source.md S2). One row per send, keyed by its
+            # client_id: the send reserves it before doing anything, so the same
+            # client_id sent again — a retry, a resend after SESSION_BUSY, a first
+            # send retried before its session existed, a channel redelivery — is
+            # answered from this row instead of running again. It records only what
+            # nothing else does (the send was taken, its session, its user row);
+            # whether that row is still queued is the row's own sent/pending_seq.
+            # `owner` is the process that reserved it: a reservation a dead process
+            # left before writing its user row may be taken again.
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS send_requests (
+                    client_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    owner TEXT NOT NULL,
+                    user_message_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_send_requests_created "
+                "ON send_requests(created_at)"
+            )
+            cursor = await conn.execute("PRAGMA user_version")
+            if (await cursor.fetchone())[0] >= 13:
+                await conn.execute("PRAGMA user_version = 14")
+            await conn.commit()
+            logger.info("Migration v14: send_requests table")
+
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.
 
@@ -3808,6 +3842,68 @@ class SQLiteDatabase(BaseDatabase):
                 await conn.commit()
         except Exception:
             logger.warning("Failed to record token usage", exc_info=True)
+
+    # ── Send requests (schema v14, core/send_requests.py) ─────────────
+    SEND_REQUEST_COLS = ("client_id", "session_id", "status", "owner",
+                         "user_message_id", "created_at", "updated_at")
+    _SEND_REQUEST_FIELDS = frozenset(("status", "user_message_id"))
+
+    async def reserve_send_request(self, row: dict) -> bool:
+        """Insert the row unless its client_id exists; True when this call inserted it
+        (atomic: of two concurrent reservations exactly one wins)."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            cursor = await conn.execute(
+                f"INSERT OR IGNORE INTO send_requests ({', '.join(self.SEND_REQUEST_COLS)}) "
+                f"VALUES ({', '.join('?' for _ in self.SEND_REQUEST_COLS)})",
+                tuple(row.get(c) for c in self.SEND_REQUEST_COLS),
+            )
+            await conn.commit()
+            return cursor.rowcount == 1
+
+    async def retake_send_request(self, client_id: str, owner: str, now: str) -> bool:
+        """Take over a reservation that never reached its user row: failed, or
+        reserved by another (dead) process. True when this call took it."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            cursor = await conn.execute(
+                "UPDATE send_requests SET status = 'reserved', owner = ?, updated_at = ? "
+                "WHERE client_id = ? AND user_message_id IS NULL "
+                "AND (status = 'failed' OR (status = 'reserved' AND owner != ?))",
+                (owner, now, client_id, owner),
+            )
+            await conn.commit()
+            return cursor.rowcount == 1
+
+    async def get_send_request(self, client_id: str) -> Optional[dict]:
+        async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+            cursor = await conn.execute(
+                f"SELECT {', '.join(self.SEND_REQUEST_COLS)} FROM send_requests WHERE client_id = ?",
+                (client_id,))
+            row = await cursor.fetchone()
+        return dict(zip(self.SEND_REQUEST_COLS, row)) if row else None
+
+    async def update_send_request(self, client_id: str, now: str, **fields: Any) -> bool:
+        """Set fields of one send request (only the ledger's own columns)."""
+        bad = set(fields) - self._SEND_REQUEST_FIELDS
+        if bad or not fields:
+            raise ValueError(f"send_requests: cannot set {sorted(bad) or 'nothing'}")
+        cols = sorted(fields)
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            cursor = await conn.execute(
+                f"UPDATE send_requests SET {', '.join(f'{c} = ?' for c in cols)}, updated_at = ? "
+                "WHERE client_id = ?",
+                (*(fields[c] for c in cols), now, client_id),
+            )
+            await conn.commit()
+            return cursor.rowcount == 1
+
+    async def prune_send_requests(self, before: str) -> int:
+        """Drop requests created before ``before`` (ISO): past the messages TTL there
+        is no row left for a retry to duplicate."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            cursor = await conn.execute(
+                "DELETE FROM send_requests WHERE created_at < ?", (before,))
+            await conn.commit()
+            return cursor.rowcount
 
     # ── Recall Metrics (batch flush) ─────────────────────────────────────
     # ── Compactions (schema v12, core/compact_summary.py) ─────────────

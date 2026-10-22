@@ -235,8 +235,8 @@ async def test_v12_does_not_skip_a_failed_v11(tmp_path):
         await conn.execute("PRAGMA user_version = 11")
         await conn.commit()
         await db._run_versioned_migrations(conn, 11)
-        # v12 bumps 11 -> 12, then v13 (transcript drop) chains to 13.
-        assert (await (await conn.execute("PRAGMA user_version")).fetchone())[0] == 13
+        # v12 bumps 11 -> 12, then v13 (transcript drop) and v14 (send_requests) chain on.
+        assert (await (await conn.execute("PRAGMA user_version")).fetchone())[0] == 14
         await conn.execute("PRAGMA user_version = 10")
         await conn.execute("DROP TABLE compactions")
         await conn.commit()

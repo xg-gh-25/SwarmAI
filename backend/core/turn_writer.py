@@ -14,9 +14,13 @@ continue_with_cmd_permission, run_injected_turn) gets ONE ``TurnWriter``:
   ``finally``, before ``turn_end`` is published, however the turn ends (result,
   Stop, error, abort, cancellation at shutdown), so a tab that reloads on
   ``turn_end`` finds every block it was shown. Idempotent.
+- ``begin(session_id)`` (``_published_turn``, at ``turn_start``): the writer is
+  the session's running one — ``TurnWriter.running(session_id)`` — until
+  ``close()``. One turn runs per session at a time; the registry is keyed by
+  session and every entry is removed by its own writer's ``close()``.
 - ``flush()``: writes what is held now and keeps the writer open — for a write
-  into the running turn from outside it (``_persist_stop_receipt``), so the
-  turn's rows keep the order the turn showed them in.
+  into the running turn from outside it (``_persist_stop_receipt`` flushes
+  ``running(sid)`` first), so the turn's rows keep the order the turn showed.
 
 ``write`` / ``flush`` / ``close`` are serialised by one lock: the Stop request
 runs concurrently with the turn, and a flush between a write's row insert and
@@ -25,7 +29,7 @@ its clearing of the held results would write them twice.
 Nothing else calls ``_persist_stream_event`` for a turn
 (tests/test_turn_writer.py holds that). P2 assigns the transcript rev here.
 
-Public: ``TurnWriter``.
+Public: ``TurnWriter`` (``TurnWriter.running``).
 """
 from __future__ import annotations
 
@@ -37,6 +41,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from .session_router import SessionRouter
 
 logger = logging.getLogger(__name__)
+
+#: the running turn's writer, per session (see ``begin``)
+_RUNNING: "dict[str, TurnWriter]" = {}
 
 
 class TurnWriter:
@@ -55,6 +62,17 @@ class TurnWriter:
     @property
     def session_id(self) -> Optional[str]:
         return self._session_id
+
+    @staticmethod
+    def running(session_id: Optional[str]) -> "Optional[TurnWriter]":
+        """The writer of the session's running turn, if one runs."""
+        return _RUNNING.get(session_id) if session_id else None
+
+    def begin(self, session_id: str) -> None:
+        """The turn started (``turn_start``): this is the session's running writer."""
+        self._session_id = session_id
+        if not self._closed:
+            _RUNNING[session_id] = self
 
     async def write(self, event: dict, *, session_id: Optional[str] = None,
                     files: Optional[dict] = None, changes: Any = None) -> list[dict]:
@@ -83,11 +101,15 @@ class TurnWriter:
     async def close(self) -> None:
         """Write the step results still held (the turn ended without the assistant
         row or terminal event that carries them). Later writes are ignored."""
-        async with self._lock:
-            if self._closed:
-                return
-            self._closed = True
-            await self._write_held()
+        try:
+            async with self._lock:
+                if self._closed:
+                    return
+                self._closed = True
+                await self._write_held()
+        finally:
+            if self._session_id and _RUNNING.get(self._session_id) is self:
+                del _RUNNING[self._session_id]
 
     async def _write_held(self) -> None:
         if not self._held or not self._session_id:

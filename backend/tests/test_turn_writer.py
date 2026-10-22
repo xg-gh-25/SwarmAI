@@ -166,7 +166,7 @@ async def test_the_result_is_in_the_db_when_turn_end_is_published():
 @pytest.mark.asyncio
 async def test_a_stop_receipt_lands_after_the_result_already_shown():
     from database import db
-    sid, hold, release = "s-tw-stop", asyncio.Event(), asyncio.Event()
+    sid, hold, release = "s-tw-receipt", asyncio.Event(), asyncio.Event()
     router = _router()
     task = asyncio.ensure_future(_turn(router, sid, _tool_then("hang", hold, release)))
     await asyncio.wait_for(hold.wait(), 5)

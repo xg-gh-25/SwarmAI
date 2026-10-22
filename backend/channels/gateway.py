@@ -59,6 +59,7 @@ from channels.message_queue import (
 from channels.egress_redactor import redact_text
 from channels.response_formatter import HumanResponseFormatter
 from core import session_registry
+from core.send_requests import channel_client_id
 from core.session_manager import session_manager
 from core.initialization_manager import initialization_manager
 from database import db
@@ -1887,6 +1888,7 @@ class ChannelGateway:
 
         reply_text = ""
         error_occurred = False
+        duplicate_delivery = False
         # ── Human Mode: mark queue as processing + drain any early supplements ──
         conv_key = (channel_id, msg.external_chat_id)
         queue: Optional[ChannelMessageQueue] = self._message_queues.get(conv_key)
@@ -1917,8 +1919,19 @@ class ChannelGateway:
                 enable_skills=enable_skills,
                 enable_mcp=enable_mcp,
                 channel_context=channel_context,
+                # the platform message id: a redelivery of this message is the
+                # same send, answered once (core/send_requests)
+                client_id=channel_client_id(
+                    channel_context.get("channel_type", ""), channel_id,
+                    msg.external_chat_id, msg.external_message_id),
             ):
                 event_type = event.get("type", "")
+                if event_type == "accepted" and event.get("duplicate"):
+                    # already taken: its turn ran (or runs) and replies itself
+                    logger.info("channel_gateway.duplicate_delivery channel=%s message=%s — no reply",
+                                channel_id, msg.external_message_id)
+                    duplicate_delivery = True
+                    continue
 
                 # ── Thinking streaming (native path only) ─────
                 # Stream thinking tokens in italic so the user sees
@@ -2211,6 +2224,13 @@ class ChannelGateway:
                         "Re-queued %d late supplement(s) for session %s",
                         len(late_supplements), session_id,
                     )
+
+        if duplicate_delivery:
+            # the ack posted for this delivery would be left dangling: the first
+            # delivery's turn has its own
+            if heartbeat_mgr:
+                await heartbeat_mgr.delete_ack()
+            return
 
         if ctx.stream_flushed:
             reply_text = ctx.stream_flushed

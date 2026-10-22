@@ -116,7 +116,6 @@ class TestContinuationClientIdStash:
         """A SessionRouter whose get_unit returns a fake WAITING_INPUT unit that
         yields ONE assistant continuation event."""
         router = SessionRouter.__new__(SessionRouter)  # no __init__ deps needed
-        router._turn_writers = {}   # set by __init__: the running turn's writer per session
         unit = MagicMock()
         unit._turn_client_id = turn_client_id
 

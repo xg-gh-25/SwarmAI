@@ -186,22 +186,43 @@ R10 暴露的不是"某条路径少了 finally"，而是一个回合写什么、
 
 ### S2 发送请求表（解 RC2）
 
-v1 只在 messages 上按 (session_id, client_id) 查，挡不住"首次发送断线后重试新建 session"。v2：
+v1 只在 messages 上按 (session_id, client_id) 查，挡不住"首次发送断线后重试新建 session"。
 
-- **表 `send_requests`**：`client_id`（主键，全局唯一）、`session_id`、`status`
-  （`reserved | persisted | queued | running | done | failed`）、`turn_id`、`pending_seq`、
-  `user_message_id`、`created_at`、`updated_at`。
-- **先占位再做事**：`run_conversation` 入口第一件事 `INSERT ... ON CONFLICT(client_id) DO NOTHING`。
-  - 插入成功：正常流程，每推进一步更新 status（建 session → persisted → queued / running → done）。
-  - 已存在：不建 session、不写用户行、不排队，直接返回已有结果的受理回执
-    `{accepted, clientId, sessionId, turnId, queued, duplicate:true}`；正在运行的，前端按回执订阅即可。
-- **client_id 来源**：桌面端由前端生成（已有）；排队送出沿用原消息的 client_id；**频道用平台消息
-  id**（Slack `channel:ts`，其他频道各自的消息 id），gateway 传入，不再由 router 每次生成。
-- **前端**：一个发送器，所有重发都调它、都用同一个 client_id；后端幂等，重试本身安全。
+#### 2.1 表和入口（2026-10-22 已落地：schema v14、`core/send_requests.py`）
+
+- **表 `send_requests`**：`client_id`（主键）、`session_id`、`status`（`reserved | persisted | failed`）、
+  `owner`（占位的进程）、`user_message_id`、`created_at`、`updated_at`。
+- **只记别处没有的事实**：这次发送被接下了、属于哪个会话、它的用户行是哪条。v2 草案里的
+  `queued / running / done`、`pending_seq`、`turn_id` 不放进来——排队与否是用户行自己的
+  `sent / pending_seq`，回合在不在跑是会话事件中心的事；放进来就成了第二个来源，要和原处同步。
+  回执需要时去原处读。
+- **先占位再做事**：`_run_conversation_impl` 在建 unit、领取预热进程、存会话、写用户行**之前**
+  `INSERT OR IGNORE` 占位（首次发送的 session id 也在这之前定下）。
+  - 占到：照常走；写下用户行后记 `persisted`。没写成用户行（出错，或请求在那之前被取消）就记
+    `failed`，同一个 client_id 再来会重新执行。
+  - 已存在：不建会话、不写用户行、不排队，只回一个 `accepted` 回执
+    `{duplicate:true, clientId, sessionId, status, userMessageId, queued}`，`queued` 读用户行。
+    回执只在 POST 上，不发布（它不属于任何回合）。
+  - 另一个进程（已经退出的 daemon）占了位却没写用户行：接管。写了用户行的永不接管。
+  - 账本读写失败：放行（照旧执行，记 ERROR）。账本坏了不能让聊天停。
+- **client_id 来源**：桌面端由前端生成（已有）；排队送出不占位（行已存在）；**频道用平台消息 id**
+  （`channel_client_id(类型, 渠道, 会话, 平台消息 id)`，Slack 的 ts 只在频道内唯一，所以带上
+  渠道和会话），gateway 传入。gateway 收到重复回执就不回复，并撤回这次投递已发出的"看一下"。
+  平台没给消息 id 的，每次投递仍是一次新发送。
+- **清理**：和消息同一个 90 天 TTL，由 lifecycle 的定期清理删掉。
+- **开销**：每次发送多一次占位插入和一次状态更新，实测 2.4 ms（测试库）。
+
+#### 2.2 还没做的（P1 后续提交）
+
+- **受理回执**：非重复的发送也先回 `accepted`（S1 3.4），前端据此处理排队、SESSION_BUSY，
+  不再删排队的用户气泡（R7）。
+- **前端统一发送器**：所有重发都用同一个 client_id。现在 QUEUE_TIMEOUT 的"重试"按钮会生成新的
+  client_id 再发一次，而原消息已被保留为待发送——这会产生第二条用户行，账本挡不住（它是另一个
+  client_id）。
 - **已有重复记录的清理**：按"相同 session、相同 client_id、两条 user 行"列清单，核对各自的
   pending 状态和后面的助手输出，给你看过再在一个事务里删。不按"内容相同 + 时间接近"判断。
-- messages 表加独立的 `client_id` 列（迁移时从 metadata 回填，坏掉的 JSON 跳过并记数），
-  不在 `json_extract` 上建索引。
+- messages 表加独立的 `client_id` 列的必要性重新评估：账本已经按 client_id 查，消息表上不一定
+  还需要。
 
 ### S3 会话状态只有一个来源（解 RC3）
 
@@ -250,7 +271,7 @@ P0 跑出的所有不一致都列进 `KNOWN`，按根因标注。之后每个阶
 | 阶段 | 内容 | 依赖 | 规模 | 风险 |
 |---|---|---|---|---|
 | P0 | 第 4 节的测试 | 无 | 中 | 无（只加测试） |
-| P1 | S2：`send_requests` 表、受理回执、频道传平台消息 id、前端统一发送器、重复记录清单 | P0 | 中 | 中（发送入口） |
+| P1 | S2：`send_requests` 表与占位（已做）、频道传平台消息 id（已做）、受理回执、前端统一发送器、重复记录清单 | P0 | 中 | 中（发送入口） |
 | P2 | S1 后端：rev 与 `session_revs`、规范化事件、提问卡片存库（R2）、Stop / 压缩 / 事后更新带 rev、`since_rev` 增量、分页带 R、按回合边界合并 | P0 | 大 | 中（写库路径、迁移） |
 | P3 | S3：状态快照随订阅流推送，前端改看它 | P1 | 中 | 中 |
 | P4 | S1 前端：投影器、快照 + rev 之后的事件、三类分开存、POST 只回回执；按 3.5 逐项删除 | P2、P3 | 大 | 高：分多个提交，每个提交 `KNOWN` 不变长 |

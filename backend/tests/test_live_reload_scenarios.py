@@ -377,6 +377,8 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
                       "envs": await _resubscribe(hub, {sid: cursor}, old_epoch),
                       "history": await _history(router, sid)})
 
+    # client_ids are unique across scenarios: they share one test DB, and the send
+    # ledger (core/send_requests) answers a client_id it has seen as a duplicate
     for n, turn in enumerate(turns, 1):
         kind = turn["kind"]
         pause = _pause_event(turn, n, sid) if turn.get("pause") else None
@@ -411,11 +413,11 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
             return _scripted(unit, frames, pause=p, at=at or None)
 
         if kind == "chat":
-            cid, text = f"local-{n}", f"user message {n}"
+            cid, text = f"local-{sid[-2:]}.{n}", f"user message {n}"
             steps.append({"kind": "user", "clientId": cid, "text": text})
             await drive(chat(cid, text, scripted(_frames(turn, n, sid, session_start=True))), killed)
         elif kind == "stop":
-            cid, text = f"local-{n}", f"user message {n}"
+            cid, text = f"local-{sid[-2:]}.{n}", f"user message {n}"
             steps.append({"kind": "user", "clientId": cid, "text": text})
             receipt: list[dict] = []
 
@@ -429,7 +431,7 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
             steps.append({"kind": "stop", "receipt": json.loads(json.dumps(receipt))})
         elif kind == "busy":
             for k in range(turn["queued"]):
-                cid, text = f"local-{n}-{k}", f"queued message {n}.{k}"
+                cid, text = f"local-{sid[-2:]}.{n}-{k}", f"queued message {n}.{k}"
                 post = await chat(cid, text, _busy_send)
                 steps.append({"kind": "user", "clientId": cid, "text": text,
                               "post": json.loads(json.dumps(post))})

@@ -1277,6 +1277,16 @@ class LifecycleManager:
                 )
         except Exception as exc:
             logger.warning("lifecycle_manager.compaction_cleanup failed: %s", exc)
+        # The send ledger (core/send_requests): same TTL — past it there is no row
+        # left for a late retry to duplicate.
+        try:
+            from core import send_requests
+
+            pruned = await send_requests.prune()
+            if pruned > 0:
+                logger.info("lifecycle_manager.ttl_cleanup deleted=%d send requests", pruned)
+        except Exception as exc:
+            logger.warning("lifecycle_manager.send_request_cleanup failed: %s", exc)
 
     # ── Radar ToDo sweep ─────────────────────────────────────────────
 

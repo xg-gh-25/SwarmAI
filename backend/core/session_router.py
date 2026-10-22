@@ -2126,11 +2126,6 @@ class SessionRouter:
         config: Optional["AppConfigManager"] = None,
     ) -> None:
         self._units: dict[str, SessionUnit] = {}
-        # The running turn's writer per session (core/turn_writer), registered by
-        # _published_turn while the turn runs and removed when it ends: a write
-        # into a running turn from outside it (the Stop receipt) goes after what
-        # the writer still holds.
-        self._turn_writers: dict[str, TurnWriter] = {}
         self._prompt_builder = prompt_builder
         self._config = config
         self._lifecycle_manager = None  # Set by session_registry after init
@@ -3785,15 +3780,13 @@ class SessionRouter:
                             yield ev
                             continue
                         started = True
-                        self._turn_writers[sid] = writer
+                        writer.begin(sid)
                         yield hub.publish(sid, {"type": "turn_start", "source": source},
                                           turn_id=turn_id, turn_client_id=turn_client_id)
                     yield hub.publish(sid, ev, turn_id=turn_id, turn_client_id=turn_client_id)
             finally:
                 await writer.close()
                 if started:
-                    if self._turn_writers.get(sid) is writer:
-                        del self._turn_writers[sid]
                     hub.publish(sid, {"type": "turn_end"}, turn_id=turn_id,
                                 turn_client_id=turn_client_id)
 
@@ -3903,6 +3896,20 @@ class SessionRouter:
                 "prefix (server-reserved for pre-warmed sessions)"
             )
 
+        # One send is one message (core/send_requests, design S2): a send that
+        # carries a user message reserves its client_id FIRST — before a unit is
+        # created or adopted, a session stored or a row written. The same
+        # client_id again gets the first one's receipt and nothing else happens.
+        # A drained turn delivers rows that exist already; it reserves nothing.
+        from . import send_requests
+        reserved_send: Optional[str] = None
+        if (content or user_message) and client_id and not _drained_pending:
+            reservation = await send_requests.reserve(client_id, session_id)
+            if not reservation.taken:
+                yield await send_requests.receipt(reservation.record or {})
+                return
+            reserved_send = client_id
+
         # ── Desktop prewarm adopt-intercept (方案A, run_f107f442) ────────────
         # A brand-new DESKTOP tab first message (no channel_context, session_id
         # not yet a live unit) may ADOPT a pooled baseline subprocess, skipping
@@ -3974,6 +3981,7 @@ class SessionRouter:
         persisted_msg_id: Optional[str] = None
         if user_content and not _drained_pending:
             title = (user_message or "Chat")[:50]
+            row_written = False
             try:
                 await session_manager.store_session(session_id, agent_id, title)
                 _msg_metadata = {"client_id": client_id} if client_id else None
@@ -3994,6 +4002,9 @@ class SessionRouter:
                     "created_at": datetime.now().isoformat(),
                     **({"metadata": _msg_metadata} if _msg_metadata else {}),
                 })
+                row_written = True
+                if reserved_send:
+                    await send_requests.persisted(reserved_send, persisted_msg_id)
             except Exception as exc:
                 persisted_msg_id = None
                 # Non-fatal: proceed even if persist fails.  The message
@@ -4003,6 +4014,11 @@ class SessionRouter:
                     "Failed to persist user message for session %s: %s",
                     session_id, exc,
                 )
+            finally:
+                # No user row (an error, or the request cancelled before it): the
+                # reservation is released, so a retry of this client_id runs.
+                if reserved_send and not row_written:
+                    await send_requests.failed(reserved_send)
 
         # Acquire concurrency slot — may queue with SSE indicator
         # Check if we need to queue BEFORE blocking, so we can emit the
@@ -4914,7 +4930,7 @@ class SessionRouter:
         if not block:
             return []
         # after what the running turn has shown but not yet written (a step's result)
-        running = self._turn_writers.get(session_id)
+        running = TurnWriter.running(session_id)
         if running is not None:
             await running.flush()
         return await self._persist_assistant_blocks(

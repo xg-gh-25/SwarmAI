@@ -393,6 +393,44 @@ class TestGenericChannelContext:
         assert captured_context.get("channel_type") == "slack"
         assert captured_context.get("bot_token") == "xoxb-test"
 
+    @pytest.mark.asyncio
+    async def test_a_redelivered_message_is_one_send_and_gets_no_second_reply(self, gateway, mock_db):
+        """The platform message id is the send's client_id (core/send_requests); the
+        router answers a redelivery with a duplicate receipt, and the gateway posts
+        nothing for it (the first delivery's turn replies)."""
+        from channels.base import InboundMessage
+        from core.send_requests import channel_client_id
+
+        mock_db.channels.get.return_value = {
+            "id": "slack-1", "channel_type": "slack", "agent_id": "default",
+            "config": json.dumps({"bot_token": "xoxb-test"}), "access_mode": "open",
+            "rate_limit_per_minute": 10, "enable_skills": False, "enable_mcp": False,
+        }
+        msg = InboundMessage(channel_id="slack-1", external_chat_id="D017ZD4PUKT",
+                             external_sender_id="REDACTED_ID1", external_message_id="1729600000.0001",
+                             text="hello", metadata={"chat_type": "im", "message_type": "text"})
+        adapter = AsyncMock()
+        gateway._adapters["slack-1"] = adapter
+        seen: list = []
+
+        async def duplicate(**kwargs):
+            seen.append(kwargs.get("client_id"))
+            yield {"type": "accepted", "duplicate": True, "clientId": kwargs.get("client_id"),
+                   "sessionId": "sid-1", "status": "persisted", "queued": False}
+
+        with patch.object(gateway, "_resolve_session", new=AsyncMock(return_value=("sid-1", "csid-1", False, None))):
+            with patch("channels.gateway.session_registry") as mock_sr:
+                mock_sr.session_router.run_conversation = duplicate
+                with patch.object(gateway, "_prepare_message_text", new=AsyncMock(return_value="hello")):
+                    await gateway.handle_inbound_message(msg)
+
+        assert seen == [channel_client_id("slack", "slack-1", "D017ZD4PUKT", "1729600000.0001")]
+        # at most this delivery's ack ("let me look"), taken back again; never a reply
+        sent = [c.args[0].text for c in adapter.send_message.await_args_list]
+        assert len(sent) <= 1
+        if sent:
+            adapter._slack_client.chat_delete.assert_called_once()
+
     def test_inject_channel_mcp_slack(self):
         """inject_channel_mcp adds Slack-specific env vars."""
         from core.mcp_config_loader import inject_channel_mcp

@@ -58,7 +58,7 @@ class TestW1TranscriptIndexRemoved:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.close()
         assert names == set(), names
-        assert version == 13
+        assert version == 14   # v13 dropped them; v14 (send_requests) chains on
 
 
 # ── W2: select_memory_sections applies temporal weight ───────────────

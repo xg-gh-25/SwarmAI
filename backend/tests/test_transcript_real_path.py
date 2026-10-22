@@ -99,12 +99,8 @@ async def test_one_send_one_user_row_and_its_reply():
     assert hist[1]["content"][-1]["text"] == "reply to hello"
 
 
-# ── S2 / P1: the same client_id is one message ─────────────────────────────────
+# ── S2 / P1 (core/send_requests): the same client_id is one message ─────────────
 
-P1 = pytest.mark.xfail(strict=True, reason="RC2: send is not idempotent — fixed by S2 / P1 (send_requests)")
-
-
-@P1
 @pytest.mark.asyncio
 async def test_same_client_id_twice_is_one_user_row():
     r = _router()
@@ -113,7 +109,6 @@ async def test_same_client_id_twice_is_one_user_row():
     assert len(await _user_rows("s-dup")) == 1
 
 
-@P1
 @pytest.mark.asyncio
 async def test_resend_after_session_busy_adds_nothing():
     r = _router()
@@ -124,7 +119,6 @@ async def test_resend_after_session_busy_adds_nothing():
     assert len(await _user_rows("s-busy")) == 1
 
 
-@P1
 @pytest.mark.asyncio
 async def test_first_send_retried_before_a_session_exists_is_one_session():
     from database import db
@@ -137,13 +131,15 @@ async def test_first_send_retried_before_a_session_exists_is_one_session():
     assert len([x for x in rows if x["role"] == "user"]) == 1
 
 
-@P1
 @pytest.mark.asyncio
 async def test_channel_turn_retried_is_one_user_row():
     r = _router()
-    ctx = {"channel_id": "C1", "channel_type": "slack", "external_message_id": "C1:1729600000.0001"}
-    await _send(r, "s-chan", "from slack", None, channel=ctx)
-    await _send(r, "s-chan", "from slack", None, channel=ctx)
+    from core.send_requests import channel_client_id
+    ctx = {"channel_id": "C1", "channel_type": "slack", "chat_id": "D1"}
+    # as the gateway sends it: the platform message id is the client_id
+    cid = channel_client_id("slack", "C1", "D1", "1729600000.0001")
+    await _send(r, "s-chan", "from slack", cid, channel=ctx)
+    await _send(r, "s-chan", "from slack", cid, channel=ctx)
     assert len(await _user_rows("s-chan")) == 1
 
 
