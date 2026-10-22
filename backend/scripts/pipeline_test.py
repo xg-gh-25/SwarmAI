@@ -409,7 +409,7 @@ def _target_repo(run_id: "str | None", run_state: dict) -> "tuple[Path | None, s
             wt = rw.validate(run_id, e, main)
         except rw.WorktreeError as exc:
             return None, f"run worktree invalid: {exc.message}"
-        _WORKTREE.update(repo=wt, run_id=run_id, name=e["repo_name"])
+        _WORKTREE.update(repo=wt, run_id=run_id, name=e["repo_name"], main=main)
         os.environ["PIPELINE_TEST_STRIP_ROOT"] = os.path.realpath(str(main / "backend"))
         return wt, None
     return main, None  # landed already (or no worktree for this repo): main holds the change
@@ -477,10 +477,27 @@ def _contained(base: Path, rel: str) -> Path | None:
     return p if b in p.parents else None
 
 
+def _run_fork_point(repo: Path) -> "str | None":
+    """Where an isolated run's worktree forked from its main checkout's integration
+    branch (B6), or None: only for a repo this call knows is a run's worktree (the v1
+    contract or the legacy run.json entry said so), never for any linked worktree."""
+    if _WORKTREE.get("repo") != repo or not _WORKTREE.get("main"):
+        return None
+    if "base" not in _WORKTREE:
+        from core.run_protocol.runner import run_base
+        _WORKTREE["base"] = run_base(repo, _WORKTREE["main"], _WORKTREE.get("branch"))
+    base = _WORKTREE.get("base") or ""
+    return base if re.fullmatch(r"[0-9a-f]{40,64}", base) else None
+
+
 def _git_changed_set(repo: Path) -> set[str]:
-    """``git diff --name-only HEAD`` ∪ untracked files."""
+    """``git diff --name-only HEAD`` ∪ untracked files; in an isolated run's worktree
+    also what the run committed there since it forked (B6: a commit does not hide it)."""
     out: set[str] = set()
-    for args in (("diff", "--name-only", "HEAD"), ("ls-files", "--others", "--exclude-standard")):
+    fork = _run_fork_point(repo)
+    committed = (("diff", "--name-only", "--no-renames", fork, "HEAD"),) if fork else ()
+    for args in (("diff", "--name-only", "HEAD"), ("ls-files", "--others", "--exclude-standard"),
+                 *committed):
         for line in (_git(repo, *args) or "").splitlines():
             if line.strip():
                 out.add(line.strip())
@@ -2393,8 +2410,57 @@ def _head_outcome(nodeid: str, results: list[dict]) -> str | None:
     return "passed" if o == "passed" else "failed" if o in ("failed", "error") else None
 
 
+def _pipeline_code_hash() -> str:
+    """The v1 code identity (B7): core/run_protocol + pipeline_test.py + pipeline_v1.py."""
+    from core.run_protocol.cache import pipeline_code_hash
+    return pipeline_code_hash(_BACKEND_DIR)
+
+
 def _baseline_path(cache: Path, sha: str) -> Path:
     return cache / f"baseline-{sha}-v{RUNNER_VERSION}.json"
+
+
+def baseline_key(repo_name: str, sha: str, python_id: str, nodeid: str) -> str:
+    """One immutable baseline outcome's identity (B7, design §C5.2): repo, base sha,
+    interpreter, code hash, protocol and rules version, and the node."""
+    from core.run_protocol.cache import cache_key
+    from core.run_protocol.risk_selection import RISK_RULES_VERSION
+    return cache_key({
+        "kind": "baseline", "repo": repo_name, "tree": sha,
+        "pipeline_code_hash": _pipeline_code_hash(), "protocol_version": 1,
+        "rules_version": f"runner-{RUNNER_VERSION}/{RISK_RULES_VERSION}",
+        "python": python_id, "nodeid": nodeid})
+
+
+def baseline_lookup(cache: Path, repo_name: str, sha: str, python_id: str,
+                    nodeid: str) -> "str | None":
+    """A cached base outcome; a poisoned (conflicting) node is unknown and reruns."""
+    from core.run_protocol.cache import CacheError, read
+    try:
+        value = read(Path(cache) / "v1", "baseline",
+                     baseline_key(repo_name, sha, python_id, nodeid))
+    except CacheError:
+        return None
+    return value if value in ("passed", "failed") else None
+
+
+def _baseline_ids(ctx) -> tuple[str, str]:
+    return str(_WORKTREE.get("name") or ctx.repo.name), _python_id(ctx.python)
+
+
+def _baseline_read(ctx, sha: str, nodeids: list[str]) -> dict[str, str]:
+    repo_name, pid = _baseline_ids(ctx)
+    return {n: o for n in nodeids
+            if (o := baseline_lookup(ctx.cache, repo_name, sha, pid, n)) is not None}
+
+
+def _baseline_put(ctx, sha: str, fresh: dict[str, str]) -> list[str]:
+    """Create each outcome once; a node measured differently before is poisoned
+    (never trusted again) and returned so its call can say so."""
+    from core.run_protocol.cache import put_once
+    repo_name, pid = _baseline_ids(ctx)
+    return [n for n, o in fresh.items() if put_once(
+        ctx.cache / "v1", "baseline", baseline_key(repo_name, sha, pid, n), o) == "conflict"]
 
 
 def _targets_from_nodeids(nodeids: list[str]) -> dict:
@@ -2825,13 +2891,10 @@ def _baseline(ctx, nodeids: list[str], until: float | None = None) -> dict[str, 
     Stored per sha with the interpreter id (``_BASELINE_PY``): outcomes measured with
     another interpreter (a venv rebuilt or upgraded) are discarded, not trusted. The
     HEAD run for uncached nodeids ends by ``until`` (default: the global deadline)."""
-    sha = _head_sha(ctx.repo)
+    sha = _run_fork_point(ctx.repo) or _head_sha(ctx.repo)   # the run's base (B6)
     if not sha:
         return {n: None for n in nodeids}
-    pid = _python_id(ctx.python)
-    bpath = _baseline_path(ctx.cache, sha)
-    base = _read_json(bpath)
-    base = base if isinstance(base, dict) and base.get(_BASELINE_PY) == pid else {}
+    base = _baseline_read(ctx, sha, nodeids)
     need = [n for n in nodeids if base.get(n) not in ("passed", "failed")]
     if need and ctx.left() >= 3:
         wt = _ensure_worktree(ctx, sha, ctx.left())
@@ -2841,16 +2904,11 @@ def _baseline(ctx, nodeids: list[str], until: float | None = None) -> dict[str, 
                                      "base", root=wt)
             fresh = {n: o for n in need if (o := _head_outcome(n, res)) is not None}
             if fresh:
-                fd = _try_lock(ctx.cache / f".baseline-{sha}.lock", 5)
-                try:
-                    cur = _read_json(bpath)
-                    cur = cur if isinstance(cur, dict) and cur.get(_BASELINE_PY) == pid else {}
-                    cur.update(fresh)
-                    cur[_BASELINE_PY] = pid
-                    _write_json(bpath, cur)
-                finally:
-                    _unlock(fd)
-                base.update(fresh)
+                conflicts = _baseline_put(ctx, sha, fresh)
+                if conflicts:
+                    ctx.warnings.append("baseline outcomes conflict with an earlier "
+                                        f"measurement and are not trusted: {conflicts[:5]}")
+                base.update({n: o for n, o in fresh.items() if n not in conflicts})
     return {n: base.get(n) if base.get(n) in ("passed", "failed") else None for n in nodeids}
 
 
@@ -3636,7 +3694,7 @@ def _v1_cache_key(ctx, runner, mode: str, plan: dict, targets: dict,
                  for path, nodeids in sorted(targets.items())}
     return cache_key({
         "kind": "test_result", "repo": runner.repo_name, "tree": runner.code_tree,
-        "pipeline_code_hash": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "pipeline_code_hash": _pipeline_code_hash(),
         "protocol_version": 1,
         "rules_version": f"runner-{RUNNER_VERSION}/{RISK_RULES_VERSION}",
         "mode": mode, "python": _python_id(ctx.python), "selectors": selectors,
@@ -5304,11 +5362,23 @@ def _v1_runner(ns, run_dir: Path, run_state: dict, ctx):
     if contract is None:
         return None
     repo_name = str(_WORKTREE.get("name") or ctx.repo.name)
+    main = (contract.get("repo_roots") or {}).get(repo_name)
+    if main and os.path.realpath(str(main)) != os.path.realpath(str(ctx.repo)):
+        # this call tests the run's own worktree: its base is the recorded fork point
+        from core.run_protocol.runner import read_integration_branches
+        if _WORKTREE.get("repo") != ctx.repo:
+            _WORKTREE.clear()
+        _WORKTREE.update(repo=ctx.repo, name=repo_name, main=Path(main), run_id=ns.run_id,
+                         branch=read_integration_branches(get_app_data_dir(), ns.run_id)
+                         .get(repo_name))
+        _WORKTREE.pop("base", None)
     code_tree = git_tree.write_tree(
         str(ctx.repo), (f".aidlc/deliverables/{ns.run_id}/",), {})
-    base = _head_sha(ctx.repo)
-    if base is None:
-        raise RuntimeError("v1 runner cannot resolve repo base")
+    # the run's base is where its worktree forked from main (B6): a commit the agent
+    # makes in the worktree does not move it
+    base = _run_fork_point(ctx.repo) or _head_sha(ctx.repo)
+    if not base:
+        raise RuntimeError("v1 runner cannot resolve the run's base")
     return V1Runner(
         run_dir=run_dir, repo_root=ctx.repo, repo_name=repo_name,
         run_id=ns.run_id, base=base, code_tree=code_tree,
@@ -5344,14 +5414,17 @@ def _v1_finalize(ns, run_state: dict, runner, *, call: dict, result: str,
                  risk_status: str = "within_cap", selection: dict | None = None) -> dict:
     runner_hash = hashlib.sha256(
         (_BACKEND_DIR / "core" / "run_protocol" / "runner.py").read_bytes()).hexdigest()
-    pipeline_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    pipeline_hash = _pipeline_code_hash()
     actual = dict(selection or {})
     actual.setdefault("files", [])
     actual.setdefault("nodeids", [])
     actual.setdefault("summary", {})
     actual.setdefault("dependency_scope", {})
     actual.setdefault("risk_rules", [])
-    actual.update(mode=ns.mode, rules_version=RUNNER_VERSION, risk_status=risk_status)
+    from core.run_protocol.risk_selection import RISK_RULES_VERSION
+    # the whole rule identity, the same string the result caches key on (F-11)
+    actual.update(mode=ns.mode, rules_version=f"runner-{RUNNER_VERSION}/{RISK_RULES_VERSION}",
+                  risk_status=risk_status)
     nodes = runner.node_results()
     final = runner.finalize(
         changed_paths=changed, runner_code_hash=runner_hash,
@@ -5362,6 +5435,7 @@ def _v1_finalize(ns, run_state: dict, runner, *, call: dict, result: str,
         trace=runner.trace(_v1_exits(runner), nodes), node_results=nodes,
         tdd_required=_v1_tdd_required(runner.repo_root, changed),
         whole_files=runner.whole_file_runs(),
+        collected=_v1_collect(runner),
     )
     return {"repo": runner.repo_name, "tests": final["tests"],
             "validations": final["validations"],
@@ -5434,6 +5508,57 @@ def _run_v1_probes(ns, run_state: dict, runner, changed: list[str]) -> tuple[dic
                            risk_status=str(prior.get("risk_status") or "within_cap"))
     ok = all(row["result"] == "pass" for row in calls)
     return {"mode": "probe", "ok": ok, "probes": calls, **summary}, (0 if ok else 1)
+
+
+def _v1_design_test_refs(runner) -> list[str]:
+    """Every pytest node the run's DESIGN_SPEC names: property / failure-mode tests and
+    test-kind exit criteria (what DS-2b / DS-4b need collected)."""
+    try:
+        design = json.loads((runner.run_dir / "artifacts" / "design_spec.json")
+                            .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    refs = [row.get("test") for key in ("properties", "failure_modes")
+            for row in design.get(key) or [] if isinstance(row, dict)]
+    refs += [row.get("ref") for row in design.get("exit_criteria") or []
+             if isinstance(row, dict) and row.get("kind") == "test"]
+    return sorted({r for r in refs if isinstance(r, str) and r.startswith("backend/")
+                   and "::" in r})
+
+
+def _v1_collect(runner) -> "list[str] | None":
+    """Collect the DESIGN_SPEC's test nodes on this tree with pytest --collect-only
+    (fixing spec B8): DS-2b / DS-4b read what pytest found, not what the document
+    claims. One bounded call per code tree, kept beside the final. None = not
+    collected (no design, or pytest could not run): the checks then fail closed."""
+    refs = _v1_design_test_refs(runner)
+    if not refs:
+        return []
+    out_path = runner.run_dir / "evidence" / "tests" / f"collect-{runner.code_tree}.json"
+    try:
+        cached = json.loads(out_path.read_text(encoding="utf-8"))
+        if cached.get("refs") == refs:
+            return list(cached["collected"])
+    except (OSError, ValueError, KeyError, AttributeError):
+        pass
+    backend = Path(runner.repo_root) / "backend"
+    files = sorted({r.split("::")[0][len("backend/"):] for r in refs
+                    if (backend / r.split("::")[0][len("backend/"):]).is_file()})
+    collected: list[str] = []
+    if files:
+        argv = [runner.python, "-m", "pytest", "--collect-only", "-q", "-o", "addopts=",
+                "-p", "no:cacheprovider", "-p", "no:randomly", *files]
+        try:
+            proc = subprocess.run(argv, cwd=str(backend), env=_child_env(backend, []),
+                                  capture_output=True, text=True, timeout=30,
+                                  stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        collected = sorted({"backend/" + line.strip() for line in proc.stdout.splitlines()
+                            if "::" in line and not line.startswith(" ")})
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(out_path, {"refs": refs, "collected": collected})
+    return collected
 
 
 def _v1_tdd_required(repo: Path, changed: list[str]) -> "list[str] | None":

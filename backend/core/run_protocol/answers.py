@@ -165,6 +165,9 @@ def parse_answer(
             token = nonempty[0].partition(":")[2].strip()
             if token not in GATE0_VERDICTS:
                 errors.append("invalid Gate-0 verdict")
+            elif any(line.startswith("VERDICT:") for line in nonempty[1:]):
+                # one answer, one verdict (F-5): a second line could flip the outcome
+                errors.append("Gate-0 answer carries more than one VERDICT line")
             else:
                 verdict = token
     elif any(line.startswith("VERDICT:") for line in nonempty):

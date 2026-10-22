@@ -62,3 +62,37 @@ def test_missing_identity_or_unsafe_kind_fails_closed(tmp_path):
         put_once(tmp_path, "../test", "a" * 64, {})
     with pytest.raises(CacheError, match="unsafe"):
         read(tmp_path, "test", "short")
+
+
+# ── B7: the code identity covers the whole protocol and both CLIs ───────────
+
+def test_pipeline_code_hash_moves_with_any_protocol_or_cli_file(tmp_path):
+    import shutil
+    from pathlib import Path
+    from core.run_protocol.cache import _pipeline_code_hash, pipeline_code_hash
+    real = Path(__file__).resolve().parents[1]
+    root = tmp_path / "backend"
+    shutil.copytree(real / "core" / "run_protocol", root / "core" / "run_protocol",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    (root / "scripts").mkdir()
+    for name in ("pipeline_test.py", "pipeline_v1.py"):
+        shutil.copy(real / "scripts" / name, root / "scripts" / name)
+    first = pipeline_code_hash(root)
+    for path in (root / "scripts" / "pipeline_v1.py", root / "core" / "run_protocol" / "landing.py",
+                 root / "scripts" / "pipeline_test.py"):
+        path.write_text(path.read_text() + "\n# changed\n")
+        _pipeline_code_hash.cache_clear()          # one process = one code identity
+        assert pipeline_code_hash(root) != first, path
+        first = pipeline_code_hash(root)
+
+
+def test_a_conflicting_baseline_outcome_is_never_trusted(tmp_path):
+    import sys
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "scripts"))
+    import pipeline_test as pt
+    from core.run_protocol.cache import put_once
+    key = pt.baseline_key("repo", "a" * 40, "py", "t.py::t")
+    assert put_once(tmp_path / "v1", "baseline", key, "passed") == "created"
+    assert pt.baseline_lookup(tmp_path, "repo", "a" * 40, "py", "t.py::t") == "passed"
+    assert put_once(tmp_path / "v1", "baseline", key, "failed") == "conflict"
+    assert pt.baseline_lookup(tmp_path, "repo", "a" * 40, "py", "t.py::t") is None

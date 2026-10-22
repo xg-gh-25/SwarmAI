@@ -34,8 +34,9 @@ def validate_manifest(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping) or value.get("schema") != 1:
         raise ValidationError("validations.json must be a schema-1 object")
     entries = value.get("entries")
-    if not isinstance(entries, list) or not entries:
-        raise ValidationError("validations.json entries must be non-empty")
+    if not isinstance(entries, list):
+        # an empty list is a repo that requires no validation (fixing log G-2)
+        raise ValidationError("validations.json entries must be a list")
     ids: set[str] = set()
     normalized: list[dict[str, Any]] = []
     for index, raw in enumerate(entries):
@@ -72,6 +73,16 @@ def load_manifest(repo: str, base: str, *, read_git: Callable[[str, str], bytes]
         raise ValidationError("base must be a full git commit id")
     if read_git is None:
         def read_git(root: str, spec: str) -> bytes:
+            rev, _, path = spec.partition(":")
+            try:
+                listed = subprocess.run(
+                    ["git", "-C", root, "ls-tree", "--name-only", rev, "--", path],
+                    check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15,
+                ).stdout.strip()
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise ValidationError(f"cannot read base validation manifest: {exc}") from exc
+            if not listed:   # the base has no manifest: it requires nothing (G-2)
+                return b'{"schema": 1, "entries": []}'
             try:
                 return subprocess.run(
                     ["git", "-C", root, "show", spec], check=True,

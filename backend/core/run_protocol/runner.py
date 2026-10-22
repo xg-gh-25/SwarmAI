@@ -52,6 +52,41 @@ def read_contract(data_dir: str | Path, run_id: str) -> dict[str, Any] | None:
     return value
 
 
+def integration_branches_path(data_dir: str | Path, run_id: str) -> Path:
+    """Where the engine records each repo's integration branch at worktree creation
+    (the audit area: agents cannot write it)."""
+    return contract_path(data_dir, run_id).parent / "integration_branches.json"
+
+
+def read_integration_branches(data_dir: str | Path, run_id: str) -> dict[str, str]:
+    try:
+        value = json.loads(integration_branches_path(data_dir, run_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): str(v) for k, v in value.items()} if isinstance(value, dict) else {}
+
+
+def run_base(worktree: str | Path, main: str | Path, branch: str | None) -> str | None:
+    """The run's base (fixing spec B6): where *worktree* forked from *main*'s
+    integration *branch* — the recorded ref, never whatever the main checkout has
+    checked out now. None when git cannot say."""
+    import subprocess
+
+    def git(root, *args):
+        try:
+            out = subprocess.run(["git", "-C", str(root), *args], capture_output=True,
+                                 text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return out.stdout.strip() if out.returncode == 0 else None
+    ref = branch or git(main, "symbolic-ref", "HEAD")
+    target = git(main, "rev-parse", "--verify", f"{ref}^{{commit}}") if ref else None
+    head = git(worktree, "rev-parse", "HEAD")
+    if not target or not head:
+        return None
+    return git(worktree, "merge-base", head, target)
+
+
 def is_v1_run(data_dir: str | Path, run_id: str) -> bool:
     return read_contract(data_dir, run_id) is not None
 
@@ -411,7 +446,8 @@ class V1Runner:
                  trace: Sequence[Mapping[str, Any]],
                  node_results: Mapping[str, Mapping[str, Any]] | None = None,
                  tdd_required: Sequence[str] | None = None,
-                 whole_files: Sequence[str] | None = None) -> dict[str, Any]:
+                 whole_files: Sequence[str] | None = None,
+                 collected: Sequence[str] | None = None) -> dict[str, Any]:
         manifest = load_manifest(str(self.repo_root), self.base)
         required = required_for(manifest, changed_paths)
         final = build_repo_final(
@@ -426,7 +462,7 @@ class V1Runner:
             tests_required=any(not path.endswith((".md", ".txt", ".rst"))
                                for path in changed_paths),
             node_results=node_results, tdd_required=tdd_required,
-            whole_files=whole_files,
+            whole_files=whole_files, collected=collected,
         )
         path = self.run_dir / "evidence" / "tests" / f"final-{self.repo_name}.json"
         warning = evidence_seal.write_sealed(path, json.dumps(final, sort_keys=True))

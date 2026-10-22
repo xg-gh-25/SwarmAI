@@ -54,3 +54,23 @@ def test_malformed_manifest_fails_closed(mutate):
     mutate(value)
     with pytest.raises(ValidationError):
         required_for(value, ["backend/a.py"])
+
+
+# ── B6 / G-2: a repo without validations.json, and an empty list ────────────
+
+def test_a_base_without_validations_json_requires_nothing(tmp_path):
+    import subprocess
+    from core.run_protocol.validations import load_manifest, required_for
+    repo = tmp_path / "r"; repo.mkdir()
+    run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True,
+                                    capture_output=True, text=True).stdout.strip()
+    run("init", "-q"); run("config", "user.email", "a@b.c"); run("config", "user.name", "T")
+    (repo / "a.py").write_text("x = 1\n"); run("add", "."); run("commit", "-qm", "base")
+    manifest = load_manifest(str(repo), run("rev-parse", "HEAD"))
+    assert manifest == {"schema": 1, "entries": []}
+    assert required_for(manifest, ["a.py"]) == []
+
+
+def test_an_empty_entry_list_is_a_valid_manifest():
+    from core.run_protocol.validations import validate_manifest
+    assert validate_manifest({"schema": 1, "entries": []})["entries"] == []

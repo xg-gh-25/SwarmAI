@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import logging
 import os
 import secrets
@@ -60,6 +61,28 @@ def _atomic_json(path: Path, value: Any) -> None:
     finally:
         try: temp.unlink()
         except FileNotFoundError: pass
+
+
+_HASH_COMMENT = re.compile(r"#(?!!)")             # a shebang (#!) is executable
+_SLASH_COMMENT = re.compile(r"(//|/\*|\*/|\*(\s|$))")   # not `*gen()` / `*[Symbol…]`
+_LINE_COMMENT = {".py": _HASH_COMMENT, ".sh": _HASH_COMMENT, ".ts": _SLASH_COMMENT,
+                 ".tsx": _SLASH_COMMENT, ".js": _SLASH_COMMENT, ".jsx": _SLASH_COMMENT}
+
+
+def _comment_only_diff(file: str, diff: str) -> bool:
+    """True when nothing executable changed (F-8): a document, or a source file whose
+    every added / removed line is blank or a whole-line comment. A docstring is a string
+    literal and counts as code; so does a trailing comment on a code line."""
+    suffix = Path(file).suffix.lower()
+    if suffix in {".md", ".txt", ".rst"}:
+        return True
+    markers = _LINE_COMMENT.get(suffix)
+    if markers is None:
+        return False
+    changed = [line[1:] for line in diff.splitlines()
+               if line[:1] in "+-" and not line.startswith(("+++", "---"))]
+    return bool(changed) and all(not text.strip() or markers.match(text.lstrip())
+                                 for text in changed)
 
 
 def _git(root: str | Path, *args: str) -> str:
@@ -172,7 +195,8 @@ class RunEngine:
         engine.project, engine.run_id, engine.run_dir = project, run_id, run_dir
         engine.audit_root, engine.authority = data_path / "state" / "pipeline_agent_audit", authority
         engine.store = _store(engine.audit_root, run_id, authority)
-        pipeline_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        from core.run_protocol.cache import pipeline_code_hash
+        pipeline_hash = pipeline_code_hash()   # the whole protocol + both CLIs (B7)
         contract = {"run_id": run_id, "project": project,
                     "protocol_version": 1, "profile": profile,
                     "session_id": session_id, "mode": mode,
@@ -316,6 +340,7 @@ class RunEngine:
                 entry = run_worktree.create(
                     self.run_id, name, self.contract["repo_roots"][name], workspace=self.workspace)
                 created.append((name, entry))
+                self._record_integration_branch(name, entry.get("integration_branch"))
         except run_worktree.WorktreeError as exc:
             for name, entry in created:
                 try:
@@ -353,12 +378,45 @@ class RunEngine:
                 raise EngineError(f"malformed final for {name}: {exc}") from exc
         return merge_final(self.run_id, self.contract["expected_repos"], rows)
 
+    def _record_integration_branch(self, name: str, branch: Any) -> None:
+        """The branch the worktree forked from, kept in the audit area (B6 review): the
+        base must not follow whatever the main checkout has checked out later."""
+        if not isinstance(branch, str) or not branch.startswith("refs/heads/"):
+            return
+        from core.run_protocol.runner import integration_branches_path
+        path = self.store.paths.run / integration_branches_path(".", self.run_id).name
+        current = self._read_json(path, {}) or {}
+        if current.get(name) != branch:
+            _atomic_json(path, {**current, name: branch})
+
+    def _fork_base(self, name: str, root: str) -> str:
+        """Where *root* forked from its main checkout's recorded integration branch (the
+        run's base, B6); HEAD for a shared run whose root IS the main checkout."""
+        from core.run_protocol.runner import run_base
+        main = self.contract["repo_roots"].get(name)
+        if not main or Path(main).resolve() == Path(root).resolve():
+            return _git(root, "rev-parse", "HEAD")
+        branches = self._read_json(self.store.paths.run / "integration_branches.json", {}) or {}
+        base = run_base(root, main, branches.get(name))
+        if not base:
+            raise EngineError(f"{name}: cannot find where the run forked from main")
+        return base
+
     def _changed_paths(self, repos: Mapping[str, str]) -> list[str]:
+        """Every path the run changed since its base: committed in the worktree (B6),
+        staged, unstaged and untracked. The base is the fork point from main."""
         out = []
-        for root in repos.values():
-            out += [line for line in _git(root, "status", "--porcelain=v1", "--untracked-files=all").splitlines()
-                    for line in [line[3:]] if line]
-        return sorted(set(out))
+        for name, root in repos.items():
+            base = self._fork_base(name, root)
+            out += _git(root, "-c", "core.quotepath=off", "diff", "--name-only",
+                        "--no-renames", base, "HEAD").splitlines()
+            # name-only listings: _git strips its output, so a porcelain status line's
+            # leading space would cost the first path a character
+            out += _git(root, "-c", "core.quotepath=off", "diff", "--name-only",
+                        "--no-renames", "HEAD").splitlines()
+            out += _git(root, "-c", "core.quotepath=off", "ls-files", "--others",
+                        "--exclude-standard").splitlines()
+        return sorted({p for p in out if p})
 
     def check_context(self) -> checks.CheckContext:
         requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
@@ -378,8 +436,14 @@ class RunEngine:
                     "run %s: code tree of %s unavailable for checks: %s", self.run_id, name, exc)
         results: dict[str, str] = {}
         covers: set[str] = set()
+        collected: set[str] = set()
         validation_manifest: dict[str, set[str]] = {}
         for name, row in final.get("repos", {}).items():
+            # what pytest collected (B8) and every node that actually ran on this tree
+            tests_row = row.get("tests") or {}
+            collected |= set(tests_row.get("collected") or [])
+            collected |= {n for n in (tests_row.get("nodes") or {}) if "::" in n
+                          and not n.endswith("::*")}
             validation_manifest[name] = {item["id"] for item in row.get("validations", [])}
             for trace in row.get("trace", []):
                 results[str(trace.get("ref") or trace.get("exit"))] = trace.get("result")
@@ -399,7 +463,7 @@ class RunEngine:
             final=final, run=run, test_results=results, trace_covers=covers,
             expected_repos=set(self.contract["expected_repos"]),
             validation_manifest=validation_manifest, existing_files=existing,
-            collected_tests=set(results), decision_documents={}, known_refs={})
+            collected_tests=collected, decision_documents={}, known_refs={})
 
     def write_projection(self) -> Path:
         state = self.projection()
@@ -608,7 +672,9 @@ class RunEngine:
                                 "code_tree": code_tree, "result": "refuted",
                                 "refs": list(refs)})
                 continue
-            diff = _git(root, "diff", "--unified=0", "HEAD", "--", file)
+            # base -> the code tree that lands, as REVIEW saw it (a new file included)
+            diff = _git(root, "diff", "--unified=0", "--no-renames",
+                        self._fork_base(_name, root), code_tree, "--", file)
             line = int(row["line"])
             touches = False
             for match in hunk_re.finditer(diff):
@@ -618,7 +684,7 @@ class RunEngine:
                         or (new_count and new_start <= line < new_start + new_count):
                     touches = True
                     break
-            non_executable = Path(file).suffix.lower() in {".md", ".txt", ".rst"}
+            non_executable = _comment_only_diff(file, diff)
             derived.append({"finding_id": finding_id,
                             "evidence_type": "diff_assertion",
                             "code_tree": code_tree, "result": "asserted",
@@ -1101,12 +1167,17 @@ class RunEngine:
         changed = []
         diffs = []
         for name, root in repos.items():
-            for line in _git(root, "diff", "--numstat", "HEAD").splitlines():
+            # the run's whole change: fork point -> the code tree that would land (B6),
+            # so a commit in the worktree or a new untracked file is reviewed too
+            base, tree_sha = self._fork_base(name, root), git_tree.write_tree(
+                root, (f".aidlc/deliverables/{self.run_id}/",), {})
+            for line in _git(root, "diff", "--numstat", "--no-renames", base, tree_sha).splitlines():
                 ins, delete, path = line.split("\t", 2)
-                changed.append({"path": path, "insertions": int(ins or 0),
-                                "deletions": int(delete or 0),
+                changed.append({"path": path, "insertions": int(ins) if ins.isdigit() else 0,
+                                "deletions": int(delete) if delete.isdigit() else 0,
                                 "is_test": "/tests/" in path or path.startswith("tests/")})
-            diffs.append(f"## {name}\n" + _git(root, "diff", "--no-ext-diff", "HEAD"))
+            diffs.append(f"## {name}\n" + _git(root, "diff", "--no-ext-diff", "--no-renames",
+                                                base, tree_sha))
         source_paths = [row["path"] for row in changed if not row["is_test"]
                         and not row["path"].endswith((".md", ".txt", ".rst"))]
         patterns = (review.review_patterns(source_paths, "\n".join(diffs)) if source_paths
@@ -1120,13 +1191,28 @@ class RunEngine:
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
         handouts = []
         expert_root = Path(__file__).resolve().parents[2] / "experts" / "code"
+        events = self.store.read_events()
+        prior = [e for e in events if e.get("kind") == "handout" and e.get("stage") == "review"
+                 and e.get("round") == 1]
+        answers = {e["payload"]["handout_event_id"]: e for e in events
+                   if e.get("kind") in ("answer", "answer_reuse") and e.get("stage") == "review"}
         for item in roster:
             instructions = (expert_root / f"{item['id']}.md").read_text(encoding="utf-8")
             review_input = "\n\n".join(diffs)
             if item["id"] == "correctness":
                 review_input = review.patterns_block(patterns) + "\n\n" + review_input
+            mine = [h for h in prior if h["payload"]["expert_id"] == item["id"]]
+            expert_attempt = attempt
+            if mine:
+                # a second review-start (resume, retry): never a third dispatch (§A3.2)
+                latest = answers.get(mine[-1]["event_id"])
+                if latest is None or latest["payload"].get("state") in ("parsed", "partial"):
+                    continue                # still pending, or answered
+                if len(mine) >= 2:
+                    continue                # no usable output twice: RV-1a/1c decide
+                expert_attempt = int(mine[-1]["attempt"]) + 1
             handouts.append(orchestrator.handout(
-                expert_id=item["id"], stage="review", round=1, attempt=attempt,
+                expert_id=item["id"], stage="review", round=1, attempt=expert_attempt,
                 at=_now(), expert_instructions=instructions,
                 review_input=review_input))
         if not handouts:

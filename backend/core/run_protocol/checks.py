@@ -331,8 +331,17 @@ def _test_refs(context: CheckContext, kinds=("test", "mutation")) -> list[str]:
             and isinstance(row.get("ref"), str)]
 
 
+def _collected(ref: Any, context: CheckContext) -> bool:
+    """A design ref is collected when pytest found it, or found it parametrized
+    (``ref[...]``): the same rule the runner uses for refs elsewhere."""
+    return isinstance(ref, str) and (ref in context.collected_tests or any(
+        node.startswith(ref + "[") for node in context.collected_tests))
+
+
 def _answers(context: CheckContext, expert: str | None = None) -> list[Mapping[str, Any]]:
-    return [event for event in context.events if event.get("kind") == "answer"
+    """Answers and fact-identical reuses of an earlier answer (§C6.2, F-7): a reuse
+    carries the reused answer's parse state, so it counts the same."""
+    return [event for event in context.events if event.get("kind") in ("answer", "answer_reuse")
             and (expert is None or event["payload"].get("expert_id") == expert)]
 
 
@@ -397,7 +406,7 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
     if check_id == "DS-2b":
         wanted = [row.get("test") for key in ("properties", "failure_modes")
                   for row in (context.design or {}).get(key, []) if isinstance(row, Mapping)]
-        missing = sorted({ref for ref in wanted if ref not in context.collected_tests})
+        missing = sorted({ref for ref in wanted if not _collected(ref, context)})
         return _result(not missing, "all property/failure tests collect" if not missing
                        else f"uncollected tests: {missing}")
     if check_id == "DS-4b":
@@ -406,7 +415,7 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         refs = [row.get("ref") for row in (context.design or {}).get("exit_criteria", [])
                 if isinstance(row, Mapping) and row.get("kind") == "test"
                 and unchanged & set(row.get("covers") or [])]
-        missing = [ref for ref in refs if ref not in context.collected_tests]
+        missing = [ref for ref in refs if not _collected(ref, context)]
         return _result(bool(refs) and not missing,
                        "unchanged regression tests collect" if refs and not missing
                        else f"unchanged tests missing/uncollected: {missing}")

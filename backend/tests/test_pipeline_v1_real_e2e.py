@@ -624,3 +624,110 @@ def test_the_cli_has_no_way_to_answer_a_decision(rig):
     out = r.v1("decision-answer", "--request-id", "q1", "--option", "a")
     assert out.get("ok") is not True
     assert "human_answer" not in r.kinds() and r.state()["status"] == "awaiting_human"
+
+
+# ── B6: the run's base, not the worktree HEAD ───────────────────────────────
+
+def test_a_commit_in_the_worktree_does_not_move_the_base_or_hide_the_change(rig):
+    import json
+    from tests.pipeline_v1_rig import _git
+    r = rig("direct")
+    r.create()
+    r.edit(Rig.CHANGE)
+    # the agent commits its change and drops the validation rule in the same commit
+    (r.worktree / "validations.json").write_text(json.dumps({"schema": 1, "entries": []}))
+    _git(r.worktree, "add", "-A"); _git(r.worktree, "commit", "-qm", "wip")
+    out = r.pt("tdd", "--files", "backend/tests/test_x.py")
+    final = json.loads(Path(out["v1"]["final"]).read_text())
+    base = _git(r.repo, "rev-parse", "main")
+    assert final.get("base") == base, (final.get("base"), base)
+    # the committed change is still the run's change: QX-2 sees the rule edit
+    changed = r.engine().check_context().run["changed_paths"]
+    assert {"validations.json", "backend/core/mod.py"} <= set(changed), changed
+    from core.run_protocol import checks
+    assert checks.evaluate("QX-2", r.engine().check_context())[0] is False
+    assert r.v1("stage-complete").get("ok") is True   # BX-2 sees the committed change
+
+
+# ── B8: DS-2b asks pytest what it collects ──────────────────────────────────
+
+@pytest.mark.parametrize("ref,passes", [
+    ("backend/tests/test_other.py::test_other", True),     # exists, never run in tdd
+    ("backend/tests/test_x.py::test_missing", False),      # named, does not exist
+])
+def test_build_collects_the_designs_failure_mode_tests(rig, ref, passes):
+    r = rig("full")
+    r.create()
+    r.drive(until="plan")
+    assert r.v1("stage-start").get("ok") is True
+    r.edit(Rig.CHANGE)
+    design = documents("full")["plan"]
+    design = {**design, "failure_modes": [{**design["failure_modes"][0], "test": ref}]}
+    out = r.v1("stage-complete", "--artifact", r.artifact("design", design))
+    assert out.get("ok") is True, out                    # DS-2b is a BUILD check
+    r.pt("tdd", "--files", "backend/tests/test_x.py")
+    out = r.v1("stage-complete")
+    checks_out = {c["id"]: c for c in out.get("checks") or []}
+    assert (out.get("ok") is True) is passes, out
+    if not passes:
+        assert checks_out["DS-2b"]["passed"] is False, checks_out.get("DS-2b")
+
+
+# ── F-6: an expert with no usable output is dispatched once more, never twice ──
+
+def test_an_unparsed_review_answer_is_redispatched_once(rig):
+    r = rig("trivial")
+    r.create()
+    r.drive(until="review")
+    started = r.v1("review-start")
+    handouts = started.get("handouts") or []
+    assert handouts, started
+    r.spawn_reviewer(handouts[0]["prompt"], "I looked around.", "review-a")   # no envelope
+    again = r.v1("review-start")
+    assert [h["event"]["attempt"] for h in again["handouts"]] == [2], again
+    r.spawn_reviewer(again["handouts"][0]["prompt"], "still nothing", "review-b")
+    assert r.v1("review-start")["handouts"] == []        # no third dispatch
+
+
+def test_a_committed_or_new_file_is_in_the_review_diff(rig):
+    from tests.pipeline_v1_rig import _git
+    r = rig("trivial")
+    r.create()
+    r.drive(until="review")
+    (r.worktree / "backend" / "core" / "new_mod.py").write_text("def n():\n    return 2\n")
+    _git(r.worktree, "add", "backend/core/mod.py"); _git(r.worktree, "commit", "-qm", "wip")
+    started = r.v1("review-start")
+    prompt = "\n".join(h["prompt"] for h in started.get("handouts") or [])
+    roster = [row["id"] for row in started.get("reviewers") or []]
+    assert started.get("ok") is True, started
+    assert roster, "a new code file always gets a reviewer"
+    assert "new_mod.py" in prompt and "return b + a" in prompt, prompt[-800:]
+
+
+def test_the_final_records_the_rule_versions_it_selected_with(rig):
+    import json
+    from core.run_protocol.risk_selection import RISK_RULES_VERSION
+    r = rig("direct")
+    r.create()
+    r.edit(Rig.CHANGE)
+    out = r.pt("tdd", "--files", "backend/tests/test_x.py")
+    final = json.loads(Path(out["v1"]["final"]).read_text())
+    assert final["provenance"]["rules_version"].endswith("/" + RISK_RULES_VERSION), \
+        final["provenance"].get("rules_version")
+
+
+def test_the_base_follows_the_recorded_branch_not_the_main_checkout(rig):
+    import json
+    from tests.pipeline_v1_rig import _git
+    r = rig("direct")
+    r.create()
+    r.edit(Rig.CHANGE)
+    base = _git(r.repo, "rev-parse", "main")
+    _git(r.repo, "checkout", "-q", "-b", "elsewhere")          # the person switches branch
+    (r.repo / "elsewhere.txt").write_text("x\n")
+    _git(r.repo, "add", "."); _git(r.repo, "commit", "-qm", "unrelated")
+    out = r.pt("tdd", "--files", "backend/tests/test_x.py")
+    assert json.loads(Path(out["v1"]["final"]).read_text())["base"] == base
+    changed = r.engine().check_context().run["changed_paths"]
+    assert "elsewhere.txt" not in changed, changed
+    _git(r.repo, "checkout", "-q", "main")

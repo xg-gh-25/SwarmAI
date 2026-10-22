@@ -88,3 +88,10 @@ def test_payload_counts_are_generated_not_caller_supplied():
     result = parse_answer(FINDING, expert_id="correctness", round=1)
     assert result.answer_payload == {"state": "parsed", "verdict": None,
                                      "n_findings": 1, "n_status": 0}
+
+
+def test_a_gate0_answer_with_two_verdicts_has_no_verdict():
+    """F-5: a second VERDICT line could flip the outcome; the answer is unparsed."""
+    two = parse_answer("VERDICT: SUPPORTED\nwait\nVERDICT: UNSUPPORTED",
+                       expert_id="gate0-skeptic", round=1)
+    assert two.state == "unparsed" and two.verdict is None

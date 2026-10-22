@@ -120,3 +120,33 @@ trivial 不变：`tests/fixtures/pipeline_v1_trivial_profile.json` 是改动前 
 - **记为已知限制，不在本组修：** 任意 Python 代码（`python -c`）不进 CLI 入口时，仍可自己调用 `allow_hook_writer()`、读出密钥签任何事件，或直接调 `landing.commit_repos` 落地任意树。这就是方案 §9 的"签名只由 daemon 提供"那份单独设计；XG 已定先做 C3（代码层面分开）。§9 里"落地时对账每条 test_call / proof 与 hook 实际看到的 runner 调用"也属于那份设计，尚未做，最后交付时单列。
 
 证明：`test_a_cli_process_cannot_sign_as_the_hook`、`test_landing_reads_its_request_from_the_event_not_the_json`、`test_the_approval_card_shows_what_lands`、`test_an_approval_is_consumed_once_and_a_second_try_is_integrity`、`test_skip_tests_lands_a_run_that_never_ran_tests`、`test_a_guard_failure_on_prepare_is_json_not_a_traceback`、`test_a_tested_prepare_on_an_untested_tree_names_the_runner`、`test_a_land_without_the_hook_ends_not_landed_needs_hooked_session`、`test_create_has_no_mode_option`、`test_an_agent_cannot_write_the_runs_deliverables`、`test_a_second_landing_of_the_same_run_is_refused_while_one_runs`、`test_the_cli_has_no_way_to_answer_a_decision`、`test_a_land_request_whose_request_does_not_match_its_digest_is_refused`、`test_an_unrecorded_approval_never_issues_the_token`。`test_pipeline_v1_real_e2e.py` 已没有 xfail。
+
+## 7. B 组剩余项（B6–B8、F-5–F-11）
+
+**根因：** 几处"run 的事实"取自错的位置——worktree 的 HEAD 被当成 run 的 base，所以 agent 在 worktree 里提交一次，验证清单、改动集、审查 diff、基线缓存就都跟着变了；缓存的身份只覆盖了一个文件；审查协议里几条规则（重派、聚类、FIXING_SPEC）只有描述，没有执行路径。
+
+| 条目 | 处理 |
+|---|---|
+| B6 | run 的 base = worktree 从 main 分叉的位置（`merge-base HEAD main`；`pipeline_test._run_fork_point`，engine `_fork_base`）。runner 的 base、改动集（再加上分叉以来在 worktree 里提交的）、engine 的 `_changed_paths`、REVIEW 的 diff（base → 将要落地的 code_tree，含未跟踪文件）、proof 的 diff、基线结果全部按它算。QX-2 因此能看到被提交掉的 `validations.json` 改动。base 上没有 `validations.json` 时清单为空（G-2），空 `entries` 合法。顺带修了 `_changed_paths` 的 bug：`_git` 会 strip 输出，porcelain 第一行的前导空格被去掉后，第一个路径少一个字符 |
+| B7 | `cache.pipeline_code_hash` 覆盖 `core/run_protocol/`、`pipeline_test.py`、`pipeline_v1.py`，contract、final、v1 结果缓存都用它。HEAD 基线缓存改为每个 node 一条 `put_once`，key = repo + base sha + 解释器 + 代码哈希 + 协议版本 + 规则版本 + nodeid；同一 key 写入不同结果即作废，之后重跑并给出警告 |
+| B8 | runner 对 DESIGN_SPEC 里的 property / failure / exit 测试执行 `pytest --collect-only`（30 s 上限，按 code_tree 缓存），写进 final 的 `tests.collected`；DS-2b / DS-4b 读它和当前树上实际跑过的 node |
+| F-5 | Gate-0 答案出现第二个 `VERDICT:` 行即为 unparsed |
+| F-6 | 再次 `review-start`：某专家最近一次 R1 答案没有可用输出、且只派过一次时，重派一次（attempt+1）；不会有第三次，已答或未答的不重派 |
+| F-7（部分） | RV-1a/1b/1c 把 `answer_reuse` 和 `answer` 一样计数。跨 run 的复用缓存没有接：§C6.2 的 key 需要模型 id，而 answer 事件里没有（专家 `model: inherit`，SubagentStop 侧也没记）。留到 D 组（需要先让 hook 记下模型 id） |
+| F-8 | proof 的 `touches_executable` 由 diff 判断：文档，或 `.py/.sh/.ts/.tsx/.js/.jsx` 里每个增删行都是空行或整行注释，才算非可执行；docstring、行尾注释算代码 |
+| F-9 | `review-address` 必须整簇处理：一个 pass 动了某个 ±10 行簇里的一条未关闭 finding，就要同时处理该簇其余未关闭的，否则整次拒绝、不写任何事件 |
+| F-10 | `FIXING_SPEC.md` 由事件生成（§B6）：每个 pass 一节，簇、位置、修复者给的 cause 和 hunk、refuted、reclassify，以及每条 finding 的结果（折叠后的状态 + proof 的证据类型）。此前 v1 根本不写这份文档 |
+| F-11 | final 的 provenance 记 `rules_version`（`runner-<v>/<risk rules v>`，与缓存 key 同一个字符串） |
+
+**偏离和遗留：**
+- B8 的 collect 结果放在 runner 封印的 final 里，不是单独的事件；final 已由 runner 封印，并被签名的 test_call 引用。
+- v1 缓存目录（`cache/v1/test`、`cache/v1/baseline`）没有回收，baseline 现在每个 node 一个小文件。记入 E 组。
+
+**审查（独立子代理 `81f1e422e202005b`）：** 1 HIGH、6 MED、2 LOW，全部已修：
+- HIGH：base 原来用 main checkout 当前的 HEAD 求 merge-base，main 切到别的分支就会算错。现在 engine 在创建 worktree 时把集成分支记进审计区（`integration_branches.json`），base = `merge-base(worktree HEAD, 记录的分支)`（`runner.run_base`，engine 和 runner 共用）。
+- F-9 的整簇规则只看 `open` / `invalid_test`，已证明的邻居不用重新处理；`review-address` 先校验全部条目、再写事件，坏条目不会留下半个 pass。
+- 参数化测试按 `ref[...]` 算作已收集；shebang（`#!`）和 JS 生成器（`*gen()`）不算注释；proof 的 diff 改为 base → code_tree，新建的未跟踪文件也能证明。
+- 分叉点只对本次调用确认是 run worktree 的仓库计算（v1 contract 或旧 run.json 的条目），不再把任意 linked worktree 当成 run。
+- 代码哈希每个进程只算一次（实测 100 次约 0.85 s）；R1 重派的 attempt 编号按专家各自计算。
+
+证明：`test_a_commit_in_the_worktree_does_not_move_the_base_or_hide_the_change`、`test_a_base_without_validations_json_requires_nothing`、`test_an_empty_entry_list_is_a_valid_manifest`、`test_pipeline_code_hash_moves_with_any_protocol_or_cli_file`、`test_a_conflicting_baseline_outcome_is_never_trusted`、`test_build_collects_the_designs_failure_mode_tests[…]`（两个方向）、`test_a_gate0_answer_with_two_verdicts_has_no_verdict`、`test_an_unparsed_review_answer_is_redispatched_once`、`test_a_committed_or_new_file_is_in_the_review_diff`、`test_comment_only_diffs_are_docs[…]`、`test_a_fix_pass_addresses_a_whole_cluster_or_nothing`、`test_fixing_spec_is_rendered_from_the_pass_events`、`test_the_final_records_the_rule_versions_it_selected_with`。

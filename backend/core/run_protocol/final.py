@@ -152,6 +152,7 @@ def build_repo_final(
     node_results: Mapping[str, Mapping[str, Any]] | None = None,
     tdd_required: Sequence[str] | None = None,
     whole_files: Sequence[str] | None = None,
+    collected: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Fold current-tree, runner-signed calls into one repo final row.
 
@@ -225,6 +226,7 @@ def build_repo_final(
         "summary": dict(actual_selection["summary"]),
         "dependency_scope": dict(actual_selection["dependency_scope"]),
         "risk_rules": list(actual_selection["risk_rules"]),
+        "rules_version": str(actual_selection.get("rules_version") or ""),   # F-11
         "manifest_identity": {"sha256": manifest_sha, "base": base,
                               "required_validation_ids": list(required)},
         "validation_manifest": {"sha256": manifest_sha, "base": base,
@@ -253,6 +255,8 @@ def build_repo_final(
         final["tdd_required"] = sorted(set(tdd_required))
     if whole_files is not None:
         final["tests"]["whole_files"] = sorted({str(item) for item in whole_files})
+    if collected is not None:   # pytest --collect-only of the design's nodes (B8)
+        final["tests"]["collected"] = sorted({str(item) for item in collected})
     if carried_from is not None:
         if not SHA40.fullmatch(carried_from):
             raise FinalError("carried_from must be a git commit id")

@@ -6,9 +6,12 @@ Public symbols:
 - ``read`` — return only an unambiguous cached value.
 - ``conflict_hashes`` — read the immutable first/new hashes of a poisoned key.
 - ``value_hash`` — canonical value identity used by cache integrity events.
+- ``pipeline_code_hash`` — one hash over the code that decides a v1 result:
+  ``core/run_protocol/``, ``scripts/pipeline_test.py``, ``scripts/pipeline_v1.py`` (B7).
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -22,6 +25,29 @@ class CacheError(RuntimeError):
 
 
 _REQUIRED = {"kind", "repo", "tree", "pipeline_code_hash", "protocol_version", "rules_version"}
+
+
+_BACKEND = Path(__file__).resolve().parents[2]
+
+
+def pipeline_code_hash(backend: str | Path | None = None) -> str:
+    return _pipeline_code_hash(str(Path(backend) if backend is not None else _BACKEND))
+
+
+@functools.lru_cache(maxsize=4)
+def _pipeline_code_hash(backend: str) -> str:
+    """sha256 over every file of the v1 protocol and both CLIs, path-tagged, in order:
+    a change to any of them is a new identity for caches, finals and the contract."""
+    root = Path(backend)
+    files = sorted((root / "core" / "run_protocol").rglob("*.py")) + [
+        root / "scripts" / "pipeline_test.py", root / "scripts" / "pipeline_v1.py"]
+    digest = hashlib.sha256()
+    for path in files:
+        if "__pycache__" in path.parts or not path.is_file():
+            continue
+        digest.update(path.relative_to(root).as_posix().encode() + b"\0")
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
 
 
 def cache_key(inputs: Mapping[str, Any]) -> str:

@@ -141,3 +141,81 @@ def test_a_broken_pattern_table_still_reviews(monkeypatch):
     got = review.review_patterns(["backend/core/a.py"], "+x")
     assert got["triggered"] == [] and "gone" in got["error"]
     assert "could not select rows" in review.patterns_block(got)
+
+
+# ── F-8: a comment-only change to source is not executable ──────────────────
+
+@pytest.mark.parametrize("file,diff,expected", [
+    ("a.py", "@@ -3 +3 @@\n-# old note\n+# new note\n", True),
+    ("a.py", "@@ -3 +3 @@\n-x = 1\n+x = 2\n", False),
+    ("a.py", "@@ -3 +3 @@\n-x = 1  # n\n+x = 1  # m\n", False),       # trailing comment
+    ("a.py", '@@ -3 +3 @@\n-    """old"""\n+    """new"""\n', False),  # docstring is code
+    ("a.ts", "@@ -3,2 +3,2 @@\n- * old\n-// a\n+ * new\n+// b\n", True),
+    ("a.go", "@@ -3 +3 @@\n-// a\n+// b\n", False),                 # unknown syntax
+    ("run.sh", "@@ -1 +1 @@\n-#!/bin/bash\n+#!/bin/sh\n", False),      # shebang is code
+    ("a.js", "@@ -3 +3 @@\n-  *gen() {}\n+  *gen2() {}\n", False),    # generator, not comment
+    ("README.md", "@@ -1 +1 @@\n-a\n+b\n", True),
+])
+def test_comment_only_diffs_are_docs(file, diff, expected):
+    from core.run_protocol.engine import _comment_only_diff
+    assert _comment_only_diff(file, diff) is expected
+
+
+def test_a_fix_pass_addresses_a_whole_cluster_or_nothing(tmp_path):
+    """F-9: two findings 7 lines apart are one cluster; addressing one alone is refused."""
+    review, bridge = _rig(tmp_path)
+    handout = review.handout(expert_id="correctness", stage="review", round=1,
+                             attempt=1, at=AT, expert_instructions="Check",
+                             review_input="diff")
+    bound = bridge.track_tool_use("tool-c", handout["prompt"])
+    bridge.record_answer(
+        bound,
+        '{"severity":"HIGH","kind":"behavior","file":"a.py","line":10,"claim":"crash","fix":"guard"}\n'
+        '{"severity":"MEDIUM","kind":"contract","file":"a.py","line":17,"claim":"stale","fix":"migrate"}',
+        completed_at=AT)
+    first, second = [row["canonical_id"] for row in review.findings()]
+    with pytest.raises(ReviewError, match="fixed as one"):
+        review.record_fix_handoff({"pass": 1, "items": [{"finding_id": first, "hunk": "@@"}]},
+                                  at=AT, attempt=1)
+    assert not any(e["kind"] == "address" for e in review.store.read_events())
+    done = review.record_fix_handoff(
+        {"pass": 1, "items": [{"finding_id": first, "hunk": "@@"},
+                              {"finding_id": second, "hunk": "@@"}]}, at=AT, attempt=1)
+    assert done["addressed"] == sorted([first, second])
+
+
+def test_fixing_spec_is_rendered_from_the_pass_events(tmp_path):
+    """F-10: FIXING_SPEC.md exists once a fix pass is recorded and is built from events."""
+    review, bridge = _rig(tmp_path)
+    handout = review.handout(expert_id="correctness", stage="review", round=1,
+                             attempt=1, at=AT, expert_instructions="Check",
+                             review_input="diff")
+    bridge.record_answer(bridge.track_tool_use("tool-f", handout["prompt"]),
+                         '{"severity":"HIGH","kind":"behavior","file":"a.py","line":3,'
+                         '"claim":"crash","fix":"guard"}', completed_at=AT)
+    cid = review.findings()[0]["canonical_id"]
+    assert review.render_fixing_passes() is None
+    review.record_fix_handoff({"pass": 1, "items": [
+        {"finding_id": cid, "hunk": "@@ -3 +3 @@\n-x\n+y", "cause": "no guard"}]},
+        at=AT, attempt=1)
+    review.write_documents()
+    text = (tmp_path / "run" / "FIXING_SPEC.md").read_text()
+    assert "## Pass 1" in text and cid in text and "no guard" in text and "a.py:3" in text
+
+
+def test_a_bad_item_records_no_part_of_the_pass(tmp_path):
+    review, bridge = _rig(tmp_path)
+    handout = review.handout(expert_id="correctness", stage="review", round=1,
+                             attempt=1, at=AT, expert_instructions="Check",
+                             review_input="diff")
+    bridge.record_answer(bridge.track_tool_use("tool-p", handout["prompt"]),
+        '{"severity":"HIGH","kind":"behavior","file":"a.py","line":10,"claim":"a","fix":"b"}\n'
+        '{"severity":"HIGH","kind":"behavior","file":"a.py","line":12,"claim":"c","fix":"d"}',
+        completed_at=AT)
+    first, second = [row["canonical_id"] for row in review.findings()]
+    with pytest.raises(ReviewError):
+        review.record_fix_handoff({"pass": 1, "items": [
+            {"finding_id": first, "hunk": "@@", "reclassify": {"from": "behavior",
+                                                              "to": "docs", "reason": "r"}},
+            {"finding_id": second, "hunk": ""}]}, at=AT, attempt=1)
+    assert not any(e["kind"] in ("address", "reclassify") for e in review.store.read_events())

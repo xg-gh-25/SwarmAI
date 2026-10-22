@@ -350,10 +350,11 @@ def test_classification_new_flaky_preexisting_regression(rig, capsys, tmp_path):
     cache = tmp_path / "cache"
     assert (cache / "test-baseline" / sha / "backend" / "core" / "mod.py").read_text() \
         == BASE_FILES["backend/core/mod.py"]  # HEAD content, not the working tree
-    base = json.loads(pt._baseline_path(cache, sha).read_text())
-    assert base["backend/tests/test_cls.py::test_pre"] == "failed"
-    assert base["backend/tests/test_cls.py::test_reg"] == "passed"
-    assert base["backend/tests/test_cls.py::test_flaky"] == "passed"
+    pid = pt._python_id(pt._python(repo, []))
+    base = {n.split("::")[-1]: pt.baseline_lookup(cache, repo.name, sha, pid, n) for n in (
+        "backend/tests/test_cls.py::test_pre", "backend/tests/test_cls.py::test_reg",
+        "backend/tests/test_cls.py::test_flaky")}
+    assert base == {"test_pre": "failed", "test_reg": "passed", "test_flaky": "passed"}, base
 
 
 # ── L1 ac_driven: desktop vitest refs and probe refs ────────────────────────
@@ -692,9 +693,10 @@ def test_not_run_tests_get_no_head_baseline_and_fail(rig, capsys, tmp_path, monk
     # test_b never started: unfinished work for the next call, not a code failure
     assert out.get("continue") is True and out["unfinished"] == 1, out
     sha = _git(repo, "rev-parse", "HEAD").strip()
-    bpath = pt._baseline_path(tmp_path / "cache", sha)
-    base = json.loads(bpath.read_text()) if bpath.exists() else {}
-    assert not any("test_die" in k for k in base), base  # never "failed at HEAD"
+    pid = pt._python_id(pt._python(repo, []))
+    assert not any(pt.baseline_lookup(tmp_path / "cache", repo.name, sha, pid, n)
+                   for n in ("backend/tests/test_die.py::test_a_dies",
+                             "backend/tests/test_die.py::test_b"))  # never "failed at HEAD"
     assert pt._head_outcome("backend/t.py::t", [
         {"nodeid": "backend/t.py::t", "file": "backend/t.py", "outcome": "timeout",
          "notrun": True}]) is None
@@ -1327,7 +1329,8 @@ def test_known_pre_existing_failure_skips_the_reruns(rig, capsys, tmp_path, monk
     cache = tmp_path / "cache"
     cache.mkdir(exist_ok=True)
     nid = "backend/tests/test_pre.py::test_pre"
-    pt._baseline_path(cache, sha).write_text(json.dumps({nid: "passed", "_python": "other-venv"}))
+    from core.run_protocol.cache import put_once
+    put_once(cache / "v1", "baseline", pt.baseline_key(repo.name, sha, "other-venv", nid), "passed")
     tags: list[str] = []
     real = pt.run_pytest_targets
     monkeypatch.setattr(pt, "run_pytest_targets",
@@ -1336,8 +1339,8 @@ def test_known_pre_existing_failure_skips_the_reruns(rig, capsys, tmp_path, monk
     assert code == 0, out
     assert {f["nodeid"]: f["classification"] for f in out["failures"]} == {nid: "pre-existing"}
     assert tags == ["base"], tags  # the HEAD lookup only
-    stored = json.loads(pt._baseline_path(cache, sha).read_text())
-    assert stored[nid] == "failed" and stored["_python"] == pt._python_id(sys.executable)
+    pid = pt._python_id(pt._python(repo, []))
+    assert pt.baseline_lookup(cache, repo.name, sha, pid, nid) == "failed"
 
 
 def test_selection_adds_tests_that_drive_a_changed_script_by_subprocess(rig, tmp_path):

@@ -81,6 +81,12 @@ _SPAWN_PROMPT = (Path(__file__).resolve().parents[2] / "skills" / "s_autonomous-
 _SPAWN_PROMPT_MOD: list[Any] = []
 
 
+def build_prompt(expert_id: str, instructions: str, review_input: str) -> str:
+    """The exact text a handout gives an expert (one definition: handout and reuse)."""
+    return (f"EXPERT-ID: {expert_id}\n\n{instructions.strip()}\n\n{review_input.strip()}"
+            f"\n\n{OUTPUT_CONTRACT}\n")
+
+
 def _spawn_prompt():
     """spawn_prompt.py by path (a skill script, not a package): the one REVIEW_PATTERNS
     parser and selector, shared with the ``--patterns-for`` CLI."""
@@ -277,7 +283,7 @@ class ReviewOrchestrator:
                 finding_ids: Sequence[str] = ()) -> dict[str, Any]:
         if round not in (1, 2) or not expert_id:
             raise ReviewError("invalid review handout identity")
-        prompt = f"EXPERT-ID: {expert_id}\n\n{expert_instructions.strip()}\n\n{review_input.strip()}\n\n{OUTPUT_CONTRACT}\n"
+        prompt = build_prompt(expert_id, expert_instructions, review_input)
         prompt_errors = lint_prompt(prompt, expert_id=expert_id, round=round)
         if prompt_errors:
             raise ReviewError(f"review prompt contract drift: {prompt_errors}")
@@ -323,14 +329,26 @@ class ReviewOrchestrator:
                 or not isinstance(items, list):
             raise ReviewError("review handoff pass/items are malformed")
         findings = {row["canonical_id"]: row for row in self.findings()}
+        # ±10-line clusters are fixed together (F-9, expert simplification E4): a pass
+        # that touches one open finding of a cluster addresses all of its open ones
+        named = {item.get("finding_id") for item in items if isinstance(item, Mapping)}
+        open_states = {"open", "invalid_test"}   # a proven neighbour stays as it is
+        for cluster in cluster_findings(list(findings.values())):
+            members = [cid for cid in cluster["findings"]
+                       if findings[cid].get("status") in open_states]
+            if named & set(members) and set(members) - named:
+                raise ReviewError(
+                    f"cluster {cluster['cluster_id']} ({cluster['sites'][0]['file']}) is fixed "
+                    f"as one: also address {sorted(set(members) - named)}")
         addressed: list[str] = []
         hunks: dict[str, str] = {}
         proofs: dict[str, str] = {}
         reclassifications: dict[str, Mapping[str, Any]] = {}
+        causes: dict[str, str] = {}
         for index, item in enumerate(items, 1):
             if not isinstance(item, Mapping):
                 raise ReviewError(f"handoff item {index} must be an object")
-            allowed = {"finding_id", "hunk", "proof", "reclassify"}
+            allowed = {"finding_id", "hunk", "proof", "reclassify", "cause"}
             if set(item) - allowed:
                 raise ReviewError(f"handoff item {index} has unknown fields")
             finding_id, hunk = item.get("finding_id"), item.get("hunk")
@@ -346,12 +364,6 @@ class ReviewOrchestrator:
             if proposal is not None:
                 if not isinstance(proposal, Mapping) or set(proposal) != {"from", "to", "reason"}:
                     raise ReviewError(f"handoff item {index} reclassification is malformed")
-                self.store.append_new(
-                    writer=self.store.authority.writer("cli"), kind="reclassify", at=at,
-                    stage="review", attempt=attempt,
-                    payload={"canonical_id": finding_id, "pass": pass_number,
-                             "from": proposal["from"], "to": proposal["to"],
-                             "reason": proposal["reason"]})
                 reclassifications[finding_id] = dict(proposal)
             proof = item.get("proof")
             if proof is not None:
@@ -363,14 +375,26 @@ class ReviewOrchestrator:
                         f"{finding_id}: {evidence_type} proof requires a runner proof event; "
                         "the CLI will not forge runner evidence")
                 proofs[finding_id] = json.dumps(dict(proof), ensure_ascii=False, sort_keys=True)
+            addressed.append(finding_id)
+            hunks[finding_id] = hunk
+            if isinstance(item.get("cause"), str) and item["cause"].strip():
+                causes[finding_id] = item["cause"].strip()[:400]
+        # every item is valid: only now record the pass (no partial pass in the log)
+        for finding_id in addressed:
+            proposal = reclassifications.get(finding_id)
+            if proposal is not None:
+                self.store.append_new(
+                    writer=self.store.authority.writer("cli"), kind="reclassify", at=at,
+                    stage="review", attempt=attempt,
+                    payload={"canonical_id": finding_id, "pass": pass_number,
+                             "from": proposal["from"], "to": proposal["to"],
+                             "reason": proposal["reason"]})
             self.store.append_new(
                 writer=self.store.authority.writer("cli"), kind="address", at=at,
                 stage="review", attempt=attempt,
                 payload={"canonical_id": finding_id, "pass": pass_number})
-            addressed.append(finding_id)
-            hunks[finding_id] = hunk
         handoff = {"pass": pass_number, "addressed": sorted(addressed),
-                   "hunks": hunks, "proofs": proofs,
+                   "hunks": hunks, "proofs": proofs, "causes": causes,
                    "reclassifications": reclassifications}
         path = self.run_dir / "artifacts" / f"review-handoff-{pass_number}.json"
         self._atomic(path, json.dumps(handoff, ensure_ascii=False, sort_keys=True, indent=2))
@@ -447,12 +471,69 @@ class ReviewOrchestrator:
                   for row in checks]
         return "\n".join(lines).rstrip() + "\n"
 
+    def render_fixing_passes(self) -> str | None:
+        """FIXING_SPEC.md from events (design §B6, F-10): one section per fix pass —
+        its clusters (the ±10-line groups of what the pass addressed), the hunk and cause
+        the fixer gave, refutations and reclassifications, and each finding's result
+        (folded state + the proof's evidence type). None when no pass exists."""
+        events = self.store.read_events()
+        passes = sorted({e["payload"]["pass"] for e in events if e.get("kind") == "address"})
+        if not passes:
+            return None
+        rows = {row["canonical_id"]: row for row in self.findings()}
+        lines = ["# Fixing Spec", ""]
+        for number in passes:
+            addressed = [e["payload"]["canonical_id"] for e in events
+                         if e.get("kind") == "address" and e["payload"]["pass"] == number]
+            try:
+                handoff = json.loads((self.run_dir / "artifacts" /
+                                      f"review-handoff-{number}.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                handoff = {}
+            lines += [f"## Pass {number}", ""]
+            for cluster in cluster_findings([rows[c] for c in addressed if c in rows]):
+                lines += [f"### {cluster['cluster_id']}", "",
+                          f"- Findings: {', '.join(cluster['findings'])}",
+                          "- Sites: " + ", ".join(f"{site['file']}:{site['line']}"
+                                                  for site in cluster["sites"])]
+                for cid in cluster["findings"]:
+                    cause = (handoff.get("causes") or {}).get(cid)
+                    if cause:
+                        lines.append(f"- Cause ({cid}): {cause}")
+                    hunk = (handoff.get("hunks") or {}).get(cid)
+                    if hunk:
+                        lines += [f"- Solution ({cid}):", "", "```diff", hunk.rstrip(), "```"]
+                lines.append("")
+            refuted = [e for e in events if e.get("kind") == "proof"
+                       and e["payload"]["pass"] == number
+                       and e["payload"].get("evidence_type") == "refuted"]
+            for e in refuted:
+                lines.append(f"- Refuted {e['payload']['canonical_id']}: "
+                             + ", ".join(e["payload"].get("refs") or []))
+            for e in events:
+                if e.get("kind") == "reclassify" and e["payload"]["pass"] == number:
+                    p = e["payload"]
+                    lines.append(f"- Reclassify {p['canonical_id']}: {p['from']} → {p['to']} "
+                                 f"({p['reason']})")
+            proofs = {e["payload"]["canonical_id"]: e["payload"]["evidence_type"]
+                      for e in events if e.get("kind") == "proof" and e["payload"]["pass"] == number}
+            lines += ["", "| Finding | State | Evidence |", "|---|---|---|"]
+            lines += [f"| {cid} | {rows.get(cid, {}).get('status', 'unknown')} | "
+                      f"{proofs.get(cid, '—')} |" for cid in addressed]
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
     def write_documents(self, fixing_spec: Mapping[str, Any] | None = None) -> list[str]:
         """Render .md projections; model-authored JSON is validated before rendering."""
         written: list[str] = []
         review_path = self.run_dir / "REVIEW.md"
         self._atomic(review_path, self.render_review())
         written.append(str(review_path))
+        fixing = self.render_fixing_passes() if fixing_spec is None else None
+        if fixing is not None:
+            path = self.run_dir / "FIXING_SPEC.md"
+            self._atomic(path, fixing)
+            written.append(str(path))
         if fixing_spec is not None:
             value = validate_fixing_spec(fixing_spec, self.findings())
             artifact = self.run_dir / "artifacts" / "fixing_spec.json"
