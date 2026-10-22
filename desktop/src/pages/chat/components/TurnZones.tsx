@@ -669,12 +669,18 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
   const { agents: bgAgents } = useBackgroundAgents(ctx.sessionId);
   const bgRunning = new Set(bgAgents.filter((a) => a.status === 'running').map((a) => a.toolUseId));
   const segSteps = (sg: (typeof segments)[number]) => sg.members.flatMap((m) => (m.kind === 'process' ? m.steps : []));
-  const worked = segments.filter((sg) => segSteps(sg).length > 0);
+  // Work is a call OR a thought: a segment whose only work is the thought being
+  // written is the step working now. The newest segment never counts as done, even
+  // before its work arrives — else it settled empty and its first thought appeared
+  // already folded, i.e. the step working now was hidden (found by the stream-order
+  // property test, 2026-10-22).
+  const worked = segments.filter((sg) => sg.members.length > 0);
   const latest = worked.length ? `seg-tx-${worked[worked.length - 1].note.textOrdinal}` : null;
+  const newest = segments.length ? `seg-tx-${segments[segments.length - 1].note.textOrdinal}` : null;
   const segSettled = useSettled(segments.map((sg) => {
     const id = `seg-tx-${sg.note.textOrdinal}`;
     const holdsRunningAgent = segSteps(sg).some((s) => bgRunning.has(s.block.id));
-    return { id, done: id !== latest && !reading && !holdsRunningAgent };
+    return { id, done: id !== latest && id !== newest && !reading && !holdsRunningAgent };
   }), active);
 
   const renderItems = (items: BodyItem[]) => {
