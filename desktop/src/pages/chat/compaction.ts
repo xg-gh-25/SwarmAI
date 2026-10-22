@@ -146,9 +146,13 @@ export function applyCompactionEvent(store: CompactionStore, event: StreamEvent)
   }
   // A record-less (legacy / fallback) notice repeated in the same turn is one
   // compaction, not two — it may sit before the placeholder, not at the end.
-  for (let i = msgs.length - 1; i > start; i--) {
-    const m = msgs[i];
-    if (m.role === 'system' && m.id.startsWith('compact-') && textOf(m) === text) return;
+  // A stored record is its own compaction: two in one turn are two dividers,
+  // even with the same wording.
+  if (!recordId) {
+    for (let i = msgs.length - 1; i > start; i--) {
+      const m = msgs[i];
+      if (m.role === 'system' && m.id.startsWith('compact-') && textOf(m) === text) return;
+    }
   }
   add(done);
 }

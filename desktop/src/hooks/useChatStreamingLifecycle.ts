@@ -33,6 +33,8 @@
  * @module useChatStreamingLifecycle
  */
 
+import { collapseAdjacentDuplicateBlocks } from '../utils/duplicateBlocks';
+import { planTranscriptChange, type TranscriptChange } from './transcriptFeed';
 import React, { useState, useReducer, useRef, useCallback, useMemo, useEffect } from 'react';
 import { streamingReducer, INITIAL_STATE, type StreamingEvent } from './streaming-machine';
 // Re-export state machine utilities for consumers
@@ -64,7 +66,6 @@ import {
 } from './sessionTurnRouter';
 import { promptMetadataToCamelCase } from '../services/tscc';
 import { messageStoreRegistry } from '../stores/MessageStore';
-import { collapseAdjacentDuplicateBlocks } from '../utils/duplicateBlocks';
 
 import { isOt01DiagEnabled } from '../utils/diagFlags';
 import { dispatchUiCommand } from '../utils/uiCommands';
@@ -391,26 +392,25 @@ export function updateMessages(
     // incoming text/thinking block, in order:
     //   a. it confirms ITS provisional (streamed) block — the unconfirmed block of
     //      that type whose text it starts with — replaced where it is;
-    //   b. else a re-emission of the LAST confirmed block of its type (the SDK
-    //      re-sends a turn's text, possibly grown — BUG FIX 2026-06-07; thinking is
-    //      only ever re-sent whole, so exact match) replaces that block where it is;
     //   c. else it confirms the last unconfirmed block of that type (the confirmed
     //      text may differ from what streamed, e.g. a cleaned leak);
     //   d. else it is new and goes at the end.
-    // Matching its own provisional FIRST is what tells a later turn that happens to
-    // repeat a text apart from a re-emission: the later turn streamed it again.
+    // Nothing is matched against CONFIRMED blocks by text: every envelope arrives
+    // once (sessionTurnRouter, eventSeq), and the record keeps a block the model
+    // wrote twice twice — so live shows it twice too (live == reload, R6). The
+    // old re-emission rule (b) and the adjacent-duplicate collapse are gone with
+    // the double deliveries they covered for; a streamed copy next to the block it
+    // duplicates is still dropped (collapseAdjacentDuplicateBlocks).
     // Exactly ONE provisional block is consumed per incoming block. Every other
     // provisional block stays (BUG FIX 2026-06-18: an event that carries no
     // text/thinking never wipes streamed content; 2026-10-18: one that does no
     // longer drops OTHER provisional thoughts — an earlier thought whose own
     // confirmation was lost stays visible). Tool_use / tool_result are deduped by id.
-    const MIN_DEDUP_LENGTH = 20;
     const content = [...msg.content];
     // `turnStart`: the index where this turn's blocks begin when the bubble also
     // holds earlier turns (a continued bubble). Those blocks are final and never
     // matched: a later turn repeating an earlier text keeps both (live == reload).
     const consumed = new Set<number>(Array.from({ length: Math.min(turnStart, content.length) }, (_, i) => i));
-    const dropped = new Set<number>();
     const appended: ContentBlock[] = [];
     let changed = false;
 
@@ -450,40 +450,11 @@ export function updateMessages(
         if (fallback < 0) fallback = i;
         if (incoming.startsWith(body(b))) { provisional = i; break; }
       }
-      let lastConfirmed = -1;
-      for (let i = content.length - 1; i >= 0; i -= 1) {
-        const b = content[i];
-        if (b.type === type && (b as TextContent | ThinkingContent)._confirmed && !consumed.has(i)) { lastConfirmed = i; break; }
-      }
       if (provisional >= 0) {
-        if (lastConfirmed >= 0 && incoming && body(content[lastConfirmed]) === incoming) {
-          // The same text again within one message is a re-emission (P0: no content
-          // explosion): one block stays, the duplicate streamed copy goes — the
-          // two are identical, so nothing is lost.
-          dropped.add(provisional);
-          consumed.add(lastConfirmed);
-        } else {
-          content[provisional] = confirmedBlock;
-        }
+        content[provisional] = confirmedBlock;
         consumed.add(provisional);
         changed = true;
         continue;
-      }
-
-      // b. A re-emission of the last confirmed block of this type.
-      if (lastConfirmed >= 0 && incoming) {
-        const existing = body(content[lastConfirmed]);
-        const isMatch = !!existing && (type === 'thinking'
-          ? incoming === existing
-          : existing.length >= MIN_DEDUP_LENGTH
-            ? incoming === existing || incoming.startsWith(existing)
-            : incoming === existing);
-        if (isMatch) {
-          content[lastConfirmed] = confirmedBlock;
-          consumed.add(lastConfirmed);
-          changed = true;
-          continue;
-        }
       }
 
       // c. Its provisional block when the confirmed text differs from what streamed
@@ -500,10 +471,9 @@ export function updateMessages(
     }
 
     if (!changed && appended.length === 0) return msg;
-    // Earlier turns' blocks (before turnStart) are never dropped above; the collapse
-    // only looks at this turn's, so a turn starting with its predecessor's last text
-    // keeps both, as the reload does.
-    const merged = [...content.filter((_, i) => !dropped.has(i)), ...appended];
+    // Earlier turns' blocks (before turnStart) are never touched; the collapse only
+    // looks at this turn's, and only ever drops a STREAMED copy (utils/duplicateBlocks).
+    const merged = [...content, ...appended];
     const head = Math.min(turnStart, merged.length);
     return {
       ...msg,
@@ -1026,6 +996,9 @@ export interface ChatStreamingLifecycleDeps {
 // ---------------------------------------------------------------------------
 // Hook implementation
 // ---------------------------------------------------------------------------
+
+/** Rows each store has applied from the transcript feed, with their rev. */
+const feedApplied = new WeakMap<object, Map<string, number>>();
 
 export function useChatStreamingLifecycle(
   deps: ChatStreamingLifecycleDeps,
@@ -4762,8 +4735,22 @@ export function useChatStreamingLifecycle(
     const tab = tabMapRef.current.get(tabId);
     const sid = tab?.sessionId;
     if (!tab || !sid) return;
-    chatService.invalidateMessageCache(sid);
-    chatService.getSessionMessagesReconcileTail(sid, RECONCILE_TAIL).then((msgs) => {
+    const reload = () => {
+      chatService.invalidateMessageCache(sid);
+      return chatService.getSessionMessagesReconcileTail(sid, RECONCILE_TAIL);
+    };
+    // A tab that knows its transcript rev first asks what changed after it: an
+    // unchanged record needs no reload (the replay that follows the resync
+    // carries the running turn). Any change, or a removal, reloads the tail.
+    const known = tab.transcriptRev ?? 0;
+    const check = known > 0
+      ? chatService.getTranscriptSince(sid, known).then((d) => {
+          if (d.rev > known) tab.transcriptRev = d.rev;
+          return d.reset || d.rows.length > 0 ? reload() : null;
+        }).catch(() => reload())
+      : reload();
+    check.then((msgs) => {
+      if (!msgs) return;
       const s = messageStoreRegistry.getOrCreate(tabId, { sessionId: sid });
       s.reconcile(msgs);
       if (s.phase === 'idle') {
@@ -4831,6 +4818,25 @@ export function useChatStreamingLifecycle(
       if (ev.type === 'background_agents') {
         // a background agent changed status: not a turn event (stores/backgroundAgentsStore)
         backgroundAgentsStore.apply(sid, (ev as { agents?: unknown }).agents);
+        return;
+      }
+      if (ev.type === 'transcript_row' || ev.type === 'transcript_delete') {
+        // A persisted change outside any turn (backend core/transcript_feed): every
+        // tab showing the session applies it, the one that caused it too.
+        for (const [tabId, tab] of tabMapRef.current.entries()) {
+          if (tab.sessionId !== sid) continue;
+          const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: sid });
+          let applied = feedApplied.get(store);
+          if (!applied) { applied = new Map(); feedApplied.set(store, applied); }
+          const rev = (ev as { rev?: number }).rev;
+          if (typeof rev === 'number' && rev > (tab.transcriptRev ?? 0)) tab.transcriptRev = rev;
+          for (const op of planTranscriptChange(store.messages, ev as unknown as TranscriptChange, applied)) {
+            if (op.kind === 'append') store.append(op.msg);
+            else if (op.kind === 'update') store.updateById(op.id, op.update);
+            else if (op.kind === 'remove') store.remove((m) => m.id === op.id);
+            else applyCompactionEvent(store, op.event);
+          }
+        }
         return;
       }
       // Every tab sees every event; the router's ownership rule decides what is

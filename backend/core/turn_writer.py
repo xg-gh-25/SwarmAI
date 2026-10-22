@@ -26,7 +26,8 @@ continue_with_cmd_permission, run_injected_turn) gets ONE ``TurnWriter``:
 runs concurrently with the turn, and a flush between a write's row insert and
 its clearing of the held results would write them twice.
 
-Nothing else calls ``_persist_stream_event`` for a turn
+Its writes are not reported to the transcript feed (core/transcript_feed): the
+turn's own events carry them. Nothing else calls ``_persist_stream_event`` for a turn
 (tests/test_turn_writer.py holds that). P2 assigns the transcript rev here.
 
 Public: ``TurnWriter`` (``TurnWriter.running``).
@@ -39,6 +40,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:  # pragma: no cover
     from .session_router import SessionRouter
+
+from database.sqlite import TRANSCRIPT_FEED_SUPPRESSED
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +86,7 @@ class TurnWriter:
         if self._closed or not self._session_id or not isinstance(event, dict):
             return []
         async with self._lock:
+            token = TRANSCRIPT_FEED_SUPPRESSED.set(True)   # the turn's events carry these rows
             try:
                 return await self._router._persist_stream_event(
                     self._session_id, event, self._held, label=self._label,
@@ -92,6 +96,8 @@ class TurnWriter:
                 logger.error("turn_writer.write_failed session_id=%s type=%s: %s",
                              self._session_id, event.get("type"), exc)
                 return []
+            finally:
+                TRANSCRIPT_FEED_SUPPRESSED.reset(token)
 
     async def flush(self) -> None:
         """Write the step results held now; the turn goes on."""
@@ -115,6 +121,7 @@ class TurnWriter:
         if not self._held or not self._session_id:
             return
         held, self._held = list(self._held), []
+        token = TRANSCRIPT_FEED_SUPPRESSED.set(True)
         try:
             await self._router._persist_assistant_blocks(
                 self._session_id, held, None,
@@ -122,3 +129,5 @@ class TurnWriter:
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("turn_writer.write_held_failed session_id=%s: %s", self._session_id, exc)
+        finally:
+            TRANSCRIPT_FEED_SUPPRESSED.reset(token)

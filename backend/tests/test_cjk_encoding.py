@@ -1425,7 +1425,7 @@ class TestMessagesFtsCjk:
         assert "content_seg" in mcols, mcols
         trigs = dict(conn.execute(
             "SELECT name, sql FROM sqlite_master WHERE type='trigger' "
-            "AND tbl_name='messages'"))
+            "AND tbl_name='messages' AND name LIKE 'messages_fts_%'"))
         assert len(trigs) == 3, sorted(trigs)
         for name, sql in trigs.items():
             assert "content_seg" in sql, f"{name} still carries raw content"

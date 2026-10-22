@@ -862,9 +862,9 @@ export class MessageStore {
     // completed turn only adds/keeps content (>= chars → DB still wins); a
     // content-SHORTENING edit is vanishingly rare and far less harmful than the
     // constant truncation race this kills at the source.
-    // A double-written local copy (the same thought/paragraph twice) is longer than
-    // the DB row without being more complete: collapse it first, so the DB's single
-    // copy can win, and the repeat never survives a reconcile.
+    // A streamed copy doubled next to the block it repeats is longer than the DB
+    // row without being more complete: collapse it first (only streamed copies —
+    // two confirmed blocks are the record's own repeat and both stay).
     localMsg = { ...localMsg, content: collapseAdjacentDuplicateBlocks(localMsg.content, 'store-merge') };
     if (MessageStore._textLen(localMsg) > MessageStore._textLen(dbMsg)) {
       // local already carries its own interactive blocks, so no further merge —
@@ -1100,13 +1100,15 @@ export class MessageStore {
             MessageStore._INTERACTIVE_BLOCK_TYPES.has(b.type),
           );
           if (interactiveBlocks.length > 0) {
+            // A block the record already holds anywhere (questions and prompts are
+            // stored with their turn now) is not rescued onto another message.
+            const existingKeys = new Set(
+              merged.flatMap((m) => m.content)
+                .filter((b) => MessageStore._INTERACTIVE_BLOCK_TYPES.has(b.type))
+                .map((b) => MessageStore._interactiveBlockKey(b)),
+            );
             for (let i = merged.length - 1; i >= 0; i--) {
               if (merged[i].role === 'assistant' && merged[i].content.length > 0) {
-                const existingKeys = new Set(
-                  merged[i].content
-                    .filter((b) => MessageStore._INTERACTIVE_BLOCK_TYPES.has(b.type))
-                    .map((b) => MessageStore._interactiveBlockKey(b)),
-                );
                 const toAdd = interactiveBlocks.filter(
                   (b) => !existingKeys.has(MessageStore._interactiveBlockKey(b)),
                 );

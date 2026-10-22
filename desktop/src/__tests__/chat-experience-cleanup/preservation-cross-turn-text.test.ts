@@ -89,7 +89,7 @@ describe('Preservation — distinct cross-turn text both render (Property 3)', (
     expect((texts[1] as Record<string, unknown>)._confirmed).toBe(true);
   });
 
-  it('identical text re-emitted within same message collapses to 1 block (P0 protection)', () => {
+  it('identical text written in two steps is two blocks (live == reload, R6)', () => {
     // MESSAGE-ID INVARIANT: within one assistantMessageId, "two turns" are
     // the SDK's agentic loop re-emitting growing/identical text for ONE user
     // request. This is NOT two independent user turns — those get separate
@@ -107,9 +107,8 @@ describe('Preservation — distinct cross-turn text both render (Property 3)', (
 
     const msg = messages.find((m) => m.id === msgId)!;
     const texts = confirmedTexts(msg);
-    // Same text within one message = re-emission = collapse to 1 (P0 fix)
-    expect(texts).toHaveLength(1);
-    expect(texts[0].text).toBe(phrase);
+    // 2026-10-23: two steps = two blocks in the record, so two live (R6)
+    expect(texts).toHaveLength(2);
   });
 
   it('property: two arbitrary non-empty texts across two turns survive as 2 blocks in order', () => {

@@ -29,9 +29,9 @@ describe('updateMessages turnStart', () => {
     expect((out.content[1] as { _confirmed?: boolean })._confirmed).toBe(true);
   });
 
-  it('without turnStart (one turn) a re-emission still collapses', () => {
+  it('without turnStart (one turn) a text written again is kept (R6: the record has both)', () => {
     const prev = msg([T(said)]);
     const [out] = updateMessages([prev], 'a', [T(said, false)]);
-    expect(texts(out)).toEqual([said]);
+    expect(texts(out)).toEqual([said, said]);
   });
 });

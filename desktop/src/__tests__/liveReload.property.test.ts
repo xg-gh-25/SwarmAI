@@ -69,7 +69,6 @@ import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import { chatService, parseSSEEvent, toMessageCamelCase } from '../services/chat';
 import { toDisplayMessage } from '../pages/chat/utils';
-import { withStopReceipt } from '../pages/chat/stopReceipt';
 import { testTabMap, createMockDeps, initTestTab, resetTestState } from './helpers/streamingTestUtils';
 
 type Step =
@@ -179,6 +178,10 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
   vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
   vi.spyOn(chatService, 'getSessionMessagesReconcileTail')
     .mockImplementation(async () => dbNow.map((r) => toMessageCamelCase(r)) as never);
+  // the since_rev check: the recorded snapshot is the record at that moment, so
+  // the harness always answers "changed" (the reload then reads it)
+  vi.spyOn(chatService, 'getTranscriptSince')
+    .mockImplementation(async () => ({ rev: 0, reset: true, rows: [] }));
   // the window's subscription back: what the hub sent for its cursor, then the DB read
   const resubscribe = async (envs: Record<string, unknown>[], history: Record<string, unknown>[]) => {
     dbNow = history;
@@ -236,12 +239,8 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
       for (const ev of st.post ?? []) act(() => { post!.handler(parseSSEEvent(JSON.stringify(ev))); });
       if (st.ended) endPost();
     } else if (st.kind === 'stop') {
-      // ChatPage.handleStop: the /chat/stop receipt into the stopped message
-      const last = [...store.messages].reverse().find((m) => m.role === 'assistant');
-      if (last && st.receipt.length) {
-        const blocks = toMessageCamelCase({ id: 'x', role: 'assistant', content: st.receipt }).content as ContentBlock[];
-        act(() => { store.updateById(last.id, (m) => withStopReceipt(m, blocks)); });
-      }
+      // ChatPage.handleStop: the stream is aborted and /chat/stop called; the
+      // receipt it persists comes back on the transcript feed (an event step)
     } else if (st.kind === 'reconcile') {
       // the turn-end reconcile (useChatStreamingLifecycle scheduleTurnEndReconcile)
       if (withReconcile) {
@@ -270,7 +269,9 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
       // missed by the subscription while it was down (`sub: false`): only the POST gets it
       if (st.sub !== false) act(() => { fake.emit(parseSSEEvent(JSON.stringify(st.env))); });
       // the same envelope on the POST of the send that started this turn
-      if (post?.open && st.env.source !== 'drain' && st.env.source !== 'injected') {
+      // (a transcript_row / background_agents envelope is published outside any
+      // turn: never on a POST)
+      if (post?.open && st.env.turnId && st.env.source !== 'drain' && st.env.source !== 'injected') {
         const ev = parseSSEEvent(JSON.stringify(st.env));
         act(() => { post!.handler(ev); });
         if (st.env.type === 'turn_end') endPost();
@@ -302,74 +303,10 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
 }
 
 /**
- * Divergences found by this test, by root cause (P0, 2026-10-22; docs/design/
- * chat-transcript-single-source.md §9). Each is a real live != reload difference, not accepted
- * as correct: listed so the test is a ratchet (a NEW divergence fails it) while the roots are
- * fixed. Remove a root's lines when it is fixed; the test then holds it.
+ * Divergences still accepted (none). The P0 roots R1-R10 are fixed (design doc
+ * chat-transcript-single-source.md §9); any signature now fails the test.
  */
-const KNOWN = new Set<string>([
-  // R1 the sending tab's own continuation (answer / permission) is bound by its POST and renders into
-  // ChatPage's numeric placeholder: its own bubble, while the reload merges it (19/40). Two render paths
-  // with two bubble rules; S1 / P4 (only the subscription renders) removes it.
-  'stream: assistant bubbles: a unlabelled turn has its own bubble',
-  // R2 ask_user_question is never stored: the question and its answer vanish on reload (17/70).
-  'stream: only live: question',
-  'reconciled: only live: question',
-  'stream: other tab: only live: question',
-  'reconciled: other tab: only live: question',
-  'stream: shown live, gone on reload: question',
-  'reconciled: shown live, gone on reload: question',
-  'stream: other tab: shown live, gone on reload: question',
-  'reconciled: other tab: shown live, gone on reload: question',
-  // R4 user messages are not session events: another tab has no user bubbles until its reconcile,
-  // and consecutive turns run together (40/40).
-  'stream: other tab: user bubbles: live fewer than reload',
-  'stream: other tab: only reload: text',
-  'stream: other tab: assistant bubbles: a chat turn has its own bubble',
-  'stream: other tab: assistant bubbles: a drain turn has its own bubble',
-  // R5 a decision made in one tab is not published: the other tab shows it undecided until reconcile (17/40).
-  'stream: other tab: only live: permission',
-  'stream: other tab: state differs: permission (live undecided, reload approve)',
-  'stream: other tab: state differs: permission (live undecided, reload deny)',
-  // R6 a turn that repeats a text / thought of its own is shown once live (taken for a re-emission),
-  // twice on reload (5/40).
-  'stream: live drops a repeated thinking',
-  'stream: live drops a repeated text',
-  'stream: other tab: live drops a repeated thinking',
-  'stream: other tab: live drops a repeated text',
-  // R8 the Stop receipt is written, not published: only the tab that pressed Stop shows it (10/40).
-  'stream: other tab: only reload: turn_stop',
-  // R9 compaction rows exist only on read (spliced into history): live never shows the divider (12/40);
-  // the splice places it after the merged message, so a later CLI turn reloads BEFORE the divider and
-  // the reconcile cannot correlate it: its content shows twice (2/40).
-  'stream: system rows (compaction): live fewer than reload',
-  'stream: only reload: text',   // the divider's own text
-  'stream: other tab: system rows (compaction): live fewer than reload',
-  'stream: live repeats: background_finished',
-  'reconciled: live repeats: background_finished',
-  'stream: live repeats: text',
-  'reconciled: live repeats: text',
-  'stream: live repeats: thinking',
-  'reconciled: live repeats: thinking',
-  'stream: live repeats: tool_use',
-  'reconciled: live repeats: tool_use',
-  'stream: live repeats: tool_result',
-  'reconciled: live repeats: tool_result',
-  'stream: assistant bubbles: a injected turn has its own bubble',
-  'reconciled: assistant bubbles: a injected turn has its own bubble',
-  'stream: other tab: live repeats: background_finished',
-  'reconciled: other tab: live repeats: background_finished',
-  'stream: other tab: live repeats: text',
-  'reconciled: other tab: live repeats: text',
-  'stream: other tab: live repeats: thinking',
-  'reconciled: other tab: live repeats: thinking',
-  'stream: other tab: live repeats: tool_use',
-  'reconciled: other tab: live repeats: tool_use',
-  'stream: other tab: live repeats: tool_result',
-  'reconciled: other tab: live repeats: tool_result',
-  'stream: other tab: assistant bubbles: a injected turn has its own bubble',
-  'reconciled: other tab: assistant bubbles: a injected turn has its own bubble',
-]);
+const KNOWN = new Set<string>([]);
 
 const scenarios = (fixture as { scenarios: Scenario[] }).scenarios;
 const report: { stream: Map<string, string[]>; reconciled: Map<string, string[]> } = {

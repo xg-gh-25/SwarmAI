@@ -103,75 +103,41 @@ describe('Streaming spinner hang — updateMessages reconciliation', () => {
   });
 
   it('should accumulate tool blocks across multiple assistant events in same agentic turn', () => {
-    // SETUP: The agentic loop produces multiple assistant events:
-    // Event 1: [text("..."), tool_use(Write)]
-    // Event 2: [text(""), tool_use(Bash), tool_result(Write-error)]
-    // Event 3: [text(""), tool_use(Read)]
-    // Event 4: [text("Summary"), tool_use(Write-success)]
-    //
-    // Each event should ADD new tool blocks without losing previous ones.
-
+    // Each assistant event carries the blocks it adds (backend: one event per
+    // block, each persisted as its row — the record holds no cumulative re-send;
+    // checked 2026-10-23 on the live DB). Tool blocks are keyed by id, so a
+    // repeated one is still added once. Each event ADDS without losing earlier ones.
     const msgId = 'assistant-1';
     const initialText = 'Let me write the design:';
-
-    // Start with streamed text
     let messages: Message[] = [makeMessage(msgId, [textBlock(initialText, false)])];
 
-    // Event 1: text + Write tool
-    messages = updateMessages(messages, msgId, [
-      textBlock(initialText),
-      toolUseBlock('tu-write-1', 'Write'),
-    ]);
-
+    messages = updateMessages(messages, msgId, [textBlock(initialText), toolUseBlock('tu-write-1', 'Write')]);
     expect(messages[0].content.filter(b => b.type === 'tool_use').length).toBe(1);
 
-    // Event 2: tool_result(error) + new tool_use(Bash)
     messages = updateMessages(messages, msgId, [
-      textBlock(initialText),
-      toolUseBlock('tu-write-1', 'Write'),       // already exists → dedup
-      toolResultBlock('tu-write-1', 'Error', true),
-      toolUseBlock('tu-bash-1', 'Bash'),          // new
-    ]);
-
-    const afterEvent2 = messages[0].content;
-    expect(afterEvent2.filter(b => b.type === 'tool_use').length).toBe(2); // Write + Bash
-    expect(afterEvent2.filter(b => b.type === 'tool_result').length).toBe(1);
-
-    // Event 3: more tools
-    messages = updateMessages(messages, msgId, [
-      textBlock(initialText),
-      toolUseBlock('tu-write-1', 'Write'),
+      toolUseBlock('tu-write-1', 'Write'),       // already there → once
       toolResultBlock('tu-write-1', 'Error', true),
       toolUseBlock('tu-bash-1', 'Bash'),
-      toolResultBlock('tu-bash-1', 'OK', false),
-      toolUseBlock('tu-read-1', 'Read'),
     ]);
+    expect(messages[0].content.filter(b => b.type === 'tool_use').length).toBe(2);
+    expect(messages[0].content.filter(b => b.type === 'tool_result').length).toBe(1);
 
-    const afterEvent3 = messages[0].content;
-    expect(afterEvent3.filter(b => b.type === 'tool_use').length).toBe(3); // Write + Bash + Read
-    expect(afterEvent3.filter(b => b.type === 'tool_result').length).toBe(2);
-
-    // Event 4: final text + final tool
     messages = updateMessages(messages, msgId, [
-      textBlock(initialText + '\n\nDone. Here is the design:'),
-      toolUseBlock('tu-write-1', 'Write'),
-      toolResultBlock('tu-write-1', 'Error', true),
-      toolUseBlock('tu-bash-1', 'Bash'),
       toolResultBlock('tu-bash-1', 'OK', false),
       toolUseBlock('tu-read-1', 'Read'),
       toolResultBlock('tu-read-1', 'file content', false),
+    ]);
+    messages = updateMessages(messages, msgId, [
+      textBlock('Done. Here is the design:'),
       toolUseBlock('tu-write-2', 'Write'),
       toolResultBlock('tu-write-2', 'Success', false),
     ]);
 
-    const afterEvent4 = messages[0].content;
-    // Should have ALL tool blocks
-    expect(afterEvent4.filter(b => b.type === 'tool_use').length).toBe(4);
-    expect(afterEvent4.filter(b => b.type === 'tool_result').length).toBe(4);
-    // Text should be the final version
-    const finalText = afterEvent4.filter(b => b.type === 'text');
-    expect(finalText.length).toBe(1);
-    expect((finalText[0] as Record<string, unknown>).text).toContain('Done. Here is the design:');
+    const after = messages[0].content;
+    expect(after.filter(b => b.type === 'tool_use').length).toBe(4);
+    expect(after.filter(b => b.type === 'tool_result').length).toBe(4);
+    expect(after.filter(b => b.type === 'text').map((b) => (b as Record<string, unknown>).text))
+      .toEqual([initialText, 'Done. Here is the design:']);
   });
 
   it('updateMessages must return a NEW reference even when only tool blocks differ', () => {
@@ -203,9 +169,9 @@ describe('Streaming spinner hang — updateMessages reconciliation', () => {
     expect(messages[0].content.filter(b => b.type === 'tool_result').length).toBe(1);
   });
 
-  it('updateMessages returns NEW reference when long text triggers same-turn dedup', () => {
-    // Same-turn dedup only fires for text >= 20 chars (MIN_DEDUP_LENGTH guard).
-    // Short text ("Done") is excluded to prevent false positives on common words.
+  it('a long text the turn writes again is a second block, as the record holds it', () => {
+    // No text is matched against a CONFIRMED block (R6, live == reload): the
+    // record keeps a repeat, so live does. Each envelope arrives once (eventSeq).
     const msgId = 'assistant-1';
     const longText = 'Now I have enough information to proceed with the implementation.';
     const messages: Message[] = [makeMessage(msgId, [
@@ -213,22 +179,11 @@ describe('Streaming spinner hang — updateMessages reconciliation', () => {
       toolUseBlock('tu-1', 'Read'),
       toolResultBlock('tu-1', 'content'),
     ])];
-
     const originalRef = messages[0];
-
-    // Same long text arrives — triggers dedup (>= 20 chars both sides)
-    const result = updateMessages(messages, msgId, [
-      textBlock(longText),
-      toolUseBlock('tu-1', 'Read'),
-      toolResultBlock('tu-1', 'content'),
-    ]);
-
-    // MUST be new reference — text was replaced via dedup
+    const result = updateMessages(messages, msgId, [textBlock(longText)]);
     expect(result[0]).not.toBe(originalRef);
     const textBlocks = result[0].content.filter(b => b.type === 'text');
-    expect(textBlocks.length).toBe(1);
-    expect((textBlocks[0] as Record<string, unknown>)._confirmed).toBe(true);
-    expect((textBlocks[0] as Record<string, unknown>).text).toBe(longText);
+    expect(textBlocks.length).toBe(2);
   });
 });
 

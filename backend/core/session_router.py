@@ -34,6 +34,7 @@ from uuid import uuid4
 
 from . import session_events
 from .turn_writer import TurnWriter
+from . import transcript_feed  # noqa: F401 — publishes out-of-turn transcript changes
 from .session_unit import SessionState, SessionUnit
 from .turn_phase import PREPARING as TURN_PHASE_PREPARING, turn_phase_event
 
@@ -2444,6 +2445,13 @@ class SessionRouter:
             pblock = permission_block(event)
             if pblock is not None:
                 pending.append(pblock)
+        if etype == "ask_user_question":
+            # The question is a block of the turn, as the prompt above is; its
+            # answer is recorded onto it (core/question_prompt) — a reload shows both.
+            from .question_prompt import question_block
+            qblock = question_block(event)
+            if qblock is not None:
+                pending.append(qblock)
         if etype == "result" and changes is not None:
             try:
                 cblock = await changes.finish()
@@ -5140,6 +5148,12 @@ class SessionRouter:
                 message=f"Session {session_id} not found",
             )
             return
+
+        # The answer onto the stored question (core/question_prompt): before the
+        # turn goes on, so a reload during the continuation shows it answered.
+        if tool_use_id:
+            from .question_prompt import record_answer
+            await record_answer(session_id, tool_use_id, answer)
 
         # The writer's row key is the originating turn's client_id (stashed by
         # send_message), so this continuation row carries the SAME

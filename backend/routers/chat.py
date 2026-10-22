@@ -998,7 +998,19 @@ async def get_session(session_id: str):
     )
 
 
-def _merge_consecutive_assistant_messages(messages: list[dict]) -> list[dict]:
+def _turn_key(msg: dict) -> Optional[str]:
+    """The turn a row belongs to: its client_id without the ``-asst`` suffix
+    (a continuation and a Stop receipt carry their turn's), or None (old rows)."""
+    md = msg.get("metadata")
+    cid = md.get("client_id") if isinstance(md, dict) else None
+    if not isinstance(cid, str) or not cid:
+        return None
+    return cid[:-5] if cid.endswith("-asst") else cid
+
+
+def _merge_consecutive_assistant_messages(
+    messages: list[dict], compaction_times: Optional[list[str]] = None,
+) -> list[dict]:
     """Merge consecutive assistant DB rows into single message dicts.
 
     The backend persists each agentic turn as a separate row (crash safety).
@@ -1011,17 +1023,31 @@ def _merge_consecutive_assistant_messages(messages: list[dict]) -> list[dict]:
     - The merged message uses the FIRST row's id and created_at (stable reference).
     - The LAST row's model wins (most recent model attribution).
     - Non-assistant rows and user rows are never merged.
+    - A compaction (``compaction_times``) between two rows of DIFFERENT turns
+      ends the bubble: the divider sits between them, as the live chat shows it
+      (a turn after a divider starts its own bubble). Within one turn the bubble
+      continues, and the divider is placed after it (compact_summary.splice).
     """
     if not messages:
         return []
 
+    times = sorted(t for t in (compaction_times or []) if t)
     merged: list[dict] = []
+    last_row: Optional[dict] = None   # the previous raw row
     for msg in messages:
         role = msg.get("role")
+        split = False
+        if times and last_row is not None and role == "assistant":
+            lo, hi = last_row.get("created_at") or "", msg.get("created_at") or ""
+            k_prev, k_new = _turn_key(last_row), _turn_key(msg)
+            split = (k_prev is not None and k_new is not None and k_prev != k_new
+                     and any(lo < t <= hi for t in times))
+        last_row = msg
         if (
             role == "assistant"
             and merged
             and merged[-1].get("role") == "assistant"
+            and not split
         ):
             # Merge into previous assistant message
             prev = merged[-1]
@@ -1102,6 +1128,16 @@ async def get_session_messages(
         logger.debug("live permission read failed session=%s", session_id, exc_info=True)
         _live_perms = set()
 
+    # The snapshot's transcript rev (schema v15), read BEFORE the rows: every
+    # change at or below it is in this body, so a tab applies only the feed's
+    # changes above it (core/transcript_feed). A change landing between this read
+    # and the rows is in both — applying it again is a no-op.
+    try:
+        transcript_rev = await db.transcript_rev(session_id)
+    except Exception:  # noqa: BLE001
+        logger.debug("transcript rev read failed session=%s", session_id, exc_info=True)
+        transcript_rev = 0
+
     # ── ETag: count query → 304 if unchanged ──
     # Only for non-cursor queries (before_id changes per request).
     etag: str | None = None
@@ -1116,7 +1152,8 @@ async def get_session_messages(
         etag = f'"{session_id}:{msg_count}:{compaction_sig}:{_perm_prompt.etag_part(_live_perms)}:{shape}"'
         if_none_match = request.headers.get("if-none-match")
         if if_none_match and if_none_match == etag:
-            return FastAPIResponse(status_code=304, headers={"ETag": etag})
+            return FastAPIResponse(status_code=304, headers={
+                "ETag": etag, "X-Transcript-Rev": str(transcript_rev)})
 
     # ── Fetch messages ──
     has_more: bool | None = None
@@ -1139,7 +1176,14 @@ async def get_session_messages(
     # but the frontend expects one assistant bubble per user→agent exchange.
     # Without merging, loadSessionMessages renders 5-20 separate assistant bubbles
     # with overlapping text content for a single response.
-    data = _merge_consecutive_assistant_messages(messages)
+    try:
+        _compactions = await db.list_compactions(session_id)
+    except Exception:  # noqa: BLE001 — history must load even if this fails
+        logger.warning("compaction read failed session=%s", session_id, exc_info=True)
+        _compactions = []
+        etag = None
+    data = _merge_consecutive_assistant_messages(
+        messages, [c.get("created_at") or "" for c in _compactions])
     _perm_prompt.annotate(data, _live_perms)
 
     # Context compactions as synthetic `compact-<id>` system rows (divider +
@@ -1147,7 +1191,7 @@ async def get_session_messages(
     # splits that turn's bubble. Display only: they are not messages rows, so
     # cold resume, recall and counts never see them.
     try:
-        compactions = await db.list_compactions(session_id)
+        compactions = _compactions
         if compactions:
             from core.compact_summary import splice_into_history
             # An older page is bounded by the row it was cut before, so every
@@ -1162,9 +1206,43 @@ async def get_session_messages(
         etag = None  # never cache a body that lacks rows the ETag counts
 
     headers = {"ETag": etag} if etag else {}
+    headers["X-Transcript-Rev"] = str(transcript_rev)
     if has_more is not None:
         headers["X-Has-More"] = "1" if has_more else "0"
     return JSONResponse(content=data, headers=headers)
+
+
+@router.get("/sessions/{session_id}/transcript")
+async def get_transcript_since(
+    session_id: str,
+    since_rev: int = Query(..., ge=0),
+):
+    """What changed in a session's transcript after ``since_rev`` (schema v15):
+    ``{rev, reset, rows: [{row, rev, pending}]}``, rows as the history returns
+    them (a compaction as its ``compact-<id>`` system row), unmerged, oldest
+    first. ``reset``: a row was removed after ``since_rev`` — read the history
+    again. A reconnecting tab asks for the changes it missed instead of the
+    whole history."""
+    session = await session_manager.get_session(session_id)
+    if not session:
+        raise SessionNotFoundException(
+            detail=f"Session with ID '{session_id}' does not exist",
+            suggested_action="Please check the session ID and try again")
+    from core import permission_prompt as _perm_prompt
+    from core.compact_summary import history_message
+    out = await db.transcript_since(session_id, since_rev)
+    try:
+        live = _perm_prompt.live_request_ids(_get_router().get_unit(session_id), session_id)
+    except Exception:  # noqa: BLE001
+        live = set()
+    fields = ("id", "session_id", "role", "content", "model", "created_at", "metadata")
+    msgs = [{k: m[k] for k in fields if k in m} for _, m in out["messages"]]
+    _perm_prompt.annotate(msgs, live)
+    rows = [{"row": m, "rev": rv, "pending": False} for m, (rv, _) in zip(msgs, out["messages"])]
+    rows += [{"row": history_message(session_id, c), "rev": rv, "pending": False}
+             for rv, c in out["compactions"]]
+    rows.sort(key=lambda r: (r["row"].get("created_at") or "", r["rev"]))
+    return {"rev": out["rev"], "reset": out["reset"], "rows": rows}
 
 
 async def _compaction_signature(session_id: str) -> str:

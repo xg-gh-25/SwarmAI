@@ -1,7 +1,9 @@
 /**
  * sessionTurnRouter — which source renders each turn event of a tab.
  *
- * Invariants under test: one render source while the subscription is up (I6),
+ * Invariants under test: one render target — a send's turn begins at its first
+ * turn_start copy, the POST's or the subscription's, and renders through the
+ * subscription path (origin 'sub') — one render source while the subscription is up (I6),
  * each eventSeq rendered once (I3), buffering while a send is unbound (F3),
  * begin on turn_start, complete exactly once, detach on POST loss (F4), resync.
  */
@@ -32,13 +34,13 @@ describe('sessionTurnRouter', () => {
     expect(kinds(onPostComplete(st, true))).toEqual(['postComplete']);
   });
 
-  it('subscription connected: POST copies bind but never render; subscription renders each seq once', () => {
+  it('subscription connected: the POST turn_start begins the turn; POST copies never render; each seq once', () => {
     const st = createTabTurnState();
     onPostSend(st);
-    expect(routePostEvent(st, ev('T', 1, 'turn_start'), true)).toEqual([]);
+    expect(kinds(routePostEvent(st, ev('T', 1, 'turn_start'), true))).toEqual(['begin:1']);
     expect(st.bound?.turnId).toBe('T');
-    expect(routeSubEvent(st, ev('T', 1, 'turn_start'))).toEqual([{ type: 'render', event: ev('T', 1, 'turn_start'), origin: 'post' }]);
-    expect(kinds(routeSubEvent(st, ev('T', 2)))).toEqual(['render:2']);
+    expect(routeSubEvent(st, ev('T', 1, 'turn_start'))).toEqual([]);   // its own start, seen
+    expect(routeSubEvent(st, ev('T', 2))).toEqual([{ type: 'render', event: ev('T', 2), origin: 'sub' }]);
     expect(routePostEvent(st, ev('T', 2), true)).toEqual([]);
     expect(routeSubEvent(st, ev('T', 2))).toEqual([]); // duplicate seq
     expect(onPostComplete(st, true)).toEqual([]); // waits for turn_end
@@ -51,15 +53,15 @@ describe('sessionTurnRouter', () => {
     onPostSend(st);
     expect(routeSubEvent(st, ev('T', 1, 'turn_start'))).toEqual([]);
     expect(routeSubEvent(st, ev('T', 2))).toEqual([]);
-    expect(kinds(routePostEvent(st, ev('T', 1, 'turn_start'), true))).toEqual(['render:1', 'render:2']);
+    expect(kinds(routePostEvent(st, ev('T', 1, 'turn_start'), true))).toEqual(['begin:1', 'render:2']);
     expect(st.buffer).toEqual([]);
     expect(kinds(routeSubEvent(st, ev('T', 3)))).toEqual(['render:3']);
   });
 
-  it('subscription down: the POST renders (fallback) and completes on [DONE]', () => {
+  it('subscription down: the POST copies render (fallback) and its [DONE] completes', () => {
     const st = createTabTurnState();
     onPostSend(st);
-    expect(kinds(routePostEvent(st, ev('T', 1, 'turn_start'), false))).toEqual(['render:1']);
+    expect(kinds(routePostEvent(st, ev('T', 1, 'turn_start'), false))).toEqual(['begin:1']);
     expect(kinds(routePostEvent(st, ev('T', 2), false))).toEqual(['render:2']);
     expect(kinds(onPostComplete(st, false))).toEqual(['complete']);
     // the subscription reconnects and replays: nothing renders twice, no second complete
@@ -130,7 +132,7 @@ describe('sessionTurnRouter', () => {
     routePostEvent(st, ev('U', 1, 'turn_start'), true);
     routeSubEvent(st, ev('U', 1, 'turn_start'));
     // the CLI starts its own turn right after the user turn (no idle in between)
-    expect(routeSubEvent(st, ev('U', 3, 'turn_end'))).toEqual([{ type: 'complete', origin: 'post' }]);
+    expect(routeSubEvent(st, ev('U', 3, 'turn_end'))).toEqual([{ type: 'complete', origin: 'sub' }]);
     const st2 = createTabTurnState();
     onPostSend(st2);
     routePostEvent(st2, ev('U', 1, 'turn_start'), true);
@@ -177,7 +179,7 @@ describe('sessionTurnRouter', () => {
     routePostEvent(st, ev('T', 5, 'turn_start'), true);
     routeSubEvent(st, ev('T', 5, 'turn_start'));
     const rs = routeSubEvent(st, { type: 'resync', sessionId: 'S', eventSeq: 4, activeTurnId: 'T' } as unknown as TurnEnvelope);
-    expect(rs).toEqual([{ type: 'reset', origin: 'post' }, { type: 'resync' }]);
+    expect(rs).toEqual([{ type: 'reset', origin: 'sub' }, { type: 'resync' }]);
     expect(routePostEvent(st, ev('T', 6), true)).toEqual([]); // the subscription replays it
     expect(kinds(routeSubEvent(st, ev('T', 5, 'turn_start')))).toEqual(['begin:5']);
     expect(onPostComplete(st, true)).toEqual([]);
@@ -253,7 +255,7 @@ describe('sessionTurnRouter', () => {
     routePostEvent(st, ev('T', 1, 'turn_start'), true);
     onPostComplete(st, true);
     const out = routeSubEvent(st, { type: 'resync', sessionId: 'S', eventSeq: 30, activeTurnId: null } as unknown as TurnEnvelope);
-    expect(out).toEqual([{ type: 'complete', origin: 'post' }, { type: 'resync' }]);
+    expect(out).toEqual([{ type: 'complete', origin: 'sub' }, { type: 'resync' }]);
   });
 
   it('a resync of another session is not this tab\'s', () => {
@@ -271,7 +273,7 @@ describe('sessionTurnRouter', () => {
     routeSubEvent(st, { ...ev('X', 2), sessionId: 'OTHER' } as TurnEnvelope);
     routeSubEvent(st, { ...ev('Y', 1, 'turn_start'), sessionId: 'MINE' } as TurnEnvelope);
     const out = routePostEvent(st, { ...ev('Y', 1, 'turn_start'), sessionId: 'MINE' } as TurnEnvelope, true);
-    expect(kinds(out)).toEqual(['render:1']);
+    expect(kinds(out)).toEqual(['begin:1']);
     expect(st.buffer).toEqual([]);
     expect(st.sessionId).toBe('MINE');
   });
@@ -295,7 +297,7 @@ describe('sessionTurnRouter', () => {
     routeSubEvent(st, { type: 'resync', sessionId: 'S', eventSeq: 4, activeTurnId: 'T' } as unknown as TurnEnvelope);
     // the subscription drops before the replay; T ends meanwhile; the reconnect resyncs
     const out = routeSubEvent(st, { type: 'resync', sessionId: 'S', eventSeq: 30, activeTurnId: null } as unknown as TurnEnvelope);
-    expect(out).toEqual([{ type: 'complete', origin: 'post' }, { type: 'resync' }]);
+    expect(out).toEqual([{ type: 'complete', origin: 'sub' }, { type: 'resync' }]);
     expect(st.rebuild).toBeUndefined();
   });
 
@@ -308,5 +310,21 @@ describe('sessionTurnRouter', () => {
     expect(kinds(routePostEvent(st, ev('T', 8), false))).toEqual(['render:8']);
     expect(st.rebuild).toBeUndefined();
     expect(kinds(onPostComplete(st, false))).toEqual(['complete']);
+  });
+});
+
+describe('sessionTurnRouter — one render target', () => {
+  it('a POST copy that is not a turn_start binds the POST\'s own handler (its start was never seen)', () => {
+    const st = createTabTurnState();
+    onPostSend(st);
+    expect(routePostEvent(st, ev('T', 4), false)).toEqual([{ type: 'render', event: ev('T', 4), origin: 'post' }]);
+  });
+
+  it('the POST turn_end while the subscription is down completes the turn once', () => {
+    const st = createTabTurnState();
+    onPostSend(st);
+    routePostEvent(st, ev('T', 1, 'turn_start'), false);
+    expect(kinds(routePostEvent(st, ev('T', 2, 'turn_end'), false))).toEqual(['complete']);
+    expect(onPostComplete(st, false)).toEqual([]);
   });
 });

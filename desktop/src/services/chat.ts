@@ -794,6 +794,15 @@ export const chatService = {
    * never hit anyway. Leaving the cache exclusively to initial-load removes the
    * poisoning vector entirely.
    */
+  /** What changed in a session's transcript after `sinceRev` (backend GET
+   *  /chat/sessions/{id}/transcript): the current rev, whether a row was removed
+   *  since (`reset`), and the changed rows. */
+  async getTranscriptSince(sessionId: string, sinceRev: number): Promise<{ rev: number; reset: boolean; rows: unknown[] }> {
+    const response = await api.get<{ rev: number; reset: boolean; rows: unknown[] }>(
+      `/chat/sessions/${sessionId}/transcript?since_rev=${sinceRev}`);
+    return response.data;
+  },
+
   async getSessionMessagesReconcileTail(
     sessionId: string,
     limit: number,

@@ -50,7 +50,7 @@ async def test_v13_database_migrates_to_v14(tmp_path):
         await conn.commit()
         await d._run_versioned_migrations(conn, 13)
         await d._run_versioned_migrations(conn, 13)          # idempotent
-        assert (await (await conn.execute("PRAGMA user_version")).fetchone())[0] == 14
+        assert (await (await conn.execute("PRAGMA user_version")).fetchone())[0] == 15   # v15 chains on
         cols = [r[1] for r in await (await conn.execute("PRAGMA table_info(send_requests)")).fetchall()]
     assert cols == list(SQLiteDatabase.SEND_REQUEST_COLS)
 

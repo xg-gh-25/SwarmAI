@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import aiosqlite
 import asyncio
+import contextvars
 import json
 import logging
 import shutil
@@ -626,7 +627,52 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                                "storing inline: %s", exc)
             item["content_seg"] = message_content_seg(item["content"])
 
-        return await super().put(item)
+        existed = False
+        if TRANSCRIPT_LISTENERS and not TRANSCRIPT_FEED_SUPPRESSED.get():
+            existed = await self.get(item["id"]) is not None
+        out = await super().put(item)
+        await self._report(item["id"], "update" if existed else "insert")
+        return out
+
+    async def _report(self, row_id: str, op: str = "update") -> None:
+        """Hand a committed change of this row to the transcript feed (see
+        TRANSCRIPT_LISTENERS): the row as the history shows it, with its rev."""
+        if not TRANSCRIPT_LISTENERS or TRANSCRIPT_FEED_SUPPRESSED.get():
+            return
+        try:
+            async with self._get_connection(readonly=True) as conn:
+                conn.row_factory = aiosqlite.Row
+                async with conn.execute(
+                    f"SELECT m.*, r.rev AS _rev FROM {self.table_name} m "
+                    "LEFT JOIN transcript_revs r ON r.row_id = m.id WHERE m.id = ?", (row_id,)) as cur:
+                    raw = await cur.fetchone()
+        except Exception:  # noqa: BLE001
+            logger.warning("transcript feed read failed row=%s", row_id, exc_info=True)
+            return
+        if raw is None:
+            return
+        row = self._row_to_dict(raw)
+        _feed({"kind": "message", "session_id": row["session_id"], "rev": row.get("_rev") or 0,
+               "pending": row.get("sent") == 0, "op": op,
+               "row": {k: row[k] for k in TRANSCRIPT_ROW_FIELDS if k in row}})
+
+    async def delete(self, item_id: str) -> bool:
+        """Delete a message; the feed reports the removal."""
+        sid = None
+        if TRANSCRIPT_LISTENERS and not TRANSCRIPT_FEED_SUPPRESSED.get():
+            got = await self.get(item_id)
+            sid = (got or {}).get("session_id")
+        ok = await super().delete(item_id)
+        if ok and sid:
+            _feed({"kind": "delete", "session_id": sid, "row_id": item_id,
+                   "rev": await _session_rev(self.db_path, sid)})
+        return ok
+
+    async def update(self, item_id: str, updates: dict):
+        out = await super().update(item_id, updates)
+        if out is not None:
+            await self._report(item_id)
+        return out
 
     # Root-1 SSOT Phase 2: a user message that arrives while the session is busy
     # is persisted with sent=0 (pending) and drained later. EVERY reader that
@@ -716,8 +762,11 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                         (self._serialize_value(blocks), datetime.now().isoformat(), row_id),
                     )
                     await conn.commit()
-                    return True
-        return False
+                    break
+            else:
+                return False
+        await self._report(row_id)
+        return True
 
     async def update_permission_decision(self, session_id: str, request_id: str, decision: str) -> bool:
         """Set ``decision`` on the stored ``cmd_permission_request`` block
@@ -751,8 +800,48 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                         (self._serialize_value(blocks), datetime.now().isoformat(), row_id),
                     )
                     await conn.commit()
-                    return True
-        return False
+                    break
+            else:
+                return False
+        await self._report(row_id)
+        return True
+
+    async def update_question_answers(self, session_id: str, tool_use_id: str, answers: dict) -> bool:
+        """Set ``answers`` on the stored ``ask_user_question`` block ``tool_use_id``
+        (core/question_prompt). True when a row changed; an answered block stays."""
+        import json as _json
+        needle = f'%"toolUseId": "{tool_use_id}"%'
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                f"SELECT id, content FROM {self.table_name} WHERE session_id = ? AND content LIKE ? "
+                f"ORDER BY created_at DESC LIMIT 5",
+                (session_id, needle),
+            ) as cursor:
+                rows = await cursor.fetchall()
+            for row_id, raw in rows:
+                try:
+                    blocks = _json.loads(raw) if isinstance(raw, str) else raw
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(blocks, list):
+                    continue
+                hit = False
+                for blk in blocks:
+                    if isinstance(blk, dict) and blk.get("type") == "ask_user_question" \
+                            and blk.get("toolUseId") == tool_use_id and not blk.get("answers"):
+                        blk["answers"] = dict(answers)
+                        hit = True
+                if hit:
+                    await conn.execute(
+                        f"UPDATE {self.table_name} SET content = ?, updated_at = ? WHERE id = ?",
+                        (self._serialize_value(blocks), datetime.now().isoformat(), row_id),
+                    )
+                    await conn.commit()
+                    break
+            else:
+                return False
+        await self._report(row_id)
+        return True
 
     async def assistant_replied_since(self, session_id: str, since_iso: str) -> bool:
         """Return True if the session has ≥1 assistant message created at/after
@@ -1857,7 +1946,68 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 12 — compactions table: one row per context compaction + its summary (2026-10-18)
 # 13 — drop transcript_chunks / transcript_fts
 # 14 — send_requests: one row per send (client_id), the idempotency ledger (2026-10-22)
-CURRENT_SCHEMA_VERSION = 14
+# 15 — transcript revisions: session_revs + transcript_revs, kept by triggers (2026-10-23)
+CURRENT_SCHEMA_VERSION = 15
+
+
+# ── Transcript feed (core/transcript_feed) ─────────────────────────────────
+# A committed transcript change is handed to the registered listeners: the
+# messages table reports its writes here, the compactions writes too. A turn's
+# own rows (written through core/turn_writer) are not reported — the turn's
+# events carry them — so TurnWriter suppresses the feed around its writes.
+TRANSCRIPT_LISTENERS: list = []
+TRANSCRIPT_FEED_SUPPRESSED = contextvars.ContextVar("transcript_feed_suppressed", default=False)
+TRANSCRIPT_ROW_FIELDS = ("id", "session_id", "role", "content", "model", "created_at", "metadata")
+
+
+def _feed(change: dict) -> None:
+    for listener in tuple(TRANSCRIPT_LISTENERS):
+        try:
+            listener(change)
+        except Exception:  # noqa: BLE001 — a listener never fails a write
+            logger.warning("transcript listener failed", exc_info=True)
+
+
+async def _session_rev(db_path, session_id: str) -> int:
+    async with _get_pool(str(db_path)).borrow(readonly=True) as conn:
+        cursor = await conn.execute("SELECT rev FROM session_revs WHERE session_id = ?", (session_id,))
+        row = await cursor.fetchone()
+    return int(row[0]) if row else 0
+
+
+def _rev_bump(session: str, row: str, kind: str) -> str:
+    return (f"INSERT INTO session_revs(session_id, rev, deleted_rev) VALUES ({session}, 1, 0) "
+            f"ON CONFLICT(session_id) DO UPDATE SET rev = rev + 1; "
+            f"INSERT OR REPLACE INTO transcript_revs(row_id, session_id, kind, rev) VALUES "
+            f"({row}, {session}, '{kind}', (SELECT rev FROM session_revs WHERE session_id = {session}));")
+
+
+def _rev_delete(session: str, row: str) -> str:
+    return (f"INSERT INTO session_revs(session_id, rev, deleted_rev) VALUES ({session}, 1, 1) "
+            f"ON CONFLICT(session_id) DO UPDATE SET rev = rev + 1, deleted_rev = rev + 1; "
+            f"DELETE FROM transcript_revs WHERE row_id = {row};")
+
+
+#: schema v15 (see the migration): the transcript revision tables and triggers
+_TRANSCRIPT_REV_DDL = (
+    """CREATE TABLE IF NOT EXISTS session_revs (
+        session_id TEXT PRIMARY KEY, rev INTEGER NOT NULL, deleted_rev INTEGER NOT NULL DEFAULT 0)""",
+    """CREATE TABLE IF NOT EXISTS transcript_revs (
+        row_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL, rev INTEGER NOT NULL)""",
+    "CREATE INDEX IF NOT EXISTS idx_transcript_revs_session ON transcript_revs(session_id, rev)",
+    f"CREATE TRIGGER IF NOT EXISTS messages_rev_insert AFTER INSERT ON messages BEGIN "
+    f"{_rev_bump('NEW.session_id', 'NEW.id', 'message')} END",
+    f"CREATE TRIGGER IF NOT EXISTS messages_rev_update AFTER UPDATE OF content, sent, metadata "
+    f"ON messages BEGIN {_rev_bump('NEW.session_id', 'NEW.id', 'message')} END",
+    f"CREATE TRIGGER IF NOT EXISTS messages_rev_delete AFTER DELETE ON messages BEGIN "
+    f"{_rev_delete('OLD.session_id', 'OLD.id')} END",
+    f"CREATE TRIGGER IF NOT EXISTS compactions_rev_insert AFTER INSERT ON compactions BEGIN "
+    f"{_rev_bump('NEW.session_id', 'NEW.id', 'compaction')} END",
+    f"CREATE TRIGGER IF NOT EXISTS compactions_rev_update AFTER UPDATE OF summary "
+    f"ON compactions BEGIN {_rev_bump('NEW.session_id', 'NEW.id', 'compaction')} END",
+    f"CREATE TRIGGER IF NOT EXISTS compactions_rev_delete AFTER DELETE ON compactions BEGIN "
+    f"{_rev_delete('OLD.session_id', 'OLD.id')} END",
+)
 
 
 class SQLiteDatabase(BaseDatabase):
@@ -3077,6 +3227,24 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             logger.info("Migration v14: send_requests table")
 
+        if current_version < 15:
+            # Version 15: transcript revisions (design chat-transcript-single-source
+            # S1 3.1). Every write to a session's transcript — a messages row
+            # inserted, changed (content / sent / metadata) or deleted, a compaction
+            # inserted or changed — bumps the session's rev IN THE SAME TRANSACTION,
+            # by trigger, so no write path can skip it. The row's rev is kept in
+            # transcript_revs (not a messages column: setting a column from an
+            # INSERT trigger is an UPDATE, which would re-run the FTS triggers on
+            # every insert). deleted_rev: the rev of the last delete — an
+            # incremental read from before it cannot see the removal.
+            for stmt in _TRANSCRIPT_REV_DDL:
+                await conn.execute(stmt)
+            cursor = await conn.execute("PRAGMA user_version")
+            if (await cursor.fetchone())[0] >= 14:
+                await conn.execute("PRAGMA user_version = 15")
+            await conn.commit()
+            logger.info("Migration v15: transcript revisions")
+
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.
 
@@ -3896,6 +4064,52 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             return cursor.rowcount == 1
 
+    # ── Transcript revisions (schema v15) ─────────────────────────────
+    async def transcript_rev(self, session_id: str) -> int:
+        """The session's current transcript rev (0: never written since v15)."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+            cursor = await conn.execute(
+                "SELECT rev FROM session_revs WHERE session_id = ?", (session_id,))
+            row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+    async def transcript_since(self, session_id: str, rev: int) -> dict:
+        """What changed after ``rev``: ``{rev, reset, messages: [(rev, row)],
+        compactions: [(rev, record)]}``. ``reset``: a row was deleted after
+        ``rev`` — an incremental read cannot show a removal, read the whole history.
+        Pending (unsent) rows are left out, as the history leaves them out."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+            cursor = await conn.execute(
+                "SELECT rev, deleted_rev FROM session_revs WHERE session_id = ?", (session_id,))
+            head = await cursor.fetchone()
+            current, deleted = (int(head[0]), int(head[1])) if head else (0, 0)
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute(
+                "SELECT r.rev AS _rev, m.* FROM transcript_revs r JOIN messages m ON m.id = r.row_id "
+                "WHERE r.session_id = ? AND r.kind = 'message' AND r.rev > ? "
+                f"AND {SQLiteMessagesTable._PENDING_EXCLUDE_SQL.replace('sent', 'm.sent')} "
+                "ORDER BY m.created_at ASC", (session_id, rev))
+            msgs = [dict(r) for r in await cursor.fetchall()]
+            cursor = await conn.execute(
+                f"SELECT r.rev AS _rev, {', '.join('c.' + c for c in self._COMPACTION_COLS)} "
+                "FROM transcript_revs r JOIN compactions c ON c.id = r.row_id "
+                "WHERE r.session_id = ? AND r.kind = 'compaction' AND r.rev > ? "
+                "ORDER BY c.created_at ASC", (session_id, rev))
+            comps = [dict(r) for r in await cursor.fetchall()]
+        return {"rev": current, "reset": deleted > rev,
+                "messages": [(m.pop("_rev"), self._messages._row_to_dict(m)) for m in msgs],
+                "compactions": [(c.pop("_rev"), c) for c in comps]}
+
+    async def row_revs(self, row_ids: list[str]) -> dict[str, int]:
+        """The rev of each row (messages / compactions) that has one."""
+        if not row_ids:
+            return {}
+        async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+            cursor = await conn.execute(
+                f"SELECT row_id, rev FROM transcript_revs WHERE row_id IN ({', '.join('?' for _ in row_ids)})",
+                tuple(row_ids))
+            return {r[0]: int(r[1]) for r in await cursor.fetchall()}
+
     async def prune_send_requests(self, before: str) -> int:
         """Drop requests created before ``before`` (ISO): past the messages TTL there
         is no row left for a retry to duplicate."""
@@ -3921,7 +4135,24 @@ class SQLiteDatabase(BaseDatabase):
                       for c in self._COMPACTION_COLS),
             )
             await conn.commit()
+        await self._report_compaction(row.get("id"))
         return True
+
+    async def _report_compaction(self, compaction_id: Optional[str]) -> None:
+        if not compaction_id or not TRANSCRIPT_LISTENERS or TRANSCRIPT_FEED_SUPPRESSED.get():
+            return
+        try:
+            async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+                cursor = await conn.execute(
+                    f"SELECT {', '.join('c.' + c for c in self._COMPACTION_COLS)}, r.rev FROM compactions c "
+                    "LEFT JOIN transcript_revs r ON r.row_id = c.id WHERE c.id = ?", (compaction_id,))
+                got = await cursor.fetchone()
+        except Exception:  # noqa: BLE001
+            logger.warning("transcript feed compaction read failed id=%s", compaction_id, exc_info=True)
+            return
+        if got:
+            rec = dict(zip(self._COMPACTION_COLS, got[:-1]))
+            _feed({"kind": "compaction", "session_id": rec["session_id"], "rev": got[-1] or 0, "row": rec})
 
     async def update_compaction_summary(self, compaction_id: str, summary: str) -> bool:
         """Attach a summary that arrived after its compaction row was stored."""
@@ -3929,7 +4160,10 @@ class SQLiteDatabase(BaseDatabase):
             cursor = await conn.execute(
                 "UPDATE compactions SET summary = ? WHERE id = ?", (summary, compaction_id))
             await conn.commit()
-            return cursor.rowcount > 0
+            changed = cursor.rowcount > 0
+        if changed:
+            await self._report_compaction(compaction_id)
+        return changed
 
     async def list_compactions(self, session_id: str) -> list[dict]:
         """A session's compactions, oldest first."""

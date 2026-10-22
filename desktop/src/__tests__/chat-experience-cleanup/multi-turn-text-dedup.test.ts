@@ -188,7 +188,7 @@ describe('Structural reconciliation (replace, not dedup)', () => {
     expect(textBlocks[0].text).toBe('Important content');
   });
 
-  it('handles the exact P0 scenario: same-turn re-emission deduplicates', () => {
+  it('the same text in a second event is a second block (the record has two)', () => {
     const msgId = 'a8';
     let messages: Message[] = [makeAssistantMessage(msgId)];
 
@@ -210,9 +210,11 @@ describe('Structural reconciliation (replace, not dedup)', () => {
 
     const msg = messages.find(m => m.id === msgId)!;
     const textBlocks = msg.content.filter(b => b.type === 'text');
-    // P0 fix: same-turn re-emission produces exactly 1 text block, not 2+
-    expect(textBlocks).toHaveLength(1);
-    expect(textBlocks[0].text).toBe(longText);
+    // 2026-10-23: no envelope arrives twice (eventSeq), and the backend sends each
+    // block once — a second event with the same text is a second block in the
+    // record, so live shows it (R6). The P0 content explosion came from double
+    // deliveries, gone at the router.
+    expect(textBlocks).toHaveLength(2);
   });
 
   it('different turns with same text content correctly produces 2 blocks', () => {
@@ -236,13 +238,8 @@ describe('Structural reconciliation (replace, not dedup)', () => {
 
     const msg = messages.find(m => m.id === msgId)!;
     const textBlocks = msg.content.filter(b => b.type === 'text');
-    // BUG FIX (2026-06-07): Same text re-emitted = deduped to 1 block.
-    // Cannot distinguish "same turn re-emission" from "different turn same text"
-    // without SDK-level turn markers. The P0 fix (prevent content explosion that
-    // causes spinner hang) takes priority over this rare edge case.
-    // A "hasToolAfter" guard was attempted (commit 410200eb) but BREAKS the P0
-    // fix because tools are always between text in the bug scenario.
-    expect(textBlocks).toHaveLength(1);
+    // Two blocks, as the record holds them (R6).
+    expect(textBlocks).toHaveLength(2);
   });
 
   it('blockKey still works for tool_use/tool_result exact matching', () => {

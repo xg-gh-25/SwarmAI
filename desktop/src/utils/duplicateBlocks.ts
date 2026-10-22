@@ -11,10 +11,11 @@ const DUPLICATE_MIN_CHARS = 20;
 
 /**
  * Drop a text/thinking block that repeats the block right before it (same type, same
- * body, >= 20 chars). The model never writes one thought or paragraph twice back to
- * back; two such blocks side by side are a client-side double write, and they also
- * inflate the "more-complete wins" length MessageStore merges by, so the DB's single
- * copy could never replace them. Logs each collapse so the writing path can be found.
+ * body, >= 20 chars) when at least one of the two is a STREAMED copy (not
+ * `_confirmed`): a streamed copy beside the block it repeats is a client-side double
+ * write, and it inflates the "more-complete wins" length MessageStore merges by. Two
+ * CONFIRMED blocks are the record's own: the model wrote it twice, the history has
+ * it twice, and both stay (live == reload, R6). Logs each collapse.
  */
 export function collapseAdjacentDuplicateBlocks(content: ContentBlock[], where: string): ContentBlock[] {
   const body = (b: ContentBlock): string | null =>
@@ -25,7 +26,8 @@ export function collapseAdjacentDuplicateBlocks(content: ContentBlock[], where: 
     const cur = content[i];
     const prev = content[i - 1];
     const b = body(cur);
-    if (b === null || prev.type !== cur.type || b.trim().length < DUPLICATE_MIN_CHARS || body(prev) !== b) {
+    const bothConfirmed = !!(prev as TextContent)._confirmed && !!(cur as TextContent)._confirmed;
+    if (b === null || bothConfirmed || prev.type !== cur.type || b.trim().length < DUPLICATE_MIN_CHARS || body(prev) !== b) {
       out?.push(cur);
       continue;
     }

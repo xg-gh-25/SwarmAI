@@ -12,6 +12,8 @@
  * - A drained turn delivers the tab's queued message: the queue mirror is not
  *   re-sent, the synthetic bubble goes at turn_end, waiting-for-busy clears.
  * - With the subscription connected, SESSION_BUSY starts no fast DB poll.
+ * - A send's turn renders into one bubble, the one its turn_start names (the
+ *   POST placeholder: turnClientId), whichever source delivers each event.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
@@ -94,13 +96,13 @@ describe('session turn wiring', () => {
     });
     testTabMap.get('t2')!.sessionId = 'S';
     const post = result.current.createStreamHandler('local-c-asst', 't2');
-    act(() => { post(env('T', 1, { type: 'turn_start' }) as StreamEvent); });
+    act(() => { post(env('T', 1, { type: 'turn_start', turnClientId: 'local-c-asst' }) as StreamEvent); });
     act(() => { post(env('T', 2, text('from-post')) as StreamEvent); });
-    expect(JSON.stringify(lastAssistant('t2', result.current.messages)!.content)).not.toContain('from-post');
-    act(() => { fake.emit(env('T', 1, { type: 'turn_start' })); });
+    expect(JSON.stringify(lastAssistant('t2')!.content)).not.toContain('from-post');
+    act(() => { fake.emit(env('T', 1, { type: 'turn_start', turnClientId: 'local-c-asst' })); });
     act(() => { fake.emit(env('T', 2, text('from-post'))); });
     act(() => { fake.emit(env('T', 2, text('from-post'))); }); // duplicate seq
-    const body = JSON.stringify(lastAssistant('t2', result.current.messages)!.content);
+    const body = JSON.stringify(lastAssistant('t2')!.content);
     expect(body.match(/from-post/g)?.length).toBe(1);
   });
 
@@ -115,12 +117,12 @@ describe('session turn wiring', () => {
     const post = result.current.createStreamHandler('local-d-asst', 't3');
     const complete = result.current.createCompleteHandler('t3');
     const lost = result.current.createDisconnectHandler('t3');
-    act(() => { post(env('T', 1, { type: 'turn_start' }) as StreamEvent); });
-    act(() => { fake.emit(env('T', 1, { type: 'turn_start' })); });
+    act(() => { post(env('T', 1, { type: 'turn_start', turnClientId: 'local-d-asst' }) as StreamEvent); });
+    act(() => { fake.emit(env('T', 1, { type: 'turn_start', turnClientId: 'local-d-asst' })); });
     act(() => { lost(); });
     expect(testTabMap.get('t3')!.isReconnecting).toBeFalsy();
     act(() => { fake.emit(env('T', 2, text('after the drop'))); });
-    expect(JSON.stringify(lastAssistant('t3', result.current.messages)!.content)).toContain('after the drop');
+    expect(JSON.stringify(lastAssistant('t3')!.content)).toContain('after the drop');
     act(() => { fake.emit(env('T', 3, { type: 'result' })); });
     act(() => { fake.emit(env('T', 4, { type: 'turn_end' })); });
     expect(testTabMap.get('t3')!.isStreaming).toBe(false);
@@ -139,9 +141,9 @@ describe('session turn wiring', () => {
     testTabMap.get('t4')!.sessionId = 'S';
     const post = result.current.createStreamHandler('local-e-asst', 't4');
     const complete = result.current.createCompleteHandler('t4');
-    act(() => { post(env('T', 1, { type: 'turn_start' }) as StreamEvent); });
+    act(() => { post(env('T', 1, { type: 'turn_start', turnClientId: 'local-e-asst' }) as StreamEvent); });
     act(() => { post(env('T', 2, text('via post')) as StreamEvent); });
-    expect(JSON.stringify(lastAssistant('t4', result.current.messages)!.content)).toContain('via post');
+    expect(JSON.stringify(lastAssistant('t4')!.content)).toContain('via post');
     act(() => { complete(); });
     expect(testTabMap.get('t4')!.isStreaming).toBe(false);
   });
@@ -332,7 +334,7 @@ describe('session turn wiring', () => {
       else { act(() => { fake.emit(e); }); act(() => { post(e as StreamEvent); }); }
     }
     expect(testTabMap.get('n1')!.sessionId).toBe('S');
-    const shown = result.current.messages.length ? result.current.messages : (messageStoreRegistry.get('n1')?.messages ?? []);
+    const shown = messageStoreRegistry.get('n1')?.messages ?? [];   // the store is what the tab shows
     if (!lastAssistant('n1', shown)) throw new Error('no assistant: ' + JSON.stringify({ react: result.current.messages, store: messageStoreRegistry.get('n1')?.messages, tab: testTabMap.get('n1')?.messages }));
     const body = JSON.stringify(lastAssistant('n1', shown)!.content);
     expect(body.match(/first answer/g)?.length).toBe(1);
@@ -373,13 +375,13 @@ describe('session turn wiring', () => {
     testTabMap.get('e1')!.sessionId = 'S';
     const post = result.current.createStreamHandler('local-g-asst', 'e1');
     const onError = result.current.createErrorHandler('local-g-asst', 'e1');
-    act(() => { post(env('T', 1, { type: 'turn_start' }) as StreamEvent); });
-    act(() => { fake.emit(env('T', 1, { type: 'turn_start' })); });
+    act(() => { post(env('T', 1, { type: 'turn_start', turnClientId: 'local-g-asst' }) as StreamEvent); });
+    act(() => { fake.emit(env('T', 1, { type: 'turn_start', turnClientId: 'local-g-asst' })); });
     act(() => { onError(new Error('Stream stalled: backend not alive after 90s of silence')); });
     expect(testTabMap.get('e1')!.isStreaming).toBe(true);
-    expect(JSON.stringify(lastAssistant('e1', result.current.messages)!.content)).not.toContain('stalled');
+    expect(JSON.stringify(lastAssistant('e1')!.content)).not.toContain('stalled');
     act(() => { fake.emit(env('T', 2, text('still going'))); });
-    expect(JSON.stringify(lastAssistant('e1', result.current.messages)!.content)).toContain('still going');
+    expect(JSON.stringify(lastAssistant('e1')!.content)).toContain('still going');
   });
 
   it('when the subscription drops mid-turn, the POST copies it never delivered render', () => {
@@ -391,12 +393,12 @@ describe('session turn wiring', () => {
     });
     testTabMap.get('s1')!.sessionId = 'S';
     const post = result.current.createStreamHandler('local-h-asst', 's1');
-    act(() => { post(env('T', 1, { type: 'turn_start' }) as StreamEvent); });
-    act(() => { fake.emit(env('T', 1, { type: 'turn_start' })); });
+    act(() => { post(env('T', 1, { type: 'turn_start', turnClientId: 'local-h-asst' }) as StreamEvent); });
+    act(() => { fake.emit(env('T', 1, { type: 'turn_start', turnClientId: 'local-h-asst' })); });
     act(() => { post(env('T', 2, text('only on the POST')) as StreamEvent); });
-    expect(JSON.stringify(lastAssistant('s1', result.current.messages)!.content)).not.toContain('only on the POST');
+    expect(JSON.stringify(lastAssistant('s1')!.content)).not.toContain('only on the POST');
     act(() => { fake.setConnected(false); });
-    expect(JSON.stringify(lastAssistant('s1', result.current.messages)!.content)).toContain('only on the POST');
+    expect(JSON.stringify(lastAssistant('s1')!.content)).toContain('only on the POST');
   });
 
   it('an answer turn rebuilt from its replay continues the question turn\'s bubble, once', () => {

@@ -59,7 +59,6 @@ import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView, AlertsPill } from './chat/components';
 import { TabNoticeBar } from './chat/components/TabNoticeBar';
 import { resetTabToNewSession as resetTabById } from './chat/resetTab';
-import { withStopReceipt } from './chat/stopReceipt';
 import { tabNoticeStore, type NoticeTarget } from '../stores/tabNoticeStore';
 // HistoryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 // parseWorkPacket still used by ChatPage's dispatch (linked_context → work packet);
@@ -3084,27 +3083,14 @@ export default function ChatPage() {
     [],
   );
 
-  // The stop receipt (handleStop step 5) into the stopped message, by id: the
-  // tab's store (display source) and its tabMapRef mirror. A message no longer
-  // there (replaced by a reconcile) is left alone — its DB rows carry the receipt.
-  const applyStopReceipt = (tabId: string, msgId: string, blocks: ContentBlock[]) => {
-    messageStoreRegistry.get(tabId)?.updateById(msgId, (m) => withStopReceipt(m, blocks));
-    const tabState = tabMapRef.current.get(tabId);
-    if (tabState?.messages?.some((m: Message) => m.id === msgId)) {
-      tabState.messages = tabState.messages.map((m: Message) => (m.id === msgId ? withStopReceipt(m, blocks) : m));
-    }
-  };
-
   // Stop a tab's background agents while no turn runs (TabView's background line):
-  // the same POST /chat/stop; its receipt joins the tab's last assistant message.
+  // the same POST /chat/stop. Its receipt is persisted and reaches every tab on
+  // the transcript feed (hooks/transcriptFeed), this one too.
   const handleStopBackgroundRef = useRef((_tabId: string) => {});
   handleStopBackgroundRef.current = (tabId: string) => {
     const sid = tabMapRef.current.get(tabId)?.sessionId;
     if (!sid) return;
-    const lastId = [...(messageStoreRegistry.get(tabId)?.messages ?? [])].reverse().find((m) => m.role === 'assistant')?.id;
-    chatService.stopSession(sid).then((res) => {
-      if (lastId && res.receipt?.length) applyStopReceipt(tabId, lastId, res.receipt);
-    }).catch((err) => {
+    chatService.stopSession(sid).catch((err) => {
       console.warn('[stopBackground] Backend stop failed (best effort):', err);
     });
   };
@@ -3209,16 +3195,11 @@ export default function ChatPage() {
       }
     }
 
-    // 5. Backend stop — fire-and-forget (best effort, don't await). Its response
-    // carries the stop receipt (what was running, how it ended, what the turn
-    // changed so far; core/turn_stop), already persisted: add it to the stopped
-    // message by id, so a turn that started since is never touched.
-    const stoppedMsgId = currentTabId
-      ? [...(messageStoreRegistry.get(currentTabId)?.messages ?? [])].reverse().find((m) => m.role === 'assistant')?.id
-      : undefined;
-    chatService.stopSession(tabSessionId).then((res) => {
-      if (currentTabId && stoppedMsgId && res.receipt?.length) applyStopReceipt(currentTabId, stoppedMsgId, res.receipt);
-    }).catch((err) => {
+    // 5. Backend stop — fire-and-forget (best effort, don't await). The stop
+    // receipt (what was running, how it ended, what the turn changed so far;
+    // core/turn_stop) is persisted and reaches every tab showing the session on
+    // the transcript feed (hooks/transcriptFeed) — this one too, one route.
+    chatService.stopSession(tabSessionId).catch((err) => {
       console.warn('[handleStop] Backend stop failed (best effort):', err);
     });
 

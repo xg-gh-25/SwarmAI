@@ -4,7 +4,8 @@
  * The same thinking block rendered twice in a row while the DB held one copy, and the
  * repeat never went away. Tested here:
  * - collapseAdjacentDuplicateBlocks drops a block equal to the one before it (text and
- *   thinking, >= 20 chars), keeps short repeats and non-adjacent repeats;
+ *   thinking, >= 20 chars) when one of the two is a streamed copy; keeps short
+ *   repeats, non-adjacent repeats and two CONFIRMED blocks (the record's own repeat, R6);
  * - updateMessages collapses a doubled provisional thought when it is confirmed;
  * - MessageStore's DB merge lets the DB's single copy replace a doubled local copy
  *   (the "more-complete wins" guard used to keep the double because it was longer).
@@ -49,11 +50,20 @@ describe('updateMessages', () => {
   });
 });
 
+describe('two confirmed blocks', () => {
+  it('stay: the model wrote it twice, the history has it twice', () => {
+    const P = 'This paragraph is long enough to count as a duplicate.';
+    const c = { type: 'text', text: P, _confirmed: true } as unknown as ContentBlock;
+    expect(collapseAdjacentDuplicateBlocks([c, c], 't')).toHaveLength(2);
+  });
+});
+
 describe('MessageStore DB merge', () => {
   it('lets the DB single copy replace a doubled local copy', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const local: Message = {
-      id: 'local-1-asst', role: 'assistant', content: [th(TH, true), th(TH, true)], timestamp: '',
+      // a confirmed thought and a streamed copy of it: the double write
+      id: 'local-1-asst', role: 'assistant', content: [th(TH, true), th(TH)], timestamp: '',
       metadata: { client_id: 'local-1-asst' },
     } as Message;
     const db: ChatMessage = {

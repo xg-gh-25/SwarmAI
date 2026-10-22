@@ -201,7 +201,7 @@ describe('BUG FIX 2026-06-18: Preserve unconfirmed text when assistant event has
     expect((thinkingBlocks[0] as ThinkingContent)._confirmed).toBe(true);
   });
 
-  it('no content explosion — same-turn dedup still works with preserved unconfirmed text', () => {
+  it('a second confirmed text joins the first, never replaces it', () => {
     // Simulate the original 2026-06-07 bug scenario:
     // Multiple assistant events with growing text in the SAME turn
     const messages: Message[] = [
@@ -219,9 +219,10 @@ describe('BUG FIX 2026-06-18: Preserve unconfirmed text when assistant event has
     const result = updateMessages(messages, 'msg-1', newContent);
     const target = result.find(m => m.id === 'msg-1')!;
 
-    // Should NOT have 2 text blocks — dedup handles same-turn growth
+    // A grown re-send never occurs (none in the record, 2026-10-23); were one to
+    // arrive it is a block of its own, as the record would hold it.
     const textBlocks = target.content.filter(b => b.type === 'text');
-    expect(textBlocks.length).toBe(1);
-    expect((textBlocks[0] as TextContent).text).toContain('Let me start by reading');
+    expect(textBlocks.length).toBe(2);
+    expect((textBlocks[1] as TextContent).text).toContain('Let me start by reading');
   });
 });

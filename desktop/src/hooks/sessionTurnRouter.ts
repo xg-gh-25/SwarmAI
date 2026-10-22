@@ -9,11 +9,18 @@
  * Both deliver the same backend envelopes (`sessionId`, `turnId`, `eventSeq`), so
  * this module is pure bookkeeping over one record per tab:
  *
- * - **One render source (I6).** While the subscription is connected it renders
+ * - **One render target.** Every turn renders into the bubble the turn's begin
+ *   chose (its own, or — a continuation, a CLI-initiated turn — the assistant
+ *   bubble before it), through one handler, whichever source delivers an event.
+ *   A send's turn begins at the first of its `turn_start` copies: the
+ *   subscription's, or the POST's (the backend yields the stamped turn_start to
+ *   the POST too). Only a POST turn whose turn_start this tab never saw renders
+ *   through the POST's own handler.
+ * - **One render source (I6).** While the subscription is connected it delivers
  *   every turn event; the POST copy only binds the send to its `turnId`. POST
- *   renders only while the subscription is down (fallback). Events without a
- *   `turnId` (pre-turn replies: validation, SESSION_BUSY, queued, POST-side
- *   errors) always render from the POST that received them.
+ *   copies are delivered only while the subscription is down (fallback). Events
+ *   without a `turnId` (pre-turn replies: validation, SESSION_BUSY, queued,
+ *   POST-side errors) always render from the POST that received them.
  * - **Each eventSeq once (I3).** `lastSeq` is the highest eventSeq rendered for
  *   the tab's session from either source; anything at or below it is dropped, so
  *   a switch of source mid-turn (subscription drops / reconnects and replays)
@@ -167,7 +174,6 @@ export function routePostEvent(
   }
   const out: TurnAction[] = [];
   if (!st.bound || st.bound.turnId !== ev.turnId) {
-    st.bound = { turnId: ev.turnId, origin: 'post', completed: false, postDone: false };
     st.postPending = false;
     st.shadow = [];
     if (ev.sessionId) st.sessionId = ev.sessionId;
@@ -175,11 +181,26 @@ export function routePostEvent(
     // session's new turn left here while this send had no session are dropped
     const mine = st.buffer.filter((b) => b.turnId === ev.turnId);
     st.buffer = st.buffer.filter((b) => b.turnId !== ev.turnId && (!ev.sessionId || b.sessionId === ev.sessionId));
-    for (const b of mine) out.push(...routeSubEvent(st, b));
+    if (mine.length && mine[0].type === 'turn_start') {
+      // the subscription saw the start first: it begins the turn (one target);
+      // it is still this POST's send, whose [DONE] is still to come
+      for (const b of mine) out.push(...routeSubEvent(st, b));
+      if (st.bound && st.bound.turnId === ev.turnId) st.bound.postDone = false;
+    } else if (ev.type === 'turn_start') {
+      // this POST copy is the turn's start: begin it as the subscription would
+      if (isSeq(ev.eventSeq) && ev.eventSeq > st.lastSeq) st.lastSeq = ev.eventSeq;
+      st.bound = { turnId: ev.turnId, origin: 'sub', completed: false, postDone: false };
+      out.push({ type: 'begin', event: ev });
+      for (const b of mine) out.push(...routeSubEvent(st, b));
+      return out;
+    } else {
+      st.bound = { turnId: ev.turnId, origin: 'post', completed: false, postDone: false };
+      for (const b of mine) out.push(...routeSubEvent(st, b));
+    }
   }
-  if (st.bound.completed) return out;
+  if (!st.bound || st.bound.turnId !== ev.turnId || st.bound.completed) return out;
   if (subConnected) {
-    // the subscription renders it (I6); keep the copy until it has
+    // the subscription delivers it (I6); keep the copy until it has
     if (isSeq(ev.eventSeq) && ev.eventSeq > st.lastSeq) st.shadow.push(ev);
     return out;
   }
@@ -187,7 +208,8 @@ export function routePostEvent(
     if (ev.eventSeq <= st.lastSeq) return out;
     st.lastSeq = ev.eventSeq;
   }
-  out.push({ type: 'render', event: ev, origin: 'post' });
+  if (ev.type === 'turn_end') return [...out, ...complete(st)];
+  out.push({ type: 'render', event: ev, origin: st.bound.origin });
   return out;
 }
 
@@ -259,7 +281,7 @@ export function onPostComplete(st: TabTurnState, subConnected: boolean): TurnAct
     st.rebuildOrigin = undefined;
     return [{ type: 'postComplete' }];
   }
-  if (st.postPending || !st.bound || st.bound.origin !== 'post') {
+  if (st.postPending || !st.bound || st.bound.turnId !== st.postTurnId) {
     // a pre-turn reply (validation, SESSION_BUSY): no turn of this send was bound
     st.postPending = false;
     // a turn the subscription is rendering in this tab owns its completion
@@ -304,12 +326,13 @@ export function onPostLost(
  */
 export function onSubDisconnected(st: TabTurnState): TurnAction[] {
   const b = st.bound;
-  if (!b || b.completed || b.origin !== 'post') { st.shadow = []; return []; }
+  if (!b || b.completed || b.turnId !== st.postTurnId) { st.shadow = []; return []; }
   const out: TurnAction[] = [];
   for (const ev of st.shadow) {
     if (!isSeq(ev.eventSeq) || ev.eventSeq <= st.lastSeq) continue;
     st.lastSeq = ev.eventSeq;
-    out.push({ type: 'render', event: ev, origin: 'post' });
+    if (ev.type === 'turn_end') { st.shadow = []; return [...out, ...complete(st)]; }
+    out.push({ type: 'render', event: ev, origin: b.origin });
   }
   st.shadow = [];
   if (b.postDone) out.push(...complete(st));

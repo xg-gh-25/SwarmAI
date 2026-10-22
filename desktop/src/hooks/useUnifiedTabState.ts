@@ -195,6 +195,9 @@ export interface UnifiedTab {
   /** Timestamp when queuedMessage was set. Used by reconcile poll to detect
    *  stale queues (>60s = SSE event lost, drain deadlock). */
   _queuedAt?: number;
+  /** The newest transcript rev this tab has seen (feed envelopes, since_rev reads);
+   *  a resync asks the server what changed after it (hooks/transcriptFeed). */
+  transcriptRev?: number;
   /** Timestamp of last sessionStorage checkpoint write (throttle: max 1 per 10s). */
   _lastCheckpointTime?: number;
   /** Reconciliation race guard: set ONLY by setIsStreaming(true). Never touched by

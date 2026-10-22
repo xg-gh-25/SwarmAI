@@ -54,11 +54,12 @@ class TestW1TranscriptIndexRemoved:
         asyncio.run(SQLiteDatabase(str(db_file)).initialize())
         conn = sqlite3.connect(str(db_file))
         names = {r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE name LIKE 'transcript_%'")}
+            "SELECT name FROM sqlite_master WHERE name IN "
+            "('transcript_chunks', 'transcript_fts', 'transcript_chunks_index_state')")}
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.close()
         assert names == set(), names
-        assert version == 14   # v13 dropped them; v14 (send_requests) chains on
+        assert version == 15   # v13 dropped them; v14, v15 chain on
 
 
 # ── W2: select_memory_sections applies temporal weight ───────────────
