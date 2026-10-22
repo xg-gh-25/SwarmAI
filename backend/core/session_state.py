@@ -8,7 +8,7 @@ pushes it on the session's event hub as a ``session_state`` envelope (outside
 any turn) whenever the unit changes state — so a tab learns a change when it
 happens, not at its next poll.
 
-Public: ``session_state_entry``, ``bg_snapshot``, ``publish``, ``forget``.
+Public: ``session_state_entry``, ``bg_snapshot``, ``publish``, ``snapshot``, ``forget``.
 """
 from __future__ import annotations
 
@@ -123,6 +123,16 @@ def publish(router, session_id: str) -> None:
         asyncio.get_running_loop().create_task(go())
     except RuntimeError:
         pass   # no loop (a sync test): nothing to push to
+
+
+async def snapshot(router, session_id: str):
+    """The state a (re)connecting subscription gets for a session: the poll's
+    entry, or None when the session has no unit (the poll lists it not at all)."""
+    from .session_router import PREWARM_SESSION_PREFIX
+    unit = router.get_unit(session_id) if router is not None else None
+    if unit is None or session_id.startswith(PREWARM_SESSION_PREFIX):
+        return None
+    return await session_state_entry(unit)
 
 
 def forget(session_id: str) -> None:

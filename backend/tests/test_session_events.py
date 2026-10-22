@@ -248,3 +248,31 @@ def test_an_unencodable_event_is_buffered_as_an_error_envelope():
     import json as _json
     _json.dumps(list(hub._logs["A"].buf))
 
+
+
+async def test_subscribe_sends_each_cursors_session_state_snapshot_before_live():
+    """S3: after the replay, each cursor's session gets its state snapshot (the
+    registered provider = the poll's producer), at the seq the tab now holds and
+    outside the buffer; a session the provider knows nothing of gets none."""
+    from core import session_events
+    hub = SessionEventHub(buffer_size=10, queue_size=10)
+    hub.publish("A", _ev(1), turn_id="t1")
+
+    async def provider(sid):
+        return {"streaming": False, "state": "idle"} if sid == "A" else None
+
+    old = session_events._state_provider
+    session_events.set_state_provider(provider)
+    try:
+        sub = hub.subscribe({"A": 0, "B": 0}, epoch=hub.epoch)
+        hello, r1, snap = await _take(sub, 3)
+        assert r1["eventSeq"] == 1
+        assert snap == {"type": "session_state", "sessionId": "A", "turnId": "", "eventSeq": 1,
+                        "state": {"streaming": False, "state": "idle"}, "snapshot": True}
+        hub.publish("A", _ev(2), turn_id="t1")
+        (live,) = await _take(sub, 1)
+        assert live["eventSeq"] == 2
+        assert all(e["type"] != "session_state" for e in hub._logs["A"].buf)
+        await sub.aclose()
+    finally:
+        session_events.set_state_provider(old)

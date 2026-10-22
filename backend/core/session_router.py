@@ -2127,6 +2127,9 @@ class SessionRouter:
         config: Optional["AppConfigManager"] = None,
     ) -> None:
         self._units: dict[str, SessionUnit] = {}
+        # the subscription's per-session state snapshot (core/session_state)
+        from . import session_events as _se, session_state as _ss
+        _se.set_state_provider(lambda sid: _ss.snapshot(self, sid))
         self._prompt_builder = prompt_builder
         self._config = config
         self._lifecycle_manager = None  # Set by session_registry after init

@@ -592,7 +592,8 @@ async def test_fixture_is_current():
         steps = s["steps"]
         for i, st in enumerate(steps):
             if st["kind"] == "reconnect":
-                types = [e["type"] for e in st["envs"]]
+                # the state snapshot every reconnect ends with is not part of the case
+                types = [e["type"] for e in st["envs"] if not e.get("snapshot")]
                 cases.add("resync+replay" if types[:2] == ["resync", "turn_start"]
                           else "resync" if types == ["resync"] else "replay")
             if st["kind"] == "restart":

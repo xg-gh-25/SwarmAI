@@ -27,6 +27,9 @@ Contract:
   ``resync`` carries ``activeTurnId`` and an ``eventSeq`` just before that turn's
   start (the log head when no turn is active), and is followed by the active
   turn's full replay, so a client never has to infer that a running turn ended.
+  Then, for each cursor's session, a ``session_state`` snapshot (from the
+  registered state provider, core/session_state — the same producer as the
+  poll endpoint), so a (re)connected tab knows the session's state at once.
   Then live envelopes. An envelope that lands both in the buffer snapshot and the queue is
   yielded once (per-session high-water mark).
 - A subscriber whose bounded queue overflows is closed (its iterator ends); the
@@ -55,6 +58,16 @@ JOIN = -1
 
 #: turn_start.source values (mirrored by desktop hooks/sessionTurnRouter TurnSource)
 TURN_SOURCES = ("chat", "drain", "channel", "injected", "answer", "permission")
+
+#: async (session_id) -> state dict | None, registered by the SessionRouter
+_state_provider = None
+
+
+def set_state_provider(fn) -> None:
+    """Register what ``subscribe`` asks for each session's state snapshot."""
+    global _state_provider
+    _state_provider = fn
+
 
 DEFAULT_BUFFER_SIZE = 4000
 DEFAULT_QUEUE_SIZE = 8000
@@ -205,6 +218,18 @@ class SessionEventHub:
                 for env in list(log.buf):
                     if env["eventSeq"] > cursor:
                         yield env
+            provider = _state_provider
+            if provider is not None:
+                for sid in cursors:
+                    try:
+                        state = await provider(sid)
+                    except Exception as exc:  # noqa: BLE001 — a display aid
+                        logger.debug("session_events.state_snapshot_failed %s: %s", sid, exc)
+                        continue
+                    if state is not None:
+                        # not buffered: a snapshot, at the seq the tab now holds
+                        yield {"type": "session_state", "sessionId": sid, "turnId": "",
+                               "eventSeq": high.get(sid, 0), "state": state, "snapshot": True}
             while True:
                 while sub.queue:
                     env = sub.queue.popleft()
