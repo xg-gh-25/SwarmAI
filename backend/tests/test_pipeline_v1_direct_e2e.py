@@ -19,19 +19,6 @@ def _git(repo, *args):
                           stdout=subprocess.PIPE, text=True).stdout.strip()
 
 
-def _documents():
-    requirements = {"requirements": [{"id": "R1", "acceptance": [{
-        "id": "R1.1", "pattern": "event", "condition": "call runs",
-        "response": "return value", "negative": False, "universal": False}]}]}
-    design = {"tasks": [{"id": "T1", "file": "a.py", "symbol": "value",
-                         "change": "return new value", "requirements": ["R1.1"],
-                         "depends_on": [], "creates_test_files": []}],
-              "exit_criteria": [{"id": "X1", "kind": "test",
-                                 "ref": "tests/test_x.py::test_value", "covers": ["R1.1"]}],
-              "no_contract_change_reason": "internal value only"}
-    return {"requirements": requirements, "design": design}
-
-
 def _repo(tmp_path):
     repo = tmp_path / "repo"; repo.mkdir()
     _git(repo, "init", "-q"); _git(repo, "config", "user.email", "a@b.c"); _git(repo, "config", "user.name", "T")
@@ -71,9 +58,9 @@ def _finalize(runner, target):
         runner_argv=["pipeline_test.py", "--mode", target],
         selection=selection, cache_keys=[],
         main_red={"sha": "e" * 64, "generated_at": "now"},
-        trace=[{"exit": "X1", "kind": "test", "covers": ["R1.1"],
-                "ref": "tests/test_x.py::test_value", "result": "pass",
-                "seq": call["seq"]}])
+        trace=[],     # direct has no exit criteria (execution plan v2 N1)
+        node_results={"tests/test_x.py::test_value": {"result": "pass", "seq": call["seq"]}},
+        tdd_required=["tests/test_x.py"])
 
 
 def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
@@ -84,13 +71,12 @@ def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
     monkeypatch.setenv("SWARM_WORKTREE_LEDGER", str(tmp_path / "ledger"))
     repo = _repo(tmp_path)
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
-                              profile="direct", session_id="s", repos={"repo": str(repo)},
+                              profile="direct", requirement="test change", session_id="s", repos={"repo": str(repo)},
                               run_id="run_one", risk_test_file_cap=20)
-    assert engine.projection()["stage"] == "plan"
+    assert engine.projection()["stage"] == "build"      # direct has no PLAN
     started = engine.stage_start()
     wt = started["repos"]["repo"]
     ( __import__("pathlib").Path(wt) / "a.py").write_text("value = 2\n")
-    assert engine.stage_complete(_documents())["state"]["stage"] == "build"
 
     runner = _runner(engine, wt); _finalize(runner, "tdd")
     assert engine.stage_complete()["state"]["stage"] == "review"
@@ -133,7 +119,7 @@ def test_worktree_creation_failure_pauses_without_shared_fallback(tmp_path, monk
     monkeypatch.setenv("SWARM_DATA_DIR", str(data))
     repo = _repo(tmp_path)
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
-                              profile="direct", session_id="s", repos={"repo": str(repo)},
+                              profile="direct", requirement="test change", session_id="s", repos={"repo": str(repo)},
                               run_id="run_pause")
     from core import run_worktree
     def fail(*args, **kwargs):
@@ -158,12 +144,11 @@ def test_a_small_change_that_triggers_review_patterns_gets_correctness(tmp_path,
     monkeypatch.setenv("SWARM_WORKTREE_LEDGER", str(tmp_path / "ledger"))
     repo = _repo(tmp_path)
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
-                              profile="direct", session_id="s", repos={"repo": str(repo)},
+                              profile="direct", requirement="test change", session_id="s", repos={"repo": str(repo)},
                               run_id="run_rp", risk_test_file_cap=20)
     wt = engine.stage_start()["repos"]["repo"]
     (__import__("pathlib").Path(wt) / "a.py").write_text(
         "import subprocess\nvalue = subprocess.Popen(['true'])\n")
-    engine.stage_complete(_documents())
     _finalize(_runner(engine, wt), "tdd")
     assert engine.stage_complete()["state"]["stage"] == "review"
     started = engine.review_start()
@@ -185,11 +170,10 @@ def test_a_failed_pattern_selection_still_dispatches_correctness(tmp_path, monke
                         lambda paths, diff="": {"compact": "", "triggered": [], "error": "OSError: gone"})
     repo = _repo(tmp_path)
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
-                              profile="direct", session_id="s", repos={"repo": str(repo)},
+                              profile="direct", requirement="test change", session_id="s", repos={"repo": str(repo)},
                               run_id="run_rp2", risk_test_file_cap=20)
     wt = engine.stage_start()["repos"]["repo"]
     (__import__("pathlib").Path(wt) / "a.py").write_text("value = 2\n")
-    engine.stage_complete(_documents())
     _finalize(_runner(engine, wt), "tdd")
     engine.stage_complete()
     started = engine.review_start()

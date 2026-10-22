@@ -59,7 +59,8 @@ def _engine(tmp_path, monkeypatch, profile="full"):
     monkeypatch.setenv("SWARM_WORKTREE_LEDGER", str(tmp_path / "ledger"))
     return RunEngine.create(data_dir=data, workspace=workspace, project="P",
                             profile=profile, session_id="session_1",
-                            repos={"repo": str(repo)}, run_id="run_one")
+                            repos={"repo": str(repo)}, run_id="run_one",
+                            requirement="test change")
 
 
 def test_gate0_is_the_executable_evaluate_gate_and_retries_once(tmp_path, monkeypatch):
@@ -151,7 +152,7 @@ def test_restore_completed_not_landed_reopens_deliver():
            {"run_id": "run_one", "profile": "direct", "decision_cap": 2})
     run = lifecycle.fold(rows, authority)
     # Construct the terminal shape through the public event fold.
-    for stage in ("plan", "build", "review"):
+    for stage in ("build", "review"):
         from core.run_protocol import checks
         roster = [item.check_id for item in checks.stage_checks("direct", stage)]
         opened = _event(authority, rows, "stage_attempt", {"check_ids": roster},

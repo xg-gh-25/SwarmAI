@@ -51,7 +51,7 @@ def run(tmp_path, monkeypatch):
     monkeypatch.setenv("SWARM_DATA_DIR", str(data))
     monkeypatch.setattr(pipeline_human, "_workspace", lambda: workspace)
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
-                              profile="direct", session_id=OWNER, repos={},
+                              profile="trivial", session_id=OWNER, repos={},
                               mode="shared", run_id="run_human1")
     engine.write_projection()
     return engine

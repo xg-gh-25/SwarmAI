@@ -21,14 +21,11 @@ Public symbols:
   profile runs.
 """
 
-PIPELINE_PROFILES: dict[str, list[str]] = {
-    "full": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
-    "bugfix": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
-    "goal": ["evaluate", "think", "plan", "goal_cycle", "review", "test", "deliver", "reflect"],
-    "trivial": ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"],
-    "direct": ["plan", "build", "review", "test", "deliver", "reflect"],
-    "research": ["evaluate", "think", "deliver", "reflect"],
-}
+from core.run_protocol.lifecycle import PROFILE_STAGES as _V1_STAGES
+
+# The v1 lifecycle owns the stage order; this view only re-shapes it (one source).
+PIPELINE_PROFILES: dict[str, list[str]] = {name: list(stages)
+                                           for name, stages in _V1_STAGES.items()}
 
 
 # Profiles whose gates run at RELAXED rigor (no adversarial-enforcement, no
@@ -44,11 +41,9 @@ _RELAXED_PROFILES: frozenset[str] = frozenset({"trivial", "research"})
 # run that edited code could ship with no tests and no review.
 REMOVED_PROFILES: dict[str, str] = {
     "docs": ("the docs profile was removed. Documents outside a code repo (SwarmWS "
-             "Knowledge / DDD) need no run: edit them directly. Documents in a code repo: "
-             "`run-create --profile direct`, `stage-start --stage plan` (exit criteria), "
-             "`stage-start --stage build`, edit, "
-             "`stage-start --stage deliver`, stage-complete (a documentation-only diff gets "
-             "no expert and needs no test run)."),
+             "Knowledge / DDD) need no run: edit them directly. *.md files and backend/context/ in "
+             "a code repo need no run either (core/doc_paths.py); any other file: "
+             "`pipeline_v1.py create --profile direct --requirement \"<the request>\"`."),
 }
 _LEGACY_PROFILE_STAGES: dict[str, list[str]] = {
     "docs": ["evaluate", "think", "plan", "deliver", "reflect"],

@@ -83,15 +83,17 @@ def _runner(engine, wt, target, profile):
         main_red={"sha": "e" * 64, "generated_at": "now"},
         trace=[{"exit": "X1", "kind": "test", "covers": covers,
                 "ref": "tests/test_x.py::test_value", "result": "pass",
-                "seq": call["seq"]}])
+                "seq": call["seq"]}],
+        node_results={"tests/test_x.py::test_value": {"result": "pass", "seq": call["seq"]}},
+        tdd_required=["tests/test_x.py"])
 
 
 def _run_code(case, profile, run_id, monkeypatch):
     data,ws=case/"data",case/"ws"; (ws/"Projects/P").mkdir(parents=True); repo=_repo(case)
     monkeypatch.setenv("SWARM_DATA_DIR",str(data)); monkeypatch.setenv("SWARM_WORKTREE_ROOT",str(case/"wts")); monkeypatch.setenv("SWARM_WORKTREE_LEDGER",str(case/"ledger"))
-    engine=RunEngine.create(data_dir=data,workspace=ws,project="P",profile=profile,session_id="s",repos={"repo":str(repo)},run_id=run_id)
+    engine=RunEngine.create(data_dir=data,workspace=ws,project="P",profile=profile,session_id="s",repos={"repo":str(repo)},run_id=run_id,requirement="rehearsal change")
     if profile=="direct":
-        wt=Path(engine.stage_start()["repos"]["repo"]); (wt/"a.py").write_text("value=2\n"); assert engine.stage_complete({"requirements":{"requirements":[{"id":"R1","acceptance":[_ac()]}]},"design":_design(profile)})["ok"]
+        wt=Path(engine.stage_start()["repos"]["repo"]); (wt/"a.py").write_text("value=2\n")  # direct: no PLAN
     else:
         requirements = _requirements(profile)
         if profile == "bugfix":

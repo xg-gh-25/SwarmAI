@@ -53,17 +53,17 @@ def test_invalid_document_never_writes_json_or_markdown(tmp_path):
 def test_complete_stage_writes_exact_roster_and_results(tmp_path):
     store, authority = _store(tmp_path)
     context = checks.make_context(
-        profile="direct", requirement_variant="lite", design_variant="lite",
+        profile="trivial", requirement_variant="lite", design_variant="lite",
         requirements=REQ, design=DESIGN, events=[], authority=authority,
         existing_files={"tests/x.py"})
-    result = complete_stage(store, profile="direct", stage="plan", variant="lite",
+    result = complete_stage(store, profile="trivial", stage="plan", variant="lite",
                             context=context, at=AT, attempt=1)
     assert result["passed"] is True
     chain = store.read_events()
     assert chain[0]["kind"] == "stage_attempt"
     assert set(chain[0]["payload"]["check_ids"]) == {
-        spec.check_id for spec in checks.stage_checks("direct", "plan", "lite")}
-    assert {"RQ-1", "RQ-2", "RQ-8", "DS-2a", "DS-5", "DS-7", "DS-9a"} \
+        spec.check_id for spec in checks.stage_checks("trivial", "plan", "lite")}
+    assert {"DS-2a", "DS-5", "DS-7", "DS-9a"} \
         <= set(chain[0]["payload"]["check_ids"])
     assert all(row["kind"] == "check" for row in chain[1:])
 

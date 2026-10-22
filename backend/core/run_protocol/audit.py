@@ -153,7 +153,9 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "findings": [dict(row) for row in findings],
                "repos": dict(repos) if isinstance(repos, Mapping) else {},
                "commits": commit_map,
-               "unclosed_high": [row["canonical_id"] for row in findings if push_effect(row)]}
+               "unclosed_high": [row["canonical_id"] for row in findings if push_effect(row)],
+               # direct: the user's words are the requirement (no REQUIREMENTS doc)
+               "requirement": contract.get("requirement")}
     audit = {"run_id": run_id, "audit_through": audit_through, "card": None,
              "outcome": outcome,
              "summary": {"isolation": isolation, "speed": speed, "quality": quality,
@@ -191,7 +193,11 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
     if fmt == "card":
         return "\n".join([f"Run Audit · {audit['run_id']}", state, ""] + [
             f"{name:<14} {row['verdict']} · {detail}" for name, row, detail in rows])
-    lines = [f"# Pipeline Delivery — Audit through {audit['audit_through']}", "", state, "",
+    lines = [f"# Pipeline Delivery — Audit through {audit['audit_through']}", "", state, ""]
+    requirement = audit.get("details", {}).get("requirement")
+    if requirement:
+        lines += [f"Requirement: {' '.join(str(requirement).split())[:500]}", ""]
+    lines += [
              "## Run Audit", "", "| Dimension | Result | This run |", "|---|---|---|"]
     lines += [f"| {name} | {row['verdict']} | {detail} |" for name, row, detail in rows]
     reasons = audit.get("details", {}).get("push_reasons", {})

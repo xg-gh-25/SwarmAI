@@ -13,13 +13,13 @@ from routers.pipelines import _to_response
 def test_active_v1_projection_maps_to_running_and_counts_stage_dict():
     response = _to_response({
         "id": "run_x", "project": "P", "requirement": "x", "status": "active",
-        "profile": "direct", "stages": {"plan": "completed", "build": "degraded",
-                                           "review": "open", "test": "pending",
+        "profile": "direct", "stages": {"build": "degraded", "review": "completed",
+                                           "test": "open",
                                            "deliver": "pending", "reflect": "pending"},
         "created_at": "now", "updated_at": "now", "audit_card": None,
     })
     assert response.status.value == "running"
-    assert response.stages_completed == 2 and response.progress == "2/6"
+    assert response.stages_completed == 2 and response.progress == "2/5"
 
 
 def test_awaiting_human_maps_to_paused_and_completed_card_survives():
@@ -39,7 +39,7 @@ def _real_v1(tmp_path, monkeypatch, run_id: str) -> tuple[RunEngine, TestClient]
     data_dir = tmp_path / "data"
     monkeypatch.setenv("SWARM_DATA_DIR", str(data_dir))
     engine = RunEngine.create(
-        data_dir=data_dir, workspace=workspace, project="P", profile="direct",
+        data_dir=data_dir, workspace=workspace, project="P", profile="direct", requirement="test change",
         session_id="session-real", repos={}, mode="shared", run_id=run_id)
     from main import app
     patcher = patch("routers.pipelines._get_swarmws", return_value=workspace)

@@ -98,9 +98,11 @@ def documents(profile: str) -> dict[str, Any]:
             design["exit_criteria"].append(
                 {"id": "X2", "kind": "test", "ref": TEST_REF, "covers": ["U1"]})
     if profile == "direct":
-        return {"plan": {"requirements": {"requirements": requirements["requirements"]},
-                         "design": design}}
+        return {}            # direct writes no documents (execution plan v2 N1)
     return {"evaluate": requirements, "plan": design}
+
+
+REQUIREMENT = "Swap the operands of core.mod.add."
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -271,7 +273,9 @@ class Rig:
         return out["state"]
 
     def edit(self, files: dict[str, str]) -> None:
-        assert self.worktree is not None, "stage-start first"
+        if self.worktree is None:               # the stage that makes the worktree
+            started = self.v1("stage-start")
+            assert started.get("ok") is True and self.worktree is not None, started
         write(self.worktree, files)
 
     def artifact(self, name: str, value: dict) -> str:
@@ -290,10 +294,11 @@ class Rig:
     # ── the happy path, one stage at a time ─────────────────────────────────
     CHANGE = {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"}
 
-    def create(self, *args: str) -> dict:
+    def create(self, *args: str, requirement: str | None = REQUIREMENT) -> dict:
         repo_args = ["--repo", f"repo={self.repo}"] if self.repo is not None else []
+        req = ["--requirement", requirement] if requirement is not None else []
         out = self.v1("create", "--project", PROJECT, "--profile", self.profile,
-                      *repo_args, *args)
+                      *repo_args, *req, *args)
         assert out.get("ok") is True, out
         return out
 
@@ -326,6 +331,11 @@ class Rig:
                 self.edit(self.CHANGE)
             return self.v1("stage-complete", "--artifact", self.artifact("design", docs["plan"]))
         if stage in {"build", "goal_cycle"}:
+            if self.worktree is None:          # direct: BUILD is the first stage
+                started = self.v1("stage-start")
+                assert started.get("ok") is True, started
+                if self.repo is not None:
+                    self.edit(self.CHANGE)
             self.pt("tdd", "--files", "backend/tests/test_x.py")
             return self.v1("stage-complete")
         if stage == "review":

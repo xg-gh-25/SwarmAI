@@ -31,7 +31,7 @@ def _engines(tmp_path, monkeypatch):
     data, ws = tmp_path / "data", tmp_path / "ws"; (ws / "Projects/P").mkdir(parents=True)
     monkeypatch.setenv("SWARM_DATA_DIR", str(data)); monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(tmp_path / "wts")); monkeypatch.setenv("SWARM_WORKTREE_LEDGER", str(tmp_path / "ledger"))
     repo = _repo(tmp_path)
-    engines = [RunEngine.create(data_dir=data, workspace=ws, project="P", profile="direct",
+    engines = [RunEngine.create(data_dir=data, workspace=ws, project="P", profile="direct", requirement="test change",
                 session_id=f"s{i}", repos={"repo":str(repo)}, run_id=f"run_{i}") for i in (1,2)]
     for engine in engines: engine.ensure_worktrees()
     return repo, engines

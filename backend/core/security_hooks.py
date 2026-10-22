@@ -3656,7 +3656,7 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 #     A session with no active run is never affected.
 #   • direct_commit_gate (G1): a session with NO active run of its own that commits
 #     more than 20 changed SOURCE lines (pure-doc paths, core/doc_paths.py, excluded) in the SwarmAI
-#     source repo is DENIED and pointed at `run-create --profile direct`, so a direct
+#     source repo is DENIED and pointed at `pipeline_v1.py create --profile direct`, so a direct
 #     fix also gets an exit contract. Commits in other repos are never gated.
 #
 # FAIL-OPEN on every infra error or timeout (adversarial_commit_gate discipline).
@@ -6843,7 +6843,7 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
     session has NO active run of its own (C6), a commit in the SwarmAI source repo
     recording more than 20 changed SOURCE lines (pure-doc paths excluded:
     ``core.doc_paths.is_doc_only_path``, the same definition rule 4 uses) is
-    DENIED with a copyable `run-create --profile direct` command for the repo's
+    DENIED with a copyable `pipeline_v1.py create --profile direct` command for the repo's
     project. With worktree mode on the limit is 0 and every project code repo counts:
     a code change lands from a run's worktree, so a source commit in a main checkout
     by a session with no run is exactly the write the worktree gate could not see
@@ -6919,10 +6919,9 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
                     "has no pipeline run. A direct fix needs an exit contract written before "
                     "verification starts (design §4-G1), so verification has an end point and "
                     "the change goes through the same runner, gates and landing. FIX: "
-                    "create a direct run, write its PLAN exit contract, then let its "
-                    "DELIVER landing commit:\n"
+                    "create a direct run and let its DELIVER landing commit:\n"
                     "backend/.venv/bin/python backend/scripts/pipeline_v1.py create --project "
-                    + project + " --profile direct\n"
+                    + project + " --profile direct --requirement '<the user request>'\n"
                     "Pure-doc files (*.md, and anything under backend/context/) are "
                     "exempt" + (" here" if mode_on else ", and so are changes of at most "
                                 + str(limit) + " source lines") + ". Only the operator can make a deliberate "

@@ -409,7 +409,9 @@ class V1Runner:
                  selection: Mapping[str, Any], cache_keys: Sequence[str],
                  main_red: Mapping[str, Any],
                  trace: Sequence[Mapping[str, Any]],
-                 node_results: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
+                 node_results: Mapping[str, Mapping[str, Any]] | None = None,
+                 tdd_required: Sequence[str] | None = None,
+                 whole_files: Sequence[str] | None = None) -> dict[str, Any]:
         manifest = load_manifest(str(self.repo_root), self.base)
         required = required_for(manifest, changed_paths)
         final = build_repo_final(
@@ -423,7 +425,8 @@ class V1Runner:
             main_red=main_red, trace=trace,
             tests_required=any(not path.endswith((".md", ".txt", ".rst"))
                                for path in changed_paths),
-            node_results=node_results,
+            node_results=node_results, tdd_required=tdd_required,
+            whole_files=whole_files,
         )
         path = self.run_dir / "evidence" / "tests" / f"final-{self.repo_name}.json"
         warning = evidence_seal.write_sealed(path, json.dumps(final, sort_keys=True))
@@ -478,6 +481,23 @@ class V1Runner:
                         key.startswith(path + "::") for key in out if not key.endswith("::*")):
                     out[f"{path}::*"] = {"result": "incomplete", "seq": seq}
         return out
+
+    def whole_file_runs(self) -> list[str]:
+        """Test files a sealed call on the current code tree ran WHOLE — named without a
+        ``::node`` and not skipped for budget. A file run only as picked nodes is not
+        here, so one passing node cannot stand for its file (direct's BX-2)."""
+        out: set[str] = set()
+        for call in self._calls(current_tree_only=True):
+            details = call.get("details") if isinstance(call.get("details"), Mapping) else {}
+            if call.get("call_type") != "test" or not details.get("evidence"):
+                continue
+            evidence = self._receipt(str(details["evidence"]), str(details.get("evidence_sha256")))
+            if evidence is None:
+                continue
+            skipped = {p for p in evidence.get("skipped_for_budget") or [] if isinstance(p, str)}
+            out |= {f for f in evidence.get("whole_files") or []
+                    if isinstance(f, str) and f not in skipped}
+        return sorted(out)
 
     def _receipt(self, path_text: str, digest: str) -> dict[str, Any] | None:
         """The sealed receipt at *path_text* inside this run's evidence, only if its

@@ -39,7 +39,7 @@ PROFILE_STAGES = {
     "bugfix": ("evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"),
     "goal": ("evaluate", "think", "plan", "goal_cycle", "review", "test", "deliver", "reflect"),
     "trivial": ("evaluate", "plan", "build", "review", "test", "deliver", "reflect"),
-    "direct": ("plan", "build", "review", "test", "deliver", "reflect"),
+    "direct": ("build", "review", "test", "deliver", "reflect"),   # no PLAN (exec plan v2 N1)
     "research": ("evaluate", "think", "deliver", "reflect"),
 }
 IGNORED = frozenset({

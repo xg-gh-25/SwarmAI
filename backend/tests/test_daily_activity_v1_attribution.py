@@ -46,7 +46,7 @@ def test_v1_landed_commit_is_attributed_to_its_session_only(tmp_path, monkeypatc
     monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(tmp_path / "worktrees"))
     monkeypatch.setenv("SWARM_WORKTREE_LEDGER", str(tmp_path / "ledger"))
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
-                              profile="direct", session_id="session_mine",
+                              profile="direct", requirement="test change", session_id="session_mine",
                               repos={"repo": str(repo)}, run_id="run_v1contract")
 
     # Land a change the way v1 does: commit-tree on base + merge --ff-only.

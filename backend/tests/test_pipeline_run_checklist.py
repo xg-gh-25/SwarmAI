@@ -89,8 +89,8 @@ class TestChecklist:
 
     def test_direct(self):
         assert _items(pse.checklist("direct")) == [
-            ("plan", False), ("build", False), ("review", False), ("test", False),
-            ("deliver", False), ("reflect", False)]
+            ("build", False), ("review", False), ("test", False),
+            ("deliver", False), ("reflect", False)]       # no PLAN (execution plan v2 N1)
 
     def test_research_has_no_gates(self):
         assert _items(pse.checklist("research")) == [
@@ -136,7 +136,7 @@ class TestRefreshedRunBlock:
 
 
 class TestPlanNextGate1:
-    @pytest.mark.parametrize("profile,nxt", [("full", "build"), ("goal", "goal_cycle"), ("direct", "build")])
+    @pytest.mark.parametrize("profile,nxt", [("full", "build"), ("goal", "goal_cycle"), ("trivial", "build")])
     def test_plan_next_names_gate1_when_the_profile_lists_it(self, profile, nxt):
         before = _state(profile, plan={"stage": "plan", "status": "in_progress"})
         after = _state(profile, plan={"stage": "plan", "status": "completed"})

@@ -445,7 +445,7 @@ async def build_hooks(
     #    pointed at the DELIVER title + run-commit (run_c5eb0858: an approval prompt
     #    parked an unattended run 2 h).
     # 2. direct_commit_gate (design §4-G1): >20 changed SOURCE lines in the SwarmAI repo
-    #    from a session with no run of its own → `run-create --profile direct`.
+    #    from a session with no run of its own → `pipeline_v1.py create --profile direct`.
     # 3. active_run_commit_gate: a file owned by an ACTIVE run (or its REPORT.md) goes
     #    through run-commit, so code + REPORT land in one commit.
     # 4. adversarial_commit_gate (R1): no commit without a review sub-agent this session.

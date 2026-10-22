@@ -47,10 +47,10 @@ class TestPipelineProfiles:
         assert PIPELINE_PROFILES[profile] == expected
 
     def test_evaluate_in_all_profiles(self):
-        """Every profile starts with evaluate — except direct, which starts at the
-        PLAN-carried exit contract (design §4-G1)."""
+        """Every profile starts with evaluate — except direct, which has no PLAN and
+        starts at BUILD (execution plan v2 N1)."""
         for name, stages in PIPELINE_PROFILES.items():
-            expected_first = "plan" if name == "direct" else "evaluate"
+            expected_first = "build" if name == "direct" else "evaluate"
             assert stages[0] == expected_first, f"Profile '{name}' starts with {stages[0]}"
 
 

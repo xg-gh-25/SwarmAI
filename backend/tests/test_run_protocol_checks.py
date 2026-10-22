@@ -17,7 +17,7 @@ EXPECTED = {
     "DS-1", "DS-2a", "DS-2b", "DS-3", "DS-4a", "DS-4b", "DS-5", "DS-6",
     "DS-7", "DS-9a", "DS-9b", "BX-1", "RV-1a", "RV-1b", "RV-1c",
     "DC-1", "DC-2", "RV-2", "FX-1", "TS-1", "TS-2", "TS-3", "DV-1",
-    "LG-1", "LG-2", "LG-3", "LG-4", "LG-5", "QX-1", "QX-2",
+    "LG-1", "LG-2", "LG-3", "LG-4", "LG-5", "QX-1", "QX-2", "BX-2",
     "MD-1", "MD-2", "MD-3", "RF-1", "RF-2", "RF-3", "RF-4", "RF-5",
 }
 
@@ -28,7 +28,7 @@ def ids(specs):
 
 def test_registry_is_the_complete_v13_table():
     assert set(checks.CHECKS) == EXPECTED
-    assert len(checks.CHECKS) == 46
+    assert len(checks.CHECKS) == 47     # v13's 46 + BX-2 (execution plan v2 N1)
     assert checks.coverage_errors() == []
 
 
@@ -68,12 +68,13 @@ def test_land_and_push_queries_route_only_their_effect():
     assert all("push" in spec.effects for spec in checks.push_checks("direct"))
 
 
-def test_requirements_run_at_evaluate_except_direct_plan():
+def test_requirements_run_at_evaluate_and_direct_has_none():
     rq = {"RQ-1", "RQ-2", "RQ-8"}
     assert rq <= ids(checks.stage_checks("full", "evaluate"))
     assert rq.isdisjoint(ids(checks.stage_checks("full", "plan")))
-    assert rq <= ids(checks.stage_checks("direct", "plan"))
-    assert "RQ-5" not in ids(checks.stage_checks("direct", "plan"))
+    for stage in checks.PROFILE_STAGES["direct"]:
+        assert not any(cid.startswith(("RQ-", "DS-")) for cid in
+                       ids(checks.stage_checks("direct", stage)))
 
 
 def test_trivial_uses_full_requirements_direct_is_the_only_rq5_rq6_exemption():
@@ -111,7 +112,7 @@ def test_named_exemptions_match_the_design_table():
         for check_id in ("RQ-4", "DS-4a", "DS-4b"):
             assert "not bugfix" in checks.EXEMPTIONS[(profile, check_id)]
     for check_id in ("DS-6",):
-        assert "lite" in checks.EXEMPTIONS[("direct", check_id)]
+        assert "no REQUIREMENTS / DESIGN_SPEC" in checks.EXEMPTIONS[("direct", check_id)]
         assert "lite" in checks.EXEMPTIONS[("trivial", check_id)]
     assert "Gate-0" in checks.EXEMPTIONS[("direct", "RV-1b")]
     assert "Gate-0" in checks.EXEMPTIONS[("trivial", "RV-1b")]

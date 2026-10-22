@@ -122,43 +122,48 @@ def _c(check_id: str, document: str, effects: str, stages: str,
 CODE = "full bugfix goal trivial direct"
 FULL_REQ = "full bugfix goal trivial research"
 ALL = "full bugfix goal trivial direct research"
+# Profiles that write REQUIREMENTS / DESIGN_SPEC. direct writes neither (execution plan
+# v2 N1): its requirement is the user's words in contract.json, it has no exit criteria.
+DOCS = FULL_REQ
+DESIGN = "full bugfix goal trivial"
 
 
 _SPECS = [
-    _c("RQ-1", "requirements", "stage", "evaluate plan", "full lite", ALL),
-    _c("RQ-2", "requirements", "stage", "evaluate plan", "full lite", ALL),
-    _c("RQ-3", "requirements", "", "evaluate plan", "full lite", ALL),
+    _c("RQ-1", "requirements", "stage", "evaluate plan", "full lite", DOCS),
+    _c("RQ-2", "requirements", "stage", "evaluate plan", "full lite", DOCS),
+    _c("RQ-3", "requirements", "", "evaluate plan", "full lite", DOCS),
     _c("RQ-4", "requirements", "stage", "evaluate", "full", "bugfix"),
     _c("RQ-5", "requirements", "stage", "evaluate", "full", FULL_REQ),
     _c("RQ-6", "requirements", "stage", "evaluate", "full", FULL_REQ),
-    _c("RQ-8", "requirements", "stage", "evaluate plan", "full lite", ALL),
-    _c("RQ-8b", "requirements", "", "evaluate plan", "full lite", ALL),
+    _c("RQ-8", "requirements", "stage", "evaluate plan", "full lite", DOCS),
+    _c("RQ-8b", "requirements", "", "evaluate plan", "full lite", DOCS),
 
-    _c("DS-1", "design_spec", "push", "plan", "full lite", CODE),
-    _c("DS-2a", "design_spec", "stage", "plan", "full lite", CODE),
-    _c("DS-2b", "design_spec", "stage", "build goal_cycle", "full lite", CODE),
-    _c("DS-3", "design_spec", "", "plan", "full lite", CODE),
+    _c("DS-1", "design_spec", "push", "plan", "full lite", DESIGN),
+    _c("DS-2a", "design_spec", "stage", "plan", "full lite", DESIGN),
+    _c("DS-2b", "design_spec", "stage", "build goal_cycle", "full lite", DESIGN),
+    _c("DS-3", "design_spec", "", "plan", "full lite", DESIGN),
     _c("DS-4a", "design_spec", "stage", "plan", "full", "bugfix"),
     _c("DS-4b", "design_spec", "stage", "build", "full", "bugfix"),
-    _c("DS-5", "design_spec", "stage", "plan", "full lite", CODE),
+    _c("DS-5", "design_spec", "stage", "plan", "full lite", DESIGN),
     _c("DS-6", "design_spec", "stage", "plan", "full", "full bugfix goal"),
-    _c("DS-7", "design_spec", "stage", "plan", "full lite", CODE),
-    _c("DS-9a", "design_spec", "stage", "plan", "full lite", CODE),
-    _c("DS-9b", "design_spec", "stage", "build goal_cycle review", "full lite", CODE),
-    _c("BX-1", "design_spec", "stage", "build goal_cycle", "full lite", CODE),
+    _c("DS-7", "design_spec", "stage", "plan", "full lite", DESIGN),
+    _c("DS-9a", "design_spec", "stage", "plan", "full lite", DESIGN),
+    _c("DS-9b", "design_spec", "stage", "build goal_cycle review", "full lite", DESIGN),
+    _c("BX-1", "design_spec", "stage", "build goal_cycle", "full lite", DESIGN),
+    _c("BX-2", "final", "stage", "build", "run", "direct"),
 
     _c("RV-1a", "review", "push", "review", "review", CODE),
     _c("RV-1b", "review", "", "evaluate", "review", "full bugfix goal"),
     _c("RV-1c", "review", "", "review", "review", CODE),
-    _c("DC-1", "decision", "", "evaluate think plan", "decision", ALL),
-    _c("DC-2", "decision", "push", "evaluate think plan", "decision", ALL),
+    _c("DC-1", "decision", "", "evaluate think plan", "decision", DOCS),
+    _c("DC-2", "decision", "push", "evaluate think plan", "decision", DOCS),
     _c("RV-2", "review", "push", "review", "review", CODE),
     _c("FX-1", "fixing_spec", "", "review", "review", CODE),
 ]
 _SPECS += [
     _c("TS-1", "test_report", "stage", "test", "test", CODE),
-    _c("TS-2", "test_report", "push", "test", "test", CODE),
-    _c("TS-3", "test_report", "", "test", "test", CODE),
+    _c("TS-2", "test_report", "push", "test", "test", DESIGN),
+    _c("TS-3", "test_report", "", "test", "test", DESIGN),
     _c("DV-1", "report", "stage", "deliver", "report", ALL),
     _c("LG-1", "final", "land", "land run_land", "final", CODE),
     _c("LG-2", "final", "land push", "land run_land", "final", CODE),
@@ -187,8 +192,13 @@ if len(CHECKS) != len(_SPECS):
 def _exemption_reason(profile: str, check_id: str) -> str:
     if check_id in ("RQ-4", "DS-4a", "DS-4b"):
         return "profile is not bugfix and has no current/expected/unchanged triad"
-    if profile == "direct" and check_id in ("RQ-5", "RQ-6"):
-        return "direct has no EVALUATE cross-analysis or clarification step"
+    if profile == "direct" and (check_id.startswith(("RQ-", "DS-", "DC-"))
+                                or check_id in ("BX-1", "TS-2", "TS-3")):
+        return ("direct writes no REQUIREMENTS / DESIGN_SPEC and has no exit criteria; its "
+                "requirement is the user's words in contract.json, an ambiguous one is "
+                "abandoned and re-run as trivial (execution plan v2 N1)")
+    if check_id == "BX-2":
+        return "BX-2 is direct's change/tdd check; other profiles prove BUILD by BX-1"
     if profile == "research":
         return "research produces no code, design spec, review, tests or landing"
     if check_id in ("DS-6",) and profile in ("direct", "trivial"):
@@ -225,7 +235,7 @@ def stage_checks(profile: str, stage: str, variant: str | None = None) -> tuple[
 
 def _stages_for(spec: CheckSpec, profile: str) -> tuple[str, ...]:
     if spec.check_id.startswith("RQ-"):
-        return ("plan",) if profile == "direct" else ("evaluate",)
+        return ("evaluate",)
     if spec.check_id in ("DS-2b", "BX-1"):
         return ("goal_cycle",) if profile == "goal" else ("build",)
     if spec.check_id == "DS-9b":
@@ -326,6 +336,59 @@ def _answers(context: CheckContext, expert: str | None = None) -> list[Mapping[s
             and (expert is None or event["payload"].get("expert_id") == expert)]
 
 
+def _bx2(context: CheckContext) -> Result:
+    """direct's BUILD check (execution plan v2 N1). The run changed something; and
+    unless every changed path is a pure-doc path, each repo has a final on its CURRENT
+    code tree whose ``tdd_required`` files (the runner's frozen selection for the
+    change: changed tests + direct importers of changed modules) all have results on
+    that tree and none of them failed or is incomplete. Facts only from the sealed
+    final and the run's own changed paths; no model field."""
+    from core.doc_paths import is_doc_only_path
+    changed = [p for p in context.run.get("changed_paths") or [] if isinstance(p, str)]
+    if not changed:
+        return False, "no change in the run's worktree"
+    if all(is_doc_only_path(p) for p in changed):
+        return True, "pure-doc change: no test to run"
+    repos = context.final.get("repos") if isinstance(context.final, Mapping) else None
+    trees = context.run.get("code_trees") or {}
+    if not isinstance(repos, Mapping) or not context.expected_repos \
+            or set(repos) != set(context.expected_repos):
+        return False, "no tdd result yet: run pipeline_test.py --mode tdd"
+    problems = []
+    for name, row in repos.items():
+        if not isinstance(row, Mapping) or row.get("code_tree") != trees.get(name):
+            problems.append(f"{name}: tdd results are for an older tree; rerun --mode tdd")
+            continue
+        required = row.get("tdd_required")
+        tests = row.get("tests") or {}
+        nodes, whole = tests.get("nodes"), tests.get("whole_files")
+        if not isinstance(required, list) or not isinstance(nodes, Mapping) \
+                or not isinstance(whole, list):
+            problems.append(f"{name}: test selection failed or no tdd result; rerun --mode tdd")
+            continue
+        if any(k.startswith("call:") and (v or {}).get("result") != "pass"
+               for k, v in nodes.items() if isinstance(k, str)):
+            problems.append(f"{name}: a tdd call did not finish")
+        # nothing selected (no importer, non-Python code): a test the agent names must
+        # still have run whole and passed, so a code change never leaves BUILD untested
+        targets = required or [f for f in whole if any(
+            isinstance(k, str) and k.split("::")[0] == f for k in nodes)]
+        if not targets:
+            problems.append(f"{name}: no test selected for this change; write one and run "
+                            "it with --mode tdd --files <test file>")
+        for test_file in targets:
+            mine = {node: value for node, value in nodes.items()
+                    if isinstance(node, str) and node.split("::")[0] == test_file}
+            if test_file not in whole:
+                problems.append(f"{test_file}: not run whole (run the file, not single nodes)")
+            elif not mine:
+                problems.append(f"{test_file}: not run")
+            elif any((value or {}).get("result") != "pass" for value in mine.values()):
+                problems.append(f"{test_file}: failed or incomplete")
+    return _result(not problems, "selected tests pass on the current tree" if not problems
+                   else "; ".join(problems[:5]))
+
+
 def _evaluate_check(check_id: str, context: CheckContext) -> Result:
     schema_ids = {cid for cid in CHECKS if cid.startswith(("RQ-", "DS-"))} | {"BX-1"}
     if check_id in schema_ids - {"RQ-3", "RQ-8b"} \
@@ -424,6 +487,8 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         missing = sorted(required - context.trace_covers)
         return _result(not missing, "trace covers requirements" if not missing
                        else f"trace missing: {missing}")
+    if check_id == "BX-2":
+        return _bx2(context)
     if check_id == "DV-1":
         ok = any(event.get("kind") == "render" and event["payload"].get("document") == "REPORT"
                  for event in context.events)

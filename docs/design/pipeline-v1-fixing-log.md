@@ -74,3 +74,21 @@ status: OPEN
 证明：`test_every_code_profile_lands[direct/trivial/full/bugfix/goal]`、`test_tests_red_ends_not_landed_tests_red`、`test_red_then_green_rerun_lands`、`test_main_moves_disjoint_lands_on_new_main`、`test_main_moves_into_dependency_scope_reruns_then_lands`、`test_merge_conflict_three_times_ends_land_conflict`、`test_expired_approval_is_refused_and_a_fresh_one_lands`、新增的三个 probe 用例。
 
 **C1 的现状（由 G 组用例发现，不是本组改的）：** `test_code_changed_after_prepare_cannot_land_even_with_edited_json` 现在已经通过——改了代码、再把 land-request JSON 改成和新树一致，`execute_request` 在 `auth` 比对 binding_digest 时拒绝（"authorization action/bindings mismatch"）。所以方案 C1 说的"没测过的树能落地"在当前代码上不成立；C1 剩下的是让执行只读事件、不读 JSON，以及审批卡显示树，放在 C 组。
+
+## 5. N1（direct 去掉 PLAN）
+
+**根因：** direct 照着 trivial 走 PLAN，要写 lite REQUIREMENTS / DESIGN_SPEC 和 exit criteria，让最小的改动背了完整的文档成本。XG 定（方案 §5）：direct 永远没有 exit criteria，需求含糊就弃掉、改用 trivial 重跑并在那里问。
+
+| 条目 | 处理 |
+|---|---|
+| 阶段 | `lifecycle.PROFILE_STAGES["direct"]` = build → review → test → deliver → reflect。`pipeline_profiles.PIPELINE_PROFILES` 改为从 lifecycle 派生，阶段顺序只有一个来源 |
+| 需求 | `create --requirement` 对 direct 必填（≤ 4000 字），写进受保护的 `contract.json`，REPORT 显示 "Requirement: …" 一行 |
+| check | 读 REQUIREMENTS / DESIGN_SPEC 的 check（RQ-\*、DS-\*、BX-1、TS-2、TS-3）以及 DC-\* 不再为 direct 注册，并带豁免理由——不是"跑了再判过" |
+| BX-2 | direct BUILD 新增：必须有改动；全是纯文档（`doc_paths.is_doc_only_path`）直接过；否则每个 repo 的 final 必须在当前 code tree 上，且 runner 为改动选出的每个测试文件（冻结的 `select_backend` + 改动的前端测试，`_v1_tdd_required`）在 `final.tests.nodes` 里都有 node 且全部 pass。TEST 不变 |
+| 其它 | `_changed_paths` 用 `--untracked-files=all`，新建文件不漏；拒绝提示里的命令带 `--requirement`；卡片、INSTRUCTIONS、AGENTS.md 同步 |
+
+trivial 不变：`tests/fixtures/pipeline_v1_trivial_profile.json` 是改动前 trivial 的阶段与 check 快照，`test_pipeline_v1_direct_profile.py` 逐项比对。原来用 direct 测"设计 / 决策 / probe"的端到端用例改用 trivial。
+
+审查（独立子代理）发现 3 个 HIGH、1 个 MED，均已修：选择失败时 `_v1_tdd_required` 返回 None、BX-2 失败（不再退化成短名单）；没有选中任何测试时，必须有 agent 自己点名的测试文件整个跑过且通过；只跑某个 node 不能代表整个文件（回执记 `whole_files`，final 记 `tests.whole_files`）；direct 的 `decision-request` 在写事件前拒绝，日志不会被写坏；仍按 direct 有 PLAN 写的旧测试已改。
+
+证明：`test_direct_starts_at_build_and_needs_the_users_words`、`test_a_doc_only_direct_run_lands_without_any_document`（真 CLI，REPORT 含需求，提交带 Swarm trailer）、`test_a_direct_code_change_needs_passing_tdd_to_leave_build`（没跑 / 红 → BUILD 不过，绿 → 进 REVIEW）、`test_one_passing_node_does_not_stand_for_its_file`、`test_a_direct_run_cannot_ask_and_its_log_still_folds`、`test_bx2_fails_closed_when_selection_failed_or_selected_nothing`。`test_pipeline_test.py::test_source_scan_suites_cover_every_test_that_globs_python_files` 在 main 上本来就红（另一个 session 新增的 `test_turn_writer.py`），与本组无关。

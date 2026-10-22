@@ -54,7 +54,7 @@ def _start_v1_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
         data_dir=data,
         workspace=workspace,
         project="P",
-        profile="direct",
+        profile="direct", requirement="test change",
         session_id="session-v1",
         repos={"repo": str(repo)},
         run_id="run_dirtyv1",

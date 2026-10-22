@@ -124,29 +124,29 @@ def test_projection_rejects_missing_transition_and_cross_run_or_corrupt_events()
 
 
 def test_stage_attempts_are_sequential_not_caller_selected():
-    stream = Stream("direct")
-    roster = stream.roster("plan")
-    stream.attempt("plan", roster, {roster[0]: False})
+    stream = Stream("trivial")
+    roster = stream.roster("evaluate")
+    stream.attempt("evaluate", roster, {roster[0]: False})
     with pytest.raises((lc.LifecycleError, ev.EventError)):
-        stream.add("stage_attempt", {"check_ids": roster}, stage="plan", attempt=3,
+        stream.add("stage_attempt", {"check_ids": roster}, stage="evaluate", attempt=3,
                    transition=False)
         stream.projection()
 
 
 def test_stage_complete_requires_declared_check_events_all_passed():
-    stream = Stream("direct")
-    roster = stream.roster("plan")
-    opened = stream.add("stage_attempt", {"check_ids": roster}, stage="plan",
+    stream = Stream("trivial")
+    roster = stream.roster("evaluate")
+    opened = stream.add("stage_attempt", {"check_ids": roster}, stage="evaluate",
                         attempt=1, transition=False)
     with pytest.raises(lc.LifecycleError, match="all declared"):
         stream.add("stage_complete", {"stage_attempt_event_id": opened["event_id"]},
-                   stage="plan", attempt=1)
+                   stage="evaluate", attempt=1)
 
 
 def test_attacker_check_id_or_incomplete_roster_cannot_advance_plan():
     for roster in (["ATTACKER-CHECK"], ["RQ-1"]):
-        stream = Stream("direct")
-        stream.add("stage_attempt", {"check_ids": roster}, stage="plan", attempt=1,
+        stream = Stream("trivial")
+        stream.add("stage_attempt", {"check_ids": roster}, stage="evaluate", attempt=1,
                    transition=False)
         with pytest.raises(lc.LifecycleError, match="registry roster"):
             stream.projection()

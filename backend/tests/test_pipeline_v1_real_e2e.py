@@ -102,7 +102,7 @@ FIX_OTHER = {"backend/core/other.py": "def other():\n    return 1\n"}
 
 
 def test_tests_red_ends_not_landed_tests_red(rig):
-    r = rig("direct")
+    r = rig("trivial")   # direct's BX-2 runs every importer in BUILD, so no TEST-only red
     r.create()
     base = _main(r)
     r.drive(until="build")
@@ -114,7 +114,7 @@ def test_tests_red_ends_not_landed_tests_red(rig):
 
 
 def test_red_then_green_rerun_lands(rig):
-    r = rig("direct")
+    r = rig("trivial")
     r.create()
     r.drive(until="build")
     r.edit(BREAK_OTHER)
@@ -204,27 +204,25 @@ def test_gate0_rejection_then_answered_decision_continues(rig):
 
 
 def test_decision_after_a_failed_attempt_then_stage_completes(rig):
-    r = rig("direct")
+    r = rig("trivial")
     r.create()
-    r.v1("stage-start")
+    r.drive(until="plan")
     r.edit(Rig.CHANGE)
-    docs = documents("direct")
+    docs = documents("trivial")
     missing = [{"id": "X1", "kind": "test", "ref": "backend/tests/test_missing.py::test_m",
                 "covers": ["R1.1"]}]                      # DS-2a fails as a check
-    failing = {"plan": {**docs["plan"], "design": {**docs["plan"]["design"],
-                                                   "exit_criteria": missing}}}
-    bad = r.v1("stage-complete", "--artifact", r.artifact("bad", failing["plan"]))
+    bad = r.v1("stage-complete", "--artifact",
+               r.artifact("bad", {**docs["plan"], "exit_criteria": missing}))
     assert bad.get("ok") is False and "stage_attempt" in r.kinds(), bad
     asked = r.v1("decision-request", "--artifact", _decision(r), "--document", "DESIGN_SPEC")
     assert asked.get("ok") is True, asked
     assert r.answer_card("a — swap")
-    docs = documents("direct")
     out = r.v1("stage-complete", "--artifact", r.artifact("design", docs["plan"]))
     assert out.get("ok") is True and r.state()["stage"] == "build", out
 
 
 def test_a_person_answers_and_the_agent_cannot(rig):
-    r = rig("direct")
+    r = rig("trivial")
     r.create()
     asked = r.v1("decision-request", "--artifact", _decision(r), "--document", "DESIGN_SPEC")
     assert asked.get("ok") is True and r.state()["status"] == "awaiting_human"
@@ -265,6 +263,7 @@ def test_user_stop_pauses_and_resume_continues(rig):
 # ── a person's run-land ─────────────────────────────────────────────────────
 
 def _not_landed_tests_red(r: Rig) -> None:
+    assert r.profile == "trivial"
     r.create()
     r.drive(until="build")
     r.edit(BREAK_OTHER)
@@ -286,7 +285,7 @@ def _request(r: Rig, prepared: dict) -> dict:
 
 def test_expired_approval_is_refused_and_a_fresh_one_lands(rig, monkeypatch):
     from core import hook_token
-    r = rig("direct")
+    r = rig("trivial")
     _not_landed_tests_red(r)
     base = _main(r)
     prepared = _prepare(r)
@@ -302,7 +301,7 @@ def test_expired_approval_is_refused_and_a_fresh_one_lands(rig, monkeypatch):
 def test_code_changed_after_prepare_cannot_land_even_with_edited_json(rig):
     import json
     from tests.pipeline_v1_rig import _git
-    r = rig("direct")
+    r = rig("trivial")
     _not_landed_tests_red(r)
     base = _main(r)
     prepared = _prepare(r)
@@ -377,18 +376,17 @@ def test_any_command_sequence_leaves_a_foldable_log(tmp_path, monkeypatch):
 # ── B4: probe exits run through the §A2.5 executor ─────────────────────────
 
 def _probe_design(r: Rig, expect: dict) -> dict:
-    docs = documents("direct")
-    design = dict(docs["plan"]["design"])
+    design = dict(documents("trivial")["plan"])
     design["exit_criteria"] = [*design["exit_criteria"], {
         "id": "X2", "kind": "probe", "covers": ["R1.1"], "expect": expect,
         "argv": ["git", "grep", "-n", "-e", "return b + a", "--", "backend/core/"]}]
-    return {**docs["plan"], "design": design}
+    return design
 
 
 def test_a_probe_exit_runs_and_counts_by_its_row_id(rig):
-    r = rig("direct")
+    r = rig("trivial")
     r.create()
-    r.v1("stage-start")
+    r.drive(until="plan")
     r.edit(Rig.CHANGE)
     out = r.v1("stage-complete", "--artifact",
                r.artifact("design", _probe_design(r, {"rc": 0, "stdout": "nonempty"})))
@@ -401,9 +399,9 @@ def test_a_probe_exit_runs_and_counts_by_its_row_id(rig):
 
 
 def test_a_probe_whose_expectation_fails_blocks_build(rig):
-    r = rig("direct")
+    r = rig("trivial")
     r.create()
-    r.v1("stage-start")
+    r.drive(until="plan")
     r.edit(Rig.CHANGE)
     r.v1("stage-complete", "--artifact",
          r.artifact("design", _probe_design(r, {"rc": 1, "stdout": "empty"})))
@@ -418,3 +416,63 @@ def test_the_old_free_argv_probe_mode_is_gone(rig):
     r.create()
     out = r.pt("probe", "--name", "x", "--", "sh", "-c", "exit 0")
     assert out.get("ok") is not True and out.get("_rc") == 2, out
+
+
+# ── N1: direct has no PLAN, no documents, no exit criteria ──────────────────
+
+def test_direct_starts_at_build_and_needs_the_users_words(rig):
+    r = rig("direct")
+    refused = r.v1("create", "--project", "P", "--profile", "direct",
+                   "--repo", f"repo={r.repo}")
+    assert refused.get("ok") is False and "--requirement" in refused.get("error", ""), refused
+    out = r.create()
+    assert "plan" not in out["state"]["stages"] and out["state"]["stage"] == "build"
+
+
+def test_a_doc_only_direct_run_lands_without_any_document(rig):
+    from tests.pipeline_v1_rig import _git
+    r = rig("direct")
+    r.create(requirement="Fix the README typo.")
+    base = _main(r)
+    r.edit({"README.md": "# readme\n\nfixed\n"})
+    assert r.v1("stage-complete").get("ok") is True          # BX-2: pure doc, no tdd
+    _landed_clean(r.drive())
+    assert _main(r) != base and "fixed" in (r.repo / "README.md").read_text()
+    report = (r.repo / f".aidlc/deliverables/{r.run_id}/REPORT.md").read_text()
+    assert "Fix the README typo." in report
+    assert _git(r.repo, "log", "-1", "--format=%B").rstrip().endswith(
+        "Co-Authored-By: Swarm <swarm@swarmai.dev>")
+
+
+def test_a_direct_code_change_needs_passing_tdd_to_leave_build(rig):
+    r = rig("direct")
+    r.create()
+    r.edit({"backend/core/mod.py": "def add(a, b):\n    return a - b\n"})   # red
+    out = r.v1("stage-complete")
+    assert out.get("ok") is False and "tdd" in str(out.get("checks")), out   # nothing run
+    r.pt("tdd", "--files", "backend/tests/test_x.py")
+    out = r.v1("stage-complete")
+    assert out.get("ok") is False and "failed" in str(out.get("checks")), out
+    r.edit(Rig.CHANGE)                                                       # green
+    r.pt("tdd", "--files", "backend/tests/test_x.py")
+    assert r.v1("stage-complete").get("ok") is True and r.state()["stage"] == "review"
+
+
+def test_one_passing_node_does_not_stand_for_its_file(rig):
+    r = rig("direct")
+    r.create()
+    r.edit(Rig.CHANGE)
+    r.pt("tdd", "--files", "backend/tests/test_x.py::test_add")       # a single node
+    out = r.v1("stage-complete")
+    assert out.get("ok") is False and "not run whole" in str(out.get("checks")), out
+    r.pt("tdd", "--files", "backend/tests/test_x.py")
+    assert r.v1("stage-complete").get("ok") is True
+
+
+def test_a_direct_run_cannot_ask_and_its_log_still_folds(rig):
+    r = rig("direct")
+    r.create()
+    before = len(r.events())
+    out = r.v1("decision-request", "--artifact", _decision(r), "--document", "REQUIREMENTS")
+    assert out.get("ok") is False and "trivial" in out.get("error", ""), out
+    assert len(r.events()) == before and r.state()["stage"] == "build"

@@ -133,7 +133,7 @@ def test_required_docs_follow_the_profile():
     assert rd.required_docs("research") == ["REQUIREMENTS.md", "REPORT.md"]
     # v13: trivial runs PLAN (lite DESIGN_SPEC) and REVIEW (core/pipeline_profiles.py)
     assert rd.required_docs("trivial") == ["REQUIREMENTS.md", "DESIGN_SPEC.md", "REVIEW.md", "REPORT.md"]
-    assert rd.required_docs("direct") == ["DESIGN_SPEC.md", "REVIEW.md", "REPORT.md"]
+    assert rd.required_docs("direct") == ["REVIEW.md", "REPORT.md"]
 
 
 def test_doc_status_explains_what_is_missing_or_skipped(tmp_path):

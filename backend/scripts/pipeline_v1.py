@@ -71,6 +71,8 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--run-id")
     create.add_argument("--risk-test-file-cap", type=int, default=200)
     create.add_argument("--transcript-id", action="append", default=[])
+    create.add_argument("--requirement",
+                        help="the user's request, verbatim (required for --profile direct)")
     for command in ("status", "stage-start", "review-start", "push-status", "land",
                     "measure-usage", "reflect-complete", "reflect-exhausted",
                     "resume", "restore"):
@@ -148,7 +150,8 @@ def execute(args) -> dict[str, Any]:
             data_dir=get_app_data_dir(), workspace=_workspace(), project=args.project,
             profile=args.profile, session_id=args.session_id, repos=_repos(args.repo),
             mode=args.mode, risk_test_file_cap=args.risk_test_file_cap,
-            run_id=args.run_id, transcript_ids=args.transcript_id)
+            run_id=args.run_id, transcript_ids=args.transcript_id,
+            requirement=args.requirement)
         return {"ok": True, "pipeline_id": engine.run_id,
                 "state": engine.projection(), "run_file": str(engine.run_dir / "run.json")}
     engine = _load(args)

@@ -421,10 +421,12 @@ there blocks a run's `merge --ff-only` landing. All three happened on 2026-10-19
   pure-doc files (`*.md` and `backend/context/`, as defined by
   `backend/core/doc_paths.py::is_doc_only_path`) are the exception and may be edited and
   committed there without a run (the adversarial review is still required). A direct
-  run always goes plan -> build -> review -> test -> deliver -> reflect: PLAN writes the
-  structured exit contract and is never skipped. A small change (at most 20 non-test
+  run (`create --profile direct --requirement "<the user's words>"`) goes build -> review ->
+  test -> deliver -> reflect: no PLAN, no requirements/design documents, no exit criteria;
+  BUILD passes when every test the runner selects for the change passed tdd (BX-2), an
+  ambiguous request is abandoned and re-run as trivial. A small change (at most 20 non-test
   source lines, no new code file, no sensitive path) dispatches no review expert; its
-  deterministic document/test/landing checks still run.
+  deterministic test/landing checks still run.
 - **Every other agent** (Claude Code, Kiro, Kiro Crew, Cursor, Codex) is not seen by that
   hook. Nothing enforces this for you; do it yourself:
 

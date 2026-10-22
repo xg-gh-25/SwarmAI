@@ -29,6 +29,8 @@ For every stage:
 
 Profiles and exact stage order come from `core/run_protocol/lifecycle.py`: full/bugfix, goal, trivial, direct, research. There is no skipped stage.
 
+direct is for a small, unambiguous change: `create --profile direct --requirement "<the user's words>"` (required), stages build → review → test → deliver → reflect, no REQUIREMENTS / DESIGN_SPEC, no exit criteria, no decision. If the request has more than one reasonable reading, abandon the direct run and re-create it as trivial, and ask there.
+
 ## Documents and checks
 
 - Model writes only `artifacts/requirements.json`, `artifacts/design_spec.json`, fixing-spec JSON and reflect JSON through the CLI. Markdown is renderer-owned.

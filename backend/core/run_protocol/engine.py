@@ -110,6 +110,9 @@ _FINDING_KINDS = frozenset({"answer", "answer_reuse", "finding_occ", "finding_st
                             "reclassify", "address", "proof"})
 
 
+REQUIREMENT_MAX = 4000
+
+
 class RunEngine:
     """One v1 run, projected from signed events and immutable contract metadata."""
 
@@ -131,9 +134,17 @@ class RunEngine:
                profile: str, session_id: str, repos: Mapping[str, str],
                mode: str = "isolated", decision_cap: int = 2,
                risk_test_file_cap: int = 200, run_id: str | None = None,
-               transcript_ids: Sequence[str] = ()) -> "RunEngine":
+               transcript_ids: Sequence[str] = (),
+               requirement: str | None = None) -> "RunEngine":
         if profile not in lifecycle.PROFILE_STAGES or mode not in {"isolated", "shared"}:
             raise EngineError("unknown profile or mode")
+        if requirement is not None and (not isinstance(requirement, str)
+                                        or len(requirement) > REQUIREMENT_MAX):
+            raise EngineError(f"requirement must be text of at most {REQUIREMENT_MAX} chars")
+        requirement = requirement.strip() if requirement else ""
+        if profile == "direct" and not requirement:
+            # direct has no REQUIREMENTS document: the user's own words ARE the requirement
+            raise EngineError("direct needs --requirement: the user's request, verbatim")
         if mode == "isolated" and profile != "research" and not repos:
             raise EngineError("code profile requires at least one repo")
         run_id = run_id or "run_" + secrets.token_hex(4)
@@ -171,6 +182,8 @@ class RunEngine:
                     "event_authority_id": authority.authority_id,
                     "created_at": _now(), "stage_attempt_cap": 3,
                     "regression_round_cap": 2, "recheck_cap": 3}
+        if requirement:
+            contract["requirement"] = requirement
         engine.contract = contract
         engine.store.write_contract_once(contract)
         engine.store.append_new(
@@ -341,7 +354,7 @@ class RunEngine:
     def _changed_paths(self, repos: Mapping[str, str]) -> list[str]:
         out = []
         for root in repos.values():
-            out += [line for line in _git(root, "status", "--porcelain=v1").splitlines()
+            out += [line for line in _git(root, "status", "--porcelain=v1", "--untracked-files=all").splitlines()
                     for line in [line[3:]] if line]
         return sorted(set(out))
 
@@ -371,8 +384,8 @@ class RunEngine:
                 covers |= set(trace.get("covers") or [])
         profile = self.contract["profile"]
         req_variant = "lite" if profile == "direct" else "full"
-        design_variant = None if profile == "research" else (
-            "lite" if profile in {"direct", "trivial"} else "full")
+        design_variant = None if profile in {"research", "direct"} else (
+            "lite" if profile == "trivial" else "full")
         run = {**self.projection(), "mode": self.contract["mode"],
                "code_trees": code_trees, "changed_paths": self._changed_paths(repos),
                "validation_rule_paths": ["validations.json", "backend/core/run_protocol/risk_selection.py"],
@@ -420,7 +433,9 @@ class RunEngine:
             ]
         requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
         rows = requirements.get("requirements") if isinstance(requirements, Mapping) else []
-        if isinstance(rows, list) and rows:
+        if self.contract.get("requirement"):
+            value["requirement"] = str(self.contract["requirement"])
+        elif isinstance(rows, list) and rows:
             value["requirement"] = str(rows[0].get("story") or rows[0].get("id") or "")
         path = self.run_dir / "run.json"
         _atomic_json(path, value)
@@ -616,6 +631,9 @@ class RunEngine:
 
     def request_decision(self, value: Mapping[str, Any], *, document: str) -> dict[str, Any]:
         from core.run_protocol.documents import record_decision
+        if self.contract.get("profile") == "direct":
+            raise EngineError("a direct run makes no decisions: abandon it and re-create the "
+                              "request as --profile trivial, then ask there")
         refs: dict[str, Mapping[str, Any]] = {
             event["event_id"]: event for event in self.store.read_events()}
         requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
@@ -957,7 +975,7 @@ class RunEngine:
             return self.finish_not_landed()
         docs = DocumentStore(self.run_dir)
         artifact = dict(artifact or {})
-        variant = ("lite" if stage == "plan" and profile in {"direct", "trivial"}
+        variant = ("lite" if stage == "plan" and profile == "trivial"
                    else "full" if stage in {"evaluate", "plan"} else None)
         roster = {spec.check_id for spec in checks.stage_checks(profile, stage, variant)}
         try:
@@ -965,15 +983,11 @@ class RunEngine:
                 docs.write_requirements(artifact, variant="full", profile=profile,
                                         blocking=roster)
             elif stage == "plan":
-                requirements = artifact.get("requirements") if profile == "direct" else self._read_json(
+                requirements = self._read_json(
                     self.run_dir / "artifacts" / "requirements.json", {})
-                design = artifact.get("design") if profile == "direct" else artifact
-                if profile == "direct":
-                    docs.write_requirements(requirements, variant="lite", profile=profile,
-                                            blocking=roster)
-                docs.write_design(design, variant="lite" if profile in {"direct", "trivial"} else "full",
+                docs.write_design(artifact, variant="lite" if profile == "trivial" else "full",
                                   profile=profile, requirements=requirements,
-                                  requirement_variant="lite" if profile == "direct" else "full",
+                                  requirement_variant="full",
                                   existing_files=self.check_context().existing_files,
                                   blocking=roster)
         except DocumentError as exc:

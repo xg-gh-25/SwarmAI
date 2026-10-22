@@ -343,12 +343,12 @@ def _no_run_verdict(p: str, nr: "_NoRun", what: "str | None" = None) -> "dict | 
                "start its next stage (that creates the worktree): " + v1_command(
                    f"stage-start --project {rp} --run-id {rid}") +
                "\nIf this repo is not one of the run's repos, it needs a new run: "
-               + v1_command(f"create --project {pq} --profile direct --repo "
+               + v1_command(f"create --project {pq} --profile direct {_REQ} --repo "
                             f"{shlex.quote(main)}"))
         return _deny(head + f"This session's run {r['id']} ({r.get('status')}) has no worktree "
                      f"for this repo yet: {nxt}\nThen make this change at the same relative "
                      "path under the worktree it prints." + note)
-    create = v1_command(f"create --project {pq} --profile direct --repo {shlex.quote(main)}")
+    create = v1_command(f"create --project {pq} --profile direct {_REQ} --repo {shlex.quote(main)}")
     start = v1_command(f"stage-start --project {pq} --run-id <run_id>")
     note = "" if what is not None else _claim_note(main, p, "", "")
     return _deny(head + "Start a run (each as ONE simple command; `--profile direct` for a "
@@ -403,13 +403,17 @@ def v1_command(args: str) -> str:
     return f"backend/.venv/bin/python backend/scripts/pipeline_v1.py {args}"
 
 
+# direct has no REQUIREMENTS document: create takes the user's request verbatim
+_REQ = "--requirement '<the user request, verbatim>'"
+
+
 def _repo_add_deny(own: "_Own", repo: str, what: str) -> dict:
     return _deny(f"{what} is in the git repo {repo}, which run {own.id} has no worktree for. "
                  "A v1 run's repos are fixed when it is created, so this change belongs in "
                  "a new run that includes it (one simple command, nothing chained):\n"
                  "Run: " + v1_command(
                      f"create --project {shlex.quote(str(own.project or '<project>'))} "
-                     f"--profile direct --repo {shlex.quote(repo)}"))
+                     f"--profile direct {_REQ} --repo {shlex.quote(repo)}"))
 
 
 def _git_segments(command: str, cwd: str) -> "list[dict]":

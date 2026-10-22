@@ -150,6 +150,8 @@ def build_repo_final(
     main_red: Mapping[str, Any], trace: Sequence[Mapping[str, Any]],
     carried_from: str | None = None, tests_required: bool = True,
     node_results: Mapping[str, Mapping[str, Any]] | None = None,
+    tdd_required: Sequence[str] | None = None,
+    whole_files: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Fold current-tree, runner-signed calls into one repo final row.
 
@@ -241,6 +243,16 @@ def build_repo_final(
         "validations": validations, "calls": rows, "provenance": provenance,
         "trace": trace_rows,
     }
+    if node_results is not None:
+        # each node's last result on this tree: what direct's BX-2 reads
+        final["tests"]["nodes"] = {str(node): {"result": str(row["result"])}
+                                   for node, row in sorted(node_results.items())}
+    if tdd_required is not None:
+        if any(not isinstance(item, str) or not item for item in tdd_required):
+            raise FinalError("tdd_required must be repo paths")
+        final["tdd_required"] = sorted(set(tdd_required))
+    if whole_files is not None:
+        final["tests"]["whole_files"] = sorted({str(item) for item in whole_files})
     if carried_from is not None:
         if not SHA40.fullmatch(carried_from):
             raise FinalError("carried_from must be a git commit id")

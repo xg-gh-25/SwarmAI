@@ -4700,6 +4700,9 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
                                    | {"backend/" + a.split("::")[0] for o in plan.get("ordered") or []
                                       for a in o if not a.startswith(_SHARD_MODIFIERS)}),
           "skipped_for_budget": plan["skipped"], "counts": counts,
+          # files run whole (named without ::node): direct's BX-2 needs a whole run
+          "whole_files": sorted({f for f, nodes in plan["targets"].items() if nodes is None}
+                                | set(plan["desktop"])),
           "dependency_scope": sorted(l2),
           **({"risk_rules": list(plan["risk_rules"])} if plan.get("risk_rules") else {}),
           **({"risk_overflow": list(plan["risk_overflow"])} if plan.get("risk_overflow") else {}),
@@ -5357,6 +5360,8 @@ def _v1_finalize(ns, run_state: dict, runner, *, call: dict, result: str,
         selection=actual,
         cache_keys=cache_keys, main_red=_v1_main_red_provenance(),
         trace=runner.trace(_v1_exits(runner), nodes), node_results=nodes,
+        tdd_required=_v1_tdd_required(runner.repo_root, changed),
+        whole_files=runner.whole_file_runs(),
     )
     return {"repo": runner.repo_name, "tests": final["tests"],
             "validations": final["validations"],
@@ -5429,6 +5434,22 @@ def _run_v1_probes(ns, run_state: dict, runner, changed: list[str]) -> tuple[dic
                            risk_status=str(prior.get("risk_status") or "within_cap"))
     ok = all(row["result"] == "pass" for row in calls)
     return {"mode": "probe", "ok": ok, "probes": calls, **summary}, (0 if ok else 1)
+
+
+def _v1_tdd_required(repo: Path, changed: list[str]) -> "list[str] | None":
+    """The test files a change's tdd must cover (direct's BX-2, execution plan v2 N1):
+    the frozen select_backend over the changed paths (changed tests + direct importers of
+    changed modules) plus changed desktop test files. Reuses the frozen selection; adds
+    no rule of its own."""
+    repo = Path(repo)
+    try:
+        sg = build_source_graph(repo, _cache_dir())
+        selected, _skipped, _mods = select_backend(
+            repo, changed, build_import_graph(repo, _cache_dir(), sg), None, [], sg)
+    except (OSError, ValueError):
+        return None          # selection failed: BX-2 fails closed, never a short list
+    desktop = [f for f in changed if _DESKTOP_TEST_RE.search(f)]
+    return sorted(set(selected) | set(desktop))
 
 
 def _v1_test_dependencies(repo: Path, files: list[str]) -> "dict[str, list[str]] | None":
