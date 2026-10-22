@@ -70,6 +70,7 @@ import { dispatchUiCommand } from '../utils/uiCommands';
 import type { UnifiedTab } from './useUnifiedTabState';
 import { type TabStatus } from './useUnifiedTabState';
 import { tabNoticeStore } from '../stores/tabNoticeStore';
+import { noteThinking } from '../stores/thinkingProgressStore';
 import { toContextWarning, isNewerSnapshot, snapshotFromEvent, onContextUsageStale, type ContextUsageSnapshot } from './contextUsage';
 
 // ---------------------------------------------------------------------------
@@ -2386,6 +2387,13 @@ export function useChatStreamingLifecycle(
         // is a NO-OP unless the store is streaming, so idle/stale pings are
         // harmless. Do NOT move this below the guards.
         if (capturedTabId) messageStoreRegistry.get(capturedTabId)?.touch();
+
+        // thinking_progress writes no content: record it so the streaming wait
+        // hint (useStreamingWait) can say "Thinking · 1m 05s", not "waiting".
+        if (event.type === 'thinking_progress' && capturedTabId) {
+          const sid = tabMapRef.current.get(capturedTabId)?.sessionId;
+          if (sid) noteThinking(sid, (event as { elapsed_seconds?: unknown }).elapsed_seconds);
+        }
 
         // recovery_exhausted is a pure side-channel signal (toast only — no
         // store/streamState writes) and is yielded from the self-heal block

@@ -424,7 +424,10 @@
       "continueAria": "Continue response",
       "continueTitle": "Continue — ask {{name}} to continue its response",
       "interrupted": "Connection interrupted",
-      "mulling": "{{name}} is mulling it over…"
+      "waitAgent": "Waiting for 1 background agent · {{time}}",
+      "waitAgents": "Waiting for {{count}} background agents · {{time}}",
+      "waitThinking": "Thinking · {{time}}",
+      "waitModel": "Waiting for the model · {{time}}"
     },
     "memory": {
       "nothingNew": "Nothing new to save",

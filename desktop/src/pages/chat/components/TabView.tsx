@@ -53,7 +53,6 @@ import { WelcomeScreen } from './WelcomeScreen';
 import { CompactNotice } from './CompactNotice';
 import { TurnPhaseLine } from './TurnPhaseLine';
 import { tf } from '../tf';
-import { useStreamingRest } from '../../../hooks/useStreamingRest';
 import { focusAgent } from '../agentFocus';
 
 /** Bottom-proximity threshold (px): within this of the bottom counts as "at
@@ -627,15 +626,6 @@ function TabViewImpl({
     if (isActive) settle();
   }, [messages, isStreaming, isActive, settle]);
 
-  // ── Per-tab resting cue for the streaming bee ──────────────────────
-  // Keyed on the render-source `messages` identity, which changes only when
-  // this tab's store CONTENT changes (heartbeat touch() never does), so the bee
-  // rests after 30s of no new content while the turn is streaming. Gated on
-  // isActive: a hidden tab skips the store→React commit (its `messages` freezes),
-  // so an armed timer there would only force a hidden re-render every 30s. A
-  // hidden tab holds no timer and starts awake when it is shown again.
-  const isResting = useStreamingRest(isStreaming && isActive, messages);
-
   // Last assistant message index — used for Save-to-Memory button placement
   // and to scope streaming indicators to the final assistant bubble.
   const lastAssistantIdx = useMemo(
@@ -811,7 +801,6 @@ function TabViewImpl({
                   pendingToolUseId={resolvedPendingToolUseId}
                   pendingPermissionRequestId={pendingPermissionRequestId ?? undefined}
                   isStreaming={isLastAssistantForStreaming}
-                  isResting={isLastAssistantForStreaming && isResting}
                   sessionId={sessionId}
                   isLastAssistant={idx === lastAssistantIdx}
                   contextWarning={idx === lastAssistantIdx ? contextWarning : null}

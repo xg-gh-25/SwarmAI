@@ -2,47 +2,60 @@
  * StreamingBee — the "this turn is still running" indicator at the end of the
  * streaming assistant message (replaces the old pulsing caret).
  *
- * Three variants, chosen by props + the OS motion setting:
- * - flying  — the bee flies left↔right along a short dashed track, flipping at
- *             each end, bobbing and flapping (content is arriving).
- * - resting — the bee sits at the start of the track with folded wings and
- *             breathes; a muted line "{name} is mulling it over…" appears. Set
- *             by TabView via useStreamingRest: no new content for 30s while the
- *             connection is alive. The copy deliberately never says "stuck",
- *             never shows seconds and never promises "soon" — a quiet turn is
- *             not a failure, and we do not know how long it will take.
- * - still   — prefers-reduced-motion: no flight, no flap, breathing only.
+ * The bee flies for as long as the turn works (`--still` under prefers-reduced-
+ * motion: breathing only). It never lands: a quiet turn is still a working turn.
+ *
+ * After 45s with no new content a muted line beside it states what the turn is
+ * waiting on and for how long (useStreamingWait): the running call
+ * ("Bash · make test · 1m 12s"), background agents, the model thinking, or the
+ * model's reply. Facts only, never a cause; real problems are reported elsewhere
+ * (still_working stall notice, reconnect banner, health monitor).
  *
  * The bee is an inline SVG (not the 🐝 emoji, whose facing direction and art
- * differ per platform) and is aria-hidden; only the resting line is announced
- * (an always-mounted role=status, polite region that the text enters). All
- * motion is CSS keyframes on transform/opacity in index.css (`.streaming-bee*`):
- * flight, bob and breathing run on HTML wrappers (compositor); the wing flap
- * scales SVG <g> children, which browsers repaint on the main thread — a
- * 26×23px area, accepted.
+ * differ per platform) and is aria-hidden; only the hint is announced (an always-
+ * mounted role=status, polite region that the text enters). All motion is CSS
+ * keyframes on transform/opacity in index.css (`.streaming-bee*`).
  *
  * @exports StreamingBee, StreamingBeeProps
  */
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import { tf } from '../tf';
-import { ASSISTANT_NAME } from '../assistantName';
+import type { ContentBlock } from '../../../types';
 import { usePrefersReducedMotion } from '../../../hooks/usePrefersReducedMotion';
+import { formatWait, useStreamingWait } from '../../../hooks/useStreamingWait';
+import type { StreamingWait } from '../../../hooks/useStreamingWait';
 
 export interface StreamingBeeProps {
-  /** No new content for a while (see useStreamingRest) — land and say so. */
-  resting: boolean;
+  /** The streaming message's content: its identity changing is "new content". */
+  content: ContentBlock[];
+  sessionId?: string;
 }
 
-export function StreamingBee({ resting }: StreamingBeeProps) {
-  const { t } = useTranslation();
+/** The hint; `time` false drops the clock (the screen-reader copy, announced once). */
+function waitText(w: StreamingWait, t: ReturnType<typeof useTranslation>['t'], zh: boolean, withTime = true): string {
+  const time = withTime ? formatWait(Date.now() - w.since, zh) : '';
+  const out = (() => { switch (w.kind) {
+    case 'tool': return [w.tool, w.object, time].filter(Boolean).join(' · ');
+    case 'agents': return w.count === 1
+      ? tf(t, 'chat.message.waitAgent', 'Waiting for 1 background agent · {{time}}', { time })
+      : tf(t, 'chat.message.waitAgents', 'Waiting for {{count}} background agents · {{time}}', { count: w.count, time });
+    case 'thinking': return tf(t, 'chat.message.waitThinking', 'Thinking · {{time}}', { time });
+    default: return tf(t, 'chat.message.waitModel', 'Waiting for the model · {{time}}', { time });
+  } })();
+  return withTime ? out : out.replace(/\s*·\s*$/, '');
+}
+
+export function StreamingBee({ content, sessionId }: StreamingBeeProps) {
+  const { t, i18n } = useTranslation();
   const reducedMotion = usePrefersReducedMotion();
-  const variant = reducedMotion ? 'still' : resting ? 'resting' : 'flying';
+  const wait = useStreamingWait(content, sessionId);
+  const zh = (i18n?.language ?? '').startsWith('zh');
 
   return (
     <div
       data-testid="streaming-bee"
-      className={clsx('streaming-bee', `streaming-bee--${variant}`)}
+      className={clsx('streaming-bee', `streaming-bee--${reducedMotion ? 'still' : 'flying'}`)}
     >
       <div className="streaming-bee-track" aria-hidden="true">
         <div className="streaming-bee-trail" />
@@ -54,12 +67,9 @@ export function StreamingBee({ resting }: StreamingBeeProps) {
       </div>
       {/* The live region stays mounted and only its TEXT appears — screen
           readers often skip a live region that is inserted already filled. */}
-      <span className="streaming-bee-note" role="status" aria-live="polite">
-        {resting && (
-          <span className="streaming-bee-note-text">
-            {tf(t, 'chat.message.mulling', '{{name}} is mulling it over…', { name: ASSISTANT_NAME })}
-          </span>
-        )}
+      {wait && <span className="streaming-bee-note-text" aria-hidden="true" data-wait={wait.kind}>{waitText(wait, t, zh)}</span>}
+      <span className="streaming-bee-note sr-only" role="status" aria-live="polite">
+        {wait ? waitText(wait, t, zh, false) : ''}
       </span>
     </div>
   );

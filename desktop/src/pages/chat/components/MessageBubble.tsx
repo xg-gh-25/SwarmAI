@@ -35,8 +35,6 @@ export interface MessageBubbleProps {
   pendingToolUseId?: string;
   pendingPermissionRequestId?: string;
   isStreaming?: boolean;
-  /** Streaming but quiet for a while — forwarded to the streaming bee. */
-  isResting?: boolean;
   sessionId?: string;
   isLastAssistant?: boolean;
   contextWarning?: ContextWarning | null;
@@ -60,7 +58,6 @@ function MessageBubbleImpl({
   pendingToolUseId,
   pendingPermissionRequestId,
   isStreaming,
-  isResting,
   sessionId,
   isLastAssistant,
   contextWarning,
@@ -89,7 +86,6 @@ function MessageBubbleImpl({
       pendingToolUseId={pendingToolUseId}
       pendingPermissionRequestId={pendingPermissionRequestId}
       isStreaming={isStreaming}
-      isResting={isResting}
       sessionId={sessionId}
       isLastAssistant={isLastAssistant}
       contextWarning={contextWarning}

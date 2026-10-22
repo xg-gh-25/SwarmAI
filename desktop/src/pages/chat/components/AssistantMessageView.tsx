@@ -188,9 +188,6 @@ export interface AssistantMessageViewProps {
   pendingPermissionRequestId?: string;
   /** Whether the assistant message is still streaming */
   isStreaming?: boolean;
-  /** Streaming but no new content for a while (TabView's useStreamingRest) —
-   *  the streaming bee lands and shows the "mulling it over" line. */
-  isResting?: boolean;
   /** The current session ID for the save API call */
   sessionId?: string;
   /** Whether this is the last assistant message in the session */
@@ -223,7 +220,6 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   pendingToolUseId,
   pendingPermissionRequestId,
   isStreaming,
-  isResting,
   sessionId,
   isLastAssistant,
   contextWarning,
@@ -561,8 +557,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       <div className="text-[var(--color-text-secondary)]">
         {contentBlocks}
         {/* Streaming indicator — the bee at the end of the streaming content
-            (flying while content arrives, resting after a quiet spell). */}
-        {isStreaming && <StreamingBee resting={!!isResting} />}
+            (it flies while the turn works; after 45s quiet a line says what it waits on). */}
+        {isStreaming && <StreamingBee content={message.content} sessionId={sessionId} />}
         {/* A running sub-agent shows in its Agents panel row (TurnZones,
             fed by subagent_progress) — no separate timer banner. */}
       </div>
