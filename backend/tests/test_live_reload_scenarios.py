@@ -256,6 +256,10 @@ async def _run(turns: list[dict], hub, messages: "_Messages") -> tuple[list[dict
             steps.append({"kind": "decide", "requestId": rid, "decision": turn["decision"]})
 
             async def contp(request_id, allowed, frames=frames):
+                # as SessionUnit._deliver_permission_decision does when the hook
+                # waits on the prompt (aa491b97): the decision onto the stored block
+                from core.permission_prompt import record_decision
+                await record_decision(SID, request_id, "approve" if allowed else "deny")
                 for ev in frames:
                     yield ev
             unit.continue_with_permission = contp
