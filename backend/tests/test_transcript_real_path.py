@@ -166,13 +166,7 @@ async def test_pages_by_turns_join_to_the_whole_history():
     assert strip(pages) == strip(whole)
 
 
-# ── R10: a tool's result shown live is kept when the turn ends right after it ──
-
-R10 = pytest.mark.xfail(strict=True, reason=(
-    "R10: run_conversation keeps step results pending until the next assistant row or a "
-    "terminal event; a turn that ends without one (Stop, daemon restart) never writes them "
-    "(run_injected_turn flushes them in its finally; this path does not)"))
-
+# ── R10 (fixed: core/turn_writer): a result shown live is kept when the turn ends right after it ──
 
 def _tool_then_stop(**kwargs: Any):
     """The CLI ran a step and the turn ends there (Stop) — no result event."""
@@ -185,7 +179,6 @@ def _tool_then_stop(**kwargs: Any):
     return gen()
 
 
-@R10
 @pytest.mark.asyncio
 async def test_a_result_shown_live_survives_a_turn_that_ends_after_it():
     r = _router()

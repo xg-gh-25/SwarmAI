@@ -374,6 +374,7 @@ def _paused_router(unit_events):
     and a continuation that yields ``unit_events``."""
     from types import SimpleNamespace
     router = SessionRouter.__new__(SessionRouter)
+    router._turn_writers = {}   # set by __init__: the running turn's writer per session
     unit = SimpleNamespace(_turn_client_id="cid", _turn_files={})
 
     async def _cont(*_a, **_k):

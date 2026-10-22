@@ -30,6 +30,15 @@ EVENT = {"type": "cmd_permission_request", "requestId": "perm_1", "sessionId": "
          "options": ["approve", "deny"]}
 
 
+@pytest.fixture(autouse=True)
+def _no_decision_in_flight():
+    """``note_decision`` is process state; a test that patches ``record_decision``
+    (which drops the entry) would leave its decision for the next test to read."""
+    pp._IN_FLIGHT.clear()
+    yield
+    pp._IN_FLIGHT.clear()
+
+
 def test_block_is_the_frontend_shape():
     assert pp.permission_block(EVENT) == {
         "type": "cmd_permission_request", "requestId": "perm_1", "toolName": "Bash",

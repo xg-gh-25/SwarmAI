@@ -375,17 +375,6 @@ const KNOWN = new Set<string>([
   'reconciled: other tab: live repeats: tool_result',
   'stream: other tab: assistant bubbles: a injected turn has its own bubble',
   'reconciled: other tab: assistant bubbles: a injected turn has its own bubble',
-  // R10 a step's result is written with the NEXT assistant row or a terminal event; a turn
-  // that ends right after a tool result without one — Stop, a daemon restart — never writes
-  // it (run_conversation / continue_with_answer / continue_with_cmd_permission; the injected
-  // path flushes in its finally). Shown live, gone on reload (5/70). After a restart the
-  // resync's DB read takes it off the screen too, so only "shown live" catches it there.
-  'stream: only live: tool_result',
-  'stream: other tab: only live: tool_result',
-  'stream: shown live, gone on reload: tool_result',
-  'reconciled: shown live, gone on reload: tool_result',
-  'stream: other tab: shown live, gone on reload: tool_result',
-  'reconciled: other tab: shown live, gone on reload: tool_result',
 ]);
 
 const scenarios = (fixture as { scenarios: Scenario[] }).scenarios;

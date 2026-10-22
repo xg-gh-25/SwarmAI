@@ -33,6 +33,7 @@ from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from . import session_events
+from .turn_writer import TurnWriter
 from .session_unit import SessionState, SessionUnit
 from .turn_phase import PREPARING as TURN_PHASE_PREPARING, turn_phase_event
 
@@ -2125,6 +2126,11 @@ class SessionRouter:
         config: Optional["AppConfigManager"] = None,
     ) -> None:
         self._units: dict[str, SessionUnit] = {}
+        # The running turn's writer per session (core/turn_writer), registered by
+        # _published_turn while the turn runs and removed when it ends: a write
+        # into a running turn from outside it (the Stop receipt) goes after what
+        # the writer still holds.
+        self._turn_writers: dict[str, TurnWriter] = {}
         self._prompt_builder = prompt_builder
         self._config = config
         self._lifecycle_manager = None  # Set by session_registry after init
@@ -3396,8 +3402,8 @@ class SessionRouter:
         unit.begin_injected_turn(ts, client_id)
         logger.info("session_router.injected_turn_start session_id=%s client_id=%s",
                     session_id, client_id)
-        pending: list[dict] = []
         row_key = f"{client_id}-asst"
+        writer = TurnWriter(self, session_id, row_key=row_key, label="injected")
 
         async def persisted_frames() -> AsyncIterator[dict]:
             # What this CLI turn answers: the background agents that finished since
@@ -3410,29 +3416,17 @@ class SessionRouter:
                     {k: a[k] for k in ("toolUseId", "description", "status", "durationMs", "toolUses", "summary") if k in a}
                     for a in finished]}
                 event0 = {"type": "assistant", "content": [block], "model": None}
-                try:
-                    await self._persist_stream_event(session_id, event0, pending, label="injected",
-                                                      client_id=row_key)
-                except Exception as exc:  # noqa: BLE001 — F4
-                    logger.warning("session_router.background_finished_persist_failed session_id=%s: %s",
-                                   session_id, exc)
+                await writer.write(event0)
                 yield event0
             # Persist first, then hand the event on to be published, so a tab
             # that reloads on turn_end finds every row it was shown live.
             async for event in unit._read_formatted_response():
                 if not isinstance(event, dict):
                     continue
-                extras: list[dict] = []
-                try:
-                    extras = await self._persist_stream_event(
-                        session_id, event, pending, label="injected",
-                        client_id=row_key, files=self._turn_files_of(unit),
-                        changes=getattr(unit, "_turn_changes", None),
-                    ) or []
-                except Exception as exc:  # noqa: BLE001 — F4: persistence must not wedge the unit
-                    logger.warning(
-                        "session_router.injected_persist_failed session_id=%s type=%s: %s",
-                        session_id, event.get("type"), exc)
+                extras = await writer.write(
+                    event, files=self._turn_files_of(unit),
+                    changes=getattr(unit, "_turn_changes", None),
+                )
                 # the turn's products (turn_deliverables / turn_changes) come
                 # before its result, as on the other turn paths
                 for _extra in extras:
@@ -3442,7 +3436,7 @@ class SessionRouter:
         try:
             async with aclosing(self._published_turn(
                 persisted_frames(), session_id=session_id, turn_client_id=row_key,
-                source="injected", start_on_session_start=False,
+                source="injected", start_on_session_start=False, writer=writer,
             )) as turn:
                 async for _published in turn:
                     pass
@@ -3456,15 +3450,6 @@ class SessionRouter:
                            session_id, type(exc).__name__, exc)
             if unit.state == SessionState.STREAMING:
                 await unit._crash_to_cold_async(clear_identity=False)
-        finally:
-            if pending:
-                try:
-                    await self._persist_assistant_blocks(
-                        session_id, list(pending), None,
-                        label="injected-results", client_id=row_key)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("session_router.injected_results_persist_failed "
-                                   "session_id=%s: %s", session_id, exc)
         logger.info("session_router.injected_turn_end session_id=%s state=%s",
                     session_id, unit.state.value)
 
@@ -3757,6 +3742,7 @@ class SessionRouter:
         turn_client_id: Optional[str],
         source: str,
         start_on_session_start: bool,
+        writer: TurnWriter,
     ) -> AsyncIterator[dict]:
         """Run one turn's event generator and publish every event of the turn.
 
@@ -3773,6 +3759,12 @@ class SessionRouter:
         closed with ``aclosing`` whenever this one is, so its ``finally`` blocks
         (pending rollback, slot release) run exactly as when it was iterated
         directly.
+
+        ``writer`` is the turn's ``TurnWriter`` (the inner generator writes each
+        event through it before yielding it): closed here, in ``finally`` and
+        before ``turn_end`` is published, however the turn ends — so what the
+        turn still held (step results waiting for the next assistant row) is
+        written, and is in the DB when a tab reloads on ``turn_end``.
         """
         hub = session_events.hub()
         turn_id = uuid4().hex[:12]
@@ -3793,11 +3785,15 @@ class SessionRouter:
                             yield ev
                             continue
                         started = True
+                        self._turn_writers[sid] = writer
                         yield hub.publish(sid, {"type": "turn_start", "source": source},
                                           turn_id=turn_id, turn_client_id=turn_client_id)
                     yield hub.publish(sid, ev, turn_id=turn_id, turn_client_id=turn_client_id)
             finally:
+                await writer.close()
                 if started:
+                    if self._turn_writers.get(sid) is writer:
+                        del self._turn_writers[sid]
                     hub.publish(sid, {"type": "turn_end"}, turn_id=turn_id,
                                 turn_client_id=turn_client_id)
 
@@ -3829,18 +3825,20 @@ class SessionRouter:
         source = "drain" if _drained_pending else ("channel" if channel_context else "chat")
         if client_id is None:
             client_id = f"{source}-{uuid4().hex}"
+        writer = TurnWriter(self, session_id, row_key=f"{client_id}-asst")
         agen = self._run_conversation_impl(
             agent_id=agent_id, user_message=user_message, content=content,
             session_id=session_id, enable_skills=enable_skills, enable_mcp=enable_mcp,
             channel_context=channel_context, editor_context=editor_context,
             terminal_context=terminal_context, agent_config=agent_config,
-            client_id=client_id, _drained_pending=_drained_pending,
+            client_id=client_id, _drained_pending=_drained_pending, writer=writer,
         )
         async with aclosing(self._published_turn(
             agen, session_id=session_id,
             turn_client_id=f"{client_id}-asst" if client_id else None,
             source=source,
             start_on_session_start=True,
+            writer=writer,
         )) as turn:
             async for ev in turn:
                 yield ev
@@ -3859,6 +3857,8 @@ class SessionRouter:
         agent_config: Optional[dict] = None,
         client_id: Optional[str] = None,
         _drained_pending: bool = False,
+        *,
+        writer: TurnWriter,
     ) -> AsyncIterator[dict]:
         """One chat turn (called through ``run_conversation``).
 
@@ -4558,8 +4558,6 @@ class SessionRouter:
         _coalesce_delivered_ok = False
         _coalesce_saw_error: Optional[str] = None
         _coalesce_saw_terminal = False
-        # Step results waiting to ride the turn's next assistant row.
-        _pending_results: list[dict] = []
         try:
             async for event in unit.send(
                 query_content=query_content,
@@ -4669,9 +4667,8 @@ class SessionRouter:
                 # The cleaned blocks are written back to event['content'] so the
                 # yielded stream carries the SAME bytes persisted to the DB (bug
                 # 2d — no UI≠DB fork); step results ride along (compact).
-                _before = await self._persist_stream_event(
-                    session_id, event, _pending_results,
-                    client_id=f"{client_id}-asst" if client_id else None,
+                _before = await writer.write(
+                    event, session_id=session_id,
                     # The unit's (reset by send() at admission): a pause for a
                     # question / permission ends this loop without a `result`, and
                     # the continuation loop finishes the same turn's products.
@@ -4916,6 +4913,10 @@ class SessionRouter:
             return []
         if not block:
             return []
+        # after what the running turn has shown but not yet written (a step's result)
+        running = self._turn_writers.get(session_id)
+        if running is not None:
+            await running.flush()
         return await self._persist_assistant_blocks(
             session_id, [block], None, label="turn_stop",
             client_id=getattr(unit, "_turn_client_id", None),
@@ -5061,17 +5062,19 @@ class SessionRouter:
         """Continue a turn with the user's answer, published to the session hub.
 
         No unit → the SESSION_NOT_FOUND reply goes to the caller only (no turn)."""
+        row_key = self._continuation_client_id(session_id)
+        writer = TurnWriter(self, session_id, row_key=row_key, label="answer")
         if self.get_unit(session_id) is None:
             async for ev in self._continue_with_answer_impl(session_id, answer, tool_use_id=tool_use_id,
-                                            answered_by=answered_by):
+                                                            answered_by=answered_by, writer=writer):
                 yield ev
             return
         async with aclosing(self._published_turn(
             self._continue_with_answer_impl(session_id, answer, tool_use_id=tool_use_id,
-                                            answered_by=answered_by),
+                                            answered_by=answered_by, writer=writer),
             session_id=session_id,
-            turn_client_id=self._continuation_client_id(session_id),
-            source="answer", start_on_session_start=False,
+            turn_client_id=row_key,
+            source="answer", start_on_session_start=False, writer=writer,
         )) as turn:
             async for ev in turn:
                 yield ev
@@ -5079,6 +5082,7 @@ class SessionRouter:
     async def _continue_with_answer_impl(
         self, session_id: str, answer: str,
         tool_use_id: str | None = None, answered_by: str = "person",
+        *, writer: TurnWriter,
     ) -> AsyncIterator[dict]:
         """Delegate to SessionUnit.continue_with_answer().
 
@@ -5099,18 +5103,15 @@ class SessionRouter:
             )
             return
 
-        _pending_results: list[dict] = []
+        # The writer's row key is the originating turn's client_id (stashed by
+        # send_message), so this continuation row carries the SAME
+        # `{client_id}-asst` key as the turn's main-path rows — keeping the
+        # merged bubble correlatable wherever a reconcile-tail cut lands
+        # (run_9bbf1761). Written cleaned → stream == DB bytes (bug 2d).
         async for event in unit.continue_with_answer(answer, tool_use_id=tool_use_id,
                                                      answered_by=answered_by):
-            # Write cleaned blocks back → stream == DB bytes (bug 2d).
-            for _extra in await self._persist_stream_event(
-                session_id, event, _pending_results, label="answer", files=self._turn_files_of(unit), changes=getattr(unit, "_turn_changes", None),
-                # Reuse the originating turn's client_id (stashed by
-                # send_message) so this continuation row carries the SAME
-                # `{client_id}-asst` key as the turn's main-path rows — keeping
-                # the merged bubble correlatable no matter where a reconcile-tail
-                # cut lands (run_9bbf1761).
-                client_id=(f"{unit._turn_client_id}-asst" if unit._turn_client_id else None),
+            for _extra in await writer.write(
+                event, files=self._turn_files_of(unit), changes=getattr(unit, "_turn_changes", None),
             ):
                 yield _extra
             yield event
@@ -5121,21 +5122,25 @@ class SessionRouter:
         """Continue a turn after a permission decision, published to the session hub.
 
         No unit → the SESSION_NOT_FOUND reply goes to the caller only (no turn)."""
+        row_key = self._continuation_client_id(session_id)
+        writer = TurnWriter(self, session_id, row_key=row_key, label="permission")
         if self.get_unit(session_id) is None:
-            async for ev in self._continue_with_cmd_permission_impl(session_id, request_id, allowed):
+            async for ev in self._continue_with_cmd_permission_impl(session_id, request_id, allowed,
+                                                                    writer=writer):
                 yield ev
             return
         async with aclosing(self._published_turn(
-            self._continue_with_cmd_permission_impl(session_id, request_id, allowed),
+            self._continue_with_cmd_permission_impl(session_id, request_id, allowed, writer=writer),
             session_id=session_id,
-            turn_client_id=self._continuation_client_id(session_id),
-            source="permission", start_on_session_start=False,
+            turn_client_id=row_key,
+            source="permission", start_on_session_start=False, writer=writer,
         )) as turn:
             async for ev in turn:
                 yield ev
 
     async def _continue_with_cmd_permission_impl(
         self, session_id: str, request_id: str, allowed: bool,
+        *, writer: TurnWriter,
     ) -> AsyncIterator[dict]:
         """Delegate to SessionUnit.continue_with_permission().
 
@@ -5152,15 +5157,10 @@ class SessionRouter:
 
         # The unit records the decision on the stored prompt once the hook has
         # it (core/permission_prompt) -- never for a decision that went nowhere.
-        _pending_results: list[dict] = []
+        # Row key: the originating turn's client_id, as in continue_with_answer.
         async for event in unit.continue_with_permission(request_id, allowed):
-            # Write cleaned blocks back → stream == DB bytes (bug 2d).
-            for _extra in await self._persist_stream_event(
-                session_id, event, _pending_results, label="permission", files=self._turn_files_of(unit), changes=getattr(unit, "_turn_changes", None),
-                # Reuse the originating turn's client_id (stashed by
-                # send_message) — same rationale as continue_with_answer above
-                # (run_9bbf1761): keeps the continuation row keyed to the turn.
-                client_id=(f"{unit._turn_client_id}-asst" if unit._turn_client_id else None),
+            for _extra in await writer.write(
+                event, files=self._turn_files_of(unit), changes=getattr(unit, "_turn_changes", None),
             ):
                 yield _extra
             yield event

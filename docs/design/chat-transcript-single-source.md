@@ -112,7 +112,7 @@ v2：**版本号在库里分配，和写入同一个事务。**
 
 - 每个会话一个计数 `session_revs(session_id, rev)`。messages 的每次插入、每次更新（审批决定、
   提问答案、后台 agent 结果）都在同一个事务里 `rev += 1`，并把新 rev 写进这条记录的 `rev` 列。
-- 事件发布时带上它产生或改动的那条记录的 `rev`（`_persist_stream_event` 返回 rev，发布时附上）。
+- 事件发布时带上它产生或改动的那条记录的 `rev`（由回合的 TurnWriter 写库时分配并返回，见 3.6）。
   不产生记录的事件（text_delta、thinking_delta）带"当前已提交的最大 rev"，只当临时显示。
 - 历史接口在**一个读事务里**取记录和 `max(rev)`，返回 `X-Transcript-Rev: R`。快照里有且只有
   `rev ≤ R` 的改动。
@@ -166,6 +166,23 @@ v2：**版本号在库里分配，和写入同一个事务。**
 `hostedTurn` / `hostForInjectedTurn` / `turnStart`、轮询补卡片的分支与 `shouldResurface*`、
 `drainSyntheticId`、`sessionTurnRouter` 的 POST 渲染和 shadow 部分、`_confirmed` 标记、
 流式路径上的 `collapseAdjacentDuplicateBlocks`、前端生成的错误消息行。
+
+#### 3.6 一个回合只有一个写入者（2026-10-22 已落地，P2 的写入点）
+
+R10 暴露的不是"某条路径少了 finally"，而是一个回合写什么、何时写完，分散在四条路径里各管各的
+（`run_conversation`、两种续接、CLI 自开回合各有一份待写列表，只有一条在结束时补写）。现在：
+
+- **`core/turn_writer.TurnWriter`**：每个回合一个。回合的每个事件发布前都经过 `write()` 写库；
+  `close()` 写完回合还攥着的东西（等下一条助手消息一起写的工具结果）。
+- **由 `_published_turn` 关闭**：它是每个回合都必经的包装，`writer` 是它的必填参数；在 finally 里、
+  发布 `turn_end` 之前 `close()`。所以不管回合怎么结束（结果、Stop、出错、中止、关机时被取消），
+  tab 收到 `turn_end` 去读库时，看到过的块都已在库里。
+- **回合外写进回合的内容排在后面**：回合运行期间 writer 登记在 router 上；Stop 回执写库前先
+  `flush()` 这个回合的 writer，库里的顺序和屏幕一致。write / flush / close 共用一把锁（Stop 请求和
+  回合并发）。
+- **守护测试**（`tests/test_turn_writer.py`）：`core/` 里除 TurnWriter 外没有任何地方直接调
+  `_persist_stream_event`；每个 `_published_turn` 调用都传了 writer。新增回合路径绕不过它。
+- **P2 接着做**：rev 在 `TurnWriter` 的写入事务里分配并返回，发布时附上；规范化事件也在这里产出。
 
 ### S2 发送请求表（解 RC2）
 
@@ -299,7 +316,7 @@ P4 完成前，聊天渲染不加新功能；发现新的显示问题，先写�
 | R7 | SESSION_BUSY 处理器删掉排队的用户气泡（按旧约定"后端删了这条"写的，后端现在保留为待发送），排队消息在对账前消失，送出的回合单独成气泡 | 12/40 | P1（受理回执）+ S1 |
 | R8 | Stop 回执只写库不发布：只有按 Stop 的 tab 看得到 | 10/40 | S1（带 rev 并发 `transcript_rev`） |
 | R9 | 上下文压缩行只在读历史时拼进去：实时从不显示分隔线（12/40）；拼接放在合并后的消息之后，压缩之后的 CLI 回合刷新后排在分隔线之前，对账对不上，内容显示两遍（2/40） | 14/40 | S1（压缩行是带 rev 的记录） |
-| R10 | 工具结果要等下一条助手消息或结束事件才写库；回合在工具结果之后直接结束（Stop、daemon 重启）就丢了：实时看到，刷新没有。`run_conversation`、`continue_with_answer`、`continue_with_cmd_permission` 三条路径都这样，只有 `run_injected_turn` 在 finally 里补写。重启后的 resync 会把它从屏幕上也拿掉，所以只有"显示过就不能丢"这条性质能抓到 | 5/70 | 写库路径（与 P1 无关，可单独修）；`test_transcript_real_path.py` 里的 xfail(strict) 是验收 |
+| R10 | 工具结果要等下一条助手消息或结束事件才写库；回合在工具结果之后直接结束（Stop、daemon 重启）就丢了：实时看到，刷新没有。`run_conversation`、`continue_with_answer`、`continue_with_cmd_permission` 三条路径都这样，只有 `run_injected_turn` 在 finally 里补写。重启后的 resync 会把它从屏幕上也拿掉，所以只有"显示过就不能丢"这条性质能抓到 | 5/70 | **已修**（见 3.6：每个回合一个 TurnWriter） |
 
 R3（共用气泡里跨回合去重）已在 23697bf8 修掉。
 
@@ -308,7 +325,7 @@ R3（共用气泡里跨回合去重）已在 23697bf8 修掉。
 （生成器问题，不是产品问题）。
 
 断线、resync、重启本身没有带来新的分歧：重连补发按 seq 去重，没有重复；resync 后读库，tab
-回到库的状态。它们暴露的是 R10。
+回到库的状态。它们暴露的是 R10（已由 3.6 修掉）。
 
 **仍未覆盖**：轮询打开、首次建 session 的绑定（要等 P1 的受理回执）、多个频道、SIGKILL 式的
 硬崩溃（现在模拟的是取消任务，finally 会跑）。
