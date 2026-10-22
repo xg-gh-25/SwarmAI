@@ -186,10 +186,7 @@ export default function HtmlRenderer({
         {mode === 'rendered' && (
           <button
             onClick={() => setFitMode((f) => !f)}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium
-              text-[var(--color-text-muted)] hover:text-[var(--color-text)]
-              bg-[var(--color-card)] border border-[var(--color-border)]
-              hover:bg-[var(--color-hover)] transition-colors shadow-sm"
+            className="btn-sm btn-secondary shadow-sm transition-colors"
             title={fitMode ? 'Actual size (no fit-scaling)' : 'Fit width to panel'}
             aria-pressed={fitMode}
           >
@@ -201,10 +198,7 @@ export default function HtmlRenderer({
         )}
         <button
           onClick={() => setMode((prev) => (prev === 'rendered' ? 'source' : 'rendered'))}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium
-            text-[var(--color-text-muted)] hover:text-[var(--color-text)]
-            bg-[var(--color-card)] border border-[var(--color-border)]
-            hover:bg-[var(--color-hover)] transition-colors shadow-sm"
+          className="btn-sm btn-secondary shadow-sm transition-colors"
           title={mode === 'rendered' ? 'Show HTML source' : 'Show rendered view'}
         >
           <span className="material-symbols-outlined icon-xs">
@@ -268,12 +262,10 @@ export default function HtmlRenderer({
           )}
           <button
             onClick={openInBrowser}
-            className="absolute bottom-3 right-3 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-              text-[var(--color-text)] bg-[var(--color-card)] border border-[var(--color-border)]
-              hover:bg-[var(--color-hover)] transition-colors shadow-sm"
+            className="absolute bottom-3 right-3 z-10 btn-md btn-secondary transition-colors shadow-sm"
             title="Open the fully-rendered page in your system browser"
           >
-            <span className="material-symbols-outlined icon-xs">open_in_new</span>
+            <span className="material-symbols-outlined icon-sm">open_in_new</span>
             Open in browser
           </button>
         </div>

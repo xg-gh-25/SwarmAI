@@ -144,7 +144,7 @@ export default function ImageRenderer({
       <div className="flex items-center gap-1 px-2 py-1.5 border-b border-[var(--color-border)] shrink-0">
         <button
           onClick={resetToFit}
-          className="flex items-center gap-1 px-2 py-1 rounded text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+          className="btn-sm btn-ghost transition-colors"
           title="Fit to panel"
         >
           <span className="material-symbols-outlined icon-xs">fit_screen</span>
@@ -152,7 +152,7 @@ export default function ImageRenderer({
         </button>
         <button
           onClick={resetTo100}
-          className="flex items-center gap-1 px-2 py-1 rounded text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+          className="btn-sm btn-ghost transition-colors"
           title="Actual size (100%)"
         >
           100%

@@ -628,7 +628,7 @@ function PromptTab({
       <button
         onClick={handleView}
         disabled={isLoading}
-        className="w-full text-xs py-1.5 px-3 rounded bg-[var(--color-hover)] text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="w-full btn-sm btn-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {isLoading ? 'Loading…' : 'View Full Prompt'}
       </button>

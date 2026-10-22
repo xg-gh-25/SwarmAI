@@ -116,7 +116,7 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
         <button
           type="button"
           onClick={onRetry}
-          className="mt-3 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded transition-colors"
+          className="mt-3 btn-md btn-primary transition-colors"
         >
           ↻ Retry when slot opens
         </button>

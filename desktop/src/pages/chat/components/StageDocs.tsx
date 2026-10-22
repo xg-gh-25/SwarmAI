@@ -62,7 +62,7 @@ export function DocCard({ doc, renderText }: { doc: PipelineDocRef; renderText: 
   };
   const openInCanvas = () => document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, { detail: { path: doc.absolutePath } }));
   const body = doc.excerpt ? excerptBody(doc.excerpt) : '';
-  const btn = 'shrink-0 text-[12px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50';
+  const btn = 'btn-sm btn-ghost focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50';
   return (
     <div data-testid="stage-doc" data-name={doc.name} data-open={open ? 'true' : 'false'} className="border-l-2 border-[var(--color-border)] pl-3">
       <div className="flex items-baseline gap-2 min-w-0">

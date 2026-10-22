@@ -698,7 +698,7 @@ function TabViewImpl({
       {hasMoreMessages && !isLoadingOlderMessages && messages.length > 0 && (
         <button
           onClick={onLoadOlder}
-          className="w-full py-1.5 text-xs text-gray-400 hover:text-gray-300 transition-colors text-center"
+          className="w-full btn-sm btn-ghost transition-colors"
         >
           {tf(t, 'chat.list.loadEarlier', '↑ Load earlier messages')}
         </button>
@@ -856,7 +856,7 @@ function TabViewImpl({
             <button
               type="button"
               onClick={() => onCancelBusyWait(tabId)}
-              className="ml-1 text-xs px-2 py-0.5 rounded border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] transition-colors"
+              className="ml-1 btn-sm btn-secondary transition-colors"
               title={t('chat.stopWaitingTitle', 'Stop waiting and return to idle')}
             >
               {t('chat.stopWaiting', 'Stop waiting')}
@@ -873,7 +873,7 @@ function TabViewImpl({
             type="button"
             onClick={() => focusAgent(bgRunning[0].toolUseId, sessionId)}
             title={bgRunning.map((a) => a.description).filter(Boolean).join('\n')}
-            className="px-2.5 py-0.5 rounded-full text-[12px] text-[var(--color-text-muted)] bg-[var(--color-bg-primary)]/95 border border-[var(--color-border-subtle)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+            className="btn-sm !rounded-full font-normal text-[var(--color-text-muted)] bg-[var(--color-bg-primary)]/95 border border-[var(--color-border-subtle)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
           >
             ↗ {tf(t, 'chat.turn.backgroundAgentsRunning', bgRunning.length === 1 ? '{{count}} background agent running' : '{{count}} background agents running', { count: bgRunning.length })}
           </button>
@@ -885,7 +885,7 @@ function TabViewImpl({
               data-testid="background-agents-stop"
               onClick={() => onStopBackground(tabId)}
               title={tf(t, 'chat.turn.stopBackgroundAgentsTitle', 'Stop the background agents (the conversation continues on your next message)')}
-              className="ml-1.5 px-2 py-0.5 rounded-full text-[12px] text-[var(--color-text-muted)] bg-[var(--color-bg-primary)]/95 border border-[var(--color-border-subtle)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+              className="ml-1.5 btn-sm !rounded-full font-normal text-[var(--color-text-muted)] bg-[var(--color-bg-primary)]/95 border border-[var(--color-border-subtle)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
             >
               ■ {tf(t, 'chat.turn.stopBackgroundAgents', 'Stop')}
             </button>
@@ -901,7 +901,7 @@ function TabViewImpl({
           <button
             type="button"
             onClick={follow}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-full max-w-[min(90%,640px)] min-w-0
+            className="btn-sm !rounded-full font-normal !justify-start max-w-[min(90%,640px)] min-w-0
                           bg-[var(--color-bg-primary)]/95 backdrop-blur-sm
                           border border-[var(--color-border-subtle)]
                           shadow-sm text-[var(--color-text-muted)]

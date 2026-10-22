@@ -160,7 +160,7 @@ function DeliverableTile({ file }: { file: TurnDeliverable }) {
   };
   const Head = readOnly ? 'div' : 'button';
   const headProps = readOnly ? {} : { type: 'button' as const, onClick: open };
-  const action = 'text-[11.5px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:underline';
+  const action = 'btn-sm btn-ghost';
   return (
     <li data-testid="deliverable" data-path={file.absolutePath} className="flex items-center gap-2 min-w-0 py-1.5">
       <Head {...headProps} title={file.absolutePath} className="min-w-0 flex-1 flex items-center gap-2 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">

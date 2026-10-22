@@ -576,8 +576,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           <button
             type="button"
             onClick={handleCopy}
-            className="flex items-center gap-1 px-2 py-0.5 text-xs text-[var(--color-text-muted)]
-                       hover:text-[var(--color-text)] rounded transition-colors"
+            className="btn-sm btn-ghost transition-colors"
             title={copied ? copiedLabel : tf(t, 'chat.message.copyTitle', 'Copy message')}
           >
             <span className="material-symbols-outlined icon-xs">
@@ -593,7 +592,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               onClick={handleSaveMemory}
               disabled={memorySaveStatus === 'loading'}
               className={clsx(
-                'flex items-center gap-1 px-2 py-0.5 text-xs rounded transition-colors',
+                'btn-sm transition-colors hover:bg-[var(--color-hover)]',
                 memorySaveStatus === 'saved'
                   ? 'text-green-500 hover:text-green-400'
                   : memorySaveStatus === 'error'
@@ -621,7 +620,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               onClick={handleCompact}
               disabled={compactStatus === 'loading'}
               className={clsx(
-                'flex items-center gap-1 px-2 py-0.5 text-xs rounded transition-colors',
+                'btn-sm transition-colors hover:bg-[var(--color-hover)]',
                 contextWarning.level === 'critical'
                   ? 'text-red-500 hover:text-red-400'
                   : compactStatus === 'done'
@@ -652,8 +651,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
             <button
               type="button"
               onClick={onContinue}
-              className="flex items-center gap-1 px-2 py-0.5 text-xs text-[var(--color-text-muted)]
-                         hover:text-[var(--color-accent,var(--color-primary))] rounded transition-colors"
+              className="btn-sm btn-ghost transition-colors"
               title={tf(t, 'chat.message.continueTitle', 'Continue — ask {{name}} to continue its response', { name: ASSISTANT_NAME })}
               aria-label={tf(t, 'chat.message.continueAria', 'Continue response')}
               data-testid="continue-button"

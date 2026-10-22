@@ -239,7 +239,7 @@ const PdfRenderer = memo(function PdfRenderer({
         <div className="flex items-center gap-1">
           <button
             onClick={handleFitWidth}
-            className={`px-2 py-0.5 text-xs rounded transition-colors ${
+            className={`btn-sm transition-colors ${
               zoomMode === 'fit-width'
                 ? 'bg-[var(--color-border)] text-[var(--color-text)]'
                 : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]'
@@ -251,7 +251,7 @@ const PdfRenderer = memo(function PdfRenderer({
 
           <button
             onClick={handleFitPage}
-            className={`px-2 py-0.5 text-xs rounded transition-colors ${
+            className={`btn-sm transition-colors ${
               zoomMode === 'fit-page'
                 ? 'bg-[var(--color-border)] text-[var(--color-text)]'
                 : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]'

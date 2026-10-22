@@ -93,7 +93,7 @@ export function TabNoticeBar({ tabId, getTab }: TabNoticeBarProps) {
               <button
                 type="button"
                 onClick={() => runAction(n)}
-                className="flex-shrink-0 px-2 py-0.5 rounded text-[var(--color-primary)] hover:bg-[var(--color-hover)]"
+                className="btn-sm btn-ghost !text-[var(--color-primary)]"
               >
                 {n.action.label}
               </button>

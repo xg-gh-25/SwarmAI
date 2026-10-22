@@ -191,14 +191,14 @@ export function InlinePermissionRequest({
       <div className="flex items-center gap-2 px-3 py-2 border-t border-[var(--color-border)]">
         <button
           onClick={handleDeny}
-          className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-md transition-colors"
+          className="btn-sm btn-danger transition-colors"
         >
           <span className="material-symbols-outlined icon-xs">close</span>
           Deny
         </button>
         <button
           onClick={handleApprove}
-          className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-green-400 bg-green-500/10 hover:bg-green-500/20 border border-green-500/20 rounded-md transition-colors"
+          className="btn-sm btn-success transition-colors"
         >
           <span className="material-symbols-outlined icon-xs">check</span>
           Approve

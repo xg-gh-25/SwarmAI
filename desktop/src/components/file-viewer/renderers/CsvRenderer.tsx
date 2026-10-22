@@ -244,7 +244,7 @@ const CsvRenderer = memo(function CsvRenderer({
           {/* Raw mode toggle */}
           <button
             onClick={toggleRaw}
-            className={`flex items-center gap-1 px-2 py-0.5 text-xs rounded transition-colors ${
+            className={`btn-sm transition-colors ${
               showRaw
                 ? 'bg-[var(--color-border)] text-[var(--color-text)]'
                 : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]'

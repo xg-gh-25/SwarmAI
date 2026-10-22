@@ -95,7 +95,7 @@ export function ChatHeader({
           <button
             type="button"
             onClick={onOpenCanvas}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--color-primary)]/10 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/20 text-xs font-medium mr-2 transition-colors"
+            className="btn-sm btn-soft mr-2 transition-colors"
             title={t('canvas.openOutputs', 'Open Canvas to review outputs')}
             aria-label={`${outputCount} output${outputCount !== 1 ? 's' : ''} — open Canvas`}
             data-testid="chat-header-outputs-pill"

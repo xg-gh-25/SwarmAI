@@ -405,6 +405,66 @@ body {
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
 
+/* Button scale — buttons with a label (icon-only buttons are icon-btn above).
+   One size class + one look class; the size sets height, padding, type and gap, so
+   no button hand-rolls px / py / text-size again (guarded by
+   src/__tests__/buttonScale.test.ts, chat + Canvas for now).
+
+     btn-sm 24px  12px   icon-xs  row and inline actions: Open in Canvas, Copy path,
+                                  message actions, notice-bar actions, viewer toggles
+     btn-md 28px  12.5px icon-sm  default: panel and toolbar buttons, empty-state CTAs
+     btn-lg 32px  13px   icon-md  dialog footers, form submits
+
+   Looks: btn-primary (accent fill), btn-secondary (bordered), btn-ghost (flat, hover
+   tint), btn-soft (accent tint), btn-danger, btn-success. */
+:root {
+  --btn-sm: 24px;
+  --btn-md: 28px;
+  --btn-lg: 32px;
+}
+@utility btn-sm {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  height: var(--btn-sm); padding: 0 8px; border-radius: 6px;
+  font-size: 12px; font-weight: 500; line-height: 1; white-space: nowrap; flex-shrink: 0;
+}
+@utility btn-md {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: var(--btn-md); padding: 0 10px; border-radius: 7px;
+  font-size: 12.5px; font-weight: 500; line-height: 1; white-space: nowrap; flex-shrink: 0;
+}
+@utility btn-lg {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: var(--btn-lg); padding: 0 14px; border-radius: 8px;
+  font-size: 13px; font-weight: 500; line-height: 1; white-space: nowrap; flex-shrink: 0;
+}
+@utility btn-primary {
+  background: var(--color-primary); color: #fff; border: 1px solid transparent;
+  &:hover:not(:disabled) { filter: brightness(1.1); }
+}
+@utility btn-secondary {
+  background: var(--color-card); color: var(--color-text); border: 1px solid var(--color-border);
+  &:hover:not(:disabled) { background: var(--color-hover); }
+}
+@utility btn-ghost {
+  background: transparent; color: var(--color-text-muted); border: 1px solid transparent;
+  &:hover:not(:disabled) { background: var(--color-hover); color: var(--color-text); }
+}
+@utility btn-soft {
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent); color: var(--color-primary);
+  border: 1px solid transparent;
+  &:hover:not(:disabled) { background: color-mix(in srgb, var(--color-primary) 20%, transparent); }
+}
+@utility btn-danger {
+  background: color-mix(in srgb, var(--color-status-error) 10%, transparent); color: var(--color-status-error);
+  border: 1px solid color-mix(in srgb, var(--color-status-error) 22%, transparent);
+  &:hover:not(:disabled) { background: color-mix(in srgb, var(--color-status-error) 18%, transparent); }
+}
+@utility btn-success {
+  background: color-mix(in srgb, var(--color-status-success) 10%, transparent); color: var(--color-status-success);
+  border: 1px solid color-mix(in srgb, var(--color-status-success) 22%, transparent);
+  &:hover:not(:disabled) { background: color-mix(in srgb, var(--color-status-success) 18%, transparent); }
+}
+
 /* Material Icons - using @fontsource-variable/material-symbols-outlined package.
    In @layer base so Tailwind utilities (@layer utilities) can size and lay out an
    icon (an unlayered rule beat every utility). The size comes from an icon-* class

@@ -153,7 +153,7 @@ function BrainPulse({
       <button
         data-testid="brain-home-batch-review"
         onClick={() => onOpenHub?.()}
-        className="ml-auto text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-0.5 hover:bg-[#12233a] shrink-0"
+        className="ml-auto btn-sm btn-soft"
         title="Open Brain Hub — view all brains"
       >
         Brain Hub →
