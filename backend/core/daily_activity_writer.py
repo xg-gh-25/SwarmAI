@@ -48,8 +48,20 @@ from pathlib import Path
 from utils.file_lock import md_lock
 from typing import Any
 
+from .credential_patterns import redact_credentials
 from .session_hooks import HookContext
 from .summarization import StructuredSummary
+
+
+def _redact_value(value: Any) -> Any:
+    """``redact_credentials`` applied to every string inside a JSON-able value."""
+    if isinstance(value, str):
+        return redact_credentials(value)
+    if isinstance(value, list):
+        return [_redact_value(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _redact_value(v) for k, v in value.items()}
+    return value
 
 logger = logging.getLogger(__name__)
 
@@ -369,7 +381,10 @@ def upsert_session_block(
     """
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)  # md_lock's sidecar lives there
-    text = _neutralize_markers(text)
+    # Credentials never reach a day file: entries quote user messages verbatim
+    # ("What happened"), and a pasted token would otherwise be stored, indexed
+    # for recall and injected into later prompts.
+    text = _neutralize_markers(redact_credentials(text))
     if not session_id or session_id == "unknown":
         # No identity to key on: a shared placeholder would make every id-less
         # session overwrite the others' block, so append it like a capture.
@@ -408,6 +423,7 @@ def upsert_session_block(
 
 def append_daily_text(file_path: Path, text: str) -> None:
     """Append session-less text (a capture line, a job note) under the day file's lock."""
+    text = redact_credentials(text)
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
     with _day_lock(file_path):
@@ -498,6 +514,7 @@ def _write_jsonl_sidecar(jsonl_path: Path, record: dict[str, Any]) -> None:
     """
     jsonl_path = Path(jsonl_path)
     jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    record = _redact_value(record)  # same rule as the day file; distillation reads this
     line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
     key_field = "session_id"
     sid = record.get(key_field)
