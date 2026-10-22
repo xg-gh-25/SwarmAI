@@ -499,9 +499,23 @@ describe('AC6 — what needs the user is a first-level card', () => {
   it('a permission request sits between groups, never inside one', () => {
     const perm = { type: 'cmd_permission_request', requestId: 'p1', toolName: 'Bash', toolInput: { command: 'rm -rf build' },
       reason: 'REASON-TOKEN', options: ['approve', 'deny'] } as ContentBlock;
-    render(view([tx('go'), bash('a', 'ls'), tr('a'), perm], true));
+    // the live card: this tab offers that request
+    render(view([tx('go'), bash('a', 'ls'), tr('a'), perm], true, {}, { pendingPermissionRequestId: 'p1' }));
     const card = screen.getByText(/REASON-TOKEN/);
     expect(card.closest('[data-testid="zone-phase"]')).toBeNull();
+    expect(screen.getByText('Approve')).toBeTruthy();
+  });
+
+  it('a stored prompt this tab does not offer has no live buttons; an expired one says so', () => {
+    const perm = (over: Record<string, unknown> = {}) => ({ type: 'cmd_permission_request', requestId: 'p1', toolName: 'Bash',
+      toolInput: { command: 'make clean' }, reason: 'R', options: ['approve', 'deny'], ...over }) as ContentBlock;
+    const r = render(view([tx('go'), bash('a', 'ls'), tr('a'), perm()], false));
+    expect(screen.queryByText('Approve')).toBeNull();
+    expect(screen.getByText('Awaiting decision')).toBeTruthy();
+    r.unmount();
+    render(view([tx('go'), bash('a', 'ls'), tr('a'), perm({ decision: 'expired' })], false, {}, { pendingPermissionRequestId: 'p1' }));
+    expect(screen.queryByText('Approve')).toBeNull();
+    expect(screen.getByText('No longer pending')).toBeTruthy();
   });
 });
 

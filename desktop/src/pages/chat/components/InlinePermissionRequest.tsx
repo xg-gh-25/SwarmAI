@@ -13,6 +13,12 @@
  *    sends a decision on its own. The backend owns the timeout (4 h,
  *    PERMISSION_ANSWER_TIMEOUT_SECONDS) and answers the tool call with a distinct
  *    "审批超时" reason, so an unanswered prompt never reads as a user denial.
+ * 5. No longer pending — `decision: 'expired'` from the backend (core/permission_prompt:
+ *    no hook waits on it any more — the turn stopped, the process restarted, it
+ *    timed out): muted, "No longer pending".
+ * 6. Not live in this tab — undecided, but this tab is not offering it (a stored
+ *    prompt the 15s mirror has not re-surfaced yet): muted "Awaiting decision",
+ *    never Deny/Approve buttons that would do nothing.
  *
  * @exports InlinePermissionRequest
  */
@@ -34,8 +40,9 @@ interface InlinePermissionRequestProps {
   reason: string;
   /** Whether this is the active pending permission (buttons enabled). */
   isPending: boolean;
-  /** Pre-existing decision (from content block update after user acts). */
-  decision?: 'approve' | 'deny';
+  /** Pre-existing decision (from content block update after user acts), or
+   *  'expired' when the backend says no hook waits on it any more. */
+  decision?: 'approve' | 'deny' | 'expired';
   onDecision?: (requestId: string, decision: 'approve' | 'deny') => void;
   /** Read-only render (History preview): a still-undecided historical request
    *  must NOT show live-looking Deny/Approve buttons or a running countdown —
@@ -59,7 +66,8 @@ export function InlinePermissionRequest({
   const [expired, setExpired] = useState(false);
   const [localDecision, setLocalDecision] = useState<'approve' | 'deny' | null>(null);
 
-  const effectiveDecision = decision || localDecision;
+  const gone = decision === 'expired';
+  const effectiveDecision = gone ? null : (decision || localDecision);
   const command = (toolInput?.command as string) || JSON.stringify(toolInput, null, 2);
 
   // Countdown timer — only when pending. Running out only marks the card expired;
@@ -133,7 +141,7 @@ export function InlinePermissionRequest({
   // — never live-looking Deny/Approve buttons or a running countdown.
   // Expired (the display countdown ran out with no decision) renders the same
   // muted shell with a "Timed out" label: no decision was sent from here.
-  if (readOnly || expired) {
+  if (readOnly || expired || gone || !isPending) {
     return (
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-md my-1 bg-[var(--color-hover)] border border-[var(--color-border)]">
         <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">{expired ? 'timer_off' : 'shield'}</span>
@@ -143,7 +151,9 @@ export function InlinePermissionRequest({
         <span className="ml-auto text-xs font-medium text-[var(--color-text-muted)]">
           {expired
             ? tf(t, 'chat.permission.timedOut', 'Timed out')
-            : tf(t, 'chat.permission.awaiting', 'Awaiting decision')}
+            : gone
+              ? tf(t, 'chat.permission.noLongerPending', 'No longer pending')
+              : tf(t, 'chat.permission.awaiting', 'Awaiting decision')}
         </span>
       </div>
     );

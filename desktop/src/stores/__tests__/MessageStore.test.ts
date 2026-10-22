@@ -1145,6 +1145,57 @@ describe('MessageStore reconcile preserves local-only interactive blocks', () =>
     store.destroy();
   });
 
+  // The prompt is stored now (core/permission_prompt, 2026-10-22).
+  const permSetup = (localDecision?: string) => {
+    const store = new MessageStore();
+    const cid = 'local-perm-2';
+    store.replace([
+      makeMsg(cid, 'user', 'run cmd'),
+      { id: `${cid}-asst`, role: 'assistant', timestamp: new Date().toISOString(), content: [
+        { type: 'text', text: 'I will run...' },
+        { type: 'cmd_permission_request', requestId: 'req-8', toolName: 'Bash', toolInput: {}, reason: '', options: ['approve', 'deny'],
+          ...(localDecision ? { decision: localDecision } : {}) },
+      ] as any },
+    ]);
+    const db = (dbDecision?: string, text = 'I will run the full command sequence here.'): ChatMessage[] => [
+      { id: 'u-uuid', sessionId: 'sess-1', role: 'user', content: [{ type: 'text', text: 'run cmd' }] as any, createdAt: new Date().toISOString(), metadata: { client_id: cid } },
+      { id: 'a-uuid', sessionId: 'sess-1', role: 'assistant', content: [{ type: 'text', text },
+        { type: 'cmd_permission_request', requestId: 'req-8', toolName: 'Bash', toolInput: {}, reason: '', options: ['approve', 'deny'],
+          ...(dbDecision ? { decision: dbDecision } : {}) }] as any,
+        createdAt: new Date().toISOString(), metadata: { client_id: `${cid}-asst` } },
+    ];
+    const perms = () => store.messages.find(m => m.role === 'assistant')!.content
+      .filter(b => (b as any).type === 'cmd_permission_request') as any[];
+    return { store, db, perms };
+  };
+
+  it('a stored prompt is not doubled by the local copy', () => {
+    const { store, db, perms } = permSetup();
+    store.reconcile(db());
+    expect(perms()).toHaveLength(1);
+    store.destroy();
+  });
+
+  it('the decision made in this tab wins over a stored copy read before it was written', () => {
+    for (const stored of [undefined, 'expired']) {
+      const { store, db, perms } = permSetup('approve');
+      store.reconcile(db(stored));
+      expect(perms()).toHaveLength(1);
+      expect(perms()[0].decision).toBe('approve');
+      store.destroy();
+    }
+  });
+
+  it('a stored outcome (decided elsewhere, or expired) reaches an undecided local copy, also when the local text is longer', () => {
+    for (const text of ['I will run the full command sequence here.', 'short']) {
+      const { store, db, perms } = permSetup();
+      store.reconcile(db('expired', text));
+      expect(perms()).toHaveLength(1);
+      expect(perms()[0].decision).toBe('expired');
+      store.destroy();
+    }
+  });
+
   it('continuation turn (numeric-id placeholder) — keeps ask_user_question block when Pass 2 would drop it', () => {
     // Adversarial HIGH (run_59f8f5ad): on answer-question / permission CONTINUATION
     // turns, ChatPage creates the assistant placeholder with a NUMERIC id

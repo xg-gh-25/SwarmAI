@@ -22,13 +22,33 @@ interface RawStreamingStateEntry {
     questions?: AskUserQuestion[];
     // permission-prompt-only fields (present when this is NOT an AskUserQuestion):
     request_id?: string;
+    tool_name?: string;
+    tool_input?: Record<string, unknown> | string;
+    reason?: string;
     options?: string[];
   } | null;
   last_drained_seqs?: number[];
   /** core/background_agents.py snapshot (camelCase keys already) */
   background_agents?: unknown[];
 }
+import type { PendingPermission } from '../types';
 import api from './api';
+
+/** streaming-state's permission payload → PendingPermission (tool_input may come
+ *  as a JSON string from the durable store; anything unreadable is {}). */
+export function toPendingPermission(raw: NonNullable<RawStreamingStateEntry['pending_question']>): PendingPermission {
+  let input: unknown = raw.tool_input ?? {};
+  if (typeof input === 'string') {
+    try { input = JSON.parse(input); } catch { input = {}; }
+  }
+  return {
+    requestId: raw.request_id!,
+    toolName: raw.tool_name || 'Bash',
+    toolInput: input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : {},
+    reason: raw.reason || '',
+    options: Array.isArray(raw.options) && raw.options.length ? raw.options : ['approve', 'deny'],
+  };
+}
 import { backgroundAgentsStore } from '../stores/backgroundAgentsStore';
 import { notifyContextUsageStale, type ContextUsageSnapshot } from '../hooks/contextUsage';
 import { getApiBaseUrl } from './tauri';
@@ -618,6 +638,11 @@ export const chatService = {
         pendingCount: raw.pending_count ?? 0,
         pendingQuestion: isAskUserQuestion
           ? { toolUseId: rawPq!.tool_use_id, questions: rawPq!.questions! }
+          : null,
+        // A command-permission prompt (request_id, no questions): its own
+        // re-surface path (useChatStreamingLifecycle mirror, core/permission_prompt).
+        pendingPermission: rawPq && !isAskUserQuestion && rawPq.request_id
+          ? toPendingPermission(rawPq)
           : null,
         lastDrainedSeqs: raw.last_drained_seqs ?? [],
       };

@@ -48,10 +48,11 @@ import type {
   SubAgentProgress,
   SystemPromptMetadata,
   CompactionGuardEvent,
+  PendingPermission,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import { applyCompactionEvent } from '../pages/chat/compaction';
-import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
+import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, shouldResurfacePermission, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
 import { errorFieldsFromEvent } from './errorFields';
 import { chatService } from '../services/chat';
 import { sessionEvents } from '../services/sessionEvents';
@@ -1395,6 +1396,61 @@ export function useChatStreamingLifecycle(
               tabState._answeredToolUseId = undefined;
             }
 
+            // Re-surface a lost command-permission prompt (core/permission_prompt,
+            // 2026-10-22): the backend is blocked on it but this tab never got its
+            // live event, so the session would sit waiting with nothing on screen.
+            if (
+              shouldResurfacePermission({
+                backendWaitingInput: mirrorState.waitingInput,
+                backendPendingPermission: mirrorState.pendingPermission ?? null,
+                currentPendingRequestId: tabState.pendingPermissionRequestId ?? null,
+                decidedRequestId: tabState._decidedPermissionId ?? null,
+              })
+            ) {
+              const perm = mirrorState.pendingPermission!;
+              const store = messageStoreRegistry.get(tabId);
+              const msgs = store?.messages ?? tabState.messages ?? [];
+              const host = findLast(msgs, (m) => m.role === 'assistant');
+              const isActive = tabId === activeTabIdRef.current;
+              if (host) {
+                surfacePendingPermission(tabId, host.id, perm, { isActive, sessionId: mirrorSid });
+                if (tabState._pendingPermissionNoticeId) {
+                  tabNoticeStore.dismiss(tabId, tabState._pendingPermissionNoticeId);
+                  tabState._pendingPermissionNoticeId = undefined;
+                }
+              } else {
+                const noticeId = `perm-${perm.requestId}`;
+                tabNoticeStore.post(tabState, mirrorSid, {
+                  id: noticeId,
+                  severity: 'info',
+                  message: `Swarm is waiting for your approval: ${perm.toolName}.`,
+                });
+                tabState._pendingPermissionNoticeId = noticeId;
+              }
+              anyCleared = true;
+            } else if (
+              !mirrorState.waitingInput &&
+              !tabState.isStreaming &&
+              (tabState.pendingPermissionRequestId || tabState._pendingPermissionNoticeId)
+            ) {
+              // SYMMETRIC RETIRE: the backend no longer waits on a prompt this tab
+              // still offers (decided elsewhere, stopped, timed out). Its card goes
+              // non-actionable; the DB copy says how it ended on the next reconcile.
+              tabState.pendingPermissionRequestId = null;
+              tabState._decidedPermissionId = undefined;
+              if (tabState._pendingPermissionNoticeId) {
+                tabNoticeStore.dismiss(tabId, tabState._pendingPermissionNoticeId);
+                tabState._pendingPermissionNoticeId = undefined;
+              }
+              if (tabId === activeTabIdRef.current) setPendingPermissionRequestId(null);
+              anyCleared = true;
+            } else if (
+              tabState._decidedPermissionId &&
+              mirrorState.pendingPermission?.requestId !== tabState._decidedPermissionId
+            ) {
+              tabState._decidedPermissionId = undefined;
+            }
+
             // AC4: mirror the server's drain progress. Retire the local optimistic
             // queue mirror once the server confirms it drained a tracked seq.
             // NOTE: the session-level "N queued" badge DRIVEN BY pending_count is
@@ -2022,6 +2078,72 @@ export function useChatStreamingLifecycle(
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refs + stable setters
     [dispatch, setMessages, setPendingQuestion, setSessionId, setIsStreaming, incrementStreamGen, updateTabStatus, scheduleTurnEndReconcile],
+  );
+
+  /**
+   * Surface a command-permission prompt in a tab — the ONE path for the live
+   * `cmd_permission_request` event and for the mirror's re-surface of a prompt the
+   * tab never got (core/permission_prompt, 2026-10-22):
+   *  1. append the block to the host assistant message (idempotent by requestId —
+   *     the stored copy may already be there from a reconcile)
+   *  2. tabState.pendingPermissionRequestId (+ active-tab React state): the card is live
+   *  3. end streaming, reconcile from the DB, status → permission_needed
+   */
+  const surfacePendingPermission = useCallback(
+    (
+      tabId: string | null,
+      assistantMessageId: string,
+      perm: PendingPermission,
+      opts: { isActive: boolean; sessionId?: string },
+    ) => {
+      const tabState = tabId ? tabMapRef.current.get(tabId) : undefined;
+      const permBlock = {
+        type: 'cmd_permission_request' as const,
+        requestId: perm.requestId,
+        toolName: perm.toolName,
+        toolInput: perm.toolInput,
+        reason: perm.reason || '',
+        options: perm.options?.length ? perm.options : ['approve', 'deny'],
+      };
+      const has = (m: Message) => m.id === assistantMessageId && m.content.some((b) =>
+        b.type === 'cmd_permission_request' && (b as { requestId?: string }).requestId === perm.requestId);
+      const store = tabId ? messageStoreRegistry.get(tabId) : undefined;
+      if (store) {
+        if (!store.messages.some(has)) {
+          store.updateLast(
+            (msg) => ({ ...msg, content: [...msg.content, permBlock] }),
+            (msg) => msg.id === assistantMessageId,
+          );
+        }
+        if (tabState) tabState.messages = store.messages;
+      } else if (tabState && !tabState.messages.some(has)) {
+        tabState.messages = tabState.messages.map((msg) =>
+          msg.id === assistantMessageId ? { ...msg, content: [...msg.content, permBlock] } : msg,
+        );
+        if (opts.isActive) setMessages(tabState.messages);
+      } else if (!tabState && opts.isActive) {
+        setMessages((prev: Message[]) => (prev.some(has) ? prev : prev.map((msg) =>
+          msg.id === assistantMessageId ? { ...msg, content: [...msg.content, permBlock] } : msg)));
+      }
+
+      if (tabState) {
+        if (opts.sessionId) tabState.sessionId = opts.sessionId;
+        tabState.pendingPermissionRequestId = perm.requestId;
+      }
+      if (opts.isActive) {
+        if (opts.sessionId) setSessionId(opts.sessionId);
+        setPendingPermissionRequestId(perm.requestId);
+      }
+      if (store) store.endStreaming();
+      setIsStreaming(false, tabId ?? undefined);
+      incrementStreamGen();
+      // Turn-end DB reconcile (reconcile-gap): this terminal path emits NO
+      // `result`; the block survives reconcile (stored, and carried by _applyMerge).
+      scheduleTurnEndReconcile(opts.sessionId ?? tabState?.sessionId, tabId);
+      if (tabId) updateTabStatus(tabId, 'permission_needed');
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs + stable setters
+    [setMessages, setSessionId, setIsStreaming, incrementStreamGen, updateTabStatus, scheduleTurnEndReconcile],
   );
 
   // Derive streaming activity for spinner label
@@ -3031,59 +3153,14 @@ export function useChatStreamingLifecycle(
         } else if (event.type === 'cmd_permission_request') {
           const raw = event as unknown as Record<string, unknown>;
           const sid = event.sessionId || (raw.session_id as string);
-          const requestId = (event.requestId || raw.request_id) as string;
-          const toolName = (event.toolName || raw.tool_name) as string;
-          const toolInput = (event.toolInput || raw.tool_input) as Record<string, unknown>;
-
-          // Append cmd_permission_request content block via store (single-writer)
-          const permBlock = {
-            type: 'cmd_permission_request' as const,
-            requestId: requestId,
-            toolName: toolName,
-            toolInput: toolInput,
+          // One path with the mirror's re-surface (surfacePendingPermission).
+          surfacePendingPermission(capturedTabId ?? null, assistantMessageId, {
+            requestId: (event.requestId || raw.request_id) as string,
+            toolName: (event.toolName || raw.tool_name) as string,
+            toolInput: (event.toolInput || raw.tool_input) as Record<string, unknown>,
             reason: event.reason || '',
             options: event.options || ['approve', 'deny'],
-          };
-          const permStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
-          if (permStore) {
-            permStore.updateLast(
-              (msg) => ({ ...msg, content: [...msg.content, permBlock] }),
-              (msg) => msg.id === assistantMessageId,
-            );
-          } else {
-            const currentMsgs = tabState?.messages ?? messagesRef.current;
-            const permMessages = currentMsgs.map((msg) =>
-              msg.id === assistantMessageId ? { ...msg, content: [...msg.content, permBlock] } : msg,
-            );
-            if (tabState) tabState.messages = permMessages;
-            if (isActiveTab) setMessages(permMessages);
-          }
-
-          if (tabState) {
-            if (sid) tabState.sessionId = sid;
-            tabState.pendingPermissionRequestId = requestId;
-          }
-          if (isActiveTab) {
-            if (sid) setSessionId(sid);
-            setPendingPermissionRequestId(requestId);
-          }
-          // End store streaming phase — unblocks reconcile/replace
-          const permEndStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
-          if (permEndStore) permEndStore.endStreaming();
-          setIsStreaming(false, capturedTabId ?? undefined);
-          incrementStreamGen();
-
-          // Turn-end DB reconcile (reconcile-gap): like ask_user_question, this
-          // terminal path emits NO `result` event — without this the streamed
-          // buffer is never repaired from the DB. The synthesized
-          // cmd_permission_request block survives reconcile via _applyMerge
-          // local-only interactive carry-forward (PART 1).
-          scheduleTurnEndReconcile(sid, capturedTabId);
-
-          // Fix 8: Update tab status to 'permission_needed'
-          if (capturedTabId) {
-            updateTabStatus(capturedTabId, 'permission_needed');
-          }
+          }, { isActive: !!isActiveTab, sessionId: sid });
         } else if (event.type === 'result') {
           // ── State machine dispatch: STREAMING → IDLE or DRAIN_PENDING (global + per-tab) ──
           const hasQueued = !!(tabState?.queuedMessage);

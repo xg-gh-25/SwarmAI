@@ -261,12 +261,19 @@ export interface UnifiedTab {
    *  loop once the backend transitions past the answered question (no longer
    *  waiting_input, or a different pending toolUseId). */
   _answeredToolUseId?: string;
+  /** The permission prompt the user just decided in this tab (decision in flight):
+   *  the mirror must not re-surface it while the backend still reports
+   *  waiting_input on it (core/permission_prompt re-surface, 2026-10-22). */
+  _decidedPermissionId?: string;
   /** Root-1 SSOT Phase 3 (AC5): id of the in-tab notice raised for a re-surfaced
    *  question that no assistant bubble could host (no-host path). Tracked so the
    *  notice can be RETIRED when the question later gets a host (inline form
    *  takes over) or is abandoned (backend leaves waiting_input). (Field name
    *  kept from when this was a toast.) */
   _pendingQuestionToastId?: string;
+  /** Id of the in-tab notice for a re-surfaced permission prompt no assistant
+   *  bubble could host; retired when the card takes over or the prompt ends. */
+  _pendingPermissionNoticeId?: string;
   /** Write token of this tab's current "still working" notice. The complete
    *  handler retracts exactly that notice at turn end (token-checked, so a late
    *  [DONE] from an older turn cannot remove a newer turn's notice). */

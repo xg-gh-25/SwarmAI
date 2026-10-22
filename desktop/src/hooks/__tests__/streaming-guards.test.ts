@@ -15,6 +15,7 @@ import {
   queuedMessageFromRetryPayload,
   retryPayloadHasAttachments,
   shouldResurfaceQuestion,
+  shouldResurfacePermission,
   computeDrainRetirement,
   shouldArmSpinnerFromBackend,
   forceClearStreamVerdict,
@@ -286,6 +287,23 @@ describe('queuedMessageFromRetryPayload', () => {
 // waiting_input AND carries a pending_question whose toolUseId is NOT already
 // the tab's current pending question (idempotent on toolUseId).
 // ═══════════════════════════════════════════════════════════════════
+// Command-permission re-surface (core/permission_prompt, 2026-10-22 incident: a CLI
+// turn stopped on a permission the tab never got; the session waited 18 min unseen).
+describe('shouldResurfacePermission (a lost permission prompt)', () => {
+  const p = (id: string) => ({ requestId: id });
+  it('backend waiting on a prompt the tab does not offer → RESURFACE', () => {
+    expect(shouldResurfacePermission({ backendWaitingInput: true, backendPendingPermission: p('r1'), currentPendingRequestId: null })).toBe(true);
+    expect(shouldResurfacePermission({ backendWaitingInput: true, backendPendingPermission: p('r2'), currentPendingRequestId: 'r1' })).toBe(true);
+  });
+  it('already offered, just decided, not waiting, or no prompt → no', () => {
+    expect(shouldResurfacePermission({ backendWaitingInput: true, backendPendingPermission: p('r1'), currentPendingRequestId: 'r1' })).toBe(false);
+    expect(shouldResurfacePermission({ backendWaitingInput: true, backendPendingPermission: p('r1'), currentPendingRequestId: null, decidedRequestId: 'r1' })).toBe(false);
+    expect(shouldResurfacePermission({ backendWaitingInput: false, backendPendingPermission: p('r1'), currentPendingRequestId: null })).toBe(false);
+    expect(shouldResurfacePermission({ backendWaitingInput: true, backendPendingPermission: null, currentPendingRequestId: null })).toBe(false);
+    expect(shouldResurfacePermission({ backendWaitingInput: true, backendPendingPermission: p(''), currentPendingRequestId: null })).toBe(false);
+  });
+});
+
 describe('shouldResurfaceQuestion (AC5 — lost AskUserQuestion re-surface)', () => {
   const pq = (id: string) => ({ toolUseId: id, questions: [{ q: 1 }] as unknown[] });
 

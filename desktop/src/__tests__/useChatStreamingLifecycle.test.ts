@@ -1793,6 +1793,98 @@ describe('Fix 6: Per-tab state isolation', () => {
         getSpy.mockRestore();
         invSpy.mockRestore();
       });
+
+      it('the live cmd_permission_request event offers the card (block + pending id + permission_needed)', () => {
+        const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+        const msgId = 'perm-live-msg';
+        act(() => {
+          initTestTab('tab-pl');
+          testActiveTabIdRef.current = 'tab-pl';
+          testTabMap.get('tab-pl')!.sessionId = 'sess-pl';
+          messageStoreRegistry.getOrCreate('tab-pl', { sessionId: 'sess-pl' })
+            .replace([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
+        });
+        const handler = result.current.createStreamHandler(msgId, 'tab-pl');
+        act(() => {
+          handler({ type: 'cmd_permission_request', sessionId: 'sess-pl', requestId: 'req-live', toolName: 'Bash',
+            toolInput: { command: 'ls' }, reason: 'r', options: ['approve', 'deny'] } as unknown as StreamEvent);
+        });
+        const blocks = messageStoreRegistry.get('tab-pl')!.messages[0].content
+          .filter((b) => (b as { type: string }).type === 'cmd_permission_request');
+        expect(blocks).toHaveLength(1);
+        expect(testTabMap.get('tab-pl')!.pendingPermissionRequestId).toBe('req-live');
+        expect(result.current.pendingPermissionRequestId).toBe('req-live');
+      });
+    });
+
+    // 2026-10-22 incident (core/permission_prompt): a CLI-initiated turn stopped on a
+    // permission the tab never got; the session waited 18 min with nothing on screen.
+    describe('mirror re-surfaces a lost permission prompt', () => {
+      beforeEach(() => { vi.useFakeTimers(); });
+      afterEach(() => { vi.useRealTimers(); });
+
+      it('backend waiting on a prompt the tab never got → card offered; backend done → retired', async () => {
+        const tailSpy = vi.spyOn(chatService, 'getSessionMessagesReconcileTail').mockResolvedValue([]);
+        const invSpy = vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
+        const pending = { requestId: 'perm_lost', toolName: 'Bash', toolInput: { command: 'make clean' }, reason: 'r', options: ['approve', 'deny'] };
+        let state: Record<string, unknown> = {
+          'sess-lost': { streaming: false, state: 'waiting_input', waitingInput: true, pendingCount: 2,
+            pendingQuestion: null, pendingPermission: pending, lastDrainedSeqs: [] },
+        };
+        const stateSpy = vi.spyOn(chatService, 'getStreamingState')
+          .mockImplementation(async () => state as unknown as Awaited<ReturnType<typeof chatService.getStreamingState>>);
+        try {
+          act(() => {
+            initTestTab('tab-lost');
+            testActiveTabIdRef.current = 'tab-lost';
+            testTabMap.get('tab-lost')!.sessionId = 'sess-lost';
+            messageStoreRegistry.getOrCreate('tab-lost', { sessionId: 'sess-lost' })
+              .replace([makeMessage({ id: 'host', role: 'assistant', content: [{ type: 'text', text: 'agent finished' }] as never })]);
+          });
+          const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+          await act(async () => { await vi.advanceTimersByTimeAsync(5_100); });
+          expect(stateSpy).toHaveBeenCalled();
+          const perms = () => messageStoreRegistry.get('tab-lost')!.messages[0].content
+            .filter((b) => (b as { type: string }).type === 'cmd_permission_request') as unknown as Array<{ requestId: string }>;
+          expect(perms().map((b) => b.requestId)).toEqual(['perm_lost']);
+          expect(testTabMap.get('tab-lost')!.pendingPermissionRequestId).toBe('perm_lost');
+          expect(result.current.pendingPermissionRequestId).toBe('perm_lost');
+          // idempotent: the next poll does not add a second card
+          await act(async () => { await vi.advanceTimersByTimeAsync(16_000); });
+          expect(perms()).toHaveLength(1);
+          // the backend stops waiting (decided elsewhere / expired): the card is retired
+          state = { 'sess-lost': { streaming: false, state: 'idle', waitingInput: false, pendingCount: 0,
+            pendingQuestion: null, pendingPermission: null, lastDrainedSeqs: [] } };
+          await act(async () => { await vi.advanceTimersByTimeAsync(16_000); });
+          expect(testTabMap.get('tab-lost')!.pendingPermissionRequestId).toBeNull();
+          expect(result.current.pendingPermissionRequestId).toBeNull();
+        } finally {
+          stateSpy.mockRestore(); tailSpy.mockRestore(); invSpy.mockRestore();
+        }
+      });
+
+      it('a prompt the user just decided is not re-surfaced while the backend still reports it', async () => {
+        const pending = { requestId: 'perm_dec', toolName: 'Bash', toolInput: {}, reason: '', options: ['approve', 'deny'] };
+        const stateSpy = vi.spyOn(chatService, 'getStreamingState').mockResolvedValue({
+          'sess-dec': { streaming: false, state: 'waiting_input', waitingInput: true, pendingCount: 0,
+            pendingQuestion: null, pendingPermission: pending, lastDrainedSeqs: [] },
+        } as unknown as Awaited<ReturnType<typeof chatService.getStreamingState>>);
+        try {
+          act(() => {
+            initTestTab('tab-dec');
+            const ts = testTabMap.get('tab-dec')!;
+            ts.sessionId = 'sess-dec';
+            ts._decidedPermissionId = 'perm_dec';
+            messageStoreRegistry.getOrCreate('tab-dec', { sessionId: 'sess-dec' })
+              .replace([makeMessage({ id: 'host2', role: 'assistant', content: [{ type: 'text', text: 'x' }] as never })]);
+          });
+          renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+          await act(async () => { await vi.advanceTimersByTimeAsync(5_100); });
+          expect(testTabMap.get('tab-dec')!.pendingPermissionRequestId ?? null).toBeNull();
+        } finally {
+          stateSpy.mockRestore();
+        }
+      });
     });
 
     it('is a no-op when tab has been closed', () => {

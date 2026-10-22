@@ -867,8 +867,20 @@ export class MessageStore {
     // copy can win, and the repeat never survives a reconcile.
     localMsg = { ...localMsg, content: collapseAdjacentDuplicateBlocks(localMsg.content, 'store-merge') };
     if (MessageStore._textLen(localMsg) > MessageStore._textLen(dbMsg)) {
-      // local already carries its own interactive blocks, so no further merge.
-      return { ...dbMsg, content: localMsg.content };
+      // local already carries its own interactive blocks, so no further merge —
+      // except a stored permission's outcome (decided elsewhere, or expired) that
+      // the local copy does not have yet.
+      const dbDecisions = new Map<string, string>();
+      for (const b of dbMsg.content) {
+        const d = (b as { decision?: string }).decision;
+        if (b.type === 'cmd_permission_request' && d) dbDecisions.set(MessageStore._interactiveBlockKey(b), d);
+      }
+      if (dbDecisions.size === 0) return { ...dbMsg, content: localMsg.content };
+      return { ...dbMsg, content: localMsg.content.map((b) => {
+        if (b.type !== 'cmd_permission_request' || (b as { decision?: string }).decision) return b;
+        const d = dbDecisions.get(MessageStore._interactiveBlockKey(b));
+        return d ? ({ ...b, decision: d } as typeof b) : b;
+      }) };
     }
 
     const localInteractive = localMsg.content.filter((b) =>
@@ -902,6 +914,16 @@ export class MessageStore {
       if (localAnswers && !dbAnswers) {
         didMerge = true;
         return { ...b, answers: localAnswers } as typeof b;
+      }
+      // A permission prompt is stored now (core/permission_prompt): the user's
+      // decision made here wins over a stored copy read before it was written
+      // (no decision yet, or "expired" because the hook had just been released).
+      const localDecision = (local as { decision?: string } | undefined)?.decision;
+      const dbDecision = (b as { decision?: string }).decision;
+      if ((localDecision === 'approve' || localDecision === 'deny')
+          && (dbDecision === undefined || dbDecision === 'expired')) {
+        didMerge = true;
+        return { ...b, decision: localDecision } as typeof b;
       }
       return b;
     });

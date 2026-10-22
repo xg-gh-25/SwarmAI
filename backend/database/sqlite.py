@@ -719,6 +719,41 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                     return True
         return False
 
+    async def update_permission_decision(self, session_id: str, request_id: str, decision: str) -> bool:
+        """Set ``decision`` on the stored ``cmd_permission_request`` block
+        ``request_id`` of a session (core/permission_prompt). True when a row was
+        updated; a block that already has a decision is left as it is."""
+        import json as _json
+        needle = f'%"requestId": "{request_id}"%'
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                f"SELECT id, content FROM {self.table_name} WHERE session_id = ? AND content LIKE ? "
+                f"ORDER BY created_at DESC LIMIT 5",
+                (session_id, needle),
+            ) as cursor:
+                rows = await cursor.fetchall()
+            for row_id, raw in rows:
+                try:
+                    blocks = _json.loads(raw) if isinstance(raw, str) else raw
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(blocks, list):
+                    continue
+                hit = False
+                for blk in blocks:
+                    if isinstance(blk, dict) and blk.get("type") == "cmd_permission_request" \
+                            and blk.get("requestId") == request_id and not blk.get("decision"):
+                        blk["decision"] = decision
+                        hit = True
+                if hit:
+                    await conn.execute(
+                        f"UPDATE {self.table_name} SET content = ?, updated_at = ? WHERE id = ?",
+                        (self._serialize_value(blocks), datetime.now().isoformat(), row_id),
+                    )
+                    await conn.commit()
+                    return True
+        return False
+
     async def assistant_replied_since(self, session_id: str, since_iso: str) -> bool:
         """Return True if the session has ≥1 assistant message created at/after
         `since_iso`. Used by the todo auto-complete sweep (run_d28de5fd).

@@ -399,8 +399,9 @@ async def test_history_endpoint_splices_and_etag_counts_compactions():
         resp = await chat_router.get_session_messages("s", req, limit=None, before_id=None)
         body = json.loads(resp.body)
         assert [m["id"] for m in body] == ["m1", "m2", "compact-c1", "m3"]
-        assert resp.headers["ETag"] == '"s:3:1.1:all"'
-        req.headers = {"if-none-match": '"s:3:1.1:all"'}
+        # ...:-: = no permission prompt is live (core/permission_prompt etag_part)
+        assert resp.headers["ETag"] == '"s:3:1.1:-:all"'
+        req.headers = {"if-none-match": '"s:3:1.1:-:all"'}
         assert (await chat_router.get_session_messages("s", req, limit=None, before_id=None)).status_code == 304
         # Older page: bounded by the cursor row, so a compaction after it is not here.
         fake_db.messages.list_by_session_paginated = AsyncMock(return_value=rows[:2])

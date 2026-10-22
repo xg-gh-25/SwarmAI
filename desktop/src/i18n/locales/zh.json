@@ -216,6 +216,7 @@
     "permission": {
       "title": "需要你批准",
       "awaiting": "等待决定",
+      "noLongerPending": "已失效",
       "timedOut": "已超时",
       "timesOutIn": "剩余",
       "flagged": "原因："

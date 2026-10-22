@@ -310,8 +310,11 @@ export interface CmdPermissionContent {
   toolInput: Record<string, unknown>;
   reason: string;
   options?: string[];
-  /** Set after user makes a decision — renders decided state inline. */
-  decision?: 'approve' | 'deny';
+  /** Set after user makes a decision — renders decided state inline. `expired`
+   *  (backend core/permission_prompt, at read time): no decision was made and no
+   *  hook waits on it any more (the turn stopped, the process restarted, it timed
+   *  out) — never shown as live buttons. */
+  decision?: 'approve' | 'deny' | 'expired';
 }
 
 export interface EscalationOption {
@@ -1525,6 +1528,15 @@ export interface ToastItem extends ToastOptions {
  * backend has emitted since Phase 2 but the frontend previously dropped:
  * `waitingInput`, `pendingCount`, `pendingQuestion`, `lastDrainedSeqs`.
  */
+/** A command-permission prompt as the backend holds it (streaming-state). */
+export interface PendingPermission {
+  requestId: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  reason: string;
+  options: string[];
+}
+
 export interface StreamingStateEntry {
   /** True iff backend state === 'streaming'. */
   streaming: boolean;
@@ -1539,6 +1551,12 @@ export interface StreamingStateEntry {
    * question whose original SSE event was lost. Null unless waiting_input.
    */
   pendingQuestion: { toolUseId: string; questions: AskUserQuestion[] } | null;
+  /**
+   * Authoritative command-permission prompt the backend is blocked on — lets the
+   * frontend re-surface a prompt whose live event the tab never got (a CLI turn
+   * after a background agent, another tab, a reload). Null unless waiting_input.
+   */
+  pendingPermission?: PendingPermission | null;
   /** Pending-message seqs the server drained in its last drain pass. */
   lastDrainedSeqs: number[];
 }

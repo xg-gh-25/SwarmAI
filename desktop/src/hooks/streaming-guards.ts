@@ -193,6 +193,37 @@ export function shouldResurfaceQuestion(input: ResurfaceQuestionInput): boolean 
   return true;
 }
 
+// ── Command-permission re-surface (core/permission_prompt, 2026-10-22) ──────────
+
+/** Inputs to the permission re-surface decision. */
+export interface ResurfacePermissionInput {
+  backendWaitingInput: boolean;
+  /** The prompt the backend is blocked on (streaming-state), if any. */
+  backendPendingPermission: { requestId: string } | null | undefined;
+  /** The prompt this tab already offers (tabState.pendingPermissionRequestId). */
+  currentPendingRequestId: string | null;
+  /** The prompt the user just decided (decision in flight: the backend may still
+   *  report waiting_input for a moment). */
+  decidedRequestId?: string | null;
+}
+
+/**
+ * Re-surface a command-permission prompt the tab never got (its live event went to
+ * a CLI-initiated turn this tab did not render, another tab, or was lost to a
+ * reload). Same gate as a question: ONLY when the backend is waiting on that exact
+ * request, the tab does not already offer it, and the user has not just decided
+ * it. Idempotent, so the 15s poll never flaps the card.
+ */
+export function shouldResurfacePermission(input: ResurfacePermissionInput): boolean {
+  const { backendWaitingInput, backendPendingPermission, currentPendingRequestId, decidedRequestId } = input;
+  if (!backendWaitingInput || !backendPendingPermission) return false;
+  const id = backendPendingPermission.requestId;
+  if (!id) return false;
+  if (id === currentPendingRequestId) return false;
+  if (decidedRequestId && id === decidedRequestId) return false;
+  return true;
+}
+
 // ── Root-1 SSOT Phase 3: AC4 — server pending_count / last_drained_seqs mirror ──
 
 /** Inputs to the drain-retirement decision. */

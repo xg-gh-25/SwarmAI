@@ -39,10 +39,11 @@ logger = logging.getLogger(__name__)
 # pipeline_attention / pipeline_summary / turn_deliverables / turn_changes are backend-written
 # display blocks too (turn_changes is the turn's file-change card: counts and tree ids;
 # turn_notice says why a call did not finish, core/turn_notice; turn_stop is the stop
-# receipt, core/turn_stop — its facts reach the model through send()'s one-time note).
+# receipt, core/turn_stop — its facts reach the model through send()'s one-time note;
+# cmd_permission_request is a stored prompt, core/permission_prompt).
 _TOOL_ONLY_TYPES = {"tool_use", "tool_result", "pipeline_stage", "pipeline_run", "pipeline_summary",
                     "pipeline_attention", "turn_deliverables", "turn_changes", "turn_notice",
-                    "turn_stop"}
+                    "turn_stop", "cmd_permission_request"}
 
 # ─── Section headers & preamble ─────────────────────────────────────
 

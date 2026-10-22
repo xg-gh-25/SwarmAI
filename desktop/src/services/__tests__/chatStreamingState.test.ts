@@ -47,11 +47,12 @@ describe('chatService.getStreamingState — boundary mapping', () => {
     expect(e.pendingQuestion).not.toBeNull();
     expect(e.pendingQuestion!.toolUseId).toBe('toolu_01ABC');
     expect(e.pendingQuestion!.questions).toHaveLength(1);
+    expect(e.pendingPermission).toBeNull(); // a question is not a permission prompt
     // the mapped entry carries exactly the live fields of the backend's streaming-state
     // contract (backend/tests/test_streaming_state_contract.py) except `pid`, which
     // only the backend's session-health probe reads
     expect(Object.keys(e).sort()).toEqual(
-      ['lastDrainedSeqs', 'pendingCount', 'pendingQuestion', 'state', 'streaming', 'waitingInput'],
+      ['lastDrainedSeqs', 'pendingCount', 'pendingPermission', 'pendingQuestion', 'state', 'streaming', 'waitingInput'],
     );
   });
 
@@ -83,6 +84,20 @@ describe('chatService.getStreamingState — boundary mapping', () => {
     // but pendingQuestion is null — NOT a phantom empty-questions AskUserQuestion.
     expect(out['perm-sess'].waitingInput).toBe(true);
     expect(out['perm-sess'].pendingQuestion).toBeNull();
+    // …and it is the permission prompt, mapped for its own re-surface path
+    // (core/permission_prompt, 2026-10-22 incident)
+    expect(out['perm-sess'].pendingPermission).toEqual({
+      requestId: 'perm-req-1', toolName: 'Bash', toolInput: out['perm-sess'].pendingPermission!.toolInput,
+      reason: 'destructive', options: ['approve', 'deny'],
+    });
+    expect(Object.keys(out['perm-sess'].pendingPermission!.toolInput)).toEqual(['command']);
+  });
+
+  it('a permission prompt from the durable store (tool_input as a JSON string) maps too', async () => {
+    mockGet.mockResolvedValue({ data: { sessions: { 's': { state: 'waiting_input', waiting_input: true,
+      pending_question: { tool_use_id: 'p2', request_id: 'p2', tool_input: '{"command": "ls"}' } } } } });
+    const out = await chatService.getStreamingState();
+    expect(out['s'].pendingPermission).toEqual({ requestId: 'p2', toolName: 'Bash', toolInput: { command: 'ls' }, reason: '', options: ['approve', 'deny'] });
   });
 
   it('an empty `questions` array also maps to null (defense-in-depth)', async () => {
@@ -104,6 +119,7 @@ describe('chatService.getStreamingState — boundary mapping', () => {
       waitingInput: false,
       pendingCount: 0,
       pendingQuestion: null,
+      pendingPermission: null,
       lastDrainedSeqs: [],
     });
   });

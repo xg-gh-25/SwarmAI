@@ -2953,6 +2953,9 @@ export default function ChatPage() {
     if (currentTabState?.isStreaming) return;
 
     if (tabId) permissionLoadingTabs.current.add(tabId);
+    // Decision in flight: the 15s mirror must not re-surface this prompt while
+    // the backend still reports waiting_input on it (core/permission_prompt).
+    if (currentTabState) currentTabState._decidedPermissionId = requestId;
     setPendingPermissionRequestId(null);
 
     // Update the content block's decision field so it renders decided state

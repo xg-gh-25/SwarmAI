@@ -1099,6 +1099,17 @@ async def get_session_messages(
             suggested_action="Please check the session ID and try again"
         )
 
+    # The permission prompts a hook of this session is blocked on now
+    # (core/permission_prompt): a stored prompt not among them reads "expired", and
+    # the set is part of the ETag (a prompt leaving it changes the body, not the
+    # row count).
+    from core import permission_prompt as _perm_prompt
+    try:
+        _live_perms = _perm_prompt.live_request_ids(_get_router().get_unit(session_id), session_id)
+    except Exception:  # noqa: BLE001 — history must load even if this fails
+        logger.debug("live permission read failed session=%s", session_id, exc_info=True)
+        _live_perms = set()
+
     # ── ETag: count query → 304 if unchanged ──
     # Only for non-cursor queries (before_id changes per request).
     etag: str | None = None
@@ -1110,7 +1121,7 @@ async def get_session_messages(
         # The page shape is part of the body: a turns page and a full fetch of the
         # same session must not share an ETag.
         shape = f"t{turns}" if turns is not None else (f"l{limit}" if limit is not None else "all")
-        etag = f'"{session_id}:{msg_count}:{compaction_sig}:{shape}"'
+        etag = f'"{session_id}:{msg_count}:{compaction_sig}:{_perm_prompt.etag_part(_live_perms)}:{shape}"'
         if_none_match = request.headers.get("if-none-match")
         if if_none_match and if_none_match == etag:
             return FastAPIResponse(status_code=304, headers={"ETag": etag})
@@ -1137,6 +1148,7 @@ async def get_session_messages(
     # Without merging, loadSessionMessages renders 5-20 separate assistant bubbles
     # with overlapping text content for a single response.
     data = _merge_consecutive_assistant_messages(messages)
+    _perm_prompt.annotate(data, _live_perms)
 
     # Context compactions as synthetic `compact-<id>` system rows (divider +
     # summary card), placed after the merge so a mid-turn compaction never

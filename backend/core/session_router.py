@@ -2234,6 +2234,8 @@ class SessionRouter:
           ``turn_deliverables`` block, delivered just before the result (so the
           chat shows "what this turn produced" live and after a reload); the
           turn's code diff becomes one ``turn_changes`` block just before it.
+        - ``cmd_permission_request``: the prompt is stored as a block of the turn
+          (core/permission_prompt), on the row the flush below writes.
         - a terminal event: any ``pending`` results get their own row.
         """
         etype = event.get("type")
@@ -2266,6 +2268,14 @@ class SessionRouter:
             event["content"] = cleaned[n:]  # the clean is one-to-one per block
             return []
         before: list[dict] = []
+        if etype == "cmd_permission_request":
+            # The prompt is stored with its turn (core/permission_prompt): a tab
+            # that missed the live event (another tab, a reload, a CLI-initiated
+            # turn) finds it in the history, never a session silently waiting.
+            from .permission_prompt import permission_block
+            pblock = permission_block(event)
+            if pblock is not None:
+                pending.append(pblock)
         if etype == "result" and changes is not None:
             try:
                 cblock = await changes.finish()
@@ -4969,6 +4979,11 @@ class SessionRouter:
                 message=f"Session {session_id} not found",
             )
             return
+
+        # The decision onto the stored prompt (core/permission_prompt), before the
+        # turn continues: a reload from now on shows it decided, not pending.
+        from .permission_prompt import record_decision
+        await record_decision(session_id, request_id, "approve" if allowed else "deny")
 
         _pending_results: list[dict] = []
         async for event in unit.continue_with_permission(request_id, allowed):
