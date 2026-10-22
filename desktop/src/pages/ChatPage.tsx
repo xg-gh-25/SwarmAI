@@ -125,10 +125,13 @@ export function buildDispatchPrompt(todo: ToDo): string {
   return lines.join('\n');
 }
 
-/** Max messages to load on initial session restore / tab switch.
- *  Backend validates limit 1–200; 200 covers 95%+ of sessions in one fetch.
- *  The infinite-scroll page size in loadOlderMessages is a separate concern. */
-const INITIAL_MESSAGE_LOAD_LIMIT = 200;
+/** History pages are measured in USER TURNS (backend core/history_page), each
+ *  turn whole: a turn is 2 to 2,000+ DB rows, so a row count is arbitrary. 20
+ *  turns fill several screens; the backend caps a page at 100. "Older history
+ *  remains" comes from the backend's X-Has-More header, never from a count. */
+const INITIAL_TURNS = 20;
+/** Turns per "load older" page while scrolling up. */
+const OLDER_TURNS = 20;
 
 /** Convert a backend ChatMessage to the frontend Message shape. */
 export default function ChatPage() {
@@ -200,6 +203,9 @@ export default function ChatPage() {
   const isExpandedRef = useRef(isExpanded);
   isExpandedRef.current = isExpanded;
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  /** Per tab: does older history remain (X-Has-More of its last page)? A tab
+   *  switch restores it from here; unknown → true, so scrolling up just asks. */
+  const hasMoreByTabRef = useRef(new Map<string, boolean>());
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
 
@@ -558,7 +564,8 @@ export default function ChatPage() {
     }
     setIsLoadingHistory(true);
     try {
-      const sessionMessages = await chatService.getSessionMessagesPaginated(sid, INITIAL_MESSAGE_LOAD_LIMIT);
+      const page = await chatService.getSessionMessagesPage(sid, INITIAL_TURNS);
+      const sessionMessages = page.messages;
       // Async guard: discard if a newer load was started while we awaited
       if (loadGenRef.current !== thisGen) return;
       // Tab-switch guard: discard if active tab changed during the async fetch
@@ -574,7 +581,8 @@ export default function ChatPage() {
       setMessages(formattedMessages);
       setSessionId(sid);
       setPendingQuestion(null);
-      setHasMoreMessages(sessionMessages.length === INITIAL_MESSAGE_LOAD_LIMIT);
+      setHasMoreMessages(page.hasMore);
+      if (activeTabIdRef.current) hasMoreByTabRef.current.set(activeTabIdRef.current, page.hasMore);
       // Sync loaded messages back into the tab map so subsequent tab switches
       // don't see empty messages and re-fetch unnecessarily.
       const currentTabId = activeTabIdRef.current;
@@ -614,7 +622,7 @@ export default function ChatPage() {
     if (!tab || !tab.sessionId || tab.isStreaming) return;
     const sid = tab.sessionId;
     try {
-      const msgs = await chatService.getSessionMessagesPaginated(sid, INITIAL_MESSAGE_LOAD_LIMIT);
+      const msgs = (await chatService.getSessionMessagesPage(sid, INITIAL_TURNS)).messages;
       const tabNow = tabMapRef.current.get(tabId);
       // Guards: tab gone, session changed, or streaming restarted during fetch.
       if (!tabNow || tabNow.sessionId !== sid || tabNow.isStreaming) return;
@@ -654,7 +662,7 @@ export default function ChatPage() {
     if (!tab || !tab.sessionId || (tab.isStreaming && !force)) return;
     const sid = tab.sessionId;
     try {
-      const msgs = await chatService.getSessionMessagesPaginated(sid, INITIAL_MESSAGE_LOAD_LIMIT);
+      const msgs = (await chatService.getSessionMessagesPage(sid, INITIAL_TURNS)).messages;
       const tabNow = tabMapRef.current.get(tabId);
       // Re-guard: tab gone, session changed, or streaming restarted during fetch.
       if (!tabNow || tabNow.sessionId !== sid || (tabNow.isStreaming && !force)) return;
@@ -861,10 +869,10 @@ export default function ChatPage() {
 
     setIsLoadingOlderMessages(true);
     try {
-      const olderMessages = await chatService.getSessionMessagesPaginated(
-        sessionId, 50, oldestMessage.id
-      );
-      if (olderMessages.length < 50) setHasMoreMessages(false);
+      const olderPage = await chatService.getSessionMessagesPage(sessionId, OLDER_TURNS, oldestMessage.id);
+      const olderMessages = olderPage.messages;
+      setHasMoreMessages(olderPage.hasMore);
+      if (activeId) hasMoreByTabRef.current.set(activeId, olderPage.hasMore);
       // Seam merge: if the agent response straddles the page boundary, the
       // last older message and first current message are both assistant —
       // merge them so it renders as one bubble (backend can't merge across fetches).
@@ -1074,10 +1082,9 @@ export default function ChatPage() {
         setPromptMetadata(tabState.promptMetadata ?? null);
         setIsExpanded(tabState.isExpanded ?? false);
         setInputValue(inputValueMapRef.current.get(tabId) ?? '');
-        // Reset hasMoreMessages based on restored message count — the tab
-        // was loaded with INITIAL_MESSAGE_LOAD_LIMIT, so if we have that many
-        // messages there are likely more on the server.
-        setHasMoreMessages(tabState.messages.length >= INITIAL_MESSAGE_LOAD_LIMIT);
+        // Restore what the tab's last page said about older history; a tab
+        // never paged here (preloaded) may have more, so let scrolling up ask.
+        setHasMoreMessages(hasMoreByTabRef.current.get(tabId) ?? tabState.messages.length > 0);
         // isStreaming derivation automatically reflects target tab's state
         // from tabMapRef — no need to call setIsStreaming which would corrupt
         // the source tab's streaming state. Just bump to re-derive.
@@ -1109,7 +1116,8 @@ export default function ChatPage() {
       try {
         // The latest page only, like every other open path: a long session is
         // tens of MB (97df0539: 12,136 rows / 19.6MB); older pages load on scroll.
-        const sessionMessages = await chatService.getSessionMessagesPaginated(tab.sessionId, INITIAL_MESSAGE_LOAD_LIMIT);
+        const page = await chatService.getSessionMessagesPage(tab.sessionId, INITIAL_TURNS);
+        const sessionMessages = page.messages;
         // Async guard: only apply if user hasn't switched away during the load
         if (activeTabIdRef.current !== loadedTabId) return;
         // Phase guard: streaming may have started during the async fetch
@@ -1124,7 +1132,8 @@ export default function ChatPage() {
         loadedStore.seedFromLoad(formattedMessages);
         setMessages(loadedStore.messages);
         setSessionId(tab.sessionId);
-        setHasMoreMessages(sessionMessages.length === INITIAL_MESSAGE_LOAD_LIMIT);
+        setHasMoreMessages(page.hasMore);
+        hasMoreByTabRef.current.set(loadedTabId, page.hasMore);
       } catch (error) {
         console.error('Failed to load session messages:', error);
       } finally {
@@ -1602,8 +1611,9 @@ export default function ChatPage() {
             if (tab.messages.length > 0) continue; // already has messages
             const sid = tab.sessionId;
             preloadPromises.push(
-              chatService.getSessionMessagesPaginated(sid, INITIAL_MESSAGE_LOAD_LIMIT)
-                .then(msgs => {
+              chatService.getSessionMessagesPage(sid, INITIAL_TURNS)
+                .then(({ messages: msgs, hasMore }) => {
+                  hasMoreByTabRef.current.set(tabId, hasMore);
                   if (!mounted) return;
                   const tabRef = tabMapRef.current.get(tabId);
                   if (tabRef && tabRef.sessionId === sid) {

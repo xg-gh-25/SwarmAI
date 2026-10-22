@@ -67,6 +67,7 @@ vi.mock('../../services/chat', () => ({
   chatService: {
     listSessions: vi.fn().mockResolvedValue([]),
     getSessionMessagesPaginated: vi.fn().mockResolvedValue([]),
+    getSessionMessagesPage: vi.fn().mockResolvedValue({ messages: [], hasMore: false }),
   },
 }));
 vi.mock('../../services/agents', () => ({

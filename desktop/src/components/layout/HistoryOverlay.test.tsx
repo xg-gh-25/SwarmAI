@@ -32,7 +32,7 @@ const getSessionMessagesPaginated = vi.fn();
 const listSessions = vi.fn();
 vi.mock('../../services/chat', () => ({
   chatService: {
-    getSessionMessagesPaginated: (id: string, limit?: number) => getSessionMessagesPaginated(id, limit),
+    getSessionMessagesPage: async (id: string, turns: number) => ({ messages: await getSessionMessagesPaginated(id, turns), hasMore: false }),
     listSessions: (agentId?: string) => listSessions(agentId),
   },
 }));
@@ -98,7 +98,7 @@ describe('HistoryOverlay (方案 B — read-only browser)', () => {
     const row = await screen.findByText('Kubernetes chat'); // self-fetched list
     fireEvent.click(row);
     // preview fetch uses the shared tab-load limit (200)
-    expect(getSessionMessagesPaginated).toHaveBeenCalledWith('s1', 200);
+    expect(getSessionMessagesPaginated).toHaveBeenCalledWith('s1', 20);
 
     // resume NOT triggered by a row click; overlay still open + preview shown
     expect(onResume).not.toHaveBeenCalled();

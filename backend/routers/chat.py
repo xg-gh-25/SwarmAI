@@ -1070,8 +1070,14 @@ async def get_session_messages(
     request: Request,
     limit: Optional[int] = Query(None, ge=1, le=200),
     before_id: Optional[str] = Query(None),
+    turns: Optional[int] = Query(None, ge=1, le=100),
 ):
     """Get messages for a chat session with optional cursor-based pagination.
+
+    ``turns`` (preferred for display): the last N user turns before ``before_id``,
+    each whole (core.history_page). The response carries ``X-Has-More: 1|0`` —
+    whether older rows remain — because the merged bubble count says nothing
+    about the row count behind it. ``limit`` stays for row-tail callers.
 
     Supports ETag caching: the ETag is ``"session_id:msg_count"``.
     Messages are append-only, so count change = content change.
@@ -1081,6 +1087,9 @@ async def get_session_messages(
     Returns messages in chronological order.
     """
     from fastapi.responses import JSONResponse, Response as FastAPIResponse
+    # Called directly (tests), the default is the Query() marker, not None.
+    if not isinstance(turns, int):
+        turns = None
 
     # Verify session exists
     session = await session_manager.get_session(session_id)
@@ -1098,13 +1107,24 @@ async def get_session_messages(
         # Compaction rows (and a late summary on one) are spliced into the
         # history below, so they are part of the content the ETag stands for.
         compaction_sig = await _compaction_signature(session_id)
-        etag = f'"{session_id}:{msg_count}:{compaction_sig}"'
+        # The page shape is part of the body: a turns page and a full fetch of the
+        # same session must not share an ETag.
+        shape = f"t{turns}" if turns is not None else (f"l{limit}" if limit is not None else "all")
+        etag = f'"{session_id}:{msg_count}:{compaction_sig}:{shape}"'
         if_none_match = request.headers.get("if-none-match")
         if if_none_match and if_none_match == etag:
             return FastAPIResponse(status_code=304, headers={"ETag": etag})
 
     # ── Fetch messages ──
-    if limit is not None or before_id is not None:
+    has_more: bool | None = None
+    if turns is not None:
+        from core.history_page import page_by_turns
+
+        async def _fetch(n: int, cursor: Optional[str]):
+            return await db.messages.list_by_session_paginated(session_id, limit=n, before_id=cursor)
+
+        messages, has_more = await page_by_turns(_fetch, turns, before_id)
+    elif limit is not None or before_id is not None:
         messages = await db.messages.list_by_session_paginated(
             session_id, limit=limit, before_id=before_id
         )
@@ -1138,6 +1158,8 @@ async def get_session_messages(
         etag = None  # never cache a body that lacks rows the ETag counts
 
     headers = {"ETag": etag} if etag else {}
+    if has_more is not None:
+        headers["X-Has-More"] = "1" if has_more else "0"
     return JSONResponse(content=data, headers=headers)
 
 

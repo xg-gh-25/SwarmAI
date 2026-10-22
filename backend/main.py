@@ -1703,6 +1703,8 @@ app.add_middleware(
     ],
     expose_headers=[
         "X-Request-ID",
+        "ETag",          # chat history 304 caching (services/chat.ts)
+        "X-Has-More",    # chat history: older turns remain (routers/chat.py)
         "X-RateLimit-Limit",
         "X-RateLimit-Remaining",
         "X-RateLimit-Reset",

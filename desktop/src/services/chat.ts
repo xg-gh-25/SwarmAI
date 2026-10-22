@@ -709,6 +709,45 @@ export const chatService = {
     return messages;
   },
 
+  /** Cache for the turn-measured first page: ETag + body + hasMore (a 304 must
+   *  restore hasMore too). Separate from `_messageEtags`: the backend ETag names
+   *  the page shape (`:t20`), so the two never answer for each other. */
+  _pageEtags: new Map<string, { etag: string; messages: ChatMessage[]; hasMore: boolean }>(),
+
+  /**
+   * One page of history measured in USER TURNS (backend core/history_page): the
+   * last `turns` user turns before `beforeId`, each turn whole. `hasMore` comes
+   * from the backend's `X-Has-More` header, never from the message count: the
+   * backend merges a turn's rows into one bubble, so a count says nothing about
+   * how much older history remains.
+   */
+  async getSessionMessagesPage(
+    sessionId: string,
+    turns: number,
+    beforeId?: string,
+  ): Promise<{ messages: ChatMessage[]; hasMore: boolean }> {
+    const params = new URLSearchParams({ turns: String(turns) });
+    if (beforeId !== undefined) params.set('before_id', beforeId);
+    const cached = !beforeId ? this._pageEtags.get(sessionId) : undefined;
+    const headers: Record<string, string> = {};
+    if (cached?.etag) headers['If-None-Match'] = cached.etag;
+
+    const response = await api.get<Record<string, unknown>[]>(`/chat/sessions/${sessionId}/messages?${params.toString()}`, {
+      headers,
+      validateStatus: (s: number) => s === 200 || s === 304,
+    });
+    if (response.status === 304) {
+      return cached ? { messages: cached.messages, hasMore: cached.hasMore } : { messages: [], hasMore: false };
+    }
+    const messages = (response.data ?? []).map(toMessageCamelCase);
+    const hasMore = String(response.headers?.['x-has-more'] ?? '') === '1';
+    if (!beforeId) {
+      const etag = response.headers?.['etag'];
+      if (etag) this._pageEtags.set(sessionId, { etag, messages, hasMore });
+    }
+    return { messages, hasMore };
+  },
+
   /**
    * Turn-end RECONCILE tail fetch — the newest `limit` rows, deliberately
    * BYPASSING the ETag cache (never sends If-None-Match, never writes the
@@ -746,11 +785,13 @@ export const chatService = {
   // Invalidate ETag cache for a session (call after sending a message)
   invalidateMessageCache(sessionId: string): void {
     this._messageEtags.delete(sessionId);
+    this._pageEtags.delete(sessionId);
   },
 
   // Delete chat session
   async deleteSession(sessionId: string): Promise<void> {
     this._messageEtags.delete(sessionId);
+    this._pageEtags.delete(sessionId);
     await api.delete(`/chat/sessions/${sessionId}`);
   },
 

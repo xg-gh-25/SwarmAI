@@ -30,9 +30,9 @@ import { chatService } from '../../services/chat';
 import { agentsService } from '../../services/agents';
 
 const DEBOUNCE_MS = 250;
-/** Same limit ChatPage uses for a tab load — keeps the shared, sessionId-keyed
- *  ETag cache consistent between a preview fetch and a real tab load. */
-const PREVIEW_MESSAGE_LIMIT = 200;
+/** Same page ChatPage loads for a tab (its INITIAL_TURNS): the last 20 user
+ *  turns, each whole, sharing the turn-page ETag cache with a real tab load. */
+const PREVIEW_TURNS = 20;
 
 export interface HistoryContentProps {
   /** Agent scope for the session list (ChatPage's selectedAgentId, via bridge). */
@@ -116,7 +116,7 @@ export function HistoryContent({ agentId, onDeleteSession, onResume, close }: Hi
     setPreviewLoading(true);
     (async () => {
       try {
-        const msgs = await chatService.getSessionMessagesPaginated(previewSession.id, PREVIEW_MESSAGE_LIMIT);
+        const { messages: msgs } = await chatService.getSessionMessagesPage(previewSession.id, PREVIEW_TURNS);
         if (seq === previewSeq.current) {
           setPreviewMessages(msgs.map(toDisplayMessage));
           setPreviewLoading(false);
