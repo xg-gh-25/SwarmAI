@@ -77,7 +77,7 @@ key files are in context). Consult BEFORE modifying:
 2. **React useState for cross-tab decisions**: Always read from `tabMapRef`. React state is
    a display mirror only (details in `multi-tab-isolation-principles.md`).
 3. **Overwriting user files**: Never overwrite files with `user_customized=True` in `ensure_directory()`.
-4. **Permission state**: per session only — `get_session_queue(session_id)`,
+4. **Permission state**: per session only — the prompt board (`open_prompts(session_id)`),
    `approve_command(session_id, …)`. There is no global queue.
 5. **Direct MEMORY.md writes**: Always use `locked_write.py`. Concurrent writes corrupt the file.
 6. **Raw message writes on the frontend**: all message mutations go through the tab's

@@ -7,12 +7,19 @@ State managed:
     - _approved_commands: session ID → set of approved command hashes
     - _permission_events: request ID → asyncio.Event for signaling decisions
     - _permission_results: request ID → decision string ("approve" or "deny")
-    - _session_queues: session ID → per-session asyncio.Queue for permission requests
+    - _prompts: session ID → the open prompts a hook is blocked on (the board)
 
-Per-session queue design:
-    Each active session gets its own ``asyncio.Queue`` via ``get_session_queue()``.
-    The security hook writes directly to the session's queue using the SDK session ID.
-    Each session's queue is isolated, preventing cross-session contention.
+The prompt board (one source of truth for "the user must decide something"):
+    A gate publishes its prompt with ``publish_prompt`` and blocks; the prompt is
+    on the board exactly while a waiter for it is alive and undecided. Readers
+    never TAKE an item: the session's stream reads ``open_prompts`` and waits on
+    ``wait_prompt_change`` (a fresh future each time, carrying no data), so a
+    reader that is cancelled, or that loses a race, can lose nothing. This
+    replaced a per-session asyncio.Queue whose items were taken by a losing
+    ``queue.get()`` task and thrown away (7 of 43 prompts 2026-10-13..17, and
+    perm_5cfb878b39ba on 2026-10-22), patched over by a 15-30 s "rescue".
+    Gates that wait on a PermissionManager decision use ``request_decision``,
+    which publishes and waits as one step.
 """
 
 import asyncio
@@ -69,9 +76,11 @@ class PermissionManager:
         self._approved_commands: dict[str, set[str]] = {}
         self._permission_events: dict[str, asyncio.Event] = {}
         self._permission_results: dict[str, str] = {}
-        # Per-session permission request queues — each session gets its own
-        # queue so parallel sessions never compete or busy-loop.
-        self._session_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+        # The prompt board: session id → prompt key (requestId, or tool_use_id
+        # for an AskUserQuestion) → the prompt as streamed to the frontend.
+        self._prompts: dict[str, dict[str, dict[str, Any]]] = {}
+        # session id → futures of readers waiting for the board to change.
+        self._board_waiters: dict[str, list["asyncio.Future[None]"]] = {}
         # Durable store for pending permission requests. Mirrored to disk so a pending
         # approval survives a DAEMON RESTART (the in-memory dict alone only survived a
         # subprocess respawn). Idempotency across a restart-replayed resolve is keyed by
@@ -286,8 +295,9 @@ class PermissionManager:
             'timeout' as deny-equivalent for the SDK decision while surfacing
             the distinct reason.
         """
-        event = asyncio.Event()
-        self._permission_events[request_id] = event
+        # publish_prompt registers the event (so the prompt is live from the
+        # moment it is on the board); a direct caller gets one here.
+        event = self._permission_events.setdefault(request_id, asyncio.Event())
 
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
@@ -323,6 +333,7 @@ class PermissionManager:
             # branch above INTENTIONALLY relies on this pop (it is the desync
             # source, not a leak) — recovery is via the has_live_waiter reap.
             self._pending_requests.pop(request_id, None)
+            self._drop_prompt(request_id)
 
     def set_permission_decision(self, request_id: str, decision: str) -> None:
         """Set the user's permission decision and signal waiting tasks."""
@@ -332,60 +343,109 @@ class PermissionManager:
         else:
             # No waiter — clean up immediately to prevent memory leak
             self._permission_results.pop(request_id, None)
+        # Decided: off the board now, not when the waiter's finally runs.
+        self._drop_prompt(request_id)
+
+    def is_open(self, request_id: str) -> bool:
+        """A hook is blocked on this request and it has not been decided."""
+        return (request_id in self._permission_events
+                and request_id not in self._permission_results)
 
     # ------------------------------------------------------------------
-    # Per-session permission request queues
+    # The prompt board
     # ------------------------------------------------------------------
 
-    def get_session_queue(self, session_id: str) -> asyncio.Queue[dict[str, Any]]:
-        """Return (or create) the permission request queue for a specific session.
+    @staticmethod
+    def _prompt_key(item: dict[str, Any]) -> Optional[str]:
+        key = item.get("requestId") or item.get("tool_use_id")
+        return str(key) if key else None
 
-        Each session gets its own queue so that parallel sessions never
-        compete or busy-loop.  Queues are lazily created and cleaned up
-        via ``remove_session_queue()`` when the session ends.
+    def publish_prompt(self, session_id: str, item: dict[str, Any]) -> None:
+        """Put a prompt on the session's board and wake its readers.
 
-        Args:
-            session_id: The SDK session ID.
-
-        Returns:
-            The per-session asyncio.Queue.
+        A permission prompt's waiter is registered here, so the prompt is live
+        (``has_live_waiter``) from the moment a reader can see it. An
+        AskUserQuestion prompt (``kind == "ask_user_question"``) is live while
+        ask_question_manager holds its waiter (the gate registers it first).
         """
-        if session_id not in self._session_queues:
-            self._session_queues[session_id] = asyncio.Queue()
-            logger.debug("Created permission queue for session %s", session_id)
-        return self._session_queues[session_id]
+        key = self._prompt_key(item)
+        if not key:
+            raise ValueError("a prompt needs a requestId or tool_use_id")
+        if item.get("kind") != "ask_user_question":
+            self._permission_events.setdefault(key, asyncio.Event())
+        self._prompts.setdefault(session_id, {})[key] = item
+        logger.info("Published prompt %s for session %s", key, session_id)
+        self._wake(session_id)
 
-    def remove_session_queue(self, session_id: str) -> None:
-        """Remove the permission request queue for a session.
+    def _prompt_live(self, item: dict[str, Any]) -> bool:
+        key = self._prompt_key(item) or ""
+        if item.get("kind") == "ask_user_question":
+            from core.ask_question_manager import ask_question_manager as _aqm
+            return _aqm.is_open(key)
+        return self.is_open(key)
 
-        Called during session cleanup to free memory.  Any items still in
-        the queue are discarded (the session is ending anyway).
-        """
-        removed = self._session_queues.pop(session_id, None)
-        if removed:
-            logger.debug("Removed permission queue for session %s", session_id)
+    def open_prompts(self, session_id: str) -> list[dict[str, Any]]:
+        """The session's prompts that are live and undecided, oldest first.
+        Prompts whose waiter is gone are dropped from the board here."""
+        board = self._prompts.get(session_id)
+        if not board:
+            return []
+        out = []
+        for key, item in list(board.items()):
+            if self._prompt_live(item):
+                out.append(item)
+            else:
+                board.pop(key, None)
+        if not board:
+            self._prompts.pop(session_id, None)
+        return out
 
-    async def enqueue_permission_request(
-        self, session_id: str, request: dict[str, Any]
-    ) -> None:
-        """Enqueue a permission request to the correct session's queue.
+    def wait_prompt_change(self, session_id: str) -> "asyncio.Future[None]":
+        """A future resolved at the next change of the session's board. It carries
+        no data: cancel it freely, then read ``open_prompts``. Register it BEFORE
+        reading the board, so a publish in between is not missed."""
+        fut: "asyncio.Future[None]" = asyncio.get_running_loop().create_future()
+        waiters = self._board_waiters.setdefault(session_id, [])
+        waiters[:] = [w for w in waiters if not w.done()]
+        waiters.append(fut)
+        return fut
 
-        Called by the security hook when a dangerous command is detected.
-        Routes the request directly to the session's queue — no global
-        queue, no re-enqueuing, no cross-session contention.
+    def _wake(self, session_id: str) -> None:
+        for fut in self._board_waiters.pop(session_id, []):
+            if not fut.done():
+                fut.set_result(None)
 
-        Args:
-            session_id: The SDK session ID that owns this request.
-            request: The permission request dict.
-        """
-        queue = self.get_session_queue(session_id)
-        await queue.put(request)
-        logger.info(
-            "Enqueued permission request %s for session %s",
-            request.get("requestId", "?"),
-            session_id,
-        )
+    def _drop_prompt(self, key: str) -> None:
+        for sid, board in list(self._prompts.items()):
+            if board.pop(key, None) is not None:
+                if not board:
+                    self._prompts.pop(sid, None)
+                self._wake(sid)
 
+    def close_prompt(self, key: str) -> None:
+        """Take a prompt off the board (its question was answered)."""
+        self._drop_prompt(key)
+
+    async def request_decision(
+        self, session_id: str, item: dict[str, Any],
+        timeout: int = PERMISSION_ANSWER_TIMEOUT_SECONDS,
+    ) -> str:
+        """Publish a permission prompt and wait for its decision, as one step:
+        'approve', 'deny' or 'timeout'. The prompt leaves the board when it is
+        decided, times out, or this wait is cancelled."""
+        key = self._prompt_key(item)
+        self.publish_prompt(session_id, item)
+        try:
+            return await self.wait_for_permission_decision(key, timeout=timeout)
+        finally:
+            self._drop_prompt(key)
+
+    def clear_session(self, session_id: str) -> None:
+        """Drop the session's board and its readers' futures (session end)."""
+        self._prompts.pop(session_id, None)
+        for fut in self._board_waiters.pop(session_id, []):
+            if not fut.done():
+                fut.cancel()
 
 
 # Module-level singleton

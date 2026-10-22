@@ -15,6 +15,7 @@ What is tested:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -66,7 +67,7 @@ async def _stream(unit: SessionUnit, msgs) -> list[set]:
     unit._client = MagicMock()
     unit._client.receive_response = lambda: _Script(msgs)
     seen: list[set] = []
-    with patch.object(_pm.permission_manager, "get_session_queue", return_value=asyncio.Queue()):
+    with contextlib.nullcontext():
         with pytest.raises(Exception):
             async for ev in orch._read_formatted_response():
                 if ev.get("type") == "subagent_progress":

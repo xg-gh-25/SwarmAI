@@ -84,9 +84,12 @@ The state machine is the guard (`SessionUnit.send()`); there is no per-session l
 
 `PermissionManager` (`permission_manager.py`) is the only permission system.
 
-- Queues: `get_session_queue(session_id)` / `remove_session_queue`, keyed by the APP
-  session ID (the consumer in streaming_orchestrator reads `self._parent.session_id`).
-  There is no global queue.
+- Prompt board: a gate publishes its prompt (`request_decision` / `publish_prompt`) under
+  the APP session ID; it is on the board exactly while its waiter is live and undecided.
+  The session's stream and `/sessions/streaming-state` both READ it (`open_prompts`,
+  `wait_prompt_change`); nothing takes an item, so no reader can lose one. A decision
+  goes to the blocked hook whatever the unit's state (`continue_with_permission`); the
+  unit reads on only when it was the one waiting for it. `clear_session` on session end.
 - Approvals: `approve_command(session_id, command)` stores a SHA-256 command hash in memory
   for that session only. Approvals are not shared across tabs and don't survive a restart.
 - Pending requests (not approvals) persist to `~/.swarm-ai/pending_approvals.json` so an

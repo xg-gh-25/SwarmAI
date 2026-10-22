@@ -13,6 +13,7 @@ What is tested:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from unittest.mock import MagicMock, patch
 
@@ -82,7 +83,7 @@ async def test_read_loop_yields_live_tool_result_with_outcome():
                     parent_tool_use_id="tu-agent"),
     ])
     events = []
-    with patch.object(_pm.permission_manager, "get_session_queue", return_value=asyncio.Queue()):
+    with contextlib.nullcontext():
         with pytest.raises(Exception):
             async for ev in orch._read_formatted_response():
                 events.append(ev)
@@ -96,7 +97,7 @@ async def _drain(orch, unit, msgs):
     from core import permission_manager as _pm
     unit._client.receive_response = lambda: _Script(msgs)
     events = []
-    with patch.object(_pm.permission_manager, "get_session_queue", return_value=asyncio.Queue()):
+    with contextlib.nullcontext():
         with pytest.raises(Exception):
             async for ev in orch._read_formatted_response():
                 events.append(ev)

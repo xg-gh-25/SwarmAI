@@ -201,16 +201,16 @@ async def test_f3_hook_discards_waiter_when_enqueue_raises(monkeypatch):
     ask_question_manager.discard_waiter("toolu_leak")
 
     # Make the surfacing call raise.
-    async def _boom(*a, **k):
-        raise RuntimeError("enqueue failed")
+    def _boom(*a, **k):
+        raise RuntimeError("publish failed")
 
     import core.permission_manager as pm
-    monkeypatch.setattr(pm.permission_manager, "enqueue_permission_request", _boom)
+    monkeypatch.setattr(pm.permission_manager, "publish_prompt", _boom)
 
     # Drive just the register→enqueue span the way the hook does it.
     ask_question_manager.register_waiter("toolu_leak")
     try:
-        await pm.permission_manager.enqueue_permission_request("s", {})
+        pm.permission_manager.publish_prompt("s", {})
     except BaseException:
         ask_question_manager.discard_waiter("toolu_leak")
 

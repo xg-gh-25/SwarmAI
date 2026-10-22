@@ -20,6 +20,7 @@ What is tested:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -103,8 +104,7 @@ async def _drain(unit: SessionUnit, msgs) -> list[dict]:
     unit._client = MagicMock()
     unit._client.receive_response = lambda: _Script(msgs)
     events: list[dict] = []
-    with patch.object(_pm_mod.permission_manager, "get_session_queue",
-                      return_value=asyncio.Queue()):
+    with contextlib.nullcontext():
         async for ev in orch._read_formatted_response():
             events.append(ev)
     return events

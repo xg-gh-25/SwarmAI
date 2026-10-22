@@ -56,7 +56,7 @@ DESIGN INVARIANTS (run_a456640f — do NOT regress):
   * PRE-ACTION, not post-hoc: approval is awaited BEFORE the destroy, surfaced in
     the initiating chat session; a deny leaves the isolated copy intact.
   * REUSE, don't rebuild: the approval flow is the SAME `permission_manager`
-    (store_pending_request → enqueue_permission_request → wait_for_permission_decision)
+    (store_pending_request → request_decision: publish on the prompt board + wait)
     + the SAME `cmd_permission_request` SSE event that `dangerous_command_gate` uses.
     Only an additive `kind: "destructive_data"` field is added. No new engine/queue/event.
   * NEVER await on a sessionless path: cold-start (`cold_start=True`) and the
@@ -465,7 +465,11 @@ async def guard_destructive(
         "status": "pending",
         "created_at": datetime.now().isoformat(),
     })
-    await permission_manager.enqueue_permission_request(session_id, {
+    logger.warning(
+        "data_safety: destroy of %s (%s) AWAITING approval in session %s (request %s)",
+        target, action, session_id, request_id,
+    )
+    decision = await permission_manager.request_decision(session_id, {
         "sessionId": session_id,
         "requestId": request_id,
         "toolName": "destructive_data",
@@ -474,11 +478,6 @@ async def guard_destructive(
         "reason": reason,
         "options": ["approve", "deny"],
     })
-    logger.warning(
-        "data_safety: destroy of %s (%s) AWAITING approval in session %s (request %s)",
-        target, action, session_id, request_id,
-    )
-    decision = await permission_manager.wait_for_permission_decision(request_id)
     permission_manager.remove_pending_request(request_id)
 
     if decision != "approve":

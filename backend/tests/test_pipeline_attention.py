@@ -152,7 +152,7 @@ def _turn_on(orch, monkeypatch, reader, tu, rid):
     from core.permission_manager import permission_manager
     from tests.test_tool_call_leak_guard import _make_result_message
     monkeypatch.setattr(pse, "read_stage_state", reader)
-    permission_manager.remove_session_queue("sess-test")  # each turn = its own loop
+    permission_manager.clear_session("sess-test")  # each turn = its own loop
     events, raised = _drive_stream(orch, [_bash_use(tu, CLI.format(rid=rid)), _result(tu),
                                           _make_result_message()])
     assert raised is None
@@ -221,7 +221,7 @@ def _create_turn(orch, monkeypatch, reader, result):
     from core.permission_manager import permission_manager
     from tests.test_tool_call_leak_guard import _make_result_message
     monkeypatch.setattr(pse, "read_stage_state", reader)
-    permission_manager.remove_session_queue("sess-test")
+    permission_manager.clear_session("sess-test")
     events, raised = _drive_stream(orch, [_bash_use("tc1", RUN_CREATE), result, _make_result_message()])
     assert raised is None
     return _blocks(events)

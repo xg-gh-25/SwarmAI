@@ -41,8 +41,9 @@ class _FakePM:
     def store_pending_request(self, req):
         self.stored.append(req)
 
-    async def enqueue_permission_request(self, session_id, req):
+    async def request_decision(self, session_id, req, timeout=None):
         self.enqueued.append((session_id, req))
+        return await self.wait_for_permission_decision(req["requestId"])
 
     async def wait_for_permission_decision(self, request_id):
         return self._decision

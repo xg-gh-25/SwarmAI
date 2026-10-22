@@ -97,6 +97,10 @@ def _is_injected_turn(unit: Any) -> bool:
 # ═══════════════════════════════════════════════════════════════════
 
 
+# What the read loop's SDK read returns when the turn's stream is exhausted.
+_STREAM_END = object()
+
+
 class StreamingCallbacks(Protocol):
     """Interface contract between StreamingOrchestrator and SessionUnit.
 
@@ -265,6 +269,8 @@ class StreamingOrchestrator:
         # continuation, so the approved call's result was dropped and the turn
         # rendered as "Stopped". Reset at a new query and at the turn's result.
         self._turn_carry: dict[str, dict] = self._new_turn_carry()
+        # (iterator, future) of the read loop's one pending SDK read.
+        self._sdk_read: "Optional[tuple[Any, asyncio.Future]]" = None
 
     @staticmethod
     def _new_turn_carry() -> dict[str, dict]:
@@ -277,8 +283,10 @@ class StreamingOrchestrator:
         }
 
     def reset_turn_carry(self) -> None:
-        """Forget the previous turn's unmatched tool ids (new turn starts)."""
+        """Forget the previous turn's unmatched tool ids (new turn starts), and a
+        pending read of an earlier turn's stream."""
         self._turn_carry = self._new_turn_carry()
+        self._discard_sdk_read()
 
     async def stream_query(
         self,
@@ -1105,189 +1113,75 @@ class StreamingOrchestrator:
             out["summary"] = state["summary"][:300]
         return out
 
-    # A pending permission older than this, with a live waiter, that this stream
-    # never surfaced is treated as lost in transit and re-queued. The normal
-    # queue hand-off takes milliseconds; the read loop wakes every 30s anyway.
-    _PERM_RESCUE_AFTER_S = 15.0
     # Read-loop heartbeat tick (see _read_formatted_response); class attribute
     # so tests can drive the tick branch.
     _HEARTBEAT_POLL_S = 30.0
 
-    def _rescue_unsurfaced_permission(
-        self, perm_queue: "asyncio.Queue", rescued: set
-    ) -> Optional[dict]:
-        """Find a pending permission request this stream never received.
-
-        7 of 43 permission requests (2026-10-13..17) were enqueued by the gate
-        but never surfaced: the CLI sat in its PreToolUse hook, the user saw no
-        dialog, and ~10 min later the streaming timeout killed the turn. The
-        exact loss path is not proven, so this closes it from the durable side:
-        PermissionManager's pending store (written BEFORE the enqueue) + a live
-        waiter = a hook is blocked on the user right now. If that request is
-        older than ``_PERM_RESCUE_AFTER_S`` and not this stream's open question,
-        return a queue-shaped item for it; the caller hands it to the normal
-        surface path as an already-completed perm_task (NOT via ``perm_queue``:
-        if a stray getter swallowed the original, it would swallow a re-queued
-        copy too). Each request is rescued at most once per stream. Never
-        raises. ``perm_queue`` is only inspected for loss-path evidence.
-        Returns the item, or None.
-        """
-        try:
-            import json as _json
-            from core.permission_manager import permission_manager as _pm
-
-            from .session_unit import SessionState
-
-            # Surfacing moves the unit to WAITING_INPUT — only legal mid-stream.
-            if getattr(self._parent, "state", None) != SessionState.STREAMING:
-                return None
-            sid = self._parent.session_id
-            open_q = getattr(self._parent, "_pending_question", None) or {}
-            now = datetime.now()
-            # The gates key the pending record by session_context["sdk_session_id"]
-            # (normally == the app id, set by SessionRouter). If they ever differ
-            # the request is under the other key — scan both, and say so.
-            _ctx = getattr(self._parent, "_hook_session_context", None) or {}
-            _gate_sid = _ctx.get("sdk_session_id") if isinstance(_ctx, dict) else None
-            keys = [sid]
-            if _gate_sid and _gate_sid != sid:
-                keys.append(_gate_sid)
-                logger.warning(
-                    "session_unit.permission_key_mismatch session_id=%s gate_key=%s "
-                    "— permission gates are not keyed by the app session id",
-                    sid, _gate_sid,
-                )
-            _reqs = [r for k in keys for r in _pm.get_pending_for_session(k)]
-            for req in _reqs:
-                if not isinstance(req, dict):
-                    continue
-                rid = req.get("id")
-                if (not rid or rid in rescued or rid == open_q.get("request_id")
-                        or not _pm.has_live_waiter(rid)):
-                    continue
-                try:
-                    age = (now - datetime.fromisoformat(req.get("created_at") or "")).total_seconds()
-                except (ValueError, TypeError):
-                    continue  # unparsable/naive-vs-aware timestamp — skip this item only
-                if age < self._PERM_RESCUE_AFTER_S:
-                    continue
-                tool_input: Any = req.get("tool_input", {})
-                if isinstance(tool_input, str):
-                    try:
-                        tool_input = _json.loads(tool_input)
-                    except ValueError:
-                        tool_input = {"command": tool_input}
-                if not isinstance(tool_input, dict):
-                    tool_input = {"value": tool_input}
-                item = {
-                    "sessionId": sid,
-                    "requestId": rid,
-                    "toolName": req.get("tool_name", "Bash"),
-                    "toolInput": tool_input,
-                    "reason": req.get("reason", ""),
-                    "options": ["approve", "deny"],
-                }
-                if req.get("kind"):
-                    item["kind"] = req["kind"]
-                # Loss-path evidence (root cause unproven): same_queue=False means
-                # the session's queue was replaced under this stream; True with
-                # qsize=0 means another getter took the item.
-                _live_q = getattr(_pm, "_session_queues", {}).get(sid)
-                _same_q = _live_q is perm_queue
-                _qsize = perm_queue.qsize()
-                rescued.add(rid)
-                logger.warning(
-                    "session_unit.permission_rescued session_id=%s request_id=%s "
-                    "age=%.0fs same_queue=%s qsize=%d — pending with a live "
-                    "waiter but never surfaced on this stream; surfacing it",
-                    sid, rid, age, _same_q, _qsize,
-                )
-                return item
-        except Exception as exc:  # noqa: BLE001 — a diagnostic rescue must never break the stream
+    def _board_keys(self) -> list[str]:
+        """Session ids this unit's gates publish prompts under: the app session id,
+        and the gate's ``sdk_session_id`` when it differs (logged: it should not)."""
+        sid = self._parent.session_id
+        keys = [sid]
+        ctx = getattr(self._parent, "_hook_session_context", None) or {}
+        gate_sid = ctx.get("sdk_session_id") if isinstance(ctx, dict) else None
+        if gate_sid and gate_sid != sid:
+            keys.append(gate_sid)
             logger.warning(
-                "session_unit.permission_rescue_failed session_id=%s: %s",
-                getattr(self._parent, "session_id", "?"), f"{type(exc).__name__}: {exc}",
-            )
+                "session_unit.permission_key_mismatch session_id=%s gate_key=%s "
+                "— permission gates are not keyed by the app session id", sid, gate_sid)
+        return keys
+
+    def _next_open_prompt(self, pm: Any, keys: list[str]) -> Optional[dict]:
+        """The oldest prompt a hook of this session is blocked on, unless it is the
+        one this unit already surfaced (then it waits for the user, not for us)."""
+        open_q = getattr(self._parent, "_pending_question", None) or {}
+        shown = open_q.get("request_id") or open_q.get("tool_use_id")
+        for key in keys:
+            for item in pm.open_prompts(key):
+                if (item.get("requestId") or item.get("tool_use_id")) != shown:
+                    return item
         return None
 
-    # Stands for a read loop's local _STREAM_EXHAUSTED sentinel in the turn
-    # carry (each _read_formatted_response call has its own sentinel object).
-    _LATE_EXHAUSTED = object()
+    def _sdk_read_for(self, response_iter: Any) -> "asyncio.Future":
+        """The ONE pending read of ``response_iter``: reused while it lives, new
+        only after the previous read was taken. It is never cancelled while its
+        stream lives -- a read cancelled after it took a message loses that
+        message -- so it also outlives a stream that returns to WAITING_INPUT
+        and is picked up by the continuation (same TurnStream). A read of a
+        different (abandoned) iterator is discarded."""
+        cur = getattr(self, "_sdk_read", None)
+        if cur is not None and cur[0] is response_iter:
+            return cur[1]
+        self._discard_sdk_read()
 
-    @staticmethod
-    def _completed_future(value: Any) -> "asyncio.Future":
-        fut = asyncio.get_running_loop().create_future()
-        fut.set_result(value)
-        return fut
-
-    @classmethod
-    async def _cancel_losers(cls, pending, perm_task, sdk_task=None,
-                             exhausted: Any = None) -> "tuple[Optional[dict], Any]":
-        """Cancel the race's losers; return what a loser read after the race.
-
-        Returns ``(perm_item, sdk_message)``; each is None unless that loser
-        finished with a result between the wait returning and its cancel.
-
-        ``asyncio.wait`` returns with the SDK message done and perm_task pending,
-        but the loop yields before the losers are cancelled (``await tick_task``).
-        When the hook enqueues in that window -- it does so right after the Bash
-        tool_use message, so this is the common timing -- perm_task wakes, runs
-        ``get_nowait`` and finishes. ``cancel()`` on a finished task does nothing
-        and the old ``await task`` discarded its result: the item had left the
-        queue (qsize=0, same queue) and only the 30 s rescue surfaced the prompt
-        (incident 2026-10-22, perm_5cfb878b39ba). The item is returned so the
-        caller surfaces it on the next iteration.
-
-        The SDK side has the same window: the permission wins the wait, and the
-        losing sdk_task's ``__anext__`` completes with a message during the
-        yield. That message has left the turn stream; discarding it would lose
-        an event of the turn, so it is returned too (the stream end is returned
-        as ``_LATE_EXHAUSTED``). A loser that timed out read nothing.
-
-        All losers are cancelled BEFORE any is awaited, so a re-raise of our own
-        cancellation cannot leave one running.
-        """
-        for task in pending:
-            task.cancel()
-        late: Optional[dict] = None
-        late_msg: Any = None
-        for task in pending:
+        async def _next() -> Any:
+            # A sentinel instead of StopAsyncIteration (which a Task would turn
+            # into RuntimeError).
             try:
-                result = await task
-            except asyncio.CancelledError:
-                # The loser's own cancellation is expected. But if THIS task is
-                # being cancelled (consumer closed / teardown), the CancelledError
-                # is ours: swallowing it makes the loop race again forever and
-                # asyncio.run's _cancel_all_tasks never returns (the 21h
-                # unkillable pytest, 2026-10-17).
-                _me = asyncio.current_task()
-                if _me is not None and _me.cancelling():
-                    raise
-                continue
-            except (StopAsyncIteration, asyncio.TimeoutError):
-                continue
-            if sdk_task is not None and task is sdk_task:
-                late_msg = cls._LATE_EXHAUSTED if result is exhausted else result
-                logger.info(
-                    "session_unit.sdk_message_carried type=%s — read by the losing "
-                    "sdk_task after the race; delivering it next",
-                    type(result).__name__)
-                continue
-            if task is perm_task and isinstance(result, dict):
-                late = result
-                logger.info(
-                    "session_unit.permission_item_carried request_id=%s — taken by "
-                    "the losing perm_task after the race; surfacing next iteration",
-                    result.get("requestId") or result.get("tool_use_id") or "?",
-                )
-        return late, late_msg
+                return await response_iter.__anext__()
+            except StopAsyncIteration:
+                return _STREAM_END
 
-    @staticmethod
-    def _completed_perm_task(item: dict) -> "asyncio.Future":
-        """A perm_task stand-in that has already 'received' ``item``."""
-        fut = asyncio.get_running_loop().create_future()
-        fut.set_result(item)
+        fut = asyncio.ensure_future(_next())
+        # An unread failure of a discarded read must not log "never retrieved".
+        fut.add_done_callback(lambda f: f.cancelled() or f.exception())
+        self._sdk_read = (response_iter, fut)
         return fut
+
+    def _take_sdk_read(self, fut: "asyncio.Future") -> Any:
+        """Consume a finished read (its result, or its exception raised)."""
+        cur = getattr(self, "_sdk_read", None)
+        if cur is not None and cur[1] is fut:
+            self._sdk_read = None
+        return fut.result()
+
+    def _discard_sdk_read(self) -> None:
+        """Cancel the pending read: only when its stream is over (teardown, turn
+        timeout, a new turn)."""
+        cur = getattr(self, "_sdk_read", None)
+        self._sdk_read = None
+        if cur is not None and not cur[1].done():
+            cur[1].cancel()
 
     def _tool_hang_tier_owns_liveness(self, current_timeout: float) -> bool:
         """True if an open tool's liveness is really owned by the watchdog.
@@ -1364,19 +1258,22 @@ class StreamingOrchestrator:
 
         itask = asyncio.ensure_future(self._parent.interrupt())
         while not itask.done():
-            ntask = asyncio.ensure_future(response_iter.__anext__())
+            # The loop's one read (never a second concurrent reader of the stream).
+            ntask = self._sdk_read_for(response_iter)
             done, _ = await asyncio.wait({itask, ntask}, return_when=asyncio.FIRST_COMPLETED)
             if ntask not in done:
-                ntask.cancel()
+                self._discard_sdk_read()  # the turn is being torn down
                 try:
                     await ntask
                 except BaseException as exc:  # noqa: BLE001 — the stream is being torn down
                     logger.debug("output_degeneration drain: pending read cancelled (%s)", type(exc).__name__)
                 break
             try:
-                msg = ntask.result()
+                msg = self._take_sdk_read(ntask)
             except BaseException as exc:  # noqa: BLE001 — exhausted / closed: nothing left to drain
                 logger.debug("output_degeneration drain: stream ended (%s)", type(exc).__name__)
+                break
+            if msg is _STREAM_END:
                 break
             if isinstance(msg, ResultMessage):
                 self._record_token_usage_bg(msg, getattr(msg, "usage", None) or {})
@@ -1563,17 +1460,19 @@ class StreamingOrchestrator:
         _degen: dict[tuple, DegenerationDetector] = {}
         _progress = ProgressWatch(now=awake_time())
 
-        # ── Permission queue watcher ──────────────────────────────
-        # The dangerous_command_gate hook blocks inside PreToolUse
-        # awaiting a user decision.  While it blocks, the SDK cannot
-        # produce new messages.  We race the SDK iterator against the
-        # PermissionManager session queue so we can surface the
-        # cmd_permission_request to the frontend via SSE.
+        # ── Prompt board watcher ──────────────────────────────────
+        # A gate (dangerous command, external tool, AskUserQuestion) blocks
+        # inside PreToolUse awaiting a human; while it blocks the SDK produces
+        # nothing. Its prompt is on the session's board (PermissionManager), and
+        # this loop waits on the SDK read AND on board changes. Neither wait can
+        # lose anything: the SDK read is one persistent task that is never
+        # cancelled while its stream lives (_sdk_read_for), and a board-change
+        # future carries no data -- the board is re-read after it fires.
         from core.permission_manager import permission_manager as _pm
-        perm_queue = _pm.get_session_queue(self._parent.session_id)
+        _board_keys = self._board_keys()
 
         response_iter = self._turn_iter()
-        _STREAM_EXHAUSTED = object()  # Sentinel: iterator is done
+        _STREAM_EXHAUSTED = _STREAM_END  # Sentinel: iterator is done
         # tool_use_id → list[raw_path] WRITTEN by that tool (Write/Edit/NotebookEdit
         # file_path + Bash `>`/tee/cp/mv-DEST). Emits operation=written at the ToolResult
         # (success) point — the EVENT-DRIVEN live-surfacing emit (run_cce6f4b9), which
@@ -1633,174 +1532,100 @@ class StreamingOrchestrator:
         # FINISH via sweep_run_changes / surface_run_outputs (the retained author-agnostic
         # fallback), an XG-accepted tradeoff for removing the per-turn regression.
 
-        # requestIds this stream re-queued via _rescue_unsurfaced_permission
-        # (each at most once per stream).
-        _rescued_perm_ids: set[str] = set()
         # Start of the current SDK silence: the last REAL SDK message (seeded
         # from the unit's clock). Unlike _last_event_time, a CPU-gated
         # extension does not move it, so TOOL_FREE_HARD_CEILING_S stays a
         # true cap on one silence.
         _silence_since: Optional[float] = getattr(self._parent, "_last_event_time", None)
-        # A rescued permission found at a read timeout, surfaced next iteration.
-        _forced_perm: Optional[dict] = None
-
-        async def _next_or_sentinel():
-            """Wrap __anext__ so StopAsyncIteration doesn't leak into Task.
-
-            Python converts StopAsyncIteration inside a Task into
-            RuntimeError('async generator raised StopAsyncIteration').
-            Wrapping it here returns a sentinel instead, which the
-            caller checks after task.result().
-            """
-            try:
-                return await response_iter.__anext__()
-            except StopAsyncIteration:
-                return _STREAM_EXHAUSTED
 
         while True:
             current_timeout = INIT_TIMEOUT if is_first_message else MESSAGE_TIMEOUT
-
-            # Race: SDK message vs permission request from hook
-            _late_sdk = self._turn_carry.setdefault("late_sdk", [])
-            if _late_sdk:
-                # An SDK message a losing sdk_task read after the race (see
-                # _cancel_losers): deliver it before reading the next one.
-                _msg = _late_sdk.pop(0)
-                sdk_task = self._completed_future(
-                    _STREAM_EXHAUSTED if _msg is self._LATE_EXHAUSTED else _msg)
-            else:
-                sdk_task = asyncio.ensure_future(
-                    asyncio.wait_for(
-                        _next_or_sentinel(),
-                        timeout=current_timeout,
-                    )
-                )
-            if _forced_perm is not None:
-                # A rescued permission (see the timeout branch) wins this race
-                # immediately; the fresh sdk_task is cancelled as the loser.
-                perm_task = self._completed_perm_task(_forced_perm)
-                _forced_perm = None
-            else:
-                perm_task = asyncio.ensure_future(perm_queue.get())
+            # Own deadline for this message instead of wait_for: a timeout must
+            # never cancel the read (a read cancelled just after it took a
+            # message loses it). The timeout branch below decides; an extension
+            # simply keeps waiting on the same read.
+            _deadline = awake_time() + current_timeout
+            sdk_read = self._sdk_read_for(response_iter)
+            perm_request: Optional[dict] = None
+            timed_out = False
 
             try:
-                # Heartbeat polling: wake every HEARTBEAT_POLL_S to surface a
-                # "still working" notice during a long or stuck wait, WITHOUT
-                # cancelling the in-flight sdk_task — cancelling it would abort
-                # the __anext__ read mid-message and could lose/corrupt a
-                # message. sdk_task and perm_task persist across ticks; only the
-                # tick timer is re-armed. This is what makes a silent hang
-                # visible (the heartbeat is otherwise event-driven and never
-                # fires when no SDK events arrive).
+                # Heartbeat polling: wake at least every HEARTBEAT_POLL_S to
+                # surface a "still working" notice during a long or stuck wait.
+                # Only the tick timer and the board-change future (no data) are
+                # re-armed; the SDK read persists.
                 while True:
-                    tick_task = asyncio.ensure_future(asyncio.sleep(HEARTBEAT_POLL_S))
+                    _remaining = _deadline - awake_time()
+                    if _remaining <= 0 and not sdk_read.done():
+                        timed_out = True
+                        break
+                    board_changed = _pm.wait_prompt_change(_board_keys[0])
+                    _extra_changes = [_pm.wait_prompt_change(k) for k in _board_keys[1:]]
+                    perm_request = self._next_open_prompt(_pm, _board_keys)
+                    if perm_request is not None or sdk_read.done():
+                        for f in (board_changed, *_extra_changes):
+                            f.cancel()
+                        break
+                    tick_task = asyncio.ensure_future(
+                        asyncio.sleep(max(0.0, min(HEARTBEAT_POLL_S, _remaining))))
                     try:
-                        done, pending = await asyncio.wait(
-                            [sdk_task, perm_task, tick_task],
+                        done, _pending = await asyncio.wait(
+                            [sdk_read, board_changed, *_extra_changes, tick_task],
                             return_when=asyncio.FIRST_COMPLETED,
                         )
-                    except BaseException:
+                    finally:
                         tick_task.cancel()
-                        raise
-                    if tick_task in done and sdk_task not in done and perm_task not in done:
-                        # Neither a message nor a permission arrived this tick —
-                        # surface a heartbeat (throttled internally) and keep
-                        # waiting on the SAME sdk_task/perm_task.
-                        # A pending permission whose queue item never arrived:
-                        # swap in a completed perm_task carrying it, so the next
-                        # wait returns it through the normal surface path.
-                        _lost = self._rescue_unsurfaced_permission(perm_queue, _rescued_perm_ids)
-                        if _lost is not None:
-                            perm_task.cancel()
-                            perm_task = self._completed_perm_task(_lost)
-                            continue
-                        _note = _progress.check(
-                            awake_time(), tools_open=bool(self._parent._open_tool_uses)
-                        )
-                        if _note is not None:
-                            yield self._stall_event(_note)
-                        try:
-                            hb = self._parent._maybe_build_elapsed_heartbeat()
-                            if hb is not None:
-                                # Only a reported stall is refreshed; a plain
-                                # long turn sends no notice.
-                                _stall = _progress.stall_note(awake_time())
-                                if _stall is not None:
-                                    yield {**hb, "message": _stall, "stall": True}
-                        except Exception as hb_exc:
-                            logger.debug(
-                                "streaming_orchestrator.heartbeat_failed session_id=%s: %s",
-                                getattr(self._parent, "session_id", "?"),
-                                f"{type(hb_exc).__name__}: {hb_exc}",
-                            )
-                        continue
-                    # A real task finished — drop the tick timer and proceed.
-                    tick_task.cancel()
+                        for f in (board_changed, *_extra_changes):
+                            f.cancel()
+                    if sdk_read in done or tick_task not in done:
+                        continue  # a message, or the board changed: re-check both
+                    if _deadline - awake_time() <= 0:
+                        continue  # the deadline branch above takes it
+                    # A tick with nothing new: surface a heartbeat (throttled
+                    # internally) and keep waiting on the SAME read.
+                    _note = _progress.check(
+                        awake_time(), tools_open=bool(self._parent._open_tool_uses)
+                    )
+                    if _note is not None:
+                        yield self._stall_event(_note)
                     try:
-                        await tick_task
-                    except asyncio.CancelledError:
-                        # Expected: we just cancelled it (fires on every streamed
-                        # event) — unless THIS task is being cancelled (see the
-                        # loser-cancel loop below).
-                        _me = asyncio.current_task()
-                        if _me is not None and _me.cancelling():
-                            raise
-                    except Exception:
-                        logger.debug("_read_formatted_response: tick timer raised on cancel", exc_info=True)
-                    done.discard(tick_task)
-                    pending.discard(tick_task)
-                    break
+                        hb = self._parent._maybe_build_elapsed_heartbeat()
+                        if hb is not None:
+                            # Only a reported stall is refreshed; a plain
+                            # long turn sends no notice.
+                            _stall = _progress.stall_note(awake_time())
+                            if _stall is not None:
+                                yield {**hb, "message": _stall, "stall": True}
+                    except Exception as hb_exc:
+                        logger.debug(
+                            "streaming_orchestrator.heartbeat_failed session_id=%s: %s",
+                            getattr(self._parent, "session_id", "?"),
+                            f"{type(hb_exc).__name__}: {hb_exc}",
+                        )
             except BaseException:
-                # Cleanup on unexpected errors — and on GeneratorExit /
-                # CancelledError at a heartbeat/notice yield (consumer closed
-                # the stream): an orphaned perm_queue.get() would swallow the
-                # next permission request on this session's queue.
-                sdk_task.cancel()
-                perm_task.cancel()
+                # The consumer closed the stream (GeneratorExit / CancelledError at
+                # a heartbeat yield) or the wait failed: this stream is over, so
+                # its read is too.
+                self._discard_sdk_read()
                 raise
 
-            # Cancel the loser(s); a perm_task that took its queue item after the
-            # wait returned is carried to the next iteration (see _cancel_losers).
-            _late_perm, _late_msg = await self._cancel_losers(
-                pending, perm_task, sdk_task, _STREAM_EXHAUSTED)
-            if _late_perm is not None:
-                _forced_perm = _late_perm
-            if _late_msg is not None:
-                # Kept in the turn carry, not a local: when the permission is
-                # surfaced this stream returns (WAITING_INPUT) and the
-                # continuation's stream must deliver the message first.
-                self._turn_carry.setdefault("late_sdk", []).append(_late_msg)
-
-            # ── Permission request OR ask_user_question won the race ──
-            if perm_task in done:
-                try:
-                    perm_request = perm_task.result()
-                except Exception:
-                    # Queue.get shouldn't fail, but be safe
-                    logger.debug("_read_formatted_response: suppressed exception on a fail-safe path", exc_info=True)
-                    continue
+            # ── A prompt is open on the board: surface it ─────────
+            # (Before an SDK message that may have arrived too: while a gate
+            # blocks, that message stays in the persistent read and is
+            # delivered first by whichever stream reads on.)
+            if perm_request is not None:
 
                 # ── AskUserQuestion item (kind-discriminated) ─────────
-                # The ask_question_gate hook enqueues {kind:"ask_user_question",
-                # tool_use_id, questions} on the SAME per-session queue. It blocks
+                # The ask_question_gate hook publishes {kind:"ask_user_question",
+                # tool_use_id, questions} on the session's prompt board. It blocks
                 # awaiting ask_question_manager.wait_for_answer(tool_use_id). Surface
                 # the question to the frontend; the answer arrives via
                 # continue_with_answer → set_answer(tool_use_id) which unblocks the
                 # hook (the hook then injects answers via updatedInput).
                 if perm_request.get("kind") == "ask_user_question":
-                    from core.ask_question_manager import ask_question_manager as _aqm
+                    # open_prompts returns only prompts whose waiter is live and
+                    # unanswered, so nothing here can be answered into a void.
                     _tuid = perm_request.get("tool_use_id")
-                    # Kind-aware drop-guard: an ask item's waiter lives in the
-                    # AskQuestionManager, NOT permission_manager. A stale item whose
-                    # hook was cancelled (respawn/timeout) has no live waiter — drop
-                    # it so the user can't "answer into a void".
-                    if not _tuid or not _aqm.has_live_waiter(_tuid):
-                        logger.info(
-                            "session_unit: dropping stale ask_user_question %s "
-                            "(no live waiter) session_id=%s",
-                            _tuid, self._parent.session_id,
-                        )
-                        continue
                     questions = perm_request.get("questions", [])
                     logger.info(
                         "session_unit.ask_question_surfaced session_id=%s "
@@ -1814,31 +1639,19 @@ class StreamingOrchestrator:
                         "tool_use_id": _tuid,
                         "questions": questions,
                     }
+                    # WAITING_INPUT BEFORE the event leaves: an answer that comes
+                    # back while this generator is still suspended at the yield
+                    # must find the unit waiting on this question, so its
+                    # continuation reads on (else nobody reads: a wedge).
+                    self._parent._transition(SessionState.WAITING_INPUT)
+                    self._parent.last_used = awake_time()
                     yield {
                         "type": "ask_user_question",
                         "toolUseId": _tuid,
                         "questions": questions,
                         "sessionId": self._parent.session_id,
                     }
-                    self._parent._transition(SessionState.WAITING_INPUT)
-                    self._parent.last_used = awake_time()
                     return
-
-                # The per-session queue survives respawn (keyed by session_id,
-                # only dropped on session end), so a stale request whose hook was
-                # cancelled can be replayed here. Surfacing it would let the user
-                # "approve" into a void with no awaiting hook. Drop any request
-                # with no live waiter (its wait_for_permission_decision already
-                # popped the event in its finally on cancellation/timeout).
-                from core.permission_manager import permission_manager as _pm_live
-                _req_id = perm_request.get("requestId")
-                if not _req_id or not _pm_live.has_live_waiter(_req_id):
-                    logger.info(
-                        "session_unit: dropping stale permission request %s "
-                        "(no live waiter) session_id=%s",
-                        _req_id, self._parent.session_id,
-                    )
-                    continue
 
                 logger.info(
                     "session_unit.permission_surfaced session_id=%s "
@@ -1861,6 +1674,9 @@ class StreamingOrchestrator:
                     "reason": perm_request.get("reason", ""),
                     "options": perm_request.get("options", ["approve", "deny"]),
                 }
+                # WAITING_INPUT BEFORE the event leaves (see the question branch).
+                self._parent._transition(SessionState.WAITING_INPUT)
+                self._parent.last_used = awake_time()
                 yield {
                     "type": "cmd_permission_request",
                     "requestId": perm_request["requestId"],
@@ -1870,17 +1686,15 @@ class StreamingOrchestrator:
                     "reason": perm_request.get("reason", ""),
                     "options": perm_request.get("options", ["approve", "deny"]),
                 }
-                self._parent._transition(SessionState.WAITING_INPUT)
-                self._parent.last_used = awake_time()
                 return
 
-            # ── SDK message won the race ──────────────────────────
-            try:
-                message = sdk_task.result()
+            # ── The SDK read finished, or this message's deadline passed ──
+            if not timed_out:
+                message = self._take_sdk_read(sdk_read)
                 if message is _STREAM_EXHAUSTED:
                     break
                 is_first_message = False
-            except asyncio.TimeoutError:
+            else:
                 phase = "init" if is_first_message else "streaming"
                 # ── Tool-FREE CPU-liveness gate (run_dcd668a6) ─────────
                 # The wall-clock timeout fired, but that alone does NOT prove a
@@ -1888,22 +1702,11 @@ class StreamingOrchestrator:
                 # large context) is SDK-silent yet CPU-BUSY. Before killing,
                 # probe the subprocess tree CPU. If it's WORKING, extend the
                 # deadline (bounded per attempt + hard-ceilinged) by looping
-                # again — the next iteration builds a FRESH sdk_task (a NEW
-                # __anext__), NOT a resume of the cancelled read (the SDK
-                # json_buffer lives in a DETACHED reader task, so a fresh
-                # __anext__ re-parks cleanly on the memory stream). WEDGED or
+                # again on the SAME pending read (never cancelled). WEDGED or
                 # UNKNOWN → raise as before (fail-safe: never hang forever on an
                 # unmeasurable/dead process). Applies to init too — a large-
                 # context cold-resume TTFT is the most common false-timeout.
                 _parent = self._parent
-                # A permission prompt that never reached the frontend: the CLI
-                # waits in its PreToolUse hook (no SDK messages) and this timer
-                # would kill a session that is only waiting for the user.
-                # Re-surface it instead (normal perm_task path next iteration).
-                _lost = self._rescue_unsurfaced_permission(perm_queue, _rescued_perm_ids)
-                if _lost is not None:
-                    _forced_perm = _lost  # surfaced at the top of the next iteration
-                    continue
                 # A tool is open (Bash build, test run, Agent sub-agent): its
                 # liveness belongs to SessionUnit's tool-aware hang tier
                 # (_pid_watchdog — CPU-probes the tool tree and warm-interrupts
@@ -1923,7 +1726,7 @@ class StreamingOrchestrator:
                         phase, _parent.session_id, current_timeout,
                         len(_parent._open_tool_uses),
                     )
-                    continue  # fresh sdk_task next iteration (new __anext__)
+                    continue  # same pending read, new deadline
                 _pid = _parent.pid
                 # Ceiling measured from the last SDK event (the SILENCE), not from
                 # turn start: a long turn that was progressing until now must get
@@ -1955,12 +1758,13 @@ class StreamingOrchestrator:
                         # Reset the liveness clocks so the watchdog backstop
                         # doesn't immediately kill on the same stale silence.
                         _parent._last_event_time = awake_time()
-                        continue  # fresh sdk_task next iteration (new __anext__)
+                        continue  # same pending read, new deadline
                 logger.error(
                     "session_unit.%s_timeout session_id=%s — "
                     "no SDK message for %.0fs (resume=%s), breaking stream",
                     phase, self._parent.session_id, current_timeout, is_resume,
                 )
+                self._discard_sdk_read()
                 raise RuntimeError(
                     f"Streaming timeout ({phase}): no SDK response for "
                     f"{current_timeout:.0f}s (session_id={self._parent.session_id}, "
@@ -2597,10 +2401,10 @@ class StreamingOrchestrator:
                             # fall through: SDK runs the tool, returns its ack normally.
                         if block.name == "AskUserQuestion":
                             # The ask_question_gate PreToolUse hook intercepts this
-                            # tool call BEFORE the CLI self-resolves it: it enqueues
+                            # tool call BEFORE the CLI self-resolves it: it publishes
                             # {kind:"ask_user_question", tool_use_id, questions} on the
-                            # per-session queue and BLOCKS on wait_for_answer. The
-                            # perm_task branch above surfaces the question SSE and
+                            # session's prompt board and BLOCKS on wait_for_answer. The
+                            # prompt branch above surfaces the question SSE and
                             # transitions to WAITING_INPUT; continue_with_answer →
                             # set_answer unblocks the hook, which injects answers via
                             # updatedInput. So here we only SKIP the tool_use block —

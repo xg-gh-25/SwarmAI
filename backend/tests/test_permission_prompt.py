@@ -134,31 +134,32 @@ async def test_record_decision_rejects_anything_but_approve_or_deny():
 
 
 @pytest.mark.asyncio
-async def test_the_permission_continuation_records_the_decision_before_continuing():
-    from core.session_router import SessionRouter
-    router = SessionRouter.__new__(SessionRouter)
-    order = []
-    unit = MagicMock()
-    unit._turn_client_id = None
-    unit._turn_changes = None
-    unit._turn_files = {}
-
-    async def _cont(rid, allowed):
-        order.append("continue")
-        yield {"type": "result"}
-
-    unit.continue_with_permission = _cont
-    router.get_unit = lambda sid: unit
+async def test_the_decision_is_recorded_only_once_the_hook_has_it():
+    """The unit records the decision on the stored prompt after handing it to the
+    blocked hook -- and records nothing when no hook waits (the 2026-10-22
+    incident: the tab showed "Approved" for a decision that went nowhere)."""
+    import asyncio
+    from core.permission_manager import permission_manager as pm
+    from core.session_unit import SessionState, SessionUnit
+    unit = SessionUnit(session_id="s1", agent_id="a")
+    unit._transition(SessionState.IDLE)
+    unit._transition(SessionState.STREAMING)
+    recorded = []
 
     async def _rec(sid, rid, decision):
-        order.append(("record", rid, decision))
+        recorded.append((rid, decision, pm.is_open(rid)))
         return True
 
-    with patch("core.permission_prompt.record_decision", _rec), \
-         patch.object(SessionRouter, "_persist_stream_event", AsyncMock(return_value=[])):
-        events = [e async for e in router._continue_with_cmd_permission_impl("s1", "perm_1", False)]
-    assert order == [("record", "perm_1", "deny"), "continue"]
-    assert events[-1] == {"type": "result"}
+    with patch("core.permission_prompt.record_decision", _rec):
+        with pytest.raises(RuntimeError):
+            [e async for e in unit.continue_with_permission("perm_nobody", False)]
+        assert recorded == []
+        waiter = asyncio.ensure_future(pm.request_decision("s1", {"requestId": "perm_1"}))
+        await asyncio.sleep(0)
+        [e async for e in unit.continue_with_permission("perm_1", False)]
+    assert await asyncio.wait_for(waiter, 2) == "deny"
+    await asyncio.sleep(0)  # the record runs in the background
+    assert recorded == [("perm_1", "deny", False)]  # recorded after delivery
 
 
 def test_annotate_marks_only_dead_undecided_prompts_expired():
@@ -174,14 +175,14 @@ def test_annotate_marks_only_dead_undecided_prompts_expired():
     assert c[2]["decision"] == "approve"
 
 
-def test_live_request_ids_reads_the_unit_and_the_durable_store():
+def test_live_request_ids_reads_the_unit_and_the_prompt_board():
     from core.session_unit import SessionState
     unit = MagicMock()
     unit.state = SessionState.WAITING_INPUT
     unit._pending_question = {"request_id": "perm_1"}
     pm = MagicMock()
-    pm.get_pending_for_session.return_value = [{"id": "perm_2"}, {"id": "perm_dead"}]
-    pm.has_live_waiter.side_effect = lambda rid: rid == "perm_2"
+    pm.open_prompts.return_value = [{"requestId": "perm_2"},
+                                    {"kind": "ask_user_question", "tool_use_id": "tu"}]
     with patch("core.permission_manager.permission_manager", pm):
         assert pp.live_request_ids(unit, "s1") == {"perm_1", "perm_2"}
     unit.state = SessionState.IDLE

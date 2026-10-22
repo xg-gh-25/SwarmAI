@@ -117,13 +117,9 @@ def _make_unit(session_id="test-cw", model_name="claude-sonnet-4-6"):
 async def _collect_events(unit):
     """Iterate _read_formatted_response() and collect all yielded events.
 
-    Patches ``permission_manager`` so its per-session ``asyncio.Queue``
-    is created on the CURRENT event loop — not a stale loop from a
-    previous test.  Without this, concurrent test execution triggers
-    ``RuntimeError: Queue is bound to a different event loop``.
+    The real permission_manager is used (its prompt board is loop-safe and the
+    autouse conftest fixture isolates it per test).
     """
-    mock_pm = MagicMock()
-    mock_pm.get_session_queue = MagicMock(return_value=asyncio.Queue())
     events = []
     # Every ResultMessage fires a fire-and-forget token-usage DB write. These
     # tests assert on emitted events only; with Hypothesis running many examples
@@ -131,8 +127,7 @@ async def _collect_events(unit):
     # reset_database teardown then hangs closing (flaky shard timeout). Stub the
     # write — token accounting is not under test here.
     import database
-    with patch("core.permission_manager.permission_manager", mock_pm), \
-         patch.object(database.db, "record_token_usage", AsyncMock(return_value=None)):
+    with patch.object(database.db, "record_token_usage", AsyncMock(return_value=None)):
         async for event in unit._read_formatted_response():
             events.append(event)
     return events

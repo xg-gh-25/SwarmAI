@@ -94,13 +94,6 @@ class _patch_sdk_modules:
                 "ThinkingBlock": _MockThinkingBlock,
             }),
         })
-        # Patch permission_manager.get_session_queue to return a fresh Queue
-        # bound to the current event loop (avoids "bound to a different event
-        # loop" RuntimeError when xdist reuses workers).
-        self._pm_patch = patch(
-            "core.permission_manager.permission_manager.get_session_queue",
-            return_value=asyncio.Queue(),
-        )
         # Mock the fire-and-forget token-usage DB write. The orchestrator
         # schedules `asyncio.get_running_loop().create_task(db.record_token_usage(...))`
         # after a result yield; with the real coroutine it outlives the
@@ -115,7 +108,6 @@ class _patch_sdk_modules:
         )
         self._dict_patch.start()
         try:
-            self._pm_patch.start()
             self._db_patch.start()
         except Exception:
             self._dict_patch.stop()
@@ -124,7 +116,6 @@ class _patch_sdk_modules:
 
     def __exit__(self, *exc):
         self._db_patch.stop()
-        self._pm_patch.stop()
         self._dict_patch.stop()
         return False
 

@@ -20,6 +20,7 @@ files, a real ``sh`` for the hook command); leak fixtures are built with
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import subprocess
 import sys
@@ -191,7 +192,7 @@ async def test_read_loop_persists_the_compaction_before_yielding_it():
         return True
 
     events = []
-    with patch.object(_pm_mod.permission_manager, "get_session_queue", return_value=asyncio.Queue()), \
+    with contextlib.nullcontext(), \
             patch("core.compact_summary.persist", _persist):
         with pytest.raises(Exception):
             async for ev in StreamingOrchestrator(unit)._read_formatted_response():

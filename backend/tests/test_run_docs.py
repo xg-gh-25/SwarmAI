@@ -214,7 +214,7 @@ class TestOrchestratorEmitsDocs:
         from tests.test_pipeline_stage_events import CLI, _ScriptedReader, _bash_use, _drive_stream, _result
         from tests.test_tool_call_leak_guard import _make_orchestrator, _make_result_message
         from core.permission_manager import permission_manager
-        permission_manager.remove_session_queue("sess-test")   # a fresh event loop per drive
+        permission_manager.clear_session("sess-test")   # a fresh event loop per drive
         monkeypatch.setattr(pse, "read_stage_state", _ScriptedReader(before, after))
         events, raised = _drive_stream(_make_orchestrator(), [
             _bash_use("tu1", CLI.format(rid="run_d1")), _result("tu1"), _make_result_message()])

@@ -340,9 +340,9 @@ def _isolated_queue():
     manager caches a per-session queue bound to the loop that created it (see
     test_orchestrator_surface_wiring.py). Clear it around every orchestrator test."""
     from core.permission_manager import permission_manager
-    permission_manager.remove_session_queue("sess-test")
+    permission_manager.clear_session("sess-test")
     yield
-    permission_manager.remove_session_queue("sess-test")
+    permission_manager.clear_session("sess-test")
 
 
 CLI = ("cd /x/swarmai && source backend/.venv/bin/activate && python "
@@ -520,7 +520,7 @@ class TestOrchestratorWiring:
         monkeypatch.setattr(pse, "read_stage_state", reader2)
         # second turn = second event loop: drop the queue bound to the first one
         from core.permission_manager import permission_manager
-        permission_manager.remove_session_queue("sess-test")
+        permission_manager.clear_session("sess-test")
         events, _ = _drive_stream(orch, [_bash_use("tu9", CLI.format(rid="run_t1")),
                                          _result("tu9"), _make_result_message()])
         blocks = [b for e in _stage_events(events) for b in e["content"]]

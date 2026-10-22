@@ -115,10 +115,10 @@ def _run_gate(questions: list, answer: dict, answered_by: str, monkeypatch) -> d
     from core import security_hooks
     mgr = AskQuestionManager()
 
-    async def _enqueue(*_args, **_kwargs):
+    def _publish(*_args, **_kwargs):
         return None
-    monkeypatch.setattr("core.permission_manager.permission_manager.enqueue_permission_request",
-                        _enqueue)
+    monkeypatch.setattr("core.permission_manager.permission_manager.publish_prompt",
+                        _publish)
     hook = security_hooks.create_ask_question_gate(OWNER, {"sdk_session_id": OWNER}, mgr)
 
     async def _go():

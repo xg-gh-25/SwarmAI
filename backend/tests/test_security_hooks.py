@@ -873,22 +873,25 @@ class TestAskQuestionGate:
 
     @pytest.mark.asyncio
     async def test_askquestion_enqueues_with_kind_and_tool_use_id(self):
-        """The surfaced queue item must carry kind + tool_use_id so the
-        orchestrator's kind-aware drop-guard + SSE branch can route it."""
+        """The prompt published on the board must carry kind + tool_use_id so the
+        stream's SSE branch routes it as a question; it leaves the board once
+        the question is answered."""
         answers = {"q": "a"}
         gate, mgr = self._make_gate(answer_to_return=answers)
-        # Use the real permission_manager session queue (the surfacing channel).
         from core.permission_manager import permission_manager as pm
-        # Drain any pre-existing items for isolation.
-        q = pm.get_session_queue("sess-askq")
-        while not q.empty():
-            q.get_nowait()
-        await gate(
-            {"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "q"}]}},
-            "toolu_askq2", None,
-        )
-        assert not q.empty(), "hook must enqueue a surfacing item"
-        item = q.get_nowait()
+        published: list = []
+        _orig = pm.publish_prompt
+        pm.publish_prompt = lambda sid, it: (published.append(it), _orig(sid, it))[-1]
+        try:
+            await gate(
+                {"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "q"}]}},
+                "toolu_askq2", None,
+            )
+        finally:
+            pm.publish_prompt = _orig
+        assert published, "hook must publish a prompt"
+        assert pm.open_prompts("sess-askq") == []
+        item = published[0]
         assert item["kind"] == "ask_user_question"
         assert item["tool_use_id"] == "toolu_askq2"
         assert "questions" in item

@@ -56,9 +56,9 @@ def _isolate_permission_queue():
     ask_user_question path, so it is not cleared here — but if you add a test that
     does, clear it in this fixture too or it will hang identically."""
     from core.permission_manager import permission_manager
-    permission_manager.remove_session_queue("sess-test")
+    permission_manager.clear_session("sess-test")
     yield
-    permission_manager.remove_session_queue("sess-test")
+    permission_manager.clear_session("sess-test")
 
 
 def _write_tool_use(tool_use_id: str = "tu-w1", file_path: str = "Knowledge/Designs/x.md"):

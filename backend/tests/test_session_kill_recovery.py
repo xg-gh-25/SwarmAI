@@ -119,13 +119,17 @@ async def _continue(unit, read_exc):
         yield {"type": "result", "resumed": True}
 
     unit.state = SessionState.WAITING_INPUT
+    unit._pending_question = {"request_id": "req-1", "tool_use_id": "req-1"}
+    unit._pending_tool_use_id = "req-1"
     unit._client = MagicMock()
     retry = MagicMock(side_effect=resumed)
     with patch("core.permission_manager.permission_manager") as pm, \
+         patch("core.permission_prompt.record_decision", AsyncMock(return_value=True)), \
          patch.object(unit, "_read_formatted_response", side_effect=dying_read), \
          patch.object(unit, "_retry_with_resume", retry), \
          patch.object(unit, "_crash_to_cold_async", new_callable=AsyncMock), \
          patch.object(unit, "_transition"):
+        pm.is_open = MagicMock(return_value=True)
         pm.update_pending_request = MagicMock()
         pm.set_permission_decision = MagicMock()
         events = [e async for e in unit.continue_with_permission("req-1", True)]

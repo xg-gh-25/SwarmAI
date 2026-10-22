@@ -163,7 +163,7 @@ def test_heredoc_patch_emits_only_the_file_it_changed(tmp_path, monkeypatch):
     from tests.test_orchestrator_surface_wiring import _patch_boundaries
     from tests.test_tool_call_leak_guard import _make_orchestrator, _make_result_message
 
-    permission_manager.remove_session_queue("sess-test")
+    permission_manager.clear_session("sess-test")
     _patch_boundaries(monkeypatch, review_worthy=True, kind="source")
     monkeypatch.setattr(
         "routers.workspace_api.resolve_path_to_physical",
@@ -187,6 +187,6 @@ def test_heredoc_patch_emits_only_the_file_it_changed(tmp_path, monkeypatch):
             _make_orchestrator(), use, lambda: written.write_text("new"), _make_result_message(),
         )
     finally:
-        permission_manager.remove_session_queue("sess-test")
+        permission_manager.clear_session("sess-test")
     fc = [e for e in events if e.get("type") == "file_changed" and e.get("operation") == "written"]
     assert [e["absolutePath"] for e in fc] == [str(written)], "read-only literal must be dropped"

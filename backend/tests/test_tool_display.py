@@ -19,6 +19,8 @@ Properties pinned:
 """
 from __future__ import annotations
 
+import contextlib
+
 import json
 
 import pytest
@@ -162,7 +164,7 @@ async def _stream(msgs) -> list[dict]:
     unit._client = MagicMock()
     unit._client.receive_response = lambda: _Script(msgs)
     events: list[dict] = []
-    with patch.object(_pm.permission_manager, "get_session_queue", return_value=asyncio.Queue()):
+    with contextlib.nullcontext():
         with pytest.raises(Exception):
             async for ev in orch._read_formatted_response():
                 events.append(ev)

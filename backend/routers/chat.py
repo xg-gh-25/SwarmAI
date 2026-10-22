@@ -872,14 +872,9 @@ async def get_streaming_state_endpoint():
         except Exception:
             pending_count = 0
 
-        # The primary source is the transient _pending_question (set on the
-        # WAITING_INPUT emit). But that field — and state==waiting_input — are
-        # LOST if the surface SSE event never fired (the hang bug: the permission
-        # was enqueued but the orchestrator's surface block never ran) or after a
-        # respawn. Fix #1B: when _pending_question is None, fall back to the
-        # DURABLE permission store, but ONLY if a live waiter still exists for the
-        # request (has_live_waiter) — otherwise the hook is dead and re-surfacing
-        # would let the user "approve" into the void.
+        # The unit's surfaced prompt (WAITING_INPUT), else the oldest open prompt
+        # on the session's board -- the same source the session's stream reads,
+        # so the tab and the stream can never disagree about what is open.
         pending_question = (
             getattr(unit, "_pending_question", None)
             if unit.state.value == "waiting_input" else None
@@ -887,26 +882,23 @@ async def get_streaming_state_endpoint():
         if pending_question is None:
             try:
                 from core.permission_manager import permission_manager as _pm
-                for req in _pm.get_pending_for_session(unit.session_id):
-                    req_id = req.get("id")
-                    if req_id and _pm.has_live_waiter(req_id):
-                        raw_input = req.get("tool_input", {})
-                        # Durable store keeps tool_input as a JSON string
-                        # (security_hooks persist); _pending_question uses a dict.
-                        if isinstance(raw_input, str):
-                            try:
-                                raw_input = json.loads(raw_input)
-                            except (ValueError, TypeError):
-                                raw_input = {}
+                for item in _pm.open_prompts(unit.session_id):
+                    if item.get("kind") == "ask_user_question":
                         pending_question = {
-                            "tool_use_id": req_id,
-                            "request_id": req_id,
-                            "tool_name": req.get("tool_name", "Bash"),
-                            "tool_input": raw_input,
-                            "reason": req.get("reason", ""),
-                            "options": req.get("options", ["approve", "deny"]),
+                            "tool_use_id": item.get("tool_use_id"),
+                            "questions": item.get("questions", []),
                         }
-                        break  # surface the oldest live pending request
+                    else:
+                        pending_question = {
+                            "tool_use_id": item.get("requestId"),
+                            "request_id": item.get("requestId"),
+                            "tool_call_id": item.get("toolUseId"),
+                            "tool_name": item.get("toolName", "Bash"),
+                            "tool_input": item.get("toolInput", {}),
+                            "reason": item.get("reason", ""),
+                            "options": item.get("options", ["approve", "deny"]),
+                        }
+                    break
             except Exception:
                 pending_question = None
 

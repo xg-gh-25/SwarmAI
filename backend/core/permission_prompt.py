@@ -63,8 +63,8 @@ async def record_decision(session_id: str, request_id: str, decision: str) -> bo
 
 def live_request_ids(unit: Any, session_id: str) -> set[str]:
     """The permission requests a hook of this session is blocked on now: the unit's
-    surfaced prompt (WAITING_INPUT) and any durable pending request with a live
-    waiter (the same fallback the streaming-state read uses)."""
+    surfaced prompt (WAITING_INPUT) and the open prompts on its board (the
+    source the session's stream and the streaming-state read use)."""
     live: set[str] = set()
     try:
         state = getattr(getattr(unit, "state", None), "value", None)
@@ -75,9 +75,9 @@ def live_request_ids(unit: Any, session_id: str) -> set[str]:
         logger.debug("permission_prompt.live_unit_read_failed", exc_info=True)
     try:
         from core.permission_manager import permission_manager as _pm
-        for req in _pm.get_pending_for_session(session_id):
-            rid = req.get("id")
-            if rid and _pm.has_live_waiter(rid):
+        for item in _pm.open_prompts(session_id):
+            rid = item.get("requestId")
+            if rid:
                 live.add(str(rid))
     except Exception:  # noqa: BLE001
         logger.debug("permission_prompt.live_store_read_failed", exc_info=True)

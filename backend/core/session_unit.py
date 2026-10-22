@@ -76,6 +76,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Strong refs for fire-and-forget decision records (a bare task can be GC'd).
+_BACKGROUND_RECORDS: "set[asyncio.Task]" = set()
+
 # Dedicated executor for subprocess operations (process tree snapshots,
 # pgrep, ps). Isolated from the default asyncio thread pool so that
 # blocking waitpid/subprocess.run calls can NEVER starve health checks,
@@ -4362,7 +4365,27 @@ class SessionUnit:
                 the SAME SDK stream continues (resumed below via
                 ``_read_formatted_response``). Falls back to ``_pending_tool_use_id``.
         """
-        if self.state != SessionState.WAITING_INPUT:
+        from core.ask_question_manager import ask_question_manager as _aqm
+        # Same rule as continue_with_permission: the answer goes to the hook
+        # blocked on it; this unit reads on only when it waits for this answer.
+        _target = tool_use_id or self._pending_tool_use_id
+        _pq = self._pending_question or {}
+        resume = (self.state == SessionState.WAITING_INPUT
+                  and self._pending_tool_use_id == _target
+                  and not _pq.get("request_id"))  # waiting on THIS question
+        if not resume:
+            if _target and _aqm.is_open(_target):
+                try:
+                    _parsed = json.loads(answer) if answer else {}
+                except (json.JSONDecodeError, TypeError):
+                    _parsed = {}
+                _aqm.set_answer(_target, _parsed if isinstance(_parsed, dict) else {},
+                                answered_by=answered_by)
+                logger.info(
+                    "session_unit.answer_no_resume session_id=%s tool_use_id=%s "
+                    "state=%s — the stream reading this turn carries on",
+                    self.session_id, _target, self.state.value)
+                return
             raise RuntimeError(
                 f"Cannot continue_with_answer in state {self.state.value} "
                 f"(session_id={self.session_id})"
@@ -4440,6 +4463,31 @@ class SessionUnit:
             async for event in self._retry_continuation(exc, traceback.format_exc()):
                 yield event
 
+    def _deliver_permission_decision(self, request_id: str, allowed: bool) -> bool:
+        """Hand the decision to the hook blocked on *request_id*; False (nothing
+        changed) when no hook waits on it. Synchronous on purpose: the caller
+        switches state right after, with no await in between, so a cancelled
+        continuation can never leave a delivered decision with no reader."""
+        from core.permission_manager import permission_manager as _pm
+        if not _pm.is_open(request_id):
+            return False
+        decision = "approve" if allowed else "deny"
+        # Status out of "pending" BEFORE signalling, so a streaming-state read in
+        # between never re-offers a decided prompt.
+        _pm.update_pending_request(request_id, {"status": decision})
+        _pm.set_permission_decision(request_id, decision)
+        logger.info(
+            "session_unit.permission_decision session_id=%s request_id=%s decision=%s",
+            self.session_id, request_id, decision,
+        )
+        # The stored prompt shows the decision only once the hook has it. Off the
+        # critical path (a display aid; it must not hold the state switch).
+        from core.permission_prompt import record_decision
+        _t = asyncio.ensure_future(record_decision(self.session_id, request_id, decision))
+        _BACKGROUND_RECORDS.add(_t)
+        _t.add_done_callback(_BACKGROUND_RECORDS.discard)
+        return True
+
     async def continue_with_permission(
         self, request_id: str, allowed: bool,
     ) -> AsyncIterator[dict]:
@@ -4455,49 +4503,31 @@ class SessionUnit:
         returns allow/deny to the SDK, the SDK continues processing,
         and we resume reading the response stream.
         """
-        from core.permission_manager import permission_manager as _pm
-        decision = "approve" if allowed else "deny"
-        if self.state == SessionState.STREAMING and _pm.has_live_waiter(request_id):
-            # The prompt reached the user before this turn's stream surfaced it
-            # (the tab's streaming-state mirror shows a prompt the backend is
-            # blocked on; the stream may surface it late, or never, when its queue
-            # item was taken). The hook is blocked and the turn's stream is still
-            # being read, so: hand the hook its decision and let that stream go
-            # on. Raising here dropped the decision while the tab showed it as
-            # made -- the hook then waited forever and every later message queued
-            # behind it (incident 2026-10-22, session 2b67fbbc).
-            _pm.update_pending_request(request_id, {"status": decision})
-            _pm.set_permission_decision(request_id, decision)
-            logger.info(
-                "session_unit.permission_decision_mid_stream session_id=%s "
-                "request_id=%s decision=%s (delivered to the blocked hook; the "
-                "running stream continues)", self.session_id, request_id, decision)
-            return
-        if self.state != SessionState.WAITING_INPUT:
-            raise RuntimeError(
-                f"Cannot continue_with_permission in state {self.state.value} "
-                f"(session_id={self.session_id})"
-            )
-        if self._client is None:
+        # One rule, whatever the state: the decision goes to the hook that is
+        # blocked on it; this unit reads on only when it is the one waiting for
+        # THAT decision (WAITING_INPUT on this exact prompt; the stream sets both
+        # before the prompt event leaves). Otherwise the stream that is reading
+        # the turn carries it on -- a prompt the tab showed from the board before
+        # the stream surfaced it, or a second prompt while a question is open.
+        pq = self._pending_question or {}
+        resume = (self.state == SessionState.WAITING_INPUT
+                  and pq.get("request_id") == request_id)
+        if resume and self._client is None:
             raise RuntimeError(
                 f"No client for continue_with_permission "
                 f"(session_id={self.session_id})"
             )
-
-        # Signal the blocked hook — this unblocks
-        # dangerous_command_gate's await on wait_for_permission_decision().
-        # Flip status OUT of "pending" BEFORE signalling. Otherwise a
-        # /sessions/streaming-state poll landing between set_permission_decision
-        # and the awaiting coroutine's finally would see status=="pending" + a
-        # still-live waiter and re-surface an already-decided prompt
-        # (approve-into-void).
-        _pm.update_pending_request(request_id, {"status": decision})
-        _pm.set_permission_decision(request_id, decision)
-        logger.info(
-            "session_unit.permission_decision session_id=%s "
-            "request_id=%s decision=%s",
-            self.session_id, request_id, decision,
-        )
+        if not self._deliver_permission_decision(request_id, allowed):
+            raise RuntimeError(
+                f"Cannot continue_with_permission: no hook is waiting on {request_id} "
+                f"(state {self.state.value}, session_id={self.session_id})"
+            )
+        if not resume:
+            logger.info(
+                "session_unit.permission_decision_no_resume session_id=%s "
+                "request_id=%s state=%s — the stream reading this turn carries on",
+                self.session_id, request_id, self.state.value)
+            return
 
         # User responded — reset compaction guard's loop-detection state.
         self._compaction_guard.reset()

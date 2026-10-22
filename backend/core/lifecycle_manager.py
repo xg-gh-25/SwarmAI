@@ -1125,7 +1125,7 @@ class LifecycleManager:
         - session_registry.recall_snapshot          (recalled block, TSCC panel)
         - session_registry.surfaced_paths           (Canvas-surfaced abs paths, run_c014a4f3)
         - permission_manager._approved_commands    (command hashes)
-        - permission_manager._session_queues       (asyncio.Queue)
+        - permission_manager prompt board          (open prompts + reader futures)
         - session_events hub replay buffer          (up to 4000 envelopes)
         """
         try:
@@ -1138,7 +1138,7 @@ class LifecycleManager:
         try:
             from .permission_manager import permission_manager
             permission_manager.clear_session_approvals(session_id)
-            permission_manager.remove_session_queue(session_id)
+            permission_manager.clear_session(session_id)
         except Exception as exc:
             logger.debug("_release_session_state permission cleanup failed: %s", exc)
         try:

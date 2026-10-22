@@ -160,7 +160,7 @@ _SAFE_RM_PREFIXES: tuple[str, ...] = (
 _SAFE_RM_EXACT: frozenset[str] = frozenset({"/tmp", "/private/tmp"})
 
 
-def _is_dangerous_rm(command: str) -> bool:
+def _is_dangerous_rm(command: str, _depth: int = 0) -> bool:
     """Fail-closed predicate: is this a *dangerous* recursive ``rm``?
 
     Replaces the blanket ``rm -rf *`` glob (fix #3), which forced an approval
@@ -176,13 +176,25 @@ def _is_dangerous_rm(command: str) -> bool:
       dangerous (fail closed). Zero path operands → dangerous (e.g. ``rm -rf *``
       where the shell would expand cwd).
     - Non-rm commands always return False (other patterns judge those).
+
+    Judged per simple command (``_gate_shell_segments``): an rm chained with
+    other commands (``rm -rf <tmp dir> && mkdir ...``) is judged on its own
+    operands, not on the words of the commands after it.
     """
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
+    segments = _gate_shell_segments(command)
+    if segments is None:
         # Unparseable (unbalanced quotes) → cannot prove safe → fail closed,
-        # but only if it actually looks like an rm command.
-        return command.strip().startswith("rm ")
+        # but only if an rm command is visible in it.
+        return bool(re.search(r"(?:^|[;&|(\n]\s*)(?:sudo\s+)?rm\s", command))
+    if any(_rm_segment_is_dangerous(_skip_leading_wrappers(seg)) for seg in segments):
+        return True
+    # A script handed to another shell (`sh -c '...'`, `bash <<EOF`) is judged too.
+    return _depth < 2 and any(
+        _is_dangerous_rm(s, _depth + 1) for s in _inner_shell_scripts(command, segments))
+
+
+def _rm_segment_is_dangerous(tokens: list[str]) -> bool:
+    """``_is_dangerous_rm`` for ONE simple command (already segmented)."""
     if not tokens or tokens[0] != "rm":
         return False
 
@@ -616,7 +628,87 @@ def _find_destroys(tokens: list) -> bool:
     return False
 
 
-def _targets_irreplaceable_store(command: str) -> bool:
+_POSITIONAL_RE = re.compile(r'"?\$(?:\{(\d+|@|\*)\}|(\d+|@|\*))"?')
+
+
+def _inner_shell_scripts(command: str, segments: "list[list[str]]") -> list[str]:
+    """Scripts a segment hands to another shell, to be judged like the outer one:
+    ``sh -c STRING [ARG0 ARG1 ...]`` (positional ``$1``.. ``$@`` substituted with
+    the ARGs, so ``sh -c 'rm "$1"' _ <store>`` is judged as ``rm <store>``), and,
+    for a shell that reads its script from stdin (no ``-c``, no script file), every
+    heredoc body of the command. Bodies are dropped by ``_gate_shell_segments``
+    (stdin is data to most programs, but code to ``bash <<EOF``)."""
+    scripts: list[str] = []
+    reads_stdin = False
+    for seg in segments:
+        seg = _skip_leading_wrappers(seg)
+        if not seg or os.path.basename(seg[0]) not in _SHELL_INTERPRETERS:
+            continue
+        parts = _shell_c_parts(seg[1:])
+        if parts is None:
+            if not any(not a.startswith("-") for a in seg[1:]):
+                reads_stdin = True  # `bash`, `bash -s`, `bash -euo pipefail`
+            continue
+        script, positional = parts
+        args = positional[1:]  # positional[0] is $0
+
+        def _sub(m: "re.Match[str]") -> str:
+            key = m.group(1) or m.group(2)
+            if key in ("@", "*"):
+                return " ".join(shlex.quote(a) for a in args)
+            idx = int(key)
+            if idx == 0:
+                return shlex.quote(positional[0]) if positional else ""
+            return shlex.quote(args[idx - 1]) if idx <= len(args) else ""
+
+        scripts.append(_POSITIONAL_RE.sub(_sub, script))
+    if reads_stdin:
+        scripts.extend(_heredoc_bodies(command))
+    return scripts
+
+
+def _heredoc_bodies(command: str) -> list[str]:
+    """The bodies of the command's heredocs (``<<WORD`` .. a line ``WORD``)."""
+    bodies: list[str] = []
+    lines = command.split("\n")
+    i = 0
+    while i < len(lines):
+        openers = list(_HEREDOC_OPENER_RE.finditer(lines[i]))
+        i += 1
+        for m in openers:
+            word = m.group("q1") or m.group("q2") or m.group("bs") or m.group("bare")
+            body: list[str] = []
+            while i < len(lines):
+                line = lines[i].lstrip("\t") if m.group("dash") else lines[i]
+                i += 1
+                if line == word:
+                    break
+                body.append(lines[i - 1])
+            bodies.append("\n".join(body))
+    return bodies
+
+
+def _copy_overwrites(dest: str, sources: list[str]) -> bool:
+    """Would ``cp``/``tee`` into *dest* overwrite an existing file? Fail-closed:
+    an unexpanded ``$VAR`` or glob counts as an overwrite."""
+    if "$" in dest or any(c in dest for c in "*?["):
+        return True
+    path = os.path.expanduser(dest)
+    if not os.path.isabs(path):
+        # Relative to the Bash call's cwd, which is not ours: cannot check.
+        return True
+    if os.path.isdir(path):
+        if not sources:
+            return True
+        return any(
+            "$" in s or any(c in s for c in "*?[")
+            or os.path.lexists(os.path.join(path, os.path.basename(s.rstrip("/"))))
+            for s in sources
+        )
+    return os.path.lexists(path)
+
+
+def _targets_irreplaceable_store(command: str, _depth: int = 0) -> bool:
     """Fail-closed predicate: does this command DESTROY/TRUNCATE an irreplaceable store?
 
     run_a456640f (order 4, STEERING #20): the Bash face of the destruction guard.
@@ -642,12 +734,25 @@ def _targets_irreplaceable_store(command: str) -> bool:
     HTTP project-delete) are covered structurally by ``isolate_store`` / trash-move,
     not by this text gate. Redirection truncation (``> store``) is also not seen
     (no verb token). Unparseable → False (fallback regex path covers that class).
+
+    Judged per simple command (``_gate_shell_segments``, which also opens
+    subshells and ``$(...)``): before, the whole line was one command, so a
+    store-destroy after ``cd x &&`` was missed (``tokens[0]`` was ``cd``) and a
+    read followed by other commands was judged on their words.
     """
-    from core.data_safety import classify_store, StoreClass
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
+    segments = _gate_shell_segments(command)
+    if segments is None:
         return False
+    if any(_store_segment_destroys(_skip_leading_wrappers(seg)) for seg in segments):
+        return True
+    return _depth < 2 and any(
+        _targets_irreplaceable_store(s, _depth + 1)
+        for s in _inner_shell_scripts(command, segments))
+
+
+def _store_segment_destroys(tokens: list[str]) -> bool:
+    """``_targets_irreplaceable_store`` for ONE simple command."""
+    from core.data_safety import classify_store, StoreClass
     # Delete/relocate/obliterate verbs + cp (cp /dev/null <store> zeroes a file).
     _DESTRUCTIVE_VERBS = ("rm", "mv", "truncate", "dd", "shred", "tee", "cp")
     if not tokens:
@@ -717,14 +822,23 @@ def _targets_irreplaceable_store(command: str) -> bool:
     #   • dd       : destroys only `of=<path>`. `if=<store>` is a read → not gated.
     #   • rm/mv/truncate/shred/find : every path operand is a target (mv RELOCATES the
     #     store away = destruction of the original location too), so gate them all.
-    _DEST_ONLY = {"cp", "tee"}
-    if verb in _DEST_ONLY:
+    _DEST_ONLY = {"cp"}
+    if verb == "tee":
+        # Every operand of tee is an output it truncates (`-a` appends: no destroy).
+        appends = any(t == "--append" or (t.startswith("-") and not t.startswith("--")
+                                           and "a" in t[1:]) for t in tokens[1:])
+        gated_operands = [] if appends else [d for d in operands if _copy_overwrites(d, [])]
+    elif verb in _DEST_ONLY:
         if t_dest is not None:
             gated_operands = [t_dest]
         elif operands:
             gated_operands = [operands[-1]]  # last = destination
         else:
             gated_operands = []
+        # A copy destroys only what it OVERWRITES: a new file in a store (a backup
+        # into Knowledge/Library, a report into a project) is not a destroy.
+        sources = operands if t_dest is not None else operands[:-1]
+        gated_operands = [d for d in gated_operands if _copy_overwrites(d, sources)]
     elif verb == "dd":
         # dd names its destructive target ONLY via of=; if= is a read source.
         gated_operands = []
@@ -1381,9 +1495,9 @@ def create_ask_question_gate(
                 }
             }
 
-        # Surface the question to the frontend via the per-session queue that the
-        # streaming orchestrator races. The item carries `kind` + `tool_use_id`
-        # so the orchestrator's kind-aware drop-guard + SSE branch can route it.
+        # Surface the question on the session's prompt board (permission_manager),
+        # which the session's stream reads. The item carries `kind` + `tool_use_id`
+        # so the stream's SSE branch routes it as a question.
         # Lazy import avoids a hard module-load cycle (permission_manager is the
         # surfacing channel, shared with the dangerous_command_gate path).
         from .permission_manager import permission_manager as _pm
@@ -1400,7 +1514,7 @@ def create_ask_question_gate(
         # answer-into-void). wait_for_answer's own finally covers the post-entry
         # case; this try only covers the enqueue/cancel window before it.
         try:
-            await _pm.enqueue_permission_request(actual_session_id, {
+            _pm.publish_prompt(actual_session_id, {
                 "kind": "ask_user_question",
                 "sessionId": actual_session_id,
                 "tool_use_id": tool_use_id,
@@ -1415,7 +1529,10 @@ def create_ask_question_gate(
             "questions=%d", actual_session_id, tool_use_id, len(questions),
         )
 
-        answer = await ask_question_mgr.wait_for_answer(tool_use_id)
+        try:
+            answer = await ask_question_mgr.wait_for_answer(tool_use_id)
+        finally:
+            _pm.close_prompt(tool_use_id)
         answered_by = ask_question_mgr.pop_answered_by(tool_use_id)
 
         # Timeout (default 4h): the user never answered. DENY the tool — do NOT
@@ -1577,7 +1694,12 @@ def create_dangerous_command_gate(
         }
         permission_mgr.store_pending_request(permission_request)
 
-        await permission_mgr.enqueue_permission_request(actual_session_id, {
+        logger.warning(
+            "[PERMISSION_REQUEST] Dangerous command requires approval: %s (request_id: %s)",
+            command[:50], request_id,
+        )
+
+        decision = await permission_mgr.request_decision(actual_session_id, {
             "sessionId": actual_session_id,
             "requestId": request_id,
             "toolUseId": tool_use_id,
@@ -1586,13 +1708,6 @@ def create_dangerous_command_gate(
             "reason": "Matches dangerous command pattern",
             "options": ["approve", "deny"],
         })
-
-        logger.warning(
-            "[PERMISSION_REQUEST] Dangerous command requires approval: %s (request_id: %s)",
-            command[:50], request_id,
-        )
-
-        decision = await permission_mgr.wait_for_permission_decision(request_id)
         logger.info("User decision for %s: %s", request_id, decision)
         permission_mgr.remove_pending_request(request_id)
 
@@ -1721,7 +1836,12 @@ def create_external_approval_gate(
             "created_at": datetime.now().isoformat(),
         })
 
-        await permission_mgr.enqueue_permission_request(actual_session_id, {
+        logger.warning(
+            "[PERMISSION_REQUEST] External tool requires approval: %s (request_id: %s)",
+            tool_name, request_id,
+        )
+
+        decision = await permission_mgr.request_decision(actual_session_id, {
             "sessionId": actual_session_id,
             "requestId": request_id,
             "toolUseId": tool_use_id,
@@ -1730,13 +1850,6 @@ def create_external_approval_gate(
             "reason": reason,
             "options": ["approve", "deny"],
         })
-
-        logger.warning(
-            "[PERMISSION_REQUEST] External tool requires approval: %s (request_id: %s)",
-            tool_name, request_id,
-        )
-
-        decision = await permission_mgr.wait_for_permission_decision(request_id)
         permission_mgr.remove_pending_request(request_id)
 
         if decision == "approve":

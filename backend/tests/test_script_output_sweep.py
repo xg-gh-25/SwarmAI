@@ -97,9 +97,9 @@ def test_recent_outputs_bulk_change_reports_nothing(tmp_path):
 @pytest.fixture
 def _isolated_queue():
     from core.permission_manager import permission_manager
-    permission_manager.remove_session_queue("sess-test")
+    permission_manager.clear_session("sess-test")
     yield
-    permission_manager.remove_session_queue("sess-test")
+    permission_manager.clear_session("sess-test")
 
 
 def _drive_bash(tmp_path, monkeypatch, *, is_error=False, in_assistant=False):

@@ -156,6 +156,11 @@ class AskQuestionManager:
         self._answer_events.pop(tool_use_id, None)
         self._answer_results.pop(tool_use_id, None)
 
+    def is_open(self, tool_use_id: str) -> bool:
+        """A hook is blocked on this question and it has not been answered."""
+        return (tool_use_id in self._answer_events
+                and tool_use_id not in self._answer_results)
+
     def set_answer(self, tool_use_id: str, answers: dict[str, Any],
                    answered_by: str = "person") -> None:
         """Record the user's answers and signal the waiting hook. *answered_by* is

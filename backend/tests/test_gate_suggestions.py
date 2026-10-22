@@ -59,8 +59,9 @@ class StrictPermissions(PermissionManager):
         super().__init__(persist_path=path)
         self.asked = []
 
-    async def enqueue_permission_request(self, session_id, request):  # noqa: D401
+    async def request_decision(self, session_id, request, timeout=None):  # noqa: D401
         self.asked.append(request)
+        return await self.wait_for_permission_decision(request["requestId"])
 
     async def wait_for_permission_decision(self, request_id, *a, **kw):
         return "deny"

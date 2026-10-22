@@ -902,26 +902,39 @@ def _isolate_judge_telemetry(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_permission_queues():
-    """Drop permission_manager's per-session queues around EVERY test.
+def _isolate_permission_queues(tmp_path_factory):
+    """Give EVERY test a clean permission_manager that cannot touch the live store.
 
-    The manager keeps one module-level ``asyncio.Queue`` per session id, and a
-    queue binds to the first event loop that waits on it. Tests each run their
-    own ``asyncio.run()`` and reuse fixed ids ("sess-test", "test-cw"), so from
-    the second test on, the orchestrator's ``perm_queue.get()`` raised "bound to
-    a different event loop" at once and its message/permission race loop spun
-    forever (a whole-file hang). The daemon has one loop, so this is test-only.
+    - The prompt board and its reader futures are dropped around each test (a
+      future binds to the loop that created it; tests each run their own loop).
+    - The durable pending-request store is pointed at a per-test tmp file and
+      emptied. The singleton's default is ~/.swarm-ai/pending_approvals.json:
+      tests that drove a real gate wrote hundreds of fake requests ("/x",
+      "run_1", "perm_midstream01") into the user's live file (found 2026-10-22).
     """
     try:
         from core.permission_manager import permission_manager as _pm
-        _pm._session_queues.clear()
     except Exception:  # noqa: BLE001 — never let isolation break a test
-        pass
+        yield
+        return
+    saved = (_pm._persist_path, _pm._pending_requests)
+    perm_dir = tmp_path_factory.mktemp("perm")
+    _pm._persist_path = perm_dir / "pending_approvals.json"
+    # A PermissionManager() built by a test resolves its default path lazily:
+    # point that at the tmp dir too.
+    import core.permission_manager as _pm_mod
+    saved_default = _pm_mod._default_persist_path
+    _pm_mod._default_persist_path = lambda: perm_dir / "pending_approvals.json"
+    _pm._pending_requests = {}
+    _pm._prompts.clear()
+    _pm._board_waiters.clear()
+    _pm._permission_events.clear()
+    _pm._permission_results.clear()
     yield
-    try:
-        _pm._session_queues.clear()
-    except Exception:  # noqa: BLE001
-        pass
+    _pm._prompts.clear()
+    _pm._board_waiters.clear()
+    _pm._persist_path, _pm._pending_requests = saved
+    _pm_mod._default_persist_path = saved_default
 
 
 # ---------------------------------------------------------------------------

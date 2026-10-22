@@ -20,6 +20,7 @@ Methodology:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from unittest.mock import MagicMock, patch
 
@@ -132,8 +133,7 @@ async def test_read_loop_yields_compaction_events_mid_stream():
         _sys("compact_boundary", compact_metadata=BOUNDARY["compact_metadata"]),
     ])
     events = []
-    with patch.object(_pm_mod.permission_manager, "get_session_queue",
-                      return_value=asyncio.Queue()):
+    with contextlib.nullcontext():
         # The script ends with _StopMarker (possibly re-wrapped by the loop's
         # error handling) — only the events yielded before it matter here.
         with pytest.raises(Exception):
@@ -191,8 +191,7 @@ async def test_read_loop_records_main_agent_usage_only():
                            usage={"input_tokens": 5, "cache_read_input_tokens": 20_000})
     unit._client.receive_response = lambda: _Script(
         [_sys("init", session_id="sdk-1"), main, sub])
-    with patch.object(_pm_mod.permission_manager, "get_session_queue",
-                      return_value=asyncio.Queue()):
+    with contextlib.nullcontext():
         with pytest.raises(Exception):
             async for _ev in orch._read_formatted_response():
                 pass

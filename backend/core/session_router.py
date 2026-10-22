@@ -5124,11 +5124,8 @@ class SessionRouter:
             )
             return
 
-        # The decision onto the stored prompt (core/permission_prompt), before the
-        # turn continues: a reload from now on shows it decided, not pending.
-        from .permission_prompt import record_decision
-        await record_decision(session_id, request_id, "approve" if allowed else "deny")
-
+        # The unit records the decision on the stored prompt once the hook has
+        # it (core/permission_prompt) -- never for a decision that went nowhere.
         _pending_results: list[dict] = []
         async for event in unit.continue_with_permission(request_id, allowed):
             # Write cleaned blocks back → stream == DB bytes (bug 2d).
