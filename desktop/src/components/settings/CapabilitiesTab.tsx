@@ -113,7 +113,7 @@ export default function CapabilitiesTab() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <span className="material-symbols-outlined animate-spin text-[var(--color-text-muted)]">progress_activity</span>
+        <span className="material-symbols-outlined icon-sm animate-spin text-[var(--color-text-muted)]">progress_activity</span>
         <span className="ml-2 text-sm text-[var(--color-text-muted)]">Loading capabilities...</span>
       </div>
     );
@@ -122,7 +122,7 @@ export default function CapabilitiesTab() {
   if (error) {
     return (
       <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4 text-center">
-        <span className="material-symbols-outlined text-red-400">error</span>
+        <span className="material-symbols-outlined icon-md text-red-400">error</span>
         <p className="mt-1 text-sm text-red-400">{error}</p>
       </div>
     );
@@ -141,7 +141,7 @@ export default function CapabilitiesTab() {
         <div key={group.label} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden">
           {/* Group header */}
           <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[var(--color-border)]">
-            <span className="material-symbols-outlined text-base text-[var(--color-text-muted)]">
+            <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">
               {group.icon}
             </span>
             <span className="text-sm font-medium text-[var(--color-text)]">{group.label}</span>
@@ -153,7 +153,7 @@ export default function CapabilitiesTab() {
               <div key={key} className="flex items-center justify-between px-4 py-2.5">
                 <span className="text-sm text-[var(--color-text)]">{label}</span>
                 {typeof value === 'boolean' ? (
-                  <span className={`material-symbols-outlined text-base ${value ? 'text-green-400' : 'text-red-400'}`}>
+                  <span className={`material-symbols-outlined icon-xs ${value ? 'text-green-400' : 'text-red-400'}`}>
                     {value ? 'check_circle' : 'cancel'}
                   </span>
                 ) : (

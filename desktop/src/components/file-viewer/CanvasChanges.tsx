@@ -65,8 +65,8 @@ export function ChangesRefresh() {
   return (
     <button type="button" onClick={() => void refreshCanvasSession()} title="Refresh"
       aria-label="Refresh changes" data-testid="canvas-changes-refresh"
-      className="ml-1 p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]">
-      <span className={`material-symbols-outlined text-[14px] block ${loading ? 'animate-spin' : ''}`}>refresh</span>
+      className="ml-1 icon-btn hover:bg-[var(--color-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]">
+      <span className={`material-symbols-outlined icon-sm block ${loading ? 'animate-spin' : ''}`}>refresh</span>
     </button>
   );
 }
@@ -135,7 +135,7 @@ function RepoCard({ repo, selected, onSelect }: {
           onClick={() => onSelect({ kind: 'commit', root: repo.root, sha: c.sha })}
           title={`${c.short} · ${c.at}${c.run ? ` · ${c.run}` : ''}`}
           className={`w-full flex items-center gap-2 pl-5 pr-2 py-[4px] rounded-md text-left text-[12px] text-[var(--color-text-secondary)] ${key === `${repo.root}@${c.sha}` ? SEL : HOVER}`}>
-          <span className="material-symbols-outlined text-[13px] text-[var(--color-text-dim)] shrink-0" aria-hidden="true">commit</span>
+          <span className="material-symbols-outlined icon-xs text-[var(--color-text-dim)] shrink-0" aria-hidden="true">commit</span>
           <span className="font-mono text-[11.5px] text-[var(--color-primary)] shrink-0">{c.short}</span>
           <span className="flex-1 min-w-0 truncate">{c.subject}</span>
           {c.source === 'run' && <span className="shrink-0 text-[10.5px] text-[var(--color-text-dim)]">run</span>}

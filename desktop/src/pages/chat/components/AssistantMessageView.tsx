@@ -580,7 +580,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
                        hover:text-[var(--color-text)] rounded transition-colors"
             title={copied ? copiedLabel : tf(t, 'chat.message.copyTitle', 'Copy message')}
           >
-            <span className="material-symbols-outlined text-[14px]">
+            <span className="material-symbols-outlined icon-xs">
               {copied ? 'check' : 'content_copy'}
             </span>
             {copied ? copiedLabel : tf(t, 'chat.message.copy', 'Copy')}
@@ -605,7 +605,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               aria-label={saveTitle}
             >
               <span className={clsx(
-                'material-symbols-outlined text-[14px]',
+                'material-symbols-outlined icon-xs',
                 memorySaveStatus === 'loading' && 'animate-spin'
               )}>
                 {MEMORY_ICON_MAP[memorySaveStatus]}
@@ -633,7 +633,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               aria-label={tf(t, 'chat.message.compactAria', 'Compact Context')}
             >
               <span className={clsx(
-                'material-symbols-outlined text-[14px]',
+                'material-symbols-outlined icon-xs',
                 compactStatus === 'loading' && 'animate-spin'
               )}>
                 {compactStatus === 'loading' ? 'progress_activity'
@@ -658,7 +658,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               aria-label={tf(t, 'chat.message.continueAria', 'Continue response')}
               data-testid="continue-button"
             >
-              <span className="material-symbols-outlined text-[14px]">
+              <span className="material-symbols-outlined icon-xs">
                 play_arrow
               </span>
               {tf(t, 'chat.message.continue', 'Continue')}

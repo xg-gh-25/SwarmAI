@@ -157,7 +157,7 @@ const MARK_COL = 'w-4 shrink-0 text-center';
 
 function Chevron({ open }: { open: boolean }) {
   return (
-    <span aria-hidden="true" className={`material-symbols-outlined inline-flex items-center justify-center h-4 text-[15px] leading-none ${MARK_COL} text-[var(--color-text-dim)] transition-transform duration-150`} style={{ transform: open ? 'rotate(90deg)' : 'none' }}>
+    <span aria-hidden="true" className={`material-symbols-outlined icon-sm inline-flex items-center justify-center h-4 leading-none ${MARK_COL} text-[var(--color-text-dim)] transition-transform duration-150`} style={{ transform: open ? 'rotate(90deg)' : 'none' }}>
       chevron_right
     </span>
   );

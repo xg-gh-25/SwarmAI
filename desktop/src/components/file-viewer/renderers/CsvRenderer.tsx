@@ -181,7 +181,7 @@ const CsvRenderer = memo(function CsvRenderer({
   if (!content) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-muted)]">
-        <span className="material-symbols-outlined text-4xl mb-2">table_chart</span>
+        <span className="material-symbols-outlined icon-xl mb-2">table_chart</span>
         <p className="text-sm">No CSV content available</p>
       </div>
     );
@@ -193,7 +193,7 @@ const CsvRenderer = memo(function CsvRenderer({
       <div className="flex flex-col h-full">
         <div className="px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
           <div className="flex items-center gap-2 text-red-400">
-            <span className="material-symbols-outlined text-base">error</span>
+            <span className="material-symbols-outlined icon-xs">error</span>
             <span className="text-xs font-medium">
               Failed to parse {fileName.endsWith('.tsv') ? 'TSV' : 'CSV'}
             </span>
@@ -214,7 +214,7 @@ const CsvRenderer = memo(function CsvRenderer({
   if (headers.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-muted)]">
-        <span className="material-symbols-outlined text-4xl mb-2">table_chart</span>
+        <span className="material-symbols-outlined icon-xl mb-2">table_chart</span>
         <p className="text-sm">Empty file</p>
         <p className="text-xs mt-1">{fileName}</p>
       </div>
@@ -228,13 +228,13 @@ const CsvRenderer = memo(function CsvRenderer({
         <div className="flex items-center gap-2">
           {isTruncated && (
             <span className="flex items-center gap-1 text-xs text-amber-500">
-              <span className="material-symbols-outlined text-[14px]">warning</span>
+              <span className="material-symbols-outlined icon-xs">warning</span>
               Showing {MAX_DISPLAY_ROWS.toLocaleString()} of {totalRows.toLocaleString()} rows
             </span>
           )}
           {parseResult && parseResult.errors.length > 0 && headers.length > 0 && (
             <span className="flex items-center gap-1 text-xs text-amber-500" title={parseResult.errors.map(e => e.message).join('; ')}>
-              <span className="material-symbols-outlined text-[14px]">warning</span>
+              <span className="material-symbols-outlined icon-xs">warning</span>
               {parseResult.errors.length} parse warning{parseResult.errors.length > 1 ? 's' : ''}
             </span>
           )}
@@ -251,7 +251,7 @@ const CsvRenderer = memo(function CsvRenderer({
             }`}
             title={showRaw ? 'Switch to table view' : 'Switch to raw text'}
           >
-            <span className="material-symbols-outlined text-base">
+            <span className="material-symbols-outlined icon-xs">
               {showRaw ? 'table_chart' : 'raw_on'}
             </span>
             {showRaw ? 'Table' : 'Raw'}
@@ -291,7 +291,7 @@ const CsvRenderer = memo(function CsvRenderer({
                       <span className="inline-flex items-center gap-1">
                         {header}
                         <span
-                          className={`material-symbols-outlined text-[14px] ${
+                          className={`material-symbols-outlined icon-xs ${
                             sort.column === header && sort.direction !== 'none'
                               ? 'text-[var(--color-text)]'
                               : 'text-[var(--color-text-muted)] opacity-40'

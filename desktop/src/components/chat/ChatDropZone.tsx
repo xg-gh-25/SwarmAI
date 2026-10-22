@@ -128,7 +128,7 @@ export function ChatDropZone({ children, addFiles, addWorkspaceFiles }: ChatDrop
                 'bg-[var(--color-primary)]/20'
               )}
             >
-              <span className="material-symbols-outlined text-3xl text-[var(--color-primary)]">upload_file</span>
+              <span className="material-symbols-outlined icon-lg text-[var(--color-primary)]">upload_file</span>
             </div>
             <div className="text-center">
               <p className="text-lg font-medium text-[var(--color-text)]">

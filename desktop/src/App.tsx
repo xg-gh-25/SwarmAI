@@ -281,7 +281,7 @@ function AppRoutes() {
       >
         <div className="flex flex-col items-center gap-4 max-w-md px-8 text-center">
           <div className="w-12 h-12 rounded-full bg-red-500/20 flex items-center justify-center">
-            <span className="material-symbols-outlined text-2xl text-red-400">error</span>
+            <span className="material-symbols-outlined icon-md text-red-400">error</span>
           </div>
           <p className="text-red-400 font-medium">Couldn’t reach the backend</p>
           <p className="text-[var(--color-text-muted)] text-sm">
@@ -295,7 +295,7 @@ function AppRoutes() {
             onClick={() => refetch()}
             className="mt-2 px-6 py-2 bg-primary hover:bg-primary-hover text-[var(--color-text)] rounded-lg transition-colors flex items-center gap-2"
           >
-            <span className="material-symbols-outlined text-xl">refresh</span>
+            <span className="material-symbols-outlined icon-sm">refresh</span>
             Retry
           </button>
         </div>

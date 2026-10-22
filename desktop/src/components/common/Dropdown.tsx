@@ -94,7 +94,7 @@ export default function Dropdown({
         {/* Dropdown Icon */}
         <span
           className={clsx(
-            'material-symbols-outlined text-[var(--color-text-muted)] transition-transform ml-2',
+            'material-symbols-outlined icon-sm text-[var(--color-text-muted)] transition-transform ml-2',
             isOpen && 'rotate-180'
           )}
         >
@@ -109,7 +109,7 @@ export default function Dropdown({
           {options.length > 5 && (
             <div className="p-3 border-b border-[var(--color-border)]">
               <div className="relative">
-                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] text-lg">
+                <span className="material-symbols-outlined icon-sm absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]">
                   search
                 </span>
                 <input

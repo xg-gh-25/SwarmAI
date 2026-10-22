@@ -104,7 +104,7 @@ function CollapsedBar({
         bg-[var(--color-card)] border border-[var(--color-border)]
         hover:bg-[var(--color-hover)] transition-colors text-sm select-none"
     >
-      <span className="material-symbols-outlined text-base text-[var(--color-text-muted)]">
+      <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">
         psychology
       </span>
       <span className="text-[var(--color-text)] font-medium truncate">
@@ -137,13 +137,13 @@ function CollapsedBar({
         aria-pressed={isPinned}
       >
         <span
-          className={`material-symbols-outlined text-base ${isPinned ? '' : 'rotate-45'}`}
+          className={`material-symbols-outlined icon-xs ${isPinned ? '' : 'rotate-45'}`}
           style={isPinned ? { fontVariationSettings: "'FILL' 1" } : undefined}
         >
           push_pin
         </span>
       </button>
-      <span className="material-symbols-outlined text-base text-[var(--color-text-muted)]">
+      <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">
         expand_more
       </span>
     </div>
@@ -187,7 +187,7 @@ function ExpandedView({
           }
         }}
       >
-        <span className="material-symbols-outlined text-base text-[var(--color-text-muted)]">
+        <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">
           psychology
         </span>
         <span className="text-sm font-medium text-[var(--color-text)]">
@@ -214,13 +214,13 @@ function ExpandedView({
             aria-pressed={isPinned}
           >
             <span
-              className={`material-symbols-outlined text-base ${isPinned ? '' : 'rotate-45'}`}
+              className={`material-symbols-outlined icon-xs ${isPinned ? '' : 'rotate-45'}`}
               style={isPinned ? { fontVariationSettings: "'FILL' 1" } : undefined}
             >
               push_pin
             </span>
           </button>
-          <span className="material-symbols-outlined text-base text-[var(--color-text-muted)]">
+          <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">
             expand_less
           </span>
         </div>

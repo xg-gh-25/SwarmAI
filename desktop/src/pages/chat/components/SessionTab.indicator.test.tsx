@@ -4,17 +4,15 @@ import { SessionTab } from './SessionTab';
 import type { OpenTab } from '../types';
 
 /**
- * Render tests for SessionTab active-state underline indicator.
+ * Render tests for SessionTab active-state styling (2026-10-22 redesign).
  *
- * **Validates: blue active-tab underline (run_1866ea59)**
- * - AC1: Active tab renders border-b-2 + border-blue-500 (blue underline visible)
- * - AC2: Inactive tab renders border-b-2 + border-transparent (layout-shift-free, GUI12)
- *
- * GUI12: layout-shift-free border indicators put border-b-2 on ALL states,
- * transparent on the off state — so the underline appearing on activation
- * does not change the tab's height.
+ * - Active: a raised card — card surface, the border color, a 2px accent rule on top
+ *   (inset shadow in --color-primary), full-strength text.
+ * - Inactive: flat — transparent border, muted text, no accent rule.
+ * - Both states carry a 1px border and the same 30px height, so selecting a tab
+ *   never shifts the strip (GUI12).
  */
-describe('SessionTab active-state underline', () => {
+describe('SessionTab active-state styling', () => {
   const mockTab: OpenTab = {
     id: 'tab-0',
     title: 'Test Tab',
@@ -33,34 +31,33 @@ describe('SessionTab active-state underline', () => {
       />
     );
 
-  it('AC1: active tab has an accent bottom border (border-b-2 + border-[var(--color-primary)])', () => {
-    // run_843962a5: active underline now uses the product accent var
-    // (--color-primary, theme-aware) instead of a hardcoded blue-500.
+  it('active tab is a raised card with the accent rule on top', () => {
     renderTab(true);
-    const tab = screen.getByRole('tab');
-    expect(tab.className).toContain('border-b-2');
-    expect(tab.className).toContain('border-[var(--color-primary)]');
+    const c = screen.getByRole('tab').className;
+    expect(c).toContain('bg-[var(--color-card)]');
+    expect(c).toContain('border-[var(--color-border)]');
+    expect(c).toContain('inset_0_2px_0_var(--color-primary)');
+    expect(c).toContain('text-[var(--color-text)]');
   });
 
-  it('AC2: inactive tab has a transparent bottom border (border-b-2 + border-transparent)', () => {
+  it('inactive tab is flat and muted, without the accent rule', () => {
     renderTab(false);
-    const tab = screen.getByRole('tab');
-    expect(tab.className).toContain('border-b-2');
-    expect(tab.className).toContain('border-transparent');
+    const c = screen.getByRole('tab').className;
+    expect(c).toContain('border-transparent');
+    expect(c).toContain('text-[var(--color-text-muted)]');
+    expect(c).not.toContain('var(--color-primary)');
+    expect(c).not.toContain('bg-[var(--color-card)]');
   });
 
-  it('AC2 (layout-shift-free): inactive tab does NOT carry the accent border color', () => {
-    renderTab(false);
-    const tab = screen.getByRole('tab');
-    expect(tab.className).not.toContain('border-[var(--color-primary)]');
-    expect(tab.className).not.toContain('border-blue-500');
-  });
-
-  it('both states reserve the border space — border-b-2 present regardless of active state', () => {
+  it('both states have the same border width and height (no shift on select)', () => {
     const { unmount } = renderTab(true);
-    expect(screen.getByRole('tab').className).toContain('border-b-2');
+    const a = screen.getByRole('tab').className.split(/\s+/);
     unmount();
     renderTab(false);
-    expect(screen.getByRole('tab').className).toContain('border-b-2');
+    const b = screen.getByRole('tab').className.split(/\s+/);
+    for (const cls of ['border', 'h-[30px]']) {
+      expect(a).toContain(cls);
+      expect(b).toContain(cls);
+    }
   });
 });

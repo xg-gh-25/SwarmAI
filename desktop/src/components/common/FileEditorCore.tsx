@@ -310,7 +310,7 @@ function SelectionCommentPopover({
           onClick={onCancel}
           className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
         >
-          <span className="material-symbols-outlined text-[14px]">close</span>
+          <span className="material-symbols-outlined icon-sm">close</span>
         </button>
       </div>
       <div className="p-2">
@@ -338,7 +338,7 @@ function SelectionCommentPopover({
           className="px-3 py-1 text-xs rounded bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
           data-testid="selection-comment-send"
         >
-          <span className="material-symbols-outlined text-xs">send</span>
+          <span className="material-symbols-outlined icon-xs">send</span>
           Send
         </button>
       </div>
@@ -578,7 +578,7 @@ function SearchBar({
         className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] disabled:opacity-40"
         aria-label="Previous match"
       >
-        <span className="material-symbols-outlined text-base">keyboard_arrow_up</span>
+        <span className="material-symbols-outlined icon-sm">keyboard_arrow_up</span>
       </button>
       <button
         onClick={onNext}
@@ -586,14 +586,14 @@ function SearchBar({
         className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] disabled:opacity-40"
         aria-label="Next match"
       >
-        <span className="material-symbols-outlined text-base">keyboard_arrow_down</span>
+        <span className="material-symbols-outlined icon-sm">keyboard_arrow_down</span>
       </button>
       <button
         onClick={onClose}
         className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]"
         aria-label="Close search"
       >
-        <span className="material-symbols-outlined text-base">close</span>
+        <span className="material-symbols-outlined icon-sm">close</span>
       </button>
     </div>
   );
@@ -732,6 +732,9 @@ export default function FileEditorCore({
   // survives without text. Modal variant keeps the roomy icon+text header. `iconOnly`
   // gates the text spans; label always lives in `title` so nothing is lost.
   const iconOnly = variant === 'panel';
+  // Header toolbar buttons: an icon button (icon-btn + icon-sm, index.css scale) in
+  // the panel, a labelled chip in the modal. One definition for every button below.
+  const toolBtn = iconOnly ? 'icon-btn' : 'flex items-center gap-1 px-2 py-1 rounded-lg text-xs';
 
   const isDirty = isDirtyState(content, originalContent);
   const hasUnsavedEdits = isDirtyState(content, savedContent ?? initialContent);
@@ -1350,7 +1353,7 @@ export default function FileEditorCore({
             {!iconOnly && (
               <>
                 <span
-                  className="material-symbols-outlined text-lg shrink-0"
+                  className="material-symbols-outlined icon-sm shrink-0"
                   style={{ color: fileIconColor(fileName) }}
                 >
                   {fileIcon(fileName)}
@@ -1383,14 +1386,14 @@ export default function FileEditorCore({
                 onClick={() => { setShowMarkdownPreview((p) => !p); if (showDiff) setShowDiff(false); }}
                 title={showMarkdownPreview ? 'Edit source' : 'Preview markdown'}
                 className={clsx(
-                  'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
+                  toolBtn, 'transition-colors',
                   showMarkdownPreview
                     ? 'bg-blue-500/20 text-[var(--color-primary)] font-medium'
                     : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
                 )}
                 data-testid="markdown-preview-toggle"
               >
-                <span className="material-symbols-outlined text-[14px]">
+                <span className="material-symbols-outlined icon-sm">
                   {showMarkdownPreview ? 'edit' : 'visibility'}
                 </span>
                 {!iconOnly && (showMarkdownPreview ? 'Edit' : 'Preview')}
@@ -1402,14 +1405,14 @@ export default function FileEditorCore({
                 onClick={() => { setShowSvgPreview((p) => !p); if (showDiff) setShowDiff(false); }}
                 title={showSvgPreview ? 'Edit source' : 'Preview SVG'}
                 className={clsx(
-                  'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
+                  toolBtn, 'transition-colors',
                   showSvgPreview
                     ? 'bg-blue-500/20 text-[var(--color-primary)] font-medium'
                     : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
                 )}
                 data-testid="svg-preview-toggle"
               >
-                <span className="material-symbols-outlined text-[14px]">
+                <span className="material-symbols-outlined icon-sm">
                   {showSvgPreview ? 'edit' : 'image'}
                 </span>
                 {!iconOnly && (showSvgPreview ? 'Edit' : 'Preview')}
@@ -1433,17 +1436,17 @@ export default function FileEditorCore({
                 }
                 await doReload();
               }}
-              className="flex items-center px-2 py-1 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+              className={clsx(toolBtn, 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors')}
               title="Reload file from disk"
               data-testid="file-editor-reload"
             >
-              <span className="material-symbols-outlined text-[14px]">refresh</span>
+              <span className="material-symbols-outlined icon-sm">refresh</span>
             </button>
             {/* Review Mode toggle (L3) */}
             <button
               onClick={review.toggleReviewMode}
               className={clsx(
-                'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
+                toolBtn, 'transition-colors',
                 review.isReviewMode
                   ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 font-medium'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
@@ -1451,7 +1454,7 @@ export default function FileEditorCore({
               data-testid="review-mode-toggle"
               title={review.isReviewMode ? 'Exit review mode' : 'Review — click line numbers to add comments'}
             >
-              <span className="material-symbols-outlined text-[14px]">rate_review</span>
+              <span className="material-symbols-outlined icon-sm">rate_review</span>
               {!iconOnly && (review.isReviewMode ? 'Exit Review' : 'Review')}
               {review.comments.length > 0 && (
                 <span className="ml-0.5 px-1 py-px rounded-full bg-amber-500/30 text-[11px] font-bold">
@@ -1464,7 +1467,7 @@ export default function FileEditorCore({
               onClick={handleToggleDiff}
               disabled={!isDirty && !showDiff}
               className={clsx(
-                'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
+                toolBtn, 'transition-colors',
                 showDiff
                   ? 'bg-blue-500/20 text-[var(--color-primary)] font-medium'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]',
@@ -1473,7 +1476,7 @@ export default function FileEditorCore({
               data-testid="show-changes-toggle"
               title={showDiff ? 'Back to edit' : 'Show changes (diff)'}
             >
-              <span className="material-symbols-outlined text-[14px]">
+              <span className="material-symbols-outlined icon-sm">
                 {showDiff ? 'edit' : 'difference'}
               </span>
               {!iconOnly && (showDiff ? 'Back to Edit' : 'Show Changes')}
@@ -1500,11 +1503,11 @@ export default function FileEditorCore({
                       await copyToClipboard(absolutePath);
                     }
                   }}
-                  className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+                  className={clsx(toolBtn, 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors')}
                   data-testid="open-in-browser-btn"
                   title={useBrowser ? 'Open in browser' : 'Open with system app'}
                 >
-                  <span className="material-symbols-outlined text-[14px]">open_in_browser</span>
+                  <span className="material-symbols-outlined icon-sm">open_in_browser</span>
                   {!iconOnly && 'Open'}
                 </button>
               );
@@ -1523,7 +1526,7 @@ export default function FileEditorCore({
                 }
               }}
               className={clsx(
-                'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
+                toolBtn, 'transition-colors',
                 copyPathFeedback
                   ? 'text-[var(--color-success)] cursor-default'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
@@ -1531,7 +1534,7 @@ export default function FileEditorCore({
               title={copyPathFeedback ? 'Copied!' : 'Copy absolute file path'}
               data-testid="copy-path-btn"
             >
-              <span className="material-symbols-outlined text-[14px]">
+              <span className="material-symbols-outlined icon-sm">
                 {copyPathFeedback ? 'check' : 'content_copy'}
               </span>
               {!iconOnly && (copyPathFeedback ? 'Copied' : 'Copy Path')}
@@ -1542,7 +1545,7 @@ export default function FileEditorCore({
                 onClick={handleAttachToChat}
                 disabled={isAttached || attachFeedback}
                 className={clsx(
-                  'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
+                  toolBtn, 'transition-colors',
                   isAttached || attachFeedback
                     ? 'text-[var(--color-success)] cursor-default'
                     : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
@@ -1550,7 +1553,7 @@ export default function FileEditorCore({
                 data-testid="attach-to-chat-btn"
                 title={isAttached || attachFeedback ? 'Attached to chat' : 'Attach to chat'}
               >
-                <span className="material-symbols-outlined text-[14px]">
+                <span className="material-symbols-outlined icon-sm">
                   {isAttached || attachFeedback ? 'check_circle' : 'attach_file'}
                 </span>
                 {!iconOnly && (isAttached || attachFeedback ? 'Attached' : 'Attach')}
@@ -1569,12 +1572,12 @@ export default function FileEditorCore({
             {onToggleMode && (
               <button
                 onClick={onToggleMode}
-                className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+                className="icon-btn text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
                 aria-label={variant === 'panel' ? 'Pop out to modal' : 'Dock as panel'}
                 title={variant === 'panel' ? 'Pop out to fullscreen' : 'Dock as side panel'}
                 data-testid="mode-toggle"
               >
-                <span className="material-symbols-outlined text-lg">
+                <span className="material-symbols-outlined icon-sm">
                   {variant === 'panel' ? 'open_in_full' : 'close_fullscreen'}
                 </span>
               </button>
@@ -1589,7 +1592,7 @@ export default function FileEditorCore({
                 className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
                 aria-label="Close"
               >
-                <span className="material-symbols-outlined">close</span>
+                <span className="material-symbols-outlined icon-md">close</span>
               </button>
             )}
           </div>
@@ -1655,7 +1658,7 @@ export default function FileEditorCore({
                 data-testid="large-md-preview-fallback"
               >
                 <div className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0">
-                  <span className="material-symbols-outlined text-[14px]">info</span>
+                  <span className="material-symbols-outlined icon-xs">info</span>
                   <span>Large file — markdown preview disabled to keep the panel responsive. Showing raw source.</span>
                 </div>
                 <pre className="m-0 p-4 font-mono text-sm leading-6 whitespace-pre-wrap break-words [word-break:break-all]">
@@ -1683,7 +1686,7 @@ export default function FileEditorCore({
                 data-testid="large-svg-preview-fallback"
               >
                 <div className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0">
-                  <span className="material-symbols-outlined text-[14px]">info</span>
+                  <span className="material-symbols-outlined icon-xs">info</span>
                   <span>Large file — SVG preview disabled to keep the panel responsive. Showing raw source.</span>
                 </div>
                 <pre className="m-0 p-4 font-mono text-sm leading-6 whitespace-pre-wrap break-words [word-break:break-all]">
@@ -1888,7 +1891,7 @@ export default function FileEditorCore({
                     onClick={() => setShowSelectionComment(true)}
                     data-testid="selection-comment-btn"
                   >
-                    <span className="material-symbols-outlined text-[14px]">comment</span>
+                    <span className="material-symbols-outlined icon-xs">comment</span>
                     Comment
                   </button>
                 )}
@@ -1909,7 +1912,7 @@ export default function FileEditorCore({
         {/* Diff review hint — shown when in diff mode with no comments yet */}
         {showDiff && review.comments.length === 0 && (
           <div className="flex items-center gap-2 px-4 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-hover)]/50 shrink-0">
-            <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">touch_app</span>
+            <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">touch_app</span>
             <span className="text-xs text-[var(--color-text-muted)]">
               Click any line to add review comments
             </span>
@@ -1974,7 +1977,7 @@ export default function FileEditorCore({
         >
           <div className="w-full max-w-md bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl p-6">
             <div className="flex items-center gap-3 mb-4">
-              <span className="material-symbols-outlined text-2xl text-[var(--color-warning)]">
+              <span className="material-symbols-outlined icon-md text-[var(--color-warning)]">
                 warning
               </span>
               <h3 className="text-lg font-semibold text-[var(--color-text)]">

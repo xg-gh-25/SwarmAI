@@ -150,7 +150,7 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
                 'bg-[var(--color-card)] text-[var(--color-text-muted)] border border-[var(--color-border)]'
               }`}>
                 {s.done ? (
-                  <span className="material-symbols-outlined text-[14px]">check</span>
+                  <span className="material-symbols-outlined icon-xs">check</span>
                 ) : s.num}
               </div>
               <span className={`text-sm ${
@@ -197,14 +197,14 @@ function Step1SystemCheck({ ok, failed, onSkip }: { ok: boolean; failed: boolean
       <p className="text-[var(--color-text-muted)] mb-6">Verifying your environment...</p>
       {ok ? (
         <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg flex items-center gap-3">
-          <span className="material-symbols-outlined text-green-400">check_circle</span>
+          <span className="material-symbols-outlined icon-md text-green-400">check_circle</span>
           <span className="text-green-400">Backend, Database, and Workspace are ready.</span>
         </div>
       ) : failed ? (
         <div className="space-y-4">
           <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
             <div className="flex items-center gap-3 mb-1">
-              <span className="material-symbols-outlined text-red-400">error</span>
+              <span className="material-symbols-outlined icon-md text-red-400">error</span>
               <span className="text-red-400 font-medium">System check is taking longer than expected</span>
             </div>
             <p className="text-xs text-[var(--color-text-muted)]">
@@ -221,7 +221,7 @@ function Step1SystemCheck({ ok, failed, onSkip }: { ok: boolean; failed: boolean
         </div>
       ) : (
         <div className="p-4 bg-[var(--color-card)] rounded-lg flex items-center gap-3">
-          <span className="material-symbols-outlined animate-spin text-[var(--color-text-muted)]">progress_activity</span>
+          <span className="material-symbols-outlined icon-sm animate-spin text-[var(--color-text-muted)]">progress_activity</span>
           <span className="text-[var(--color-text-muted)]">Checking system components...</span>
         </div>
       )}
@@ -410,7 +410,7 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
       <div>
         <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">Restore Complete</h2>
         <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg mb-6">
-          <span className="material-symbols-outlined text-green-400 align-middle mr-2">check_circle</span>
+          <span className="material-symbols-outlined icon-md text-green-400 align-middle mr-2">check_circle</span>
           <span className="text-green-400">
             {last?.messagesCount ?? 0} conversations, {last?.sessionsCount ?? 0} sessions,
             {last?.todosCount ?? 0} todos restored.

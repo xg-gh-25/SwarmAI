@@ -72,7 +72,7 @@ export default function FileViewerTabBar({
             >
               {/* File type icon */}
               <span
-                className="material-symbols-outlined text-[14px] leading-none opacity-60"
+                className="material-symbols-outlined icon-xs leading-none opacity-60"
                 aria-hidden="true"
               >
                 {info.icon}

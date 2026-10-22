@@ -230,7 +230,7 @@ function FullPromptModal({ fullText, onClose }: { fullText: string; onClose: () 
             className="p-1 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)]"
             aria-label="Close"
           >
-            <span className="material-symbols-outlined text-base">close</span>
+            <span className="material-symbols-outlined icon-sm">close</span>
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-5">
@@ -521,7 +521,7 @@ function SecurityTab({ scan, state }: { scan: SecurityScanResult | null; state: 
           const sc = pass ? '#4ade80' : (SEV_COLOR[f.severity] ?? '#8b93a7');
           return (
             <li key={i} className="flex items-start gap-2 p-2 rounded bg-[var(--color-hover)]/40">
-              <span className="material-symbols-outlined text-[14px] mt-0.5" style={{ color: sc }}>
+              <span className="material-symbols-outlined icon-xs mt-0.5" style={{ color: sc }}>
                 {pass ? 'check_circle' : 'warning'}
               </span>
               <div className="flex-1 min-w-0">
@@ -749,7 +749,7 @@ export function SystemPromptModule({ sessionId, metadata: metadataProp }: System
           "loud" — this is the consumer that makes the signal visible. */}
       {metadata?.degraded && (
         <div className="flex items-start gap-2 mb-3 px-2.5 py-2 rounded-lg border border-[#f87171]/40 bg-[#f87171]/10">
-          <span className="material-symbols-outlined text-[16px] text-[#f87171] flex-shrink-0">warning</span>
+          <span className="material-symbols-outlined icon-sm text-[#f87171] flex-shrink-0">warning</span>
           <div className="min-w-0">
             <div className="text-[11px] font-semibold text-[#f87171]">Prompt assembled incomplete</div>
             <div className="text-[11px] font-mono text-[var(--color-text-muted)] break-words">{metadata.degraded}</div>
@@ -772,7 +772,7 @@ export function SystemPromptModule({ sessionId, metadata: metadataProp }: System
                 : 'text-[var(--color-text-muted)] border-transparent hover:text-[var(--color-text)]'
             }`}
           >
-            <span className="material-symbols-outlined text-[14px] flex-shrink-0">{t.icon}</span>
+            <span className="material-symbols-outlined icon-xs flex-shrink-0">{t.icon}</span>
             {/* whitespace-nowrap + overflow-hidden on the button (above) prevents any
                 wrap; truncate keeps a long label from pushing siblings — the icon
                 always stays visible so the tab is identifiable even if text clips. */}

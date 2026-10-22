@@ -3412,14 +3412,14 @@ export default function ChatPage() {
           {agentLoadError ? (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center max-w-md">
-                <span className="material-symbols-outlined text-6xl text-red-500 mb-4">error</span>
+                <span className="material-symbols-outlined icon-xl text-red-500 mb-4">error</span>
                 <h2 className="text-xl font-semibold text-[var(--color-text)] mb-2">{t('chat.agentLoadFailed', 'Failed to Load Agent')}</h2>
                 <p className="text-[var(--color-text-muted)] mb-4">{agentLoadError}</p>
                 <button
                   onClick={() => window.location.reload()}
                   className="inline-flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
                 >
-                  <span className="material-symbols-outlined">refresh</span>
+                  <span className="material-symbols-outlined icon-sm">refresh</span>
                   {t('common.button.retry', 'Retry')}
                 </button>
               </div>
@@ -3496,7 +3496,7 @@ export default function ChatPage() {
               {isLimited('/chat') && chatRateLimitCountdown > 0 && (
                 <div className="chat-gutter py-2">
                   <div className="chat-column text-sm text-yellow-400 flex items-center gap-2">
-                    <span className="material-symbols-outlined text-base">schedule</span>
+                    <span className="material-symbols-outlined icon-xs">schedule</span>
                     Rate limited — resuming in {chatRateLimitCountdown}s
                   </div>
                 </div>

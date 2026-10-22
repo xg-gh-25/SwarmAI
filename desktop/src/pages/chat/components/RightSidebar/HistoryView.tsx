@@ -114,7 +114,7 @@ export function HistoryView({
         }
       }}
     >
-      <span className="material-symbols-outlined text-[16px] shrink-0">
+      <span className="material-symbols-outlined icon-sm shrink-0">
         chat_bubble_outline
       </span>
       <div className="flex-1 min-w-0">
@@ -138,7 +138,7 @@ export function HistoryView({
           text-[var(--color-text-muted)] hover:text-[var(--color-text)]
           transition-opacity"
       >
-        <span className="material-symbols-outlined text-[14px]">delete</span>
+        <span className="material-symbols-outlined icon-xs">delete</span>
       </button>
     </div>
   );
@@ -159,7 +159,7 @@ export function HistoryView({
             className="p-1 rounded hover:bg-[var(--color-hover)] transition-colors"
             aria-label="Back"
           >
-            <span className="material-symbols-outlined text-lg text-[var(--color-text-muted)]">
+            <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">
               arrow_back
             </span>
           </button>
@@ -173,8 +173,8 @@ export function HistoryView({
       <div className="px-3 py-2">
         <div className="relative">
           <span
-            className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2
-              text-sm text-[var(--color-text-muted)]"
+            className="material-symbols-outlined icon-xs absolute left-2 top-1/2 -translate-y-1/2
+              text-[var(--color-text-muted)]"
             aria-hidden="true"
           >
             search

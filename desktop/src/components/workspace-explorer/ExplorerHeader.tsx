@@ -50,7 +50,7 @@ function HeaderIconButton({
           : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
       }`}
     >
-      <span className="material-symbols-outlined text-[14px]">{icon}</span>
+      <span className="material-symbols-outlined icon-sm">{icon}</span>
     </button>
   );
 }
@@ -120,7 +120,7 @@ export default function ExplorerHeader() {
       <div className="px-3 pb-1.5">
         <div className="relative flex items-center">
           <span
-            className="material-symbols-outlined absolute left-2 text-[14px] text-[var(--color-text-dim)] pointer-events-none"
+            className="material-symbols-outlined icon-xs absolute left-2 text-[var(--color-text-dim)] pointer-events-none"
             aria-hidden="true"
           >
             search
@@ -142,7 +142,7 @@ export default function ExplorerHeader() {
               data-testid="explorer-search-clear"
               className="absolute right-1.5 p-0.5 rounded text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
             >
-              <span className="material-symbols-outlined text-[14px]">close</span>
+              <span className="material-symbols-outlined icon-sm">close</span>
             </button>
           )}
         </div>

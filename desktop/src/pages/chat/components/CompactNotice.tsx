@@ -74,7 +74,7 @@ function CompactNoticeImpl({ message, isStreaming }: CompactNoticeProps) {
   return (
     <div data-testid="compact-notice" data-phase={info?.phase ?? 'legacy'} className="py-2">
       <div className={`flex items-center gap-2 text-xs ${tone}`}>
-        <span className="material-symbols-outlined shrink-0" style={{ fontSize: '15px' }}>{icon}</span>
+        <span className="material-symbols-outlined icon-sm shrink-0">{icon}</span>
         <span className="font-medium shrink-0">{title}</span>
         {meta && <span className="opacity-80 truncate">· {meta}</span>}
         <div className="flex-1 min-w-[24px] border-t border-dashed border-[var(--color-border)]" />
@@ -92,10 +92,10 @@ function CompactNoticeImpl({ message, isStreaming }: CompactNoticeProps) {
             onClick={() => setOpen((v) => !v)}
             className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-hover)] rounded-md transition-colors text-left"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+            <span className="material-symbols-outlined icon-sm">
               {open ? 'expand_more' : 'chevron_right'}
             </span>
-            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>summarize</span>
+            <span className="material-symbols-outlined icon-sm">summarize</span>
             {tf(t, 'chat.compact.summary', 'Conversation Summary')}
           </button>
           {open && (

@@ -100,7 +100,7 @@ export function ChatHeader({
             aria-label={`${outputCount} output${outputCount !== 1 ? 's' : ''} — open Canvas`}
             data-testid="chat-header-outputs-pill"
           >
-            <span className="material-symbols-outlined text-[14px]">draft</span>
+            <span className="material-symbols-outlined icon-xs">draft</span>
             {outputCount} output{outputCount !== 1 ? 's' : ''}
           </button>
         )}

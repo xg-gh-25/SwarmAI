@@ -101,7 +101,7 @@ export function NeedYouContent({ onDispatch, close }: NeedYouContentProps) {
 
       {!loading && !error && items.length === 0 && (
         <div className="py-10 text-center text-[13px] text-[var(--color-text-muted)]">
-          <div className="material-symbols-outlined text-[28px] opacity-40">check_circle</div>
+          <div className="material-symbols-outlined icon-xl opacity-40">check_circle</div>
           <div className="mt-1">Nothing needs you right now</div>
         </div>
       )}
@@ -172,7 +172,7 @@ function TierSection({
                     {SOURCE_LABEL[it.source]}
                   </span>
                   <span className="flex-1 text-[12.5px] text-[var(--color-text)] truncate">{it.title}</span>
-                  <span className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)]">
+                  <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">
                     arrow_forward
                   </span>
                 </div>

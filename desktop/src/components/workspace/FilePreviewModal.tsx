@@ -108,7 +108,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
         onClick={handleRevealInFinder}
         className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-[var(--color-text)] rounded-lg transition-colors"
       >
-        <span className="material-symbols-outlined text-lg">folder_open</span>
+        <span className="material-symbols-outlined icon-sm">folder_open</span>
         Reveal in Finder
       </button>
     );
@@ -138,7 +138,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
     if (isLoading) {
       return (
         <div className="flex items-center justify-center h-64 text-[var(--color-text-muted)]">
-          <span className="material-symbols-outlined animate-spin mr-2">progress_activity</span>
+          <span className="material-symbols-outlined icon-sm animate-spin mr-2">progress_activity</span>
           Loading file...
         </div>
       );
@@ -148,7 +148,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
       const errorMessage = error instanceof Error ? error.message : 'Failed to load file';
       return (
         <div className="flex flex-col items-center justify-center h-64 text-[var(--color-text-muted)]">
-          <span className="material-symbols-outlined text-5xl mb-4">error</span>
+          <span className="material-symbols-outlined icon-xl mb-4">error</span>
           <span className="text-lg font-medium mb-2">Cannot Load File</span>
           <span className="text-sm text-center mb-4 text-status-error">{errorMessage}</span>
           <RevealButton />
@@ -187,7 +187,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
         <div className="flex flex-col">
           <Suspense fallback={
             <div className="flex items-center justify-center h-64 text-[var(--color-text-muted)]">
-              <span className="material-symbols-outlined animate-spin mr-2">progress_activity</span>
+              <span className="material-symbols-outlined icon-sm animate-spin mr-2">progress_activity</span>
               Loading PDF viewer...
             </div>
           }>

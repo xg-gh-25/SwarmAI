@@ -85,7 +85,7 @@ export function NextSteps({ steps }: NextStepsProps) {
               aria-label={`${tf(t, 'chat.nextSteps.send', 'Send now')}: ${step}`}
               className="w-8 shrink-0 flex items-center justify-center text-[var(--color-text-dim)] border-l border-transparent group-hover/chip:text-primary group-hover/chip:border-primary/25 hover:bg-primary/20 transition-colors rounded-r-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/50"
             >
-              <span className="material-symbols-outlined text-[16px]">arrow_upward</span>
+              <span className="material-symbols-outlined icon-sm">arrow_upward</span>
             </button>
           </span>
         ))}

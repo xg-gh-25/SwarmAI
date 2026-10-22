@@ -497,7 +497,7 @@ function FileViewerPanelImpl({
           aria-label="Open Canvas"
           data-testid="canvas-resident-rail"
         >
-          <span className="material-symbols-outlined text-[18px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">chevron_left</span>
+          <span className="material-symbols-outlined icon-md text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">chevron_left</span>
           <span className="canvas-rail-text text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--color-text)]">Canvas · Artifacts</span>
           {counts.total > 0 && (
             <span
@@ -541,7 +541,7 @@ function FileViewerPanelImpl({
           aria-label="Expand Canvas"
           data-testid="canvas-rail"
         >
-          <span className="material-symbols-outlined text-[18px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">chevron_left</span>
+          <span className="material-symbols-outlined icon-md text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">chevron_left</span>
           <span className="canvas-rail-text text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--color-text)]">Canvas · Artifacts</span>
           {counts.total > 0 && (
             // Consistent with the expanded-header count (Gate-1 F1): git-semantic
@@ -664,7 +664,7 @@ function FileViewerPanelImpl({
                 aria-expanded={!outputsCollapsed}
                 data-testid="canvas-outputs-caret"
               >
-                <span className={`material-symbols-outlined text-[18px] block transition-transform duration-200 ${outputsCollapsed ? '-rotate-90' : ''}`}>expand_more</span>
+                <span className={`material-symbols-outlined icon-sm block transition-transform duration-200 ${outputsCollapsed ? '-rotate-90' : ''}`}>expand_more</span>
               </button>
               {/* Tabs: Artifacts (this session's files) | Changes (code repos' local state). */}
               <div className="flex items-center min-w-0 flex-1">
@@ -705,23 +705,23 @@ function FileViewerPanelImpl({
                   // so a trailing `${pinned ? 'text-primary'}` would LOSE to a leading
                   // idle color and the active accent would never show (Gate-2 CRITICAL).
                   // --color-text-dim is a real, defined token (fainter than muted).
-                  className={`p-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors ${pinned ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}`}
+                  className={`icon-btn hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors ${pinned ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}`}
                   title={pinned ? 'Pinned — this file won’t be auto-replaced (click to unpin)' : 'Pin this file — keep it open; a new output won’t replace your view'}
                   aria-label="Toggle pin — keep this file open"
                   aria-pressed={!!pinned}
                 >
-                  <span className="material-symbols-outlined text-[14px]">keep</span>
+                  <span className="material-symbols-outlined icon-sm">keep</span>
                 </button>
                 <button
                   onClick={onToggleMute}
                   // Mutually-exclusive color slot — see the pin button above (Gate-2 CRITICAL:
                   // stacked text-* utilities let the idle color override the active accent).
-                  className={`p-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors ${muted ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}`}
+                  className={`icon-btn hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors ${muted ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}`}
                   title={muted ? 'Auto-surface muted for this session (click to unmute)' : 'Mute auto-surface — stop opening new outputs this session (they still list here)'}
                   aria-label="Toggle auto-surface mute for this session"
                   aria-pressed={!!muted}
                 >
-                  <span className="material-symbols-outlined text-[14px]">{muted ? 'notifications_off' : 'notifications'}</span>
+                  <span className="material-symbols-outlined icon-sm">{muted ? 'notifications_off' : 'notifications'}</span>
                 </button>
               </div>
               {/* Divider between the two semantic groups (content | window). */}
@@ -740,21 +740,21 @@ function FileViewerPanelImpl({
               <div className="flex items-center gap-0.5 shrink-0" data-testid="canvas-window-controls">
                 <button
                   onClick={toggleExpand}
-                  className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors"
+                  className="icon-btn hover:bg-[var(--color-hover)] transition-colors"
                   title={expanded ? 'Restore width' : 'Expand — widen the Canvas for review'}
                   aria-label={expanded ? 'Restore Canvas width' : 'Expand Canvas for review'}
                   aria-pressed={expanded}
                 >
-                  <span className="material-symbols-outlined text-[14px]">{expanded ? 'close_fullscreen' : 'open_in_full'}</span>
+                  <span className="material-symbols-outlined icon-sm">{expanded ? 'close_fullscreen' : 'open_in_full'}</span>
                 </button>
                 <button
                   onClick={collapseToRail}
-                  className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors"
+                  className="icon-btn hover:bg-[var(--color-hover)] transition-colors"
                   title="Collapse Canvas to a side rail"
                   aria-label="Collapse Canvas to a side rail"
                   data-testid="canvas-collapse-rail-btn"
                 >
-                  <span className="material-symbols-outlined text-[14px]">right_panel_close</span>
+                  <span className="material-symbols-outlined icon-sm">right_panel_close</span>
                 </button>
               </div>
             </div>

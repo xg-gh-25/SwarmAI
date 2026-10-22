@@ -49,7 +49,7 @@ export function AlertsPill({ count }: AlertsPillProps) {
         ].join(' ')}
       >
         <span className="w-4 flex items-center justify-center">
-          <span className="material-symbols-outlined text-[19px] leading-none">notifications</span>
+          <span className="material-symbols-outlined icon-md leading-none">notifications</span>
         </span>
         <span className="flex-1 text-left text-[11.5px] font-mono tracking-wide whitespace-nowrap">{tf(t, 'chat.alerts.label', 'Needs You')}</span>
         {!calm && (

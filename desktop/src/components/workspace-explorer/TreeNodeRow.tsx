@@ -232,8 +232,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
       'border-radius:6px;font-size:13px;color:var(--color-text);' +
       'position:absolute;top:-1000px;';
     const iconSpan = document.createElement('span');
-    iconSpan.className = 'material-symbols-outlined';
-    iconSpan.style.fontSize = '16px';
+    iconSpan.className = 'material-symbols-outlined icon-sm';
     iconSpan.textContent = fileIcon(node.name);
     ghost.appendChild(iconSpan);
     ghost.appendChild(document.createTextNode(node.name));
@@ -397,12 +396,11 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
       {/* Expand / collapse chevron (directories only) */}
       {isDirectory ? (
         <span
-          className="material-symbols-outlined"
+          className="material-symbols-outlined icon-sm"
           data-testid="tree-chevron"
           onClick={handleChevronClick}
           aria-hidden="true"
           style={{
-            fontSize: '16px',
             width: '16px',
             flexShrink: 0,
             transition: CHEVRON_TRANSITION,
@@ -425,9 +423,8 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         aria-hidden="true"
       >
         <span
-          className="material-symbols-outlined"
+          className="material-symbols-outlined icon-sm"
           style={{
-            fontSize: '16px',
             color: iconColor,
           }}
         >
@@ -435,10 +432,9 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         </span>
         {node.isSymlink && (
           <span
-            className="material-symbols-outlined"
+            className="material-symbols-outlined icon-xs"
             title="Linked folder"
             style={{
-              fontSize: '10px',
               position: 'absolute',
               bottom: '-2px',
               right: '-4px',
@@ -507,9 +503,8 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         >
           {isDirectory && (
             <span
-              className="material-symbols-outlined"
+              className="material-symbols-outlined icon-xs"
               style={{
-                fontSize: '14px',
                 color: 'var(--color-explorer-accent)',
                 cursor: 'pointer',
               }}
@@ -519,9 +514,8 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
             </span>
           )}
           <span
-            className="material-symbols-outlined"
+            className="material-symbols-outlined icon-xs"
             style={{
-              fontSize: '14px',
               color: 'var(--color-explorer-accent)',
               cursor: 'pointer',
             }}

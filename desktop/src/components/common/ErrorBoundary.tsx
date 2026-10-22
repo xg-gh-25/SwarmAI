@@ -51,7 +51,7 @@ export class ErrorBoundary extends Component<Props, State> {
       if (variant === 'tab') {
         return (
           <div className="flex items-center gap-3 p-4 m-4 rounded-lg bg-red-500/10 border border-red-500/20">
-            <span className="material-symbols-outlined text-red-500">error</span>
+            <span className="material-symbols-outlined icon-md text-red-500">error</span>
             <div className="flex-1">
               <p className="text-sm font-medium text-[var(--color-text)]">This tab encountered an error</p>
               <p className="text-xs text-[var(--color-text-muted)]">{this.state.error?.message}</p>
@@ -70,7 +70,7 @@ export class ErrorBoundary extends Component<Props, State> {
         return (
           <div className="flex flex-col items-center justify-center min-h-screen p-8 text-center bg-[var(--color-bg)]">
             <div className="w-20 h-20 mb-6 rounded-full bg-red-500/10 flex items-center justify-center">
-              <span className="material-symbols-outlined text-red-500 text-4xl">error</span>
+              <span className="material-symbols-outlined icon-xl text-red-500">error</span>
             </div>
             <h1 className="text-2xl font-bold text-[var(--color-text)] mb-2">Something went wrong</h1>
             <p className="text-[var(--color-text-muted)] mb-6 max-w-md">
@@ -126,7 +126,7 @@ export function ErrorFallback({ error, onRetry }: ErrorFallbackProps): React.Rea
   return (
     <div className="flex flex-col items-center justify-center min-h-[400px] p-8 text-center">
       <div className="w-16 h-16 mb-4 rounded-full bg-red-500/10 flex items-center justify-center">
-        <span className="material-symbols-outlined text-red-500 text-3xl">error</span>
+        <span className="material-symbols-outlined icon-lg text-red-500">error</span>
       </div>
       <h2 className="text-xl font-semibold text-[var(--color-text)] mb-2">Something went wrong</h2>
       <p className="text-[var(--color-text-muted)] mb-6 max-w-md">{errorMessage}</p>
@@ -135,7 +135,7 @@ export function ErrorFallback({ error, onRetry }: ErrorFallbackProps): React.Rea
           onClick={onRetry}
           className="flex items-center gap-2 px-4 py-2 bg-primary text-[var(--color-text)] rounded-lg hover:bg-primary/80 transition-colors"
         >
-          <span className="material-symbols-outlined text-[14px]">refresh</span>
+          <span className="material-symbols-outlined icon-xs">refresh</span>
           Try again
         </button>
       )}
@@ -172,13 +172,13 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
   if (compact) {
     return (
       <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
-        <span className={`material-symbols-outlined text-[14px] ${getErrorColor(error.code)}`}>
+        <span className={`material-symbols-outlined icon-xs ${getErrorColor(error.code)}`}>
           {getErrorIcon(error.code)}
         </span>
         <span className="text-sm text-[var(--color-text-muted)] flex-1">{error.message}</span>
         {onDismiss && (
           <button onClick={onDismiss} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-            <span className="material-symbols-outlined text-[14px]">close</span>
+            <span className="material-symbols-outlined icon-sm">close</span>
           </button>
         )}
       </div>
@@ -189,7 +189,7 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
     <div className="p-6 rounded-xl bg-[var(--color-card)] border border-[var(--color-border)]">
       <div className="flex items-start gap-4">
         <div className={`w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center flex-shrink-0`}>
-          <span className={`material-symbols-outlined ${getErrorColor(error.code)}`}>
+          <span className={`material-symbols-outlined icon-lg ${getErrorColor(error.code)}`}>
             {getErrorIcon(error.code)}
           </span>
         </div>
@@ -200,7 +200,7 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
           )}
           {error.suggestedAction && (
             <p className="text-sm text-[var(--color-text-muted)] mb-4 flex items-center gap-1">
-              <span className="material-symbols-outlined text-[14px]">lightbulb</span>
+              <span className="material-symbols-outlined icon-xs">lightbulb</span>
               {error.suggestedAction}
             </p>
           )}
@@ -210,7 +210,7 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
                 onClick={onRetry}
                 className="flex items-center gap-2 px-4 py-2 bg-primary text-[var(--color-text)] rounded-lg hover:bg-primary/80 transition-colors text-sm"
               >
-                <span className="material-symbols-outlined text-[14px]">refresh</span>
+                <span className="material-symbols-outlined icon-xs">refresh</span>
                 Try again
               </button>
             )}

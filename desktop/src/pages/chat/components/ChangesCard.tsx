@@ -118,10 +118,10 @@ function ChangeRow({ file }: { file: TurnChangeFile }) {
             onClick={toggle}
             className="shrink-0 w-4 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
           >
-            <span aria-hidden="true" className={`material-symbols-outlined text-[16px] leading-none transition-transform ${open ? 'rotate-90' : ''}`}>chevron_right</span>
+            <span aria-hidden="true" className={`material-symbols-outlined icon-sm leading-none transition-transform ${open ? 'rotate-90' : ''}`}>chevron_right</span>
           </button>
         ) : <span className="shrink-0 w-4" />}
-        <span aria-hidden="true" className="material-symbols-outlined text-[15px] leading-none shrink-0" style={{ color: fileIconColor(name), filter: 'saturate(0.55)' }}>
+        <span aria-hidden="true" className="material-symbols-outlined icon-sm leading-none shrink-0" style={{ color: fileIconColor(name), filter: 'saturate(0.55)' }}>
           {fileIcon(name)}
         </span>
         {canOpenFile ? (
@@ -180,7 +180,7 @@ export function ChangesCard({ block, bare }: { block: TurnChangesContent; bare?:
   return (
     <section data-testid="turn-changes" className={bare ? '' : 'rounded-lg border border-[var(--color-border)] overflow-hidden'}>
       <header className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
-        <span aria-hidden="true" className="material-symbols-outlined text-[16px] leading-none text-[var(--color-text-muted)]">difference</span>
+        <span aria-hidden="true" className="material-symbols-outlined icon-sm leading-none text-[var(--color-text-muted)]">difference</span>
         <span className="font-mono text-[13px] text-[var(--color-text)]">
           {count === 1
             ? tf(t, 'chat.turn.changes.titleOne', '1 file changed')

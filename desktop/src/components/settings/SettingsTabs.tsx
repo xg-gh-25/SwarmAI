@@ -91,7 +91,7 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
                   : 'text-[var(--color-text-muted)] border-transparent hover:text-[var(--color-text)] hover:border-[var(--color-border)]'
               }`}
             >
-              <span className="material-symbols-outlined text-base">{tab.icon}</span>
+              <span className="material-symbols-outlined icon-xs">{tab.icon}</span>
               {tab.label}
             </button>
           ))}

@@ -193,7 +193,7 @@ export default function HtmlRenderer({
             title={fitMode ? 'Actual size (no fit-scaling)' : 'Fit width to panel'}
             aria-pressed={fitMode}
           >
-            <span className="material-symbols-outlined text-[14px]">
+            <span className="material-symbols-outlined icon-xs">
               {fitMode ? 'width_normal' : 'fit_screen'}
             </span>
             {fitMode ? 'Actual' : 'Fit'}
@@ -207,7 +207,7 @@ export default function HtmlRenderer({
             hover:bg-[var(--color-hover)] transition-colors shadow-sm"
           title={mode === 'rendered' ? 'Show HTML source' : 'Show rendered view'}
         >
-          <span className="material-symbols-outlined text-[14px]">
+          <span className="material-symbols-outlined icon-xs">
             {mode === 'rendered' ? 'code' : 'visibility'}
           </span>
           {mode === 'rendered' ? 'Source' : 'Rendered'}
@@ -273,7 +273,7 @@ export default function HtmlRenderer({
               hover:bg-[var(--color-hover)] transition-colors shadow-sm"
             title="Open the fully-rendered page in your system browser"
           >
-            <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+            <span className="material-symbols-outlined icon-xs">open_in_new</span>
             Open in browser
           </button>
         </div>

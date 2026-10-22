@@ -113,7 +113,7 @@ interface FileResponse {
 function LoadingFallback() {
   return (
     <div className="flex-1 flex items-center justify-center text-[var(--color-text-secondary)]">
-      <span className="material-symbols-outlined animate-spin text-2xl mr-2">progress_activity</span>
+      <span className="material-symbols-outlined icon-md animate-spin mr-2">progress_activity</span>
       <span className="text-sm">Loading...</span>
     </div>
   );
@@ -634,7 +634,7 @@ function FileViewerImpl({
     if (contentError) {
       return (
         <div className="flex-1 flex flex-col items-center justify-center gap-3 text-[var(--color-text-secondary)]">
-          <span className="material-symbols-outlined text-3xl text-red-400">error</span>
+          <span className="material-symbols-outlined icon-lg text-red-400">error</span>
           <span className="text-sm">{contentError}</span>
         </div>
       );
@@ -797,7 +797,7 @@ function FileViewerImpl({
           data-testid="file-chrome-header"
         >
           <span
-            className="material-symbols-outlined text-[15px] leading-none shrink-0"
+            className="material-symbols-outlined icon-sm leading-none shrink-0"
             style={{ color: fileIconColor(activeTab.fileName) }}
             aria-hidden="true"
           >
@@ -829,21 +829,21 @@ function FileViewerImpl({
               none (only FileEditorCore's own Reload covered text/md/svg). */}
           <button
             onClick={handleRefreshActive}
-            className="shrink-0 p-1 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            className="icon-btn hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
             title="Reload this file from disk"
             aria-label="Refresh file"
             data-testid="file-chrome-refresh"
           >
-            <span className="material-symbols-outlined text-[16px] leading-none">refresh</span>
+            <span className="material-symbols-outlined icon-sm leading-none">refresh</span>
           </button>
           <button
             onClick={handleUnifiedClose}
-            className="shrink-0 p-1 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            className="icon-btn hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
             title="Close this file"
             aria-label="Close file"
             data-testid="file-chrome-close"
           >
-            <span className="material-symbols-outlined text-[16px] leading-none">close</span>
+            <span className="material-symbols-outlined icon-sm leading-none">close</span>
           </button>
         </div>
       )}

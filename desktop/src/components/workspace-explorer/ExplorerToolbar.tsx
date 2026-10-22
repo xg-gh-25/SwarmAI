@@ -339,7 +339,7 @@ function ToolbarButton({
       aria-label={label}
       data-testid={testId}
     >
-      <span className="material-symbols-outlined text-lg">{icon}</span>
+      <span className="material-symbols-outlined icon-sm">{icon}</span>
     </button>
   );
 }

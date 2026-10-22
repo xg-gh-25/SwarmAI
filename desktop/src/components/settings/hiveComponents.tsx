@@ -83,7 +83,7 @@ export function HiveSection({
             disabled={!accounts || accounts.length === 0}
             className="px-3 py-1.5 text-xs bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
           >
-            <span className="material-symbols-outlined text-[14px]">add</span>
+            <span className="material-symbols-outlined icon-xs">add</span>
             Deploy New Hive
           </button>
         )}
@@ -368,7 +368,7 @@ export function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
           onClick={handleShare}
           className="px-2 py-1 bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded hover:bg-[var(--color-primary)]/30 flex items-center gap-1"
         >
-          <span className="material-symbols-outlined text-[14px]">share</span>
+          <span className="material-symbols-outlined icon-xs">share</span>
           {copied === 'share' ? 'Copied!' : 'Share'}
         </button>
         <span className="text-[var(--color-text-muted)]">Copy URL + credentials for the Hive user</span>

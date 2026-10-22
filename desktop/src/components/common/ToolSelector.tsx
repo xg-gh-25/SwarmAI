@@ -177,7 +177,7 @@ export function ToolSelector({ selectedTools, onChange, className }: ToolSelecto
                 onClick={() => toggleCategory(category.id)}
               >
                 <div className="flex items-center gap-3">
-                  <span className="material-symbols-outlined text-primary">{category.icon}</span>
+                  <span className="material-symbols-outlined icon-md text-primary">{category.icon}</span>
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-[var(--color-text)] font-medium">{category.name}</span>
@@ -215,7 +215,7 @@ export function ToolSelector({ selectedTools, onChange, className }: ToolSelecto
                   {/* Expand/Collapse Icon */}
                   <span
                     className={clsx(
-                      'material-symbols-outlined text-[var(--color-text-muted)] transition-transform',
+                      'material-symbols-outlined icon-sm text-[var(--color-text-muted)] transition-transform',
                       isExpanded && 'rotate-180'
                     )}
                   >

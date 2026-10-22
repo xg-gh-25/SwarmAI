@@ -557,8 +557,8 @@ function RowRenderer(props: {
         {/* Spacer to align with chevron */}
         <span style={{ width: '16px', flexShrink: 0 }} />
         <span
-          className="material-symbols-outlined"
-          style={{ fontSize: '16px', color: iconColor, flexShrink: 0 }}
+          className="material-symbols-outlined icon-sm"
+          style={{ color: iconColor, flexShrink: 0 }}
         >
           {iconName}
         </span>

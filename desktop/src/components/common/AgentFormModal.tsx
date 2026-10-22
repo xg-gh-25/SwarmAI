@@ -315,7 +315,7 @@ export default function AgentFormModal({
           />
           {useBedrock && (
             <p className="mt-1 text-xs text-amber-400">
-              <span className="material-symbols-outlined text-xs align-middle mr-1">info</span>
+              <span className="material-symbols-outlined icon-xs align-middle mr-1">info</span>
               {t('agents.form.thirdPartyModelsNote')}
             </p>
           )}

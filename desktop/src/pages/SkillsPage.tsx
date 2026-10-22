@@ -236,7 +236,7 @@ export default function SkillsPage({ embedded = false }: SkillsPageProps) {
                     const source = getSourceDisplay(skill);
                     return (
                       <div className="flex items-center gap-1.5">
-                        <span className={`material-symbols-outlined text-[14px] ${source.color}`}>
+                        <span className={`material-symbols-outlined icon-xs ${source.color}`}>
                           {source.icon}
                         </span>
                         <span className={`text-sm ${source.color}`}>{source.label}</span>
@@ -258,7 +258,7 @@ export default function SkillsPage({ embedded = false }: SkillsPageProps) {
                         className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-status-error hover:bg-status-error/10 transition-colors"
                         title={t('skills.deleteSkill')}
                       >
-                        <span className="material-symbols-outlined text-lg">delete</span>
+                        <span className="material-symbols-outlined icon-sm">delete</span>
                       </button>
                     )}
                     {/* For read-only skills, show tier info */}
@@ -275,7 +275,7 @@ export default function SkillsPage({ embedded = false }: SkillsPageProps) {
             {filteredSkills.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-6 py-12 text-center">
-                  <span className="material-symbols-outlined text-4xl text-[var(--color-text-muted)] mb-2">
+                  <span className="material-symbols-outlined icon-xl text-[var(--color-text-muted)] mb-2">
                     construction
                   </span>
                   <p className="text-[var(--color-text-muted)]">{t('skills.noSkills')}</p>
@@ -833,7 +833,7 @@ function GenerateSkillForm({
 
         <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-4">
           <div className="flex items-start gap-3">
-            <span className="material-symbols-outlined text-primary">info</span>
+            <span className="material-symbols-outlined icon-md text-primary">info</span>
             <div>
               <p className="text-sm text-[var(--color-text)] font-medium">{t('skills.create.howItWorks')}</p>
               <p className="text-sm text-[var(--color-text-muted)] mt-1">
@@ -866,7 +866,7 @@ function GenerateSkillForm({
       {/* Chat Header */}
       <div className="flex items-center justify-between pb-4 border-b border-[var(--color-border)]">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-primary">smart_toy</span>
+          <span className="material-symbols-outlined icon-md text-primary">smart_toy</span>
           <div>
             <h3 className="font-medium text-[var(--color-text)]">{t('skills.create.skillCreator')}</h3>
             <p className="text-xs text-[var(--color-text-muted)]">{t('skills.create.creating', { name })}</p>
@@ -893,7 +893,7 @@ function GenerateSkillForm({
               }`}
             >
               <span
-                className={`material-symbols-outlined text-[14px] ${
+                className={`material-symbols-outlined icon-xs ${
                   message.role === 'user' ? 'text-orange-400' : 'text-primary'
                 }`}
               >
@@ -928,7 +928,7 @@ function GenerateSkillForm({
       {error && (
         <div className="mb-4 p-3 bg-status-error/10 border border-status-error/30 rounded-lg">
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-status-error">error</span>
+            <span className="material-symbols-outlined icon-md text-status-error">error</span>
             <span className="text-status-error text-sm">{error}</span>
           </div>
         </div>
@@ -939,7 +939,7 @@ function GenerateSkillForm({
         {isComplete && !isStreaming ? (
           <div className="space-y-3">
             <div className="flex items-center gap-2 p-3 bg-status-success/10 border border-status-success/30 rounded-lg">
-              <span className="material-symbols-outlined text-status-success">check_circle</span>
+              <span className="material-symbols-outlined icon-md text-status-success">check_circle</span>
               <span className="text-status-success text-sm">Skill creation complete! You can iterate or save.</span>
             </div>
             <div className="flex gap-3">
@@ -961,7 +961,7 @@ function GenerateSkillForm({
                   } disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors`}
                   title={isStreaming ? 'Stop generation' : 'Send message'}
                 >
-                  <span className="material-symbols-outlined text-white text-[14px]">
+                  <span className="material-symbols-outlined icon-xs text-white">
                     {isStreaming ? 'stop' : 'send'}
                   </span>
                 </button>
@@ -990,7 +990,7 @@ function GenerateSkillForm({
               } disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors`}
               title={isStreaming ? 'Stop generation' : 'Send message'}
             >
-              <span className="material-symbols-outlined text-white text-[14px]">
+              <span className="material-symbols-outlined icon-xs text-white">
                 {isStreaming ? 'stop' : 'send'}
               </span>
             </button>
@@ -1026,7 +1026,7 @@ function ContentBlockRenderer({ block, onAnswerQuestion, pendingToolUseId, isStr
       <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg overflow-hidden text-sm">
         <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--color-hover)]">
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary text-[14px]">terminal</span>
+            <span className="material-symbols-outlined icon-xs text-primary">terminal</span>
             <span className="font-medium text-[var(--color-text)]">{block.name}</span>
           </div>
         </div>
@@ -1043,7 +1043,7 @@ function ContentBlockRenderer({ block, onAnswerQuestion, pendingToolUseId, isStr
     return (
       <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-3 text-sm">
         <div className="flex items-center gap-2 mb-1">
-          <span className="material-symbols-outlined text-status-success text-[14px]">check_circle</span>
+          <span className="material-symbols-outlined icon-xs text-status-success">check_circle</span>
           <span className="font-medium text-[var(--color-text)]">Result</span>
         </div>
         <pre className="text-xs text-[var(--color-text-muted)] overflow-x-auto whitespace-pre-wrap break-words max-h-24 overflow-y-auto">

@@ -106,7 +106,7 @@ export default function AskUserQuestion({
     return (
       <div className="bg-[var(--color-card)] border border-primary/20 rounded-lg p-4 my-3">
         <div className="flex items-center gap-2 mb-3">
-          <span className="material-symbols-outlined text-primary text-base">check_circle</span>
+          <span className="material-symbols-outlined icon-xs text-primary">check_circle</span>
           <span className="font-medium text-[var(--color-text)]">Answered</span>
         </div>
         <div className="space-y-2">
@@ -156,7 +156,7 @@ export default function AskUserQuestion({
   return (
     <div className="bg-[var(--color-card)] border border-primary/30 rounded-lg p-4 my-3">
       <div className="flex items-center gap-2 mb-4">
-        <span className="material-symbols-outlined text-primary">help_outline</span>
+        <span className="material-symbols-outlined icon-md text-primary">help_outline</span>
         <span className="font-medium text-[var(--color-text)]">Claude needs your input</span>
       </div>
 
@@ -197,7 +197,7 @@ export default function AskUserQuestion({
                       }`}
                     >
                       {isSelected && (
-                        <span className="material-symbols-outlined text-[var(--color-text)] text-[14px]">
+                        <span className="material-symbols-outlined icon-xs text-[var(--color-text)]">
                           {q.multiSelect ? 'check' : 'circle'}
                         </span>
                       )}
@@ -229,7 +229,7 @@ export default function AskUserQuestion({
                     }`}
                   >
                     {showCustom[q.question] && (
-                      <span className="material-symbols-outlined text-[var(--color-text)] text-[14px]">circle</span>
+                      <span className="material-symbols-outlined icon-xs text-[var(--color-text)]">circle</span>
                     )}
                   </div>
                   <span className="text-[var(--color-text)] text-sm">Other (custom answer)</span>

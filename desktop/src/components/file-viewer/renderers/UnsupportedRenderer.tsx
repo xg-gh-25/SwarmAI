@@ -186,8 +186,8 @@ export default function UnsupportedRenderer({
           style={{ backgroundColor: 'var(--color-hover)' }}
         >
           <span
-            className="material-symbols-outlined"
-            style={{ fontSize: '40px', color: 'var(--color-text-muted)' }}
+            className="material-symbols-outlined icon-xl"
+            style={{ color: 'var(--color-text-muted)' }}
           >
             {typeInfo.icon}
           </span>
@@ -234,7 +234,7 @@ export default function UnsupportedRenderer({
               className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg
                 bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
             >
-              <span className="material-symbols-outlined text-base">open_in_new</span>
+              <span className="material-symbols-outlined icon-xs">open_in_new</span>
               Open in Default App
             </button>
           )}
@@ -247,7 +247,7 @@ export default function UnsupportedRenderer({
                 border border-[var(--color-border)] transition-colors"
               title="Reveal this file in Finder"
             >
-              <span className="material-symbols-outlined text-base">folder_open</span>
+              <span className="material-symbols-outlined icon-xs">folder_open</span>
               Reveal in Finder
             </button>
           )}
@@ -259,7 +259,7 @@ export default function UnsupportedRenderer({
                 text-[var(--color-text)] hover:bg-[var(--color-hover)]
                 border border-[var(--color-border)] transition-colors"
             >
-              <span className="material-symbols-outlined text-base">attach_file</span>
+              <span className="material-symbols-outlined icon-xs">attach_file</span>
               Attach to Chat
             </button>
           )}
@@ -271,7 +271,7 @@ export default function UnsupportedRenderer({
               hover:bg-[var(--color-hover)] border border-[var(--color-border)] transition-colors"
             title={tf(t, 'common.copy.absolutePath', 'Copy absolute file path')}
           >
-            <span className="material-symbols-outlined text-base">
+            <span className="material-symbols-outlined icon-xs">
               {copyFeedback ? 'check' : 'content_copy'}
             </span>
             {copyFeedback ? tf(t, 'common.copy.copied', 'Copied!') : tf(t, 'common.copy.path', 'Copy Path')}

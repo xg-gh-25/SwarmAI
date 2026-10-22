@@ -198,7 +198,7 @@ export default function KnowledgebasesTab({ workspaceId }: KnowledgebasesTabProp
             )}
           >
             <div className="flex items-center gap-3 min-w-0">
-              <span className="material-symbols-outlined text-lg text-[var(--color-text-muted)]">
+              <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">
                 menu_book
               </span>
               <div className="min-w-0">
@@ -217,7 +217,7 @@ export default function KnowledgebasesTab({ workspaceId }: KnowledgebasesTabProp
                 className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
                 title={t('common.button.edit')}
               >
-                <span className="material-symbols-outlined text-lg">edit</span>
+                <span className="material-symbols-outlined icon-sm">edit</span>
               </button>
               {deleteConfirm === kb.id ? (
                 <div className="flex items-center gap-1">
@@ -240,7 +240,7 @@ export default function KnowledgebasesTab({ workspaceId }: KnowledgebasesTabProp
                   className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-status-error hover:bg-status-error/10 transition-colors"
                   title={t('common.button.delete')}
                 >
-                  <span className="material-symbols-outlined text-lg">delete</span>
+                  <span className="material-symbols-outlined icon-sm">delete</span>
                 </button>
               )}
             </div>

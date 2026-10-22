@@ -201,12 +201,12 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       >
         {verifyState === 'verifying' ? (
           <>
-            <span className="material-symbols-outlined animate-spin text-[14px]">progress_activity</span>
+            <span className="material-symbols-outlined icon-xs animate-spin">progress_activity</span>
             Verifying...
           </>
         ) : (
           <>
-            <span className="material-symbols-outlined text-[14px]">play_arrow</span>
+            <span className="material-symbols-outlined icon-xs">play_arrow</span>
             Verify Connection
           </>
         )}
@@ -214,7 +214,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
 
       {verifyState === 'success' && verifyResult && (
         <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg flex items-center gap-2">
-          <span className="material-symbols-outlined text-green-400">check_circle</span>
+          <span className="material-symbols-outlined icon-md text-green-400">check_circle</span>
           <span className="text-green-400 text-sm">
             {verifyResult.model} responded in {verifyResult.latencyMs}ms
           </span>
@@ -224,7 +224,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       {verifyState === 'error' && verifyResult && (
         <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
           <div className="flex items-center gap-2 mb-1">
-            <span className="material-symbols-outlined text-red-400 text-[14px]">error</span>
+            <span className="material-symbols-outlined icon-xs text-red-400">error</span>
             <span className="text-red-400 text-sm font-medium">
               {verifyResult.errorType === 'expired_credentials' ? 'Credentials Expired' :
                verifyResult.errorType === 'missing_key' ? 'API Key Not Found' :

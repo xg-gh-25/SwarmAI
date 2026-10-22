@@ -368,16 +368,53 @@ body {
   padding-right: calc(var(--chat-gutter) - var(--scrollbar-size));
 }
 
+/* Icon and icon-button scale — the ONE place icon and icon-button sizes are set.
+   Every Material icon carries exactly one icon-* class (guarded by
+   src/__tests__/iconScale.test.ts); no text-* size, no inline fontSize.
+
+     icon-xs 14px  inline with 11–12px text: chips, badges, row metadata
+     icon-sm 16px  toolbar and row buttons, list rows, chevrons, spinners in text
+     icon-md 18px  primary actions (send / stop / new tab), dialog headers and close,
+                   status marks beside a line of text
+     icon-lg 24px  status marks in a card or banner of their own
+     icon-xl 32px  empty and error states
+
+   Icon buttons (a button whose content is one icon):
+     icon-btn    26px square, radius 6 — toolbars, headers, row actions (icon-sm)
+     icon-btn-lg 30px square, radius 8 — primary actions (icon-md) */
+:root {
+  --icon-xs: 14px;
+  --icon-sm: 16px;
+  --icon-md: 18px;
+  --icon-lg: 24px;
+  --icon-xl: 32px;
+  --icon-btn: 26px;
+  --icon-btn-lg: 30px;
+}
+@utility icon-xs { font-size: var(--icon-xs); }
+@utility icon-sm { font-size: var(--icon-sm); }
+@utility icon-md { font-size: var(--icon-md); }
+@utility icon-lg { font-size: var(--icon-lg); }
+@utility icon-xl { font-size: var(--icon-xl); }
+@utility icon-btn {
+  width: var(--icon-btn); height: var(--icon-btn); border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+@utility icon-btn-lg {
+  width: var(--icon-btn-lg); height: var(--icon-btn-lg); border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+
 /* Material Icons - using @fontsource-variable/material-symbols-outlined package.
    In @layer base so Tailwind utilities (@layer utilities) can size and lay out an
-   icon: unlayered, this rule beat every text-[..] / leading-* / flex / hidden on
-   ~370 icons, which all rendered at 24px inline-block. */
+   icon (an unlayered rule beat every utility). The size comes from an icon-* class
+   above; the base default is icon-sm so an unclassed icon is never 24px. */
 @layer base {
   .material-symbols-outlined {
     font-family: 'Material Symbols Outlined Variable';
     font-weight: normal;
     font-style: normal;
-    font-size: 24px;
+    font-size: var(--icon-sm);
     line-height: 1;
     letter-spacing: normal;
     text-transform: none;

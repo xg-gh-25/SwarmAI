@@ -195,7 +195,7 @@ export function HistoryContent({ agentId, onDeleteSession, onResume, close }: Hi
                     bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-colors shrink-0
                     disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                  <span className="material-symbols-outlined icon-xs">open_in_new</span>
                   Resume in tab
                 </button>
               </div>

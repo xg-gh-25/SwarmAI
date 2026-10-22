@@ -162,7 +162,7 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
             className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors flex-shrink-0"
             title="Root"
           >
-            <span className="material-symbols-outlined text-lg">home</span>
+            <span className="material-symbols-outlined icon-sm">home</span>
           </button>
           {breadcrumbParts.map((part, index) => (
             <div key={index} className="flex items-center flex-shrink-0">
@@ -190,7 +190,7 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
         >
           <span
             className={clsx(
-              'material-symbols-outlined text-lg',
+              'material-symbols-outlined icon-sm',
               isFetching && 'animate-spin'
             )}
           >
@@ -203,12 +203,12 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
       <div className="flex-1 overflow-y-auto">
         {isLoading ? (
           <div className="flex items-center justify-center h-32 text-[var(--color-text-muted)]">
-            <span className="material-symbols-outlined animate-spin mr-2">progress_activity</span>
+            <span className="material-symbols-outlined icon-sm animate-spin mr-2">progress_activity</span>
             Loading...
           </div>
         ) : isError ? (
           <div className="flex flex-col items-center justify-center h-32 text-status-error px-4 text-center">
-            <span className="material-symbols-outlined text-2xl mb-2">error</span>
+            <span className="material-symbols-outlined icon-md mb-2">error</span>
             <span className="text-sm">
               {error instanceof Error ? error.message : 'Failed to load files'}
             </span>
@@ -221,7 +221,7 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
           </div>
         ) : !fileList || fileList.files.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-32 text-[var(--color-text-muted)]">
-            <span className="material-symbols-outlined text-2xl mb-2">folder_off</span>
+            <span className="material-symbols-outlined icon-md mb-2">folder_off</span>
             <span className="text-sm">Empty directory</span>
           </div>
         ) : (
@@ -232,7 +232,7 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
                 onClick={handleNavigateUp}
                 className="w-full flex items-center gap-3 px-3 py-2 hover:bg-[var(--color-hover)] transition-colors text-left"
               >
-                <span className="material-symbols-outlined text-lg text-[var(--color-text-muted)]">
+                <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">
                   folder_open
                 </span>
                 <span className="text-[var(--color-text-muted)] text-sm">..</span>
@@ -248,7 +248,7 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
               >
                 <span
                   className={clsx(
-                    'material-symbols-outlined text-lg',
+                    'material-symbols-outlined icon-sm',
                     getFileIconColor(file)
                   )}
                 >

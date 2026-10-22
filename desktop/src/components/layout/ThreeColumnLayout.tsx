@@ -625,7 +625,7 @@ function NavSvgIcon({ name }: { name: string }) {
       );
     default:
       // Fallback to material-symbols for unknown icons
-      return <span className="material-symbols-outlined text-[18px]">{name}</span>;
+      return <span className="material-symbols-outlined icon-md">{name}</span>;
   }
 }
 

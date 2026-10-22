@@ -99,20 +99,20 @@ export default function AboutTab() {
                   onClick={handleCheckForUpdates}
                   className="w-full px-4 py-2 bg-[var(--color-bg)] text-[var(--color-text)] rounded-lg hover:bg-[var(--color-primary)] hover:text-white transition-colors flex items-center justify-center gap-2"
                 >
-                  <span className="material-symbols-outlined text-lg">update</span>
+                  <span className="material-symbols-outlined icon-sm">update</span>
                   Check for Updates
                 </button>
               )}
               {updateState === 'checking' && (
                 <div className="flex items-center justify-center gap-2 py-2 text-[var(--color-text-muted)]">
-                  <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
+                  <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>
                   Checking...
                 </div>
               )}
               {updateState === 'available' && availableUpdate && (
                 <div className="space-y-3">
                   <div className="text-green-400 flex items-center gap-2">
-                    <span className="material-symbols-outlined">new_releases</span>
+                    <span className="material-symbols-outlined icon-md">new_releases</span>
                     Version {availableUpdate.version} available
                   </div>
                   <button
@@ -154,7 +154,7 @@ export default function AboutTab() {
         <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">Data</h2>
         <div className="space-y-2 text-sm font-mono">
           <div className="flex items-start gap-2">
-            <span className="material-symbols-outlined text-base text-[var(--color-text-muted)] mt-0.5">folder</span>
+            <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)] mt-0.5">folder</span>
             <div>
               <p className="text-[var(--color-text)]">~/.swarm-ai/</p>
               <p className="text-xs text-[var(--color-text-muted)] font-sans">
@@ -164,7 +164,7 @@ export default function AboutTab() {
           </div>
           {isDesktop() && (
             <div className="flex items-start gap-2">
-              <span className="material-symbols-outlined text-base text-[var(--color-text-muted)] mt-0.5">apps</span>
+              <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)] mt-0.5">apps</span>
               <div>
                 <p className="text-[var(--color-text)]">/Applications/SwarmAI.app/</p>
                 <p className="text-xs text-[var(--color-text-muted)] font-sans">
@@ -175,7 +175,7 @@ export default function AboutTab() {
           )}
         </div>
         <div className="mt-4 flex items-start gap-2 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)]">
-          <span className="material-symbols-outlined text-status-success text-base mt-0.5">shield</span>
+          <span className="material-symbols-outlined icon-xs text-status-success mt-0.5">shield</span>
           <p className="text-xs text-[var(--color-text-muted)]">
             Updates replace the app. Your data is never touched.
           </p>

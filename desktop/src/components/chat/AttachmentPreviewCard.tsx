@@ -51,7 +51,7 @@ export function AttachmentPreviewCard({ attachment, onRemove }: AttachmentPrevie
         className="absolute top-1 right-1 z-10 w-5 h-5 rounded-full bg-black/60 text-[var(--color-text)] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
         title="Remove attachment"
       >
-        <span className="material-symbols-outlined text-[14px]">close</span>
+        <span className="material-symbols-outlined icon-sm">close</span>
       </button>
 
       {/* Content */}
@@ -60,11 +60,11 @@ export function AttachmentPreviewCard({ attachment, onRemove }: AttachmentPrevie
         <div className="flex-1 flex items-center justify-center p-2 overflow-hidden">
           {isLoading ? (
             <div className="animate-spin">
-              <span className="material-symbols-outlined text-[var(--color-text-muted)]">progress_activity</span>
+              <span className="material-symbols-outlined icon-md text-[var(--color-text-muted)]">progress_activity</span>
             </div>
           ) : error ? (
             <div className="flex flex-col items-center text-red-400">
-              <span className="material-symbols-outlined text-xl">error</span>
+              <span className="material-symbols-outlined icon-sm">error</span>
               <span className="text-xs mt-1">Error</span>
             </div>
           ) : type === 'image' && preview ? (
@@ -75,7 +75,7 @@ export function AttachmentPreviewCard({ attachment, onRemove }: AttachmentPrevie
             />
           ) : type === 'pdf' ? (
             <div className="flex flex-col items-center text-red-400">
-              <span className="material-symbols-outlined text-2xl">picture_as_pdf</span>
+              <span className="material-symbols-outlined icon-md">picture_as_pdf</span>
             </div>
           ) : (type === 'text' || type === 'csv') && preview ? (
             <div className="w-full h-full overflow-hidden p-1">
@@ -84,7 +84,7 @@ export function AttachmentPreviewCard({ attachment, onRemove }: AttachmentPrevie
               </pre>
             </div>
           ) : (
-            <span className="material-symbols-outlined text-2xl text-[var(--color-text-muted)]">{getFileIcon(type)}</span>
+            <span className="material-symbols-outlined icon-md text-[var(--color-text-muted)]">{getFileIcon(type)}</span>
           )}
         </div>
 

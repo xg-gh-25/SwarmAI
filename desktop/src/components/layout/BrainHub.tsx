@@ -223,7 +223,7 @@ function BrainDetailShell(
           onClick={onBack}
           className="flex items-center gap-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
         >
-          <span className="material-symbols-outlined text-[15px]">arrow_back</span>
+          <span className="material-symbols-outlined icon-sm">arrow_back</span>
           All brains
         </button>
         <span className="text-[var(--color-text-faint)]">/</span>
@@ -344,7 +344,7 @@ function BrainSearchRow({ name, onOpenFile }: { name: string; onOpenFile: (p: st
   return (
     <div className="px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0" data-testid="brainhub-search-row">
       <div className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1">
-        <span className="material-symbols-outlined text-[15px] text-[var(--color-text-faint)]">search</span>
+        <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)]">search</span>
         <input
           data-testid="brainhub-search-input"
           value={q}
@@ -355,7 +355,7 @@ function BrainSearchRow({ name, onOpenFile }: { name: string; onOpenFile: (p: st
         {q && (
           <button data-testid="brainhub-search-clear" onClick={() => setQ('')}
             className="text-[var(--color-text-faint)] hover:text-[var(--color-text)]">
-            <span className="material-symbols-outlined text-[15px]">close</span>
+            <span className="material-symbols-outlined icon-sm">close</span>
           </button>
         )}
       </div>
@@ -624,13 +624,13 @@ function NeedYouBlock(
               <span className="font-semibold text-[#f0a500] min-w-[22px]">{pending}</span>
               <span className="text-[var(--color-text-muted)]">proposal{pending === 1 ? '' : 's'} awaiting review</span>
               <span className="ml-auto flex items-center gap-0.5 text-[#f0a500]">
-                Go to Review <span className="material-symbols-outlined text-[13px]">arrow_forward</span>
+                Go to Review <span className="material-symbols-outlined icon-xs">arrow_forward</span>
               </span>
             </button>
           )}
           {uncommitted && (
             <div data-testid="needyou-uncommitted" className="flex items-center gap-2 text-[11px] px-2 py-1">
-              <span className="material-symbols-outlined text-[14px] text-[#db8c3a]">pending_actions</span>
+              <span className="material-symbols-outlined icon-xs text-[#db8c3a]">pending_actions</span>
               <span className="text-[var(--color-text-muted)]">uncommitted changes in this brain's subtree</span>
             </div>
           )}
@@ -680,7 +680,7 @@ function CoreDocCards(
           onClick={onToggleWeekly}
           className="ml-auto flex items-center gap-1 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded px-1.5 py-0.5 hover:bg-[#12233a]"
         >
-          <span className="material-symbols-outlined text-[12px]">summarize</span>
+          <span className="material-symbols-outlined icon-xs">summarize</span>
           {showWeekly ? 'Hide report' : 'Weekly Report'}
         </button>
       </div>
@@ -702,7 +702,7 @@ function CoreDocCards(
               }`}
             >
               <div className="flex items-center gap-1.5 mb-0.5">
-                <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">description</span>
+                <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">description</span>
                 <span className="text-[12px] font-semibold font-mono">{docName}</span>
                 {marked && <span data-testid={`coredoc-mark-${docName}`} className="ml-auto w-1.5 h-1.5 rounded-full bg-[#f0a500]" />}
               </div>
@@ -738,7 +738,7 @@ function WeeklyReportPanel({ weekly, projectName }: { weekly: WeeklyReportModel;
   return (
     <div data-testid="brainhub-weekly-panel" className="rounded-lg border border-[#1f3a5a] bg-[#0e1723] p-3 mb-2 text-[11px]">
       <div className="flex items-center gap-1.5 mb-2 font-semibold text-[#58a6ff]">
-        <span className="material-symbols-outlined text-[15px]">summarize</span>
+        <span className="material-symbols-outlined icon-sm">summarize</span>
         {projectName} · weekly review {weekly.sinceSha && <span className="text-[11px] font-mono text-[var(--color-text-faint)]">since {weekly.sinceSha}</span>}
       </div>
       <div className="flex flex-col gap-1 text-[var(--color-text-muted)]">
@@ -791,7 +791,7 @@ function BrainBrowse(
         style={{ maxWidth: 'clamp(320px, 38%, 560px)', maxHeight: '60vh' }}
       >
         <div className="flex items-center gap-1.5 px-3 py-2 border-b border-[var(--color-border)] text-[11px] font-medium text-[var(--color-text-muted)] flex-shrink-0">
-          <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">folder_open</span>
+          <span className="material-symbols-outlined icon-xs text-[#58a6ff]">folder_open</span>
           <span>Files · Projects/{name}</span>
         </div>
         <LibraryTree
@@ -812,10 +812,10 @@ function BrainBrowse(
             onClick={() => setGraphOpen((v) => !v)}
             className="w-full flex items-center gap-2 px-3 py-2 text-[12px] hover:bg-[var(--color-hover)]"
           >
-            <span className="material-symbols-outlined text-[15px] text-[#58a6ff]">hub</span>
+            <span className="material-symbols-outlined icon-sm text-[#58a6ff]">hub</span>
             <span className="font-medium">Code Graph</span>
             {!graphOpen && <span className="text-[11px] text-[var(--color-text-faint)]">· expand to load the dependency graph</span>}
-            <span className="material-symbols-outlined text-[16px] text-[var(--color-text-faint)] ml-auto">
+            <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] ml-auto">
               {graphOpen ? 'expand_less' : 'expand_more'}
             </span>
           </button>
@@ -953,7 +953,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
       {/* diff header — plain language first, git internals folded */}
       <div className="mb-3" data-testid="review-diff-header">
         <div className="flex items-center gap-2 text-[13px] text-[var(--color-text)]">
-          <span className="material-symbols-outlined text-[16px] text-[#a855f7]">rate_review</span>
+          <span className="material-symbols-outlined icon-sm text-[#a855f7]">rate_review</span>
           <span>
             {changeCount === 0
               ? 'No changes since your last review'
@@ -973,7 +973,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
             }`}
             title={armed ? 'This clears the review queue and records everything as seen — click again to confirm' : 'Records all changes below as reviewed'}
           >
-            <span className="material-symbols-outlined text-[14px]">{armed ? 'warning' : 'visibility'}</span>
+            <span className="material-symbols-outlined icon-xs">{armed ? 'warning' : 'visibility'}</span>
             {armed ? 'Click again to confirm' : 'Mark all seen'}
           </button>
         </div>
@@ -995,11 +995,11 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
           large-repo timeout isn't a dead-end lockout of the review. */}
       {data.diff_incomplete && (
         <div className="flex items-center gap-1.5 mb-3 text-[11px] text-[#f0a500] bg-[#241f10] border border-[#5a4a1f] rounded-md px-2 py-1" data-testid="review-diff-incomplete">
-          <span className="material-symbols-outlined text-[14px]">warning</span>
+          <span className="material-symbols-outlined icon-xs">warning</span>
           The review diff timed out — this queue may be incomplete. "Mark all seen" is disabled to avoid skipping unreviewed changes.
           <button onClick={() => load()} disabled={busy} data-testid="review-diff-retry"
             className="ml-auto flex items-center gap-1 text-[11px] text-[#f0a500] border border-[#5a4a1f] rounded px-1.5 py-0.5 hover:bg-[#2e2814] disabled:opacity-40">
-            <span className="material-symbols-outlined text-[12px]">refresh</span>Retry
+            <span className="material-symbols-outlined icon-xs">refresh</span>Retry
           </button>
         </div>
       )}
@@ -1008,7 +1008,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
           blank the whole queue (Gate-2). Dismissible; also cleared on next load(). */}
       {actionError && (
         <div className="flex items-center gap-1.5 mb-3 text-[11px] text-[#ff9a94] bg-[#2a1214] border border-[#5a1f1f] rounded-md px-2 py-1" data-testid="review-action-error">
-          <span className="material-symbols-outlined text-[14px]">error</span>
+          <span className="material-symbols-outlined icon-xs">error</span>
           Action failed: {actionError}
           <button onClick={() => setActionError(null)} data-testid="review-action-error-dismiss"
             className="ml-auto text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1.5">dismiss</button>
@@ -1114,7 +1114,7 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
             data-testid={`hunk-toggle-diff-${sig}`}
             className="flex items-center gap-1 text-[11px] text-[var(--color-text-muted)] border border-[var(--color-border)] rounded px-1.5 py-0.5 hover:bg-[var(--color-hover)]"
           >
-            <span className="material-symbols-outlined text-[12px]">{showDiff ? 'expand_less' : 'code'}</span>
+            <span className="material-symbols-outlined icon-xs">{showDiff ? 'expand_less' : 'code'}</span>
             {showDiff ? 'Hide diff' : 'View diff'}
           </button>
           <button
@@ -1123,7 +1123,7 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
             className="flex items-center gap-1 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded px-1.5 py-0.5 hover:bg-[#12233a]"
             title="Open this file in the Canvas"
           >
-            <span className="material-symbols-outlined text-[12px]">open_in_new</span>
+            <span className="material-symbols-outlined icon-xs">open_in_new</span>
             Open file
           </button>
           <button
@@ -1132,7 +1132,7 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
             data-testid="review-reject-hunk"
             className="flex items-center gap-1 text-[11px] text-[#ef4444] border border-[#5a1f1f] rounded px-1.5 py-0.5 hover:bg-[#2a1214] disabled:opacity-40"
           >
-            <span className="material-symbols-outlined text-[13px]">undo</span>
+            <span className="material-symbols-outlined icon-xs">undo</span>
             Revert hunk
           </button>
         </div>
@@ -1236,7 +1236,7 @@ function DistributeView(
             Step 2 · confirm targets &amp; freshness
           </div>
           <div className="flex items-center gap-2 mb-3 text-[12px]">
-            <span className="material-symbols-outlined text-[16px] text-[#3fb950]">outbound</span>
+            <span className="material-symbols-outlined icon-sm text-[#3fb950]">outbound</span>
             <span className="font-semibold text-[var(--color-text)]">Distributable</span>
             <span className={`text-[11px] px-1.5 py-0.5 rounded tabular-nums ${data.visibility === 'external' ? 'bg-[#3a2412] text-[#f0a500]' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]'}`}>
               {data.visibility}
@@ -1245,7 +1245,7 @@ function DistributeView(
           <div className="flex flex-col gap-1.5 mb-4" data-testid="distribute-targets">
             {data.declared_targets.map((t) => (
               <div key={t} className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[#12161c] px-2.5 py-1.5" data-testid="distribute-target-row">
-                <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">deployed_code</span>
+                <span className="material-symbols-outlined icon-xs text-[#58a6ff]">deployed_code</span>
                 <span className="font-mono text-[11px] text-[var(--color-text)]">{t}</span>
                 {/* AC1 (run_8d2ec26c): where it lands — derived read-only from target+visibility. */}
                 <span className="text-[11px] text-[var(--color-text-muted)]" title={repoForTarget(t).install}>
@@ -1281,7 +1281,7 @@ function DistributeView(
             className="mb-4 flex items-center gap-1.5 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-1 hover:bg-[#12233a]"
             title="Open aim.json in the Canvas to edit the declared reach (targets / visibility)"
           >
-            <span className="material-symbols-outlined text-[13px]">edit</span>
+            <span className="material-symbols-outlined icon-xs">edit</span>
             Edit aim.json
           </button>
         </>
@@ -1301,7 +1301,7 @@ function DistributeView(
             </div>
           )}
           <div className="flex items-center gap-2 text-[12px] text-[#f0a500] mb-1">
-            <span className="material-symbols-outlined text-[16px]">block</span>
+            <span className="material-symbols-outlined icon-sm">block</span>
             Not distributable
           </div>
           <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
@@ -1326,7 +1326,7 @@ function DistributeView(
             className="mt-2.5 flex items-center gap-1.5 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-1 hover:bg-[#12233a]"
             title="Open aim.json in the Canvas to declare the distribution block"
           >
-            <span className="material-symbols-outlined text-[13px]">open_in_new</span>
+            <span className="material-symbols-outlined icon-xs">open_in_new</span>
             Open aim.json
           </button>
         </div>
@@ -1354,7 +1354,7 @@ function DistributeView(
                 : 'Copy the chat command to run s_ddd-distribute'
             }
           >
-            <span className="material-symbols-outlined text-[14px]">{onDispatch ? 'send' : 'content_copy'}</span>
+            <span className="material-symbols-outlined icon-xs">{onDispatch ? 'send' : 'content_copy'}</span>
             {copied ? 'Copied — paste into a chat tab'
               : onDispatch ? 'Distribute this brain →'
               : 'Distribute a brain'}
@@ -1376,9 +1376,9 @@ function DistributeView(
           onClick={() => setGuidelineOpen((v) => !v)}
           className="w-full flex items-center gap-2 px-3 py-2 text-[12px] hover:bg-[var(--color-hover)]"
         >
-          <span className="material-symbols-outlined text-[15px] text-[#58a6ff]">help</span>
+          <span className="material-symbols-outlined icon-sm text-[#58a6ff]">help</span>
           <span className="font-medium">How distribution works</span>
-          <span className="material-symbols-outlined text-[16px] text-[var(--color-text-faint)] ml-auto">
+          <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] ml-auto">
             {guidelineOpen ? 'expand_less' : 'expand_more'}
           </span>
         </button>

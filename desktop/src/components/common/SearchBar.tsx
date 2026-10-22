@@ -15,7 +15,7 @@ export default function SearchBar({
 }: SearchBarProps) {
   return (
     <div className={clsx('relative', className)}>
-      <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] text-xl">
+      <span className="material-symbols-outlined icon-sm absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]">
         search
       </span>
       <input

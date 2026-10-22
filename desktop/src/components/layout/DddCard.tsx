@@ -121,7 +121,7 @@ type DddCardProps = CompactProps | FullProps;
 function CardHeader({ name, kind, verdict }: { name: string; kind: string; verdict?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 mb-2">
-      <span className="material-symbols-outlined text-[16px] text-[#f0a500]">psychology</span>
+      <span className="material-symbols-outlined icon-sm text-[#f0a500]">psychology</span>
       <span className="text-[13px] font-semibold">{name}</span>
       <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{kind}</span>
       {verdict != null && <span className="ml-auto">{verdict}</span>}

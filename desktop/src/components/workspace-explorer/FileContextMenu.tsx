@@ -358,7 +358,7 @@ export default function FileContextMenu({
         data-testid="delete-confirm-dialog"
       >
         <div className="flex items-start gap-3 mb-4">
-          <span className="material-symbols-outlined text-[var(--color-warning, var(--color-error))]">delete</span>
+          <span className="material-symbols-outlined icon-md text-[var(--color-warning, var(--color-error))]">delete</span>
           <div>
             <h4 className="text-sm font-medium text-[var(--color-text)] mb-1">
               Move to Trash?
@@ -435,7 +435,7 @@ export default function FileContextMenu({
             role="menuitem"
             data-testid={`context-menu-${menuItem.id}`}
           >
-            <span className="material-symbols-outlined text-base">{menuItem.icon}</span>
+            <span className="material-symbols-outlined icon-xs">{menuItem.icon}</span>
             {menuItem.label}
           </button>
           {menuItem.dividerAfter && index < menuItems.length - 1 && (

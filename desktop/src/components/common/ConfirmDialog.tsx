@@ -41,7 +41,7 @@ export default function ConfirmDialog({
     <Modal isOpen={isOpen} onClose={onClose} title={title} size="sm">
       <div className="text-center">
         <div className={`w-16 h-16 rounded-full ${bg} flex items-center justify-center mx-auto mb-4`}>
-          <span className={`material-symbols-outlined text-3xl ${color}`}>{icon}</span>
+          <span className={`material-symbols-outlined icon-lg ${color}`}>{icon}</span>
         </div>
         <div className="text-[var(--color-text-muted)] mb-6">{message}</div>
         <div className="flex gap-3">

@@ -56,8 +56,8 @@ export default function AudioRenderer({
         style={{ backgroundColor: 'var(--color-hover)' }}
       >
         <span
-          className="material-symbols-outlined"
-          style={{ fontSize: '48px', color: 'var(--color-primary)' }}
+          className="material-symbols-outlined icon-xl"
+          style={{ color: 'var(--color-primary)' }}
         >
           audiotrack
         </span>

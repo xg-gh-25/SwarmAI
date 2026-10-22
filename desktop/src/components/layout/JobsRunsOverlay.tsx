@@ -160,7 +160,7 @@ export function JobsRunsContent({ onDispatch, close }: JobsRunsContentProps) {
               data-testid="jobs-new-btn"
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
             >
-              <span className="material-symbols-outlined text-[15px]">add</span>New Job
+              <span className="material-symbols-outlined icon-sm">add</span>New Job
             </button>
           )}
         />
@@ -198,7 +198,7 @@ function GuideBanner() {
       className="shrink-0 mx-4 mt-3 rounded-lg border border-primary/25 bg-primary/[0.06] px-3.5 py-2.5 flex items-start gap-2.5"
       data-testid="jobs-guide-banner"
     >
-      <span className="material-symbols-outlined text-[16px] text-primary mt-0.5 shrink-0">auto_awesome</span>
+      <span className="material-symbols-outlined icon-sm text-primary mt-0.5 shrink-0">auto_awesome</span>
       <div className="flex-1 min-w-0 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
         <span className="text-[var(--color-text)] font-medium">Just ask Swarm in chat</span> — the AI-native way.
         Say <span className="tabular-nums text-[var(--color-text)]">“schedule a job to … every weekday 9am”</span> and it
@@ -347,7 +347,7 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
           </div>
         </div>
         <button onClick={onClose} data-testid="job-drawer-close" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-          <span className="material-symbols-outlined text-[18px]">close</span>
+          <span className="material-symbols-outlined icon-md">close</span>
         </button>
       </div>
 
@@ -429,7 +429,7 @@ function DrawerBtn({ icon, label, primary, disabled, onClick }: {
         primary ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
       }`}
     >
-      <span className="material-symbols-outlined text-[13px]">{icon}</span>{label}
+      <span className="material-symbols-outlined icon-xs">{icon}</span>{label}
     </button>
   );
 }
@@ -496,7 +496,7 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
       <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
         <span className="flex-1 text-[13px] font-semibold text-[var(--color-text)]">New Job</span>
         <button onClick={onCancel} data-testid="jobs-new-cancel" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-          <span className="material-symbols-outlined text-[18px]">close</span>
+          <span className="material-symbols-outlined icon-md">close</span>
         </button>
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 text-[12px]">

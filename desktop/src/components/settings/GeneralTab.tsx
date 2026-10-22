@@ -32,7 +32,7 @@ export default function GeneralTab() {
                   : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
               }`}
             >
-              {i18n.language === lang && <span className="material-symbols-outlined text-[14px]">check</span>}
+              {i18n.language === lang && <span className="material-symbols-outlined icon-xs">check</span>}
               {t(`settings.language.${lang}`)}
             </button>
           ))}
@@ -58,8 +58,8 @@ export default function GeneralTab() {
                   : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
               }`}
             >
-              {theme === opt.id && <span className="material-symbols-outlined text-[14px]">check</span>}
-              <span className="material-symbols-outlined text-[14px]">{opt.icon}</span>
+              {theme === opt.id && <span className="material-symbols-outlined icon-xs">check</span>}
+              <span className="material-symbols-outlined icon-xs">{opt.icon}</span>
               {t(`settings.theme.${opt.id}`)}
             </button>
           ))}

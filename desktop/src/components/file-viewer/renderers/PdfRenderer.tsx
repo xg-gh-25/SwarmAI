@@ -183,7 +183,7 @@ const PdfRenderer = memo(function PdfRenderer({
   if (!fileSource) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-muted)]">
-        <span className="material-symbols-outlined text-4xl mb-2">picture_as_pdf</span>
+        <span className="material-symbols-outlined icon-xl mb-2">picture_as_pdf</span>
         <p className="text-sm">No PDF content available</p>
       </div>
     );
@@ -193,7 +193,7 @@ const PdfRenderer = memo(function PdfRenderer({
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-6 text-center">
-        <span className="material-symbols-outlined text-4xl text-red-400 mb-3">error</span>
+        <span className="material-symbols-outlined icon-xl text-red-400 mb-3">error</span>
         <p className="text-sm font-medium text-[var(--color-text)] mb-1">
           Failed to render PDF
         </p>
@@ -218,7 +218,7 @@ const PdfRenderer = memo(function PdfRenderer({
             className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             title="Previous page"
           >
-            <span className="material-symbols-outlined text-lg">chevron_left</span>
+            <span className="material-symbols-outlined icon-sm">chevron_left</span>
           </button>
 
           <span className="text-xs text-[var(--color-text-muted)] min-w-[80px] text-center select-none">
@@ -231,7 +231,7 @@ const PdfRenderer = memo(function PdfRenderer({
             className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             title="Next page"
           >
-            <span className="material-symbols-outlined text-lg">chevron_right</span>
+            <span className="material-symbols-outlined icon-sm">chevron_right</span>
           </button>
         </div>
 
@@ -246,7 +246,7 @@ const PdfRenderer = memo(function PdfRenderer({
             }`}
             title="Fit width"
           >
-            <span className="material-symbols-outlined text-base">width_normal</span>
+            <span className="material-symbols-outlined icon-xs">width_normal</span>
           </button>
 
           <button
@@ -258,7 +258,7 @@ const PdfRenderer = memo(function PdfRenderer({
             }`}
             title="Fit page"
           >
-            <span className="material-symbols-outlined text-base">fit_page</span>
+            <span className="material-symbols-outlined icon-xs">fit_page</span>
           </button>
 
           <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
@@ -268,7 +268,7 @@ const PdfRenderer = memo(function PdfRenderer({
             className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
             title="Zoom out"
           >
-            <span className="material-symbols-outlined text-base">remove</span>
+            <span className="material-symbols-outlined icon-sm">remove</span>
           </button>
 
           <span className="text-xs text-[var(--color-text-muted)] min-w-[44px] text-center select-none">
@@ -280,7 +280,7 @@ const PdfRenderer = memo(function PdfRenderer({
             className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
             title="Zoom in"
           >
-            <span className="material-symbols-outlined text-base">add</span>
+            <span className="material-symbols-outlined icon-sm">add</span>
           </button>
         </div>
       </div>
@@ -292,7 +292,7 @@ const PdfRenderer = memo(function PdfRenderer({
       >
         {loading && (
           <div className="flex items-center gap-2 text-[var(--color-text-muted)] py-12">
-            <span className="material-symbols-outlined animate-spin text-xl">progress_activity</span>
+            <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>
             <span className="text-sm">Loading PDF...</span>
           </div>
         )}
@@ -312,7 +312,7 @@ const PdfRenderer = memo(function PdfRenderer({
               height={getPageHeight()}
               loading={
                 <div className="flex items-center justify-center p-12 text-[var(--color-text-muted)]">
-                  <span className="material-symbols-outlined animate-spin mr-2">progress_activity</span>
+                  <span className="material-symbols-outlined icon-sm animate-spin mr-2">progress_activity</span>
                   <span className="text-sm">Rendering page {currentPage}...</span>
                 </div>
               }

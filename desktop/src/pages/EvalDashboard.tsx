@@ -262,7 +262,7 @@ export default function EvalDashboard() {
                   : 'text-[var(--color-text-muted)] border-transparent hover:text-[var(--color-text)] hover:border-[var(--color-border)]'
               }`}
             >
-              <span className="material-symbols-outlined text-base">{tab.icon}</span>
+              <span className="material-symbols-outlined icon-xs">{tab.icon}</span>
               {tab.label}
             </button>
           ))}
@@ -613,7 +613,7 @@ export function GoldenSetTab() {
                   onClick={() => toggleCat(cat)}
                   className="w-full flex items-center gap-2 px-3 py-2 bg-[var(--color-bg)] border-b border-[var(--color-border)] sticky top-0 z-10 hover:bg-[var(--color-hover)] transition-colors text-left"
                 >
-                  <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">
+                  <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">
                     {collapsed ? 'chevron_right' : 'expand_more'}
                   </span>
                   <span className="font-semibold text-xs">{cat}</span>
@@ -646,7 +646,7 @@ export function GoldenSetTab() {
                               className="text-[var(--color-text-muted)] hover:text-red-500 transition-colors"
                               title="Archive"
                             >
-                              <span className="material-symbols-outlined text-[14px]">archive</span>
+                              <span className="material-symbols-outlined icon-sm">archive</span>
                             </button>
                           </td>
                         </tr>
@@ -867,7 +867,7 @@ function GovernanceTab() {
     <div className="p-6 max-w-3xl mx-auto">
       <div className="mb-4">
         <h2 className="text-base font-semibold text-[var(--color-text)] flex items-center gap-1.5">
-          <span className="material-symbols-outlined text-lg text-[var(--color-primary)]">gavel</span>
+          <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">gavel</span>
           Governance Proposals
         </h2>
         <p className="text-xs text-[var(--color-text-muted)] mt-1">
@@ -1019,7 +1019,7 @@ function RunDetailPanel({ runId, onClose }: { runId: string; onClose: () => void
             {run && <div className="text-[11px] text-[var(--color-text-muted)]">{run.triggered_at?.slice(0, 19).replace('T', ' ')} · {run.triggered_by}</div>}
           </div>
           <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-            <span className="material-symbols-outlined text-base">close</span>
+            <span className="material-symbols-outlined icon-sm">close</span>
           </button>
         </div>
         {isLoading || !run ? <Loading /> : (
@@ -1105,7 +1105,7 @@ function ContextHealthTab() {
 
       {!hasActivity && (
         <div className="text-center py-12 text-[var(--color-text-muted)]">
-          <span className="material-symbols-outlined text-4xl mb-2 block opacity-40">check_circle</span>
+          <span className="material-symbols-outlined icon-xl mb-2 block opacity-40">check_circle</span>
           <p className="text-sm">No context drift detected. Everything is fresh.</p>
           <p className="text-xs mt-1 opacity-70">Auto-refresh runs on every code commit + every 30 minutes.</p>
         </div>
@@ -1118,7 +1118,7 @@ function ContextHealthTab() {
       {driftFindings.length > 0 && (
         <section>
           <h3 className="text-sm font-medium text-[var(--color-text)] mb-2 flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-base text-red-500">rule</span>
+            <span className="material-symbols-outlined icon-xs text-red-500">rule</span>
             Semantic Drift ({driftFindings.length})
             {drift?.report_date && (
               <span className="text-[11px] text-[var(--color-text-muted)] font-normal">
@@ -1162,7 +1162,7 @@ function ContextHealthTab() {
       {data.staleness.length > 0 && (
         <section>
           <h3 className="text-sm font-medium text-[var(--color-text)] mb-2 flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-base text-amber-500">warning</span>
+            <span className="material-symbols-outlined icon-xs text-amber-500">warning</span>
             Stale Documents ({data.staleness.length})
           </h3>
           <div className="border border-amber-500/20 rounded-lg overflow-hidden">
@@ -1197,7 +1197,7 @@ function ContextHealthTab() {
       {data.pending_proposals.length > 0 && (
         <section>
           <h3 className="text-sm font-medium text-[var(--color-text)] mb-2 flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-base text-blue-500">pending_actions</span>
+            <span className="material-symbols-outlined icon-xs text-blue-500">pending_actions</span>
             Pending Decisions ({data.pending_proposals.length})
           </h3>
           <div className="space-y-2">
@@ -1225,7 +1225,7 @@ function ContextHealthTab() {
       {data.refresh_log.length > 0 && (
         <section>
           <h3 className="text-sm font-medium text-[var(--color-text)] mb-2 flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-base text-green-500">auto_fix_high</span>
+            <span className="material-symbols-outlined icon-xs text-green-500">auto_fix_high</span>
             Auto-Applied Fixes ({data.refresh_log.length})
           </h3>
           <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
@@ -1347,7 +1347,7 @@ export function ReportsTab() {
                 >
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-2">
-                      <span className="material-symbols-outlined text-[14px] text-[var(--color-primary)]">description</span>
+                      <span className="material-symbols-outlined icon-xs text-[var(--color-primary)]">description</span>
                       <span className="font-medium">{label}</span>
                     </div>
                   </td>
@@ -1880,7 +1880,7 @@ export function GuideTab() {
         <h2 className="text-[15px] font-semibold mb-1.5">{guideContent.coverage[t]}</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mb-3">{guideContent.coverageDesc[t]}</p>
         <div className="flex items-center gap-2 border border-[var(--color-border)] rounded-lg p-3 bg-[var(--color-bg)]">
-          <span className="material-symbols-outlined text-[16px] text-[var(--color-primary)]">checklist</span>
+          <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">checklist</span>
           <p className="text-[11px] text-[var(--color-text-muted)]">
             {t === 'en'
               ? 'The live, filterable distribution across all 4 axes lives on the Golden Set tab — it grows every run, so it is never snapshotted here.'
@@ -2099,7 +2099,7 @@ function OriginBadge({ origin }: { origin?: string }) {
   const cls = isPublic ? 'bg-green-500/10 text-green-600' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]';
   return (
     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold ${cls}`} title={isPublic ? 'Public — ships in the repo' : 'Private — gitignored instance case'}>
-      <span className="material-symbols-outlined text-[11px]">{isPublic ? 'public' : 'lock'}</span>
+      <span className="material-symbols-outlined icon-xs">{isPublic ? 'public' : 'lock'}</span>
       {origin}
     </span>
   );
@@ -2212,7 +2212,7 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-card)] z-10">
         <span className="text-xs font-semibold font-mono">{caseId}</span>
         <button onClick={onClose} className="p-1 rounded hover:bg-[var(--color-hover)]">
-          <span className="material-symbols-outlined text-[14px]">close</span>
+          <span className="material-symbols-outlined icon-sm">close</span>
         </button>
       </div>
 
@@ -2237,7 +2237,7 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
               <div className="flex items-center gap-2">
                 <span className="font-medium">{detail.title}</span>
                 <button onClick={startEdit} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-                  <span className="material-symbols-outlined text-[14px]">edit</span>
+                  <span className="material-symbols-outlined icon-sm">edit</span>
                 </button>
               </div>
             )}

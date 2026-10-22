@@ -131,7 +131,7 @@ function FileChip({ file, onRemove, isFocused, onFocus, tabIndex }: FileChipProp
       data-testid={`file-chip-${file.id}`}
     >
       {/* File icon */}
-      <span className="material-symbols-outlined text-xs flex-shrink-0">
+      <span className="material-symbols-outlined icon-xs flex-shrink-0">
         {getFileIcon(displayName)}
       </span>
       
@@ -153,7 +153,7 @@ function FileChip({ file, onRemove, isFocused, onFocus, tabIndex }: FileChipProp
         aria-label={`Remove ${displayName} from context`}
         tabIndex={-1}
       >
-        <span className="material-symbols-outlined text-xs">close</span>
+        <span className="material-symbols-outlined icon-xs">close</span>
       </button>
     </div>
   );
@@ -248,7 +248,7 @@ export function AttachedFileChips({ files, onRemoveFile }: AttachedFileChipsProp
       data-testid="attached-file-chips"
     >
       {/* Attachment indicator icon */}
-      <span className="material-symbols-outlined text-[14px] text-[var(--color-primary)] flex-shrink-0">
+      <span className="material-symbols-outlined icon-xs text-[var(--color-primary)] flex-shrink-0">
         attach_file
       </span>
       

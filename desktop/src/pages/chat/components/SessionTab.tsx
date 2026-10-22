@@ -90,18 +90,15 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
       className={clsx(
         // border-b-2 on ALL tabs reserves the underline height → no layout shift
         // between active/inactive. Inactive uses a transparent placeholder.
-        'group/tab flex items-center gap-1.5 px-3 py-1 rounded-md cursor-pointer',
-        'transition-all duration-150 ease-out',
-        'min-w-0 max-w-[200px] flex-shrink-0',
-        // border-b-2 on ALL states (transparent when inactive) keeps the tab
-        // height constant so the active underline appears without layout shift (GUI12).
-        'border-b-2',
+        // 30px, like the icon-btn-lg "+" beside it. Active = a raised card (card
+        // surface, border, a 2px accent rule on top, full-strength text); inactive =
+        // flat and muted, a hover tint only. A border on every state keeps the size
+        // constant (no shift on select). Accent = --color-primary (follows the theme).
+        'group/tab flex items-center gap-1.5 h-[30px] px-2.5 rounded-lg cursor-pointer border',
+        'transition-colors duration-150 ease-out',
+        'min-w-0 max-w-[220px] flex-shrink-0',
         isActive
-          // Active: accent underline + subtle accent-tinted fill + faint top ring
-          // for a "lifted" chip feel. Uses the product accent var
-          // (--color-primary, which follows the user's accent preset) so the
-          // active tab matches the app theme instead of a hardcoded blue (GUI12).
-          ? 'border-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_10%,var(--color-card))] text-[var(--color-text)] font-medium shadow-[inset_0_1px_0_var(--color-border)]'
+          ? 'bg-[var(--color-card)] border-[var(--color-border)] text-[var(--color-text)] font-medium shadow-[inset_0_2px_0_var(--color-primary),0_1px_2px_rgba(0,0,0,0.25)]'
           : 'border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
       )}
     >
@@ -117,7 +114,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
       )}
 
       {/* Chat icon */}
-      <span className="material-symbols-outlined text-[14px] flex-shrink-0">
+      <span className="material-symbols-outlined icon-xs flex-shrink-0">
         chat_bubble
       </span>
 
@@ -128,7 +125,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
       <TabNoticeDot tabId={tab.id} sessionId={tab.sessionId} isActive={isActive} />
 
       {/* Truncated title */}
-      <span className="truncate text-xs" title={tab.title}>
+      <span className="truncate text-[12.5px]" title={tab.title}>
         {displayTitle}
       </span>
 
@@ -145,13 +142,13 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
         onClick={handleClose}
         aria-label={`Close ${tab.title}`}
         className={clsx(
-          'p-0.5 rounded-md transition-all duration-150 flex-shrink-0',
+          'w-[18px] h-[18px] inline-flex items-center justify-center rounded transition-all duration-150 flex-shrink-0',
           isActive ? 'opacity-70 hover:opacity-100' : 'opacity-0 group-hover/tab:opacity-100',
           'hover:bg-[var(--color-hover)]',
           'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
         )}
       >
-        <span className="material-symbols-outlined text-[14px]">close</span>
+        <span className="material-symbols-outlined icon-xs">close</span>
       </button>
     </div>
   );

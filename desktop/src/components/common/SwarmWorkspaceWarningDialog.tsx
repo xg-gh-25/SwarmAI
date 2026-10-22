@@ -48,7 +48,7 @@ export default function SwarmWorkspaceWarningDialog({
           style={{ backgroundColor: 'var(--color-status-warning-bg, rgba(234, 179, 8, 0.1))' }}
         >
           <span
-            className="material-symbols-outlined text-3xl"
+            className="material-symbols-outlined icon-lg"
             style={{ color: 'var(--color-status-warning)' }}
           >
             warning

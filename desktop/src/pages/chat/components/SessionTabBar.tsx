@@ -153,13 +153,13 @@ export function SessionTabBar({
             title={isNewTabDisabled
               ? t('chat.tabLimitReached', 'System resources are limited. Close a tab or free memory to open another.')
               : t('chat.newSession', 'New Session (⌘N)')}
-            className={`flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-lg border transition-colors ${
+            className={`icon-btn-lg border transition-colors ${
               isNewTabDisabled
                 ? 'border-transparent text-[var(--color-text-disabled,var(--color-text-muted))] opacity-50 cursor-not-allowed'
                 : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-primary)] hover:bg-[color-mix(in_srgb,var(--color-primary)_12%,transparent)] hover:text-[var(--color-primary)]'
             }`}
           >
-            <span className="material-symbols-outlined text-[18px]">add</span>
+            <span className="material-symbols-outlined icon-md">add</span>
           </button>
         </>
       )}

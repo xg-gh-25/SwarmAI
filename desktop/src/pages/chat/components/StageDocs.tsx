@@ -66,7 +66,7 @@ export function DocCard({ doc, renderText }: { doc: PipelineDocRef; renderText: 
   return (
     <div data-testid="stage-doc" data-name={doc.name} data-open={open ? 'true' : 'false'} className="border-l-2 border-[var(--color-border)] pl-3">
       <div className="flex items-baseline gap-2 min-w-0">
-        <span aria-hidden="true" className="material-symbols-outlined text-[15px] leading-none self-center shrink-0 text-[var(--color-text-muted)]">{meta.icon}</span>
+        <span aria-hidden="true" className="material-symbols-outlined icon-sm leading-none self-center shrink-0 text-[var(--color-text-muted)]">{meta.icon}</span>
         <span className="shrink-0 font-mono text-[12.5px] text-[var(--color-text)]">{doc.name}</span>
         <span className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--color-text-muted)]">{meta.purpose}</span>
         <button type="button" data-testid="stage-doc-toggle" aria-expanded={open} onClick={toggle} className={btn}>

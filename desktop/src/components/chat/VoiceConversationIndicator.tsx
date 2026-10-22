@@ -74,7 +74,7 @@ export function VoiceConversationIndicator({
       title={state === 'speaking' ? 'Click to interrupt' : undefined}
     >
       <span
-        className={`material-symbols-outlined text-[14px] ${
+        className={`material-symbols-outlined icon-xs ${
           config.animate ? 'animate-pulse' : ''
         }`}
       >

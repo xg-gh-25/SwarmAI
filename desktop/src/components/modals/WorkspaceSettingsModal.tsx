@@ -48,7 +48,7 @@ export default function WorkspaceSettingsModal({
                 : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
             )}
           >
-            <span className="material-symbols-outlined text-lg">{tab.icon}</span>
+            <span className="material-symbols-outlined icon-sm">{tab.icon}</span>
             {t(`settings.tabs.${tab.key}`)}
           </button>
         ))}

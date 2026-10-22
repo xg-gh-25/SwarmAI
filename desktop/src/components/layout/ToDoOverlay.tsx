@@ -357,7 +357,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
             data-testid="todo-new-btn"
             className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-md bg-primary text-white hover:opacity-90 transition-opacity shrink-0 shadow-sm"
           >
-            <span className="material-symbols-outlined text-[16px]">add</span>New ToDo
+            <span className="material-symbols-outlined icon-sm">add</span>New ToDo
           </button>
         )}
       />
@@ -376,7 +376,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
           data-testid="todo-truncated"
           className="shrink-0 mx-4 mt-2 text-[11px] text-[var(--color-text-faint)] flex items-center gap-1.5"
         >
-          <span className="material-symbols-outlined text-[13px]">info</span>
+          <span className="material-symbols-outlined icon-xs">info</span>
           Showing the most recent {FETCH_CAP} ToDos — narrow the time range to see a focused set.
         </div>
       )}
@@ -387,7 +387,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
           data-testid="todo-load-error"
           className="mx-4 mt-2 flex items-center gap-2 rounded-md border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-3 py-2 text-[12px] text-[var(--color-text)]"
         >
-          <span className="material-symbols-outlined text-[15px] text-[#d0524a]">error</span>
+          <span className="material-symbols-outlined icon-sm text-[#d0524a]">error</span>
           <span className="flex-1">{loadErr}</span>
           <button
             data-testid="todo-load-retry"
@@ -402,7 +402,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
           data-testid="todo-action-error"
           className="mx-4 mt-2 flex items-center gap-2 rounded-md bg-[#d0524a]/10 px-3 py-2 text-[12px] text-[#d0524a]"
         >
-          <span className="material-symbols-outlined text-[15px]">warning</span>
+          <span className="material-symbols-outlined icon-sm">warning</span>
           <span className="flex-1">{actionErr}</span>
           <button onClick={() => setActionErr(null)} className="text-[11px] underline opacity-80 hover:opacity-100">dismiss</button>
         </div>
@@ -468,7 +468,7 @@ function Kpi({ label, value, testid, icon, primary }: { label: string; value: nu
       }`}
     >
       <span
-        className={`material-symbols-outlined text-[18px] shrink-0 ${primary ? 'text-primary' : 'text-[var(--color-text-muted)]'}`}
+        className={`material-symbols-outlined icon-md shrink-0 ${primary ? 'text-primary' : 'text-[var(--color-text-muted)]'}`}
       >{icon}</span>
       <div className="flex flex-col min-w-0">
         <span className={`text-[20px] leading-none tabular-nums ${primary ? 'font-bold text-primary' : 'font-semibold text-[var(--color-text)]'}`}>{value}</span>
@@ -705,7 +705,7 @@ function StatusSelect({ todo, onSetZone }: {
   return (
     <span className="relative inline-flex items-center" data-testid="todo-status-select">
       <StatusBadge status={status} />
-      <span className="material-symbols-outlined text-[13px] text-[var(--color-text-muted)] -ml-0.5 pointer-events-none">arrow_drop_down</span>
+      <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)] -ml-0.5 pointer-events-none">arrow_drop_down</span>
       {/* Native <select> overlaid transparently → real keyboard/a11y + zero-dep menu.
           value pinned to the current zone; options are current + legal targets. The
           onChange only fires onSetZone for a DIFFERENT target (handler also guards). */}
@@ -736,7 +736,7 @@ function RowBtn({ onClick, icon, label, primary, testid }: { onClick: () => void
         primary ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-red-400'
       }`}
     >
-      <span className="material-symbols-outlined text-[14px]">{icon}</span>{label}
+      <span className="material-symbols-outlined icon-xs">{icon}</span>{label}
     </button>
   );
 }
@@ -760,7 +760,7 @@ function GuideBanner() {
       className="shrink-0 mx-4 mt-3 rounded-lg border border-primary/25 bg-primary/[0.06] px-3.5 py-2.5 flex items-start gap-2.5"
       data-testid="todo-guide-banner"
     >
-      <span className="material-symbols-outlined text-[16px] text-primary mt-0.5 shrink-0">auto_awesome</span>
+      <span className="material-symbols-outlined icon-sm text-primary mt-0.5 shrink-0">auto_awesome</span>
       <div className="flex-1 min-w-0 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
         <span className="text-[var(--color-text)] font-medium">Just ask Swarm in chat</span> — the AI-native way.
         Say <span className="tabular-nums text-[var(--color-text)]">“add a todo to …”</span> and it captures full context
@@ -805,10 +805,10 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
           <span className="mt-0.5 w-1 h-5 rounded-full shrink-0" style={{ background: priColor }} />
           <div className="flex-1 min-w-0 text-[14px] font-semibold text-[var(--color-text)] leading-snug break-words">{todo.title}</div>
           <button onClick={onEdit} data-testid="todo-drawer-edit" title="Edit" className="text-[var(--color-text-muted)] hover:text-primary shrink-0">
-            <span className="material-symbols-outlined text-[18px]">edit</span>
+            <span className="material-symbols-outlined icon-md">edit</span>
           </button>
           <button onClick={onClose} data-testid="todo-drawer-close" title="Close" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] shrink-0">
-            <span className="material-symbols-outlined text-[18px]">close</span>
+            <span className="material-symbols-outlined icon-md">close</span>
           </button>
         </div>
         <div className="mt-2 flex items-center gap-2 flex-wrap pl-3.5">
@@ -824,7 +824,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
         {wp?.next_step && (
           <div className="rounded-lg border border-primary/25 bg-primary/[0.06] px-3 py-2.5" data-testid="todo-drawer-nextstep">
             <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-primary">
-              <span className="material-symbols-outlined text-[13px]">arrow_forward</span>Next step
+              <span className="material-symbols-outlined icon-xs">arrow_forward</span>Next step
             </div>
             <p className="mt-1 text-[12px] text-[var(--color-text)] leading-relaxed break-words">{wp.next_step}</p>
           </div>
@@ -876,10 +876,10 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
                     data-testid="todo-detail-attachment-open"
                     className="w-full flex items-center gap-2 text-[11px] text-[var(--color-text)] hover:text-primary hover:bg-[var(--color-hover)] rounded px-1 py-0.5 -mx-1 transition-colors text-left"
                   >
-                    <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">attach_file</span>
+                    <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">attach_file</span>
                     <span className="flex-1 truncate">{a.filename}</span>
                     <span className=" text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
-                    <span className="material-symbols-outlined text-[13px] text-[var(--color-text-faint)]">open_in_new</span>
+                    <span className="material-symbols-outlined icon-xs text-[var(--color-text-faint)]">open_in_new</span>
                   </button>
                 </li>
               ))}
@@ -898,7 +898,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
             data-testid="todo-drawer-dispatch"
             className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-[12px] font-semibold rounded-md bg-primary text-white hover:opacity-90 transition-opacity shadow-sm"
           >
-            <span className="material-symbols-outlined text-[16px]">play_arrow</span>Dispatch to chat
+            <span className="material-symbols-outlined icon-sm">play_arrow</span>Dispatch to chat
           </button>
         ) : (
           <span className="flex-1 text-[11px] text-[var(--color-text-faint)]">This ToDo is {status.toLowerCase()} — no action needed.</span>
@@ -909,7 +909,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
           title="Withdraw"
           className="inline-flex items-center gap-1 px-3 py-2 text-[12px] font-medium rounded-md text-[var(--color-text-muted)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
         >
-          <span className="material-symbols-outlined text-[16px]">delete</span>Withdraw
+          <span className="material-symbols-outlined icon-sm">delete</span>Withdraw
         </button>
       </div>
     </OverlayDrawer>
@@ -1107,7 +1107,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
       <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
         <span className="flex-1 text-[13px] font-semibold text-[var(--color-text)]">{isEdit ? 'Edit ToDo' : 'New ToDo'}</span>
         <button onClick={onCancel} data-testid="todo-form-cancel" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-          <span className="material-symbols-outlined text-[18px]">close</span>
+          <span className="material-symbols-outlined icon-md">close</span>
         </button>
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3.5 text-[12px]">
@@ -1182,7 +1182,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
               data-testid="todo-form-attach-btn"
               className="self-start inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium rounded-md border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
             >
-              <span className="material-symbols-outlined text-[15px]">upload_file</span>
+              <span className="material-symbols-outlined icon-sm">upload_file</span>
               Add files
             </button>
             {(attachments.length > 0 || staged.length > 0) && (
@@ -1196,22 +1196,22 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
                       data-testid="todo-form-attachment-open"
                       className="flex-1 min-w-0 flex items-center gap-2 hover:text-primary transition-colors text-left"
                     >
-                      <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">attach_file</span>
+                      <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">attach_file</span>
                       <span className="flex-1 truncate text-[var(--color-text)]">{a.filename}</span>
                       <span className=" text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
                     </button>
                     <button onClick={() => void removeExisting(a)} title="Remove" className="text-[var(--color-text-muted)] hover:text-red-400 shrink-0">
-                      <span className="material-symbols-outlined text-[14px]">close</span>
+                      <span className="material-symbols-outlined icon-sm">close</span>
                     </button>
                   </li>
                 ))}
                 {staged.map((s) => (
                   <li key={s.key} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-[11px]" data-testid="todo-form-staged">
-                    <span className="material-symbols-outlined text-[14px] text-[var(--color-text-faint)]">schedule</span>
+                    <span className="material-symbols-outlined icon-xs text-[var(--color-text-faint)]">schedule</span>
                     <span className="flex-1 truncate text-[var(--color-text-muted)]">{s.file.name}</span>
                     <span className=" text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(s.file.size)}</span>
                     <button onClick={() => setStaged((prev) => prev.filter((x) => x.key !== s.key))} title="Remove" className="text-[var(--color-text-muted)] hover:text-red-400">
-                      <span className="material-symbols-outlined text-[14px]">close</span>
+                      <span className="material-symbols-outlined icon-sm">close</span>
                     </button>
                   </li>
                 ))}

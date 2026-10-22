@@ -14,7 +14,7 @@ export default function Breadcrumb({ currentPage }: BreadcrumbProps) {
         to="/dashboard"
         className="flex items-center gap-1 text-[var(--color-text-muted)] hover:text-primary transition-colors"
       >
-        <span className="material-symbols-outlined text-lg">arrow_back</span>
+        <span className="material-symbols-outlined icon-sm">arrow_back</span>
         <span>{t('nav.swarmcore')}</span>
       </Link>
       <span className="text-[var(--color-text-muted)]">/</span>

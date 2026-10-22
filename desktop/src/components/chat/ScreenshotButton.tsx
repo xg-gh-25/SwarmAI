@@ -73,10 +73,10 @@ export function ScreenshotButton({
       onClick={handleClick}
       disabled={isDisabled}
       className={clsx(
-        'w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-colors',
+        'icon-btn transition-colors',
         isDisabled
-          ? 'bg-[var(--color-hover)]/50 text-[var(--color-text-muted)]/50 cursor-not-allowed'
-          : 'bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]',
+          ? 'text-[var(--color-text-muted)]/50 cursor-not-allowed'
+          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]',
         className
       )}
       title={
@@ -87,7 +87,7 @@ export function ScreenshotButton({
             : 'Capture the screen you’re on and attach it'
       }
     >
-      <span className="material-symbols-outlined">screenshot_monitor</span>
+      <span className="material-symbols-outlined icon-sm">screenshot_monitor</span>
     </button>
   );
 }

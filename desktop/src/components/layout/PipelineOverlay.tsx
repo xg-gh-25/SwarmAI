@@ -326,7 +326,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
             return (
               <div className="rounded-md border border-rose-500/40 bg-rose-500/5" data-testid="pipeline-needsyou-region">
                 <div className="flex items-center gap-2 px-3 py-2 border-b border-rose-500/30">
-                  <span className="material-symbols-outlined text-[16px] text-rose-500">priority_high</span>
+                  <span className="material-symbols-outlined icon-sm text-rose-500">priority_high</span>
                   <span className="text-sm font-medium text-[var(--color-text)]">Needs you</span>
                   <span className="text-[11px] tabular-nums text-rose-500">{o?.abortedCount ?? needy.length}</span>
                 </div>
@@ -380,7 +380,7 @@ function Stat({ label, value, sub, accent, onClick, active, testid }: {
     <>
       <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] flex items-center gap-1">
         {label}
-        {onClick && <span className="material-symbols-outlined text-[12px]">{active ? 'filter_alt_off' : 'filter_alt'}</span>}
+        {onClick && <span className="material-symbols-outlined icon-xs">{active ? 'filter_alt_off' : 'filter_alt'}</span>}
       </div>
       <div className={`text-sm tabular-nums ${accent ? 'text-rose-500' : 'text-[var(--color-text)]'}`}>{value}</div>
       {sub && <div className="text-[11px] text-[var(--color-text-faint)] tabular-nums">{sub}</div>}
@@ -451,7 +451,7 @@ function RunRow({ r, onOpenRun, close, showProject }: {
           onClick={(e) => { e.stopPropagation(); openReportInCanvas(r.reportPath as string, close); }}
           data-testid={`pipeline-run-report-${r.id}`}
           title="Open report in Canvas"
-          className="material-symbols-outlined text-[15px] text-primary hover:text-primary/80 shrink-0"
+          className="material-symbols-outlined icon-sm text-primary hover:text-primary/80 shrink-0"
         >
           description
         </button>
@@ -459,7 +459,7 @@ function RunRow({ r, onOpenRun, close, showProject }: {
         <span className="w-[15px] shrink-0" aria-hidden />
       )}
       {isResumable(r.pauseKind) && (
-        <span className="material-symbols-outlined text-[14px] text-rose-500 shrink-0" title="resumable">play_circle</span>
+        <span className="material-symbols-outlined icon-xs text-rose-500 shrink-0" title="resumable">play_circle</span>
       )}
     </div>
   );
@@ -487,7 +487,7 @@ function ProjectGroup({ group, onOpenRun, close, defaultExpanded = false, needsY
         disabled={needsYouOnly}
         className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-hover)] transition-colors disabled:cursor-default"
       >
-        <span className="material-symbols-outlined text-[16px] text-[var(--color-text-faint)]">
+        <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)]">
           {isOpen ? 'expand_more' : 'chevron_right'}
         </span>
         <span className="text-sm font-medium text-[var(--color-text)]">{group.project}</span>
@@ -538,7 +538,7 @@ function RunDetailDrawer({
     <OverlayDrawer widthPx={420} maxWidthPct={90} z={10} testid="pipeline-run-drawer" stopPropagation={false}>
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
         <span className="text-xs font-mono text-[var(--color-text-muted)] truncate flex-1">{runId}</span>
-        <button onClick={onClose} className="material-symbols-outlined text-[18px] text-[var(--color-text-faint)] hover:text-[var(--color-text)]">close</button>
+        <button onClick={onClose} className="material-symbols-outlined icon-md text-[var(--color-text-faint)] hover:text-[var(--color-text)]">close</button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
         {loading && <div className="text-xs text-[var(--color-text-faint)]">Loading…</div>}
@@ -651,7 +651,7 @@ function RunDetailDrawer({
                   data-testid="pipeline-resume-btn"
                   className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors disabled:opacity-50"
                 >
-                  <span className="material-symbols-outlined text-[15px]">play_arrow</span>{resuming ? 'Resuming…' : 'Resume'}
+                  <span className="material-symbols-outlined icon-sm">play_arrow</span>{resuming ? 'Resuming…' : 'Resume'}
                 </button>
               )}
               {detail.pauseKind === 'idle' && (
@@ -664,7 +664,7 @@ function RunDetailDrawer({
                   data-testid="pipeline-continue-btn"
                   className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
                 >
-                  <span className="material-symbols-outlined text-[15px]">forum</span>Continue in its chat
+                  <span className="material-symbols-outlined icon-sm">forum</span>Continue in its chat
                 </button>
               )}
               {(detail.status === 'running' || detail.status === 'paused') && (
@@ -682,7 +682,7 @@ function RunDetailDrawer({
                   data-testid="pipeline-cancel-btn"
                   className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md text-rose-500 hover:bg-rose-500/10 transition-colors disabled:opacity-50"
                 >
-                  <span className="material-symbols-outlined text-[15px]">cancel</span>{cancelling ? 'Cancelling…' : 'Cancel'}
+                  <span className="material-symbols-outlined icon-sm">cancel</span>{cancelling ? 'Cancelling…' : 'Cancel'}
                 </button>
               )}
             </div>
@@ -763,7 +763,7 @@ function RunDetailDrawer({
                 data-testid="pipeline-detail-report-btn"
                 className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
               >
-                <span className="material-symbols-outlined text-[15px]">description</span>View report in Canvas
+                <span className="material-symbols-outlined icon-sm">description</span>View report in Canvas
               </button>
             )}
           </>

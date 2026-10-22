@@ -272,7 +272,7 @@ export default function AIModelsTab() {
                 className="flex items-center gap-1 px-3 py-1.5 text-sm bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] hover:border-[var(--color-primary)] disabled:opacity-50"
                 title="List Claude models available on your Bedrock account"
               >
-                <span className={`material-symbols-outlined text-[14px] ${discovering ? 'animate-spin' : ''}`}>
+                <span className={`material-symbols-outlined icon-xs ${discovering ? 'animate-spin' : ''}`}>
                   {discovering ? 'progress_activity' : 'cloud_sync'}
                 </span>
                 {discovering ? 'Refreshing…' : 'Refresh from Bedrock'}
@@ -314,7 +314,7 @@ export default function AIModelsTab() {
                     </span>
                     {already ? (
                       <span className="text-[var(--color-text-muted)] text-xs flex items-center gap-1">
-                        <span className="material-symbols-outlined text-[14px]">check</span>added
+                        <span className="material-symbols-outlined icon-xs">check</span>added
                       </span>
                     ) : (
                       <button
@@ -336,7 +336,7 @@ export default function AIModelsTab() {
                 <span className="text-[var(--color-text)] font-mono text-sm">{model}</span>
                 {model === defaultModel ? (
                   <span className="flex items-center gap-1 text-amber-400 text-sm">
-                    <span className="material-symbols-outlined text-[14px]">star</span>
+                    <span className="material-symbols-outlined icon-xs">star</span>
                     {t('settings.modelConfig.defaultLabel')}
                   </span>
                 ) : (
@@ -344,7 +344,7 @@ export default function AIModelsTab() {
                     onClick={() => handleDeleteModel(model)}
                     className="text-[var(--color-text-muted)] hover:text-red-400 transition-colors"
                   >
-                    <span className="material-symbols-outlined text-[14px]">delete</span>
+                    <span className="material-symbols-outlined icon-sm">delete</span>
                   </button>
                 )}
               </div>

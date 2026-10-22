@@ -42,7 +42,7 @@ function TodoItemCard({ todo }: { todo: TodoItem }) {
     >
       <span
         className={clsx(
-          'material-symbols-outlined text-xl flex-shrink-0',
+          'material-symbols-outlined icon-sm flex-shrink-0',
           config.color
         )}
       >
@@ -65,7 +65,7 @@ export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
     return (
       <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-4">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-primary text-[14px]">
+          <span className="material-symbols-outlined icon-xs text-primary">
             checklist
           </span>
           <span className="text-sm font-medium text-[var(--color-text)]">
@@ -91,7 +91,7 @@ export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-hover)]">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-primary text-[14px]">
+          <span className="material-symbols-outlined icon-xs text-primary">
             checklist
           </span>
           <span className="text-sm font-medium text-[var(--color-text)]">
@@ -122,7 +122,7 @@ export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
           onClick={handleCopy}
           className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-hover)] rounded transition-colors"
         >
-          <span className="material-symbols-outlined text-[14px]">content_copy</span>
+          <span className="material-symbols-outlined icon-xs">content_copy</span>
           Copy
         </button>
       </div>

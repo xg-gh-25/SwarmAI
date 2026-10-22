@@ -169,39 +169,17 @@ describe('SessionTabBar', () => {
   });
 
   describe('active tab visual distinction', () => {
-    // run_843962a5: active tab now uses the product accent var (--color-primary,
-    // which follows the user's accent preset) instead of a hardcoded blue-500,
-    // so the active tab matches the app theme (GUI12 underline-no-layout-shift
-    // still holds via border-b-2 on all tabs).
-    it('active tab carries the accent bottom-border underline', () => {
+    // 2026-10-22: the active tab is a raised card with a 2px accent rule on top
+    // (SessionTab.indicator.test has the full styling contract).
+    it('only the active tab carries the accent rule and the card surface', () => {
       render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
       const tabs = screen.getAllByRole('tab');
-      expect(tabs[1].className).toContain('border-[var(--color-primary)]');
-      // and it is genuinely distinct — inactive tabs do NOT carry the accent border
-      expect(tabs[0].className).not.toContain('border-[var(--color-primary)]');
-    });
-
-    it('inactive tabs carry a transparent border placeholder (no layout shift)', () => {
-      render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
-      const tabs = screen.getAllByRole('tab');
-      expect(tabs[0].className).toContain('border-transparent');
-      expect(tabs[2].className).toContain('border-transparent');
-    });
-
-    it('all tabs reserve border height via border-b-2 (active and inactive)', () => {
-      render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
-      const tabs = screen.getAllByRole('tab');
-      tabs.forEach((t) => expect(t.className).toContain('border-b-2'));
-    });
-
-    it('active tab has a distinct accent-tinted background (not inactive)', () => {
-      render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
-      const tabs = screen.getAllByRole('tab');
-      // accent-tinted fill via color-mix on the product accent var
-      expect(tabs[1].className).toContain('color-mix');
-      expect(tabs[1].className).toContain('var(--color-primary)');
-      // inactive tab has no such tinted fill
-      expect(tabs[0].className).not.toContain('color-mix');
+      expect(tabs[1].className).toContain('inset_0_2px_0_var(--color-primary)');
+      expect(tabs[1].className).toContain('bg-[var(--color-card)]');
+      for (const t of [tabs[0], tabs[2]]) {
+        expect(t.className).not.toContain('var(--color-primary)');
+        expect(t.className).toContain('border-transparent');
+      }
     });
   });
 

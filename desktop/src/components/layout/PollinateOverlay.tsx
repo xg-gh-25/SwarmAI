@@ -88,7 +88,7 @@ function ImgWithFallback({ src, alt, className, lazy }: { src: string; alt: stri
   if (failed) {
     return (
       <div className={`flex items-center justify-center bg-[var(--color-bg)] ${className ?? ''}`} data-testid="pollinate-img-fallback">
-        <span className="material-symbols-outlined text-[28px] text-[var(--color-text-faint)]" title={`Preview unavailable: ${alt}`}>
+        <span className="material-symbols-outlined icon-xl text-[var(--color-text-faint)]" title={`Preview unavailable: ${alt}`}>
           broken_image
         </span>
       </div>
@@ -402,7 +402,7 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
         onClick={() => setExpanded((e) => !e)}
         className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-hover)] transition-colors text-left"
       >
-        <span className="material-symbols-outlined text-[16px] text-[var(--color-text-faint)]">
+        <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)]">
           {expanded ? 'expand_more' : 'chevron_right'}
         </span>
         <span className="text-sm font-medium text-[var(--color-text)] truncate flex-1 min-w-0">{card.topic}</span>
@@ -435,7 +435,7 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
                         className="w-full h-full object-cover"
                       />
                     ) : (
-                      <span className="material-symbols-outlined text-[28px] text-[var(--color-text-faint)]">
+                      <span className="material-symbols-outlined icon-xl text-[var(--color-text-faint)]">
                         {a.format === 'video' ? 'movie' : a.format === 'narrative' ? 'article' : a.format === 'readme' ? 'description' : 'draft'}
                       </span>
                     )}
@@ -457,7 +457,7 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
               data-testid={`pollinate-produce-${card.run}`}
               className="mt-2 flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md text-primary hover:bg-primary/10 transition-colors"
             >
-              <span className="material-symbols-outlined text-[14px]">add</span>Produce more
+              <span className="material-symbols-outlined icon-xs">add</span>Produce more
             </button>
           )}
         </div>
@@ -554,7 +554,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
     <OverlayDrawer widthPx={460} maxWidthPct={92} z={10} testid="pollinate-asset-drawer" stopPropagation={false}>
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
         <span className="text-xs font-medium text-[var(--color-text)] truncate flex-1">{asset.platform || asset.format} · {asset.fileName}</span>
-        <button onClick={onClose} className="material-symbols-outlined text-[18px] text-[var(--color-text-faint)] hover:text-[var(--color-text)]">close</button>
+        <button onClick={onClose} className="material-symbols-outlined icon-md text-[var(--color-text-faint)] hover:text-[var(--color-text)]">close</button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
         <div className="text-[11px] tabular-nums text-[var(--color-text-faint)]">
@@ -568,7 +568,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
           />
         ) : (
           <div className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-6 text-center">
-            <span className="material-symbols-outlined text-[36px] text-[var(--color-text-faint)]">
+            <span className="material-symbols-outlined icon-xl text-[var(--color-text-faint)]">
               {asset.format === 'video' ? 'movie' : 'description'}
             </span>
             <div className="text-[11px] text-[var(--color-text-muted)] mt-1 font-mono break-all">{asset.filePath}</div>
@@ -625,7 +625,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
             data-testid="pollinate-unpublish-btn"
             className="self-start flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors disabled:opacity-50"
           >
-            <span className="material-symbols-outlined text-[14px]">undo</span>
+            <span className="material-symbols-outlined icon-xs">undo</span>
             {markErr ? 'Failed — retry' : 'Mark unpublished'}
           </button>
         ) : (
@@ -642,7 +642,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
               data-testid="pollinate-mark-published-btn"
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25 transition-colors disabled:opacity-50"
             >
-              <span className="material-symbols-outlined text-[15px]">{markErr ? 'error' : 'check_circle'}</span>
+              <span className="material-symbols-outlined icon-sm">{markErr ? 'error' : 'check_circle'}</span>
               {marking ? 'Marking…' : markErr ? 'Failed — retry' : 'Mark published'}
             </button>
           </div>
@@ -653,7 +653,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
             data-testid="pollinate-copy-btn"
             className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
           >
-            <span className="material-symbols-outlined text-[15px]">{copyErr ? 'error' : copied ? 'check' : 'content_copy'}</span>
+            <span className="material-symbols-outlined icon-sm">{copyErr ? 'error' : copied ? 'check' : 'content_copy'}</span>
             {copyErr ? 'Copy blocked' : copied ? 'Copied' : (body ? 'Copy caption' : 'Copy path')}
           </button>
           {asset.platform && (
@@ -662,7 +662,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
               data-testid="pollinate-open-account-btn"
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors"
             >
-              <span className="material-symbols-outlined text-[15px]">open_in_new</span>Open {asset.platform}
+              <span className="material-symbols-outlined icon-sm">open_in_new</span>Open {asset.platform}
             </button>
           )}
         </div>
@@ -679,7 +679,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
                   data-testid={`pollinate-produce-platform-${p}`}
                   className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md text-[var(--color-text-muted)] border border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors"
                 >
-                  <span className="material-symbols-outlined text-[13px]">add</span>{p}
+                  <span className="material-symbols-outlined icon-xs">add</span>{p}
                 </button>
               ))}
             </div>

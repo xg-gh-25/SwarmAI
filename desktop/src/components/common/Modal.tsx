@@ -147,7 +147,7 @@ export default function Modal({
             onClick={onClose}
             className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
           >
-            <span className="material-symbols-outlined">close</span>
+            <span className="material-symbols-outlined icon-md">close</span>
           </button>
         </div>
 

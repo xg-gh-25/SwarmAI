@@ -676,7 +676,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
         {status === 'error' && (
           <div className="flex flex-col items-center gap-4">
             <div className="w-12 h-12 rounded-full bg-red-500/20 flex items-center justify-center">
-              <span className="material-symbols-outlined text-2xl text-red-400">
+              <span className="material-symbols-outlined icon-md text-red-400">
                 error
               </span>
             </div>
@@ -694,7 +694,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
               onClick={handleRetry}
               className="mt-4 px-6 py-2 bg-primary hover:bg-primary-hover text-[var(--color-text)] rounded-lg transition-colors flex items-center gap-2"
             >
-              <span className="material-symbols-outlined text-xl">refresh</span>
+              <span className="material-symbols-outlined icon-sm">refresh</span>
               Retry
             </button>
           </div>

@@ -124,7 +124,7 @@ export default function SkillsTab({ workspaceId }: SkillsTabProps) {
             )}
           >
             <div className="flex items-center gap-3 min-w-0">
-              <span className="material-symbols-outlined text-lg text-[var(--color-text-muted)]">
+              <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">
                 psychology
               </span>
               <div className="min-w-0">

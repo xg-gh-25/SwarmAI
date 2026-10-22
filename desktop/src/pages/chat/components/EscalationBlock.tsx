@@ -51,7 +51,7 @@ export function EscalationBlock({
     return (
       <div data-testid={`escalation-${id}`} className="my-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-3">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-base text-green-400">check_circle</span>
+          <span className="material-symbols-outlined icon-xs text-green-400">check_circle</span>
           <span className="text-sm text-[var(--color-text-muted)]">{tf(t, 'chat.escalation.resolved', 'Escalation resolved')}</span>
           {resolution && (
             <span className="text-sm text-[var(--color-text)]">— {resolution}</span>
@@ -65,7 +65,7 @@ export function EscalationBlock({
     <div data-testid={`escalation-${id}`} className="my-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden">
       {/* Header with severity badge */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[var(--color-border)]">
-        <span className="material-symbols-outlined text-base text-[var(--color-text-muted)]">
+        <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">
           escalator_warning
         </span>
         <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${style.bg} ${style.text}`}>
@@ -104,7 +104,7 @@ export function EscalationBlock({
                 )}
               </div>
               {onSelectOption && (
-                <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)] opacity-0 group-hover/opt:opacity-100 shrink-0 mt-0.5">
+                <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)] opacity-0 group-hover/opt:opacity-100 shrink-0 mt-0.5">
                   send
                 </span>
               )}

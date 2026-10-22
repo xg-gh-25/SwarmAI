@@ -251,7 +251,7 @@ function InboundTab({ close }: { close: () => void }) {
                 className="group w-full text-left rounded-lg px-2 py-2 hover:bg-[var(--color-hover)] transition-colors flex items-center gap-3"
               >
                 <span className="flex-1 text-[13px] text-[var(--color-text)] truncate">{it.name}</span>
-                <span className="material-symbols-outlined text-[15px] text-[var(--color-text-faint)] opacity-0 group-hover:opacity-100">
+                <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] opacity-0 group-hover:opacity-100">
                   open_in_new
                 </span>
               </button>
@@ -431,7 +431,7 @@ function SourcesTab() {
                 type="button"
                 data-testid="source-expand"
                 onClick={() => setExpanded((e) => (e === s.id ? null : s.id))}
-                className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                className="material-symbols-outlined icon-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                 aria-expanded={expanded === s.id}
                 aria-label={`${expanded === s.id ? 'Hide' : 'Show'} members for ${s.name}`}
                 title={expanded === s.id ? 'Hide members' : 'Show members'}
@@ -494,7 +494,7 @@ function SourcesTab() {
                 data-testid="source-delete"
                 onClick={() => setConfirmDelete(s.id)}
                 aria-label={`Delete source ${s.name}`}
-                className="material-symbols-outlined text-[15px] text-[var(--color-text-faint)] hover:text-red-400 focus-visible:text-red-400"
+                className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] hover:text-red-400 focus-visible:text-red-400"
               >
                 delete
               </button>
@@ -575,7 +575,7 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
               data-testid="member-delete"
               onClick={() => setConfirm(m)}
               aria-label={`Remove member ${m}`}
-              className="material-symbols-outlined text-[13px] text-[var(--color-text-faint)] hover:text-red-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              className="material-symbols-outlined icon-xs text-[var(--color-text-faint)] hover:text-red-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             >
               close
             </button>
@@ -750,7 +750,7 @@ function OutboundTab() {
               >
                 <span className="w-[7px] h-[7px] rounded-full bg-[var(--color-text-faint)]" aria-hidden />
                 Posted · handled ({posted.length}{capped ? ` shown of ${e.kpis.commentsPosted}` : ''})
-                <span className="material-symbols-outlined text-[16px]">{showHandled ? 'expand_more' : 'chevron_right'}</span>
+                <span className="material-symbols-outlined icon-sm">{showHandled ? 'expand_more' : 'chevron_right'}</span>
               </button>
               {showHandled && (
                 <div data-testid="handled-list" className="mt-1 flex flex-col gap-0.5">
@@ -810,7 +810,7 @@ function FollowupRow({ item }: { item: CommunityEngagementItem }) {
             maintainer
           </span>
         )}
-        <span className="material-symbols-outlined text-[15px] text-[var(--color-text-faint)] shrink-0">open_in_new</span>
+        <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] shrink-0">open_in_new</span>
       </div>
       {latest && (
         <div className="mt-1.5 flex items-baseline gap-2 text-[12px]">
@@ -848,7 +848,7 @@ function PostedRow({ item }: { item: CommunityEngagementItem }) {
           ● {item.replyCount}
         </span>
       )}
-      <span className="material-symbols-outlined text-[14px] text-[var(--color-text-faint)] opacity-0 group-hover:opacity-100 shrink-0">open_in_new</span>
+      <span className="material-symbols-outlined icon-xs text-[var(--color-text-faint)] opacity-0 group-hover:opacity-100 shrink-0">open_in_new</span>
     </button>
   );
 }

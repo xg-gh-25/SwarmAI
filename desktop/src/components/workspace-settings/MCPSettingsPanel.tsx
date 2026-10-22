@@ -151,7 +151,7 @@ function CatalogRow({
     )}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0">
-          <span className="material-symbols-outlined text-lg text-primary">hub</span>
+          <span className="material-symbols-outlined icon-sm text-primary">hub</span>
           <div className="min-w-0">
             <span className="text-sm font-medium text-[var(--color-text)]">{entry.name}</span>
             {entry.description && (
@@ -165,7 +165,7 @@ function CatalogRow({
               onClick={() => setShowEnv(!showEnv)}
               className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
             >
-              <span className="material-symbols-outlined text-lg">settings</span>
+              <span className="material-symbols-outlined icon-sm">settings</span>
             </button>
           )}
           <ToggleSwitch checked={entry.enabled} onChange={onToggle} />
@@ -204,7 +204,7 @@ function DevRow({
       'border-[var(--color-border)] bg-[var(--color-card)]',
     )}>
       <div className="flex items-center gap-3 min-w-0">
-        <span className="material-symbols-outlined text-lg text-[var(--color-text-muted)]">
+        <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">
           {isPlugin ? 'extension' : 'terminal'}
         </span>
         <div className="min-w-0">
@@ -225,7 +225,7 @@ function DevRow({
             onClick={onDelete}
             className="p-1 rounded text-[var(--color-text-muted)] hover:text-status-error"
           >
-            <span className="material-symbols-outlined text-lg">delete</span>
+            <span className="material-symbols-outlined icon-sm">delete</span>
           </button>
         )}
         <ToggleSwitch checked={entry.enabled} onChange={onToggle} />

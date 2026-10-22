@@ -158,7 +158,7 @@ export const CodePreview = memo(function CodePreview({
           onClick={handleCopy}
           className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
         >
-          <span className="material-symbols-outlined text-[14px]">
+          <span className="material-symbols-outlined icon-xs">
             {copied ? 'check' : 'content_copy'}
           </span>
           {copied ? tf(t, 'common.copy.copied', 'Copied!') : tf(t, 'common.copy.copy', 'Copy')}

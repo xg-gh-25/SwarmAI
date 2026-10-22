@@ -177,7 +177,7 @@ const OutputRow = memo(function OutputRow({
         />
       )}
       <span
-        className="material-symbols-outlined shrink-0 text-[16px] leading-none"
+        className="material-symbols-outlined icon-sm shrink-0 leading-none"
         style={{ color: fileIconColor(file.fileName) }}
         aria-hidden="true"
         data-testid="canvas-output-icon"
@@ -232,7 +232,7 @@ const OutputRow = memo(function OutputRow({
         title="Copy absolute path"
         aria-label={`Copy path of ${file.fileName}`}
       >
-        <span className="material-symbols-outlined text-[12px]">content_copy</span>
+        <span className="material-symbols-outlined icon-sm">content_copy</span>
       </button>
     </li>
   );
@@ -438,7 +438,7 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
             onClick={() => setActivityShown((v) => !v)}
             className="w-full flex items-center gap-1.5 h-[24px] pl-2.5 pr-2 rounded-md text-left text-[11.5px] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]"
           >
-            <span className="material-symbols-outlined text-[14px] leading-none" aria-hidden="true">
+            <span className="material-symbols-outlined icon-xs leading-none" aria-hidden="true">
               {activityOpen ? 'expand_more' : 'chevron_right'}
             </span>
             Activity
@@ -509,7 +509,7 @@ const BrowsingRow = memo(function BrowsingRow({
           aria-hidden="true"
           className="absolute left-0.5 top-1 bottom-1 w-[2.5px] rounded-full bg-[var(--color-text-muted)]"
         />
-        <span className="material-symbols-outlined shrink-0 text-[14px] text-[var(--color-text-muted)]" aria-hidden="true">visibility</span>
+        <span className="material-symbols-outlined icon-xs shrink-0 text-[var(--color-text-muted)]" aria-hidden="true">visibility</span>
         <span className="shrink-0 truncate text-[var(--color-text)] font-medium">{fileName}</span>
         {dir && (
           <span className="ml-auto truncate text-[11px] text-[var(--color-text-faint,var(--color-text-muted))]">
@@ -522,7 +522,7 @@ const BrowsingRow = memo(function BrowsingRow({
           title="Copy absolute path"
           aria-label={`Copy path of ${fileName}`}
         >
-          <span className="material-symbols-outlined text-[12px]">content_copy</span>
+          <span className="material-symbols-outlined icon-sm">content_copy</span>
         </button>
       </div>
     </li>

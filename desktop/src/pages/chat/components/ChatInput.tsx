@@ -786,7 +786,7 @@ export function ChatInput({
           {isDragging && (
             <div className="absolute inset-0 bg-primary/10 flex items-center justify-center rounded-xl z-10 pointer-events-none">
               <div className="flex flex-col items-center gap-2">
-                <span className="material-symbols-outlined text-primary text-3xl">upload_file</span>
+                <span className="material-symbols-outlined icon-lg text-primary">upload_file</span>
                 <span className="text-primary font-medium">{tf(t, 'chat.input.dropFiles', 'Drop files here')}</span>
               </div>
             </div>
@@ -836,7 +836,7 @@ export function ChatInput({
                                 : 'text-[var(--color-text)] hover:bg-[var(--color-hover)]'
                             )}
                           >
-                            <span className="material-symbols-outlined text-base mt-0.5 opacity-60">terminal</span>
+                            <span className="material-symbols-outlined icon-xs mt-0.5 opacity-60">terminal</span>
                             <div className="min-w-0 flex-1">
                               <p className="font-medium text-sm">{cmd.name}</p>
                               <p
@@ -875,7 +875,7 @@ export function ChatInput({
                                 : 'text-[var(--color-text)] hover:bg-[var(--color-hover)]'
                             )}
                           >
-                            <span className="material-symbols-outlined text-base mt-0.5 opacity-60">magic_button</span>
+                            <span className="material-symbols-outlined icon-xs mt-0.5 opacity-60">magic_button</span>
                             <div className="min-w-0 flex-1">
                               <p className="font-medium text-sm">{cmd.name}</p>
                               <p
@@ -905,7 +905,7 @@ export function ChatInput({
                     className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors p-0.5 rounded hover:bg-[var(--color-hover)]"
                     title={tf(t, 'chat.input.closeEsc', 'Close (Esc)')}
                   >
-                    <span className="material-symbols-outlined text-[14px]">close</span>
+                    <span className="material-symbols-outlined icon-sm">close</span>
                   </button>
                 </div>
               </div>
@@ -964,9 +964,9 @@ export function ChatInput({
                 aria-label={isExpanded ? 'Collapse input' : 'Expand input'}
                 aria-expanded={isExpanded}
                 title={`${isExpanded ? 'Collapse' : 'Expand'} input (${/Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl'}+Shift+E)`}
-                className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+                className="icon-btn text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
               >
-                <span className="material-symbols-outlined text-lg">
+                <span className="material-symbols-outlined icon-sm">
                   {isExpanded ? 'collapse_content' : 'expand_content'}
                 </span>
               </button>
@@ -978,7 +978,7 @@ export function ChatInput({
             <button
               onClick={onStop}
               className={clsx(
-                'w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors',
+                'icon-btn-lg transition-colors',
                 isStreaming
                   ? 'text-[var(--color-text-muted)] hover:text-red-500 hover:bg-red-500/10'
                   : 'invisible'
@@ -987,7 +987,7 @@ export function ChatInput({
               tabIndex={isStreaming ? 0 : -1}
               aria-hidden={!isStreaming}
             >
-              <span className="material-symbols-outlined text-[16px]">stop</span>
+              <span className="material-symbols-outlined icon-md">stop</span>
             </button>
 
             {/* Send button — always primary, queues during streaming */}
@@ -995,7 +995,7 @@ export function ChatInput({
               onClick={handleSend}
               disabled={!canSend || disabled}
               className={clsx(
-                'w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors shadow-[0_1px_2px_rgba(0,0,0,0.2)]',
+                'icon-btn-lg transition-colors shadow-[0_1px_2px_rgba(0,0,0,0.2)]',
                 'bg-gradient-to-b from-[#3d7ef0] to-[#2b6cee] hover:from-[#5a94f5] hover:to-[#3d7ef0]',
                 (!canSend || disabled) && 'opacity-50 cursor-not-allowed'
               )}
@@ -1007,7 +1007,7 @@ export function ChatInput({
                       : 'Send message'
               }
             >
-              <span className="material-symbols-outlined text-white text-[16px]">arrow_upward</span>
+              <span className="material-symbols-outlined icon-md text-white">arrow_upward</span>
             </button>
           </div>
 
@@ -1030,7 +1030,7 @@ export function ChatInput({
                   aria-pressed={voiceConversationState !== 'off'}
                   aria-label={voiceConversationState !== 'off' ? 'Exit voice conversation' : 'Start voice conversation'}
                   className={clsx(
-                    'w-6 h-6 rounded-md flex items-center justify-center transition-all',
+                    'icon-btn transition-all',
                     voiceConversationState !== 'off'
                       ? 'text-green-500 bg-green-500/10'
                       : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]',
@@ -1038,7 +1038,7 @@ export function ChatInput({
                   )}
                   title={voiceConversationState !== 'off' ? 'Exit voice conversation' : 'Start voice conversation'}
                 >
-                  <span className="material-symbols-outlined text-[16px]">
+                  <span className="material-symbols-outlined icon-sm">
                     {voiceConversationState !== 'off' ? 'hearing' : 'headset_mic'}
                   </span>
                 </button>
@@ -1051,7 +1051,7 @@ export function ChatInput({
                   aria-pressed={voiceState === 'recording'}
                   aria-label={voiceState === 'recording' ? 'Stop recording' : 'Start voice input'}
                   className={clsx(
-                    'w-6 h-6 rounded-md flex items-center justify-center transition-all',
+                    'icon-btn transition-all',
                     voiceState === 'recording'
                       ? 'text-red-500 bg-red-500/10 animate-pulse'
                       : voiceState === 'processing'
@@ -1067,7 +1067,7 @@ export function ChatInput({
                         : 'Start voice input'
                   }
                 >
-                  <span className="material-symbols-outlined text-[16px]">
+                  <span className="material-symbols-outlined icon-sm">
                     {voiceState === 'processing' ? 'hourglass_top' : 'mic'}
                   </span>
                 </button>
@@ -1098,11 +1098,11 @@ export function ChatInput({
                   type="button"
                   onClick={onRefreshContext}
                   disabled={isStreaming || disabled}
-                  className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  className="icon-btn text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   title={tf(t, 'chat.input.refreshTitle', 'Refresh context — restart {{name}} with the conversation summary', { name: ASSISTANT_NAME })}
                   aria-label={tf(t, 'chat.input.refreshAria', 'Refresh context')}
                 >
-                  <span className="material-symbols-outlined text-[18px]">
+                  <span className="material-symbols-outlined icon-sm">
                     refresh
                   </span>
                 </button>

@@ -70,7 +70,7 @@ function SectionHeader({
       className="w-full flex items-center gap-1.5 px-3.5 py-1 text-[11px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-dim)] cursor-pointer hover:text-[var(--color-text-muted)] transition-colors border-t border-[var(--color-border)] first:border-t-0"
     >
       <span
-        className="material-symbols-outlined text-[14px] transition-transform duration-150"
+        className="material-symbols-outlined icon-xs transition-transform duration-150"
         style={{ transform: isOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}
       >
         expand_more
@@ -124,7 +124,7 @@ function WorkingFileItem({
       style={{ paddingLeft: 8, fontSize: '13px', lineHeight: '32px' }}
       onDoubleClick={handleDoubleClick}
     >
-      <span className="material-symbols-outlined" style={{ fontSize: '16px', color: iconColor, flexShrink: 0 }}>
+      <span className="material-symbols-outlined icon-sm" style={{ color: iconColor, flexShrink: 0 }}>
         {icon}
       </span>
       <span className="truncate text-[var(--color-text)]" style={{ letterSpacing: '-0.01em' }}>

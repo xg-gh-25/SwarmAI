@@ -147,7 +147,7 @@ export function FolderPickerModal({
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary">folder_open</span>
+            <span className="material-symbols-outlined icon-md text-primary">folder_open</span>
             <h2 className="font-semibold text-[var(--color-text)]">{t('chat.selectWorkFolder') || 'Select Work Folder'}</h2>
           </div>
           <button
@@ -155,7 +155,7 @@ export function FolderPickerModal({
             className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors rounded"
             aria-label="Close"
           >
-            <span className="material-symbols-outlined">close</span>
+            <span className="material-symbols-outlined icon-md">close</span>
           </button>
         </div>
 
@@ -167,7 +167,7 @@ export function FolderPickerModal({
               className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors flex-shrink-0"
               title="Home"
             >
-              <span className="material-symbols-outlined text-lg">home</span>
+              <span className="material-symbols-outlined icon-sm">home</span>
             </button>
             {breadcrumbParts.map((part, index) => (
               <div key={index} className="flex items-center flex-shrink-0">
@@ -195,7 +195,7 @@ export function FolderPickerModal({
           >
             <span
               className={clsx(
-                'material-symbols-outlined text-lg',
+                'material-symbols-outlined icon-sm',
                 isFetching && 'animate-spin'
               )}
             >
@@ -208,12 +208,12 @@ export function FolderPickerModal({
         <div className="flex-1 overflow-y-auto min-h-[200px] max-h-[400px]">
           {isLoading ? (
             <div className="flex items-center justify-center h-32 text-[var(--color-text-muted)]">
-              <span className="material-symbols-outlined animate-spin mr-2">progress_activity</span>
+              <span className="material-symbols-outlined icon-sm animate-spin mr-2">progress_activity</span>
               Loading...
             </div>
           ) : isError ? (
             <div className="flex flex-col items-center justify-center h-32 text-status-error px-4 text-center">
-              <span className="material-symbols-outlined text-2xl mb-2">error</span>
+              <span className="material-symbols-outlined icon-md mb-2">error</span>
               <span className="text-sm">
                 {error instanceof Error ? error.message : 'Failed to load directories'}
               </span>
@@ -232,7 +232,7 @@ export function FolderPickerModal({
                   onClick={handleNavigateUp}
                   className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-hover)] transition-colors text-left"
                 >
-                  <span className="material-symbols-outlined text-lg text-[var(--color-text-muted)]">
+                  <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">
                     folder_open
                   </span>
                   <span className="text-[var(--color-text-muted)] text-sm">..</span>
@@ -242,7 +242,7 @@ export function FolderPickerModal({
               {/* Directories only */}
               {directories.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-[var(--color-text-muted)]">
-                  <span className="material-symbols-outlined text-2xl mb-2">folder_off</span>
+                  <span className="material-symbols-outlined icon-md mb-2">folder_off</span>
                   <span className="text-sm">No subdirectories</span>
                 </div>
               ) : (
@@ -262,7 +262,7 @@ export function FolderPickerModal({
                     >
                       <span
                         className={clsx(
-                          'material-symbols-outlined text-lg',
+                          'material-symbols-outlined icon-sm',
                           getFolderIconColor(isSelected)
                         )}
                       >
@@ -276,7 +276,7 @@ export function FolderPickerModal({
                       >
                         {dir.name}
                       </span>
-                      <span className="material-symbols-outlined text-[var(--color-text-muted)] text-[14px]">
+                      <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">
                         chevron_right
                       </span>
                     </button>
@@ -291,7 +291,7 @@ export function FolderPickerModal({
         <div className="border-t border-[var(--color-border)] px-4 py-3">
           {/* Selected path display */}
           <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-[var(--color-hover)]/50 rounded-lg">
-            <span className="material-symbols-outlined text-primary text-[14px]">folder</span>
+            <span className="material-symbols-outlined icon-xs text-primary">folder</span>
             <span className="text-sm text-[var(--color-text-muted)]">{t('chat.selectedFolder') || 'Selected'}:</span>
             <span className="text-sm text-[var(--color-text)] font-medium truncate flex-1">
               {getSelectedPath()}

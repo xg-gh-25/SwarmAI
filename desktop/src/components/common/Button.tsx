@@ -46,7 +46,7 @@ export default function Button({
       {isLoading ? (
         <LoadingSpinner size="sm" />
       ) : icon ? (
-        <span className="material-symbols-outlined text-xl">{icon}</span>
+        <span className="material-symbols-outlined icon-sm">{icon}</span>
       ) : null}
       {children}
     </button>

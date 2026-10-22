@@ -134,7 +134,7 @@ function BrainPulse({
   const grand = totals ? totals.meta + totals.cognitive + totals.operational : 0;
   return (
     <div data-testid="tier-pulse" className="flex items-center gap-3.5 px-4 py-2.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary,var(--color-bg))]">
-      <span className="material-symbols-outlined text-[16px] text-[#f0a500]">psychology</span>
+      <span className="material-symbols-outlined icon-sm text-[#f0a500]">psychology</span>
       <span className="text-[13px] font-semibold text-[var(--color-text)]">{count}</span>
       <span className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">brain{count > 1 ? 's' : ''}</span>
       {totals && grand > 0 && (

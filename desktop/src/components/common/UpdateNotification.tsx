@@ -92,7 +92,7 @@ export default function UpdateNotification() {
         {/* Version info */}
         {updateInfo && (
           <div className="flex items-center gap-3">
-            <span className="material-symbols-outlined text-3xl text-primary">system_update</span>
+            <span className="material-symbols-outlined icon-lg text-primary">system_update</span>
             <div>
               <p className="text-[var(--color-text)] font-medium">
                 Version {updateInfo.version} is available
@@ -108,7 +108,7 @@ export default function UpdateNotification() {
 
         {/* Data safety assurance */}
         <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)]">
-          <span className="material-symbols-outlined text-status-success text-base mt-0.5">shield</span>
+          <span className="material-symbols-outlined icon-xs text-status-success mt-0.5">shield</span>
           <p className="text-xs text-[var(--color-text-muted)]">
             Your conversations, memory, and workspace are safe — only the app binary is updated.
           </p>
@@ -144,7 +144,7 @@ export default function UpdateNotification() {
         {/* Ready message */}
         {state === 'ready' && (
           <div className="flex items-center gap-2 text-status-success">
-            <span className="material-symbols-outlined">check_circle</span>
+            <span className="material-symbols-outlined icon-md">check_circle</span>
             <span>Update downloaded. Restart to apply.</span>
           </div>
         )}
@@ -152,7 +152,7 @@ export default function UpdateNotification() {
         {/* Error message */}
         {state === 'error' && error && (
           <div className="flex items-center gap-2 text-status-error">
-            <span className="material-symbols-outlined">error</span>
+            <span className="material-symbols-outlined icon-md">error</span>
             <span>{error}</span>
           </div>
         )}

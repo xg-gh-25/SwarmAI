@@ -57,7 +57,7 @@ export function TSCCSnapshotCard({ snapshot }: TSCCSnapshotCardProps) {
           hover:bg-[var(--color-hover)] transition-colors rounded-lg"
         aria-expanded={isExpanded}
       >
-        <span className="material-symbols-outlined text-base text-[var(--color-text-muted)]">
+        <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">
           camera
         </span>
         <span className="text-xs text-[var(--color-text-muted)]">
@@ -66,7 +66,7 @@ export function TSCCSnapshotCard({ snapshot }: TSCCSnapshotCardProps) {
         <span className="text-[var(--color-text)] truncate">
           {snapshot.reason}
         </span>
-        <span className="ml-auto material-symbols-outlined text-base text-[var(--color-text-muted)]">
+        <span className="ml-auto material-symbols-outlined icon-xs text-[var(--color-text-muted)]">
           {isExpanded ? 'expand_less' : 'expand_more'}
         </span>
       </button>

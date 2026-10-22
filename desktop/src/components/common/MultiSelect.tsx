@@ -119,7 +119,7 @@ export default function MultiSelect({
                     onClick={(e) => handleRemove(option.id, e)}
                     className="hover:bg-primary/20 rounded-full p-0.5"
                   >
-                    <span className="material-symbols-outlined text-[14px]">close</span>
+                    <span className="material-symbols-outlined icon-sm">close</span>
                   </button>
                 )}
               </span>
@@ -130,7 +130,7 @@ export default function MultiSelect({
         {/* Dropdown Icon */}
         <span
           className={clsx(
-            'material-symbols-outlined absolute right-3 top-10 text-[var(--color-text-muted)] transition-transform',
+            'material-symbols-outlined icon-sm absolute right-3 top-10 text-[var(--color-text-muted)] transition-transform',
             isOpen && 'rotate-180'
           )}
         >
@@ -144,7 +144,7 @@ export default function MultiSelect({
           {/* Search Input */}
           <div className="p-3 border-b border-[var(--color-border)]">
             <div className="relative">
-              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] text-lg">
+              <span className="material-symbols-outlined icon-sm absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]">
                 search
               </span>
               <input
@@ -192,7 +192,7 @@ export default function MultiSelect({
                         )}
                       >
                         {isSelected && (
-                          <span className="material-symbols-outlined text-[var(--color-text)] text-[14px]">
+                          <span className="material-symbols-outlined icon-xs text-[var(--color-text)]">
                             check
                           </span>
                         )}

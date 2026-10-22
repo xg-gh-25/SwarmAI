@@ -114,7 +114,7 @@ export function AssumptionsDisclosure({ block }: { block: PipelineAttentionConte
   return (
     <details data-testid="turn-assumptions" className="group/assumptions text-[12.5px] text-[var(--color-text-muted)]">
       <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded py-0.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
-        <span aria-hidden="true" className="material-symbols-outlined text-[15px] transition-transform group-open/assumptions:rotate-90">chevron_right</span>
+        <span aria-hidden="true" className="material-symbols-outlined icon-sm transition-transform group-open/assumptions:rotate-90">chevron_right</span>
         <span>{tf(t, 'chat.turn.assumptions.title', 'Assumptions to verify')}</span>
       </summary>
       <ul className="mt-1 ml-[22px] space-y-1">
@@ -169,7 +169,7 @@ function DeliverableTile({ file }: { file: TurnDeliverable }) {
         ) : (
           <span
             aria-hidden="true"
-            className="material-symbols-outlined text-[18px] leading-none shrink-0"
+            className="material-symbols-outlined icon-md leading-none shrink-0"
             style={{ color: fileIconColor(name), filter: 'saturate(0.55)' }}
           >
             {fileIcon(name)}
@@ -206,7 +206,7 @@ function SummaryDocRow({ doc }: { doc: PipelineSummaryDoc }) {
         {...(Row === 'button' ? { type: 'button' as const, onClick: open, title: doc.absolutePath ?? undefined } : {})}
         className={`w-full flex items-baseline gap-2 py-1 text-left min-w-0 ${Row === 'button' ? 'rounded hover:bg-[var(--color-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50' : ''}`}
       >
-        <span aria-hidden="true" className={`material-symbols-outlined text-[16px] leading-none self-center shrink-0 ${there ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-dim)]'}`}>
+        <span aria-hidden="true" className={`material-symbols-outlined icon-sm leading-none self-center shrink-0 ${there ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-dim)]'}`}>
           {meta.icon}
         </span>
         <span className={`shrink-0 font-mono text-[12.5px] ${there ? 'text-[var(--color-text)]' : 'text-[var(--color-text-dim)]'}`}>{doc.name}</span>
@@ -274,7 +274,7 @@ export function RunResult({ summary, showReasons = false, collapseDetails = fals
       {collapseDetails && detailRows ? (
         <details data-testid="run-details" className="group/run-details text-[12.5px] text-[var(--color-text-muted)]">
           <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded py-0.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
-            <span aria-hidden="true" className="material-symbols-outlined text-[15px] transition-transform group-open/run-details:rotate-90">chevron_right</span>
+            <span aria-hidden="true" className="material-symbols-outlined icon-sm transition-transform group-open/run-details:rotate-90">chevron_right</span>
             <span>{tf(t, 'chat.turn.runResult.details', 'Run details')}</span>
           </summary>
           <div className="mt-1 ml-[19px]">{detailRows}</div>

@@ -75,7 +75,7 @@ function ToastEntry({ toast, onDismiss }: ToastEntryProps) {
       aria-live="polite"
     >
       {/* Severity icon */}
-      <span className="material-symbols-outlined text-lg shrink-0">
+      <span className="material-symbols-outlined icon-sm shrink-0">
         {ICON_MAP[toast.severity]}
       </span>
 
@@ -98,7 +98,7 @@ function ToastEntry({ toast, onDismiss }: ToastEntryProps) {
         className="ml-1 p-1 rounded hover:bg-black/10 transition-colors shrink-0"
         aria-label="Dismiss notification"
       >
-        <span className="material-symbols-outlined text-[14px]">close</span>
+        <span className="material-symbols-outlined icon-sm">close</span>
       </button>
     </div>
   );

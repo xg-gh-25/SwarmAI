@@ -178,7 +178,7 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
         disabled={isDisabled}
         onClick={isDisabled ? undefined : handleToggle}
         className={`
-          w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0
+          icon-btn
           transition-colors
           ${isDisabled
             ? 'text-[var(--color-text-muted)]/50 cursor-not-allowed'
@@ -188,7 +188,7 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
           }
         `}
       >
-        <span className="material-symbols-outlined text-[18px]">psychology</span>
+        <span className="material-symbols-outlined icon-sm">psychology</span>
       </button>
 
       {isOpen && sessionId && box && createPortal(

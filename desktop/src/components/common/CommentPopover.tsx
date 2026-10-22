@@ -134,7 +134,7 @@ export default function CommentPopover({
           className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
           aria-label="Close"
         >
-          <span className="material-symbols-outlined text-[14px]">close</span>
+          <span className="material-symbols-outlined icon-sm">close</span>
         </button>
       </div>
 
@@ -183,7 +183,7 @@ export default function CommentPopover({
               data-testid="comment-send-single"
               title="Send this comment to agent immediately"
             >
-              <span className="material-symbols-outlined text-xs">send</span>
+              <span className="material-symbols-outlined icon-xs">send</span>
               Send
             </button>
           )}

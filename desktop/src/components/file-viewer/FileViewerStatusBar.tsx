@@ -80,7 +80,7 @@ export default function FileViewerStatusBar({
       <div className="flex items-center gap-2 min-w-0">
         <span className="flex items-center gap-1">
           <span
-            className="material-symbols-outlined text-[12px] leading-none opacity-60"
+            className="material-symbols-outlined icon-xs leading-none opacity-60"
             aria-hidden="true"
           >
             {info.icon}
@@ -124,7 +124,7 @@ export default function FileViewerStatusBar({
                 aria-label="Attach to chat"
                 data-testid="statusbar-attach"
               >
-                <span className="material-symbols-outlined text-[13px] leading-none">attach_file</span>
+                <span className="material-symbols-outlined icon-sm leading-none">attach_file</span>
               </button>
             )}
             <button
@@ -134,7 +134,7 @@ export default function FileViewerStatusBar({
               aria-label={tf(t, 'common.copy.filePath', 'Copy file path')}
               data-testid="statusbar-copy-path"
             >
-              <span className="material-symbols-outlined text-[13px] leading-none">
+              <span className="material-symbols-outlined icon-xs leading-none">
                 {copied ? 'check' : 'content_copy'}
               </span>
             </button>

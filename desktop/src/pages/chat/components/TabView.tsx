@@ -740,7 +740,7 @@ function TabViewImpl({
                 <div className="flex-1 h-px bg-[var(--color-border)]" />
                 <span className="text-xs text-[var(--color-text-muted)] whitespace-nowrap flex items-center gap-1.5">
                   {isRefresh && (
-                    <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>refresh</span>
+                    <span className="material-symbols-outlined icon-xs">refresh</span>
                   )}
                   {label}
                 </span>

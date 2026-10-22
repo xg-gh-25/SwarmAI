@@ -191,7 +191,7 @@ const MermaidModal = memo(function MermaidModal({
       {/* Top toolbar */}
       <div className="flex items-center justify-between px-4 py-3 bg-[var(--color-card)] border-b border-[var(--color-border)]">
         <span className="text-sm text-[var(--color-text)] font-medium flex items-center gap-2">
-          <span className="material-symbols-outlined text-primary">schema</span>
+          <span className="material-symbols-outlined icon-md text-primary">schema</span>
           Mermaid Diagram
         </span>
         <div className="flex items-center gap-2">
@@ -202,7 +202,7 @@ const MermaidModal = memo(function MermaidModal({
               className="p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
               title="Zoom out"
             >
-              <span className="material-symbols-outlined text-lg">remove</span>
+              <span className="material-symbols-outlined icon-sm">remove</span>
             </button>
             <button
               onClick={handleResetZoom}
@@ -216,7 +216,7 @@ const MermaidModal = memo(function MermaidModal({
               className="p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
               title="Zoom in"
             >
-              <span className="material-symbols-outlined text-lg">add</span>
+              <span className="material-symbols-outlined icon-sm">add</span>
             </button>
           </div>
           {/* Close button */}
@@ -225,7 +225,7 @@ const MermaidModal = memo(function MermaidModal({
             className="p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-hover)] hover:bg-[var(--color-border)] rounded-lg transition-colors"
             title="Close (Esc)"
           >
-            <span className="material-symbols-outlined">close</span>
+            <span className="material-symbols-outlined icon-md">close</span>
           </button>
         </div>
       </div>
@@ -465,7 +465,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
     return (
       <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-4 my-4">
         <div className="flex items-center gap-2 text-status-error mb-2">
-          <span className="material-symbols-outlined text-[14px]">error</span>
+          <span className="material-symbols-outlined icon-xs">error</span>
           <span className="text-sm font-medium">Mermaid Diagram Error</span>
         </div>
         <pre className="text-xs text-[var(--color-text-muted)] overflow-x-auto">{error}</pre>
@@ -491,7 +491,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
         {/* Toolbar */}
         <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-hover)] border-b border-[var(--color-border)]">
           <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-[14px]">schema</span>
+            <span className="material-symbols-outlined icon-xs">schema</span>
             Mermaid Diagram
           </span>
           <div className="flex items-center gap-1">
@@ -501,7 +501,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
               className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
               title="View fullscreen"
             >
-              <span className="material-symbols-outlined text-[14px]">fullscreen</span>
+              <span className="material-symbols-outlined icon-xs">fullscreen</span>
               Zoom
             </button>
             {/* Download SVG button */}
@@ -510,7 +510,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
               className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
               title="Download as SVG"
             >
-              <span className="material-symbols-outlined text-[14px]">download</span>
+              <span className="material-symbols-outlined icon-xs">download</span>
               SVG
             </button>
             {/* Download PNG button */}
@@ -520,7 +520,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
               className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors disabled:opacity-50"
               title="Download as PNG"
             >
-              <span className="material-symbols-outlined text-[14px]">
+              <span className="material-symbols-outlined icon-xs">
                 {isDownloading ? 'hourglass_empty' : 'image'}
               </span>
               PNG
@@ -632,7 +632,7 @@ const CodeBlock = memo(function CodeBlock({
           onClick={handleCopy}
           className="flex items-center gap-1 text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors bg-transparent border-none cursor-pointer"
         >
-          <span className="material-symbols-outlined text-[13px]">
+          <span className="material-symbols-outlined icon-xs">
             {copied ? 'check' : 'content_copy'}
           </span>
           {copied ? 'Copied!' : 'Copy'}
@@ -817,7 +817,7 @@ const InlineCode = memo(function InlineCode({ children }: { children: React.Reac
             the chat's FileChip, desaturated so a type never reads as a status. */}
         <span
           aria-hidden="true"
-          className="material-symbols-outlined text-[13px] leading-none"
+          className="material-symbols-outlined icon-xs leading-none"
           style={{ color: fileIconColor(cleanPath), filter: 'saturate(0.55)' }}
         >
           {fileIcon(cleanPath)}

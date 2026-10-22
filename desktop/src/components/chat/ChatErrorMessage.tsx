@@ -55,7 +55,7 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
     >
       {/* Error header */}
       <div className="flex items-center gap-2 mb-1">
-        <span className={`material-symbols-outlined text-lg ${
+        <span className={`material-symbols-outlined icon-sm ${
           error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT' || error.code === 'QUEUE_TIMEOUT' || !error.code
             ? 'text-amber-400'
             : 'text-red-400'

@@ -58,7 +58,7 @@ export default function HiveTab() {
             onClick={() => setShowAddAccount(true)}
             className="px-3 py-1.5 text-xs bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded-lg hover:bg-[var(--color-primary)] hover:text-white transition-colors flex items-center gap-1.5"
           >
-            <span className="material-symbols-outlined text-[14px]">add</span>
+            <span className="material-symbols-outlined icon-xs">add</span>
             Add Account
           </button>
         </div>

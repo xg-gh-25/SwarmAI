@@ -222,11 +222,11 @@ export function BottomBar() {
           </span>
         </span>
         <span className="flex items-center gap-1">
-          <span className="material-symbols-outlined text-[12px] leading-none">smart_toy</span>
+          <span className="material-symbols-outlined icon-xs leading-none">smart_toy</span>
           <span>{agentName}</span>
         </span>
         <span className="flex items-center gap-1">
-          <span className="material-symbols-outlined text-[12px] leading-none">folder</span>
+          <span className="material-symbols-outlined icon-xs leading-none">folder</span>
           <span>SwarmWS</span>
         </span>
         {appVersion && (

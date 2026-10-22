@@ -113,7 +113,7 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
             data-testid="hive-deploy-btn"
             className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <span className="material-symbols-outlined text-[15px]">add</span>Deploy Hive
+            <span className="material-symbols-outlined icon-sm">add</span>Deploy Hive
           </button>
         ) : (
           <button
@@ -121,7 +121,7 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
             data-testid="hive-add-account-btn"
             className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
           >
-            <span className="material-symbols-outlined text-[15px]">add</span>Add Account
+            <span className="material-symbols-outlined icon-sm">add</span>Add Account
           </button>
         )}
       />
@@ -254,7 +254,7 @@ function GuideBanner() {
       className="shrink-0 mx-4 mt-3 rounded-lg border border-primary/25 bg-primary/[0.06] px-3.5 py-2.5 flex items-start gap-2.5"
       data-testid="hive-guide-banner"
     >
-      <span className="material-symbols-outlined text-[16px] text-primary mt-0.5 shrink-0">cloud</span>
+      <span className="material-symbols-outlined icon-sm text-primary mt-0.5 shrink-0">cloud</span>
       <div className="flex-1 min-w-0 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
         <span className="text-[var(--color-text)] font-medium">Your fleet of remote AI clones.</span> Each Hive
         deploys the whole Agent OS to your own AWS — 100% data sovereignty, a 24/7 stand-in you can share with a

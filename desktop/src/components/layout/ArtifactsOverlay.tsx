@@ -513,7 +513,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
                       className="w-full flex items-center gap-2 px-1 py-2.5 text-left text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
                     >
                       <span
-                        className="material-symbols-outlined text-[15px] leading-none text-[var(--color-text-faint)] transition-transform"
+                        className="material-symbols-outlined icon-sm leading-none text-[var(--color-text-faint)] transition-transform"
                         style={{ transform: open ? 'none' : 'rotate(-90deg)' }}
                         aria-hidden="true"
                       >
