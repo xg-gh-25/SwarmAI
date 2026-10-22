@@ -150,3 +150,25 @@ trivial 不变：`tests/fixtures/pipeline_v1_trivial_profile.json` 是改动前 
 - 代码哈希每个进程只算一次（实测 100 次约 0.85 s）；R1 重派的 attempt 编号按专家各自计算。
 
 证明：`test_a_commit_in_the_worktree_does_not_move_the_base_or_hide_the_change`、`test_a_base_without_validations_json_requires_nothing`、`test_an_empty_entry_list_is_a_valid_manifest`、`test_pipeline_code_hash_moves_with_any_protocol_or_cli_file`、`test_a_conflicting_baseline_outcome_is_never_trusted`、`test_build_collects_the_designs_failure_mode_tests[…]`（两个方向）、`test_a_gate0_answer_with_two_verdicts_has_no_verdict`、`test_an_unparsed_review_answer_is_redispatched_once`、`test_a_committed_or_new_file_is_in_the_review_diff`、`test_comment_only_diffs_are_docs[…]`、`test_a_fix_pass_addresses_a_whole_cluster_or_nothing`、`test_fixing_spec_is_rendered_from_the_pass_events`、`test_the_final_records_the_rule_versions_it_selected_with`。
+
+## 8. D 组（审计和 REFLECT，含 F-4）
+
+**根因：** 审计的几个数字没有生产者或单位不一致（Token 被重复累加、主 agent 不计量、审批和 `accept_finding` 永远是 0、没有基线），REPORT 和卡片的格式与 §B8 / §E9 不符；REFLECT 的后台处理从未接线，由 agent 自己宣布完成。
+
+| 条目 | 处理 |
+|---|---|
+| D1 | 新增 `core/run_protocol/reflect_job.py`：daemon 在本 session 的 pipeline 命令之后（PostToolUse `v1_reflect_trigger`），在一个后台线程里处理 `reflecting` 的 run——judge、按目标路由、逐条记 outcome、次数和时间上限（2 次 / 60 s），超限为 `degraded`——然后以 hook 身份写 `reflect_complete` / `reflect_exhausted`。这两个事件的 producer 改为 hook，CLI 的 `reflect-complete` / `reflect-exhausted` 命令删除，agent 无法自己宣布完成。查重候选由 CLI 用现有的 DDD 关键词召回（`recall_ddd_entries`）计算，agent 不再提供。新增只读命令 `pipeline_v1.py events`，列出可引用的事件 ID（RF-2） |
+| D2 | `scripts/pipeline_baseline.py` 从已完成 run 的 created→completed 时间按 profile 求 p95（至少 5 个），生成 `core/run_protocol/baselines.json`；create 时写进 contract 的 `budget_seconds` / `budget_tokens`。旧 run 只有估算、没有实测 Token，所以 `budget_tokens` 全为 null，审计显示 "no baseline"。10 个 v1 run 之后重跑脚本 |
+| D3 | create 和每次 CLI 调用自动记录本进程的 transcript id（`CLAUDE_CODE_SESSION_ID`，审计区 `transcripts.json`）；`measure-usage` 的最新一组替换之前的；有 transcript 计量时它已包含全部子 agent，SubagentStop 的专家记录不再相加；没有时只算专家，主 agent 为 null；一次计量都没有为 BLOCK；calls 的分子分母都是模型响应数 |
+| D4 | 危险命令和外部发送的审批卡通过时，daemon 给本 session 拥有的 v1 run 记一次 `required_approval`（v1 的授权命令除外，那是人的决策）；`accept_finding` 计入 human_decisions（只在审计里，不占 decision 上限） |
+| D5 | renderer 按 §B8：一句话结论（交付了什么、是否落地；未落地写 reason），去掉 "Landing guards: PASS" 行，"Full machine-readable audit is stored with this run."，push 理由里高危 security_policy 排第一，人工落地一行 request_id 和原话，未集成工作的保存位置和恢复命令；卡片末行 `Final audit through COMPLETED`；Quality N/A 显示 reason；`repos_isolated` 按实际创建了 worktree 的 repo 计；时间不足为 null；`% budget` / `no baseline` / `observed · x/y calls accounted`。人工落地 completed(not_landed) 的 run 后重建 run_audit 和卡片。chat 的 run 摘要卡片显示同一段卡片文本 |
+| F-4 | handout 事件带 prompt 全文，按 `FORCED_BLOB_KEYS` 存进审计区 blob |
+
+**偏离和遗留：**
+- D1 的 judge 用现有的确定性门（`ddd_cultivation.is_noise` / `is_quality_lesson`），不调模型；MEMORY / EVOLUTION / self-evolution 的经验进项目的 proposal 队列，不由后台直接改受治理的 context 文件。领域经验直接 `apply_to_ddd`。
+- D4 的 `manual_rescue` 生产者没有做：§E9.3 的三种信号都需要判断"这一步本该由系统完成"，现有事件里没有可靠依据；不靠推测补。
+- F-7 的跨 run 答案复用仍待 answer 事件记录模型 id。
+
+**对抗审查（1c1e2c20bd672ecd，3 HIGH + 6 MED）：**
+- 已修：`domain:<project>` 只接受项目名（不能是路径），路由时再确认目标在 `Projects/` 下且存在；writer 的结果分为已写入（`applied` / `created_section` / `duplicate` / 入队）、拒绝（记 `rejected`，不算 applied）、忙（`locked`，重试后 degraded）；后台任务异常时以 `degraded` 结束 REFLECT，不会一直停在 reflecting；`measure-usage` 在 run 已 completed 时重建最终审计、REPORT 和卡片（REFLECT 可能先完成）；人工落地的 request_id 和原话改为每次从签名的 `auth_consumed` / `land_request` 事件推出，COMPLETED 重建不再丢；结论里"交付了什么"对非 direct 取 REQUIREMENTS 的 understanding.claim（否则第一条 story）；基线脚本对 v1 run 用终态的 `updated_at` 作结束时间，Token 样本只取有整段计量（calls 已知）的审计。
+- 遗留（§9）：进程内任意 Python 可以自己调 `allow_hook_writer()` 再签 hook 事件（与 C 组相同的已知限制；需要把 hook 签名移到 daemon 的 IPC 后面）。60 秒上限只在每条经验前检查，阻塞的文件写不能中断；completed 之后重建审计失败不会自动修复。

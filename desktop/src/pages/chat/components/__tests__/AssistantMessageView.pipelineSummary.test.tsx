@@ -99,6 +99,17 @@ describe('pipeline_summary', () => {
     expect(within(rows[1]).queryByRole('button')).toBeNull();
   });
 
+  it('shows a v1 run\'s audit card as the backend rendered it (D5)', () => {
+    const card = 'Run Audit · run_x\nCOMPLETED · LANDED · PUSH READY\n\nSpeed          PASS · 1m 0s wall';
+    renderView(TURN({ ...SUMMARY(true), auditCard: card }));
+    expect(screen.getByTestId('run-audit-card').textContent).toBe(card);
+  });
+
+  it('shows no audit card for a run without one', () => {
+    renderView(TURN(SUMMARY(true)));
+    expect(screen.queryByTestId('run-audit-card')).toBeNull();
+  });
+
   it('a run not ready to push says so; the raw model-facing reason is not shown', () => {
     renderView(TURN(SUMMARY(false)));
     const v = screen.getByTestId('summary-verdict');

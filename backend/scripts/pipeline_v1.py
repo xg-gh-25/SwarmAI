@@ -56,9 +56,20 @@ def _json_arg(value: str | None) -> dict[str, Any]:
     return result
 
 
+def _this_transcript() -> list[str]:
+    """This CLI process's SDK transcript id (CLAUDE_CODE_SESSION_ID): the main agent's
+    usage is measured from it (D3). Not an SDK id -> nothing."""
+    from core.session_ids import valid_session_id
+    sid = (os.environ.get("CLAUDE_CODE_SESSION_ID") or "").strip()
+    return [sid] if valid_session_id(sid) else []
+
+
 def _load(args) -> RunEngine:
-    return RunEngine.load(data_dir=get_app_data_dir(), workspace=_workspace(),
-                          project=args.project, run_id=args.run_id)
+    engine = RunEngine.load(data_dir=get_app_data_dir(), workspace=_workspace(),
+                            project=args.project, run_id=args.run_id)
+    for sid in _this_transcript():     # a resumed / taken-over session adds its own
+        engine.note_transcript(sid)
+    return engine
 
 
 def parser() -> argparse.ArgumentParser:
@@ -75,8 +86,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--requirement",
                         help="the user's request, verbatim (required for --profile direct)")
     for command in ("status", "stage-start", "review-start", "push-status", "land",
-                    "measure-usage", "reflect-complete", "reflect-exhausted",
-                    "resume", "restore"):
+                    "measure-usage", "events", "resume", "restore"):
         item = sub.add_parser(command)
         item.add_argument("--project", required=True)
         item.add_argument("--run-id", required=True)
@@ -153,7 +163,7 @@ def execute(args) -> dict[str, Any]:
             # the mode is a setting, never the agent's choice (C4, design §C5.1)
             mode="isolated" if mode_enabled() else "shared",
             risk_test_file_cap=args.risk_test_file_cap,
-            run_id=args.run_id, transcript_ids=args.transcript_id,
+            run_id=args.run_id, transcript_ids=[*args.transcript_id, *_this_transcript()],
             requirement=args.requirement)
         return {"ok": True, "pipeline_id": engine.run_id,
                 "state": engine.projection(), "run_file": str(engine.run_dir / "run.json")}
@@ -205,10 +215,12 @@ def execute(args) -> dict[str, Any]:
             args.request, message=args.message)}
     if args.command == "reflect-prepare":
         artifact = _json_arg(args.artifact)
-        return {"ok": True, "reflect": engine.prepare_reflect(
-            artifact.get("lessons", []), artifact.get("candidates", {}))}
-    if args.command == "reflect-complete":
-        return {"ok": True, "state": engine.reflect_complete()}
+        # dedup candidates are computed here, not supplied (RF-4, D1)
+        return {"ok": True, "reflect": engine.prepare_reflect(artifact.get("lessons", []))}
+    if args.command == "events":      # read-only: the ids a lesson may cite (RF-2, D1)
+        return {"ok": True, "events": [
+            {"event_id": e["event_id"], "kind": e["kind"], "stage": e.get("stage"),
+             "at": e.get("at")} for e in engine.store.read_events()]}
     if args.command in {"accept-finding", "discard-snapshot"}:
         action = args.command.replace("-", "_")
         target = args.canonical_id if args.command == "accept-finding" else args.repo
@@ -220,8 +232,6 @@ def execute(args) -> dict[str, Any]:
         if target or args.note:
             raise ValueError("--request cannot be combined with prepare-only options")
         return {"ok": True, **engine.execute_authorized_action(args.request)}
-    if args.command == "reflect-exhausted":
-        return {"ok": True, "state": engine.reflect_complete(degraded=True)}
     raise ValueError(f"unknown command {args.command}")
 
 

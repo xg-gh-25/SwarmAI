@@ -353,13 +353,15 @@ class Rig:
             self.pt("regression")
             return self.v1("stage-complete")
         if stage == "deliver":
-            self.v1("reflect-prepare", "--artifact",
-                    self.artifact("reflect", {"lessons": [], "candidates": {}}))
+            self.v1("reflect-prepare", "--artifact", self.artifact("reflect", {"lessons": []}))
             if self.repo is None:
                 return self.v1("stage-complete")
             return self.v1("land", "--message", "fix: swap the operands" + SWARM)
         if stage == "reflect":
-            return self.v1("reflect-complete")
+            # the daemon's background REFLECT (D1), as the hook schedules it
+            from core.run_protocol import reflect_job
+            reflect_job.process_run(self.engine())
+            return self.v1("status")
         raise AssertionError(f"no happy step for stage {stage!r}")
 
     def drive(self, until: str | None = None, limit: int = 12) -> dict:

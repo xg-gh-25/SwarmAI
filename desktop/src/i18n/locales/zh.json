@@ -391,6 +391,7 @@
       },
       "runResult": {
         "title": "运行结果",
+        "audit": "运行审计",
         "landed": "已落 main · {{sha}}",
         "asked": "你要的",
         "before": "原来",

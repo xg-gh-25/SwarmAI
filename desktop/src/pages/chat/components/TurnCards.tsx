@@ -280,6 +280,12 @@ export function RunResult({ summary, showReasons = false, collapseDetails = fals
           <div className="mt-1 ml-[19px]">{detailRows}</div>
         </details>
       ) : detailRows}
+      {summary.auditCard && (
+        <pre data-testid="run-audit-card" aria-label={tf(t, 'chat.turn.runResult.audit', 'Run audit')}
+          className="overflow-x-auto whitespace-pre rounded bg-[var(--color-bg-chrome)] p-2 font-mono text-[12px] leading-snug text-[var(--color-text-secondary)]">
+          {summary.auditCard}
+        </pre>
+      )}
       {showReasons && summary.pushReady === false && (summary.pushReasons?.length ?? 0) > 0 && (
         <ul data-testid="run-reasons" className={`${DIM} list-disc pl-5`}>
           {summary.pushReasons!.map((r, i) => (

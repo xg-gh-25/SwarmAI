@@ -731,3 +731,85 @@ def test_the_base_follows_the_recorded_branch_not_the_main_checkout(rig):
     changed = r.engine().check_context().run["changed_paths"]
     assert "elsewhere.txt" not in changed, changed
     _git(r.repo, "checkout", "-q", "main")
+
+
+# ── D4: an approved dangerous command is a required approval of the run ─────
+
+def test_an_approved_dangerous_command_counts_as_a_required_approval(rig):
+    from core import security_hooks
+    from tests.pipeline_v1_rig import SESSION
+    r = rig("direct")
+    r.create()
+    security_hooks._count_required_approval(SESSION)
+    rows = [e for e in r.events() if e["kind"] == "metric"
+            and e["payload"]["name"] == "required_approval"]
+    assert len(rows) == 1 and rows[0]["producer"] == "hook"
+    audit = r.engine().build_audit(through="DELIVER", persist=False)
+    assert audit["summary"]["autonomy"]["required_approvals"] == 1
+
+
+def test_create_records_the_sessions_own_transcript(rig, monkeypatch):
+    r = rig("direct")
+    r.env["CLAUDE_CODE_SESSION_ID"] = "0123abcd-0000-4000-8000-00000000abcd"
+    r.create()
+    assert "0123abcd-0000-4000-8000-00000000abcd" in r.engine().transcript_ids()
+
+
+# ── D1: REFLECT is the daemon's background work ─────────────────────────────
+
+def test_the_agent_cannot_complete_reflect_and_the_daemon_does(rig):
+    from core.run_protocol import reflect_job
+    r = rig("direct")
+    r.create()
+    r.drive(until="deliver")
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+    r.v1("land", "--message", "fix: swap the operands\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
+    assert r.state()["status"] == "reflecting"
+    out = r.v1("reflect-complete")
+    assert out.get("ok") is not True                       # the command is gone
+    reflect_job.process_run(r.engine())
+    state = r.state()
+    assert state["status"] == "completed" and state.get("reflect") in ("ok", None), state
+    complete = [e for e in r.events() if e["kind"] == "reflect_complete"]
+    assert len(complete) == 1 and complete[0]["producer"] == "hook"
+
+
+def test_lessons_cite_events_listed_by_the_cli_and_are_routed_with_an_outcome(rig):
+    import json
+    from core.run_protocol import reflect_job
+    r = rig("direct")
+    r.create()
+    r.drive(until="deliver")
+    ids = [e["event_id"] for e in r.v1("events")["events"]]
+    lesson = {"id": "L1", "type": "pitfall", "scope": "instance",
+              "statement": "Run the whole test file, not one node, before leaving BUILD.",
+              "tell": "BX-2 refused a single node", "evidence": ids[:1],
+              "relation": {"kind": "new", "entry": None}}
+    out = r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": [lesson]}))
+    assert out.get("ok") is True, out
+    r.v1("land", "--message", "fix: swap the operands\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
+    reflect_job.process_run(r.engine())
+    doc = json.loads((r.engine().run_dir / "artifacts" / "reflect.json").read_text())
+    outcome = doc["lessons"][0]["outcome"]
+    assert outcome["status"] in ("applied", "noise", "suspect"), outcome
+
+
+def test_measuring_after_the_daemon_completed_reflect_refreshes_the_final_audit(rig, monkeypatch):
+    import json
+    from core.run_protocol import reflect_job, usage
+    r = rig("direct")
+    r.create()
+    r.drive(until="deliver")
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+    r.v1("land", "--message", "fix: swap the operands\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
+    reflect_job.process_run(r.engine())
+    engine = r.engine()
+    audit = json.loads((engine.run_dir / "run_audit.json").read_text())
+    assert audit["summary"]["token_cost"]["verdict"] == "BLOCK"       # nothing measured yet
+    monkeypatch.setattr(usage.transcript_usage, "resolve_transcripts", lambda ids: ["t"])
+    monkeypatch.setattr(usage.transcript_usage, "usage_in_window", lambda *a, **k: {
+        "input_tokens": 10, "cache_read_tokens": 0, "cache_creation_tokens": 0,
+        "output_tokens": 5, "responses": 2})
+    engine.measure_usage()
+    audit = json.loads((engine.run_dir / "run_audit.json").read_text())
+    assert audit["summary"]["token_cost"]["verdict"] != "BLOCK", audit["summary"]["token_cost"]

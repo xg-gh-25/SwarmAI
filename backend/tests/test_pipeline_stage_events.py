@@ -115,7 +115,7 @@ def test_pipeline_v1_commands_are_watched():
         "python backend/scripts/pipeline_v1.py status --project P --run-id run_v1")
     for command in ("status", "stage-start", "stage-complete", "review-start",
                     "push-status", "land", "measure-usage", "reflect-prepare",
-                    "reflect-complete", "reflect-exhausted"):
+                    "events"):
         cmd = f"python backend/scripts/pipeline_v1.py {command} --project P --run-id run_v1"
         assert pse.parse_watched_run_id(cmd) == "run_v1", command
 

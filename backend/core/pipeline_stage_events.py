@@ -861,4 +861,6 @@ def summary_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[
                             plain_reason_items(deliver.get("push_ready_reason"))] if push is False else [],
             "stagesDone": sum(1 for r in stages.values() if isinstance(r, dict)
                               and _TERMINAL.get(str(r.get("status") or "")) == "completed"),
-            "docs": docs, "at": at}
+            "docs": docs, "at": at,
+            # v1: the run's own five-line audit card, rendered by the backend (§E9.5)
+            "auditCard": state.get("audit_card") if isinstance(state.get("audit_card"), str) else None}

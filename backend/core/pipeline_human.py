@@ -52,8 +52,9 @@ def load_engine(run_id: str, workspace: Optional[Path] = None):
     return engine
 
 
-def owned_runs(session_id: str) -> list[str]:
-    """Run ids of non-terminal v1 runs whose projected owner is *session_id*.
+def owned_runs(session_id: str, status: Optional[str] = None) -> list[str]:
+    """Run ids of non-terminal v1 runs whose projected owner is *session_id* (and,
+    with *status*, whose projected status is that one).
 
     run.json is only the projection; callers re-check the owner on the engine."""
     if not session_id:
@@ -65,7 +66,8 @@ def owned_runs(session_id: str) -> list[str]:
         except (OSError, ValueError):
             continue
         if isinstance(data, dict) and data.get("session_id") == session_id \
-                and data.get("status") not in _TERMINAL and "decision_cap" in data:
+                and data.get("status") not in _TERMINAL and "decision_cap" in data \
+                and (status is None or data.get("status") == status):
             out.append(path.parent.name)
     return sorted(out)
 
@@ -95,6 +97,30 @@ def _owned_engines(session_id: str):
             continue
         if engine is not None and engine.owner_session() == session_id:
             yield engine
+
+
+def record_required_approval(session_id: str) -> list[str]:
+    """A person approved a dangerous command or an external send in this session: each
+    v1 run it owns counts one required approval (design §E9.3, D4). A system boundary,
+    not an autonomy failure. Never raises: the approval itself already happened."""
+    counted = []
+    for engine in _owned_engines(session_id):
+        try:
+            state = engine.projection()
+            events = engine.store.read_events()
+            attempt = 1 + sum(e.get("kind") == "metric"
+                              and e.get("payload", {}).get("name") == "required_approval"
+                              for e in events)
+            engine.store.append_new(
+                writer=engine.authority.writer("hook"), kind="metric",
+                at=__import__("core.run_protocol.engine", fromlist=["_now"])._now(),
+                stage=str(state.get("stage") or "deliver"), attempt=attempt,
+                payload={"name": "required_approval", "value": 1})
+            counted.append(engine.run_id)
+        except Exception:  # noqa: BLE001 — telemetry never undoes an approval
+            logger.warning("pipeline_human: approval of %s not counted", engine.run_id,
+                           exc_info=True)
+    return counted
 
 
 def record_card_answer(session_id: str, answers: Any) -> list[dict[str, str]]:

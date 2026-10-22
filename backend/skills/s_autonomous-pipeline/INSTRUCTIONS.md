@@ -66,7 +66,7 @@ Normal delivery: `pipeline_v1.py land --project <P> --run-id <R> --message <mess
 
 Human run-land is executable and always two-step: `run-land --prepare [--skip-tests] [--note ...]`, then `run-land --request <id> --message <message>`. The request command passes the existing HITL gate, burns a daemon-memory one-time token bound to session/run/request, rechecks every tree, and persists each repo commit. A failed action consumes the authorization; prepare and approve a new request. Snapshot deletion and finding acceptance use the same exact one-use authorization model. Abandoned/not-landed work keeps its `run/<id>` branch, bundle and diff indefinitely.
 
-REFLECT processing is background and cannot change landing. Before completion, run `pipeline_v1.py measure-usage --project <P> --run-id <R>` when the contract carries transcript IDs; expert usage is also recorded automatically at SubagentStop. Complete with `pipeline_v1.py reflect-complete`; exhausted background processing uses `reflect-exhausted` and records degraded.
+REFLECT processing is the daemon's background work and cannot change landing: it judges and routes each lesson, records its outcome and completes REFLECT itself (`degraded` at its cap); you have no command for it. Run `pipeline_v1.py measure-usage --project <P> --run-id <R>` after landing so the audit counts the whole session (your own transcript is recorded automatically; a later measurement replaces an earlier one).
 
 ## Human boundary
 

@@ -85,6 +85,22 @@ def _comment_only_diff(file: str, diff: str) -> bool:
                                  for text in changed)
 
 
+def _budgets(profile: str) -> dict[str, Any]:
+    """The profile's speed / token reference lines from baselines.json (design §E9.3,
+    built by scripts/pipeline_baseline.py). A missing file or profile gives null, and
+    the audit says "no baseline" instead of inventing a number."""
+    try:
+        rows = json.loads((Path(__file__).parent / "baselines.json").read_text(encoding="utf-8"))
+        row = rows["profiles"][profile]
+    except (OSError, ValueError, KeyError, TypeError):
+        row = {}
+    out = {}
+    for key in ("budget_seconds", "budget_tokens"):
+        value = row.get(key) if isinstance(row, Mapping) else None
+        out[key] = value if isinstance(value, (int, float)) and value > 0 else None
+    return out
+
+
 def _git(root: str | Path, *args: str) -> str:
     try:
         return subprocess.run(["git", "-C", str(root), *args], check=True,
@@ -207,7 +223,9 @@ class RunEngine:
                     "pipeline_code_hash": pipeline_hash,
                     "event_authority_id": authority.authority_id,
                     "created_at": _now(), "stage_attempt_cap": 3,
-                    "regression_round_cap": 2, "recheck_cap": 3}
+                    "regression_round_cap": 2, "recheck_cap": 3,
+                    # reference lines, never limits: the profile's p95 (D2); null = none
+                    **_budgets(profile)}
         if requirement:
             contract["requirement"] = requirement
         engine.contract = contract
@@ -813,15 +831,15 @@ class RunEngine:
 
     def _commit_report(self, audit_value: Mapping[str, Any], *, guards: Sequence[str],
                        request_id: str | None = None, note: str | None = None) -> bytes:
+        """The commit-version REPORT (§B8): the renderer's text only. The guards are in
+        its one-line conclusion; a manual landing's request and words come in through
+        the audit's ``manual`` detail (no extra lines outside the allowed set)."""
         from core.run_protocol import audit as audit_protocol
-        text = audit_protocol.render(audit_value, fmt="report")
-        marker = "Landing guards: PASS (" + ", ".join(guards) + ")."
-        lines = text.splitlines()
-        lines.insert(3 if len(lines) >= 3 else len(lines), marker)
+        value = dict(audit_value)
         if request_id:
-            lines.insert(4 if len(lines) >= 4 else len(lines),
-                         f"Manual landing request: {request_id}" + (f" — {note}" if note else ""))
-        return ("\n".join(lines).rstrip() + "\n").encode()
+            value["details"] = {**dict(audit_value.get("details") or {}),
+                                "manual": {"request_id": request_id, "note": note}}
+        return audit_protocol.render(value, fmt="report").encode()
 
     def prepare_land_request(self, *, action: str, note: str | None = None,
                              request_id: str | None = None) -> dict[str, Any]:
@@ -866,6 +884,7 @@ class RunEngine:
                           and event.get("payload", {}).get("request_id") == request_id)
             prior = events[:cutoff]
             audit_value = audit_protocol.build(
+                **self._audit_facts(),
                 run_id=self.run_id,
                 projection=lifecycle.fold(prior, self.authority), events=prior,
                 final=self.final(), findings=finding_protocol.fold(prior, self.authority),
@@ -926,6 +945,8 @@ class RunEngine:
         DocumentStore._atomic(self.run_dir / "REPORT.md", report)
         self._settle()
         self.write_projection()
+        if self.projection()["status"] == "completed":
+            self._refresh_completed_audit()     # the card must say it landed now
         auth_event_id = next(event_id for event_id, row in lifecycle.fold(
             self.store.read_events(), self.authority)["auth_grants"].items()
             if row["request_id"] == request_id)
@@ -1219,6 +1240,41 @@ class RunEngine:
             orchestrator.write_documents()
         return {"reviewers": roster, "handouts": handouts}
 
+    def _audit_facts(self) -> dict[str, Any]:
+        """Measured inputs the audit cannot read from events (§E9.3, D5): how many repos
+        really got a run worktree (recorded at creation, in the audit area) and the
+        retained, unintegrated work."""
+        made = self._read_json(self.store.paths.run / "integration_branches.json", {}) or {}
+        isolated = (len([n for n in self.contract["expected_repos"] if n in made])
+                    if self.contract["mode"] == "isolated" else 0)
+        manual = None          # a person's landing: from the signed chain, every rebuild (D5)
+        rows = self.store.read_events()
+        consumed = [e["payload"] for e in rows if e.get("kind") == "auth_consumed"
+                    and str(e.get("payload", {}).get("action", "")).startswith("land")]
+        if consumed:
+            request_id = consumed[-1].get("request_id")
+            requests = [e["payload"] for e in rows if e.get("kind") == "land_request"
+                        and e.get("payload", {}).get("request_id") == request_id]
+            note = ((requests[-1].get("request") or {}).get("note") if requests else None)
+            manual = {"request_id": request_id, "note": note}
+        return {"repos_isolated": isolated, "manual": manual,
+                "retained": [{"repo_name": row.get("repo_name"), "ledger": row.get("ledger")}
+                             for row in self._retention_entries()
+                             if isinstance(row, Mapping) and row.get("ledger")]}
+
+    def _delivered_summary(self) -> str | None:
+        """What the run delivered, for the report's conclusion (D5): the user's words for
+        direct, else the validated REQUIREMENTS understanding (or its first story)."""
+        if self.contract.get("requirement"):
+            return self.contract["requirement"]
+        value = self._read_json(self.run_dir / "artifacts" / "requirements.json", {}) or {}
+        claim = (value.get("understanding") or {}).get("claim") if isinstance(value, Mapping) else None
+        if isinstance(claim, str) and claim.strip():
+            return claim
+        stories = [r.get("story") for r in (value.get("requirements") or [])
+                   if isinstance(r, Mapping)] if isinstance(value, Mapping) else []
+        return stories[0] if stories and isinstance(stories[0], str) else None
+
     def build_audit(self, *, through: str, commits: Mapping[str, str] | None = None,
                     persist: bool = True,
                     event_rows: Sequence[Mapping[str, Any]] | None = None,
@@ -1228,9 +1284,11 @@ class RunEngine:
         rows = list(event_rows) if event_rows is not None else self.store.read_events()
         projected_findings = finding_protocol.fold(rows, self.authority)
         value = audit_protocol.build(
+            **self._audit_facts(),
             run_id=self.run_id, projection=lifecycle.fold(rows, self.authority),
             events=rows, final=self.final(), findings=projected_findings,
-            contract=self.contract, push=dict(push or self.push_status()), audit_through=through,
+            contract={**self.contract, "requirement": self._delivered_summary()},
+            push=dict(push or self.push_status()), audit_through=through,
             commits=commits)
         if persist:
             audit_protocol.write(self.run_dir / "run_audit.json", value)
@@ -1254,7 +1312,7 @@ class RunEngine:
         return {"push_ready": not failed, "reasons": failed, "checks": results}
 
     def prepare_reflect(self, lessons: Sequence[Mapping[str, Any]],
-                        candidates: Mapping[str, Sequence[str]]) -> dict[str, Any]:
+                        candidates: Mapping[str, Sequence[str]] | None = None) -> dict[str, Any]:
         """Write reflect.json and evaluate RF-1~4 as a DELIVER attempt (design §A1.2).
         RF never blocks landing: the third failure drops the lessons to zero and
         records ``reflect: degraded``; DELIVER continues."""
@@ -1264,7 +1322,10 @@ class RunEngine:
             raise EngineError("reflect-prepare requires active DELIVER")
         if state.get("reflect") == "degraded":
             return {"lessons": [], "degraded": True}
+        from core.run_protocol import reflect_job
         event_ids = {event["event_id"] for event in self.store.read_events()}
+        if candidates is None:      # the CLI's own recall (RF-4): the agent cannot pick them
+            candidates = reflect_job.candidates_for(list(lessons), self.project)
         document = reflect.prepare(lessons, event_ids=event_ids, candidates=candidates)
         path = self.run_dir / "artifacts" / "reflect.json"
         DocumentStore._atomic(path, json.dumps(document, ensure_ascii=False, sort_keys=True,
@@ -1280,11 +1341,27 @@ class RunEngine:
                                                    sort_keys=True, indent=2))
         return {**document, "checks": result["checks"], "passed": result["passed"]}
 
+    def note_transcript(self, sid: str) -> None:
+        """Remember an SDK transcript that worked on this run (audit area; D3)."""
+        from core.session_ids import MAX_TRANSCRIPT_IDS, valid_session_id
+        if not valid_session_id(sid) or sid in self.contract.get("transcript_ids", []):
+            return
+        path = self.store.paths.run / "transcripts.json"
+        known = self._read_json(path, []) or []
+        if sid not in known and len(known) < MAX_TRANSCRIPT_IDS:
+            _atomic_json(path, [*known, sid])
+
+    def transcript_ids(self) -> list[str]:
+        extra = self._read_json(self.store.paths.run / "transcripts.json", []) or []
+        return list(dict.fromkeys([*self.contract.get("transcript_ids", []), *extra]))
+
     def measure_usage(self) -> dict[str, Any]:
         from core.run_protocol import usage
-        return usage.measure(self.store,
-                             transcript_ids=self.contract.get("transcript_ids", []),
-                             created_at=self.contract["created_at"])
+        value = usage.measure(self.store, transcript_ids=self.transcript_ids(),
+                              created_at=self.contract["created_at"])
+        if self.projection().get("status") == "completed":
+            self._refresh_completed_audit()      # REFLECT may have finished first (D3/D5)
+        return value
 
     def _resume_normal_landing(self, *, message: str) -> dict[str, Any] | None:
         from core.run_protocol import landing
@@ -1569,9 +1646,15 @@ class RunEngine:
             raise EngineError("reflect completion requires reflecting")
         kind = "reflect_exhausted" if degraded else "reflect_complete"
         payload = {"reason": reason or "background reflection exhausted"} if degraded else {}
-        self.store.append_new(writer=self.authority.writer("cli"), kind=kind, at=_now(),
+        self.store.append_new(writer=self.authority.writer("hook"), kind=kind, at=_now(),
                               ordinal=len(self.store.read_events()) + 1, payload=payload)
         self._settle()
+        self._refresh_completed_audit()
+        return self.projection()
+
+    def _refresh_completed_audit(self) -> None:
+        """The run-directory audit, REPORT and card through COMPLETED (§B8, §E9.5): at
+        REFLECT's end, and again when a person lands a completed(not_landed) run (D5)."""
         commits: dict[str, str] = {}
         for progress_path in sorted((self.run_dir / "artifacts").glob("landing-progress-*.json")):
             progress = self._read_json(progress_path, {})
@@ -1590,4 +1673,3 @@ class RunEngine:
         DocumentStore._atomic(self.run_dir / "REPORT.md",
                               audit_protocol.render(value, fmt="report"))
         self.write_projection()
-        return self.projection()

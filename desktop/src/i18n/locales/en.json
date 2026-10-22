@@ -391,6 +391,7 @@
       },
       "runResult": {
         "title": "Run result",
+        "audit": "Run audit",
         "landed": "on main · {{sha}}",
         "asked": "Asked",
         "before": "Before",

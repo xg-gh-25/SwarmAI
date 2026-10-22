@@ -107,12 +107,17 @@ def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
     assert landed["state"]["status"] == "reflecting"
     assert (repo / "a.py").read_text() == "value = 2\n"
     assert (repo / ".aidlc/deliverables/run_one/REPORT.md").is_file()
+    from tests.test_pipeline_v1_rehearsal import _measured
+    _measured(engine)      # measure-usage (D3): an unmeasured run is a Token Cost BLOCK
     final = engine.reflect_complete()
     assert final["status"] == "completed" and final["landing"] == "human_override"
     audit = json.loads((engine.run_dir / "run_audit.json").read_text())
     assert audit["audit_through"] == "COMPLETED" and audit["card"].startswith("Run Audit")
     assert audit["summary"]["isolation"]["verdict"] == "PASS"
-    assert "Audit through COMPLETED" in (engine.run_dir / "REPORT.md").read_text()
+    final_report = (engine.run_dir / "REPORT.md").read_text()
+    assert "Final audit through COMPLETED" in final_report
+    # the person's request survives the COMPLETED rebuild (derived from signed events)
+    assert f"人工落地：request {request_id}" in final_report
 
     assert all(row["verdict"] != "BLOCK" for row in audit["summary"].values())
 

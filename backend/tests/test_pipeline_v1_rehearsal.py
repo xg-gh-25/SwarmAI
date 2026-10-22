@@ -130,9 +130,20 @@ def _run_code(case, profile, run_id, monkeypatch):
     if profile=="goal": pass
     assert engine.review_start()["reviewers"]==[]; assert engine.stage_complete()["ok"]
     _runner(engine,wt,"regression",profile); assert engine.stage_complete()["ok"]
-    _land_through_the_hook(engine, monkeypatch, f"feat: {profile}\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"); engine.reflect_complete()
+    _land_through_the_hook(engine, monkeypatch, f"feat: {profile}\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"); _measured(engine); engine.reflect_complete()
     audit=json.loads((engine.run_dir/"run_audit.json").read_text())
     assert all(row["verdict"]!="BLOCK" for row in audit["summary"].values()),audit["summary"]
+
+
+def _measured(engine):
+    """What `measure-usage` appends from the session's transcripts (D3): a run with no
+    measurement at all is a Token Cost BLOCK by design."""
+    from datetime import datetime, timezone
+    at = datetime.now(timezone.utc).isoformat()
+    for name, value in (("input_tokens", 1000), ("output_tokens", 200), ("accounted_calls", 4)):
+        engine.store.append_new(writer=engine.authority.writer("cli"), kind="metric", at=at,
+                                stage="reflect", attempt=1,
+                                payload={"name": name, "value": value})
 
 
 @pytest.mark.parametrize("case_name,profile",[("direct-a","direct"),("direct-b","direct"),("full","full"),("bugfix","bugfix"),("trivial","trivial"),("goal","goal")])
@@ -144,4 +155,4 @@ def test_research_rehearsal(tmp_path,monkeypatch):
     case=tmp_path/"research"; data,ws=case/"data",case/"ws"; (ws/"Projects/P").mkdir(parents=True)
     monkeypatch.setenv("SWARM_DATA_DIR",str(data)); engine=RunEngine.create(data_dir=data,workspace=ws,project="P",profile="research",session_id="s",repos={},run_id="run_research")
     assert engine.stage_complete(_requirements("research"))["ok"]; assert engine.stage_complete()["ok"]; assert engine.stage_complete()["ok"]
-    engine.reflect_complete(); audit=json.loads((engine.run_dir/"run_audit.json").read_text()); assert all(row["verdict"]!="BLOCK" for row in audit["summary"].values())
+    _measured(engine); engine.reflect_complete(); audit=json.loads((engine.run_dir/"run_audit.json").read_text()); assert all(row["verdict"]!="BLOCK" for row in audit["summary"].values())

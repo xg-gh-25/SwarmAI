@@ -1,6 +1,6 @@
 # DELIVER
 
-Write `artifacts/reflect.json` through `pipeline_v1.py reflect-prepare --project <P> --run-id <R> --artifact <json>` (zero lessons is valid), then request deterministic landing.
+Write `artifacts/reflect.json` through `pipeline_v1.py reflect-prepare --project <P> --run-id <R> --artifact <json>` with `{"lessons": [...]}` (zero lessons is valid), then request deterministic landing. Each lesson's `evidence` cites this run's event ids (`pipeline_v1.py events --project <P> --run-id <R>` lists them); the CLI finds the dedup candidates itself and RF-4 names them when a `relation` must point at one.
 
 Normal landing evaluates RF-1–RF-4 and LG-1–LG-5. Push readiness is the fold of all push-effect checks, never a model field.
 

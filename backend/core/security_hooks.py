@@ -321,6 +321,17 @@ def _is_main_claim(command: str) -> bool:
 
 
 
+def _count_required_approval(session_id: "str | None") -> None:
+    """Count one required approval on the session's v1 runs (D4); off the decision."""
+    if not session_id:
+        return
+    try:
+        from core import pipeline_human
+        pipeline_human.record_required_approval(str(session_id))
+    except Exception:  # noqa: BLE001 — telemetry never blocks the approved call
+        logger.debug("required approval not counted", exc_info=True)
+
+
 def v1_land_card(command: str) -> "str | None":
     """What the approval card shows for a v1 run-land / accept-finding / discard-snapshot
     (fixing spec C1): read from the signed land_request event, never from the run's
@@ -1772,6 +1783,8 @@ def create_dangerous_command_gate(
             permission_mgr.approve_command(session_key, command)
             if _is_main_claim(command) or _is_v1_land_request(command):
                 record_claim_approval(tool_use_id, command)
+            else:   # a v1 authorization is a human decision, not a required approval
+                _count_required_approval(actual_session_id)
             return {"decision": "approve"}
 
         # Distinguish an explicit user denial from a timeout (fix #2/#3). Both
@@ -1910,6 +1923,7 @@ def create_external_approval_gate(
         permission_mgr.remove_pending_request(request_id)
 
         if decision == "approve":
+            _count_required_approval(actual_session_id)
             return {"decision": "approve"}
 
         if decision == "timeout":

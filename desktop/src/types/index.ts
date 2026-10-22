@@ -415,6 +415,8 @@ export interface PipelineSummaryContent {
   stagesDone: number;
   docs: PipelineSummaryDoc[];
   at: string;
+  /** Pipeline v1: the run's five-line audit card, rendered by the backend — shown as is. */
+  auditCard?: string | null;
 }
 
 /**

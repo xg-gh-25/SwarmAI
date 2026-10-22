@@ -103,7 +103,8 @@ EVENT_SPECS: dict[str, EventSpec] = {
                         {"run_id": str, "profile": str, "decision_cap": int}),
     "handout": _spec("cli", ("stage", "round", "payload.expert_id", "attempt"),
                      "payload.expert_id", {"expert_id": str},
-                     {"finding_ids": list, "prompt_sha": str}),
+                     # prompt: the full text, always moved into an audit blob (F-4)
+                     {"finding_ids": list, "prompt_sha": str, "prompt": (str, dict)}),
     # one answer per handout: the event id derives from the handout, so a second
     # spawn of the same handout can never add a second answer (a retry needs a new
     # handout attempt)
@@ -178,7 +179,8 @@ EVENT_SPECS: dict[str, EventSpec] = {
                    "auth_consumed_event_id": str}),
     "abandon": _spec("cli", ("ordinal",), None, {"reason": str}),
     "restore": _spec("cli", ("ordinal",), None, {"snapshot_exists": bool}),
-    "metric": _spec(("cli", "runner"), ("stage", "payload.name", "attempt"), "payload.name",
+    # hook: the daemon's required_approval count (D4)
+    "metric": _spec(("cli", "runner", "hook"), ("stage", "payload.name", "attempt"), "payload.name",
                     {"name": str, "value": (int, float)}),
     "turn": _spec("cli", ("payload.message_id",), None, {"message_id": str}),
     "integrity": _spec(("cli", "hook", "runner"), ("payload.conflict_id", "ordinal"),
@@ -197,8 +199,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "resume": _spec("cli", ("ordinal",), None, {"worktree_ready": bool}),
     "infrastructure_failed": _spec("cli", ("ordinal",), None, {"reason": str}),
     "worktree_unavailable": _spec("cli", ("ordinal",), None, {"reason": str}),
-    "reflect_complete": _spec("cli", ("ordinal",), None, {}),
-    "reflect_exhausted": _spec("cli", ("ordinal",), None, {"reason": str}),
+    # the daemon's background REFLECT ends REFLECT, never the agent's CLI (D1)
+    "reflect_complete": _spec("hook", ("ordinal",), None, {}),
+    "reflect_exhausted": _spec("hook", ("ordinal",), None, {"reason": str}),
 }
 class EventError(ValueError):
     """The event violates the v1 envelope, identity or size contract."""

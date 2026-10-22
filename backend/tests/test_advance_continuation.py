@@ -168,10 +168,11 @@ class TestStageResolution:
 
 
     def test_reflect_doc_carries_v1_terminal_commands(self):
-        """REFLECT must route background processing to a bounded terminal command."""
+        """REFLECT is the daemon's bounded background work (D1): the card gives the
+        agent no completion command, only how to see the result."""
         text = (STAGES / "reflect.md").read_text(encoding="utf-8")
-        assert "pipeline_v1.py reflect-complete" in text
-        assert "reflect-exhausted" in text
+        assert "reflect-complete" not in text and "reflect-exhausted" not in text
+        assert "pipeline_v1.py status" in text and "degraded" in text
 
 
 # ── AC7: budget is NEVER a reason to withhold continuation (post-refactor) ───

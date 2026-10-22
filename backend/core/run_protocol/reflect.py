@@ -25,11 +25,21 @@ class ReflectError(ValueError):
     """A lesson cannot safely enter background cultivation."""
 
 
+class TransientWrite(RuntimeError):
+    """The destination was busy (retried, then degraded)."""
+
+
+# writer results (ddd_cultivation.apply_to_ddd): what counts as applied, what is retried
+APPLIED_RESULTS = frozenset({"applied", "created_section", "duplicate"})
+TRANSIENT_RESULTS = frozenset({"locked"})
+
+
 def destination(lesson_type: str, scope: str) -> str:
     layer = LAYERS[lesson_type]
     if scope == "product":
         return "self-evolution-proposal"
-    if scope.startswith("domain:") and len(scope) > len("domain:"):
+    if scope.startswith("domain:") and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,63}",
+                                                    scope[len("domain:"):]):
         section = ({("metacognition", "principle"): "PRODUCT:Design Philosophy",
                     ("metacognition", "correction"): "IMPROVEMENT:What Failed"}
                    .get((layer, lesson_type))
@@ -102,8 +112,12 @@ def process(document: Mapping[str, Any], *,
                 if verdict in {"noise", "suspect"}:
                     outcome = {"status": verdict, "attempts": attempt}
                 elif verdict == "keep":
-                    outcome = {"status": "applied", "result": writer(lesson, lesson["destination"]),
-                               "attempts": attempt}
+                    result = str(writer(lesson, lesson["destination"]))
+                    if result in TRANSIENT_RESULTS:
+                        raise TransientWrite(result)
+                    outcome = {"status": "applied" if result in APPLIED_RESULTS
+                               or result.startswith("queued:") else "rejected",
+                               "result": result, "attempts": attempt}
                 else:
                     outcome = {"status": "judge_error", "detail": str(verdict), "attempts": attempt}
                 break

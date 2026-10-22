@@ -288,7 +288,10 @@ class ReviewOrchestrator:
         if prompt_errors:
             raise ReviewError(f"review prompt contract drift: {prompt_errors}")
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-        payload: dict[str, Any] = {"expert_id": expert_id, "prompt_sha": digest}
+        # the full prompt goes into the audit area as a blob (F-4): the evidence prompts
+        # file in the run dir is agent-writable, the blob is not
+        payload: dict[str, Any] = {"expert_id": expert_id, "prompt_sha": digest,
+                                   "prompt": prompt}
         if round == 2:
             if not finding_ids:
                 raise ReviewError("R2 needs a finding roster")

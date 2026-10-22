@@ -52,14 +52,14 @@ _RUN_ID_RE = re.compile(r"^run_[A-Za-z0-9_]{1,64}$")
 _TAKEOVER = frozenset({
     "stage-start", "stage-complete", "run-resume", "run-update",
     "run-checkpoint", "run-commit", "review-start", "land", "measure-usage",
-    "reflect-prepare", "reflect-complete", "reflect-exhausted", "gate0-start",
+    "reflect-prepare", "gate0-start",
     "review-address", "review-proof", "resume", "restore", "abandon",
     "decision-request", "run-land", "accept-finding",
     "discard-snapshot",
 })
 _V1_MUTATIONS = frozenset({
     "create", "stage-start", "stage-complete", "review-start", "land",
-    "measure-usage", "reflect-prepare", "reflect-complete", "reflect-exhausted",
+    "measure-usage", "reflect-prepare",
     "gate0-start", "review-address", "review-proof", "resume", "restore",
     "abandon", "decision-request", "run-land",
     "accept-finding", "discard-snapshot",

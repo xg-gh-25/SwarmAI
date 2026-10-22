@@ -707,6 +707,17 @@ async def build_hooks(
             "PostToolUse", session_link_stamper, "session_link_stamper", matcher="Bash",
         )
 
+    # ── PostToolUse: Pipeline v1 background REFLECT (Bash-scoped, D1) ──
+    # After a pipeline_v1 command, queue this session's ``reflecting`` runs on one
+    # worker thread (judge + route + outcome, bounded; the daemon completes REFLECT).
+    # Returns at once and never blocks the chat; fails open.
+    if session_context is not None:
+        from core.run_protocol.reflect_job import create_reflect_trigger
+        registry.register(
+            "PostToolUse", create_reflect_trigger(session_context),
+            "v1_reflect_trigger", matcher="Bash",
+        )
+
     # ── PostToolUse: main-checkout edit reporter (Bash-scoped) ──
     # Only while THIS session owns an isolated run with an active worktree: after each
     # Bash call, report main-checkout files of the run's repos that changed since the

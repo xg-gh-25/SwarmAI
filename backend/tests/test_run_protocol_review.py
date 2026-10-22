@@ -219,3 +219,12 @@ def test_a_bad_item_records_no_part_of_the_pass(tmp_path):
                                                               "to": "docs", "reason": "r"}},
             {"finding_id": second, "hunk": ""}]}, at=AT, attempt=1)
     assert not any(e["kind"] in ("address", "reclassify") for e in review.store.read_events())
+
+
+def test_the_handout_prompt_is_kept_whole_in_the_audit_area(tmp_path):
+    """F-4: the full prompt is an audit blob, not only a file in the run directory."""
+    review, _ = _rig(tmp_path)
+    handout = review.handout(expert_id="correctness", stage="review", round=1, attempt=1,
+                             at=AT, expert_instructions="Check", review_input="diff --git a b")
+    blob = handout["event"]["payload"]["prompt"]["blob"]
+    assert (review.store.paths.blobs / blob).read_text(encoding="utf-8") == handout["prompt"]
