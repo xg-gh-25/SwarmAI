@@ -362,7 +362,11 @@
         "doneInBackground": "done in background",
         "failedInBackground": "failed in background",
         "lostInBackground": "lost: its process ended before it finished",
-        "stoppedByYouPlain": "Stopped by you"
+        "stoppedByYouPlain": "Stopped by you",
+        "backgroundAgent": "background agent",
+        "stopAgentStatus": "background · {{status}}",
+        "stopOmitted": "+{{count}} more",
+        "stopContinueHint": "Continue picks up from here: the agent is told what was stopped and checks what it already did before going on."
       },
       "doc": {
         "expand": "展开全文",

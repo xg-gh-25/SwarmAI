@@ -510,6 +510,18 @@ export interface TurnNoticeContent {
   at?: string;
 }
 
+/** What a user Stop stopped — written by the BACKEND once the AI process is gone
+ *  (core/turn_stop): the calls that were running, background agents and how they
+ *  ended. Persisted, and returned by POST /chat/stop (the live route). */
+export interface TurnStopContent {
+  type: 'turn_stop';
+  at?: string;
+  calls: Array<{ toolUseId: string; name: string; elapsedMs?: number; description?: string }>;
+  agents: Array<{ toolUseId: string; description?: string; status: string; background?: boolean; summary?: string }>;
+  /** Rows beyond the cap that are not listed. */
+  omitted?: number;
+}
+
 /** At the top of a turn the CLI started to answer finished background agents
  *  (backend core/background_agents.py): which ones, how they ended. */
 export interface BackgroundFinishedContent {
@@ -527,7 +539,7 @@ export interface BackgroundFinishedContent {
 
 export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent
   | PipelineRunContent | PipelineAttentionContent | PipelineSummaryContent | TurnDeliverablesContent | TurnChangesContent
-  | TurnNoticeContent | BackgroundFinishedContent;
+  | TurnNoticeContent | BackgroundFinishedContent | TurnStopContent;
 
 export interface Message {
   id: string;

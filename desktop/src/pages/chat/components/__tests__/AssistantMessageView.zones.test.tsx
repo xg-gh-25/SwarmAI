@@ -566,6 +566,42 @@ describe('AC9 — one signal; a stopped turn says so', () => {
     expect(screen.queryByTestId('turn-result')).toBeNull();
   });
 
+  // core/turn_stop: the CLI answers the interrupted call with an error written for the
+  // model; that is a stop, never "NEEDS YOU · This call failed".
+  const receipt = (calls: string[], agents: Array<{ toolUseId: string; description: string; status: string }> = []) =>
+    ({ type: 'turn_stop', at: '2026-10-22T09:00:00Z', calls: calls.map((id) => ({ toolUseId: id, name: 'Bash', elapsedMs: 252000 })),
+      agents: agents.map((a) => ({ ...a, background: true })) }) as ContentBlock;
+
+  it('stop receipt: the interrupted call is stopped, not a failure, and the receipt lists it with Continue', () => {
+    const { container } = render(view([tx('go'), bash('a', 'make'), tr('a', true), receipt(['a'],
+      [{ toolUseId: 'g1', description: 'phase3 experiment', status: 'stopped' }])], false));
+    expect(container.querySelector('[data-zone="failure"]')).toBeNull();
+    const stopped = screen.getByTestId('turn-stopped');
+    expect(stopped.hasAttribute('data-receipt')).toBe(true);
+    expect(stopped.textContent).toContain('Stopped by you');
+    expect(within(stopped).getByTestId('strip-time').textContent).toBe('stopped');
+    expect(within(stopped).getByTestId('stop-agent').textContent).toContain('phase3 experiment');
+    expect(within(stopped).getByTestId('stop-agent').textContent).toContain('background · stopped');
+    expect(within(stopped).getByTestId('stop-continue-hint')).toBeTruthy();
+    expect(stopped.textContent).not.toContain('boom'); // the CLI's note to the model stays out
+  });
+
+  it('live, before the receipt: the marker alone makes the last call stopped, not failed', () => {
+    const { container } = render(view([tx('go'), bash('a', 'make'), tr('a', true), tx('---\n*Stopped*')], false));
+    expect(container.querySelector('[data-zone="failure"]')).toBeNull();
+    expect(screen.getByTestId('turn-stopped').textContent).toContain('Stopped by you');
+  });
+
+  it('a call that failed before the Stop is still a failure (the receipt does not list it)', () => {
+    const { container } = render(view([tx('go'), bash('a', 'make'), tr('a', true), receipt([])], false));
+    expect(container.querySelector('[data-zone="failure"]')).not.toBeNull();
+  });
+
+  it('a receipt with nothing running is just Stopped by you', () => {
+    render(view([tx('go'), bash('a', 'make'), tr('a'), tx('partial'), receipt([])], false));
+    expect(screen.getByTestId('turn-stopped').textContent).toBe('Stopped by you');
+  });
+
   it('a stop the backend explained says why (core/turn_notice)', () => {
     const n = (reason: string, cause?: string) => ({ type: 'turn_notice', reason, ...(cause ? { cause } : {}) }) as ContentBlock;
     const { unmount } = render(view([tx('go'), bash('a', 'make'), tr('a'), bash('b', 'make'), n('restarted', 'stalled')], false));

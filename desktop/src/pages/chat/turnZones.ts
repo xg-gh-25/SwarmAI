@@ -24,7 +24,8 @@
  *                     its `body` holds the phases, notes and needs of that stage.
  * - `gate`          — a gate's verdict row; `earlier` lists the verdicts of its earlier rounds.
  * - `stopped`       — the user stopped the turn (`byUser`), or it ended on a call that
- *                     did not finish (`unfinished`).
+ *                     did not finish (`unfinished`); `receipt` (backend turn_stop): the
+ *                     calls the Stop found running and how background agents ended.
  *
  * Ids come from ordinals that survive appending and the stream-end reconcile (thought
  * ordinal, text ordinal, process segment id, stage name), so while a turn streams the
@@ -46,7 +47,7 @@
  */
 import type { InterruptBlock, ProcessUnit, ThoughtUnit, ToolStep, TurnUnit, TurnView } from './turnView';
 import { displayCommand, isGateStage, isUnanswered, toolCall } from './turnView';
-import type { PipelineDocRef, PipelineStageContent, ToolUseContent } from '../../types';
+import type { PipelineDocRef, PipelineStageContent, ToolUseContent, TurnStopContent } from '../../types';
 
 /** What the agent wrote between calls, in the phase, where it was written. */
 export interface PhaseText { kind: 'text'; text: string; textOrdinal: number }
@@ -90,7 +91,18 @@ export type Zone =
   | { kind: 'stopped'; id: string; byUser: boolean; unfinished: boolean;
       /** The backend's reason (turn_notice), when it restarted the process or a
        *  newer message took over; absent = the reason is not known. */
-      notice?: { reason: string; cause?: string } };
+      notice?: { reason: string; cause?: string };
+      /** The stop receipt (turn_stop): the steps it found running, in stream order,
+       *  and the background agents with how they ended. */
+      receipt?: StopReceiptView };
+
+/** What the Stopped zone lists under "Stopped by you". */
+export interface StopReceiptView {
+  at?: string;
+  calls: ToolStep[];
+  agents: TurnStopContent['agents'];
+  omitted?: number;
+}
 
 const firstIndex = (u: TurnUnit): number => (u.kind === 'process' ? (u.steps[0]?.index ?? -1) : u.index);
 
@@ -262,11 +274,22 @@ export function turnZones(view: TurnView, isStreaming: boolean, hold: boolean = 
 
   if (stopped) {
     zones.push({ kind: 'stopped', id: 'stopped', byUser: !!view.stoppedMarker, unfinished,
-      ...(noticeEnds && notice ? { notice: { reason: notice.reason, cause: notice.cause } } : {}) });
+      ...(noticeEnds && notice ? { notice: { reason: notice.reason, cause: notice.cause } } : {}),
+      ...(view.stopReceipt ? { receipt: receiptView(view.stopReceipt, units) } : {}) });
   }
   markLive(zones, isStreaming);
   if (hold && !isStreaming) markHeld(zones);
   return zones;
+}
+
+/** The receipt's running calls as this turn's steps (a call the turn does not show —
+ *  a sub-agent's own call — is left out), and its background agents. */
+function receiptView(r: TurnStopContent, units: TurnUnit[]): StopReceiptView {
+  const steps = new Map<string, ToolStep>();
+  for (const u of units) if (u.kind === 'process') for (const s of u.steps) steps.set(s.block.id, s);
+  const calls = (r.calls ?? []).map((c) => steps.get(c.toolUseId)).filter((s): s is ToolStep => !!s)
+    .sort((a, b) => a.index - b.index);
+  return { at: r.at, calls, agents: r.agents ?? [], ...(r.omitted ? { omitted: r.omitted } : {}) };
 }
 
 function pipelineZones(units: TurnUnit[], view: TurnView, hasCalls: boolean, isStreaming: boolean, resultOrdinal: number | null, hold: boolean = isStreaming): Zone[] {

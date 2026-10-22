@@ -1,4 +1,4 @@
-import type { ChatRequest, StreamEvent, ChatSession, ChatMessage, PermissionResponse, StreamingStateEntry, AskUserQuestion } from '../types';
+import type { ChatRequest, StreamEvent, ChatSession, ChatMessage, PermissionResponse, StreamingStateEntry, AskUserQuestion, ContentBlock } from '../types';
 import { toEditorContextPayload } from '../utils/uiContext';
 
 /** Raw snake_case shape of a streaming-state entry as emitted by the backend.
@@ -795,10 +795,14 @@ export const chatService = {
     await api.delete(`/chat/sessions/${sessionId}`);
   },
 
-  // Stop a running chat session
-  async stopSession(sessionId: string): Promise<{ status: string; message: string }> {
-    const response = await api.post<{ status: string; message: string }>(`/chat/stop/${sessionId}`);
-    return response.data;
+  // Stop a running chat session. `receipt`: the stopped turn's closing blocks
+  // (turn_changes / turn_deliverables / turn_stop, core/turn_stop), already
+  // persisted — the frontend aborted the stream, so this is their live route.
+  async stopSession(sessionId: string): Promise<{ status: string; message: string; receipt: ContentBlock[] }> {
+    const response = await api.post<{ status: string; message: string; receipt?: unknown[] }>(`/chat/stop/${sessionId}`);
+    const receipt = Array.isArray(response.data.receipt)
+      ? toCamelCaseContent(response.data.receipt) as ContentBlock[] : [];
+    return { ...response.data, receipt };
   },
 
   // Stop ONE sub-agent of the running turn (its SDK task id); the turn goes on.

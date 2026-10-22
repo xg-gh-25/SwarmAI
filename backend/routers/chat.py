@@ -1183,7 +1183,8 @@ async def stop_session(session_id: str):
     result = await _get_router().interrupt_session(session_id)
 
     if result["success"]:
-        return {"status": "stopped", "message": result["message"]}
+        return {"status": "stopped", "message": result["message"],
+                "receipt": result.get("receipt") or []}
     else:
         # Return 200 even if session not found - client may have already finished
         return {"status": "not_found", "message": result["message"]}

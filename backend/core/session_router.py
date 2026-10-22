@@ -4619,6 +4619,7 @@ class SessionRouter:
         if unit is None:
             return {"success": False, "message": f"Session {session_id} not found"}
         interrupted = await unit.interrupt()
+        receipt = await self._persist_stop_receipt(session_id, unit)
         # PIT01 recycle: a user Stop now recycles the poisoned subprocess to COLD,
         # so `interrupted=True` (the turn was stopped) no longer implies the
         # process is alive. Re-read is_alive for the accurate liveness signal.
@@ -4626,7 +4627,43 @@ class SessionRouter:
             "success": True,
             "message": "Interrupted" if interrupted else "Killed (interrupt timed out)",
             "subprocess_alive": unit.is_alive,
+            "receipt": receipt,
         }
+
+    async def _persist_stop_receipt(self, session_id: str, unit: SessionUnit) -> list[dict]:
+        """The stopped turn's closing row (core/turn_stop): what this turn changed and
+        produced so far (``turn_changes`` / ``turn_deliverables``, otherwise only
+        written at a ``result`` a stopped turn never gets) and the ``turn_stop``
+        block. Persisted like any assistant row (a reload shows it) and returned for
+        the ``/chat/stop`` response: the frontend aborted the stream before calling
+        stop, so the response is the live route. A display aid: [] on any failure,
+        never fails the stop."""
+        try:
+            block = unit.take_stop_receipt()
+        except Exception:  # noqa: BLE001
+            logger.debug("stop receipt failed session=%s", session_id, exc_info=True)
+            return []
+        if block is None:
+            return []
+        blocks: list[dict] = []
+        changes = getattr(unit, "_turn_changes", None)
+        if changes is not None:
+            try:
+                cblock = await changes.finish()
+                if cblock:
+                    blocks.append(cblock)
+            except Exception as exc:  # noqa: BLE001 — a display aid
+                logger.debug("turn_changes finish at stop failed: %s", exc)
+        files = self._turn_files_of(unit)
+        if files:
+            blocks.append({"type": "turn_deliverables",
+                           "files": list(files.values())[:MAX_TURN_DELIVERABLES]})
+            files.clear()
+        blocks.append(block)
+        return await self._persist_assistant_blocks(
+            session_id, blocks, None, label="turn_stop",
+            client_id=getattr(unit, "_turn_client_id", None),
+        )
 
     async def stop_task(self, session_id: str, task_id: str) -> dict:
         """Stop one sub-agent of a session's running turn (SessionUnit.stop_task).

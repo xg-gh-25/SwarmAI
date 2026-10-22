@@ -39,7 +39,7 @@ import { ANCHOR_PROPS } from '../scrollFocus';
 import { tf } from '../tf';
 import type { ThoughtUnit, ToolStep } from '../turnView';
 import { STOP_TURN_EVENT, agentBatches, mergeStrips, phaseSegments, stripView, zoneStats } from '../turnZones';
-import type { PhaseMember, StageZone, StripItem, Zone } from '../turnZones';
+import type { PhaseMember, StageZone, StopReceiptView, StripItem, Zone } from '../turnZones';
 import { ReadingContext } from '../readingContext';
 import { StageResult } from './StageDocs';
 import { agentStatus, useBackgroundAgents } from '../../../stores/backgroundAgentsStore';
@@ -319,6 +319,45 @@ export const ToolStripV6 = memo(function ToolStripV6({ item }: { item: StripItem
     </div>
   );
 }, sameStrip);
+
+/** The end of a turn the user stopped while something ran (backend turn_stop): the
+ *  calls the Stop interrupted, as their strips (one line each, the full call on
+ *  hover), each background agent and how it ended, and what Continue does. */
+function StopReceiptBlock({ receipt }: { receipt: StopReceiptView }) {
+  const { t } = useTranslation();
+  return (
+    <div data-testid="turn-stopped" data-receipt="" {...ANCHOR_PROPS}>
+      <div className="text-[12.5px] text-[var(--color-text-dim)]">
+        {tf(t, 'chat.turn.zone.stoppedByYouPlain', 'Stopped by you')}
+      </div>
+      <div className={`${INNER_GAP} space-y-0.5`}>
+        {receipt.calls.map((s) => (
+          <ToolStripV6 key={`stop-${s.block.id}`} item={{ key: `stop-${s.block.id}`, steps: [s], objects: [] }} />
+        ))}
+        {receipt.agents.map((a) => (
+          <div key={`stop-ag-${a.toolUseId}`} data-testid="stop-agent" data-status={a.status} title={a.summary || a.description}
+            className="flex items-center gap-3 min-w-0 pl-2 pr-3 py-[3px] rounded-[6px] font-mono text-[12px] bg-[var(--color-hover)]/60">
+            <span className="w-[10ch] shrink-0 truncate text-[var(--color-text-dim)]">Agent</span>
+            <span className="truncate min-w-0 text-[var(--color-text-muted)]">
+              {a.description || tf(t, 'chat.turn.zone.backgroundAgent', 'background agent')}
+            </span>
+            <span className="ml-auto shrink-0 text-right text-[var(--color-text-dim)]">
+              {tf(t, 'chat.turn.zone.stopAgentStatus', 'background · {{status}}', { status: a.status })}
+            </span>
+          </div>
+        ))}
+        {!!receipt.omitted && (
+          <div className="pl-2 font-mono text-[11.5px] text-[var(--color-text-dim)]">
+            {tf(t, 'chat.turn.zone.stopOmitted', '+{{count}} more', { count: receipt.omitted })}
+          </div>
+        )}
+      </div>
+      <div data-testid="stop-continue-hint" className={`${INNER_GAP} text-[12px] text-[var(--color-text-dim)]`}>
+        {tf(t, 'chat.turn.zone.stopContinueHint', 'Continue picks up from here: the agent is told what was stopped and checks what it already did before going on.')}
+      </div>
+    </div>
+  );
+}
 
 // ── Agents panel ────────────────────────────────────────────────────────────────
 
@@ -808,9 +847,11 @@ export function TurnZoneList({ zones, ctx, hasOpenQuestionIn }: {
           case 'stageResult': el = <StageResultRow zone={z} ctx={ctx} />; break;
           case 'gate': el = <GateRow zone={z} />; break;
           case 'stopped':
-            el = (
+            el = z.byUser && z.receipt && (z.receipt.calls.length || z.receipt.agents.length)
+              ? <StopReceiptBlock receipt={z.receipt} />
+              : (
               <div data-testid="turn-stopped" className="text-[12.5px] text-[var(--color-text-dim)]" {...ANCHOR_PROPS}>
-                {z.byUser && !z.unfinished
+                {z.byUser && (!z.unfinished || z.receipt)
                   ? tf(t, 'chat.turn.zone.stoppedByYouPlain', 'Stopped by you')
                   : z.byUser
                     ? tf(t, 'chat.turn.zone.stoppedByYou', 'Stopped by you · the last call did not finish')

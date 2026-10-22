@@ -78,6 +78,7 @@ import type {
   PipelineSummaryContent,
   TurnDeliverable,
   TurnChangesContent,
+  TurnStopContent,
   SubAgentProgress,
 } from '../../types';
 
@@ -187,8 +188,11 @@ export interface TurnView {
    *  changes while the turn streams. */
   pipelineStart?: { index: number; profile: string | null; current: string | null };
   /** The user pressed Stop in this view (the live `*Stopped*` marker ChatPage
-   *  appends; it is not rendered as text). */
+   *  appends; it is not rendered as text), or the backend's stop receipt is here. */
   stoppedMarker?: boolean;
+  /** The backend's stop receipt (`turn_stop`, core/turn_stop): what was running when
+   *  the user stopped the turn and how background agents ended. */
+  stopReceipt?: TurnStopContent;
   /** The latest backend `turn_notice` (why a call did not finish) and its content
    *  index: a call started before it with no result was lost by that event. */
   notice?: { reason: string; cause?: string; index: number };
@@ -279,7 +283,7 @@ const standInAgent = (id: string): ToolUseContent => ({
 /** Backend-written display blocks that are not part of the turn's flow (the run's
  *  alignment, what needs the user, the turn's products): lifted into TurnView
  *  fields, invisible to segments, the done rule and the outcome. */
-const DISPLAY_TYPES = new Set(['pipeline_run', 'pipeline_attention', 'pipeline_summary', 'turn_deliverables', 'turn_changes', 'turn_notice', 'background_finished']);
+const DISPLAY_TYPES = new Set(['pipeline_run', 'pipeline_attention', 'pipeline_summary', 'turn_deliverables', 'turn_changes', 'turn_notice', 'background_finished', 'turn_stop']);
 
 /** Derive the display units for one assistant message. Pure.
  *  `progress` is the streaming message's live sub-agent status, by Agent id. */
@@ -331,6 +335,17 @@ export function deriveTurnView(
     if (b.type === 'text' || b.type === 'thinking') { seenNonTool = true; gate = false; }
     if (INTERRUPT_TYPES.has(b.type)) gate = isUnanswered(b as InterruptBlock);
   }
+
+  // A user Stop interrupts the calls it found running; the CLI then hands each an
+  // error result written for the model ("doesn't want to proceed…"). That is a stop,
+  // not a failure. The backend's receipt names those calls; until it arrives (live,
+  // right after Stop) the app's marker stands for the last call alone.
+  let stopReceipt: TurnStopContent | undefined;
+  for (const b of content) if (b.type === 'turn_stop') stopReceipt = b;
+  const stoppedIds = new Set((stopReceipt?.calls ?? []).map((c) => c.toolUseId));
+  const markerOnly = !stopReceipt && content.some((b) => b.type === 'text' && STOP_MARKER_RE.test(b.text || ''));
+  const cutByStop = (id: string, index: number, result?: ToolResultContent) =>
+    (!result || result.isError) && (stoppedIds.has(id) || (markerOnly && index === lastToolIdx && !!result));
 
   const units: TurnUnit[] = [];
   let seg: ProcessUnit | null = null;
@@ -385,8 +400,10 @@ export function deriveTurnView(
   // a stand-in Agent step for sub-agent calls whose Agent was called in an earlier turn
   // (a background agent still running): running while the turn streams, else done.
   const pushToolStep = (block: ToolUseContent, index: number, stand = false) => {
-    const result = results.get(block.id);
-    const status: ToolStatus = stand ? (isStreaming ? 'pending' : 'done') : result?.isError
+    const cut = !stand && !isStreaming && cutByStop(block.id, index, results.get(block.id));
+    // a call the Stop interrupted: its error result is the CLI's note to the model
+    const result = cut ? undefined : results.get(block.id);
+    const status: ToolStatus = stand ? (isStreaming ? 'pending' : 'done') : cut ? 'unknown' : result?.isError
       ? 'error'
       : result
         ? 'done'
@@ -493,6 +510,7 @@ export function deriveTurnView(
       if (Array.isArray(block.agents) && block.agents.length) backgroundFinished = [...(backgroundFinished ?? []), ...block.agents];
       return;
     }
+    if (block.type === 'turn_stop') return; // stopReceipt, read above
     if (block.type === 'turn_notice') {
       notice = { reason: String(block.reason || ''), cause: block.cause, index };
       return;
@@ -622,7 +640,8 @@ export function deriveTurnView(
     .filter((u): u is Extract<TurnUnit, { kind: 'outcome' }> => u.kind === 'outcome')
     .map((u) => u.text)
     .join('\n\n');
-  return { units, nextSteps, copyText, run, attention, summary, deliverables, changes, liveStage, midWork, pipelineStart, stoppedMarker, notice, backgroundFinished };
+  return { units, nextSteps, copyText, run, attention, summary, deliverables, changes, liveStage, midWork, pipelineStart,
+    stoppedMarker: stoppedMarker || !!stopReceipt, ...(stopReceipt ? { stopReceipt } : {}), notice, backgroundFinished };
 }
 
 // ── Step labels ─────────────────────────────────────────────────────────────

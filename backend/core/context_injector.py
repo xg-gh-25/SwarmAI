@@ -38,9 +38,11 @@ logger = logging.getLogger(__name__)
 # row would add an empty assistant turn to the resumed prompt. pipeline_run /
 # pipeline_attention / pipeline_summary / turn_deliverables / turn_changes are backend-written
 # display blocks too (turn_changes is the turn's file-change card: counts and tree ids;
-# turn_notice says why a call did not finish, core/turn_notice).
+# turn_notice says why a call did not finish, core/turn_notice; turn_stop is the stop
+# receipt, core/turn_stop — its facts reach the model through send()'s one-time note).
 _TOOL_ONLY_TYPES = {"tool_use", "tool_result", "pipeline_stage", "pipeline_run", "pipeline_summary",
-                    "pipeline_attention", "turn_deliverables", "turn_changes", "turn_notice"}
+                    "pipeline_attention", "turn_deliverables", "turn_changes", "turn_notice",
+                    "turn_stop"}
 
 # ─── Section headers & preamble ─────────────────────────────────────
 
