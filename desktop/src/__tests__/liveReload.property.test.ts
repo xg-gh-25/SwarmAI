@@ -27,7 +27,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import fixture from './fixtures/liveReload/scenarios.json';
-import type { Message, ContentBlock } from '../types';
+import type { Message, ContentBlock, StreamEvent } from '../types';
 
 const fake = vi.hoisted(() => {
   const listeners = new Set<(e: unknown) => void>();
@@ -55,17 +55,18 @@ import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import { parseSSEEvent, toMessageCamelCase } from '../services/chat';
 import { toDisplayMessage } from '../pages/chat/utils';
+import { withStopReceipt } from '../pages/chat/stopReceipt';
 import { testTabMap, createMockDeps, initTestTab, resetTestState } from './helpers/streamingTestUtils';
 
 type Step =
-  | { kind: 'user'; clientId: string; text: string }
+  | { kind: 'user'; clientId: string; text: string; post?: Record<string, unknown>[] }
+  | { kind: 'stop'; receipt: Record<string, unknown>[] }
   | { kind: 'event'; env: Record<string, unknown> }
   | { kind: 'decide'; requestId: string; decision: 'approve' | 'deny' }
   | { kind: 'answer'; toolUseId: string; answers: Record<string, string> }
   | { kind: 'reconcile'; history: Record<string, unknown>[] };
-interface Scenario { name: string; shape: string[]; steps: Step[]; history: Record<string, unknown>[] }
+interface Scenario { name: string; sid: string; shape: string[]; steps: Step[]; history: Record<string, unknown>[] }
 
-const SID = 'sess-lr';
 
 /** What the user sees of one block. */
 function seen(b: ContentBlock): string {
@@ -107,7 +108,10 @@ function divergences(live: ReturnType<typeof view>, reload: ReturnType<typeof vi
         out.add(`assistant bubbles: a ${m.source || 'unlabelled'} turn has its own bubble`);
       }
     });
-    if (lu === ru && la === ra) out.add('bubble order differs');
+    const ls = l.filter((m) => m.role === 'system').length;
+    const rs = reload.filter((m) => m.role === 'system').length;
+    if (ls !== rs) out.add(`system rows (compaction): live ${ls > rs ? 'more' : 'fewer'} than reload`);
+    if (lu === ru && la === ra && ls === rs) out.add('bubble order differs');
   }
   const flat = (v: typeof live) => v.flatMap((m) => m.blocks.map((b) => `${m.role}|${b}`));
   const lf = flat(l), rf = flat(reload);
@@ -135,21 +139,59 @@ function divergences(live: ReturnType<typeof view>, reload: ReturnType<typeof vi
   return [...out];
 }
 
-function replay(s: Scenario, renderLifecycle: () => void, withReconcile: boolean) {
+type Lifecycle = ReturnType<typeof useChatStreamingLifecycle>;
+function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }, withReconcile: boolean) {
   resetTestState();
   fake.listeners.clear();
-  renderLifecycle();
+  const hook = renderLifecycle();
+  const SID = s.sid;
   act(() => { initTestTab('T'); initTestTab('T2'); });
   testTabMap.get('T')!.sessionId = SID;
   testTabMap.get('T2')!.sessionId = SID;   // another tab showing the same session; it sends nothing
   const store = messageStoreRegistry.getOrCreate('T', { sessionId: SID });
   const store2 = messageStoreRegistry.getOrCreate('T2', { sessionId: SID });
+  let numericId = 1_700_000_000_000;
+  // The sending tab's own POST stream, as ChatPage opens it for a send / an answer /
+  // a decision: it receives the same envelopes as the subscription (the turn router
+  // renders each once) and completes at the turn's end.
+  let post: { handler: (e: StreamEvent) => void; complete: () => void; open: boolean } | null = null;
+  const openPost = (bubbleId: string) => {
+    post = { handler: hook.current.createStreamHandler(bubbleId, 'T'),
+             complete: hook.current.createCompleteHandler('T'), open: true };
+  };
+  const endPost = () => { if (post?.open) { post.open = false; act(() => { post!.complete(); }); } post = null; };
+  // ChatPage.handleAnswerQuestion / handlePermissionDecision: the continuation's
+  // own POST placeholder, a numeric id
+  const continuationPlaceholder = () => {
+    const id = String(numericId++);
+    act(() => {
+      store.append({ id, role: 'assistant', content: [], timestamp: new Date().toISOString() } as Message);
+    });
+    openPost(id);
+  };
   for (const st of s.steps) {
     if (st.kind === 'user') {
+      // ChatPage send: the user bubble and the turn's assistant placeholder
       act(() => {
-        store.append({ id: st.clientId, role: 'user', content: [{ type: 'text', text: st.text }] as ContentBlock[],
-          timestamp: new Date().toISOString(), metadata: { client_id: st.clientId } } as Message);
+        store.appendMany([
+          { id: st.clientId, role: 'user', content: [{ type: 'text', text: st.text }] as ContentBlock[],
+            timestamp: new Date().toISOString(), metadata: { client_id: st.clientId } } as Message,
+          { id: `${st.clientId}-asst`, role: 'assistant', content: [], timestamp: new Date().toISOString() } as Message,
+        ]);
       });
+      openPost(`${st.clientId}-asst`);
+      if (st.post) {
+        // what came back on this send's POST only (SESSION_BUSY: kept pending server-side)
+        for (const ev of st.post) act(() => { post!.handler(parseSSEEvent(JSON.stringify(ev))); });
+        endPost();
+      }
+    } else if (st.kind === 'stop') {
+      // ChatPage.handleStop: the /chat/stop receipt into the stopped message
+      const last = [...store.messages].reverse().find((m) => m.role === 'assistant');
+      if (last && st.receipt.length) {
+        const blocks = toMessageCamelCase({ id: 'x', role: 'assistant', content: st.receipt }).content as ContentBlock[];
+        act(() => { store.updateById(last.id, (m) => withStopReceipt(m, blocks)); });
+      }
     } else if (st.kind === 'reconcile') {
       // the turn-end reconcile (useChatStreamingLifecycle scheduleTurnEndReconcile)
       if (withReconcile) {
@@ -160,6 +202,12 @@ function replay(s: Scenario, renderLifecycle: () => void, withReconcile: boolean
       }
     } else if (st.kind === 'event') {
       act(() => { fake.emit(parseSSEEvent(JSON.stringify(st.env))); });
+      // the same envelope on the POST of the send that started this turn
+      if (post?.open && st.env.source !== 'drain' && st.env.source !== 'injected') {
+        const ev = parseSSEEvent(JSON.stringify(st.env));
+        act(() => { post!.handler(ev); });
+        if (st.env.type === 'turn_end') endPost();
+      }
     } else if (st.kind === 'decide') {
       // ChatPage.handlePermissionDecision: the decision onto its block
       act(() => {
@@ -168,6 +216,7 @@ function replay(s: Scenario, renderLifecycle: () => void, withReconcile: boolean
           return x.type === 'cmd_permission_request' && x.requestId === st.requestId ? { ...b, decision: st.decision } as ContentBlock : b;
         }) }), (m) => m.content.some((b) => (b as unknown as { requestId?: string }).requestId === st.requestId));
       });
+      continuationPlaceholder();
     } else {
       // ChatPage.handleAnswerQuestion: the answers onto its block
       act(() => {
@@ -177,36 +226,81 @@ function replay(s: Scenario, renderLifecycle: () => void, withReconcile: boolean
         }) }), (m) => m.content.some((b) => (b as unknown as { toolUseId?: string; type: string }).type === 'ask_user_question'
           && (b as unknown as { toolUseId?: string }).toolUseId === st.toolUseId));
       });
+      continuationPlaceholder();
     }
   }
   return [store, store2] as const;
 }
 
 /**
- * Divergences found by this test (2026-10-22, first run), by root cause. Each is a
- * real live != reload difference, not accepted as correct: listed so the test is
- * a ratchet (a NEW divergence fails it) while these are fixed one root at a time.
- * Remove a line when its root is fixed; the test then holds it.
+ * Divergences found by this test, by root cause (P0, 2026-10-22; docs/design/
+ * chat-transcript-single-source.md §9). Each is a real live != reload difference, not accepted
+ * as correct: listed so the test is a ratchet (a NEW divergence fails it) while the roots are
+ * fixed. Remove a root's lines when it is fixed; the test then holds it.
  */
 const KNOWN = new Set<string>([
-  // R2 — ask_user_question is never stored (core/permission_prompt stores only
-  // permission prompts): after a reload the question and its answer are gone.
+  // R1 the sending tab's own continuation (answer / permission) is bound by its POST and renders into
+  // ChatPage's numeric placeholder: its own bubble, while the reload merges it (19/40). Two render paths
+  // with two bubble rules; S1 / P4 (only the subscription renders) removes it.
+  'stream: assistant bubbles: a unlabelled turn has its own bubble',
+  // R2 ask_user_question is never stored: the question and its answer vanish on reload (7/40).
   'stream: only live: question',
   'reconciled: only live: question',
   'stream: other tab: only live: question',
   'reconciled: other tab: only live: question',
-  // R4 — user messages are not session events: another tab showing the session
-  // has no user bubbles until its reconcile, and consecutive turns run together.
-  // (S1: the user message is a transcript record with a rev, like any block.)
+  // R4 user messages are not session events: another tab has no user bubbles until its reconcile,
+  // and consecutive turns run together (40/40).
   'stream: other tab: user bubbles: live fewer than reload',
   'stream: other tab: only reload: text',
   'stream: other tab: assistant bubbles: a chat turn has its own bubble',
-  // R5 — a permission decision made in one tab is not published: the other tab
-  // keeps the card undecided until its reconcile. (S1: the decision is an update
-  // with a rev, announced by transcript_rev.)
+  'stream: other tab: assistant bubbles: a drain turn has its own bubble',
+  // R5 a decision made in one tab is not published: the other tab shows it undecided until reconcile (17/40).
   'stream: other tab: only live: permission',
-  'stream: other tab: state differs: permission (live undecided, reload deny)',
   'stream: other tab: state differs: permission (live undecided, reload approve)',
+  'stream: other tab: state differs: permission (live undecided, reload deny)',
+  // R6 a turn that repeats a text / thought of its own is shown once live (taken for a re-emission),
+  // twice on reload (5/40).
+  'stream: live drops a repeated thinking',
+  'stream: live drops a repeated text',
+  'stream: other tab: live drops a repeated thinking',
+  'stream: other tab: live drops a repeated text',
+  // R7 SESSION_BUSY: the handler removes the queued user bubble (written for the old contract, when the
+  // backend deleted the row; it now keeps it pending), so the queued messages vanish until reconcile and
+  // the drained turn gets its own bubble (12/40).
+  'stream: user bubbles: live fewer than reload',
+  'stream: only reload: text',
+  'stream: assistant bubbles: a drain turn has its own bubble',
+  // R8 the Stop receipt is written, not published: only the tab that pressed Stop shows it (10/40).
+  'stream: other tab: only reload: turn_stop',
+  // R9 compaction rows exist only on read (spliced into history): live never shows the divider (12/40);
+  // the splice places it after the merged message, so a later CLI turn reloads BEFORE the divider and
+  // the reconcile cannot correlate it: its content shows twice (2/40).
+  'stream: system rows (compaction): live fewer than reload',
+  'stream: other tab: system rows (compaction): live fewer than reload',
+  'stream: live repeats: background_finished',
+  'reconciled: live repeats: background_finished',
+  'stream: live repeats: text',
+  'reconciled: live repeats: text',
+  'stream: live repeats: thinking',
+  'reconciled: live repeats: thinking',
+  'stream: live repeats: tool_use',
+  'reconciled: live repeats: tool_use',
+  'stream: live repeats: tool_result',
+  'reconciled: live repeats: tool_result',
+  'stream: assistant bubbles: a injected turn has its own bubble',
+  'reconciled: assistant bubbles: a injected turn has its own bubble',
+  'stream: other tab: live repeats: background_finished',
+  'reconciled: other tab: live repeats: background_finished',
+  'stream: other tab: live repeats: text',
+  'reconciled: other tab: live repeats: text',
+  'stream: other tab: live repeats: thinking',
+  'reconciled: other tab: live repeats: thinking',
+  'stream: other tab: live repeats: tool_use',
+  'reconciled: other tab: live repeats: tool_use',
+  'stream: other tab: live repeats: tool_result',
+  'reconciled: other tab: live repeats: tool_result',
+  'stream: other tab: assistant bubbles: a injected turn has its own bubble',
+  'reconciled: other tab: assistant bubbles: a injected turn has its own bubble',
 ]);
 
 const scenarios = (fixture as { scenarios: Scenario[] }).scenarios;
@@ -234,7 +328,7 @@ describe('live == reload (generated scenarios from the real backend)', () => {
     const reloadMsgs = s.history.map((r) => toDisplayMessage(toMessageCamelCase(r) as never));
     const reload = view(reloadMsgs);
     const run = (withReconcile: boolean) => {
-      const [store, store2] = replay(s, () => { renderHook(() => useChatStreamingLifecycle(createMockDeps())); }, withReconcile);
+      const [store, store2] = replay(s, () => renderHook(() => useChatStreamingLifecycle(createMockDeps())).result, withReconcile);
       const v = view(store.messages);
       if (process.env.LR_DUMP === s.name) {
         // eslint-disable-next-line no-console

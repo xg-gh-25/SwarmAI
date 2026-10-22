@@ -264,19 +264,38 @@ P4 完成前，聊天渲染不加新功能；发现新的显示问题，先写�
   生成的 client_id（只是每次不同）；现在是订阅流为主、POST 兜底，不是两边都渲染；历史接口的合并
   只按相邻角色，不识别回合；"内容相同 + 2 秒内"的清理办法不安全。
 
-## 9. P0 进度（2026-10-22）
+## 9. P0 结果（2026-10-22）
 
-已做：
+**测试**
 
-- `backend/tests/test_transcript_real_path.py`：真实 SQLite + 真实 `run_conversation`（只替换 CLI）。
-  一次发送一条用户行、按回合分页拼起来等于整页历史：通过。同一 client_id 再发、SESSION_BUSY 后重发、
-  新 tab 首次发送在建 session 前重试、频道回合重试：**4 条全部失败（库里 2 条用户行 / 2 个 session）**，
-  以 `xfail(strict=True)` 记为 P1 的验收，P1 修好后标记必须删掉。
-- `liveReload.property.test.ts`：加第二个 tab（同一会话，不发消息）；提问卡片的答案按内容比较。
-  新发现两个根因，记入 `KNOWN`：
-  - **R4** 用户消息不是会话事件：另一个 tab 在对账前看不到用户气泡，连续回合连成一片（40/40 场景）。
-  - **R5** 一个 tab 做的审批决定不发布：另一个 tab 在对账前一直显示未决定（16/40）。
-  两者对账后都消失，S1（用户消息和决定都是带 rev 的记录）从根上解决。
+- `backend/tests/test_transcript_real_path.py`：真实 SQLite + 真实 `run_conversation`。发送幂等的 4 条
+  （同一 client_id 再发、SESSION_BUSY 后重发、建 session 前重试、频道重试）今天都失败，以
+  `xfail(strict=True)` 作为 P1 的验收。
+- `backend/tests/test_live_reload_scenarios.py`（重写）：40 个场景全部走真实后端和真实库——用户回合走
+  `run_conversation`，SESSION_BUSY 排队后由真实 `drain_pending` 合并送出，CLI 自开回合走
+  `run_injected_turn`，续接走 `continue_with_answer` / `continue_with_cmd_permission`，Stop 走
+  `_persist_stop_receipt`，上下文压缩写真实的 compaction 记录，刷新走真实历史接口。
+- `liveReload.property.test.ts`：发送的 tab 按 ChatPage 的方式开 POST（用户气泡 + 占位气泡，续接的数字
+  占位，POST 收到同样的信封，回合结束时完成）；SESSION_BUSY 的回复走真实的流处理；Stop 回执按
+  `applyStopReceipt` 写入；另一个 tab 只收会话事件。
 
-还没做（下一步）：属性测试的后端场景改用真实 `run_conversation` + 真实库生成；场景补 Stop、
-排队合并送出、上下文压缩、订阅流断线与 resync、轮询打开、重启。
+**根因清单**（`KNOWN` 里按此分组；修好一个就删一组，测试守住它）
+
+| 根因 | 现象 | 场景 | 由谁解决 |
+|---|---|---|---|
+| R1 | 发送 tab 的续接回合由它自己的 POST 渲染进数字占位，单独成气泡（只在流式期间，对账后消失） | 19/40 | S1 / P4（只由订阅流渲染） |
+| R2 | 提问卡片和答案不存库，刷新后消失 | 7/40 | P2 |
+| R4 | 用户消息不是会话事件：另一个 tab 对账前没有用户气泡 | 40/40 | S1 |
+| R5 | 一个 tab 的审批决定不发布：另一个 tab 对账前显示未决定 | 17/40 | S1 |
+| R6 | 一个回合里重复的相同文本 / 思考，实时只显示一次（当成重复发送），刷新后两次 | 5/40 | S1（投影只按回合内的块） |
+| R7 | SESSION_BUSY 处理器删掉排队的用户气泡（按旧约定"后端删了这条"写的，后端现在保留为待发送），排队消息在对账前消失，送出的回合单独成气泡 | 12/40 | P1（受理回执）+ S1 |
+| R8 | Stop 回执只写库不发布：只有按 Stop 的 tab 看得到 | 10/40 | S1（带 rev 并发 `transcript_rev`） |
+| R9 | 上下文压缩行只在读历史时拼进去：实时从不显示分隔线（12/40）；拼接放在合并后的消息之后，压缩之后的 CLI 回合刷新后排在分隔线之前，对账对不上，内容显示两遍（2/40） | 14/40 | S1（压缩行是带 rev 的记录） |
+
+R3（共用气泡里跨回合去重）已在 23697bf8 修掉。
+
+**过程中发现并修掉的**：审批决定在写库前刷新显示成"已失效"（95ff04da）；P0 测试的运行顺序依赖
+（e050c23a）；生成器的记录 id 在场景之间重复，覆盖了库里的旧记录，曾被误看成"历史接口丢消息"
+（生成器问题，不是产品问题）。
+
+**仍未覆盖**：订阅流断线与 resync、轮询打开、daemon 重启、首次建 session 的绑定、多个频道。
