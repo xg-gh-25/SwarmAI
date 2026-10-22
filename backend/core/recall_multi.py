@@ -371,6 +371,7 @@ def recall_all(
     max_sections: int = 3,
     policy_excluded_files: frozenset[str] = frozenset(),
     exclude_session_id: Optional[str] = None,
+    deadline: Optional[float] = None,
 ) -> BucketedRecall:
     """Fan ``query`` across all (or the requested) READ recall domains.
 
@@ -397,6 +398,11 @@ def recall_all(
             enforces (run_4358cc95 Gate-2).
         exclude_session_id: the asking session, left out of the ``session``
             domain (its own just-persisted message would be the best match).
+        deadline: ``time.monotonic()`` value after which the remaining legs are
+            skipped (``hit_layers[leg] = "skipped_deadline"``). The runtime caller
+            gives up waiting at its timeout, but a worker thread cannot be
+            cancelled; without this it runs every remaining leg anyway, adding
+            CPU at the moment the process is already contended.
 
     Returns:
         BucketedRecall with one bucket + hit_layer per requested domain.
@@ -425,25 +431,36 @@ def recall_all(
     """
     result = BucketedRecall(query=query)
 
+    import time as _time
+
+    def _go(leg: str) -> bool:
+        if leg not in domains:
+            return False
+        if deadline is not None and _time.monotonic() > deadline:
+            result.buckets[leg] = []
+            result.hit_layers[leg] = "skipped_deadline"
+            return False
+        return True
+
     # context_files + ddd are markdown ##-section domains.
-    if "context_files" in domains:
+    if _go("context_files"):
         result.buckets["context_files"], result.hit_layers["context_files"] = \
             _recall_context_files(query, allow_embed, max_sections,
                                   policy_excluded_files)
 
-    if "ddd" in domains:
+    if _go("ddd"):
         result.buckets["ddd"], result.hit_layers["ddd"] = \
             _recall_ddd(query, project, max_sections)
 
-    if "library" in domains:
+    if _go("library"):
         result.buckets["library"], result.hit_layers["library"] = \
             _recall_library(query, allow_embed)
 
-    if "session" in domains:
+    if _go("session"):
         result.buckets["session"], result.hit_layers["session"] = \
             _recall_session(query, exclude_session_id)
 
-    if "codeintel" in domains:
+    if _go("codeintel"):
         hits = _codeintel_recall(query, project=project)
         result.buckets["codeintel"] = hits
         result.hit_layers["codeintel"] = "graph" if hits else "none"

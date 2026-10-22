@@ -70,3 +70,29 @@ def test_domain_budget():
     kept = filter_recall(_result("recall budget", library=hits)).buckets["library"]
     assert sum(len(h["content"]) for h in kept) <= DOMAIN_CHAR_CAPS["library"] + 10
     assert kept and len(kept) < 8
+
+
+def test_recall_all_skips_legs_after_deadline(monkeypatch):
+    """A timed-out caller cannot cancel the worker thread; the deadline makes the
+    worker skip every leg it has not started yet."""
+    import time
+    import core.recall_multi as rm
+
+    calls = []
+    monkeypatch.setattr(rm, "_recall_library", lambda q, a=False: (calls.append("library"), ([], "none"))[1])
+    monkeypatch.setattr(rm, "_recall_session", lambda q, e=None: (calls.append("session"), ([], "none"))[1])
+    r = rm.recall_all("x y", domains=("library", "session"), deadline=time.monotonic() - 1)
+    assert calls == []
+    assert r.hit_layers == {"library": "skipped_deadline", "session": "skipped_deadline"}
+
+
+def test_code_symbol_leg_runs_only_for_code_like_terms(monkeypatch):
+    import core.recall_multi as rm
+    from core.session_router import _unified_recall_body
+
+    seen = []
+    monkeypatch.setattr(rm, "_codeintel_recall", lambda q, project=None, limit=8: seen.append(q) or [])
+    _unified_recall_body("build 重启", (None, "no_signal"))
+    assert seen == []
+    _unified_recall_body("session_router build", (None, "no_signal"))
+    assert seen == ["session_router build"]

@@ -997,6 +997,7 @@ def _flatten_recall_hits(result: Any) -> list[dict]:
 def _unified_recall_body(
     query: str, active_project: Optional[tuple[Optional[str], str]] = None,
     prompt_text: str = "", exclude_session_id: Optional[str] = None,
+    deadline: Optional[float] = None,
 ) -> tuple[str, Optional[list[dict]]]:
     """Returns (rendered_body_str, structured_hits | None).
 
@@ -1045,9 +1046,13 @@ def _unified_recall_body(
         # re-detects (was: a second blocking iterdir with a DIFFERENT query =
         # extracted keywords, which could disagree with the DDD leg's project).
         project = active_project[0] if active_project else None
-        non_ddd = tuple(d for d in DOMAINS if d != "ddd")
+        from .recall_filter import is_code_like
+        # The code-symbol leg (~0.1 s) only ever survives the relevance gate for a
+        # code-like term, so do not run it otherwise.
+        non_ddd = tuple(d for d in DOMAINS if d != "ddd"
+                        and (d != "codeintel" or any(is_code_like(t) for t in query.split())))
         result = recall_all(query, project=project, domains=non_ddd, allow_embed=False,
-                            exclude_session_id=exclude_session_id)
+                            exclude_session_id=exclude_session_id, deadline=deadline)
         # Relevance gate + "not already in the prompt" + size budget
         # (core/recall_filter.py): ranking alone never says "nothing relevant".
         from .recall_filter import filter_recall
@@ -1363,7 +1368,8 @@ async def _maybe_inject_recall_inner(
             # with bulk work (which would starve the readiness sampler → false offline).
             executors.run_in("io", _unified_recall_body, keywords, _active_project,
                              options.system_prompt or "",
-                             getattr(unit, "_app_session_id", None) or unit.session_id),
+                             getattr(unit, "_app_session_id", None) or unit.session_id,
+                             time.monotonic() + _RECALL_DISASTER_TIMEOUT_S),
             timeout=_RECALL_DISASTER_TIMEOUT_S,
         )
         recalled, _structured_hits = _unified_out
@@ -1521,14 +1527,27 @@ async def _maybe_inject_recall_inner(
                 keywords[:80], _base_tok, _recall_ms,
             )
     except asyncio.TimeoutError:
-        # DISASTER: recall hung past the cap. This should NEVER happen in normal
-        # operation (recall is ~1-3s, cap is 8s) — if it fires, recall code has a
-        # bug. LOUD so it is caught immediately, not silently dead for months.
+        # The leg (~0.3-0.5 s measured, cold or warm) did not finish within the
+        # cap. Every observed case (7, 2026-10-12..22) was process contention, not
+        # a hang: the event loop had stalled 3-4 s, prompt assembly took 6-18 s
+        # instead of ~1 s, and 20+ threads were busy (dashboard panel scans, cold
+        # resumes after a restart) -- the recall thread could not get the GIL.
+        # The leg's deadline makes the abandoned worker skip its remaining legs.
+        # LOUD and counted: the answer goes out without recall.
+        import threading as _threading
         _record_recall_degraded("disaster_timeout")
+        try:
+            from core.recall_metrics import record_recall_metric
+            record_recall_metric(
+                "session_prompt", ("timeout",), _RECALL_DISASTER_TIMEOUT_S * 1000.0,
+                hit_count=0, degraded_reason="disaster_timeout")
+        except Exception:  # noqa: BLE001 — metric must never break recall
+            logger.debug("recall timeout metric failed", exc_info=True)
         logger.error(
-            "RECALL DISASTER TIMEOUT (>%.0fs) — recall code likely hung; "
-            "answer proceeds WITHOUT recall. keywords=%s",
-            _RECALL_DISASTER_TIMEOUT_S, keywords[:80],
+            "RECALL TIMEOUT (>%.0fs): the recall leg did not finish -- usually CPU/GIL "
+            "contention in this process (threads=%d), not a hang; answer proceeds "
+            "WITHOUT recall. keywords=%s",
+            _RECALL_DISASTER_TIMEOUT_S, _threading.active_count(), keywords[:80],
         )
     except Exception as exc:
         _record_recall_degraded(f"inject_exception:{type(exc).__name__}")

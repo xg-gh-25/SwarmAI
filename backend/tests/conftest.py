@@ -573,6 +573,22 @@ def _restore_streaming_count():
 
 
 @pytest.fixture(autouse=True)
+def _reset_recall_health_counters():
+    """Start every test with empty recall / DDD degradation counters.
+
+    core.session_router keeps them module-global for the daemon's health check.
+    Any test that fault-injects recall (an exception, a timeout) bumps them, and a
+    later test that asserts "deep check passed" then saw a degradation it never
+    caused -- order-dependent red (seen: TestDeepCheck::test_passes_when_healthy
+    after test_session_router_pure's exception test). Test isolation only.
+    """
+    mod = _sys.modules.get("core.session_router")
+    if mod is not None:
+        getattr(mod, "_recall_degraded_count", {}).clear()
+        getattr(mod, "_ddd_inject_count", {}).clear()
+    yield
+
+@pytest.fixture(autouse=True)
 def _restore_thread_event_loop():
     """Put back the thread's event loop when a test cleared it.
 
