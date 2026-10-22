@@ -49,3 +49,17 @@ def test_production_default_keeps_tauri_and_devurl():
 # block were deleted). The production contract that matters — the class default
 # excludes the dev origins — is covered by test_production_default_excludes_dev_origins
 # against real config code. (Adversarial correctness specialist, run_8b1014af.)
+
+
+def test_preflight_allows_if_none_match_for_conditional_gets():
+    """The webview's conditional GETs (history, workspace tree) send If-None-Match;
+    its preflight was rejected 400, so every cached re-fetch failed (2026-10-22)."""
+    from fastapi.testclient import TestClient
+    import main
+    origin = next(o for o in main.cors_origins if o.startswith("tauri"))
+    c = TestClient(main.app)   # no `with`: the lifespan (daemon startup) is not run
+    r = c.options("/api/workspace/tree", headers={
+        "Origin": origin, "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "if-none-match"})
+    assert r.status_code == 200
+    assert "if-none-match" in r.headers.get("access-control-allow-headers", "").lower()

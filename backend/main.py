@@ -1700,6 +1700,10 @@ app.add_middleware(
         "Origin",
         "X-Requested-With",
         "X-Request-ID",
+        # Conditional GETs (chat history, workspace tree) send If-None-Match: not a
+        # CORS-safelisted header, so its preflight was rejected (400) and every
+        # cached re-fetch from the webview failed (2026-10-22: 134 rejected).
+        "If-None-Match",
     ],
     expose_headers=[
         "X-Request-ID",

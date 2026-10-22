@@ -109,8 +109,12 @@ async def validation_exception_handler(
             )
         )
 
+    # The fields go in the message too: the text log formatter drops `extra`, so
+    # the 2026-10-22 history-endpoint 422s could not be traced to a parameter.
+    # Field names and pydantic's message only, never the submitted value.
     logger.warning(
-        f"Validation error on {request.url.path}",
+        "Validation error on %s %s: %s", request.method, request.url.path,
+        "; ".join(f"{f.field}: {f.error}" for f in fields)[:300],
         extra={
             "request_id": request_id,
             "path": request.url.path,

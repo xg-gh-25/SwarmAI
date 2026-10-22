@@ -570,8 +570,9 @@ class ProductRegistry:
         """
         if not rel_paths:
             return {}
+        from utils.stdin_file import run_with_stdin_file   # never input= (its module doc)
         try:
-            r = subprocess.run(
+            r = run_with_stdin_file(
                 # -c core.quotepath=false: emit paths as raw UTF-8, NOT git's default
                 # C-style octal-escaped + double-quote-wrapped form for non-ASCII names.
                 # WITHOUT it, a CJK-named product (e.g. `assets/中概互联ETF.md`) comes back
@@ -589,8 +590,8 @@ class ProductRegistry:
                 # the default still reports it ignored. (Gate-2 Red-Team, verified.)
                 ["git", "-c", "core.quotepath=false", "check-ignore",
                  "--stdin", "--verbose"],
+                "\n".join(rel_paths) + "\n",
                 cwd=str(tree_root),
-                input="\n".join(rel_paths) + "\n",
                 capture_output=True,
                 text=True,
                 timeout=10,

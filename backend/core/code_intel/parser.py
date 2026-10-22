@@ -721,10 +721,13 @@ def _gitignored_subset(repo_root: Path, paths: list[Path]) -> set[Path]:
         return set()
     rel_to_path = {p.relative_to(repo_root).as_posix(): p for p in paths}
     stdin_blob = "\n".join(rel_to_path.keys())
+    # stdin is a temp file, never input= (utils/stdin_file: a pipe deadlocked here
+    # under memory pressure and hung the 300s full-reindex job, 2026-10-22).
+    from utils.stdin_file import run_with_stdin_file
     try:
-        proc = subprocess.run(
-            ["git", "-C", str(repo_root), "check-ignore", "--stdin"],
-            input=stdin_blob, capture_output=True, text=True, timeout=30,
+        proc = run_with_stdin_file(
+            ["git", "-C", str(repo_root), "check-ignore", "--stdin"], stdin_blob,
+            capture_output=True, text=True, timeout=30,
         )
     except (OSError, subprocess.SubprocessError) as e:
         logger.debug("git check-ignore unavailable for %s: %s", repo_root, e)

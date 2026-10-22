@@ -783,3 +783,28 @@ def test_gate_judges_while_the_slow_writer_pool_is_full(r4):
     v, took = asyncio.run(_run())
     assert _denied(v), "the gate failed open while the slow-writer pool was busy"
     assert took < 1.0
+
+
+def test_ignored_spawns_one_check_ignore_per_target_within_its_ttl(tmp_path, monkeypatch):
+    # 2026-10-22: a deny is judged twice; each check-ignore is a process spawn that
+    # took seconds under memory pressure and timed the gate out (fail-open x3).
+    repo = Path(os.path.realpath(tmp_path)) / "r"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".gitignore").write_text("build/\n")
+    real, calls = subprocess.run, []
+
+    def counting(cmd, *a, **k):
+        if "check-ignore" in cmd:
+            calls.append(cmd[-1])
+        return real(cmd, *a, **k)
+
+    monkeypatch.setattr(subprocess, "run", counting)
+    monkeypatch.setattr(wg, "_ignored_memo", {})
+    for _ in range(3):
+        assert wg._ignored(str(repo), str(repo / "build" / "x.o")) is True
+        assert wg._ignored(str(repo), str(repo / "src.py")) is False
+    assert sorted(calls) == ["build/x.o", "src.py"]
+    monkeypatch.setattr(wg, "_IGNORED_TTL", 0.0)   # expired: asked again
+    wg._ignored(str(repo), str(repo / "src.py"))
+    assert len(calls) == 3

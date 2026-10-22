@@ -227,16 +227,31 @@ def _budget_left(cap: float) -> float:
     return cap if deadline is None else min(cap, deadline - time.monotonic() - _NOTE_MARGIN)
 
 
+_IGNORED_TTL = 5.0
+_ignored_memo: "dict[tuple[str, str], tuple[float, bool]]" = {}
+
+
 def _ignored(main: str, p: str) -> bool:
+    """Whether *p* is gitignored in *main*. Memoized for ``_IGNORED_TTL``: a deny is
+    judged twice (cached state, then afresh) and each ``git check-ignore`` is a process
+    spawn, which under host memory pressure took seconds and timed the gate out
+    (2026-10-22, three fail-opens)."""
     import subprocess
     rel = os.path.relpath(p, main)
     if rel == ".git" or rel.startswith(".git" + os.sep):
         return True          # git's own dir: never part of a change
+    key, now = (main, rel), time.monotonic()
+    hit = _ignored_memo.get(key)
+    if hit is not None and now - hit[0] < _IGNORED_TTL:
+        return hit[1]
     try:
         r = subprocess.run(["git", "-C", main, "check-ignore", "-q", "--", rel],
                            capture_output=True, timeout=2)
     except (OSError, subprocess.SubprocessError):
-        return False
+        return False         # not memoized: a failed spawn is retried next call
+    if len(_ignored_memo) > 512:
+        _ignored_memo.clear()
+    _ignored_memo[key] = (now, r.returncode == 0)
     return r.returncode == 0
 
 
@@ -658,12 +673,17 @@ def create_worktree_write_gate(session_context: "dict[str, Any]"):
             logger.debug("worktree_write_gate: WT_ROOT check failed", exc_info=True)
             return {}
         sid = str(session_context.get("sdk_session_id") or "")
+        t0 = time.monotonic()
         try:
             v = await asyncio.wait_for(
                 executors.run_in("gate", _decide_by, time.monotonic() + _GATE_TIMEOUT,
                                  sid, input_data), timeout=_GATE_TIMEOUT)
-        except Exception:  # incl. TimeoutError — fail-open, the sync check is the backstop
-            logger.warning("worktree_write_gate: judgment failed — failing open", exc_info=True)
+        except Exception as exc:  # incl. TimeoutError — fail-open, the sync check is the backstop
+            ti = input_data.get("tool_input") or {}
+            what = ti.get("command") or ti.get(_PATH_KEYS.get(input_data.get("tool_name"), "")) or ""
+            logger.warning("worktree_write_gate: judgment failed after %.1fs — failing open "
+                           "(%s %s): %s", time.monotonic() - t0, input_data.get("tool_name"),
+                           str(what)[:120], type(exc).__name__)
             return {}
         if v is None:
             return {}

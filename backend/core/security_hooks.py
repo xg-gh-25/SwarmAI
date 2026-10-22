@@ -6864,7 +6864,10 @@ _SYNTAX_CHECK_ARGS: tuple[str, ...] = (
 _SYNTAX_CHECK_MAX_CMD_BYTES = 256 * 1024
 # The parse check is sub-millisecond; this cap is pure defense-in-depth so the
 # guard itself can never hang. On timeout we KILL the subprocess and fail-OPEN.
-_BASH_SYNTAX_CHECK_TIMEOUT_S = 1.0
+# 3.0s (was 1.0): the cap also covers the fork/exec of this large process, which
+# under host memory pressure took over 1s (2026-10-22: two fail-opens at 1.0s,
+# parse itself instant). Still far below the Bash call's own budget.
+_BASH_SYNTAX_CHECK_TIMEOUT_S = 3.0
 
 
 # Fast path (F3, 2026-10-21; quote-aware 2026-10-22): a command can only be

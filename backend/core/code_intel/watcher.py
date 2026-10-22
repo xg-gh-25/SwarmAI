@@ -226,10 +226,11 @@ def _drop_git_ignored(root: Path, files: list[Path]) -> list[Path]:
     """The files git does not ignore in the repo at ``root`` (blocking: run off
     the loop). One subprocess for the whole batch. Not a git repo, or git
     failing, keeps every file: the watcher then behaves as before."""
+    from utils.stdin_file import run_with_stdin_file   # never input= (module doc)
     try:
-        proc = subprocess.run(
+        proc = run_with_stdin_file(
             ["git", "-C", str(root), "check-ignore", "--stdin", "-z"],
-            input="\0".join(str(f) for f in files).encode(),
+            "\0".join(str(f) for f in files),
             capture_output=True, timeout=10,
         )
     except (OSError, subprocess.SubprocessError) as exc:

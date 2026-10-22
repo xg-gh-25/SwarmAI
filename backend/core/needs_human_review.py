@@ -367,11 +367,12 @@ def _git_ignored_batch(
     _git_to = deadline.git_timeout() if deadline is not None else 15.0
     if _git_to <= 0:
         return {rel: None for rel in rel_paths}  # budget spent → None (caller fails CLOSED, #5)
+    from utils.stdin_file import run_with_stdin_file   # never input= (its module doc)
     try:
-        r = subprocess.run(
+        r = run_with_stdin_file(
             ["git", "check-ignore", "--stdin", "-z"],
+            "\x00".join(rel_paths) + "\x00",
             cwd=str(tree_root),
-            input=("\x00".join(rel_paths) + "\x00").encode("utf-8"),
             capture_output=True,
             timeout=_git_to,
         )
