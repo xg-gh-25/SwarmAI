@@ -277,7 +277,50 @@ class TestFastPathAndCache:
             return real(*a, **k)
 
         with patch("core.security_hooks.subprocess.run", side_effect=counting):
-            cmd = 'echo "cached-probe-$RANDOM-unique-9f3"'
+            # a $(...) inside quotes is not judged by the fast path: the shell runs
+            cmd = 'echo "$(date) cached-probe-unique-9f3"'
             assert not _is_deny(_run(cmd))
             assert not _is_deny(_run(cmd))
         assert len(calls) == 1
+
+
+class TestQuoteAwareFastPath:
+    """The fast path now tracks quotes and brackets, so quoted and bracketed commands
+    (most real Bash calls) start no shell. It may only say "complete" when the
+    shell agrees: cross-checked against the real `<shell> -n` here."""
+
+    COMPLETE = [
+        'git commit -m "fix: a thing (with parens)"',
+        "grep -rn 'foo|bar' src --include='*.py' | head -20",
+        'python3 -c "import sys; print(sys.argv)" a b',
+        "find . -name '*.ts' -not -path './node_modules/*'",
+        'echo "it\'s fine" && ls',
+        "awk '{print $1}' f.txt",
+        'curl -s "http://127.0.0.1:1/x?a=1&b=2" -o /dev/null',
+        "echo ${HOME} $((1 + 2)) [ok]",
+        "jq '.items[] | select(.a == \"b\")' f.json",
+        "ls (foo|bar)",
+    ]
+    UNSURE = [
+        'echo "abc', "echo 'abc", "(cd x", "ls )", "echo {a", "echo [a",
+        "echo `date`", "cat <<EOF", "if true", "for x in a", "ls |", "ls \\",
+        'echo "$(date"', "echo $'a'", "ls # don't",
+    ]
+
+    def test_complete_commands_start_no_shell(self):
+        from core.security_hooks import _syntax_cannot_be_incomplete
+        for c in self.COMPLETE:
+            assert _syntax_cannot_be_incomplete(c), c
+
+    def test_the_shell_agrees_with_every_complete_verdict(self):
+        import subprocess as sp
+        from core.security_hooks import _SYNTAX_CHECK_ARGS, _SYNTAX_CHECK_SHELL
+        for c in self.COMPLETE:
+            r = sp.run([_SYNTAX_CHECK_SHELL, *_SYNTAX_CHECK_ARGS], input=c.encode(),
+                       capture_output=True, timeout=5)
+            assert r.returncode == 0, (c, r.stderr)
+
+    def test_open_or_unknown_shapes_go_to_the_shell(self):
+        from core.security_hooks import _syntax_cannot_be_incomplete
+        for c in self.UNSURE:
+            assert not _syntax_cannot_be_incomplete(c), c

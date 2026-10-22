@@ -6866,12 +6866,49 @@ _SYNTAX_TRAILING = ("|", "&&", "||", "\\")
 
 
 def _syntax_cannot_be_incomplete(command: str) -> bool:
-    if any(c in _SYNTAX_RISK_CHARS for c in command) or "<<" in command:
+    """True only when *command* is certainly complete: the caller then approves it
+    without starting a shell. False means "not sure", never "incomplete": the shell's
+    own ``-n`` parse decides those.
+
+    Heredocs, compound keywords outside quotes, a trailing operator or backslash,
+    backticks and ANSI-C ``$'...'`` quoting are not judged here (False). Otherwise one pass tracks
+    single and double quotes (backslash escapes outside single quotes) and the
+    ( { [ nesting outside quotes; a ``$(`` or `` ` `` inside double quotes is not
+    judged either. Complete = no open quote and every bracket closed. A ``#`` is an
+    ordinary character here, so a quote inside a comment only makes it unsure."""
+    if "<<" in command or "`" in command or "$'" in command:
         return False
     if command.rstrip().endswith(_SYNTAX_TRAILING):
         return False
-    words = re.split(r"[\s;&|]+", command)
-    return not any(w in _SYNTAX_KEYWORDS for w in words)
+    closing = {"(": ")", "{": "}", "[": "]"}
+    stack: list[str] = []
+    quote = ""  # "", "'" or '"'
+    bare: list[str] = []  # the command outside quotes, for the keyword check
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        bare.append(c if not quote and c not in "'\"" else " ")
+        if quote == "'":
+            if c == "'":
+                quote = ""
+        elif c == "\\":
+            i += 1  # the next character is escaped (also inside double quotes)
+        elif quote == '"':
+            if c == '"':
+                quote = ""
+            elif c == "$" and i + 1 < n and command[i + 1] == "(":
+                return False
+        elif c in "'\"":
+            quote = c
+        elif c in closing:
+            stack.append(closing[c])
+        elif c in ")}]":
+            if not stack or stack.pop() != c:
+                return False
+        i += 1
+    if quote or stack:
+        return False
+    return not any(w in _SYNTAX_KEYWORDS for w in re.split(r"[\s;&|()]+", "".join(bare)))
 
 
 # Verdicts of commands already parsed: (exit code, stderr) by sha1 of the command.
