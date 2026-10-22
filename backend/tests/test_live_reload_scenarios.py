@@ -43,6 +43,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# Imported before any test patches database.db: both bind `db` at import time, and a
+# first import under the patch would leave them on the fake for every later test.
+import core.session_manager  # noqa: F401
+import routers.chat  # noqa: F401
 from core import session_events
 from core.background_agents import BackgroundAgents
 from core.session_router import SessionRouter

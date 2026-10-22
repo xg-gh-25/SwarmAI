@@ -78,7 +78,9 @@ async def _history(sid: str, **kw) -> list[dict]:
     import routers.chat as chat_router
     req = MagicMock()
     req.headers = {}
-    with patch.object(chat_router.session_manager, "get_session", AsyncMock(return_value=object())):
+    import database
+    with patch.object(chat_router, "db", database.db), \
+            patch.object(chat_router.session_manager, "get_session", AsyncMock(return_value=object())):
         resp = await chat_router.get_session_messages(sid, req, limit=None,
                                                       before_id=kw.get("before_id"), turns=kw.get("turns"))
     return json.loads(resp.body)
