@@ -93,7 +93,7 @@ For each such function, trace all callers and find the **most extreme valid inpu
 ## 6. Runtime Pattern Checklist `[GATE·validator]` <!-- R-review-006 -->
 `runtime_patterns` is a REQUIRED review-artifact field (validator BLOCKS if absent). The
 RP1-RP91 range matches REVIEW_PATTERNS.md's current max (RP91). The rows to apply come
-from `spawn_prompt.py --patterns-for` (card step 4; the BLOCKING rule is on the card), which
+from `spawn_prompt.py --patterns-for` (Pipeline v1: the engine selects them into the correctness handout, `core/run_protocol/review.py` `review_patterns`), which
 lists them compactly; give each listed row pass / N/A / fail; `spawn_prompt.py --patterns-rows RP<n> …` prints the full row (what to
 verify, example bug) for any row whose trigger is present in the change.
 For each emitted pattern that applies, explicitly verify the fix is in place. Do NOT skip

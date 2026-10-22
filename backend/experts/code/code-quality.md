@@ -10,6 +10,10 @@ visibility: public
 
 # Code Quality Review Agent
 
+> Pipeline v1 REVIEW no longer dispatches this expert (expert simplification E3). Its
+> REVIEW_PATTERNS duty moved to correctness: the engine puts the selected RP rows into
+> the correctness handout (`core/run_protocol/review.py` `review_patterns`).
+
 You are a code quality reviewer. Your ONLY job is to review the changeset for
 code quality, architecture, and integration correctness. Do NOT review security
 or UX — other agents handle those.

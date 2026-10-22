@@ -105,7 +105,7 @@ stale within the same session).
 | think | `stages/think.md` | — |
 | plan | `stages/plan.md` | — |
 | build | `stages/build.md` | stage-start `gate1_prompt_path` (or `gate1_verdict`: already judged, do not respawn); fallback `scripts/spawn_prompt.py --gate gate1-skeptic` (Gate-1 Skeptic+SSA) |
-| review | `stages/review.md` (it runs `spawn_prompt.py --patterns-for <files>` for the triggered `REVIEW_PATTERNS.md` rows instead of a full read; `OPERATIONAL_PATTERNS.md` is read where `stages/ref/review/checks-system.md` says so) | stage-start `review_knowledge_path` + `review_diff_path`; fallback `scripts/spawn_prompt.py --knowledge-only --project <P> --files <changed…>` (project-knowledge block per fan-out agent) |
+| review | `stages/review.md` (the triggered `REVIEW_PATTERNS.md` rows reach the correctness handout through the engine, `review_patterns`, instead of a full read; `OPERATIONAL_PATTERNS.md` is read where `stages/ref/review/checks-system.md` says so) | stage-start `review_knowledge_path` + `review_diff_path`; fallback `scripts/spawn_prompt.py --knowledge-only --project <P> --files <changed…>` (project-knowledge block per fan-out agent) |
 | test | `stages/test.md` | `scripts/wtf_gate.py` (stage-complete computes it on the new path) |
 | deliver | `stages/deliver.md` | stage-start expert `prompt_path`s + `meta_review_prompt_path`; fallback `scripts/spawn_prompt.py --gate gate2-adversarial` / `--gate meta-review` `--project <P> --files <changed…>` (Gate-2 specialists, Meta-review) |
 | reflect | `stages/reflect.md` | — |
