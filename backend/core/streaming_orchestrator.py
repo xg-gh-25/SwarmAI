@@ -1784,6 +1784,8 @@ class StreamingOrchestrator:
                 self._parent._pending_question = {
                     "tool_use_id": perm_request["requestId"],
                     "request_id": perm_request["requestId"],
+                    # the gated call itself (the hook's tool_use_id): it has not run
+                    "tool_call_id": perm_request.get("toolUseId"),
                     "tool_name": perm_request.get("toolName", "Bash"),
                     "tool_input": perm_request.get("toolInput", {}),
                     "reason": perm_request.get("reason", ""),

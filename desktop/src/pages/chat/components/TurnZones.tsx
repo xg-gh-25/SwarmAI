@@ -320,39 +320,44 @@ export const ToolStripV6 = memo(function ToolStripV6({ item }: { item: StripItem
   );
 }, sameStrip);
 
-/** The end of a turn the user stopped while something ran (backend turn_stop): the
- *  calls the Stop interrupted, as their strips (one line each, the full call on
- *  hover), each background agent and how it ended, and what Continue does. */
+/** One line for a stop: the call(s) it cut, the call(s) it kept from running, the
+ *  background agents it ended. Each call already shows `stopped` on its own strip,
+ *  so this only sums up (several calls of a kind are counted, not listed). */
+function stopSummary(t: Parameters<typeof tf>[0], r: StopReceiptView): { line: string; full: string } {
+  const cut = r.calls.filter((c) => c.ran !== false);
+  const waiting = r.calls.filter((c) => c.ran === false);
+  const parts: string[] = [];
+  const full: string[] = [];
+  const at = (ms?: number) => (ms !== undefined && ms >= MIN_SECONDS * 1000 ? fmt(Math.round(ms / 1000)) : '');
+  if (cut.length === 1) {
+    const d = at(cut[0].elapsedMs);
+    parts.push(d ? tf(t, 'chat.turn.zone.stopCallAt', '{{tool}} stopped at {{time}}', { tool: cut[0].name, time: d })
+      : tf(t, 'chat.turn.zone.stopCall', '{{tool}} stopped', { tool: cut[0].name }));
+  } else if (cut.length > 1) parts.push(tf(t, 'chat.turn.zone.stopCalls', '{{count}} calls stopped', { count: cut.length }));
+  if (waiting.length === 1) parts.push(tf(t, 'chat.turn.zone.stopNotRun', '{{tool}} not run', { tool: waiting[0].name }));
+  else if (waiting.length > 1) parts.push(tf(t, 'chat.turn.zone.stopNotRunCount', '{{count}} calls not run', { count: waiting.length }));
+  const agents = r.agents;
+  if (agents.length === 1) parts.push(tf(t, 'chat.turn.zone.stopAgent', 'background agent {{name}} stopped',
+    { name: agents[0].description || tf(t, 'chat.turn.zone.backgroundAgent', 'background agent') }));
+  else if (agents.length > 1) parts.push(tf(t, 'chat.turn.zone.stopAgents', '{{count}} background agents stopped', { count: agents.length }));
+  if (r.omitted) parts.push(tf(t, 'chat.turn.zone.stopOmitted', '+{{count}} more', { count: r.omitted }));
+  for (const c of cut) full.push(`${c.name}${c.description ? ` ${c.description}` : ''} · stopped${at(c.elapsedMs) ? ` at ${at(c.elapsedMs)}` : ''}`);
+  for (const c of waiting) full.push(`${c.name} · not run (was waiting for approval)`);
+  for (const a of agents) full.push(`Agent ${a.description || a.toolUseId} · background · ${a.status}`);
+  return { line: parts.join(' · '), full: full.join('\n') };
+}
+
+/** The end of a turn the user stopped while something ran (backend turn_stop):
+ *  "Stopped by you · …" in one line (the full list on hover) and what Continue does. */
 function StopReceiptBlock({ receipt }: { receipt: StopReceiptView }) {
   const { t } = useTranslation();
+  const { line, full } = stopSummary(t, receipt);
   return (
     <div data-testid="turn-stopped" data-receipt="" {...ANCHOR_PROPS}>
-      <div className="text-[12.5px] text-[var(--color-text-dim)]">
-        {tf(t, 'chat.turn.zone.stoppedByYouPlain', 'Stopped by you')}
+      <div data-testid="stop-summary" title={full} className="truncate text-[12.5px] text-[var(--color-text-dim)]">
+        {tf(t, 'chat.turn.zone.stoppedByYouPlain', 'Stopped by you')}{line ? ` · ${line}` : ''}
       </div>
-      <div className={`${INNER_GAP} space-y-0.5`}>
-        {receipt.calls.map((s) => (
-          <ToolStripV6 key={`stop-${s.block.id}`} item={{ key: `stop-${s.block.id}`, steps: [s], objects: [] }} />
-        ))}
-        {receipt.agents.map((a) => (
-          <div key={`stop-ag-${a.toolUseId}`} data-testid="stop-agent" data-status={a.status} title={a.summary || a.description}
-            className="flex items-center gap-3 min-w-0 pl-2 pr-3 py-[3px] rounded-[6px] font-mono text-[12px] bg-[var(--color-hover)]/60">
-            <span className="w-[10ch] shrink-0 truncate text-[var(--color-text-dim)]">Agent</span>
-            <span className="truncate min-w-0 text-[var(--color-text-muted)]">
-              {a.description || tf(t, 'chat.turn.zone.backgroundAgent', 'background agent')}
-            </span>
-            <span className="ml-auto shrink-0 text-right text-[var(--color-text-dim)]">
-              {tf(t, 'chat.turn.zone.stopAgentStatus', 'background · {{status}}', { status: a.status })}
-            </span>
-          </div>
-        ))}
-        {!!receipt.omitted && (
-          <div className="pl-2 font-mono text-[11.5px] text-[var(--color-text-dim)]">
-            {tf(t, 'chat.turn.zone.stopOmitted', '+{{count}} more', { count: receipt.omitted })}
-          </div>
-        )}
-      </div>
-      <div data-testid="stop-continue-hint" className={`${INNER_GAP} text-[12px] text-[var(--color-text-dim)]`}>
+      <div data-testid="stop-continue-hint" className="mt-0.5 text-[12px] text-[var(--color-text-dim)]">
         {tf(t, 'chat.turn.zone.stopContinueHint', 'Continue picks up from here: the agent is told what was stopped and checks what it already did before going on.')}
       </div>
     </div>

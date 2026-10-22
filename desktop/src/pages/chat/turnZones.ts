@@ -92,17 +92,13 @@ export type Zone =
       /** The backend's reason (turn_notice), when it restarted the process or a
        *  newer message took over; absent = the reason is not known. */
       notice?: { reason: string; cause?: string };
-      /** The stop receipt (turn_stop): the steps it found running, in stream order,
-       *  and the background agents with how they ended. */
+      /** The stop receipt (turn_stop): the calls the Stop found running and the
+       *  background agents it ended. Each call keeps its own strip in place
+       *  (marked stopped); the receipt says it in one line. */
       receipt?: StopReceiptView };
 
-/** What the Stopped zone lists under "Stopped by you". */
-export interface StopReceiptView {
-  at?: string;
-  calls: ToolStep[];
-  agents: TurnStopContent['agents'];
-  omitted?: number;
-}
+/** What the Stopped zone sums up after "Stopped by you". */
+export type StopReceiptView = Omit<TurnStopContent, 'type'>;
 
 const firstIndex = (u: TurnUnit): number => (u.kind === 'process' ? (u.steps[0]?.index ?? -1) : u.index);
 
@@ -275,21 +271,18 @@ export function turnZones(view: TurnView, isStreaming: boolean, hold: boolean = 
   if (stopped) {
     zones.push({ kind: 'stopped', id: 'stopped', byUser: !!view.stoppedMarker, unfinished,
       ...(noticeEnds && notice ? { notice: { reason: notice.reason, cause: notice.cause } } : {}),
-      ...(view.stopReceipt ? { receipt: receiptView(view.stopReceipt, units) } : {}) });
+      ...(view.stopReceipt ? { receipt: receiptView(view.stopReceipt) } : {}) });
+  } else if (view.stopReceipt && view.stopReceipt.turn === false && !hold) {
+    // background agents stopped after this turn ended: said at its end, its RESULT kept
+    zones.push({ kind: 'stopped', id: 'stopped', byUser: true, unfinished: false, receipt: receiptView(view.stopReceipt) });
   }
   markLive(zones, isStreaming);
   if (hold && !isStreaming) markHeld(zones);
   return zones;
 }
 
-/** The receipt's running calls as this turn's steps (a call the turn does not show —
- *  a sub-agent's own call — is left out), and its background agents. */
-function receiptView(r: TurnStopContent, units: TurnUnit[]): StopReceiptView {
-  const steps = new Map<string, ToolStep>();
-  for (const u of units) if (u.kind === 'process') for (const s of u.steps) steps.set(s.block.id, s);
-  const calls = (r.calls ?? []).map((c) => steps.get(c.toolUseId)).filter((s): s is ToolStep => !!s)
-    .sort((a, b) => a.index - b.index);
-  return { at: r.at, calls, agents: r.agents ?? [], ...(r.omitted ? { omitted: r.omitted } : {}) };
+function receiptView(r: TurnStopContent): StopReceiptView {
+  return { at: r.at, calls: r.calls ?? [], agents: r.agents ?? [], ...(r.omitted ? { omitted: r.omitted } : {}) };
 }
 
 function pipelineZones(units: TurnUnit[], view: TurnView, hasCalls: boolean, isStreaming: boolean, resultOrdinal: number | null, hold: boolean = isStreaming): Zone[] {

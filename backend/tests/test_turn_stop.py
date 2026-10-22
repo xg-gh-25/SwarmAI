@@ -1,16 +1,15 @@
 """Stop receipt (core/turn_stop): what a user Stop stopped, shown and remembered.
 
 What is tested
-- The pure module: snapshot of running calls / foreground Agent labels / background
-  agents, the block (a background agent the Stop took down with the process reads
-  ``stopped``; a status the CLI reported first is kept), caps, the continuation note.
-- SessionUnit: ``interrupt()`` snapshots BEFORE it clears the per-turn tracking, so
-  ``take_stop_receipt()`` after the recycle still knows what ran; the receipt is
-  one-shot and refused once a new send started (generation guard); the note is
-  injected once into the next query (``_apply_stop_note``), and send() calls it.
-- SessionRouter.interrupt_session: persists one assistant row (receipt last, the
-  turn's changes / deliverables before it) and returns it; a failing receipt never
-  fails the stop.
+- The pure module: running calls / foreground Agent labels / background agents
+  (``stopped``), a call behind an open permission marked ``ran: False``, caps, the
+  continuation note; a user Stop makes BackgroundAgents write ``stopped``, not ``lost``.
+- SessionUnit: ``begin_stop_receipt()`` reads what runs before ``interrupt()`` clears
+  it; none when nothing runs; ``stop_background()`` recycles an IDLE process that runs
+  background agents; the note is injected once (``_apply_stop_note``), send() calls it.
+- SessionRouter.interrupt_session: the turn_stop row is persisted BEFORE the stop is
+  awaited; the turn's changes / products follow; an idle session with background
+  agents is stopped through stop_background; a failing receipt never fails the stop.
 - context_injector keeps ``turn_stop`` out of resume history.
 """
 
@@ -38,42 +37,34 @@ def _streaming_unit(session_id: str = "s-stop") -> SessionUnit:
 
 # ── pure module ──────────────────────────────────────────────────────────
 
-def test_snapshot_reads_running_calls_labels_and_background():
-    snap = turn_stop.take_snapshot(
-        generation=3,
+def test_build_reads_running_calls_labels_and_background():
+    block = turn_stop.build(
         open_tool_uses={"b1": (100.0, "Bash"), "a1": (130.0, "Agent"), "bad": "x"},
         agent_tools={"a1": {"label": "review the diff"}},
         background=[{"toolUseId": "g1", "description": "phase3 experiment"}, {"description": "no id"}],
         now=352.0,
     )
-    assert snap["generation"] == 3
-    assert snap["calls"] == [
+    assert block["type"] == "turn_stop" and block["at"]
+    assert block["calls"] == [
         {"toolUseId": "b1", "name": "Bash", "elapsedMs": 252000},
         {"toolUseId": "a1", "name": "Agent", "elapsedMs": 222000, "description": "review the diff"},
     ]
-    assert snap["background"] == [{"toolUseId": "g1", "description": "phase3 experiment"}]
+    assert block["agents"] == [{"toolUseId": "g1", "description": "phase3 experiment",
+                                "status": "stopped", "background": True}]
 
 
-def test_block_status_after_stop():
-    snap = {"calls": [], "at": "T", "background": [
-        {"toolUseId": "g1", "description": "a"}, {"toolUseId": "g2", "description": "b"},
-        {"toolUseId": "g3", "description": "c"}]}
-    now = {"g1": {"status": "lost"}, "g2": {"status": "completed", "summary": " done "}}
-    block = turn_stop.build_block(snap, now)
-    assert block["type"] == "turn_stop" and block["at"] == "T"
-    assert [(a["toolUseId"], a["status"]) for a in block["agents"]] == [
-        ("g1", "stopped"), ("g2", "completed"), ("g3", "stopped")]
-    assert block["agents"][1]["summary"] == "done"
-    assert all(a["background"] for a in block["agents"])
-    live = turn_stop.build_block(snap, {"g1": {"status": "running"}}, process_gone=False)
-    assert live["agents"][0]["status"] == "running", "an alive process: not claimed stopped"
-    gone = turn_stop.build_block(snap, {"g1": {"status": "running"}}, process_gone=True)
-    assert gone["agents"][0]["status"] == "stopped"
+def test_a_call_waiting_for_approval_never_ran():
+    block = turn_stop.build(open_tool_uses={"b1": (0.0, "Bash")}, agent_tools={},
+                            background=[], now=10.0, not_run="b1")
+    assert block["calls"] == [{"toolUseId": "b1", "name": "Bash", "ran": False}]
+    note = turn_stop.continuation_note(block)
+    assert "Never ran (it was waiting for the user's approval): Bash (id b1)" in note
+    assert "Stopped mid-call" not in note
 
 
-def test_block_caps_rows_and_counts_the_rest():
-    calls = [{"toolUseId": f"c{i}", "name": "Bash"} for i in range(25)]
-    block = turn_stop.build_block({"calls": calls, "background": []}, {})
+def test_build_caps_rows_and_counts_the_rest():
+    calls = {f"c{i}": (0.0, "Bash") for i in range(25)}
+    block = turn_stop.build(open_tool_uses=calls, agent_tools={}, background=[], now=1.0)
     assert len(block["calls"]) == turn_stop.MAX_ROWS and block["omitted"] == 5
 
 
@@ -88,39 +79,68 @@ def test_note_names_what_stopped_and_says_check_before_rerun():
     assert "do not blindly re-run" in note and note.endswith("]")
 
 
+def test_user_stop_marks_background_agents_stopped_not_lost():
+    from core.background_agents import BackgroundAgents
+    seen = []
+    reg = BackgroundAgents(on_change=seen.append)
+    reg.launch("g1", "x")
+    reg.user_stop(True)
+    reg.lose_all()
+    reg.user_stop(False)
+    assert reg.snapshot()[0]["status"] == "stopped" and seen[-1]["status"] == "stopped"
+    reg.launch("g2", "y")
+    reg.lose_all()
+    assert reg.snapshot()[1]["status"] == "lost", "a crash is still lost"
+
+
 # ── SessionUnit ─────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_interrupt_snapshots_before_clearing_and_receipt_survives_recycle():
+async def test_receipt_is_read_before_the_interrupt_clears_tracking():
     unit = _streaming_unit()
     unit._open_tool_uses = {"b1": (0.0, "Bash")}
-    unit.background_agents.launch("g1", "phase3 experiment")
+    block = unit.begin_stop_receipt()
     assert await unit.interrupt() is True
     assert unit.state == SessionState.COLD and unit._open_tool_uses == {}
-    block = unit.take_stop_receipt()
     assert block["calls"][0]["toolUseId"] == "b1"
-    assert block["agents"] == [{"toolUseId": "g1", "description": "phase3 experiment",
-                                "status": "stopped", "background": True}]
-    assert unit.take_stop_receipt() is None, "one receipt per Stop"
     assert "Bash" in unit._stop_context
 
 
-@pytest.mark.asyncio
-async def test_autonomous_interrupt_takes_no_snapshot():
+def test_receipt_marks_the_call_behind_an_open_permission_not_run():
     unit = _streaming_unit()
-    unit._open_tool_uses = {"b1": (0.0, "Bash")}
-    await unit.interrupt(autonomous=True)
-    assert unit.take_stop_receipt() is None
+    unit._transition(SessionState.WAITING_INPUT)
+    unit._open_tool_uses = {"b1": (0.0, "Bash"), "b0": (0.0, "Read")}
+    unit._pending_question = {"request_id": "r1", "tool_use_id": "r1", "tool_call_id": "b1"}
+    calls = {c["toolUseId"]: c for c in unit.begin_stop_receipt()["calls"]}
+    assert calls["b1"].get("ran") is False and "ran" not in calls["b0"]
+
+
+def test_no_receipt_when_nothing_runs():
+    unit = SessionUnit(session_id="s-idle", agent_id="default")
+    assert unit.begin_stop_receipt() is None
 
 
 @pytest.mark.asyncio
-async def test_receipt_refused_once_a_new_send_started():
+async def test_idle_stop_recycles_the_process_that_runs_background_agents():
     unit = _streaming_unit()
-    unit._open_tool_uses = {"b1": (0.0, "Bash")}
-    await unit.interrupt()
-    unit._send_generation += 1  # what send()'s Layer 0 does
-    assert unit.take_stop_receipt() is None
-    assert unit._stop_context == ""
+    unit._transition(SessionState.IDLE)
+    unit.background_agents.launch("g1", "phase3")
+    block = unit.begin_stop_receipt()
+    assert block["calls"] == [] and block["agents"][0]["status"] == "stopped"
+    assert block["turn"] is False, "no turn ran: the turn it lands on is not stopped"
+    unit.background_agents.user_stop(True)
+    assert await unit.stop_background() is True
+    unit.background_agents.user_stop(False)
+    assert unit.state == SessionState.COLD and unit._client is None
+    assert unit.background_agents.snapshot()[0]["status"] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_idle_stop_with_nothing_running_does_nothing():
+    unit = _streaming_unit()
+    unit._transition(SessionState.IDLE)
+    assert await unit.stop_background() is False
+    assert unit.state == SessionState.IDLE
 
 
 def test_stop_note_is_injected_once():
@@ -138,11 +158,11 @@ def test_send_applies_the_stop_note():
     assert "self._apply_stop_note(query_content)" in src
 
 
-def test_reset_turn_state_drops_a_stale_snapshot():
-    unit = SessionUnit(session_id="s-reset", agent_id="default")
-    unit._stop_snapshot = {"generation": 0}
-    unit._reset_turn_state()
-    assert unit._stop_snapshot is None
+def test_permission_prompts_carry_the_gated_call_id():
+    import core.security_hooks as sh
+    import core.streaming_orchestrator as so
+    assert inspect.getsource(sh).count('"toolUseId": tool_use_id,') >= 2
+    assert '"tool_call_id": perm_request.get("toolUseId")' in inspect.getsource(so)
 
 
 # ── SessionRouter ───────────────────────────────────────────────────────
@@ -154,32 +174,65 @@ def _router_with(unit):
     return router
 
 
-@pytest.mark.asyncio
-async def test_interrupt_session_persists_and_returns_the_receipt():
+def _fake_unit(state):
     unit = MagicMock()
-    unit.interrupt = AsyncMock(return_value=True)
+    unit.state = state
     unit.is_alive = False
-    unit.take_stop_receipt = MagicMock(return_value={"type": "turn_stop", "calls": [], "agents": []})
+    unit.background_agents = MagicMock()
+    unit._turn_client_id = "c1"
+    unit._turn_changes = None
+    unit._turn_files = {}
+    return unit
+
+
+@pytest.mark.asyncio
+async def test_interrupt_session_persists_the_receipt_before_the_stop_and_returns_it():
+    unit = _fake_unit(SessionState.STREAMING)
+    order = []
+    unit.begin_stop_receipt = MagicMock(return_value={"type": "turn_stop", "calls": [], "agents": []})
+    async def _interrupt():
+        order.append("interrupt")
+        return True
+    unit.interrupt = _interrupt
     unit._turn_changes = MagicMock()
     unit._turn_changes.finish = AsyncMock(return_value={"type": "turn_changes", "files": [{"path": "a"}]})
     unit._turn_files = {"/x/r.md": {"path": "r.md", "absolutePath": "/x/r.md", "kind": "content"}}
-    unit._turn_client_id = "c1"
     router = _router_with(unit)
-    persist = AsyncMock(side_effect=lambda sid, blocks, model, **kw: blocks)
-    with patch.object(type(router), "_persist_assistant_blocks", persist):
+    async def _persist(sid, blocks, model, **kw):
+        order.append(blocks[-1]["type"])
+        return blocks
+    with patch.object(type(router), "_persist_assistant_blocks", AsyncMock(side_effect=_persist)) as persist:
         out = await router.interrupt_session("s1")
+    assert order[0] == "turn_stop" and order.index("interrupt") > 0
     assert [b["type"] for b in out["receipt"]] == ["turn_changes", "turn_deliverables", "turn_stop"]
     assert persist.await_args.kwargs["client_id"] == "c1"
     assert unit._turn_files == {}, "deliverables are written once"
+    assert [c.args for c in unit.background_agents.user_stop.call_args_list] == [(True,), (False,)]
+
+
+@pytest.mark.asyncio
+async def test_idle_session_with_background_agents_stops_them():
+    unit = _fake_unit(SessionState.IDLE)
+    unit.begin_stop_receipt = MagicMock(return_value={"type": "turn_stop", "calls": [],
+                                                       "agents": [{"toolUseId": "g1", "status": "stopped"}]})
+    unit.stop_background = AsyncMock(return_value=True)
+    unit.interrupt = AsyncMock()
+    router = _router_with(unit)
+    with patch.object(type(router), "_persist_assistant_blocks", AsyncMock(side_effect=lambda s, b, m, **k: b)):
+        out = await router.interrupt_session("s1")
+    unit.stop_background.assert_awaited_once()
+    unit.interrupt.assert_not_awaited()
+    assert out["message"] == "Stopped background agents"
+    assert [b["type"] for b in out["receipt"]] == ["turn_stop"]
 
 
 @pytest.mark.asyncio
 async def test_a_failing_receipt_never_fails_the_stop():
-    unit = MagicMock()
+    unit = _fake_unit(SessionState.STREAMING)
     unit.interrupt = AsyncMock(return_value=True)
-    unit.is_alive = False
-    unit.take_stop_receipt = MagicMock(side_effect=RuntimeError("boom"))
+    unit.begin_stop_receipt = MagicMock(side_effect=RuntimeError("boom"))
     out = await _router_with(unit).interrupt_session("s1")
+    unit.interrupt.assert_awaited_once()
     assert out["success"] is True and out["receipt"] == []
 
 

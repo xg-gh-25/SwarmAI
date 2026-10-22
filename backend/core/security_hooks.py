@@ -1532,6 +1532,7 @@ def create_dangerous_command_gate(
         await permission_mgr.enqueue_permission_request(actual_session_id, {
             "sessionId": actual_session_id,
             "requestId": request_id,
+            "toolUseId": tool_use_id,
             "toolName": "Bash",
             "toolInput": tool_input_data,
             "reason": "Matches dangerous command pattern",
@@ -1675,6 +1676,7 @@ def create_external_approval_gate(
         await permission_mgr.enqueue_permission_request(actual_session_id, {
             "sessionId": actual_session_id,
             "requestId": request_id,
+            "toolUseId": tool_use_id,
             "toolName": tool_name,
             "toolInput": tool_input_data,
             "reason": reason,

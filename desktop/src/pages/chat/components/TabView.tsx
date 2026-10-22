@@ -226,6 +226,8 @@ export interface TabViewProps {
   onEscalationSelect: (escalationId: string, optionLabel: string) => void;
   onCancelQueued: (tabId: string) => void;
   onContinue: () => void;
+  /** Stop this tab's background agents while no turn runs (POST /chat/stop). */
+  onStopBackground?: (tabId: string) => void;
   onFocusClick: (title: string) => void;
   onItemClick: (message: string, context?: string) => void;
   onRetryQueueTimeout: () => void;
@@ -277,6 +279,7 @@ function TabViewImpl({
   onEscalationSelect,
   onCancelQueued,
   onContinue,
+  onStopBackground,
   onFocusClick,
   onItemClick,
   onRetryQueueTimeout,
@@ -861,6 +864,19 @@ function TabViewImpl({
           >
             ↗ {tf(t, 'chat.turn.backgroundAgentsRunning', bgRunning.length === 1 ? '{{count}} background agent running' : '{{count}} background agents running', { count: bgRunning.length })}
           </button>
+          {/* No turn runs, so the composer has no Stop: this one stops them (the
+              turn's own Stop covers them while a turn streams). */}
+          {!isStreaming && onStopBackground && (
+            <button
+              type="button"
+              data-testid="background-agents-stop"
+              onClick={() => onStopBackground(tabId)}
+              title={tf(t, 'chat.turn.stopBackgroundAgentsTitle', 'Stop the background agents (the conversation continues on your next message)')}
+              className="ml-1.5 px-2 py-0.5 rounded-full text-[12px] text-[var(--color-text-muted)] bg-[var(--color-bg-primary)]/95 border border-[var(--color-border-subtle)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+            >
+              ■ {tf(t, 'chat.turn.stopBackgroundAgents', 'Stop')}
+            </button>
+          )}
         </div>
       )}
       {/* "↓ Back to latest" pill — shown ONLY while streaming AND the user has

@@ -643,11 +643,8 @@ class SessionUnit:
         # tell a user Stop apart from a clean completion. A user Stop must NEVER
         # be followed by a proactive self-heal kill/respawn (that defeats Stop).
         self._user_stopped_current_turn: bool = False
-        # Stop receipt (core/turn_stop): what was running when interrupt() ran,
-        # taken BEFORE the per-turn tracking is cleared; turned into a turn_stop
-        # block by take_stop_receipt() (router, after the process is gone). The
-        # note it leaves is injected ONCE into the next send's query.
-        self._stop_snapshot: Optional[dict] = None
+        # Stop receipt (core/turn_stop): the note begin_stop_receipt() leaves for
+        # the next send, injected ONCE into its query (_apply_stop_note).
         self._stop_context: str = ""
         self._retry_count: int = 0
         # Per-turn SDK spawn (__aenter__ handshake) wall time in ms, for the TTFT
@@ -1384,7 +1381,6 @@ class SessionUnit:
         self._content_emitted = False   # Track if meaningful content is emitted
         self._active_agent_tools = {}  # Clear stale sub-agent progress on new turn
         self._live_task_ids = set()  # an earlier turn's task ids are not stoppable
-        self._stop_snapshot = None  # a Stop's snapshot belongs to the turn it stopped
         self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
         # Gate-2 F3 (belt-and-suspenders): a fresh user turn never carries a stale
         # outstanding-tool_use guard. Gate-2 F4: drop the stale last-drained hint so
@@ -4118,21 +4114,6 @@ class SessionUnit:
         # turn should remain eligible for self-heal (run_fb6e94a9).
         if not autonomous:
             self._user_stopped_current_turn = True
-            # What is running right now, before the clears below forget it
-            # (core/turn_stop). Display/continuation aid: never blocks the stop.
-            try:
-                from . import turn_stop
-                self._stop_snapshot = turn_stop.take_snapshot(
-                    generation=gen_at_entry,
-                    open_tool_uses=self._open_tool_uses,
-                    agent_tools=self._active_agent_tools,
-                    background=self.background_agents.running(),
-                    now=awake_time(),
-                )
-            except Exception:  # noqa: BLE001
-                logger.debug("session_unit.stop_snapshot_failed session_id=%s",
-                             self.session_id, exc_info=True)
-                self._stop_snapshot = None
         self._active_agent_tools = {}  # Clear stale sub-agent progress on interrupt
         self._live_task_ids = set()  # the turn is stopped: no per-agent stop after it
         self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
@@ -4274,22 +4255,47 @@ class SessionUnit:
             await self.kill()
             return False
 
-    def take_stop_receipt(self) -> Optional[dict]:
-        """The ``turn_stop`` block for the Stop that just ran (core/turn_stop), once.
+    def begin_stop_receipt(self) -> Optional[dict]:
+        """The ``turn_stop`` block for a user Stop that is about to run (core/turn_stop).
 
-        Call after ``interrupt()`` returned, so a background agent's status says how
-        it ended with the process. None when there is no snapshot, or a new send
-        started since (the receipt belongs to the stopped turn, never the new one).
-        Leaves the one-time continuation note for the next ``send()``."""
-        snap, self._stop_snapshot = self._stop_snapshot, None
-        if not snap or snap.get("generation") != self._send_generation:
+        Synchronous, called BEFORE ``interrupt()`` / ``stop_background()``: it reads
+        what is running at this instant (the interrupt clears that tracking). None
+        when nothing would be stopped (no turn running, no background agent). Leaves
+        the one-time continuation note for the next ``send()``."""
+        active = self.state in (SessionState.STREAMING, SessionState.WAITING_INPUT)
+        background = self.background_agents.running() if self.is_alive else []
+        if not active and not background:
             return None
         from . import turn_stop
-        agents_now = {e["toolUseId"]: e for e in self.background_agents.snapshot()
-                      if e.get("toolUseId")}
-        block = turn_stop.build_block(snap, agents_now, process_gone=not self.is_alive)
+        pending = self._pending_question if self.state == SessionState.WAITING_INPUT else None
+        block = turn_stop.build(
+            open_tool_uses=self._open_tool_uses if active else {},
+            agent_tools=self._active_agent_tools if active else {},
+            background=background,
+            now=awake_time(),
+            # a permission prompt still open: the call it gates never started
+            not_run=(pending or {}).get("tool_call_id") if (pending or {}).get("request_id") else None,
+        )
+        if not active:
+            block["turn"] = False  # no turn was running: only background agents stopped
         self._stop_context = turn_stop.continuation_note(block)
         return block
+
+    async def stop_background(self) -> bool:
+        """Stop the background agents of an IDLE session (no turn running): they run
+        inside the AI process, so it is recycled the way a user Stop recycles it
+        (``_crash_to_cold_async(clear_identity=False)``: the conversation resumes on
+        the next send). False when there is nothing to stop."""
+        if self.state != SessionState.IDLE or not self.background_agents.running():
+            return False
+        # an app recycle, not a crash: the exit is classified as a fast recycle
+        self._recycle_kill_pending = True
+        await self._crash_to_cold_async(clear_identity=False)
+        # they ended with the process (a no-op when the reader's teardown already said so)
+        self.background_agents.lose_all()
+        logger.info("session_unit.stop_background session_id=%s — recycled to COLD",
+                    self.session_id)
+        return True
 
     def _apply_stop_note(self, query_content: Any) -> Any:
         """The query with the last Stop's note in front (core/turn_stop), once: what

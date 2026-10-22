@@ -510,16 +510,21 @@ export interface TurnNoticeContent {
   at?: string;
 }
 
-/** What a user Stop stopped — written by the BACKEND once the AI process is gone
- *  (core/turn_stop): the calls that were running, background agents and how they
- *  ended. Persisted, and returned by POST /chat/stop (the live route). */
+/** What a user Stop stopped — written by the BACKEND at the moment of the Stop
+ *  (core/turn_stop): the calls that were running, the background agents it ends.
+ *  Persisted, and returned by POST /chat/stop (the live route). */
 export interface TurnStopContent {
   type: 'turn_stop';
   at?: string;
-  calls: Array<{ toolUseId: string; name: string; elapsedMs?: number; description?: string }>;
+  calls: Array<{ toolUseId: string; name: string; elapsedMs?: number; description?: string;
+    /** false: it was waiting for the user's approval and never started. */
+    ran?: boolean }>;
   agents: Array<{ toolUseId: string; description?: string; status: string; background?: boolean; summary?: string }>;
   /** Rows beyond the cap that are not listed. */
   omitted?: number;
+  /** false: no turn was running; only background agents were stopped (the turn
+   *  this lands on had already ended and is not "stopped"). */
+  turn?: boolean;
 }
 
 /** At the top of a turn the CLI started to answer finished background agents

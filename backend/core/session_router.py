@@ -4614,37 +4614,70 @@ class SessionRouter:
                     )
 
     async def interrupt_session(self, session_id: str) -> dict:
-        """Delegate to SessionUnit.interrupt()."""
+        """A user Stop (POST /chat/stop): stop the running turn, or with no turn
+        running, the session's background agents; either way with a stop receipt.
+
+        The receipt (core/turn_stop) is built from what runs at this instant and
+        persisted BEFORE the stop is awaited, so a message sent meanwhile is stored
+        after it (the receipt never lands on the next turn). The turn's changes and
+        products so far are computed while the stop runs."""
         unit = self.get_unit(session_id)
         if unit is None:
             return {"success": False, "message": f"Session {session_id} not found"}
-        interrupted = await unit.interrupt()
-        receipt = await self._persist_stop_receipt(session_id, unit)
-        # PIT01 recycle: a user Stop now recycles the poisoned subprocess to COLD,
-        # so `interrupted=True` (the turn was stopped) no longer implies the
-        # process is alive. Re-read is_alive for the accurate liveness signal.
+        turn_running = unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT)
+        stop_rows = await self._persist_stop_receipt(session_id, unit)
+        products = (asyncio.ensure_future(self._turn_products_at_stop(unit))
+                    if stop_rows and turn_running else None)
+        bg = getattr(unit, "background_agents", None)
+        if stop_rows and bg is not None:
+            bg.user_stop(True)  # what the process takes down is "stopped", not "lost"
+        try:
+            if turn_running:
+                interrupted = await unit.interrupt()
+                message = "Interrupted" if interrupted else "Killed (interrupt timed out)"
+            else:
+                stopped = await unit.stop_background() if stop_rows else False
+                message = "Stopped background agents" if stopped else "Nothing running"
+        finally:
+            if bg is not None:
+                bg.user_stop(False)
+        extra = await products if products is not None else []
+        if extra:
+            extra = await self._persist_assistant_blocks(
+                session_id, extra, None, label="turn_stop-products",
+                client_id=getattr(unit, "_turn_client_id", None),
+            )
+        # PIT01 recycle: a user Stop recycles the subprocess to COLD, so a stopped
+        # turn does not imply a live process. Re-read is_alive for liveness.
         return {
             "success": True,
-            "message": "Interrupted" if interrupted else "Killed (interrupt timed out)",
+            "message": message,
             "subprocess_alive": unit.is_alive,
-            "receipt": receipt,
+            "receipt": [*extra, *stop_rows],
         }
 
     async def _persist_stop_receipt(self, session_id: str, unit: SessionUnit) -> list[dict]:
-        """The stopped turn's closing row (core/turn_stop): what this turn changed and
-        produced so far (``turn_changes`` / ``turn_deliverables``, otherwise only
-        written at a ``result`` a stopped turn never gets) and the ``turn_stop``
-        block. Persisted like any assistant row (a reload shows it) and returned for
-        the ``/chat/stop`` response: the frontend aborted the stream before calling
-        stop, so the response is the live route. A display aid: [] on any failure,
-        never fails the stop."""
+        """The ``turn_stop`` row for a Stop about to run (core/turn_stop), persisted
+        like any assistant row (a reload shows it) and returned for the
+        ``/chat/stop`` response (the frontend aborted the stream before calling
+        stop, so the response is the live route). A display aid: [] when nothing is
+        running or on any failure, never fails the stop."""
         try:
-            block = unit.take_stop_receipt()
+            block = unit.begin_stop_receipt()
         except Exception:  # noqa: BLE001
             logger.debug("stop receipt failed session=%s", session_id, exc_info=True)
             return []
-        if block is None:
+        if not block:
             return []
+        return await self._persist_assistant_blocks(
+            session_id, [block], None, label="turn_stop",
+            client_id=getattr(unit, "_turn_client_id", None),
+        )
+
+    async def _turn_products_at_stop(self, unit: SessionUnit) -> list[dict]:
+        """What the stopped turn changed and produced so far (``turn_changes`` /
+        ``turn_deliverables``): otherwise only written at a ``result``, which a
+        stopped turn never gets. [] on any failure."""
         blocks: list[dict] = []
         changes = getattr(unit, "_turn_changes", None)
         if changes is not None:
@@ -4659,11 +4692,7 @@ class SessionRouter:
             blocks.append({"type": "turn_deliverables",
                            "files": list(files.values())[:MAX_TURN_DELIVERABLES]})
             files.clear()
-        blocks.append(block)
-        return await self._persist_assistant_blocks(
-            session_id, blocks, None, label="turn_stop",
-            client_id=getattr(unit, "_turn_client_id", None),
-        )
+        return blocks
 
     async def stop_task(self, session_id: str, task_id: str) -> dict:
         """Stop one sub-agent of a session's running turn (SessionUnit.stop_task).

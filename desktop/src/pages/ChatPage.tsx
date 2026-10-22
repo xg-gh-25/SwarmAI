@@ -3087,6 +3087,21 @@ export default function ChatPage() {
     }
   };
 
+  // Stop a tab's background agents while no turn runs (TabView's background line):
+  // the same POST /chat/stop; its receipt joins the tab's last assistant message.
+  const handleStopBackgroundRef = useRef((_tabId: string) => {});
+  handleStopBackgroundRef.current = (tabId: string) => {
+    const sid = tabMapRef.current.get(tabId)?.sessionId;
+    if (!sid) return;
+    const lastId = [...(messageStoreRegistry.get(tabId)?.messages ?? [])].reverse().find((m) => m.role === 'assistant')?.id;
+    chatService.stopSession(sid).then((res) => {
+      if (lastId && res.receipt?.length) applyStopReceipt(tabId, lastId, res.receipt);
+    }).catch((err) => {
+      console.warn('[stopBackground] Backend stop failed (best effort):', err);
+    });
+  };
+  const stableStopBackground = useCallback((tabId: string) => handleStopBackgroundRef.current(tabId), []);
+
   // Handle stop — UI feedback is SYNCHRONOUS (no waiting for backend).
   // Backend stop is fire-and-forget (best effort). This eliminates the
   // race window where error events from the interrupted stream leak
@@ -3461,6 +3476,7 @@ export default function ChatPage() {
                     onEscalationSelect={handleEscalationSelect}
                     onCancelQueued={handleCancelQueued}
                     onContinue={handleContinue}
+                    onStopBackground={stableStopBackground}
                     onFocusClick={handleFocusClick}
                     onItemClick={handleItemClick}
                     onRetryQueueTimeout={handleRetryQueueTimeout}

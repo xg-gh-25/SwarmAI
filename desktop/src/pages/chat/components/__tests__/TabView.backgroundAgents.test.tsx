@@ -4,7 +4,8 @@
  * What is tested (real TabView, MessageBubble mocked): while the daemon reports a
  * background agent running for the tab's session, one line says how many — also when
  * no turn streams; it goes when they end; another session's agents do not show; a
- * click brings the first running agent's row into view.
+ * click brings the first running agent's row into view; with no turn running it has a
+ * Stop for those agents (onStopBackground), none while a turn streams.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, act } from '@testing-library/react';
@@ -92,5 +93,17 @@ describe('TabView — background agents line', () => {
     await afterActivation();
     act(() => { backgroundAgentsStore.apply('s2', [{ toolUseId: 'x', status: 'running' }]); });
     expect(queryByTestId('background-agents-line')).toBeNull();
+  });
+
+  it('with no turn running the line has a Stop for its agents; while a turn streams it does not', async () => {
+    const onStop = vi.fn();
+    const { queryByTestId, rerender } = render(<TabView {...props} onStopBackground={onStop} />);
+    await afterActivation();
+    act(() => { backgroundAgentsStore.apply('s1', [{ toolUseId: 'ag1', description: 'Measure', status: 'running' }]); });
+    fireEvent.click(queryByTestId('background-agents-stop')!);
+    expect(onStop).toHaveBeenCalledWith('A');
+    expect(focused).toEqual([]); // Stop is its own button, it does not scroll
+    rerender(<TabView {...props} onStopBackground={onStop} isStreaming />);
+    expect(queryByTestId('background-agents-stop')).toBeNull();
   });
 });

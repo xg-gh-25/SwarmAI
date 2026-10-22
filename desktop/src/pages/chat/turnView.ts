@@ -342,7 +342,8 @@ export function deriveTurnView(
   // right after Stop) the app's marker stands for the last call alone.
   let stopReceipt: TurnStopContent | undefined;
   for (const b of content) if (b.type === 'turn_stop') stopReceipt = b;
-  const stoppedIds = new Set((stopReceipt?.calls ?? []).map((c) => c.toolUseId));
+  // a call that was still waiting for approval never ran: it is not "stopped"
+  const stoppedIds = new Set((stopReceipt?.calls ?? []).filter((c) => c.ran !== false).map((c) => c.toolUseId));
   const markerOnly = !stopReceipt && content.some((b) => b.type === 'text' && STOP_MARKER_RE.test(b.text || ''));
   const cutByStop = (id: string, index: number, result?: ToolResultContent) =>
     (!result || result.isError) && (stoppedIds.has(id) || (markerOnly && index === lastToolIdx && !!result));
@@ -641,7 +642,9 @@ export function deriveTurnView(
     .map((u) => u.text)
     .join('\n\n');
   return { units, nextSteps, copyText, run, attention, summary, deliverables, changes, liveStage, midWork, pipelineStart,
-    stoppedMarker: stoppedMarker || !!stopReceipt, ...(stopReceipt ? { stopReceipt } : {}), notice, backgroundFinished };
+    // a receipt for background agents only (no turn ran) does not stop this turn
+    stoppedMarker: stoppedMarker || (!!stopReceipt && stopReceipt.turn !== false),
+    ...(stopReceipt ? { stopReceipt } : {}), notice, backgroundFinished };
 }
 
 // ── Step labels ─────────────────────────────────────────────────────────────

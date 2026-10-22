@@ -8,13 +8,14 @@ was started (its Agent step), in one line above the composer while it runs, and 
 the top of the CLI turn that answers it.
 
 Statuses: ``running`` → ``completed`` / ``failed`` / ``stopped`` (the CLI said so),
-or ``lost`` (the CLI process went away first: its result will never come).
+or ``lost`` (the CLI process went away first: its result will never come), or
+``stopped`` when that process went away because of the user's Stop (``user_stop``).
 
 - ``launch(tool_use_id, description)``: the orchestrator saw a background Agent call.
 - ``task_started`` / ``task_finished``: the stream reader's task frames, with or
   without a turn open. A task that finishes before its launch was recorded (the reader
   runs ahead of the orchestrator) is kept and applied at launch.
-- ``lose_all()``: the CLI process is gone.
+- ``lose_all()``: the CLI process is gone; ``user_stop(on)`` frames a user Stop.
 - Every change calls ``on_change(entry)``; ``take_unannounced()`` returns the agents
   that finished since the last CLI turn took them (recent ones only).
 
@@ -55,6 +56,7 @@ class BackgroundAgents:
         self._task_tool: dict[str, str] = {}  # task_id -> tool_use_id
         self._early: dict[str, dict] = {}  # tool_use_id -> a finish seen before launch
         self._unannounced: list[str] = []
+        self._user_stop = False
 
     # ── input ─────────────────────────────────────────────────────────
 
@@ -100,11 +102,18 @@ class BackgroundAgents:
             self._finish(entry, **info)
 
     def lose_all(self) -> None:
+        # a user Stop is ending the process: what it ends is "stopped", not "lost"
+        status = "stopped" if self._user_stop else "lost"
         for entry in self._agents.values():
             if entry["status"] == "running":
-                entry["status"] = "lost"
+                entry["status"] = status
                 entry["endedAt"] = _now_ms()
+                entry.setdefault("durationMs", max(0, entry["endedAt"] - entry["startedAt"]))
                 self._changed(entry)
+
+    def user_stop(self, on: bool) -> None:
+        """While on, the process going away is the user's Stop (core/turn_stop)."""
+        self._user_stop = bool(on)
 
     # ── output ────────────────────────────────────────────────────────
 
