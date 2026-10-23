@@ -8,7 +8,7 @@
  * the default (no props) renders identically to before (pure info bar).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import FileViewerStatusBar from '../FileViewerStatusBar';
 
 const clip = vi.fn(async () => true);
@@ -23,7 +23,7 @@ describe('FileViewerStatusBar — file-operation cluster', () => {
     expect(screen.queryByTestId('statusbar-attach')).toBeNull();
   });
 
-  it('renders copy-path when filePath present; clicking copies the path', () => {
+  it('renders copy-path when filePath present; clicking copies the path', async () => {
     render(
       <FileViewerStatusBar
         fileName="deck.html"
@@ -34,7 +34,7 @@ describe('FileViewerStatusBar — file-operation cluster', () => {
     );
     const btn = screen.getByTestId('statusbar-copy-path');
     fireEvent.click(btn);
-    expect(clip).toHaveBeenCalledWith('/ws/out/deck.html');
+    await waitFor(() => expect(clip).toHaveBeenCalledWith('/ws/out/deck.html'));
   });
 
   it('renders attach button only when onAttach is provided; clicking fires it', () => {

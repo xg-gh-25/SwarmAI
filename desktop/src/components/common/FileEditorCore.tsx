@@ -29,7 +29,7 @@ import { FileTypeIcon } from './FileTypeIcon';
 import { computeLineDiff } from '../../utils/lineDiff';
 import type { DiffLine } from '../../utils/lineDiff';
 import api from '../../services/api';
-import { copyToClipboard } from '../../utils/clipboard';
+import { CopyPathButton, copyPathNow } from './CopyPathButton';
 import { openExternal, openInSystemApp } from '../../utils/openExternal';
 import { subscribeFileChanged } from '../../hooks/fileChangedBroker';
 import MarkdownRenderer from './MarkdownRenderer';
@@ -710,7 +710,6 @@ export default function FileEditorCore({
   const [selectionLines, setSelectionLines] = useState<[number, number] | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const [attachFeedback, setAttachFeedback] = useState(false);
-  const [copyPathFeedback, setCopyPathFeedback] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   // Viewport height of the scroll area — drives the virtualized gutter's window.
   // Seeded from window.innerHeight so the FIRST paint never under-fills a tall
@@ -1486,8 +1485,8 @@ export default function FileEditorCore({
               await openInSystemApp(absolutePath);
             }
           } catch {
-            // Fallback: copy path to clipboard so user can paste in browser
-            await copyToClipboard(absolutePath);
+            // Fallback: copy the path so the user can paste it (toast on failure)
+            await copyPathNow(absolutePath);
           }
         }}
         className={clsx(toolBtn, 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors')}
@@ -1518,6 +1517,13 @@ export default function FileEditorCore({
       <span className="material-symbols-outlined icon-sm">refresh</span>
     </button>
   );
+  const copyPathBtn = (
+    <CopyPathButton
+      path={getAbsolutePath()}
+      label={iconOnly ? undefined : 'Copy Path'}
+      className={clsx(toolBtn, 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]')}
+    />
+  );
   const attachBtn = onAttachToChat ? (
     <button
       onClick={handleAttachToChat}
@@ -1547,8 +1553,8 @@ export default function FileEditorCore({
   // scroll clear of the bar and the synced layers keep one scroll height. The
   // gutter needs none: it positions from scrollTop. Reload is in the group (the
   // editor also reloads on an agent write, on window focus and when the window is
-  // shown again; an edit made elsewhere can still need it). No Copy path (each
-  // Canvas list row has it), no Close (the list is the file selector).
+  // shown again; an edit made elsewhere can still need it). Copy path is here too
+  // (frequent action, canvas-file-types.md §2b). No Close (the list is the selector).
   const floatPad = iconOnly ? { paddingBottom: PANEL_FLOAT_PAD } : undefined;
   const hasPreview = isMarkdown || isSvg;
   const previewOn = isMarkdown ? showMarkdownPreview : showSvgPreview;
@@ -1600,6 +1606,7 @@ export default function FileEditorCore({
         {reloadBtn}
         {reviewBtn}
         {openExternalBtn}
+        {copyPathBtn}
         {attachBtn}
         {syncDisabled && (
           <span
@@ -1735,33 +1742,7 @@ export default function FileEditorCore({
               {!iconOnly && (showDiff ? 'Back to Edit' : 'Show Changes')}
             </button>
             {openExternalBtn}
-            {/* Copy absolute file path */}
-            <button
-              onClick={async () => {
-                if (copyPathFeedback) return;
-                const absolutePath = getAbsolutePath();
-                const ok = await copyToClipboard(absolutePath);
-                if (ok) {
-                  setCopyPathFeedback(true);
-                  setTimeout(() => setCopyPathFeedback(false), 2000);
-                } else {
-                  console.warn('[FileEditor] copyToClipboard failed for:', absolutePath);
-                }
-              }}
-              className={clsx(
-                toolBtn, 'transition-colors',
-                copyPathFeedback
-                  ? 'text-[var(--color-success)] cursor-default'
-                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
-              )}
-              title={copyPathFeedback ? 'Copied!' : 'Copy absolute file path'}
-              data-testid="copy-path-btn"
-            >
-              <span className="material-symbols-outlined icon-sm">
-                {copyPathFeedback ? 'check' : 'content_copy'}
-              </span>
-              {!iconOnly && (copyPathFeedback ? 'Copied' : 'Copy Path')}
-            </button>
+            {copyPathBtn}
             {attachBtn}
             {/* Mode toggle: panel ↔ modal */}
             {onToggleMode && (

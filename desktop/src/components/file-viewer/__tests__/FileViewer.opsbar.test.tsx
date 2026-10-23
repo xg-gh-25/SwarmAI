@@ -48,15 +48,15 @@ const base = (fileName: string) => ({
 beforeEach(() => vi.clearAllMocks());
 
 describe('FileViewer — non-text file-op cluster', () => {
-  it('html file (panel): status bar shows attach + refresh, not copy-path; attach dispatches swarm:attach-file', async () => {
+  it('html file (panel): status bar shows attach + refresh + copy-path; attach dispatches swarm:attach-file', async () => {
     const events: CustomEvent[] = [];
     const listener = (e: Event) => events.push(e as CustomEvent);
     window.addEventListener('swarm:attach-file', listener);
     try {
       render(<FileViewer {...base('deck.html')} />);
       await waitFor(() => expect(screen.getByTestId('statusbar-refresh')).toBeTruthy());
-      // Copy path is on each Canvas list row, so the panel's status bar does not repeat it.
-      expect(screen.queryByTestId('statusbar-copy-path')).toBeNull();
+      // Copy path is a frequent action: shown in the panel too (§2b).
+      expect(screen.getByTestId('statusbar-copy-path')).toBeTruthy();
       const attach = screen.getByTestId('statusbar-attach');
       fireEvent.click(attach);
       expect(events).toHaveLength(1);

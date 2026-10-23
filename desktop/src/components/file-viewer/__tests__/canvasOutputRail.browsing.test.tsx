@@ -136,4 +136,15 @@ describe('CanvasOutputRail — browsing row + empty guard', () => {
     expect(stop).toHaveBeenCalledTimes(1);
     expect(opened).not.toHaveBeenCalled();
   });
+
+  it('copy path: always visible on the selected row, hover-only on the others (§2b)', () => {
+    mockFiles = [mkFile('a.ts'), mkFile('b.ts')];
+    render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="src/a.ts" />);
+    const rows = screen.getAllByTestId('canvas-output-row');
+    const sel = rows.find((r) => r.hasAttribute('data-selected'))!;
+    const other = rows.find((r) => !r.hasAttribute('data-selected'))!;
+    expect(sel.querySelector('[data-testid="canvas-row-copy"]')!.className).not.toContain('opacity-0');
+    expect(other.querySelector('[data-testid="canvas-row-copy"]')!.className).toContain('group-hover:opacity-100');
+  });
 });
+

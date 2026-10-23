@@ -875,10 +875,9 @@ function FileViewerImpl({
           filePath={activeTab.filePath}
           onAttach={() => attachFile(activeTab.filePath, activeTab.fileName)}
           // Panel: refresh lives here (a non-editor renderer reloads on an agent
-          // write but not on an outside edit); copy-path does not (each Canvas list
-          // row has it). The modal keeps copy-path and has no refresh (unchanged).
+          // write but not on an outside edit). Copy path is shown in both variants:
+          // it is a frequent action (canvas-file-types.md §2b).
           onRefresh={variant === 'panel' ? handleRefreshActive : undefined}
-          showCopyPath={variant !== 'panel'}
         />
       )}
     </div>

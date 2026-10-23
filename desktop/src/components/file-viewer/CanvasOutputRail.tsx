@@ -36,7 +36,7 @@ import { orderOutputs, outputRowOpenDetail } from '../../hooks/railSsot';
 
 export { outputRowOpenDetail, railOrder } from '../../hooks/railSsot';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
-import { copyToClipboard } from '../../utils/clipboard';
+import { CopyPathButton } from '../common/CopyPathButton';
 import { FileTypeIcon } from '../common/FileTypeIcon';
 
 // run_4de279ca: isBookkeepingPath + BOOKKEEPING_DIRS REMOVED. The backend git
@@ -95,14 +95,6 @@ const OutputRow = memo(function OutputRow({
     );
   }, [file.path, file.absolutePath, file.baseRef, file.sessionId, badge, file.deleted]);
 
-  const handleCopy = useCallback(
-    async (e: React.MouseEvent) => {
-      e.stopPropagation();
-      await copyToClipboard(file.absolutePath || file.path);
-    },
-    [file.absolutePath, file.path],
-  );
-
   const style = badge ? BADGE_STYLE[badge] : null;
   const dir = dirOf(file.path);
 
@@ -159,14 +151,12 @@ const OutputRow = memo(function OutputRow({
           {dir}
         </span>
       )}
-      <button
-        onClick={handleCopy}
-        className={`${dir ? '' : 'ml-auto '}opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-all shrink-0`}
-        title="Copy absolute path"
-        aria-label={`Copy path of ${file.fileName}`}
-      >
-        <span className="material-symbols-outlined icon-sm">content_copy</span>
-      </button>
+      {/* Copy path: always shown on the selected row, on hover elsewhere (§2b). */}
+      <CopyPathButton
+        path={file.absolutePath || file.path}
+        testId="canvas-row-copy"
+        className={`${dir ? '' : 'ml-auto '}${selected ? '' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 '}p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] shrink-0 inline-flex`}
+      />
       {time && (
         <span
           className="shrink-0 text-[11px] tabular-nums text-[var(--color-text-dim)]"
@@ -382,14 +372,6 @@ const BrowsingRow = memo(function BrowsingRow({
     );
   }, [path]);
 
-  const handleCopy = useCallback(
-    async (e: React.MouseEvent) => {
-      e.stopPropagation();
-      await copyToClipboard(path);
-    },
-    [path],
-  );
-
   const dir = dirOf(path);
 
   return (
@@ -418,14 +400,11 @@ const BrowsingRow = memo(function BrowsingRow({
             {dir}
           </span>
         )}
-        <button
-          onClick={handleCopy}
-          className={`${dir ? '' : 'ml-auto '}opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-all shrink-0`}
-          title="Copy absolute path"
-          aria-label={`Copy path of ${fileName}`}
-        >
-          <span className="material-symbols-outlined icon-sm">content_copy</span>
-        </button>
+        <CopyPathButton
+          path={path}
+          testId="canvas-row-copy"
+          className={`${dir ? '' : 'ml-auto '}p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] shrink-0 inline-flex`}
+        />
         {onStop && (
           <button
             onClick={(e) => { e.stopPropagation(); onStop(); }}

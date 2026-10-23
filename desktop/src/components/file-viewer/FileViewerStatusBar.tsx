@@ -6,12 +6,9 @@
  * Uses CSS-variable theming and stays at a fixed ~28px height.
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react';
 import type { FileViewType } from './utils/fileViewTypes';
 import { getFileTypeInfo } from './utils/fileViewTypes';
-import { useTranslation } from 'react-i18next';
-import { copyToClipboard } from '../../utils/clipboard';
-import { tf } from '../../pages/chat/tf';
+import { CopyPathButton } from '../common/CopyPathButton';
 
 export interface FileViewerStatusBarProps {
   fileName: string;
@@ -31,9 +28,6 @@ export interface FileViewerStatusBarProps {
   /** Reload-from-disk handler — when provided, a refresh button is shown (the
    *  Canvas panel, which has no file header). */
   onRefresh?: () => void;
-  /** Show the copy-path button (with filePath). Default true; the Canvas panel
-   *  passes false because each Canvas list row already copies its path. */
-  showCopyPath?: boolean;
 }
 
 /** Format bytes into a human-readable string (KB / MB / GB). */
@@ -54,26 +48,10 @@ export default function FileViewerStatusBar({
   filePath,
   onAttach,
   onRefresh,
-  showCopyPath = true,
 }: FileViewerStatusBarProps) {
   const info = getFileTypeInfo(fileName);
   const extraEntries = extraInfo ? Object.entries(extraInfo) : [];
 
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  // Hold the "Copied!" reset timer in a ref so we can cancel it on unmount —
-  // otherwise the 2s callback fires after the component is gone and setState on
-  // an unmounted component leaks (adversarial F1, conf 9).
-  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (copyTimerRef.current) clearTimeout(copyTimerRef.current); }, []);
-  const handleCopy = useCallback(async () => {
-    if (!filePath || copied) return;
-    const ok = await copyToClipboard(filePath);
-    if (ok) {
-      setCopied(true);
-      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    }
-  }, [filePath, copied]);
 
   return (
     <div
@@ -141,17 +119,12 @@ export default function FileViewerStatusBar({
                 <span className="material-symbols-outlined icon-sm leading-none">attach_file</span>
               </button>
             )}
-            {showCopyPath && <button
-              onClick={handleCopy}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-              title={copied ? tf(t, 'common.copy.copied', 'Copied!') : tf(t, 'common.copy.absolutePath', 'Copy absolute file path')}
-              aria-label={tf(t, 'common.copy.filePath', 'Copy file path')}
-              data-testid="statusbar-copy-path"
-            >
-              <span className="material-symbols-outlined icon-xs leading-none">
-                {copied ? 'check' : 'content_copy'}
-              </span>
-            </button>}
+            <CopyPathButton
+              path={filePath}
+              testId="statusbar-copy-path"
+              iconClassName="icon-xs leading-none"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
+            />
           </>
         )}
       </div>

@@ -13,12 +13,10 @@
  *     - "Copy Path"
  *   - Uses getFileTypeInfo from fileViewTypes for icon/label resolution
  */
-import { useState, useCallback } from 'react';
+import { useCallback } from 'react';
 import { getFileTypeInfo, OFFICE_EXTENSIONS } from '../utils/fileViewTypes';
 import { openInSystemApp, revealInFolder } from '../../../utils/openExternal';
-import { useTranslation } from 'react-i18next';
-import { copyToClipboard } from '../../../utils/clipboard';
-import { tf } from '../../../pages/chat/tf';
+import { CopyPathButton, copyPathNow } from '../../common/CopyPathButton';
 import { isDesktop } from '../../../services/tauri';
 
 interface RendererProps {
@@ -130,8 +128,6 @@ export default function UnsupportedRenderer({
   absolutePath,
   onAttachToChat,
 }: UnsupportedRendererProps) {
-  const { t } = useTranslation();
-  const [copyFeedback, setCopyFeedback] = useState(false);
 
   const ext = getExtension(fileName);
   // A file routed as text that the server found binary (415) has a "text" type
@@ -158,10 +154,8 @@ export default function UnsupportedRenderer({
     try {
       await openInSystemApp(osPath);
     } catch {
-      // Fallback: copy path instead
-      await copyToClipboard(osPath);
-      setCopyFeedback(true);
-      setTimeout(() => setCopyFeedback(false), 2000);
+      // Fallback: copy the path instead (toast on failure)
+      await copyPathNow(osPath);
     }
   }, [osPath]);
 
@@ -169,21 +163,9 @@ export default function UnsupportedRenderer({
     try {
       await revealInFolder(osPath);
     } catch {
-      await copyToClipboard(osPath);
-      setCopyFeedback(true);
-      setTimeout(() => setCopyFeedback(false), 2000);
+      await copyPathNow(osPath);
     }
   }, [osPath]);
-
-  const handleCopyPath = useCallback(async () => {
-    if (copyFeedback) return;
-    // Absolute in Tauri (local backend), workspace-relative on Hive (remote backend).
-    const ok = await copyToClipboard(copyPath);
-    if (ok) {
-      setCopyFeedback(true);
-      setTimeout(() => setCopyFeedback(false), 2000);
-    }
-  }, [copyPath, copyFeedback]);
 
   const handleAttachToChat = useCallback(() => {
     onAttachToChat?.(filePath);
@@ -271,16 +253,11 @@ export default function UnsupportedRenderer({
             </button>
           )}
 
-          <button
-            onClick={handleCopyPath}
-            className="btn-md btn-ghost transition-colors"
-            title={tf(t, 'common.copy.absolutePath', 'Copy absolute file path')}
-          >
-            <span className="material-symbols-outlined icon-sm">
-              {copyFeedback ? 'check' : 'content_copy'}
-            </span>
-            {copyFeedback ? tf(t, 'common.copy.copied', 'Copied!') : tf(t, 'common.copy.path', 'Copy Path')}
-          </button>
+          <CopyPathButton
+            path={copyPath}
+            label="Copy Path"
+            className="btn-md btn-ghost"
+          />
         </div>
       </div>
     </div>

@@ -75,6 +75,8 @@ describe('Changes tab (this session\'s runs)', () => {
     expect(files[0].textContent).toMatch(/M.*a\.ts.*src.*\+3 −1/);
     expect(files[0].textContent).not.toContain('uncommitted'); // the state lives in the card title
     expect(files[1].textContent).toMatch(/A.*new\.ts.*src.*\+4/);
+    // every worktree file row has a copy-path button (§2b)
+    expect(files[0].querySelector('[data-testid="changes-row-copy"]')).toBeTruthy();
     expect(screen.getByTestId('changes-commit').textContent).toMatch(/aaaaaaaa.*feat: one.*committed/);
     expect(gone.textContent).toMatch(/Gone.*failed/);
     expect(screen.getByTestId('changes-released').textContent).toContain('Released without landing');

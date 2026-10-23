@@ -37,7 +37,7 @@ describe('panel chrome', () => {
   it('has no header or footer controls, only the bottom strip', () => {
     render(<FileEditorCore {...md} variant="panel" committedContent="# old\n" />);
     expect(screen.getByTestId('editor-panel-bar')).toBeTruthy();
-    for (const id of ['show-changes-toggle', 'markdown-preview-toggle', 'copy-path-btn', 'mode-toggle', 'file-editor-cancel']) {
+    for (const id of ['show-changes-toggle', 'markdown-preview-toggle', 'mode-toggle', 'file-editor-cancel']) {
       expect(screen.queryByTestId(id)).toBeNull();
     }
     expect(screen.queryByLabelText('Close')).toBeNull();
@@ -45,6 +45,8 @@ describe('panel chrome', () => {
     expect(screen.getByTestId('attach-to-chat-btn')).toBeTruthy();
     // Refresh is in the floating group (super-canvas-fixing.md C2).
     expect(screen.getByTestId('editor-panel-bar').contains(screen.getByTestId('file-editor-reload'))).toBe(true);
+    // Copy path is back in the group (canvas-file-types.md §2b).
+    expect(screen.getByTestId('editor-panel-bar').contains(screen.getByTestId('copy-path-btn'))).toBe(true);
   });
 
   it('Refresh with unsaved edits asks first (Discard & Reload), never silently overwrites', () => {

@@ -20,6 +20,7 @@ import {
   type RunCommit, type RunRepoChange, type SessionRunChange,
 } from '../../services/canvasSession';
 import { FileTypeIcon } from '../common/FileTypeIcon';
+import { CopyPathButton } from '../common/CopyPathButton';
 
 export type ChangesSelection =
   | { kind: 'file'; run: string; root: string; path: string }
@@ -110,16 +111,23 @@ function RepoBlock({ run, repo, multi, selected, onSelect }: {
         const on = key === `${run}|${repo.root}:${f.path}`;
         const [name, dir] = splitPath(f.path);
         return (
-          <button key={f.path} type="button" data-testid="changes-file"
+          // A row, not a <button>: it holds the copy-path button (no nested buttons).
+          <div key={f.path} role="button" tabIndex={0} data-testid="changes-file"
             onClick={() => onSelect({ kind: 'file', run, root: repo.root, path: f.path })}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect({ kind: 'file', run, root: repo.root, path: f.path }); } }}
             title={f.path} data-selected={on || undefined}
-            className={`w-full flex items-center gap-1.5 h-[26px] pl-[18px] pr-2 rounded-md text-left text-[12px] ${on ? SEL : HOVER}`}>
+            className={`group w-full flex items-center gap-1.5 h-[26px] pl-[18px] pr-2 rounded-md text-left text-[12px] cursor-pointer ${on ? SEL : HOVER}`}>
             <span className={`w-3 shrink-0 text-center text-[10.5px] font-bold ${f.status === 'added' ? 'text-[var(--color-git-added)]' : f.status === 'deleted' ? 'text-[var(--color-git-deleted,#f85149)]' : 'text-[var(--color-git-modified)]'}`}>{STATUS_LETTER[f.status]}</span>
             <TypeIcon name={name} />
             <span className={`shrink-0 truncate max-w-[60%] text-[var(--color-text)] ${on ? 'font-semibold' : ''}`}>{name}</span>
             <span className="flex-1 min-w-0 truncate text-[11px] text-[var(--color-text-faint,var(--color-text-muted))]">{dir}</span>
+            <CopyPathButton
+              path={f.absolutePath || f.path}
+              testId="changes-row-copy"
+              className={`${on ? '' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 '}p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] shrink-0 inline-flex`}
+            />
             <Delta ins={f.added} del={f.deleted} />
-          </button>
+          </div>
         );
       })}
       {repo.files.length > SHOWN && (
