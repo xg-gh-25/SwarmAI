@@ -1830,3 +1830,57 @@ def test_an_overlay_keeps_desktop_results_of_a_base_without_a_key():
     a = [r for r in merged["results"] if pt._rfile(r) == "desktop/src/a.test.ts"]
     assert [r["outcome"] for r in a] == ["timeout"], a
 
+
+
+def test_risk_selected_desktop_tests_run_under_vitest_not_pytest(rig, monkeypatch):
+    """R7: risk expansion may name desktop tests (public-contract, shared-config); they
+    join the vitest set, never the pytest targets."""
+    repo = rig({"desktop/src/a.test.ts": "x\n", "backend/tests/test_api_contract.py": ""})
+    monkeypatch.setattr(pt, "_risk_expansion", lambda ns, scope, r: (
+        ["backend/tests/test_api_contract.py", "desktop/src/a.test.ts"], ["public-contract"], []))
+    _write(repo, {"backend/routers/r.py": "x = 1\n"})
+    ctx = pt._Ctx(repo, repo.parent / "cache-plan", time.monotonic() + 60)
+    ns = SimpleNamespace(mode="verify", project=PROJECT, run_id=RUN_ID)
+    sgraph = pt.build_source_graph(repo, ctx.cache)
+    plan, err = pt._plan(ctx, ns, repo, {}, pt.build_import_graph(repo, ctx.cache, sgraph), sgraph)
+    assert err is None
+    assert "desktop/src/a.test.ts" not in plan["targets"]
+    assert "desktop/src/a.test.ts" in plan["desktop"]
+    assert "backend/tests/test_api_contract.py" in plan["targets"]
+
+
+_VITEST_DEADLINE = {"nodeid": "desktop::vitest", "classification": "timeout",
+                    "outcome": "timeout", "deadline": True}
+_DESKTOP_RED = {"nodeid": "desktop/src/a.test.ts::adds", "classification": "new",
+                "outcome": "failed"}
+
+
+@pytest.mark.parametrize("failure,auto", [
+    (_VITEST_DEADLINE, None), (_VITEST_DEADLINE, "verify"), (_VITEST_DEADLINE, "regression"),
+    (_DESKTOP_RED, None),   # an explicit recheck re-runs a red test; a continuation does not
+])
+def test_recheck_reruns_risk_selected_desktop_tests_with_no_desktop_change(
+        rig, monkeypatch, tmp_path, failure, auto):
+    """R7 review HIGH: a backend-only change whose desktop tests came from risk
+    expansion (public-contract) must be continuable / recheckable: the recheck's
+    desktop set is the base's (risk over the run's whole change set), plus the named
+    failing file, even when no desktop file changed since."""
+    repo = rig({"desktop/src/a.test.ts": "x\n"})
+    _write(repo, {"backend/routers/r.py": "x = 1\n"})
+    monkeypatch.setattr(pt, "_risk_expansion", lambda ns, scope, r: (
+        (["desktop/src/a.test.ts"] if "backend/routers/r.py" in scope else []),
+        ["public-contract"], []))
+    ev_root = tmp_path / "evroot"
+    (ev_root / "tests").mkdir(parents=True)
+    changed = pt.changed_files(repo)
+    (ev_root / "tests" / f"latest-{auto or 'verify'}.json").write_text(json.dumps({
+        "schema": 1, "mode": auto or "verify", "finished_at": "2026-10-24T00:00:00Z",
+        "failures": [failure], "results": [failure],
+        "changed_files": {f: pt._file_digest(repo / f) for f in changed}}))
+    ctx = pt._Ctx(repo, tmp_path / "cache-rc", time.monotonic() + 60)
+    ns = SimpleNamespace(mode="recheck", project=PROJECT, run_id=RUN_ID, auto_recheck_of=auto)
+    sgraph = pt.build_source_graph(repo, ctx.cache)
+    plan, err = pt._plan(ctx, ns, ev_root, {}, pt.build_import_graph(repo, ctx.cache, sgraph), sgraph)
+    assert err is None, err
+    assert "desktop/src/a.test.ts" in plan["desktop"], plan["desktop"]
+    assert plan.get("desktop_key")

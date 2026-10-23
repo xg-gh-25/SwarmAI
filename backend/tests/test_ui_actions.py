@@ -396,12 +396,6 @@ def test_frontend_table_derives_show_star_from_ssot():
 # cross-language equivalent of "run the real reader against the real writer".
 
 
-# ── surface_run_outputs handler does NOT write the gate marker (run_a87bfe3f) ──
-# Gate-2: the orchestrator dedups emission per session, so a handler that wrote the
-# marker on every call could attest rows it never sent. The orchestrator writes it
-# after yielding the batch (test_orchestrator_surface_wiring.py).
-
-
 def test_tool_description_teaches_open_then_tab():
     """The agent must learn from the tool itself that a canvas-tab-* command does
     not open a closed / folded Canvas: "show me the changes" = open-canvas, then

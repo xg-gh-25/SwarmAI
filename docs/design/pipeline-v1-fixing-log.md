@@ -663,3 +663,16 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - **LOW，`daily_activity_hook._session_run_evidence` 的 `files_touched` 分支：** 删除，返回值改为 `(shas, ids)`。
 - **LOW，`pipeline_baseline`：** 删除对 `"complete"` 和 `completed_at` 的兼容。
 - **LOW，AGENTS.md：** takeover 只发生在 v1 的变更命令上；`pipeline_test.py` 只被注入 session id，owner 由它自己检查。已分开写。
+
+## 29. R7：最终验证
+
+**静态检查：** 已删除的旧名字（`stage-start`、`run-create`、`run-commit`、`surface_run_outputs`、`session_link_stamper` 等）在代码里不再出现。仍出现的地方都有理由留着：负向测试（断言旧命令已被拒绝）、给 gate 当输入的命令字符串、历史设计文档。`pytest --collect-only` 没有错误。前端 `tsc -b` 通过，vitest 174 个文件、2245 个测试全部通过。后端 58 个受影响的测试文件中，有两个失败。
+
+**这两个失败都是 R2（9b28d96d6）引入、当时没有测出的回归**，在 R2 及其前一个 commit 上都复现过：
+- **`_ref_nodeids`：** 报告中不能截断的 nodeid 原来取自旧 BUILD 的 `ac_coverage`。R2 删掉这个读取后，结果永远为空，v1 DESIGN_SPEC 点名的长 nodeid 会被截断，之后再也对不上。修法：改为读 `_v1_design_test_refs(v1)`。
+- **风险扩展把前端文件交给 pytest：** public-contract 规则会选出 `*.test.ts(x)`；改到共享配置时，会选出整个 `desktop/src` 下的 `.ts` / `.tsx`，连源码也在内。`_plan` 把这些文件全部作为 pytest 目标，结果报 `not found: backend/desktop/...` 的 runner 错误，挡住落地。这个 bug 从 K3 就有，R2 把测试夹具改成真实的 v1 run 后才暴露。修法（XG 2026-10-24 批准修改冻结的 `_plan`，已记入 pipeline-test-speed.md §11）：风险扩展选出的 `desktop/` 文件进入 vitest 集合；共享配置只选该区域的测试文件；`RISK_RULES_VERSION` 改为 `v13-2026-10-23b`。
+
+**审查（c744d60f，1 HIGH），已修：**
+- **HIGH，只改了后端的 run，vitest 超时后无法续跑：** recheck 和续跑只对增量范围做风险扩展，结果为空，前端集合也就是空的；点名的失败文件又只在集合非空时才会加进去。修法：recheck 时，对 run 的整个变更集重新做风险扩展，取出前端测试；点名的失败文件无条件加入。新增参数化测试，覆盖 vitest 超时后的显式 recheck、verify 续跑、regression 续跑，以及显式 recheck 一个红的前端测试。不修时 4 个用例中 3 个失败，修后全部通过。冻结摘要更新为 `8c58545e4bf5d915`，§11 已补记。
+
+**测试清理：** `test_run_session_link`、`test_pipeline_run_mapping`、`test_ui_actions` 中删除了指向旧代码的 fixture 和注释。

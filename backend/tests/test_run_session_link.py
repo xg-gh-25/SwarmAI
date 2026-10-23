@@ -1,27 +1,22 @@
 """A pipeline run stays linked to the session that created it (run_df73d970).
 
-run_1f81be36 redirected ``run-create``'s stdout to a file. The session→run map was
-written only by a PostToolUse hook that parses that stdout, so the run was never
-linked: every reviewer marker went to the PREVIOUS run and ``run-commit`` refused
-(D7). These tests pin the fixes:
+run_1f81be36 redirected the create command's stdout to a file. The session→run map
+was written only by a PostToolUse hook that parses that stdout, so the run was never
+linked and every reviewer marker went to the PREVIOUS run. These tests pin the fixes
+that remain with Pipeline v1:
 
-- AC3: ``run-create`` writes ``session_<sid>_run.map`` itself (SWARM_APP_SESSION_ID),
-  through the same helper and shape the hook uses; a write failure never fails it.
+- the map helper writes the same shape the hook and run_owner_gate (at a takeover) use;
 - AC4: the SubagentStop audit hook attributes a marker to the NEWER of the session
   ctx run and the session's map run.
-- AC5: ``run-update --files-touched`` accepts a JSON array or plain paths.
 """
 from __future__ import annotations
 
 import json
-import sys
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from core import runtime_hooks as rh
-from scripts import artifact_cli as cli
 
 
 @pytest.fixture
@@ -31,33 +26,13 @@ def audit(tmp_path, monkeypatch):
     return d
 
 
-@pytest.fixture
-def ws(tmp_path, monkeypatch):
-    w = tmp_path / "ws"
-    (w / "Projects" / "P1").mkdir(parents=True)
-    monkeypatch.setenv("SWARM_WORKSPACE", str(w))
-    monkeypatch.setattr(cli, "_get_workspace", lambda: w)
-    return w
-
-
-# ── AC3 ─────────────────────────────────────────────────────────────────────
+# ── the map helper ──────────────────────────────────────────────────────────
 def test_map_helper_roundtrip_has_the_hook_shape(audit):
     rh.write_session_run_map("sess-1", "run_aaaa1111", ts=5.0)
     data = json.loads((audit / "session_sess-1_run.map").read_text())
     assert data == {"session_id": "sess-1", "run_id": "run_aaaa1111", "ts": 5.0}
     assert rh.read_session_run_map("sess-1") == ("run_aaaa1111", 5.0)
     assert rh.read_session_run_map("nobody") is None
-
-
-def _create(capsys, monkeypatch, sid):
-    if sid is None:
-        monkeypatch.delenv("SWARM_APP_SESSION_ID", raising=False)
-    else:
-        monkeypatch.setenv("SWARM_APP_SESSION_ID", sid)
-    args = SimpleNamespace(project="P1", requirement="do x", profile=None, intent=None)
-    cli.cmd_run_create(args, MagicMock())
-    out = capsys.readouterr().out.strip().splitlines()[-1]
-    return json.loads(out)["pipeline_id"]
 
 
 # ── AC4 ─────────────────────────────────────────────────────────────────────

@@ -228,24 +228,19 @@ LONG = f"{G}::test_g[{'x' * 500}]"
 OTHER = f"{G}::test_g[{'y' * 500}]"
 
 
-def test_long_nodeid_named_by_exit_criteria_is_not_capped(tmp_path, monkeypatch):
-    repo = tmp_path / "repo"
-    (repo / "backend" / "tests").mkdir(parents=True)
-    (repo / G).write_text("")
-    (repo / F).write_text("")
-    arts = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts"
-    arts.mkdir(parents=True)
-    (arts / "manifest.json").write_text(json.dumps({"artifacts": [
-        {"id": "p1", "file": "plan.json"}, {"id": "b1", "file": "build.json"}]}))
-    (arts / "plan.json").write_text(json.dumps({"data": {"exit_criteria": [
-        {"id": "X1", "kind": "test", "ref": LONG, "expect": "pass"},
-        {"id": "X2", "kind": "probe", "ref": "fuzz", "expect": "no_new_findings"}]}}))
-    (arts / "build.json").write_text(json.dumps({"ac_coverage": [{"test": "test_x.py::test_add"}]}))
-    monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path / "ws"))
-    run_state = {"stages": [{"stage": "plan", "artifact_id": "p1"},
-                            {"stage": "build", "artifact_id": "b1"}]}
-    refs = pt._ref_nodeids(repo, PROJECT, run_state, [])
-    assert refs == [f"{F}::test_add", LONG], refs
+def test_long_nodeid_named_by_exit_criteria_is_not_capped(tmp_path):
+    """v1: the refs come from the run's DESIGN_SPEC (exit criteria of kind test,
+    property and failure-mode tests); a probe criterion names no node."""
+    run_dir = tmp_path / "run"
+    (run_dir / "artifacts").mkdir(parents=True)
+    (run_dir / "artifacts" / "design_spec.json").write_text(json.dumps({
+        "properties": [{"id": "P1", "test": f"{F}::test_add"}],
+        "exit_criteria": [
+            {"id": "X1", "kind": "test", "ref": LONG, "expect": "pass"},
+            {"id": "X2", "kind": "probe", "ref": "fuzz", "expect": "no_new_findings"}]}))
+    refs = pt._ref_nodeids(SimpleNamespace(run_dir=run_dir))
+    assert refs == sorted([f"{F}::test_add", LONG]), refs
+    assert pt._ref_nodeids(None) == []
     assert pt._capped_id(LONG, refs) == {"nodeid": LONG}  # referenced: kept whole
     assert pt._capped_id(OTHER, refs).get("nodeid_truncated") is True  # others still capped
     short = [f"{G}::test_g"]  # a function ref still matches the capped id: cap it

@@ -4068,6 +4068,9 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
         ctx.warnings.append(
             f"risk expansion exceeded contract cap by {len(risk_overflow)} test file(s); "
             "the final is incomplete, not partially green")
+    # risk expansion may name desktop tests: they join the vitest set, not pytest (R7)
+    risk_desktop = [f for f in sel if f.startswith("desktop/")]
+    sel = [f for f in sel if not f.startswith("desktop/")]
     for f in sel:
         _add_target(plan["targets"], f, None)
     plan["l2"], plan["skipped"] = sel, list(skipped)
@@ -4091,11 +4094,19 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
     # changed since: the failure is the reason to run, not a digest change.
     plan["desktop"] = [f for f in (changed if plan.get("desktop_recheck") else scope)
                        if f.startswith("desktop/src/") and (ctx.repo / f).is_file()]
+    if plan.get("desktop_recheck"):
+        # the base's risk-selected desktop tests come from the run's whole change set,
+        # not this recheck's incremental scope (R7 review)
+        risk_desktop += [f for f in _risk_expansion(ns, changed, ctx.repo)[0]
+                         if f.startswith("desktop/")]
+    plan["desktop"] += [f for f in dict.fromkeys(risk_desktop) if f not in plan["desktop"]
+                        and (ctx.repo / f).is_file()]
     # AC-named desktop tests run in the same vitest job (and so join its cache key).
     plan["desktop"] += [f for f in plan.get("ac_desktop", []) if f not in plan["desktop"]]
+    # a named failing desktop test file is rerun even when nothing else is (R7 review)
+    plan["desktop"] += [f for f in dict.fromkeys(plan.get("desktop_rerun", []))
+                        if f not in plan["desktop"] and (ctx.repo / f).is_file()]
     if plan["desktop"]:
-        plan["desktop"] += [f for f in dict.fromkeys(plan.get("desktop_rerun", []))
-                            if f not in plan["desktop"] and (ctx.repo / f).is_file()]
         # the desktop inputs this call's vitest results run on (checked again at its end)
         plan["desktop_key"] = _desktop_key(ctx.repo)
     if mode == "recheck" and getattr(ns, "auto_recheck_of", None) and plan["desktop"] and prev:
@@ -4297,17 +4308,11 @@ def _dedupe_results(results: list[dict]) -> list[dict]:
     return list(pick.values())
 
 
-def _ref_nodeids(repo: Path, project: str, run_state: dict, ac_entries: list) -> list[str]:
-    """Resolved nodeid refs (not whole-file refs) of the run's BUILD ac_coverage and
-    PLAN ``exit_criteria[kind=test].ref``: evidence never caps a nodeid one of them
-    names (``_capped_id``), or the ref could no longer match it."""
-    refs = [r for e in ac_entries or [] for r in e]
-    out = []
-    for ref in refs:
-        rv = _resolve_ref(repo, ref)
-        if rv and rv[1]:
-            out.append(rv[1])
-    return list(dict.fromkeys(out))
+def _ref_nodeids(v1) -> list[str]:
+    """The pytest nodes the v1 run's DESIGN_SPEC names (``_v1_design_test_refs``):
+    evidence never caps a nodeid one of them names (``_capped_id``), or the ref could
+    no longer match it. No run, no refs."""
+    return _v1_design_test_refs(v1) if v1 is not None else []
 
 
 def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
@@ -4335,7 +4340,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
                                 "batch your changes before re-running")
     targets = plan["targets"]
     ordered = plan.get("ordered") or []
-    ctx.ref_ids = _ref_nodeids(ctx.repo, ns.project, run_state, plan["ac_entries"])
+    ctx.ref_ids = _ref_nodeids(v1)
     ord_files = {"backend/" + a.split("::")[0]: None for o in ordered for a in o
                  if not a.startswith(_SHARD_MODIFIERS)}
     head = _head_sha(ctx.repo)

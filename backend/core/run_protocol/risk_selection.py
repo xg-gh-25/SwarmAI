@@ -10,7 +10,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Sequence
 
-RISK_RULES_VERSION = "v13-2026-10-23"
+RISK_RULES_VERSION = "v13-2026-10-23b"
 
 _RULES = (
     ("pipeline-protocol", (
@@ -88,9 +88,9 @@ def expand(repo: str | Path, changed: Sequence[str], *, cap: int) -> tuple[list[
     shared = [path for path in changed_paths if _is_shared_config(path)]
     if shared:
         hits.append("shared-config")
-        for path in shared:
-            area = "backend/tests" if path.startswith("backend/") else "desktop/src"
-            selected |= _files(root, (area + "/**/*.py", area + "/**/*.ts", area + "/**/*.tsx"))
+        for path in shared:   # every TEST of the area, never its sources (R7)
+            selected |= _files(root, ("backend/tests/**/test_*.py",) if path.startswith("backend/")
+                               else ("desktop/src/**/*.test.ts", "desktop/src/**/*.test.tsx"))
     dynamic_modules: list[str] = []
     for path in changed_paths:
         target = root / path

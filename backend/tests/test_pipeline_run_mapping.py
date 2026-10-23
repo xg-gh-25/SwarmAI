@@ -1,6 +1,6 @@
 """Forced-execution tests for R1.5a — the session<->run "key system" for D7.
 
-Every test DRIVES the real code (the real hook closure, the real CLI subprocess),
+Every test DRIVES the real code (the real hook closure),
 never a mock of the subject. Mutation-proof points are called out: reverting the
 production line makes the named test go RED.
 
@@ -9,12 +9,10 @@ Covered:
     _active_pipeline_run_id in ctx, persists the session->run map keyed by the
     APP-LEVEL session_id (NOT an env value — the identity correctness AC7).
   * _extract_pipeline_id — dict / str / list / wrapped-stdout shapes.
-  * run-update --add-required-expert — append-only + idempotent + NO remove path.
   (expert_id extraction moved to test_expert_id_contract.py in R1.5b-i.)
 """
 import asyncio
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -131,5 +129,3 @@ def test_mapping_key_is_app_session_not_env(tmp_path, monkeypatch):
 # spawns). It is now extracted from the spawn-prompt's `EXPERT-ID:` anchor line; see
 # test_expert_id_contract.py for the inject↔extract contract tests.
 
-
-# ---- run-update --add-required-expert (append-only) -------------------------

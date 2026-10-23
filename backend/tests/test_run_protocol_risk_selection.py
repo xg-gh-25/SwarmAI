@@ -58,3 +58,17 @@ def test_nested_conftest_and_other_vitest_configs_are_shared_config(tmp_path):
         assert "shared-config" in hits and want in selected, (changed, hits, selected)
     _, hits, _ = expand(tmp_path, ["desktop/src/conftest.py"], cap=50)
     assert "shared-config" not in hits
+
+
+def test_shared_config_selects_only_test_files_of_its_area(tmp_path):
+    """R7: a shared-config change reruns the area's TESTS, never its sources (a
+    desktop/src/bad.ts selected as a "test" became a pytest target)."""
+    for rel in ("backend/tests/test_a.py", "backend/tests/pipeline_v1_rig.py",
+                "backend/tests/conftest.py", "desktop/src/x.test.ts",
+                "desktop/src/y.test.tsx", "desktop/src/bad.ts", "desktop/src/App.tsx"):
+        _touch(tmp_path, rel, "x\n")
+    selected, hits, _ = expand(tmp_path, ["desktop/package.json"], cap=50)
+    assert "shared-config" in hits
+    assert selected == ["desktop/src/x.test.ts", "desktop/src/y.test.tsx"]
+    selected, _, _ = expand(tmp_path, ["backend/conftest.py"], cap=50)
+    assert selected == ["backend/tests/test_a.py"]
