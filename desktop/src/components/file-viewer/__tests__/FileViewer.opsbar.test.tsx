@@ -14,7 +14,10 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import FileViewer from '../FileViewer';
 
 vi.mock('../../common/FileEditorCore', () => ({
-  default: () => <div data-testid="file-editor-core-stub" />,
+  default: ({ onAttachToChat }: { onAttachToChat?: (i: { path: string; name: string }) => void }) => (
+    <button data-testid="file-editor-core-stub" data-attach={onAttachToChat ? 'yes' : 'no'}
+      onClick={() => onAttachToChat?.({ path: '/ws/out/app.ts', name: 'app.ts' })} />
+  ),
 }));
 vi.mock('../renderers/HtmlRenderer', () => ({ default: () => <div data-testid="html-stub" /> }));
 vi.mock('../renderers/CsvRenderer', () => ({ default: () => <div /> }));
@@ -93,6 +96,22 @@ describe('FileViewer — non-text file-op cluster', () => {
       fireEvent.click(screen.getByTestId('statusbar-attach'));
       expect(onAttachToChat).toHaveBeenCalledTimes(1);
       expect(events).toHaveLength(0); // prop wins, no event fallback
+    } finally {
+      window.removeEventListener('swarm:attach-file', listener);
+    }
+  });
+
+  it('text file (panel, no onAttachToChat): the editor still gets attach, which dispatches swarm:attach-file (C3)', async () => {
+    const events: CustomEvent[] = [];
+    const listener = (e: Event) => events.push(e as CustomEvent);
+    window.addEventListener('swarm:attach-file', listener);
+    try {
+      render(<FileViewer {...base('app.ts')} />);
+      const ed = await screen.findByTestId('file-editor-core-stub');
+      expect(ed.getAttribute('data-attach')).toBe('yes');
+      fireEvent.click(ed);
+      expect(events).toHaveLength(1);
+      expect(events[0].detail).toMatchObject({ path: '/ws/out/app.ts', name: 'app.ts', type: 'file' });
     } finally {
       window.removeEventListener('swarm:attach-file', listener);
     }

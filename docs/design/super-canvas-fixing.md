@@ -67,12 +67,14 @@ panel holds exactly one. One source: `CanvasTabState.file`.
   "Discard & Reload"), in the status bar for the rest (already there).
 - The editor's existing visibility refetch also runs on `window` `focus` (same
   3 s throttle, same unsaved-edits skip). One handler, two events.
+- As built: `reloadBtn` is one element rendered by both the modal header and the
+  panel group.
 
 ### C3 — the panel's actions depend on props the Canvas never passes (F2)
 
 - FileViewer gives FileEditorCore an attach handler in every case: the caller's
   `onAttachToChat` when given, else the same `swarm:attach-file` event the status
-  bar already dispatches. One attach builder in FileViewer for both.
+  bar already dispatches. One attach builder in FileViewer for all three (editor, status bar, unsupported renderer): `attachFile`.
 
 ### C4 — floating bar contrast and the selected row (F3, F13)
 

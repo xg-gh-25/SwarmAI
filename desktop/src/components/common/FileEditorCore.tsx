@@ -836,8 +836,15 @@ export default function FileEditorCore({
         }
       } catch { /* ignore */ }
     };
+    // Also on window focus: clicking back from an editor beside SwarmAI never fires
+    // visibilitychange (the window was not hidden). Same throttle + unsaved skip.
     document.addEventListener('visibilitychange', handleVisibility);
-    return () => { document.removeEventListener('visibilitychange', handleVisibility); clearTimeout(highlightTimerRef.current); };
+    window.addEventListener('focus', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+      clearTimeout(highlightTimerRef.current);
+    };
   }, [filePath]);
 
   // L3: Review mode — inline comments (used for both normal review and diff review)
@@ -1396,6 +1403,25 @@ export default function FileEditorCore({
       </button>
     );
   })();
+  const reloadBtn = (
+    <button
+      onClick={async () => {
+        // Guard unsaved edits, mirroring the SSE + visibility auto-refresh paths:
+        // the warning opens in RELOAD mode, so its confirm reloads from disk.
+        if (hasUnsavedEditsRef.current) {
+          setReloadPending(true);
+          setShowUnsavedWarning(true);
+          return;
+        }
+        await doReload();
+      }}
+      className={clsx(toolBtn, 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors')}
+      title="Reload file from disk"
+      data-testid="file-editor-reload"
+    >
+      <span className="material-symbols-outlined icon-sm">refresh</span>
+    </button>
+  );
   const attachBtn = onAttachToChat ? (
     <button
       onClick={handleAttachToChat}
@@ -1423,9 +1449,10 @@ export default function FileEditorCore({
   // edits. Every scroll layer of the content gets the same `floatPad` bottom padding
   // (textarea, highlight and search overlays, previews, diff), so the last lines
   // scroll clear of the bar and the synced layers keep one scroll height. The
-  // gutter needs none: it positions from scrollTop. No Reload (the editor reloads itself on an agent write and when the window
-  // comes back), no Copy path (each Canvas list row has it), no Close (the list is
-  // the file selector).
+  // gutter needs none: it positions from scrollTop. Reload is in the group (the
+  // editor also reloads on an agent write, on window focus and when the window is
+  // shown again; an edit made elsewhere can still need it). No Copy path (each
+  // Canvas list row has it), no Close (the list is the file selector).
   const floatPad = iconOnly ? { paddingBottom: PANEL_FLOAT_PAD } : undefined;
   const hasPreview = isMarkdown || isSvg;
   const previewOn = isMarkdown ? showMarkdownPreview : showSvgPreview;
@@ -1472,6 +1499,7 @@ export default function FileEditorCore({
           ))}
         </div>
         <span className="w-px h-4 bg-[var(--color-border)] mx-0.5 shrink-0" aria-hidden="true" />
+        {reloadBtn}
         {reviewBtn}
         {openExternalBtn}
         {attachBtn}
@@ -1587,26 +1615,7 @@ export default function FileEditorCore({
                 {!iconOnly && (showSvgPreview ? 'Edit' : 'Preview')}
               </button>
             )}
-            {/* Reload button — refetch file from disk */}
-            <button
-              onClick={async () => {
-                // Guard unsaved edits, mirroring the SSE + visibility auto-refresh
-                // paths. Without this, an explicit Reload silently overwrites the
-                // user's pending edits with disk content. Open the warning in
-                // RELOAD mode so its confirm action reloads-from-disk (not close).
-                if (hasUnsavedEditsRef.current) {
-                  setReloadPending(true);
-                  setShowUnsavedWarning(true);
-                  return;
-                }
-                await doReload();
-              }}
-              className={clsx(toolBtn, 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors')}
-              title="Reload file from disk"
-              data-testid="file-editor-reload"
-            >
-              <span className="material-symbols-outlined icon-sm">refresh</span>
-            </button>
+            {reloadBtn}
             {reviewBtn}
             {/* Show Changes toggle */}
             <button

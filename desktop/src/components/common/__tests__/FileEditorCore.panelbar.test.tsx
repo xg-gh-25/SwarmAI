@@ -37,12 +37,23 @@ describe('panel chrome', () => {
   it('has no header or footer controls, only the bottom strip', () => {
     render(<FileEditorCore {...md} variant="panel" committedContent="# old\n" />);
     expect(screen.getByTestId('editor-panel-bar')).toBeTruthy();
-    for (const id of ['show-changes-toggle', 'markdown-preview-toggle', 'file-editor-reload', 'copy-path-btn', 'mode-toggle', 'file-editor-cancel']) {
+    for (const id of ['show-changes-toggle', 'markdown-preview-toggle', 'copy-path-btn', 'mode-toggle', 'file-editor-cancel']) {
       expect(screen.queryByTestId(id)).toBeNull();
     }
     expect(screen.queryByLabelText('Close')).toBeNull();
     expect(screen.getByTestId('review-mode-toggle')).toBeTruthy();
     expect(screen.getByTestId('attach-to-chat-btn')).toBeTruthy();
+    // Refresh is in the floating group (super-canvas-fixing.md C2).
+    expect(screen.getByTestId('editor-panel-bar').contains(screen.getByTestId('file-editor-reload'))).toBe(true);
+  });
+
+  it('Refresh with unsaved edits asks first (Discard & Reload), never silently overwrites', () => {
+    render(<FileEditorCore {...ts} variant="panel" />);
+    const ta = screen.getByTestId('file-editor-textarea') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: 'edited' } });
+    fireEvent.click(screen.getByTestId('file-editor-reload'));
+    expect(screen.getByTestId('unsaved-warning-discard').textContent).toMatch(/Discard & Reload/i);
+    expect(ta.value).toBe('edited');
   });
 
   it('a markdown file switches Preview / Source / Changes with one control', () => {

@@ -580,6 +580,27 @@ function FileViewerImpl({
     setRefetchNonce((n) => n + 1);
   }, [activeTab]);
 
+  /** Attach a file to the chat: the caller's handler when given (modal / single-
+   *  instance), else the decoupled swarm:attach-file window event ChatPage listens
+   *  to (the Canvas passes no handler). One builder for the editor, the status bar
+   *  and the unsupported renderer (super-canvas-fixing.md C3). */
+  const attachFile = useCallback((path: string, name: string) => {
+    const item: FileTreeItem = {
+      id: path,
+      name,
+      type: 'file',
+      path,
+      workspaceId: workspaceIdRef.current,
+      workspaceName: '',
+    };
+    if (onAttachToChat) onAttachToChat(item);
+    else window.dispatchEvent(new CustomEvent('swarm:attach-file', { detail: item }));
+  }, [onAttachToChat]);
+  const attachForEditor = useCallback(
+    (item: FileTreeItem) => attachFile(item.path, item.name),
+    [attachFile],
+  );
+
   /** Close the active tab (used by FileEditorCore's onClose). */
   const handleCloseActive = useCallback(() => {
     if (activeTab) {
@@ -670,7 +691,7 @@ function FileViewerImpl({
           onSave={handleSave}
           onClose={handleCloseActive}
           gitStatus={gitStatus}
-          onAttachToChat={onAttachToChat}
+          onAttachToChat={attachForEditor}
           readonly={cached.readonly}
           // Auto-show the diff on open ONLY when we actually have a committed
           // (HEAD) baseline to diff against. Without one — an untracked file, or
@@ -728,16 +749,7 @@ function FileViewerImpl({
           <UnsupportedRenderer
             key={rKey}
             {...rendererProps}
-            onAttachToChat={onAttachToChat ? (path: string) => {
-              onAttachToChat({
-                id: path,
-                name: fileName,
-                type: 'file',
-                path,
-                workspaceId: workspaceIdRef.current,
-                workspaceName: '',
-              });
-            } : undefined}
+            onAttachToChat={(path: string) => attachFile(path, fileName)}
           />
         )}
       </Suspense>
@@ -834,18 +846,7 @@ function FileViewerImpl({
           // prop-threading through the Canvas host is needed. Prefer onAttachToChat
           // when the caller wired it (modal/single-instance); else the event.
           filePath={activeTab.filePath}
-          onAttach={() => {
-            const item: FileTreeItem = {
-              id: activeTab.filePath,
-              name: activeTab.fileName,
-              type: 'file',
-              path: activeTab.filePath,
-              workspaceId: workspaceIdRef.current,
-              workspaceName: '',
-            };
-            if (onAttachToChat) onAttachToChat(item);
-            else window.dispatchEvent(new CustomEvent('swarm:attach-file', { detail: item }));
-          }}
+          onAttach={() => attachFile(activeTab.filePath, activeTab.fileName)}
           // Panel: refresh lives here (a non-editor renderer reloads on an agent
           // write but not on an outside edit); copy-path does not (each Canvas list
           // row has it). The modal keeps copy-path and has no refresh (unchanged).
