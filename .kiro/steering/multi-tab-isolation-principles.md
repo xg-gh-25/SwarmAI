@@ -1,6 +1,6 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: ["desktop/src/pages/ChatPage.tsx", "desktop/src/hooks/useChatStreamingLifecycle.ts", "desktop/src/hooks/useUnifiedTabState.ts", "desktop/src/services/tabPersistence.ts", "desktop/src/services/chat.ts", "desktop/src/stores/MessageStore.ts"]
+fileMatchPattern: ["desktop/src/pages/ChatPage.tsx", "desktop/src/hooks/useChatStreamingLifecycle.ts", "desktop/src/hooks/useUnifiedTabState.ts", "desktop/src/services/tabPersistence.ts", "desktop/src/services/chat.ts", "desktop/src/stores/MessageStore.ts", "desktop/src/hooks/transcriptFeed.ts", "backend/core/turn_writer.py", "backend/core/transcript_feed.py", "backend/routers/chat.py"]
 ---
 
 # Multi-Tab Chat Isolation Principles
@@ -213,3 +213,29 @@ Frontend tab isolation depends on backend session isolation. See `session-identi
 - Send admission / SESSION_BUSY → pending-message conversion (prevents double-send and lost messages)
 - Per-session permission queues and approvals
 - Session ID stability across backend restarts and subprocess recycles
+
+## Transcript Single Source (2026-10-23)
+
+Design: `docs/design/chat-transcript-single-source.md` (§3.7 is the shape as built, §3.9 the
+rev rules). Invariants a change to chat rendering, history, send or the subscription must keep:
+
+- **The DB is the only record.** Every write to `messages` / `compactions` bumps a per-session
+  `rev` in the same transaction (schema v15 triggers). Never add a write path that bypasses
+  the tables, and never add a second store of "what the transcript is".
+- **Two delivery routes, no third.** A turn's own content goes through its `TurnWriter` and the
+  turn events (eventSeq, no rev). Everything written outside a turn (user row, decision,
+  answer, Stop receipt, background result, compaction, delete) reaches tabs as
+  `transcript_row` / `transcript_delete` with its rev. A new kind of out-of-turn write needs no
+  new event: the feed reports it.
+- **A tab's `transcriptRev` comes only from reads** (resync reload, `since_rev`), never from a
+  feed event: a turn row can be written with a lower rev and publish later.
+- **History messages carry `row_revs`.** A feed change for a row a message already holds at
+  that rev is skipped. A merge that keeps LOCAL content must not keep the DB's `row_revs`.
+- **History ETag is the rev**, never a row count (in-place updates keep the count).
+- **One client_id per message**, minted only by `services/clientId.newClientId()`; every resend
+  reuses it; `send_requests` makes the send idempotent.
+
+Acceptance for any such change: `backend/tests/test_live_reload_scenarios.py` (regenerate the
+fixture with `LIVE_RELOAD_UPDATE=1` when backend output changes, and check it is byte-stable
+across two runs) and `desktop/src/__tests__/liveReload.property.test.ts`, whose `KNOWN` list
+must stay EMPTY. A new display bug is first written as a scenario there, then fixed.
