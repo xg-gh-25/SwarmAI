@@ -776,7 +776,7 @@ export function ChatInput({
             // winner would be stylesheet rule order, not this condition.
             isDragging
               ? 'border-primary bg-primary/5'
-              : 'bg-[var(--color-card)] border-[var(--color-border)] focus-within:border-[rgba(43,108,238,0.5)] focus-within:shadow-[0_0_0_2px_rgba(43,108,238,0.1)]'
+              : 'bg-[var(--color-card)] border-[var(--color-border)] focus-within:border-[var(--color-primary)]/50 focus-within:shadow-[0_0_0_2px_color-mix(in_srgb,var(--color-primary)_10%,transparent)]'
           )}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -952,7 +952,10 @@ export function ChatInput({
                 overflowY: 'auto',
               } as React.CSSProperties : undefined}
               className={clsx(
-                'flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] resize-none focus:outline-none py-2',
+                // overflow-x-hidden: the textarea wraps, so it never scrolls sideways;
+                // without it a few px of width overflow drew a full-width 6px
+                // horizontal scrollbar under the text.
+                'flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] resize-none focus:outline-none py-2 overflow-x-hidden',
                 disabled && 'opacity-50 cursor-not-allowed'
               )}
             />
@@ -972,43 +975,6 @@ export function ChatInput({
               </button>
             )}
 
-            {/* Stop button — same size as send for consistent hit target,
-                muted color for visual hierarchy. Always rendered to avoid layout
-                shift; invisible when not streaming. */}
-            <button
-              onClick={onStop}
-              className={clsx(
-                'icon-btn-lg transition-colors',
-                isStreaming
-                  ? 'text-[var(--color-text-muted)] hover:text-red-500 hover:bg-red-500/10'
-                  : 'invisible'
-              )}
-              title={tf(t, 'chat.input.stopEsc', 'Stop generation (Esc)')}
-              tabIndex={isStreaming ? 0 : -1}
-              aria-hidden={!isStreaming}
-            >
-              <span className="material-symbols-outlined icon-md">stop</span>
-            </button>
-
-            {/* Send button — always primary, queues during streaming */}
-            <button
-              onClick={handleSend}
-              disabled={!canSend || disabled}
-              className={clsx(
-                'icon-btn-lg transition-colors shadow-[0_1px_2px_rgba(0,0,0,0.2)]',
-                'bg-gradient-to-b from-[#3d7ef0] to-[#2b6cee] hover:from-[#5a94f5] hover:to-[#3d7ef0]',
-                (!canSend || disabled) && 'opacity-50 cursor-not-allowed'
-              )}
-              title={
-                isStreaming
-                  ? 'Queue message'
-                  : attachments.length > 0
-                      ? 'Send with attachments'
-                      : 'Send message'
-              }
-            >
-              <span className="material-symbols-outlined icon-md text-white">arrow_upward</span>
-            </button>
           </div>
 
           {/* Bottom Row - attachment left, context/TSCC right */}
@@ -1090,8 +1056,10 @@ export function ChatInput({
                 </span>
               )}
             </div>
-            {/* Right: Context ring + Refresh + TSCC */}
+            {/* Right: TSCC, context ring, refresh (acts on the context, so it sits
+                next to the ring), then the one send/stop slot. */}
             <div className="flex items-center gap-2">
+              <TSCCPopoverButton sessionId={sessionId ?? null} metadata={promptMetadata ?? null} />
               <ContextUsageRing pct={contextPct ?? null} level={contextLevel ?? null} size={18} showLabel />
               {onRefreshContext && (
                 <button
@@ -1103,11 +1071,45 @@ export function ChatInput({
                   aria-label={tf(t, 'chat.input.refreshAria', 'Refresh context')}
                 >
                   <span className="material-symbols-outlined icon-sm">
-                    refresh
+                    compress
                   </span>
                 </button>
               )}
-              <TSCCPopoverButton sessionId={sessionId ?? null} metadata={promptMetadata ?? null} />
+              <span aria-hidden className="w-px h-4 bg-[var(--color-border)]" />
+              {/* One slot: Stop while streaming with nothing to queue, otherwise
+                  Send (which queues a follow-up during streaming). Esc still stops. */}
+              {isStreaming && !canSend ? (
+                <button
+                  type="button"
+                  onClick={onStop}
+                  className="icon-btn-lg transition-colors bg-[var(--color-text)] text-[var(--color-card)] hover:opacity-85"
+                  title={tf(t, 'chat.input.stopEsc', 'Stop generation (Esc)')}
+                  aria-label={tf(t, 'chat.input.stopEsc', 'Stop generation (Esc)')}
+                >
+                  <span className="material-symbols-outlined icon-md">stop</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSend}
+                  disabled={!canSend || disabled}
+                  className={clsx(
+                    'icon-btn-lg transition-colors',
+                    !canSend || disabled
+                      ? 'bg-[var(--color-hover)] text-[var(--color-text-dim)] cursor-not-allowed'
+                      : 'bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white'
+                  )}
+                  title={
+                    isStreaming
+                      ? 'Queue message'
+                      : attachments.length > 0
+                          ? 'Send with attachments'
+                          : 'Send message'
+                  }
+                >
+                  <span className="material-symbols-outlined icon-md">arrow_upward</span>
+                </button>
+              )}
             </div>
           </div>
 

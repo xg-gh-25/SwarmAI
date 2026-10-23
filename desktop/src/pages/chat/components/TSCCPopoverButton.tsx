@@ -1,7 +1,7 @@
 /**
  * TSCC context button + slide-out panel for the ChatInput bottom row.
  *
- * Renders a ``psychology`` Material Symbol button that toggles a tabbed
+ * Renders a ``layers`` Material Symbol button that toggles a tabbed
  * context panel (``SystemPromptModule``): Files / Recall / Security / Prompt.
  *
  * PANEL GEOMETRY (the reason this is not a plain popover):
@@ -188,7 +188,7 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
           }
         `}
       >
-        <span className="material-symbols-outlined icon-sm">psychology</span>
+        <span className="material-symbols-outlined icon-sm">layers</span>
       </button>
 
       {isOpen && sessionId && box && createPortal(

@@ -155,6 +155,36 @@ describe('ChatInput with Unified Attachments', () => {
     });
   });
 
+  // Layout (2026-10-23): one send/stop slot at the right end of the bottom row,
+  // no hidden stop button, no horizontal scrollbar on the textarea.
+  describe('Send/stop slot and textarea overflow', () => {
+    it('shows Stop (not Send) while streaming with nothing to queue', () => {
+      const onStop = vi.fn();
+      renderWithProviders(<ChatInput {...createDefaultChatInputProps({ isStreaming: true, onStop })} />);
+      expect(screen.queryByTitle('Send message')).toBeNull();
+      expect(screen.queryByTitle('Queue message')).toBeNull();
+      fireEvent.click(screen.getByLabelText('Stop generation (Esc)'));
+      expect(onStop).toHaveBeenCalled();
+    });
+
+    it('shows Queue (not Stop) while streaming once there is text to send', () => {
+      renderWithProviders(<ChatInput {...createDefaultChatInputProps({ isStreaming: true, inputValue: 'next' })} />);
+      expect(screen.getByTitle('Queue message')).toBeEnabled();
+      expect(screen.queryByLabelText('Stop generation (Esc)')).toBeNull();
+    });
+
+    it('renders no stop button at all when idle, and a disabled Send for empty input', () => {
+      renderWithProviders(<ChatInput {...createDefaultChatInputProps()} />);
+      expect(screen.queryByLabelText('Stop generation (Esc)')).toBeNull();
+      expect(screen.getByTitle('Send message')).toBeDisabled();
+    });
+
+    it('textarea never scrolls horizontally', () => {
+      renderWithProviders(<ChatInput {...createDefaultChatInputProps()} />);
+      expect(screen.getByPlaceholderText('Ask Swarm anything...').className).toContain('overflow-x-hidden');
+    });
+  });
+
   // Regression: input-lag fix (run_90a033c4). The per-keystroke height
   // recalculation (adjustHeight) must be DEFERRED into a requestAnimationFrame,
   // not run synchronously on the render path — a synchronous style.height='auto'
