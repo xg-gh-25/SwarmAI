@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XXX (TBD) Organizational Autonomy OS · Project Agent Delivery</title>
+  <!-- Standalone executive visualization for the Project Agent Delivery OS HLD. -->
+  <style>
+    :root {
+      --bg: #f7f4ee;
+      --surface: #fffdf9;
+      --surface-soft: #f1ede5;
+      --ink: #202734;
+      --muted: #667085;
+      --line: #d7d0c3;
+      --blue: #315b88;
+      --blue-soft: #e8eff7;
+      --green: #39715a;
+      --green-soft: #e6f1eb;
+      --amber: #9a6729;
+      --amber-soft: #f7edda;
+      --red: #9b4b45;
+      --red-soft: #f6e8e6;
+      --shadow: 0 12px 32px rgba(55, 47, 36, .10);
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+    }
+
+    button { font: inherit; }
+    .page { max-width: 1540px; margin: 0 auto; padding: 24px; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand-mark {
+      width: 34px; height: 34px; border-radius: 10px;
+      display: grid; place-items: center;
+      color: var(--surface); background: var(--blue);
+      font-weight: 750; letter-spacing: -.04em;
+    }
+    .brand-copy b { display: block; font-size: 13px; }
+    .brand-copy span { color: var(--muted); font-size: 11px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+    .btn {
+      min-height: 34px; padding: 7px 11px;
+      border: 1px solid var(--line); border-radius: 9px;
+      color: var(--ink); background: var(--surface);
+      cursor: pointer; font-size: 11px; font-weight: 650;
+    }
+    .btn:hover { border-color: var(--blue); }
+    .btn:focus-visible { outline: 3px solid rgba(49, 91, 136, .25); outline-offset: 2px; }
+    .btn.primary { color: var(--surface); border-color: var(--blue); background: var(--blue); }
+    .btn[aria-pressed="true"] { color: var(--blue); border-color: var(--blue); background: var(--blue-soft); }
+
+    .hero {
+      display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, .75fr);
+      gap: 18px; align-items: stretch;
+    }
+    .hero-main, .promise {
+      border: 1px solid var(--line); border-radius: var(--radius);
+      background: var(--surface); box-shadow: var(--shadow);
+    }
+    .hero-main { padding: 24px 26px; }
+    .eyebrow {
+      color: var(--blue); font-size: 11px; font-weight: 750;
+      letter-spacing: .11em; text-transform: uppercase;
+    }
+    h1 { margin: 7px 0 9px; font-size: clamp(26px, 3vw, 43px); line-height: 1.08; letter-spacing: -.035em; }
+    .hero-main p { max-width: 900px; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
+    .positioning {
+      display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 11px;
+    }
+    .positioning-item { padding: 7px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); color: var(--muted); font-size: 9px; line-height: 1.35; }
+    .positioning-item b { display: block; color: var(--ink); font-size: 9px; }
+    .promise { padding: 20px; border-color: var(--blue); background: var(--blue-soft); }
+    .promise h2 { margin: 0 0 8px; color: var(--blue); font-size: 16px; }
+    .promise p { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.6; }
+    .north-star { margin-top: 8px; padding: 11px; border-radius: 9px; background: var(--surface); }
+    .north-star-label { color: var(--muted); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .north-star-value { margin-top: 3px; color: var(--green); font-size: 23px; font-weight: 800; line-height: 1.1; }
+    .north-star-definition { margin-top: 5px; color: var(--ink); font-size: 9px; line-height: 1.42; }
+    .north-star-definition b { color: var(--green); }
+    .rate-note { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--line); color: var(--muted); font-size: 8px; line-height: 1.38; }
+    .north-star-guards { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .guard-chip { padding: 4px 6px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--surface-soft); font-size: 8px; }
+    .guard-chip.positive { color: var(--green); border-color: var(--green); background: var(--green-soft); }
+    .stage-shell {
+      position: relative; margin-top: 18px; padding: 18px;
+      border: 1px solid var(--line); border-radius: var(--radius);
+      background: var(--surface); box-shadow: var(--shadow); overflow: hidden;
+    }
+    .section-head {
+      display: flex; justify-content: space-between; gap: 16px;
+      align-items: flex-start; margin-bottom: 12px;
+    }
+    .command-center {
+      margin-top: 18px; padding: 16px;
+      border: 1px solid var(--blue); border-radius: var(--radius);
+      background: var(--surface); box-shadow: var(--shadow);
+    }
+    .command-head {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      gap: 18px; padding-bottom: 11px; border-bottom: 1px solid var(--line);
+    }
+    .command-head h2 { margin: 0 0 4px; color: var(--blue); font-size: 17px; }
+    .command-head p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .command-role {
+      padding: 6px 9px; border-radius: 999px;
+      color: var(--blue); background: var(--blue-soft);
+      font-size: 10px; font-weight: 700; white-space: nowrap;
+    }
+    .org-scope {
+      display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
+      margin-top: 6px; color: var(--muted); font-size: 9px;
+    }
+    .org-scope b { color: var(--ink); }
+    .scope-arrow { color: var(--blue); font-weight: 750; }
+    .command-blocks {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 8px; margin-top: 11px;
+    }
+    .command-block {
+      min-width: 0; padding: 11px;
+      border: 1px solid var(--line); border-radius: 10px;
+      background: var(--surface-soft);
+      transition: border-color .35s ease, background-color .35s ease, transform .35s ease;
+    }
+    .command-block.active { border-color: var(--blue); background: var(--blue-soft); transform: translateY(-2px); }
+    .block-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+    .block-head h3 { margin: 0; font-size: 12px; }
+    .block-head span {
+      padding: 3px 6px; border-radius: 999px;
+      color: var(--muted); background: var(--surface); font-size: 8px; white-space: nowrap;
+    }
+    .block-copy { min-height: 42px; margin: 6px 0 8px; color: var(--muted); font-size: 9px; line-height: 1.45; }
+    .block-rows { display: grid; gap: 5px; }
+    .block-row {
+      padding: 6px 7px; border: 1px solid var(--line);
+      border-radius: 6px; background: var(--surface);
+      color: var(--muted); font-size: 8px; line-height: 1.4;
+    }
+    .block-row b { display: block; color: var(--ink); font-size: 9px; }
+    .block-actions {
+      margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--line);
+      color: var(--blue); font-size: 8px; font-weight: 700; line-height: 1.4;
+    }
+    .lifecycle-mini {
+      display: flex; flex-wrap: wrap; gap: 3px; align-items: center;
+      margin: 7px 0;
+    }
+    .life-step { padding: 3px 5px; border-radius: 5px; background: var(--surface); border: 1px solid var(--line); font-size: 7px; }
+    .life-arrow { color: var(--blue); font-size: 8px; }
+    .five-mini { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; margin: 7px 0; }
+    .five-item { padding: 4px 2px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); font-size: 7px; text-align: center; }
+    .control-limit {
+      margin-top: 8px; padding: 7px 9px; border-left: 3px solid var(--amber);
+      border-radius: 5px; color: var(--muted); background: var(--amber-soft);
+      font-size: 9px; line-height: 1.4;
+    }
+    .control-limit b { color: var(--ink); }
+    .control-to-flow {
+      position: relative; height: 28px; margin-top: 2px;
+      display: grid; place-items: center; color: var(--blue);
+      font-size: 9px; font-weight: 700;
+    }
+    .control-to-flow::before {
+      content: ""; position: absolute; top: 0; bottom: 7px;
+      left: 50%; border-left: 2px solid var(--blue);
+    }
+    .control-to-flow::after {
+      content: ""; position: absolute; bottom: 5px; left: calc(50% - 4px);
+      width: 7px; height: 7px; border-right: 2px solid var(--blue);
+      border-bottom: 2px solid var(--blue); transform: rotate(45deg);
+    }
+    .control-to-flow span { padding: 0 7px; background: var(--bg); z-index: 1; }
+    .section-head h2 { margin: 0; font-size: 16px; }
+    .section-head p { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
+    .pill {
+      padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px;
+      color: var(--muted); background: var(--surface-soft); font-size: 10px;
+      white-space: nowrap;
+    }
+    .brain-rail {
+      padding: 12px; border: 1px solid var(--green);
+      border-radius: 12px; background: var(--green-soft);
+      transition: box-shadow .35s ease, transform .35s ease;
+    }
+    .brain-rail.returned { box-shadow: 0 9px 22px rgba(57,113,90,.18); transform: translateY(-2px); }
+    .brain-intro { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }
+    .brain-intro h3 { margin: 0 0 4px; color: var(--green); font-size: 14px; }
+    .brain-intro p { max-width: 900px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .asset-system { display: grid; grid-template-columns: 1fr 40px 1fr; gap: 8px; margin-top: 9px; align-items: stretch; }
+    .asset-card { padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+    .asset-card h4 { margin: 0 0 6px; font-size: 11px; }
+    .asset-items { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; }
+    .asset-item { padding: 6px; border-radius: 6px; background: var(--surface-soft); color: var(--muted); font-size: 8px; line-height: 1.35; }
+    .asset-item b { display: block; color: var(--ink); font-size: 9px; }
+    .subsection-label {
+      display: flex; justify-content: space-between; gap: 12px;
+      align-items: center; margin: 2px 0 9px;
+      color: var(--ink); font-size: 11px; font-weight: 750;
+    }
+    .subsection-label span { color: var(--muted); font-size: 9px; font-weight: 500; }
+    .asset-bridge { display: grid; place-items: center; color: var(--green); font-size: 18px; font-weight: 750; text-align: center; }
+    .asset-bridge small { display: block; color: var(--muted); font-size: 7px; font-weight: 600; }
+    .downlinks {
+      display: grid; grid-template-columns: repeat(5, 1fr); gap: 9px;
+      height: 22px; padding: 0 22px;
+    }
+    .downlink { position: relative; border-left: 1px dashed var(--green); }
+    .downlink::after {
+      content: ""; position: absolute; left: -4px; bottom: -1px;
+      width: 7px; height: 7px; border-right: 1px solid var(--green);
+      border-bottom: 1px solid var(--green); transform: rotate(45deg);
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: minmax(130px,.75fr) 34px minmax(185px,1.05fr) 34px minmax(185px,1fr) 34px minmax(280px,1.45fr) 34px minmax(175px,1fr);
+      gap: 5px; align-items: stretch;
+    }
+    .flow-node {
+      position: relative; min-width: 0; padding: 13px;
+      border: 1px solid var(--line); border-radius: 11px;
+      background: var(--surface-soft);
+      transition: border-color .35s ease, background-color .35s ease, transform .35s ease, box-shadow .35s ease;
+    }
+    .flow-node .step {
+      display: inline-grid; width: 23px; height: 23px; place-items: center;
+      margin-bottom: 8px; border-radius: 50%;
+      color: var(--surface); background: var(--muted);
+      font-size: 10px; font-weight: 750;
+    }
+    .flow-node h3 { margin: 0 0 5px; font-size: 13px; }
+    .flow-node p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.48; }
+    .boundary {
+      margin-top: 9px; padding-top: 7px; border-top: 1px solid var(--line);
+      color: var(--muted); font-size: 9px; line-height: 1.38;
+    }
+    .boundary b { color: var(--ink); }
+    .connector { position: relative; display: grid; place-items: center; }
+    .connector::before { content: ""; width: 100%; height: 2px; background: var(--line); }
+    .connector::after {
+      content: ""; position: absolute; right: 1px;
+      width: 7px; height: 7px; border-top: 2px solid var(--line);
+      border-right: 2px solid var(--line); transform: rotate(45deg);
+    }
+    .flow-node.active {
+      border-color: var(--blue); background: var(--blue-soft);
+      transform: translateY(-3px); box-shadow: 0 9px 22px rgba(49,91,136,.16);
+    }
+    .flow-node.active .step { background: var(--blue); }
+    .flow-node.complete { border-color: var(--green); background: var(--green-soft); }
+    .flow-node.complete .step { background: var(--green); }
+    .connector.active::before { background: var(--blue); }
+    .connector.active::after { border-color: var(--blue); }
+    .executors { display: grid; gap: 5px; margin-top: 8px; }
+    .executor {
+      display: grid; grid-template-columns: 78px 1fr; gap: 7px;
+      padding: 7px; border: 1px solid var(--line);
+      border-radius: 7px; background: var(--surface);
+      color: var(--muted); font-size: 9px; line-height: 1.3;
+    }
+    .executor b { color: var(--ink); }
+    .protocol {
+      margin-top: 12px; padding: 10px 12px;
+      border: 1px solid var(--amber); border-radius: 10px;
+      background: var(--amber-soft);
+    }
+    .protocol-head { display: flex; justify-content: space-between; gap: 14px; }
+    .protocol-head b { color: var(--amber); font-size: 11px; }
+    .protocol-head span { color: var(--muted); font-size: 9px; }
+    .protocol-steps { gap: 5px; margin-top: 7px; }
+    .executive-stages { display: grid; grid-template-columns: repeat(6,1fr); }
+    .architecture-stages { display: none; grid-template-columns: repeat(8,1fr); }
+    body.architecture .executive-stages { display: none; }
+    body.architecture .architecture-stages { display: grid; }
+    .protocol-step {
+      position: relative; padding: 6px 3px;
+      border: 1px solid var(--line); border-radius: 5px;
+      background: var(--surface); font-size: 8px; font-weight: 700; text-align: center;
+    }
+    .protocol-step:not(:last-child)::after {
+      content: "›"; position: absolute; right: -6px; color: var(--amber);
+    }
+    .human-loop {
+      display: grid; grid-template-columns: 1.05fr repeat(3,1fr); gap: 7px;
+      margin-top: 12px; padding: 10px 12px;
+      border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft);
+    }
+    .human-title b { display: block; font-size: 11px; }
+    .human-title span { color: var(--muted); font-size: 9px; line-height: 1.35; }
+    .human-card {
+      padding: 7px; border: 1px solid var(--line);
+      border-radius: 6px; background: var(--surface);
+      color: var(--muted); font-size: 9px; line-height: 1.35;
+    }
+    .human-card b { display: block; color: var(--ink); }
+    .trace-rail {
+      display: grid; grid-template-columns: 210px 1fr; gap: 10px;
+      margin-top: 12px; padding: 12px;
+      border: 1px solid var(--blue); border-radius: 12px; background: var(--blue-soft);
+      transition: box-shadow .35s ease, transform .35s ease;
+    }
+    .trace-rail.active { box-shadow: 0 9px 22px rgba(49,91,136,.16); transform: translateY(-2px); }
+    .trace-intro h3 { margin: 0 0 4px; color: var(--blue); font-size: 14px; }
+    .trace-intro p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .trace-items { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; }
+    .trace-item {
+      padding: 8px 6px; border: 1px solid var(--line);
+      border-radius: 7px; background: var(--surface); text-align: center;
+      color: var(--muted); font-size: 9px; line-height: 1.35;
+    }
+    .trace-item b { display: block; color: var(--ink); font-size: 10px; }
+    .offline {
+      display: grid; grid-template-columns: 1fr 34px 1.1fr 34px 1.15fr;
+      gap: 7px; align-items: stretch; margin-top: 14px;
+    }
+    .offline-node {
+      padding: 11px; border: 1px solid var(--line);
+      border-radius: 10px; background: var(--surface);
+      transition: border-color .35s ease, background-color .35s ease, transform .35s ease;
+    }
+    .offline-node h3 { margin: 0 0 5px; font-size: 12px; }
+    .offline-node p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
+    .offline-node.active { border-color: var(--amber); background: var(--amber-soft); transform: translateY(-2px); }
+    .offline-node.evolution.active { border-color: var(--green); background: var(--green-soft); }
+    .brain-return {
+      position: relative; display: grid; grid-template-columns: auto 1fr auto;
+      gap: 10px; align-items: center; margin-top: 9px; padding: 9px 12px;
+      border: 1px dashed var(--green); border-radius: 9px;
+      color: var(--muted); background: var(--surface); font-size: 9px;
+      transition: border-color .35s ease, background-color .35s ease, transform .35s ease;
+    }
+    .brain-return strong { color: var(--green); font-size: 11px; }
+    .brain-return .return-arrow { color: var(--green); font-size: 18px; font-weight: 750; }
+    .brain-return .future { color: var(--ink); font-weight: 700; text-align: right; }
+    .brain-return.active { border-style: solid; background: var(--green-soft); transform: translateY(-2px); }
+    .goal-outcome { margin-top: 7px; padding: 5px; border-left: 3px solid var(--amber); background: var(--surface); font-size: 8px; }
+    .eval-five { display: grid; grid-template-columns: repeat(5,1fr); gap: 4px; margin-top: 5px; }
+    .metric { padding: 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); font-size: 8px; text-align: center; }
+    .details { display: none; margin-top: 14px; }
+    body.architecture .details { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+    .detail {
+      padding: 10px; border-top: 3px solid var(--blue);
+      border-radius: 7px; background: var(--surface-soft);
+      color: var(--muted); font-size: 9px; line-height: 1.45;
+    }
+    .detail b { display: block; margin-bottom: 3px; color: var(--ink); font-size: 10px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .legend span { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+    .dot.semantic { background: var(--blue); }
+    .dot.deterministic { background: var(--amber); }
+    .dot.execution { background: var(--muted); }
+    .dot.learning { background: var(--green); }
+    .status { min-width: 120px; color: var(--muted); font-size: 10px; text-align: right; }
+
+    @media (max-width: 1100px) {
+      .page { min-width: 1080px; }
+    }
+    @media print {
+      .controls { display: none; }
+      .page { max-width: none; padding: 12px; }
+      .hero-main, .promise, .stage-shell { box-shadow: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .flow-node, .offline-node, .trace-rail { transition: none; }
+      .flow-node.active, .offline-node.active, .trace-rail.active { transform: none; box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-mark">X</div>
+        <div class="brand-copy"><b>XXX (TBD)</b><span>Brain-Driven Autonomy OS</span></div>
+      </div>
+      <div class="controls" aria-label="Visualization controls">
+        <button class="btn" id="executiveBtn" type="button" aria-pressed="true">Executive view</button>
+        <button class="btn" id="architectureBtn" type="button" aria-pressed="false">Architecture view</button>
+        <button class="btn primary" id="playBtn" type="button">Pause</button>
+        <button class="btn" id="exportBtn" type="button">Export summary</button>
+        <span class="status" id="status" aria-live="polite">Flow animation running</span>
+      </div>
+    </div>
+
+    <header class="hero">
+      <div class="hero-main">
+        <div class="eyebrow">Target product · XXX (TBD) Organizational Autonomy OS</div>
+        <h1>Turn Autonomous Delivery Rate into<br>a Governed Operating System.</h1>
+        <p>
+          XXX (TBD) 把组织的 Autonomous Delivery Rate 从一个结果指标，变成可定义、可观察、可控制、可评估并持续提升的系统能力。
+          DDD / Brain 提供领域知识和判断标准，Project Agents 管理工作，Local 与 Cloud Workers 扩大并行执行，
+          Pipeline 在规模增长时守住 Isolation 和 Quality。
+        </p>
+        <div class="positioning">
+          <div class="positioning-item"><b>Current implementation baseline</b>SwarmAI self-evolving Agent OS</div>
+          <div class="positioning-item"><b>First workload</b>Project Agent Delivery</div>
+          <div class="positioning-item"><b>Future workloads</b>Research · Operations · Content · Data</div>
+          <div class="positioning-item"><b>Core mechanism</b>DDD / Brain-Driven · Trace-Evaluated · Governed Evolution</div>
+        </div>
+      </div>
+      <aside class="promise">
+        <h2>Organization North Star</h2>
+        <p>提升自治交付率，同时不牺牲质量、安全和必要的人类判断。</p>
+        <div class="north-star">
+          <div class="north-star-label">Autonomous Delivery Rate</div>
+          <div class="north-star-value">↑ Measurable & Improving</div>
+          <div class="north-star-definition"><b>ADR = A / E</b><br><b>E:</b> 执行前在 Triage 固定、已准入 Project Agent Delivery 的 Intent revisions。<br><b>A:</b> 完成可信交付、Trace 完整、Isolation/Quality PASS，且无 preventable intervention。</div>
+          <div class="rate-note"><b>始终留在 E、不进入 A：</b>失败、abandoned、system-cancelled、Trace/Isolation/Quality UNKNOWN 或 BLOCK。<br><b>排除但单独报告：</b>duplicate/test、准入前 unsupported、执行前 user-withdrawn、superseded，以及尚无 workload contract 的 standalone research/no-code。<br><b>Preventable：</b>question、correction、manual routing/retry、operational rescue、unnecessary approval、manual code fix、takeover。Required judgment 保持 neutral。</div>
+          <div class="north-star-guards">
+            <span class="guard-chip positive">Isolation stays green</span>
+            <span class="guard-chip positive">Quality stays green</span>
+            <span class="guard-chip">Required judgment is neutral</span>
+          </div>
+        </div>
+      </aside>
+    </header>
+
+    <section class="command-center" aria-labelledby="commandTitle">
+      <div class="command-head">
+        <div>
+          <h2 id="commandTitle">Organization Agent Delivery Control Center</h2>
+          <p>从组织资产到每一个 Intent 的交付与自治表现，统一发现、追踪、决策和治理。</p>
+          <div class="org-scope"><b>Organization</b><span class="scope-arrow">›</span> Portfolio <span class="scope-arrow">›</span> Business Domain <span class="scope-arrow">›</span> Project Agent <span class="scope-arrow">›</span> Intent</div>
+        </div>
+        <div class="command-role">Organization-wide visibility + control</div>
+      </div>
+
+      <div class="command-blocks">
+        <article class="command-block" data-control-block="0">
+          <div class="block-head"><h3>1. Asset Registry</h3><span>Discover & govern</span></div>
+          <div class="block-copy">发现组织已有的领域知识与 Agent 资产，明确谁负责什么、覆盖到哪里、是否可用。</div>
+          <div class="block-rows">
+            <div class="block-row"><b>DDD / Brain Registry</b>领域、知识、Gates、能力、资产绑定、健康与 owner</div>
+            <div class="block-row"><b>Project Agent Registry</b>职责、覆盖范围、关联 Brain、Tools/Skills 和执行资格</div>
+            <div class="block-row"><b>Coverage Map</b>哪些业务域已覆盖，哪里缺 Brain、Agent、能力或责任人</div>
+          </div>
+          <div class="block-actions">操作：Register · Assign owner · Bind assets · Approve policy</div>
+        </article>
+
+        <article class="command-block" data-control-block="1">
+          <div class="block-head"><h3>2. Intent Operations</h3><span>Intake & triage</span></div>
+          <div class="block-copy">汇集组织各入口的 Intent，完成分类、路由、优先级和全生命周期实时追踪。</div>
+          <div class="lifecycle-mini">
+            <span class="life-step">Intent</span><span class="life-arrow">›</span>
+            <span class="life-step">Requirement</span><span class="life-arrow">›</span>
+            <span class="life-step">Design Spec</span><span class="life-arrow">›</span>
+            <span class="life-step">Delivery</span>
+          </div>
+          <div class="block-rows">
+            <div class="block-row"><b>Live delivery state</b>Report、Changes、PR / FR、Commits 与最终集成状态</div>
+            <div class="block-row"><b>Run Graph</b>当前阶段、并行、依赖、阻塞、Local / Cloud 与关键路径</div>
+          </div>
+          <div class="block-actions">操作：Prioritize · Route · Approve scope/spec · Pause · Cancel · Reassign</div>
+        </article>
+
+        <article class="command-block" data-control-block="2">
+          <div class="block-head"><h3>3. Intent Autonomy</h3><span>Per intent / stage</span></div>
+          <div class="block-copy">逐个 Intent 判断是否在正确边界内自主交付，并向上汇总成组织 Autonomous Delivery Rate。</div>
+          <div class="five-mini">
+            <div class="five-item">Isolation</div><div class="five-item">Quality</div>
+            <div class="five-item">Autonomy</div><div class="five-item">Speed</div>
+            <div class="five-item">Token Cost</div>
+          </div>
+          <div class="block-rows">
+            <div class="block-row"><b>Autonomous outcome</b>Autonomous · Required judgment · Preventable intervention · Human takeover</div>
+            <div class="block-row"><b>Human intervention by stage</b>Approve · Decide · Correct · Rescue · Take over</div>
+            <div class="block-row"><b>Organization roll-up</b>按 Portfolio、Domain、Project Agent 和时间窗口汇总 Rate 与趋势</div>
+          </div>
+          <div class="block-actions">操作：Answer decisions · Inspect evidence · Accept scoped risk</div>
+        </article>
+
+        <article class="command-block" data-control-block="3">
+          <div class="block-head"><h3>4. Eval Dashboard</h3><span>Offline assurance</span></div>
+          <div class="block-copy">离线验证 Autonomous Delivery Rate 是否可信、哪些因素在推动或拖累它，并追踪组织长期趋势。</div>
+          <div class="block-rows">
+            <div class="block-row"><b>Rate assurance</b>校验 eligible Intent、必要判断、可避免介入和 Trace 完整性</div>
+            <div class="block-row"><b>Golden journeys & regressions</b>目标成功、Local / Cloud parity、故障恢复和质量趋势</div>
+            <div class="block-row"><b>Portfolio comparison</b>跨领域比较五维表现、Human rescue 与 Rate 变化原因</div>
+          </div>
+          <div class="block-actions">操作：Compare · Drill down · Review finding · Propose improvement</div>
+        </article>
+      </div>
+
+      <div class="control-limit"><b>治理边界：</b>组织中控可以管理优先级、路由、执行和授权，但不能改写不可变质量结论，也不能绕过 Pipeline 证据或安全 Gate。</div>
+    </section>
+    <div class="control-to-flow" aria-hidden="true"><span>organization assets → intent triage → governed execution</span></div>
+
+    <section class="stage-shell" aria-labelledby="flowTitle">
+      <div class="section-head">
+        <div><h2 id="flowTitle">Agent System Under Management</h2><p>资产与认知支撑 Intent 生命周期；执行、Trace、Offline Eval 和 Evolution 各自保持清晰边界。</p></div>
+        <div class="pill">Executive view · organization level</div>
+      </div>
+
+      <div class="brain-rail" id="brainRail">
+        <div class="brain-intro">
+          <div><h3>Foundation A · Organizational Assets & Cognition</h3><p>组织先拥有可发现、可治理的知识与 Agent 资产；每个 Intent 再解析出对应 Project Agent Definition 和上下文。</p></div>
+          <div class="pill">Assets drive every future Intent</div>
+        </div>
+        <div class="asset-system">
+          <div class="asset-card">
+            <h4>DDD / Brains · What the organization knows</h4>
+            <div class="asset-items">
+              <div class="asset-item"><b>Identity & Strategy</b>业务域、目标、职责和边界</div>
+              <div class="asset-item"><b>Knowledge & Specs</b>产品、技术、系统规格和历史决策</div>
+              <div class="asset-item"><b>Policies & Gates</b>治理规则、Human policy 和质量底线</div>
+              <div class="asset-item"><b>Capabilities & Assets</b>Tools、Skills、代码、数据与交付契约</div>
+            </div>
+          </div>
+          <div class="asset-bridge">↔<small>link & resolve</small></div>
+          <div class="asset-card">
+            <h4>Project Agents · Who manages the work</h4>
+            <div class="asset-items">
+              <div class="asset-item"><b>Responsibility</b>负责的产品、服务、领域和结果</div>
+              <div class="asset-item"><b>Brain Association</b>可使用哪些 Brain、Specs 和资产</div>
+              <div class="asset-item"><b>Operating Capability</b>Tools、Skills、模型和 Delivery Protocol</div>
+              <div class="asset-item"><b>Execution Eligibility</b>可在 Chat、本地后台或 Cloud 执行</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="downlinks" aria-hidden="true">
+        <div class="downlink"></div><div class="downlink"></div><div class="downlink"></div>
+        <div class="downlink"></div><div class="downlink"></div>
+      </div>
+
+      <div class="subsection-label">Intent Delivery Lifecycle <span>Real-time status from intake through delivery records</span></div>
+      <div class="flow" id="flow">
+        <article class="flow-node" data-flow-step="0">
+          <div class="step">1</div><h3>Intent Intake & Triage</h3>
+          <p>汇集 Chat、Slack、Ticket、Schedule 等入口，分类、去重、排序，并匹配业务域、Brain 和 Project Agent。</p>
+          <div class="boundary"><b>实时状态：</b>New · Triaging · Routed · Needs clarification</div>
+        </article>
+        <div class="connector" data-connector="0" aria-hidden="true"></div>
+
+        <article class="flow-node" data-flow-step="1">
+          <div class="step">2</div><h3>Requirement & Design Spec</h3>
+          <p>Project Agent 结合 Brain 解锁目标、范围、验收标准和方案；缺少事实时先发起 Discovery Run。</p>
+          <div class="boundary"><b>实时状态：</b>Drafting · Waiting decision · Approved · Revised</div>
+        </article>
+        <div class="connector" data-connector="1" aria-hidden="true"></div>
+
+        <article class="flow-node" data-flow-step="2">
+          <div class="step">3</div><h3>Run Graph & Conductor</h3>
+          <p>把设计拆成可并行或有依赖的 Runs；确定性管理 Placement、单一 Owner、恢复和集成顺序。</p>
+          <div class="boundary"><b>实时状态：</b>Queued · Ready · Blocked · Replanning</div>
+        </article>
+        <div class="connector" data-connector="2" aria-hidden="true"></div>
+        <article class="flow-node" data-flow-step="3">
+          <div class="step">4</div><h3>Governed Execution</h3>
+          <p>多个独立 Run 并行；每个 Run 始终只有一个有效 Owner、一个隔离工作区和同一质量协议。</p>
+          <div class="executors">
+            <div class="executor"><b>Chat Inline</b><span>重要 Run 实时观察全过程</span></div>
+            <div class="executor"><b>Local Worker</b><span>本地后台运行，原 Chat 可继续</span></div>
+            <div class="executor"><b>Cloud Workers</b><span>远程云端执行节点，提供可扩展并行算力</span></div>
+          </div>
+        </article>
+        <div class="connector" data-connector="3" aria-hidden="true"></div>
+
+        <article class="flow-node" data-flow-step="4">
+          <div class="step">5</div><h3>Delivery Records</h3>
+          <p>Host 接受并集成可信结果，实时关联 Report、Changes、PR / FR、Commits 和最终交付状态。</p>
+          <div class="boundary"><b>实时状态：</b>Verifying · Ready · Integrated · Delivered · Blocked</div>
+        </article>
+      </div>
+
+      <div class="human-loop">
+        <div class="human-title"><b>Human Decision & Control Rail</b><span>横跨 Triage、Requirement、Design、Execution 和 Delivery；只在正确边界介入。</span></div>
+        <div class="human-card"><b>Required judgment</b>产品取舍、重大歧义、安全、权限与不可逆操作</div>
+        <div class="human-card"><b>Intervention depth</b>Approve · Decide · Correct · Rescue · Take over</div>
+        <div class="human-card"><b>Measured impact</b>等待时长、返工、失效工作、影响范围与追加成本</div>
+      </div>
+
+      <div class="protocol">
+        <div class="protocol-head">
+          <b>One Governed Delivery Standard</b>
+          <span>Executive View 展示业务阶段；Architecture View 展开正式 Pipeline stages</span>
+        </div>
+        <div class="protocol-steps executive-stages">
+          <div class="protocol-step">UNDERSTAND</div><div class="protocol-step">DESIGN</div>
+          <div class="protocol-step">EXECUTE</div><div class="protocol-step">VERIFY</div>
+          <div class="protocol-step">DELIVER</div><div class="protocol-step">LEARN</div>
+        </div>
+        <div class="protocol-steps architecture-stages">
+          <div class="protocol-step">EVALUATE</div><div class="protocol-step">THINK</div>
+          <div class="protocol-step">PLAN</div><div class="protocol-step">BUILD</div>
+          <div class="protocol-step">REVIEW</div><div class="protocol-step">TEST</div>
+          <div class="protocol-step">DELIVER</div><div class="protocol-step">REFLECT</div>
+        </div>
+      </div>
+
+      <div class="trace-rail" id="traceRail">
+        <div class="trace-intro">
+          <h3>Foundation B · Unified Trace</h3>
+          <p>记录系统实际上发生了什么。中控台、恢复、成本核算和离线评估都消费这条事实链。</p>
+        </div>
+        <div class="trace-items">
+          <div class="trace-item"><b>Lifecycle</b>Intent、Requirement、Spec、Runs 与 Delivery 状态</div>
+          <div class="trace-item"><b>Human Involvement</b>何时、为何、介入多深及影响范围</div>
+          <div class="trace-item"><b>Time & Token Cost</b>按 Intent、Run、Stage 和 Attempt 汇总</div>
+          <div class="trace-item"><b>Evidence & Results</b>Report、Changes、PR / FR、Commits、验证与风险</div>
+        </div>
+      </div>
+
+      <div class="offline" aria-label="Offline evaluation and evolution flow">
+        <article class="offline-node" data-offline-step="0">
+          <h3>Sealed Delivery Trace</h3>
+          <p>完成后的目标、运行、Human 介入、成本与证据形成不可变 Trace revision。</p>
+        </article>
+        <div class="connector" aria-hidden="true"></div>
+
+        <article class="offline-node" data-offline-step="1">
+          <h3>Offline Eval Engine</h3>
+          <p>验证 Autonomous Delivery Rate 的口径与真实性，并按组织、业务域、Project Agent 和版本解释提升或下降的原因。</p>
+          <div class="goal-outcome"><b>Goal Outcome:</b> 原始 Intent 是否真正完成</div>
+          <div class="eval-five">
+            <div class="metric">Isolation</div><div class="metric">Quality</div>
+            <div class="metric">Autonomy</div><div class="metric">Speed</div>
+            <div class="metric">Token Cost</div>
+          </div>
+        </article>
+        <div class="connector" aria-hidden="true"></div>
+        <article class="offline-node evolution" data-offline-step="2">
+          <h3>Governed Evolution</h3>
+          <p>把重复问题和有效经验变成 Knowledge、Policy、Skill 或 Gate 提案，经治理后才能应用。</p>
+        </article>
+      </div>
+      <div class="brain-return" data-offline-step="3">
+        <div class="return-arrow">↑</div>
+        <div><strong>Governed updates return to the Organization Asset Registry</strong><br>按根因更新 DDD / Brain、Policy / Gate、Tool / Skill、Project Agent Definition 或执行能力，并保留来源、审核与回滚记录。</div>
+        <div class="future">New asset revision → Future Intents</div>
+      </div>
+
+      <div class="details" id="architectureDetails">
+        <div class="detail"><b>DDD has six governed sections</b>Identity、Knowledge、Gates、Capabilities、Delivery Contract 和 Refresher 是 Brain 内部唯一事实源。</div>
+        <div class="detail"><b>Definition is a projection</b>Project Agent Definition 从 DDD 事实源编译；不复制成第二套知识或政策。</div>
+        <div class="detail"><b>Conductor is deterministic</b>依赖、Placement、Lease、去重、恢复和 Landing 由代码处理，不靠模型临场判断。</div>
+        <div class="detail"><b>Host ↔ Cloud Run Exchange</b>远程命令幂等、事件可重放、结果通过不可变 Bundle 返回；不共享可变数据库。</div>
+        <div class="detail"><b>Host accepts every result</b>Chat、Local 和 Cloud Workers 都只能提交候选；Host 才拥有接受与集成权。</div>
+        <div class="detail"><b>Trace and Eval stay separate</b>Trace 从 canonical facts 派生；Offline Eval 读取 sealed revision，不阻塞 Delivery。</div>
+      </div>
+
+      <div class="legend" aria-label="Role legend">
+        <span><i class="dot semantic"></i>语义理解与管理</span>
+        <span><i class="dot deterministic"></i>确定性治理与质量协议</span>
+        <span><i class="dot execution"></i>本地与远程执行</span>
+        <span><i class="dot learning"></i>知识与系统进化</span>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const flowNodes = [...document.querySelectorAll('[data-flow-step]')];
+    const connectors = [...document.querySelectorAll('[data-connector]')];
+    const offlineNodes = [...document.querySelectorAll('[data-offline-step]')];
+    const controlBlocks = [...document.querySelectorAll('[data-control-block]')];
+    const traceRail = document.getElementById('traceRail');
+    const brainRail = document.getElementById('brainRail');
+    const playBtn = document.getElementById('playBtn');
+    const status = document.getElementById('status');
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let timer = null;
+    let index = 0;
+    let running = false;
+    function resetVisuals() {
+      flowNodes.forEach(node => node.classList.remove('active', 'complete'));
+      connectors.forEach(node => node.classList.remove('active'));
+      offlineNodes.forEach(node => node.classList.remove('active'));
+      controlBlocks.forEach(node => node.classList.remove('active'));
+      traceRail.classList.remove('active');
+      brainRail.classList.remove('returned');
+    }
+
+    function renderFrame(frame) {
+      resetVisuals();
+      const controlIndex = frame <= 2 ? 1 : frame <= 6 ? 2 : frame <= 8 ? 3 : 0;
+      if (controlBlocks[controlIndex]) controlBlocks[controlIndex].classList.add('active');
+      if (frame <= 4) {
+        flowNodes.forEach((node, i) => {
+          if (i < frame) node.classList.add('complete');
+          if (i === frame) node.classList.add('active');
+        });
+        connectors.forEach((node, i) => {
+          if (i < frame) node.classList.add('active');
+        });
+        const lifecycleLabels = ['Intent triage', 'Requirement & Design Spec', 'Run Graph planning', 'Governed execution', 'Delivery records'];
+        status.textContent = lifecycleLabels[frame];
+      } else if (frame === 5) {
+        flowNodes.forEach(node => node.classList.add('complete'));
+        connectors.forEach(node => node.classList.add('active'));
+        traceRail.classList.add('active');
+        status.textContent = 'Trace captures the completed flow';
+      } else {
+        flowNodes.forEach(node => node.classList.add('complete'));
+        connectors.forEach(node => node.classList.add('active'));
+        traceRail.classList.add('active');
+        const offlineIndex = frame - 6;
+        offlineNodes.forEach((node, i) => {
+          if (i === offlineIndex) node.classList.add('active');
+        });
+        if (offlineIndex === 3) brainRail.classList.add('returned');
+        status.textContent = ['Sealed trace ready', 'Offline evaluation', 'Governed evolution', 'Organization asset registry updated'][offlineIndex] || 'Flow complete';
+      }
+    }
+
+    function stopAnimation(done = false) {
+      if (timer) window.clearInterval(timer);
+      timer = null; running = false;
+      playBtn.textContent = done ? 'Replay' : 'Resume';
+      status.textContent = done ? 'Flow complete · ready to replay' : 'Flow animation paused';
+    }
+    function startAnimation(restart = false) {
+      if (restart) index = 0;
+      running = true; playBtn.textContent = 'Pause';
+      renderFrame(index);
+      timer = window.setInterval(() => {
+        index += 1;
+        if (index > 9) { renderFrame(9); stopAnimation(true); return; }
+        renderFrame(index);
+      }, 1150);
+    }
+
+    playBtn.addEventListener('click', () => {
+      if (running) stopAnimation(false);
+      else startAnimation(index >= 9);
+    });
+
+    const executiveBtn = document.getElementById('executiveBtn');
+    const architectureBtn = document.getElementById('architectureBtn');
+    function setView(mode) {
+      document.body.classList.toggle('architecture', mode === 'architecture');
+      executiveBtn.setAttribute('aria-pressed', String(mode === 'executive'));
+      architectureBtn.setAttribute('aria-pressed', String(mode === 'architecture'));
+    }
+    executiveBtn.addEventListener('click', () => setView('executive'));
+    architectureBtn.addEventListener('click', () => setView('architecture'));
+
+    document.getElementById('exportBtn').addEventListener('click', async () => {
+      const summary = [
+        '# XXX (TBD) Organizational Autonomy OS',
+        '',
+        'Current implementation baseline: SwarmAI',
+        'First workload: Project Agent Delivery',
+        'Future workloads: Research, Operations, Content, Data',
+        '',
+        'North Star: Autonomous Delivery Rate (ADR) = A / E.',
+        'E = Intent revisions admitted to Project Agent Delivery with eligibility fixed at triage before execution.',
+        'A = eligible Intents delivered with complete classification, Isolation PASS, Quality PASS, and zero canonical preventable intervention.',
+        'Failed, abandoned, system-cancelled, UNKNOWN, or BLOCK Intents remain in E and never enter A.',
+        'Preventable interventions: preventable question, human correction, manual routing/retry, operational rescue, unnecessary approval, manual code fix, takeover. Required judgment is neutral.',
+        'Excluded but separately reported: duplicate/test, pre-admission unsupported, pre-execution user withdrawal, superseded revisions, and standalone research/no-code without a workload contract.',
+        '',
+        '- Organization Asset Registry discovers and governs DDD / Brains and Project Agents.',
+        '- Intent Operations traces Triage → Requirement → Design Spec → Delivery Records.',
+        '- Intent Autonomy uses Isolation, Quality, Autonomy, Speed, and Token Cost.',
+        '- Human intervention is visible by stage, depth, impact, waiting time, and rework.',
+        '- Pipeline Conductor coordinates Chat, Local, and Cloud Worker execution.',
+        '- Cloud Workers are remote execution nodes that provide scalable parallel capacity.',
+        '- One Pipeline Protocol applies the same quality and evidence rules everywhere.',
+        '- Unified Trace links lifecycle, Human involvement, cost, evidence, and delivery records.',
+        '- Offline Eval reports Goal Outcome plus the same five Pipeline dimensions.',
+        '- Governed Evolution updates the correct Brain, policy, capability, or Project Agent asset.',
+        '',
+        'Boundary: the actor that performs work does not certify its own delivery.'
+      ].join('\n');
+      try {
+        await navigator.clipboard.writeText(summary);
+        status.textContent = 'Executive summary copied';
+      } catch {
+        const blob = new Blob([summary], { type: 'text/markdown' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob); link.download = 'xxx-tbd-agent-delivery-os-summary.md';
+        link.click(); URL.revokeObjectURL(link.href);
+        status.textContent = 'Executive summary downloaded';
+      }
+    });
+
+    if (reducedMotion) { renderFrame(9); stopAnimation(true); }
+    else startAnimation(true);
+  </script>
+</body>
+</html>
