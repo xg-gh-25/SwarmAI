@@ -28,7 +28,7 @@ from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
 # Import the function under test
-from routers.workspace_api import _build_tree
+from routers.workspace_api import _build_tree, _HIDDEN_DIRS
 
 # Import ProjectionLayer and SkillInfo for Bug 2 test
 from core.projection_layer import ProjectionLayer
@@ -44,7 +44,10 @@ _path_segment = st.text(
     alphabet="abcdefghijklmnopqrstuvwxyz0123456789_-",
     min_size=1,
     max_size=12,
-).filter(lambda s: s not in (".", "..") and not s.startswith("-"))
+).filter(lambda s: s not in (".", "..") and not s.startswith("-")
+          # a name the tree hides at every level (_HIDDEN_DIRS, e.g. "chats") never
+          # appears, so a generated "x/chats" made the property fail by design
+          and s not in _HIDDEN_DIRS)
 
 # Git status codes that can appear on directories
 _git_status_code = st.sampled_from(["untracked", "modified", "added"])
