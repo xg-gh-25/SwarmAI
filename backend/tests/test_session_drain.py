@@ -43,8 +43,10 @@ async def wired(db_path: Path, monkeypatch):
     router = SessionRouter(prompt_builder=MagicMock())
     yield router, sp
     # Cancel any lazily-started drain worker so it doesn't outlive the test loop.
+    # A turn's end enqueues a drain (chat-turn-liveness S1), so the worker may have
+    # been started on the test function's loop, already closed here.
     task = router._drain_worker_task
-    if task is not None and not task.done():
+    if task is not None and not task.done() and not task.get_loop().is_closed():
         task.cancel()
         try:
             await task

@@ -193,6 +193,20 @@ class TestAutoRecoverStallGuard:
 class TestSessionBusyErrorEvent:
     """Verify SessionRouter yields SESSION_BUSY error on active streaming."""
 
+    @pytest.fixture(autouse=True)
+    def _no_background_drain(self, monkeypatch):
+        """These tests make send() raise SESSION_BUSY on an IDLE unit (production
+        raises it only for a streaming unit or a CLI that is not quiescent) and
+        replace database.db with a MagicMock. The queued row then looks deliverable,
+        and the turn's end kicks the drain (docs/design/chat-turn-liveness.md S1),
+        which would run against the mocked database after the test. The drain is
+        covered by test_session_drain.py and test_turn_liveness_p0.py."""
+        from core.session_router import SessionRouter
+
+        async def _skip(self, session_id):
+            return None
+        monkeypatch.setattr(SessionRouter, "drain_pending", _skip)
+
     @pytest.mark.asyncio
     async def test_router_yields_session_busy_on_active_session(self):
         """When backend detects active streaming, SSE yields SESSION_BUSY error."""

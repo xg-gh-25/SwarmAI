@@ -559,7 +559,15 @@ async def _generate() -> dict:
                 patch("core.compact_summary.datetime", stamp), \
                 patch("core.turn_stop.datetime", SimpleNamespace(now=lambda tz=None: clock.now())), \
                 patch("core.background_agents._now_ms", lambda: int(clock.t.timestamp() * 1000)), \
-                patch("core.session_state.publish", lambda *_a, **_k: None):
+                patch("core.session_events.time.time_ns",       # activity_seq (chat-turn-liveness S1)
+                      lambda: int(clock.t.timestamp() * 1_000_000_000)), \
+                patch("core.session_state.publish", lambda *_a, **_k: None), \
+                patch.object(SessionRouter, "enqueue_drain", lambda *_a, **_k: None):
+            # (enqueue_drain: the generator drives every drain itself, in order
+            # (`router.drain_pending` in _run), and its `_busy_send` double answers
+            # SESSION_BUSY on an IDLE unit, which production never does; the
+            # automatic kick (docs/design/chat-turn-liveness.md S1) would start a
+            # second, concurrent drain. The kick is covered by test_turn_liveness_p1.)
             # (session_state pushes are tested on their own, test_transcript_feed:
             # they are scheduled tasks, and the transcript is what this compares)
             steps, router = await _run(turns, sid, hub)
@@ -597,7 +605,9 @@ async def test_fixture_is_current():
                 cases.add("resync+replay" if types[:2] == ["resync", "turn_start"]
                           else "resync" if types == ["resync"] else "replay")
             if st["kind"] == "restart":
-                prev = [x for x in steps[:i] if x["kind"] == "event"]
+                # turn envelopes only: one outside any turn (session_activity,
+                # turnId "") says nothing about whether a turn was running
+                prev = [x for x in steps[:i] if x["kind"] == "event" and x["env"].get("turnId")]
                 mid = bool(prev) and prev[-1]["env"]["type"] != "turn_end"
                 cases.add("restart mid-turn" if mid else "restart idle")
                 if mid and prev[-1]["env"]["type"] == "tool_result":

@@ -646,6 +646,8 @@ class SessionUnit:
         # tell a user Stop apart from a clean completion. A user Stop must NEVER
         # be followed by a proactive self-heal kill/respawn (that defeats Stop).
         self._user_stopped_current_turn: bool = False
+        # A user Stop is running (interrupt → recycle), docs/design/chat-turn-liveness.md S1
+        self._stopping: bool = False
         # Stop receipt (core/turn_stop): the note begin_stop_receipt() leaves for
         # the next send, injected ONCE into its query (_apply_stop_note).
         self._stop_context: str = ""
@@ -1287,7 +1289,7 @@ class SessionUnit:
         self._emit_cli_event("idle")
 
     def _emit_cli_event(self, kind: str) -> None:
-        cb = self._on_cli_event
+        cb = getattr(self, "_on_cli_event", None)   # getattr: fixtures built with __new__
         if cb is None:
             return
         try:
@@ -2367,6 +2369,15 @@ class SessionUnit:
             _is_retriable_error,
             _sanitize_sdk_error,
         )
+
+        # ── Layer -1: a user Stop still recycling this subprocess ──────
+        # Wait for it (bounded) BEFORE advancing the generation: a send that
+        # bumped it mid-interrupt would make the interrupt skip its recycle and
+        # hand this send the poisoned process (10-22 19:20). The router queues
+        # admitted sends during a Stop; this guards every other caller.
+        # (getattr: some fixtures build a unit with __new__, skipping __init__)
+        if getattr(self, "_stopping", False):
+            await self._wait_for_stop()
 
         # ── Layer 0: Advance generation + clear stale interrupt state ─
         # Must happen BEFORE anything else so a concurrent interrupt()
@@ -4066,6 +4077,49 @@ class SessionUnit:
         return {"stopped": True, "reason": ""}
 
     async def interrupt(self, timeout: float = 5.0, autonomous: bool = False) -> bool:
+        """Stop the current turn (``_interrupt_impl`` does it; see there).
+
+        A user Stop (``autonomous=False``) marks the unit ``_stopping`` from entry
+        until the interrupt has run to its end, recycle included (docs/design/
+        chat-turn-liveness.md S1): the session's activity reads ``stopping`` the
+        whole time, no turn is admitted onto the subprocess being recycled (the
+        router queues it; ``send`` waits), and its end re-drives the pending
+        messages queued meanwhile (``stop_done``)."""
+        if autonomous or self.state not in (SessionState.STREAMING, SessionState.WAITING_INPUT):
+            return await self._interrupt_impl(timeout=timeout, autonomous=autonomous)
+        self._set_stopping(True)
+        try:
+            return await self._interrupt_impl(timeout=timeout, autonomous=autonomous)
+        finally:
+            self._set_stopping(False)
+            self._emit_cli_event("stop_done")
+
+    def _set_stopping(self, value: bool) -> None:
+        if getattr(self, "_stopping", False) == value:
+            return
+        self._stopping = value
+        self._emit_cli_event("activity")
+
+    STOP_WAIT_BUDGET_S = 10.0
+
+    async def _wait_for_stop(self, budget_s: Optional[float] = None) -> None:
+        """A send that arrives during a user Stop waits for it to finish (the
+        subprocess is about to be recycled; the send then respawns with --resume).
+        Bounded: past the budget it raises SessionBusyError and touches nothing —
+        it never goes on while the Stop runs (docs/design/chat-turn-liveness.md S1
+        v4 RC-C). The router keeps the message pending; the Stop's end drains it."""
+        budget = self.STOP_WAIT_BUDGET_S if budget_s is None else budget_s
+        deadline = time.monotonic() + budget
+        while getattr(self, "_stopping", False) and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        if getattr(self, "_stopping", False):
+            from .exceptions import SessionBusyError
+            logger.warning("session_unit.stop_wait_timeout session_id=%s — busy after %.0fs",
+                           self.session_id, budget)
+            raise SessionBusyError(
+                detail=f"Session {self.session_id} is still stopping; the message is queued.")
+
+    async def _interrupt_impl(self, timeout: float = 5.0, autonomous: bool = False) -> bool:
         """Interrupt active query. SDK interrupt() with kill fallback.
 
         ``autonomous`` (run_fb6e94a9): when True, this is a system-initiated

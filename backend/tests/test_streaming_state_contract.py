@@ -8,7 +8,8 @@ the "still flushing" flag it reported) has no trigger. This file binds what rema
 - GET /api/chat/sessions/streaming-state, called over HTTP through the real router,
   returns per-session entries with exactly the live keys (I2). The desktop's
   chatService.getStreamingState (desktop/src/services/chat.ts) maps all of them
-  except `pid`, which only the backend's session-health probe reads;
+  except `pid`, which only the backend's session-health probe reads, and
+  `activity` / `activity_seq` / `pending` until chat-turn-liveness P2 maps them;
   scripts/daemon-lib.sh reads `streaming`.
 
 REMOVED_MEMBERS names the deleted members on purpose: it is the absence check that
@@ -30,6 +31,8 @@ LIVE_KEYS = {
     "streaming", "state", "pid", "waiting_input",
     "pending_count", "pending_question", "last_drained_seqs",
     "background_agents",  # core/background_agents.py snapshot (d39df26a)
+    # docs/design/chat-turn-liveness.md S1/S3 (backend P1); the desktop maps them in P2
+    "activity", "activity_seq", "pending",
 }
 
 REMOVED_MEMBERS = (

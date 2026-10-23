@@ -91,7 +91,8 @@ class TestStopSuppressesSelfHeal:
 
     def test_interrupt_sets_user_stopped_flag(self):
         """interrupt() must set the durable stopped flag at entry."""
-        source = inspect.getsource(SessionUnit.interrupt)
+        # interrupt() wraps _interrupt_impl (the Stop flag, chat-turn-liveness S1)
+        source = inspect.getsource(SessionUnit._interrupt_impl)
         assert "self._user_stopped_current_turn = True" in source, (
             "interrupt() must set self._user_stopped_current_turn = True so the "
             "post-stream self-heal check can tell a user Stop from a clean completion."

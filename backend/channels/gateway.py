@@ -1901,6 +1901,7 @@ class ChannelGateway:
 
         _ttft_start = time.monotonic()
         _ttft_logged = False
+        _turn_stream = None
         try:
             # A new session normally passes resume_sid=None (run_conversation mints
             # the id). BUT when a prewarm unit was just ADOPTED, it is already
@@ -1912,7 +1913,9 @@ class ChannelGateway:
             # the 4-killer + poison-guard changes let the prewarm SURVIVE to adoption;
             # this routes the triggering turn to the adopted unit. (Gate-2 meta-review HIGH.)
             resume_sid = session_id if (prewarm_adopted or not is_new_session) else None
-            async for event in session_registry.session_router.run_conversation(
+            # Closed in `finally` (docs/design/chat-turn-liveness.md S1): a turn claimed
+            # at admission never outlives this handler.
+            _turn_stream = session_registry.session_router.run_conversation(
                 agent_id=agent_id,
                 user_message=final_text,
                 session_id=resume_sid,
@@ -1924,7 +1927,8 @@ class ChannelGateway:
                 client_id=channel_client_id(
                     channel_context.get("channel_type", ""), channel_id,
                     msg.external_chat_id, msg.external_message_id),
-            ):
+            )
+            async for event in _turn_stream:
                 event_type = event.get("type", "")
                 if event_type == "accepted" and event.get("duplicate"):
                     # already taken: its turn ran (or runs) and replies itself
@@ -2196,6 +2200,8 @@ class ChannelGateway:
             reply_text = "Sorry, something unexpected happened. Please try again."
             error_occurred = True
         finally:
+            if _turn_stream is not None:
+                await _turn_stream.aclose()
             await cleanup_stream(ctx)
             # Cancel heartbeat if running
             if heartbeat_task and not heartbeat_task.done():

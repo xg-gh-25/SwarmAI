@@ -372,9 +372,12 @@ class TestStaleCheckpointClearedOnSend:
             if "Layer 0:" in line and layer0_start is None:
                 layer0_start = i
             stripped = line.lstrip()
+            # the first await AFTER the Layer 0 marker: a bounded wait for a user
+            # Stop runs before Layer 0 on purpose (chat-turn-liveness S1, Layer -1)
             if (
                 stripped.startswith("await ")
                 and first_await is None
+                and layer0_start is not None
                 and not stripped.startswith("#")
             ):
                 first_await = i

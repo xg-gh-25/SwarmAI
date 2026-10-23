@@ -421,9 +421,13 @@ async def chat_stream(request: Request):
         if captured_session_id is not None:
             surface_injection.register(captured_session_id)
             _injection_registered = captured_session_id
+        _turn_stream = None
         try:
             logger.info(f"Starting chat stream for agent {chat_request.agent_id}")
-            async for msg in _get_router().run_conversation(
+            # Closed in `finally` (docs/design/chat-turn-liveness.md S1): when this
+            # POST stream is closed (a disconnect), the turn's generator closes at
+            # once, so a turn claimed at admission never outlives its request.
+            _turn_stream = _get_router().run_conversation(
                 agent_id=chat_request.agent_id,
                 user_message=chat_request.message,
                 content=chat_request.content,
@@ -433,7 +437,8 @@ async def chat_stream(request: Request):
                 editor_context=chat_request.editor_context.model_dump() if chat_request.editor_context else None,
                 terminal_context=chat_request.terminal_context.model_dump() if chat_request.terminal_context else None,
                 client_id=chat_request.client_id,
-            ):
+            )
+            async for msg in _turn_stream:
                 if captured_session_id is None:
                     captured_session_id = msg.get("sessionId") or msg.get("session_id")
                     # A NEW session's id first arrives here — register now so the
@@ -527,6 +532,8 @@ async def chat_stream(request: Request):
                     suggested_action="Please try again or contact support",
                 )
         finally:
+            if _turn_stream is not None:
+                await _turn_stream.aclose()
             # Drop the Layer-2 injection queue (fires on normal completion AND
             # CancelledError) so a dropped/crashed turn never leaks a queue.
             if _injection_registered is not None:
@@ -1348,6 +1355,24 @@ async def enable_mcp_for_session(session_id: str, body: dict):
         return {"status": "reclaimed", "message": result["message"]}
     else:
         raise HTTPException(status_code=409, detail=result["message"])
+
+
+@router.delete("/sessions/{session_id}/pending/{client_id}")
+async def cancel_pending_message(session_id: str, client_id: str):
+    """Cancel one queued message (docs/design/chat-turn-liveness.md S3).
+
+    Only a message no drain has taken yet: it is removed and its send-ledger
+    entry released. 409 when a drain already took it (it is being sent), 404
+    when there is no such queued message. The session's state (with its queue)
+    is pushed to its tabs after a cancel."""
+    from core import session_pending, session_state
+    result = await session_pending.cancel_unclaimed(session_id, client_id)
+    if result == "claimed":
+        raise HTTPException(status_code=409, detail="The message is already being sent.")
+    if result == "missing":
+        raise HTTPException(status_code=404, detail="No such queued message.")
+    session_state.publish(_get_router(), session_id)
+    return {"status": "cancelled", "clientId": client_id}
 
 
 @router.delete("/sessions/{session_id}", status_code=204)

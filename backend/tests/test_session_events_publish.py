@@ -38,8 +38,11 @@ def _router() -> SessionRouter:
 
 
 def _published(h, sid):
+    """The turn envelopes published for sid. Envelopes outside any turn (turnId "":
+    session_state, session_activity — docs/design/chat-turn-liveness.md S1) share
+    the session's eventSeq but are not part of the turn under test."""
     log = h._logs.get(sid)
-    return list(log.buf) if log else []
+    return [e for e in log.buf if e.get("turnId")] if log else []
 
 
 async def _fake_impl(events, closed=None):
@@ -70,7 +73,8 @@ async def test_run_conversation_publishes_from_session_start(hub, monkeypatch):
                                                session_id="S1", client_id="local-c1")]
     pub = _published(hub, "S1")
     assert [e["type"] for e in pub] == ["turn_start", "session_start", "text_delta", "result", "turn_end"]
-    assert [e["eventSeq"] for e in pub] == [1, 2, 3, 4, 5]
+    seqs = [e["eventSeq"] for e in pub]
+    assert seqs == sorted(set(seqs)) and seqs[0] == 1   # strictly increasing
     assert len({e["turnId"] for e in pub}) == 1
     assert all(e["turnClientId"] == "local-c1-asst" for e in pub)
     # the caller gets the pre-turn event unstamped and the turn events stamped

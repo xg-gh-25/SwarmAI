@@ -120,14 +120,18 @@ async def run_skill_creator(
         skill_name, session_id, agent_config["model"],
     )
 
-    async for event in router.run_conversation(
+    from contextlib import aclosing
+    # aclosing (docs/design/chat-turn-liveness.md S1): a turn claimed at admission
+    # never outlives this generator when its consumer closes it.
+    async with aclosing(router.run_conversation(
         agent_id="skill-creator",
         user_message=prompt,
         session_id=session_id,
         enable_skills=True,
         enable_mcp=False,
         agent_config=agent_config,
-    ):
-        if event.get("type") == "result":
-            event["skill_name"] = skill_name
-        yield event
+    )) as stream:
+        async for event in stream:
+            if event.get("type") == "result":
+                event["skill_name"] = skill_name
+            yield event

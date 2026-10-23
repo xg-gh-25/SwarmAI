@@ -636,6 +636,100 @@ async def count_pending(session_id: str) -> int:
         return row[0]
 
 
+#: characters of a queued message shown in its row of the queue list
+_PREVIEW_CHARS = 200
+#: queued messages listed (a queue is a handful; the cap bounds the read)
+_LIST_MAX = 50
+
+
+#: The row's preview, computed by SQLite (on the connection's thread, never the
+#: event loop, and without handing the whole content to Python): the text of a
+#: string content, or of its text blocks; "" for anything else or invalid JSON.
+#: Bound parameters: the preview length, twice.
+_PREVIEW_SQL = (
+    "CASE WHEN content IS NULL OR NOT json_valid(content) THEN '' "
+    "WHEN json_type(content) = 'text' THEN substr(json_extract(content, '$'), 1, ?) "
+    "WHEN json_type(content) = 'array' THEN substr(COALESCE((SELECT group_concat("
+    "json_extract(j.value, '$.text'), ' ') FROM json_each(content) AS j "
+    "WHERE json_extract(j.value, '$.type') = 'text'), ''), 1, ?) "
+    "ELSE '' END AS preview"
+)
+
+
+async def list_pending(session_id: str) -> list[dict]:
+    """The session's queued (sent=0) messages, FIFO, as the queue list shows them:
+    ``client_id``, ``id``, ``pending_seq``, ``preview``, ``created_at``, ``claimed``
+    (a drain has taken it: it is being delivered and can no longer be cancelled).
+    One pooled read; ``pending_count`` is its length (docs/design/chat-turn-liveness.md S3)."""
+    db_path = _get_db_path()
+    async with _pooled(db_path, readonly=True) as conn:
+        cursor = await conn.execute(
+            f"SELECT id, pending_seq, {_PREVIEW_SQL}, created_at, metadata, claimed_at "
+            "FROM messages WHERE session_id = ? AND sent = 0 ORDER BY pending_seq ASC LIMIT ?",
+            (_PREVIEW_CHARS, _PREVIEW_CHARS, session_id, _LIST_MAX),
+        )
+        rows = await cursor.fetchall()
+    out = []
+    for msg_id, seq, preview, created_at, metadata_json, claimed_at in rows:
+        try:
+            meta = json.loads(metadata_json) if metadata_json else {}
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
+        out.append({
+            "id": msg_id, "client_id": (meta or {}).get("client_id"), "pending_seq": seq,
+            "preview": preview or "", "created_at": created_at,
+            "claimed": claimed_at is not None,
+        })
+    return out
+
+
+async def list_unclaimed(session_id: str) -> list[dict]:
+    """The queued messages no drain has taken yet (the ones that can be cancelled)."""
+    return [p for p in await list_pending(session_id) if not p["claimed"]]
+
+
+async def cancel_unclaimed(session_id: str, client_id: str) -> str:
+    """Cancel one queued message by its client_id: ``cancelled`` (its row is deleted
+    and its send-ledger entry released, so the same client_id may be sent again),
+    ``claimed`` (a drain already took it — it is being delivered), or ``missing``.
+
+    One transaction (docs/design/chat-turn-liveness.md S1 v4 RC-D): the row's
+    delete and the ledger's release commit together, so a retry of the same
+    client_id never sees a receipt naming a deleted row. Under the per-session seq
+    lock, so it can never race ``claim_pending_batch``: the delete only takes a row
+    that is still unsent AND unclaimed."""
+    db_path = _get_db_path()
+
+    async def _do() -> str:
+        async with _get_seq_lock(session_id):
+            async with _pooled(db_path) as conn:
+                await conn.execute("PRAGMA busy_timeout=5000")
+                cursor = await conn.execute(
+                    "SELECT id, claimed_at FROM messages WHERE session_id = ? AND sent = 0 "
+                    "AND json_extract(metadata, '$.client_id') = ?",
+                    (session_id, client_id),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    return "missing"
+                if row[1] is not None:
+                    return "claimed"
+                await conn.execute(
+                    "DELETE FROM messages WHERE id = ? AND sent = 0 AND claimed_at IS NULL",
+                    (row[0],),
+                )
+                # the ledger's release (core/send_requests.release), same transaction
+                await conn.execute(
+                    "UPDATE send_requests SET status = 'failed', user_message_id = NULL, "
+                    "updated_at = ? WHERE client_id = ?",
+                    (datetime.now().isoformat(), client_id),
+                )
+                await conn.commit()
+                return "cancelled"
+
+    return await _with_retry(_do)
+
+
 async def reopen_dangling_claims(session_id: str | None = None) -> int:
     """Startup crash-window reconciler (F4/F10): reopen rows left in the
     ``claimed`` phase (claimed_at set, sent=0) by a crash back to ``pending``

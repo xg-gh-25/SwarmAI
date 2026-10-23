@@ -33,7 +33,7 @@ def hub(monkeypatch):
     return h
 
 
-async def _sse_frames(app, path: str, want: int, act) -> list[dict]:
+async def _sse_frames(app, path: str, want: int, act, turn_frames: bool = False) -> list[dict]:
     """Call the ASGI app like a browser fetch, collect `want` data frames, then
     disconnect. `act` runs once the hello arrived (the subscriber is registered)."""
     frames: list[dict] = []
@@ -56,7 +56,11 @@ async def _sse_frames(app, path: str, want: int, act) -> list[dict]:
             while "\n\n" in buf:
                 chunk, buf = buf.split("\n\n", 1)
                 if chunk.startswith("data: "):
-                    frames.append(json.loads(chunk[len("data: "):]))
+                    frame = json.loads(chunk[len("data: "):])
+                    # turn_frames: keep the hello and the turn's envelopes; drop those
+                    # outside any turn (session_activity / session_state, turnId "")
+                    if not (turn_frames and frame.get("turnId") == "" and frame.get("type") != "events_hello"):
+                        frames.append(frame)
                     hello.set()
             if len(frames) >= want:
                 done.set()
@@ -111,11 +115,12 @@ async def test_cli_initiated_turn_reaches_the_events_subscriber_over_http(hub, m
     async def act():
         await r.run_injected_turn(unit, object())
 
-    got = await _sse_frames(app, "/api/chat/events", 7, act)
+    got = await _sse_frames(app, "/api/chat/events", 7, act, turn_frames=True)
     assert got[0]["type"] == "events_hello"
     turn = got[1:]
     assert [f["type"] for f in turn] == ["turn_start", "assistant", "session_start", "assistant", "result", "turn_end"]
-    assert [f["eventSeq"] for f in turn] == [1, 2, 3, 4, 5, 6]
+    seqs = [f["eventSeq"] for f in turn]
+    assert seqs == sorted(set(seqs))   # strictly increasing (non-turn envelopes share the counter)
     assert {f["sessionId"] for f in turn} == {"S1"} and len({f["turnId"] for f in turn}) == 1
     assert turn[0]["source"] == "injected" and turn[0]["turnClientId"].endswith("-asst")
     finished = turn[1]["content"][0]

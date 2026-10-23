@@ -1009,7 +1009,7 @@ class LifecycleManager:
 
         now = awake_time()
         for unit in self._router.list_units():
-            if unit.state == SessionState.IDLE:
+            if unit.state == SessionState.IDLE and not self._busy(unit.session_id):
                 # Channel sessions are never TTL-killed — they persist
                 # for the lifetime of the daemon.  Context continuity
                 # is maintained by the long-lived subprocess + --resume.
@@ -1089,6 +1089,8 @@ class LifecycleManager:
         for unit in self._router.list_units():
             if unit.state != SessionState.IDLE:
                 continue  # protect STREAMING / WAITING_INPUT / COLD / DEAD
+            if self._busy(unit.session_id):
+                continue  # a turn admitted on it (claimed) or a Stop recycling it
             # Background work does NOT exempt an orphan: no window would see the turn
             # its task leads to, and a never-ending task would pin the slot (I5).
             if unit.is_channel_session:
@@ -1112,6 +1114,17 @@ class LifecycleManager:
                 await self.enqueue_hooks_for_unit(unit)
             await unit.kill()
             self._release_session_state(unit.session_id)
+
+    def _busy(self, session_id: str) -> bool:
+        """The router's one busy check (SessionRouter.is_busy, docs/design/
+        chat-turn-liveness.md S1 v4): a claimed turn, a Stop, or an active unit.
+        Strictly ``is True``: a test double router answers MagicMocks."""
+        check = getattr(self._router, "is_busy", None)
+        try:
+            return callable(check) and check(session_id) is True
+        except Exception:  # noqa: BLE001 — fail safe: treat as busy, kill nothing
+            logger.debug("lifecycle busy check failed session=%s", session_id, exc_info=True)
+            return True
 
     @staticmethod
     def _release_session_state(session_id: str) -> None:
@@ -1178,6 +1191,11 @@ class LifecycleManager:
                 # it is no longer DEAD, send() owns it now — leave it alone.
                 if unit.state != SessionState.DEAD:
                     continue
+                # a turn admitted onto this DEAD unit (its send recovers it) owns
+                # the session: wiping it would drop that turn's claim
+                # (docs/design/chat-turn-liveness.md S1 v4)
+                if self._busy(unit.session_id):
+                    continue
                 self._release_session_state(unit.session_id)
                 # Route through the idempotent, self._lock-holding recovery
                 # transaction instead of hand-rolling cleanup+transition. This
@@ -1201,6 +1219,9 @@ class LifecycleManager:
             u.session_id for u in self._router.list_units()
             if u.state == SessionState.COLD
             and (now - u.last_used) > 3600  # 1 hour
+            # a COLD unit a turn was just admitted on (claimed, cold-starting) is
+            # not stale: purging it would let a second unit be made for the session
+            and not self._busy(u.session_id)
         ]
         for sid in stale_ids:
             self._release_session_state(sid)

@@ -38,6 +38,15 @@ Contract:
   because of a subscriber.
 - ``epoch`` is new per process, so a cursor from before a daemon restart is never
   trusted.
+- The session's turn in progress is also its "a turn is in progress" fact
+  (docs/design/chat-turn-liveness.md S1): ``try_claim_turn`` claims it at a send's
+  admission only when none is open or claimed (synchronous: one check-and-claim
+  step), its ``turn_start`` is published later at the turn's first event, as
+  before. ``open_turn_id`` / ``open_phase`` read the open turn, else the claim
+  (preparing, then each ``turn_phase``; streaming from the open turn's first event
+  not in ``WAIT_EVENT_TYPES``). ``set_activity`` / ``activity_of`` keep the
+  activity core/session_state derives, with a seq that only grows (also across
+  restarts and ``drop_session``).
 
 The hub is process-local and in-memory by design: the DB stays the durable
 record, this is only the live channel plus a short replay window.
@@ -48,6 +57,7 @@ import asyncio
 import json
 import logging
 import math
+import time
 from collections import deque
 from typing import Any, AsyncIterator, Mapping, Optional
 from uuid import uuid4
@@ -56,6 +66,15 @@ logger = logging.getLogger(__name__)
 
 #: cursor value meaning "join": replay the session's active turn, if any.
 JOIN = -1
+
+#: Events of a turn that do not mean the model is producing: they leave the turn's
+#: phase where it is (docs/design/chat-turn-liveness.md S1). Any other event of the
+#: open turn moves it to ``streaming``; a ``turn_phase`` sets its own phase.
+WAIT_EVENT_TYPES = frozenset({
+    "turn_start", "turn_phase", "session_start", "session_resuming", "queued",
+    "heartbeat", "still_working", "reconnecting", "system_prompt_metadata",
+    "mcp_health_warning", "error",
+})
 
 #: turn_start.source values (mirrored by desktop hooks/sessionTurnRouter TurnSource)
 TURN_SOURCES = ("chat", "drain", "channel", "injected", "answer", "permission")
@@ -86,7 +105,8 @@ _MAX_SESSION_ID_LEN = 200
 
 
 class _Log:
-    __slots__ = ("seq", "buf", "active", "active_turn", "warned", "retry_seq")
+    __slots__ = ("seq", "buf", "active", "active_turn", "warned", "retry_seq",
+                 "phase", "claim", "claim_phase", "claim_task", "waiters", "activity", "activity_seq")
 
     def __init__(self, size: int) -> None:
         self.warned = False   # the active turn's over-limit warning was logged
@@ -96,6 +116,24 @@ class _Log:
         # the active turn's envelopes from its turn_start; None between turns
         self.active: Optional[list[dict]] = None
         self.active_turn: Optional[str] = None
+        # the active turn's phase (docs/design/chat-turn-liveness.md S1): preparing
+        # from its turn_start, then each turn_phase, streaming from its first event
+        # that is not a wait; None between turns
+        self.phase: Optional[str] = None
+        # the turn admitted but not yet started (docs/design/chat-turn-liveness.md
+        # S1, SessionEventHub.try_claim_turn) and its phase; None when none
+        self.claim: Optional[str] = None
+        self.claim_phase: Optional[str] = None
+        # the task that claimed it: a claim whose task has ended is no claim, so a
+        # claim can never outlive the request that made it (v4 RC-A backstop)
+        self.claim_task: Optional["asyncio.Task"] = None
+        # a message was queued while the session was busy: the next end of a turn
+        # or claim must kick the drain (docs/design/chat-turn-liveness.md S1 v4)
+        self.waiters: bool = False
+        # the session's activity as last derived (core/session_state.refresh_activity)
+        # and its seq (SessionEventHub.set_activity)
+        self.activity: str = "idle"
+        self.activity_seq: int = 0
 
     @property
     def active_start(self) -> Optional[int]:
@@ -132,6 +170,7 @@ class SessionEventHub:
         self._queue_size = queue_size
         self._logs: dict[str, _Log] = {}
         self._subs: set[_Subscriber] = set()
+        self._activity_clock = 0
 
     # ── publishing ───────────────────────────────────────────────────
     def publish(self, session_id: str, event: Mapping[str, Any], *, turn_id: str,
@@ -160,12 +199,25 @@ class SessionEventHub:
             log.active_turn = turn_id
             log.warned = False
             log.retry_seq = 0
+            # a claimed turn keeps the phase it reached before its turn_start
+            log.phase = (log.claim_phase if log.claim == turn_id and log.claim_phase
+                         else "preparing")
         elif log.active is not None and turn_id == log.active_turn:
             if etype == "turn_end":
                 log.active = None
                 log.active_turn = None
-            elif len(log.active) < ACTIVE_TURN_LIMIT or self._compact_active(log):
-                log.active.append(env)
+                log.phase = None
+                if log.claim == turn_id:
+                    log.claim = None
+                    log.claim_phase = None
+                    log.claim_task = None
+            else:
+                if etype == "turn_phase":
+                    log.phase = env.get("phase") or log.phase
+                elif etype not in WAIT_EVENT_TYPES:
+                    log.phase = "streaming"
+                if len(log.active) < ACTIVE_TURN_LIMIT or self._compact_active(log):
+                    log.active.append(env)
         log.buf.append(env)
         for sub in tuple(self._subs):
             sub.offer(env)
@@ -174,6 +226,107 @@ class SessionEventHub:
     def current_seq(self, session_id: str) -> int:
         log = self._logs.get(session_id)
         return log.seq if log is not None else 0
+
+    # ── the open turn and the session's activity (chat-turn-liveness S1) ─────
+    def try_claim_turn(self, session_id: str, turn_id: str) -> bool:
+        """Claim the session's turn for ``turn_id`` at its admission, unless a turn is
+        open or claimed. Synchronous (no await): the check and the claim are one
+        step, so two sends on the loop can never both get it. The claim is the turn
+        from admission on (the session's activity reads it); its ``turn_start`` is
+        published later, at the turn's first event, as before."""
+        log = self._logs.get(session_id)
+        if log is None:
+            log = self._logs[session_id] = _Log(self._buffer_size)
+        if log.active is not None or self._live_claim(log) is not None:
+            return False
+        log.claim = turn_id
+        log.claim_phase = "preparing"
+        try:
+            log.claim_task = asyncio.current_task()
+        except RuntimeError:
+            log.claim_task = None   # no running loop (a sync test)
+        return True
+
+    @staticmethod
+    def _live_claim(log: "_Log") -> Optional[str]:
+        """The log's claim, dropped first when the task that made it has ended
+        (its finally never ran: a generator nobody closed)."""
+        if log.claim is not None and log.claim_task is not None and log.claim_task.done():
+            logger.warning("session_events.stale_claim_dropped turn=%s", log.claim)
+            log.claim = None
+            log.claim_phase = None
+            log.claim_task = None
+        return log.claim
+
+    def note_phase(self, session_id: str, turn_id: str, phase: Optional[str]) -> bool:
+        """A claimed turn's phase before its turn_start (not published). True when
+        it changed."""
+        log = self._logs.get(session_id)
+        if log is None or log.claim != turn_id or not phase or log.claim_phase == phase:
+            return False
+        log.claim_phase = phase
+        return True
+
+    def note_waiter(self, session_id: str) -> None:
+        """A message of the session was queued because it was busy: whatever holds
+        it kicks the drain when it ends (``take_waiters``)."""
+        log = self._logs.get(session_id)
+        if log is None:
+            log = self._logs[session_id] = _Log(self._buffer_size)
+        log.waiters = True
+
+    def take_waiters(self, session_id: str) -> bool:
+        """True (once) when messages were queued while the session was busy."""
+        log = self._logs.get(session_id)
+        if log is None or not log.waiters:
+            return False
+        log.waiters = False
+        return True
+
+    def release_claim(self, session_id: str, turn_id: str) -> None:
+        """The claimed turn ended without ever starting (queued, rejected)."""
+        log = self._logs.get(session_id)
+        if log is not None and log.claim == turn_id:
+            log.claim = None
+            log.claim_phase = None
+            log.claim_task = None
+
+    def open_turn_id(self, session_id: str) -> Optional[str]:
+        """The session's turn in progress: the open one, else the claimed one."""
+        log = self._logs.get(session_id)
+        if log is None:
+            return None
+        return log.active_turn if log.active is not None else self._live_claim(log)
+
+    def open_phase(self, session_id: str) -> Optional[str]:
+        """The phase of the session's turn in progress, None when there is none."""
+        log = self._logs.get(session_id)
+        if log is None:
+            return None
+        if log.active is not None:
+            return log.phase
+        return log.claim_phase if self._live_claim(log) is not None else None
+
+    def activity_of(self, session_id: str) -> "tuple[str, int]":
+        log = self._logs.get(session_id)
+        return (log.activity, log.activity_seq) if log is not None else ("idle", 0)
+
+    def set_activity(self, session_id: str, activity: str) -> Optional[int]:
+        """Record the session's activity; its new seq when it changed, else None.
+
+        The seq is microseconds since the epoch, bumped past the last one handed
+        out: strictly increasing per session within a process AND across a daemon
+        restart (a tab holding the old process's seq must accept the new one's),
+        and it survives ``drop_session``."""
+        log = self._logs.get(session_id)
+        if log is None:
+            log = self._logs[session_id] = _Log(self._buffer_size)
+        if log.activity == activity and log.activity_seq:
+            return None
+        self._activity_clock = max(self._activity_clock + 1, time.time_ns() // 1000)
+        log.activity = activity
+        log.activity_seq = self._activity_clock
+        return log.activity_seq
 
     def drop_session(self, session_id: str) -> None:
         """Free a released session's replay buffer. The seq counter is kept: a
@@ -184,6 +337,14 @@ class SessionEventHub:
             log.buf.clear()
             log.active = None
             log.active_turn = None
+            log.phase = None
+            log.claim = None
+            log.claim_phase = None
+            log.claim_task = None
+            log.waiters = False
+            # the session is gone: it is idle now (new seq, so a tab never keeps an
+            # old "streaming"; the seq itself only grows)
+            self.set_activity(session_id, "idle")
 
     def subscriber_count(self) -> int:
         return len(self._subs)

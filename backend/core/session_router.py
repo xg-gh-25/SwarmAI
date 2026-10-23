@@ -2131,6 +2131,43 @@ def _log_canvas_record_failure(fut) -> None:
         logger.warning("canvas record write failed: %s", fut.exception())
 
 
+class TurnOpener:
+    """Claims a ``run_conversation`` turn at its admission (docs/design/
+    chat-turn-liveness.md S1). Made before the turn's generator; the generator
+    calls ``open`` once its user row is written (or, for a drain, at once) and
+    before it takes a slot, so from then on the session's activity says a turn is
+    in progress (preparing → starting → waiting) though its ``turn_start`` is
+    published at ``session_start``, as before. ``open`` is synchronous: the hub's
+    check-and-claim is one step, so two sends can never both get the turn."""
+
+    __slots__ = ("turn_id", "source", "turn_client_id", "session_id")
+
+    def __init__(self, *, source: str, turn_client_id: Optional[str]) -> None:
+        self.turn_id = uuid4().hex[:12]
+        self.source = source
+        self.turn_client_id = turn_client_id
+        self.session_id: Optional[str] = None
+
+    @property
+    def opened(self) -> bool:
+        return self.session_id is not None
+
+    def open(self, session_id: str, unit: Any) -> bool:
+        """Claim the turn unless the session cannot take one now: a turn of it is
+        open or claimed, or a user Stop is still recycling its subprocess. False →
+        the caller queues the message (session_pending) instead."""
+        if self.opened:
+            return True
+        if getattr(unit, "_stopping", False) is True:
+            return False
+        if not session_events.hub().try_claim_turn(session_id, self.turn_id):
+            return False
+        self.session_id = session_id
+        from . import session_state
+        session_state.refresh_activity(session_id, unit)
+        return True
+
+
 class SessionRouter:
     """Routes chat requests to SessionUnits with RAM-based spawn admission.
 
@@ -2186,6 +2223,10 @@ class SessionRouter:
         self._drain_queue: asyncio.Queue[str] = asyncio.Queue()
         self._drain_worker_task: Optional[asyncio.Task] = None
         self._drain_enqueued: set[str] = set()  # de-dupe: at most one pending entry/session
+        # sessions whose message was queued on QUEUE_TIMEOUT: kicked when a slot
+        # frees, and the set emptied then. At most one entry per unit in _units
+        # (docs/design/chat-turn-liveness.md S1 v4).
+        self._awaiting_slot: set[str] = set()
         # CLI-initiated turns (core/cli_stream_reader.py): one sink task per
         # session at a time, running the unit's queued injected turns in order.
         self._injected_tasks: dict[str, asyncio.Task] = {}
@@ -3185,6 +3226,8 @@ class SessionRouter:
             and not (u.has_background_work and u.is_channel_session)
             and u is not exclude
             and u.is_channel_session == channel_only
+            # a turn admitted on it (claimed) or a Stop recycling it (S1 v4)
+            and not self.is_busy(u.session_id)
         ]
         if not idle_units:
             return False
@@ -3309,10 +3352,21 @@ class SessionRouter:
         if old_state in (SessionState.STREAMING, SessionState.WAITING_INPUT):
             if new_state in (SessionState.IDLE, SessionState.COLD, SessionState.DEAD):
                 self._slot_available.set()
+        # A slot freed (a live unit stopped streaming, or its process ended): the
+        # sessions whose message timed out waiting for one get a try now.
+        _alive = (SessionState.IDLE, SessionState.STREAMING, SessionState.WAITING_INPUT)
+        if (getattr(self, "_awaiting_slot", None)
+                and old_state in _alive and new_state != old_state
+                and (new_state in (SessionState.COLD, SessionState.DEAD)
+                     or old_state != SessionState.IDLE)):
+            waiting, self._awaiting_slot = self._awaiting_slot - {session_id}, set()
+            for s in waiting:
+                self.kick(s)
 
         # The session's state, pushed to its tabs as it changes (core/session_state).
         if not session_id.startswith(PREWARM_SESSION_PREFIX):
             from . import session_state
+            session_state.refresh_activity(session_id, self._units.get(session_id))
             session_state.publish(self, session_id)
 
         # H2 single-sink desktop-pool cleanup (方案A, run_f107f442): EVERY kill
@@ -3345,9 +3399,9 @@ class SessionRouter:
         # the streaming/hook stack, so we must NEVER drain (call send()) inline
         # here (F1 deadlock/recursion). The serial worker does the actual drain.
         if new_state == SessionState.IDLE:
-            self.enqueue_drain(session_id)
-            # A CLI-initiated turn that arrived while the unit was busy runs now.
-            self.enqueue_injected(session_id)
+            # pending messages, and a CLI-initiated turn that arrived while the unit
+            # was busy, run now (drain_pending / the sink decide from the state)
+            self.kick(session_id)
 
     # ── CLI-initiated turns (core/cli_stream_reader.py) ───────────
 
@@ -3363,6 +3417,16 @@ class SessionRouter:
             self.enqueue_drain(session_id)
         elif kind == "background_agent":
             self._publish_background_agents(session_id)
+        elif kind == "activity":
+            # the unit's Stop flag changed (docs/design/chat-turn-liveness.md S1)
+            from . import session_state
+            session_state.refresh_activity(session_id, self._units.get(session_id))
+        elif kind == "stop_done":
+            # a user Stop recycled the subprocess to COLD: what was queued meanwhile
+            # goes now (drain_pending decides from the state; a turn still open
+            # kicks again at its end)
+            if session_events.hub().take_waiters(session_id):
+                self.kick(session_id)
 
     def _publish_background_agents(self, session_id: str) -> None:
         """A background agent changed status (core/background_agents.py): publish the
@@ -3425,6 +3489,10 @@ class SessionRouter:
             while True:
                 unit = self._units.get(session_id)
                 if unit is None:
+                    return
+                # one turn at a time: an open turn's end (or a Stop's) re-drives
+                # this (docs/design/chat-turn-liveness.md S1)
+                if self.is_busy(session_id):
                     return
                 ts = unit.take_injected_turn()
                 if ts is None:
@@ -3568,7 +3636,18 @@ class SessionRouter:
         from . import session_pending
 
         unit = self._units.get(session_id)
-        if unit is None or not unit.is_alive or unit.state != SessionState.IDLE:
+        if unit is None:
+            return
+        # Level-triggered (docs/design/chat-turn-liveness.md S1, v4 RC-B): decided
+        # from the session's state now, never from which event asked. A busy session
+        # (a turn open or claimed, a user Stop recycling it, the unit streaming /
+        # waiting) is left alone: that turn's end, or the Stop's, kicks again. A COLD
+        # unit is drained too (run_conversation spawns it with --resume).
+        if self.is_busy(session_id):
+            # the turn / Stop that holds it kicks again when it ends
+            session_events.hub().note_waiter(session_id)
+            return
+        if unit.state not in (SessionState.IDLE, SessionState.COLD):
             return
         if unit.has_outstanding_tool_use:
             return  # F3: a question is awaiting its answer — do not inject a turn
@@ -3833,6 +3912,7 @@ class SessionRouter:
         source: str,
         start_on_session_start: bool,
         writer: TurnWriter,
+        opener: Optional["TurnOpener"] = None,
     ) -> AsyncIterator[dict]:
         """Run one turn's event generator and publish every event of the turn.
 
@@ -3855,18 +3935,50 @@ class SessionRouter:
         before ``turn_end`` is published, however the turn ends — so what the
         turn still held (step results waiting for the next assistant row) is
         written, and is in the DB when a tab reloads on ``turn_end``.
+
+        ``opener`` (run_conversation, docs/design/chat-turn-liveness.md S1): the
+        inner generator claims the turn itself at admission (``TurnOpener.open``,
+        before the slot), so from then on the session's activity shows a turn in
+        progress; until the turn starts its ``turn_phase`` events move the claim's
+        phase (they still reach only the POST, as before). ``accepted`` and any
+        event carrying ``_post_only`` are replies to the POST alone and are never
+        published. The claim ends at the turn's ``turn_end``, or here when the turn
+        never started (queued, rejected, cancelled).
+
+        The session's activity is refreshed whenever the turn's phase changes, and
+        the turn's end re-drives the session's pending messages and CLI-initiated
+        turns (both wait for no turn to be open or claimed).
         """
+        from . import session_state as _ss
         hub = session_events.hub()
-        turn_id = uuid4().hex[:12]
+        turn_id = opener.turn_id if opener is not None else uuid4().hex[:12]
         sid = session_id
         started = False
+
+        def unit_of(s):
+            return getattr(self, "_units", {}).get(s)
+
+        def publish(ev: dict) -> dict:
+            before = hub.open_phase(sid)
+            env = hub.publish(sid, ev, turn_id=turn_id, turn_client_id=turn_client_id)
+            if hub.open_phase(sid) != before:
+                _ss.refresh_activity(sid, unit_of(sid))
+            return env
+
         async with aclosing(agen) as inner:
             try:
                 async for ev in inner:
                     if not isinstance(ev, dict):
                         yield ev
                         continue
+                    if ev.get("type") == "accepted" or ev.pop("_post_only", False):
+                        yield ev
+                        continue
                     if not started:
+                        if (opener is not None and opener.opened
+                                and ev.get("type") == "turn_phase"
+                                and hub.note_phase(opener.session_id, turn_id, ev.get("phase"))):
+                            _ss.refresh_activity(opener.session_id, unit_of(opener.session_id))
                         if start_on_session_start and ev.get("type") != "session_start":
                             yield ev
                             continue
@@ -3876,14 +3988,25 @@ class SessionRouter:
                             continue
                         started = True
                         writer.begin(sid)
-                        yield hub.publish(sid, {"type": "turn_start", "source": source},
-                                          turn_id=turn_id, turn_client_id=turn_client_id)
-                    yield hub.publish(sid, ev, turn_id=turn_id, turn_client_id=turn_client_id)
+                        yield publish({"type": "turn_start", "source": source})
+                    yield publish(ev)
             finally:
                 await writer.close()
+                ended: set = set()
                 if started:
-                    hub.publish(sid, {"type": "turn_end"}, turn_id=turn_id,
-                                turn_client_id=turn_client_id)
+                    publish({"type": "turn_end"})   # ends the claim of this turn too
+                    ended.add(sid)
+                if opener is not None and opener.opened and opener.session_id not in ended:
+                    # claimed, never started (queued, rejected, cancelled)
+                    hub.release_claim(opener.session_id, turn_id)
+                    _ss.refresh_activity(opener.session_id, unit_of(opener.session_id))
+                    ended.add(opener.session_id)
+                # the session is free of this turn: if messages were queued while it
+                # held the session, they go now (one flag, set wherever a message is
+                # queued for being busy; no other trigger is needed — v4 RC-B)
+                for s in ended:
+                    if hub.take_waiters(s):
+                        self.kick(s)
 
     async def run_conversation(
         self,
@@ -3914,12 +4037,15 @@ class SessionRouter:
         if client_id is None:
             client_id = f"{source}-{uuid4().hex}"
         writer = TurnWriter(self, session_id, row_key=f"{client_id}-asst")
+        opener = TurnOpener(source=source,
+                            turn_client_id=f"{client_id}-asst" if client_id else None)
         agen = self._run_conversation_impl(
             agent_id=agent_id, user_message=user_message, content=content,
             session_id=session_id, enable_skills=enable_skills, enable_mcp=enable_mcp,
             channel_context=channel_context, editor_context=editor_context,
             terminal_context=terminal_context, agent_config=agent_config,
             client_id=client_id, _drained_pending=_drained_pending, writer=writer,
+            opener=opener,
         )
         async with aclosing(self._published_turn(
             agen, session_id=session_id,
@@ -3927,9 +4053,80 @@ class SessionRouter:
             source=source,
             start_on_session_start=True,
             writer=writer,
+            opener=opener,
         )) as turn:
             async for ev in turn:
                 yield ev
+
+    def is_busy(self, session_id: str) -> bool:
+        """THE "is this session busy" check (docs/design/chat-turn-liveness.md S1,
+        v4 RC-A): a turn of it is open or claimed (hub), a user Stop is recycling it,
+        or its unit streams / waits for input. Every path that would start a turn on
+        the session, or kill / evict / purge / release its unit, asks this — the unit
+        state alone does not see a turn admitted but not yet sending."""
+        unit = getattr(self, "_units", {}).get(session_id)
+        if unit is not None:
+            if unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT):
+                return True
+            if getattr(unit, "_stopping", False) is True:
+                return True
+        return session_events.hub().open_turn_id(session_id) is not None
+
+    def queued_while_busy(self, session_id: str) -> None:
+        """A message of the session was just made pending because the session was
+        busy (docs/design/chat-turn-liveness.md S1 v4 RC-B). Whatever holds it kicks
+        the drain when it ends (``take_waiters`` at a turn's / claim's end, a Stop's
+        end); and if it already ended while the row was converted, kick now."""
+        hub = session_events.hub()
+        hub.note_waiter(session_id)
+        if not self.is_busy(session_id) and hub.take_waiters(session_id):
+            self.kick(session_id)
+
+    def kick(self, session_id: str) -> None:
+        """The session may be free now: try its pending messages and its queued
+        CLI-initiated turns (docs/design/chat-turn-liveness.md S1, v4 RC-B). One
+        call for every such moment (a turn's end, a released claim, a Stop's end, an
+        IDLE edge, a message turned pending); both workers decide from the state
+        then, so a kick that comes too early costs one check. Non-blocking (F1).
+        (getattr: tests build a router with __new__.)"""
+        if getattr(self, "_units", None) is None:
+            return
+        self.enqueue_drain(session_id)
+        self.enqueue_injected(session_id)
+
+    async def _queue_admitted_send(self, receipt: dict, session_id: str,
+                                   persisted_msg_id: Optional[str],
+                                   terminal_context: Optional[dict]) -> list[dict]:
+        """A send whose session could not open a turn (docs/design/
+        chat-turn-liveness.md S1): its user row becomes a pending message and the
+        receipt says ``queued``. Returns the POST's events: the receipt, then the
+        same SESSION_BUSY reply (pendingSeq / pendingId) a busy unit has always
+        given, so a client that waits on it behaves as before. When the pending
+        conversion fails, only the receipt (not queued) and the caller runs the
+        send as before."""
+        from . import session_pending
+        from .session_utils import _build_error_event
+        seq: Optional[int] = None
+        if persisted_msg_id:
+            try:
+                seq = await session_pending.mark_pending_by_id(
+                    session_id, persisted_msg_id, terminal_context=terminal_context)
+            except Exception as exc:  # noqa: BLE001 — degrade to the old path
+                logger.warning("session_router.admission_pending_failed session_id=%s: %s",
+                               session_id, exc)
+        if seq is None:
+            return [receipt]
+        receipt["queued"] = True
+        receipt["pendingSeq"] = seq
+        logger.info("session_router.admission_queued session_id=%s msg=%s seq=%s",
+                    session_id, persisted_msg_id, seq)
+        self.queued_while_busy(session_id)
+        busy = _build_error_event(
+            code="SESSION_BUSY",
+            message="Another turn of this session is running; your message is queued.",
+            suggested_action="It is sent automatically when the session is free.")
+        busy.update({"pendingSeq": seq, "pendingId": persisted_msg_id, "_post_only": True})
+        return [receipt, busy]
 
     async def _run_conversation_impl(
         self,
@@ -3947,6 +4144,7 @@ class SessionRouter:
         _drained_pending: bool = False,
         *,
         writer: TurnWriter,
+        opener: Optional[TurnOpener] = None,
     ) -> AsyncIterator[dict]:
         """One chat turn (called through ``run_conversation``).
 
@@ -4121,7 +4319,42 @@ class SessionRouter:
                 # turn). From here the server owns the message: whatever comes next
                 # (SESSION_BUSY, QUEUE_TIMEOUT, a dropped stream) it is kept, and the
                 # client never removes or re-sends it.
-                yield send_requests.accepted(client_id, session_id, persisted_msg_id)
+                receipt = send_requests.accepted(client_id, session_id, persisted_msg_id)
+                # Admission (docs/design/chat-turn-liveness.md S1): open this
+                # session's turn now, before the slot, so the wait from here to the
+                # first token is a visible turn. A session that cannot take one (a
+                # turn of it is open, or a Stop is still recycling it) queues the
+                # message instead; that turn's end, or the Stop's, drains it.
+                if opener is not None and not opener.open(session_id, unit):
+                    queued_events = await self._queue_admitted_send(
+                        receipt, session_id, persisted_msg_id, terminal_context)
+                    for _qev in queued_events:
+                        yield _qev
+                    if receipt.get("queued"):
+                        return
+                    # the pending conversion failed: run the send as before
+                    # (unit.send decides; a busy unit answers SESSION_BUSY)
+                else:
+                    yield receipt
+            elif opener is not None and not opener.open(session_id, unit):
+                # The row could not be written and another turn holds the session:
+                # nothing to queue, so the send is handed back (one turn at a time
+                # holds even when the database does not).
+                yield {**_build_error_event(code="SESSION_BUSY",
+                                            message="Another turn of this session is running."),
+                       "retryPayload": await self._hand_back_send(
+                           client_id, session_id, agent_id, user_message, content, None,
+                           terminal_context),
+                       "_post_only": True}
+                return
+        elif _drained_pending and opener is not None and not opener.open(session_id, unit):
+            # a drain that lost the race to another turn: the drain worker rolls the
+            # claimed set back (it sees this error) and the winner's end kicks again
+            session_events.hub().note_waiter(session_id)
+            yield {**_build_error_event(code="SESSION_BUSY",
+                                        message="Another turn of this session is running."),
+                   "_post_only": True}
+            return
 
         # Acquire concurrency slot — may queue with SSE indicator
         # Check if we need to queue BEFORE blocking, so we can emit the
@@ -4179,10 +4412,14 @@ class SessionRouter:
             if queue_pending_seq is not None:
                 error_event["pendingSeq"] = queue_pending_seq
                 error_event["pendingId"] = persisted_msg_id
+                # nothing of this session frees it (it never got a slot): the next
+                # slot that frees kicks it (docs/design/chat-turn-liveness.md S1 v4)
+                self._awaiting_slot.add(session_id)
             else:
                 error_event["retryPayload"] = await self._hand_back_send(
                     client_id, session_id, agent_id, user_message, content, persisted_msg_id,
                     terminal_context)
+            error_event["_post_only"] = True   # a reply to this POST, not turn content
             yield error_event
             return
 
@@ -4844,6 +5081,9 @@ class SessionRouter:
                             "session_id=%s msg=%s seq=%s",
                             session_id, persisted_msg_id, _seq,
                         )
+                        # this turn's end drains it on the COLD unit (--resume
+                        # re-injects history); docs/design/chat-turn-liveness.md S1
+                        self.queued_while_busy(session_id)
                     except Exception:
                         logger.exception(
                             "session_router.resume_recover_pending_failed "
@@ -4925,6 +5165,9 @@ class SessionRouter:
                         pending_seq = await session_pending.mark_pending_by_id(
                             session_id, persisted_msg_id, terminal_context=terminal_context,
                         )
+                        # the unit itself was busy: its IDLE edge (or the CLI's idle
+                        # report) kicks the drain; a turn of it ending kicks too
+                        session_events.hub().note_waiter(session_id)
                         logger.info(
                             "session_router.session_busy_pending session_id=%s "
                             "msg=%s seq=%s",
@@ -4953,6 +5196,7 @@ class SessionRouter:
                     busy_event["retryPayload"] = await self._hand_back_send(
                         client_id, session_id, agent_id, user_message, content, persisted_msg_id,
                         terminal_context)
+                busy_event["_post_only"] = True   # a reply to this POST, not turn content
                 yield busy_event
                 return
             raise  # Re-raise non-SessionBusyError exceptions
@@ -5145,6 +5389,15 @@ class SessionRouter:
         # channel agent, even with force.
         if unit.is_channel_session:
             return {"status": "skipped_channel", "alive_count": self.alive_count}
+
+        # A turn admitted but not yet sending (claimed: cold-starting, waiting for a
+        # slot) or a Stop still recycling: nothing to interrupt yet, and dropping the
+        # session's state would drop the claim under the running turn
+        # (docs/design/chat-turn-liveness.md S1 v4). Left alone, even with force: the
+        # turn runs to its end (as a detached one does) and the unit is reaped later.
+        if (unit.state not in (SessionState.STREAMING, SessionState.WAITING_INPUT)
+                and self.is_busy(session_id)):
+            return {"status": "skipped_active", "alive_count": self.alive_count}
 
         # Active states are never raw-killed: the turn is still running.
         if unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT):

@@ -104,14 +104,13 @@ async def _state(router, sid) -> dict:
 
 
 def _open_turn(hub, sid) -> bool:
-    log = hub._logs.get(sid)
-    return bool(log and log.active)
+    """A turn of the session is in progress: open, or claimed at admission."""
+    return hub.open_turn_id(sid) is not None
 
 
 # ── T1 ────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-@red(P1)
 async def test_t1_cold_start_is_visible_through_every_phase(hub):
     r = _router()
     sid = "s-t1"
@@ -127,7 +126,7 @@ async def test_t1_cold_start_is_visible_through_every_phase(hub):
             st = await _state(r, sid)
             assert _open_turn(hub, sid), f"no open hub turn while {phase}"
             assert st.get("activity") not in (None, "idle"), st
-            seen.append((st["activity"], st["activitySeq"]))
+            seen.append((st["activity"], st["activity_seq"]))
             gates[phase].set()
         await asyncio.wait_for(task, 5)
     finally:
@@ -142,31 +141,75 @@ async def test_t1_cold_start_is_visible_through_every_phase(hub):
 # ── T3 ────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-@red(P1)
 async def test_t3_concurrent_sends_open_one_turn_and_queue_the_second(hub):
+    """Two sends while the first cold-starts: one turn; the second is queued at
+    admission (its POST ends at once, not after the first turn) and, when the first
+    turn ends, the drain delivers it as the session's next turn."""
     from core import session_pending
     r = _router()
     sid = "s-t3"
-    r.get_or_create_unit(sid, "default")
+    unit = r.get_or_create_unit(sid, "default")
     gates = {p: asyncio.Event() for p in ("starting", "waiting")}
     reached = {p: asyncio.Event() for p in ("starting", "waiting")}
-    first, _ = _drive(r, sid, "first", "local-t3a", _gated_send(gates, reached, "a"))
-    second = None
-    try:
-        await asyncio.wait_for(reached["starting"].wait(), 5)   # first is cold-starting
-        second, ev2 = _drive(r, sid, "second", "local-t3b",
-                             _gated_send({p: asyncio.Event() for p in gates},
-                                         {p: asyncio.Event() for p in reached}, "b"))
-        done, _ = await asyncio.wait({second}, timeout=5)
-        assert done, "the second send waited for the first turn instead of being queued"
-        starts = [e for e in hub._logs[sid].buf if e.get("type") == "turn_start"]
-        assert len(starts) == 1, f"{len(starts)} turn_start for one running turn"
-        assert any(e.get("type") == "accepted" and e.get("queued") for e in ev2), ev2
-        assert await session_pending.count_pending(sid) == 1
-    finally:
-        for g in gates.values():
-            g.set()
-        await _settle(first, *([second] if second else []))
+    first_send = _gated_send(gates, reached, "a")
+    drained: list[Any] = []
+
+    async def later_send(**kwargs: Any):
+        drained.append(kwargs.get("query_content"))
+        sid_ = kwargs.get("app_session_id")
+        yield {"type": "session_start", "sessionId": sid_}
+        yield {"type": "assistant", "content": [{"type": "text", "text": "b"}], "model": "test"}
+        yield {"type": "result", "sessionId": sid_, "durationMs": 1}
+
+    calls = {"n": 0}
+
+    def dispatch(**kwargs: Any):
+        calls["n"] += 1
+        return first_send(**kwargs) if calls["n"] == 1 else later_send(**kwargs)
+
+    with patch("core.agent_defaults.build_agent_config", new_callable=AsyncMock,
+               return_value={"model": "test"}), \
+            patch("core.session_unit.SessionUnit.send", side_effect=dispatch, autospec=False):
+
+        async def run(text, cid, out):
+            async for ev in r.run_conversation(agent_id="default", user_message=text,
+                                               session_id=sid, client_id=cid):
+                out.append(ev)
+        ev1: list[dict] = []
+        ev2: list[dict] = []
+        first = asyncio.ensure_future(run("first", "local-t3a", ev1))
+        second = None
+        try:
+            await asyncio.wait_for(reached["starting"].wait(), 5)   # first is cold-starting
+            second = asyncio.ensure_future(run("second", "local-t3b", ev2))
+            done, _ = await asyncio.wait({second}, timeout=5)
+            assert done, "the second send waited for the first turn instead of being queued"
+            starts = [e for e in hub._logs[sid].buf if e.get("type") == "turn_start"]
+            assert len(starts) == 0, "the second send started a turn"   # first: claimed, not started
+            assert _open_turn(hub, sid)
+            assert any(e.get("type") == "accepted" and e.get("queued") for e in ev2), ev2
+            assert await session_pending.count_pending(sid) == 1
+            # the first turn runs to its end on a live unit; its end drains the second
+            unit._transition(SessionState.IDLE)
+            unit._client = MagicMock()
+            for g in gates.values():
+                g.set()
+            await asyncio.wait_for(first, 5)
+            for _ in range(100):
+                if drained and await session_pending.count_pending(sid) == 0:
+                    break
+                await asyncio.sleep(0.05)
+            assert drained and "second" in str(drained[0]), "the queued message was not delivered"
+            assert await session_pending.count_pending(sid) == 0
+            sources = [e.get("source") for e in hub._logs[sid].buf if e.get("type") == "turn_start"]
+            assert sources == ["chat", "drain"], sources
+        finally:
+            for g in gates.values():
+                g.set()
+            await _settle(first, *([second] if second else []))
+            task = r._drain_worker_task
+            if task is not None and not task.done():
+                task.cancel()
 
 
 # ── T4 ────────────────────────────────────────────────────────────────────────
@@ -183,16 +226,19 @@ def _streaming_unit(sid: str) -> SessionUnit:
 
 
 @pytest.mark.asyncio
-@red(P1)
-async def test_t4_stop_never_passes_through_idle_while_recycling(monkeypatch):
+async def test_t4_nothing_starts_on_a_subprocess_a_stop_is_recycling(hub, monkeypatch):
+    """10-22 19:20: a send arrived after the Stop's interrupt returned and before its
+    recycle killed the process, and ran on it. During a user Stop the session reads
+    ``stopping`` (never idle), the router admits no turn (TurnOpener refuses), a
+    send() that arrives waits without touching the unit (its generation is not
+    advanced, so the interrupt still recycles), and the drain is re-driven at the
+    end. (The unit itself still passes IDLE inside the interrupt; nothing can act on
+    that: every admission reads ``_stopping``.)"""
+    from core.session_router import TurnOpener
+    from core.session_state import derive_activity
     unit = _streaming_unit("s-t4")
-    states: list[SessionState] = []
-    real = unit._transition
-
-    def record(s, *a, **k):
-        states.append(s)
-        return real(s, *a, **k)
-    monkeypatch.setattr(unit, "_transition", record)
+    events: list[str] = []
+    unit._on_cli_event = lambda sid, kind: events.append(kind)
 
     in_checkpoint, release = asyncio.Event(), asyncio.Event()
 
@@ -204,12 +250,24 @@ async def test_t4_stop_never_passes_through_idle_while_recycling(monkeypatch):
     stop = asyncio.ensure_future(unit.interrupt(timeout=5.0, autonomous=False))
     await asyncio.wait_for(in_checkpoint.wait(), 5)
     # the window in which 10-22 19:20 accepted a new send onto a dying process
-    observed = unit.state
+    assert derive_activity("s-t4", unit) == "stopping"
+    assert not TurnOpener(source="chat", turn_client_id=None).open("s-t4", unit)
+    gen = unit._send_generation
+    send = asyncio.ensure_future(unit.send("next", options=MagicMock()).__anext__())
+    await asyncio.sleep(0.2)
+    assert not send.done() and unit._send_generation == gen, "send ran during the Stop"
     release.set()
     await asyncio.wait_for(stop, 5)
     assert unit.state == SessionState.COLD and unit._sdk_session_id == "resume-t4"
-    assert observed != SessionState.IDLE, "unit reads IDLE while its process is about to be killed"
-    assert SessionState.IDLE not in states, f"Stop passed through IDLE: {states}"
+    assert derive_activity("s-t4", unit) == "idle"
+    assert events.count("stop_done") == 1
+    await asyncio.sleep(0.1)
+    assert unit._send_generation == gen + 1, "the waiting send did not go on after the Stop"
+    send.cancel()
+    try:
+        await send
+    except BaseException:  # noqa: BLE001 — the send itself is not under test
+        pass
 
 
 # ── T5 (T5b is test_injected_turn_empty.py, already green: it guards 1d060eee) ─
@@ -281,7 +339,6 @@ async def test_t5_an_injected_turn_whose_process_dies_is_retried_with_a_reason(h
 # ── T8 ────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-@red(P1)
 async def test_t8_a_queued_message_is_listed_and_cancellable_until_claimed():
     from core import session_pending
     sid = "s-t8"

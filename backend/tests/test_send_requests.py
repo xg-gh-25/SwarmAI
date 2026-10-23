@@ -31,6 +31,20 @@ from core.session_router import SessionRouter
 from core.session_unit import SessionState
 
 
+@pytest.fixture(autouse=True)
+def _no_background_drain(monkeypatch):
+    """This file's `_busy` double makes send() raise SESSION_BUSY on a unit that is
+    IDLE — a state production never has (a busy error means the unit streams or its
+    CLI is not quiescent). The queued message then really is deliverable, and the
+    end of the turn kicks the drain (docs/design/chat-turn-liveness.md S1), which
+    would deliver it through the REAL SessionUnit.send after this test's patch is
+    gone. The drain is covered by test_session_drain.py / test_turn_liveness_p0.py;
+    here it is kept from running."""
+    async def _skip(self, session_id):
+        return None
+    monkeypatch.setattr(SessionRouter, "drain_pending", _skip)
+
+
 def _row(cid: str, sid: str = "s", owner: str = sr.OWNER, status: str = sr.RESERVED, mid=None, at=None):
     now = at or datetime.now().isoformat()
     return {"client_id": cid, "session_id": sid, "status": status, "owner": owner,

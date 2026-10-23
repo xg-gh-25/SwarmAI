@@ -176,7 +176,7 @@ def test_registry_cleared_at_teardown_and_interrupt_and_send():
     unit._reset_turn_state()
     assert unit._live_task_ids == set()
     assert "self._reset_turn_state()" in inspect.getsource(SessionUnit.send)
-    assert "self._live_task_ids = set()" in inspect.getsource(SessionUnit.interrupt)
+    assert "self._live_task_ids = set()" in inspect.getsource(SessionUnit._interrupt_impl)  # interrupt() wraps it (chat-turn-liveness S1)
 
 
 @pytest.mark.asyncio
