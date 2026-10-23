@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: DESIGN v1 — 待 XG 审；未动代码
+status: DESIGN v1 — XG 2026-10-23 通过（D1–D5 按倾向）；P0 已落地，P1 起实施
 related: ~/.swarm-ai/SwarmWS/Knowledge/Designs/2026-08-02-navcard-overlay-uxui-standard.md（现行标准，部分已过时，见 §7）, 2026-08-04-overlayhost-subsystem-design.md（OverlayHost，已落地）, chat-transcript-single-source.md（同一套方法：先列问题、归根因、先写测试）
 ---
 
@@ -187,7 +187,7 @@ P1 先于 P2：契约测试需要导航表才能遍历所有 id。每个阶段�
 - 不改各 overlay 内部的功能和布局。
 - 不处理 Settings / Eval 内部 tab 的取数（它们已是 TanStack Query），除非契约测试暴露问题。
 
-## 8. 待 XG 决定
+## 8. XG 的决定（2026-10-23：五项都按下面的倾向）
 
 - **D1 再点已打开的项**：统一为"关闭"（现在 Settings、OS Eval 的做法），还是统一为"保持打开"
   （其余 14 项的做法）？我倾向关闭：nav 项就像开关，第二次点击没有别的含义。
@@ -199,3 +199,24 @@ P1 先于 P2：契约测试需要导航表才能遍历所有 id。每个阶段�
   因此会从 "SwarmWS" 变成 "Workspace"。
 - **D5 mode 标签**：由区推出（BRAIN / WORK / SYSTEM / CHAT），还是保留每个 overlay 自己的
   标签（HISTORY、PIPELINE…）？我倾向保留各自的：标签说的是"这是什么"，区已经由颜色表达了。
+
+## 9. P0 结果（2026-10-23）
+
+`desktop/src/components/layout/navOverlayContract.test.tsx`：真实的 `LeftSidebar` + `OverlayHost` +
+注册的 overlay，经真实 provider 渲染；只 mock HTTP（`services/api`，每次 GET 记下 URL）和 pty，
+所以统计到的请求就是 app 会发的请求。对 16 个 nav 项逐个检查 §5 的 1–3（tint、title、spout、
+selected、toggle、modalFirst、refetch、prefetch），再加 Settings 带子 tab 时的选中（D2）和
+Need You 的 tint/title。发现的分歧必须与 `KNOWN` 完全相等：多一条失败，修好了没删也失败。
+
+跑出 51 条，按根因：
+
+| 根因 | 条数 | 内容 |
+|---|---|---|
+| RC1 | 13 | tint：context、library、brain-hub、new-brain、swarmws、capabilities；title：前 5 个 + capabilities、hive |
+| RC3 | 19 | selected：history、artifacts、settings 带子 tab；toggle：除 Settings、OS Eval 外的 14 项；modalFirst：Settings、OS Eval |
+| RC2 | 19 | refetch：todo、community、jobs、capabilities、pipeline、pollinate、hive；prefetch：有取数的 12 项全部 |
+
+对照：History、Artifacts、C&M、Library、Brain Hub（已用 TanStack Query）没有 refetch，Hive、
+Jobs 已有正确的 tint，spout 全部正常——说明各项检查能区分对错，不是一律报错。连跑两次结果相同。
+
+§5.4（首包上限）、§5.5（真机计时）放到 P3，和按需加载一起做。
