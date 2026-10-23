@@ -25,8 +25,10 @@
  *
  * @exports HiveFleetContent
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { hiveService, HiveAccount, HiveInstance, TRANSITIONAL_STATUSES } from '../../services/hive';
+import { useCallback, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { HiveAccount, HiveInstance, TRANSITIONAL_STATUSES } from '../../services/hive';
+import { overlayQuery, invalidateOverlay } from './overlayQueries';
 import { HiveSection, AccountCard, AddAccountDialog, DeployHiveDialog } from '../settings/hiveComponents';
 import { WorkbenchToolbar } from './overlayShell';
 
@@ -40,47 +42,23 @@ type ViewMode = 'fleet' | 'accounts';
 
 export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
   const [view, setView] = useState<ViewMode>('fleet');
-  const [accounts, setAccounts] = useState<HiveAccount[]>([]);
-  const [instances, setInstances] = useState<HiveInstance[]>([]);
-  const [loading, setLoading] = useState(true);
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [showDeploy, setShowDeploy] = useState(false);
-  const refreshInFlight = useRef(false);
-
-  const refresh = useCallback(async () => {
-    if (refreshInFlight.current) return;
-    refreshInFlight.current = true;
-    try {
-      // Settle independently so a transient failure on one endpoint doesn't blank the
-      // other (mirror of JobsRunsOverlay F1).
-      const [accsRes, instsRes] = await Promise.allSettled([
-        hiveService.listAccounts(),
-        hiveService.listInstances(),
-      ]);
-      if (accsRes.status === 'fulfilled') setAccounts(accsRes.value);
-      if (instsRes.status === 'fulfilled') setInstances(instsRes.value);
-    } finally {
-      refreshInFlight.current = false;
-      setLoading(false);
-    }
-  }, []);
-
-  // Load on mount (host mounts fresh per open).
-  useEffect(() => { void refresh(); }, [refresh]);
-
-  // Poll every 5s ONLY while an instance is transitional (deploy/stop in flight) —
-  // no idle polling (mirror of the former HiveTab poll; Gate-1 D2: the always-mounted
-  // idle cost lives on the nav card's own gated poll, not here). Depend on the DERIVED
-  // boolean, not the whole `instances` array (REVIEW MED): re-running on every poll's
-  // array identity would tear down + rebuild the interval each cycle. The interval is
-  // (re)created only when the transitional↔stable edge flips, and torn down on unmount
-  // or that flip — `refresh` is a stable useCallback([]) so it never forces a rebuild.
-  const hasTransitional = instances.some((i) => TRANSITIONAL_STATUSES.includes(i.status));
-  useEffect(() => {
-    if (!hasTransitional) return;
-    const id = setInterval(() => { void refresh(); }, 5000);
-    return () => clearInterval(id);
-  }, [hasTransitional, refresh]);
+  // Accounts + instances through the shared overlay queries (overlayQueries), settled
+  // independently (a failure on one keeps the other on screen). Instances poll every
+  // 5s ONLY while one is transitional (deploy/stop in flight) — no idle polling; the
+  // always-mounted idle cost lives on the nav card's own gated poll.
+  const qc = useQueryClient();
+  const accountsQ = useQuery(overlayQuery.hiveAccounts());
+  const instancesQ = useQuery({
+    ...overlayQuery.hiveInstances(),
+    refetchInterval: (q) =>
+      (q.state.data ?? []).some((i) => TRANSITIONAL_STATUSES.includes(i.status)) ? 5000 : false,
+  });
+  const accounts: HiveAccount[] = accountsQ.data ?? [];
+  const instances: HiveInstance[] = instancesQ.data ?? [];
+  const loading = accountsQ.isPending || instancesQ.isPending;
+  const refresh = useCallback(() => invalidateOverlay(qc, 'hive'), [qc]);
 
   const myHives = instances.filter((i) => i.hiveType === 'my');
   const sharedHives = instances.filter((i) => i.hiveType !== 'my');

@@ -48,9 +48,9 @@
  *
  * @exports CapabilitiesContent
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { skillsService } from '../../services/skills';
-import { expertsService } from '../../services/experts';
+import { useCallback, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { overlayQuery, invalidateOverlay } from './overlayQueries';
 import { mcpConfigService, type ConfigEntry } from '../../services/mcpConfig';
 import { classifyLoadError } from '../../services/api';
 import type { Skill, SkillHealthMap, SkillHealthStatus, ExpertsByDomain } from '../../types';
@@ -178,73 +178,38 @@ export function groupSkills(skills: Skill[]): { heroes: Skill[]; groups: [string
   return { heroes, groups };
 }
 
+// stable empties: a fresh [] / {} per render would re-run every memo below
+const EMPTY_SKILLS: Skill[] = [];
+const EMPTY_MCPS: ConfigEntry[] = [];
+const EMPTY_HEALTH: SkillHealthMap = {};
+const EMPTY_EXPERTS: ExpertsByDomain = {};
+
 export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentProps) {
   const [view, setView] = useState<ViewMode>('skills');
-  const [skills, setSkills] = useState<Skill[]>([]);
-  const [mcps, setMcps] = useState<ConfigEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Skill | null>(null);
-  // Health is LAZY + independent of the skill list: it loads in its own effect and its
-  // failure NEVER blocks/crashes the list (fail-safe). `healthSettled` distinguishes
-  // "not fetched yet" (show a loading placeholder) from "fetched — empty or failed" (show
-  // NOTHING, never a perpetual 'loading…'). A skill absent from a SETTLED map genuinely
-  // has no health data (never_used skills carry an explicit entry, so absence = no-data).
-  const [health, setHealth] = useState<SkillHealthMap>({});
-  const [healthSettled, setHealthSettled] = useState(false);
-  // Experts (R2): LAZY + FAIL-SAFE, independent of the skills/mcp load — a fetch
-  // failure renders an empty-state, never blocks or crashes the panel (same
-  // discipline as the health fetch below). `expertsSettled` distinguishes
-  // not-fetched-yet from fetched-but-empty so the view never sticks on 'loading'.
-  const [experts, setExperts] = useState<ExpertsByDomain>({});
-  const [expertsSettled, setExpertsSettled] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [sk, mc] = await Promise.all([
-        skillsService.list(),
-        mcpConfigService.listAll().catch(() => [] as ConfigEntry[]),
-      ]);
-      setSkills(sk);
-      setMcps(mc);
-    } catch (e) {
-      setError(classifyLoadError(e, 'Capabilities'));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // load() is a stable useCallback (deps []); depending on it here fetches once on mount.
-  useEffect(() => { void load(); }, [load]);
-
-  // LAZY + FAIL-SAFE health fetch — SEPARATE from load() so the skill list is never
-  // coupled to it. A rejection is swallowed (rows just render no dot); it never throws,
-  // never blocks the list, never 500s the panel (backend also returns {} on error).
-  useEffect(() => {
-    let alive = true;
-    skillsService
-      .getHealth()
-      .then((h) => { if (alive) setHealth(h); })
-      .catch(() => { if (alive) setHealth({}); })
-      .finally(() => { if (alive) setHealthSettled(true); });
-    return () => { alive = false; };
-  }, []);
-
-  // LAZY + FAIL-SAFE experts fetch (R2) — SEPARATE from load() so the Experts
-  // view is never coupled to the skills/mcp fetch. A rejection renders an empty
-  // state (never throws, never blocks the panel).
-  useEffect(() => {
-    let alive = true;
-    expertsService
-      .list()
-      .then((e) => { if (alive) setExperts(e); })
-      .catch(() => { if (alive) setExperts({}); })
-      .finally(() => { if (alive) setExpertsSettled(true); });
-    return () => { alive = false; };
-  }, []);
+  // Skills + MCPs, health and experts through the shared overlay queries
+  // (overlayQueries): a reopen inside the freshness window or after a nav hover shows
+  // the cached panel at once. Health and experts stay LAZY + FAIL-SAFE + independent:
+  // their failure never blocks or crashes the list; `*Settled` distinguishes "not
+  // fetched yet" (a loading placeholder) from "fetched — empty or failed" (nothing).
+  const qc = useQueryClient();
+  const mainQ = useQuery(overlayQuery.capabilities());
+  const skills: Skill[] = mainQ.data?.skills ?? EMPTY_SKILLS;
+  const mcps: ConfigEntry[] = mainQ.data?.mcps ?? EMPTY_MCPS;
+  const loading = mainQ.isFetching;
+  const error = mainQ.isError && !mainQ.data ? classifyLoadError(mainQ.error, 'Capabilities') : null;
+  const setMcps = useCallback((f: (prev: ConfigEntry[]) => ConfigEntry[]) => {
+    qc.setQueryData(overlayQuery.capabilities().queryKey,
+      (d: { skills: Skill[]; mcps: ConfigEntry[] } | undefined) => d && { ...d, mcps: f(d.mcps) });
+  }, [qc]);
+  const load = useCallback(() => invalidateOverlay(qc, 'capabilities'), [qc]);
+  const healthQ = useQuery(overlayQuery.capabilitiesHealth());
+  const health: SkillHealthMap = healthQ.data ?? EMPTY_HEALTH;
+  const healthSettled = !healthQ.isPending;
+  const expertsQ = useQuery(overlayQuery.capabilitiesExperts());
+  const experts: ExpertsByDomain = expertsQ.data ?? EMPTY_EXPERTS;
+  const expertsSettled = !expertsQ.isPending;
 
   // The full health LINE shown ON each card by default (lazy: renders once health resolves;
   // absent health → a muted placeholder so the card layout never jumps). Format:
@@ -369,7 +334,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
       setMcps((prev) => prev.map((x) => (x.id === m.id ? { ...x, enabled: m.enabled } : x)));
       void load();
     }
-  }, [load]);
+  }, [load, setMcps]);
 
   const teachNewSkill = useCallback(() => {
     const landed = onDispatch(

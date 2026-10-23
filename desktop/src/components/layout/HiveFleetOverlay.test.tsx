@@ -1,3 +1,4 @@
+import type React from 'react';
 /**
  * Tests for HiveFleetOverlay — the Hive Fleet workbench (run_b450108e).
  *
@@ -25,6 +26,12 @@ vi.mock('../../services/hive', async () => {
 
 import { HiveFleetContent } from './HiveFleetOverlay';
 import type { HiveInstance, HiveAccount } from '../../services/hive';
+import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
+import { render as __render } from '@testing-library/react';
+// The overlay reads its data through TanStack Query (overlayQueries): a fresh client
+// per render, so no cache carries over between tests.
+const renderQ = (ui: React.ReactElement) =>
+  __render(<__QCP client={new __QC({ defaultOptions: { queries: { retry: false } } })}>{ui}</__QCP>);
 
 const mkInst = (o: Partial<HiveInstance>): HiveInstance => ({
   id: 'i1', name: 'xg-hive', ownerName: null, hiveType: 'my', accountRef: 'a1',
@@ -52,7 +59,7 @@ beforeEach(() => {
 
 describe('HiveFleetOverlay', () => {
   it('fetches on mount and renders the fleet overview + instances', async () => {
-    render(<HiveFleetContent close={() => {}} />);
+    renderQ(<HiveFleetContent close={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('hive-overview')).toBeInTheDocument());
     expect(listInstances).toHaveBeenCalled();
     expect(listAccounts).toHaveBeenCalled();
@@ -63,14 +70,14 @@ describe('HiveFleetOverlay', () => {
   });
 
   it('overview reflects real counts (1 running)', async () => {
-    render(<HiveFleetContent close={() => {}} />);
+    renderQ(<HiveFleetContent close={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('hive-overview')).toBeInTheDocument());
     const txt = screen.getByTestId('hive-overview').textContent || '';
     expect(txt).toContain('running');
   });
 
   it('toggles Fleet ⇄ Accounts and lists AWS accounts', async () => {
-    render(<HiveFleetContent close={() => {}} />);
+    renderQ(<HiveFleetContent close={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('hive-view-accounts')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('hive-view-accounts'));
     await waitFor(() => expect(screen.getByTestId('hive-accounts-view')).toBeInTheDocument());
@@ -78,14 +85,14 @@ describe('HiveFleetOverlay', () => {
   });
 
   it('Deploy button is enabled when an account exists', async () => {
-    render(<HiveFleetContent close={() => {}} />);
-    await waitFor(() => expect(screen.getByTestId('hive-deploy-btn')).toBeInTheDocument());
-    expect(screen.getByTestId('hive-deploy-btn')).not.toBeDisabled();
+    renderQ(<HiveFleetContent close={() => {}} />);
+    // enabled once the accounts arrive
+    await waitFor(() => expect(screen.getByTestId('hive-deploy-btn')).not.toBeDisabled());
   });
 
   it('Deploy button is disabled when there are no accounts', async () => {
     listAccounts.mockResolvedValue([]);
-    render(<HiveFleetContent close={() => {}} />);
+    renderQ(<HiveFleetContent close={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('hive-deploy-btn')).toBeInTheDocument());
     expect(screen.getByTestId('hive-deploy-btn')).toBeDisabled();
     // disabled state is discoverable (UX1): a title explains WHY
@@ -96,7 +103,7 @@ describe('HiveFleetOverlay', () => {
   it('renders the empty state when there are 0 instances', async () => {
     listInstances.mockResolvedValue([]);
     listAccounts.mockResolvedValue([ACCOUNT]);
-    render(<HiveFleetContent close={() => {}} />);
+    renderQ(<HiveFleetContent close={() => {}} />);
     await waitFor(() => expect(screen.getByText(/No Hives deployed yet/)).toBeInTheDocument());
     expect(screen.getByTestId('hive-overview').textContent).toContain('0');
   });
@@ -104,7 +111,7 @@ describe('HiveFleetOverlay', () => {
   it('degrades gracefully when listInstances rejects (accounts still render — allSettled independence)', async () => {
     listInstances.mockRejectedValueOnce(new Error('Network error'));
     listAccounts.mockResolvedValue([ACCOUNT]);
-    render(<HiveFleetContent close={() => {}} />);
+    renderQ(<HiveFleetContent close={() => {}} />);
     // does not crash: overview renders (empty), and the accounts leg still fulfilled
     await waitFor(() => expect(screen.getByTestId('hive-overview')).toBeInTheDocument());
     expect(screen.queryByText('xg-hive')).not.toBeInTheDocument();
@@ -114,7 +121,7 @@ describe('HiveFleetOverlay', () => {
 
   it('stops a running instance via the real InstanceCard action → calls hiveService.stopInstance', async () => {
     stopInstance.mockResolvedValue(undefined);
-    render(<HiveFleetContent close={() => {}} />);
+    renderQ(<HiveFleetContent close={() => {}} />);
     await waitFor(() => expect(screen.getByText('xg-hive')).toBeInTheDocument());
     // xg-hive is the running 'my' instance → its card offers Stop
     fireEvent.click(screen.getAllByRole('button', { name: /^Stop$/ })[0]);
@@ -122,7 +129,7 @@ describe('HiveFleetOverlay', () => {
   });
 
   it('view toggle carries aria-selected (accessible tabs)', async () => {
-    render(<HiveFleetContent close={() => {}} />);
+    renderQ(<HiveFleetContent close={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('hive-view-fleet')).toBeInTheDocument());
     expect(screen.getByTestId('hive-view-fleet').getAttribute('aria-selected')).toBe('true');
     fireEvent.click(screen.getByTestId('hive-view-accounts'));

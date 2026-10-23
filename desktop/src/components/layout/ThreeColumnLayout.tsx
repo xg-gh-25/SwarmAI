@@ -179,14 +179,14 @@ function LeftSidebar() {
   // New OverlayHost subsystem (M2+). Migrated surfaces open via openOverlay + read
   // their highlight from newActiveOverlay. The hybrid bridge (OverlayContext) keeps
   // legacy + new mutually exclusive until M5 retires the legacy path.
-  const { activeOverlay: newActiveOverlay, openOverlay, closeOverlay } = useOverlay();
+  const { activeOverlay: newActiveOverlay, openOverlay, closeOverlay, agentId } = useOverlay();
   // One rule for every nav item: an open small modal closes first; clicking the item
   // whose overlay is open closes it (XG D1), otherwise it opens. `before` runs just
   // before an open (Settings clears its deep-link tab).
   // Hover / keyboard focus on a nav item loads its overlay's data (overlayQueries),
   // so the click opens onto content instead of a spinner.
   const qc = useQueryClient();
-  const prefetch = (id: OverlayId) => prefetchNav(qc, id);
+  const prefetch = (id: OverlayId) => prefetchNav(qc, id, { agentId });
   const activateNav = (id: OverlayId, before?: () => void) => {
     if (activeModal) closeModal();
     if (newActiveOverlay === id) { closeOverlay(); return; }

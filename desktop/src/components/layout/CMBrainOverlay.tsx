@@ -20,6 +20,7 @@
  */
 import { useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { overlayQuery } from './overlayQueries';
 import api, { classifyLoadError } from '../../services/api';
 
 // ── Types (mirror the backend context-health token_block, snake_case as served) ──
@@ -143,18 +144,13 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
-const LITE_QUERY_KEY = ['cm-brain-context-health-lite'];
+const LITE_QUERY_KEY = overlayQuery.contextLite().queryKey;
 
 function useContextHealth(enabled: boolean) {
-  return useQuery<ContextHealthLite>({
-    queryKey: LITE_QUERY_KEY,
-    // AC1: first paint hits the THIN endpoint (token_block + counts only) so the
-    // overlay opens instantly — the heavy /eval/context-health (5 scans) is never
-    // fetched here. Memory tab keeps its own lazy brain-graph/brain-trend queries.
-    queryFn: async () => (await api.get<ContextHealthLite>('/eval/context-health/lite')).data,
-    staleTime: 30_000,
-    enabled,
-  });
+  // AC1: first paint hits the THIN endpoint (token_block + counts only) so the overlay
+  // opens instantly — the heavy /eval/context-health (5 scans) is never fetched here.
+  // Memory tab keeps its own lazy brain-graph/brain-trend queries.
+  return useQuery({ ...overlayQuery.contextLite<ContextHealthLite>(), enabled });
 }
 
 /**
@@ -192,11 +188,7 @@ export function CMBrainContent() {
   const needsErr = healthErr || (needsFilter === 'approve' && govErr);
 
   // Growth-trend series for the rail (same source as the Memory size-trend).
-  const { data: trend } = useQuery<BrainTrend>({
-    queryKey: ['cm-brain-trend'],
-    queryFn: async () => (await api.get<BrainTrend>('/eval/brain-trend')).data,
-    staleTime: 30_000, enabled: true,
-  });
+  const { data: trend } = useQuery(overlayQuery.contextTrend<BrainTrend>());
 
   // Dual-route decision handler (AC3/AC4): Review items (DDD cultivation) and Approve
   // items (governance) live in DIFFERENT queues with DIFFERENT endpoints — a single

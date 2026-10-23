@@ -21,13 +21,13 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { overlayQuery } from './overlayQueries';
 import { HistoryView } from '../../pages/chat/components/RightSidebar/HistoryView';
 import { MessageBubble } from '../../pages/chat/components/MessageBubble';
 import type { ChatSession, Message } from '../../types';
 import { groupSessionsByTime, toDisplayMessage } from '../../pages/chat/utils';
 import { searchService } from '../../services/search';
 import { chatService } from '../../services/chat';
-import { agentsService } from '../../services/agents';
 
 const DEBOUNCE_MS = 250;
 /** Same page ChatPage loads for a tab (its INITIAL_TURNS): the last 20 user
@@ -58,12 +58,8 @@ export interface HistoryContentProps {
  */
 export function HistoryContent({ agentId, onDeleteSession, onResume, close }: HistoryContentProps) {
   // Self-fetch, same query keys ChatPage uses → shares the cache, stays reactive.
-  const { data: sessions = [] } = useQuery({
-    queryKey: ['chatSessions', agentId],
-    queryFn: () => chatService.listSessions(agentId || undefined),
-    enabled: !!agentId,
-  });
-  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: agentsService.list });
+  const { data: sessions = [] } = useQuery({ ...overlayQuery.historySessions(agentId), enabled: !!agentId });
+  const { data: agents = [] } = useQuery(overlayQuery.agents());
   const groupedSessions = useMemo(() => groupSessionsByTime(sessions), [sessions]);
 
   const [searchText, setSearchText] = useState('');

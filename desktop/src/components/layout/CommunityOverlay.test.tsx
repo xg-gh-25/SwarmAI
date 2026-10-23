@@ -1,3 +1,4 @@
+import type React from 'react';
 /**
  * CommunityOverlay — 3-tab read-only surface (run_5165013e).
  *
@@ -14,6 +15,12 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup, waitFor, fireEvent, within } from '@testing-library/react';
 import { CommunityContent } from './CommunityOverlay';
+import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
+import { render as __render } from '@testing-library/react';
+// The overlay reads its data through TanStack Query (overlayQueries): a fresh client
+// per render, so no cache carries over between tests.
+const renderQ = (ui: React.ReactElement) =>
+  __render(<__QCP client={new __QC({ defaultOptions: { queries: { retry: false } } })}>{ui}</__QCP>);
 
 // openExternal is the Tauri system-browser helper. External links (Outbound comment,
 // Hot Topics thread) route through it — a raw window.open is dead in the WKWebview.
@@ -84,7 +91,7 @@ afterEach(() => {
 });
 
 function setup(close = vi.fn()) {
-  render(<CommunityContent close={close} />);
+  renderQ(<CommunityContent close={close} />);
   return close;
 }
 

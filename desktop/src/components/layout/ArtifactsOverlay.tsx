@@ -25,6 +25,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { overlayQuery, ARTIFACTS_WORKSPACE } from './overlayQueries';
 import { radarService } from '../../services/radar';
 import type { Product, ProductRole } from '../../services/radar';
 import { fileIcon, fileIconColor } from '../../utils/fileUtils';
@@ -44,7 +45,7 @@ const BACKFILL_POLL_MAX_MS = 45_000;
 
 /** The backend ignores workspace_id (resolves the single workspace from DB config);
  *  a non-empty placeholder satisfies the required query param. */
-const WS_PLACEHOLDER = 'default';
+const WS_PLACEHOLDER = ARTIFACTS_WORKSPACE;
 
 /** The 2-week default window (Earlier = older than this, folded). */
 const WINDOW_DAYS = 14;
@@ -240,21 +241,20 @@ export interface ArtifactsContentProps {
 }
 
 /** react-query key for the products list — shared by the fetch + the optimistic star patch. */
-const PRODUCTS_QUERY_KEY = ['workspace-products'] as const;
+const PRODUCTS_QUERY_KEY = overlayQuery.artifactsProducts().queryKey;
 
 /**
  * The Artifacts retrieval body (the host wraps it in scrim + panel + header chrome).
  */
 export function ArtifactsContent({ close, fetchProducts, now, setStarred }: ArtifactsContentProps) {
-  const fetcher = fetchProducts ?? radarService.fetchProducts;
   const starrer = setStarred ?? radarService.setStarred;
   const nowMs = now ?? Date.now();
   const queryClient = useQueryClient();
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: PRODUCTS_QUERY_KEY,
-    queryFn: () => fetcher(WS_PLACEHOLDER),
-    staleTime: 30_000,
+    ...overlayQuery.artifactsProducts(),
+    // the test seam replaces the fetcher; the key (and so the cache) is the shared one
+    ...(fetchProducts ? { queryFn: () => fetchProducts(WS_PLACEHOLDER) } : {}),
     refetchInterval: (query) => {
       const rows = query.state.data as Product[] | undefined;
       if (rows && rows.length > 0) return false;

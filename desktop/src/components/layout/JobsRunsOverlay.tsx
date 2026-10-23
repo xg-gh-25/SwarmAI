@@ -32,7 +32,9 @@
  *
  * @exports JobsRunsOverlay
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { overlayQuery, invalidateOverlay } from './overlayQueries';
 import { jobsService, type JobRosterRow, type JobsOverview, type JobRunsResult } from '../../services/jobs';
 import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
 
@@ -58,63 +60,24 @@ function healthColor(j: JobRosterRow): string {
 
 export function JobsRunsContent({ onDispatch, close }: JobsRunsContentProps) {
   const [view, setView] = useState<ViewMode>('jobs');
-  const [roster, setRoster] = useState<JobRosterRow[]>([]);
-  const [overview, setOverview] = useState<JobsOverview | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Roster + overview through the shared overlay queries (overlayQueries): a reopen
+  // inside the freshness window or after a nav hover shows the cached roster at once.
+  // They settle INDEPENDENTLY (F1): an overview (/jobs/status) failure leaves the
+  // roster on screen. The Runs view needs only the roster (XG: pipeline 别揉进来).
+  const qc = useQueryClient();
+  const rosterQ = useQuery(overlayQuery.jobsRoster());
+  const overviewQ = useQuery({ ...overlayQuery.jobsOverview(), enabled: view === 'jobs' });
+  const roster: JobRosterRow[] = rosterQ.data ?? [];
+  const overview: JobsOverview | null = overviewQ.isError ? null : overviewQ.data ?? null;
+  const loading = rosterQ.isFetching || (view === 'jobs' && overviewQ.isFetching);
   // Track the selected job by ID (not a snapshot) so the drawer re-derives fresh
   // data after a refresh (F2: a captured row went stale after Run-now).
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  // Request-generation guard: a stale (slower) refresh must not overwrite a newer
-  // one's result (F3: rapid view toggles launch overlapping fetches).
-  const genRef = useRef(0);
 
   const selected = selectedId ? roster.find((j) => j.id === selectedId) ?? null : null;
 
-  const refreshJobs = useCallback(async () => {
-    const gen = ++genRef.current;
-    setLoading(true);
-    try {
-      // Settle roster + overview INDEPENDENTLY (F1): a transient /jobs/status blip
-      // must not blank a successfully-fetched roster into a false "no jobs" screen.
-      const [rRes, oRes] = await Promise.allSettled([jobsService.fetchRoster(), jobsService.fetchOverview()]);
-      if (gen !== genRef.current) return;  // a newer refresh superseded this one
-      if (rRes.status === 'fulfilled') setRoster(rRes.value);
-      setOverview(oRes.status === 'fulfilled' ? oRes.value : null);
-    } finally {
-      // Only the CURRENT (winning) generation clears the spinner — a superseded
-      // loser must not flip loading off while the winner is still in flight, and
-      // the finally guarantees the winner always clears it (meta-review MED: an
-      // early return before setLoading(false) could otherwise stick the spinner).
-      if (gen === genRef.current) setLoading(false);
-    }
-  }, []);
-
-  const refreshRuns = useCallback(async () => {
-    const gen = ++genRef.current;
-    setLoading(true);
-    try {
-      // Runs view is PURE job-runs (XG: pipeline 别揉进来) — it shows each job's
-      // latest run from the roster, so it only needs the roster, even when the
-      // user jumps straight to Runs without visiting Jobs first.
-      const rRes = await jobsService.fetchRoster().then(
-        (v) => ({ status: 'fulfilled' as const, value: v }),
-        () => ({ status: 'rejected' as const }),
-      );
-      if (gen !== genRef.current) return;
-      if (rRes.status === 'fulfilled') setRoster(rRes.value);
-    } finally {
-      if (gen === genRef.current) setLoading(false);
-    }
-  }, []);
-
-  // Load on mount (host mounts fresh per open) + on view switch. The former
-  // reset-on-close effect is gone — the host unmounts/remounts, so view/selectedId/
-  // creating start fresh each open by construction.
-  useEffect(() => {
-    if (view === 'jobs') void refreshJobs();
-    else void refreshRuns();
-  }, [view, refreshJobs, refreshRuns]);
+  const refreshJobs = useCallback(() => invalidateOverlay(qc, 'jobs'), [qc]);
 
   // Route a chat prompt through the tab-landing dispatcher, then close on success.
   const dispatchToChat = useCallback((prompt: string) => {

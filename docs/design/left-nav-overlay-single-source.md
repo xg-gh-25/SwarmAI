@@ -241,3 +241,29 @@ Artifacts、Need You 槽加 `data-nav-id`；所有 nav 项的点击走同一个 
 `KNOWN` 51 → 19（RC1 13 条、RC3 19 条全部清掉，只剩 RC2）。反向验证：去掉"已打开则关闭"，14 条 toggle
 重新出现；不设 tint，所有 tint 重新出现。OverlayHost.test 的测试 overlay 改为注册在真实 id 下（标题、
 mode、尖角都从表里来）。
+
+## 11. P2 结果（2026-10-23）
+
+`overlayQueries.ts` 是 overlay 打开时数据的唯一定义：每个 overlay 的 queryKey + queryFn，freshness
+一律 `OVERLAY_STALE_MS` = 30 s，过期后先显示缓存、后台刷新。`NAV_PREFETCH` + `prefetchNav` 让 nav
+项在悬停或键盘聚焦时预取同一组查询；写操作后用 `invalidateOverlay`，不再手动重拉。
+
+- 原来用 `useEffect` 取数的 7 个改为 `useQuery`：ToDo、Pipeline、Pollinate（P2a，`74fe513e`），
+  Jobs、Hive、Capabilities、Community（P2b）。原有的"独立结算"语义保留：Jobs 的 overview 失败不清空
+  roster，Hive 的 accounts / instances 互不影响，Capabilities 的 health / experts 失败不影响列表，
+  Community 的 null / 同步异常都落到错误分支。Hive 只在有实例处于过渡状态时每 5 s 轮询，改用
+  `refetchInterval` 表达。乐观更新改为直接改缓存（ToDo 撤回、Capabilities 的 MCP 开关）。
+- 原来已用 TanStack Query 的 5 个（History、Artifacts、C&M、Library、Brain Hub）把定义移进
+  `overlayQueries`（Brain Hub 的定义仍在 `services/ddd.ts`，导出 `brainsWithPinnedQuery` 共用），
+  **沿用原来的 key**（其他代码按这些 key 失效缓存）。History 的预取需要当前 agent，从 OverlayContext
+  取。
+
+`KNOWN` 19 → 13 → 0。反向验证：`staleTime` 设 0，refetch 签名回来；`prefetchNav` 设为空操作或删掉
+某项的预取，对应的 prefetch 签名回来。
+
+测试修正：P0 时 History 的取数检查其实没有生效——`services/chat` 经由一个 import 环拿到的是真实
+axios 实例，不是测试里的 mock，请求从未被记录。契约测试现在单独 mock `chatService.listSessions`
+记录请求。
+
+没有做 §S3 的 `OverlayState` 统一组件：各 overlay 的 Loading / 空 / 出错文案和样式不同，换成一个组件
+会改到每个 overlay 的外观，超出这次范围（§3、§7）；取数统一后"每次打开都先 Loading"的问题已经没有了。

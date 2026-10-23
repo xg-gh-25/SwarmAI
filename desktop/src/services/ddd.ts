@@ -339,11 +339,12 @@ const BRAIN_STALE_MS = 30_000;
 /** Cached GET /ddd/brains — the Gallery summaries + pinned order. Re-opening the
  *  overlay within the window is instant (the aggregate scan is the ~4s cold cost). */
 export function useBrainsWithPinned() {
-  return useQuery<{ brains: BrainSummary[]; pinned: string[] }>({
-    queryKey: ['brains-with-pinned'],
-    queryFn: getBrainsWithPinned,
-    staleTime: BRAIN_STALE_MS,
-  });
+  return useQuery<{ brains: BrainSummary[]; pinned: string[] }>(brainsWithPinnedQuery());
+}
+
+/** The options of the Gallery query — also what the Brain Hub nav item prefetches. */
+export function brainsWithPinnedQuery() {
+  return { queryKey: ['brains-with-pinned'] as const, queryFn: getBrainsWithPinned, staleTime: BRAIN_STALE_MS };
 }
 
 /** Cached GET /ddd/brains/{name} — the six-section detail. */

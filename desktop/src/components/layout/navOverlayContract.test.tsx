@@ -70,6 +70,14 @@ vi.mock('../../services/api', async (importOriginal) => {
     interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } }, defaults: { headers: {} } } };
 });
 
+// services/chat reaches services/api through an import cycle, so it holds the REAL
+// axios instance, not the mock above: record its session list here instead.
+vi.mock('../../services/chat', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/chat')>();
+  return { ...actual, chatService: { ...actual.chatService,
+    listSessions: vi.fn(async () => { calls.push('/chat/sessions'); return []; }) } };
+});
+
 // ── The target spec (one row per nav item) ─────────────────────────────────────
 const ZONE = { chat: 'var(--color-primary)', cognitive: '#5fc99a', work: '#4a8fb0', system: '#7c8194' } as const;
 interface Item { id: string; nav: string; label: string; zone: keyof typeof ZONE; fetches?: string[] }
@@ -96,11 +104,6 @@ const ITEMS: Item[] = [
 // Divergences on main at P0 (2026-10-23), grouped by the design's root cause.
 // Each phase deletes what it fixed; the design is done when this is empty.
 const KNOWN = new Set<string>([
-  // RC2 — fetching without a cache (P2: TanStack Query) and no hover prefetch
-  'community:refetch', 'jobs:refetch', 'capabilities:refetch', 'hive:refetch',
-  'history:prefetch', 'artifacts:prefetch', 'context:prefetch', 'library:prefetch', 'brain-hub:prefetch',
-  'community:prefetch', 'jobs:prefetch',
-  'capabilities:prefetch', 'hive:prefetch',
 ]);
 
 // ── Harness ────────────────────────────────────────────────────────────────────
@@ -194,6 +197,9 @@ describe('Left Nav × overlay contract', () => {
     for (const it of ITEMS) {
       calls.length = 0;
       renderApp();
+      await settle();
+      // ChatPage publishes the current agent (History is per agent)
+      act(() => { probe!.overlay.setAgentId('agent-1'); });
       await settle();
       await checkItem(it, (c) => found.add(`${it.id}:${c}`));
       cleanup();

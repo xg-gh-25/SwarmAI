@@ -1,3 +1,4 @@
+import type React from 'react';
 /**
  * CapabilitiesOverlay — fail-safe grouping logic (run_b5d98151 §5).
  *
@@ -12,6 +13,12 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
 import { groupSkills, orderedCategories, mostUsed, byFrequencyThenName, CapabilitiesContent } from './CapabilitiesOverlay';
 import type { Skill, SkillHealthMap, ExpertsByDomain } from '../../types';
+import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
+import { render as __render } from '@testing-library/react';
+// The overlay reads its data through TanStack Query (overlayQueries): a fresh client
+// per render, so no cache carries over between tests.
+const renderQ = (ui: React.ReactElement) =>
+  __render(<__QCP client={new __QC({ defaultOptions: { queries: { retry: false } } })}>{ui}</__QCP>);
 
 // Health fixture builder — invocation_count is now required (run_ff4adc88).
 function h(status: SkillHealthMap[string]['status'], invocation_count: number | null, success_rate: number | null = null, last_used: string | null = null): SkillHealthMap[string] {
@@ -160,7 +167,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
     };
     getHealth.mockResolvedValue(health);
 
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
 
     // Card renders first (from list()), independent of health.
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
@@ -175,7 +182,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
     listSkills.mockResolvedValue(twoSkills);
     getHealth.mockRejectedValue(new Error('network down'));
 
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
 
     // The skill cards are fully usable even though health failed.
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
@@ -191,7 +198,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
   it('first-run: empty health map ({}) → cards render, NO grey wall of "loading" lines', async () => {
     listSkills.mockResolvedValue(twoSkills);
     getHealth.mockResolvedValue({} as SkillHealthMap); // backend empty-table guard returns {}
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
     await waitFor(() => expect(getHealth).toHaveBeenCalled());
     // Settled-empty → no health lines at all (not a wall of perpetual loaders).
@@ -202,7 +209,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
   it('renders a faint tier marker per row (always/lazy)', async () => {
     listSkills.mockResolvedValue(twoSkills);
     getHealth.mockResolvedValue({});
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('cap-tier-s_deep-research')).toBeTruthy());
     expect(screen.getByTestId('cap-tier-s_deep-research').getAttribute('data-tier')).toBe('always');
     expect(screen.getByTestId('cap-tier-s_narrative-writing').getAttribute('data-tier')).toBe('lazy');
@@ -214,7 +221,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
       's_deep-research': h('healthy', 12, 0.92, '2026-08-06'),
       's_narrative-writing': h('never_used', null),
     } as SkillHealthMap);
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     // The health line is ON the card (not a drawer) and carries success% + last-used.
     await waitFor(() => {
       const line = screen.getByTestId('cap-healthline-s_deep-research');
@@ -231,7 +238,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
     listSkills.mockResolvedValue(twoSkills);
     let resolveHealth: (v: SkillHealthMap) => void = () => {};
     getHealth.mockReturnValue(new Promise<SkillHealthMap>((r) => { resolveHealth = r; }));
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     // Card is present before health resolves.
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
     // Health line not yet populated (lazy) — placeholder present, no % yet.
@@ -258,7 +265,7 @@ describe('CapabilitiesContent — Most-Used strip + noise reduction (AC2/AC4/AC5
       's_summarize': h('healthy', 20, 0.8, '2026-08-05'),
       's_narrative-writing': h('never_used', null),
     } as SkillHealthMap);
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('cap-most-used')).toBeTruthy());
     // Most-used strip contains the high-frequency skills (never_used excluded).
     const strip = screen.getByTestId('cap-most-used');
@@ -268,7 +275,7 @@ describe('CapabilitiesContent — Most-Used strip + noise reduction (AC2/AC4/AC5
   it('AC5 fail-safe: strip ABSENT before health settles + when health empty', async () => {
     listSkills.mockResolvedValue(threeSkills);
     getHealth.mockResolvedValue({} as SkillHealthMap);
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
     await waitFor(() => expect(getHealth).toHaveBeenCalled());
     // Empty health → no strip (no flash of mis-ranked/dead skills), list still renders.
@@ -279,7 +286,7 @@ describe('CapabilitiesContent — Most-Used strip + noise reduction (AC2/AC4/AC5
   it('AC4: per-group count header removed (no bare number beside the category name)', async () => {
     listSkills.mockResolvedValue(threeSkills);
     getHealth.mockResolvedValue({} as SkillHealthMap);
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('cap-group-Research')).toBeTruthy());
     // The group header is just the category name — no count span. The old markup put a
     // bare "{list.length}" beside it; assert no lone digit text node in the header.
@@ -362,7 +369,7 @@ describe('CapabilitiesContent — Connections registry honesty (run_3989a574)', 
     listSkills.mockResolvedValue([]);
     getHealth.mockResolvedValue({} as SkillHealthMap);
     listAllMcp.mockReturnValue(Promise.resolve(mcps));
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('cap-view-connections')).toBeTruthy());
     fireEvent.click(screen.getByTestId('cap-view-connections'));
     await waitFor(() => expect(screen.getByTestId('cap-connections-view')).toBeTruthy());
@@ -414,7 +421,7 @@ describe('CapabilitiesContent — Experts view (R2)', () => {
     listSkills.mockResolvedValue([]);
     getHealth.mockResolvedValue({});
     listExperts.mockResolvedValue(grouped);
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     fireEvent.click(screen.getByTestId('cap-view-experts'));
     await waitFor(() => expect(screen.getByTestId('cap-expert-group-code')).toBeTruthy());
     const card = screen.getByTestId('cap-expert-correctness');
@@ -429,7 +436,7 @@ describe('CapabilitiesContent — Experts view (R2)', () => {
         { expertId: 'bad', displayNameZh: '坏', displayNameEn: 'Bad', domain: 'code', scope: 's', spawnAs: 'adversarial', visibility: 'public', isValid: false },
       ],
     });
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     fireEvent.click(screen.getByTestId('cap-view-experts'));
     await waitFor(() => expect(screen.getByTestId('cap-expert-health-good')).toBeTruthy());
     expect(screen.getByTestId('cap-expert-health-good').getAttribute('data-valid')).toBe('true');
@@ -442,7 +449,7 @@ describe('CapabilitiesContent — Experts view (R2)', () => {
     listSkills.mockResolvedValue([]);
     getHealth.mockResolvedValue({});
     listExperts.mockRejectedValue(new Error('network down'));
-    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     fireEvent.click(screen.getByTestId('cap-view-experts'));
     await waitFor(() => expect(screen.getByTestId('cap-experts-empty')).toBeTruthy());
   });

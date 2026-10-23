@@ -23,7 +23,9 @@
  * empty branches (the 5-overlay fetch pattern). Clone lineage: NeedYouOverlay + BrainHub.
  * Chrome/geometry owned by OverlayHost.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { overlayQuery, type CommunityPart } from './overlayQueries';
 import {
   communityService,
   type CommunityFeed,
@@ -92,55 +94,27 @@ export function CommunityContent({ close }: CommunityContentProps) {
   );
 }
 
-// ── shared fetch-state hook (loading / error / empty — the 5-overlay pattern) ──
-
-function useFetch<T>(fetcher: () => Promise<T>): {
+// ── shared fetch-state hook (loading / error / empty) ──
+// Through the shared overlay query of `part` (overlayQueries): a reopen inside the
+// freshness window or after a nav hover shows the cached tab at once. null is the
+// only error signal and any failure mode (rejection, sync throw, a missing method)
+// lands in the visible error branch — overlayQuery.community makes them all a
+// rejected query (run_a1f4c2d8).
+function useFetch<T>(part: CommunityPart): {
   data: T | null;
   loading: boolean;
   error: boolean;
   reload: () => void;
 } {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    // null is the ONLY error signal. An empty array [] / all-zero object is a SUCCESS
-    // (renders the empty/zero state), NOT an error — so we branch on `=== null`, never
-    // on truthiness (a falsy-looking [] must not read as error).
-    //
-    // try/catch, NOT `fetcher().catch(...)`: `.catch` only handles a REJECTED promise.
-    // A SYNCHRONOUS throw from the call itself escapes it entirely — and because load()
-    // is invoked as a floating promise in useEffect, that escape became an UNHANDLED
-    // REJECTION instead of this component's error state. Real occurrence: a new service
-    // method (fetchHotTopics) was added to this overlay but not to the test's
-    // whole-service mock, so `fetcher` was `undefined` → `fetcher()` threw a TypeError
-    // → 22 unhandled errors and a NON-ZERO vitest exit while every assertion still
-    // "passed". try/catch makes ANY failure mode — rejection, sync throw, a
-    // missing/renamed method — land in the visible error branch (run_a1f4c2d8).
-    let res: T | null = null;
-    try {
-      res = await fetcher();
-    } catch {
-      res = null;
-    }
-    if (res === null) {
-      setError(true);
-    } else {
-      setData(res);
-      setError(false);
-    }
-    setLoading(false);
-    // fetcher identity is stable (module singleton method) — safe dep.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  return { data, loading, error, reload: load };
+  const qc = useQueryClient();
+  const q = useQuery(overlayQuery.community(part));
+  const reload = useCallback(() => { void qc.invalidateQueries({ queryKey: overlayQuery.community(part).queryKey }); }, [qc, part]);
+  return {
+    data: (q.data as T | undefined) ?? null,
+    loading: q.isPending,
+    error: q.isError && q.data === undefined,
+    reload,
+  };
 }
 
 function StateBanner({ loading, error, empty, emptyMsg }: {
@@ -178,7 +152,7 @@ function SectionLabel({ children, className = '' }: { children: React.ReactNode;
 // De-boxed: no per-row borders — whitespace + hover-highlight (Tufte / Refactoring UI).
 
 function InboundTab({ close }: { close: () => void }) {
-  const { data, loading, error } = useFetch<CommunityFeed>(communityService.fetchFeed);
+  const { data, loading, error } = useFetch<CommunityFeed>('feed');
 
   const openFile = useCallback(
     (path: string) => {
@@ -301,7 +275,7 @@ function _freshnessLabel(scannedAt: string | null): { text: string; stale: boole
 }
 
 function HotTopicsSection() {
-  const { data, loading, error } = useFetch<CommunityHotTopics>(communityService.fetchHotTopics);
+  const { data, loading, error } = useFetch<CommunityHotTopics>('hotTopics');
   // Fail-quiet: hot topics is secondary — on load-fail or empty, render NOTHING
   // (don't push a red error banner above the primary content). It's additive context.
   if (loading || error) return null;
@@ -372,7 +346,7 @@ function HotTopicRow({ topic, widthPct }: { topic: CommunityHotTopic; widthPct: 
 // a config surface, so it keeps its inline row editor (tier select / toggle / delete).
 
 function SourcesTab() {
-  const { data, loading, error, reload } = useFetch<CommunitySource[]>(communityService.fetchSources);
+  const { data, loading, error, reload } = useFetch<CommunitySource[]>('sources');
   const sources = data ?? [];
   const [busy, setBusy] = useState<string | null>(null); // id being mutated
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null); // 2-step delete
@@ -692,7 +666,7 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
 // to a collapsed expandable count — not a wall of stacked boxes (run_ced271e8 redesign).
 
 function OutboundTab() {
-  const { data, loading, error } = useFetch<CommunityEngagement>(communityService.fetchEngagement);
+  const { data, loading, error } = useFetch<CommunityEngagement>('engagement');
   const [showHandled, setShowHandled] = useState(false); // Posted/handled default COLLAPSED
 
   if (loading || error) return <StateBanner loading={loading} error={error} empty={false} emptyMsg="" />;

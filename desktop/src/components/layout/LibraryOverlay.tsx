@@ -29,6 +29,7 @@
  */
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { overlayQuery } from './overlayQueries';
 import api from '../../services/api';
 import { LibraryTree } from './LibraryTree';
 import { LibraryHealth } from './LibraryHealth';
@@ -86,23 +87,11 @@ export function LibraryContent() {
   // Native store stats (rail totals + Browse tab badge). The Browse body itself is
   // now a live file tree (LibraryTree) off /workspace/tree — it owns its own
   // loading/error state, so this query no longer drives the browse panel.
-  const { data: native } = useQuery<NativeStore>({
-    queryKey: ['library-native'],
-    queryFn: async () => (await api.get<NativeStore>('/library/native')).data,
-    staleTime: 30_000, enabled: true,
-  });
+  const { data: native } = useQuery(overlayQuery.libraryNative<NativeStore>());
   const {
     data: recent, isLoading: recentLoading, isError: recentError, refetch: refetchRecent,
-  } = useQuery<RecentFeed>({
-    queryKey: ['library-recent'],
-    queryFn: async () => (await api.get<RecentFeed>('/library/recent')).data,
-    staleTime: 30_000, enabled: true,
-  });
-  const { data: mounts } = useQuery<MountsList>({
-    queryKey: ['library-mounts'],
-    queryFn: async () => (await api.get<MountsList>('/library/mounts')).data,
-    staleTime: 30_000, enabled: true,
-  });
+  } = useQuery(overlayQuery.libraryRecent<RecentFeed>());
+  const { data: mounts } = useQuery(overlayQuery.libraryMounts<MountsList>());
 
   const nativeFileTotal = (native?.categories ?? []).reduce((s, c) => s + c.file_count, 0);
   const nativeByteTotal = (native?.categories ?? []).reduce((s, c) => s + c.total_bytes, 0);
