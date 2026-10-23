@@ -30,10 +30,11 @@ paths:
 | E4 | Slack, immediate or scheduled | `background_local` or `remote_hive` | No |
 
 Host and Hives never connect to each other. Both connect outbound to one **Central
-Service** (§4.3), which also stores every Run's result and runs the learning pipeline
-that turns results into DDD changes (§4.4) in the AWS account SwarmAI uses for Bedrock. It registers DDDs,
+Service** (§4.3) in the AWS account SwarmAI uses for Bedrock. It registers DDDs,
 Project Agents and execution nodes, coordinates remote Runs and holds their leases, and
-mirrors Run events for the Control Center. It is never on the chat path, and Host-local
+keeps the organization's copy of every Run's record (§4.4) for Trace, Eval, statistics and
+later consumers (§4.5). Whichever node runs a Run keeps its original data and does
+everything it does today; the upload is a copy and never changes local behaviour. It is never on the chat path, and Host-local
 Runs do not depend on it.
 
 The Pipeline itself does not change: one requirement, one owner, one continuous context
@@ -84,18 +85,18 @@ Containers, other clouds and other machine types are out of scope.
   DynamoDB and S3.
 - Every node (Host, EC2 Hive, Cloud Desktop Hive) only makes outbound HTTPS calls to it.
   No node accepts an inbound connection for Runs.
-- It stores the full result of every Run, from every placement, and is the one place
-  results are reviewed, distilled and reflected back into DDDs (§4.4).
-- It never writes a DDD store itself. Approved changes are applied through a per-DDD
-  storage adapter, so new DDD storage types plug in without changing Central (§4.4.3).
+- It keeps the organization's copy of each Run's record (§4.4). The node that ran the Run
+  keeps the original and its local flow is unchanged and never depends on the upload.
+- In V1 it writes nothing back to any node: no DDD, MEMORY, EVOLUTION or knowledge store.
+  Turning stored records into org-level knowledge is a later consumer (§4.5.4).
+- What it stores is extensible: new kinds of records can be added later (§4.4.3).
 - V1 runs in internal accounts only, so content is stored as is (encrypted at rest, access
-  by role, every access audited). Field-level sealing is deferred (§4.3.4). The SwarmAI
-  DDD is the first end-to-end case; every other DDD follows the same path.
+  by role, every access audited). Field-level sealing is deferred (§4.3.4).
 
 ## 3. Non-goals
 
-- Project Agents, Intent triage, Run Graph / DAG of Runs, Asset Registry, Offline Eval,
-  ADR, Evolution. They depend on this plane; this plane does not depend on them.
+- Project Agents, Intent triage, Run Graph / DAG of Runs, Asset Registry, Evolution. They
+  depend on this plane; this plane does not depend on them.
 - Automatic Hive selection and automatic cross-Hive failover. The user or the Slack
   request names the Hive.
 - Replicating schedules to a Hive so they fire while the Host is offline.
@@ -107,8 +108,8 @@ Containers, other clouds and other machine types are out of scope.
 - Running Project Agents. V1 registers Project Agent definitions in the Central Service;
   executing them is later work.
 - Field-level sealing of internal content in Central. V1 runs in internal accounts.
-- DDD storage types other than Host files and git repos. The adapter interface (§4.4.3)
-  is where they are added later.
+- Any consumer that writes derived knowledge back into a DDD or knowledge base (§4.5.4).
+  V1 stores records and defines where such consumers plug in.
 - Backward compatibility for runs created before the Phase 6 protocol cutover.
 - Changing the Chat inline experience. Inline registration must be invisible in chat.
 
@@ -143,7 +144,7 @@ Each fact has exactly one owner. Every other view is a projection.
 
 | Fact | Owner | Readers |
 |---|---|---|
-| Stage, verdict, findings, signed events of a Run | The Pipeline v1 run store on the node that executes the Run | That node; others see the mirror |
+| Original Run data: stage, verdict, findings, signed events, documents, transcripts | The Pipeline v1 run store on the node that executes the Run | That node, as today. Central holds an uploaded copy |
 | Request, origin, placement, queue, Attempts of a Host-local Run | **Conductor Store** on the Host (§4.2) | UI, Slack replies, Scheduler |
 | Request, queue, Attempts and **lease / epoch** of a remote Run | **Central Service** `requests` table (§4.3) | Host Conductor, the target Hive |
 | Schedule definition and fire times | Host Job Scheduler (`user-jobs.yaml`, new job kind `pipeline_submit`) | Conductor |
@@ -152,12 +153,12 @@ Each fact has exactly one owner. Every other view is a projection.
 | Published DDD revisions and Project Agent definitions | **Central Service** registry | Every node |
 | Node identity, type, allowed class, capacity, heartbeat | **Central Service** `nodes` table | Host Conductor dispatch |
 | Org-wide view of Runs | **Central Service** event mirror, a projection of each node's outbox | Control Center |
-| A Run's full result (Run record) | **Central Service** result store (§4.4.1) | Learning worker, Host landing, Offline Eval |
+| The organization's copy of a Run (Run record) | **Central Service** org Run store (§4.4) | Host landing of remote results, Trace, Eval, later consumers |
 | Run Trace statistics | **Central Service** `run_index`, derived from Run records (§4.5.1) | Control Center |
 | Intervention classification and five-dimension results | **Central Service** `eval_reports` (§4.5.3) | Control Center, ADR roll-up |
 | Whether a local Run uploads | `config.json["pipeline"]["central_upload"]` and the request's `upload` flag, fixed in the Run contract at create (§4.4.1) | Conductor, Host outbox |
-| Proposed, approved and applied DDD changes, audit | **Central Service** learning pipeline (§4.4) | Control Center |
-| DDD content | The DDD's own store. Written by the existing local paths as today, plus Central-approved changes from Pipeline Runs through the DDD's adapter (§4.4.3) | Executors |
+| DDD content | The DDD's own store, written only by the existing local paths, as today. Central does not write it in V1 | Executors |
+| Audit of Central access | **Central Service** `audit` (§4.4.4) | Owner |
 | Landing on a Host repo | `run_protocol/landing.py` on the Host | Conductor |
 
 `routers/hive.py` keeps only EC2 provisioning (create, start, stop). Hive identity for
@@ -212,15 +213,14 @@ owner command, never automatically.
 | Table | Key | Holds |
 |---|---|---|
 | `nodes` | `node_id` | type (`host`, `ec2`, `cloud_desktop`), allowed class, Ed25519 public key, reported `slots`, last heartbeat, status (`enrolling`, `active`, `revoked`) |
-| `ddds` | `ddd_id`, `rev` | origin (`host` / `repo`), storage adapter (§4.4.3), access class, clone URL, pinned commit or snapshot digest, published at |
+| `ddds` | `ddd_id`, `rev` | origin (`host` / `repo`), access class, clone URL, pinned commit or snapshot digest, published at |
 | `project_agents` | `agent_id`, `rev` | definition (or its blob digest), pinned `ddd_id` + `rev`, published at |
 | `requests` | `request_id`; GSI `(target_node, state)`; GSI `(state, updated_at)` | the immutable request, dispatch state (§7.4), attempt, `lease_epoch`, `lease_renewed_at` (Central clock), `worker_incarnation`, `cancel_deadline` |
 | `events` | `request_id`, sort key `<attempt>#<lease_epoch>#<seq>` (zero-padded) | mirrored Run events with their signed `payload_digest` (§7.1) |
 | `decisions` | `decision_id`; TTL | question, options, answer, answer nonce state, expiry |
 | `blob_objects` | `digest` | size, media type, first registered at. One row per distinct content |
 | `blob_refs` | `owner_id` (request or DDD revision), `role`; GSI `digest` | the digest, producing node, attempt, epoch, producer signature. One row per use, so the same content used by many Runs keeps every provenance |
-| `learning_jobs` | `job_id`; GSI `(destination, state)` | §4.4.2 |
-| `change_sets` | `change_set_id`; GSI `(destination, state)` | §4.4.3 |
+| `record_kinds` | `kind`, `schema_version` | the registered kinds of uploaded records and who may produce them (§4.4.3) |
 | `audit` | `day`, `ts#id` | §4.4.4 |
 | `enrolments` | `code_hash`; TTL | target node, attempts left, consumed flag (§4.3.6) |
 | `run_index` | `request_id`; GSIs `(project, day)`, `(day)` | Trace projection (§4.5.1), rebuildable |
@@ -241,7 +241,7 @@ putting wrong bytes under a digest first, so:
    claimed digest. S3 rejects a body whose checksum differs.
 2. The writer calls `complete` with its signature over the digest, size, media type and
    role. Central checks that the stored object's checksum is that digest.
-3. **Intake runs on the quarantined object before anything is registered** (§4.4.2). Text
+3. **Intake runs on the quarantined object before anything is registered** (§4.4.1). Text
    content is redacted and becomes a new object with its own digest; the raw object is
    then deleted. A result bundle (code) is never rewritten: a secret finding in it rejects
    the upload and the candidate cannot land.
@@ -304,7 +304,7 @@ V1 runs only in internal accounts, so Central stores Run content as it is:
 - DynamoDB and S3 are encrypted with a customer-managed KMS key; only the Central
   Lambdas and the Host admin role can use it.
 - Every read and write of a Run record or blob is recorded in the audit table (§4.4.4).
-- Content is redacted at intake (§4.4.2), before anything is distilled from it.
+- Content is redacted at intake (§4.4.1), before any consumer reads it.
 - `classify_project()` still decides **where** a Run may execute (§5.3). It no longer
   decides what Central may store.
 - Field-level sealing is deferred. If a later DDD needs it, it is added at intake, where
@@ -316,6 +316,7 @@ V1 runs only in internal accounts, so Central stores Run content as it is:
 - It holds no Pipeline signing key and no credential value. It is not a second
   authoritative copy of any code or DDD.
 - It does not execute anything; it stores, authorizes and expires.
+- In V1 it writes nothing to any node's DDD, MEMORY, EVOLUTION or knowledge store.
 - If it is down: Host-local Runs are unaffected; running Hive Runs keep executing and
   buffer their events locally; new remote submissions fail visibly at submit rather than
   being queued silently.
@@ -339,11 +340,11 @@ It must fix at least:
 - **Key lifecycle:** node private keys in the OS keystore, or a `0600` file owned by the
   service user when there is none; rotation, loss and recovery.
 
-### 4.4 Result store and learning pipeline
+### 4.4 Org Run store
 
-Every Run, wherever it ran, hands its result to Central. Review, distillation, reflection
-into DDDs, quality, redaction and audit all happen in one place, decoupled from where Runs
-execute and from how each DDD is stored.
+Central keeps the organization's copy of each Run. It is a store, not a step in the Run:
+the node that ran the Run keeps its own original data and does everything it does today,
+and what Central does with the copy (§4.5) never changes or waits on that.
 
 #### 4.4.1 What a Run hands in
 
@@ -356,7 +357,7 @@ content, plus the metadata that ties them together:
 | Part | Contents | Source today |
 |---|---|---|
 | Pipeline documents | `REQUIREMENTS.md` and `DESIGN_SPEC.md` (profiles that have them), `REVIEW.md`, `FIXING_SPEC.md` (if review asked for fixes), `REPORT.md` | Rendered by the Pipeline into the run directory (`run_protocol/documents.py`, `engine.py`) |
-| Reflect summary | Each lesson the agent wrote, with its destination, relation and the judge's verdict | `artifacts/reflect.json` |
+| Reflect summary | Each lesson the agent wrote, with its destination, relation, the judge's verdict and what local REFLECT did with it | `artifacts/reflect.json` |
 | Delivery record | Commits: per repo the base, landed commit and message. Or CR: package, CR id, revision, commit, state at handoff (draft) | The landing result (`run_protocol/landing.py`), or the CR handoff (§7.3) |
 | Trace and human-loop record | The full signed Pipeline event chain and the blobs it references: stage attempts and completions with times, checks and test calls with results, review handouts, answers and findings, every `decision` and `human_answer`, `auth` (human approvals), `user_stop`, `resume`, `owner_transfer` (takeover), `session_lost`, `restore`, `abandon`, landing events and usage metrics per stage and model | The run's signed event store (`run_protocol/events.py`), usage from `run_protocol/usage.py` |
 | Dispatch record | Queue wait, Attempts with their start, end and reason, cancel and lease events | Conductor Store (local) or Central `requests` (remote) |
@@ -367,7 +368,7 @@ The record is a versioned manifest (`run_record_version: 1`). Metadata fields:
 | Field | Required for |
 |---|---|
 | `request_id`, `run_id`, project, profile, origin, placement, executing node | all |
-| `ddd_ref` (adapter, revision, digest), Project Agent Definition revision if any | all |
+| `ddd_ref` (origin, revision, digest), Project Agent Definition revision if any | all |
 | `code_ref` per repo (base commit) and owned paths | all |
 | Pipeline protocol revision and evidence contract id | all |
 | Attempts (attempt, epoch, node, start, end, reason) | all |
@@ -413,122 +414,50 @@ A local Run with upload off:
 A Run that should upload but cannot (Central down) keeps its record locally and retries;
 nothing is lost.
 
-#### 4.4.2 Learning stages
+**Intake.** Every uploaded record passes intake before it is registered: schema and
+digest checks, and a redaction scan of all text that masks secrets and credential shapes
+and records each finding. A record that fails is kept in quarantine with the reason and is
+not registered; the node keeps its own copy and nothing about the Run changes.
 
-| Stage | What happens | Where it runs |
-|---|---|---|
-| Intake | Schema and digest check; redaction scan of all text (secrets and credential shapes masked, findings recorded); a record that fails is quarantined, not learned from | Central Lambda |
-| Review and distill | Each reflect lesson, and anything distilled from the documents and delivery records across Runs, becomes a proposal and goes through the existing admission logic: `ingestion_gate` (noise floors, quality, the self-adversarial judge) and `reflect_job.judge`; related proposals across Runs are merged; `contradicts` proposals are held for a person | **Learning worker** on a SwarmAI node (the Host in V1), which claims learning jobs from Central like a Hive claims Runs |
-| Approve | Verdict `auto` (DDD knowledge passing every gate), `review` (anything touching Gates, rules or governed context files, and every `contradicts`) or `discard`. `review` items wait for the owner in the Control Center | Central records the decision |
-| Apply | The approved change set is applied to its DDD through that DDD's adapter (§4.4.3), by the node that holds the adapter | The adapter's node |
-| Record | The applied revision is recorded, published for a DDD (§4.3.2), and linked back to the Runs and proposals it came from | Central |
+#### 4.4.2 The local flow does not change
 
-The learning worker reuses SwarmAI's existing code instead of reimplementing it in a
-Lambda, and runs as a background job, never on the chat path or in the Local Worker slot.
+- On every node, for every placement, the Pipeline runs as today, including REFLECT:
+  `reflect_job.route` applies kept lessons on the node that ran the Run, exactly as now.
+- Chat sessions, MEMORY, EVOLUTION, DailyActivity, the post-session hooks, Save to Memory
+  and DDD cultivation are not part of the upload and are not touched.
+- Uploading happens after the Run is terminal, on the Conductor executor. A failed or
+  slow upload never fails, delays or changes a Run; the record waits in the outbox.
+- One consequence to know: lessons from a remote Run are applied to that Hive's own
+  workspace, as any SwarmAI daemon does. They reach the Host's DDD only through a later
+  consumer (§4.5.4) or a person, not automatically in V1.
 
-**Learning jobs.** Intake creates one `learning_jobs` row per accepted Run record:
+#### 4.4.3 Record kinds
 
-| State | Next | Written by |
-|---|---|---|
-| `queued` | `claimed` | learning worker (conditional claim with lease and epoch, as for Runs) |
-| `claimed` | `proposed`, `queued` (lease lost), `failed` | worker / sweeper |
-| `proposed` | done when every proposal has a change set or a `discard` | Central |
-| `failed` | `queued` (retry, at most 3), then `dead_letter` | sweeper |
+Every uploaded object is a record of a registered kind with a schema version
+(`record_kinds`). V1 has one kind, `run_record` v1 (§4.4.1). Later kinds are added by
+registering them, with no change to the store, intake or audit, for example:
 
-- The worker is a node enrolled with the role `learning` (the Host in V1). It may claim
-  learning jobs, read the Run records they name and write proposals and change sets. It
-  may apply only to destinations whose adapter it holds (§4.4.3). It cannot create or
-  claim Run requests.
-- A `dead_letter` job is shown in the Control Center with its last error.
-- If the adapter node is offline, approved change sets stay `approved` and are applied
-  when it returns. Nothing is applied by another node.
+- `judge_verdicts`: the distilled judge results of a Host's ingestion gate;
+- `corrections`: captured corrections;
+- `eval_report`: written by Eval (§4.5.3).
 
-**Scope: Pipeline Runs only.** The learning pipeline handles only what Pipeline Runs
-hand in. It does not touch chat sessions or any of SwarmAI's private, local learning:
-MEMORY, EVOLUTION, DailyActivity, the post-session hooks (distillation, context health,
-improvement write-back, evolution maintenance), Save to Memory, correction capture and
-DDD cultivation all keep working exactly as today, on the Host, and are never uploaded.
-
-**Local and remote Runs.** The purpose is to connect local and remote learning, for every
-DDD, not only SwarmAI's:
-
-| Run placement | REFLECT on the executor | What Central does with the lessons |
-|---|---|---|
-| `inline_local`, `background_local` | Unchanged: `reflect_job.route` applies kept lessons on the Host as today | Records them with their local outcome (`applied`, `queued`, `noise`) for provenance, audit and cross-Run distillation. Never applies them a second time |
-| `remote_hive` | The Hive does not write any DDD; `route` records its decision and the lesson as proposals in the Run record | Reviews, distills and applies them to the DDD through its adapter |
-
-Lessons from a remote Run whose destination is the Host's own MEMORY / EVOLUTION, or a
-self-evolution proposal, are not applied by Central. They are handed to the owning Host,
-which puts them in its existing local proposal queue (`.artifacts/proposals/`), the same
-human-reviewed flow a local Run uses today.
-
-Cross-Run distillation (patterns across many Runs' documents and delivery records) can
-propose new DDD changes for any DDD; these go through the same review and apply.
-
-#### 4.4.3 Destination adapters
-
-Central writes a DDD only through the adapter declared on its `ddds` record. Central has
-no other destination: MEMORY, EVOLUTION and other private stores are not destinations.
-
-Each approved change becomes a **change set** with a `change_set_id`, its DDD and the
-`base_rev` it was reviewed against. Change sets of one destination are applied one at
-a time, in approval order.
-
-| State | Meaning |
-|---|---|
-| `approved` | Waiting for the destination's turn |
-| `applying` | The adapter node holds it (lease, as for jobs) |
-| `handed_off` | `git_repo` only: a PR or CR is open; waiting for it to merge |
-| `applied` | The destination now contains it; `applied_rev` recorded |
-| `conflict` | The destination moved past `base_rev`; back to review |
-| `failed` | The adapter reported an error; retried at most 3 times |
-| `reverted` | A later revert change set removed it |
-
-Adapter operations, all idempotent by `change_set_id`:
-
-| Operation | Meaning |
-|---|---|
-| `read(rev)` | Materialize the destination at a revision (used by §5.2) |
-| `head()` | Current revision |
-| `apply(change_set)` | If the destination is at `base_rev`, apply and return a receipt with `applied_rev`; if this change set was already applied, return the same receipt; otherwise `conflict` |
-| `status(change_set_id)` | `git_repo`: whether its PR / CR merged and at which revision |
-| `revert(change_set_id)` | Apply the inverse as a new change set, through the same path |
-
-A change set is all or nothing for its destination. Changes that span destinations are
-separate change sets and are never assumed atomic together.
-
-V1 has two adapters:
-
-- `host_files` (a DDD stored as files on the Host, such as SwarmAI's): `apply` calls the
-  existing `ddd_cultivation.apply_to_ddd` / `annotate_entry` under the existing file lock,
-  the same functions local REFLECT uses, so local and Central writes to a DDD go through
-  one code path. Because the Host's own local paths keep writing the same files, the
-  conflict check is per entry, not per file: `apply_to_ddd` already detects a duplicate or
-  a missing section, and a `contradicts` relation is held for review. Each applied change
-  set is journalled with the entry it wrote, so `revert` removes exactly that entry
-  (`retire_entry`). The recorded revision is the sha256 of the DDD file after the apply.
-- `git_repo`: `apply` opens a PR (GitHub) or a draft CR (internal git) and moves the change
-  set to `handed_off`. The destination's revision is published only when `status` sees the
-  merge. While one change set is `handed_off`, later ones for the same destination wait.
-
-A new storage type, or a new kind of destination, is a new adapter and a new registered
-value; Central, the learning stages and the Pipeline do not change. SwarmAI's own DDD on
-`host_files` is the first end-to-end case.
+A kind declares who may produce it (a role) and whether its upload is on by default; a
+kind that carries a node's private content (such as corrections) is off unless the owner
+turns it on, as `central_upload` does for Runs. Records are immutable; a new version is a
+new record.
 
 #### 4.4.4 Audit
 
 Central keeps an append-only `audit` table: every Run record received, every redaction
-finding, every gate verdict, every human approval, every learning job and change set
-transition, every applied change with its adapter, base and resulting revision, every
-revert, and every read of Run content. Any DDD line can be traced to
-the Runs and decisions that produced it, and an applied change set can be reverted through
-its adapter.
+finding, every quarantined upload, every Eval report written, and every read of Run
+content. Every record and every derived output can be traced to who produced and read it.
 
 
-### 4.5 Trace and Offline Eval on Central
+### 4.5 Consumers of the org store
 
-Central is the single source for Run Trace statistics and for Eval. Both read only what
-Runs hand in (§4.4.1) and what Central records itself; neither runs in the delivery path.
+Consumers read records; they never modify them and never run in the delivery path. Trace
+and Offline Eval are the first two (Phase 4). Both read only what Runs hand in (§4.4.1) and
+what Central records itself.
 
 #### 4.5.1 Trace
 
@@ -567,8 +496,8 @@ the classification and its reasoning in its report, never back into the Run.
 #### 4.5.3 Offline Eval
 
 Eval runs as `eval_jobs` claimed by a node with the `eval` role (the Host in V1), the same
-way learning jobs are claimed (§4.4.2), and writes `eval_reports`. It never blocks or
-delays a Run, a landing or the learning pipeline. A report is computed only from Central
+way Hives claim Runs (§4.3.3), and writes `eval_reports`. It never blocks or
+delays a Run or a landing. A report is computed only from Central
 data and records the Eval version and the Run record digests it read, so it can be
 reproduced.
 
@@ -584,6 +513,20 @@ Missing or unverifiable evidence makes that dimension `UNKNOWN` for the Run, nev
 Org roll-ups (by project, DDD, placement, period) are computed by Eval from reports;
 Autonomous Delivery Rate follows the HLD formula (A / E) and is always shown with its
 evidence coverage, which counts `incomplete` Traces and `local only` Runs as not covered.
+
+
+#### 4.5.4 Later consumers
+
+Statistics and reports, and secondary processing of records into organization-level
+knowledge stored in a particular DDD or a knowledge base, are later work. The store is
+built so they plug in without changing it:
+
+- a consumer reads records by kind and time, and writes its own output as a new record
+  kind with provenance (the record digests it read);
+- it writes into a DDD or knowledge base only through that destination's own write path
+  (for a SwarmAI DDD, the existing `apply_to_ddd` under its lock), with the destination
+  owner's approval, and is designed when it is built;
+- it never edits Run records or any node's local data.
 
 ## 5. Data model
 
@@ -1137,12 +1080,12 @@ Measure first, then build. Each phase starts with its acceptance tests written a
 |---|---|---|
 | 1 | Conductor Store, `submit` / `register_inline`, status join, API, Pipelines page columns | An inline Run appears in the Conductor view with origin `chat`; chat send and stream timings are unchanged (measured before and after); a failing registration never fails `create` |
 | 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2 |
-| 3-0 | Contracts before code: wire and key specification (§4.3.6) with test vectors; DynamoDB, event, Run-record and audit schemas; `ddd_origin` and adapter fields in `ddd_bindings.py`; the four-fact event schema | Reviewed documents and red conformance tests for: crash after claim, out-of-order and duplicate events, duplicate-with-different-payload, cancel racing a result, Hive restart and adopt, lease across a simulated outage, key loss and rotation, a poisoned blob upload, a Run record that fails intake |
+| 3-0 | Contracts before code: wire and key specification (§4.3.6) with test vectors; DynamoDB, event, Run-record and audit schemas; `ddd_origin` in `ddd_bindings.py`; the four-fact event schema | Reviewed documents and red conformance tests for: crash after claim, out-of-order and duplicate events, duplicate-with-different-payload, cancel racing a result, Hive restart and adopt, lease across a simulated outage, key loss and rotation, a poisoned blob upload, a Run record that fails intake |
 | 3 | Central Service in the Bedrock account (CDK: HTTP API, Lambdas, DynamoDB, S3, KMS key, sweeper); Host enrolment and signed requests; DDD and Project Agent registry; Run-record upload from the Host outbox for inline and Local Runs; intake with redaction; audit; Control Center reads Central | Every finished local Run with upload on hands its record to Central, which passes intake; with `central_upload: "off"`, or `--no-upload`, a local Run sends nothing to Central and behaves the same locally; a remote request ignores the setting and always uploads; a planted fake secret is masked and recorded; a Central outage leaves local Runs unaffected and their records upload afterwards; a replayed upload is a no-op; a node with a wrong signature, stale timestamp or reused nonce is refused |
-| 4 | Trace index, live view and sealed Trace; Offline Eval jobs and reports with intervention classification and the five dimensions; learning pipeline: `learning_jobs` and `change_sets`, learning worker on the Host, review and approve in the Control Center, `host_files` adapter with journal and revert, `reflect_job.route` in proposal mode for `remote_hive` placements only. Exercised with a Host-local Run first (its lessons recorded, not re-applied) and a simulated remote Run record | A local Run behaves exactly as today and its lessons appear in Central with their local outcome, never applied twice; a simulated remote Run's `auto` lesson is applied through `host_files` with an audit trail back to its Run; its MEMORY / EVOLUTION lesson lands in the Host's existing proposal queue; a Gates change waits for approval; a duplicate entry is not written twice; an applied change set can be reverted; no chat, hook or MEMORY behaviour changes; an uploaded local Run shows per-stage times, tokens and every human answer in the Control Center from Central data only; a dropped event marks its Trace `incomplete`; an Eval report for that Run gives all five dimensions or `UNKNOWN`, never a guessed PASS; rebuilding `run_index` from Run records gives the same statistics; `local only` Runs are absent from org stats and counted as not covered |
+| 4 | First consumers: Trace (live view, sealed Trace, `run_index`) and Offline Eval (`eval_jobs`, `eval_reports`, intervention classification, the five dimensions) | An uploaded local Run shows per-stage times, tokens and every human answer in the Control Center from Central data only; a dropped event marks its Trace `incomplete`; an Eval report gives all five dimensions or `UNKNOWN`, never a guessed PASS; rebuilding `run_index` from Run records gives the same statistics; `local only` Runs are absent from org stats and counted as not covered; with Central down, local Runs, chat, hooks and MEMORY behave exactly as before |
 | 5 | Slack submit (owner only), confirmation card, `pipeline_submit` job, thread updates, Slack answer button | A non-owner cannot submit; a scheduled Run fires and reports in its thread; a missed fire is recorded `missed(host_offline)` and never submitted late; an overlapping fire is `skipped_overlap`; a replayed occurrence key is a no-op; an owner button press consumes its nonce once and records `human_answer`, while a second click, a non-owner click or an expired nonce is rejected |
-| 6 | Hive credentials moved to the secret store; four-fact completion protocol with landing journal for every placement; EC2 Hive enrolment and Worker through Central; leases; capacity reporting; DDD snapshot manifest and scan; `git_repo` adapter for GitHub DDDs | An external Run on EC2 hands in its Run record; the Host takes the result from Central, verifies, re-tests and lands it; a claim raced by two nodes has one winner; a lease survives a simulated 15-minute Central outage and a dead Hive's lease expires 10 minutes after recovery; a revoked-epoch event is rejected; an internal project is rejected for EC2; a crash mid-landing reconciles without double-landing |
-| 7 | Cloud Desktop enrolment and Worker; `ddd_origin: repo` fetch with internal git; draft CR handoff; `git_repo` adapter for internal git. Gated on S6 | An internal Run with an IVTHubSpec-hosted DDD runs on a Cloud Desktop, hands in its Run record and records all four facts ending in `external_handoff` with a draft CR; its approved lessons are applied to IVTHubSpec as a draft CR; an external project is rejected for a Cloud Desktop |
+| 6 | Hive credentials moved to the secret store; four-fact completion protocol with landing journal for every placement; EC2 Hive enrolment and Worker through Central; leases; capacity reporting; DDD snapshot manifest and scan | An external Run on EC2 hands in its Run record; the Host takes the result from Central, verifies, re-tests and lands it; a claim raced by two nodes has one winner; a lease survives a simulated 15-minute Central outage and a dead Hive's lease expires 10 minutes after recovery; a revoked-epoch event is rejected; an internal project is rejected for EC2; a crash mid-landing reconciles without double-landing |
+| 7 | Cloud Desktop enrolment and Worker; `ddd_origin: repo` fetch with internal git; draft CR handoff. Gated on S6 | An internal Run with an IVTHubSpec-hosted DDD runs on a Cloud Desktop, hands in its Run record and records all four facts ending in `external_handoff` with a draft CR; an external project is rejected for a Cloud Desktop |
 
 Slack scheduling to a named Hive is part of phases 6 and 7 once those Hives exist.
 
@@ -1157,7 +1100,6 @@ Slack scheduling to a named Hive is part of phases 6 and 7 once those Hives exis
 | S5 | How an owner's Slack button press becomes a `human_answer` without the gateway's unattended path | Phase 5 |
 | S6 | Headless Midway, internal git and `cr` on a Cloud Desktop. `ddd_bindings.bind_repo` defers internal bindings today ("needs Brazil+Midway headless auth") | Phase 7 |
 | S7 | Size of a real Run record (documents, reflect summary, delivery record, event chain with its blobs), measured over recent SwarmAI Runs, to confirm one upload per Run and set S3 lifecycle | Phase 3 |
-| S8 | How `reflect_job.route` records a remote-placement decision without writing, and which existing outcome values in `artifacts/reflect.json` Central maps to `applied` / `queued` / `noise` | Phase 4 |
 
 If S1 fails, Phase 2 stops and the design is revised; the jobs `--bare` path is not used
 as a fallback. If S6 fails, internal remote Runs stay unsupported and Phase 7 is
