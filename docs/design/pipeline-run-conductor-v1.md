@@ -617,6 +617,7 @@ request:                       # immutable once accepted
   request_id: req_<ulid>
   project: SwarmAI
   requirement: "<user's words, stored verbatim as data>"
+  title: "<= 60 chars, how the Run is named on every surface (§5.4)"
   profile: direct | bugfix | full
   placement:
     mode: inline_local | background_local | remote_hive
@@ -814,6 +815,29 @@ that failed. It never silently changes placement.
 The project class is computed again at dispatch. If `bindings.yaml` changed class between
 submit and dispatch, the request fails with `classification_changed` and is not retried.
 
+### 5.4 Run title
+
+Every surface names a Run by its **title**, with the requirement as its subtitle and the
+`run_id` only as a small secondary label. An id alone tells a person nothing.
+
+- **What it is:** at most 60 characters, plain text, part of the immutable request.
+- **Where it comes from:**
+  - Chat tab: the chat agent proposes it in the draft, from the person's words; the
+    person sees it on the confirmation card and can edit it (§6.4).
+  - Slack immediate: the Slack session agent proposes it the same way (§8.2).
+  - Chat inline: the agent passes `pipeline_v1.py create --title`, recorded in the contract
+    and copied by `register_inline`.
+  - Schedule: the schedule's name plus the fire date in the schedule's timezone, for
+    example "Nightly dependency bump · Oct 24", so each fire is told apart.
+  - Missing or empty (a draft from a caller that does not propose one): the first line of
+    the requirement, cut at 60 characters on a word boundary. Never generated later by a
+    model behind the person's back.
+- **Never changes** after submit. A Run that drifts from its title is visible as such in
+  its thread; the requirement stays the record of intent.
+- **Shown:** stream messages and cards use "title · project · profile"; the drawer heads
+  with the title and shows the full requirement under it; Slack thread replies quote the
+  title; the chat-tab card heads with it.
+
 ## 6. Execution modes
 
 ### 6.1 `inline_local` (exists)
@@ -951,14 +975,17 @@ bugfix pipeline in the background", or "on hive-ec2-1", or "on my Cloud Desktop"
 
 1. The chat agent builds a draft with `pipeline_conductor.py draft` (a Host CLI over the
    owner-only socket, the same one Slack uses in §8.2), giving project, requirement (the
-   person's words, stored verbatim as data), profile and placement. Draft applies the
+   person's words, stored verbatim as data), a proposed title (§5.4), profile and
+   placement. Draft applies the
    placement rules (§5.3) and the DDD pin (§5.2), and lists the Hives allowed for that
    project with their free slots and queue length. The draft is persisted in the Conductor
    Store and signed by the daemon. It binds: actor (the owner), origin session, project,
-   profile, placement, DDD revision, base commits and the sha256 of the requirement text.
+   profile, placement, DDD revision, base commits, the title and the sha256 of the
+   requirement text.
    It is single-use and expires after 10 minutes.
-2. The tab shows a confirmation card: project, profile, placement, queue position or free
-   slot, DDD revision and base commits. Only the person's click on that card submits;
+2. The tab shows a confirmation card: title (editable), the requirement, project,
+   profile, placement, queue position or free slot, DDD revision and base commits. Editing
+   the title makes a new draft. Only the person's click on that card submits;
    the agent has no submit command. The route needs a per-draft **confirm secret** that
    the daemon generates and sends only inside the card payload to the frontend (over the
    tab's SSE stream); it is never in the CLI's output, a file or the transcript the agent
@@ -1132,8 +1159,8 @@ text is stored verbatim as data and is never used as an instruction to the Condu
 2. The Slack session agent turns the message into a draft request with
    `pipeline_conductor.py draft` (a Host CLI over the owner-only socket). Draft runs the
    placement rules and the DDD pin, so an invalid request is rejected here, with its reason.
-3. The bot replies with a confirmation card listing project, profile, placement, DDD ref,
-   base commits and, for a schedule, the cron expression and timezone.
+3. The bot replies with a confirmation card listing title, requirement, project, profile,
+   placement, DDD ref, base commits and, for a schedule, the cron expression and timezone.
 4. The owner confirms on the card. The draft is the same signed, single-use, bound draft
    as §6.4, and the button consumes it with the same atomic re-check; the confirm secret
    travels only in the Slack button's value, and the Slack adapter
@@ -1276,7 +1303,8 @@ Cancel is always available to the owner until landing starts (§7.4).
 ## 10. Surfaces
 
 Every surface below reads the Conductor Store and the Runs' message streams
-(`pipeline-human-loop-v2.md` §4); none keeps its own copy of a Run's state. The mockup is
+(`pipeline-human-loop-v2.md` §4); none keeps its own copy of a Run's state. Every surface
+names a Run by its title (§5.4). The mockup is
 `docs/design/pipeline-conductor-ui-mock.html`.
 
 - **Pipelines overlay.** It becomes the live control surface; today's retro content moves
