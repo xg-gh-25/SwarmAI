@@ -24,6 +24,9 @@ export type FileViewType =
 
 const IMAGE_EXTENSIONS = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif',
+  // Drawn where the webview can (macOS WebKit); ImageRenderer falls back to the
+  // info card where it cannot (canvas-file-types.md P2).
+  'heic', 'heif', 'tiff', 'tif',
 ]);
 
 const VIDEO_EXTENSIONS = new Set([
@@ -47,8 +50,8 @@ export const OFFICE_EXTENSIONS: ReadonlySet<string> = new Set([
 const NON_RENDERABLE_BINARY = new Set([
   // Office documents (SSOT — see OFFICE_EXTENSIONS)
   ...OFFICE_EXTENSIONS,
-  // Non-browser images
-  'tiff', 'tif', 'heic', 'heif', 'raw', 'cr2', 'nef',
+  // Camera raw images (heic / heif / tiff / tif try the image renderer first)
+  'raw', 'cr2', 'nef',
   // Archives
   'zip', 'tar', 'gz', 'bz2', 'xz', 'rar', '7z', 'dmg', 'iso', 'jar', 'war',
   // Executables & compiled

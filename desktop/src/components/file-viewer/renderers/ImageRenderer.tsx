@@ -1,5 +1,6 @@
 /**
- * ImageRenderer -- Renders browser-compatible images (PNG, JPG, GIF, WebP, AVIF, BMP, ICO)
+ * ImageRenderer -- Renders images the webview can decode (PNG, JPG, GIF, WebP, AVIF, BMP,
+ * ICO, and HEIC/TIFF where the platform can — macOS WebKit; onUnsupported otherwise)
  * with zoom/pan controls ported from BinaryPreviewModal.
  *
  * Features:
@@ -21,6 +22,8 @@ interface RendererProps {
   mimeType: string;
   fileSize: number;
   onStatusInfo?: (info: { dimensions?: string; pageInfo?: string; rowColCount?: string; customInfo?: string }) => void;
+  /** The image could not be decoded here (e.g. HEIC/TIFF outside WebKit). */
+  onUnsupported?: () => void;
 }
 
 const MIN_ZOOM = 0.1;
@@ -33,6 +36,7 @@ export default function ImageRenderer({
   content,
   mimeType,
   onStatusInfo,
+  onUnsupported,
 }: RendererProps) {
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
@@ -208,6 +212,7 @@ export default function ImageRenderer({
           src={imgSrc}
           alt={fileName}
           onLoad={handleImageLoad}
+          onError={() => onUnsupported?.()}
           draggable={false}
           style={{
             ...(fitMode

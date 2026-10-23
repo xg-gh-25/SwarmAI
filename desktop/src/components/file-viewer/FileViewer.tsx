@@ -169,8 +169,10 @@ function FileViewerImpl({
         size: number;
         mimeType?: string;
         readonly?: boolean;
-        /** The file is not text (the server's 415): shown as the info card. */
-        binary?: boolean;
+        /** Shown as the info card although its route has a renderer: a text route
+         *  whose file is not text (the server's 415), or an image this system
+         *  cannot draw (canvas-file-types.md P0 / P2). */
+        asCard?: boolean;
         /** The committed baseline is still loading (it loads after the content). */
         baselinePending?: boolean;
         committedContent?: string;
@@ -450,7 +452,7 @@ function FileViewerImpl({
             absolutePath = m.data.absolute_path;
           } catch { /* best effort, the card works without it */ }
           if (cancelled) return;
-          contentCache.current[tab.filePath] = { content: '', size, binary: true, absolutePath };
+          contentCache.current[tab.filePath] = { content: '', size, asCard: true, absolutePath };
           setStatusBarInfo({ fileSize: size });
           return;
         }
@@ -705,8 +707,9 @@ function FileViewerImpl({
     if (!cached) return <LoadingFallback />;
 
     const { filePath, fileName, gitStatus } = activeTab;
-    // A file routed as text that turned out binary is shown as the info card.
-    const viewType = cached.binary ? 'unsupported' : activeTab.viewType;
+    // A file whose renderer cannot show it (binary behind a text route, an image
+    // this system cannot decode) is shown as the info card.
+    const viewType = cached.asCard ? 'unsupported' : activeTab.viewType;
 
     // --- Text / Markdown / SVG: delegate to existing FileEditorCore ---
     if (viewType === 'text' || viewType === 'markdown' || viewType === 'svg') {
@@ -770,7 +773,18 @@ function FileViewerImpl({
     const rKey = `${filePath}:${refetchNonce}`;
     return (
       <Suspense fallback={<LoadingFallback />}>
-        {viewType === 'image' && <ImageRenderer key={rKey} {...rendererProps} />}
+        {viewType === 'image' && (
+          <ImageRenderer
+            key={rKey}
+            {...rendererProps}
+            // Capability, not platform guessing (P2): heic/tiff draw on macOS
+            // WebKit; where the image cannot be decoded, show the info card.
+            onUnsupported={() => {
+              const entry = contentCache.current[filePath];
+              if (entry && !entry.asCard) { entry.asCard = true; setBaselineTick((n) => n + 1); }
+            }}
+          />
+        )}
         {viewType === 'pdf' && <PdfRenderer key={rKey} {...rendererProps} />}
         {viewType === 'html-preview' && <HtmlRenderer key={rKey} {...rendererProps} />}
         {viewType === 'video' && <VideoRenderer key={rKey} {...rendererProps} />}
@@ -800,7 +814,7 @@ function FileViewerImpl({
   // The type actually shown: a text route whose file turned out binary (415) is the
   // info card, so it has no editor (no own footer, no guarded editor close).
   const shownType = activeTab == null ? null
-    : contentCache.current[activeTab.filePath]?.binary ? 'unsupported' : activeTab.viewType;
+    : contentCache.current[activeTab.filePath]?.asCard ? 'unsupported' : activeTab.viewType;
   const hasOwnFooter = shownType === 'text' || shownType === 'markdown' || shownType === 'svg';
 
   // Editor types (FileEditorCore) are the ONLY ones that can be dirty; their close

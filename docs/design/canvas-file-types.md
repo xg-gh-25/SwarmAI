@@ -153,6 +153,9 @@ Possible later as "Render pages" when `soffice` is on PATH.
   exactly as today.
 - mkv / avi / wmv / flv go to the info card (WebKit cannot play them; today they
   fall into P0).
+- As built: FileViewer's cache flag `asCard` (one flag for "shown as the card
+  although its route has a renderer": the 415 text route and an undecodable
+  image); ImageRenderer `onUnsupported` sets it.
 
 ## 5. P3 — notebooks and mermaid, as previews of an editable file
 

@@ -133,7 +133,7 @@ export default function UnsupportedRenderer({
   // A file routed as text that the server found binary (415) has a "text" type
   // info; on this card it is a binary file (canvas-file-types.md P0 B3).
   const routed = getFileTypeInfo(fileName);
-  const typeInfo = routed.category === 'binary' ? routed : { label: 'Binary file', icon: 'draft', category: 'binary' as const };
+  const typeInfo = routed.category === 'text' ? { label: 'Binary file', icon: 'draft', category: 'binary' as const } : routed;
   const helpText = getHelpfulText(ext);
   // Canonical SSOT (services/tauri) — checks __TAURI_INTERNALS__ (Tauri 2.x) OR
   // __TAURI__ (1.x). A local `'__TAURI__' in window` check was always false in the
