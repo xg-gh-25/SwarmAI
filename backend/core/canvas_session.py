@@ -234,6 +234,7 @@ def _live_worktree(run_id: str, entry: dict, main: str) -> Optional[str]:
     try:
         path = rw.wt_path(run_id, name)
     except Exception:  # noqa: BLE001 — a malformed id is no worktree
+        logger.debug("worktree path failed run=%s repo=%s", run_id, name, exc_info=True)
         return None
     if os.path.realpath(str(path)) != str(path) or not rw._no_symlinks(path) or not path.is_dir():
         return None

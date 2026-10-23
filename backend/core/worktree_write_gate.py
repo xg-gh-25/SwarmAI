@@ -178,7 +178,7 @@ def _v1_reserved(p: str, worktree: str, run_id: str) -> "str | None":
         if not is_v1_run(get_app_data_dir(), run_id):
             return None
     except Exception:   # unknown: the reserved path is still reserved
-        pass
+        logger.debug("v1 run check failed run=%s", run_id, exc_info=True)
     return (f"{p} is under .aidlc/deliverables/, which run {run_id}'s landing writes "
             "(the REPORT goes into the commit from the audit log); do not write it")
 

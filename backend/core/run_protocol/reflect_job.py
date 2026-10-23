@@ -84,6 +84,7 @@ def candidates_for(lessons: Any, project: str) -> dict[str, list[str]]:
     try:
         from core.recall_multi import recall_ddd_entries
     except Exception:  # noqa: BLE001 — no recall: no candidate, RF-4 still checks shape
+        logger.debug("recall unavailable for reflect candidates", exc_info=True)
         return out
     for row in lessons if isinstance(lessons, list) else []:
         if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
@@ -91,6 +92,7 @@ def candidates_for(lessons: Any, project: str) -> dict[str, list[str]]:
         try:
             hits = recall_ddd_entries(str(row.get("statement") or ""), project, top_n=3)
         except Exception:  # noqa: BLE001
+            logger.debug("reflect candidate recall failed lesson=%s", row.get("id"), exc_info=True)
             hits = []
         out[row["id"]] = [f"{h.get('doc')}#{h.get('section')}: {str(h.get('content'))[:120]}"
                           for h in hits if isinstance(h, Mapping)]
