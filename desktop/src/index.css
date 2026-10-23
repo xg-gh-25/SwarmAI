@@ -1074,17 +1074,36 @@ body {
   border-radius: 2px;
   background: var(--color-primary);
 }
-/* The file controls in the Canvas content card (FileEditorCore panelBar): one
-   raised group — view switch, Review, Open, Attach — on the card's bottom strip. */
+/* The file controls floating over the Canvas content card (FileEditorCore panelBar):
+   an INVERTED solid group (XG 2026-10-23, variant B of the fixing spec's C4 mock) —
+   the theme's text colour as the fill, so it reads on any document in both themes.
+   `.editor-float-ink` (the bar) captures the theme's ink and paper; the group then
+   re-points the theme tokens its buttons already use (--color-text, -muted, -hover,
+   -border) at the inverted pair, so every control inside inverts with no
+   per-button colours. */
+.editor-float-ink {
+  --fg-ink: var(--color-text);
+  --fg-paper: var(--color-bg);
+}
 .editor-float-group {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   padding: 2px;
   border-radius: 8px;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  background: var(--fg-ink);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  --color-text: var(--fg-paper);
+  --color-text-muted: color-mix(in srgb, var(--fg-paper) 70%, var(--fg-ink));
+  --color-hover: color-mix(in srgb, var(--fg-paper) 16%, var(--fg-ink));
+  --color-border: color-mix(in srgb, var(--fg-paper) 45%, var(--fg-ink));
+  color: var(--color-text-muted);
+}
+/* The selected view (Preview / Source / Changes): a paper chip on the ink group. */
+.editor-view-on {
+  background: var(--fg-paper);
+  color: var(--fg-ink);
+  font-weight: 600;
 }
 
 /* Collapsed rail: the whole Canvas as a thin vertical strip. Vertical text reads

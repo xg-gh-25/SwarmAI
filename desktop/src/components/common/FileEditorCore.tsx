@@ -1522,7 +1522,7 @@ export default function FileEditorCore({
   ];
   const panelBar = (
     <div
-      className="absolute inset-x-0 bottom-0 z-[3] flex items-end gap-2 px-2.5 pb-2.5 pointer-events-none"
+      className="editor-float-ink absolute inset-x-0 bottom-0 z-[3] flex items-end gap-2 px-2.5 pb-2.5 pointer-events-none"
       data-testid="editor-panel-bar"
     >
       <div className="editor-float-group pointer-events-auto" role="toolbar" aria-label="File view and actions">
@@ -1542,7 +1542,7 @@ export default function FileEditorCore({
               className={clsx(
                 'h-6 px-2 rounded-md text-[11.5px] transition-colors',
                 view === id
-                  ? 'bg-[var(--color-hover)] text-[var(--color-text)]'
+                  ? 'editor-view-on'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]',
                 id === 'changes' && changesOff && 'opacity-40 cursor-not-allowed hover:text-[var(--color-text-muted)]',
               )}

@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: draft for XG review
+status: implemented 2026-10-23 (C1-C6 + F13; F12 open, needs a WebKit look)
 ---
 
 # Super Canvas — fixing spec (round 1)
@@ -78,12 +78,13 @@ panel holds exactly one. One source: `CanvasTabState.file`.
 
 ### C4 — floating bar contrast and the selected row (F3, F13)
 
-- `.editor-float-group`: `--color-card` fill mixed 6% toward `--color-text`, a 1px
-  `--color-border-strong` (fallback `--color-border`) ring, shadow
-  `0 4px 14px rgba(0,0,0,.28)`, `backdrop-filter: blur(6px)`; icons
-  `--color-text-secondary`, active view chip `--color-primary` text on a 14% primary
-  tint (matches the pin's active look). Mock first, then code (XG's rule for
-  visual changes).
+- `.editor-float-group`: XG picked variant B from the mock (2026-10-23): an
+  INVERTED solid group — the theme's text colour as the fill, shadow
+  `0 4px 14px rgba(0,0,0,.3)`. The bar (`.editor-float-ink`) captures the theme's
+  ink/paper; the group re-points `--color-text`, `-text-muted`, `-hover`, `-border`
+  at the inverted pair, so every button inside inverts with no per-button colour.
+  The selected view is a paper chip (`.editor-view-on`). Save stays the primary
+  button. (Variant A, a lifted light fill with a primary chip, was not chosen.)
 - F13: `.canvas-row-sel` (the one selected-row style, both lists) gets a primary
   tint fill — `color-mix(--color-primary 16%, --color-card)` — a 1px ring of
   `color-mix(--color-primary 40%, --color-border)`, the 3px primary bar, bold name.

@@ -96,6 +96,11 @@ describe('the bar floats over the content', () => {
     expect(bar.className).toMatch(/\babsolute\b/);
     expect(bar.className).toContain('bottom-0');
     expect(bar.className).toContain('pointer-events-none'); // only its buttons take clicks
+    expect(bar.className).toContain('editor-float-ink');
+    expect(bar.querySelector('.editor-float-group')).toBeTruthy();
+    // the selected view is the paper chip, the others are not
+    expect(screen.getByTestId('editor-view-source').className).toContain('editor-view-on');
+    expect(screen.getByTestId('editor-view-changes').className).not.toContain('editor-view-on');
   });
 
   it('source view: textarea and highlight layer share the same end padding', () => {
