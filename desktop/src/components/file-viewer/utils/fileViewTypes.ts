@@ -20,6 +20,7 @@ export type FileViewType =
   | 'csv'
   | 'video'
   | 'audio'
+  | 'office'
   | 'unsupported';
 
 const IMAGE_EXTENSIONS = new Set([
@@ -44,8 +45,12 @@ const AUDIO_EXTENSIONS = new Set([
  * drifts across surfaces (MarkdownRenderer previously omitted odt/ods/odp).
  */
 export const OFFICE_EXTENSIONS: ReadonlySet<string> = new Set([
-  'docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt', 'odt', 'ods', 'odp',
+  'docx', 'xlsx', 'xlsm', 'pptx', 'doc', 'xls', 'ppt', 'odt', 'ods', 'odp',
 ]);
+
+/** The Office files the backend previews (GET /workspace/file/preview, P1). The rest
+ *  of OFFICE_EXTENSIONS (legacy binary + OpenDocument) stays on the info card. */
+export const OFFICE_PREVIEW_EXTENSIONS: ReadonlySet<string> = new Set(['docx', 'xlsx', 'xlsm', 'pptx']);
 
 const NON_RENDERABLE_BINARY = new Set([
   // Office documents (SSOT — see OFFICE_EXTENSIONS)
@@ -89,6 +94,7 @@ export function classifyFileForViewer(fileName: string): FileViewType {
   if (ext === 'csv' || ext === 'tsv') return 'csv';
 
   // Category sets
+  if (OFFICE_PREVIEW_EXTENSIONS.has(ext)) return 'office';
   if (IMAGE_EXTENSIONS.has(ext)) return 'image';
   if (VIDEO_EXTENSIONS.has(ext)) return 'video';
   if (AUDIO_EXTENSIONS.has(ext)) return 'audio';
@@ -105,7 +111,7 @@ export function isEditableType(type: FileViewType): boolean {
 
 /** Whether a file type needs content as base64 instead of UTF-8 text. */
 export function isBinaryType(type: FileViewType): boolean {
-  return type === 'image' || type === 'pdf' || type === 'video' || type === 'audio' || type === 'unsupported';
+  return type === 'image' || type === 'pdf' || type === 'video' || type === 'audio' || type === 'office' || type === 'unsupported';
 }
 
 /** Human-friendly info for each file type. */
@@ -138,6 +144,7 @@ export function getFileTypeInfo(fileName: string): FileTypeInfo {
       return { label: `${ext.toUpperCase()} Video`, icon: 'movie', category: 'media' };
     case 'audio':
       return { label: `${ext.toUpperCase()} Audio`, icon: 'audiotrack', category: 'media' };
+    case 'office':
     case 'unsupported':
       return { label: detectUnsupportedLabel(ext), icon: detectUnsupportedIcon(ext), category: 'binary' };
   }
@@ -159,7 +166,7 @@ function detectTextLabel(ext: string): string {
 
 function detectUnsupportedLabel(ext: string): string {
   const labels: Record<string, string> = {
-    docx: 'Word Document', xlsx: 'Excel Spreadsheet', pptx: 'PowerPoint Presentation',
+    docx: 'Word Document', xlsx: 'Excel Spreadsheet', xlsm: 'Excel Spreadsheet (Macros)', pptx: 'PowerPoint Presentation',
     doc: 'Word Document (Legacy)', xls: 'Excel Spreadsheet (Legacy)', ppt: 'PowerPoint (Legacy)',
     zip: 'ZIP Archive', tar: 'TAR Archive', gz: 'GZip Archive', rar: 'RAR Archive', '7z': '7-Zip Archive',
     dmg: 'Disk Image', iso: 'Disk Image',

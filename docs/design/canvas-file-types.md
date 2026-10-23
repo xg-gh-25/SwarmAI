@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: agreed with XG 2026-10-23; implementing in order (§6)
+status: implemented 2026-10-23 (P0, §2b, P3, P2, P1)
 ---
 
 # Canvas file types
@@ -141,6 +141,16 @@ Safety (security baseline): the files are untrusted input.
 
 Measure in the phase (fixtures generated in tests, not user files): a 5 000-row
 sheet, a 40-slide deck, a 30-page docx; budget < 1 s each on this Mac.
+
+As built: `backend/core/office_preview.py` + `GET /workspace/file/preview`
+(`format=json|html`; the session render gate is shared with GET /workspace/file via
+`_allowed_external_for`). The html response also carries
+`Content-Security-Policy: default-src 'none'; img-src data:; style-src 'unsafe-inline'`.
+Measured (tests): a 10 000-row sheet previews in < 1 s. On a 504 the worker thread
+finishes in the background (threads cannot be killed). Frontend: viewType
+`office` (docx xlsx xlsm pptx; doc xls ppt odt ods odp stay on the card),
+`renderers/OfficeRenderer.tsx`; refresh / agent rewrite remount it like the other
+non-editor renderers.
 
 Not now: pixel-exact pages via LibreOffice → PDF (needs a ~600 MB install).
 Possible later as "Render pages" when `soffice` is on PATH.

@@ -64,9 +64,9 @@ describe('classifyFileForViewer', () => {
 
   // AC6: Unsupported (Office, archives, executables, etc.)
   it.each([
-    ['report.docx', 'unsupported'],
-    ['budget.xlsx', 'unsupported'],
-    ['slides.pptx', 'unsupported'],
+    ['report.doc', 'unsupported'], // legacy binary; docx/xlsx/pptx are 'office' (P1)
+    ['budget.xls', 'unsupported'],
+    ['slides.odp', 'unsupported'],
     ['archive.zip', 'unsupported'],
     ['backup.tar', 'unsupported'],
     ['app.exe', 'unsupported'],

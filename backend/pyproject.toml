@@ -44,6 +44,8 @@ dependencies = [
     # Skill dependencies — used by s_pptx, s_docx, s_xlsx scripts
     "python-pptx>=1.0.0",
     "openpyxl>=3.1.0",
+    # Canvas docx preview (docs/design/canvas-file-types.md P1): pure Python, BSD-2
+    "mammoth==1.13.0",
     "defusedxml>=0.7.0",
     "Pillow>=10.0.0",
     "markitdown[pptx]>=0.1.0",

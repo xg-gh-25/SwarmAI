@@ -49,6 +49,7 @@ const VideoRenderer = lazy(() => import('./renderers/VideoRenderer'));
 const AudioRenderer = lazy(() => import('./renderers/AudioRenderer'));
 const CsvRenderer = lazy(() => import('./renderers/CsvRenderer'));
 const UnsupportedRenderer = lazy(() => import('./renderers/UnsupportedRenderer'));
+const OfficeRenderer = lazy(() => import('./renderers/OfficeRenderer'));
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -303,7 +304,7 @@ function FileViewerImpl({
           // the renderer builds its own raw URL from filePath. (video/audio already
           // ignored the base64 content — this stops fetching it for them too.)
           try {
-            const resp = await api.get<{ size: number; mime_type: string }>(
+            const resp = await api.get<{ size: number; mime_type: string; absolute_path?: string }>(
               '/workspace/file/meta',
               { params: { path: tab.filePath } },
             );
@@ -312,6 +313,7 @@ function FileViewerImpl({
               content: '',
               size: resp.data.size ?? 0,
               mimeType: resp.data.mime_type,
+              absolutePath: resp.data.absolute_path,
             };
             setStatusBarInfo({ fileSize: resp.data.size ?? 0 });
           } catch (err) {
@@ -790,6 +792,17 @@ function FileViewerImpl({
         {viewType === 'video' && <VideoRenderer key={rKey} {...rendererProps} />}
         {viewType === 'audio' && <AudioRenderer key={rKey} {...rendererProps} />}
         {viewType === 'csv' && <CsvRenderer key={rKey} {...rendererProps} />}
+        {viewType === 'office' && (
+          <OfficeRenderer
+            key={rKey}
+            filePath={filePath}
+            fileName={fileName}
+            fileSize={cached.size}
+            absolutePath={cached.absolutePath}
+            sessionId={initialFile && initialFile.filePath === filePath ? initialFile.sessionId : undefined}
+            onAttachToChat={(path: string) => attachFile(path, fileName)}
+          />
+        )}
         {viewType === 'unsupported' && (
           <UnsupportedRenderer
             key={rKey}

@@ -928,6 +928,38 @@ def _is_symlink_traversal(workspace_root: Path, relative_path: str) -> bool:
     return False
 
 
+async def _allowed_external_for(session_id: str | None) -> "set[str] | None":
+    """The external absolute paths a session surfaced to its Canvas rail (read-only
+    render gate). Shared by GET /workspace/file and GET /workspace/file/preview."""
+    # Canvas render-gate consistency (run_c014a4f3): if this GET carries an owning
+    # session_id, allow rendering the external absolute paths THAT session surfaced
+    # to the rail (read-only). This is the ONLY caller that passes allowed_external —
+    # PUT/write + the other reads keep the home-only guard (no arbitrary read/write).
+    _allowed_external: "set[str] | None" = None
+    if session_id:
+        try:
+            from core import session_registry as _sr
+            _live = _sr.surfaced_paths.get(session_id)
+            # Hand the gate a COPY, never the live session set — the gate only reads it,
+            # but a defensive copy means no future caller can mutate session state
+            # through this reference (frozenset would also work; copy keeps the type).
+            _allowed_external = set(_live) if _live else None
+        except Exception:  # noqa: BLE001 — fail-safe: no allowlist → home-only guard
+            logger.debug("get_workspace_file: suppressed exception on a fail-safe path", exc_info=True)
+            _allowed_external = None
+        # The same paths survive a restart in the session's Canvas record
+        # (core/session_outputs: the external rows that emit gate admitted), so a
+        # persisted rail row stays renderable — still only for that session.
+        try:
+            from core import executors, session_outputs
+            _rec = await executors.run_in("canvas_session", session_outputs.external_paths, session_id)
+            if _rec:
+                _allowed_external = (_allowed_external or set()) | _rec
+        except Exception:  # noqa: BLE001 — fail-safe: the live set alone
+            logger.debug("get_workspace_file: canvas record unavailable", exc_info=True)
+    return _allowed_external
+
+
 @router.get("/workspace/file")
 async def get_workspace_file(
     path: str = Query(..., description="Absolute or workspace-relative file path"),
@@ -960,32 +992,7 @@ async def get_workspace_file(
     """
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
-    # Canvas render-gate consistency (run_c014a4f3): if this GET carries an owning
-    # session_id, allow rendering the external absolute paths THAT session surfaced
-    # to the rail (read-only). This is the ONLY caller that passes allowed_external —
-    # PUT/write + the other reads keep the home-only guard (no arbitrary read/write).
-    _allowed_external: "set[str] | None" = None
-    if session_id:
-        try:
-            from core import session_registry as _sr
-            _live = _sr.surfaced_paths.get(session_id)
-            # Hand the gate a COPY, never the live session set — the gate only reads it,
-            # but a defensive copy means no future caller can mutate session state
-            # through this reference (frozenset would also work; copy keeps the type).
-            _allowed_external = set(_live) if _live else None
-        except Exception:  # noqa: BLE001 — fail-safe: no allowlist → home-only guard
-            logger.debug("get_workspace_file: suppressed exception on a fail-safe path", exc_info=True)
-            _allowed_external = None
-        # The same paths survive a restart in the session's Canvas record
-        # (core/session_outputs: the external rows that emit gate admitted), so a
-        # persisted rail row stays renderable — still only for that session.
-        try:
-            from core import executors, session_outputs
-            _rec = await executors.run_in("canvas_session", session_outputs.external_paths, session_id)
-            if _rec:
-                _allowed_external = (_allowed_external or set()) | _rec
-        except Exception:  # noqa: BLE001 — fail-safe: the live set alone
-            logger.debug("get_workspace_file: canvas record unavailable", exc_info=True)
+    _allowed_external = await _allowed_external_for(session_id)
     target, is_external = _resolve_file_path(path, workspace_root, allowed_external=_allowed_external,
                                              map_landed=True)
 
@@ -1254,6 +1261,66 @@ async def resolve_workspace_file(
         return {"resolved_path": resolved["relative"]}
 
     raise HTTPException(status_code=404, detail=f"Could not resolve file: {path}")
+
+
+OFFICE_PREVIEW_TIMEOUT_S = 10
+
+
+@router.get("/workspace/file/preview")
+async def get_workspace_file_preview(
+    path: str = Query(..., description="Absolute or workspace-relative file path"),
+    format: str = Query("json", pattern="^(json|html)$", description="json (sheets / slides / kind) or html (a docx as a document)"),
+    session_id: str | None = Query(None, description="Owning session id of a Canvas rail row (same render gate as GET /workspace/file)"),
+):
+    """Read-only preview of an Office file (docs/design/canvas-file-types.md P1).
+
+    - xlsx / xlsm → ``{kind: "sheets", sheets: [{name, rows, totalRows, totalCols, truncated}]}``
+    - pptx → ``{kind: "slides", slides: [{index, title, body, tables, notes, images}]}``
+    - docx → ``{kind: "html"}``; ``format=html`` serves the document as ``text/html``
+      for a script-less sandboxed iframe (mammoth output is not sanitized).
+
+    The file is untrusted: 50 MB cap, zip-bomb guard, 10 s conversion cap, generic
+    errors (415 not previewable, 422 cannot read, 504 too slow). On 504 the worker
+    thread finishes in the background (a thread cannot be killed); the request
+    returns at once.
+    """
+    from core import office_preview as op
+
+    expanded_path = await _get_workspace_path()
+    target, _ = _resolve_file_path(path, Path(expanded_path),
+                                   allowed_external=await _allowed_external_for(session_id),
+                                   map_landed=True)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    if op.preview_kind(target.name) is None:
+        raise HTTPException(status_code=415, detail="No preview for this file type")
+    if target.stat().st_size > MAX_PREVIEW_SIZE:
+        raise HTTPException(status_code=413, detail="File too large to preview. Maximum is 50 MB.")
+
+    def _convert():
+        result = op.build_preview(target)
+        if format == "html":
+            if result["kind"] != "html":
+                raise op.OfficePreviewError("no document view for this file type")
+            return op.preview_docx_html(target)  # build_preview ran the zip guard
+        return result
+
+    try:
+        out = await asyncio.wait_for(asyncio.to_thread(_convert), timeout=OFFICE_PREVIEW_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Preview took too long")
+    except op.OfficePreviewError as exc:
+        logger.info("office preview refused for %s: %s", target, exc)
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:  # noqa: BLE001 — never leak parser internals to the client
+        logger.warning("office preview failed for %s", target, exc_info=True)
+        raise HTTPException(status_code=422, detail="Could not read this file")
+    if format == "html":
+        # The document is shown in a sandbox WITHOUT scripts; CSP repeats that.
+        return Response(content=out, media_type="text/html; charset=utf-8",
+                        headers={"Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+                                 "X-Content-Type-Options": "nosniff"})
+    return out
 
 
 @router.get("/workspace/file/meta")
