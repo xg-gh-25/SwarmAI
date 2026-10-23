@@ -71,6 +71,10 @@ export const HIGHLIGHT_MAX_CHARS = 100_000;
  */
 export const HIGHLIGHT_DEBOUNCE_MS = 150;
 
+/** Panel only: bottom padding of every content scroll layer, so the last lines
+ *  scroll clear of the floating bar (a ~30px group + 10px inset + breathing room). */
+export const PANEL_FLOAT_PAD = 56;
+
 /** Whether synchronous main-thread text processing (highlight/diff/search) is
  *  safe for content of this length. Pure — exported for testing. */
 export function shouldProcessSync(contentLength: number): boolean {
@@ -376,6 +380,8 @@ interface DiffViewProps {
   getCommentForDiffIndex?: (index: number) => ReviewComment | undefined;
   /** Comment being edited (for existing comment editing). */
   editingComment?: ReviewComment | null;
+  /** Extra scroll room at the end (the panel's floating bar covers the bottom). */
+  bottomPad?: number;
 }
 
 function DiffView({
@@ -388,6 +394,7 @@ function DiffView({
   onCancelPopover,
   getCommentForDiffIndex,
   editingComment,
+  bottomPad,
 }: DiffViewProps) {
   const maxOld = lines.reduce((m, l) => Math.max(m, l.oldLineNumber ?? 0), 0);
   const maxNew = lines.reduce((m, l) => Math.max(m, l.newLineNumber ?? 0), 0);
@@ -411,6 +418,7 @@ function DiffView({
       ref={scrollRef}
       onScroll={handleDiffScroll}
       className="absolute inset-0 m-0 overflow-auto font-mono text-sm leading-6 bg-[var(--color-background)]"
+      style={bottomPad ? { paddingBottom: bottomPad } : undefined}
       data-testid="diff-view"
     >
       {lines.map((line, i) => {
@@ -1409,12 +1417,16 @@ export default function FileEditorCore({
   ) : null;
 
   // ── Panel bar (Super Canvas, docs/design/super-canvas.md commit 3) ──
-  // The panel has no header or footer: one borderless strip at the bottom of the
-  // card holds a floating group on the left (one Preview / Source / Changes control,
+  // The panel has no header or footer: the controls FLOAT over the bottom of the
+  // content — a raised group on the left (one Preview / Source / Changes control,
   // Review, Open, Attach) and Save on the right, shown only while there are unsaved
-  // edits. No Reload (the editor reloads itself on an agent write and when the window
+  // edits. Every scroll layer of the content gets the same `floatPad` bottom padding
+  // (textarea, highlight and search overlays, previews, diff), so the last lines
+  // scroll clear of the bar and the synced layers keep one scroll height. The
+  // gutter needs none: it positions from scrollTop. No Reload (the editor reloads itself on an agent write and when the window
   // comes back), no Copy path (each Canvas list row has it), no Close (the list is
   // the file selector).
+  const floatPad = iconOnly ? { paddingBottom: PANEL_FLOAT_PAD } : undefined;
   const hasPreview = isMarkdown || isSvg;
   const previewOn = isMarkdown ? showMarkdownPreview : showSvgPreview;
   const view: 'preview' | 'source' | 'changes' = showDiff ? 'changes' : hasPreview && previewOn ? 'preview' : 'source';
@@ -1431,8 +1443,11 @@ export default function FileEditorCore({
     ['changes', 'Changes'] as const,
   ];
   const panelBar = (
-    <div className="flex items-center gap-2 h-10 px-2.5 shrink-0" data-testid="editor-panel-bar">
-      <div className="editor-float-group" role="toolbar" aria-label="File view and actions">
+    <div
+      className="absolute inset-x-0 bottom-0 z-[3] flex items-end gap-2 px-2.5 pb-2.5 pointer-events-none"
+      data-testid="editor-panel-bar"
+    >
+      <div className="editor-float-group pointer-events-auto" role="toolbar" aria-label="File view and actions">
         <div role="radiogroup" aria-label="View" className="flex items-center gap-px">
           {views.map(([id, label]) => (
             <button
@@ -1460,16 +1475,21 @@ export default function FileEditorCore({
         {reviewBtn}
         {openExternalBtn}
         {attachBtn}
-      </div>
-      {syncDisabled && (
-        <span
-          className="text-[11px] text-[var(--color-warning,#d97706)] truncate"
+        {syncDisabled && (
+          <span
+            className="px-1.5 text-[11px] text-[var(--color-warning,#d97706)] whitespace-nowrap"
           title="Syntax highlighting, search, and diff are disabled on large files to keep the editor responsive."
-          data-testid="large-file-notice"
-        >
-          Large file
-        </span>
-      )}
+            data-testid="large-file-notice"
+          >
+            Large file
+          </span>
+        )}
+        {showDiff && review.comments.length === 0 && (
+          <span className="px-1.5 text-[11px] text-[var(--color-text-muted)] whitespace-nowrap" data-testid="diff-comment-hint">
+            Click a line to comment
+          </span>
+        )}
+      </div>
       <span className="flex-1" />
       {hasUnsavedEdits && !readonly && (
         <Button
@@ -1479,6 +1499,7 @@ export default function FileEditorCore({
           isLoading={isSaving}
           disabled={showDiff}
           title={showDiff ? 'Back to Source or Preview to save' : 'Save (⌘S)'}
+          className="pointer-events-auto shadow-[0_2px_8px_rgba(0,0,0,0.18)]"
           data-testid="file-editor-save"
         >
           Save
@@ -1493,7 +1514,7 @@ export default function FileEditorCore({
         ref={rootRef}
         className={iconOnly
           // Panel: the Canvas content card is the frame; no second card inside it.
-          ? 'bg-[var(--color-card)] flex flex-col h-full w-full overflow-hidden'
+          ? 'relative bg-[var(--color-card)] flex flex-col h-full w-full overflow-hidden'
           : 'bg-[var(--color-card)] border border-[var(--color-border)] shadow-2xl flex flex-col h-full w-full rounded-xl overflow-hidden'}
         onMouseDown={(e) => e.stopPropagation()}
         data-testid="file-editor-core"
@@ -1695,11 +1716,12 @@ export default function FileEditorCore({
                 onCancelPopover={handleDiffCancelPopover}
                 getCommentForDiffIndex={getCommentForDiffIndex}
                 editingComment={editingDiffComment}
+                bottomPad={floatPad?.paddingBottom}
               />
             </div>
           ) : showMarkdownPreview ? (
             shouldProcessSync(content.length) ? (
-              <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]">
+              <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]" style={floatPad}>
                 <MarkdownRenderer
                   content={content}
                   className="canvas-doc max-w-4xl mx-auto"
@@ -1715,6 +1737,7 @@ export default function FileEditorCore({
               // to edit). Mirrors the edit path's syncDisabled degradation.
               <div
                 className="flex-1 relative overflow-auto bg-[var(--color-background)]"
+                style={floatPad}
                 data-testid="large-md-preview-fallback"
               >
                 <div className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0">
@@ -1728,7 +1751,7 @@ export default function FileEditorCore({
             )
           ) : showSvgPreview ? (
             shouldProcessSync(content.length) ? (
-              <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)] flex items-center justify-center">
+              <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)] flex items-center justify-center" style={floatPad}>
                 <img
                   className="max-w-full max-h-full w-auto h-auto"
                   src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`}
@@ -1743,6 +1766,7 @@ export default function FileEditorCore({
               // never lands here — canPreviewInitial routes big svg to edit).
               <div
                 className="flex-1 relative overflow-auto bg-[var(--color-background)]"
+                style={floatPad}
                 data-testid="large-svg-preview-fallback"
               >
                 <div className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0">
@@ -1795,7 +1819,7 @@ export default function FileEditorCore({
                     'bg-[var(--color-background)]',
                     '[word-break:break-all]'
                   )}
-                  style={{ tabSize: 4 }}
+                  style={{ tabSize: 4, ...floatPad }}
                   aria-hidden="true"
                 />
                 {/* Diff highlight overlay — shows green border on changed lines after
@@ -1879,7 +1903,7 @@ export default function FileEditorCore({
                       'pointer-events-none z-[1]',
                       '[word-break:break-all]'
                     )}
-                    style={{ scrollBehavior: 'auto', tabSize: 4 }}
+                    style={{ scrollBehavior: 'auto', tabSize: 4, ...floatPad }}
                     aria-hidden="true"
                   >
                     {content.split('\n').map((line, lineIdx) => {
@@ -1935,7 +1959,7 @@ export default function FileEditorCore({
                     '[word-break:break-all]',
                     readonly && 'cursor-default'
                   )}
-                  style={{ tabSize: 4 }}
+                  style={{ tabSize: 4, ...floatPad }}
                   spellCheck={false}
                   autoCapitalize="off"
                   autoCorrect="off"
@@ -1970,7 +1994,7 @@ export default function FileEditorCore({
         </div>
 
         {/* Diff review hint — shown when in diff mode with no comments yet */}
-        {showDiff && review.comments.length === 0 && (
+        {!iconOnly && showDiff && review.comments.length === 0 && (
           <div className="flex items-center gap-2 px-4 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-hover)]/50 shrink-0">
             <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">touch_app</span>
             <span className="text-xs text-[var(--color-text-muted)]">

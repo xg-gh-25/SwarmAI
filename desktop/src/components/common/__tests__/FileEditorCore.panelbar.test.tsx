@@ -2,8 +2,10 @@
  * FileEditorCore — panel vs modal chrome (Super Canvas commit 3,
  * docs/design/super-canvas.md).
  *
- * Panel (the Canvas): no header and no footer. One bottom strip holds a floating
- * group — a single Preview / Source / Changes view switch, Review, Attach — and a
+ * Panel (the Canvas): no header and no footer. The controls FLOAT over the bottom
+ * of the content (absolutely positioned, not a strip in the layout), and every
+ * content scroll layer gets PANEL_FLOAT_PAD bottom padding so the last lines scroll
+ * clear of them. The floating group — a single Preview / Source / Changes view switch, Review, Attach — and a
  * Save button that exists only while there are unsaved edits. No Reload, Copy path,
  * mode toggle or Close. Modal: the labelled header and footer are unchanged and
  * there is no panel strip.
@@ -12,7 +14,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
-import FileEditorCore from '../FileEditorCore';
+import FileEditorCore, { PANEL_FLOAT_PAD } from '../FileEditorCore';
 
 vi.mock('../../../services/api', () => ({
   default: { get: vi.fn().mockResolvedValue({ data: {} }), put: vi.fn(), post: vi.fn() },
@@ -71,6 +73,38 @@ describe('panel chrome', () => {
     fireEvent.change(screen.getByTestId('file-editor-textarea'), { target: { value: 'const x = 2;\n' } });
     fireEvent.click(screen.getByTestId('file-editor-save'));
     expect(onSave).toHaveBeenCalledWith('const x = 2;\n');
+  });
+});
+
+describe('the bar floats over the content', () => {
+  const pad = (el: Element) => (el as HTMLElement).style.paddingBottom;
+
+  it('is positioned over the content, not laid out below it', () => {
+    render(<FileEditorCore {...ts} variant="panel" />);
+    const bar = screen.getByTestId('editor-panel-bar');
+    expect(bar.className).toMatch(/\babsolute\b/);
+    expect(bar.className).toContain('bottom-0');
+    expect(bar.className).toContain('pointer-events-none'); // only its buttons take clicks
+  });
+
+  it('source view: textarea and highlight layer share the same end padding', () => {
+    render(<FileEditorCore {...ts} variant="panel" />);
+    expect(pad(screen.getByTestId('file-editor-textarea'))).toBe(`${PANEL_FLOAT_PAD}px`);
+    expect(pad(screen.getByTestId('editor-highlight-layer'))).toBe(`${PANEL_FLOAT_PAD}px`);
+  });
+
+  it('preview and diff views get it too; diff shows the comment hint in the bar', () => {
+    const { container } = render(<FileEditorCore {...md} variant="panel" committedContent="# old\n" />);
+    const preview = container.querySelector('.canvas-doc')!.parentElement!;
+    expect(pad(preview)).toBe(`${PANEL_FLOAT_PAD}px`);
+    fireEvent.click(screen.getByTestId('editor-view-changes'));
+    expect(pad(screen.getByTestId('diff-view'))).toBe(`${PANEL_FLOAT_PAD}px`);
+    expect(screen.getByTestId('diff-comment-hint')).toBeTruthy();
+  });
+
+  it('the modal adds no end padding', () => {
+    render(<FileEditorCore {...ts} variant="modal" />);
+    expect(pad(screen.getByTestId('file-editor-textarea'))).toBe('');
   });
 });
 

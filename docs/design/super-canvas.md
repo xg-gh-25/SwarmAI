@@ -65,17 +65,22 @@ As built (panel variant only; `FileEditorModal` and the modal FileViewer unchang
 
 - `FileViewer`'s file header row is gone for every type; so is `crumbOf`.
 - `FileEditorCore` (text / md / svg) has no header and no footer in the panel.
-  One borderless 40px strip at the bottom of the card holds `panelBar`: a raised
-  group (`.editor-float-group`) with ONE Preview / Source / Changes control
-  (radiogroup; Preview only for md / svg; Changes disabled with nothing to
-  compare), Review, Open externally (html / svg / pdf / xml only) and Attach; a
-  "Large file" notice when highlighting is off; Save on the right, rendered only
-  while there are unsaved edits (disabled in Changes). Its root drops its own
-  border / radius / shadow, the Canvas card is the frame.
-  - Deviation: the group sits in that strip instead of over the content with
-    52px padding. The editor scrolls through six synced layers (textarea, highlight
-    overlay, gutter, previews, diff); padding each to keep them aligned is fragile,
-    and the strip costs the same height without ever covering a line.
+  `panelBar` FLOATS over the bottom of the content (absolutely positioned,
+  `pointer-events: none` except its buttons): a raised group
+  (`.editor-float-group`) with ONE Preview / Source / Changes control (radiogroup;
+  Preview only for md / svg; Changes disabled with nothing to compare), Review,
+  Open externally (html / svg / pdf / xml only), Attach, and inline notes ("Large
+  file"; "Click a line to comment" in Changes, which replaces the modal's hint row);
+  Save on the right, rendered only while there are unsaved edits (disabled in
+  Changes). Its root drops its own border / radius / shadow, the Canvas card is the
+  frame.
+  - Every content scroll layer gets `PANEL_FLOAT_PAD` (56px) bottom padding: the
+    textarea, the highlight and search overlays (so they keep the textarea's scroll
+    height), the markdown / svg previews and their large-file fallbacks, and the
+    diff view. The gutter positions from scrollTop and needs none. The last lines
+    scroll clear of the bar; mid-scroll, content passes under it.
+  - (First landed as a 40px strip below the content in e6802e60e; changed to float
+    at XG's request the same day.)
   - Reload: dropped for editor types (they reload on an agent write via
     swarm:file-changed and on window focus). Non-editor renderers (html, image,
     pdf, csv, media) reload on an agent write but not on an outside edit, so their
