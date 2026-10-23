@@ -320,13 +320,13 @@ export default function TerminalPanel() {
 
       <div className="terminal-card flex flex-col flex-1 min-h-0">
       {/* header */}
-      <div className="flex items-center h-10 gap-1.5 px-2.5 border-b border-[var(--color-border)] text-[12.5px] flex-shrink-0">
+      <div className="flex items-center h-10 gap-1.5 px-2.5 border-b border-[var(--color-border)] text-[12px] flex-shrink-0">
         <div className="relative flex items-center">
           <div
             role="tablist"
             aria-label="Terminal location"
             data-testid="terminal-locations"
-            className="flex items-center gap-0.5 p-[3px] rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)]"
+            className="flex items-center gap-0.5 p-[3px] rounded-lg bg-[color-mix(in_srgb,var(--color-bg)_45%,var(--color-card))]"
           >
             {segments.map((seg) => {
               const on = seg.key === current.key;
@@ -343,7 +343,7 @@ export default function TerminalPanel() {
                   onClick={() => selectSegment(seg)}
                   className={`flex items-center gap-1.5 h-[26px] px-2.5 rounded-md max-w-[200px] transition-colors ${
                     on
-                      ? 'bg-[var(--color-card)] text-[var(--color-text)] shadow-sm ring-1 ring-[var(--color-border)]'
+                      ? 'bg-[var(--color-hover)] text-[var(--color-text)]'
                       : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
                   }`}
                 >

@@ -78,6 +78,17 @@ describe('TerminalTab selection', () => {
   });
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+  it('text is eased toward the card, not full --color-text; bold is 500 (no glare)', async () => {
+    await mount();
+    const theme = term!.opts.theme as Record<string, string>;
+    // jsdom has no CSS vars: the dark fallbacks #e6edf3 on #1a1f2b, mixed 80/20
+    expect(theme.background).toBe('#1a1f2b');
+    expect(theme.foreground).toBe('#bdc4cb');
+    expect(theme.brightWhite).toBe('#cdd9e5');
+    expect(term!.opts.fontWeightBold).toBe(500);
+    expect(term!.opts.lineHeight).toBe(1.2);
+  });
+
   it('⌥-drag selects in mouse-mode programs; WebGL renders, a lost context falls back', async () => {
     await mount();
     expect(term!.opts.macOptionClickForcesSelection).toBe(true);

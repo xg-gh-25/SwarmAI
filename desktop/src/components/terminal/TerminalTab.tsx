@@ -29,15 +29,15 @@ interface TerminalTabProps {
 }
 
 // ANSI palettes per app theme. Background / foreground / cursor come from the app's
-// own CSS variables at runtime (themeFor), so the terminal surface is the app surface;
-// the 16 ANSI colours are tuned per theme for contrast on it (GitHub dark / light).
-// Once the shell has a colour-capable $TERM (Rust pty_spawn), ls/git/errors emit
-// these codes.
+// own CSS variables at runtime (themeFor), so the terminal surface is the app surface.
+// Dark is GitHub's "dark dimmed" palette (XG 2026-10-23: the full-saturation GitHub
+// dark set glared on the card); light is GitHub light. Once the shell has a
+// colour-capable $TERM (Rust pty_spawn), ls/git/errors emit these codes.
 const DARK_ANSI = {
-  black: '#484f58', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
-  blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4',
-  brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364', brightYellow: '#e3b341',
-  brightBlue: '#79c0ff', brightMagenta: '#d2a8ff', brightCyan: '#56d4dd', brightWhite: '#f0f6fc',
+  black: '#545d68', red: '#f47067', green: '#57ab5a', yellow: '#c69026',
+  blue: '#539bf5', magenta: '#b083f0', cyan: '#39c5cf', white: '#909dab',
+  brightBlack: '#636e7b', brightRed: '#ff938a', brightGreen: '#6bc46d', brightYellow: '#daaa3f',
+  brightBlue: '#6cb6ff', brightMagenta: '#dcbdfb', brightCyan: '#56d4dd', brightWhite: '#cdd9e5',
 };
 const LIGHT_ANSI = {
   black: '#24292f', red: '#cf222e', green: '#116329', yellow: '#7d4e00',
@@ -69,19 +69,37 @@ function loadWebgl(t: Terminal, gone: () => boolean): void {
     .catch((e) => console.info('terminal: WebGL renderer unavailable, using DOM', e));
 }
 
-/** The xterm theme for the current app theme, its surface read from CSS variables. */
+/** *fg* mixed toward *bg* (weight = share of fg), as #rrggbb; *fg* unchanged when
+ *  either is not a #rgb / #rrggbb colour. xterm's theme takes plain colours only
+ *  (no color-mix()), so the mix is done here. */
+function mix(fg: string, bg: string, weight: number): string {
+  const rgb = (c: string): number[] | null => {
+    const h = c.trim().replace(/^#/, '');
+    const full = h.length === 3 ? h.split('').map((x) => x + x).join('') : h;
+    return /^[0-9a-f]{6}$/i.test(full) ? [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)) : null;
+  };
+  const a = rgb(fg);
+  const b = rgb(bg);
+  if (!a || !b) return fg;
+  return `#${a.map((x, i) => Math.round(x * weight + b[i] * (1 - weight)).toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** The xterm theme for the current app theme, its surface read from CSS variables.
+ *  Output text is the app's text colour eased toward the card (XG 2026-10-23: full
+ *  --color-text on the dark card glared); the cursor keeps the accent. */
 function themeFor(dark: boolean): ITheme {
   const css = typeof document === 'undefined' ? null : getComputedStyle(document.documentElement);
   const v = (name: string, fallback: string) => css?.getPropertyValue(name).trim() || fallback;
   // The card the terminal sits in (TerminalPanel .terminal-card), so the text area
   // and the card are one surface.
   const background = v('--color-card', dark ? '#1a1f2b' : '#ffffff');
+  const text = v('--color-text', dark ? '#e6edf3' : '#1f2328');
   return {
     background,
-    foreground: v('--color-text', dark ? '#e6edf3' : '#1f2328'),
+    foreground: mix(text, background, dark ? 0.8 : 0.88),
     cursor: v('--color-primary', dark ? '#58a6ff' : '#0969da'),
     cursorAccent: background,
-    selectionBackground: dark ? '#2f5178' : '#b6d3f5',
+    selectionBackground: dark ? '#2b4466' : '#b6d3f5',
     ...(dark ? DARK_ANSI : LIGHT_ANSI),
   };
 }
@@ -190,13 +208,14 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
         cursorBlink: true,
         fontFamily:
           "'SF Mono', Menlo, 'JetBrains Mono', Monaco, 'Courier New', monospace",
-        // 12px with a little leading (XG 2026-10-23: 11px / 1.0 read as cramped);
-        // 1.3 wasted ~30% of every row, 1.15 keeps rows distinct.
+        // 12px with some leading (XG 2026-10-23: 11px / 1.0 read as cramped, then
+        // the text glared): 1.2 lets rows breathe; bold is 500, not 600, so bold
+        // output (git headings, prompts) does not shout.
         fontSize: 12,
-        lineHeight: 1.15,
+        lineHeight: 1.2,
         letterSpacing: 0,
         fontWeight: 400,
-        fontWeightBold: 600,
+        fontWeightBold: 500,
         theme: themeFor(isDark()),
         convertEol: false,
         scrollback: 10000,
