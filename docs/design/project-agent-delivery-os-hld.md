@@ -404,7 +404,9 @@ recovery decisions never require a model pass.
 ### 6.5 Pipeline Run and Run Attempt
 
 A Pipeline Run is the delivery unit. It pins one Requirement, Definition revision, Context
-Snapshot, repository base, Pipeline protocol revision, and evidence contract. Current
+Snapshot, repository base, Pipeline protocol revision, and evidence contract. In the
+execution-plane V1 a Chat-inline Run is the exception: it reads the live DDD and only
+records its digest (`pipeline-run-conductor-v1.md` §5.2). Current
 profile sequences remain owned by the Pipeline protocol registry; the HLD never maintains a
 second stage list.
 
@@ -524,9 +526,9 @@ from observed execution state.
 | Store | Writer | Canonical facts |
 |---|---|---|
 | **Host Command / Control Ledger** | Host Conductor | Intent, Run Graph, Host-local Run assignment and lease, Human answers, result acceptance, landing, latest Eval report reference. For remote Runs only a cursor-backed projection of the Central record. |
-| **Central Coordination Store** | Central Service | Remote Run requests, assignment, Attempt, lease epoch and worker incarnation, decisions, node registry, published DDD and Project Agent revisions, event mirror. The only owner of remote fencing. |
+| **Central Coordination Store** | Central Service | Remote Run requests, assignment, Attempt, lease epoch, worker incarnation and slot accounting, node registry, published DDD and Project Agent revisions, event mirror and Trace cursors. Decisions only as transport: answer commands signed by the Host, accepted or rejected against the current Attempt. The only owner of remote fencing. |
 | **Hive Execution Store** | Assigned Hive | Accepted dispatch, worker session, Pipeline events, pending decision, sealed result manifest. |
-| **Transfer Blob Store** | Central-verified uploads (S3) | DDD snapshots, result bundles and the organization's copy of every Run's record, read by Trace, Eval and later consumers (`pipeline-run-conductor-v1.md` §4.4, §4.5). Never a step in the Run; nodes keep their original data. |
+| **Transfer Blob Store** | Central-verified uploads (S3) | Canonical, byte-exact DDD snapshots, result bundles and the organization's copy of every Run's record (`blobs/`, readable only by verifying and landing roles), plus redacted projections that Trace, Eval and later consumers read (`views/`) (`pipeline-run-conductor-v1.md` §4.3.2, §4.4, §4.5). Never a step in the Run; nodes keep their original data. |
 
 Transport uses at-least-once delivery with idempotent effects:
 
@@ -607,11 +609,13 @@ missing event ranges · unknown usage ranges
 projection digest · immutable source references
 ```
 
-Required control and Pipeline cursors must be complete before the terminal factual projection
-is sealed, and that includes every required Run's terminal REFLECT outcome. A Flow may expose
-an earlier **provisional** projection for live status, but the immutable, Eval-eligible seal
-is created only after protocol completion. Optional telemetry may be incomplete without
-blocking delivery; its measures are `unknown`. Data arriving after the cutoff never mutates a
+Required control and Pipeline cursors are checked before the terminal factual projection
+is sealed, and the seal waits for every required Run's terminal REFLECT outcome. A Flow may
+expose an earlier **provisional** projection for live status; the immutable, Eval-eligible
+seal is created only after protocol completion. A seal whose required cursors have a gap is
+still immutable but marked `incomplete`, and every measure that needs the missing range is
+`UNKNOWN` (`pipeline-run-conductor-v1.md` §4.5.1). Optional telemetry may be incomplete
+without blocking delivery; its measures are `unknown`. Data arriving after the cutoff never mutates a
 sealed revision. It creates a superseding Trace revision with its own digest. An existing Eval
 report remains bound to its original Trace revision, and a new revision may trigger a
 replacement offline Eval report.
@@ -879,7 +883,8 @@ future Flows consume the new Brain.
 
 ### 14.1 Run Isolation
 
-- Every Run pins Definition, Context, base, protocol and evidence-contract digests.
+- Every managed Run (background or remote) pins Definition, Context, base, protocol and
+  evidence-contract digests; a Chat-inline Run pins all but Context, which it records.
 - Every Run has one active owner lease; a higher epoch fences stale executors.
 - Every Attempt has an isolated worktree.
 - Parallel Runs never share a writer or writable worktree.
