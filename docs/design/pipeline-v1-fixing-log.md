@@ -2,7 +2,7 @@
 title: Pipeline v1 fixing log
 date: 2026-10-22
 created: 2026-10-22
-updated: 2026-10-22
+updated: 2026-10-23
 project: SwarmAI
 status: OPEN
 ---
@@ -644,3 +644,22 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - **MED，用户自己点了 Cancel 的 run 也算 needs you，30 天里一直挂着：** `needs_you` 新增 reason 参数，`cancelled_by_user`（`pm.USER_CANCEL_REASON`）不算。router 的 Cancel 也改为使用这个常量。
 - **MED，所有 Need You 项的标题都是 "Paused"，dispatch 只写一句 needs you：** 改为按状态区分标题（Decision needed / Stopped / Worktree unavailable / Not driven / Abandoned），每种状态都写清楚该做什么，并带上 `owner_session_id`。
 - **LOW，测试 fixture 里还在用 `cancelled`：** 已删除。
+
+## 28. R6：清理残留
+
+**改了什么：**
+- **删除：** `skills/s_autonomous-pipeline/scripts/confidence_score.py` 及其两份测试，`tests/test_advance_continuation.py`。后者里仍然成立的两个测试（REFLECT 卡片不给完成命令、stop hook 保持被动）移到 `test_pipeline_v1_cards.py`。
+- **活跃状态：** `run_index.LIVE_STATUSES` 和 `run_worktree._LIVE` 删除旧状态 `running`，等于 v1 lifecycle 的非终态集合（新测试锁住两者相等）。
+- **删掉 `running` 后测出的真 bug：** `own_isolated_run` 和 `worktree_write_gate._state` 判断"还没建 worktree 的隔离 run 仍占着本 session 的写入"时只认 `status == "running"`，v1 run 永远不满足。改为 `active` / `reflecting`。`awaiting_human` 不算：回答后会回到 `active`；已有 worktree 的 run 一直受保护。
+- **注释和文档：** backend/core、scripts、hooks、desktop/src 中描述旧命令（`stage-start`、`run-create`、`run-commit`、`session_link_stamper` 等）的注释改为描述 v1 现状。AGENTS.md 的 `run_owner_gate` 段按代码重写。pollinate 文档里"artifact_cli 在 DELIVER 强制运行 validator"的说法早已不成立，改为 agent 自己运行。`docs/Autonomous-Pipeline-Design.md` 标为 superseded，只作历史保留。
+
+**审查（0afcf6fd，0 HIGH + 5 MED + 4 LOW），一次修完：** 五处 MED 都是读旧 stage 记录格式（列表）的代码，对 v1 run（`stages` 是 `{stage: state}` 映射）永远不生效或直接报错。
+- **MED，`run_worktree._deliver_done`：** 隔离 run 交付后 24 小时清理从不触发，worktree 要等 14 天超时。改为读 `stages["deliver"]` 是否为 completed/degraded。
+- **MED，`context_health_hook._auto_cultivate_pipeline_lessons`：** 对 v1 run 调用 `.get()` 时在字符串上报错，每个 v1 run 都会让这一遍中断。v1 的 REFLECT 已由 `run_protocol.reflect_job` 写入 DDD 和提案队列，这条旧路径属于重复，连同它独占的 `_extract_lessons_to_memory`、`ddd_cultivation.cultivate_from_reflect` 及其测试一起删除。`content_floor` 和 memory lifecycle 的两个测试保留。
+- **MED，`_set_verified_from_pipeline_runs`：** 同样把映射当列表读；还把"已处理"标记写回 run.json，而 run.json 是 engine 会重写的 projection。改为读 v1 映射，已处理的 run id 记在 `.artifacts/maturity_verified_runs.json`。
+- **MED，`adversarial_meta`：** 读旧 deliver 记录和 artifact_id，v1 run 全部被跳过，降级告警永远不会触发。改为读 `run_audit.json`：只统计派过 review expert 的已完成 run，按创建时间排序，统计末尾连续 0 findings 的 run 数。
+- **MED，月报：** 从旧 stage 记录读 lessons，从已删除的 delivery artifact 读 confidence，对 v1 一直是 0。改为从 `artifacts/reflect.json` 读 lessons，从 `run_audit.json` 读 push-ready 数；confidence 指标随旧 pipeline 一起删除。
+- **LOW，`ddd_cultivation.derive_gate2_outcome` / `stamp_trust_from_run`：** 读旧 stage 的 `gate2_outcome`，v1 run 永远拿不到 trust。改为读 v1 `run_audit.json`，fail-closed，以下条件全部满足才算 pass：completed、landing 为 `landed`（human override 不算）、至少派过一个 expert、quality verdict 为 PASS。quality BLOCK 算 block，其余都是 n/a。旧格式 run.json 明确测试为 n/a。
+- **LOW，`daily_activity_hook._session_run_evidence` 的 `files_touched` 分支：** 删除，返回值改为 `(shas, ids)`。
+- **LOW，`pipeline_baseline`：** 删除对 `"complete"` 和 `completed_at` 的兼容。
+- **LOW，AGENTS.md：** takeover 只发生在 v1 的变更命令上；`pipeline_test.py` 只被注入 session id，owner 由它自己检查。已分开写。

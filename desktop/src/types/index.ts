@@ -370,7 +370,7 @@ export interface PipelineStageContent {
   /** ISO time of the transition (an `in_progress` block: when the stage started). */
   at: string;
   /** The run document this stage wrote (REQUIREMENTS / DESIGN_SPEC / REVIEW,
-   *  backend/core/run_docs.py) — on a completed row only. Kept for older rows: `docs`
+   *  backend/core/pipeline_stage_events.py STAGE_DOCS) — on a completed row only. Kept for older rows: `docs`
    *  lists every document (DELIVER: REVIEW, FIXING_SPEC, REPORT). */
   doc?: PipelineDocRef | null;
   docs?: PipelineDocRef[] | null;
@@ -381,7 +381,7 @@ export interface PipelineDocRef {
   name: string;
   path: string;
   absolutePath: string;
-  /** The document's first section (run_docs.doc_excerpt): what the card shows folded. */
+  /** The document's first section (pipeline_stage_events.doc_excerpt): what the card shows folded. */
   excerpt?: string;
 }
 

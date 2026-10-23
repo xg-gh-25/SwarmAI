@@ -1,7 +1,7 @@
 """
 Tests for DDD Cultivation Engine — Tiered Autonomy Model.
 
-Tests: model → filter → auto-apply → changelog → escalation → cultivate_from_reflect.
+Tests: model → filter → auto-apply → changelog → escalation.
 """
 
 import json
@@ -743,58 +743,6 @@ class TestLogApplication:
             entry = json.loads(lines[0])
             assert entry["action"] == "applied"
             assert entry["target_doc"] == "TECH.md"
-
-
-class TestCultivateFromReflect:
-    """Test the one-call entry point."""
-
-    def test_trust_passed_run_auto_applies_into_any_zone(self):
-        """Trust cutover (run_8d5fe9d1, AC11): a Gate-2-PASSED source run auto-applies
-        into ANY doc — including a formerly-PROTECTED zone. Trust, not doc, decides."""
-        from core.ddd_cultivation import cultivate_from_reflect
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir)
-            doc = project_dir / "IMPROVEMENT.md"
-            doc.write_text("# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n")
-            # Stamp trust: a passed adversarial run.json for run_e2e
-            run_dir = project_dir / ".artifacts" / "runs" / "run_e2e"
-            run_dir.mkdir(parents=True)
-            (run_dir / "run.json").write_text(json.dumps(
-                {"stages": [{"stage": "adversarial", "status": "completed",
-                             "gate2_outcome": "pass"}]}))
-
-            lessons = [
-                "SMOKE caught 2 runtime crashes that unit tests missed — highest ROI check",
-            ]
-            result = cultivate_from_reflect(lessons, "run_e2e", "SwarmAI", project_dir)
-
-            assert result["applied"] == 1  # trust=passed → auto-applied
-            content = doc.read_text()
-            assert "SMOKE caught 2 runtime crashes" in content
-            assert "auto-cultivated" in content
-
-    def test_untrusted_run_judge_suspect_discards_not_auto(self):
-        """AUTONOMY-FIRST (run_86f44f35): a lesson from a run with NO Gate-2 pass → trust=n/a
-        → the judge decides. A judge-suspect → DISCARD (never auto, never a review queue)."""
-        import unittest.mock as m
-        from core.ddd_cultivation import cultivate_from_reflect
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir)
-            doc = project_dir / "IMPROVEMENT.md"
-            doc.write_text("# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n")
-
-            lessons = ["SMOKE caught 2 runtime crashes that unit tests missed — highest ROI check"]
-            with m.patch("core.ddd_cultivation.self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
-                result = cultivate_from_reflect(lessons, "run_untrusted", "SwarmAI", project_dir)
-
-            assert result["applied"] == 0  # no trust + judge suspect → not auto
-            assert result["escalated"] == 0  # NO human queue (autonomy-first)
-            assert "SMOKE caught 2 runtime crashes" not in doc.read_text()  # not written
-            proposals = list((project_dir / ".artifacts" / "proposals").glob("*.json")) \
-                if (project_dir / ".artifacts" / "proposals").is_dir() else []
-            assert proposals == [], "autonomy-first: no review queue"
 
 
 class TestCultivateFromCorrections:

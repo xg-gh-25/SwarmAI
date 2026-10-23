@@ -93,7 +93,7 @@ _HOST_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
 # scan_context (run_03c40277, G5): UNLIKE the 4 host-path patterns above — which are
 # host-specific literals that leak on ANY destination — this pattern is a leak ONLY when
 # the destination LACKS a backend/ tree (a shipped PACKAGE). When the destination IS the
-# SwarmAI source repo (a REPORT-B committed by run-commit), `backend/skills/` is correct
+# SwarmAI source repo (a REPORT-B committed by a run landing), `backend/skills/` is correct
 # repo-relative content, NOT a leak. So `_scan_text` fires this pattern UNLESS
 # scan_context == "source-repo" (fail-closed: default/typo/unknown all scan strictly;
 # only the one known-safe value suppresses). Kept a SEPARATE module-level constant (not inside
@@ -305,7 +305,7 @@ def _scan_text(rel: str, text: str, *, external: bool, scan_context: str = "pack
                 findings.append(ScanFinding(rel, "host-path", m.group(0)[:60], i))
         # dev-command path (backend/skills|scripts/) — a leak ONLY for a shipped PACKAGE
         # (consumer has no backend/ tree); correct repo-relative content for a source-repo
-        # destination. Gated by scan_context so run-commit's REPORT-B is not false-flagged.
+        # destination. Gated by scan_context so a landed REPORT-B is not false-flagged.
         # FAIL-CLOSED (Gate-2 run_03c40277): suppress ONLY for the single known-safe value
         # "source-repo"; EVERY other value (default "package", a typo, an unknown future
         # context) runs the STRICT dev-command scan. An == "package" allowlist would

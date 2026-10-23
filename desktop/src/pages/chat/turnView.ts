@@ -861,7 +861,7 @@ function labelBash(cmd: string): Pick<StepLabel, 'verb' | 'object' | 'path' | 'c
     if (['python', 'python3', 'node', 'bash', 'sh', 'perl', 'ruby', 'deno'].includes(head)) {
       const script = nonFlag.find((a) => /\.[a-z]{1,4}$/i.test(a));
       if (script) {
-        // A subcommand right after the script (`artifact_cli.py run-update`) says what ran.
+        // A subcommand right after the script (`pipeline_v1.py land`) says what ran.
         const sub = args[args.indexOf(script) + 1];
         const subcommand = sub && /^[a-z][\w:-]*$/i.test(sub) && !looksLikePath(sub) ? ` ${sub}` : '';
         return { verb: 'run', object: `${basename(script)}${subcommand}` };

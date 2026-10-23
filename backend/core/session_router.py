@@ -127,11 +127,11 @@ async def _rehydrate_pipeline_run_id(ctx: dict, session_id: str) -> None:
     """Keystone (R1.5a-fix): restore ``_active_pipeline_run_id`` into the session
     hook-ctx on a RESUMED turn, so adversarial markers stay run-attributable.
 
-    THE BUG: ``_active_pipeline_run_id`` is set ONLY by the run-create PostToolUse
-    hook (``runtime_hooks``). A resumed session never re-runs run-create → the ctx
+    THE BUG: ``_active_pipeline_run_id`` is set ONLY by the `pipeline_v1.py create` PostToolUse
+    hook (``runtime_hooks``). A resumed session never re-runs `pipeline_v1.py create` → the ctx
     key stays unset → markers get ``run_id=None`` and the D7 gate (and the compaction
     briefing) can't attribute them. The ``session_<sid>_run.map`` rendezvous written at
-    run-create was never read back into ctx (write-only dead state). This reads it back.
+    `pipeline_v1.py create` was never read back into ctx (write-only dead state). This reads it back.
 
     FRESHNESS, not presence (Gate-1 H1): ``_hook_session_context`` is unit-lifetime —
     it is NEVER reset across turns — so a session that ran run_A then resumes mid-run_B
@@ -146,7 +146,7 @@ async def _rehydrate_pipeline_run_id(ctx: dict, session_id: str) -> None:
     path; the ctx mutation stays on the loop (single-threaded, no ``await`` between
     the two key writes → the marker reader can never observe a half-updated pair).
 
-    Called at ctx construction (every send); runs BEFORE this turn's own run-create
+    Called at ctx construction (every send); runs BEFORE this turn's own `pipeline_v1.py create`
     hook could fire, so it only ever competes with a PRIOR turn's stale value, never a
     same-turn live write. Idempotent + fail-safe: a missing / corrupt / empty-run_id
     .map is a no-op and NEVER raises.
@@ -154,7 +154,7 @@ async def _rehydrate_pipeline_run_id(ctx: dict, session_id: str) -> None:
     KNOWN RESIDUAL (Gate-2 correctness HIGH, tracked as a follow-up — NOT fixed here):
     the ``.map`` is never deleted at run completion, so a session that finished run_A
     and then (post-eviction, empty ctx) runs an adversarial sub-agent before run_B's
-    run-create fires will re-hydrate the stale run_A. Blast radius is OVER-credit
+    `pipeline_v1.py create` fires will re-hydrate the stale run_A. Blast radius is OVER-credit
     (run_A's completed set gains an expert it didn't need) — it can only RELAX a
     future D7 check, never false-block a commit, and D7 is not yet live. A clean fix
     (run-completion .map invalidation, or a run-active guard) needs the project the
@@ -4561,9 +4561,9 @@ class SessionRouter:
             unit._hook_session_context = {"sdk_session_id": session_id}
         else:
             unit._hook_session_context["sdk_session_id"] = session_id
-        # Keystone (R1.5a-fix): a resumed session never re-runs run-create, so restore
+        # Keystone (R1.5a-fix): a resumed session never re-runs `pipeline_v1.py create`, so restore
         # _active_pipeline_run_id from the session_<sid>_run.map rendezvous here (every
-        # send, BEFORE this turn's own run-create hook could fire). Freshness-ordered +
+        # send, BEFORE this turn's own `pipeline_v1.py create` hook could fire). Freshness-ordered +
         # fail-safe — see _rehydrate_pipeline_run_id. Without it, resumed-session
         # adversarial markers get run_id=None and D7 can't attribute them. The .map
         # disk read is off-loop (asyncio.to_thread); the ctx mutate stays on the loop.

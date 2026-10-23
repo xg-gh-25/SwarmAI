@@ -26,7 +26,7 @@ silently half-converted corpus. So the decision to write is HUMAN-OWNED.
 SAFETY
 ------
 - **Dry-run is the DEFAULT.** Nothing is written without ``--apply``
-  (mirrors ``purge_garbage_runs.py``, the repo's convention for destructive scripts).
+  (the repo's convention for destructive scripts).
 - **Verified snapshot backup before any write.** ``--apply`` takes a
   ``Connection.backup`` snapshot (NOT ``shutil.copy2`` — the DB is WAL with live
   writers, so file copies tear), PROVES it with ``PRAGMA integrity_check``, chmods it

@@ -69,8 +69,8 @@ def _load_json_field(json_path: Path, field: str):
     a fast-path/legacy doc that initializes the key to [] must not hard-block a
     delivery that has real track output (adversarial review, HIGH).
     Top-level non-dict JSON (e.g. a bare list) returns None instead of crashing
-    — a raw AttributeError here is swallowed by artifact_cli's bare except and
-    would silently bypass the ENTIRE validator (adversarial review, CRITICAL)."""
+    — a raw AttributeError here would end the whole validator run without a
+    verdict (adversarial review, CRITICAL)."""
     if not json_path.exists():
         return None
     try:

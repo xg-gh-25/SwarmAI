@@ -35,10 +35,9 @@ from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
 
-# legacy running/paused plus every non-terminal Pipeline v1 status
-# (core.run_protocol.lifecycle.STATUSES - TERMINAL): sweeper and gates must never
-# treat a live v1 run as finished
-LIVE_STATUSES = ("running", "paused", "active", "awaiting_human", "reflecting")
+# every non-terminal Pipeline v1 status (core.run_protocol.lifecycle.STATUSES -
+# TERMINAL): sweeper and gates must never treat a live v1 run as finished
+LIVE_STATUSES = ("active", "awaiting_human", "paused", "reflecting")
 
 # What the nav shows and counts: runs active in the last 30 days (Gawan 2026-10-23:
 # older runs carry no meaning there). Safety reads ignore it and use runs().

@@ -2036,7 +2036,7 @@ def _strip_entries_by_line(content: str, start_lines: "set[int]") -> str:
 def collapse_stacked_metadata(content: str) -> str:
     """Collapse consecutive ``<!-- ref ... -->`` metadata lines to ONE per entry.
 
-    Heals the orphan-metadata bug: ``_extract_lessons_to_memory``'s off-by-one
+    Heals the orphan-metadata bug: the (since retired) ``_extract_lessons_to_memory``'s off-by-one
     splice inserted a new entry+meta BETWEEN an existing bullet and its meta,
     orphaning the existing meta as a 2nd consecutive metadata line.
     ``inject_entry_metadata`` is orphan-blind (consumes only the first meta), so

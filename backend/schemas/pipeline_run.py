@@ -200,8 +200,7 @@ class PipelineRunDetail(BaseModel):
         None, description=("What the run needs from the user: 'decision' (answer the "
                            "question), 'stopped' (Stop / tab closed; Resume), 'worktree' "
                            "(worktree unavailable; Resume retries), 'idle' (active but no "
-                           "session drives it; continue in its session), 'crash_residue' "
-                           "(pre-v1), else None"))
+                           "session drives it; continue in its session), else None"))
     decision: Optional[PipelineDecision] = Field(
         None, description="Pipeline v1: the pending human decision, when pause_kind is 'decision'")
     owner_session_id: Optional[str] = Field(

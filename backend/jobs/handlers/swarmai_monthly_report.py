@@ -151,63 +151,43 @@ def _collect_context_metrics() -> dict:
 
 
 def _collect_pipeline_metrics(month_start: datetime, month_end: datetime, project_name: str = "SwarmAI") -> dict:
-    """Pipeline: runs this month, confidence scores, stages."""
+    """Pipeline v1: runs completed this month, how many were push-ready
+    (``run_audit.json`` ``outcome.push_ready``), lessons recorded at REFLECT
+    (``artifacts/reflect.json``) and the profile mix."""
     runs_dir = PROJECTS_DIR / project_name / ".artifacts" / "runs"
+    out = {"runs_completed": 0, "push_ready": 0, "total_lessons": 0, "profiles": {}}
     if not runs_dir.exists():
-        return {"runs_completed": 0, "avg_confidence": 0, "total_lessons": 0}
+        return out
 
-    runs_completed = 0
-    confidences = []
-    total_lessons = 0
-    profiles = {}
+    def _read(path: Path):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
 
     for run_dir in runs_dir.iterdir():
-        if not run_dir.is_dir():
-            continue
-        run_json = run_dir / "run.json"
-        if not run_json.exists():
+        data = _read(run_dir / "run.json") if run_dir.is_dir() else None
+        if not isinstance(data, dict) or data.get("status") != "completed":
             continue
         try:
-            data = json.loads(run_json.read_text())
-            created = data.get("created_at", "")
-            if not created:
-                continue
-            ts = datetime.fromisoformat(created)
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            if month_start <= ts < month_end and data.get("status") == "completed":
-                runs_completed += 1
-                # Extract confidence from stages
-                for stage in data.get("stages", []):
-                    if isinstance(stage, dict) and stage.get("stage") == "reflect":
-                        lessons = stage.get("lessons", [])
-                        total_lessons += len(lessons)
-                profile = data.get("profile", "unknown")
-                profiles[profile] = profiles.get(profile, 0) + 1
-        except (json.JSONDecodeError, ValueError, TypeError):
+            ts = datetime.fromisoformat(str(data.get("created_at") or ""))
+        except ValueError:
             continue
-
-    # Try to get confidence from delivery artifacts
-    artifacts_dir = PROJECTS_DIR / project_name / ".artifacts"
-    for f in artifacts_dir.glob("delivery-*.json"):
-        try:
-            data = json.loads(f.read_text())
-            score = data.get("confidence_score")
-            if isinstance(score, dict):
-                confidences.append(score.get("score", 0))
-            elif isinstance(score, (int, float)):
-                confidences.append(score)
-        except (json.JSONDecodeError, TypeError):
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if not month_start <= ts < month_end:
             continue
-
-    avg_conf = sum(confidences) / len(confidences) if confidences else 0
-
-    return {
-        "runs_completed": runs_completed,
-        "avg_confidence": round(avg_conf, 1),
-        "total_lessons": total_lessons,
-        "profiles": profiles,
-    }
+        out["runs_completed"] += 1
+        audit = _read(run_dir / "run_audit.json")
+        if isinstance(audit, dict) and isinstance(audit.get("outcome"), dict) \
+                and audit["outcome"].get("push_ready") is True:
+            out["push_ready"] += 1
+        reflect = _read(run_dir / "artifacts" / "reflect.json")
+        lessons = reflect.get("lessons") if isinstance(reflect, dict) else None
+        out["total_lessons"] += len(lessons) if isinstance(lessons, list) else 0
+        profile = str(data.get("profile") or "unknown")
+        out["profiles"][profile] = out["profiles"].get(profile, 0) + 1
+    return out
 
 
 def _collect_cultivation_metrics(month_start: datetime, month_end: datetime) -> dict:
@@ -625,7 +605,7 @@ def _generate_monthly_report(
     # Build narrative
     highlights = []
     if pipe["runs_completed"] > 0:
-        highlights.append(f"{pipe['runs_completed']} pipeline runs (avg confidence {pipe['avg_confidence']}/12)")
+        highlights.append(f"{pipe['runs_completed']} pipeline runs ({pipe['push_ready']} push-ready)")
     if cult["applied"] > 0:
         highlights.append(f"{cult['applied']} lessons auto-cultivated into DDD")
     if git["commits"] > 0:
@@ -661,9 +641,10 @@ def _generate_monthly_report(
     lines.append(f"| **Context** | System prompt total | {ctx['total_tokens']:,} tok | {ctx_status} |")
 
     # Pipeline
-    pipe_status = "🟢" if pipe["avg_confidence"] >= 8 else ("🟡" if pipe["avg_confidence"] >= 6 else "🔴")
+    _ready = pipe["push_ready"] / pipe["runs_completed"] if pipe["runs_completed"] else 0
+    pipe_status = "🟢" if _ready >= 0.8 else ("🟡" if _ready >= 0.5 else "🔴")
     lines.append(f"| **Pipeline** | Runs completed | {pipe['runs_completed']} | {pipe_status} |")
-    lines.append(f"| | Avg confidence | {pipe['avg_confidence']}/12 | |")
+    lines.append(f"| | Push-ready | {pipe['push_ready']}/{pipe['runs_completed']} | |")
     lines.append(f"| | Lessons extracted | {pipe['total_lessons']} | |")
 
     # DDD Cultivation
@@ -799,7 +780,7 @@ def _generate_monthly_report(
     lines.append("### Autonomous Pipeline")
     lines.append("")
     lines.append(f"- Runs completed: {pipe['runs_completed']}")
-    lines.append(f"- Average confidence: {pipe['avg_confidence']}/12")
+    lines.append(f"- Push-ready: {pipe['push_ready']}/{pipe['runs_completed']}")
     if pipe.get("profiles"):
         profile_str = ", ".join(f"{k}: {v}" for k, v in pipe["profiles"].items())
         lines.append(f"- Profiles used: {profile_str}")

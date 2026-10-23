@@ -407,165 +407,6 @@ class TestDDDStaleness:
 # Auto-cultivation
 # --------------------------------------------------------------------------
 
-class TestAutoCultivation:
-    """Tests for _auto_cultivate_pipeline_lessons."""
-
-    def _make_run(self, workspace, project, run_id, *, lessons=None,
-                  cultivated=False, status="completed"):
-        """Create a run.json with a reflect stage."""
-        runs_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        stages = []
-        if lessons is not None:
-            reflect_stage = {"stage": "reflect", "status": "completed", "lessons": lessons}
-            if cultivated:
-                reflect_stage["cultivated"] = True
-            stages.append(reflect_stage)
-        run_data = {
-            "id": run_id,
-            "project": project,
-            "status": status,
-            "stages": stages,
-        }
-        (runs_dir / "run.json").write_text(json.dumps(run_data), encoding="utf-8")
-        return runs_dir / "run.json"
-
-    def test_inflight_run_not_consumed(self, hook, workspace):
-        """Gate-2 fix: a run whose status is non-terminal (running/paused) must
-        NOT be marked cultivated — else a mid-pipeline hook event consumes it,
-        HOLD-BACKs every MEMORY lesson as 'unqualified', and never retries after
-        the run completes (silently defeats the feature for actively-worked runs).
-        The run must be left un-cultivated so a later session re-processes it.
-        """
-        proj = workspace / "Projects" / "TestProject"
-        (proj / "IMPROVEMENT.md").write_text("# Lessons\n\n## What Worked\n\n- x\n")
-        run_file = self._make_run(
-            workspace, "TestProject", "run_inflight",
-            lessons=["Use nc -z instead of lsof for port checks on macOS"],
-            status="running",
-        )
-        hook._auto_cultivate_pipeline_lessons(workspace)
-        run_data = json.loads(run_file.read_text(encoding="utf-8"))
-        reflect_stage = next(s for s in run_data["stages"] if s["stage"] == "reflect")
-        assert "cultivated" not in reflect_stage, (
-            "an in-flight (status=running) run was consumed (cultivated=True) — "
-            "its MEMORY lessons are now permanently held back and never retried"
-        )
-
-    def test_cultivates_uncultivated_run(self, hook, workspace):
-        """Cultivates a completed run with reflect.lessons and no cultivated flag."""
-        # Create project with DDD docs (needed for cultivation target)
-        proj = workspace / "Projects" / "TestProject"
-        (proj / "IMPROVEMENT.md").write_text(
-            "# Lessons\n\n## What Worked\n\n- existing\n\n## What Failed\n\n- nothing\n"
-        )
-
-        run_file = self._make_run(
-            workspace, "TestProject", "run_abc123",
-            lessons=["Use nc -z instead of lsof for port checks"]
-        )
-
-        hook._auto_cultivate_pipeline_lessons(workspace)
-
-        # Verify cultivated:true was set
-        run_data = json.loads(run_file.read_text(encoding="utf-8"))
-        reflect_stage = next(s for s in run_data["stages"] if s["stage"] == "reflect")
-        assert reflect_stage["cultivated"] is True
-
-    def test_skips_already_cultivated(self, hook, workspace):
-        """Skips runs that already have cultivated:true."""
-        proj = workspace / "Projects" / "TestProject"
-        (proj / "IMPROVEMENT.md").write_text("# Lessons\n\n## What Worked\n\n- x\n")
-
-        run_file = self._make_run(
-            workspace, "TestProject", "run_def456",
-            lessons=["Some lesson"], cultivated=True
-        )
-
-        # Should not re-cultivate (file unchanged)
-        original_content = run_file.read_text()
-        hook._auto_cultivate_pipeline_lessons(workspace)
-        assert run_file.read_text() == original_content
-
-    def test_skips_run_without_lessons(self, hook, workspace):
-        """Skips runs whose reflect stage has no lessons."""
-        proj = workspace / "Projects" / "TestProject"
-        (proj / "IMPROVEMENT.md").write_text("# Lessons\n\n## What Worked\n\n- x\n")
-
-        run_file = self._make_run(
-            workspace, "TestProject", "run_ghi789",
-            lessons=[]
-        )
-
-        original_content = run_file.read_text()
-        hook._auto_cultivate_pipeline_lessons(workspace)
-        # No cultivated flag should be added for empty lessons
-        run_data = json.loads(run_file.read_text(encoding="utf-8"))
-        reflect_stage = next(s for s in run_data["stages"] if s["stage"] == "reflect")
-        assert "cultivated" not in reflect_stage
-
-    def test_handles_missing_reflect_stage(self, hook, workspace):
-        """Gracefully handles runs without a reflect stage."""
-        proj = workspace / "Projects" / "TestProject"
-        (proj / "IMPROVEMENT.md").write_text("# Lessons\n\n## What Worked\n\n- x\n")
-
-        self._make_run(workspace, "TestProject", "run_jkl012", lessons=None)
-        # Should not raise
-        hook._auto_cultivate_pipeline_lessons(workspace)
-
-    def test_handles_corrupt_json(self, hook, workspace, caplog):
-        """Gracefully handles corrupt run.json files."""
-        proj = workspace / "Projects" / "TestProject"
-        proj.mkdir(parents=True, exist_ok=True)
-        runs_dir = proj / ".artifacts" / "runs" / "run_bad"
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        (runs_dir / "run.json").write_text("not valid json{{{")
-
-        with caplog.at_level(logging.DEBUG):
-            hook._auto_cultivate_pipeline_lessons(workspace)
-        # Should not raise — just log and continue
-
-    def test_does_not_mark_cultivated_on_failure(self, hook, workspace):
-        """cultivated:true is NOT set when cultivate_from_reflect raises."""
-        proj = workspace / "Projects" / "TestProject"
-        (proj / "IMPROVEMENT.md").write_text("# Lessons\n\n## What Worked\n\n- x\n")
-
-        run_file = self._make_run(
-            workspace, "TestProject", "run_fail_test",
-            lessons=["Some lesson that will fail"]
-        )
-
-        with patch("core.ddd_cultivation.cultivate_from_reflect", side_effect=RuntimeError("boom")):
-            hook._auto_cultivate_pipeline_lessons(workspace)
-
-        # cultivated should NOT be set
-        run_data = json.loads(run_file.read_text(encoding="utf-8"))
-        reflect_stage = next(s for s in run_data["stages"] if s["stage"] == "reflect")
-        assert "cultivated" not in reflect_stage or reflect_stage.get("cultivated") is not True
-
-    def test_idempotent_multiple_calls(self, hook, workspace):
-        """Multiple calls don't re-cultivate already-done runs."""
-        proj = workspace / "Projects" / "TestProject"
-        (proj / "IMPROVEMENT.md").write_text(
-            "# Lessons\n\n## What Worked\n\n- existing\n\n## What Failed\n\n- nothing\n"
-        )
-
-        self._make_run(
-            workspace, "TestProject", "run_idempotent",
-            lessons=["Pattern: always validate threshold against real data"]
-        )
-
-        # First call cultivates
-        hook._auto_cultivate_pipeline_lessons(workspace)
-        # Second call skips (cultivated:true now set)
-        hook._auto_cultivate_pipeline_lessons(workspace)
-
-        # Should still only be cultivated once
-        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_idempotent" / "run.json"
-        run_data = json.loads(run_file.read_text(encoding="utf-8"))
-        reflect_stage = next(s for s in run_data["stages"] if s["stage"] == "reflect")
-        assert reflect_stage["cultivated"] is True
-
 
 class TestAutoSessionSignalCultivation:
     """Tests for _auto_cultivate_session_signals — Ch5 + Ch6 feed."""
@@ -750,61 +591,8 @@ class TestAutoSessionSignalCultivation:
 # PROJECTS.md refresh after cultivation (line number drift fix)
 # --------------------------------------------------------------------------
 
-class TestExtractLessonsNoOrphan:
-    """R-1 C2: _extract_lessons_to_memory must not orphan an existing meta.
-
-    Root cause (run_55c02bbe): the raw-splice insert math landed a new entry+meta
-    BETWEEN an existing bullet and its meta, orphaning the existing meta as a 2nd
-    consecutive metadata line. Fix routes through _modify_content (section-boundary
-    insert) so the orphan is structurally impossible.
-    """
-
-    def test_extract_does_not_orphan_existing_meta(self, hook, tmp_path):
-        ws = tmp_path / "SwarmWS"
-        ctx = ws / ".context"
-        ctx.mkdir(parents=True)
-        # MEMORY.md with an existing Guidelines entry that already has its meta
-        (ctx / "MEMORY.md").write_text(
-            "## Guidelines\n"
-            "_Operational lessons._\n\n"
-            "- [guideline] **Existing entry** — prior lesson (2026-06-01)\n"
-            "  <!-- ref:3 | last:2026-06-20 | decay:active -->\n"
-        )
-        # Stub the LLM admission judge to a deterministic pass (see the note in
-        # test_cultivates_decisions_from_jsonl): _extract_lessons_to_memory routes
-        # through admit_memory_lesson → ingestion_gate → self_adversarial_judge,
-        # which fails closed to "discard" with no Bedrock backend, so the lesson
-        # would never be written. This test asserts the WRITER's insert math (no
-        # orphaned meta, newest-at-top), not the judge's admit decision.
-        import core.ingestion_gate as _ig
-        with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "t")):
-            # Extract a new confident lesson into MEMORY.md
-            hook._extract_lessons_to_memory(
-                ws, ["Always verify before asserting — a new guideline lesson here"],
-                "run_test", "TestProject",
-            )
-        content = (ctx / "MEMORY.md").read_text()
-        # No bullet may be followed by TWO consecutive metadata lines
-        import re
-        lines = content.splitlines()
-        stacked = sum(
-            1 for i in range(1, len(lines))
-            if re.match(r"\s*<!-- ref:", lines[i]) and re.match(r"\s*<!-- ref:", lines[i - 1])
-        )
-        assert stacked == 0, f"writer orphaned a meta — {stacked} stacked pairs:\n{content}"
-        # The pre-existing entry's real-date meta must survive intact
-        assert "last:2026-06-20" in content
-        # R-1 Gate-2 #2/#3: NEW lessons must land at section TOP (newest-first),
-        # matching distillation_hook._write_section's prepend convention and the
-        # newest-at-top assumption _enforce_section_caps relies on (it trims the
-        # bottom = oldest). The new lesson must appear ABOVE the pre-existing one.
-        new_pos = content.find("Always verify before asserting")
-        old_pos = content.find("Existing entry")
-        assert new_pos != -1, "new lesson not written"
-        assert new_pos < old_pos, (
-            "new lesson must be prepended (newest-at-top) — found below the "
-            f"existing entry:\n{content}"
-        )
+class TestMemoryLifecycleHeals:
+    """R-1 C2: the per-session memory lifecycle heals a stacked (orphan) metadata line."""
 
     def test_memory_lifecycle_auto_heals_stacked_metadata(self, hook, tmp_path):
         # R-1 Gate-2 #1: collapse_stacked_metadata must be WIRED into the
@@ -1069,104 +857,9 @@ class TestUsageDecayGate:
 # only. There is no embedding-orphan backlog to converge anymore.
 
 
-class TestCognitiveAdmissionGate:
-    """Deterministic-floor + judge admission gate on _extract_lessons_to_memory.
-
-    THE MUTATION-PROOF CONTRACT (the fix for the false-green class): every reject-path
-    test STUBS THE JUDGE TO PASS and asserts the entry is STILL held. That proves the
-    DETERMINISTIC FLOOR does the holding — not an accidental judge fail-close (no
-    Bedrock in CI). Before this rewrite these tests were green only because the judge
-    crashed; stubbing it to pass turned them red, exposing that the floor 2c8fc37f
-    dropped was gone. The autouse _judge_pass fixture enforces the stub structurally so
-    a future reject-path test cannot silently regress to "green because the judge died".
-
-    Verdicts: auto = written; pending = held recoverably (judge UNAVAILABLE — infra
-    error / budget); discard = a real rejection (a deterministic floor, or the judge
-    online saying suspect/noise). keep-types are NOT held by a pre-judge short-circuit
-    (that can never be re-judged → infinite requeue, an adversarial HIGH we fixed); they
-    flow through the judge normally, and XG 乙 ("never DROP a keep-type when the judge is
-    down") is delivered by the CONVERGENT judge-down→pending path.
-    """
-
-    @pytest.fixture(autouse=True)
-    def _judge_pass(self):
-        """STRUCTURAL guard against the false-green class: force the LLM judge to PASS
-        for every test in this class. A reject-path test that still holds its entry is
-        then proving the DETERMINISTIC FLOOR, never a judge fail-close. Remove this and
-        the reject tests would go green for the wrong reason (judge crash) — exactly the
-        bug this class now guards against."""
-        import core.ingestion_gate as _ig
-        with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "judged")):
-            yield
-
-    def _mk_memory(self, tmp_path, body: str = ""):
-        ws = tmp_path / "SwarmWS"
-        ctx = ws / ".context"
-        ctx.mkdir(parents=True)
-        base = (
-            "## Principles\n_meta._\n\n"
-            "## Guidelines\n_Operational lessons._\n\n"
-            "## Pitfalls\n_Traps._\n\n"
-        )
-        (ctx / "MEMORY.md").write_text(base + body)
-        return ws, ctx / "MEMORY.md"
-
-    def test_ac1_keep_type_deferred_when_judge_unavailable(self, hook, tmp_path):
-        """AC1 (safety core, XG 乙): when the judge is UNAVAILABLE a keep-type principle is
-        NOT auto-written — it defers (pending), so a permanent/decay-immune entry never
-        rides into MEMORY on a judge that could not actually vet it. This overrides the
-        autouse judge=pass with an infra-error stub. (The judge-AVAILABLE keep-type path —
-        pass → written — is covered in test_distillation_admission; splitting the two is
-        what makes the design CONVERGENT instead of an infinite pre-judge hold.)"""
-        import core.ingestion_gate as _ig
-        ws, mem = self._mk_memory(tmp_path)
-        principle = (
-            "The first principle is that confidence is a counter-signal: the more "
-            "certain I feel, the more likely I skipped verification."
-        )
-        with patch.object(_ig, "self_adversarial_judge",
-                          lambda *a, **k: ("suspect", "judge_error:EndpointConnectionError")):
-            hook._extract_lessons_to_memory(ws, [principle], "run_x", "Proj")
-        content = mem.read_text()
-        assert "confidence is a counter-signal" not in content, (
-            "a keep-type principle was written to MEMORY while the judge was UNAVAILABLE "
-            f"— it must defer (pending), never ride an un-vetted permanent write:\n{content}"
-        )
-
-    def test_ac2_operational_admitted(self, hook, tmp_path):
-        """AC2: a clean operational guideline (judge passes) → ADMITTED (written)."""
-        ws, mem = self._mk_memory(tmp_path)
-        g = ("When editing MEMORY.md always take the .lock before the "
-             "read-modify-write to avoid a lost-update race across writers.")
-        hook._extract_lessons_to_memory(ws, [g], "run_ok", "Proj")
-        content = mem.read_text()
-        assert "lost-update race across writers" in content, (
-            f"operational lesson was NOT written:\n{content}"
-        )
-
-    def test_ac4_thin_held_even_when_judge_passes(self, hook, tmp_path):
-        """AC4a: a too-thin fragment is held by the deterministic thin floor EVEN WHEN
-        THE JUDGE PASSES (not an accidental fail-close)."""
-        ws, mem = self._mk_memory(tmp_path)
-        hook._extract_lessons_to_memory(ws, ["too short"], "r", "P")
-        assert "too short" not in mem.read_text()
-
-    def test_ac4_low_confidence_denied_even_when_judge_passes(self, hook, tmp_path):
-        """AC4b: content_floor holds a low-confidence (<=0.3) entry EVEN WHEN THE JUDGE
-        PASSES. classify_content NEVER rejects (always routes), so the numeric floor —
-        not a truthiness check — must do the holding. Patched to the 0.1-confidence dict
-        real noise gets; asserts NOT written. Direct floor-level assertion too."""
-        from core.ingestion_gate import content_floor
-        lesson = ("Always take the .lock before the read-modify-write on MEMORY.md "
-                  "to avoid a lost-update race across concurrent writers here.")
-        with patch("core.persist_routing.classify_content",
-                   return_value={"confidence": 0.1, "is_governance": False}):
-            deny, reason = content_floor(lesson)
-            assert deny is True, "low-confidence entry must be DENIED by content_floor"
-            assert "confidence" in reason.lower(), f"reason must cite confidence: {reason!r}"
-            ws, mem = self._mk_memory(tmp_path)
-            hook._extract_lessons_to_memory(ws, [lesson], "r", "P")
-            assert "lost-update race across concurrent writers" not in mem.read_text()
+class TestContentFloor:
+    """ingestion_gate.content_floor is not over-broad (its REFLECT→MEMORY caller was
+    retired with the old pipeline; v1 queues MEMORY lessons as proposals)."""
 
     def test_ac4_high_confidence_passes_floor(self, hook):
         """AC4b companion: a normal-confidence dict does NOT trip content_floor (proves
@@ -1179,47 +872,6 @@ class TestCognitiveAdmissionGate:
             deny, reason = content_floor(lesson)
         assert deny is False, f"normal-confidence lesson must pass the floor, got: {reason}"
 
-    def test_ac4_governance_held_even_when_judge_passes(self, hook, tmp_path):
-        """AC4c: a governance-phrased lesson is held by content_floor EVEN WHEN THE
-        JUDGE PASSES (belongs to s_self-evolution, not MEMORY)."""
-        ws, mem = self._mk_memory(tmp_path)
-        gov = ("From now on always run the full adversarial review before every "
-               "merge to main — this is a new standing rule for the team.")
-        from core.persist_routing import classify_content
-        assert classify_content(gov).get("is_governance"), "fixture not governance"
-        hook._extract_lessons_to_memory(ws, [gov], "r", "P")
-        assert "new standing rule" not in mem.read_text()
-
-    def test_ac4_duplicate_held(self, hook, tmp_path):
-        """AC4d: an exact-title duplicate of an existing section entry → HELD (dedup)."""
-        body = (
-            "- [guideline] **Always lock before write** — prior lesson (2026-06-01)\n"
-            "  <!-- ref:2 | last:2026-06-10 | decay:active -->\n"
-        )
-        ws = tmp_path / "SwarmWS"
-        ctx = ws / ".context"
-        ctx.mkdir(parents=True)
-        (ctx / "MEMORY.md").write_text(
-            "## Principles\n_meta._\n\n"
-            "## Guidelines\n_Operational lessons._\n\n" + body +
-            "\n## Pitfalls\n_Traps._\n\n"
-        )
-        mem = ctx / "MEMORY.md"
-        dup = "Always lock before write — take the .lock before read-modify-write always"
-        hook._extract_lessons_to_memory(ws, [dup], "r", "P")
-        content = mem.read_text()
-        assert content.count("Always lock before write") == 1, (
-            f"duplicate title was auto-written (expected 1 occurrence):\n{content}"
-        )
-
-    def test_ac5_no_regression_operational_written(self, hook, tmp_path):
-        """AC5: the writer still writes a legit operational lesson (back-compat, the
-        judge-pass happy path)."""
-        ws, mem = self._mk_memory(tmp_path)
-        g = ("Verify runtime state by observation before asserting a cause — "
-             "read the live gauge, do not infer from a stale log string.")
-        hook._extract_lessons_to_memory(ws, [g], "run_z", "Proj")
-        assert "read the live gauge" in mem.read_text()
 
 class TestMaturityWritebackResolvesLayout:
     """run_ff06972d: _set_verified_from_pipeline_runs must resolve canonical docs
@@ -1247,9 +899,10 @@ class TestMaturityWritebackResolvesLayout:
         run_dir = proj / ".artifacts" / "runs" / "run_x"
         run_dir.mkdir(parents=True)
         (run_dir / "run.json").write_text(json.dumps({
-            "status": "completed",
-            "stages": [{"stage": "deliver", "status": "completed"}],
+            "id": "run_x", "status": "completed",
+            "stages": {"deliver": "completed", "reflect": "completed"},
         }))
+        before = (run_dir / "run.json").read_text()
 
         hook._set_verified_from_pipeline_runs(proj)
 
@@ -1257,12 +910,32 @@ class TestMaturityWritebackResolvesLayout:
         content = (und / "TECH.md").read_text()
         assert "verified: true" in content, \
             f"migrated 2-understanding/ doc should be marked verified, got:\n{content}"
-        # And the run marked processed.
-        run_data = json.loads((run_dir / "run.json").read_text())
-        assert run_data.get("maturity_updated") is True
+        # The run is marked processed OUTSIDE its run.json (a v1 projection the engine
+        # rewrites): run.json is untouched, the marker is the project's ledger.
+        assert (run_dir / "run.json").read_text() == before
+        ledger = proj / ".artifacts" / "maturity_verified_runs.json"
+        assert json.loads(ledger.read_text()) == ["run_x"]
+        hook._set_verified_from_pipeline_runs(proj)          # idempotent
+        assert json.loads(ledger.read_text()) == ["run_x"]
         # No stale lock stranded at project root (lock co-locates with resolved doc).
         assert not (proj / ".TECH.md.lock").exists(), \
             "lock must co-locate with the resolved doc, not strand at project root"
+
+
+    def test_a_run_that_did_not_pass_deliver_or_an_old_run_is_not_counted(self, hook, tmp_path):
+        proj = tmp_path / "Projects" / "P"
+        (proj / "2-understanding").mkdir(parents=True)
+        (proj / "2-understanding" / "TECH.md").write_text(
+            "# TECH\n\n## Architecture\n"
+            "<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | promoted: none -->\n"
+            "- [decision] seed\n")
+        for rid, data in (("run_a", {"status": "completed", "stages": {"deliver": "open"}}),
+                          ("run_b", {"status": "completed",
+                                     "stages": [{"stage": "deliver", "status": "completed"}]})):
+            (proj / ".artifacts" / "runs" / rid).mkdir(parents=True)
+            (proj / ".artifacts" / "runs" / rid / "run.json").write_text(json.dumps(data))
+        hook._set_verified_from_pipeline_runs(proj)
+        assert "verified: false" in (proj / "2-understanding" / "TECH.md").read_text()
 
 
 class TestRecallDegradationReader:

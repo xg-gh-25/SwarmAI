@@ -1,7 +1,7 @@
 /**
  * What a completed pipeline stage hands back in the chat (XG 2026-10-20): its one-line
  * summary, and a card per run document it wrote — REQUIREMENTS / DESIGN_SPEC / REVIEW /
- * FIXING_SPEC / REPORT (backend/core/run_docs.py).
+ * FIXING_SPEC / REPORT (backend/core/pipeline_stage_events.py).
  *
  * A card starts as one compact document row. "Show full text" reads the file from
  * the workspace (GET /workspace/file) and renders it in place; while that read is in

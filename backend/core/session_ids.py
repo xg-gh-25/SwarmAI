@@ -1,7 +1,7 @@
 """SDK session ids: the one pattern and the run.json transcript cap.
 
-Kept free of imports so the stage commands (artifact_cli ``_record_transcript_id``,
-called on every stage-start / stage-complete) can validate an id without loading
+Kept free of imports so the pipeline CLI (each ``pipeline_v1.py`` call) can validate
+an id without loading
 core.transcript_usage -> leak_transcript -> session_utils -> config_settings ->
 pydantic_settings (0.3 s per CLI call, measured 2026-10-20).
 

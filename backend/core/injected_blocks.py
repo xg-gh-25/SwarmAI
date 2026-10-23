@@ -7,7 +7,7 @@ the prompt as the user's own words (high-signal capture, the correction detector
 the language classifier, the run-intent reader) must see the user's text only.
 
 The block shapes live HERE and the builders import them (session_router's resume
-header/footer and recall provenance/hint, run_delivery_summary's meta prefixes), so
+header/footer and recall provenance/hint), so
 a builder change cannot leave a stripper matching a shape nobody emits any more.
 
 Key public symbols:
@@ -65,7 +65,7 @@ TASK_NOTIFICATION_OPEN = "<task-notification"
 TASK_NOTIFICATION_CLOSE = "</task-notification>"
 INJECT_DELIM = "\n\n---\n\n"
 
-# Shapes for readers that see one content block at a time (run_delivery_summary).
+# Shapes for readers that see one content block at a time.
 META_PREFIXES = (
     *UI_STATE_HEADERS, TASK_NOTIFICATION_OPEN, _RESUME_PREFIX, RECALL_HEADER,
     TERMINAL_HEADER, TASK_CONTINUATION_HEADER, "[Request interrupted",

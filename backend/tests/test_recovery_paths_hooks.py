@@ -106,7 +106,7 @@ class TestT12CodeIntelParseFailure:
 
 # ═══════════════════════════════════════════════════════════════════
 # T13: Cultivation Deadline Overflow (context_health_hook)
-# Path: _auto_cultivate_pipeline_lessons() — shared 25s deadline
+# Path: the cultivation passes of _light_refresh — shared 25s deadline
 # ═══════════════════════════════════════════════════════════════════
 
 

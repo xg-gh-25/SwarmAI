@@ -254,15 +254,18 @@ implementations in `security_hooks.py`). By category:
    trust this store; the gate cannot be forced.
    Per-run worktrees (`docs/design/pipeline-run-worktree.md`; on by default, turned off only by
    `config.json["pipeline"]["worktree_mode"] = "off"`, a `PUT /api/settings` key): `run_owner_gate`
-   (Bash, right after `commit_gate`; applies to isolated runs, to v1 token commands, and to the stage-start
-   that decides an undecided run's mode — a run recorded `shared` is untouched; takes a crashed
-   owner's run over (a v1 takeover is also signed as an `owner_transfer` event, so human
-   authorizations follow the new owner), denies while the owner is live, denies a Bash call
-   to the human-only `/api/pipelines/<id>/decision`,
-   and issues the one-time `SWARM_HOOK_TOKEN` by rewriting a single artifact_cli command via
+   (Bash, right after `commit_gate`; for a mutating `pipeline_v1.py` call it reads the owner
+   from the run's signed events, never run.json, takes a crashed owner's run over only when
+   the old owner is confirmed not live (signing an `owner_transfer` event first, so human
+   authorizations follow the new owner) and denies while the owner is live or its liveness
+   is unknown; for a `pipeline_v1.py` or `pipeline_test.py` call from an adopted prewarm
+   subprocess it puts this session's `SWARM_APP_SESSION_ID` before the command
+   (`pipeline_test.py` then checks the signed owner itself); it denies a Bash call to the
+   human-only `/api/pipelines/<id>/decision`,
+   and issues the one-time `SWARM_HOOK_TOKEN` by rewriting that single command via
    `updatedInput` — no other Bash hook may set `updatedInput`; the issuance record lives only
-   in daemon memory, the CLI burns it over the owner-only socket started in `main.py`. For v1
-   it also tokens `land` (no token: `not_landed(needs_hooked_session)`) and, shared runs
+   in daemon memory, the CLI burns it over the owner-only socket started in `main.py`. It
+   tokens `land` (no token: `not_landed(needs_hooked_session)`) and, shared runs
    included, `run-land` / `accept-finding` / `discard-snapshot`: after the person approves one,
    the gate itself writes the signed `auth` event from the run's `land_request` event (the
    approval card shows the trees from that event; execution reads only it). Only the daemon
@@ -273,8 +276,9 @@ implementations in `security_hooks.py`). By category:
    the `pipeline_v1.py create --repo` command for a run that includes it (v1 repos are fixed at
    create), denies a write under a v1 run's `.aidlc/deliverables/` (its landing writes it),
    denies stash / shared-ref changes from a run worktree). Run liveness everywhere
-   (`run_index.LIVE_STATUSES`, the worktree sweeper, these gates) counts legacy running/paused
-   and every non-terminal v1 status.
+   (`run_index.LIVE_STATUSES`, the worktree sweeper, these gates) counts every non-terminal
+   v1 status. Only runs with a protected v1 contract exist: the old pipeline (artifact_cli
+   run commands, `stage-start`, run.json-only runs) is retired.
 5. **Review-expert scope** (`core/pipeline_expert_agent.py`) — every session defines the
    `pipeline-expert` sub-agent type (Read/Grep/Glob/Bash only, effort medium, maxTurns
    backstop). `expert_type_gate` (Agent|Task, app sessions, main thread) denies an

@@ -6,8 +6,8 @@ Verifies that all tracks produced in a multi-track Pollinate run maintain
 consistency across format boundaries. Runs during REVIEW stage.
 
 ⚠️ ENFORCEMENT SPLIT(2026-07-03): the DETERMINISTIC cross-format
-facts are now HARD-ENFORCED by pollinate_validator.py at the DELIVER chokepoint
-(the only place artifact_cli.py can exit(1)):
+facts are checked by pollinate_validator.py, which the agent runs at DELIVER (its
+artifact_cli.py chokepoint was retired with the old pipeline):
     - RP-X1 (brand-token/--accent consistency)   → validator Check 7
     - produced-tracks ⊆ confirmed_tracks          → validator Check 8
     - production_tracks == confirmed_tracks drift  → validator Check 9

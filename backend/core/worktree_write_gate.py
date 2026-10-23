@@ -636,7 +636,7 @@ def create_worktree_write_gate(session_context: "dict[str, Any]"):
         from core.security_hooks import _pipeline_runs_root
         r = own_isolated_run(sid, _pipeline_runs_root()) if sid and any_wt else None
         own = _Own(r["id"], r["worktrees"], project=r.get("project"),
-                   lazy=not r.get("settled") and r.get("status") == "running") if r else None
+                   lazy=not r.get("settled") and r.get("status") in ("active", "reflecting")) if r else None
         nr = None
         if mode_on and sid and own is None and not session_context.get("_unbound"):
             runs = _session_runs_light(sid)

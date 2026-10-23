@@ -137,3 +137,27 @@ def test_every_option_and_runner_command_in_the_cards_exists():
                     raise AssertionError(f"{doc.name}: `{span}` does not parse: {exc}")
                 seen += 1
     assert seen >= 1
+
+
+# ── moved from the retired test_advance_continuation.py (R6) ─────────────────
+
+def test_reflect_card_gives_no_completion_command():
+    """REFLECT is the daemon's bounded background work (D1): the card gives the
+    agent no completion command, only how to see the result."""
+    stages = Path(__file__).resolve().parents[1] / "skills" / "s_autonomous-pipeline" / "stages"
+    text = (stages / "reflect.md").read_text(encoding="utf-8")
+    assert "reflect-complete" not in text and "reflect-exhausted" not in text
+    assert "pipeline_v1.py status" in text and "degraded" in text
+
+
+def test_the_stop_hook_stays_passive():
+    """No end_turn interception: the Stop hook's input carries only
+    ``stop_hook_active``, so it cannot tell a stall from a real stop."""
+    src = (Path(__file__).resolve().parents[1] / "core" / "hook_builder.py").read_text(
+        encoding="utf-8")
+    idx = src.index("def _stop_hook")
+    body = src[idx: src.index('registry.register("Stop"', idx)]
+    assert '"decision": "approve"' in body
+    assert '"block"' not in body and "continue_" not in body
+    reg = src[src.index('registry.register("Stop"', idx):][:200]
+    assert "block" not in reg.lower()

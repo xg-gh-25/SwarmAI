@@ -1,10 +1,9 @@
 """run_lock — one lock per pipeline run, and atomic run.json writes.
 
-Every writer of ``runs/<id>/run.json`` (artifact_cli commands, the two reapers,
-the router's cancel, the session-link stamper, takeover) serializes on the
-sidecar ``runs/<id>/.lock`` (docs/design/pipeline-run-worktree.md §4.1). Before
-this, ``run-update`` read the file at its start and wrote the whole dict at its
-end, so a cancel landing in between was silently undone.
+Every writer of a run's ``runs/<id>/run.json`` outside the v1 engine (the worktree
+sweeper, run_owner_gate's takeover) serializes on the sidecar ``runs/<id>/.lock``
+(docs/design/pipeline-run-worktree.md §4.1), so a read-modify-write never undoes a
+write that landed in between.
 
 - ``run_lock(run_dir, timeout)``: context manager; RE-ENTRANT within a process
   (a held lock is counted, not re-acquired — flock on a second fd of the same

@@ -82,18 +82,11 @@ def cmd_discover(args, reg: ArtifactRegistry) -> None:
 def _read_json_arg(raw: str, argname: str) -> str:
     """Resolve a CLI JSON argument's RAW-STRING source — @path / @- / inline.
 
-    Shared by ``publish --data`` and ``run-update --stage-json`` so both read a
-    file identically (run_b7620c6e introduced @file for --data only; this unifies
-    it — R25 de-dup / P8 one entry rule). ``@PATH`` reads the file, ``@-`` reads
-    stdin, anything else is returned verbatim (a JSON value never starts with '@',
-    so the prefix is an unambiguous discriminator).
-
-    DELIBERATELY does NOT ``json.loads`` — it returns the raw string and the caller
-    parses it. This preserves the asymmetric exception semantics at the two
-    run-update call sites: the deliver-ack precheck swallows a parse error
-    (best-effort), the main parse lets it raise. Merging json.loads here would
-    erase that difference (contract drift). ``argname`` only parameterizes the
-    read-failure message so a --stage-json failure does not misreport "--data".
+    Used by ``publish --data``: it reads a
+    file. ``@PATH`` reads the file, ``@-`` reads stdin, anything else is returned
+    verbatim (a JSON value never starts with '@', so the prefix is unambiguous).
+    It does not ``json.loads``: the caller parses; ``argname`` names the argument
+    in the read-failure message.
     """
     if isinstance(raw, str) and raw.startswith("@"):
         try:
@@ -176,7 +169,7 @@ def _ensure_project_dir(project: str) -> Path:
 
     THE single choke point for minting a project directory from the pipeline CLI.
     Every command that would ``mkdir(parents=True)`` a ``Projects/<name>/`` subtree
-    (run-create, release-gate, run-report, run-analytics) must obtain the project dir
+    (release-gate today) must obtain the project dir
     THROUGH here first — so a ``Projects/<name>/`` can NEVER be created without its
     ``.project.json`` (which is what makes it visible to Brain Hub). This closes the
     "pseudo-DDD" class at the birth point rather than in one command (see run_be30a0c6).
@@ -428,7 +421,7 @@ def cmd_release_gate(args, reg: "ArtifactRegistry") -> None:
     if concl == "success":
         # Atomic write (temp + replace) — mirror the file-write discipline used elsewhere.
         # Register the project first — this .artifacts/ mkdir would otherwise mint an
-        # unregistered Projects/<name>/ (pseudo-DDD) if release-gate ran before run-create.
+        # unregistered Projects/<name>/ (pseudo-DDD) if the project was never created.
         _ensure_project_dir(args.project)
         marker.parent.mkdir(parents=True, exist_ok=True)
         payload = {"head_sha": head, "repo_root": repo_root,

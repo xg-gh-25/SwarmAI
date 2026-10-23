@@ -215,7 +215,7 @@ jobs:
       # (fetch-depth: 0 was dropped with it — sync-version.sh reads only worktree
       # files, no git history.) The PreToolUse commit_trailer_gate was also removed
       # the same day (73378945), so nothing enforces the trailer automatically; only
-      # run-commit builds it in. scripts/check_commit_trailers.py is kept for optional
+      # the pipeline's landing builds it in. scripts/check_commit_trailers.py is kept for optional
       # local use.
 
   # ── Code-security boundary gate (bandit HIGH + detect-secrets) ────────────

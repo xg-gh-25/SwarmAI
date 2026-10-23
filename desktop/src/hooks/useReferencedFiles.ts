@@ -45,7 +45,7 @@ export type FileRelevance = 'deliverable' | 'incidental' | 'bookkeeping';
  *  - content|knowledge → surface in the rail (+auto-pop) — immediate, per change.
  *  - source → mid-run coding edit; DROPPED from the rail (suppressed mid-run).
  *  - source-final → the pipeline-FINISH PR-review batch (run_b8ea6d5c): coding
- *    files a run committed, emitted once at COMPLETE via surface_run_outputs.
+ *    files a run committed. Its emitter was retired with the old pipeline (R3).
  *    ACCEPTED into the rail (persistent rows) but does NOT auto-pop (a finish batch
  *    of N files must not hijack the Canvas — the user clicks a row to review it).
  *  - external-diff → a file the session touched OUTSIDE SwarmWS that lives in a git

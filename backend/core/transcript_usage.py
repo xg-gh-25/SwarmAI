@@ -23,7 +23,7 @@ Public symbols:
   (``input_tokens``, ``output_tokens``, ``cache_read_tokens``,
   ``cache_creation_tokens``), plus ``tokens`` (input + output + cache creation,
   cache reads excluded — the same definition ``artifact_cli._apply_token_cost`` and
-  ``run_delivery_summary.run_token_usage`` use), ``responses`` and
+  ``run_protocol.usage.measure`` use), ``responses`` and
   ``source="transcript"``; None when no response falls inside the window.
 """
 from __future__ import annotations

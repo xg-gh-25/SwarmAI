@@ -746,7 +746,7 @@ _PIPELINE_AUDIT_DIR = _STATE_DIR / "pipeline_agent_audit"
 # Two writers produce the map. (a) A PostToolUse-Bash hook: it runs in the daemon (so
 # ctx carries the correct app-level session_id) AND the SDK hands it the Bash
 # tool_response (so it sees create's stdout). (b) run_owner_gate, when it hands a run
-# to this session at stage-start, so the link holds even when create's stdout is
+# to this session at a takeover, so the link holds even when create's stdout is
 # redirected and (a) sees nothing. The hook (1) revives the EXISTING-but-
 # -set-nowhere `_active_pipeline_run_id` consumer (read at the marker writer below +
 # the compaction briefing) and (2) persists a session_<sid>_run.map file into the
@@ -774,7 +774,7 @@ def write_session_run_map(session_id: str, run_id: str, ts: float | None = None)
     """Atomically write the session->run rendezvous (tmp sibling + os.replace).
 
     The ONE writer of the .map shape ``{session_id, run_id, ts}``: the PostToolUse hook
-    below (parses ``pipeline_v1.py create`` stdout) and run_owner_gate at stage-start
+    below (parses ``pipeline_v1.py create`` stdout) and run_owner_gate at a takeover
     (so a session working on an older run credits reviews to it) both call it. Raises on I/O
     error; callers decide whether that is fatal."""
     _PIPELINE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1182,7 +1182,7 @@ def create_agent_tool_audit_hook(
             # mid-record.
             def _classify_and_write() -> None:
                 # The run this marker belongs to: the NEWER of the session ctx and the
-                # session's .map. run_owner_gate writes the .map at stage-start, so a
+                # session's .map. run_owner_gate writes the .map at a takeover, so a
                 # run whose create stdout was redirected (the PostToolUse hook saw nothing and ctx still
                 # names the previous run) still gets its own reviewers in the same turn.
                 owner = run_id
@@ -1204,8 +1204,8 @@ def create_agent_tool_audit_hook(
                 # Classify THIS sub-agent's intent: agent_type primary; the HEAD of
                 # its OWN transcript (spawn prompt) as fallback. Per-agent-correct by
                 # construction — this SubagentStop fires for exactly one sub-agent.
-                # Which run and which expert: a prompt FILE that stage-start (or
-                # gate2-recheck / gate0-prompt) wrote under runs/<run_id>/evidence/prompts/
+                # Which run and which expert: a prompt FILE that the v1 review handout
+                # (`pipeline_v1.py review-start`) wrote under runs/<run_id>/evidence/prompts/
                 # and the sub-agent read in full names both, so a session working on two
                 # runs credits the right one, and a "Read <file> and follow it" spawn with
                 # no EXPERT-ID line of its own still counts (16 such spawns 2026-10-18).
@@ -1461,9 +1461,8 @@ def _prompt_reads(transcript_path: str) -> Optional[dict]:
     (``…/evidence/prompts/*.md``) the sub-agent loaded IN FULL — a Read without
     offset / limit, or a Bash ``cat <path>`` — plus ``<inline:N>`` hashes of its own
     prompt (each text block and the whole message, with / without a trailing newline), so
-    an exact paste of the handed-out file binds too. Lets stage-complete check that a
-    gate skeptic read the exact prompt stage-start handed out (artifact_cli
-    ``_gate1_prompt_unread``). The file is hashed at SubagentStop: a copy edited and
+    an exact paste of the handed-out file binds too. Lets the run protocol check that
+    an expert read the exact prompt its handout named. The file is hashed at SubagentStop: a copy edited and
     restored while the skeptic ran is not caught (deliberate cheating, not a cut corner).
     None when the transcript cannot be read (the checker then warns instead of blocking)."""
     import hashlib

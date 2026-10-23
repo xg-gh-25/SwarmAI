@@ -14,7 +14,7 @@ only when its bytes match its latest seal; anything else is present but unusable
 
 Public API:
 - ``run_of(path)``: the run id of a runner-written evidence path, else None
-- ``enable(run_id)``: create the run's store (run-create); returns warnings
+- ``enable(run_id)``: create the run's store (at run creation); returns warnings
 - ``write_sealed(path, text)``: atomic write + seal under the store's lock
 - ``read_checked(path)``: ``(bytes | None, ok, reason)``: the bytes that were hashed,
   so a reader parses exactly what it checked (no swap between check and use)

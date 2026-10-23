@@ -18,9 +18,10 @@ if str(_BACKEND) not in sys.path:
 def _passed_run(project_dir: Path, run_id: str):
     rd = project_dir / ".artifacts" / "runs" / run_id
     rd.mkdir(parents=True, exist_ok=True)
-    (rd / "run.json").write_text(json.dumps(
-        {"stages": [{"stage": "adversarial", "status": "completed",
-                     "gate2_outcome": "pass"}]}))
+    (rd / "run_audit.json").write_text(json.dumps(   # a v1 run that cleared review
+        {"outcome": {"status": "completed", "landing": "landed"},
+         "summary": {"quality": {"verdict": "PASS", "findings_total": 0}},
+         "details": {"experts": [{"expert": "correctness"}]}}))
 
 
 def _improvement_doc(project_dir: Path):
@@ -63,14 +64,6 @@ class TestSourceRouting:
         )
         assert admission_band(p, tmp_path)[0] == "discard"
 
-    def test_reflect_untrusted_judge_suspect_discards(self, tmp_path):
-        import unittest.mock as m
-        from core.ddd_cultivation import cultivate_from_reflect
-        _improvement_doc(tmp_path)  # no run.json → trust n/a → judge decides
-        lessons = ["SMOKE catches runtime crashes that unit tests miss — a highest-ROI check to keep."]
-        with m.patch("core.ddd_cultivation.self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
-            res = cultivate_from_reflect(lessons, "run_untrusted", "SwarmAI", tmp_path)
-        assert res["applied"] == 0 and res["escalated"] == 0  # autonomy-first: no queue
 
     def test_decision_session_sourced_judge_suspect_discards(self, tmp_path):
         import unittest.mock as m

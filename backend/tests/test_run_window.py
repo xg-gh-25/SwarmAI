@@ -94,3 +94,11 @@ def test_analytics_has_one_thirty_day_window(ws, monkeypatch):
     for w in ("30d", "ytd"):
         d = client.get(f"/api/pipelines/analytics?window={w}").json()
         assert d["window"] == "30d"
+
+
+def test_live_statuses_are_the_v1_lifecycle_s_non_terminal_ones():
+    """R6: the old pipeline's `running` is not a live status any more."""
+    from core import run_index, run_worktree
+    from core.run_protocol import lifecycle
+    assert set(run_index.LIVE_STATUSES) == set(lifecycle.STATUSES - lifecycle.TERMINAL)
+    assert set(run_worktree._LIVE) == set(run_index.LIVE_STATUSES)

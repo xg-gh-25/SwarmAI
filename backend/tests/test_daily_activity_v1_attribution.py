@@ -64,7 +64,7 @@ def test_v1_landed_commit_is_attributed_to_its_session_only(tmp_path, monkeypatc
     landed = commits["repo"]
     assert _git(repo, "rev-parse", "HEAD") == landed
 
-    shas, _files, ids = _session_run_evidence("session_mine", workspace)
+    shas, ids = _session_run_evidence("session_mine", workspace)
     assert landed in shas and "run_v1contract" in ids
 
     since = datetime.now() - timedelta(hours=1)
@@ -72,7 +72,7 @@ def test_v1_landed_commit_is_attributed_to_its_session_only(tmp_path, monkeypatc
                                     session_run_ids=ids, call_windows=[])
     assert len(mine) == 1 and mine[0].startswith(landed[:7]) and "v1 landing" in mine[0]
 
-    o_shas, o_files, o_ids = _session_run_evidence("session_other", workspace)
+    o_shas, o_ids = _session_run_evidence("session_other", workspace)
     assert not o_shas and not o_ids
     assert _get_session_git_commits(
         repo, since, session_files=[str(repo / "a.py")], session_shas=o_shas,

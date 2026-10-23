@@ -3,8 +3,10 @@ outcome + fail-closed trust stamp.
 
 RED-first. The trust stamp is the SOLE authority that lets a proposal auto-write
 into ANY doc (incl. SELF.md) — so its derivation must be deterministic and
-fail-closed: only an explicit machine-readable pass/pass_with_fixes earns
-trust=passed; absent/un-parseable/prose-only/block → failed or n/a, NEVER passed.
+fail-closed: only a Pipeline v1 run_audit.json that shows a completed, landed run
+whose review experts ran and whose quality verdict is PASS earns pass/pass_with_fixes;
+a BLOCK verdict is block; everything else (no audit, the retired pipeline's stage
+records, a human override, no review, WARN) is n/a, NEVER passed.
 (Design: 2026-08-09-knowledge-admission-subsystem-design.md, AC3/AC10.)
 """
 import sys
@@ -15,89 +17,52 @@ if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
 
+def audit(verdict="PASS", findings=0, experts=1, status="completed", landing="landed"):
+    """A v1 run_audit.json (core.run_protocol.audit.build) reduced to what trust reads."""
+    return {"outcome": {"status": status, "landing": landing},
+            "summary": {"quality": {"verdict": verdict, "findings_total": findings}},
+            "details": {"experts": [{"expert": f"e{i}"} for i in range(experts)]}}
+
+
 class TestGate2OutcomeDerivation:
-    """step0: derive a canonical gate2_outcome enum from a run's stages,
-    fail-closed on anything non-explicit."""
+    """Derive the canonical gate2 outcome from a v1 run audit, fail-closed."""
 
     def _fn(self):
         from core.ddd_cultivation import derive_gate2_outcome
         return derive_gate2_outcome
 
-    def test_explicit_enum_pass(self):
-        derive = self._fn()
-        run = {"stages": [{"stage": "adversarial", "status": "completed",
+    def test_clean_reviewed_landed_run_is_pass(self):
+        assert self._fn()(audit()) == "pass"
+
+    def test_findings_all_closed_is_pass_with_fixes(self):
+        assert self._fn()(audit(findings=2)) == "pass_with_fixes"
+
+    def test_block_verdict_is_block(self):
+        assert self._fn()(audit(verdict="BLOCK")) == "block"
+
+    def test_warn_or_na_verdict_is_na(self):
+        assert self._fn()(audit(verdict="WARN")) == "n/a"
+        assert self._fn()(audit(verdict="N/A")) == "n/a"
+
+    def test_human_override_is_not_a_review_pass(self):
+        assert self._fn()(audit(landing="human_override")) == "n/a"
+
+    def test_run_without_review_experts_is_na(self):
+        # a small change v1 sent no expert: nothing adversarial cleared it
+        assert self._fn()(audit(experts=0)) == "n/a"
+
+    def test_unfinished_run_is_na(self):
+        assert self._fn()(audit(status="active")) == "n/a"
+
+    def test_retired_pipeline_stage_records_are_not_trusted(self):
+        old = {"stages": [{"stage": "adversarial", "status": "completed",
                            "gate2_outcome": "pass"}]}
-        assert derive(run) == "pass"
+        assert self._fn()(old) == "n/a"
 
-    def test_explicit_enum_pass_with_fixes(self):
+    def test_malformed_input_is_na(self):
         derive = self._fn()
-        run = {"stages": [{"stage": "deliver", "status": "completed",
-                           "gate2_outcome": "pass_with_fixes"}]}
-        assert derive(run) == "pass_with_fixes"
-
-    def test_explicit_enum_block(self):
-        derive = self._fn()
-        run = {"stages": [{"stage": "adversarial", "status": "completed",
-                           "gate2_outcome": "block"}]}
-        assert derive(run) == "block"
-
-    def test_block_wins_over_document_order(self):
-        # HOLE #1 (adversarial): a pass must NEVER shadow a block, regardless of order.
-        derive = self._fn()
-        run = {"stages": [
-            {"stage": "deliver", "status": "completed", "gate2_outcome": "pass"},
-            {"stage": "adversarial", "status": "completed", "gate2_outcome": "block"},
-        ]}
-        assert derive(run) == "block"
-        # and the reverse order:
-        run2 = {"stages": [
-            {"stage": "adversarial", "status": "completed", "gate2_outcome": "block"},
-            {"stage": "deliver", "status": "completed", "gate2_outcome": "pass"},
-        ]}
-        assert derive(run2) == "block"
-
-    def test_incomplete_stage_outcome_is_ignored(self):
-        # HOLE #2 (adversarial): a stale pass on an in-progress stage is NOT authoritative.
-        derive = self._fn()
-        run = {"stages": [{"stage": "adversarial", "status": "in_progress",
-                           "gate2_outcome": "pass"}]}
-        assert derive(run) == "n/a"
-
-    def test_stale_incomplete_pass_cannot_shadow_completed_block(self):
-        # HOLE #3 (adversarial, worst case): combined order+status attack.
-        derive = self._fn()
-        run = {"stages": [
-            {"stage": "deliver", "status": "in_progress", "gate2_outcome": "pass"},
-            {"stage": "adversarial", "status": "completed", "gate2_outcome": "block"},
-        ]}
-        assert derive(run) == "block"
-
-    def test_prose_only_verdict_is_not_parsed_to_pass(self):
-        # CRITICAL fail-closed: a free-text gate2_verdict with NO canonical enum
-        # must NOT be heuristically parsed to pass — it returns n/a.
-        derive = self._fn()
-        run = {"stages": [{"stage": "adversarial", "status": "completed",
-                           "gate2_verdict": "2 CRIT (mine) fixed + 3 findings adjudicated"}]}
-        assert derive(run) == "n/a"
-        # prose present on a COMPLETED stage still must not be parsed to a pass
-
-    def test_no_adversarial_stage_is_na(self):
-        # docs/research profile — no adversarial stage by design.
-        derive = self._fn()
-        run = {"stages": [{"stage": "deliver", "status": "completed"}]}
-        assert derive(run) == "n/a"
-
-    def test_empty_or_missing_stages_is_na(self):
-        derive = self._fn()
-        assert derive({}) == "n/a"
-        assert derive({"stages": []}) == "n/a"
-
-    def test_unknown_enum_value_is_na_not_pass(self):
-        # a garbage enum value must fail closed, never pass.
-        derive = self._fn()
-        run = {"stages": [{"stage": "adversarial", "status": "completed",
-                           "gate2_outcome": "looks_good"}]}
-        assert derive(run) == "n/a"
+        for bad in (None, {}, [], "pass", {"summary": "x"}, {"outcome": [], "summary": {}}):
+            assert derive(bad) == "n/a"
 
 
 class TestTrustStamp:

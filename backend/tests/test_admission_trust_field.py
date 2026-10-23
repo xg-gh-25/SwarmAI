@@ -1,9 +1,9 @@
 """Knowledge Admission — Component B: the passed_adversarial_gate field + stamping.
 
 The trust field is stamped at proposal creation by resolving the source run's
-run.json and deriving the canonical gate2 outcome. Fail-closed: an unresolvable
-run, a non-run source (session decision/correction), or a run without a canonical
-gate2_outcome → 'n/a', NEVER 'passed'. (Design AC3.)
+v1 run_audit.json and deriving the canonical gate2 outcome. Fail-closed: an
+unresolvable run, a non-run source (session decision/correction), or a run whose
+audit does not show a clean reviewed landing → 'n/a', NEVER 'passed'. (Design AC3.)
 """
 import json
 import sys
@@ -54,31 +54,31 @@ class TestStampTrust:
         from core.ddd_cultivation import stamp_trust_from_run
         return stamp_trust_from_run
 
-    def _make_run(self, tmp_path, project, run_id, stages):
+    def _make_run(self, tmp_path, project, run_id, verdict, experts=1, stages=None):
         run_dir = tmp_path / "Projects" / project / ".artifacts" / "runs" / run_id
         run_dir.mkdir(parents=True)
-        (run_dir / "run.json").write_text(json.dumps({"stages": stages}))
+        if stages is not None:   # a retired-pipeline run.json, no audit
+            (run_dir / "run.json").write_text(json.dumps({"stages": stages}))
+        else:
+            (run_dir / "run_audit.json").write_text(json.dumps({
+                "outcome": {"status": "completed", "landing": "landed"},
+                "summary": {"quality": {"verdict": verdict, "findings_total": 0}},
+                "details": {"experts": [{"expert": "e"}] * experts}}))
         return tmp_path / "Projects" / project
 
     def test_gate2_passed_run_yields_passed(self, tmp_path):
         stamp = self._fn()
-        proj = self._make_run(tmp_path, "SwarmAI", "run_ok", [
-            {"stage": "adversarial", "status": "completed", "gate2_outcome": "pass"}
-        ])
+        proj = self._make_run(tmp_path, "SwarmAI", "run_ok", "PASS")
         assert stamp("run_ok", proj) == "passed"
 
     def test_blocked_run_yields_failed(self, tmp_path):
         stamp = self._fn()
-        proj = self._make_run(tmp_path, "SwarmAI", "run_bad", [
-            {"stage": "adversarial", "status": "completed", "gate2_outcome": "block"}
-        ])
+        proj = self._make_run(tmp_path, "SwarmAI", "run_bad", "BLOCK")
         assert stamp("run_bad", proj) == "failed"
 
     def test_docs_run_no_adversarial_yields_na(self, tmp_path):
         stamp = self._fn()
-        proj = self._make_run(tmp_path, "SwarmAI", "run_docs", [
-            {"stage": "deliver", "status": "completed"}
-        ])
+        proj = self._make_run(tmp_path, "SwarmAI", "run_docs", "PASS", experts=0)
         assert stamp("run_docs", proj) == "n/a"
 
     def test_unresolvable_run_yields_na_fail_closed(self, tmp_path):
@@ -94,9 +94,7 @@ class TestStampTrust:
     def test_filter_lessons_stamps_trust_from_run(self, tmp_path):
         # E2E: a lesson cultivated from a Gate-2-passed run → proposal.passed_adversarial_gate=passed
         from core.ddd_cultivation import filter_lessons_for_ddd
-        proj = self._make_run(tmp_path, "SwarmAI", "run_e2e", [
-            {"stage": "adversarial", "status": "completed", "gate2_outcome": "pass"}
-        ])
+        proj = self._make_run(tmp_path, "SwarmAI", "run_e2e", "PASS")
         # give the project the DDD docs so classify/append works; project_dir enables stamping
         lessons = ["A silent race drops a bubble when two writes interleave; a recurring "
                    "bug whenever a fallback path is added without a client_id."]
@@ -119,9 +117,7 @@ class TestStampTrust:
         # the traversal target genuinely resolves to a passed run.json.
         stamp = self._fn()
         # victim: a DIFFERENT project with a passed run
-        self._make_run(tmp_path, "Other", "run_win", [
-            {"stage": "adversarial", "status": "completed", "gate2_outcome": "pass"}
-        ])
+        self._make_run(tmp_path, "Other", "run_win", "PASS")
         attacker = tmp_path / "Projects" / "SwarmAI"
         (attacker / ".artifacts" / "runs").mkdir(parents=True)
         for attack_id in (
@@ -131,11 +127,9 @@ class TestStampTrust:
         ):
             assert stamp(attack_id, attacker) == "n/a", f"traversal forged trust via {attack_id!r}"
 
-    def test_prose_only_verdict_run_yields_na(self, tmp_path):
-        # a run with only a free-text gate2_verdict (no canonical enum) → n/a
+    def test_retired_pipeline_run_yields_na(self, tmp_path):
+        # an old run.json whose stage record claims a Gate-2 pass is not trusted
         stamp = self._fn()
-        proj = self._make_run(tmp_path, "SwarmAI", "run_prose", [
-            {"stage": "adversarial", "status": "completed",
-             "gate2_verdict": "2 CRIT fixed + 3 adjudicated"}
-        ])
-        assert stamp("run_prose", proj) == "n/a"
+        proj = self._make_run(tmp_path, "SwarmAI", "run_old", None, stages=[
+            {"stage": "adversarial", "status": "completed", "gate2_outcome": "pass"}])
+        assert stamp("run_old", proj) == "n/a"

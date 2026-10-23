@@ -246,7 +246,7 @@ export function turnZones(view: TurnView, isStreaming: boolean, hold: boolean = 
   const rest = units.slice(lead);
 
   // The chat part: everything before the run's first block. A call that straddles it
-  // (the run block arrives while run-create runs) is split at the block.
+  // (the run block arrives while `pipeline_v1.py create` runs) is split at the block.
   const start = view.pipelineStart?.index;
   const chat: TurnUnit[] = [];
   const pipe: TurnUnit[] = [];

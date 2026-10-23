@@ -3493,26 +3493,15 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
 
 
 # ---------------------------------------------------------------------------
-# active-run commit gate — code + REPORT.md must land in ONE commit (PreToolUse, Bash)
+# active-run commit gate — a live v1 run's files land only through its landing (Bash)
 # ---------------------------------------------------------------------------
-# WHY: a pipeline run's REPORT.md audit projection is generated LATE (REFLECT stage),
-# and run-commit bundles it with the run's code into ONE commit — BUT only if the code
-# is still UNCOMMITTED when run-commit runs. If the agent commits the code FIRST (a
-# manual `git commit` in COMPLETE, OR a per-cycle BUILD commit), run-commit's later
-# `git commit -- *real_files` carries only the new REPORT.md → the code and its audit
-# split across two commits, defeating the single-commit review purpose (observed:
-# git-reflog 29b3c1dd[code] + a1ec9b0e[REPORT-only]). Prose ("let run-commit commit")
-# failed twice, so per SOUL P7 this is a STRUCTURAL gate: deny an agent `git commit`
-# whose pending paths belong to an ACTIVE pipeline run, routing it to run-commit.
-#
-# run-commit itself commits via a Python subprocess (artifact_cli.py:3613
-# `subprocess.run(["git",...,"commit",...])`), NOT the agent Bash tool, so it NEVER
-# reaches PreToolUse — no self-deadlock. The agent's own Bash call that drives it is
-# `python artifact_cli.py run-commit` (no `git commit` token → not matched).
-#
-# FAIL-OPEN is cardinal (adversarial_commit_gate discipline): any uncomputable pending
-# set / parse error / timeout → APPROVE. A gate that false-blocks real work is worse
-# than the split it prevents.
+# A v1 run lands its change (code + its REPORT deliverable) with `pipeline_v1.py land`,
+# which checks the signed tests and review first. An agent `git commit` of a path the
+# run changed (RunEngine.owned_paths: its signed code facts) would put the change on
+# main without those checks, so it is denied and pointed at the landing. The landing
+# commits in its own subprocess, never through the agent's Bash tool, so it never
+# reaches this gate. A relevant run that cannot be read, or a commit retargeted at
+# another repo (`git -C`, `--git-dir`), is denied rather than let through (R1 review).
 
 # Scan root for active pipeline runs. Overridable in tests. The daemon's live
 # workspace is ~/.swarm-ai/SwarmWS; runs live at Projects/*/.artifacts/runs/*/run.json.
@@ -3584,7 +3573,7 @@ def _active_run_ownership(touching: "list[tuple[str, str]]") -> "tuple[set, set]
 
 
 # A run's review deliverable (B) lives at <repo>/.aidlc/deliverables/<run_id>/ in
-# whichever repo run-commit picks, so it is matched by path shape, not by root.
+# whichever repo the landing writes it, so it is matched by path shape, not by root.
 _DELIVERABLE_PATH_RE = re.compile(r"[\\/]\.aidlc[\\/]deliverables[\\/]([A-Za-z0-9_-]{1,64})[\\/]")
 
 
@@ -3716,7 +3705,7 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 # design: docs/design/pipeline-speed-systematic-fix.md §4-B3 and §4-G1
 # ---------------------------------------------------------------------------
 # Both gates key on "this session's active run" (contract C6): a run.json under
-# <workspace>/Projects/*/.artifacts/runs/*/run.json with status == "running" and
+# <workspace>/Projects/*/.artifacts/runs/*/run.json with status active / reflecting and
 # session_id == the hook's APP session id. The app session id arrives as
 # session_context["sdk_session_id"] (historical name; see _other_live_sessions_present).
 #
@@ -3738,9 +3727,9 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 # anyone else. Creating a run with SWARM_APP_SESSION_ID removed or overridden from a
 # Bash command is denied by session_link_gate (section below); a v1 run cannot be
 # created without one (its contract names the owner). Only runs active within
-# _RUN_ACTIVE_WINDOW_SECONDS (3 h) count: a running run is rewritten on every stage
-# transition, so an idle "running" file is a crashed or abandoned run and must not
-# pin a gate (the deny text names `run-update --status abandoned`).
+# _RUN_ACTIVE_WINDOW_SECONDS (3 h) count: an active run's projection is rewritten on
+# every pipeline_v1.py call, so an idle "active" one is a run nobody drives and must
+# not pin a gate.
 #
 # ACCEPTED RESIDUAL (same trade as pytest_command_guard): eval, project scripts and
 # `sudo -u X` are not recognised; a cd to an unresolvable directory (`cd $X`, `cd -`,
@@ -3759,9 +3748,8 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 # implicit `<pm> lint|vitest|build`, `pnpm exec|dlx`, `yarn exec|dlx`, `bunx`,
 # `bun x`, `bun build`); `pnpm install`, `yarn`, `bun install`, `pnpm dev` pass.
 
-# A running run counts as ACTIVE only while it shows recent activity (run.json mtime or
-# its updated_at, whichever is newer). An abandoned run left at status=running must not
-# gate tests for days; the deny text names the run-update --status abandoned escape.
+# An active run counts only while it shows recent activity (run.json mtime or its
+# updated_at, whichever is newer): a run nobody drives must not gate tests for days.
 _RUN_ACTIVE_WINDOW_SECONDS = 3 * 3600
 _RUN_SCAN_TIMEOUT = _GATE_GIT_TIMEOUT
 # _pending_commit_paths (≤4 git calls) + rev-parse + 2 numstat calls, each ≤ _GATE_GIT_TIMEOUT.
@@ -4866,7 +4854,7 @@ def create_run_amend_gate(session_context: dict[str, Any]):
     (same ``_session_run_state`` test as pipeline_test_gate), DENY ``git commit
     --amend`` outright instead of letting dangerous_command_gate park the run on a
     human approval prompt (run_c5eb0858 waited 2 h on one). A run's commit message is
-    built from its DELIVER record by ``run-commit``; the deny says so. No run → no
+    built by its landing (``pipeline_v1.py land --message``); the deny says so. No run → no
     effect (an interactive amend still goes through dangerous_command_gate).
     Fail-open on any error (the command then reaches dangerous_command_gate)."""
 

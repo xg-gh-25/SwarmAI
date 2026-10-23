@@ -1,44 +1,29 @@
-"""Tests for adversarial review meta-monitoring.
+"""Tests for adversarial review meta-monitoring (Pipeline v1).
 
 Verifies:
-- AC6: adversarial_stats.json records per-run findings count
-- AC7: WARNING emitted when 3+ consecutive runs with >50 changed lines have 0 findings
+- AC6: adversarial_stats.json records per-run findings count, read from each v1
+  run's run_audit.json (``details.findings``, ``details.experts``)
+- AC7: WARNING when the 3 latest completed runs that dispatched review experts all
+  closed with 0 findings; a run v1 sent no expert (a small change) never counts
 """
 import json
 from pathlib import Path
 
 
-
-def _make_run(runs_dir: str, run_id: str, findings_total: int, files_changed: int):
-    """Helper: create a run.json with deliver stage containing adversarial review."""
+def _make_run(runs_dir: str, run_id: str, findings_total: int, files_changed: int,
+              created: str | None = None):
+    """A completed v1 run: run.json projection + run_audit.json. ``files_changed`` > 50
+    stands for "v1 dispatched review experts" (it sends none to a small change)."""
     run_dir = Path(runs_dir) / run_id
     run_dir.mkdir(parents=True)
-    run_data = {
-        "id": run_id,
-        "status": "completed",
-        "stages": [
-            {
-                "stage": "deliver",
-                "status": "completed",
-                "artifact_id": f"art_{run_id}",
-            }
-        ],
-    }
-    (run_dir / "run.json").write_text(json.dumps(run_data))
-
-    # Create deliver artifact
-    artifacts_dir = run_dir.parent.parent
-    deliver_art = {
-        "type": "delivery",
-        "adversarial_review": {
-            "findings_total": findings_total,
-            "findings_fixed": findings_total,
-            "findings_remaining": 0,
-        },
-        "files_changed": files_changed,
-    }
-    art_file = artifacts_dir / f"art_{run_id}.json"
-    art_file.write_text(json.dumps(deliver_art))
+    (run_dir / "run.json").write_text(json.dumps({
+        "id": run_id, "status": "completed", "stages": {"deliver": "completed"},
+        "created_at": created or f"2026-10-01T00:00:{run_id[-2:]}Z"}))
+    experts = [{"expert": "correctness", "stage": "review"}] if files_changed > 50 else []
+    (run_dir / "run_audit.json").write_text(json.dumps({
+        "run_id": run_id, "outcome": {"status": "completed"},
+        "details": {"findings": [{"canonical_id": f"F{i}"} for i in range(findings_total)],
+                    "experts": experts}}))
 
 
 class TestAdversarialStatsRecording:
@@ -122,3 +107,26 @@ class TestDegradationWarning:
         result = check_adversarial_health(tmp_path / ".artifacts")
         # Not consecutive — middle run has findings
         assert result["degradation_warning"] is False
+
+    def test_an_old_pipeline_run_without_an_audit_is_not_counted(self, tmp_path):
+        from core.adversarial_meta import check_adversarial_health
+
+        runs_dir = tmp_path / ".artifacts" / "runs"
+        (runs_dir / "run_old").mkdir(parents=True)
+        (runs_dir / "run_old" / "run.json").write_text(json.dumps({
+            "id": "run_old", "status": "completed",
+            "stages": [{"stage": "deliver", "status": "completed", "artifact_id": "a"}]}))
+        assert check_adversarial_health(tmp_path / ".artifacts")["runs_analyzed"] == 0
+
+    def test_runs_are_ordered_by_creation_not_by_directory_name(self, tmp_path):
+        from core.adversarial_meta import check_adversarial_health
+
+        runs_dir = tmp_path / ".artifacts" / "runs"
+        runs_dir.mkdir(parents=True)
+        for rid, t in (("run_c3", "01"), ("run_b2", "02"), ("run_a1", "03")):
+            _make_run(str(runs_dir), rid, findings_total=0, files_changed=60,
+                      created=f"2026-10-01T00:00:{t}Z")
+        _make_run(str(runs_dir), "run_z9", findings_total=1, files_changed=60,
+                  created="2026-10-01T00:00:04Z")
+        # newest run has findings: the trailing streak is 0
+        assert check_adversarial_health(tmp_path / ".artifacts")["degradation_warning"] is False

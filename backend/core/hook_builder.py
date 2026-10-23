@@ -428,14 +428,14 @@ async def build_hooks(
 
     # ── PreToolUse: commit gate (Bash-scoped), four checks on `git commit` ──
     # 1. run_amend_gate: in THIS session's active run, `git commit --amend` is denied and
-    #    pointed at the DELIVER title + run-commit (run_c5eb0858: an approval prompt
-    #    parked an unattended run 2 h).
+    #    pointed at the run's landing, `pipeline_v1.py land --message` (run_c5eb0858:
+    #    an approval prompt parked an unattended run 2 h).
     # 2. direct_commit_gate (design §4-G1): >20 changed SOURCE lines in the SwarmAI repo
     #    from a session with no run of its own → `pipeline_v1.py create --profile direct`.
-    # 3. active_run_commit_gate: a file owned by an ACTIVE run (or its REPORT.md) goes
-    #    through run-commit, so code + REPORT land in one commit.
+    # 3. active_run_commit_gate: a file a live v1 run changed (its signed code facts)
+    #    lands only through the run's landing; denies when such a run is unreadable.
     # 4. adversarial_commit_gate (R1): no commit without a review sub-agent this session.
-    # All fail-open. Operator bypass SWARM_GATE_FORCE=commit_gate (or one member name).
+    # The others fail open. Operator bypass SWARM_GATE_FORCE=commit_gate (or one member name).
     # Registered BEFORE dangerous_command_gate: never ask a user to approve a commit
     # this gate would then deny.
     registry.register(

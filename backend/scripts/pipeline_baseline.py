@@ -49,11 +49,11 @@ def collect(workspace: Path) -> dict:
         except (OSError, ValueError):
             continue
         profile = run.get("profile")
-        if profile not in seconds or run.get("status") not in ("completed", "complete"):
+        if profile not in seconds or run.get("status") != "completed":
             continue
-        # legacy runs record completed_at; a terminal v1 projection's updated_at is its end
+        # a terminal v1 projection's updated_at is its end
         start = _epoch(run.get("created_at"))
-        end = _epoch(run.get("completed_at") or run.get("updated_at"))
+        end = _epoch(run.get("updated_at"))
         if start is not None and end is not None and end > start:
             seconds[profile].append(end - start)
         try:

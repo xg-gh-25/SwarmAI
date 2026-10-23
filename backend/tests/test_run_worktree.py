@@ -439,7 +439,7 @@ def test_run_lock_reentrant_and_excludes_other_process(tmp_path):
 
 def test_update_run_is_atomic_read_modify_write(tmp_path):
     f = tmp_path / "run.json"
-    f.write_text(json.dumps({"status": "running"}))
+    f.write_text(json.dumps({"status": "active"}))
     run_lock.update_run(f, lambda d: d.update(status="cancelled"))
     assert json.loads(f.read_text())["status"] == "cancelled"
     assert [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")] == []
@@ -610,7 +610,7 @@ def test_own_isolated_run_includes_a_run_with_no_worktree_yet(env, tmp_path):
     rd = ws / "Projects" / "P" / ".artifacts" / "runs" / RUN
     rd.mkdir(parents=True)
     (rd / "run.json").write_text(json.dumps({
-        "id": RUN, "project": "P", "status": "running", "session_id": "s1",
+        "id": RUN, "project": "P", "status": "active", "session_id": "s1",
         "worktree_mode": "isolated", "worktrees": []}))
     r = rw.own_isolated_run("s1", ws)
     assert r is not None and r["id"] == RUN and r["worktrees"] == []
@@ -633,7 +633,7 @@ def test_landed_run_no_longer_claims_writes(env):
     e = rw.create(RUN, "swarmai", env["main"])
     e["state"] = "integrated"
     (rd / "run.json").write_text(json.dumps({
-        "id": RUN, "project": "P", "status": "running", "session_id": "s1",
+        "id": RUN, "project": "P", "status": "active", "session_id": "s1",
         "worktree_mode": "isolated", "worktrees": [e]}))
     assert rw.own_isolated_run("s1", ws) is None       # REFLECT writes go in place
 
@@ -659,7 +659,7 @@ def test_unborn_repo_is_not_isolatable(env):
 
 def test_paused_run_without_worktrees_claims_nothing_and_newest_run_wins(env):
     ws = env["tmp"] / "ws"
-    for rid, status in (("run_old1", "running"), ("run_new1", "running"), ("run_p1", "paused")):
+    for rid, status in (("run_old1", "active"), ("run_new1", "active"), ("run_p1", "paused")):
         rd = ws / "Projects" / "P" / ".artifacts" / "runs" / rid
         rd.mkdir(parents=True)
         (rd / "run.json").write_text(json.dumps({
@@ -813,3 +813,12 @@ def test_land_restores_their_bytes_when_git_fails_after_checkout(env, monkeypatc
     with pytest.raises(rw.WorktreeError):
         rw.land(RUN, e, env["main"], "m", t)
     assert (env["main"] / "m.py").read_text() == theirs
+
+
+def test_deliver_done_reads_the_v1_stage_map():
+    """R6 review: run.json ``stages`` is v1's {stage: state} map, not old records."""
+    assert rw._deliver_done({"stages": {"deliver": "completed", "reflect": "open"}})
+    assert rw._deliver_done({"stages": {"deliver": "degraded"}})
+    assert not rw._deliver_done({"stages": {"deliver": "open"}})
+    assert not rw._deliver_done({"stages": [{"stage": "deliver", "status": "completed"}]})
+    assert not rw._deliver_done({})

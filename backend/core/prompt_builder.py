@@ -509,9 +509,9 @@ def _render_ui_context_section(editor_context: Optional[dict]) -> str:
 def with_app_session_id(session_env: "dict | None", session_context: "dict | None") -> "dict | None":
     """*session_env* plus ``SWARM_APP_SESSION_ID`` = the app session id, except for a
     prewarmed unit's temporary id: its subprocess env is fixed at spawn and survives
-    adoption, so the prewarm id would stamp every run the adopting session creates.
-    Left unset, the run is created unowned and session_link_stamper (bound to the
-    unit's hook context, which adoption rewrites) stamps the real session."""
+    adoption, so the prewarm id would own every run the adopting session creates.
+    Left unset, run_owner_gate (bound to the unit's hook context, which adoption
+    rewrites) puts the real id before each pipeline_v1 / pipeline_test call."""
     sid = (session_context or {}).get("sdk_session_id")
     from .session_router import PREWARM_SESSION_PREFIX
     if not sid or str(sid).startswith(PREWARM_SESSION_PREFIX):
@@ -2480,13 +2480,12 @@ class PromptBuilder:
         )
         # Run ↔ session link (pipeline design §4-E1): the CLI subprocess gets the
         # APP session id (session_context["sdk_session_id"] holds the app id, see
-        # session_router) so `artifact_cli run-create` can record it in run.json.
-        # Per-subprocess env only — never os.environ (session isolation).
+        # session_router) so `pipeline_v1.py create` records it as the run's owner in
+        # the protected contract. Per-subprocess env only — never os.environ.
         # A prewarmed unit's id is temporary (PREWARM_SESSION_PREFIX): its subprocess env
-        # is fixed at spawn and survives adoption, so injecting it would stamp every run
-        # the adopting session creates with the prewarm id. Leave it unset instead: the
-        # run is created unowned and session_link_stamper (hooked to the unit's context,
-        # which adoption rewrites to the real id) stamps the real session.
+        # is fixed at spawn and survives adoption, so it is left unset; run_owner_gate
+        # (hooked to the unit's context, which adoption rewrites to the real id) puts
+        # the real id before each pipeline call.
         session_env = with_app_session_id(session_env, session_context)
 
         # ── Max turns: per-message API roundtrip limit ─────────────

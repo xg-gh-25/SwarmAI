@@ -794,8 +794,9 @@ of content type (poster, video, narrative). The validator is the Pollinate equiv
 of pipeline_validator.py.
 
 Checks 7-9 are the DETERMINISTIC cross-format consistency gate — the hard-enforced
-subset of RP-X, moved here from the prose-only `cross_format_check.py` so the DELIVER
-chokepoint (`artifact_cli.py`) actually blocks on them. Each SKIPs when its input is
+subset of RP-X, moved here from the prose-only `cross_format_check.py`. The old DELIVER
+chokepoint that ran the validator (`artifact_cli.py`'s pipeline-run path) was retired with
+the old pipeline, so today the agent runs `pollinate_validator.py` itself at DELIVER. Each SKIPs when its input is
 absent (single-track / legacy / fast-path runs stay valid) and only FAILs on a
 deterministic conflict. The HEURISTIC RP-X2/3/4/5 (thesis-keyword / numeric / naming /
 color-overlap) stay ADVISORY in `cross_format_check.py` at REVIEW — false-positive-prone
@@ -809,9 +810,9 @@ know which before you trust it:
 
 | Gate script | Kind | Enforcement mechanism |
 |---|---|---|
-| `pollinate_validator.py` | **ENFORCED** | `artifact_cli.py` runs it at DELIVER and `exit(1)` on `valid:false`. The ONE delivery-level chokepoint. 9 invariants (incl. cross-format 7-9). |
+| `pollinate_validator.py` | **AGENT-RUN (was ENFORCED)** | The agent runs it at DELIVER; `valid:false` means fix before delivering. Its `artifact_cli.py` chokepoint was retired with the old pipeline, so nothing blocks a delivery that skips it. 9 invariants (incl. cross-format 7-9). |
 | `convergence_gate.py` | **ENFORCED (poster track)** | Poster BUILD blocks on its 8-layer CSS/HTML result (`run_gate` valid:false → fix-and-rerun). Per-poster depth check — NOT a duplicate of the validator's dir-level checks. |
-| `p2_scan.py` | **ENFORCED (poster track, agent-run)** | First-person / hero-framing scan (L2 mechanical gate). `track-b-poster.md` runs it BLOCKING in the poster BUILD loop — `exit 1` = fix offending text before proceeding. Agent-enforced (not wired to the `artifact_cli.py` chokepoint), same kind as `convergence_gate.py`. |
+| `p2_scan.py` | **ENFORCED (poster track, agent-run)** | First-person / hero-framing scan (L2 mechanical gate). `track-b-poster.md` runs it BLOCKING in the poster BUILD loop — `exit 1` = fix offending text before proceeding. Agent-enforced, same kind as `convergence_gate.py`. |
 | `geo_score.py` | **ADVISORY** | GEO/AI-slop-opener + superlative scan for narrative. Prose-invoked; never wired to a chokepoint. Its AI-slop-opener detector is UNIQUE — keep it. |
 | `cross_format_check.py` RP-X2/3/4/5 | **ADVISORY** | Heuristic consistency (thesis-keyword / numeric / naming / color). REVIEW-stage signal only. (RP-X1 + track-set drift are the enforced part — in the validator.) |
 | `check_prereqs.py` | **PREFLIGHT (not a gate)** | Video-track environment probe. Always `exit 0` by design — it informs, never blocks. |
@@ -819,9 +820,9 @@ know which before you trust it:
 **The honest rule:** an ADVISORY check is trusted-to-be-run, not enforced. That is a
 legitimate soft gate ONLY for judgment/taste checks whose false-positive cost is high
 (AI-slop opener, thesis-alignment, color/naming heuristics). Anything DETERMINISTIC that
-matters belongs in an ENFORCED gate. Note two enforcement TIERS: (a) delivery-level —
-`pollinate_validator.py` via the `artifact_cli.py exit(1)` chokepoint (the hardest, can't
-be skipped); (b) track-level agent-run — `convergence_gate.py` + `p2_scan.py` are BLOCKING
+matters belongs in an ENFORCED gate. Today every Pollinate gate is agent-run: the
+delivery-level chokepoint (`pollinate_validator.py` via `artifact_cli.py`) was retired with
+the old pipeline; track-level agent-run — `convergence_gate.py` + `p2_scan.py` are BLOCKING
 inside the poster BUILD loop (the runbook says fix-before-proceed), enforced by the agent
 following the runbook rather than by a chokepoint. Both are real gates; ADVISORY is neither.
 Do NOT dress an advisory check up as if it blocks, and do NOT downgrade a blocking gate to

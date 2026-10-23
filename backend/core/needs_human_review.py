@@ -84,11 +84,9 @@ _ARCHIVE_BASENAME_RE = re.compile(r"-archive(-\d{4}-\d{2})?\.md$")
 
 __all__ = ["needs_human_review", "ReviewVerdict", "Kind"]
 
-# `source-final` (run_b8ea6d5c): the finish-time PR-review batch kind. Minted ONLY
-# by the orchestrator's surface_run_outputs observe-emit path (never by this
-# classifier), so a mid-run source edit is still `source` (suppressed) — this kind
-# exists so the frontend rail can ACCEPT the finish batch while keeping mid-run
-# `source` dropped. It never appears as a _classify_kind return.
+# `source-final`: the kind of the old pipeline's finish-time PR-review batch. Nothing
+# mints it since that batch was retired (R3); it stays in the Literal while the
+# frontend rail still names it. It never appears as a _classify_kind return.
 Kind = Literal["content", "knowledge", "source", "source-final", "process"]
 
 

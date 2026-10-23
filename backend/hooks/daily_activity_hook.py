@@ -73,8 +73,7 @@ def _touches_session_file(commit_files: list[str], session_files: list[str],
 # allowed in between), or a pipeline landing. `git log | grep commit` is not one.
 _GIT_WRITE_RE = re.compile(
     r"\bgit(?:\s+-[Cc]\s+\S+)*\s+(?:commit|merge|rebase|cherry-pick|revert|am|pull)\b"
-    r"|\bpipeline_v1\.py\b.*\bland\b"
-    r"|\bartifact_cli\.py\b.*\b(?:land|deliver|run-commit|stage-complete)\b")
+    r"|\bpipeline_v1\.py\b.*\bland\b")
 _RUN_ID_RE = re.compile(r"\brun_[0-9a-f]{8}\b")
 _SLACK_S = 3.0  # seconds of clock slack around a tool call
 
@@ -219,27 +218,24 @@ def _get_session_git_commits(
 
 
 def _session_run_evidence(session_id: str, workspace: "Path | None" = None,
-                          ) -> "tuple[set[str], list[str], set[str]]":
-    """(landed SHAs, touched files, run ids) of the pipeline runs this session owns.
+                          ) -> "tuple[set[str], set[str]]":
+    """(landed SHAs, run ids) of the Pipeline v1 runs this session owns.
 
     A run's edits are made by its own agents, not by tool calls in this
     session's transcript, so without this a session that drove a run gets none
-    of the run's commits. Pipeline v1 (the current protocol): both landing
+    of the run's commits. Both landing
     paths -- the normal DELIVER landing and ``run-land`` -- persist the landed
     SHAs to ``<run_dir>/artifacts/landing-progress-*.json`` and then
     ``RunEngine.write_projection`` publishes them as ``run.json`` ``commits[]``
     beside the contract's ``session_id``; the landing is ``commit-tree`` +
     ``merge --ff-only`` into the contract's repo roots, so the SHA in run.json
-    is the SHA on main. Legacy (pre-cutover) runs record ``files_touched``
-    runs record ``files_touched`` and name the run id in the landing commit
-    message. Both carry ``session_id``. Reads the shared
+    is the SHA on main. The run.json ``session_id`` is the signed owner. Reads the shared
     incremental run index (one stat per run, parse only on change).
     """
     shas: set[str] = set()
-    files: list[str] = []
     ids: set[str] = set()
     if not session_id:
-        return shas, files, ids
+        return shas, ids
     try:
         from core.run_index import runs
         for rf in runs(workspace or SWARMWS):
@@ -251,12 +247,9 @@ def _session_run_evidence(session_id: str, workspace: "Path | None" = None,
             for c in data.get("commits") or []:
                 if isinstance(c, dict) and isinstance(c.get("sha"), str) and len(c["sha"]) == 40:
                     shas.add(c["sha"])
-            for f in data.get("files_touched") or []:
-                if isinstance(f, str):
-                    files.append(f)
     except Exception:  # noqa: BLE001 -- evidence is best-effort, never blocks DA
         logger.debug("run evidence lookup failed for %s", session_id, exc_info=True)
-    return shas, files, ids
+    return shas, ids
 
 
 def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
@@ -527,8 +520,8 @@ class DailyActivityExtractionHook:
         ``_get_session_git_commits``. Commits from every distinct repo, at
         most 15. Empty list on any failure.
         """
-        run_shas, run_files, run_ids = _session_run_evidence(session_id)
-        session_files = list(session_files or []) + run_files
+        run_shas, run_ids = _session_run_evidence(session_id)
+        session_files = list(session_files or [])
         try:
             since = datetime.fromisoformat(session_start_iso.replace("Z", "+00:00"))
         except (ValueError, TypeError):

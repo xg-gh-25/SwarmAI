@@ -232,13 +232,6 @@ class ContextHealthHook:
         # self-healing, and the hook now exits clean instead of "timed out".
         _refresh_deadline = time.monotonic() + 25.0
 
-        # Auto-cultivate pipeline lessons — promote REFLECT output into DDD docs
-        # without requiring the agent to remember to run `run-cultivate` manually.
-        try:
-            self._auto_cultivate_pipeline_lessons(root, _deadline=_cultivation_deadline)
-        except Exception as exc:
-            logger.debug("context_health: auto-cultivation skipped: %s", exc)
-
         # Auto-cultivate session signals — promote corrections (Ch6) and
         # decisions (Ch5) from DailyActivity JSONL into DDD docs.
         try:
@@ -990,379 +983,7 @@ class ContextHealthHook:
             logger.debug("spec-stale escalation creation failed for %s: %s", project, exc)
 
     # ------------------------------------------------------------------
-    # Auto-cultivation — promote REFLECT lessons into DDD docs
-    # ------------------------------------------------------------------
-
-    def _auto_cultivate_pipeline_lessons(self, root: Path, *, _deadline: float = 0) -> bool:
-        """Auto-cultivate uncultivated pipeline REFLECT lessons into DDD docs.
-
-        Scans all Projects/*/.artifacts/runs/*/run.json for completed pipeline
-        runs that have reflect.lessons populated but no cultivated:true flag.
-        For each, calls cultivate_from_reflect() to auto-apply safe additive
-        lessons and escalate risky ones, then marks the run as cultivated.
-
-        This replaces the manual `run-cultivate` CLI call that the agent had
-        to remember (and failed 100% of the time — 141 runs, 0 cultivated).
-
-        Capped at 5 cultivations per session AND 25s cooperative time budget.
-        The hook executor enforces a 30s timeout via asyncio.wait_for, but that
-        cannot actually cancel a thread-pool thread in CPython — it just stops
-        waiting while the thread continues silently. The cooperative budget bails
-        early so the hook finishes cleanly within the executor's window.
-
-        Remaining uncultivated runs are processed in subsequent sessions.
-
-        Returns:
-            True if any DDD docs were modified (applied > 0), False otherwise.
-        """
-        projects_dir = root / "Projects"
-        if not projects_dir.is_dir():
-            return False
-
-        from core.ddd_cultivation import cultivate_from_reflect
-
-        _MAX_PER_SESSION = 5
-        # PE-4: use shared deadline from _light_refresh (25s total for all cultivation)
-        _effective_deadline = _deadline if _deadline > 0 else (time.monotonic() + 25.0)
-        cultivated_count = 0
-        any_applied = False  # Track if any DDD docs were actually modified
-
-        for project_dir in sorted(projects_dir.iterdir()):
-            if not project_dir.is_dir():
-                continue
-            runs_dir = project_dir / ".artifacts" / "runs"
-            if not runs_dir.is_dir():
-                continue
-
-            # Sort by mtime (oldest first) to ensure FIFO processing.
-            # Filter to last 30 days — older uncultivated runs are stale and
-            # won't produce useful DDD content. Also bounds scan cost to O(recent)
-            # instead of O(total history) as pipelines accumulate.
-            # Cache stat to avoid double syscall (meta-review finding).
-            mtime_cutoff = time.time() - 30 * 86400
-            run_items = [
-                (d, d.stat().st_mtime)
-                for d in runs_dir.iterdir()
-                if d.is_dir()
-            ]
-            run_dirs = sorted(
-                ((d, mt) for d, mt in run_items if mt > mtime_cutoff),
-                key=lambda x: x[1],
-            )
-
-            for run_dir, _ in run_dirs:
-                # Cooperative time budget — bail cleanly before hook timeout
-                if time.monotonic() > _effective_deadline:
-                    logger.info(
-                        "context_health: auto-cultivate hit shared deadline, "
-                        "deferring remaining to next session",
-                    )
-                    break
-
-                run_file = run_dir / "run.json"
-                if not run_file.exists():
-                    continue
-
-                try:
-                    run_data = json.loads(run_file.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    logger.debug(
-                        "context_health: auto-cultivate skipped corrupt %s", run_file
-                    )
-                    continue
-
-                # Only cultivate runs that have reached a TERMINAL status. An
-                # in-flight run (running/paused) may still write more reflect
-                # lessons, and consuming it now would permanently mark it
-                # cultivated=True (:768) → the MEMORY mirror would be held back
-                # as "unqualified run" (run_qualified gate) and NEVER retried
-                # after completion. Leaving it un-cultivated lets a later session
-                # re-process it once status is terminal. (Gate-2, run_f73a33e2)
-                _TERMINAL = ("completed", "abandoned", "cancelled", "blocked", "failed")
-                if run_data.get("status") not in _TERMINAL:
-                    continue
-
-                # Find reflect stage with lessons
-                reflect_stage = None
-                reflect_idx = -1
-                for idx, stage in enumerate(run_data.get("stages", [])):
-                    if stage.get("stage") == "reflect":
-                        reflect_stage = stage
-                        reflect_idx = idx
-                        break
-
-                if reflect_stage is None:
-                    continue
-                if reflect_stage.get("cultivated"):
-                    continue  # Already done
-                lessons = reflect_stage.get("lessons", [])
-                if not lessons:
-                    continue  # Nothing to cultivate
-
-                # Cap per session to keep _light_refresh fast
-                if cultivated_count >= _MAX_PER_SESSION:
-                    break
-
-                # Cultivate
-                project_name = project_dir.name
-                try:
-                    run_id = run_data.get("id", run_dir.name)
-                    result = cultivate_from_reflect(
-                        lessons, run_id, project_name, project_dir
-                    )
-
-                    # Atomic write: mark cultivated in run.json via tmp+replace
-                    run_data["stages"][reflect_idx]["cultivated"] = True
-                    tmp_file = run_file.with_suffix(".tmp")
-                    tmp_file.write_text(
-                        json.dumps(run_data, indent=2, ensure_ascii=False),
-                        encoding="utf-8",
-                    )
-                    os.replace(tmp_file, run_file)
-                    cultivated_count += 1
-
-                    if result.get("applied", 0) > 0:
-                        any_applied = True
-
-                    # ── Event extraction: REFLECT → MEMORY.md (immediate) ──
-                    # Pipeline REFLECT lessons also go to MEMORY.md as
-                    # structured entries. Same engine, parallel destination.
-                    # Only extract high-confidence lessons (those that were
-                    # applied to DDD — if DDD accepted them, they're confident).
-                    if result.get("applied", 0) > 0:
-                        try:
-                            self._extract_lessons_to_memory(
-                                root, lessons, run_id, project_name,
-                            )
-                        except Exception:
-                            pass  # Best-effort — DDD cultivation is primary
-
-                    # discarded is logged alongside the rest because it is the
-                    # ONLY field that separates "every proposal was declined"
-                    # from "there was nothing to cultivate" — both leave
-                    # applied/escalated/rejected at zero.
-                    logger.info(
-                        "context_health: auto-cultivated %s/%s — "
-                        "applied=%d, escalated=%d, rejected=%d, discarded=%d%s",
-                        project_name, run_id,
-                        result.get("applied", 0),
-                        result.get("escalated", 0),
-                        result.get("rejected", 0),
-                        result.get("discarded", 0),
-                        (f" ({result['discard_reasons']})"
-                         if result.get("discard_reasons") else ""),
-                    )
-                    # Section-name drift = config bug (lesson dropped), not a
-                    # benign rejection — log at error level so it surfaces.
-                    for _drift in result.get("drift_errors", []):
-                        logger.error("context_health: %s", _drift)
-                except Exception as exc:
-                    logger.warning(
-                        "context_health: auto-cultivate failed for %s/%s: %s",
-                        project_name, run_dir.name, exc,
-                    )
-
-            if cultivated_count >= _MAX_PER_SESSION:
-                break
-            if time.monotonic() > _effective_deadline:
-                break
-
-        if cultivated_count > 0:
-            logger.info(
-                "context_health: auto-cultivated %d pipeline run(s)", cultivated_count
-            )
-
-        return any_applied
-
-    def _extract_lessons_to_memory(
-        self, root: Path, lessons: list[str], run_id: str, project: str,
-    ) -> None:
-        """Extract REFLECT lessons to MEMORY.md through the SSOT admission gate.
-
-        Every lesson routes through ``ingestion_gate.admit_memory_lesson`` — the ONE
-        MEMORY door all writers share (P8). That gate runs the deterministic HARD-DENY
-        floors FIRST (structural-noise → thin → content_floor[confidence/governance] →
-        keep_type_holdback), then the LLM judge, so the brain is guarded even when the
-        judge is unavailable. Verdicts:
-          • auto    → written to the judge-routed section (dedup inside the write lock).
-          • pending → RECOVERABLE (judge budget-exhausted / infra down, or a keep-type
-            held while the judge is down) → deferred to distill-pending.jsonl for a
-            fresh-budget re-judge next cycle; NEVER dropped, NEVER auto-written.
-          • discard → a real refusal (a deterministic floor, or the judge online saying
-            suspect/noise) → not written (the source lesson still lives upstream).
-        (The former ``run_qualified`` trust param + the ``_admit_lesson_to_memory``
-        code-side stand-in were removed — the SSOT gate is the sole authority now.)
-        """
-
-        memory_path = root / ".context" / "MEMORY.md"
-        if not memory_path.exists():
-            return
-
-        today = date.today().isoformat()
-
-        # Route each lesson to its correct section via the shared route_lesson_type
-        # SSOT (imported at the per-lesson site below).
-        # Group lessons by target section. Each candidate carries its title so
-        # step-6 dedup can compare against existing section entries INSIDE the
-        # lock (against the locked snapshot, not a stale pre-lock read).
-        from collections import defaultdict
-        by_section: dict[str, list[tuple[str, str]]] = defaultdict(list)
-
-        from core.ddd_entry_lifecycle import route_lesson_type, _DECLARED_TYPE_RE, VALID_TYPES
-        for lesson in lessons[:3]:
-            # JUDGE GATE (run_04fd397c, XG decision A): this reflection→MEMORY path
-            # was a BACKDOOR — it used _admit_lesson_to_memory (a code-side Step-0
-            # STAND-IN), NOT the self_adversarial judge, so "the judge is the sole
-            # admit authority" (P8) was false here. Now routes through the SAME
-            # admit_memory_lesson every other MEMORY door uses. verdict=="auto" →
-            # write to the judge-routed section; fail-closed (judge error/suspect/
-            # noise) → discard (dropped, logged, never a human sink).
-            try:
-                from core.ingestion_gate import admit_memory_lesson
-                verdict, target_section, reason, distilled = admit_memory_lesson(lesson)
-            except Exception as exc:
-                logger.warning(
-                    "context_health: MEMORY judge crashed, DISCARD "
-                    "lesson (%s: %s): %.80s", type(exc).__name__, exc, lesson,
-                )
-                continue
-            if verdict == "pending":
-                # RECOVERABLE (judge budget-exhausted / infra down / keep-type held while
-                # the judge is unavailable) — DEFER, never drop. Lands in the shared
-                # distill-pending.jsonl for a fresh-budget re-judge next cycle. This is
-                # the fix for the silent-drop bug: the SSOT door used to collapse
-                # pending→discard, losing every reflection lesson once the window filled.
-                try:
-                    from hooks.distillation_hook import requeue_pending_lesson
-                    requeue_pending_lesson(root / ".context", "lesson", lesson)
-                    logger.info("context_health: MEMORY lesson deferred (%s): %.80s",
-                                reason, lesson)
-                except Exception as exc:  # noqa: BLE001 — defer is best-effort, never break
-                    logger.warning("context_health: pending defer FAILED (%s), lesson "
-                                   "NOT lost from source: %.80s", type(exc).__name__, lesson)
-                continue
-            if verdict != "auto" or not target_section:
-                logger.info(
-                    "context_health: judge DISCARD MEMORY lesson (%s): %.80s",
-                    reason, lesson,
-                )
-                continue
-            # ROOT-FIX (capture-vs-distill): write the DISTILLED rule when the gate
-            # rewrote a shape-dirty lesson; fail-open → distilled=None keeps original.
-            lesson = distilled or lesson
-            # entry_type from the type router. route_lesson_type now HONORS an
-            # author-declared leading [type] tag (run_4ad5a44b), so pass the
-            # tag-bearing lesson — the declared type wins over a keyword guess.
-            _, entry_type = route_lesson_type(lesson)
-            # Strip the leading [type] prefix from the BODY before embedding, or it
-            # is written THREE times (auto [entry_type] + in title-split + in body)
-            # — the triple-tag pollution that produced malformed "- [guideline]
-            # **[pitfall] X** — [pitfall] X" entries (run_4ad5a44b bug b).
-            # Strip ONLY a VALID type tag (same guard as route_lesson_type's honor):
-            # an unconditional .sub() would corrupt a lesson whose body legitimately
-            # opens with a non-type bracket like "[TODO] ..." or "[2026] ..."
-            # (Gate-2 CRITICAL, run_4ad5a44b).
-            _dm = _DECLARED_TYPE_RE.match(lesson)
-            lesson_body = (
-                _DECLARED_TYPE_RE.sub("", lesson, count=1)
-                if _dm and _dm.group(1).lower() in VALID_TYPES
-                else lesson
-            )
-            title = lesson_body.split("—")[0].strip() if "—" in lesson_body else lesson_body[:60]
-            title = title.rstrip(".")
-            entry_line = f"- [{entry_type}] **{title}** — {lesson_body} ({today}, {run_id})"
-            meta_line = f"  <!-- ref:0 | last:{today} | decay:active -->"
-            by_section[target_section].append((title, f"{entry_line}\n{meta_line}"))
-
-        if not by_section:
-            return
-
-        # Insert each group at the section boundary via _modify_content (prepend).
-        # R-1 (run_55c02bbe): the prior raw-splice insert math had an off-by-one
-        # that landed the new entry+meta BETWEEN an existing bullet and its meta,
-        # orphaning the existing meta as a 2nd consecutive line (120 stacks in
-        # live MEMORY.md). _modify_content inserts at a clean section boundary
-        # (right after the header), which structurally cannot orphan an existing
-        # entry's meta. PREPEND (not append) keeps newest-at-TOP — the convention
-        # distillation_hook._write_section uses for these same sections, and the
-        # one _enforce_section_caps relies on (it trims the BOTTOM = oldest).
-        # Reuses the same locked writer distillation uses (R-1 Gate-2 #2/#3).
-        from scripts.locked_write import _modify_content
-
-        # R-1 Gate-2 meta-review (MED interaction): MEMORY.md is concurrently
-        # written by distillation + _run_memory_lifecycle, both under MEMORY.md.lock.
-        # This writer previously read+wrote UNLOCKED → lost-update race. Take the
-        # SAME lock and read INSIDE it so the modify is computed from the locked
-        # snapshot. Non-blocking: if busy, skip (best-effort — caller wraps in
-        # try/except and DDD cultivation is the primary destination).
-        from utils.file_lock import flock_exclusive_nb, flock_unlock
-        lock_path = memory_path.with_suffix(".md.lock")
-        lock_fd = None
-        try:
-            lock_fd = open(lock_path, "w")  # noqa: SIM115
-            flock_exclusive_nb(lock_fd)
-        except OSError:
-            if lock_fd:
-                lock_fd.close()
-            logger.debug("context_health: MEMORY.md lock busy, skipping lesson extract")
-            return
-
-        try:
-            content = memory_path.read_text(encoding="utf-8")
-            # Step 6 — dedup INSIDE the lock, against the locked snapshot. An
-            # exact/normalized-title match with an existing entry in the SAME
-            # target section → HOLD-BACK (benign skip). Uses parse_entries (the
-            # canonical MEMORY.md parser); no embeddings (that path is removed
-            # dead code). Normalization = casefold + strip so trivial variants
-            # collide.
-            from core.ddd_entry_lifecycle import parse_entries
-
-            def _norm(t: str) -> str:
-                return t.strip().casefold()
-
-            existing_by_section: dict[str, set[str]] = defaultdict(set)
-            for e in parse_entries(content):
-                if e.section and e.title:
-                    existing_by_section[e.section].add(_norm(e.title))
-
-            wrote = 0
-            for section_name, candidates in by_section.items():
-                seen = existing_by_section[section_name]
-                fresh_blocks = []
-                for title, block in candidates:
-                    key = _norm(title)
-                    if key in seen:
-                        logger.info(
-                            "context_health: HOLD-BACK MEMORY lesson (duplicate "
-                            "of existing '%s' in %s): %.60s",
-                            title, section_name, block,
-                        )
-                        continue
-                    seen.add(key)  # also dedups within this same batch
-                    fresh_blocks.append(block)
-                if not fresh_blocks:
-                    continue
-                new_block = "\n".join(fresh_blocks)
-                content = _modify_content(content, section_name, new_block, "prepend")
-                wrote += len(fresh_blocks)
-
-            if wrote:
-                # Reindex IN-LOCK via the SAME pure function the facade uses
-                # NEW ARCHITECTURE (2026-08-14): the in-prompt index was DELETED
-                # (live MEMORY is full-injected; recall scans body-BM25). No index
-                # to maintain — the write persists the entry directly.
-                memory_path.write_text(content, encoding="utf-8")
-        finally:
-            flock_unlock(lock_fd)
-            lock_fd.close()
-
-        logger.debug(
-            "context_health: extracted lessons to MEMORY.md from %s/%s",
-            project, run_id,
-        )
-
-    # ------------------------------------------------------------------
-    # Auto-cultivation — promote session corrections + decisions into DDD
+    # Auto-cultivation — promote session signals into DDD docs
     # ------------------------------------------------------------------
 
     # State file: tracks which JSONL session records have been cultivated
@@ -1373,7 +994,7 @@ class ContextHealthHook:
 
         Reads recent DailyActivity JSONL sidecars (last 7 days), extracts
         corrections (Ch6 — highest priority) and decisions (Ch5), feeds them
-        through the same keyword classifier used by pipeline REFLECT cultivation.
+        through the same keyword classifier REFLECT lessons once went through.
 
         Idempotency: tracks cultivated session_ids in a state file. Each session
         is processed at most once. State file is a simple JSON list of session IDs.
@@ -1641,12 +1262,13 @@ class ContextHealthHook:
     def _set_verified_from_pipeline_runs(self, project_path: Path) -> None:
         """F5: Set verified_by_production on maturity states from completed pipeline runs.
 
-        Scans recent runs (last 10). If a run has status=completed AND a deliver
-        stage with status=completed, ALL sections in this project's DDD are marked
-        verified_by_production=True + used_in_decision=True (the pipeline consumed
-        DDD context at EVALUATE/THINK/BUILD).
+        Scans recent runs (last 10). If a Pipeline v1 run has status=completed AND its
+        run.json ``stages`` map shows DELIVER passed (completed / degraded), ALL sections
+        in this project's DDD are marked verified_by_production=True +
+        used_in_decision=True (the pipeline consumed DDD context).
 
-        Marks processed runs with 'maturity_updated: true' to avoid re-processing.
+        Processed run ids are kept in ``.artifacts/maturity_verified_runs.json``, never
+        in run.json: that is the v1 engine's projection, which it rewrites.
         """
         import json as _json
         from core.ddd_maturity import (
@@ -1657,6 +1279,12 @@ class ContextHealthHook:
         runs_dir = project_path / ".artifacts" / "runs"
         if not runs_dir.is_dir():
             return
+        ledger = project_path / ".artifacts" / "maturity_verified_runs.json"
+        try:
+            done = _json.loads(ledger.read_text(encoding="utf-8"))
+            done = [str(x) for x in done] if isinstance(done, list) else []
+        except (ValueError, OSError):
+            done = []
 
         # Find completed runs with deliver stage, not yet processed
         found_run: tuple | None = None  # (run_dir, run_json, data)
@@ -1669,18 +1297,15 @@ class ContextHealthHook:
             except (ValueError, OSError):
                 continue
 
-            if data.get("maturity_updated"):
+            if run_dir.name in done:
                 continue  # Already processed
-            if data.get("status") != "completed":
+            if not isinstance(data, dict) or data.get("status") != "completed":
                 continue
 
-            # Check if deliver stage completed
-            stages = data.get("stages", [])
-            has_deliver = any(
-                s.get("stage") == "deliver" and s.get("status") == "completed"
-                for s in stages
-            )
-            if not has_deliver:
+            # v1: run.json "stages" is the {stage: state} map
+            stages = data.get("stages")
+            if not (isinstance(stages, dict)
+                    and stages.get("deliver") in ("completed", "degraded")):
                 continue
 
             found_run = (run_dir, run_json, data)
@@ -1742,11 +1367,10 @@ class ContextHealthHook:
         if any_doc_updated or not any(
             ddd_path(project_path, d).exists() for d in DDD_CANONICAL_DOCS
         ):
-            data["maturity_updated"] = True
             try:
-                tmp = run_json.with_suffix(".tmp")
-                tmp.write_text(_json.dumps(data, indent=2), encoding="utf-8")
-                os.replace(tmp, run_json)
+                tmp = ledger.with_suffix(".tmp")
+                tmp.write_text(_json.dumps((done + [run_dir.name])[-200:]), encoding="utf-8")
+                os.replace(tmp, ledger)
             except OSError:
                 pass
             logger.debug(
@@ -2669,8 +2293,8 @@ class ContextHealthHook:
                 if health.get("degradation_warning"):
                     findings.append(
                         f"[gap/high] Adversarial review may be degraded — "
-                        f"{health['consecutive_zero_count']} consecutive pipeline runs "
-                        f"with >50 changed lines had 0 findings. Consider rotating "
+                        f"{health['consecutive_zero_count']} consecutive reviewed pipeline "
+                        f"runs had 0 findings. Consider rotating "
                         f"adversarial prompt."
                     )
         except Exception as exc:

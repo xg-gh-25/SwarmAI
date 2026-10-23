@@ -1,13 +1,19 @@
 ---
 title: "Autonomous Pipeline — Coding as Black Box"
 created: 2026-05-12
-updated: 2026-08-31
+updated: 2026-10-23
 tags: [architecture, pipeline, autonomous-delivery, quality-convergence, adversarial-review, tdd, ddd]
 project: SwarmAI
-status: current
+status: superseded
 ---
 
 # Autonomous Pipeline — Coding as Black Box
+
+> **Retired 2026-10-23.** This describes the OLD pipeline (artifact_cli run commands,
+> `stage-start`, run.json-only runs). It was retired with no compatibility; the live
+> pipeline is Pipeline v1 (`backend/scripts/pipeline_v1.py`, `core/run_protocol/`),
+> specified by the v13 design and `docs/design/pipeline-v1-remaining-design.md`. Kept as
+> history only: no command or mechanism below exists any more.
 
 > **Last refresh — 2026-08-31 (drift-calibration pass):** Re-verified every concrete
 > claim against live source and corrected the drift that had accumulated since the

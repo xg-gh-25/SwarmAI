@@ -145,7 +145,7 @@ export function useCanvasAutoSurface({ pinned = false, viewingUserChoice = false
       // kind-whitelisted write: the SSE bridge defaults a relevance-less event to
       // 'incidental' (fail-closed), so `relevance !== 'deliverable'` was true for ALL
       // live content/knowledge writes → Canvas stopped auto-opening session outputs
-      // (HTML/DDD/Knowledge/context). Only surface_run_outputs, which HARD-CODES
+      // (HTML/DDD/Knowledge/context). Only the old finish batch (retired), which HARD-CODED
       // relevance='deliverable', survived. The gate is now scoped to an OLD backend
       // that sends `relevance` but no `kind` (migration only), matching the original
       // intent the comment always claimed but the code did not enforce.

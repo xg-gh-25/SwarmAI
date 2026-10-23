@@ -20,7 +20,6 @@ Public API:
     log_application(proposal, project_dir) → None
     write_proposal(proposal, project_dir) → Path  (escalation path only)
     read_pending_proposals(workspace_dir, project) → List[CultivationProposal]
-    cultivate_from_reflect(lessons, run_id, project, project_dir) → dict
     cultivate_from_corrections(corrections, session_id, project, project_dir) → dict
     cultivate_from_decisions(decisions, session_id, project, project_dir) → dict
 """
@@ -53,8 +52,8 @@ MAX_PROPOSALS_PER_RUN = 5
 MAX_AUTO_RETIRES_PER_RUN = 2
 
 # SESSION/DAY-wide cap across ALL entrypoints (Gate-2 #3, run_ecc7a32b): the
-# per-call cap above is insufficient — cultivate_from_reflect + _corrections +
-# _decisions each call _cultivate_proposals separately, so one session could
+# per-call cap above is insufficient — cultivate_from_corrections +
+# cultivate_from_decisions each call _cultivate_proposals separately, so one session could
 # auto-delete 2×3=6 entries. This module-level counter, keyed by (project, UTC
 # date), bounds the TOTAL autonomous retires per project per day across every
 # entrypoint, and self-resets daily. The per-call cap still applies (whichever
@@ -68,7 +67,7 @@ def _auto_retire_budget_remaining(project_dir: Path) -> int:
     """Remaining session/day-wide auto-retire budget for this project (Gate-2 #3).
 
     Keyed by (project name, UTC date) in a module-level ledger — shared across
-    cultivate_from_reflect/_corrections/_decisions within one process/day, and
+    cultivate_from_corrections/_decisions within one process/day, and
     self-resetting when the date rolls. Returns how many more autonomous retires
     are permitted today; 0 → all further confident retires escalate instead.
     """
@@ -1908,49 +1907,42 @@ def log_application(
 # block NEVER yields 'passed'. A wrong 'passed' is a permanent evergreen auto-write
 # (DEC19: False > Stale > Imperfect).
 
-# Canonical machine-readable outcomes the adversarial/deliver stage MUST emit.
+# Canonical outcomes derive_gate2_outcome returns (trust_from_gate2_outcome maps them).
 _GATE2_PASS_OUTCOMES = frozenset({"pass", "pass_with_fixes"})
 _GATE2_BLOCK_OUTCOMES = frozenset({"block"})
-_GATE2_ALL_OUTCOMES = _GATE2_PASS_OUTCOMES | _GATE2_BLOCK_OUTCOMES
 
 
-def derive_gate2_outcome(run_state: dict) -> str:
-    """Derive the canonical adversarial outcome from a run's stages.
+def derive_gate2_outcome(audit: dict) -> str:
+    """Derive the canonical adversarial outcome from a Pipeline v1 ``run_audit.json``.
 
     Returns one of ``{"pass", "pass_with_fixes", "block", "n/a"}``.
 
-    FAIL-CLOSED contract (AC10): read ONLY the canonical ``gate2_outcome`` enum on a
-    COMPLETED adversarial/deliver stage. A free-text ``gate2_verdict`` (prose) is NEVER
-    heuristically parsed — prose-only, absent stage, or an unrecognized enum value all
-    return ``"n/a"``. ``"n/a"`` is the safe default: it denies auto-apply to protected
-    knowledge, forcing REVIEW.
-
-    Two adversarial-hardened rules (a wrong ``pass`` is a permanent evergreen auto-write):
-      • **BLOCK WINS over document order** — a ``pass`` on one stage must NEVER shadow a
-        ``block`` on another. We scan ALL qualifying stages; if ANY says block → ``block``.
-      • **STATUS-GATED** — a ``gate2_outcome`` is honored ONLY on a stage whose status is
-        ``completed``/``done``. A stale ``pass`` on an in-progress/abandoned/failed stage is
-        ignored (it is preliminary, not authoritative).
+    FAIL-CLOSED contract (AC10): the audit is built by ``core.run_protocol.audit`` from
+    the run's signed events, never from agent prose. ``pass`` / ``pass_with_fixes``
+    (findings were raised and all closed) need ALL of: ``outcome.status`` completed,
+    ``outcome.landing`` landed (a human override is not a review pass), at least one
+    review-expert dispatch in ``details.experts`` (a small change v1 reviewed with no
+    expert earns nothing) and ``summary.quality.verdict`` PASS. A BLOCK quality verdict
+    is ``block``. Anything else, including a retired-pipeline run.json with stage
+    records, is ``"n/a"``: it denies auto-apply to protected knowledge, forcing REVIEW.
     """
-    if not isinstance(run_state, dict):
+    if not isinstance(audit, dict):
         return "n/a"
-    saw_pass: "str | None" = None
-    for stage in run_state.get("stages", []):
-        if not isinstance(stage, dict):
-            continue
-        if stage.get("stage") not in ("adversarial", "deliver"):
-            continue
-        if stage.get("status") not in ("completed", "done"):
-            continue  # status-gated: preliminary/abandoned verdicts are not authoritative
-        outcome = stage.get("gate2_outcome")
-        if not (isinstance(outcome, str) and outcome in _GATE2_ALL_OUTCOMES):
-            continue  # prose / dict / unknown enum → NOT parsed here
-        if outcome in _GATE2_BLOCK_OUTCOMES:
-            return "block"  # block wins immediately — no pass may shadow it
-        # remember the strongest pass seen but keep scanning for a later block
-        if saw_pass is None or outcome == "pass":
-            saw_pass = outcome
-    return saw_pass if saw_pass is not None else "n/a"
+    outcome, summary, details = (audit.get(k) for k in ("outcome", "summary", "details"))
+    if not (isinstance(outcome, dict) and isinstance(summary, dict)):
+        return "n/a"
+    quality = summary.get("quality")
+    if not isinstance(quality, dict):
+        return "n/a"
+    if quality.get("verdict") == "BLOCK":
+        return "block"
+    experts = details.get("experts") if isinstance(details, dict) else None
+    if (outcome.get("status") != "completed" or outcome.get("landing") != "landed"
+            or not isinstance(experts, list) or not experts
+            or quality.get("verdict") != "PASS"):
+        return "n/a"
+    findings = quality.get("findings_total")
+    return "pass_with_fixes" if isinstance(findings, int) and findings > 0 else "pass"
 
 
 def trust_from_gate2_outcome(outcome: "str | None") -> str:
@@ -2155,11 +2147,12 @@ def admission_band(
 def stamp_trust_from_run(run_id: "str | None", project_dir: "Path | None") -> str:
     """Resolve a proposal's source run → its trust stamp {passed, failed, n/a}.
 
-    Reads ``<project_dir>/.artifacts/runs/<run_id>/run.json``, derives the canonical
-    gate2 outcome (derive_gate2_outcome), and maps it (trust_from_gate2_outcome).
+    Reads ``<project_dir>/.artifacts/runs/<run_id>/run_audit.json`` (Pipeline v1),
+    derives the canonical gate2 outcome (derive_gate2_outcome), and maps it
+    (trust_from_gate2_outcome).
 
     FAIL-CLOSED on EVERYTHING that isn't an explicit Gate-2 pass: a non-run source id
-    (``code_intel_drift:x``, a session decision), a missing/unreadable run.json, a bad
+    (``code_intel_drift:x``, a session decision), a missing/unreadable audit, a bad
     project_dir, or a run with no canonical enum → ``"n/a"`` (never ``"passed"``).
     A wrong ``passed`` is a permanent evergreen auto-write (DEC19).
     """
@@ -2181,13 +2174,13 @@ def stamp_trust_from_run(run_id: "str | None", project_dir: "Path | None") -> st
         # project's runs/ root — a belt to the charset suspenders.
         if runs_root not in run_dir.parents and run_dir != runs_root:
             return "n/a"
-        run_file = run_dir / "run.json"
-        if not run_file.is_file():
+        audit_file = run_dir / "run_audit.json"
+        if not audit_file.is_file():
             return "n/a"
-        run_state = json.loads(run_file.read_text(encoding="utf-8"))
+        audit = json.loads(audit_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return "n/a"  # unreadable / malformed → fail closed
-    return trust_from_gate2_outcome(derive_gate2_outcome(run_state))
+    return trust_from_gate2_outcome(derive_gate2_outcome(audit))
 
 
 _TERMINAL_STATUSES = frozenset({"applied", "rejected", "expired", "dismissed"})
@@ -2836,26 +2829,6 @@ def _cultivate_proposals(
             or skipped_protected or discarded):
         record_cultivation_outcome(project_dir, result)
     return result
-
-
-def cultivate_from_reflect(
-    lessons: List[str], run_id: str, project: str, project_dir: Path
-) -> dict:
-    """One-call entry point: filter lessons → auto-apply safe ones → escalate risky ones.
-
-    This is the function the REFLECT stage calls. It handles the full lifecycle:
-    1. Filter lessons into proposals
-    2. For each proposal:
-       - If safe additive: apply directly to DDD + log to changelog
-       - If risky: write to proposal queue for escalation
-    3. Return summary for REFLECT stage output
-
-    Returns:
-        {"applied": N, "escalated": M, "rejected": K, "retired": R, "drift_errors": [...]}
-        (retired = confident auto-retires applied this run — run_ecc7a32b)
-    """
-    proposals = filter_lessons_for_ddd(lessons, run_id, project, project_dir)
-    return _cultivate_proposals(proposals, project_dir)
 
 
 def cultivate_from_corrections(

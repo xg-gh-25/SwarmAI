@@ -42,7 +42,7 @@ REPO_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 COMMIT_TIMEOUT_S = 300.0
 INTEGRATE_LOCK_TIMEOUT_S = 30.0
 STALE_DAYS = 14
-_LIVE = ("running", "paused", "active", "awaiting_human", "reflecting")   # = run_index.LIVE_STATUSES
+_LIVE = ("active", "awaiting_human", "paused", "reflecting")   # = run_index.LIVE_STATUSES
 _IN_PROGRESS = ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply")
 # Dependency dirs of the main checkout made visible in a new worktree as symlinks (the
 # worktree holds tracked files only). Each link is excluded from git (info/exclude:
@@ -241,7 +241,7 @@ def _git_path(cwd, name: str) -> Path:
 
 
 # Per-process memo for the read-only answers one CLI call asks again and again (a
-# stage-start ran --show-toplevel, --git-common-dir, symbolic-ref HEAD and worktree
+# pipeline_v1.py call ran --show-toplevel, --git-common-dir, symbolic-ref HEAD and worktree
 # list several times each). Every key names the files the answer is read from, by
 # identity (inode, mtime, size): git rewrites them by lock + rename, so any change
 # gives a new key and a stale answer is never returned. A failure is never stored.
@@ -787,7 +787,7 @@ def carries_over(wt: "str | Path", run_id: str, old_base: str, old_tree: str,
     return differs <= moved and not (moved & mine)
 
 
-# ── sync (deliver stage-start, §7.2) ─────────────────────────────────────────
+# ── sync (before the landing, §7.2) ───────────────────────────────────────────────
 def _unmerged(wt) -> "list[str]":
     out = _out(wt, "diff", "--name-only", "--diff-filter=U", "-z")
     return sorted(p for p in out.split("\0") if p)
@@ -1103,7 +1103,7 @@ def land(run_id: str, entry: dict, main: "str | Path", message: str, expect_tree
     wt = validate(run_id, entry, main)
     base = entry["base"]
     if _rebase_onto(wt) or _unmerged(wt):
-        raise WorktreeError("conflict", "a rebase is in progress — rerun deliver stage-start")
+        raise WorktreeError("conflict", "a rebase is in progress — finish or abort it, then run land again")
     if _rev(wt, "HEAD") != base:
         raise WorktreeError("worktree_invalid", "worktree HEAD is not the run's base")
     left = untracked_new_files(wt, run_id)
@@ -1541,8 +1541,8 @@ def own_isolated_run(session_id: str, workspace: "str | Path",
         settled = any(isinstance(e, dict) and e.get("state") in ("integrated", "released")
                       for e in data.get("worktrees") or [])
         if wts or (with_empty and data.get("worktree_mode") == "isolated" and not settled
-                   and data.get("status") == "running"):
-            # with_empty: a RUNNING isolated run with no worktree yet still owns the
+                   and data.get("status") in ("active", "reflecting")):
+            # with_empty: a working v1 isolated run with no worktree yet still owns the
             # session's writes (its repos are isolated on first write, §16.9) — until it
             # lands or a worktree is released; a paused run never claims new repos
             try:
@@ -1700,8 +1700,9 @@ def _iso_ts(v) -> float:
 
 
 def _deliver_done(data: dict) -> bool:
-    return any(isinstance(s, dict) and s.get("stage") == "deliver"
-               and s.get("status") in ("completed", "done") for s in data.get("stages") or [])
+    """The v1 run passed DELIVER: run.json ``stages`` is its {stage: state} map."""
+    stages = data.get("stages")
+    return isinstance(stages, dict) and stages.get("deliver") in ("completed", "degraded")
 
 
 def sweep(workspace: "str | Path", owner_active: "Callable[[str | None], bool]",
@@ -1754,7 +1755,7 @@ def sweep(workspace: "str | Path", owner_active: "Callable[[str | None], bool]",
         except OSError:
             idle = False
         if rec is None or rec[1].get("status") not in _LIVE or idle:
-            drop_stamp_only_dir(rd.name, workspace)   # a stage-start re-arms an idle run
+            drop_stamp_only_dir(rd.name, workspace)   # the next pipeline_v1.py call re-arms an idle run
     _sweep_branches(runs, report)
     _purge_ledgers(now, report)
     return report

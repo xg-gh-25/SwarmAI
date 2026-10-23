@@ -88,7 +88,7 @@ atomically (tmp + replace) under ``tests/.run_index.lock``; one object per evide
   recheck laid over verify / regression evidence: a rewrite, NOT another run)
 - ``mode``: the evidence mode written (for an overlay: the base mode)
 - ``finished_at``: the evidence's ``finished_at`` (ISO-8601 UTC, 1 s resolution)
-- ``ts``: epoch seconds (float) at write time — compare to a stage-start epoch
+- ``ts``: epoch seconds (float) at write time
 - ``evidence``: the timestamped file name written (may since have been pruned)
 - ``cached``: bool, a result-cache hit
 - ``auto_recheck_of``: the mode whose identical re-run became this recheck, else null
