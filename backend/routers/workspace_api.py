@@ -52,6 +52,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
+from core import executors
 from core.context_directory_loader import CONTEXT_FILES
 from core.swarm_workspace_manager import SYSTEM_MANAGED_FOLDERS, swarm_workspace_manager
 from database import db
