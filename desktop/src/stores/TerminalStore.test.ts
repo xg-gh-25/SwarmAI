@@ -100,11 +100,26 @@ describe('TerminalStore', () => {
     expect(terminalStore.list().map((t) => t.id)).toEqual([a.id, b.id, c.id]);
   });
 
-  it('openTerminal defaults title from cwd basename, falls back for no cwd', () => {
-    const withCwd = terminalStore.openTerminal({ cwd: '/Users/x/Projects/AIDLC' });
-    expect(withCwd.title).toBe('AIDLC');
-    const noCwd = terminalStore.openTerminal({});
-    expect(noCwd.title.length).toBeGreaterThan(0); // some sensible default
+  it('titles are numbered within a LOCATION; the switcher, not the title, shows the folder', () => {
+    const a = terminalStore.openTerminal({ cwd: '/Users/x/Projects/AIDLC' });
+    const b = terminalStore.openTerminal({ cwd: '/Users/x/Projects/AIDLC/' }); // same location
+    const ws = terminalStore.openTerminal({});
+    expect([a.title, b.title, ws.title]).toEqual(['zsh', 'zsh 2', 'zsh']);
+    expect([a.locKey, b.locKey, ws.locKey]).toEqual(['/Users/x/Projects/AIDLC', '/Users/x/Projects/AIDLC', 'swarmws']);
+    expect(terminalStore.listAt('/Users/x/Projects/AIDLC').map((t) => t.id)).toEqual([a.id, b.id]);
+    expect(terminalStore.countAt('swarmws')).toBe(1);
+  });
+
+  it('records the exit status when the shell exits', () => {
+    let fire: ((e: { exitCode: number }) => void) | null = null;
+    spawnMock.mockImplementationOnce(() => ({
+      ...makeFakePty(),
+      onExit: vi.fn((cb: (e: { exitCode: number }) => void) => { fire = cb; return { dispose: vi.fn() }; }),
+    }) as unknown as IPty);
+    const tab = terminalStore.openTerminal({});
+    fire!({ exitCode: 3 });
+    expect(terminalStore.get(tab.id)?.status).toBe('exited');
+    expect(terminalStore.get(tab.id)?.exitCode).toBe(3);
   });
 
   it('AC4: untitled (no-cwd) terminals get distinct numbered titles (zsh, zsh 2, zsh 3)', () => {
@@ -114,19 +129,17 @@ describe('TerminalStore', () => {
     expect([a.title, b.title, c.title]).toEqual(['zsh', 'zsh 2', 'zsh 3']);
   });
 
-  it('AC4: cwd-named tabs do not consume untitled slot numbers', () => {
+  it('AC4: shells at another location do not consume this location\'s numbers', () => {
     const a = terminalStore.openTerminal({}); // zsh
-    const proj = terminalStore.openTerminal({ cwd: '/x/Projects/AIDLC' }); // AIDLC
-    const b = terminalStore.openTerminal({}); // zsh 2 (proj didn't take a slot)
+    const proj = terminalStore.openTerminal({ cwd: '/x/Projects/AIDLC' }); // zsh (its own location)
+    const b = terminalStore.openTerminal({}); // zsh 2
     expect(a.title).toBe('zsh');
-    expect(proj.title).toBe('AIDLC');
+    expect(proj.title).toBe('zsh');
     expect(b.title).toBe('zsh 2');
   });
 
-  it('AC4: a cwd tab basenamed "zsh" does NOT perturb untitled numbering (structural !cwd filter)', () => {
-    // Adversarial LOW: numbering must key off cwd-absence, not a title regex —
-    // a cwd ending in /zsh yields title "zsh" but must NOT collide with the
-    // untitled slot sequence.
+  it('AC4: a cwd tab whose folder is named "zsh" numbers within its own location', () => {
+    // Numbering keys off the location (locKey), never a title regex.
     const a = terminalStore.openTerminal({}); // untitled → zsh (slot 1)
     const proj = terminalStore.openTerminal({ cwd: '/x/zsh' }); // cwd basename "zsh"
     const b = terminalStore.openTerminal({}); // untitled → must be zsh 2, not zsh 3

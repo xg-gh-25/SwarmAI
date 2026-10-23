@@ -31,7 +31,10 @@ single-worker ``canvas_session`` pool (behind the session_outputs writes the rou
 submitted first); Changes run their git on the ``canvas_changes`` pool, so an
 Artifacts refresh never waits for git. Commit facts are immutable and cached by sha.
 
-Public: ``build``, ``artifact_rows``, ``in_head``, ``session_runs``, ``run_changes``,
+``working_repo`` names the repo the session's newest run works in (the terminal's
+default location, docs/design/terminal-locations.md): no git, the same run index.
+
+Public: ``build``, ``artifact_rows``, ``in_head``, ``session_runs``, ``working_repo``, ``run_changes``,
 ``deliverable_turns``, ``MAX_FILES``.
 """
 from __future__ import annotations
@@ -369,6 +372,31 @@ def run_changes(run: dict) -> Optional[dict]:
         return None
     return {"run": run["run"], "title": run["title"], "status": run["status"],
             "project": run["project"], "createdAt": run["createdAt"], "repos": rows}
+
+
+def _main_checkout(path: str) -> Optional[str]:
+    """*path* as a real path when it is a repo's main checkout (``.git`` is a
+    directory), else None — a linked worktree's ``.git`` is a file, so a run worktree
+    never qualifies. No git call."""
+    real = os.path.realpath(path) if path else ""
+    return real if real and os.path.isdir(os.path.join(real, ".git")) else None
+
+
+def working_repo(session_id: str, workspace: Optional[str]) -> Optional[dict]:
+    """The repo this session is coding in: the newest run it owns that names a repo,
+    that run's first named repo (its first worktree ``main``, else its first commit's
+    repo) when that is a main checkout — never a later one, never an older run's.
+    {path, name} or None. Blocking: the run index's stat per run.json."""
+    if not workspace:
+        return None
+    for run in session_runs(session_id, workspace):
+        named = [str(w.get("main") or "") for w in run["worktrees"]] + [c["repo"] for c in run["commits"]]
+        named = [p for p in named if p]
+        if not named:
+            continue
+        main = _main_checkout(named[0])   # exactly the first named repo: never a later one
+        return {"path": main, "name": os.path.basename(main)} if main else None
+    return None
 
 
 def changes_of(session_id: str, workspace: Optional[str]) -> list[dict]:

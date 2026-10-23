@@ -37,6 +37,12 @@ vi.mock('@xterm/xterm', () => {
     write = vi.fn();
     dispose = vi.fn();
     onData = vi.fn(() => ({ dispose: vi.fn() }));
+    attachCustomKeyEventHandler = vi.fn();
+    onSelectionChange = vi.fn(() => ({ dispose: vi.fn() }));
+    hasSelection = vi.fn(() => false);
+    getSelection = vi.fn(() => '');
+    clear = vi.fn();
+    options: Record<string, unknown> = {};
     buffer = { active: { length: 0, getLine: () => null } };
     constructor() {
       lastTerm = this as unknown as typeof lastTerm;
@@ -71,6 +77,8 @@ function makeTab(): TerminalTabModel {
   return {
     id: 'term-1',
     title: 'zsh',
+    locKey: 'swarmws',
+    slot: 1,
     pty: {
       pid: 1,
       onData: vi.fn(() => ({ dispose: vi.fn() })),

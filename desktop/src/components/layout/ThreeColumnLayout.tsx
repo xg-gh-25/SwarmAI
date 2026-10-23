@@ -12,6 +12,8 @@ import { NAV, ZONE_TINT } from './navTable';
 import { prefetchNav } from './overlayQueries';
 import type { OverlayId } from './overlayIds';
 import TerminalPanel from '../terminal/TerminalPanel';
+import { terminalLocation } from '../../stores/terminalLocation';
+import { keyOfCwd } from '../../stores/TerminalStore';
 import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 // BrainHubDemoOverlay retired (M2): brain-hub migrated to the OverlayHost registry
 // (overlaySurfaces.tsx). File kept dormant until M5 (its test still renders it).
@@ -821,12 +823,15 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const { togglePanel: toggleTerminal, openTerminal } = useTerminal();
   useTerminalHotkey(toggleTerminal);
 
-  // Explorer right-click "Open terminal here" → open a terminal cwd'd into the
-  // directory (AC3). Bridged via a window event (same idiom as attach/ask).
+  // Explorer right-click "Open terminal here" → that folder becomes this chat tab's
+  // terminal location and a shell opens there (AC3). Bridged via a window event
+  // (same idiom as attach/ask).
   useEffect(() => {
     const onOpenTerminal = (e: Event) => {
       const detail = (e as CustomEvent<{ path?: string }>).detail;
-      if (detail?.path) openTerminal({ cwd: detail.path });
+      if (!detail?.path) return;
+      terminalLocation.choose({ kind: 'custom', path: detail.path });
+      openTerminal({ cwd: keyOfCwd(detail.path) });
     };
     window.addEventListener(EXPLORER_OPEN_TERMINAL, onOpenTerminal);
     return () => window.removeEventListener(EXPLORER_OPEN_TERMINAL, onOpenTerminal);

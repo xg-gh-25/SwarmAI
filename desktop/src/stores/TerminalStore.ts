@@ -11,16 +11,43 @@
  * orphaned when a tab re-mounts (C2). Centralizing spawn/kill here means the
  * identity of "the pty for tab X" is authoritative and closeTerminal always
  * kills exactly the right process.
+ *
+ * Every shell carries the location it was opened at (`locKey`, keyOfCwd) and a
+ * number within it; the panel groups by location (docs/design/terminal-locations.md).
+ *
+ * Exports: terminalStore, SWARMWS_KEY, keyOfCwd, baseName, sendTerminalTextToChat,
+ * ATTACH_TERMINAL_EVENT, types TerminalTab / OpenTerminalOptions.
  */
 import { spawn, type IPty } from '../services/pty';
+
+/** The grouping key of the SwarmWS location (a shell opened with no cwd). */
+export const SWARMWS_KEY = 'swarmws';
+
+/** The grouping key of a shell opened with *cwd*. */
+export function keyOfCwd(cwd?: string): string {
+  if (!cwd) return SWARMWS_KEY;
+  return cwd.length > 1 ? cwd.replace(/\/+$/, '') : cwd;
+}
+
+export function baseName(path: string): string {
+  const parts = path.replace(/\/+$/, '').split('/');
+  return parts[parts.length - 1] || path;
+}
 
 /** One terminal tab: identity + cwd + its live PTY handle + status. */
 export interface TerminalTab {
   id: string;
   title: string;
   cwd?: string;
+  /** The location this shell was opened at (terminalLocation.keyOfCwd): shells are
+   *  grouped by it in the tab strip. */
+  locKey: string;
+  /** Number within its location: 1 → "zsh", N → "zsh N". */
+  slot: number;
   pty: IPty;
   status: 'running' | 'exited';
+  /** The child's exit status once exited (-1 when unknown / spawn failed). */
+  exitCode?: number;
   /** Set by the mounted TerminalTab component — returns the current xterm
    *  buffer text (last N lines) for the P2 "attach to chat" action. Null until
    *  the surface has mounted. */
@@ -30,6 +57,19 @@ export interface TerminalTab {
    *  doesn't change `active`, so the [active] focus effect doesn't re-fire).
    *  Null until the surface has mounted. */
   focus?: () => void;
+  /** Set by the mounted TerminalTab — the current xterm selection ('' when none). */
+  getSelection?: () => string;
+}
+
+/** Window event the panel / ChatPage use to hand terminal text to the next chat
+ *  message (one-shot, consumed on send). */
+export const ATTACH_TERMINAL_EVENT = 'swarm:attach-terminal';
+
+/** Hand *text* (with the shell's cwd) to the next chat message. False when empty. */
+export function sendTerminalTextToChat(text: string, cwd?: string): boolean {
+  if (!text) return false;
+  window.dispatchEvent(new CustomEvent(ATTACH_TERMINAL_EVENT, { detail: { bufferTail: text, cwd: cwd ?? '' } }));
+  return true;
 }
 
 /** Options for opening a terminal. */
@@ -77,42 +117,19 @@ function nextId(): string {
 }
 
 /**
- * Yields the SLOT number of an UNTITLED (no-cwd) tab's title:
- * "zsh" → slot 1, "zsh 2" → slot 2, ... Returns 0 if the title doesn't parse.
- *
- * IMPORTANT: only ever call this on tabs that are actually untitled (no cwd) —
- * the caller filters by `!tab.cwd`, NOT by matching this regex against the
- * title. That structural filter is what prevents a cwd tab whose basename is
- * literally "zsh" (cwd ending in /zsh) from colliding with the untitled slot
- * numbering. (Adversarial: LOW title-collision finding.)
+ * Title of a shell: numbered within its LOCATION, like VSCode/Kiro — slot 1 renders
+ * "zsh", slot N≥2 "zsh N". The location itself is shown by the panel's switcher, so
+ * the title does not repeat the directory. A new shell takes (highest slot in use at
+ * that location) + 1, so closing a middle one never produces a duplicate label.
  */
-const UNTITLED_RE = /^zsh(?: (\d+))?$/;
-function untitledSlot(title: string): number {
-  const m = UNTITLED_RE.exec(title);
-  if (!m) return 0;
-  return m[1] ? parseInt(m[1], 10) : 1; // bare "zsh" is slot 1
+function shellName(file: string): string {
+  const base = file.split(/[\\/]/).pop() ?? file;
+  return base.replace(/\.exe$/i, '') || 'sh';
 }
 
-/**
- * Title for a new tab. A cwd tab uses the dir basename. An untitled (no-cwd)
- * tab gets a distinct numbered title like VSCode/Kiro: slot 1 renders "zsh",
- * slot N≥2 renders "zsh N". The new tab takes (highest existing slot) + 1.
- * Using max-slot+1 (not a live count) means closing a middle tab never
- * produces a duplicate label: with {zsh, zsh 3} open (slots 1,3) the next is
- * "zsh 4", not a colliding second "zsh 3". The Rust side still launches a
- * no-cwd shell in $HOME/.swarm-ai/SwarmWS (resolve_default_cwd) — the generic
- * numbered title is intentional and does NOT show that default's basename.
- *
- * `maxSlot` = highest untitled slot currently in use, or 0 if there are none.
- */
-function titleFromCwd(cwd: string | undefined, maxSlot: number): string {
-  if (cwd) {
-    const parts = cwd.replace(/\/+$/, '').split('/');
-    const base = parts[parts.length - 1];
-    if (base) return base;
-  }
-  const slot = maxSlot + 1;
-  return slot === 1 ? 'zsh' : `zsh ${slot}`;
+function titleOf(file: string, slot: number): string {
+  const name = shellName(file);
+  return slot === 1 ? name : `${name} ${slot}`;
 }
 
 class TerminalStore {
@@ -143,37 +160,50 @@ class TerminalStore {
   openTerminal(opts: OpenTerminalOptions): TerminalTab {
     const id = nextId();
     const sh = defaultShell();
-    const pty = spawn(opts.file ?? sh.file, opts.args ?? sh.args, {
+    const file = opts.file ?? sh.file;
+    const pty = spawn(file, opts.args ?? sh.args, {
       cols: opts.cols ?? 80,
       rows: opts.rows ?? 24,
       cwd: opts.cwd,
     });
-    // Highest untitled slot in use, so a new no-cwd tab gets the next distinct
-    // number (VSCode/Kiro behavior). max-slot+1 avoids duplicate labels when a
-    // middle tab was closed. Filter by `!t.cwd` (structural "is untitled"), NOT
-    // by title regex — so a cwd tab basenamed "zsh" can't perturb the numbering.
-    const maxSlot = Array.from(this.tabs.values()).reduce(
-      (mx, t) => (t.cwd ? mx : Math.max(mx, untitledSlot(t.title))),
+    const locKey = keyOfCwd(opts.cwd);
+    const slot = Array.from(this.tabs.values()).reduce(
+      (mx, t) => (t.locKey === locKey ? Math.max(mx, t.slot) : mx),
       0,
-    );
+    ) + 1;
     const tab: TerminalTab = {
       id,
-      title: titleFromCwd(opts.cwd, maxSlot),
+      title: titleOf(file, slot),
       cwd: opts.cwd,
+      locKey,
+      slot,
       pty,
       status: 'running',
     };
-    // Mark exited when the PTY child dies, so the tab bar can show it.
-    pty.onExit(() => {
+    // Mark exited when the PTY child dies, so the panel can show it.
+    pty.onExit((e) => {
       const t = this.tabs.get(id);
       if (t) {
         t.status = 'exited';
+        t.exitCode = typeof e?.exitCode === 'number' ? e.exitCode : -1;
         this.notify();
       }
     });
     this.tabs.set(id, tab);
     this.notify();
     return tab;
+  }
+
+  /** Shells opened at location *locKey*, in insertion order. */
+  listAt(locKey: string): TerminalTab[] {
+    return Array.from(this.tabs.values()).filter((t) => t.locKey === locKey);
+  }
+
+  /** Live count at a location (the registry, not a React snapshot). */
+  countAt(locKey: string): number {
+    let n = 0;
+    for (const t of this.tabs.values()) if (t.locKey === locKey) n += 1;
+    return n;
   }
 
   /**

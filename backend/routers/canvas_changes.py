@@ -39,6 +39,21 @@ async def get_session_outputs(session_id: str = Path(..., min_length=1, max_leng
     return await build(session_id, parts)
 
 
+@router.get("/session/{session_id}/working-repo")
+async def get_working_repo(session_id: str = Path(..., min_length=1, max_length=128)):
+    """{workingRepo: {path, name} | null} — the repo the session's newest run works in
+    (core/canvas_session.working_repo); the terminal opens there. No git; an unknown
+    session simply has none."""
+    from core import executors
+    from core.canvas_session import working_repo
+    from core.project_registry import get_swarmws
+    try:
+        workspace = str(get_swarmws())
+    except Exception:  # noqa: BLE001 — no workspace: no runs
+        workspace = None
+    return {"workingRepo": await executors.run_in("canvas_changes", working_repo, session_id, workspace)}
+
+
 @router.get("/changes/diff")
 async def get_diff(root: str = Query(..., max_length=4096), sha: str = Query(..., max_length=64),
                    path: str = Query(..., max_length=4096)):

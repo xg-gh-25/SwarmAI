@@ -25,12 +25,17 @@ import {
   type ReactNode,
 } from 'react';
 import { terminalStore, type OpenTerminalOptions } from '../stores/TerminalStore';
+import { terminalLocation } from '../stores/terminalLocation';
 
 const PANEL_OPEN_KEY = 'terminalPanelOpen';
 
 /** Window event the BottomBar (outside this provider) dispatches to toggle the
  *  panel — same decoupling idiom as 'swarm:show-code-graph'. */
 export const TERMINAL_TOGGLE_EVENT = 'swarm:toggle-terminal';
+
+/** Window event: reveal the panel at the current location (terminalLocation) —
+ *  the BottomBar location chip and the ⌘⇧` switch. TerminalPanel handles it. */
+export const TERMINAL_GOTO_EVENT = 'swarm:terminal-goto';
 
 function getStoredBoolean(key: string, def: boolean): boolean {
   try {
@@ -49,6 +54,8 @@ export interface TerminalContextValue {
   /** Open a new terminal; returns its tab id. Reveals the panel + activates it. */
   openTerminal: (opts: OpenTerminalOptions) => string;
   closeTerminal: (id: string) => void;
+  /** Replace an (exited) shell with a fresh one at the same location; returns the new id. */
+  restartTerminal: (id: string) => string | null;
   setActiveTab: (id: string) => void;
   togglePanel: () => void;
   setPanelOpen: (open: boolean) => void;
@@ -113,12 +120,25 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
 
   const setActiveTab = useCallback((id: string) => setActiveTabId(id), []);
 
+  const restartTerminal = useCallback(
+    (id: string): string | null => {
+      const old = terminalStore.get(id);
+      if (!old) return null;
+      const fresh = terminalStore.openTerminal({ cwd: old.cwd });
+      terminalStore.closeTerminal(id);
+      setActiveTabId(fresh.id);
+      return fresh.id;
+    },
+    [],
+  );
+
   const value: TerminalContextValue = {
     tabs,
     activeTabId,
     panelOpen,
     openTerminal,
     closeTerminal,
+    restartTerminal,
     setActiveTab,
     togglePanel,
     setPanelOpen,
@@ -133,14 +153,20 @@ export function useTerminal(): TerminalContextValue {
   return ctx;
 }
 
-// Optional convenience: a global Ctrl/Cmd-` toggle hook the layout can mount.
+// Global terminal keys the layout mounts: Ctrl/Cmd-` toggles the panel;
+// Ctrl/Cmd-Shift-` switches the chat's location SwarmWS ↔ working repo and shows
+// the terminal there. Matched on e.code (Shift turns e.key into '~' on US layouts).
 export function useTerminalHotkey(togglePanel: () => void): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === '`' && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        togglePanel();
+      const backquote = e.code === 'Backquote' || e.key === '`';
+      if (!backquote || !(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      if (e.shiftKey) {
+        if (terminalLocation.toggleRepo()) window.dispatchEvent(new CustomEvent(TERMINAL_GOTO_EVENT));
+        return;
       }
+      togglePanel();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

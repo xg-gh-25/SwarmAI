@@ -16,7 +16,8 @@ import { isDesktop } from '../../services/tauri';
 import { getCodeIntelSummary, triggerReindex, type CodeIntelSummary } from '../../services/codeIntel';
 import { CodeGraph } from '../code-intel/CodeGraph';
 import { terminalStore } from '../../stores/TerminalStore';
-import { TERMINAL_TOGGLE_EVENT } from '../../contexts/TerminalContext';
+import { TERMINAL_TOGGLE_EVENT, TERMINAL_GOTO_EVENT } from '../../contexts/TerminalContext';
+import { terminalLocation } from '../../stores/terminalLocation';
 
 // ── Code Intel Popover ───────────────────────────────────────────────────────
 
@@ -123,6 +124,15 @@ export function BottomBar() {
   const toggleTerminal = useCallback(() => {
     window.dispatchEvent(new CustomEvent(TERMINAL_TOGGLE_EVENT));
   }, []);
+  // Where a terminal opens for the chat in front (terminalLocation); clicking the
+  // chip reveals the panel there.
+  const termLoc = useSyncExternalStore(
+    (cb) => terminalLocation.subscribe(cb),
+    () => terminalLocation.snapshot(),
+  ).current;
+  const gotoTerminal = useCallback(() => {
+    window.dispatchEvent(new CustomEvent(TERMINAL_GOTO_EVENT));
+  }, []);
 
   // Code Intel state
   const [codeIntel, setCodeIntel] = useState<CodeIntelSummary | null>(null);
@@ -225,10 +235,18 @@ export function BottomBar() {
           <span className="material-symbols-outlined icon-xs leading-none">smart_toy</span>
           <span>{agentName}</span>
         </span>
-        <span className="flex items-center gap-1">
-          <span className="material-symbols-outlined icon-xs leading-none">folder</span>
-          <span>SwarmWS</span>
-        </span>
+        <button
+          type="button"
+          data-testid="bottom-bar-terminal-location"
+          onClick={gotoTerminal}
+          title={`Open the terminal in ${termLoc.label}${termLoc.cwd ? ` (${termLoc.cwd})` : ''}`}
+          className="flex items-center gap-1 px-1.5 -mx-1.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] cursor-pointer"
+        >
+          <span className="material-symbols-outlined icon-xs leading-none">
+            {termLoc.kind === 'repo' ? 'code' : termLoc.kind === 'custom' ? 'folder' : 'hive'}
+          </span>
+          <span className="truncate max-w-[160px]">{termLoc.label}</span>
+        </button>
         {appVersion && (
           <span className="opacity-60">v{appVersion}</span>
         )}

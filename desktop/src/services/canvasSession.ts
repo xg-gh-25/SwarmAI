@@ -129,6 +129,13 @@ export const canvasSessionService = {
     const r = await api.get<{ diff: string; truncated: boolean }>('/canvas/changes/diff', { params: { root, sha, path } });
     return r.data ?? { diff: '', truncated: false };
   },
+  /** The repo the session's newest pipeline run works in (the terminal's default
+   *  location, docs/design/terminal-locations.md); null when it has none. */
+  async workingRepo(sessionId: string): Promise<{ path: string; name: string } | null> {
+    const r = await api.get<{ workingRepo: { path: string; name: string } | null }>(
+      `/canvas/session/${encodeURIComponent(sessionId)}/working-repo`);
+    return r.data?.workingRepo ?? null;
+  },
 };
 
 // ── store ─────────────────────────────────────────────────────────────────────

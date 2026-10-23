@@ -15,11 +15,11 @@
  *   - H5-adjacent (fit on 0-height): fit() is guarded on a >0 sized container
  *     and re-run when the panel becomes visible (ResizeObserver).
  */
-import { useEffect, useRef } from 'react';
-import { Terminal } from '@xterm/xterm';
+import { useEffect, useRef, useState } from 'react';
+import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import type { TerminalTab as TerminalTabModel } from '../../stores/TerminalStore';
+import { sendTerminalTextToChat, type TerminalTab as TerminalTabModel } from '../../stores/TerminalStore';
 
 interface TerminalTabProps {
   tab: TerminalTabModel;
@@ -27,36 +27,57 @@ interface TerminalTabProps {
   active: boolean;
 }
 
-// A dark theme aligned with the app's chrome variables, WITH a full 16-color
-// ANSI palette. The palette is what makes command output legible + distinct:
-// once the shell has a color-capable $TERM (set in Rust pty_spawn), ls/git/errors
-// emit ANSI color codes, and these are the colors xterm renders them in. Tuned
-// for the #0a0d12 background (GitHub-dark-ish, high contrast, not muddy).
-const XTERM_THEME = {
-  background: '#0a0d12',
-  foreground: '#e6edf3',
-  cursor: '#58a6ff',
-  cursorAccent: '#0a0d12',
-  selectionBackground: '#2f5178',
-  // Normal
-  black: '#484f58',
-  red: '#ff7b72',
-  green: '#3fb950',
-  yellow: '#d29922',
-  blue: '#58a6ff',
-  magenta: '#bc8cff',
-  cyan: '#39c5cf',
-  white: '#b1bac4',
-  // Bright
-  brightBlack: '#6e7681',
-  brightRed: '#ffa198',
-  brightGreen: '#56d364',
-  brightYellow: '#e3b341',
-  brightBlue: '#79c0ff',
-  brightMagenta: '#d2a8ff',
-  brightCyan: '#56d4dd',
-  brightWhite: '#f0f6fc',
+// ANSI palettes per app theme. Background / foreground / cursor come from the app's
+// own CSS variables at runtime (themeFor), so the terminal surface is the app surface;
+// the 16 ANSI colours are tuned per theme for contrast on it (GitHub dark / light).
+// Once the shell has a colour-capable $TERM (Rust pty_spawn), ls/git/errors emit
+// these codes.
+const DARK_ANSI = {
+  black: '#484f58', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
+  blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4',
+  brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364', brightYellow: '#e3b341',
+  brightBlue: '#79c0ff', brightMagenta: '#d2a8ff', brightCyan: '#56d4dd', brightWhite: '#f0f6fc',
 };
+const LIGHT_ANSI = {
+  black: '#24292f', red: '#cf222e', green: '#116329', yellow: '#7d4e00',
+  blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#6e7781',
+  brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#1a7f37', brightYellow: '#633c01',
+  brightBlue: '#218bff', brightMagenta: '#a475f9', brightCyan: '#3192aa', brightWhite: '#8c959f',
+};
+
+function isDark(): boolean {
+  return typeof document === 'undefined' || !document.documentElement.classList.contains('light');
+}
+
+/** The xterm theme for the current app theme, its surface read from CSS variables. */
+function themeFor(dark: boolean): ITheme {
+  const css = typeof document === 'undefined' ? null : getComputedStyle(document.documentElement);
+  const v = (name: string, fallback: string) => css?.getPropertyValue(name).trim() || fallback;
+  const background = v('--color-bg', dark ? '#111318' : '#f8fafc');
+  return {
+    background,
+    foreground: v('--color-text', dark ? '#e6edf3' : '#1f2328'),
+    cursor: v('--color-primary', dark ? '#58a6ff' : '#0969da'),
+    cursorAccent: background,
+    selectionBackground: dark ? '#2f5178' : '#b6d3f5',
+    ...(dark ? DARK_ANSI : LIGHT_ANSI),
+  };
+}
+
+/** Follows the app theme (ThemeContext puts 'light' / 'dark' on <html>, the accent in
+ *  data-accent) without a provider dependency — the panel renders in tests without
+ *  ThemeProvider. Returns a key that changes with either. */
+function useThemeKey(): string {
+  const read = () =>
+    `${isDark() ? 'dark' : 'light'}|${typeof document === 'undefined' ? '' : document.documentElement.dataset.accent ?? ''}`;
+  const [key, setKey] = useState(read);
+  useEffect(() => {
+    const mo = new MutationObserver(() => setKey(read()));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-accent'] });
+    return () => mo.disconnect();
+  }, []);
+  return key;
+}
 
 export default function TerminalTab({ tab, active }: TerminalTabProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -75,6 +96,20 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
   // path must then focus. Gated so safeFit (which runs on EVERY resize tick)
   // does NOT re-focus and steal focus from chat on later resizes.
   const focusedRef = useRef(false);
+  const themeKey = useThemeKey();
+  // Whether the user has text selected (drives the "Send to chat" pill), and the
+  // pill's brief "Sent" acknowledgement.
+  const [hasSelection, setHasSelection] = useState(false);
+  const [sent, setSent] = useState(false);
+  const sendSelection = (t: Terminal | null): boolean => {
+    const text = t?.getSelection() ?? '';
+    if (!sendTerminalTextToChat(text.replace(/\s+$/, ''), tab.cwd)) return false;
+    setSent(true);
+    window.setTimeout(() => setSent(false), 1500);
+    return true;
+  };
+  const sendSelectionRef = useRef(sendSelection);
+  sendSelectionRef.current = sendSelection;
 
   // Create xterm + wire to the (store-owned) PTY once per tab.id.
   //
@@ -103,6 +138,7 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
     let ro: ResizeObserver | null = null;
     let dataSub: { dispose: () => void } | null = null;
     let inputSub: { dispose: () => void } | null = null;
+    let selSub: { dispose: () => void } | null = null;
 
     const init = async () => {
       // Preload the exact faces xterm will measure (regular 400 + bold 600) so
@@ -138,7 +174,7 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
         letterSpacing: 0,
         fontWeight: 400,
         fontWeightBold: 600,
-        theme: XTERM_THEME,
+        theme: themeFor(isDark()),
         convertEol: false,
         scrollback: 10000,
       });
@@ -148,6 +184,23 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       term = t;
       termRef.current = t;
       fitRef.current = f;
+
+      // ⌘K clears the screen + scrollback; ⌘↵ sends the selection to chat. Both are
+      // swallowed (not sent to the shell). macOS ⌘ only — Ctrl-K is readline's
+      // kill-line and must reach the shell.
+      t.attachCustomKeyEventHandler((e) => {
+        if (e.type !== 'keydown' || !e.metaKey || e.ctrlKey || e.altKey) return true;
+        if (e.key === 'k' || e.key === 'K') {
+          t.clear();
+          return false;
+        }
+        if (e.key === 'Enter' && t.hasSelection()) {
+          sendSelectionRef.current(t);
+          return false;
+        }
+        return true;
+      });
+      selSub = t.onSelectionChange(() => setHasSelection(t.hasSelection()));
 
       // Fit only when the container actually has size (guards the 0-height race
       // when the panel is collapsed on first mount).
@@ -199,6 +252,7 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       tab.focus = () => {
         if (termRef.current === t) t.focus();
       };
+      tab.getSelection = () => (termRef.current === t ? t.getSelection() : '');
 
       // Re-fit when the container resizes (panel open/resize/window resize).
       ro = new ResizeObserver(() => safeFit());
@@ -215,9 +269,11 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       ro?.disconnect();
       dataSub?.dispose();
       inputSub?.dispose();
+      selSub?.dispose();
       term?.dispose();
       tab.getBuffer = undefined;
       tab.focus = undefined;
+      tab.getSelection = undefined;
       termRef.current = null;
       fitRef.current = null;
       // Re-arm the one-shot autofocus for a genuine remount (StrictMode
@@ -262,16 +318,40 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
     }
   }, [active, tab.pty]);
 
+  // Re-theme a live terminal when the app theme / accent changes.
+  useEffect(() => {
+    const term = termRef.current;
+    if (term) term.options.theme = themeFor(themeKey.startsWith('dark'));
+  }, [themeKey]);
+
   return (
     // Visibility is owned by the PARENT wrapper (TerminalPanel toggles the
     // `absolute inset-0` wrapper's display), which is the click-hit-test surface.
     // This inner host is always block inside its wrapper — a single source of
     // visibility truth (Gate-2: removed the redundant inner display toggle that
     // duplicated the wrapper's, which risked the two diverging).
-    <div
-      ref={hostRef}
-      data-testid={`terminal-surface-${tab.id}`}
-      className="h-full w-full overflow-hidden pl-2 pr-1 py-0.5"
-    />
+    <div className="relative h-full w-full">
+      <div
+        ref={hostRef}
+        data-testid={`terminal-surface-${tab.id}`}
+        className="h-full w-full overflow-hidden pl-2 pr-1 py-0.5"
+      />
+      {(hasSelection || sent) && (
+        <button
+          type="button"
+          data-testid={`terminal-send-selection-${tab.id}`}
+          // mousedown, not click: keep the xterm selection (a click would clear it).
+          onMouseDown={(e) => {
+            e.preventDefault();
+            sendSelection(termRef.current);
+          }}
+          className="btn-sm btn-secondary absolute top-1.5 right-3 shadow-sm bg-[var(--color-bg-chrome)]"
+        >
+          <span className="material-symbols-outlined icon-xs">{sent ? 'check' : 'reply'}</span>
+          {sent ? 'Sent to chat' : 'Send to chat'}
+          {!sent && <span className="text-[var(--color-text-muted)] font-normal">⌘↵</span>}
+        </button>
+      )}
+    </div>
   );
 }

@@ -60,6 +60,8 @@ import { ChatHeader, ChatInput, TabView, AlertsPill } from './chat/components';
 import { TabNoticeBar } from './chat/components/TabNoticeBar';
 import { resetTabToNewSession as resetTabById } from './chat/resetTab';
 import { tabNoticeStore, type NoticeTarget } from '../stores/tabNoticeStore';
+import { terminalLocation } from '../stores/terminalLocation';
+import { ATTACH_TERMINAL_EVENT } from '../stores/TerminalStore';
 // HistoryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 // parseWorkPacket still used by ChatPage's dispatch (linked_context → work packet);
 // ToDoOverlay itself retired (M4): migrated to the OverlayHost registry.
@@ -452,6 +454,18 @@ export default function ChatPage() {
   // global Canvas state that lived in ThreeColumnLayout.
   const canvas = useCanvasHost({ activeTabId, sessionId, isStreaming });
 
+  // Terminal location (docs/design/terminal-locations.md): publish the chat tab in
+  // front so the terminal opens in its working repo; re-read that repo when a turn
+  // ends (a run may have just been created or landed).
+  useEffect(() => {
+    terminalLocation.setActiveChat(activeTabId ?? null, sessionId ?? null);
+  }, [activeTabId, sessionId]);
+  const wasStreamingRef = useRef(isStreaming);
+  useEffect(() => {
+    if (wasStreamingRef.current && !isStreaming) void terminalLocation.refresh();
+    wasStreamingRef.current = isStreaming;
+  }, [isStreaming]);
+
   // Agent UI proprioception (SENSE): assemble a request-time snapshot of the
   // agent's own UI state — open file + Canvas state + which nav overlay is open —
   // so the agent can perceive what it is currently showing the user. Merged from
@@ -527,8 +541,8 @@ export default function ChatPage() {
     const handler = (e: Event) => {
       terminalContextRef.current = (e as CustomEvent).detail ?? null;
     };
-    window.addEventListener('swarm:attach-terminal', handler);
-    return () => window.removeEventListener('swarm:attach-terminal', handler);
+    window.addEventListener(ATTACH_TERMINAL_EVENT, handler);
+    return () => window.removeEventListener(ATTACH_TERMINAL_EVENT, handler);
   }, []);
 
   const agentSkills = selectedAgent?.allowAllSkills
