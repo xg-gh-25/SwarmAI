@@ -188,3 +188,20 @@ def test_locations_are_bound_to_no_run_and_no_session():
             idents |= {getattr(n, a) for a in ("id", "attr", "arg", "name", "module")
                        if isinstance(getattr(n, a, None), str)}
         assert not (idents & banned), (name, idents & banned)
+
+
+def test_last_commit_is_the_commit_time_not_the_head_log_mtime(tmp_path):
+    """logs/HEAD moves on checkout too; the header says "last commit", so it reads HEAD's
+    committer time (cached by that mtime)."""
+    from core import workspace_locations as wl
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "a").write_text("a\n")
+    _git(repo, "add", ".")
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=a@b.c", "-c", "user.name=T", "commit", "-qm", "x"],
+                   check=True, capture_output=True,
+                   env={**os.environ, "GIT_COMMITTER_DATE": "2020-01-01T00:00:00Z",
+                        "GIT_AUTHOR_DATE": "2020-01-01T00:00:00Z"})
+    _git(repo, "checkout", "-q", "-b", "side")         # moves logs/HEAD to now
+    assert wl.summary(repo, "repo")["last_commit_at"] == 1577836800.0

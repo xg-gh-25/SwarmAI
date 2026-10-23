@@ -282,3 +282,8 @@ overlay 里只允许用下面这些角色，全部是已有的主题变量，自
 - 手工部分：指标卡（ToDo 的 KPI、Pipeline 的统计条）改用共用 `Stat`，不再带图标；Needs-you 统计仍是筛选按钮，外面套一个普通按钮。C&M 的 tab 改成共用 Tabs 的样子（主色下划线，计数是 muted 小字，加了 `role=tab`）。ToDo 的筛选分段：选中项从实心主色改为浅主色底加主色字。各种状态胶囊（Pipeline 的状态、ToDo 的状态和优先级、C&M 的 fresh/idle、"still emerging"）改用 `StatusBadge`（圆点 + 文字）。ToDo 的提示框改为无框的 `Hint`。表头统一 `tableHeadClass`，排序列只多箭头、不变色。C&M 的 emoji 改为 Material 图标或删掉。自绘按钮换成 btn 尺度（Pipeline Cancel -> `btn-danger`，ToDo 行内按钮 -> `btn-soft`/`btn-ghost`，C&M Accept -> `btn-success`，打开文件 -> `btn-danger`）。Pipeline 行的状态列定宽，需求列对齐。
 - 宽度：ToDo、Community、Artifacts、New Brain 从 `l` 改为 `xl`。
 - 棘轮的"自绘按钮"判定改了：原来只要没 btn 类就算，会把可点的列表行、文字链接都算进去，而且解析会被 `=>` 截断。现在只算自己画了背景/边框/圆角/内边距、又不是列表行（`text-left`/`w-full`）、不是 tab/分段、不是图表元素（`data-viz`）的按钮。基线据此重算：19 个文件，手写字号 432、Tailwind 字号 137、字面颜色 145、调色板 138、字重 108、自绘按钮 28、emoji 92。
+
+**Workspace**（单独设计 `workspace-working-location.md` v5，2026-10-23，W1–W4）：
+- 后端：`core/workspace_locations.py` 加 `/workspace/locations`、`/workspace/summary`；tree / expand / file 带 `location`。只读本地 main，不读 run 或 session，git 走 `nav` 池并带 `GIT_OPTIONAL_LOCKS=0`。
+- 取数：`ExplorerProvider` 从 app 外壳移进 overlay，去掉 30 秒轮询。打开 overlay 才取数，切到哪个位置只取哪个位置。
+- 界面：新文件 `WorkspaceOverlay`、`RepoPane`、`workspaceParts` 都已加进棘轮，计数为零。SwarmWS 原来的树组件（`VirtualizedTree` 等）这一轮没迁移视觉，留给 S7。

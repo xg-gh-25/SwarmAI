@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: v5 — UI 已通过（2026-10-23）；W1–W3 已实现
+status: v5 — UI 已通过（2026-10-23）；W1–W4 已完成
 related: left-nav-backend-and-visual-system.md（nav 原则：不影响聊天、轻量、30 天窗口）
 ---
 
@@ -98,6 +98,7 @@ v1–v3 里的这些全部去掉：this chat、`working_repo()`、按 run 列出
   - 仓库文件没有 Attach：现在的附件只接受 SwarmWS 内的相对路径，仓库文件附加不进去。仓库文件只有 Open in Canvas 和 Copy path（悬停按钮和右键菜单）。SwarmWS 文件的 Attach 不变。
   - SwarmWS 首屏取两层：Knowledge、Projects 这些分区要显示它们的子项，取一层分区就是空的。两层实测 171 个节点，仍远小于原来三层的约 3,500 个。仓库首屏一层。
   - `/locations` 每行多返回 `path`，用于头部显示和复制路径；前端仍然只用 key 指定位置。
+  - "last commit" 读 HEAD 的提交时间（`git log -1 --format=%ct`，按 `logs/HEAD` 修改时间缓存）。`logs/HEAD` 的修改时间在 checkout、reset 时也会变，所以只用作缓存键和 30 天筛选，不当作提交时间显示。
 - **状态**：
   - 没有缓存的首次打开：三行骨架，不放转圈；
   - 有缓存：直接显示，后台刷新；
@@ -173,7 +174,7 @@ v1–v3 里的这些全部去掉：this chat、`working_repo()`、按 run 列出
 | W1 ✅ | 后端：`/workspace/locations`（只 stat）、`/workspace/summary`（每个位置一份缓存）、`_location_root`、tree / expand / file 加 `location`、tree 加 `fresh`、目录 `changed_count`、仓库模式（跳过目录、`hidden` 标记、不进入软链接）、写接口拒绝 `location`；T1–T6，`tests/test_workspace_locations.py` |
 | W2 ✅ | 前端取数：`ExplorerProvider` 从 app 外壳移进 SwarmWS pane，去掉 30 秒轮询；SwarmWS 首屏两层、仓库一层；按位置分开的 `overlayQueries`（locations / summary / repo tree），nav 悬停只预取列表和上次位置的 summary；只取当前位置；↻ 带 `fresh=true`；记住的展开目录自己补加载（最多 20 个）；T7 |
 | W3 ✅ | 前端界面：`WorkspaceOverlay`（标签页切换条、每个位置挂载后保留状态）、`LocationHeader` / `PaneFooter`、`RepoPane`（只读树、键盘、右键菜单、过滤、隐藏项）、SwarmWS 嵌入式工具栏加显示隐藏项；T8、T9，`WorkspaceOverlay.test.tsx` |
-| W4 | 更新 navcard 标准文档里 Workspace 的部分 |
+| W4 ✅ | 结果记在 `left-nav-backend-and-visual-system.md` §7。navcard 标准（SwarmWS `Knowledge/Designs/2026-08-02-navcard-overlay-uxui-standard.md`）里没有 Workspace 专门的章节，那份文档属于 SwarmWS 的知识库，没有改 |
 
 每个阶段在自己的 worktree 里做，ff-only 合进本地 main，不 push。W1 要重启 daemon 才生效，重启前会先提醒你：你正在用的长 session，重启后下一条消息的首字会慢几分钟。
 

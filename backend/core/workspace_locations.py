@@ -178,11 +178,35 @@ def invalidate(root: Path | str | None = None) -> None:
         _status_cache.pop(os.path.realpath(str(root)), None)
 
 
+_commit_cache: dict[str, tuple[float, float | None]] = {}
+
+
+def last_commit_at(root: str) -> float | None:
+    """Committer time of HEAD (epoch s). ``.git/logs/HEAD``'s mtime also moves on a
+    checkout, reset or rebase, so it is only the cache key, never the answer."""
+    key = os.path.realpath(root)
+    mtime = _head_mtime(key)
+    if mtime is None:
+        return None
+    hit = _commit_cache.get(key)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        r = subprocess.run(["git", "log", "-1", "--format=%ct"], cwd=key, capture_output=True,
+                           text=True, timeout=GIT_TIMEOUT_S,
+                           env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"})
+        value = float(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        value = None
+    _commit_cache[key] = (mtime, value)
+    return value
+
+
 def summary(root: Path | str, kind: str, *, fresh: bool = False) -> dict:
     """{changed, last_commit_at?} for ONE location."""
     out: dict = {"changed": len(status_map(root, fresh=fresh))}
     if kind == "repo":
-        out["last_commit_at"] = _head_mtime(os.path.realpath(str(root)))
+        out["last_commit_at"] = last_commit_at(str(root))
     return out
 
 
