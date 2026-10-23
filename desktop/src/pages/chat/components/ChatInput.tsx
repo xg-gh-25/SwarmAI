@@ -765,7 +765,7 @@ export function ChatInput({
   return (
     // `chat-gutter` + `chat-column` (index.css) give the composer the same width and
     // edges as the transcript column above it.
-    <div className="chat-gutter pb-4 pt-2 flex-shrink-0">
+    <div className="chat-gutter pb-4 pt-3 flex-shrink-0">
         {/* Input Container with drag-and-drop. The transition is limited to the
             focus/drag colours: the column width is a computed length now, so
             `transition-all` would animate the card's width on every Canvas

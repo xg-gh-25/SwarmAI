@@ -674,7 +674,7 @@ function TabViewImpl({
       // WelcomeScreen is its own scroll container with the same gutter.
       className={messages.length === 0
         ? 'flex-1 overflow-hidden flex flex-col'
-        : 'flex-1 chat-scroll-gutter py-3.5 min-w-0'
+        : 'flex-1 chat-scroll-gutter pt-5 pb-6 min-w-0'
       }
     >
       {everActiveRef.current ? (
