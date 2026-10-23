@@ -264,12 +264,13 @@ flowchart TB
     TT[Telemetry Stream<br/>time · usage · human · recovery]
   end
 
-  subgraph EXCHANGE[Host ↔ Hive Run Exchange]
+  subgraph EXCHANGE[Run Exchange via Central Service]
     HS[Host Command / Control Ledger]
-    RP[Commands · Replayable Events · Blob Store]
+    RP[Central Service<br/>requests · leases · events · verified blobs]
     XS[Hive Execution Store + Event Outbox]
     HW[Hive Remote Workers]
-    HS <--> RP <--> XS
+    HS -- outbound --> RP
+    XS -- outbound --> RP
     XS --> HW
     HW --> XS
   end
@@ -522,9 +523,10 @@ from observed execution state.
 
 | Store | Writer | Canonical facts |
 |---|---|---|
-| **Host Command / Control Ledger** | Host Conductor | Intent, Run Graph, assignment, desired state, lease epoch, Human answers, result acceptance, landing, latest Eval report reference. |
-| **Hive Execution Store** | Assigned Hive | Accepted dispatch, worker session, Attempt state, Pipeline events, pending decision, sealed result manifest. |
-| **Transfer Blob Store** | Content-addressed writers | Definition snapshots, source Git bundles, attachments, logs, evidence and result bundles. |
+| **Host Command / Control Ledger** | Host Conductor | Intent, Run Graph, Host-local Run assignment and lease, Human answers, result acceptance, landing, latest Eval report reference. For remote Runs only a cursor-backed projection of the Central record. |
+| **Central Coordination Store** | Central Service | Remote Run requests, assignment, Attempt, lease epoch and worker incarnation, decisions, node registry, published DDD and Project Agent revisions, event mirror. The only owner of remote fencing. |
+| **Hive Execution Store** | Assigned Hive | Accepted dispatch, worker session, Pipeline events, pending decision, sealed result manifest. |
+| **Transfer Blob Store** | Central-verified uploads (S3) | SwarmAI DDD snapshots and external result bundles only. Internal code, DDD content, logs and bundles never enter it. |
 
 Transport uses at-least-once delivery with idempotent effects:
 
@@ -553,8 +555,9 @@ Unified Trace is a derived, rebuildable index over canonical streams. It is not 
 control ledger and no producer writes an independent copy of a state-changing fact into it.
 The authorities are:
 
-- Host Command / Control Ledger for desired state, Intent/Spec/graph revisions, assignments,
-  Human answers, result acceptance and integration;
+- Host Command / Control Ledger for desired state, Intent/Spec/graph revisions, Host-local
+  assignments, Human answers, result acceptance and integration;
+- Central Coordination Store for remote Run assignment, Attempt, lease and fencing;
 - Pipeline signed event chain for Run checks, quality verdict, candidate completion and
   protocol transitions;
 - Hive Execution Store and outbox for executor-observed Attempt facts;
@@ -862,7 +865,7 @@ future Flows consume the new Brain.
 | Resolved Project Agent Definition | Rebuildable Definition projection |
 | Flow and Intent identifiers | Atomic Host intake transaction in the Host Command / Control Ledger |
 | Intent content, Spec revision and Run Graph | Host Command / Control Ledger |
-| Run desired state, assignment and lease | Host Conductor through that ledger |
+| Run desired state, assignment and lease | Host Conductor for Host-local Runs; Central Service for remote Runs (`pipeline-run-conductor-v1.md` §4.3) |
 | Attempt observed execution state | Assigned executor's Execution Store |
 | Immutable Pipeline quality verdict and result candidate | Pipeline Protocol signed event chain |
 | Delivery disposition, result acceptance and integration landing | Host per-repository integration transaction |
