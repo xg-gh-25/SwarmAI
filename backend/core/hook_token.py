@@ -208,6 +208,26 @@ def stop_oracle() -> None:
         _MEM.clear()
 
 
+def redeem(token: "str | None") -> "dict | None":
+    """IN THE DAEMON: burn *token* and return what it was issued for (session_id,
+    run_id, subcommand), or None (unknown, used, expired, malformed, or a platform
+    without the in-memory oracle). The caller then checks the scope against the
+    command it is about to run (B-class B-b)."""
+    if not token or not oracle_supported() or _server is None:
+        return None
+    m = _ORACLE_TOKEN_RE.fullmatch(token)
+    if not m or int(m.group(1)) != _server_port:
+        return None
+    now = time.time()
+    with _MEM_LOCK:
+        rec = _MEM.pop(_digest(m.group(2)), None)   # single use, whatever happens next
+        _purge_mem(now)
+    if not isinstance(rec, dict) or now - float(rec.get("issued_at") or 0) > TOKEN_TTL_SECONDS:
+        return None
+    return {"session_id": rec.get("session_id"), "run_id": rec.get("run_id"),
+            "subcommand": rec.get("subcommand")}
+
+
 def issue(run_dir: "str | Path", session_id: str, run_id: str, subcommand: str,
           now: "float | None" = None) -> "str | None":
     """Create a token for ONE command; the nonce itself is never stored."""

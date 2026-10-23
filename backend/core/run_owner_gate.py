@@ -10,11 +10,16 @@ For a ``pipeline_v1.py`` command:
 - **takeover**: the run's owner is another session → if that session is not
   STREAMING / WAITING_INPUT, this session takes the run over (run.json, the session
   map, and a signed ``owner_transfer`` event, so every human authorization follows
-  the new owner); if it is, DENY.
-- **token**: ``land``, and ``run-land`` / ``accept-finding`` / ``discard-snapshot
-  --request <id>``, must be the FIRST simple command of the line (``_token_binding``);
-  the gate issues a one-time token (recorded only in the daemon, ``core.hook_token``)
-  and puts ``SWARM_HOOK_TOKEN=<token>`` right before the call via ``updatedInput``.
+  the new owner); if it is, DENY. The transfer is signed only after every other
+  check of the command passed (a denied command changes nothing).
+- **token**: EVERY ``pipeline_v1.py`` command, and ``pipeline_test.py`` (scope
+  ``test``: the runner's daemon lease), gets a one-time token (B-class B-b: the daemon
+  runs nothing without one). The call must be the FIRST simple command of the line
+  (``_token_binding``) and must run THIS backend's own script (``_is_our_script``: a
+  file with the same name elsewhere gets nothing); the gate issues the token (recorded
+  only in the daemon, ``core.hook_token``) and puts ``SWARM_HOOK_TOKEN=<token>`` right
+  before the call via ``updatedInput``. Its scope is ``cli_scope.scope``, the
+  daemon's own function.
   The person-approved actions (``AFTER_APPROVAL``) get their token only in the
   ``phase="approved"`` registration, after dangerous_command_gate recorded the
   person's approval for this exact command; the gate then writes the signed ``auth``
@@ -124,6 +129,7 @@ def parse_cli_calls(command: str) -> "tuple[list[dict], bool]":
         if tool == "pipeline_test":
             sub = "run"
         calls.append({"tool": tool, "sub": sub, "run_id": _opt(rest, "--run-id"),
+                      "script": prog[j],
                       "project": _opt(rest, "--project"), "stage": _opt(rest, "--stage"),
                       "status": _opt(rest, "--status"),
                       "session_id": _opt(rest, "--session-id"),
@@ -150,23 +156,26 @@ def _ambiguous(rest: list[str]) -> bool:
 
 
 def _needs_token(call: dict) -> "str | None":
-    """The token action of a v1 call, or None."""
-    if call.get("tool") != "pipeline_v1":
+    """The token scope of a pipeline_v1 call (every one has a token: the daemon runs
+    only token-carrying commands, B-class B-b), or None for any other call. The scope
+    function is the daemon's own (``cli_scope.scope``)."""
+    if call.get("tool") == "pipeline_test":
+        return "test" if call.get("run_id") else None   # the runner's lease (B-b)
+    if call.get("tool") != "pipeline_v1" or not call.get("sub"):
         return None
-    subcommand = call.get("sub")
-    if subcommand == "land":
-        return "land"    # a landing proves it came through this hook (A7)
-    if subcommand in AFTER_APPROVAL:
-        request_ids = _opt_all(call.get("argv") or [], "--request")
-        if len(request_ids) == 1 and request_ids[0]:
-            return f"{subcommand}:{request_ids[0]}"
-    return None
+    from core.run_protocol.cli_scope import scope
+    request_ids = _opt_all(call.get("argv") or [], "--request")
+    return scope(str(call["sub"]),
+                 request_ids[0] if len(request_ids) == 1 and request_ids[0] else None)
 
 
 def _single_form(call: dict) -> str:
     """The same call as ONE simple command, for a deny message."""
-    from core.worktree_write_gate import v1_command
-    return v1_command(shlex.join(call.get("argv") or []))
+    from core.worktree_write_gate import pipeline_test_command, v1_command
+    args = shlex.join(call.get("argv") or [])
+    if call.get("tool") == "pipeline_test":
+        return pipeline_test_command(args)
+    return v1_command(args)
 
 
 def _dedup_last(call: dict) -> dict:
@@ -204,7 +213,7 @@ _HEREDOC_WRITE_RE = re.compile(
     r"(?P<q>['\"])(?P<delim>[A-Za-z_]\w*)(?P=q)[ \t]*\n")
 
 
-def _token_binding(command: str) -> "tuple[str, str] | None":
+def _token_binding(command: str, cwd: "str | None" = None) -> "tuple[str, str] | None":
     """(prefix, rest) such that ``prefix + TOKEN=… + rest`` hands the token to the CLI
     call that starts *rest* and to nothing else, or None. *prefix* is zero or more
     ``cat >[>] FILE <<'DELIM'`` … ``DELIM`` writes (a quoted delimiter: the body is
@@ -229,7 +238,8 @@ def _token_binding(command: str) -> "tuple[str, str] | None":
             j = nl + 1
         if lines_end is None:
             return None          # unterminated heredoc: the CLI is not where it looks
-        if os.path.basename(m.group("path")) in _SCRIPTS:
+        dest = m.group("path")
+        if os.path.basename(dest) in _SCRIPTS or _resolves_into_scripts(dest, cwd):
             return None          # it would rewrite the script that gets the token
         i = lines_end
     head, rest = command[:i], command[i:]
@@ -369,38 +379,67 @@ def _v1_mutation_check(sid: str, call: dict) -> "str | None":
 
 
 def _decide(sid: str, command: str, tool_input: dict,
-            phase: str = "check") -> "dict | None":
+            phase: str = "check", cwd: "str | None" = None) -> "dict | None":
     from core import hook_token
     if _HUMAN_ONLY_API_RE.search(command or ""):
         return _deny("a pipeline decision is answered by a person (the chat question card "
                      "or the dashboard), never by a command. Ask with AskUserQuestion using "
                      "the run's ask_user_question payload, then wait for the answer.")
     calls, _single = parse_cli_calls(command)
+    for c in calls:
+        c["cwd"] = cwd
     rewrite = None
     tokened = [c for c in calls if _needs_token(c)]
     for c in calls:
-        if c["tool"] != "pipeline_v1" or c.get("sub") not in _V1_MUTATIONS:
+        if c["tool"] not in ("pipeline_v1", "pipeline_test"):
             continue
         if c.get("ambiguous"):
             return _deny("give --run-id / --project / --session-id exactly once and "
                          "unabbreviated, as ONE command.\nRun instead (the values argparse "
                          f"would have used): {_single_form(_dedup_last(c))}")
-        reason = _v1_mutation_check(sid, c)
-        if reason:
-            return _deny(reason)
-        if c.get("sub") == "create":
-            continue
-        run_file, data = _v1_run(c)
-        if run_file is None or data is None:
-            return _deny("Pipeline v1 mutation lost its canonical run binding")
-        rid = str(c.get("run_id"))
-        if data.get("session_id") != sid and phase == "check":
-            reason = _take_over(run_file, rid, sid, str(data.get("session_id")))
+        if not c.get("sub"):
+            return _deny("unknown pipeline_v1 command; run `pipeline_v1.py --help`")
+        if c["tool"] == "pipeline_test" and not c.get("run_id"):
+            return _deny("pipeline_test.py tests a Pipeline v1 run: give --project and "
+                         "--run-id")
+        extra = [a for a in c["assigns"] if a not in (_SESSION_ENV, hook_token.TOKEN_ENV)]
+        if extra:
+            return _deny("do not set " + ", ".join(sorted(set(extra))) + " on a pipeline "
+                         "command: it runs with the session's own environment.\nRun instead: "
+                         f"{_single_form(c)}")
+        if sid.startswith(_prewarm_prefix()):
+            return _deny("this session is not ready yet (no app session id); retry the "
+                         "pipeline command in a moment")
+        token_dir = None
+        if c["tool"] == "pipeline_v1" and c.get("sub") in _V1_MUTATIONS:
+            reason = _v1_mutation_check(sid, c)
             if reason:
                 return _deny(reason)
+        if c["tool"] == "pipeline_v1" and c.get("sub") == "create":
+            from core.security_hooks import _pipeline_runs_root
+            rid = None
+            token_dir = Path(_pipeline_runs_root())
+        else:
+            run_file, data = _v1_run(c)
+            if run_file is None or data is None:
+                return _deny("Pipeline v1 command cannot resolve exactly one canonical "
+                             "--run-id")
+            rid = str(c.get("run_id"))
+            token_dir = run_file.parent
+        # a takeover is SIGNED only after every check that could still deny this
+        # command has passed (B round 1: a denied command must change nothing)
+        takeover = (c["tool"] == "pipeline_v1" and c.get("sub") in _V1_MUTATIONS
+                    and c.get("sub") != "create" and data.get("session_id") != sid
+                    and phase == "check")       # a late action takes over when approved
+        if not _is_our_script(c):
+            return _deny("run the SwarmAI checkout's own pipeline script (this one is "
+                         "another file with the same name).\nRun instead: "
+                         f"{_single_form(c)}")
         sub = _needs_token(c)
         if sub is None:
             continue
+        if c["tool"] == "pipeline_v1" and c.get("sub") == "create":
+            data = {}
         late = sub.split(":", 1)[0] in AFTER_APPROVAL
         if phase == "approved" and not late:
             continue   # the check phase issued it
@@ -411,27 +450,37 @@ def _decide(sid: str, command: str, tool_input: dict,
         if hook_token.TOKEN_ENV in c["assigns"] or hook_token.TOKEN_ENV + "=" in command:
             return _deny(f"do not set {hook_token.TOKEN_ENV} yourself; the hook issues it.\n"
                          f"Run instead: {_single_form(c)}")
-        binding = _token_binding(command)
+        binding = _token_binding(command, c.get("cwd"))
         first = parse_cli_calls(binding[1])[0][:1] if binding else []
         if (binding is None or not first or first[0].get("sub") != c.get("sub")
                 or first[0].get("run_id") != c.get("run_id") or len(tokened) != 1):
-            return _deny("this command changes the run's code or landing: it must be the "
+            return _deny("a pipeline command must be the "
                          "FIRST command of the line (output may be piped or redirected after "
                          "it; only `cat > FILE <<'EOF'` writes may come before it; no `cd … "
                          "&&`, `source …`, subshells or `$(...)`), so the hook can hand it "
                          f"its one-time token.\nRun instead: {_single_form(c)}")
         if late and phase != "approved":
-            continue   # token after the person's approval (phase="approved")
-        if late:
-            why = _record_approval(rid, sub.split(":", 1)[1])
-            if why:
-                return _deny(why)
-        nonce = hook_token.issue(run_file.parent, sid, rid, sub)
+            continue   # token (and any takeover) after the person's approval
+        # Everything that can still deny comes first, the token is issued next, and
+        # only then are state changes made (takeover, the approval's auth event); a
+        # state change that fails burns the token, so a denied command changed nothing
+        # and left nothing usable (B round 2).
+        nonce = hook_token.issue(token_dir, sid, rid, sub)
         if nonce is None:  # the daemon's token service is down: never run unproven
             logger.warning("run_owner_gate: hook-token service not running; %s %s denied",
                            rid, sub)
             return _deny("the SwarmAI backend's hook-token service is not running, so this "
                          "command cannot be proven; tell the user (restart SwarmAI)")
+        if takeover or (late and data.get("session_id") != sid):
+            reason = _take_over(run_file, rid, sid, str(data.get("session_id")))
+            if reason:
+                hook_token.redeem(nonce)
+                return _deny(reason)
+        if late:
+            why = _record_approval(rid, sub.split(":", 1)[1])
+            if why:
+                hook_token.redeem(nonce)
+                return _deny(why)
         head, rest = binding
         given = f"{_SESSION_ENV}={shlex.quote(sid)} "
         rewrite = (f"{head}{hook_token.TOKEN_ENV}={shlex.quote(nonce)} "
@@ -445,6 +494,51 @@ def _decide(sid: str, command: str, tool_input: dict,
 
 
 _SESSION_ENV = "SWARM_APP_SESSION_ID"
+
+
+def _resolves_into_scripts(path: str, cwd: "str | None") -> bool:
+    """A heredoc destination that is, or (through a link) lands in, this backend's
+    scripts directory: a write there could change the script before it runs. A
+    relative destination with no known cwd cannot be checked and counts as one."""
+    ours = (Path(__file__).resolve().parents[1] / "scripts").resolve()
+    try:
+        target = Path(os.path.expanduser(path))
+        if not target.is_absolute():
+            if not cwd:
+                return True
+            target = Path(cwd) / target
+        target = target.resolve()
+    except (OSError, RuntimeError):
+        return True
+    return target == ours or ours in target.parents
+
+
+def _is_our_script(call: dict) -> bool:
+    """The script a pipeline call runs is this backend's own (``backend/scripts``), not
+    another file with the same name: only those receive a token (B round 1). The path
+    is resolved against the call's working directory; a relative path that does not
+    resolve to our scripts directory is not ours."""
+    script = call.get("script")
+    tool = call.get("tool")
+    if not isinstance(script, str) or not script or tool not in ("pipeline_v1",
+                                                                  "pipeline_test"):
+        return False
+    expected = (Path(__file__).resolve().parents[1] / "scripts" / f"{tool}.py").resolve()
+    if os.path.isabs(script):
+        cand = Path(script)
+    elif call.get("cwd"):
+        cand = Path(call["cwd"]) / script
+    else:
+        return False        # a relative path with no known cwd cannot be checked
+    try:
+        return cand.resolve(strict=True) == expected
+    except OSError:
+        return False
+
+
+def _prewarm_prefix() -> str:
+    from core.session_router import PREWARM_SESSION_PREFIX
+    return PREWARM_SESSION_PREFIX
 
 
 def _with_session(command: str, sid: str) -> "str | None":
@@ -526,7 +620,7 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
         try:
             res = await asyncio.wait_for(
                 executors.run_in("gate", _decide, sid, command, dict(tool_input),
-                                 phase),
+                                 phase, input_data.get("cwd") or None),
                 timeout=_DECIDE_TIMEOUT)
         except Exception:  # incl. TimeoutError — fail-open, never block a command
             logger.warning("run_owner_gate: decision failed — failing open", exc_info=True)

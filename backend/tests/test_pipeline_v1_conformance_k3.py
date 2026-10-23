@@ -257,18 +257,28 @@ def test_f11_git_objects_that_cannot_be_written_fail_the_run(rig):
     assert state["status"] == "failed" and state["reason"].startswith("git_objects"), state
 
 
-def test_f11_an_unreachable_hook_token_service_fails_the_run(rig, monkeypatch):
-    from core import hook_token
-    from core.run_protocol import engine as engine_module
+def test_a_tokened_action_outside_a_daemon_request_is_refused(rig):
+    """B-class B-b: a token is redeemed by the daemon before it runs the command; an
+    engine call with no daemon request (nothing redeemed) is never authorized, and a
+    request redeemed for another scope or run does not cover it."""
+    from core.run_protocol import request_ctx
     r = rig("direct")
     r.create()
     engine = r.engine()
-    monkeypatch.setattr(hook_token, "consume", lambda *a, **k: (
-        False, hook_token.UNREACHABLE + " (test)"))
-    with pytest.raises(engine_module.HookTokenUnavailable) as caught:
-        engine._consume_token("token", "land")
-    assert engine.fail_infrastructure(caught.value)["recorded"] is True
-    assert r.state()["status"] == "failed"
+    assert engine._consume_token("land")[0] is False
+    with request_ctx.active(request_ctx.Request(
+            session_id=engine.owner_session(), run_id=r.run_id, scope="cli:status")):
+        assert engine._consume_token("land")[0] is False
+    with request_ctx.active(request_ctx.Request(
+            session_id=engine.owner_session(), run_id="run_other", scope="land")):
+        assert engine._consume_token("land")[0] is False
+    with request_ctx.active(request_ctx.Request(
+            session_id="someone_else", run_id=r.run_id, scope="land")):
+        assert engine._consume_token("land")[0] is False
+    with request_ctx.active(request_ctx.Request(
+            session_id=engine.owner_session(), run_id=r.run_id, scope="land")):
+        assert engine._consume_token("land")[0] is True
+        assert engine._consume_token("land")[0] is False      # once per request
 
 
 def test_f11_an_unwritable_audit_area_is_named_and_nothing_else_is_caught(rig, monkeypatch):
@@ -382,12 +392,15 @@ def test_r1_a_git_object_failure_while_collecting_facts_fails_the_run(rig, monke
     r.create()
     r.drive(until="review")
     engine = r.engine()
+    real = git_tree.write_tree
     monkeypatch.setattr(git_tree, "write_tree", lambda *a, **k: (_ for _ in ()).throw(
         git_tree.GitObjectWriteError("git write-tree failed: no space")))
     with pytest.raises(git_tree.GitObjectWriteError):
         engine.check_context()
     with pytest.raises(git_tree.GitObjectWriteError):
         engine.push_status()
+    # this process is the daemon: teardown's status needs git back
+    monkeypatch.setattr(git_tree, "write_tree", real)
 
 
 def test_r1_two_reporters_record_one_infrastructure_failure(rig):

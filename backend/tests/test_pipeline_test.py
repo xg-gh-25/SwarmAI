@@ -722,7 +722,16 @@ def test_sigterm_aborts_children_and_removes_mutation_worktree(rig, tmp_path):
     spec.write_text(json.dumps({"tests": ["backend/tests/test_wait.py"], "mutations": [
         {"id": "M1", "file": "backend/core/mod.py", "find": "a + b", "replace": "a - b"}]}))
     pidfile = tmp_path / "child.pid"
-    env = dict(os.environ, PT_PIDFILE=str(pidfile))
+    # a real subprocess runner: it opens its lease with a hook token from the daemon
+    # service this process plays (B-class B-b)
+    from core import hook_token
+    from core.run_protocol import daemon_exec
+    port = 40000 + os.getpid() % 20000
+    hook_token.stop_oracle()
+    daemon_exec.stop()
+    assert hook_token.start_oracle(port) and daemon_exec.start(port)
+    token = hook_token.issue(tmp_path, SESSION, RUN_ID, "test")
+    env = dict(os.environ, PT_PIDFILE=str(pidfile), SWARM_HOOK_TOKEN=token)
     proc = subprocess.Popen(
         [sys.executable, str(Path(pt.__file__)), "--project", PROJECT, "--run-id", RUN_ID,
          "--mode", "mutation", "--mutations", str(spec)],
@@ -738,6 +747,8 @@ def test_sigterm_aborts_children_and_removes_mutation_worktree(rig, tmp_path):
     finally:
         if proc.poll() is None:
             proc.kill()
+        daemon_exec.stop()
+        hook_token.stop_oracle()
     assert proc.returncode == 2
     out = json.loads(stdout.strip().splitlines()[-1])
     assert "interrupted by SIGTERM" in out["error"], out

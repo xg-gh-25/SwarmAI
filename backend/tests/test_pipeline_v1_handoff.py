@@ -14,6 +14,7 @@ Methodology: the real CLI, runner and engine on the v1 rig. Invariants:
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 
@@ -60,15 +61,27 @@ def test_the_retired_commands_are_gone(rig):
 
 
 def test_an_artifact_can_come_on_stdin(rig):
+    """``--artifact -``: the CLI forwards its stdin to the daemon with the command."""
     r = rig("full")
     r.create()
-    proc = subprocess.run([sys.executable, str(PV1), "stage-complete", "--project", PROJECT,
-                           "--run-id", str(r.run_id), "--artifact", "-"], env=r.env,
-                          input=json.dumps(documents("full")["evaluate"]),
-                          capture_output=True, text=True, timeout=120)
-    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    argv = [sys.executable, str(PV1), "stage-complete", "--project", PROJECT,
+            "--run-id", str(r.run_id), "--artifact", "-"]
+    body = json.dumps(documents("full")["evaluate"])
+    out = r.bash(" ".join(map(shlex.quote, argv)) + f" <<'JSON'\n{body}\nJSON")
     assert out.get("ok") is True, out
     assert out["next"]["stage"] == "think" and "card_text" in out["next"]
+
+
+def test_a_pipeline_command_without_the_hooks_token_is_refused(rig):
+    """B-class B-b: run outside the session's hook (no token), nothing is executed."""
+    r = rig()
+    r.create()
+    proc = subprocess.run([sys.executable, str(PV1), "abandon", "--project", PROJECT,
+                           "--run-id", str(r.run_id), "--reason", "x"], env=r.env,
+                          capture_output=True, text=True, timeout=60)
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert proc.returncode == 2 and out.get("code") == "no_token", out
+    assert r.v1("status")["state"]["status"] == "active"
 
 
 def test_passing_build_results_complete_build_by_themselves(rig):

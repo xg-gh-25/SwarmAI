@@ -108,27 +108,10 @@ def test_a_partial_land_ends_the_run_not_landed_partial_land(tmp_path, monkeypat
             raise landing.PartialLanding("repo2: integration branch moved",
                                          landed={"repo": "a" * 40}, failed="repo2")
         monkeypatch.setattr(landing, "commit_repos", raced)
-        # the land command as the session runs it: the real gate issues the hook token;
-        # the engine then runs in THIS process, so the race above reaches it
-        import re
-        import shlex
-        from core import hook_token, run_owner_gate
-        from tests.pipeline_v1_rig import PROJECT, PV1, SESSION
-        import sys
-        command = " ".join(shlex.quote(a) for a in [
-            sys.executable, str(PV1), "land", "--project", PROJECT, "--run-id", r.run_id,
-            "--message", "fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"])
-        tool_input = {"command": command}
-        for phase in ("check", "approved"):
-            out = (run_owner_gate._decide(SESSION, tool_input["command"], tool_input,
-                                          phase=phase) or {}).get("hookSpecificOutput") or {}
-            if out.get("updatedInput"):
-                tool_input = dict(out["updatedInput"])
-        token = re.match(r"SWARM_HOOK_TOKEN=(\S+) ", tool_input["command"]).group(1)
-        monkeypatch.setenv(hook_token.TOKEN_ENV, token)
+        # the land command as the session runs it: the real gate issues the hook token
+        # and the daemon (this test process) runs it, so the race above reaches it
         r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
-        engine = r.engine()
-        out = engine.normal_land(message="fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
+        out = r.v1("land", "--message", "fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
         assert out.get("reason") == "partial_land", out
         state = r.state()
         assert state["landing"] == "not_landed" and state["reason"] == "partial_land", state

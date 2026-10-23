@@ -705,3 +705,68 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 **审查**：84b72ec1 报 4 HIGH、3 MED，c772dd92 报 2 HIGH、3 MED，都已修。每条修复都有对应测试；凡是能把修复撤回的，都撤回确认过测试会变红（批次截断、目录替换、伪造 integrated、contract 损坏）。
 
 **测试调整：** `test_run_worktree_live_cache` 改用 v1 的状态，并补上 contract（`running`、`done` 已在 R6 退役）。
+
+## 31. B 类：签名只在 daemon 里做（B-a、B-b、B-c）
+
+三方复审指出的 B 类问题，根因是 agent 和 daemon 用的是同一个系统用户：gate 只能按命令文本判断，agent 在进程里临时拼一下命令就能绕开。按 `docs/design/pipeline-v1-b-class-authority.md`（XG 2026-10-24 批准），这一节把签名和命令执行都移进 daemon，并且不保留本地回退：daemon 不在线时，pipeline 命令直接失败。
+
+**B-a：命令改在 daemon 里执行**
+- 原来在 `scripts/pipeline_v1.py` 里的命令实现，挪到 `core/run_protocol/cli_commands.py`。CLI 只剩一个瘦客户端：先在本地做参数校验，然后把 argv、hook token、transcript id 和 stdin（用于 `--artifact -`）发出去，打印 daemon 返回的 JSON。CLI 不再加载 engine、store 或密钥，有测试检查它的模块里没有导入这些。
+- `core/run_protocol/daemon_exec.py` 是 daemon 这边的服务：用一个仅属主可访问的 Unix socket（`run/pipeline-exec-<port>.sock`），和 hook-token oracle 一起由 `main.py` 启停。收到请求后它的处理顺序是：
+  1. `hook_token.redeem` 销毁 token，并取出签发时记下的 session、run 和 scope；
+  2. 解析命令，核对 scope 和 run 都与 token 一致（scope 由 `cli_scope.scope` 计算，gate 和 daemon 共用这一个函数）；
+  3. 以 token 记下的 session 作为调用者执行命令（`request_ctx`）。
+- 请求里带的 session id、`SWARM_APP_SESSION_ID` 和 `create --session-id` 都不被信任。
+
+**B-b：每个 pipeline 命令都要 token，runner 也通过 daemon**
+- `run_owner_gate` 给每个 `pipeline_v1` 调用都发 token，原来只有 land 和人工批准的那几个命令有。代价是 pipeline 命令必须是这一行的第一个命令，才能拿到 token。
+- `engine._consume_token` 不再读环境变量，改为检查这次请求兑换的 scope（`request_ctx.take_scope`），并且每个请求只能用一次。所以伪造 `SWARM_APP_SESSION_ID` 已经没有用（B2 关闭）。
+- `pipeline_test.py` 用自己这次命令的 token（scope 为 `test`）向 daemon 开一个 lease（`runner_client` / `runner_service`）。daemon 先确认 token 里的 session 就是 run 的签名 owner。之后这次调用的读事件、追加事件、证据封印和测试后的阶段完成，都通过这个 lease 交给 daemon：
+  - 追加事件只允许 runner 的事件种类，由 daemon 以 runner 身份签名；
+  - 拒绝规则按名字传过去（cap 或 infrastructure），在 daemon 一侧执行。
+- 在 daemon 自己的进程里（测试扮演 daemon 时）不开 lease：用本地 store，并做同样的 owner 检查（`runner_service.owner_refusal`）。
+
+**本轮顺带查出的 A 类遗漏（第三处）**
+- `_session_run_state` 决定 direct-commit、测试 gate 和 amend gate 是否放过一个 session。它原来读 run.json 的 status、session_id 和 mtime，伪造一个 run.json 就能让手工 commit 被放行。现在改为读签名视图（`_iter_runs`），活动时间取最新签名事件的 `at`（`_signed_activity_time`），run 的 id 和 project 都取自 run 目录。
+- 测试夹具 `_seed` 改为创建真实的 v1 run。另加两个测试：伪造的 run.json 不算本 session 的 run；id 和 project 一律取自目录。
+
+**B-c：密钥存储（与设计不一致，已登记）**
+- 所有对密钥的读写都改走 `core/run_protocol/keys.py`，存储仍是 0600 文件。设计原本打算把密钥放进 Keychain，但同一个系统用户下这做不到真正的隔离：
+  - 用 `security` CLI 写进 Keychain 的条目，同一用户的任何进程也能用同一个 CLI 读出来；
+  - 按二进制绑定 ACL 的方法，只对签名稳定的正式打包二进制有效，而 dev 和测试都不是。
+- 现在的状态是：签名只在 daemon 里做，agent 进程不加载密钥，但一个同用户的进程如果自己读这个文件，仍然能读到。这一条作为残余记进 E7。真正的修法是让 agent 跑在单独的系统用户下或放进 sandbox，因为所有密钥访问都已集中到 `keys.py`，到时只需要改这个模块和文件属主。
+- 证据封印存储也是同样的残余（见 `evidence_seal` 的模块说明）。
+
+**测试改动：** 原来在 hook 之外直接运行 CLI 或 runner 的测试，都改成走 `rig.bash` 这条真实 hook 路径，或者显式签发 token；断言改为新规则，例如没有 token 就什么都不执行（`no_token`）。rig 让测试进程扮演 daemon：同时启动 oracle 和执行服务，worktree 模式跟随 `r.env`。
+
+**第一轮审查（189210bc）：4 个 HIGH、2 个 MED、1 个 LOW**
+
+已修复：
+- **HIGH，被拒绝的接管命令已经转移了 owner：** 一条不在行首、最终会被拒绝的接管命令，在被拒之前就已经签了 `owner_transfer`。现在只有在这条命令其余所有可能拒绝的检查都通过之后，才签接管。
+- **HIGH，只按文件名判断脚本：** 任何名为 `pipeline_test.py` 的文件都能拿到 `test` token，从而打开 runner lease。现在只有解析后确实位于本后端 `backend/scripts/` 下的脚本才发 token（`_is_our_script`），相对路径按 hook 传入的 Bash cwd 解析。
+- **MED，daemon 连接数没有上限：** 现在同时最多处理 `_MAX_CONNECTIONS = 32` 个请求，超出的立即回复 busy 并关闭连接。
+- **MED，runner 崩溃后 lease 仍然有效：** lease 现在绑定到打开它的那个进程。对端 pid 由 socket 取得，macOS 用 `LOCAL_PEERPID`，Linux 用 `SO_PEERCRED`。其他进程拿着同一个 lease 会被拒绝；开 lease 的进程退出后，下一次开新 lease 时会把它清掉（`reap`）。
+- **LOW，模块文档描述过时：** 已更新。
+
+属于已知残余、本节不修：
+- **HIGH，同用户进程可以直接读密钥自己签名：** 这是 B-c 的残余，见上文 B-c。
+- **HIGH，dashboard 的 decision、cancel、resume 接口没有鉴权：** 交给 B-d 处理。
+
+**第二轮审查（79f5d47a）：2 个 HIGH、1 个 MED、1 个 LOW，均已修复**
+- **HIGH，状态在拒绝之前就已改变：**
+  - `run-land --request` 这类需要先由人批准的操作，在 check 阶段就做了接管；
+  - 批准时 `auth` 事件先写入，之后才签发 token，签发失败时状态已经变了。
+
+  现在的顺序是：所有可能拒绝的检查放在最前，然后签发 token，最后才改状态（接管、写 `auth` 事件）。改状态失败时，当场兑掉这个 token，让它作废。需要人批准的操作，只在批准阶段做接管。
+- **HIGH，脚本身份检查太宽：**
+  - 原来只比较父目录，所以 `backend/scripts/` 下的任何文件都能通过；
+  - 没有 cwd 的相对路径，会按 daemon 自己的 cwd 去解析；
+  - 行首 heredoc 的目标只按文件名检查。
+
+  现在脚本解析后必须正好是对应的那一个文件（`pipeline_v1.py` 或 `pipeline_test.py`）；没有 cwd 的相对路径一律视为不是本后端的脚本。heredoc 的目标只要解析后落进 scripts 目录就拒绝，判断不了时也拒绝。
+- **MED，worker 启动失败会泄漏连接名额：** 现在释放名额并关闭连接。
+- **LOW，lease 认人不严：**
+  - 识别不出对端进程时，原来照样发 lease，现在不发；
+  - lease 的绑定从只认 pid 改为认 pid 加进程启动时间（`ps -o lstart`），pid 被复用时 lease 作废。
+
+针对这些问题新增了测试。其中"作废 token"和"只认确切脚本"两条做了变异验证：去掉修复后，对应测试会变红。

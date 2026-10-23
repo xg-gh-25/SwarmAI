@@ -3873,6 +3873,27 @@ def _run_activity_time(path: str, data: dict) -> float:
     return t
 
 
+def _v1_cmd(args: str) -> str:
+    from core.worktree_write_gate import v1_command
+    return v1_command(args)
+
+
+def _signed_activity_time(view: dict) -> float:
+    """Last activity of a run: its newest SIGNED event's time (never run.json's mtime
+    or ``updated_at``, which the agent can write). Unknown -> 0 (not active)."""
+    raw = view.get("_last_event_at")
+    if not isinstance(raw, str) or not raw:
+        return 0.0
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        parsed = _dt.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_tz.utc)
+        return parsed.timestamp()
+    except (ValueError, OverflowError):
+        return 0.0
+
+
 def _session_run_state(app_session_id: str) -> "dict[str, str] | None":
     """C6 scan → ``{"project", "id"}`` of THIS session's active run, else None.
 
@@ -3886,23 +3907,26 @@ def _session_run_state(app_session_id: str) -> "dict[str, str] | None":
     without one. A corrupt or
     unreadable run.json is skipped. A glob failure propagates; each caller fails OPEN on it."""
     import time as _time
-    from core import run_index
+    from core.run_worktree import _iter_runs
 
     if not app_session_id:
         return None
     cutoff = _time.time() - _RUN_ACTIVE_WINDOW_SECONDS
     best: dict[str, str] | None = None
     best_t = -1.0
-    for _r in run_index.live_runs(_pipeline_runs_root()):
-        f, data = str(_r.path), _r.data
+    # status, owner, id and project from the SIGNED view (events + contract + run dir),
+    # never run.json's own fields (B-class re-check: a forged status/session_id lifted
+    # direct_commit_gate and the test gate)
+    for _path, data in _iter_runs(_pipeline_runs_root()):
+        f = str(_path)
         try:
-            if _r.mtime < cutoff:
-                continue  # cheap pre-filter: every run.json write (incl. updated_at) bumps mtime
+            t = _signed_activity_time(data)
+            if t < cutoff:
+                continue
             if data.get("status") not in ("active", "reflecting"):   # a v1 run at work
                 continue
             if data.get("session_id") != app_session_id:
                 continue
-            t = _run_activity_time(f, data)
         except Exception:
             logger.debug("_session_run_state: skipped unreadable %s", f, exc_info=True)
             continue
@@ -3910,10 +3934,7 @@ def _session_run_state(app_session_id: str) -> "dict[str, str] | None":
             continue
         run_dir = os.path.dirname(f)
         project_dir = os.path.dirname(os.path.dirname(os.path.dirname(run_dir)))
-        best = {
-            "project": str(data.get("project") or os.path.basename(project_dir)),
-            "id": str(data.get("id") or os.path.basename(run_dir)),
-        }
+        best = {"project": os.path.basename(project_dir), "id": os.path.basename(run_dir)}
         best_t = t
     if best is None:
         # pipeline-run-worktree §4.2: an isolated run with a live worktree is this
@@ -6813,8 +6834,8 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
                     "verification starts (design §4-G1), so verification has an end point and "
                     "the change goes through the same runner, gates and landing. FIX: "
                     "create a direct run and let its DELIVER landing commit:\n"
-                    "backend/.venv/bin/python backend/scripts/pipeline_v1.py create --project "
-                    + project + " --profile direct --requirement '<the user request>'\n"
+                    + _v1_cmd("create --project " + project
+                              + " --profile direct --requirement '<the user request>'") + "\n"
                     "Pure-doc files (*.md, and anything under backend/context/) are "
                     "exempt" + (" here" if mode_on else ", and so are changes of at most "
                                 + str(limit) + " source lines") + ". Only the operator can make a deliberate "

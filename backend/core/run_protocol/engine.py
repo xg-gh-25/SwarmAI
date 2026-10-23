@@ -40,12 +40,6 @@ class EngineError(RuntimeError):
     code = "engine_error"
 
 
-class HookTokenUnavailable(EngineError, InfrastructureError):
-    """The hook-token service could not be reached (conformance F11)."""
-
-    component = "hook_token"
-
-
 class IntegrationRequired(EngineError):
     """A safe operation requires wiring owned outside the v1 CLI process."""
 
@@ -239,8 +233,8 @@ def signed_terminal(data_dir: str | Path, run_id: str) -> bool:
     from core.run_protocol.store import AuditStore
     root = Path(data_dir) / "state" / "pipeline_agent_audit"
     try:
-        key = (root / "runs" / run_id / "authority.key").read_bytes()
-        authority = EventAuthority(key)
+        from core.run_protocol import keys
+        authority = keys.load(data_dir, run_id)
         events = AuditStore(root, run_id, authority).read_events()
         return bool(events) and lifecycle.fold(
             events, authority, allow_pending_transition=True)["status"] in lifecycle.TERMINAL
@@ -431,12 +425,8 @@ class RunEngine:
         try:
             audit.mkdir(parents=True, exist_ok=False, mode=0o700)
             created.append(audit)
-            key = secrets.token_bytes(32)
-            key_path = audit / "authority.key"
-            fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(key); handle.flush(); os.fsync(handle.fileno())
-            authority = EventAuthority(key)
+            from core.run_protocol import keys
+            authority = keys.create(data_path, run_id)
             engine = cls.__new__(cls)
             engine.data_dir, engine.workspace = data_path, workspace_path
             engine.project, engine.run_id, engine.run_dir = project, run_id, run_dir
@@ -484,13 +474,13 @@ class RunEngine:
         actual_project = resolved_run.parents[2].name
         if project != actual_project:
             raise EngineError(f"run {run_id} belongs to project {actual_project}, not {project}")
-        key_path = Path(data_dir) / "state" / "pipeline_agent_audit" / "runs" / run_id / "authority.key"
+        from core.run_protocol import keys
         try:
-            key = key_path.read_bytes()
-        except OSError as exc:
-            raise EngineError(f"authority unavailable: {exc}") from exc
+            authority = keys.load(data_dir, run_id)
+        except keys.KeyUnavailable as exc:
+            raise EngineError(str(exc)) from exc
         engine = cls(data_dir=Path(data_dir), workspace=workspace_path,
-                     project=actual_project, run_id=run_id, authority=EventAuthority(key),
+                     project=actual_project, run_id=run_id, authority=authority,
                      producer=producer)
         contract_project = engine.contract.get("project")
         if contract_project is not None and contract_project != actual_project:
@@ -1456,7 +1446,6 @@ class RunEngine:
     def _execute_land_request(self, request_id: str, *, message: str) -> dict[str, Any]:
         from core.run_protocol.landing import with_trailer
         message = with_trailer(message)
-        from core import hook_token
         from core.run_protocol import auth, landing
 
         try:
@@ -1466,9 +1455,7 @@ class RunEngine:
         request = payload["request"]
         if request.get("session_id") != self.owner_session():
             raise EngineError("land request was prepared by another owner session")
-        token = os.environ.get(hook_token.TOKEN_ENV)
-        token_scope = f"run-land:{request_id}"
-        ok, reason = self._consume_token(token, token_scope)
+        ok, reason = self._consume_token(f"run-land:{request_id}")
         if not ok:
 
             raise IntegrationRequired("approval_required", reason)
@@ -1556,7 +1543,6 @@ class RunEngine:
     @_one_operation
     def execute_authorized_action(self, request_id: str) -> dict[str, Any]:
         """Consume a daemon-issued token, append auth facts, then perform one action."""
-        from core import hook_token
         from core.run_protocol import auth, findings, landing, retention
 
         path = self.run_dir / "artifacts" / "authorized-requests" / f"{request_id}.json"
@@ -1592,7 +1578,7 @@ class RunEngine:
             raise EngineError("prepared authorization action is unsupported")
 
         token_scope = f"{str(action).replace('_', '-')}:{request_id}"
-        ok, reason = self._consume_token(os.environ.get(hook_token.TOKEN_ENV), token_scope)
+        ok, reason = self._consume_token(token_scope)
         if not ok:
             raise IntegrationRequired("approval_required", reason)
         now = __import__("time").time()
@@ -1769,14 +1755,14 @@ class RunEngine:
             self._render_failed("FIXING_SPEC", FileNotFoundError(
                 "address hunk blob missing: " + ", ".join(orchestrator.missing_blobs)))
 
-    def _consume_token(self, token: str | None, scope: str) -> tuple[bool, str]:
-        """Burn the session hook's one-time token for *scope*. An unreachable token
-        service is the run's infrastructure failing (conformance F11), not a refusal."""
-        from core import hook_token
-        ok, reason = hook_token.consume(self.run_dir, token, self.owner_session(),
-                                        self.run_id, scope)
-        if not ok and reason.startswith(hook_token.UNREACHABLE):
-            raise HookTokenUnavailable(reason)
+    def _consume_token(self, scope: str) -> tuple[bool, str]:
+        """Whether this daemon request's hook token covers *scope* on this run and was
+        issued to the run's owner (B-class B-b: the daemon redeemed it before running
+        the command; nothing in the agent's process or environment counts)."""
+        from core.run_protocol import request_ctx
+        ok, reason = request_ctx.take_scope(scope, self.run_id)
+        if ok and request_ctx.current().session_id != self.owner_session():
+            return False, "hook token belongs to another session"
         return ok, reason
 
     @_one_operation
@@ -2262,8 +2248,7 @@ class RunEngine:
         resumed = self._resume_normal_landing(message=message)
         if resumed is not None:
             return resumed
-        from core import hook_token
-        ok, why = self._consume_token(os.environ.get(hook_token.TOKEN_ENV), "land")
+        ok, why = self._consume_token("land")
         if not ok:
             # a landing needs the session's hook (fixing spec A7, design §C5.1): a
             # hookless executor's work is kept and the run ends not_landed

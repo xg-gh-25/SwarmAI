@@ -5512,27 +5512,26 @@ def _v1_proof_bindings(values: list[str]) -> dict[str, str]:
     return bindings
 
 def _not_the_owner(ns) -> "str | None":
-    """Why this call may not test a v1 run (R1 review r1/r2), before anything is written
-    (cache, temp dirs, evidence, events): only the run's own session tests it. The owner
-    is the signed one (the creator, then each owner_transfer); SWARM_APP_SESSION_ID is
-    kept unforgeable in the Bash call by session_link_gate. A run without a v1 contract
-    is refused too."""
-    from config import get_app_data_dir
-    from core.run_protocol.runner import read_contract
-    try:
-        if read_contract(get_app_data_dir(), ns.run_id) is None:
-            return (f"run {ns.run_id} has no Pipeline v1 contract: only v1 runs are "
-                    "tested (this call wrote nothing)")
-        from core.run_protocol.engine import RunEngine
-        owner = RunEngine.load(data_dir=get_app_data_dir(), workspace=_workspace(),
-                               project=ns.project, run_id=ns.run_id,
-                               producer="runner").owner_session()
-    except Exception as exc:  # noqa: BLE001 — an unreadable run is not tested
-        return f"run {ns.run_id} cannot be read: {type(exc).__name__}: {exc}"[:300]
-    if (os.environ.get("SWARM_APP_SESSION_ID") or "") != owner:
-        return (f"run {ns.run_id} belongs to session {owner}; only that session runs its "
-                "tests (this call wrote nothing)")
-    return None
+    """Why this call may not test a v1 run, before anything is written (cache, temp
+    dirs, evidence, events). The daemon decides (B-class B-b): it redeems the one-time
+    hook token of this command, checks the token's session is the run's signed owner
+    and the run has a v1 contract, and opens the lease every event, seal and stage
+    completion of this call then goes through. In the daemon's own process (tests
+    playing it) the lease is already installed by the caller."""
+    from core import hook_token
+    from core.run_protocol import runner_client
+    if runner_client.active():
+        return None
+    if runner_client.in_daemon():
+        # this IS the daemon's process (tests playing it): no lease, the same owner check
+        from core.run_protocol import runner_service
+        why = runner_service.owner_refusal(os.environ.get("SWARM_APP_SESSION_ID") or "",
+                                           ns.project, ns.run_id)
+        return None if why is None else f"{why} (this call wrote nothing)"
+    else:
+        ok, why = runner_client.open_lease(os.environ.get(hook_token.TOKEN_ENV),
+                                           ns.project, ns.run_id)
+    return None if ok else f"{why} (this call wrote nothing)"
 
 
 def execute(ns) -> tuple[dict, int]:
@@ -5637,32 +5636,17 @@ _STAGE_RESULT_MODES = frozenset({"tdd", "probe", "regression", "verify", "rechec
 
 def _v1_after_tests(ns) -> dict | None:
     """After a v1 call's results are in its final (r6 §2.3): when the run is in BUILD or
-    TEST and every check of that stage now passes, complete the stage, and in every case
-    say what comes next. The completion is the CLI's own ``stage-complete`` (it signs as
-    cli and takes the run's operation lock; this process signs only runner facts, C3),
-    started only now: no lock is ever held while tests run."""
+    TEST and every check of that stage now passes, the daemon completes the stage (as
+    cli, under the run's operation lock), and in every case says what comes next. Asked
+    only now: no lock is ever held while tests run."""
     if not _V1_CONTRACT or ns.mode not in _STAGE_RESULT_MODES or not ns.run_id:
         return None
-    from config import get_app_data_dir
-    from core.run_protocol.engine import RunEngine
-    from core.run_protocol.next_step import auto_completable, next_step
-    engine = RunEngine.load(data_dir=get_app_data_dir(), workspace=_workspace(),
-                            project=ns.project, run_id=ns.run_id, producer="runner")
-    state = engine.projection()
-    if not auto_completable(engine, state):
-        return {"next": next_step(engine)}
-    cli = Path(__file__).resolve().with_name("pipeline_v1.py")
-    try:
-        done = subprocess.run(
-            [sys.executable, str(cli), "stage-complete", "--project", ns.project,
-             "--run-id", ns.run_id, "--expect-stage", state["stage"]],
-            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
-        result = json.loads(done.stdout.strip().splitlines()[-1])
-    except (OSError, subprocess.TimeoutExpired, ValueError, IndexError) as exc:
-        return {"stage_complete": {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]},
-                "next": next_step(engine)}
-    return {"stage_complete": {key: result.get(key) for key in ("ok", "error", "attempt")},
-            "next": result.get("next") or next_step(engine)}
+    from core.run_protocol import runner_client
+    if runner_client.in_daemon():
+        from core.run_protocol import runner_service
+        return runner_service.after_tests(os.environ.get("SWARM_APP_SESSION_ID") or "",
+                                          ns.project, ns.run_id)
+    return runner_client.call("after_tests", mode=ns.mode)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -5703,6 +5687,8 @@ def main(argv: list[str] | None = None) -> int:
         _restore_signal_handlers(prev)
         _cleanup_private_worktrees()  # normally empty; covers an unexpected exception path
         _LIVE_JOBS.clear()
+        from core.run_protocol import runner_client
+        runner_client.close()            # this call's lease ends with it
 
 
 if __name__ == "__main__":

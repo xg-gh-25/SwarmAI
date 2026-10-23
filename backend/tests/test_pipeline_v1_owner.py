@@ -28,6 +28,9 @@ def _signed_owner_from_run_json(monkeypatch):
         return True
     from core import pipeline_human
     monkeypatch.setattr(pipeline_human, "record_owner", record)
+    # every pipeline command now carries a hook token (B-class B-b): a stand-in issuer
+    from core import hook_token
+    monkeypatch.setattr(hook_token, "issue", lambda *_a, **_k: "40001." + "a" * 64)
 
 
 def _run(tmp_path: Path, *, owner: str = "session-a", project: str = "proj") -> Path:
@@ -45,13 +48,12 @@ def _cmd(command: str, project: str = "proj") -> str:
 
 
 def _passes(value) -> bool:
-    """Allowed, with at most this session's id handed to the call (R1 review r2)."""
+    """Allowed, with the hook's token and this session's id handed to the call."""
     if value is None:
         return True
     out = value.get("hookSpecificOutput", {})
     cmd = out.get("updatedInput", {}).get("command", "")
-    return out.get("permissionDecision") == "allow" and cmd.startswith("SWARM_APP_SESSION_ID=") \
-        and "SWARM_HOOK_TOKEN" not in cmd
+    return out.get("permissionDecision") == "allow" and "SWARM_APP_SESSION_ID=" in cmd
 
 
 def _denied(value) -> bool:
@@ -63,7 +65,7 @@ def test_parser_recognizes_pipeline_v1_mutation():
     assert single
     assert calls == [{
         "tool": "pipeline_v1", "sub": "stage-complete", "run_id": "run_one",
-        "project": "proj", "stage": None, "status": None, "session_id": None,
+        "script": "backend/scripts/pipeline_v1.py", "project": "proj", "stage": None, "status": None, "session_id": None,
         "ambiguous": False, "assigns": [],
         "argv": ["stage-complete", "--project", "proj", "--run-id", "run_one"],
         "run_ids": ["run_one"], "projects": ["proj"], "session_ids": [],
@@ -195,9 +197,10 @@ def test_the_hook_hands_the_session_id_to_the_first_pipeline_call(tmp_path, monk
                     "--project proj --run-id run_one --mode regression | tail -3"):
         out = gate._decide("session-a", command, {"command": command})
         new = out["hookSpecificOutput"]["updatedInput"]["command"]
-        assert new == "SWARM_APP_SESSION_ID=session-a " + command
+        assert new == ("SWARM_HOOK_TOKEN=40001." + "a" * 64
+                       + " SWARM_APP_SESSION_ID=session-a " + command)
     compound = "cd /x && " + _cmd("status")
-    assert gate._decide("session-a", compound, {"command": compound}) is None
+    assert _denied(gate._decide("session-a", compound, {"command": compound}))
     assert gate._with_session(_cmd("status"), "prewarm-123") is None
 
 
@@ -218,3 +221,71 @@ def test_no_gate_module_defines_a_function_twice():
                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
         dup = sorted({n for n in names if names.count(n) > 1})
         assert not dup, (name, dup)
+
+
+def test_a_denied_takeover_command_transfers_nothing(tmp_path, monkeypatch):
+    """B round 1 HIGH: a takeover command the gate then denies (not first on the line)
+    must not have signed the owner transfer already."""
+    run_file = _run(tmp_path)
+    monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
+    monkeypatch.setattr(gate, "_owner_live", lambda _owner: False)
+    monkeypatch.setattr("core.runtime_hooks.write_session_run_map", lambda *_a, **_k: None)
+    command = "cd /x && " + _cmd("stage-complete")
+    assert _denied(gate._decide("session-b", command, {"command": command}))
+    assert json.loads(run_file.read_text())["session_id"] == "session-a"
+
+
+def test_only_this_backends_pipeline_scripts_get_a_token(tmp_path, monkeypatch):
+    """B round 1 HIGH: a file merely NAMED pipeline_test.py / pipeline_v1.py elsewhere
+    gets no token (it could open a runner lease or send commands)."""
+    _run(tmp_path)
+    monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
+    fake = tmp_path / "evil" / "pipeline_test.py"
+    fake.parent.mkdir()
+    fake.write_text("print('x')\n")
+    for script in (str(fake), "evil/pipeline_test.py"):
+        command = f"python {script} --project proj --run-id run_one --mode tdd"
+        out = gate._decide("session-a", command, {"command": command}, "check", str(tmp_path))
+        assert _denied(out), script
+
+
+def test_a_late_action_takes_over_only_once_approved(tmp_path, monkeypatch):
+    """B round 2 HIGH: run-land --request on an idle foreign run took it over in the
+    CHECK phase, before the person approved anything."""
+    run_file = _run(tmp_path)
+    monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
+    monkeypatch.setattr(gate, "_owner_live", lambda _owner: False)
+    monkeypatch.setattr("core.runtime_hooks.write_session_run_map", lambda *_a, **_k: None)
+    command = _cmd("run-land") + " --request land_abc --message land"
+    gate._decide("session-b", command, {"command": command}, phase="check")
+    assert json.loads(run_file.read_text())["session_id"] == "session-a"
+
+
+def test_a_failed_state_change_burns_the_issued_token(tmp_path, monkeypatch):
+    """B round 2 HIGH: the token is issued before any state change; when the change
+    then fails, the command is denied AND its token is redeemed (unusable)."""
+    _run(tmp_path)
+    monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
+    from core import hook_token
+    burned = []
+    monkeypatch.setattr(hook_token, "redeem", lambda t: burned.append(t))
+    monkeypatch.setattr(gate, "_record_approval", lambda *_a: "approval not recorded")
+    command = _cmd("run-land") + " --request land_abc --message land"
+    assert _denied(gate._decide("session-a", command, {"command": command},
+                                phase="approved"))
+    assert burned == ["40001." + "a" * 64]
+
+
+def test_only_the_exact_script_counts(tmp_path):
+    """B round 2 HIGH: a sibling under backend/scripts is not pipeline_test.py, and a
+    relative path with no cwd cannot be checked."""
+    from pathlib import Path as P
+    scripts = P(gate.__file__).resolve().parents[1] / "scripts"
+    assert gate._is_our_script({"tool": "pipeline_v1",
+                                "script": str(scripts / "pipeline_v1.py")})
+    assert not gate._is_our_script({"tool": "pipeline_test",
+                                    "script": str(scripts / "pipeline_v1.py")})
+    assert not gate._is_our_script({"tool": "pipeline_v1",
+                                    "script": "backend/scripts/pipeline_v1.py"})
+    assert gate._resolves_into_scripts(str(scripts / "x.json"), None)
+    assert not gate._resolves_into_scripts("art.json", str(tmp_path))

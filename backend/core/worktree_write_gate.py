@@ -46,8 +46,10 @@ import asyncio
 import logging
 import os
 import shlex
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from core.doc_paths import is_doc_only_path
@@ -412,8 +414,26 @@ V1_MAIN_EDIT_REMEDY = (
 
 
 def v1_command(args: str) -> str:
-    """``<python> backend/scripts/pipeline_v1.py <args>``: the run CLI."""
-    return f"backend/.venv/bin/python backend/scripts/pipeline_v1.py {args}"
+    """``<python> <this backend's scripts/pipeline_v1.py> <args>``: the run CLI, by
+    absolute path. Only this backend's own script receives a hook token
+    (``run_owner_gate._is_our_script``), so the suggestion must name it wherever the
+    agent's cwd is (a run worktree's copy of the script is not it)."""
+    return f"{_python()} {shlex.quote(str(_SCRIPTS / 'pipeline_v1.py'))} {args}"
+
+
+def pipeline_test_command(args: str) -> str:
+    """The runner, by absolute path, under the 110 s wall-clock cap."""
+    return (f"perl -e 'alarm 110; exec @ARGV' {_python()} "
+            f"{shlex.quote(str(_SCRIPTS / 'pipeline_test.py'))} {args}")
+
+
+_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+
+
+def _python() -> str:
+    """The backend venv's python when it exists (dev checkout), else this process's."""
+    venv = Path(__file__).resolve().parents[1] / ".venv" / "bin" / "python"
+    return shlex.quote(str(venv if venv.exists() else sys.executable))
 
 
 # direct has no REQUIREMENTS document: create takes the user's request verbatim

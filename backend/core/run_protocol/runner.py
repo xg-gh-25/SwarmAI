@@ -94,16 +94,21 @@ def is_v1_run(data_dir: str | Path, run_id: str) -> bool:
 
 
 def event_channel(run_id: str, contract: Mapping[str, Any]):
-    """(store, runner writer) of *run_id*, checked against its contract's authority."""
+    """(store, runner writer) of *run_id*. In the test runner's process the store is the
+    daemon's (``runner_client``: the key never leaves the daemon, B-class B-b); in the
+    daemon itself it is the local store, checked against the contract's authority."""
+    from core.run_protocol import runner_client
+    if runner_client.active():
+        return runner_client.RemoteStore(run_id), None
     data_dir = os.environ.get("SWARM_DATA_DIR")
     if not data_dir:
         from config import get_app_data_dir
         data_dir = str(get_app_data_dir())
     audit_root = Path(data_dir) / "state" / "pipeline_agent_audit"
-    key_path = audit_root / "runs" / run_id / "authority.key"
+    from core.run_protocol import keys
     try:
-        authority = protocol_events.EventAuthority(key_path.read_bytes())
-    except (OSError, protocol_events.EventError) as exc:
+        authority = keys.load(data_dir, run_id)
+    except keys.KeyUnavailable as exc:
         raise RunnerError(f"runner event authority unavailable: {exc}") from exc
     expected = contract.get("event_authority_id")
     if not isinstance(expected, str) or expected != authority.authority_id:
@@ -112,6 +117,28 @@ def event_channel(run_id: str, contract: Mapping[str, Any]):
     # can land after a trigger whose transition is still due
     from core.run_protocol.engine import _store
     return _store(audit_root, run_id, authority, producer="runner"), authority.writer("runner")
+
+
+def _named(spec: tuple, store):
+    """A store refusal by name: sent as-is to the daemon's store, made into the check
+    itself for a local one (the two cannot drift: runner_service._refusal)."""
+    from core.run_protocol import runner_client
+    if isinstance(store, runner_client.RemoteStore):
+        return spec
+    from core.run_protocol.runner_service import _refusal
+    return _refusal(list(spec), store.authority)
+
+
+def _stage_attempt(store) -> "tuple[str, int]":
+    """The run's current stage and its attempt, from the signed log."""
+    from core.run_protocol import runner_client
+    if isinstance(store, runner_client.RemoteStore):
+        value = runner_client.call("stage_attempt")
+        return str(value["stage"]), int(value["attempt"])
+    from core.run_protocol import lifecycle
+    state = lifecycle.fold(store.read_events(), store.authority)
+    stage = str(state.get("stage") or "run")
+    return stage, int((state.get("stage_attempts") or {}).get(stage) or 1)
 
 
 def record_infrastructure_failed(run_id: str, contract: Mapping[str, Any],
@@ -128,7 +155,7 @@ def record_infrastructure_failed(run_id: str, contract: Mapping[str, Any],
             payload={"reason": f"{failure.component}: {failure}"[:300]},
             # one per run, checked under the run lock: a second reporter (another
             # repo's runner) records nothing (K3 review r1)
-            refuse=lambda chain: lifecycle.infrastructure_refusal(chain, store.authority))
+            refuse=_named(("infrastructure",), store))
     except StoreError as exc:
         if str(exc).startswith(lifecycle.ALREADY_ENDED):
             return None
@@ -363,14 +390,12 @@ class V1Runner:
         if cap not in lifecycle.CAPS or cap in ("stage_attempt", "land_attempt",
                                                 "gate0_round", "dispatch"):
             raise RunnerError(f"unknown runner cap {cap!r}")
-        state = lifecycle.fold(self._store.read_events(), self._store.authority)
-        stage = str(state.get("stage") or "run")
-        attempt = int((state.get("stage_attempts") or {}).get(stage) or 1)
+        stage, attempt = _stage_attempt(self._store)
         try:
             event, _ = self._store.append_new(
                 writer=self._writer, kind="metric", at=_now(), stage=stage, attempt=attempt,
                 payload={"name": f"cap_exceeded.{cap}", "value": 1, "cap": cap},
-                refuse=lambda chain: lifecycle.cap_already_recorded(chain, cap, stage, attempt))
+                refuse=_named(("cap", cap, stage, attempt), self._store))
         except StoreError as exc:
             if str(exc) != "cap already recorded":
                 raise

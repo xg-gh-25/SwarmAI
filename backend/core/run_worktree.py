@@ -1507,7 +1507,9 @@ def _signed_view(run_file: Path, data: dict) -> "dict | None":
                 if set(commits) == {"primary"} and len(repos_) == 1:
                     commits = {repos_[0]: commits["primary"]}
                 landed = sorted(commits)
+            events = engine.store.read_events()
             signed = {"session_id": engine.owner_session(), "status": state.get("status"),
+                      "_last_event_at": (events[-1].get("at") if events else None),
                       "stages": dict(state.get("stages") or {}),
                       "worktree_mode": (contract or {}).get("mode"),
                       "_repos": repos_, "_landed": landed}

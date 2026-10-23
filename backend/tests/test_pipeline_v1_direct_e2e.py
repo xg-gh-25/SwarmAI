@@ -96,13 +96,16 @@ def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
         token = hook_token.issue(
             engine.run_dir, "s", "run_one", f"run-land:{request_id}")
         assert token
-        monkeypatch.setenv(hook_token.TOKEN_ENV, token)
-        landed = engine.execute_land_request(
-            request_id,
-            message="feat: value\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
+        # the daemon redeems the hook's token and runs the landing as that session
+        rec = hook_token.redeem(token)
+        from core.run_protocol import request_ctx
+        with request_ctx.active(request_ctx.Request(
+                session_id=rec["session_id"], run_id=rec["run_id"], scope=rec["subcommand"])):
+            landed = engine.execute_land_request(
+                request_id,
+                message="feat: value\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
     finally:
         hook_token.stop_oracle()
-        monkeypatch.delenv(hook_token.TOKEN_ENV, raising=False)
     assert landed["state"]["status"] == "reflecting"
     assert (repo / "a.py").read_text() == "value = 2\n"
     assert (repo / ".aidlc/deliverables/run_one/REPORT.md").is_file()

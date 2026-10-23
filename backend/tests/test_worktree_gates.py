@@ -97,13 +97,12 @@ def _call(tool, cwd="", **ti):
 
 
 def _passes(value) -> bool:
-    """Allowed, with at most this session's id handed to the call (R1 review r2)."""
+    """Allowed, with the hook's token and this session's id handed to the call."""
     if value is None:
         return True
     out = value.get("hookSpecificOutput", {})
     cmd = out.get("updatedInput", {}).get("command", "")
-    return out.get("permissionDecision") == "allow" and cmd.startswith("SWARM_APP_SESSION_ID=") \
-        and "SWARM_HOOK_TOKEN" not in cmd
+    return out.get("permissionDecision") == "allow" and "SWARM_APP_SESSION_ID=" in cmd
 
 
 def _denied(v):
@@ -184,7 +183,8 @@ def test_read_of_main_gets_reminder(env):
 
 
 # ── owner gate (v1 only, r6 §5) ─────────────────────────────────────────────
-CLI = "python /x/backend/scripts/pipeline_v1.py"
+# this backend's own CLI: only its scripts receive a token (B round 1)
+CLI = "python " + str(Path(__file__).resolve().parents[1] / "scripts" / "pipeline_v1.py")
 LAND = "land --message x"                       # the token command of a normal landing
 
 
@@ -269,9 +269,11 @@ def test_steering_env_on_a_pipeline_command_is_denied(env):
     assert _denied(og._decide("s1", c, {"command": c}))
 
 
-def test_an_ordinary_mutation_needs_no_token(env):
+def test_every_pipeline_command_must_be_first_to_get_its_token(env):
+    """B-class B-b: the daemon runs only token-carrying commands, so a pipeline call
+    the hook cannot hand a token to (not the first command of the line) is denied."""
     c = "cd /x && " + _cmd("stage-complete")
-    assert _passes(og._decide("s1", c, {"command": c}))
+    assert _denied(og._decide("s1", c, {"command": c}))
 
 
 def test_read_only_command_untouched(env):

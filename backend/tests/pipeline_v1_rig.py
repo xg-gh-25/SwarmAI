@@ -147,25 +147,39 @@ class Rig:
         for key in ("SWARM_DATA_DIR", "SWARM_WORKSPACE", "SWARM_WORKTREE_ROOT",
                     "SWARM_WORKTREE_LEDGER", "SWARM_APP_SESSION_ID"):
             monkeypatch.setenv(key, env[key])
+        # this process plays the daemon, where pipeline commands run: the env a test
+        # gives its CLI (r.env) is the daemon's too. The default is isolated (conftest
+        # turns worktrees off for every other test).
+        monkeypatch.setenv("SWARM_WORKTREE_MODE", env.get("SWARM_WORKTREE_MODE") or "on")
+        monkeypatch.setenv("SWARM_TEST_CACHE_DIR", env["SWARM_TEST_CACHE_DIR"])
         from core import runtime_hooks
         monkeypatch.setattr(runtime_hooks, "_PIPELINE_AUDIT_DIR",
                             tmp_path / "data" / "state" / "pipeline_agent_audit")
         from core import pipeline_human
         monkeypatch.setattr(pipeline_human, "_workspace", lambda: self.ws)
+        from core.run_protocol import daemon_exec
         hook_token.stop_oracle()
-        self.oracle = hook_token.start_oracle(40000 + (os.getpid() * 7 + id(self)) % 20000)
+        daemon_exec.stop()
+        port = 40000 + (os.getpid() * 7 + id(self)) % 20000
+        self.oracle = hook_token.start_oracle(port)
+        # the test process plays the daemon: pipeline commands run here (B-class B-a)
+        self.service = daemon_exec.start(port)
         self.ctx: dict[str, Any] = {"sdk_session_id": SESSION}
         self.run_id: str | None = None
         self.worktree: Path | None = None
 
     def close(self) -> None:
         from core import hook_token
+        from core.run_protocol import daemon_exec
+        daemon_exec.stop()
         hook_token.stop_oracle()
 
     # ── commands ────────────────────────────────────────────────────────────
     def _exec(self, argv: list[str], extra_env: dict[str, str] | None = None,
               timeout: float = 150) -> tuple[dict, int]:
         env = {**self.env, **(extra_env or {})}
+        # the daemon (this process) reads the mode a test set on r.env
+        os.environ["SWARM_WORKTREE_MODE"] = env.get("SWARM_WORKTREE_MODE") or "on"
         proc = subprocess.run(argv, env=env, capture_output=True, text=True,
                               timeout=timeout, cwd=str(self.root))
         lines = [line for line in proc.stdout.strip().splitlines() if line.strip()]
@@ -201,9 +215,11 @@ class Rig:
         extra = {"SWARM_TEST_REPO_ROOT": str(repo)}
         if session is not None:
             extra["SWARM_APP_SESSION_ID"] = session
-        out, _ = self._exec([sys.executable, str(PTEST), *self._run_args(),
-                             "--mode", mode, *args], extra_env=extra)
-        return out
+        # through the session's hook, like a real Bash call: it issues the token the
+        # runner opens its daemon lease with (B-class B-b)
+        argv = [sys.executable, str(PTEST), *self._run_args(), "--mode", mode, *args]
+        return self.bash(" ".join(map(shlex.quote, argv)), extra_env=extra,
+                         session=session or SESSION)
 
     def _tested(self, out: dict) -> dict:
         """BUILD / TEST complete by themselves once the runner's results pass their
@@ -213,20 +229,21 @@ class Rig:
             return {"ok": True, **done, "auto": True}
         return self.v1("stage-complete")
 
-    def bash(self, command: str) -> dict:
+    def bash(self, command: str, extra_env: dict[str, str] | None = None,
+             session: str = SESSION) -> dict:
         """What a Bash tool call does in a SwarmAI session: the run_owner_gate check
         phase, then its after-approval phase (the token issuer), then ``bash -c``."""
         from core import run_owner_gate
         tool_input = {"command": command}
         for phase in ("check", "approved"):
-            decision = run_owner_gate._decide(SESSION, tool_input["command"], tool_input,
+            decision = run_owner_gate._decide(session, tool_input["command"], tool_input,
                                               phase=phase)
             out = (decision or {}).get("hookSpecificOutput") or {}
             if out.get("permissionDecision") == "deny":
                 return {"ok": False, "denied": out.get("permissionDecisionReason", "")}
             if out.get("updatedInput"):
                 tool_input = dict(out["updatedInput"])
-        result, _ = self._exec(["bash", "-c", tool_input["command"]])
+        result, _ = self._exec(["bash", "-c", tool_input["command"]], extra_env=extra_env)
         return result
 
     # ── hook-side producers (real hook functions) ───────────────────────────

@@ -85,6 +85,23 @@ import pytest
 from core.run_protocol.events import allow_hook_writer as _allow_hook_writer
 
 _allow_hook_writer()   # the test process plays the daemon; CLI subprocesses do not (C3)
+
+
+@pytest.fixture(autouse=True)
+def _gate_cwd_is_the_repo_root(monkeypatch):
+    """run_owner_gate resolves a pipeline script against the Bash call's cwd (the hook
+    passes it). Unit tests that call ``_decide`` directly with a relative
+    ``backend/scripts/...`` path run as if from the repo root, like an agent session."""
+    from pathlib import Path as _P
+    from core import run_owner_gate as _og
+    real = _og._decide
+    root = str(_P(__file__).resolve().parents[2])
+
+    def decide(sid, command, tool_input, phase="check", cwd=None):
+        return real(sid, command, tool_input, phase, cwd or root)
+    monkeypatch.setattr(_og, "_decide", decide)
+
+
 from fastapi.testclient import TestClient
 from httpx import AsyncClient, ASGITransport
 from typing import Generator, AsyncGenerator

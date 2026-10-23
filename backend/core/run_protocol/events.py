@@ -39,6 +39,11 @@ def allow_hook_writer() -> None:
     _process_producers = _process_producers | {"hook"}
 
 
+def hook_writer_allowed() -> bool:
+    """Whether this is the daemon's process (it may record hook facts)."""
+    return _hook_writer_allowed
+
+
 def restrict_process(*producers: str) -> None:
     """A CLI / runner process: from now on only *producers* may be obtained."""
     global _hook_writer_allowed, _process_producers

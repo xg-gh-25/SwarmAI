@@ -31,9 +31,10 @@ Rules:
 - Paths are taken as written (``abspath``, never ``realpath``), and a checked path with
   a symlink anywhere from ``runs/<run_id>`` down is rejected: a link could otherwise
   point a report at a file outside the run, or at an older sealed report.
-Residual: a script the agent writes can still call ``write_sealed`` (the audit-dir
-gate matches path text in commands, not imports) — the same boundary as the review
-markers next to it.
+In the test runner's process (a runner lease is installed, ``runner_client``) every
+write and check goes to the daemon, which keeps the store (B-class B-b). Residual: the
+agent runs as the same OS user, so a process it writes could still edit the store
+file directly (fixing log §31; closed only by a separate OS user for the agent).
 """
 from __future__ import annotations
 
@@ -48,6 +49,12 @@ logger = logging.getLogger(__name__)
 
 SUBDIRS = frozenset({"tests", "proofs", "probes", "mutations"})
 _RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _remote() -> bool:
+    """In the test runner's process every seal is the daemon's (B-class B-b)."""
+    from core.run_protocol import runner_client
+    return runner_client.active()
 
 
 def _store_dir() -> Path:
@@ -161,6 +168,9 @@ def write_sealed(path, text: str) -> "str | None":
     the replace and the seal happen under the store's lock, so two writers cannot leave
     the store holding the other's sha. Returns a warning when the seal could not be
     recorded (the file is then unusable for an enabled run until written again)."""
+    if _remote() and run_of(path) is not None:
+        from core.run_protocol import runner_client
+        return runner_client.seal_write(str(path), text)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -217,6 +227,12 @@ def read_checked(path) -> "tuple[bytes | None, bool, str | None]":
     """The file's bytes and whether a reader may use them: ``(data, True, None)``
     unchecked or sealed; ``(data, True, reason)`` could not be checked (fail open);
     ``(None, False, reason)`` reject. OSError propagates for an unreadable file."""
+    if _remote() and run_of(path) is not None:
+        from core.run_protocol import runner_client
+        data, ok, why = runner_client.seal_read(str(path))
+        if data is None and why and why.startswith("unreadable ("):
+            raise OSError(why)
+        return data, ok, why
     rid = run_of(path)
     if rid is None:
         return Path(path).read_bytes(), True, None
@@ -249,6 +265,9 @@ def read_checked(path) -> "tuple[bytes | None, bool, str | None]":
 def sealed_missing(path) -> "str | None":
     """A reason when ``path`` is absent but the runner sealed it: deleting a sealed
     report (e.g. snapshots.json, so any snapshot's proof would count) is not absence."""
+    if _remote() and run_of(path) is not None:
+        from core.run_protocol import runner_client
+        return runner_client.call("sealed_missing", path=str(path))
     rid = run_of(path)
     if rid is None or os.path.lexists(_key(path)):
         return None

@@ -39,6 +39,7 @@ import json
 import os
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
@@ -54,6 +55,7 @@ def ws(tmp_path, monkeypatch):
     root = tmp_path / "ws"
     root.mkdir()
     monkeypatch.setenv("SWARM_WORKSPACE", str(root))
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(sh, "_ACTIVE_RUN_GLOB_ROOT", str(root))
     for k in ("SWARM_GATE_FORCE",):
         monkeypatch.delenv(k, raising=False)
@@ -65,18 +67,38 @@ _NO_SID = object()
 
 def _seed(ws, project="SwarmAI", run_id="run_abc123", status="active",
           session_id=SID, age_hours=0.0):
-    """Write Projects/<project>/.artifacts/runs/<run_id>/run.json (C1 fields)."""
+    """A real Pipeline v1 run (protected contract + signed events) owned by
+    *session_id*: the gates read the SIGNED owner/status, never run.json's own fields
+    (B-class re-check). *status* "paused" is a recorded user stop; an owner of None /
+    "" / _NO_SID is a run.json with no contract (not a run). *age_hours* backdates its
+    newest signed event. Returns the run's run.json."""
+    from core.run_protocol import engine as engine_mod
     d = ws / "Projects" / project / ".artifacts" / "runs" / run_id
-    d.mkdir(parents=True, exist_ok=True)
-    payload = {"id": run_id, "project": project, "status": status}
-    if session_id is not _NO_SID:
-        payload["session_id"] = session_id
-    f = d / "run.json"
-    f.write_text(json.dumps(payload))
+    if session_id in (None, "", _NO_SID):
+        d.mkdir(parents=True, exist_ok=True)
+        payload = {"id": run_id, "project": project, "status": status}
+        if session_id is not _NO_SID:
+            payload["session_id"] = session_id
+        (d / "run.json").write_text(json.dumps(payload))
+        return d / "run.json"
+    data = Path(os.environ["SWARM_DATA_DIR"])
+    real_now = engine_mod._now
     if age_hours:
-        t = time.time() - age_hours * 3600
-        os.utime(f, (t, t))
-    return f
+        from datetime import datetime, timedelta, timezone
+        then = (datetime.now(timezone.utc) - timedelta(hours=age_hours)).isoformat()
+        engine_mod._now = lambda: then
+    try:
+        engine = engine_mod.RunEngine.create(
+            data_dir=data, workspace=ws, project=project, profile="direct",
+            requirement="seeded", session_id=session_id, repos={}, mode="shared",
+            run_id=run_id)
+        if status == "paused":
+            engine.record_stop("user_stop", reason="seeded")
+        elif status in ("abandoned", "completed"):
+            engine.abandon(reason="seeded")      # a terminal run
+    finally:
+        engine_mod._now = real_now
+    return engine.run_dir / "run.json"
 
 
 def _call(gate, command, cwd=REPO, tool_name="Bash", timeout=None):
@@ -158,11 +180,18 @@ class TestSessionRunState:
         _seed(ws, run_id="run_ok")
         assert sh._session_run_state(SID)["id"] == "run_ok"
 
-    def test_missing_id_and_project_fall_back_to_directory_names(self, ws):
-        d = ws / "Projects" / "Proj" / ".artifacts" / "runs" / "run_dir"
+    def test_id_and_project_are_the_run_directorys_never_run_json(self, ws):
+        f = _seed(ws, project="Proj", run_id="run_dir")
+        f.write_text(json.dumps({**json.loads(f.read_text()), "id": "run_x", "project": "X"}))
+        assert sh._session_run_state(SID) == {"project": "Proj", "id": "run_dir"}
+
+    def test_a_forged_run_json_is_not_this_sessions_run(self, ws):
+        """B-class re-check: status / owner of a run.json with no contract do not
+        make it a run (a forged one lifted direct_commit_gate and the test gate)."""
+        d = ws / "Projects" / "Proj" / ".artifacts" / "runs" / "run_forged"
         d.mkdir(parents=True)
         (d / "run.json").write_text(json.dumps({"status": "active", "session_id": SID}))
-        assert sh._session_run_state(SID) == {"project": "Proj", "id": "run_dir"}
+        assert sh._session_run_state(SID) is None
 
 
 # ── pipeline_test_gate ───────────────────────────────────────────────────────
@@ -563,8 +592,9 @@ class TestDirectCommitGateDenies:
         assert _is_deny(res)
         reason = _reason(res)
         assert "21 source lines" in reason
-        assert ("backend/.venv/bin/python backend/scripts/pipeline_v1.py create "
-                "--project Repo --profile direct") in reason
+        assert ("pipeline_v1.py create --project Repo --profile direct") in reason
+        from core.worktree_write_gate import v1_command
+        assert v1_command("") .split()[1] in reason       # the absolute script path
         assert "artifact_cli" not in reason
         assert "--project SwarmAI" not in reason
 
@@ -931,17 +961,25 @@ class TestDirectCommitGateWorktreeMode:
 
 
 class TestDirectCommitGateWorktreeModeScope:
-    def test_only_a_shared_mode_run_exempts(self, ws, repo, monkeypatch):
-        """The same exemption as the write gate's rule 4: a paused (or stale) isolated
-        run exempts nothing, a shared-mode run keeps writing and committing main."""
-        import json as _json
+    def test_only_a_live_v1_run_of_its_own_exempts(self, ws, repo, tmp_path, monkeypatch):
+        """A session's own live v1 run (any mode) exempts it here: the run's gates own
+        the commit then (active_run_commit_gate, worktree_write_gate). A run.json with
+        no protected contract is not a run and exempts nothing (A-class)."""
+        from core.run_protocol.engine import RunEngine
         monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
-        f = _seed(ws, status="paused")
+        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
         (repo / "a.py").write_text("base = 1\n")
         _git(repo, "add", "a.py")
-        assert _is_deny(_direct("git commit -m x", repo))
-        d = _json.loads(f.read_text())
-        f.write_text(_json.dumps({**d, "worktree_mode": "shared"}))
+        (ws / "Projects" / "Repo").mkdir(parents=True, exist_ok=True)   # a project repo
+        assert _is_deny(_direct("git commit -m x", repo))                # no run at all
+        f = ws / "Projects" / "Repo" / ".artifacts" / "runs" / "run_nocontract" / "run.json"
+        f.parent.mkdir(parents=True)
+        f.write_text(json.dumps({"id": "run_nocontract", "project": "Repo", "status": "active",
+                                 "session_id": SID, "worktree_mode": "shared"}))
+        assert _is_deny(_direct("git commit -m x", repo))                # forged: not a run
+        RunEngine.create(data_dir=tmp_path / "data", workspace=ws, project="Repo",
+                         profile="direct", requirement="x", session_id=SID,
+                         repos={"repo": str(repo)}, mode="shared", run_id="run_shr1")
         assert _direct("git commit -m x", repo) == {"decision": "approve"}
 
     def test_a_repo_no_run_can_isolate_keeps_the_20_line_rule(self, ws, repo, monkeypatch):

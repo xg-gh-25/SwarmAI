@@ -230,32 +230,25 @@ def test_a_person_answers_and_the_agent_cannot(rig):
     assert r.kinds().count("human_answer") == 1 and r.state()["status"] == "active"
 
 
-def test_a_cli_process_cannot_sign_as_the_hook(rig):
-    """The CLI's own entry narrows the process to the cli writer before it runs any
-    command, so nothing it executes afterwards can sign as the hook (C3). This is a
-    code-level split: a process that never enters the CLI and reads the key itself is
-    the separate daemon-signing design (fixing spec §9)."""
+def test_the_cli_process_holds_no_key_and_no_engine(rig):
+    """B-class B-b: the CLI only sends its command to the daemon. Its module imports
+    no engine, store or key code, so nothing in the agent's process signs (C3 by
+    construction, no longer by narrowing the process)."""
     import subprocess, sys
     from tests.pipeline_v1_rig import PV1
-    r = rig("direct")
-    r.create()
-    code = (
-        "import runpy, sys\n"
-        "sys.argv = [%r, 'status', '--project', %r, '--run-id', %r]\n"
-        "try:\n"
-        "    runpy.run_path(%r, run_name='__main__')\n"
-        "except SystemExit:\n"
-        "    pass\n"
-        "from core.run_protocol.events import EventAuthority, allow_hook_writer\n"
-        "try:\n"
-        "    allow_hook_writer()\n"
-        "except Exception:\n"
-        "    pass\n"
-        "EventAuthority(b'k' * 32).writer('hook')\n"
-        % (str(PV1), "P", r.run_id, str(PV1)))
-    proc = subprocess.run([sys.executable, "-c", code], env=r.env, capture_output=True,
-                          text=True, cwd=str(PV1.parents[1]))
-    assert proc.returncode != 0 and "may not write as 'hook'" in proc.stderr, proc.stderr[-500:]
+    code = ("import runpy, sys\n"
+            "sys.argv = [%r, '--help']\n"
+            "try:\n"
+            "    runpy.run_path(%r, run_name='not_main')\n"
+            "except SystemExit:\n"
+            "    pass\n"
+            "bad = [m for m in sys.modules if m in ('core.run_protocol.engine', "
+            "'core.run_protocol.store', 'core.run_protocol.keys')]\n"
+            "print(bad)\n" % (str(PV1), str(PV1)))
+    proc = subprocess.run([sys.executable, "-c", code], env=rig("direct").env,
+                          capture_output=True, text=True, cwd=str(PV1.parents[1]))
+    assert proc.stdout.strip().splitlines()[-1] == "[]", proc.stdout + proc.stderr
+
 
 def test_user_stop_pauses_and_resume_continues(rig):
     r = rig("direct")
@@ -298,8 +291,8 @@ def test_expired_approval_is_refused_and_a_fresh_one_lands(rig, monkeypatch):
     monkeypatch.setattr(hook_token, "TOKEN_TTL_SECONDS", -1.0)
     refused = _request(r, prepared)
     assert refused.get("ok") is not True and _main(r) == base, refused
-    assert r.v1("status").get("ok") is True, "the refused attempt must be closed"
     monkeypatch.setattr(hook_token, "TOKEN_TTL_SECONDS", 120.0)
+    assert r.v1("status").get("ok") is True, "the refused attempt must be closed"
     landed = _request(r, _prepare(r))
     assert landed.get("ok") is True and _main(r) != base, landed
 
@@ -573,8 +566,9 @@ def test_a_land_without_the_hook_ends_not_landed_needs_hooked_session(rig):
     argv = [sys.executable, str(PV1), "land", *r._run_args(), "--message",
             "fix\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"]
     out, _ = r._exec(argv)                                      # straight, no hook
-    assert out.get("reason") == "needs_hooked_session", out
-    assert _main(r) == base and r.state()["landing"] == "not_landed"
+    # no token: the daemon runs nothing at all (B-class B-b), so the run is untouched
+    assert out.get("code") == "no_token", out
+    assert _main(r) == base and r.state()["stage"] == "deliver"
 
 
 def test_create_has_no_mode_option(rig):

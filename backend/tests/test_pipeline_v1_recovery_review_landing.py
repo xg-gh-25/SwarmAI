@@ -290,14 +290,19 @@ def test_accept_finding_requires_and_consumes_exact_token(tmp_path, monkeypatch)
         from core.run_protocol import landing   # the daemon, after the person approved
         landing.approve_from_event(engine.store, "auth_accept",
                                    now=__import__("time").time(), at="2026-10-23T00:00:00Z")
+        # the daemon redeems the token the hook issued, then runs the action as
+        # that session (B-class B-b)
         token = hook_token.issue(
             engine.run_dir, "session_1", engine.run_id,
             "accept-finding:auth_accept")
-        monkeypatch.setenv(hook_token.TOKEN_ENV, token)
-        engine.execute_authorized_action("auth_accept")
+        rec = hook_token.redeem(token)
+        from core.run_protocol import request_ctx
+        with request_ctx.active(request_ctx.Request(
+                session_id=rec["session_id"], run_id=rec["run_id"],
+                scope=rec["subcommand"])):
+            engine.execute_authorized_action("auth_accept")
     finally:
         hook_token.stop_oracle()
-        monkeypatch.delenv(hook_token.TOKEN_ENV, raising=False)
     row = findings.fold(engine.store.read_events(), engine.authority)[0]
     assert row["status"] == "accepted"
 
@@ -321,14 +326,19 @@ def test_discard_snapshot_requires_authorized_snapshot_identity(tmp_path, monkey
         from core.run_protocol import landing   # the daemon, after the person approved
         landing.approve_from_event(engine.store, "auth_discard",
                                    now=__import__("time").time(), at="2026-10-23T00:00:00Z")
+        # the daemon redeems the token the hook issued, then runs the action as
+        # that session (B-class B-b)
         token = hook_token.issue(
             engine.run_dir, "session_1", engine.run_id,
             "discard-snapshot:auth_discard")
-        monkeypatch.setenv(hook_token.TOKEN_ENV, token)
-        result = engine.execute_authorized_action("auth_discard")
+        rec = hook_token.redeem(token)
+        from core.run_protocol import request_ctx
+        with request_ctx.active(request_ctx.Request(
+                session_id=rec["session_id"], run_id=rec["run_id"],
+                scope=rec["subcommand"])):
+            result = engine.execute_authorized_action("auth_discard")
     finally:
         hook_token.stop_oracle()
-        monkeypatch.delenv(hook_token.TOKEN_ENV, raising=False)
     assert result["action"] == "discard_snapshot"
     assert not __import__("pathlib").Path(ledger).exists()
 

@@ -28,8 +28,12 @@ _HUMAN_PAUSES = {"user_stop", "session_lost"}
 
 
 def _cmd(engine, tool: str, rest: str) -> str:
-    return (f"python backend/scripts/{tool} {rest} --project {engine.project} "
-            f"--run-id {engine.run_id}").replace("  ", " ")
+    """The command the agent runs next, with this backend's script by ABSOLUTE path:
+    only that script receives a hook token, wherever the agent's cwd is."""
+    from core.worktree_write_gate import pipeline_test_command, v1_command
+    args = f"{rest} --project {engine.project} --run-id {engine.run_id}".strip()
+    build = pipeline_test_command if tool == "pipeline_test.py" else v1_command
+    return build(args).replace("  ", " ")
 
 
 def blocking_checks(engine, state: dict[str, Any]) -> list[dict[str, str]]:

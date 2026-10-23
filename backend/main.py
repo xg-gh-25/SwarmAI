@@ -1467,6 +1467,11 @@ async def lifespan(app: FastAPI):
         from core import hook_token as _hook_token
         if not _hook_token.start_oracle(backend_port) and _hook_token.oracle_supported():
             logger.warning("hook-token oracle not started: isolated pipeline runs will refuse")
+        # Pipeline commands execute HERE, never in the agent's process (B-class B-a):
+        # the CLI sends its argv + hook token over an owner-only socket.
+        from core.run_protocol import daemon_exec as _pipeline_exec
+        if not _pipeline_exec.start(backend_port):
+            logger.warning("pipeline service not started: pipeline commands will fail")
     except Exception:  # noqa: BLE001 — never block startup
         logger.warning("hook-token oracle failed to start", exc_info=True)
     if _bjson_written:
@@ -1613,6 +1618,8 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     try:
         from core import hook_token as _hook_token
+        from core.run_protocol import daemon_exec as _pipeline_exec
+        _pipeline_exec.stop()
         _hook_token.stop_oracle()
     except Exception:  # noqa: BLE001
         logger.debug("hook-token oracle stop failed", exc_info=True)
