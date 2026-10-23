@@ -185,6 +185,15 @@ describe('ArtifactsContent — time-grouped list', () => {
     closeSpy = vi.fn();
   });
 
+  it('a failed first load shows the error with a Retry that fetches again (OverlayState)', async () => {
+    fetchProducts = vi.fn().mockRejectedValueOnce(new Error('down')).mockResolvedValue(FIXTURE);
+    renderWithClient(<ArtifactsContent close={closeSpy} fetchProducts={fetchProducts} now={NOW} />);
+    expect(await screen.findByTestId('artifacts-error')).toHaveTextContent(/Couldn't load products/);
+    fireEvent.click(screen.getByTestId('artifacts-retry'));
+    await waitFor(() => expect(screen.getByText('This week')).toBeInTheDocument());
+    expect(fetchProducts).toHaveBeenCalledTimes(2);
+  });
+
   it('AC3: renders the primary role (Deliverables) as a TIME-GROUPED list with This week / Last week headers', async () => {
     renderWithClient(<ArtifactsContent close={closeSpy} fetchProducts={fetchProducts} now={NOW} />);
     await waitFor(() => expect(screen.getByText('This week')).toBeInTheDocument());

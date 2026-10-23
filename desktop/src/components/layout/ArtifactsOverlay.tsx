@@ -26,6 +26,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery, ARTIFACTS_WORKSPACE } from './overlayQueries';
+import { OverlayError } from './OverlayState';
 import { radarService } from '../../services/radar';
 import type { Product, ProductRole } from '../../services/radar';
 import { fileIcon, fileIconColor } from '../../utils/fileUtils';
@@ -251,7 +252,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
   const nowMs = now ?? Date.now();
   const queryClient = useQueryClient();
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     ...overlayQuery.artifactsProducts(),
     // the test seam replaces the fetcher; the key (and so the cache) is the shared one
     ...(fetchProducts ? { queryFn: () => fetchProducts(WS_PLACEHOLDER) } : {}),
@@ -436,11 +437,14 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
               <div key={i} className="h-9 rounded-md bg-[var(--color-hover)] animate-pulse" />
             ))}
           </div>
-        ) : isError ? (
-          <div className="flex flex-col items-center justify-center gap-2 px-3 py-10 text-center" data-testid="artifacts-error">
-            <span className="text-[22px]" aria-hidden="true">🐝</span>
-            <p className="text-[11px] text-[var(--color-text-muted)]">Couldn't load products. Try again in a moment.</p>
-          </div>
+        ) : isError && !data ? (
+          // first-load failure only: a failed background refresh keeps the list (OverlayState)
+          <OverlayError
+            testid="artifacts-error"
+            retryTestid="artifacts-retry"
+            message="Couldn't load products."
+            onRetry={() => { void refetch(); }}
+          />
         ) : totalShown === 0 && starredOnly ? (
           <div className="flex flex-col items-center justify-center gap-2 px-3 py-10 text-center" data-testid="artifacts-starred-empty">
             <span className="text-[22px]" aria-hidden="true">★</span>

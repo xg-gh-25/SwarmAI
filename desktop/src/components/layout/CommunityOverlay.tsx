@@ -35,6 +35,7 @@ import {
   type CommunityHotTopics,
   type CommunityHotTopic,
 } from '../../services/community';
+import { OverlayLoading, OverlayError, OverlayEmpty } from './OverlayState';
 import { openExternal } from '../../utils/openExternal';
 
 interface CommunityContentProps {
@@ -117,22 +118,22 @@ function useFetch<T>(part: CommunityPart): {
   };
 }
 
-function StateBanner({ loading, error, empty, emptyMsg }: {
-  loading: boolean; error: boolean; empty: boolean; emptyMsg: string;
+// First-load states through the shared OverlayState (left-nav-overlay-finish.md §1.2).
+function StateBanner({ loading, error, empty, emptyMsg, onRetry }: {
+  loading: boolean; error: boolean; empty: boolean; emptyMsg: string; onRetry?: () => void;
 }) {
-  if (loading) {
-    return <div className="py-8 text-center text-[12px] text-[var(--color-text-muted)]">Loading…</div>;
-  }
+  if (loading) return <OverlayLoading />;
   if (error) {
     return (
-      <div className="py-8 text-center text-[12px] text-red-400">
-        Couldn't load. Retry shortly.
-      </div>
+      <OverlayError
+        testid="community-load-error"
+        retryTestid="community-load-retry"
+        message="Couldn't load."
+        onRetry={onRetry ?? (() => {})}
+      />
     );
   }
-  if (empty) {
-    return <div className="py-10 text-center text-[13px] text-[var(--color-text-muted)]">{emptyMsg}</div>;
-  }
+  if (empty) return <OverlayEmpty>{emptyMsg}</OverlayEmpty>;
   return null;
 }
 
@@ -152,7 +153,7 @@ function SectionLabel({ children, className = '' }: { children: React.ReactNode;
 // De-boxed: no per-row borders — whitespace + hover-highlight (Tufte / Refactoring UI).
 
 function InboundTab({ close }: { close: () => void }) {
-  const { data, loading, error } = useFetch<CommunityFeed>('feed');
+  const { data, loading, error, reload } = useFetch<CommunityFeed>('feed');
 
   const openFile = useCallback(
     (path: string) => {
@@ -212,7 +213,7 @@ function InboundTab({ close }: { close: () => void }) {
       <div>
         <SectionLabel className="mb-2">Today's signals</SectionLabel>
         {loading || error || signals.length === 0 ? (
-          <StateBanner loading={loading} error={error} empty={signals.length === 0}
+          <StateBanner loading={loading} error={error} onRetry={reload} empty={signals.length === 0}
             emptyMsg="No recent signals." />
         ) : (
           <div className="flex flex-col gap-0.5">
@@ -381,7 +382,7 @@ function SourcesTab() {
     [reload],
   );
 
-  const banner = <StateBanner loading={loading} error={error} empty={sources.length === 0}
+  const banner = <StateBanner loading={loading} error={error} onRetry={reload} empty={sources.length === 0}
     emptyMsg="No subscribed sources yet — add one below." />;
   // Show the banner for loading/error; but on empty still render the add-form (below),
   // so a fresh user can add their first source.
@@ -666,10 +667,10 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
 // to a collapsed expandable count — not a wall of stacked boxes (run_ced271e8 redesign).
 
 function OutboundTab() {
-  const { data, loading, error } = useFetch<CommunityEngagement>('engagement');
+  const { data, loading, error, reload } = useFetch<CommunityEngagement>('engagement');
   const [showHandled, setShowHandled] = useState(false); // Posted/handled default COLLAPSED
 
-  if (loading || error) return <StateBanner loading={loading} error={error} empty={false} emptyMsg="" />;
+  if (loading || error) return <StateBanner loading={loading} error={error} onRetry={reload} empty={false} emptyMsg="" />;
   const e = data!;
   const items = e.items ?? [];
 

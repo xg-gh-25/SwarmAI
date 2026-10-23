@@ -51,6 +51,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery, invalidateOverlay } from './overlayQueries';
+import { OverlayError } from './OverlayState';
 import { mcpConfigService, type ConfigEntry } from '../../services/mcpConfig';
 import { classifyLoadError } from '../../services/api';
 import type { Skill, SkillHealthMap, SkillHealthStatus, ExpertsByDomain } from '../../types';
@@ -382,9 +383,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {error && (
-          <div className="text-sm text-[var(--color-text-muted)] py-8 text-center" data-testid="cap-error">
-            {error}
-          </div>
+          <OverlayError testid="cap-error" retryTestid="cap-retry" message={error} onRetry={() => { void mainQ.refetch(); }} />
         )}
 
         {!error && view === 'skills' && (

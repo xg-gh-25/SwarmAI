@@ -157,6 +157,16 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
     skill({ folderName: 's_narrative-writing', category: 'Writing', tier: 'lazy' }),
   ];
 
+  it('a failed skills load shows the error with a Retry that fetches again (OverlayState)', async () => {
+    listSkills.mockRejectedValueOnce(new Error('down')).mockResolvedValue(twoSkills);
+    getHealth.mockResolvedValue({});
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    expect(await screen.findByTestId('cap-error')).toHaveTextContent('Capabilities failed');
+    fireEvent.click(screen.getByTestId('cap-retry'));
+    await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
+    expect(listSkills).toHaveBeenCalledTimes(2);
+  });
+
   it('renders a health dot per skill row once /skills/health resolves (lazy)', async () => {
     listSkills.mockResolvedValue(twoSkills);
     // Health map is keyed by the exact folderName the backend returns (canonicalized

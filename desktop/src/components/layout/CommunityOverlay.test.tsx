@@ -143,6 +143,14 @@ describe('CommunityOverlay — Inbound tab', () => {
     await waitFor(() => expect(screen.getByText(/Couldn't load/i)).toBeTruthy());
   });
 
+  it('the error state has a Retry that fetches again (OverlayState)', async () => {
+    fetchFeed.mockRejectedValueOnce(new Error('boom')).mockResolvedValue(feedOf([]));
+    setup();
+    fireEvent.click(await screen.findByTestId('community-load-retry'));
+    await waitFor(() => expect(screen.getByText(/No recent signals/i)).toBeTruthy());
+    expect(fetchFeed).toHaveBeenCalledTimes(2);
+  });
+
   it('separates the latest Report into a card, keeping Signals in the daily flow', async () => {
     fetchFeed.mockResolvedValue(feedOf([
       { path: 'Knowledge/Reports/2026-08-09-weekly.html', category: 'Reports', name: '2026-08-09-weekly.html', mtime: 300 },
