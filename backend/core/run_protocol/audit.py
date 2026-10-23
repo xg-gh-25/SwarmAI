@@ -265,17 +265,22 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                 "human_decisions": human_decisions, "manual_rescues": None,
                 "required_approvals": approvals}
 
-    # Token accounting (D3). A transcript measurement (``measure-usage``, cli) covers the
+    # Token accounting (D3). A transcript measurement (cli; the daemon takes it when
+    # REFLECT ends, r6 §2.3) covers the
     # main agent AND every sub-agent of the run's transcripts: its LATEST set is the
     # token total, and the per-expert SubagentStop records (runner) are already in it,
     # so they are not added. Without one, only the experts' tokens are known.
     measured: dict[str, float] = {}
     experts: dict[str, float] = {}
+    unavailable: str | None = None
     expert_records = 0
     for event in event_rows:
         if event.get("kind") != "metric" or not isinstance(event.get("payload"), Mapping):
             continue
         name, value = event["payload"].get("name"), event["payload"].get("value")
+        if name == "usage_not_available":
+            unavailable = event["payload"].get("reason") or "not measured"
+            continue
         if not isinstance(name, str) or not isinstance(value, (int, float)) \
                 or name == "required_approval" or name.startswith("cap_exceeded."):
             continue
@@ -308,7 +313,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     from core.run_protocol.lifecycle import DISPATCH_CAPS
     if set(caps_hit) & DISPATCH_CAPS:
         token_verdict = "BLOCK"                        # model dispatches hit their cap
-    elif accounted == 0:
+    elif accounted == 0 and unavailable is None:
         token_verdict = "BLOCK"                        # nothing was metered at all
     elif accounted < total_calls or total_tokens is None \
             or not isinstance(budget_tokens, (int, float)):
@@ -319,7 +324,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
              "input_tokens": input_tokens, "output_tokens": output_tokens,
              "budget_tokens": budget_tokens if isinstance(budget_tokens, (int, float)) else None,
              "accounted_calls": accounted, "total_calls": total_calls,
-             "expert_answers": answers, "expert_records": expert_records}
+             "expert_answers": answers, "expert_records": expert_records,
+             "not_available": None if measured else unavailable}
 
     commit_map = dict(commits or {})
     high_policy = [row["canonical_id"] for row in findings if push_effect(row)

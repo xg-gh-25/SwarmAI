@@ -59,8 +59,7 @@ def _start_v1_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
         repos={"repo": str(repo)},
         run_id="run_dirtyv1",
     )
-    started = engine.stage_start()
-    assert Path(started["repos"]["repo"]).is_dir()
+    assert Path(engine.ensure_stage_worktrees()["repo"]).is_dir()
     return repo, engine
 
 

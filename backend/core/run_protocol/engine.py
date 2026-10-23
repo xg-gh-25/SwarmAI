@@ -171,12 +171,14 @@ class RunEngine:
     """One v1 run, projected from signed events and immutable contract metadata."""
 
     def __init__(self, *, data_dir: Path, workspace: Path, project: str,
-                 run_id: str, authority: EventAuthority):
+                 run_id: str, authority: EventAuthority, producer: str = "cli"):
         self.data_dir, self.workspace = data_dir, workspace
         self.project, self.run_id = project, run_id
         self.run_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
         self.audit_root = data_dir / "state" / "pipeline_agent_audit"
-        self.store = _store(self.audit_root, run_id, authority)
+        # *producer*: who this process signs as. The test runner loads a run to read
+        # what comes next and signs nothing but its own facts (C3)
+        self.store = _store(self.audit_root, run_id, authority, producer=producer)
         self.authority = authority
         try:
             self.contract = json.loads(self.store.paths.contract.read_text(encoding="utf-8"))
@@ -266,7 +268,7 @@ class RunEngine:
 
     @classmethod
     def load(cls, *, data_dir: str | Path, workspace: str | Path,
-             project: str, run_id: str) -> "RunEngine":
+             project: str, run_id: str, producer: str = "cli") -> "RunEngine":
         workspace_path = Path(workspace)
         resolved_run = find_run_dir(workspace_path, run_id)
         actual_project = resolved_run.parents[2].name
@@ -278,7 +280,8 @@ class RunEngine:
         except OSError as exc:
             raise EngineError(f"authority unavailable: {exc}") from exc
         engine = cls(data_dir=Path(data_dir), workspace=workspace_path,
-                     project=actual_project, run_id=run_id, authority=EventAuthority(key))
+                     project=actual_project, run_id=run_id, authority=EventAuthority(key),
+                     producer=producer)
         contract_project = engine.contract.get("project")
         if contract_project is not None and contract_project != actual_project:
             raise EngineError("contract project identity mismatch")
@@ -1340,29 +1343,37 @@ class RunEngine:
                 "consumed_event_id": consumed["event_id"],
                 "action": action, "state": self.projection()}
 
-    def stage_start(self) -> dict[str, Any]:
+    WORKTREE_STAGES = frozenset({"plan", "build", "goal_cycle", "review", "test", "deliver"})
+
+    def ensure_stage_worktrees(self) -> dict[str, str]:
+        """The run's worktrees exist whenever it is active in a stage that edits code
+        (r6 §2.3: no ``stage-start``; every mutating command ends by calling this, so
+        the call that enters such a stage makes them). Idempotent. run.json is rewritten
+        only when a worktree was made: the live hooks read the worktrees from it."""
         state = self.projection()
-        if state["status"] != "active":
-            raise EngineError(f"run is {state['status']}")
-        if state["stage"] in {"plan", "build", "goal_cycle", "review", "test", "deliver"}:
-            self.ensure_worktrees()
-            # run.json is what the live hooks read (worktree_write_gate, main_dirty_scan):
-            # it must name the worktrees the moment they exist
+        before = self.effective_repos()
+        if state["status"] != "active" or state["stage"] not in self.WORKTREE_STAGES:
+            return before
+        after = self.ensure_worktrees()
+        if after != before:
             self.write_projection()
-        card = Path(__file__).resolve().parents[2] / "skills" / "s_autonomous-pipeline" / "stages" / f"{state['stage']}.md"
-        return {"run_id": self.run_id, "stage": state["stage"], "card": str(card),
-                "card_text": card.read_text(encoding="utf-8"), "repos": self.effective_repos()}
+        return after
 
     def _next_attempt(self, stage: str) -> int:
         """The lifecycle numbers attempts (a human answer restarts the count)."""
         return int(self.projection()["stage_attempts"].get(stage, 0)) + 1
 
-    def stage_complete(self, artifact: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    def stage_complete(self, artifact: Mapping[str, Any] | None = None, *,
+                       expected_stage: str | None = None) -> dict[str, Any]:
         from core.run_protocol.documents import DocumentError
         state = self.projection()
         if state["status"] != "active":
             raise EngineError(f"run is {state['status']}")
         stage, profile = state["stage"], state["profile"]
+        if expected_stage is not None and stage != expected_stage:
+            # a completion decided on an earlier state never completes a later stage
+            # (r6 §2.3, review 4cfba9d6): checked under the operation lock
+            raise EngineError(f"stale: the run is in {stage}, not {expected_stage}")
         for document in ("REQUIREMENTS", "DESIGN_SPEC"):   # the decisions' projection
             self._sync_decision_document(document)
         if stage == "deliver":
@@ -1780,6 +1791,26 @@ class RunEngine:
         extra = self._read_json(self.store.paths.run / "transcripts.json", []) or []
         return list(dict.fromkeys([*self.contract.get("transcript_ids", []), *extra]))
 
+    def _record_run_usage(self) -> None:
+        """The run's token usage, measured by the daemon when REFLECT ends (r6 §2.3):
+        the agent never calls a measuring command. No transcript, or none in the run's
+        window, is recorded as ``metric(usage_not_available)`` with the reason, and
+        Token Cost reads WARN for it instead of BLOCK."""
+        from core.run_protocol import usage
+        try:
+            usage.measure(self.store, transcript_ids=self.transcript_ids(),
+                          created_at=self.contract["created_at"])
+        except usage.UsageError as exc:
+            events = self.store.read_events()
+            attempt = 1 + sum(e.get("kind") == "metric"
+                              and e["payload"].get("name") == "usage_not_available"
+                              for e in events)
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="metric", at=_now(),
+                stage="reflect", attempt=attempt,
+                payload={"name": "usage_not_available", "value": 1,
+                         "reason": str(exc)[:300]})
+
     def measure_usage(self) -> dict[str, Any]:
         from core.run_protocol import usage
         value = usage.measure(self.store, transcript_ids=self.transcript_ids(),
@@ -2128,6 +2159,7 @@ class RunEngine:
             raise EngineError("reflect completion requires reflecting")
         kind = "reflect_exhausted" if degraded else "reflect_complete"
         payload = {"reason": reason or "background reflection exhausted"} if degraded else {}
+        self._record_run_usage()
         self.store.append_new(writer=self.authority.writer("hook"), kind=kind, at=_now(),
                               ordinal=NEXT, payload=payload)
         self._settle()

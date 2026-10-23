@@ -332,7 +332,7 @@ def test_code_changed_after_prepare_cannot_land_even_with_edited_json(rig):
 
 # ── invariant: whatever the command order, the log folds ────────────────────
 
-_STEPS = ("stage-start", "complete-current", "stage-complete-empty", "tdd", "regression",
+_STEPS = ("push-status", "complete-current", "stage-complete-empty", "tdd", "regression",
           "review-start", "land", "decision", "answer", "stop", "resume", "status")
 
 
@@ -459,8 +459,8 @@ def test_a_direct_code_change_needs_passing_tdd_to_leave_build(rig):
     out = r.v1("stage-complete")
     assert out.get("ok") is False and "failed" in str(out.get("checks")), out
     r.edit(Rig.CHANGE)                                                       # green
-    r.pt("tdd", "--files", "backend/tests/test_x.py")
-    assert r.v1("stage-complete").get("ok") is True and r.state()["stage"] == "review"
+    out = r.pt("tdd", "--files", "backend/tests/test_x.py")       # completes BUILD itself
+    assert out["stage_complete"]["ok"] is True and r.state()["stage"] == "review", out
 
 
 def test_one_passing_node_does_not_stand_for_its_file(rig):
@@ -654,8 +654,7 @@ def test_build_collects_the_designs_failure_mode_tests(rig, ref, passes):
     r = rig("full")
     r.create()
     r.drive(until="plan")
-    assert r.v1("stage-start").get("ok") is True
-    r.edit(Rig.CHANGE)
+    r.edit(Rig.CHANGE)                  # entering PLAN made the worktree
     design = documents("full")["plan"]
     design = {**design, "failure_modes": [{**design["failure_modes"][0], "test": ref}]}
     out = r.v1("stage-complete", "--artifact", r.artifact("design", design))
@@ -801,7 +800,9 @@ def test_measuring_after_the_daemon_completed_reflect_refreshes_the_final_audit(
     reflect_job.process_run(r.engine())
     engine = r.engine()
     audit = json.loads((engine.run_dir / "run_audit.json").read_text())
-    assert audit["summary"]["token_cost"]["verdict"] == "BLOCK"       # nothing measured yet
+    token = audit["summary"]["token_cost"]
+    # the daemon found no transcript when REFLECT ended: WARN with the reason (r6 §2.3)
+    assert token["verdict"] == "WARN" and token["not_available"], token
     monkeypatch.setattr(usage.transcript_usage, "resolve_transcripts", lambda ids: ["t"])
     monkeypatch.setattr(usage.transcript_usage, "usage_in_window", lambda *a, **k: {
         "input_tokens": 10, "cache_read_tokens": 0, "cache_creation_tokens": 0,
@@ -809,3 +810,4 @@ def test_measuring_after_the_daemon_completed_reflect_refreshes_the_final_audit(
     engine.measure_usage()
     audit = json.loads((engine.run_dir / "run_audit.json").read_text())
     assert audit["summary"]["token_cost"]["verdict"] != "BLOCK", audit["summary"]["token_cost"]
+    assert audit["summary"]["token_cost"]["not_available"] is None

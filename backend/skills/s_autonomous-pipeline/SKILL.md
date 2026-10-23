@@ -42,7 +42,7 @@ DO NOT USE: for a single stage (use the specific skill directly).
 | direct | build → review → test → deliver → reflect (`create --requirement`, no PLAN) |
 | research | evaluate → think → deliver → reflect |
 
-`pipeline_v1.py create` → `stage-start` / `stage-complete` per stage (REVIEW via
+`pipeline_v1.py create` → follow each response's `next` / `stage-complete` (REVIEW via
 `review-start`, tests via `pipeline_test.py`) → `land` in DELIVER → REFLECT runs in the
 daemon's background and completes itself.
 

@@ -503,9 +503,8 @@ def test_no_run_session_writing_main_is_sent_to_a_run(r4):
     assert _denied(v)
     why = v["hookSpecificOutput"]["permissionDecisionReason"]
     run_line = why.split("Run: ", 1)[1].split("\n")[0]
-    then_line = why.split("Then: ", 1)[1].split("\n")[0]
     assert _v1_args(run_line).command == "create" and _v1_args(run_line).project == "SwarmAI"
-    assert _v1_args(then_line).command == "stage-start"
+    assert "stage-start" not in why and "follow its `next`" in why   # r6 §2.3
     assert _denied(g(_call("Bash", cwd=str(r4["main"]),
                            command=f"sed -i '' 's/a/b/' {r4['main']}/a.py")))
     assert _denied(g(_call("Write", file_path=str(r4["other"] / "a.py"))))   # a run's worktree
@@ -558,7 +557,8 @@ def test_no_run_rule_names_the_sessions_own_run(r4):
     v = _gate("s7")(_call("Edit", file_path=str(r4["main"] / "a.py")))
     assert _denied(v) and "run_7a7a7a7a" in v["hookSpecificOutput"]["permissionDecisionReason"]
     why = v["hookSpecificOutput"]["permissionDecisionReason"]
-    assert _v1_args(why.split("(that creates the worktree): ", 1)[1].split("\n")[0]).command == "stage-start"
+    made_by = why.split("is missing, ", 1)[1].split(" makes it", 1)[0]
+    assert _v1_args(made_by).command == "status"         # no stage-start (r6 §2.3)
     _run_json(r4, "run_8b8b8b8b", "s8", status="paused", worktree_mode="isolated")
     v = _gate("s8")(_call("Edit", file_path=str(r4["main"] / "a.py")))
     why = v["hookSpecificOutput"]["permissionDecisionReason"]

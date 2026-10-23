@@ -8,4 +8,4 @@ Probe exits run with `pipeline_test.py --project <P> --run-id <R> --mode probe` 
 
 Required checks: DS-2b, DS-4b (bugfix), DS-9b, BX-1; direct only BX-2 (a change exists; unless it is pure-doc, every test the runner selects for it passed tdd on the current tree). Do not run full regression here. Fix a whole failure cluster in one pass, then re-run only affected tests.
 
-Complete with `pipeline_v1.py stage-complete --project <P> --run-id <R>` and continue.
+The stage completes by itself once a `pipeline_test.py` call's results pass its checks; otherwise its `next.blocking` names what fails. `pipeline_v1.py stage-complete --project <P> --run-id <R>` still works by hand.

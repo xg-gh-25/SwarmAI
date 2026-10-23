@@ -188,17 +188,30 @@ class Rig:
         out = self.bash(" ".join([shlex.quote(sys.executable), *map(shlex.quote, argv)]))
         if command == "create" and out.get("pipeline_id"):
             self.run_id = out["pipeline_id"]
-        if command == "stage-start" and isinstance(out.get("repos"), dict) and out["repos"]:
+        # every response names where the run's code is (r6 §2.3: no stage-start)
+        if command != "status" and isinstance(out.get("repos"), dict) and out["repos"]:
             self.worktree = Path(next(iter(out["repos"].values())))
         return out
 
-    def pt(self, mode: str, *args: str) -> dict:
-        """One pipeline_test.py call against the run's worktree."""
-        repo = self.worktree or self.repo
+    def pt(self, mode: str, *args: str, repo: Path | None = None,
+           session: str | None = None) -> dict:
+        """One pipeline_test.py call against the run's worktree (or *repo*), from this
+        run's session (or *session*: then it never completes a stage)."""
+        repo = repo or self.worktree or self.repo
+        extra = {"SWARM_TEST_REPO_ROOT": str(repo)}
+        if session is not None:
+            extra["SWARM_APP_SESSION_ID"] = session
         out, _ = self._exec([sys.executable, str(PTEST), *self._run_args(),
-                             "--mode", mode, *args],
-                            extra_env={"SWARM_TEST_REPO_ROOT": str(repo)})
+                             "--mode", mode, *args], extra_env=extra)
         return out
+
+    def _tested(self, out: dict) -> dict:
+        """BUILD / TEST complete by themselves once the runner's results pass their
+        checks (r6 §2.3); otherwise the stage is completed by hand, as before."""
+        done = out.get("stage_complete")
+        if isinstance(done, dict) and done.get("ok") is True:
+            return {"ok": True, **done, "auto": True}
+        return self.v1("stage-complete")
 
     def bash(self, command: str) -> dict:
         """What a Bash tool call does in a SwarmAI session: the run_owner_gate check
@@ -278,9 +291,7 @@ class Rig:
         return out["state"]
 
     def edit(self, files: dict[str, str]) -> None:
-        if self.worktree is None:               # the stage that makes the worktree
-            started = self.v1("stage-start")
-            assert started.get("ok") is True and self.worktree is not None, started
+        assert self.worktree is not None, "no worktree yet: the run is not in a code stage"
         write(self.worktree, files)
 
     def artifact(self, name: str, value: dict) -> str:
@@ -298,6 +309,7 @@ class Rig:
 
     # ── the happy path, one stage at a time ─────────────────────────────────
     CHANGE = {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"}
+    _edited = False
 
     def create(self, *args: str, requirement: str | None = REQUIREMENT) -> dict:
         repo_args = ["--repo", f"repo={self.repo}"] if self.repo is not None else []
@@ -330,19 +342,16 @@ class Rig:
         if stage == "think":
             return self.v1("stage-complete")
         if stage == "plan":
-            started = self.v1("stage-start")
-            assert started.get("ok") is True, started
             if self.repo is not None:
                 self.edit(self.CHANGE)
             return self.v1("stage-complete", "--artifact", self.artifact("design", docs["plan"]))
         if stage in {"build", "goal_cycle"}:
-            if self.worktree is None:          # direct: BUILD is the first stage
-                started = self.v1("stage-start")
-                assert started.get("ok") is True, started
-                if self.repo is not None:
-                    self.edit(self.CHANGE)
-            self.pt("tdd", "--files", "backend/tests/test_x.py")
-            return self.v1("stage-complete")
+            from core.run_protocol.lifecycle import PROFILE_STAGES
+            if self.repo is not None and "plan" not in PROFILE_STAGES[self.profile] \
+                    and not self._edited:
+                self.edit(self.CHANGE)          # no PLAN: BUILD is the first code stage
+                self._edited = True
+            return self._tested(self.pt("tdd", "--files", "backend/tests/test_x.py"))
         if stage == "review":
             started = self.v1("review-start")
             assert started.get("ok") is True, started
@@ -350,8 +359,7 @@ class Rig:
                 self.spawn_reviewer(handout["prompt"], "NO FINDINGS", f"review-{i}")
             return self.v1("stage-complete")
         if stage == "test":
-            self.pt("regression")
-            return self.v1("stage-complete")
+            return self._tested(self.pt("regression"))
         if stage == "deliver":
             self.v1("reflect-prepare", "--artifact", self.artifact("reflect", {"lessons": []}))
             if self.repo is None:

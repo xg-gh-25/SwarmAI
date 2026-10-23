@@ -26,13 +26,13 @@ def _denied(value) -> bool:
 
 
 def test_parser_recognizes_pipeline_v1_mutation():
-    calls, single = gate.parse_cli_calls(_cmd("stage-start"))
+    calls, single = gate.parse_cli_calls(_cmd("stage-complete"))
     assert single
     assert calls == [{
-        "tool": "pipeline_v1", "sub": "stage-start", "run_id": "run_one",
+        "tool": "pipeline_v1", "sub": "stage-complete", "run_id": "run_one",
         "project": "proj", "stage": None, "status": None, "session_id": None,
         "ambiguous": False, "assigns": [],
-        "argv": ["stage-start", "--project", "proj", "--run-id", "run_one"],
+        "argv": ["stage-complete", "--project", "proj", "--run-id", "run_one"],
         "run_ids": ["run_one"], "projects": ["proj"], "session_ids": [],
     }]
 
@@ -40,7 +40,7 @@ def test_parser_recognizes_pipeline_v1_mutation():
 def test_mutation_checks_canonical_project(tmp_path, monkeypatch):
     _run(tmp_path)
     monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
-    result = gate._decide("session-a", _cmd("stage-start", "other"), {})
+    result = gate._decide("session-a", _cmd("stage-complete", "other"), {})
     assert _denied(result)
     assert "project mismatch" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
@@ -49,7 +49,7 @@ def test_live_other_owner_denies_mutation(tmp_path, monkeypatch):
     _run(tmp_path)
     monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
     monkeypatch.setattr(gate, "_owner_live", lambda _owner: True)
-    result = gate._decide("session-b", _cmd("stage-start"), {})
+    result = gate._decide("session-b", _cmd("stage-complete"), {})
     assert _denied(result)
     assert "being worked on" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
@@ -59,7 +59,7 @@ def test_dead_owner_is_taken_over_before_mutation(tmp_path, monkeypatch):
     monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
     monkeypatch.setattr(gate, "_owner_live", lambda _owner: False)
     monkeypatch.setattr("core.runtime_hooks.write_session_run_map", lambda *_a, **_k: None)
-    assert gate._decide("session-b", _cmd("stage-start"), {}) is None
+    assert gate._decide("session-b", _cmd("stage-complete"), {}) is None
     assert json.loads(run_file.read_text())["session_id"] == "session-b"
 
 
@@ -67,7 +67,7 @@ def test_unknown_takeover_liveness_fails_closed(tmp_path, monkeypatch):
     _run(tmp_path)
     monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
     monkeypatch.setattr(gate, "_owner_live", lambda _owner: None)
-    assert _denied(gate._decide("session-b", _cmd("stage-start"), {}))
+    assert _denied(gate._decide("session-b", _cmd("stage-complete"), {}))
 
 
 def test_other_live_owner_blocks_reflect_mutation(tmp_path, monkeypatch):

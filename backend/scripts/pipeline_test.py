@@ -5465,8 +5465,8 @@ def _v1_runner(ns, run_dir: Path, run_state: dict, ctx):
         names = [n for n, root in roots.items() if os.path.realpath(str(root)) == here]
     if len(names) != 1:
         raise RuntimeError(f"{ctx.repo} is not one of this run's own repos "
-                           f"({contract.get('mode')}); run `pipeline_v1.py stage-start` "
-                           "first, and test from the run's own worktree")
+                           f"({contract.get('mode')}); test from the run's own worktree "
+                           "(`repos` in any pipeline_v1.py response names it)")
     repo_name = names[0]
     main = roots[repo_name]
     if main and os.path.realpath(str(main)) != os.path.realpath(str(ctx.repo)):
@@ -5801,6 +5801,46 @@ def execute(ns) -> tuple[dict, int]:
         shutil.rmtree(ctx.workdir, ignore_errors=True)
 
 
+# the modes whose results can finish BUILD / TEST (proof modes belong to REVIEW)
+_STAGE_RESULT_MODES = frozenset({"tdd", "probe", "regression", "verify", "recheck",
+                                 "validation"})
+
+
+def _v1_after_tests(ns) -> dict | None:
+    """After a v1 call's results are in its final (r6 §2.3): when the run is in BUILD or
+    TEST and every check of that stage now passes, complete the stage, and in every case
+    say what comes next. The completion is the CLI's own ``stage-complete`` (it signs as
+    cli and takes the run's operation lock; this process signs only runner facts, C3),
+    started only now: no lock is ever held while tests run."""
+    if not _V1_CONTRACT or ns.mode not in _STAGE_RESULT_MODES or not ns.run_id:
+        return None
+    from config import get_app_data_dir
+    from core.run_protocol.engine import RunEngine
+    from core.run_protocol.next_step import auto_completable, next_step
+    engine = RunEngine.load(data_dir=get_app_data_dir(), workspace=_workspace(),
+                            project=ns.project, run_id=ns.run_id, producer="runner")
+    state = engine.projection()
+    if not auto_completable(engine, state):
+        return {"next": next_step(engine)}
+    # only the run's own session moves it (review 4cfba9d6): the session id is the one
+    # session_link_gate keeps unforgeable in this Bash call's environment
+    if (os.environ.get("SWARM_APP_SESSION_ID") or "") != engine.owner_session():
+        return {"next": next_step(engine), "stage_complete": {
+            "ok": False, "error": "not this run's session: nothing was completed"}}
+    cli = Path(__file__).resolve().with_name("pipeline_v1.py")
+    try:
+        done = subprocess.run(
+            [sys.executable, str(cli), "stage-complete", "--project", ns.project,
+             "--run-id", ns.run_id, "--expect-stage", state["stage"]],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+        result = json.loads(done.stdout.strip().splitlines()[-1])
+    except (OSError, subprocess.TimeoutExpired, ValueError, IndexError) as exc:
+        return {"stage_complete": {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]},
+                "next": next_step(engine)}
+    return {"stage_complete": {key: result.get(key) for key in ("ok", "error", "attempt")},
+            "next": result.get("next") or next_step(engine)}
+
+
 def main(argv: list[str] | None = None) -> int:
     from core.run_worktree import run_for_path
     if run_for_path(__file__) is not None:  # a run's half-edited copy of the runner
@@ -5817,6 +5857,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         try:
             out, code = execute(ns)
+            if code in (0, 1) and "error" not in out:
+                try:
+                    out.update(_v1_after_tests(ns) or {})
+                except Exception as exc:  # noqa: BLE001 — the results are already recorded
+                    out["next_error"] = f"{type(exc).__name__}: {exc}"[:300]
         except _Interrupted as exc:
             _cleanup_private_worktrees()
             try:

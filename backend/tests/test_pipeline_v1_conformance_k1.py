@@ -110,7 +110,8 @@ def test_a_final_from_another_code_tree_does_not_complete_build(rig):
     r = rig("trivial")
     r.create()
     r.drive(until="build")
-    r.pt("tdd", "--files", "backend/tests/test_x.py")
+    # another session's test call: it never completes the stage itself (r6 §2.3)
+    r.pt("tdd", "--files", "backend/tests/test_x.py", session="someone-else")
     r.edit({"backend/core/mod.py": "def add(a, b):\n    return a - b\n"})   # after the run
     out = r.v1("stage-complete")
     assert out.get("ok") is False and r.state()["stage"] == "build", out
@@ -119,7 +120,6 @@ def test_a_final_from_another_code_tree_does_not_complete_build(rig):
 def test_an_isolated_repo_with_no_recorded_branch_yields_no_final(rig):
     r = rig()
     r.create()
-    r.v1("stage-start")
     r.edit(Rig.CHANGE)
     branches = (r.data / "state" / "pipeline_agent_audit" / "runs" / str(r.run_id)
                 / "integration_branches.json")
@@ -165,8 +165,8 @@ def test_an_unchanged_run_is_qx2_clean(rig):
 
 def test_an_isolated_run_without_its_worktree_never_tests_main(rig):
     r = rig()
-    r.create()                                 # direct: no stage-start yet
-    out = r.pt("tdd", "--files", "backend/tests/test_x.py")
+    r.create()
+    out = r.pt("tdd", "--files", "backend/tests/test_x.py", repo=r.repo)   # main, not its own
     assert out.get("ok") is not True, out
     assert r.engine().final() == {}, "a final was made on the shared main checkout"
 

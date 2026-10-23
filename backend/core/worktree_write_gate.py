@@ -372,21 +372,23 @@ def _no_run_verdict(p: str, nr: "_NoRun", what: "str | None" = None) -> "dict | 
         rp = shlex.quote(r["project"] or project)
         nxt = ("resume it: " + v1_command(f"resume --project {rp} --run-id {rid}")
                if r.get("status") == "paused" else
-               "start its next stage (that creates the worktree): " + v1_command(
-                   f"stage-start --project {rp} --run-id {rid}") +
+               "the run makes its worktrees when it enters a code stage; if this "
+               "repo's is missing, " + v1_command(
+                   f"status --project {rp} --run-id {rid}") + " makes it and its `repos` "
+               "names it, and its `next` says what comes before a code stage" +
                "\nIf this repo is not one of the run's repos, it needs a new run: "
                + v1_command(f"create --project {pq} --profile direct {_REQ} --repo "
                             f"{shlex.quote(main)}"))
         return _deny(head + f"This session's run {r['id']} ({r.get('status')}) has no worktree "
                      f"for this repo yet: {nxt}\nThen make this change at the same relative "
-                     "path under the worktree it prints." + note)
+                     "path under the worktree its `repos` names." + note)
     create = v1_command(f"create --project {pq} --profile direct {_REQ} --repo {shlex.quote(main)}")
-    start = v1_command(f"stage-start --project {pq} --run-id <run_id>")
     note = "" if what is not None else _claim_note(main, p, "", "")
-    return _deny(head + "Start a run (each as ONE simple command; `--profile direct` for a "
+    return _deny(head + "Start a run (ONE simple command; `--profile direct` for a "
                  "small, fully specified change, otherwise pick the matching profile):\n"
-                 f"Run: {create}\nThen: {start}\nand make this change at the same relative "
-                 "path under the worktree stage-start prints." + note)
+                 f"Run: {create}\nthen follow its `next`, and make this change at the same "
+                 "relative path under the worktree its `repos` names (a direct run has it "
+                 "at once)." + note)
 
 
 def _claim_note(main: str, p: str, claim: str, when: str) -> str:

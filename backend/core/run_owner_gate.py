@@ -51,15 +51,15 @@ _RUN_ID_RE = re.compile(r"^run_[A-Za-z0-9_]{1,64}$")
 # report / observe / test call from another tab must not steal it).
 _TAKEOVER = frozenset({
     "stage-start", "stage-complete", "run-resume", "run-update",
-    "run-checkpoint", "run-commit", "review-start", "land", "measure-usage",
+    "run-checkpoint", "run-commit", "review-start", "land",
     "reflect-prepare", "gate0-start",
     "review-address", "review-proof", "resume", "restore", "abandon",
     "decision-request", "run-land", "accept-finding",
     "discard-snapshot",
 })
 _V1_MUTATIONS = frozenset({
-    "create", "stage-start", "stage-complete", "review-start", "land",
-    "measure-usage", "reflect-prepare",
+    "create", "stage-complete", "review-start", "land",
+    "reflect-prepare",
     "gate0-start", "review-address", "review-proof", "resume", "restore",
     "abandon", "decision-request", "run-land",
     "accept-finding", "discard-snapshot",

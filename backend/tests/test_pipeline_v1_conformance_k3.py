@@ -10,6 +10,7 @@ code before K3 (F14 was closed by K1; its test pins that). Covered:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -43,21 +44,23 @@ def _branches(r: Rig) -> dict:
 
 def test_f14_resume_after_worktree_unavailable_records_the_branch(rig, monkeypatch):
     from core import run_worktree
-    r = rig("direct")
+    r = rig("trivial")                       # PLAN is the first stage with a worktree
     r.create()
     real = run_worktree.create
     monkeypatch.setattr(run_worktree, "create", lambda *a, **k: (_ for _ in ()).throw(
         run_worktree.WorktreeError("create_failed", "no space")))
     engine = r.engine()
+    from tests.pipeline_v1_rig import documents
+    assert engine.stage_complete(documents("trivial")["evaluate"])["ok"] is True   # → PLAN
     with pytest.raises(Exception, match="worktree unavailable"):
-        engine.stage_start()
+        engine.ensure_stage_worktrees()
     assert r.state()["status"] == "paused"
     monkeypatch.setattr(run_worktree, "create", real)
     assert r.engine().resume()["ok"] is True
     assert _branches(r) == {"repo": "refs/heads/main"}
     assert set(r.engine().effective_repos()) == {"repo"}
     # the base is nameable, so a test call on the resumed worktree yields a bound final
-    r.drive(until="build")
+    r.worktree = Path(r.engine().effective_repos()["repo"])
     r.edit(Rig.CHANGE)
     r.pt("tdd", "--files", "backend/tests/test_x.py")
     assert r.engine().final()["repos"]["repo"]["base"]
@@ -72,7 +75,8 @@ def test_f17_full_scope_rounds_stop_at_the_contracts_cap(rig):
     cap = r.engine().contract["regression_round_cap"]
     outs = []
     for i in range(cap + 1):
-        r.edit({"backend/core/other.py": f"def other():\n    return 1  # round {i}\n"})
+        # red each round: a green final with no required validation finishes TEST
+        r.edit({"backend/core/other.py": f"def other():\n    return 2  # round {i}\n"})
         outs.append(r.pt("regression"))
     assert all(o.get("full_scope", {}).get("refused") is not True for o in outs[:cap]), outs
     assert outs[cap]["full_scope"]["refused"] is True, outs[cap]
@@ -137,7 +141,8 @@ def test_f18_a_refused_full_scope_round_is_recorded_by_the_runner(rig):
     r.create()
     r.drive(until="test")
     for i in range(r.engine().contract["regression_round_cap"] + 1):
-        r.edit({"backend/core/other.py": f"def other():\n    return 1  # round {i}\n"})
+        # red each round: a green final with no required validation finishes TEST
+        r.edit({"backend/core/other.py": f"def other():\n    return 2  # round {i}\n"})
         r.pt("regression")
     assert "regression_round" in _caps(r)
     rows = [e for e in r.events() if e["kind"] == "metric"
@@ -413,7 +418,8 @@ def test_r1_a_repeated_cap_hit_is_recorded_once(rig):
     r.create()
     r.drive(until="test")
     for i in range(r.engine().contract["regression_round_cap"] + 3):
-        r.edit({"backend/core/other.py": f"def other():\n    return 1  # round {i}\n"})
+        # red each round: a green final with no required validation finishes TEST
+        r.edit({"backend/core/other.py": f"def other():\n    return 2  # round {i}\n"})
         r.pt("regression")
     caps = [e for e in r.events() if e["kind"] == "metric"
             and e["payload"]["name"] == "cap_exceeded.regression_round"]

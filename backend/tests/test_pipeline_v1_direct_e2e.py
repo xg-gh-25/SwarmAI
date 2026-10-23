@@ -74,8 +74,7 @@ def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
                               profile="direct", requirement="test change", session_id="s", repos={"repo": str(repo)},
                               run_id="run_one", risk_test_file_cap=20)
     assert engine.projection()["stage"] == "build"      # direct has no PLAN
-    started = engine.stage_start()
-    wt = started["repos"]["repo"]
+    wt = engine.ensure_stage_worktrees()["repo"]
     ( __import__("pathlib").Path(wt) / "a.py").write_text("value = 2\n")
 
     runner = _runner(engine, wt); _finalize(runner, "tdd")
@@ -135,7 +134,7 @@ def test_worktree_creation_failure_pauses_without_shared_fallback(tmp_path, monk
     monkeypatch.setattr(run_worktree, "create", fail)
     import pytest
     with pytest.raises(Exception, match="worktree unavailable"):
-        engine.stage_start()
+        engine.ensure_stage_worktrees()
     state = engine.projection()
     assert state["status"] == "paused" and state["reason"] == "worktree_unavailable"
     assert engine.contract["mode"] == "isolated" and engine.effective_repos() == {}
@@ -154,7 +153,7 @@ def test_a_small_change_that_triggers_review_patterns_gets_correctness(tmp_path,
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
                               profile="direct", requirement="test change", session_id="s", repos={"repo": str(repo)},
                               run_id="run_rp", risk_test_file_cap=20)
-    wt = engine.stage_start()["repos"]["repo"]
+    wt = engine.ensure_stage_worktrees()["repo"]
     (__import__("pathlib").Path(wt) / "a.py").write_text(
         "import subprocess\nvalue = subprocess.Popen(['true'])\n")
     _finalize(_runner(engine, wt), "tdd")
@@ -180,7 +179,7 @@ def test_a_failed_pattern_selection_still_dispatches_correctness(tmp_path, monke
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
                               profile="direct", requirement="test change", session_id="s", repos={"repo": str(repo)},
                               run_id="run_rp2", risk_test_file_cap=20)
-    wt = engine.stage_start()["repos"]["repo"]
+    wt = engine.ensure_stage_worktrees()["repo"]
     (__import__("pathlib").Path(wt) / "a.py").write_text("value = 2\n")
     _finalize(_runner(engine, wt), "tdd")
     engine.stage_complete()

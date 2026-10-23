@@ -22,12 +22,15 @@ A requirement/design choice goes through `decision-request` only. Its output (an
 
 ## Execute
 
+Every `pipeline_v1.py` and `pipeline_test.py` response ends with `next`: what to do now (`action`, `command`, `why`), the checks that still fail (`blocking`), and the stage card (`card_text`, included when the call entered a new stage). Follow it; there is no need to call `status` between stages. `repos` names where to edit the run's code: the call that enters a code stage creates the worktrees.
+
 For every stage:
 
-1. `pipeline_v1.py stage-start --project <P> --run-id <R>`
-2. Read the returned v1 card and execute it.
-3. `pipeline_v1.py stage-complete --project <P> --run-id <R> --artifact <json-file>` when the card requires an artifact; omit it otherwise.
-4. Continue immediately to the returned next stage. Stop only for a DC-1 human decision, user stop, or terminal state.
+1. Read `next.card_text` and execute the card.
+2. `pipeline_v1.py stage-complete --project <P> --run-id <R> --artifact -` with the artifact JSON on stdin when the card requires one; omit `--artifact` otherwise. BUILD and TEST complete by themselves when a `pipeline_test.py` call's results pass their checks (the response carries `stage_complete`).
+3. Continue immediately with the returned `next`. Stop only for a DC-1 human decision, user stop, or terminal state.
+
+Token usage is measured by the daemon when REFLECT ends; there is no measuring command.
 
 Profiles and exact stage order come from `core/run_protocol/lifecycle.py`: full/bugfix, goal, trivial, direct, research. There is no skipped stage.
 
@@ -68,7 +71,7 @@ Normal delivery: `pipeline_v1.py land --project <P> --run-id <R> --message <mess
 
 Human run-land is executable and always two-step: `run-land --prepare [--skip-tests] [--note ...]`, then `run-land --request <id> --message <message>`. The request command passes the existing HITL gate, burns a daemon-memory one-time token bound to session/run/request, rechecks every tree, and persists each repo commit. A failed action consumes the authorization; prepare and approve a new request. Snapshot deletion and finding acceptance use the same exact one-use authorization model. Abandoned/not-landed work keeps its `run/<id>` branch, bundle and diff indefinitely.
 
-REFLECT processing is the daemon's background work and cannot change landing: it judges and routes each lesson, records its outcome and completes REFLECT itself (`degraded` at its cap); you have no command for it. Run `pipeline_v1.py measure-usage --project <P> --run-id <R>` after landing so the audit counts the whole session (your own transcript is recorded automatically; a later measurement replaces an earlier one).
+REFLECT processing is the daemon's background work and cannot change landing: it judges and routes each lesson, records its outcome and completes REFLECT itself (`degraded` at its cap); you have no command for it. The daemon measures the run's token usage from its transcripts when REFLECT ends.
 
 ## Human boundary
 

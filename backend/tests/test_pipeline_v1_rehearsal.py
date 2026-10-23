@@ -108,7 +108,7 @@ def _run_code(case, profile, run_id, monkeypatch):
     monkeypatch.setenv("SWARM_DATA_DIR",str(data)); monkeypatch.setenv("SWARM_WORKTREE_ROOT",str(case/"wts")); monkeypatch.setenv("SWARM_WORKTREE_LEDGER",str(case/"ledger"))
     engine=RunEngine.create(data_dir=data,workspace=ws,project="P",profile=profile,session_id="s",repos={"repo":str(repo)},run_id=run_id,requirement="rehearsal change")
     if profile=="direct":
-        wt=Path(engine.stage_start()["repos"]["repo"]); (wt/"a.py").write_text("value=2\n")  # direct: no PLAN
+        wt=Path(engine.ensure_stage_worktrees()["repo"]); (wt/"a.py").write_text("value=2\n")  # direct: no PLAN
     else:
         requirements = _requirements(profile)
         if profile == "bugfix":
@@ -124,7 +124,7 @@ def _run_code(case, profile, run_id, monkeypatch):
                 completed_at="2026-10-22T00:00:01+00:00")
         assert engine.stage_complete(requirements)["ok"]
         if profile in {"full","bugfix","goal"}: assert engine.stage_complete()["ok"]  # THINK
-        wt=Path(engine.stage_start()["repos"]["repo"]); (wt/"a.py").write_text("value=2\n")
+        wt=Path(engine.ensure_stage_worktrees()["repo"]); (wt/"a.py").write_text("value=2\n")
         assert engine.stage_complete(_design(profile))["ok"]
     _runner(engine,wt,"tdd",profile); assert engine.stage_complete()["ok"]
     if profile=="goal": pass

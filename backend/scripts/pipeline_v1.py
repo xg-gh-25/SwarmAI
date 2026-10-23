@@ -43,11 +43,15 @@ def _repos(values: list[str]) -> dict[str, str]:
 
 
 def _json_arg(value: str | None) -> dict[str, Any]:
+    """``--artifact``: ``-`` reads stdin (r6 §2.3: no file for the agent to manage), a
+    path reads that file, anything else is the JSON itself. The command that consumes it
+    keeps it: a document stores its JSON source in the run, an event its payload."""
     if value is None:
         return {}
     path = Path(value)
     try:
-        raw = path.read_text(encoding="utf-8") if path.is_file() else value
+        raw = (sys.stdin.read() if value == "-"
+               else path.read_text(encoding="utf-8") if path.is_file() else value)
         result = json.loads(raw)
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"artifact is not JSON: {exc}") from exc
@@ -64,11 +68,12 @@ def _this_transcript() -> list[str]:
     return [sid] if valid_session_id(sid) else []
 
 
-def _load(args) -> RunEngine:
+def _load(args, *, note: bool = True) -> RunEngine:
     engine = RunEngine.load(data_dir=get_app_data_dir(), workspace=_workspace(),
                             project=args.project, run_id=args.run_id)
-    for sid in _this_transcript():     # a resumed / taken-over session adds its own
-        engine.note_transcript(sid)
+    if note:   # a write: only under the operation lock (r6 §2.2)
+        for sid in _this_transcript():     # a resumed / taken-over session adds its own
+            engine.note_transcript(sid)
     return engine
 
 
@@ -85,8 +90,8 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--transcript-id", action="append", default=[])
     create.add_argument("--requirement",
                         help="the user's request, verbatim (required for --profile direct)")
-    for command in ("status", "stage-start", "review-start", "push-status", "land",
-                    "measure-usage", "events", "resume", "restore"):
+    for command in ("status", "review-start", "push-status", "land",
+                    "events", "resume", "restore"):
         item = sub.add_parser(command)
         item.add_argument("--project", required=True)
         item.add_argument("--run-id", required=True)
@@ -145,6 +150,8 @@ def parser() -> argparse.ArgumentParser:
     discard.add_argument("--note")
     complete.add_argument("--run-id", required=True)
     complete.add_argument("--artifact")
+    complete.add_argument("--expect-stage",
+                          help="complete only if the run is still in this stage")
 
     reflect_prepare = sub.add_parser("reflect-prepare")
     reflect_prepare.add_argument("--project", required=True)
@@ -165,16 +172,60 @@ def execute(args) -> dict[str, Any]:
             risk_test_file_cap=args.risk_test_file_cap,
             run_id=args.run_id, transcript_ids=[*args.transcript_id, *_this_transcript()],
             requirement=args.requirement)
-        return {"ok": True, "pipeline_id": engine.run_id,
-                "state": engine.projection(), "run_file": str(engine.run_dir / "run.json")}
-    if args.command != "status":
+        return _with_next(engine, {"ok": True, "pipeline_id": engine.run_id,
+                                   "run_file": str(engine.run_dir / "run.json")},
+                          previous_stage="", mutating=True)
+    if args.command not in _READ_ONLY:
         # one read-decide-write operation at a time on this run (r6 §2.2): a parallel
         # call waits, then is judged on the state the first one left
         from core.run_protocol.oplock import operation
         audit_root = get_app_data_dir() / "state" / "pipeline_agent_audit"
         with operation(audit_root, args.run_id):
-            return _execute_loaded(args, _load(args))
-    return _execute_loaded(args, _load(args))
+            engine = _load(args)
+            before = engine.projection()["stage"]
+            return _with_next(engine, _execute_loaded(args, engine), previous_stage=before,
+                              mutating=True)
+    engine = _load(args, note=False)
+    if args.command == "status" and _missing_worktrees(engine):
+        # status is read-only, except that it makes a code stage's missing worktree (a
+        # crash between entering the stage and making it): one operation, under the lock
+        from core.run_protocol.oplock import operation
+        with operation(get_app_data_dir() / "state" / "pipeline_agent_audit", args.run_id):
+            engine = _load(args)
+            engine.ensure_stage_worktrees()
+    return _with_next(engine, _execute_loaded(args, engine), previous_stage=None,
+                      mutating=False)
+
+
+# read the run, never write it: no operation lock (r6 §2.2)
+_READ_ONLY = frozenset({"status", "push-status", "events"})
+
+
+def _missing_worktrees(engine: RunEngine) -> bool:
+    state = engine.projection()
+    return (engine.contract.get("mode") == "isolated" and state["status"] == "active"
+            and engine.contract.get("profile") != "research"
+            and state["stage"] in engine.WORKTREE_STAGES
+            and set(engine.effective_repos()) != set(engine.contract["expected_repos"]))
+
+
+def _with_next(engine: RunEngine, result: dict[str, Any], *, previous_stage: str | None,
+               mutating: bool) -> dict[str, Any]:
+    """Every response ends with ``state`` and ``next`` (r6 §2.3). A mutating call that
+    leaves the run in a stage that edits code also makes sure its worktrees exist
+    (idempotent): there is no ``stage-start``, the first call that needs them makes them."""
+    from core.run_protocol.next_step import next_step
+    if mutating:
+        try:
+            engine.ensure_stage_worktrees()
+        except EngineError as exc:
+            result["worktree_error"] = str(exc)
+    result["state"] = engine.projection()
+    result["repos"] = engine.effective_repos()       # where the run's code is edited
+    handouts = result.get("handouts")
+    result["next"] = next_step(engine, previous_stage=previous_stage,
+                               dispatched=len(handouts) if isinstance(handouts, list) else None)
+    return result
 
 
 def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
@@ -182,13 +233,12 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
         return {"ok": True, "state": engine.projection(), "owner": engine.owner_session(),
                 "decision": engine.pending_decision(),
                 "push": engine.push_status(), "run_file": str(engine.run_dir / "run.json")}
-    if args.command == "stage-start":
-        return {"ok": True, **engine.stage_start()}
     if args.command == "gate0-start":
         return {"ok": True, **engine.gate0_start(
             _json_arg(args.artifact) if args.artifact else None)}
     if args.command == "stage-complete":
-        return engine.stage_complete(_json_arg(args.artifact))
+        return engine.stage_complete(_json_arg(args.artifact),
+                                     expected_stage=args.expect_stage)
     if args.command == "review-start":
         return {"ok": True, **engine.review_start()}
     if args.command == "review-address":
@@ -197,8 +247,6 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
         return {"ok": True, **engine.review_proof(_json_arg(args.artifact))}
     if args.command == "push-status":
         return {"ok": True, **engine.push_status()}
-    if args.command == "measure-usage":
-        return {"ok": True, "usage": engine.measure_usage()}
     if args.command == "land":
         return {"ok": True, **engine.normal_land(message=args.message)}
     if args.command == "resume":

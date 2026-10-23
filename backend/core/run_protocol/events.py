@@ -212,8 +212,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
     # hook: the daemon's required_approval count (D4)
     "metric": _spec(("cli", "runner", "hook"), ("stage", "payload.name", "attempt"), "payload.name",
                     {"name": str, "value": (int, float)},
-                    # metric(cap_exceeded.<cap>): a count cap of the run was hit (F18)
-                    {"cap": str}),
+                    # metric(cap_exceeded.<cap>): a count cap of the run was hit (F18);
+                    # metric(usage_not_available): why the run's usage was not measured
+                    {"cap": str, "reason": str}),
     "turn": _spec("cli", ("payload.message_id",), None, {"message_id": str}),
     "integrity": _spec(("cli", "hook", "runner"), ("payload.conflict_id", "ordinal"),
                        "payload.conflict_id", {"conflict_id": str,

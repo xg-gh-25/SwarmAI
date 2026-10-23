@@ -458,3 +458,34 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - **HIGH，answer 和 findings 不是原子写入：** 新增 `AuditStore.append_batch`，在一次 store 锁内逐条验证，然后一次 write、一次 fsync 写入。另在检查层兜底：一个 parsed answer 只有在它声明的 `n_findings` 条 `finding_occ` 和 `n_status` 条 `finding_status` 都在账本上时才算数（`checks._answers`），否则 RV 检查失败。
 - **MED，来源行与正文不是同一次读取（TOCTOU）：** `write_review` 和 `write_fixing_spec` 只读一次事件，正文和来源行都用这一份。REQUIREMENTS 和 DESIGN_SPEC 的哈希取自刚写入的那段文本。
 - **MED，`operation()` 先建路径、后校验 run_id：** 入口先调 `validate_run_id`。
+
+## 19. 收尾 commit 4：衔接（r6 §2.3）
+
+- **`next`：** 新增 `core/run_protocol/next_step.py`。`pipeline_v1.py` 和 `pipeline_test.py` 的每个响应都带 `state`、`repos` 和 `next`。
+  - `next` 的字段有 `action`、`command`、`why`、`blocking`、`card`。`action` 取值为 run、write_artifact、fix、dispatch、wait、ask_user、none。
+  - 当这次调用让 run 进入了新阶段时，`next` 还带上该阶段 card 的全文（`card_text`）。
+  - `next` 只读签名事件的 fold、engine 算出的检查结果、run 自己的文件和 stage card。`blocking` 由 `checks.evaluate` 计算，它是纯函数，不写任何事件。
+- **删除 `stage-start`：** 改为 `engine.ensure_stage_worktrees()`，幂等，只在真建了 worktree 时才重写 run.json。
+  - 每个写类命令结束时都会调它，所以进入代码阶段的那次调用会顺带建好 worktree。direct 的 `create` 返回时 worktree 就已经在了。
+  - 如果在进入阶段和建 worktree 之间崩溃，下一次 `status` 会在操作锁内补建。
+  - `worktree_write_gate` 的拒绝提示改为：先 `create`，再按 `next` 走；缺 worktree 时调 `status`。
+- **只读命令：** `status`、`push-status`、`events` 不拿操作锁，也不再写 `transcripts.json`。这个文件只在写类命令里、锁内写入。
+- **自动完成阶段：**
+  - **触发条件：** `pipeline_test.py` 的 tdd、probe、regression、verify、recheck、validation 调用写完 final 之后，如果 run 处于 BUILD 或 TEST，并且该阶段的检查全部通过，就完成这个阶段。
+  - **怎么完成：** 由 CLI 自己的 `stage-complete` 子进程完成（它以 cli 签名，并拿操作锁）。runner 进程只签 runner 的事实（C3），而且这时测试已经跑完，不存在持锁跑测试。
+  - **检查没过时：** 不记录任何 stage attempt，`next.blocking` 列出没过的检查。TDD 先红后绿的过程因此不会耗掉阶段的尝试次数。
+- **`--artifact -`：** 从 stdin 读。文档把 JSON source 存进 run 目录，事件则在 payload 里保存内容，所以不再另存一份。
+- **usage：** 删除 `measure-usage` 子命令。daemon 在 `reflect_complete` 时从 run 的 transcript 测量用量。测不到时记一条 `metric(usage_not_available, reason)`，Token Cost 判 WARN（原先是 BLOCK），并在 `not_available` 字段写明原因。
+- **`RunEngine.load(producer=)`：** runner 进程以 runner 身份加载 run，只读出下一步要做什么。
+- **文档：** INSTRUCTIONS、SKILL 和 BUILD/TEST 的 stage card 都改为按 `next` 走。
+
+**审查 4cfba9d6（1 轮，3 HIGH + 6 MED），一次修完：**
+- **HIGH，TEST 第一次 regression 就会被自动完成，必需的 validation 被跳过：** 原因是 TS-1 对任何结束了的 final 都放行。现在 TEST 自动完成多了两个条件：每个 repo 的 final 都是 green，并且 LG-5 通过（所有必需 validation 都已跑过）。两项都写进 `next.blocking`。所以 red 或 incomplete 的 regression 不会结束 TEST，agent 可以修完再跑；也可以按 TS-1 手动完成。
+- **HIGH，两个并发的 runner 会连着完成 BUILD 和 REVIEW：** 自动完成改为带 `--expect-stage <观察到的阶段>`。`stage_complete(expected_stage=)` 在操作锁内比对，阶段已变就报 `stale`，不再把这次完成算到新阶段头上。
+- **HIGH，非 owner 会话能借 `pipeline_test` 推进别人的 run：** 现在只有本次 Bash 调用的 `SWARM_APP_SESSION_ID` 等于 `owner_session()` 时才自动完成。这个环境变量由 `session_link_gate` 保护，不能被改写。其他会话的测试调用只返回 `next`，不推进 run。
+- **MED，`user_stop`/`session_lost` 暂停后 `next` 会让 agent 直接 resume：** 改为 `wait`，由人来决定是否恢复。
+- **MED，REVIEW 的 handout 按阶段尝试次数取，编号用错了：** 改为按 (expert, round) 取最新的 handout。有未回答的就 `wait`（本次调用刚派发时为 `dispatch`）；全部答完且检查通过就 `stage-complete`。`dispatched` 由 engine 本次创建的 handout 数给出，roster 为空时直接指向 `stage-complete`。
+- **MED，DELIVER 用 `reflect.json` 是否存在来判断：** 改为看签名事件：存在一次只含 RF 检查、且全部通过的 deliver attempt，或 reflect 已 degraded。
+- **MED，GOAL_CYCLE 被指向 regression：** 改为 tdd，`why` 也不再说它会自动完成。
+- **MED，已删除的命令仍在文字里出现：** 删掉了 INSTRUCTIONS 中的 measure-usage 一段，runner 缺 worktree 时的报错也不再提 stage-start。
+- **MED，只读命令的 `next` 会写 git 对象，未修：** `write_tree` 用私有 index，写出的是内容寻址、没有 ref 指向的对象，可被 gc 回收，不改变任何 run 状态，也不需要锁。`status` 原本就这样做。
