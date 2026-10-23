@@ -35,9 +35,8 @@ class NoES { close() {} addEventListener() {} removeEventListener() {} }
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 
 import api from '../../services/api';
-// Only the agents answer: with both failing, ChatPage's default-agent effect
-// loops (its `agents = []` default is a new array every render) — a known issue
-// recorded in canvas-proprioception.md §9, not what this test measures.
+// Only the agents answer, so the default tab renders (with both failing ChatPage
+// shows the agent-error card instead; ChatPage.backendOffline.test.tsx).
 const AGENT = { id: 'default', name: 'Swarm' };
 api.defaults.adapter = ((config: { url?: string }) => (config.url === '/agents' || config.url === '/agents/default'
   ? Promise.resolve({ data: config.url === '/agents' ? [AGENT] : AGENT, status: 200, statusText: 'OK', headers: {}, config })

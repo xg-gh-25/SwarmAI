@@ -138,6 +138,15 @@ const INITIAL_TURNS = 20;
 /** Turns per "load older" page while scrolling up. */
 const OLDER_TURNS = 20;
 
+/** Stable fallbacks for the list queries below. A `= []` default is a NEW array
+ *  on every render while the query has no data, so any effect / memo depending on
+ *  it re-runs every render: with the backend unreachable the default-agent effect
+ *  looped (set error → refetch → fail → set error), ~17k commits in 4 s. */
+const NO_AGENTS: Agent[] = [];
+const NO_SKILLS: Awaited<ReturnType<typeof skillsService.list>> = [];
+const NO_PLUGINS: Awaited<ReturnType<typeof pluginsService.listPlugins>> = [];
+const NO_SESSIONS: ChatSession[] = [];
+
 /** Convert a backend ChatMessage to the frontend Message shape. */
 export default function ChatPage() {
   const { t } = useTranslation();
@@ -232,24 +241,24 @@ export default function ChatPage() {
   // LayoutContext — attachment state removed (now in useUnifiedAttachments)
 
   // Data queries
-  const { data: agents = [] } = useQuery({
+  const { data: agents = NO_AGENTS } = useQuery({
     queryKey: ['agents'],
     queryFn: agentsService.list,
   });
 
-  const { data: skills = [] } = useQuery({
+  const { data: skills = NO_SKILLS } = useQuery({
     queryKey: ['skills'],
     queryFn: skillsService.list,
     enabled: messagesReady,
   });
 
-  const { data: plugins = [] } = useQuery({
+  const { data: plugins = NO_PLUGINS } = useQuery({
     queryKey: ['plugins'],
     queryFn: pluginsService.listPlugins,
     enabled: messagesReady,
   });
 
-  const { data: sessions = [], refetch: refetchSessions } = useQuery({
+  const { data: sessions = NO_SESSIONS, refetch: refetchSessions } = useQuery({
     queryKey: ['chatSessions', selectedAgentId],
     queryFn: () => chatService.listSessions(selectedAgentId || undefined),
     enabled: !!selectedAgentId && messagesReady,
