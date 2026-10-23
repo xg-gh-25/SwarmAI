@@ -52,6 +52,9 @@ export const OVERLAY_WIDTH = {
   xl: 'clamp(760px, 70%, 1200px)',
 } as const;
 
+/** Dev builds log open → content-mounted timings (not in tests, not in production). */
+const DEV_TIMING = import.meta.env.DEV && import.meta.env.MODE !== 'test';
+
 const PANEL_GAP = 20;   // left/right/bottom breathing gap inside the scrim
 const NUB = 20;         // spout square size
 const EXIT_MS = 300;    // exit-transition backstop (> the 280ms card transform)
@@ -83,6 +86,8 @@ export function OverlayHost() {
 
     if (isOpen && spec) {
       setRenderedId(activeOverlay);
+      // dev-only timing: open → content mounted (code loaded), see ContentMountMark
+      if (DEV_TIMING) performance.mark(`overlay-open:${activeOverlay}`);
       // Capture the spout origin: the live rect of the nav item that opens this id
       // (`[data-nav-id=<id>]`, navTable). None (a deep-link-only id) → no spout.
       const card = document.querySelector<HTMLElement>(`[data-nav-id="${activeOverlay}"]`);
@@ -278,9 +283,24 @@ export function OverlayHost() {
                 open surface re-renders on agent switch) + ref-backed dispatch handlers
                 (from the non-reactive module bridge — stable, never stale). */}
             {renderSpec.render({ close: closeOverlay, agentId, ...getOverlayCtxBridge() })}
+            {DEV_TIMING && <ContentMountMark id={renderedId} />}
           </Suspense>
         </div>
       </div>
     </div>
   );
+}
+
+/** Dev-only: rendered inside the Suspense with the content, so it mounts once the
+ *  content's code has loaded; logs open → mounted for the real-machine check
+ *  (design left-nav-overlay-single-source.md §5.5). Data arrival is each overlay's. */
+function ContentMountMark({ id }: { id: OverlayId }) {
+  useEffect(() => {
+    const start = `overlay-open:${id}`;
+    if (performance.getEntriesByName(start).length === 0) return;
+    const m = performance.measure(`overlay-mounted:${id}`, start);
+    console.debug(`[overlay] ${id} content mounted ${Math.round(m.duration)} ms after open`);
+    performance.clearMarks(start);
+  }, [id]);
+  return null;
 }

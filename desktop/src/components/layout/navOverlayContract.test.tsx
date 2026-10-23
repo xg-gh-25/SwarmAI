@@ -36,6 +36,7 @@ import { HealthProvider } from '../../contexts/HealthContext';
 import { LeftSidebar } from './ThreeColumnLayout';
 import { OverlayHost } from './OverlayHost';
 import './overlaySurfaces';
+import { OVERLAY_CHUNK } from './overlayChunks';
 
 class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
@@ -187,7 +188,7 @@ async function checkItem(it: Item, fail: (check: string) => void) {
 }
 
 beforeAll(async () => {
-  await Promise.all([import('./BrainHub'), import('../../pages/SettingsPage'), import('../../pages/EvalDashboard')]);
+  await Promise.all(Object.values(OVERLAY_CHUNK).map((load) => load()));   // every content is lazy
 });
 afterEach(() => { cleanup(); probe = null; });
 

@@ -267,3 +267,31 @@ axios 实例，不是测试里的 mock，请求从未被记录。契约测试现
 
 没有做 §S3 的 `OverlayState` 统一组件：各 overlay 的 Loading / 空 / 出错文案和样式不同，换成一个组件
 会改到每个 overlay 的外观，超出这次范围（§3、§7）；取数统一后"每次打开都先 Loading"的问题已经没有了。
+
+## 12. P3 结果（2026-10-23）
+
+**后端，先量再改（S4）**：
+
+- `/community/engagement`：每行带整串回复，334 行 560 KB；列表只显示最新一条回复和回复数。接口改为每行
+  只带 `latest_reply`（`engagement_items()` 本身不变，别的调用方仍拿整串）。同一份数据 246 KB。
+- `/ddd/brains`：用只读脚本（`$KIROCREW_SCRATCH/time_brains.py`，不碰数据库；attention 那一路可能读
+  data.db，所以跳过）量了文件和 git 的几路：dirty ~330 ms、last-commit 170–350 ms、9 个 summary
+  100–140 ms，没有哪一路占大头；daemon 上热 0.4–0.9 s，重启后首次 3.8 s。没有猜着改：接口超过 1.5 s 时
+  按路记一条 WARNING，下次慢时日志直接说是哪一路。overlay 侧已缓存 + 悬停预取（P2），用户看到的等待
+  被盖住了大半。
+- `/attention`：热 85–235 ms，没改。
+
+**前端**：
+
+- 每个 overlay 的内容都是独立 chunk（`overlayChunks.ts`，一个 id 一个动态 import），`prefetchNav`
+  悬停时先加载代码再取数据。Workspace（WorkspaceExplorer）本来就是侧栏，留在首包。ToDo 仍被 ChatPage
+  静态引用，所以它的代码还在首包里（vite 有提示），没有动 ChatPage。
+- 首包 `index-*.js`：3,881 kB → 3,683 kB（-198 kB）。首包剩下的大头不是 overlay（mermaid 图类、
+  pdf、cytoscape 等），不在这次范围。
+- `npm run check:bundle`（`scripts/check-bundle-size.mjs`）：首包超过 3,683 kB × 1.05 就失败；用改前的
+  构建跑会失败，用改后的通过。**没有接进 `build` / `build:all`**：那是 XG 的生产构建流程，加不加由 XG 定。
+- dev 构建里 OverlayHost 打 `overlay-open:<id>` 标记，内容挂载后 console.debug 打出耗时（测试和生产
+  不打）。只覆盖"代码加载 + 挂载"，数据到达各 overlay 自己管。
+- 补了一条测试：内容代码还在加载时关闭 overlay，退场后照常卸载。
+
+§5.5 的真机对比需要 XG 在 dev 构建里点一遍 17 项看 console 输出，本机做不了。

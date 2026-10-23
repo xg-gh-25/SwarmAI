@@ -13,33 +13,33 @@ import { lazy } from 'react';
 import { registerOverlay } from './overlayRegistry';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
-import { CMBrainContent } from './CMBrainOverlay';
-import { LibraryContent } from './LibraryOverlay';
-import { NewBrainContent } from './NewBrainOverlay';
-import { HistoryContent } from './HistoryOverlay';
-import { ArtifactsContent } from './ArtifactsOverlay';
-import { ToDoContent } from './ToDoOverlay';
-import { NeedYouContent } from './NeedYouOverlay';
-import { CommunityContent } from './CommunityOverlay';
-import { JobsRunsContent } from './JobsRunsOverlay';
-import { CapabilitiesContent } from './CapabilitiesOverlay';
-import { PipelineContent } from './PipelineOverlay';
 import { continueInSession } from './continueInSession';
-import { PollinateContent } from './PollinateOverlay';
-import { HiveFleetContent } from './HiveFleetOverlay';
+import { OVERLAY_CHUNK } from './overlayChunks';
 import { useLayout } from '../../contexts/LayoutContext';
 import type { ToDo } from '../../types/todo';
 
-// G2 code-split (run_06c49540, MEASURED): the initial bundle was one 3,858 kB
-// (1,102 kB gzip) index chunk with all 12 surfaces eager. These three are the heavy,
-// rarely-first-open surfaces — lazy() moves each into its own chunk fetched on first
-// open. OverlayHost wraps spec.render(ctx) in a <Suspense> boundary (required — a
-// lazy component without one throws "suspended on synchronous input"). The other 9
-// surfaces stay eager (light / opened often). BrainHub (1,125 lines) + EvalDashboard
-// (2,603 lines) + SettingsPage→SettingsTabs (11-tab tree) are the measured-heavy set.
-const BrainHub = lazy(() => import('./BrainHub').then((m) => ({ default: m.BrainHub })));
-const SettingsPage = lazy(() => import('../../pages/SettingsPage'));
-const EvalDashboard = lazy(() => import('../../pages/EvalDashboard'));
+// Every overlay's content is its own chunk (design left-nav-overlay-single-source.md
+// S4; the G2 split of run_06c49540 did three). Each lazy component below is built on
+// overlayChunks' one import for that id, which the nav also calls on hover, so a
+// hovered item's code is loaded before the click. OverlayHost wraps spec.render(ctx)
+// in the <Suspense> a lazy component needs. (Measured 2026-10-23: index chunk
+// 3,975 kB before this, see the design doc §12 for after.)
+const CMBrainContent = lazy(() => OVERLAY_CHUNK.context().then((m) => ({ default: m.CMBrainContent })));
+const LibraryContent = lazy(() => OVERLAY_CHUNK.library().then((m) => ({ default: m.LibraryContent })));
+const NewBrainContent = lazy(() => OVERLAY_CHUNK['new-brain']().then((m) => ({ default: m.NewBrainContent })));
+const HistoryContent = lazy(() => OVERLAY_CHUNK.history().then((m) => ({ default: m.HistoryContent })));
+const ArtifactsContent = lazy(() => OVERLAY_CHUNK.artifacts().then((m) => ({ default: m.ArtifactsContent })));
+const ToDoContent = lazy(() => OVERLAY_CHUNK.todo().then((m) => ({ default: m.ToDoContent })));
+const NeedYouContent = lazy(() => OVERLAY_CHUNK['needs-you']().then((m) => ({ default: m.NeedYouContent })));
+const CommunityContent = lazy(() => OVERLAY_CHUNK.community().then((m) => ({ default: m.CommunityContent })));
+const JobsRunsContent = lazy(() => OVERLAY_CHUNK.jobs().then((m) => ({ default: m.JobsRunsContent })));
+const CapabilitiesContent = lazy(() => OVERLAY_CHUNK.capabilities().then((m) => ({ default: m.CapabilitiesContent })));
+const PipelineContent = lazy(() => OVERLAY_CHUNK.pipeline().then((m) => ({ default: m.PipelineContent })));
+const PollinateContent = lazy(() => OVERLAY_CHUNK.pollinate().then((m) => ({ default: m.PollinateContent })));
+const HiveFleetContent = lazy(() => OVERLAY_CHUNK.hive().then((m) => ({ default: m.HiveFleetContent })));
+const BrainHub = lazy(() => OVERLAY_CHUNK['brain-hub']().then((m) => ({ default: m.BrainHub })));
+const SettingsPage = lazy(() => OVERLAY_CHUNK.settings());
+const EvalDashboard = lazy(() => OVERLAY_CHUNK.eval());
 
 // Chrome (title, mode, width, zone tint, spout target) lives in navTable.NAV, not here:
 // each entry below is only an id + its content.

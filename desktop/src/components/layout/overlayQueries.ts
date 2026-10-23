@@ -47,6 +47,7 @@ const COMMUNITY_FETCH: Record<CommunityPart, () => Promise<unknown>> = {
   engagement: () => communityService.fetchEngagement(),
 };
 import type { OverlayId } from './overlayIds';
+import { loadOverlayChunk } from './overlayChunks';
 
 /** One freshness window for every overlay: older data is still shown at once, then
  *  refreshed in the background. */
@@ -184,8 +185,9 @@ export const NAV_PREFETCH: Partial<Record<OverlayId, (ctx: PrefetchCtx) => AnyOp
   community: () => [overlayQuery.community('feed'), overlayQuery.community('hotTopics')],
 };
 
-/** Prefetch a nav item's overlay data (no-op when fresh). Never throws. */
+/** Prefetch a nav item's overlay code and data (no-op when loaded / fresh). Never throws. */
 export function prefetchNav(qc: QueryClient, id: OverlayId, ctx: PrefetchCtx = {}): void {
+  loadOverlayChunk(id);   // the overlay's code (overlayChunks), then its data
   for (const opts of NAV_PREFETCH[id]?.(ctx) ?? []) {
     void qc.prefetchQuery(opts).catch(() => { /* the overlay's own query reports it */ });
   }

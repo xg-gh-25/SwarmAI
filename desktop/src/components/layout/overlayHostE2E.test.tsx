@@ -22,6 +22,7 @@ import { OverlayProvider } from '../../contexts/OverlayContext';
 import { ExplorerProvider } from '../../contexts/ExplorerContext';
 import { OverlayHost } from './OverlayHost';
 import './overlaySurfaces'; // side-effect: register the REAL surfaces
+import { OVERLAY_CHUNK } from './overlayChunks';
 
 // jsdom lacks ResizeObserver (used by explorer/message children of some surfaces).
 class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
@@ -98,15 +99,12 @@ function renderHost() {
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  // G2 (run_06c49540): brain-hub/settings/eval are React.lazy — pre-resolve their
+  // Every surface is React.lazy (overlayChunks) — pre-resolve their
   // dynamic import()s so this test exercises the event→open WIRING (its job), not the
   // chunk-fetch timing. Without this the Suspense fallback ("Loading…") is what
   // findByTestId sees for the lazy surfaces. The eager surfaces are unaffected.
-  await Promise.all([
-    import('./BrainHub'),
-    import('../../pages/SettingsPage'),
-    import('../../pages/EvalDashboard'),
-  ]);
+  // Every overlay's content is lazy (overlayChunks): load them all first.
+  await Promise.all(Object.values(OVERLAY_CHUNK).map((load) => load()));
 });
 afterEach(cleanup);
 

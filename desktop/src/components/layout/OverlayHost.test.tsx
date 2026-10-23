@@ -9,7 +9,7 @@
  * gate is the DoD, this suite is the structural regression guard.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { useEffect } from 'react';
+import { lazy, useEffect } from 'react';
 import { render, screen, act, cleanup } from '@testing-library/react';
 import { OverlayProvider, useOverlay } from '../../contexts/OverlayContext';
 import { OverlayHost } from './OverlayHost';
@@ -218,5 +218,30 @@ describe('OverlayHost — spout Y is corrected for app zoom (the ×invZoom conve
     const spout = screen.getByTestId('overlay-host-spout');
     // invZoom=1 → local = 100−40−10 = 50 (identical to pre-fix behaviour at zoom 1).
     expect(spout.style.top).toBe('50px');
+  });
+});
+
+describe('OverlayHost — closing while the content code is still loading', () => {
+  it('unmounts after the exit transition even if the lazy content never resolved', () => {
+    vi.useFakeTimers();
+    const Never = lazy(() => new Promise<{ default: () => null }>(() => {}));
+    registerOverlay({ id: 'pollinate', render: () => <Never /> });
+    function H() {
+      const { openOverlay, closeOverlay } = useOverlay();
+      return (
+        <div>
+          <button data-testid="o" onClick={() => openOverlay('pollinate')}>o</button>
+          <button data-testid="c" onClick={() => closeOverlay()}>c</button>
+          <OverlayHost />
+        </div>
+      );
+    }
+    render(<OverlayProvider><H /></OverlayProvider>);
+    act(() => screen.getByTestId('o').click());
+    expect(screen.getByTestId('overlay-loading')).toBeInTheDocument();
+    act(() => screen.getByTestId('c').click());
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(screen.queryByTestId('overlay-host-scrim')).toBeNull();
+    vi.useRealTimers();
   });
 });
