@@ -169,6 +169,8 @@ function FileViewerImpl({
         size: number;
         mimeType?: string;
         readonly?: boolean;
+        /** The file is not text (the server's 415): shown as the info card. */
+        binary?: boolean;
         /** The committed baseline is still loading (it loads after the content). */
         baselinePending?: boolean;
         committedContent?: string;
@@ -367,8 +369,11 @@ function FileViewerImpl({
                 params: { path: tab.filePath, ...(isOpened && initialFile!.baseRef ? { ref: initialFile!.baseRef } : {}) },
               }).then((r) => r.data.content, () => undefined) // new/untracked: no baseline
             : Promise.resolve(undefined);
+          // text_only: this route can only show text, so a file that is not text
+          // comes back as 415 after an 8 KB sniff instead of its base64 body
+          // (canvas-file-types.md P0) — handled in the catch below.
           const resp = await api.get<FileResponse>('/workspace/file', {
-            params: { path: tab.filePath, ...(renderSessionId ? { session_id: renderSessionId } : {}) },
+            params: { path: tab.filePath, text_only: 1, ...(renderSessionId ? { session_id: renderSessionId } : {}) },
           });
           if (cancelled) return;
 
@@ -432,6 +437,21 @@ function FileViewerImpl({
         // shared api.ts 404 interceptor, which 9 other callers depend on).
         if (status === 404) {
           setContentError('This file is no longer available — it may have been moved or deleted.');
+          return;
+        }
+        // 415: not text (an unlisted binary). Show the info card, never the editor:
+        // the editor would show base64 and Save would overwrite the file (P0 B3).
+        if (status === 415) {
+          let size = 0;
+          let absolutePath: string | undefined;
+          try {
+            const m = await api.get<{ size: number; absolute_path?: string }>('/workspace/file/meta', { params: { path: tab.filePath } });
+            size = m.data.size ?? 0;
+            absolutePath = m.data.absolute_path;
+          } catch { /* best effort, the card works without it */ }
+          if (cancelled) return;
+          contentCache.current[tab.filePath] = { content: '', size, binary: true, absolutePath };
+          setStatusBarInfo({ fileSize: size });
           return;
         }
         const msg = err instanceof Error ? err.message : 'Failed to load file';
@@ -684,7 +704,9 @@ function FileViewerImpl({
     const cached = contentCache.current[activeTab.filePath];
     if (!cached) return <LoadingFallback />;
 
-    const { viewType, filePath, fileName, gitStatus } = activeTab;
+    const { filePath, fileName, gitStatus } = activeTab;
+    // A file routed as text that turned out binary is shown as the info card.
+    const viewType = cached.binary ? 'unsupported' : activeTab.viewType;
 
     // --- Text / Markdown / SVG: delegate to existing FileEditorCore ---
     if (viewType === 'text' || viewType === 'markdown' || viewType === 'svg') {
@@ -775,19 +797,15 @@ function FileViewerImpl({
   // FileEditorCore at renderActiveContent() — NOT isEditableType(), which also
   // includes 'csv' → CsvRenderer (a lazy renderer with NO own footer, so csv
   // still needs the status bar). Gate-1 CRITICAL catch (run_09431085).
-  const hasOwnFooter =
-    activeTab != null &&
-    (activeTab.viewType === 'text' ||
-      activeTab.viewType === 'markdown' ||
-      activeTab.viewType === 'svg');
+  // The type actually shown: a text route whose file turned out binary (415) is the
+  // info card, so it has no editor (no own footer, no guarded editor close).
+  const shownType = activeTab == null ? null
+    : contentCache.current[activeTab.filePath]?.binary ? 'unsupported' : activeTab.viewType;
+  const hasOwnFooter = shownType === 'text' || shownType === 'markdown' || shownType === 'svg';
 
   // Editor types (FileEditorCore) are the ONLY ones that can be dirty; their close
   // must run FileEditorCore's unsaved-guard. Non-editor renderers are read-only.
-  const isEditorType =
-    activeTab != null &&
-    (activeTab.viewType === 'text' ||
-      activeTab.viewType === 'markdown' ||
-      activeTab.viewType === 'svg');
+  const isEditorType = hasOwnFooter;
 
   // The ONE close affordance (run_f49d3ff3 R2, panel variant). Editor type → delegate
   // to FileEditorCore's guarded close via closeSignal; non-editor → close directly.
@@ -845,7 +863,7 @@ function FileViewerImpl({
         <FileViewerStatusBar
           fileName={activeTab.fileName}
           fileSize={statusBarInfo.fileSize}
-          viewType={activeTab.viewType}
+          viewType={shownType ?? activeTab.viewType}
           encoding={statusBarInfo.encoding}
           extraInfo={statusBarInfo.extraInfo}
           // Non-text renderers have no footer of their own → surface file ops here

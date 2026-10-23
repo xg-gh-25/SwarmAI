@@ -55,6 +55,7 @@ from pydantic import BaseModel
 from core.context_directory_loader import CONTEXT_FILES
 from core.swarm_workspace_manager import SYSTEM_MANAGED_FOLDERS, swarm_workspace_manager
 from database import db
+from utils.text_sniff import is_text_on_disk
 from utils.diff_parser import parse_unified_diff, format_human_summary
 from schemas.workspace_config import (
     WorkspaceConfigResponse,
@@ -936,6 +937,12 @@ async def get_workspace_file(
         "path is an external absolute path surfaced by THIS session, it is rendered "
         "read-only. Absent → home-only guard (unchanged).",
     ),
+    text_only: bool = Query(
+        False,
+        description="The caller can only show text (the viewer's editor route). A file "
+        "that is not text then returns 415 after an 8 KB sniff instead of its whole "
+        "body as base64 (docs/design/canvas-file-types.md P0).",
+    ),
 ):
     """Read a file's content by path.
 
@@ -949,6 +956,7 @@ async def get_workspace_file(
     Returns 404 if the file does not exist.
     Returns 400 if a relative path attempts directory traversal.
     Returns 413 if the file exceeds 50 MB.
+    Returns 415 ``{detail: "binary"}`` when ``text_only`` and the file is not text.
     """
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
@@ -992,6 +1000,9 @@ async def get_workspace_file(
             detail=f"File too large to preview ({file_size // (1024 * 1024)} MB). Maximum is 50 MB.",
         )
 
+    if text_only and not await asyncio.to_thread(is_text_on_disk, target):
+        raise HTTPException(status_code=415, detail="binary")
+
     try:
         # Offload the blocking read off the event loop (a large file blocks all
         # concurrent HTTP otherwise — the file's established pattern, cf :632/:682).
@@ -1010,6 +1021,9 @@ async def get_workspace_file(
             "encoding": "base64",
             "mime_type": mime_type,
             "size": file_size,
+            # Never editable as text: saving it back through PUT would overwrite the
+            # binary (PUT refuses that too — P0 B1).
+            "readonly": True,
         }
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
@@ -1537,6 +1551,12 @@ async def put_workspace_file(
             raise HTTPException(status_code=403, detail="Skill files are read-only")
         if _is_readonly_context_file(path):
             raise HTTPException(status_code=403, detail="System-default context files are read-only")
+
+    # Never overwrite a binary file with text (docs/design/canvas-file-types.md P0
+    # B1): the viewer once opened an unlisted binary as its base64 and Save wrote that
+    # text over the file. New files and text files write as before.
+    if await asyncio.to_thread(lambda: target.is_file() and not is_text_on_disk(target)):
+        raise HTTPException(status_code=409, detail="binary file, not overwritten")
 
     # mkdir + write_text are blocking FS I/O — off the event loop in one worker
     # thread (run_6ea3cb12).

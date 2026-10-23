@@ -758,6 +758,12 @@ async def write_file(
             detail=f"Content too large. Max size: {MAX_TEXT_FILE_SIZE // 1024}KB"
         )
 
+    # Never overwrite a binary file with text (same guard as
+    # workspace_api.put_workspace_file — R27, docs/design/canvas-file-types.md P0 B1).
+    from utils.text_sniff import is_text_on_disk
+    if await asyncio.to_thread(lambda: file_path.is_file() and not is_text_on_disk(file_path)):
+        raise HTTPException(status_code=409, detail="binary file, not overwritten")
+
     # Ensure parent directory exists
     parent_dir = file_path.parent
     if not parent_dir.exists():

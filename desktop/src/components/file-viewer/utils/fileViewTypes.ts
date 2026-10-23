@@ -59,6 +59,16 @@ const NON_RENDERABLE_BINARY = new Set([
   'ttf', 'otf', 'woff', 'woff2',
   // Generic binary
   'bin', 'dat', 'pak',
+  // Video containers this webview cannot play (canvas-file-types.md P2)
+  'mkv', 'avi', 'wmv', 'flv',
+  // Apple iWork
+  'pages', 'numbers', 'key',
+  // Data / model files
+  'parquet', 'feather', 'arrow', 'npy', 'npz', 'pkl', 'pickle', 'pt', 'pth', 'ckpt',
+  'safetensors', 'onnx', 'h5', 'hdf5',
+  // Design files
+  'psd', 'sketch', 'fig',
+  // Any other binary is caught by the server's text sniff (415), not this list.
 ]);
 
 /**
@@ -153,6 +163,13 @@ function detectUnsupportedLabel(ext: string): string {
     sqlite: 'SQLite Database', db: 'Database',
     ttf: 'TrueType Font', otf: 'OpenType Font', woff: 'Web Font', woff2: 'Web Font',
     tiff: 'TIFF Image', tif: 'TIFF Image', heic: 'HEIC Image', heif: 'HEIF Image',
+    mkv: 'MKV Video', avi: 'AVI Video', wmv: 'WMV Video', flv: 'FLV Video',
+    pages: 'Pages Document', numbers: 'Numbers Spreadsheet', key: 'Keynote Presentation',
+    parquet: 'Parquet Data', feather: 'Feather Data', arrow: 'Arrow Data',
+    npy: 'NumPy Array', npz: 'NumPy Archive', pkl: 'Pickle File', pickle: 'Pickle File',
+    pt: 'PyTorch Model', pth: 'PyTorch Model', ckpt: 'Model Checkpoint',
+    safetensors: 'Safetensors Model', onnx: 'ONNX Model', h5: 'HDF5 Data', hdf5: 'HDF5 Data',
+    psd: 'Photoshop Document', sketch: 'Sketch Document', fig: 'Figma File',
   };
   return labels[ext] ?? 'Binary File';
 }

@@ -107,7 +107,16 @@ function getHelpfulText(ext: string): string {
   if (compiledExts.has(ext)) {
     return 'Compiled bytecode cannot be displayed as text. Decompile it or inspect the source file instead.';
   }
-  return 'This file can be opened in its default system application.';
+  if (['mkv', 'avi', 'wmv', 'flv'].includes(ext)) {
+    return 'This video format cannot play here. Open it in QuickTime, VLC or your default player.';
+  }
+  if (['pages', 'numbers', 'key'].includes(ext)) {
+    return 'iWork documents open in Pages, Numbers or Keynote. Use “Open in Default App”.';
+  }
+  if (['parquet', 'feather', 'arrow', 'npy', 'npz', 'pkl', 'pickle', 'pt', 'pth', 'ckpt', 'safetensors', 'onnx', 'h5', 'hdf5'].includes(ext)) {
+    return 'Data and model files are binary. Load them with their library (pandas, numpy, torch …) or attach to a chat to inspect them.';
+  }
+  return 'This file is not text and cannot be shown here. Open it in its default application.';
 }
 
 /* ------------------------------------------------------------------ */
@@ -125,7 +134,10 @@ export default function UnsupportedRenderer({
   const [copyFeedback, setCopyFeedback] = useState(false);
 
   const ext = getExtension(fileName);
-  const typeInfo = getFileTypeInfo(fileName);
+  // A file routed as text that the server found binary (415) has a "text" type
+  // info; on this card it is a binary file (canvas-file-types.md P0 B3).
+  const routed = getFileTypeInfo(fileName);
+  const typeInfo = routed.category === 'binary' ? routed : { label: 'Binary file', icon: 'draft', category: 'binary' as const };
   const helpText = getHelpfulText(ext);
   // Canonical SSOT (services/tauri) — checks __TAURI_INTERNALS__ (Tauri 2.x) OR
   // __TAURI__ (1.x). A local `'__TAURI__' in window` check was always false in the
