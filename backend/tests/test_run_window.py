@@ -78,6 +78,7 @@ def test_pipeline_list_and_need_you_read_the_window(ws, monkeypatch):
     from routers import pipelines
 
     monkeypatch.setattr(pipelines, "_get_swarmws", lambda: ws)
+    monkeypatch.setattr(pipelines.pm, "is_v1", lambda run_id: True)
     ids = sorted(r["id"] for r in pipelines._load_pipeline_runs())
     assert ids == ["run_new", "run_new_paused"]
     paused = [it.id for it in attention_authority._collect_paused_runs()]

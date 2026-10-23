@@ -59,7 +59,7 @@ class PipelineRunResponse(BaseModel):
     progress: str = Field(..., description="Stages completed/total (e.g., '3/8')")
     stages_completed: int = Field(0, description="Number of completed stages")
     stages_total: int = Field(8, description="Total stages in profile")
-    tokens_consumed: int = Field(0, description="Total tokens used across all stages")
+    tokens_consumed: Optional[int] = Field(None, description="Measured tokens; None when never measured")
     taste_decisions: int = Field(0, description="Number of pending taste decisions")
     checkpoint: Optional[PipelineCheckpoint] = Field(None, description="Checkpoint info if paused")
     pause_kind: Optional[str] = Field(
@@ -89,7 +89,7 @@ class PipelineStatusSummary(BaseModel):
     paused: int = 0
     completed: int = 0
     abandoned: int = 0
-    total_tokens: int = 0
+    total_tokens: Optional[int] = None  # None when any listed run is unmeasured
 
 
 class PipelineDashboard(BaseModel):
@@ -112,12 +112,12 @@ class PipelineRunSummary(BaseModel):
     profile: str
     progress: str = ""
     cycle_time_min: Optional[float] = Field(None, description="duration_minutes; None if not finished")
-    tokens_actual: int = 0
-    tokens_est: int = 0
+    tokens_actual: Optional[int] = None  # None when unmeasured (or any run in it is)
+    tokens_est: Optional[int] = None     # v1 has no token estimate
     created_at: str = ""
     updated_at: str = ""
     pause_kind: Optional[str] = None
-    needs_you: bool = Field(False, description="the user has to act on this run (routers.pipelines._needs_you)")
+    needs_you: bool = Field(False, description="the user has to act on this run (core.pipeline_metrics.needs_you)")
     checkpoint_reason: Optional[str] = None
     owner_session_id: Optional[str] = Field(
         None, description="Pipeline v1: the chat session that drives the run now")
@@ -148,7 +148,7 @@ class PipelineProjectGroup(BaseModel):
     # paused, never delivered) is excluded from analytics entirely and is NOT
     # needs-you — the user can take no action on a dead run. Delivered-but-mislabeled
     # abandoned runs are recategorized to completed, not counted here.
-    aborted_count: int = Field(0, description="runs that need you (routers.pipelines._needs_you; garbage excluded)")
+    aborted_count: int = Field(0, description="runs that need you (core.pipeline_metrics.needs_you)")
     runs: list[PipelineRunSummary] = Field(default_factory=list)
 
 
@@ -158,7 +158,7 @@ class PipelineTrendPoint(BaseModel):
     runs: int = 0
     completed: int = 0
     avg_cycle_min: Optional[float] = None
-    tokens: int = 0
+    tokens: Optional[int] = None  # None when any run of the week is unmeasured
 
 
 class PipelineOverall(BaseModel):
@@ -167,8 +167,8 @@ class PipelineOverall(BaseModel):
     completed: int = 0
     completion_rate: float = 0.0
     avg_cycle_min: Optional[float] = None
-    tokens_actual: int = 0
-    tokens_est: int = 0
+    tokens_actual: Optional[int] = None  # None when unmeasured (or any run in it is)
+    tokens_est: Optional[int] = None     # v1 has no token estimate
     profile_mix: dict[str, int] = Field(default_factory=dict)
     aborted_count: int = 0
 

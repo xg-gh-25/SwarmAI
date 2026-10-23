@@ -23,6 +23,43 @@ class AuditError(ValueError):
 
 
 
+
+def _token_metrics(event_rows):
+    """(cli measurements, summed expert records, usage_not_available reason, expert
+    record count) from the metric events. The main agent's transcript measurement
+    (producer cli) already includes every sub-agent, so its LATEST set is the total;
+    without one only the experts' own SubagentStop records are known."""
+    measured: dict[str, float] = {}
+    experts: dict[str, float] = {}
+    unavailable: str | None = None
+    expert_records = 0
+    for event in event_rows:
+        if event.get("kind") != "metric" or not isinstance(event.get("payload"), Mapping):
+            continue
+        name, value = event["payload"].get("name"), event["payload"].get("value")
+        if name == "usage_not_available":
+            unavailable = event["payload"].get("reason") or "not measured"
+            continue
+        if not isinstance(name, str) or not isinstance(value, (int, float)) \
+                or name == "required_approval" or name.startswith("cap_exceeded."):
+            continue
+        if event.get("producer") == "cli":
+            measured[name] = value                     # a later measurement replaces
+        else:
+            experts[name] = experts.get(name, 0) + value
+            expert_records += name == "input_tokens"
+    return measured, experts, unavailable, expert_records
+
+
+def token_totals(event_rows) -> "tuple[float | None, float | None]":
+    """(input, output) tokens of a run: the latest transcript measurement, else the sum
+    of the experts' records, else (None, None). One rule for the audit and the
+    dashboard read model."""
+    measured, experts, _unavailable, _records = _token_metrics(event_rows)
+    source = measured or experts
+    return source.get("input_tokens"), source.get("output_tokens")
+
+
 def _time(value: Any) -> float | None:
     if not isinstance(value, str):
         return None
@@ -270,25 +307,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     # main agent AND every sub-agent of the run's transcripts: its LATEST set is the
     # token total, and the per-expert SubagentStop records (runner) are already in it,
     # so they are not added. Without one, only the experts' tokens are known.
-    measured: dict[str, float] = {}
-    experts: dict[str, float] = {}
-    unavailable: str | None = None
-    expert_records = 0
-    for event in event_rows:
-        if event.get("kind") != "metric" or not isinstance(event.get("payload"), Mapping):
-            continue
-        name, value = event["payload"].get("name"), event["payload"].get("value")
-        if name == "usage_not_available":
-            unavailable = event["payload"].get("reason") or "not measured"
-            continue
-        if not isinstance(name, str) or not isinstance(value, (int, float)) \
-                or name == "required_approval" or name.startswith("cap_exceeded."):
-            continue
-        if event.get("producer") == "cli":
-            measured[name] = value                     # a later measurement replaces
-        else:
-            experts[name] = experts.get(name, 0) + value
-            expert_records += name == "input_tokens"
+    measured, experts, unavailable, expert_records = _token_metrics(event_rows)
     answers = sum(event.get("kind") == "answer" for event in event_rows)
     # Completeness (E5, conformance F7), counted in model SESSIONS from events, never
     # from the measurement itself: the main agent is one, and every handout an expert
@@ -299,13 +318,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     spawned = sum(event.get("kind") == "handout" for event in event_rows)
     total_calls: int | None = 1 + spawned
     accounted = (1 if measured else 0) + min(expert_records, spawned)
-    if measured:
-        input_tokens = measured.get("input_tokens")
-        output_tokens = measured.get("output_tokens")
-    elif experts:
-        input_tokens, output_tokens = experts.get("input_tokens"), experts.get("output_tokens")
-    else:
-        input_tokens = output_tokens = None
+    input_tokens, output_tokens = token_totals(event_rows)
     total_tokens = ((input_tokens + output_tokens)
                     if isinstance(input_tokens, (int, float)) and isinstance(output_tokens, (int, float))
                     else None)

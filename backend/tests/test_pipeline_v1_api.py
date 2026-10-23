@@ -100,8 +100,9 @@ def test_real_v1_detail_reads_stage_dict_and_reflect_artifact(tmp_path, monkeypa
         client._v1_patcher.stop()  # type: ignore[attr-defined]
 
 
-def test_historical_run_cancel_and_resume_are_read_only(tmp_path, monkeypatch):
-    """One-shot cutover: a pre-v1 run.json is never mutated by the dashboard."""
+def test_a_run_without_a_v1_contract_is_not_found(tmp_path, monkeypatch):
+    """No old-pipeline compatibility: a run.json with no contract is neither listed
+    nor acted on, and is never mutated."""
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
     workspace = tmp_path / "workspace"
     run_file = workspace / "Projects" / "P" / ".artifacts" / "runs" / "run_legacy1" / "run.json"
@@ -113,8 +114,66 @@ def test_historical_run_cancel_and_resume_are_read_only(tmp_path, monkeypatch):
         client = TestClient(app)
         for action in ("cancel", "resume"):
             response = client.patch(f"/api/pipelines/run_legacy1/{action}")
-            assert response.status_code == 410
-            assert response.json()["status"] == "read_only"
-        assert client.patch("/api/pipelines/run_absent1/cancel").status_code == 404
+            assert response.status_code == 404
+        assert client.get("/api/pipelines/run_legacy1").status_code == 404
+        assert client.get("/api/pipelines").json()["count"] == 0
+        assert client.get("/api/pipelines/analytics").json()["overall"]["total_runs"] == 0
     assert run_file.read_text() == original
     assert not (run_file.parent / ".cancel_requested").exists()
+
+
+def test_list_analytics_and_detail_read_the_v1_projection(tmp_path, monkeypatch):
+    """R1b: the list, the analytics and the detail read only v1 runs, from their
+    projection: finished_at gives the duration, measured metric events give the
+    tokens, and an unmeasured run carries no token number."""
+    from core.run_protocol.store import NEXT
+    engine, client = _real_v1(tmp_path, monkeypatch, "run_readmodel1")
+    legacy = engine.run_dir.parent / "run_legacy2" / "run.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"id": "run_legacy2", "status": "running", "stages": []}))
+    try:
+        listed = client.get("/api/pipelines").json()
+        assert [r["id"] for r in listed["pipelines"]] == ["run_readmodel1"]
+        assert listed["pipelines"][0]["tokens_consumed"] is None
+        row = client.get("/api/pipelines/analytics").json()["by_project"][0]["runs"][0]
+        assert row["cycle_time_min"] is None and row["owner_session_id"] == "session-real"
+        for name, value in (("input_tokens", 1200), ("output_tokens", 300)):
+            engine.store.append_new(writer=engine.authority.writer("cli"), kind="metric",
+                                    at="2026-10-23T00:00:00+00:00", stage="reflect",
+                                    attempt=1, ordinal=NEXT,
+                                    payload={"name": name, "value": value})
+        engine.abandon(reason="cancelled_by_user")
+        engine.write_projection()
+        from core import run_index
+        run_index._clear_for_tests()
+        data = client.get("/api/pipelines/analytics").json()
+        assert data["overall"]["tokens_actual"] == 1500
+        row = data["by_project"][0]["runs"][0]
+        assert row["status"] == "abandoned" and row["needs_you"] is True
+        assert isinstance(row["cycle_time_min"], float)
+        assert client.get("/api/pipelines/run_readmodel1").json()["status"] == "abandoned"
+    finally:
+        client._v1_patcher.stop()  # type: ignore[attr-defined]
+
+
+def test_the_listed_identity_is_the_run_directory_not_run_json(tmp_path, monkeypatch):
+    """R1b review: an agent that rewrites run A's run.json id/project to run B's must
+    not make the dashboard show or act on B; a malformed projection does not break the
+    list, and an unknown status is not shown as running."""
+    engine, client = _real_v1(tmp_path, monkeypatch, "run_identity_a")
+    path = engine.run_dir / "run.json"
+    value = json.loads(path.read_text())
+    value.update({"id": "run_someone_else", "project": "Other", "requirement": 7,
+                  "updated_at": 5, "status": "bogus"})
+    path.write_text(json.dumps(value))
+    from core import run_index
+    run_index._clear_for_tests()
+    try:
+        rows = client.get("/api/pipelines").json()["pipelines"]
+        assert [(r["id"], r["project"], r["status"]) for r in rows] == [
+            ("run_identity_a", "P", "failed")]
+        assert rows[0]["tokens_consumed"] is None
+        overall = client.get("/api/pipelines/analytics").json()["overall"]
+        assert overall["tokens_actual"] is None and overall["tokens_est"] is None
+    finally:
+        client._v1_patcher.stop()  # type: ignore[attr-defined]

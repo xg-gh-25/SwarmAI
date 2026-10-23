@@ -718,10 +718,28 @@ class RunEngine:
                 out.update(_commit_identity(os.path.join(home, p)) for p in paths)
         return out
 
+    @staticmethod
+    def _read_model(events: list[Mapping[str, Any]]) -> dict[str, Any]:
+        """Dashboard facts the fold does not keep (R1b): when the run finished (the
+        terminal transition's time) and its token usage, by the audit's one rule
+        (``audit.token_totals``). Absent when never recorded."""
+        from core.run_protocol.audit import token_totals
+        out: dict[str, Any] = {}
+        for event in events:
+            if event.get("kind") == "transition" \
+                    and (event.get("payload") or {}).get("to") in lifecycle.TERMINAL:
+                out["finished_at"] = event.get("at")
+        tokens_in, tokens_out = token_totals(events)
+        if isinstance(tokens_in, (int, float)) and isinstance(tokens_out, (int, float)):
+            out["usage"] = {"input_tokens": int(tokens_in), "output_tokens": int(tokens_out)}
+        return out
+
     def write_projection(self) -> Path:
-        state = self.projection()
+        events = self.store.read_events()          # read and verified once
+        state = lifecycle.fold(events, self.authority)
         value = {key: val for key, val in state.items()
                  if key not in {"expected_transition", "open_attempt", "auth_grants"}}
+        value.update(self._read_model(events))
         value.update({"id": self.run_id, "project": self.project,
                       "session_id": self.owner_session(),
                       "worktree_mode": self.contract["mode"],

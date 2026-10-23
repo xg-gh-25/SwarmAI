@@ -576,3 +576,19 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - **仍作为残余交 XG，放到 NE-0 之后：**
   3. **MED，每次 commit 都要读所有历史 run 的 contract，可能超时放行；contract 损坏时直接跳过：** 正解是一个受保护的活跃 run 索引。
   4. **MED，`_source_repo_root` 的 contract 回退：** 根治要在安装或启动配置里写明源码仓库路径。
+
+## 24. R1b：v1 读模型和 router（退役 R1 的后半）
+
+**改了什么：**
+- 新建 `core/pipeline_metrics.py`。dashboard 显示的每个值只来自 projection；projection 里没有的值就是 None，不估算。
+- `RunEngine.write_projection` 新增 `finished_at`（终止 transition 事件的时间）和 `usage`。`usage` 由 `audit.token_totals` 计算，和审计用同一条规则：有 CLI 的 transcript 测量就取最新那次，否则把各 expert 的记录相加。event 链只读取和校验一次。
+- `routers/pipelines.py` 重写为只列出有 v1 contract 的 run。不再导入 artifact_cli；旧 pipeline 的 stale/crash-residue/checkpoint 推断、METRICS.json 缓存和 410 都删了，旧 run 一律 404。
+- 删掉旧的 `test_pipelines_router.py`，以及 `scripts/reconcile_mislabeled_runs.py` 和它的测试。后者原定在 R4 删，但它依赖已删除的 `_STALE_FAILURE_REASON`，所以提前到这里。
+
+**审查（f6f4f63a，1 HIGH + 3 MED + 2 LOW），一次修完：**
+- **HIGH，run.json 的 `id` 决定显示和操作对象：** agent 把 A 的 `id` 改成 B，列表就会把 A 显示成 B，按钮也会去操作 B。现在 run 的身份取自它的目录，`id` 和 `project` 被覆盖；pending decision 改从签名事件读取。
+- **MED，一个格式错的 run.json 会拖垮整个列表；未知 status 被显示成 running：** 现在先把每条 projection 规整为字符串字段；未知 status 显示为 failed。
+- **MED，没测量的 token 当成 0，合计变成部分和：** 把 token 字段改为 Optional，只要有一部分没测量，合计就是 None。前端原本就把 0 和缺失都显示成 `—`。`tokens_est` 在 v1 中不存在，改为 None；R5 会把它从 schema 删掉。
+- **MED，token 取最后一条 metric：** 改用 `audit.token_totals`。
+- **LOW，write_projection 读两次 event 链：** 改为只读一次。
+- **LOW，router 自带 run_id 正则：** 改用 `identifiers.validate_run_id`。

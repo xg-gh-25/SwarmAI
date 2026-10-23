@@ -40,6 +40,8 @@ def client(tmp_path, monkeypatch):
 
     run_index._clear_for_tests()
     monkeypatch.setattr(pipelines, "_get_swarmws", lambda: tmp_path)
+    # these runs are bare projections: treat each as having a v1 contract
+    monkeypatch.setattr(pipelines.pm, "is_v1", lambda run_id: True)
     yield TestClient(app), tmp_path
     run_index._clear_for_tests()
 
