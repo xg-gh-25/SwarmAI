@@ -1,157 +1,185 @@
 ---
-title: Workspace — one working location shared with Terminal (SwarmWS or the chat's working repo)
+title: Workspace — SwarmWS always, plus the repos you worked in this month (a browsing place)
 date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: DRAFT — 待审
-related: terminal-locations.md（Terminal 的位置模型，本文复用）、left-nav-backend-and-visual-system.md（nav 原则：不影响聊天、只读现成记录）
+status: DRAFT v2 — 待审
+related: terminal-locations.md（Terminal 的位置；本文不再与它共用选择）、left-nav-backend-and-visual-system.md（nav 原则：不影响聊天、只读现成记录、30 天窗口）
 ---
 
-# Workspace：和 Terminal 共用一个"工作位置"
+# Workspace：SwarmWS 永远在，加上这个月用过的仓库
 
 ## 0. 决定与原则
 
-Gawan 2026-10-23 定：
+Gawan 2026-10-23（v2，替换 v1 的"只显示工作仓库、选择与 Terminal 共用"）：
 
-- **只显示两个位置**：默认的 SwarmWS，以及这个 chat 的工作仓库（和 Terminal 的 `repo` 是同一个）。不列 bindings 里的其他仓库。
-- **选择共用**：一个 chat tab 只有一个"当前位置"，Terminal 和 Workspace 读写的是同一个值。
+- **SwarmWS 是默认位置，永远在列表第一位。**
+- **其他位置是最近 30 天里你在 pipeline run 中改过的仓库**，当前这个 chat 的工作仓库排在最前。
+- **Workspace 是用户浏览东西的地方。** 按"用户想找什么、看什么"来设计，不按"agent 在哪里干活"。
+- **绝不影响聊天。**
+
+由此带来的一处改动：**Workspace 的选择不再和 Terminal 共用。** Terminal 的默认位置是 repo（它是动手干活的地方），Workspace 的默认位置是 SwarmWS（它是浏览的地方），两边共用就违背了"SwarmWS 是默认"。两边共用的是位置列表和"在这里开 terminal"这个操作，不共用当前选中哪一个。
 
 沿用 nav 的原则：
 
-1. **绝不影响聊天。** 文件树的取数跑在 `nav` 线程池；git 调用一律带 `GIT_OPTIONAL_LOCKS=0`，不拿 index.lock；聊天路径上不新增任何东西。
-2. **只读现成记录。** 工作仓库只有一个来源：`canvas_session.working_repo()`（读 run index，不跑 git）。
-3. **前端不能传路径进来。** 后端只认 `swarmws`，以及这个 session 的工作仓库。
+1. **不影响聊天。** 所有读取都跑在 `nav` 线程池；git 一律带 `GIT_OPTIONAL_LOCKS=0`；overlay 关着时什么都不取；聊天路径上不新增任何东西。
+2. **只读现成记录。** 仓库列表来自 `run_index.recent()`，这是 30 天窗口、已经缓存的 run 数据，不跑 git，也不扫描磁盘去找仓库。
+3. **前端不能传路径进来。** 前端只传后端列表里给出的位置 key。
 
-## 1. 现状（2026-10-23）
+## 1. 用户在这里想做什么
 
-| | Terminal | Workspace overlay |
+| 想做的事 | 现在 | 设计后 |
 |---|---|---|
-| 位置 | `swarmws` / `repo` / `custom`，存在 `stores/terminalLocation.ts`，每个 chat tab 记一份（localStorage `terminalLocationByChatTab`） | 只有 SwarmWS。根目录来自数据库里的 `workspace_config` |
-| 工作仓库 | `GET /api/canvas/session/{id}/working-repo` -> `working_repo()` | 看不到 |
-| 改动 | -- | "Working files"只列 `Knowledge/`、`Projects/` 下的 git 改动 |
+| 翻 SwarmWS 里的知识、笔记、日报 | 能 | 不变，打开就是它 |
+| 看正在改的仓库里有什么文件 | 看不到 | 点一下仓库位置 |
+| 看那个仓库现在有哪些没提交的改动 | 看不到 | 顶部的 Working files |
+| 回头看上周在另一个仓库干了什么 | 看不到 | Recent 里有，带"10 天前" |
+| 找一个文件 | SwarmWS 里有搜索框 | 每个位置都有，搜索的是已经加载出来的树 |
+| 打开到 Canvas 看 | 能 | 每个位置都能 |
+| 附加到 chat、复制路径 | 能 | 每个位置都能 |
+| 在这个目录开 terminal | 能（右键） | 每个位置都能 |
+| 改、删、重命名 | SwarmWS 能 | 只限 SwarmWS；仓库只读，改动走 pipeline run |
 
-问题：
+## 2. 现状（2026-10-23 实测）
 
-- **P1 两边说的不是同一件事。** Terminal 在 swarmai 仓库里，Workspace 打开却是 SwarmWS。正在改的仓库里有哪些文件、哪些改了，在 Workspace 里看不到。
-- **P2 文件树在后台一直刷新。** `ExplorerProvider` 挂在 `ThreeColumnLayout` 根部，app 一启动就取整棵 SwarmWS 树，然后每 30 秒轮询一次，每次都要做 `git status` 加文件系统扫描。Workspace overlay 关着也照样轮询。今天 16:05 起日志里每 30 秒一条 500，就是这个轮询在报错。
-- **P3 加载失败时提示不够。** 现在只有一行 "Failed to load file tree" 加一个文字链接 Retry，没用统一的 `OverlayState`；而且看不出到底是哪个位置没加载出来。
-- **P4 今天的 500**（`3d349113` 漏了 import，已由 `5b5c2b17` 修复）：以前的测试从来没有真正调用过文件树接口。
+- Workspace 只显示 SwarmWS，根目录来自数据库里的 `workspace_config`。
+- 最近 30 天的 run.json 一共只涉及 3 个 main checkout：
+  - `swarmai`：149 个 run，0.7 天前；
+  - `agentcore-data-agent-handson`：10 个 run，10.7 天前；
+  - SwarmWS 自己：7 个 run，在列表里会和默认位置合并。
 
-## 2. 模型
+  所以列表会很短。
+- **文件树在后台一直刷新**：`ExplorerProvider` 挂在 `ThreeColumnLayout` 根部，app 一启动就取整棵 SwarmWS 树，之后每 30 秒做一次 `git status` 加文件系统扫描，overlay 关着也照样跑。今天 16:05 起日志里每 30 秒一条 500，就是这个轮询在报错。
+- **加载失败的提示**只有一行文字加一个 Retry 链接，没有用统一的 `OverlayState`。
 
-**位置**：`swarmws` 或 `repo`，另外 Terminal 还有 `custom`。
+## 3. 界面
 
-- **共用的选择**：沿用 `terminalLocation` 这个 store，不新建。Workspace 读它的 `snapshot()`，切换时调 `choose()`。这个 store 从 Terminal 专用升格为"chat tab 的工作位置"，模块路径和导出名不变，只更新注释和设计文档。
-- **Workspace 里显示的位置**：
-  - 当前位置是 `swarmws` 或 `repo`：照原样显示。
-  - 当前位置是 `custom`（Terminal 里选的文件夹）：Workspace 显示 SwarmWS，选择本身不改。原因是 custom 文件夹不在后端白名单里，Workspace 不开放任意路径。
-- **工作仓库**：沿用 `working_repo()`。chat 没有工作仓库时，Workspace 只显示 SwarmWS，切换器里不出现 repo 这一项。
-- 在 Workspace 里切换位置会改 Terminal 的选择，反过来也一样。这正是"选择共用"的意思。
+### 3.1 位置条
 
-## 3. 后端
+Workspace overlay 的顶部放一排位置条，替换现在的 "SWARMWS" 标题。宽度档位 `m` 不变。
 
-### 3.1 一个解析函数决定根目录
+```
+[ SwarmWS ]  [ swarmai · this chat ]  [ agentcore-data-agent-handson · 10d ]   ⋯
+```
 
-`routers/workspace_api.py` 新增 `_resolve_root(root: str, session_id: str | None) -> Path`：
+- **第一个永远是 SwarmWS**，打开 Workspace 默认就在这里。
+- **当前 chat 有工作仓库时**，它排第二，标 "this chat"。
+- **然后是 Recent**：最近 30 天里在 run 中改过的其他仓库，按最近一次 run 的时间倒序排，每个标"N 天前"。鼠标悬停显示完整路径、run 数和所属项目。
+- **最多显示 4 个，其余收进 `⋯`** 下拉。今天实际只有 3 个，`⋯` 不会出现。
+- **样式**用视觉规范里的 `Segmented`（`components/overlay`）：选中的位置是浅主色底加主色字，没有新样式。
+- **记住上次看的位置**：只在 app 这次运行期间记住，关掉 overlay 再打开还在原处。app 重启后回到 SwarmWS，因为 SwarmWS 是默认位置。不按 chat tab 分开记，Workspace 是浏览的地方，不跟着某个 chat 走。
 
-- `root="swarmws"`（默认）：沿用现在的 `_get_workspace_path()`。
-- `root="repo"`：调用 `working_repo(session_id, swarmws)`。拿到路径后，再确认它是真实目录，并且 `.git` 也是目录（main checkout）。条件不满足就返回 404 `no_working_repo`。
-- 其他取值返回 422。请求里任何形式的路径参数都不能改变根目录。
+### 3.2 每个位置的内容
 
-`working_repo()` 本身已经保证不会是 run worktree，也不会取到更旧的 run。这里只是在请求时再核对一遍，因为 run.json 可能在两次请求之间变了。
+| | SwarmWS | 仓库 |
+|---|---|---|
+| Working files | `Knowledge/`、`Projects/` 下的改动（不变） | 整个仓库的 `git status` 改动 |
+| 树 | Knowledge、Projects 分区，系统文件夹保护（不变） | 普通目录树：首屏深度 2，子目录懒加载；跳过 `.git`、`node_modules`、`.venv`、`dist`、`build`、`__pycache__` 和 gitignore 掉的顶层目录 |
+| 搜索框 | 有（不变） | 有，只搜已经加载出来的树，不去后端扫描 |
+| 右键菜单 | 不变 | 打开到 Canvas、附加到 chat、复制路径、在这里开 terminal。没有新建、重命名、删除 |
+| 拖动 | 不变 | 只能拖进 chat 作为附件，不能在树里移动 |
 
-### 3.2 接口：在现有接口上加参数，不新开接口
+### 3.3 在这里开 terminal
+
+在任何位置右键 "Open terminal here"，或者点仓库位置旁边的 terminal 图标：
+
+- 打开 Terminal 面板，切到这个目录。
+- 对 Terminal 来说，这是一个 custom 位置；如果这个目录正好就是这个 chat 的工作仓库，就是 repo 位置。
+- 只改 Terminal 的位置，不改 Workspace 的位置。
+
+### 3.4 加载、空状态、错误
+
+- **首次加载失败**：用 `OverlayState` 的 error 显示，带 Retry，并说明是哪个位置，例如 "Couldn't load swarmai"。SwarmWS 那个标签照样能点。
+- **仓库已经不在了**（被删除或移动）：这个位置不会出现在列表里，因为列表本身只收真实存在的 main checkout。如果它在这次打开期间消失，显示一行提示 "swarmai is no longer on disk"，然后回到 SwarmWS。
+- **轮询失败但已经有数据**：保留现在的树，只在位置条右边显示一个小的错误标记。
+
+## 4. 后端
+
+### 4.1 位置列表：`GET /api/workspace/locations?session_id=`
+
+返回：
+
+```json
+{"locations": [
+  {"key": "swarmws", "label": "SwarmWS", "kind": "default"},
+  {"key": "r_<12 hex>", "label": "swarmai", "kind": "this_chat",
+   "path": "/Users/…/swarmai", "lastActive": "2026-10-22T…", "runs": 149, "projects": ["SwarmAI"]},
+  {"key": "r_<12 hex>", "label": "agentcore-data-agent-handson", "kind": "recent", …}
+]}
+```
+
+- **来源**：`run_index.recent()`，也就是最近 30 天、已经缓存的 run。每个 run 取它点名的仓库（`worktrees[].main`，以及 commits 里的 repo）。
+- **过滤**：只收 main checkout，即真实存在的目录、`.git` 也是目录，判断只用 stat。去掉 SwarmWS 自己。
+- **合并排序**：按 realpath 合并，记下最近一次 run 的时间、run 数和所属项目。
+- **当前 chat 的工作仓库**：用 `working_repo(session_id)`。它在列表里就标成 `this_chat` 并排到最前；它不在 30 天窗口里也照样列出来，因为它就是这个 chat 现在用的仓库。
+- **key**：`r_` 加 realpath 的 sha1 前 12 位。这是一个稳定、不透明的 id，前端只能拿它回传，不能自己拼路径。
+- **运行位置**：跑在 `nav` 池。这里没有新的缓存，读的就是 run index 那份现成的缓存。
+
+### 4.2 根目录解析：`_resolve_root(key, session_id)`
+
+- `swarmws`（默认）：沿用 `_get_workspace_path()`。
+- `r_…`：在 4.1 那份列表里查，查不到就返回 404 `unknown_location`。查到后在请求时再核对一次是不是 main checkout。
+
+前端传什么路径都不会改变根目录。
+
+### 4.3 现有接口加 `location` 参数
 
 | 接口 | 改动 |
 |---|---|
-| `GET /workspace/tree` | 加 `root`、`session_id`；ETag 缓存的 key 带上解析后的根目录 |
-| `GET /workspace/tree/expand` | 同上；`path` 解析后必须仍在根目录之内（现有的 `_is_path_under`） |
-| `GET /workspace/file`（打开到 Canvas） | 加 `root=repo` 时，`path` 按仓库根目录解析，并做同样的包含检查。只读 |
-| 写接口（PUT/POST/DELETE、trash、rename、folders） | **不加 `root`**。仓库里的改动走 pipeline run，不在文件树里改 |
+| `GET /workspace/tree` | 加 `location`、`session_id`。ETag 缓存的 key 带上根目录；仓库模式下用 4.2 的过滤规则 |
+| `GET /workspace/tree/expand` | 同上；`path` 解析后必须仍在根目录之内（`_is_path_under`） |
+| `GET /workspace/file`（打开到 Canvas） | `location=r_…` 时，`path` 按仓库根目录解析，并做同样的包含检查。只读 |
+| 写接口 | 不接受 `location`，带了就返回 422 |
 
-仓库模式下的树：
+所有这些都跑在 `nav` 池，git 都带 `GIT_OPTIONAL_LOCKS=0`，由现有的静态检查 `test_nav_pool_and_git_locks.py` 守住。
 
-- **跳过的目录**：`.git`、`node_modules`、`.venv`、`dist`、`build`、`__pycache__`，以及 `git status --ignored` 报告为忽略的顶层目录。
-- **深度**：首屏深度 2，子目录一律懒加载。
-- **Working files**：对仓库根目录跑现有的 `_get_git_status()`（已经带 `GIT_OPTIONAL_LOCKS=0`），列出所有改动的文件，不再只限 `Knowledge/`、`Projects/`。这和 Canvas Changes 是两件事：Changes 看的是 run worktree 里的改动和 run 合入的提交；这里看的是 main checkout 当前的工作区。
+## 5. 前端取数
 
-全部跑在 `nav` 池，git 调用都带 `GIT_OPTIONAL_LOCKS=0`，由 `test_nav_pool_and_git_locks.py` 的静态检查守住。
+- **改用 `overlayQueries`**，三条 key：
+  - `['overlay','swarmws','locations',sessionId]`
+  - `['overlay','swarmws','tree',locationKey]`
+  - `['overlay','swarmws','expand',locationKey,path]`
+- **只在 overlay 打开时取**：`ExplorerProvider` 的首屏请求和 30 秒轮询，都只在 overlay 打开、而且窗口可见时进行，只针对当前选中的那个位置。关掉 overlay 就停。`ThreeColumnLayout` 的 `RefreshTreeBridge` 换成 `invalidateOverlay(qc, 'swarmws')`。
+- **预取**：鼠标悬停 nav 时，预取位置列表和上次看的那个位置的树。
+- **切换位置**：先显示缓存，30 秒内切回来不重新请求。
 
-### 3.3 不变的
-
-SwarmWS 模式下的行为一律不变：Knowledge、Projects 分区，系统文件夹保护，写操作，ETag。
-
-## 4. 前端
-
-### 4.1 头部：位置切换器
-
-Workspace overlay 的工具栏左边放一个分段切换器：`SwarmWS | <repo 名>`，样式和 Terminal 头部的切换器一致，用的是视觉规范里的 `Segmented`（`components/overlay`）。
-
-- chat 没有工作仓库时，切换器不显示，界面和现在一样。
-- 现有的工具栏按钮（排序、折叠、展开、新建文件夹、刷新）在仓库模式下只保留折叠、展开和刷新。
-
-### 4.2 取数：只在 overlay 打开时取
-
-`ExplorerProvider` 改为只给 Workspace overlay（以及确实读它的 LibraryTree）提供数据：
-
-- **首屏**：overlay 打开时，按 `(位置, session)` 取一次。
-- **轮询**：只在 overlay 打开、而且窗口可见时才轮询 30 秒一次。关掉 overlay 就停。
-- `ThreeColumnLayout` 里的 `RefreshTreeBridge` 换成 `invalidateOverlay(qc, 'swarmws')`，和其他 overlay 的刷新方式一样（`overlayQueries`）。
-- **缓存**：取数改走 `overlayQueries`，key 是 `['overlay','swarmws',位置key,sessionId]`。30 秒内重新打开直接显示缓存；鼠标悬停 nav 时预取当前位置。
-
-这一条解决 P2：overlay 关着的时候，不再每 30 秒做一次 `git status` 加文件系统扫描。
-
-### 4.3 加载、空状态、错误
-
-- **首次加载失败**：用 `OverlayState` 的 error 显示，带 Retry，文案写明是哪个位置，例如 "Couldn't load swarmai"。
-- **仓库已经不存在**（404 `no_working_repo`）：显示一行提示 "This chat has no working repo now"，然后自动切回 SwarmWS 显示，但不改共用的选择。
-- **轮询失败但已经有数据**：保留现在的树，只在工具栏显示一个小的错误标记。不清空树，也不弹窗。
-
-### 4.4 仓库模式下的操作
-
-| 操作 | 仓库模式 |
-|---|---|
-| 浏览、展开 | 有 |
-| 双击打开到 Canvas | 有（走 3.2 的 `root=repo` 读取） |
-| 附加到 chat | 有（绝对路径） |
-| 在这里开 terminal | 有，并把共用的位置切到 `repo` |
-| 新建、重命名、删除、拖动 | 没有：右键菜单里不出现，拖动不生效 |
-
-## 5. 验收测试（先写，先红）
+## 6. 验收测试（先写，先红）
 
 | # | 测试 | 证明什么 |
 |---|---|---|
-| T1 | 真实路由、临时目录：`root=swarmws` 的 tree 和 expand 返回 200，并包含磁盘上的目录（沿用 `test_workspace_tree_loads.py`） | 不会再有今天那种 500 |
-| T2 | 用真实 run.json 让一个 session 拥有一个指向临时 git 仓库的 run：`root=repo&session_id=` 返回这个仓库的树；Working files 等于这个仓库的 `git status`；`.git`、`node_modules` 不出现 | 仓库根目录只从 run 推出来 |
-| T3 | session 没有 run，或者 run 指向的是 linked worktree：`root=repo` 返回 404 `no_working_repo` | 不猜 |
-| T4 | `root=repo` 时 `path=../../etc`、绝对路径、软链接逃逸，全部被拒；写接口传 `root` 返回 422 | 前端不能传路径进来；仓库只读 |
-| T5 | 静态检查：文件树相关接口不用默认线程池；git 调用都带 `GIT_OPTIONAL_LOCKS=0`（扩展现有测试） | 不影响聊天 |
-| T6 | 前端：Terminal 切到 repo 后，打开 Workspace 就是 repo；Workspace 切回 SwarmWS 后，Terminal 也是 SwarmWS；当前位置是 custom 时，Workspace 显示 SwarmWS，选择不变 | 选择共用 |
-| T7 | 前端：overlay 关着时没有任何 `/workspace/tree` 请求；打开后才请求；关掉后轮询停止 | 不在后台刷新 |
-| T8 | 前端：首次加载失败显示 `OverlayState` error 加 Retry；404 `no_working_repo` 回落到 SwarmWS；轮询失败不清空树 | 加载失败有提示 |
-| T9 | 现有的 `navOverlayContract`、Workspace explorer、Terminal 位置相关测试原样通过 | 结构没被碰 |
+| T1 | 真实路由：`location=swarmws` 的 tree 和 expand 返回 200（沿用 `test_workspace_tree_loads.py`） | 不会再有今天那种 500 |
+| T2 | 用真实 run.json 准备三类仓库：近期 run 指向的仓库、31 天前 run 指向的仓库、指向 linked worktree 的 run。`/workspace/locations` 只列第一类；SwarmWS 永远在第一位且只出现一次；按最近活动倒序；当前 chat 的工作仓库排在最前并标 `this_chat` | 列表只来自 run，30 天，不猜 |
+| T3 | `location=r_…` 返回那个仓库的树；Working files 等于那个仓库的 `git status`；`.git`、`node_modules` 不出现 | 仓库浏览 |
+| T4 | 不认识的 key 返回 404；`path=../..`、绝对路径、软链接逃逸都被拒；写接口带 `location` 返回 422 | 不能读白名单之外、仓库只读 |
+| T5 | 位置列表接口在打桩下没有任何子进程，并且只读 run index | 不跑 git、不扫描磁盘 |
+| T6 | 静态检查：这些接口都不用默认线程池，git 都带 `GIT_OPTIONAL_LOCKS=0` | 不影响聊天 |
+| T7 | 前端：打开 Workspace 默认在 SwarmWS；切到仓库，关掉再打开仍在仓库；app 重启后（清掉 store）回到 SwarmWS；切换 Workspace 的位置不改 Terminal 的位置 | SwarmWS 默认，选择不共用 |
+| T8 | 前端：overlay 关着时没有 `/workspace/*` 请求；打开后才取；关掉后轮询停止 | 不在后台刷新 |
+| T9 | 前端：首次加载失败显示 `OverlayState` error 加 Retry；仓库消失时回到 SwarmWS；轮询失败不清空树 | 加载失败有提示 |
+| T10 | `navOverlayContract`、workspace explorer、Terminal 位置相关测试原样通过 | 结构没被碰 |
 
-每个修复都做反向验证。另外跑聊天相关的回归：`test_transcript_real_path.py`、liveReload 属性测试。
+每个修复都做反向验证。聊天回归另跑：`test_transcript_real_path.py` 和 liveReload 属性测试。
 
-## 6. 实施顺序
+## 7. 实施顺序
 
 | 阶段 | 内容 |
 |---|---|
-| W1 | 后端：`_resolve_root`，tree / expand / file 加 `root`，仓库模式的过滤规则；T1–T5 |
-| W2 | 前端取数：`ExplorerProvider` 只在 overlay 打开时取数和轮询，改走 `overlayQueries`；T7 |
-| W3 | 前端：位置切换器接共用的 `terminalLocation`，仓库模式下只读，加载失败用 `OverlayState`；T6、T8 |
-| W4 | 更新 `terminal-locations.md`（这个 store 现在也是 Workspace 的位置）和 navcard 标准文档 |
+| W1 | 后端：`/workspace/locations`、`_resolve_root`，tree / expand / file 加 `location`，仓库模式的过滤规则；T1–T6 |
+| W2 | 前端取数：只在 overlay 打开时取，改用 `overlayQueries`；T8 |
+| W3 | 前端界面：位置条、仓库只读、"在这里开 terminal"、加载失败用 `OverlayState`；T7、T9 |
+| W4 | 更新 `terminal-locations.md`（只在"在这里开 terminal"上和 Workspace 交互）和 navcard 标准文档 |
 
-每个阶段在自己的 worktree 里做，ff-only 合进本地 main，不 push。W1 要重启 daemon 才生效。按今天的教训，重启前要提醒你：你正在用的长 session，重启后下一条消息的首字会慢几分钟。
+每个阶段在自己的 worktree 里做，ff-only 合进本地 main，不 push。W1 要重启 daemon 才生效，重启前会先提醒你：你正在用的长 session，重启后下一条消息的首字会慢几分钟。
 
-## 7. 不做的
+## 8. 不做的
 
-- bindings 里其他仓库的下拉（Gawan 定：只显示工作仓库）。
-- Workspace 打开 Terminal 的 custom 文件夹（不开放任意路径）。
+- bindings 里那些 30 天内没有 run 的仓库。
+- Terminal 选过的 custom 文件夹（它们是任意路径，不进白名单）。
 - 在仓库里改文件。
-- 把 Terminal 的 custom 文件夹也做成共用：custom 仍然只在 Terminal 里有。
+- 后端全文搜索仓库。
 
-## 8. 待定
+## 9. 待定
 
-- 仓库模式下首屏深度用 2 还是 1。swarmai 仓库顶层有 20 个左右目录，深度 2 的响应大小要在 W1 实测后再定。
+- 仓库首屏深度用 2 还是 1，W1 实测 swarmai 的响应大小后再定。
+- 位置条超过 4 个时，用 `⋯` 下拉还是横向滚动。今天只有 3 个，暂按下拉写。
