@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: draft for XG review
+status: agreed with XG 2026-10-23; implementing in order (§6)
 ---
 
 # Canvas file types
@@ -68,6 +68,42 @@ Fix — three layers, each enough on its own to stop the corruption:
   pages/numbers/key → "Apple iWork"; parquet/npy/pkl/safetensors/onnx/h5 → "data /
   model file"). Correctness does not depend on the list: an unlisted binary is
   caught by B2/B3.
+
+## 2b. P0 — Copy path: hidden and silent (XG 2026-10-23: "经常被用到")
+
+Since Super Canvas commit 3 the ONLY copy-path in the Canvas is the hover button on
+a list row:
+
+- **Hidden**: `opacity-0 group-hover:opacity-100`, between the folder and the time;
+  nothing shows that it exists until the pointer is on that exact row. With the list
+  folded there is none at all; the Changes list never had one.
+- **Silent**: the row's `handleCopy` ignores `copyToClipboard`'s result — no "copied"
+  mark on success, nothing on failure. A copy that worked looks like a dead click; a
+  copy that failed (all three strategies in `utils/clipboard.ts`) is invisible.
+- **Maybe not absolute**: the row copies `file.absolutePath || file.path`; a row
+  without `absolutePath` copies its display path (repo- or workspace-relative).
+- **Five copies of one button**: rail row, Browsing row, FileEditorCore header,
+  FileViewerStatusBar, UnsupportedRenderer each build their own copy button with
+  their own (or no) feedback.
+
+Fix — one component, placed where the path is needed:
+
+- `CopyPathButton({ path, resolve? })` (components/common): copies through
+  `copyToClipboard`; success swaps the icon to a check for 1.5 s and sets
+  `aria-live` "Copied"; failure raises the existing `swarm:toast`
+  ("Could not copy — <path>", warning) so the path is still readable. If the path
+  is not absolute it is resolved first with the same `/workspace/file/resolve` the
+  open path uses; nothing is copied until it is absolute. Every copy-path in the
+  viewer uses it (the five above).
+- Placement (frequent action → always visible):
+  - the editor's floating group gets Copy path (it was removed in commit 3);
+  - the status bar of non-editor renderers gets it back in the panel;
+  - list rows: always visible on the SELECTED row, hover on the others;
+  - Changes file rows get the same button (the worktree file's absolute path).
+- Tests: success → check icon then back; failure → toast with the path; a relative
+  path is resolved before copying; row click on the button does not open the row;
+  one implementation (no `copyToClipboard` call left in the viewer outside it —
+  a source-scan guard).
 
 ## 3. P1 — Office preview (docx / xlsx / pptx)
 
@@ -142,7 +178,7 @@ preview the same way.
 
 ## 6. Order, one commit each, tests first (each mutation-checked)
 
-1. **P0** B1–B3 + labels. Tests: PUT on a binary → 409, file bytes unchanged; PUT on
+1. **P0** B1–B3 + labels; then **2b Copy path** (its own commit). Tests: PUT on a binary → 409, file bytes unchanged; PUT on
    text/new file → writes; `text_only` on binary → 415 after ≤ 8 KB read; FileViewer
    on 415 → info card, no textarea; is_text_file on UTF-8 split at the 8 KB edge →
    text.
@@ -154,8 +190,8 @@ preview the same way.
    formula without cached value), pptx, docx fixtures; caps; zip-bomb fixture →
    refused; timeout path; docx iframe has `sandbox=""`.
 
-## 7. Decisions for XG
+## 7. Decisions (XG 2026-10-23: all three agreed)
 
-1. Add `mammoth` (BSD-2, pure Python) for docx — or skip docx preview?
-2. xlsx caps: 500 rows × 50 columns × 20 sheets — OK?
-3. ipynb `text/html` outputs not rendered (security) — OK?
+1. Add `mammoth==1.13.0` for docx — yes.
+2. xlsx caps 500 rows × 50 columns × 20 sheets — yes.
+3. ipynb `text/html` outputs not rendered — yes.
