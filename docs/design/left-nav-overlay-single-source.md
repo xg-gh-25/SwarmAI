@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: DESIGN v1 — XG 2026-10-23 通过（D1–D5 按倾向）；P0 已落地，P1 起实施
+status: DONE — P0–P4 已落地（2026-10-23），契约测试 KNOWN 为空；未做的见 §11、§12（OverlayState、首包检查接入构建、真机计时）
 related: ~/.swarm-ai/SwarmWS/Knowledge/Designs/2026-08-02-navcard-overlay-uxui-standard.md（现行标准，部分已过时，见 §7）, 2026-08-04-overlayhost-subsystem-design.md（OverlayHost，已落地）, chat-transcript-single-source.md（同一套方法：先列问题、归根因、先写测试）
 ---
 
@@ -295,3 +295,11 @@ axios 实例，不是测试里的 mock，请求从未被记录。契约测试现
 - 补了一条测试：内容代码还在加载时关闭 overlay，退场后照常卸载。
 
 §5.5 的真机对比需要 XG 在 dev 构建里点一遍 17 项看 console 输出，本机做不了。
+
+## 13. P4 结果（2026-10-23）
+
+`~/.swarm-ai/SwarmWS/Knowledge/Designs/2026-08-02-navcard-overlay-uxui-standard.md` 已按现状重写
+§1 区颜色、§2 nav（结构、`navTable`、加卡片的规则：表一行 + `activateNav` + `data-nav-id` +
+`overlayQueries`/`NAV_PREFETCH` + `overlayChunks` + 契约测试 + 两份顺序测试）、§3 OverlayHost、新增
+§3b 取数和代码分块、§5 坑表、§6 测试、§7 一句话总结；§4 内容布局未动。旧标准里的 Modal fullscreen、
+`chatAreaBounds`、`navSource`、`showOverlay` 已删。
