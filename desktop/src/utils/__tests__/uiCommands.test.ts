@@ -56,6 +56,12 @@ describe('UI_COMMAND_TABLE', () => {
     }
   });
 
+  it('the Canvas layout commands are explicit, window-target, never show-*', () => {
+    expect(UI_COMMAND_TABLE['fold-canvas']).toEqual({ event: 'swarm:canvas-fold', target: 'window' });
+    expect(UI_COMMAND_TABLE['canvas-tab-artifacts']).toEqual({ event: 'swarm:canvas-tab-artifacts', target: 'window' });
+    expect(UI_COMMAND_TABLE['canvas-tab-changes']).toEqual({ event: 'swarm:canvas-tab-changes', target: 'window' });
+  });
+
   it('keeps open-canvas + back-to-chat as explicit non-overlay commands', () => {
     // These are NOT in ALL_SHOW_EVENTS (open-canvas has no overlay; back-to-chat
     // is the close event) — they must be present regardless of the SSOT.
@@ -110,7 +116,7 @@ describe('dispatchUiCommand', () => {
     const ev = navCalls(spy)[0];
     expect(ev.type).toBe('swarm:open-canvas');
     // nothing from the wire: only the frontend-made result id (Gate-2 LOW).
-    expect(Object.keys(ev.detail)).toEqual(['cmdId']);
+    expect(Object.keys(ev.detail).sort()).toEqual(['by', 'cmdId']);
   });
 
   // ── open-canvas origin-tab stamp (run_10c51cac): forwards ONLY {tabId} ──
@@ -121,7 +127,7 @@ describe('dispatchUiCommand', () => {
     const ev = navCalls(spy)[0];
     expect(ev.type).toBe('swarm:open-canvas');
     // ONLY the origin tab + the result id — no path, nothing from the wire (crux intact).
-    expect(ev.detail).toEqual({ tabId: 'tab-A', cmdId: expect.any(String) });
+    expect(ev.detail).toEqual({ by: 'agent', tabId: 'tab-A', cmdId: expect.any(String) });
   });
 
   it('open-canvas with NO originTabId dispatches detail-less (user-click path → active-tab fallback)', () => {
@@ -143,7 +149,7 @@ describe('dispatchUiCommand', () => {
     expect(docSpy).toHaveBeenCalledTimes(1);
     const ev = docSpy.mock.calls[0][0] as CustomEvent;
     expect(ev.type).toBe('swarm:open-file');
-    expect(ev.detail).toEqual({ path: 'Knowledge/Designs/x.md', cmdId: expect.any(String) });
+    expect(ev.detail).toEqual({ path: 'Knowledge/Designs/x.md', by: 'agent', cmdId: expect.any(String) });
     // NOT dispatched on window (only its pending result report is).
     expect(navCalls(winSpy)).toHaveLength(0);
   });

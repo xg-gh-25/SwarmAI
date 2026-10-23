@@ -73,6 +73,13 @@ UI_COMMAND_ALLOWLIST: dict[str, UiCommandEntry] = {
     # canvas file filter is the single authority. document-target (all open-file
     # dispatchers listen on document, per useCanvasHost EVENT-TARGET CONTRACT).
     "open-canvas-file": {"event": "swarm:open-file", "target": "document"},
+    # Canvas layout commands (canvas-proprioception.md §4): fold to the side rail and
+    # pick the Artifacts / Changes tab. Payload-less (the tab is part of the command
+    # name, not a parameter); the frontend records each outcome for the next turn's
+    # snapshot. Named canvas-* (NOT show-*): show-* is the overlay family.
+    "fold-canvas": {"event": "swarm:canvas-fold", "target": "window"},
+    "canvas-tab-artifacts": {"event": "swarm:canvas-tab-artifacts", "target": "window"},
+    "canvas-tab-changes": {"event": "swarm:canvas-tab-changes", "target": "window"},
     "back-to-chat": {"event": "swarm:back-to-chat", "target": "window"},
     "show-swarmws": {"event": "swarm:show-swarmws", "target": "window"},
     "show-brain-hub": {"event": "swarm:show-brain-hub", "target": "window"},
@@ -138,17 +145,13 @@ def _expected_post_state(cmd: str) -> str:
 
     Assumes *cmd* is already allowlist-validated (callers gate on validate_ui_command).
     """
-    if cmd == "open-canvas-file":
+    if cmd in _CANVAS_CMDS:
         return (
-            "the 'Current UI State' section should show a 'Canvas (output panel): "
-            "… open …' line AND the 'Open file:' line should name the file you "
-            "opened (if it's absent, the path was outside the workspace or not found "
-            "→ the generic file filter dropped it)"
-        )
-    if cmd == "open-canvas":
-        return (
-            "the 'Current UI State' section should show a "
-            "'Canvas (output panel): … open …' line"
+            "the 'Current UI State' section lists it under 'Your Canvas commands since "
+            "the last message' as applied, ignored (with the reason, e.g. file not "
+            "found or unsaved edits) or pending (opening / folding during your answer "
+            "applies when the answer finishes), and the 'Canvas (output panel):' and "
+            "'File:' lines show the result"
         )
     if cmd == "back-to-chat":
         return (
@@ -187,6 +190,10 @@ def build_ui_ack(cmd: object, path: object = None) -> Optional[str]:
         f"{expected}. If it doesn't, the command did not reach the UI."
     )
 
+
+# Canvas commands whose outcome the frontend reports back in the next snapshot.
+_CANVAS_CMDS = frozenset({"open-canvas", "open-canvas-file", "fold-canvas",
+                          "canvas-tab-artifacts", "canvas-tab-changes"})
 
 # Commands that carry a `path` payload (per-cmd opt-in, mirroring the frontend's
 # "re-introduce a payload ONLY per-cmd" rule). ONLY open-canvas-file: its path is
@@ -779,12 +786,16 @@ def get_ui_mcp_server():
         (
             "Act on your OWN UI in the SwarmAI desktop app: open a panel, switch a "
             "navigation view, or open one of THIS session's workspace files in Canvas. "
-            "Use when the user asks you to show/open something in the app. cmd MUST be "
-            f"one of: {_cmd_list}. For 'open-canvas-file', also pass `path` = the "
-            "workspace-relative file path to show in Canvas (e.g. "
-            "'Knowledge/Designs/foo.md'); it is resolved by the workspace file "
-            "filter, so only files inside the workspace open. Non-destructive only — "
-            "this cannot write, delete, send, or run anything."
+            "Use ONLY when the user asks you to show/open/fold something in the app. "
+            f"cmd MUST be one of: {_cmd_list}. Canvas: 'open-canvas' opens and unfolds "
+            "it, 'fold-canvas' folds it to the side rail, 'canvas-tab-artifacts' / "
+            "'canvas-tab-changes' pick its tab, 'open-canvas-file' shows a file — pass "
+            "`path` = the workspace-relative file path (e.g. 'Knowledge/Designs/foo.md'); "
+            "only files inside the workspace open. A file with unsaved edits is never "
+            "replaced (the open is ignored). Opening or folding while you are still "
+            "answering applies when the answer finishes. Each outcome shows in the next "
+            "'Current UI State'. Non-destructive only — this cannot write, delete, "
+            "send, or run anything."
         ),
         {"cmd": str, "path": str},
     )

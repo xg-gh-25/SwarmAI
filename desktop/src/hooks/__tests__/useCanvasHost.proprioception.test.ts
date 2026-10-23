@@ -122,14 +122,13 @@ describe('T9 — command results, one writer', () => {
     ]);
   });
 
-  it('open-canvas on a folded Canvas is applied and says it stays folded', () => {
+  it('open-canvas on a folded Canvas unfolds it (run 2) and is applied', () => {
     const { result } = mount();
     act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
     act(() => result.current.setCollapse({ railed: true }));
     act(() => { dispatchUiCommand('open-canvas', undefined, 'A'); });
-    expect(result.current.getCanvasSnapshot()!.commands).toEqual([
-      { cmd: 'open-canvas', result: 'applied', reason: 'Canvas stays folded to the side rail' },
-    ]);
+    expect(result.current.getCanvasSnapshot()!.visible).toBe('open');
+    expect(result.current.getCanvasSnapshot()!.commands).toEqual([{ cmd: 'open-canvas', result: 'applied' }]);
   });
 
   it('a background tab command lands on that tab only', () => {

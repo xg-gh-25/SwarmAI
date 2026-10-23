@@ -41,6 +41,7 @@ describe('T5 — every CanvasTabState field is classified', () => {
     seen: 'outputs[].isNew',
     fileView: 'file.view / file.review',
     commands: 'commands',
+    deferred: 'commands[] as pending (applies when the answer finishes)',
   };
   it('the interface has exactly the classified fields', () => {
     const src = read('hooks/useCanvasHost.ts');

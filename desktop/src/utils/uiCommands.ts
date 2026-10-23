@@ -24,9 +24,9 @@
  * (edit ALL_SHOW_EVENTS) and this table auto-follows; there is no hand-copied
  * list to fall out of sync. The backend (Python, can't import TS) is bound to
  * the same SSOT by a test (test_ui_actions.py::test_backend_allowlist_is_bound_to_leftnav_ssot).
- * open-canvas + back-to-chat are the ONLY hand-listed entries because they are
- * NOT overlay show-events (open-canvas has no overlay; back-to-chat is the close
- * event) — everything else rides the SSOT.
+ * The Canvas commands (open-canvas, open-canvas-file, fold-canvas, canvas-tab-*)
+ * and back-to-chat are the ONLY hand-listed entries because they are NOT overlay
+ * show-events — everything else rides the SSOT.
  */
 import { ALL_SHOW_EVENTS, BACK_TO_CHAT_EVENT } from '../components/layout/useExclusiveOverlay';
 import type { UiCommandResult } from './uiContext';
@@ -34,7 +34,9 @@ import type { UiCommandResult } from './uiContext';
 /** The Canvas commands whose outcome the agent sees next turn (canvas-proprioception
  *  §5). Their result is REPORTED here as an event and RECORDED only by useCanvasHost
  *  (the one writer of a tab's `commands`). */
-export const CANVAS_RESULT_CMDS: ReadonlySet<string> = new Set(['open-canvas', 'open-canvas-file']);
+export const CANVAS_RESULT_CMDS: ReadonlySet<string> = new Set([
+  'open-canvas', 'open-canvas-file', 'fold-canvas', 'canvas-tab-artifacts', 'canvas-tab-changes',
+]);
 export const UI_COMMAND_RESULT_EVENT = 'swarm:ui-command-result';
 
 export interface UiCommandResultDetail extends UiCommandResult {
@@ -70,6 +72,11 @@ export const UI_COMMAND_TABLE: Record<string, UiCommandEntry> = {
   // filter (rejects abs/host paths + `..`). document-target per useCanvasHost's
   // EVENT-TARGET CONTRACT (all open-file dispatchers listen on document).
   'open-canvas-file': { event: 'swarm:open-file', target: 'document' },
+  // Canvas layout (canvas-proprioception §4): payload-less, the tab is part of the
+  // command name. Handled by useCanvasHost on the ORIGIN tab.
+  'fold-canvas': { event: 'swarm:canvas-fold', target: 'window' },
+  'canvas-tab-artifacts': { event: 'swarm:canvas-tab-artifacts', target: 'window' },
+  'canvas-tab-changes': { event: 'swarm:canvas-tab-changes', target: 'window' },
   'back-to-chat': { event: BACK_TO_CHAT_EVENT, target: 'window' },
   // Derived from the LeftNav SSOT — one entry per overlay, auto-synced:
   ...Object.fromEntries(
@@ -106,7 +113,7 @@ const PATH_CARRYING_CMDS = new Set(['open-canvas-file']);
 // this, an agent open-canvas from a background tab opened the ACTIVE tab's Canvas
 // (the sibling of the open-canvas-file bleed). Bare user-click dispatch (no
 // originTabId) falls back to the active tab in useCanvasHost — unchanged.
-const TAB_STAMPED_CMDS = new Set(['open-canvas']);
+const TAB_STAMPED_CMDS = new Set(['open-canvas', 'fold-canvas', 'canvas-tab-artifacts', 'canvas-tab-changes']);
 
 // originTabId (run_48a29fc2): the FRONTEND-captured origin tab of the stream that
 // emitted this ui_command (the caller passes _stampTab / capturedTabId — NEVER a
@@ -175,8 +182,12 @@ export function dispatchUiCommand(
     // originTabId (a valid non-empty string) rides as detail.tabId so the file lands
     // on the initiating tab. Omitted when absent → handleOpenFile falls back to the
     // active tab (correct for the synchronous user-click path, which never stamps).
+    // by: 'agent' (frontend-made, never wire-derived) lets the Canvas apply the
+    // agent rules (§4: never replace unsaved edits, no prompt; layout waits for
+    // the answer to finish). Other swarm:open-file senders are user clicks.
     const detail = {
       path,
+      by: 'agent' as const,
       ...(tabId ? { tabId } : {}),
       ...(tracked ? { cmdId } : {}),
     };
@@ -189,9 +200,9 @@ export function dispatchUiCommand(
     // command lands on the INITIATING tab. Omitted when absent → useCanvasHost falls
     // back to the active tab (correct for the synchronous user-click path). No path,
     // so no workspace-relative filtering applies.
-    const detail = (tabId || tracked) ? { ...(tabId ? { tabId } : {}), ...(tracked ? { cmdId } : {}) } : undefined;
+    const detail = { by: 'agent' as const, ...(tabId ? { tabId } : {}), ...(tracked ? { cmdId } : {}) };
     if (tracked) reportResult({ id: cmdId, tabId, cmd, result: 'pending' });
-    targetObj.dispatchEvent(new CustomEvent(entry.event, detail ? { detail } : undefined));
+    targetObj.dispatchEvent(new CustomEvent(entry.event, { detail }));
     return true;
   }
   // Pure-nav command: payload-less (a supplied path is ignored by design).

@@ -257,9 +257,17 @@ def test_ack_signals_match_real_sense_render():
     # show-* ack points at the "Open overlay:" line.
     assert "Open overlay:" in overlay_render
 
+    # A current client's snapshot carries the command results the Canvas acks name.
+    new_render = _render_ui_context_section({"file_path": "a.md", "file_name": "a.md", "canvas": {
+        "open": True, "visible": "open", "output_count": 0,
+        "file": {"path": "a.md", "name": "a.md"},
+        "commands": [{"cmd": "open-canvas", "result": "applied"}]}})
+
     # And prove the ack text itself only references phrases present in the render.
-    for phrase in ("Current UI State", "Canvas (output panel):"):
-        assert phrase in build_ui_ack("open-canvas")
+    for cmd in ("open-canvas", "open-canvas-file", "fold-canvas", "canvas-tab-artifacts", "canvas-tab-changes"):
+        for phrase in ("Current UI State", "Canvas (output panel):", "Your Canvas commands since the last message", "File:"):
+            assert phrase in build_ui_ack(cmd), (cmd, phrase)
+            assert phrase in new_render, phrase
     assert "Open overlay:" in build_ui_ack("show-todo")
     assert "Open overlay:" in build_ui_ack("back-to-chat")
 
@@ -327,6 +335,9 @@ def test_backend_allowlist_is_bound_to_leftnav_ssot():
     expected["open-canvas"] = {"event": "swarm:open-canvas", "target": "window"}
     expected["open-canvas-file"] = {"event": "swarm:open-file", "target": "document"}
     expected["back-to-chat"] = {"event": "swarm:back-to-chat", "target": "window"}
+    expected["fold-canvas"] = {"event": "swarm:canvas-fold", "target": "window"}
+    expected["canvas-tab-artifacts"] = {"event": "swarm:canvas-tab-artifacts", "target": "window"}
+    expected["canvas-tab-changes"] = {"event": "swarm:canvas-tab-changes", "target": "window"}
 
     assert UI_COMMAND_ALLOWLIST == expected, (
         "backend UI_COMMAND_ALLOWLIST drifted from the LeftNav SSOT "

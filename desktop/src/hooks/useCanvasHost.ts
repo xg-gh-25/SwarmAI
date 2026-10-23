@@ -29,7 +29,7 @@
  *
  * @exports useCanvasHost
  */
-import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, startTransition } from 'react';
 import api from '../services/api';
 import { useCanvasAutoSurface, type CanvasSuppression } from './useCanvasAutoSurface';
 import { useReferencedFiles, outputRows, outputKey, storedOutputRows, type GroupedReferencedFiles, type ReferencedFile } from './useReferencedFiles';
@@ -76,6 +76,9 @@ interface CanvasTabState {
   /** The agent's Canvas commands since this tab's last send (§5), newest last.
    *  QUIET: mapRef only; this hook is the one writer; takeCanvasSnapshotFor clears it. */
   commands: (UiCommandResult & { id: string })[];
+  /** An agent layout change waiting for the active tab's answer to finish (§4).
+   *  QUIET; reported as a `pending` command. A user layout change drops it. */
+  deferred: DeferredAgentChange | null;
   /** Whether the whole Canvas is collapsed to the thin vertical rail (Bug 2). Per-tab:
    *  the panel does NOT remount on tab switch (tabScopeKey, not React key), so this used
    *  to be panel-local useState + a GLOBAL localStorage key → collapsing tab A's Canvas
@@ -103,6 +106,18 @@ interface CanvasTabState {
 /** The two Canvas tabs. */
 export type CanvasTabId = 'artifacts' | 'changes';
 
+/** An agent Canvas change, computed from the tab's state at the moment it applies. */
+type AgentCompute = (cur: CanvasTabState) => {
+  next: Partial<CanvasTabState> | null;
+  result: 'applied' | 'ignored';
+  reason?: string;
+};
+interface DeferredAgentChange { cmd: string; cmdId: string; compute: AgentCompute }
+
+/** What the user sees: no Canvas, the folded side rail, or the open Canvas. */
+const visibleOf = (st: CanvasTabState): 'hidden' | 'rail' | 'open' =>
+  !(st.file || st.manuallyOpen) ? 'hidden' : st.railed ? 'rail' : 'open';
+
 const EMPTY: CanvasTabState = {
   file: null,
   pinned: false,
@@ -110,6 +125,7 @@ const EMPTY: CanvasTabState = {
   seen: new Set<string>(),
   fileView: null,
   commands: [],
+  deferred: null,
   railed: false,
   outputsCollapsed: false,
   canvasTab: 'artifacts',
@@ -256,14 +272,79 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     setSlice(mapRef.current.get(k) ?? EMPTY);
   }, [activeTabId]);
 
+  // QUIET write (canvas-proprioception §3.2 / §5): state only the agent's snapshot
+  // reads goes to mapRef and NEVER through setSlice, so it costs ChatPage no render.
+  const writeQuiet = useCallback((k: string, p: Partial<CanvasTabState>) => {
+    mapRef.current.set(k, { ...(mapRef.current.get(k) ?? EMPTY), ...p });
+  }, []);
+  // The ONE writer of a tab's `commands`: a report with a known id replaces that
+  // entry (pending → applied/ignored); otherwise it is appended; the last few kept.
+  const recordCommand = useCallback((k: string, r: UiCommandResult & { id: string }) => {
+    const list = (mapRef.current.get(k) ?? EMPTY).commands;
+    const i = list.findIndex((c) => c.id === r.id);
+    const next = i >= 0 ? list.map((c, j) => (j === i ? r : c)) : [...list, r];
+    writeQuiet(k, { commands: next.slice(-MAX_SNAPSHOT_COMMANDS) });
+  }, [writeQuiet]);
   // Write a patch to the active tab's slice: update the map AND the React mirror.
+  // A USER layout change (file / open / fold) wins over an agent change still
+  // waiting for the answer to finish (§4): that one is dropped, with the reason.
   const patch = useCallback((p: Partial<CanvasTabState>) => {
     const k = keyFor(activeTabId);
     const cur = mapRef.current.get(k) ?? EMPTY;
-    const next = { ...cur, ...p };
+    let next = { ...cur, ...p };
+    const layoutChanged = ('file' in p && p.file?.filePath !== cur.file?.filePath)
+      || ('manuallyOpen' in p && p.manuallyOpen !== cur.manuallyOpen)
+      || ('railed' in p && p.railed !== cur.railed);
+    if (cur.deferred && layoutChanged) {
+      recordCommand(k, { id: cur.deferred.cmdId, cmd: cur.deferred.cmd, result: 'ignored', reason: 'the user changed the Canvas first' });
+      next = { ...(mapRef.current.get(k) ?? EMPTY), ...p, deferred: null };
+    }
     mapRef.current.set(k, next);
     setSlice(next);
-  }, [activeTabId]);
+  }, [activeTabId, recordCommand]);
+
+  // ── Agent Canvas changes (canvas-proprioception §4) ──────────────────────────
+  // One path for every agent command: compute the change from the tab's CURRENT
+  // state, record the outcome (the one writer of `commands`), and
+  //  · while the ACTIVE tab streams, a change that moves the chat column's width
+  //    (closed ↔ open ↔ rail) waits in `deferred` until the answer finishes — the
+  //    message list reflow is never paid mid-stream (run 0: WebKit 37 ms / 300 msgs);
+  //  · otherwise it applies now, its render in a transition so streamed tokens
+  //    paint first. A background tab's change applies to its slice (no layout).
+  const isStreamingRef = useRef(isStreaming);
+  isStreamingRef.current = isStreaming;
+  const applyAgent = useCallback((landingTab: string | null | undefined, cmd: string, cmdId: string | undefined, compute: AgentCompute) => {
+    const k = keyFor(landingTab);
+    const cur = mapRef.current.get(k) ?? EMPTY;
+    const r = compute(cur);
+    const rec = (result: UiCommandResult['result'], reason?: string) => {
+      if (cmdId) recordCommand(k, { id: cmdId, cmd, result, ...(reason ? { reason } : {}) });
+    };
+    if (!r.next) { rec(r.result, r.reason); return; }
+    const next = { ...cur, ...r.next };
+    const active = keyFor(activeTabIdRef.current) === k;
+    if (active && isStreamingRef.current && visibleOf(next) !== visibleOf(cur)) {
+      if (cur.deferred) {
+        recordCommand(k, { id: cur.deferred.cmdId, cmd: cur.deferred.cmd, result: 'ignored', reason: 'replaced by a newer Canvas command' });
+      }
+      writeQuiet(k, { deferred: cmdId ? { cmd, cmdId, compute } : null });
+      rec('pending', 'applies when your answer finishes');
+      return;
+    }
+    const applied = { ...(mapRef.current.get(k) ?? EMPTY), ...r.next };
+    mapRef.current.set(k, applied);
+    if (active) startTransition(() => setSlice(applied));
+    rec(r.result, r.reason);
+  }, [recordCommand, writeQuiet]);
+  // The answer finished (or the user came back to the tab): apply what waited.
+  useEffect(() => {
+    if (isStreaming) return;
+    const k = keyFor(activeTabId);
+    const d = (mapRef.current.get(k) ?? EMPTY).deferred;
+    if (!d) return;
+    writeQuiet(k, { deferred: null });
+    applyAgent(activeTabId, d.cmd, d.cmdId, d.compute);
+  }, [isStreaming, activeTabId, applyAgent, writeQuiet]);
 
   const setCollapse = useCallback((p: Partial<CanvasCollapse>) => patch(p), [patch]);
   const setCanvasTab = useCallback((t: CanvasTabId) => patch({ canvasTab: t }), [patch]);
@@ -298,19 +379,6 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     const file = dirty && cur.file?.auto ? { ...cur.file, auto: undefined } : cur.file;
     patch({ fileDirty: dirty, file });
   }, [patch, activeTabId]);
-  // QUIET write (canvas-proprioception §3.2 / §5): state only the agent's snapshot
-  // reads goes to mapRef and NEVER through setSlice, so it costs ChatPage no render.
-  const writeQuiet = useCallback((k: string, p: Partial<CanvasTabState>) => {
-    mapRef.current.set(k, { ...(mapRef.current.get(k) ?? EMPTY), ...p });
-  }, []);
-  // The ONE writer of a tab's `commands`: a report with a known id replaces that
-  // entry (pending → applied/ignored); otherwise it is appended; the last few kept.
-  const recordCommand = useCallback((k: string, r: UiCommandResult & { id: string }) => {
-    const list = (mapRef.current.get(k) ?? EMPTY).commands;
-    const i = list.findIndex((c) => c.id === r.id);
-    const next = i >= 0 ? list.map((c, j) => (j === i ? r : c)) : [...list, r];
-    writeQuiet(k, { commands: next.slice(-MAX_SNAPSHOT_COMMANDS) });
-  }, [writeQuiet]);
   const setFileView = useCallback((v: CanvasFileViewReport | null) => {
     const k = keyFor(activeTabIdRef.current);
     const cur = (mapRef.current.get(k) ?? EMPTY).fileView;
@@ -444,20 +512,62 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // only mirrors into React state when that origin tab is still active.
   useEffect(() => {
     const onOpenCanvas = (e: Event) => {
-      const { tabId: stampedTab, cmdId } = (e as CustomEvent<{ tabId?: string; cmdId?: string }>).detail ?? {};
+      const { tabId: stampedTab, cmdId, by } = (e as CustomEvent<{ tabId?: string; cmdId?: string; by?: string }>).detail ?? {};
       const landingTab = stampedTab ?? activeTabIdRef.current;
+      if (by === 'agent') {
+        // The agent "open Canvas" = what the user means by it: shown and unfolded.
+        applyAgent(landingTab, 'open-canvas', cmdId, (cur) => ({
+          next: { manuallyOpen: true, railed: false },
+          result: 'applied',
+          ...(visibleOf(cur) === 'open' ? { reason: 'already open' } : {}),
+        }));
+        return;
+      }
       const k = keyFor(landingTab);
       const cur = mapRef.current.get(k) ?? EMPTY;
       const next = { ...cur, manuallyOpen: true };
       mapRef.current.set(k, next);
       if (activeTabIdRef.current === landingTab) setSlice(next);
-      if (cmdId) {
-        recordCommand(k, { id: cmdId, cmd: 'open-canvas', result: 'applied', ...(cur.railed ? { reason: 'Canvas stays folded to the side rail' } : {}) });
-      }
     };
     window.addEventListener('swarm:open-canvas', onOpenCanvas);
     return () => window.removeEventListener('swarm:open-canvas', onOpenCanvas);
-  }, [recordCommand]);
+  }, [applyAgent]);
+
+  // ── Agent-only Canvas layout commands (§4) — no user sender ─────────────────
+  useEffect(() => {
+    const detailOf = (e: Event) => (e as CustomEvent<{ tabId?: string; cmdId?: string }>).detail ?? {};
+    const onFold = (e: Event) => {
+      const { tabId, cmdId } = detailOf(e);
+      applyAgent(tabId ?? activeTabIdRef.current, 'fold-canvas', cmdId, (cur) => {
+        const v = visibleOf(cur);
+        if (v === 'hidden') return { next: null, result: 'ignored', reason: 'Canvas is closed' };
+        if (v === 'rail') return { next: null, result: 'applied', reason: 'already folded' };
+        return { next: { railed: true }, result: 'applied' };
+      });
+    };
+    const onTab = (tab: CanvasTabId, cmd: string) => (e: Event) => {
+      const { tabId, cmdId } = detailOf(e);
+      applyAgent(tabId ?? activeTabIdRef.current, cmd, cmdId, (cur) => {
+        const v = visibleOf(cur);
+        return {
+          next: { canvasTab: tab },
+          result: 'applied',
+          ...(v === 'hidden' ? { reason: 'Canvas is closed; the tab shows when it opens' }
+            : v === 'rail' ? { reason: 'Canvas is folded; the tab shows when it unfolds' } : {}),
+        };
+      });
+    };
+    const onArtifacts = onTab('artifacts', 'canvas-tab-artifacts');
+    const onChanges = onTab('changes', 'canvas-tab-changes');
+    window.addEventListener('swarm:canvas-fold', onFold);
+    window.addEventListener('swarm:canvas-tab-artifacts', onArtifacts);
+    window.addEventListener('swarm:canvas-tab-changes', onChanges);
+    return () => {
+      window.removeEventListener('swarm:canvas-fold', onFold);
+      window.removeEventListener('swarm:canvas-tab-artifacts', onArtifacts);
+      window.removeEventListener('swarm:canvas-tab-changes', onChanges);
+    };
+  }, [applyAgent]);
 
   // ── swarm:ui-command-result (window) — uiCommands reports an agent command ──
   useEffect(() => {
@@ -483,7 +593,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   useEffect(() => {
     let mounted = true;
     const handleOpenFile = async (e: Event) => {
-      const { path: filePath, autoDiff, gitStatus, workspaceId, baseRef, sessionId: openSessionId, tabId: stampedTab, auto, cmdId } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string; baseRef?: string; sessionId?: string; tabId?: string; auto?: boolean; cmdId?: string }>).detail ?? {};
+      const { path: filePath, autoDiff, gitStatus, workspaceId, baseRef, sessionId: openSessionId, tabId: stampedTab, auto, cmdId, by } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string; baseRef?: string; sessionId?: string; tabId?: string; auto?: boolean; cmdId?: string; by?: string }>).detail ?? {};
       if (!filePath) return;
       // Landing tab = the event's STAMPED origin tab if present, else the live active
       // tab. Two distinct origin cases:
@@ -539,7 +649,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       // during the resolve routes the file to A's map (restored when A is revisited)
       // and never disturbs B. `cur` is re-read HERE (post-await) so any patch() that
       // ran during the resolve (pin/mute toggle) is preserved, not clobbered (C).
-      const cur = mapRef.current.get(k) ?? EMPTY;
+      let cur = mapRef.current.get(k) ?? EMPTY;
       // UN-RAIL AT THE WRITE (Bug 2 root fix, run_5f5e7675): a new file arriving IS the
       // "I want to see this" intent, so reveal a railed Canvas. This lives HERE — the
       // single per-tab chokepoint where a file is SET — NOT in a panel render effect.
@@ -552,6 +662,28 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       // CHANGES (a re-open of the same path must not fight a deliberate manual re-rail).
       const fileChanged = cur.file?.filePath !== resolvedPath;
       const opened: CanvasFile = { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef, sessionId: openSessionId, auto: auto || undefined };
+      if (by === 'agent') {
+        // §4: shown and unfolded like the user's own open, but never over unsaved
+        // edits and without the "discard?" prompt (the agent must not interrupt).
+        // Computed when it applies — a newer open or an edit since then wins.
+        applyAgent(landingTab, 'open-canvas-file', cmdId, (c) => {
+          if (openGenRef.current.get(k) !== gen) return { next: null, result: 'ignored', reason: 'replaced by a newer open' };
+          const changed = c.file?.filePath !== resolvedPath;
+          if (c.fileDirty && changed) return { next: null, result: 'ignored', reason: 'the shown file has unsaved edits; it was not replaced' };
+          return {
+            next: { file: opened, pendingOpen: null, canvasTab: 'artifacts', railed: false },
+            result: 'applied',
+            ...(changed ? {} : { reason: 'already shown' }),
+          };
+        });
+        return;
+      }
+      // A user open wins over an agent change still waiting for the answer to end.
+      if (cur.deferred) {
+        recordCommand(k, { id: cur.deferred.cmdId, cmd: cur.deferred.cmd, result: 'ignored', reason: 'the user changed the Canvas first' });
+        writeQuiet(k, { deferred: null });
+        cur = mapRef.current.get(k) ?? EMPTY;
+      }
       // Unsaved edits on the shown file (C1): Canvas never drops them by itself — an
       // auto open is ignored; a user open waits for "discard and open / keep editing".
       if (cur.fileDirty && fileChanged) {
@@ -559,7 +691,6 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
         const held = { ...cur, pendingOpen: opened };
         mapRef.current.set(k, held);
         if (activeTabIdRef.current === landingTab) setSlice(held);
-        settle('ignored', 'the shown file has unsaved edits; the user is asked to discard them or keep editing');
         return;
       }
       const next = {
@@ -573,14 +704,13 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       };
       mapRef.current.set(k, next);
       if (activeTabIdRef.current === landingTab) setSlice(next);
-      settle('applied', !fileChanged && cur.railed ? 'already shown; Canvas stays folded to the side rail' : undefined);
     };
     document.addEventListener('swarm:open-file', handleOpenFile);
     return () => {
       mounted = false;
       document.removeEventListener('swarm:open-file', handleOpenFile);
     };
-  }, [recordCommand]);
+  }, [recordCommand, applyAgent, writeQuiet]);
 
   // ── Auto-surface (streaming-gated, fail-closed) ─────────────────────────────
   // activeTabId = the tab-scope key (run_26aa6caa) — the same stable key the rest
