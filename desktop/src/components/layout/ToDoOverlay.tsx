@@ -26,7 +26,7 @@
  *
  * PRESERVED CONTRACT (do not change — external consumers depend):
  *   • ToDoContent{onDispatch, close}  — overlaySurfaces.tsx
- *   • parseWorkPacket / WorkPacket    — ChatPage.tsx buildDispatchPrompt
+ *   • parseWorkPacket / WorkPacket    — re-exported from todoWorkPacket.ts (ChatPage imports that file)
  *
  * Local state ONLY — never MessageStore / active-tab mutation (OT01 safety).
  *
@@ -43,6 +43,7 @@ import {
   type SortKey, type SortDir, type TodoStatusLabel,
 } from './todoTable';
 import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
+import { parseWorkPacket, type WorkPacket } from './todoWorkPacket';
 
 export interface ToDoContentProps {
   /** Land a todo into a chat tab (inject + snapshot). Returns true if it landed
@@ -52,20 +53,9 @@ export interface ToDoContentProps {
   close: () => void;
 }
 
-/** Parse a todo's linked_context JSON string into a work-packet object.
- *  Guarded: null / empty / malformed / non-object → null. */
-export interface WorkPacket {
-  next_step?: string;
-  acceptance?: string;
-  files?: string[];
-  design_docs?: string[];
-  commits?: string[];
-  sessions?: string[];
-  memory_refs?: string[];
-  blockers?: string[];
-  notes?: string;
-  [k: string]: unknown;
-}
+// WorkPacket + parseWorkPacket live in todoWorkPacket.ts so ChatPage can use them
+// without pulling this overlay into the first bundle; re-exported for existing callers.
+export { parseWorkPacket, type WorkPacket } from './todoWorkPacket';
 
 /** Merge a user's form edits INTO the existing work-packet JSON without dropping
  *  any key the form doesn't expose. This is the Gate-1 F6 safety property: the
@@ -101,17 +91,6 @@ function mergeWorkPacket(
   if (keys.length === 0) return '';
   return JSON.stringify(merged);
 }
-export function parseWorkPacket(linkedContext: string | null): WorkPacket | null {
-  if (!linkedContext) return null;
-  try {
-    const p = JSON.parse(linkedContext);
-    if (typeof p === 'object' && p !== null && !Array.isArray(p)) return p as WorkPacket;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 // ── Range + status filter options ───────────────────────────────────
 type RangeOpt = { label: string; days: number | null };
 const RANGES: RangeOpt[] = [

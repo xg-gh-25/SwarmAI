@@ -63,7 +63,7 @@ import { tabNoticeStore, type NoticeTarget } from '../stores/tabNoticeStore';
 // HistoryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 // parseWorkPacket still used by ChatPage's dispatch (linked_context → work packet);
 // ToDoOverlay itself retired (M4): migrated to the OverlayHost registry.
-import { parseWorkPacket } from '../components/layout/ToDoOverlay';
+import { parseWorkPacket } from '../components/layout/todoWorkPacket';
 import { setOverlayCtxBridge } from '../components/layout/overlayRegistry';
 import { OverlayHost } from '../components/layout/OverlayHost';
 // ToDo / Jobs & Runs / Pipeline / Pollinate + NewBrain overlays retired (M3+M4):
