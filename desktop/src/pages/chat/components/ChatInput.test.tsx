@@ -20,6 +20,7 @@ import '@testing-library/jest-dom/vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChatInput } from './ChatInput';
 import type { UnifiedAttachment } from '../../../types';
+import { dispatchInjectChatInput } from '../injectChatInput';
 
 // Mock react-i18next
 vi.mock('react-i18next', () => ({
@@ -235,3 +236,24 @@ describe('ChatInput with Unified Attachments', () => {
     });
   });
 });
+
+// The Canvas "attach selection to chat" appends to the draft (super-canvas-fixing.md
+// round 2, G4); every other injector keeps replacing it.
+describe('swarm:inject-chat-input append', () => {
+  afterEach(() => { cleanup(); vi.clearAllMocks(); });
+  it('append adds after the draft with a blank line; without it the draft is replaced', () => {
+    const onInputChange = vi.fn();
+    renderWithProviders(<ChatInput {...createDefaultChatInputProps({ inputValue: 'my draft  ', onInputChange })} />);
+    dispatchInjectChatInput({ text: '> quoted', append: true });
+    expect(onInputChange).toHaveBeenLastCalledWith('my draft\n\n> quoted');
+    dispatchInjectChatInput({ text: 'replace me' });
+    expect(onInputChange).toHaveBeenLastCalledWith('replace me');
+  });
+  it('append onto an empty draft is just the text', () => {
+    const onInputChange = vi.fn();
+    renderWithProviders(<ChatInput {...createDefaultChatInputProps({ inputValue: '', onInputChange })} />);
+    dispatchInjectChatInput({ text: '> quoted', append: true });
+    expect(onInputChange).toHaveBeenLastCalledWith('> quoted');
+  });
+});
+

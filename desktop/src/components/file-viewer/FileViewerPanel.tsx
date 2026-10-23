@@ -690,9 +690,11 @@ function FileViewerPanelImpl({
           establish a containing block that clips the overhanging spout. The panel is
           fixed-width (outer box: flex-shrink-0 + explicit style.width), so typing
           never changes Canvas width → `layout` containment is both effective and
-          spout-safe. `contain:layout` (NOT paint/content/size) does not clip, so zero
-          visual change; absolute children inside the column are positioned relative to
-          ancestors inside it (no-op), and popovers are portaled/fixed (unaffected).
+          spout-safe. `contain:layout` (NOT paint/content/size) does not clip. It DOES
+          make this column the containing block of fixed-position descendants (CSS
+          Containment), so anything fixed inside the Canvas that is placed with viewport
+          coordinates MUST be portaled to <body> (FileEditorCore's selection toolbar was
+          not, and landed off-card: super-canvas-fixing.md round 2, G3).
           NOTE (run_2daacd0f): paint/composite isolation for the 6th-recurrence lag is
           scoped NARROWLY to HtmlRenderer's root (the iframe report + transform:scale
           sizer — the actual composite-heavy surface), NOT here. Paint containment on

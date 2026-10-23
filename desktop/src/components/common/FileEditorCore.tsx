@@ -706,6 +706,9 @@ export default function FileEditorCore({
   const [selectionText, setSelectionText] = useState('');
   const [selectionPopoverPos, setSelectionPopoverPos] = useState<{ top: number; left: number } | null>(null);
   const [showSelectionComment, setShowSelectionComment] = useState(false);
+  // Lines of the current selection (source view only; the preview has no line map).
+  const [selectionLines, setSelectionLines] = useState<[number, number] | null>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
   const [attachFeedback, setAttachFeedback] = useState(false);
   const [copyPathFeedback, setCopyPathFeedback] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
@@ -1009,6 +1012,39 @@ export default function FileEditorCore({
     },
     [content, handleSendReviewComment],
   );
+
+  // Selection in the markdown preview (round 2, G3): the window selection inside the
+  // preview, placed under its rect. A collapsed selection clears the toolbar unless
+  // the comment popover is open (same rule as the textarea).
+  const handlePreviewSelect = useCallback(() => {
+    const sel = window.getSelection();
+    const box = previewRef.current;
+    const text = sel && !sel.isCollapsed ? sel.toString() : '';
+    if (sel && text.trim() && box && sel.anchorNode && box.contains(sel.anchorNode)) {
+      const r = sel.getRangeAt(0).getBoundingClientRect();
+      setSelectionText(text);
+      setSelectionLines(null);
+      setSelectionPopoverPos({ top: r.bottom + 4, left: Math.max(8, Math.min(r.left, window.innerWidth - 240)) });
+    } else if (!showSelectionComment) {
+      setSelectionText('');
+      setSelectionPopoverPos(null);
+    }
+  }, [showSelectionComment]);
+
+  // Attach the selection to the chat (round 2, G4): a quote appended to what the
+  // user typed, focused, not sent.
+  const handleAttachSelection = useCallback(() => {
+    if (!selectionText.trim()) return;
+    const where = selectionLines
+      ? (selectionLines[0] === selectionLines[1] ? ` line ${selectionLines[0]}` : ` lines ${selectionLines[0]}-${selectionLines[1]}`)
+      : '';
+    const quote = selectionText.replace(/\s+$/, '').split('\n').map((l) => `> ${l}`).join('\n');
+    dispatchInjectChatInput({ text: `From \`${filePath}\`${where}:\n${quote}\n`, focus: true, append: true });
+    setSelectionText('');
+    setSelectionPopoverPos(null);
+    setSelectionLines(null);
+    window.getSelection()?.removeAllRanges();
+  }, [selectionText, selectionLines, filePath]);
 
   // --- Handlers ---
 
@@ -1324,6 +1360,10 @@ export default function FileEditorCore({
     const selected = content.slice(ta.selectionStart, ta.selectionEnd);
     if (selected && selected.length > 0 && ta.selectionStart !== ta.selectionEnd) {
       setSelectionText(selected);
+      setSelectionLines([
+        content.slice(0, ta.selectionStart).split('\n').length,
+        content.slice(0, ta.selectionEnd).split('\n').length,
+      ]);
       // Position floating button near end of selection using textarea geometry
       const rect = ta.getBoundingClientRect();
       const computedStyle = window.getComputedStyle(ta);
@@ -1405,7 +1445,12 @@ export default function FileEditorCore({
   // File actions shared by the modal header and the panel's floating bar.
   const reviewBtn = (
     <button
-      onClick={review.toggleReviewMode}
+      onClick={() => {
+        // The review gutter lives in the editable view (round 2, G2): turning Review
+        // on from a preview switches there, so the click visibly does something.
+        if (!review.isReviewMode) { setShowMarkdownPreview(false); setShowSvgPreview(false); }
+        review.toggleReviewMode();
+      }}
       className={clsx(
         toolBtn, 'transition-colors',
         review.isReviewMode
@@ -1517,7 +1562,7 @@ export default function FileEditorCore({
   };
   const views = [
     ...(hasPreview ? [['preview', 'Preview'] as const] : []),
-    ['source', 'Source'] as const,
+    ['source', 'Edit'] as const,
     ['changes', 'Changes'] as const,
   ];
   const panelBar = (
@@ -1741,6 +1786,36 @@ export default function FileEditorCore({
         </div>
         )}
 
+        {/* Selection toolbar + comment popover (round 2, G3/G4) — one for the source
+            view and the markdown preview. Portaled to <body>: the Canvas column has
+            `contain: layout`, which makes it the containing block of a fixed
+            descendant, so a fixed toolbar rendered in place landed off-card. */}
+        {selectionText && selectionPopoverPos && !showSelectionComment && createPortal(
+          <div
+            className="fixed z-[999] flex items-center gap-1 p-1 rounded-lg bg-[var(--color-card)] border border-[var(--color-border)] shadow-lg"
+            style={{ top: selectionPopoverPos.top, left: selectionPopoverPos.left }}
+            onMouseDown={(e) => e.preventDefault()}
+            data-testid="selection-toolbar"
+          >
+            <button className="btn-sm btn-primary" onClick={() => setShowSelectionComment(true)} data-testid="selection-comment-btn">
+              <span className="material-symbols-outlined icon-xs">comment</span>
+              Comment
+            </button>
+            <button className="btn-sm btn-ghost" onClick={handleAttachSelection} data-testid="selection-attach-btn">
+              <span className="material-symbols-outlined icon-xs">attach_file</span>
+              Attach to chat
+            </button>
+          </div>,
+          document.body,
+        )}
+        {showSelectionComment && selectionText && selectionPopoverPos && (
+          <SelectionCommentPopover
+            position={selectionPopoverPos}
+            onSubmit={(text) => handleSendReviewComment(text)}
+            onCancel={() => { setShowSelectionComment(false); setSelectionPopoverPos(null); }}
+          />
+        )}
+
         {/* Readonly banner */}
         {readonly && (
           <div
@@ -1783,7 +1858,14 @@ export default function FileEditorCore({
             </div>
           ) : showMarkdownPreview ? (
             shouldProcessSync(content.length) ? (
-              <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]" style={floatPad}>
+              <div
+                ref={previewRef}
+                className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]"
+                style={floatPad}
+                onMouseUp={handlePreviewSelect}
+                onKeyUp={handlePreviewSelect}
+                data-testid="markdown-preview"
+              >
                 <MarkdownRenderer
                   content={previewContent}
                   className="canvas-doc max-w-4xl mx-auto"
@@ -2025,28 +2107,6 @@ export default function FileEditorCore({
                   data-testid="file-editor-textarea"
                 />
 
-                {/* Floating "Comment" button — appears on text selection */}
-                {selectionText && selectionPopoverPos && !showSelectionComment && (
-                  <button
-                    className="btn-sm btn-primary fixed z-[999] shadow-lg transition-colors"
-                    style={{ top: selectionPopoverPos.top, left: selectionPopoverPos.left }}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setShowSelectionComment(true)}
-                    data-testid="selection-comment-btn"
-                  >
-                    <span className="material-symbols-outlined icon-xs">comment</span>
-                    Comment
-                  </button>
-                )}
-
-                {/* Selection comment popover — positioned directly at selection coords */}
-                {showSelectionComment && selectionText && selectionPopoverPos && (
-                  <SelectionCommentPopover
-                    position={selectionPopoverPos}
-                    onSubmit={(text) => handleSendReviewComment(text)}
-                    onCancel={() => { setShowSelectionComment(false); setSelectionPopoverPos(null); }}
-                  />
-                )}
               </div>
             </>
           )}

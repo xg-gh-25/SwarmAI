@@ -58,10 +58,10 @@ describe('panel chrome', () => {
 
   it('a markdown file switches Preview / Source / Changes with one control', () => {
     render(<FileEditorCore {...md} variant="panel" committedContent="# old\n" />);
-    expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Preview', 'Source', 'Changes']);
+    expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Preview', 'Edit', 'Changes']);
     expect(checked()).toBe('Preview');
     fireEvent.click(screen.getByTestId('editor-view-source'));
-    expect(checked()).toBe('Source');
+    expect(checked()).toBe('Edit');
     expect(screen.getByTestId('file-editor-textarea')).toBeTruthy();
     fireEvent.click(screen.getByTestId('editor-view-changes'));
     expect(checked()).toBe('Changes');
@@ -73,7 +73,7 @@ describe('panel chrome', () => {
 
   it('a code file has Source and Changes only; Changes is off with nothing to compare', () => {
     render(<FileEditorCore {...ts} variant="panel" />);
-    expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Source', 'Changes']);
+    expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Edit', 'Changes']);
     expect((screen.getByTestId('editor-view-changes') as HTMLButtonElement).disabled).toBe(true);
   });
 

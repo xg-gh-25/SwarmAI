@@ -294,8 +294,10 @@ export function ChatInput({
 
   useEffect(() => {
     const handler = (e: Event) => {
-      const { text, focus, autoSend } = (e as CustomEvent<InjectChatInputDetail>).detail ?? { text: '' };
-      if (text) {
+      const { text: injected, focus, autoSend, append } = (e as CustomEvent<InjectChatInputDetail>).detail ?? { text: '' };
+      if (injected) {
+        const current = inputValueRef.current;
+        const text = append && current.trim() ? `${current.replace(/\s+$/, '')}\n\n${injected}` : injected;
         onInputChange(text);
         // Sync to per-tab draft storage so the injected text survives tab switches
         const tabId = activeTabIdRef?.current;

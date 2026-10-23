@@ -154,3 +154,36 @@ height instead of padding (no code now).
 
 Modal-variant behaviour; backend `/committed` speed (git show ~120 ms is only
 taken off the first paint, not made faster); Changes tab diff loading.
+
+## Round 2 — editing, review and selection (XG 2026-10-23)
+
+XG: "edit 不work, review 没法加comments, review 没法选中加comments; 没法选中一部分
+attach to chat". A jsdom probe through the real useCanvasHost + FileViewerPanel +
+FileViewer + FileEditorCore shows typing, the dirty state and Save working, so the
+failures are in what the panel shows and where, not in the state.
+
+| # | Problem | Cause |
+|---|---|---|
+| G1 | "Edit" missing: a .md / .svg opens in Preview; the only way to edit is a chip called "Source". The modal and the old toolbar called it Edit. | label |
+| G2 | Review does nothing in Preview: the line-number review gutter exists only in the source view, so turning Review on while previewing changes nothing visible. | review is wired to one view |
+| G3 | Selecting text shows no Comment button. The button is `position: fixed` but NOT portaled, and the Canvas content column has `contain: layout`, which makes the column the containing block of fixed descendants: the viewport coordinates land offset by the chat column's width, outside the clipped card. (The popover after it IS portaled, so it was never reached.) In Preview there is no selection handling at all. | fixed under a containing block; selection wired to one view |
+| G4 | No way to send part of a file to the chat: attach is whole-file only. | missing feature |
+
+Fixes:
+
+- G1: the view chip reads **Edit** (Preview / Edit / Changes); test ids unchanged.
+- G2: turning Review on from a preview switches to the editable view, where the
+  gutter is (both variants). The Changes view keeps its own click-to-comment.
+- G3: one selection toolbar, portaled to `document.body` (so no ancestor can be its
+  containing block), shown for a selection in the source textarea AND in the
+  markdown preview (window selection inside the preview, placed under the
+  selection's rect). It holds **Comment** (the existing popover and message) and
+  **Attach to chat**.
+- G4: Attach to chat puts the selection into the chat input as a quote — file path
+  (+ line range in the source view) and the text as `>` lines — APPENDED to what the
+  user already typed (new `append` field on the `swarm:inject-chat-input` contract),
+  focused, not sent.
+
+Tests: selection in source → toolbar in `document.body`; selection in preview →
+toolbar; Comment → popover; Attach → inject event with append + quote + line range;
+ChatInput appends instead of replacing; Review from Preview → textarea + gutter.

@@ -29,6 +29,9 @@ export interface InjectChatInputDetail {
    *  Overlay dispatch keeps this false (user reviews + sends); the file-review
    *  feedback path sets it true. */
   autoSend?: boolean;
+  /** Add `text` after what the user already typed (a blank line between) instead of
+   *  replacing it. The Canvas "attach selection to chat" uses it (default false). */
+  append?: boolean;
 }
 
 /** Dispatch the typed inject event. The single sanctioned way to fire it — callers
