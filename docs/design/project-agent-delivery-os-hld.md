@@ -1062,7 +1062,8 @@ Trace facts, or bypass Pipeline evidence and safety Gates.
 The execution plane is built in the order of `pipeline-run-conductor-v1.md` §12, which
 uses its own phase numbers. Mapping: this HLD's Phase 1 (registration part) = V1 Phase 1;
 Phase 2 = V1 Phases 2 and 5; Phase 1b and Phase 4 = V1 Phase 6 (with Phase 7 for Cloud
-Desktops); the Central Service and learning pipeline are V1 Phases 3 and 4. Phases 1
+Desktops); the Central Service (org Run store) is V1 Phase 3, and Trace and Offline Eval
+over it are V1 Phase 4. Phases 1
 (Definition and Flow parts), 3, 5 and 6 below are not in V1.
 
 ### Phase 1 — Definition and Flow facts
@@ -1129,6 +1130,9 @@ which supersedes the order below where they differ.
 ### Definition and Brain
 
 - Every Flow and Run names an immutable Project Agent Definition revision and Context digest.
+  Exception in the execution-plane V1: a Chat-inline Run reads the live DDD and only
+  records its digest; it is marked unpinned and excluded from Local/remote parity in Eval
+  (`pipeline-run-conductor-v1.md` §5.2, §4.5.3).
 - No authored fact is duplicated into a second authoritative definition file.
 - A Brain update affects future Flows only unless a human explicitly revises active work.
 

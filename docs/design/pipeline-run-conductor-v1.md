@@ -235,14 +235,15 @@ owner command, never automatically.
 
 | Table | Key | Holds |
 |---|---|---|
-| `nodes` | `node_id` | type (`host`, `ec2`, `cloud_desktop`), allowed class, Ed25519 public key, reported `slots`, last heartbeat, status (`enrolling`, `active`, `revoked`) |
+| `nodes` | `node_id` | type (`host`, `ec2`, `cloud_desktop`), allowed class, Ed25519 public key, reported `slots`, `active_leases` (held Attempts, changed only inside the claim / release transactions of §6.3), last heartbeat, status (`enrolling`, `active`, `revoked`) |
 | `ddds` | `ddd_id`, `rev` | origin (`host` / `repo`), access class, clone URL, pinned commit or snapshot digest, published at |
 | `project_agents` | `agent_id`, `rev` | definition (or its blob digest), pinned `ddd_id` + `rev`, published at |
-| `requests` | `request_id`; GSI `(target_node, state)`; GSI `(state, updated_at)` | the immutable request, dispatch state (§7.4), attempt, `lease_epoch`, `lease_renewed_at` (Central clock), `worker_incarnation`, `cancel_deadline` |
+| `requests` | `request_id`; GSI `queue`: partition `<target_node>#<state>`, sort `<created_at>#<request_id>` (FIFO per Hive, §6.3); GSI `(state, updated_at)` | the immutable request, dispatch state (§7.4), attempt, `lease_epoch`, `lease_renewed_at` (Central clock), `worker_incarnation`, `cancel_deadline` |
 | `events` | `request_id`, sort key `<attempt>#<lease_epoch>#<seq>` (zero-padded) | mirrored Run events with their signed `payload_digest` (§7.1) |
-| `decisions` | `decision_id`; TTL | question, options, answer, answer nonce state, expiry |
+| `decisions` | `decision_id`; TTL | transport only, not the authority (§8.3): the question as reported by the Hive, and the Host-signed answer command with its delivery state (`posted`, `acked`, `expired`) |
+| `trace_cursors` | `request_id`, `attempt` | last contiguous `seq` mirrored, its Pipeline event id and chain position, `attempt_closed` seq, and the seal revision (§4.5.1) |
 | `blob_objects` | `digest` | size, media type, first registered at. One row per distinct content |
-| `blob_refs` | `owner_id` (request or DDD revision), `role`; GSI `digest` | the digest, producing node, attempt, epoch, producer signature. One row per use, so the same content used by many Runs keeps every provenance |
+| `blob_refs` | `owner_id` (request or DDD revision), sort `<role>#<ref_id>` (`ref_id` is unique per use, so several blobs of one role fit); GSI `digest` | the digest, producing node, attempt, epoch, producer signature. One row per use, so the same content used by many Runs keeps every provenance |
 | `record_kinds` | `kind`, `schema_version` | the registered kinds of uploaded records and who may produce them (§4.4.3) |
 | `audit` | `day`, `ts#id` | §4.4.4 |
 | `enrolments` | `code_hash`; TTL | target node, attempts left, consumed flag (§4.3.6) |
@@ -252,8 +253,11 @@ owner command, never automatically.
 
 | S3 prefix | Holds |
 |---|---|
-| `quarantine/<upload_id>` | Raw uploads awaiting intake. Readable only by the intake Lambda; deleted when intake ends, and by a 1-day lifecycle rule as a backstop |
-| `blobs/sha256/<digest>` | Verified DDD snapshots, Run records and result bundles (§4.4.1). Kept until the owner deletes them; lifecycle rules are set in Phase 3 from measured volume |
+| `quarantine/<upload_id>` | Raw uploads awaiting intake. Readable only by the intake Lambda and the audit role. One rule: deleted as soon as intake promotes it; an upload that fails intake stays here with its reason for 7 days (lifecycle rule), then is deleted |
+| `blobs/sha256/<digest>` | Canonical, byte-exact DDD snapshots, Run records, event chains and result bundles (§4.4.1). Never rewritten. Readable only by the integrity roles (Host landing, Trace sealing, Eval) |
+| `views/sha256/<digest>` | Redacted projections of text blobs (§4.4.1 intake), each with a signed transformation manifest naming its canonical digest. What the Control Center and later consumers read |
+
+Lifecycle rules for `blobs/` and `views/` are set in Phase 3 from measured volume (S7).
 
 How a blob gets in. Content addressing alone does not stop an authorized writer from
 putting wrong bytes under a digest first, so:
@@ -264,13 +268,18 @@ putting wrong bytes under a digest first, so:
    claimed digest. S3 rejects a body whose checksum differs.
 2. The writer calls `complete` with its signature over the digest, size, media type and
    role. Central checks that the stored object's checksum is that digest.
-3. **Intake runs on the quarantined object before anything is registered** (§4.4.1). Text
-   content is redacted and becomes a new object with its own digest; the raw object is
-   then deleted. A result bundle (code) is never rewritten: a secret finding in it rejects
+3. **Intake runs on the quarantined object before anything is registered** (§4.4.1).
+   Canonical evidence is never rewritten: signatures, `prev_hash` links and `blob_sha`
+   references cover the exact bytes (`run_protocol/events.py`), so a rewritten event or
+   blob would no longer verify. Intake instead scans it and, for text, writes a separate
+   redacted projection plus a signed manifest `(canonical digest, projection digest,
+   findings)`. A result bundle (code) gets no projection: a secret finding in it rejects
    the upload and the candidate cannot land.
-4. Central writes the `blob_objects` row (if new) and a `blob_refs` row for this use, and
-   copies the redacted object to `blobs/sha256/<digest>` with `If-None-Match: *`. Content
-   that already exists is not copied again; the new `blob_refs` row still records this use.
+4. Central writes the `blob_objects` row (if new) and a `blob_refs` row for this use,
+   copies the canonical object to `blobs/sha256/<digest>` and the projection to
+   `views/sha256/<digest>`, both with `If-None-Match: *`, and deletes the quarantined
+   object. Content that already exists is not copied again; the new `blob_refs` row still
+   records this use.
 5. Every reader verifies the sha256 after download and refuses a mismatch.
 
 No node can write to `blobs/` directly.
@@ -398,7 +407,7 @@ The record is a versioned manifest (`run_record_version: 1`). Metadata fields:
 | The four completion facts and the landing outcome | all |
 | Candidate tree digest per repo and the result bundle digest | Runs that changed code |
 | Signed event chain: head digest and event count, so the uploaded chain can be verified complete | all |
-| Token and time usage | all |
+| Token and time usage | all. Per stage and model once 3-0 instruments it (today `run_protocol/usage.py` records only run-level input/output/call totals with no model); until then Token Cost is recorded at run level and its per-stage split is `UNKNOWN` |
 | Digests of transcripts and logs | all |
 
 The **result bundle** is a separate blob, referenced by digest. Per repo it holds the base
@@ -430,17 +439,20 @@ A local Run with upload off:
 - sends nothing to Central: no Run record, no event mirror, no lessons;
 - runs, lands and reflects exactly the same locally;
 - is shown in the Control Center only on this Host, marked `local only`;
-- is not part of org Trace statistics or Eval (§4.5). The Host's own Control Center shows
-  how many of its Runs are `local only`, counted locally and never sent, so org coverage
-  is not overstated.
+- is not part of org Trace statistics or Eval (§4.5). Central cannot see it, so org
+  metrics are stated as **over the Runs Central received**, never as over all Runs. The
+  Host's own Control Center shows how many of its Runs are `local only`, counted locally
+  and never sent.
 
 A Run that should upload but cannot (Central down) keeps its record locally and retries;
 nothing is lost.
 
 **Intake.** Every uploaded record passes intake before it is registered: schema and
-digest checks, and a redaction scan of all text that masks secrets and credential shapes
-and records each finding. A record that fails is kept in quarantine with the reason and is
-not registered; the node keeps its own copy and nothing about the Run changes.
+digest checks, signature and chain verification on the canonical bytes, and a redaction
+scan of all text. Findings never alter the canonical record; they produce the redacted
+projection (§4.3.2 step 3) and an audit entry. A record that fails schema, digest or
+signature checks stays in quarantine with the reason (§4.3.2) and is not registered; the
+node keeps its own copy and nothing about the Run changes.
 
 #### 4.4.2 The local flow does not change
 
@@ -487,9 +499,16 @@ what Central records itself.
 - **Live:** while a Run executes, its events reach Central through the event mirror
   (§4.2 outbox for local Runs, §7.1 for remote Runs), so the Control Center shows stage,
   waits and human questions as they happen.
-- **Sealed:** the Run record replaces the live view when it arrives after REFLECT. The
-  uploaded event chain is checked against its head digest and count; a gap marks the
-  Run's Trace `incomplete`, never silently complete.
+- **Sealed:** the Run record seals the Trace when it arrives after REFLECT, in one
+  conditional transaction on `trace_cursors`. Each mirrored event row carries its Pipeline
+  event id and chain position, so the live mirror maps onto the chain. The seal checks,
+  per Attempt, that the mirrored cursor is contiguous up to that Attempt's
+  `attempt_closed` seq (or its last event), that every mirrored event appears in the
+  uploaded chain at its position with the same digest, and that the chain verifies to
+  its head digest and count. Any gap or mismatch seals the Trace as `incomplete`, never
+  silently complete. Data that arrives after the seal does not edit it: it creates a new
+  seal revision that supersedes the previous one, and the Control Center shows the
+  latest.
 - **Index:** a `run_index` table is built from Run records and dispatch facts (project,
   DDD, placement, node, profile, origin, outcome, start and end, per-stage durations,
   tokens, human events) with GSIs by project and by day, so Control Center statistics are
@@ -535,7 +554,10 @@ reproduced.
 Missing or unverifiable evidence makes that dimension `UNKNOWN` for the Run, never PASS.
 Org roll-ups (by project, DDD, placement, period) are computed by Eval from reports;
 Autonomous Delivery Rate follows the HLD formula (A / E) and is always shown with its
-evidence coverage, which counts `incomplete` Traces and `local only` Runs as not covered.
+evidence coverage over the Runs Central received, which counts `incomplete` Traces as
+not covered. Inline Runs read the live DDD (§5.2), so their context is unpinned: Eval
+reports their DDD-context parity as `UNKNOWN` and Local-versus-remote comparisons use
+managed Runs (`background_local`, `remote_hive`) only.
 
 
 #### 4.5.4 Later consumers
@@ -581,7 +603,7 @@ request:                       # immutable once accepted
 
 dispatch:                      # mutable, owned by the Conductor
   run_id: <pipeline v1 run id, set when the Run is created>
-  state: queued | dispatching | running | candidate_ready | landing
+  state: submitting | queued | dispatching | running | candidate_ready | landing
        | cancelling | done | failed | cancelled
   attempts:
     - attempt: 1
@@ -601,7 +623,8 @@ Legal dispatch transitions (any other write is rejected):
 
 | From | To | Written by |
 |---|---|---|
-| `queued` | `dispatching`, `cancelled`, `failed` | Conductor (slot free / cancel / re-check failed) |
+| `submitting` | `queued`, `failed` | Host Conductor (remote only: Central acknowledged the create / `failed(central_unavailable)`, §7.1) |
+| `queued` | `dispatching`, `cancelled`, `failed` | Conductor (slot free / cancel / re-check failed, queue timeout, target revoked) |
 | `dispatching` | `running`, `queued`, `failed` | Conductor (executor accepted / executor refused before start / rule failed) |
 | `running` | `candidate_ready`, `running` (new Attempt), `failed`, `cancelling` | Conductor on executor events |
 | `cancelling` | `cancelled` | `cancel_ack`, or the cancel deadline (§7.4) |
@@ -611,7 +634,16 @@ Legal dispatch transitions (any other write is rejected):
 Before Phase 6, an inline or Local Run goes `running` → `done` directly: today's v1 `land`
 both judges and lands, so there is no candidate step. Every transition is an event in
 `events.jsonl` with a key `(request_id, attempt, lease_epoch, seq)`; replaying a key that
-was already applied is a no-op.
+was already applied is a no-op. A local request is created directly as `queued`;
+`submitting` exists only while a remote create awaits Central.
+
+**What a new Attempt may reuse** (HLD §6.5). A new Attempt (crash recovery, adopt, rebase)
+resumes from the Pipeline checkpoint and may reuse its verified source changes and
+completed documents as starting material. It may not reuse the closed Attempt's session
+state, test results, review closure, authorization or completion verdict as proof: every
+check that landing reads is recomputed by the new Attempt on its current code tree,
+which v1 already requires (`facts.bind_final`). The closed Attempt's evidence stays in the
+chain as history.
 
 What a user sees is computed on read:
 
@@ -671,7 +703,7 @@ against the mutable Host copy:
 
 | Placement | DDD the Run reads |
 |---|---|
-| `inline_local` | The live Host copy, as today. `ddd_ref` records `kind: live` and the digest at create. It is a record, not a pin: an inline session may cultivate its own DDD mid-run, and V1 does not change that |
+| `inline_local` | The live Host copy, as today. `ddd_ref` records `kind: live` and the digest at create. It is a record, not a pin: an inline session may cultivate its own DDD mid-run, and V1 does not change that. So the HLD's "every Run pins its Context revision" invariant applies to managed Runs only; inline Runs are marked unpinned and Eval treats them as such (§4.5.3) |
 | `background_local`, `remote_hive` | An immutable copy materialized at dispatch into the Run's directory (`<run dir>/ddd/`, read-only), with its digest in `ddd_ref`. The Pipeline contract is created pointing at that directory, so the Run cannot read another revision |
 
 The Pipeline gains one input for this: `pipeline_v1.py create --ddd-root <dir>`. Today
@@ -769,9 +801,26 @@ while waiting and holds its epoch, so a long wait is never treated as a crash.
 ### 6.3 `remote_hive`
 
 The request names one Hive. The Conductor checks the placement rules (§5.3) and that the
-Hive is `active` in the Central `nodes` table, of the right type and within its reported
-slots. Otherwise the request stays `queued` behind that Hive; it is never moved to another
-Hive.
+Hive is `active` in the Central `nodes` table and of the right type. The request is then
+queued behind that Hive; it is never moved to another Hive.
+
+**Queue and capacity rules** (enforced by Central, not by the Host):
+
+- **Order.** Each Hive's queue is the `queue` GSI (§4.3.2): FIFO by `created_at` then
+  `request_id`. V1 has one priority, so there is no aging; the queue position shown is
+  exact.
+- **Slots.** A claim is one DynamoDB `TransactWriteItems`: move the oldest queued request
+  to `dispatching` (condition: still `queued`) and increment the node's `active_leases`
+  (condition: `active_leases < slots` and status `active`). Either both happen or
+  neither, so a Hive never holds more Attempts than its slots. Every terminal transition,
+  lease expiry and cancel completion decrements `active_leases` in the same transaction.
+  A lowered `slots` report takes effect for new claims only.
+- **Offline target.** Submitting to a Hive with no heartbeat in the last 10 minutes is
+  allowed; the confirmation card says the Hive is offline, and the request waits.
+- **Revoked target.** Revoking a Hive fails every request still queued for it with
+  `failed(node_revoked)`.
+- **Queue timeout.** A request still `queued` 24 hours after `created_at` fails with
+  `failed(queue_timeout)` (sweeper). The person resubmits if wanted.
 
 **Hive types.**
 
@@ -786,8 +835,9 @@ basic auth stays for its own dashboard and is not used by Runs.
 
 **Capacity.** On every heartbeat to the Central Service the Hive reports `slots`, computed on the Hive from its
 own `ResourceMonitor.spawn_budget()` and a per-Run memory figure measured in Phase 6 (§12).
-The Conductor dispatches at most `slots` concurrent Runs to that Hive. There is no
-instance-type table on the Host. A Hive with no report counts as one slot.
+The Conductor dispatches at most `slots` concurrent Runs to that Hive, enforced by the
+claim transaction above. There is no instance-type table on the Host. A Hive with no
+report counts as one slot.
 
 **Worker on the Hive.** The Hive runs the same Worker as §6.2 (headless `SessionUnit`,
 full hooks, `pipeline:<run_id>`), against:
@@ -834,10 +884,18 @@ bugfix pipeline in the background", or "on hive-ec2-1", or "on my Cloud Desktop"
    owner-only socket, the same one Slack uses in §8.2), giving project, requirement (the
    person's words, stored verbatim as data), profile and placement. Draft applies the
    placement rules (§5.3) and the DDD pin (§5.2), and lists the Hives allowed for that
-   project with their free slots and queue length.
+   project with their free slots and queue length. The draft is persisted in the Conductor
+   Store and signed by the daemon. It binds: actor (the owner), origin session, project,
+   profile, placement, DDD revision, base commits and the sha256 of the requirement text.
+   It is single-use and expires after 10 minutes.
 2. The tab shows a confirmation card: project, profile, placement, queue position or free
    slot, DDD revision and base commits. Only the person's click on that card submits;
-   the agent has no submit command. An invalid draft shows the rule that failed.
+   the agent has no submit command. The click goes to a daemon route that, like
+   `/api/pipelines/<id>/decision`, is human-only: `run_owner_gate` denies a Bash call to
+   it, and it accepts only the dashboard's authenticated click. Submit consumes the draft
+   atomically (unused → used) and re-checks placement rules and the bound revisions; if
+   any changed, nothing is submitted and the card shows a new draft for a new click. An
+   invalid or expired draft shows the rule that failed.
 3. After submit, the Run belongs to its Worker (`pipeline:<run_id>`), not to the chat
    session. The tab stays free for chat, and a status card in the tab shows queue
    position, stage and outcome. It reads `GET /api/conductor/requests/<id>` on the `nav`
@@ -862,21 +920,23 @@ Service:
    create that keeps failing ends `failed(central_unavailable)` with the reason.
 2. **Claim.** The Hive long-polls `POST /v1/nodes/{id}/claim` (20 s wait, then again),
    sending its `worker_incarnation`: a random id the Hive daemon generates at start and
-   keeps in its local state. The conditional claim returns the request, its attempt and
-   `lease_epoch`.
+   keeps in its local state. The claim is the transaction of §6.3 and returns the request,
+   its attempt and `lease_epoch`.
 3. **Run.** The Hive fetches code at the pinned `base_commit`, the DDD at its pinned
    revision, and runs the Worker (§6.2).
 4. **Report.** The Hive writes events from its local outbox to
    `PUT /v1/requests/{id}/events/{attempt}/{epoch}/{seq}`: started, stage changed,
    `awaiting_human`, `result_candidate`, failed, `cancel_ack`. `seq` starts at 1 for each
-   Attempt and has no gaps. Each event carries the sha256 of its signed payload. Its
-   heartbeat (60 s) renews leases and reports `slots`.
+   Attempt and has no gaps. Each event carries the sha256 of its signed payload and, when
+   it mirrors a Pipeline event, that event's id and chain position (used to seal the
+   Trace, §4.5.1). Its heartbeat (60 s) renews leases and reports `slots`.
 5. **Observe.** The Host Conductor reads events for its live remote requests every 10 s
    while it has any, and not at all otherwise. It keeps one cursor per Attempt and
    advances it only over a contiguous run of `seq`; a gap means it waits and asks again
    from the cursor. The Hive keeps resending an event until Central acknowledges it.
-6. **Answer and cancel.** The Host writes the human answer to `decisions`, or cancels the
-   request (§7.4). The Hive sees both on its next claim poll or heartbeat.
+6. **Answer and cancel.** The Host records the person's answer in its own decision
+   record (the authority, §8.3) and posts a signed answer command to `decisions`, or
+   cancels the request (§7.4). The Hive sees both on its next claim poll or heartbeat.
 
 Idempotency: an event write whose key exists with the same `payload_digest` succeeds as a
 no-op; one with a different digest is rejected as `equivocation`, recorded and shown
@@ -997,7 +1057,9 @@ text is stored verbatim as data and is never used as an instruction to the Condu
    placement rules and the DDD pin, so an invalid request is rejected here, with its reason.
 3. The bot replies with a confirmation card listing project, profile, placement, DDD ref,
    base commits and, for a schedule, the cron expression and timezone.
-4. The owner confirms on the card. Only then:
+4. The owner confirms on the card. The draft is the same signed, single-use, bound draft
+   as §6.4, and the button consumes it with the same atomic re-check; the Slack adapter
+   accepts the click only from the bound owner in that channel and thread. Only then:
    - immediate: `Conductor.submit()` queues the request;
    - scheduled: the Conductor writes a `pipeline_submit` job into the Host Job Scheduler.
      The job stores a request template, not a pinned request.
@@ -1064,9 +1126,30 @@ decisions. So a Slack answer needs its own protocol:
 4. Only a successful consume writes the `human_answer`, through the same path the
    dashboard uses, with `answered_by: person` and the nonce id as evidence.
 
-A typed Slack reply is shown to the agent as context but is never an answer. Phase 3's
+A typed Slack reply is shown to the agent as context but is never an answer. Phase 5's
 answer acceptance is gated on this protocol being implemented and tested; spike S5 checks
 how step 4 joins `ask_question_gate`'s answer record.
+
+**Where an answer is authoritative, and how it reaches a remote Run.** Every answer,
+whatever its channel (tab, Pipelines page, Slack), is first written to the Host's
+authenticated decision record. That record is the authority (HLD §13). For a local Run
+the Host then delivers it as today. For a remote Run:
+
+1. The Host posts an answer command to Central `decisions`, signed with the Host's own
+   Ed25519 key (enrolled in `nodes` as type `host` in Phase 3) over: `request_id`,
+   `run_id`, attempt, `lease_epoch`, the question's digest, the chosen option, the actor
+   and an expiry. Central stores and forwards it; it cannot create or change one.
+2. The Hive verifies the Host signature, the current attempt and epoch and the question
+   digest, then hands the answer to its blocked Worker through its own daemon-local
+   answer path (the one its dashboard uses), so its own hook writes the `human_answer`
+   event with the command id as evidence.
+3. The Hive acknowledges with an `answer_ack` event carrying the command id. A command for
+   an old epoch, a different question or past its expiry is refused and reported; a
+   repeated command is a no-op. Until `answer_ack` arrives the Host shows the answer as
+   delivered-pending.
+
+Spike S8 checks step 2: how a remote answer enters the blocked `SessionUnit` without the
+gateway's unattended path.
 
 ## 9. Failure and recovery
 
@@ -1126,12 +1209,12 @@ Measure first, then build. Each phase starts with its acceptance tests written a
 | Phase | Scope | Acceptance |
 |---|---|---|
 | 1 | Conductor Store, `submit` / `register_inline`, status join, API, Pipelines page columns | An inline Run appears in the Conductor view with origin `chat`; chat send and stream timings are unchanged (measured before and after); a failing registration never fails `create` |
-| 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery; Chat tab placement choice for `background_local` (§6.4) | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2; from a Chat tab, asking for a background Run shows a confirmation card, only the click submits, the tab stays usable while the Run works, and the Run's questions come back to that tab |
-| 3-0 | Contracts before code: wire and key specification (§4.3.6) with test vectors; DynamoDB, event, Run-record and audit schemas; `ddd_origin` in `ddd_bindings.py`; the four-fact event schema | Reviewed documents and red conformance tests for: crash after claim, out-of-order and duplicate events, duplicate-with-different-payload, cancel racing a result, Hive restart and adopt, lease across a simulated outage, key loss and rotation, a poisoned blob upload, a Run record that fails intake |
-| 3 | Central Service in the Bedrock account (CDK: HTTP API, Lambdas, DynamoDB, S3, KMS key, sweeper); Host enrolment and signed requests; DDD and Project Agent registry; Run-record upload from the Host outbox for inline and Local Runs; intake with redaction; audit; Control Center reads Central | Every finished local Run with upload on hands its record to Central, which passes intake; with `central_upload: "off"`, or `--no-upload`, a local Run sends nothing to Central and behaves the same locally; a remote request ignores the setting and always uploads; a planted fake secret is masked and recorded; a Central outage leaves local Runs unaffected and their records upload afterwards; a replayed upload is a no-op; a node with a wrong signature, stale timestamp or reused nonce is refused |
+| 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery; Chat tab placement choice for `background_local` (§6.4) | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2; from a Chat tab, asking for a background Run shows a confirmation card, only the click submits, the tab stays usable while the Run works, and the Run's questions come back to that tab; a Bash call to the submit route is denied, a second click on a used draft, an expired draft, or a draft whose DDD revision or base commit moved submits nothing |
+| 3-0 | Contracts before code: wire and key specification (§4.3.6) with test vectors; DynamoDB, event, Run-record, trace-cursor and audit schemas; `ddd_origin` in `ddd_bindings.py`; the four-fact event schema; contract fields the Run record needs (`ddd_ref`, `code_ref`, placement, evidence contract id); per-stage, per-model usage instrumentation in `run_protocol/usage.py`; the answer-command envelope (§8.3) | Reviewed documents and red conformance tests for: crash after claim, out-of-order and duplicate events, duplicate-with-different-payload, cancel racing a result, Hive restart and adopt, lease across a simulated outage, key loss and rotation, a poisoned blob upload, a Run record that fails intake, a redacted projection whose canonical record still verifies, a sealed Trace with a mirror gap, two claims racing for a Hive's last slot |
+| 3 | Central Service in the Bedrock account (CDK: HTTP API, Lambdas, DynamoDB, S3, KMS key, sweeper); Host enrolment and signed requests; DDD and Project Agent registry; Run-record upload from the Host outbox for inline and Local Runs; intake with redaction; audit; Control Center reads Central | Every finished local Run with upload on hands its record to Central, which passes intake; with `central_upload: "off"`, or `--no-upload`, a local Run sends nothing to Central and behaves the same locally; a remote request ignores the setting and always uploads; a planted fake secret appears masked in the projection and recorded in audit, while the canonical record still verifies; a Central outage leaves local Runs unaffected and their records upload afterwards; a replayed upload is a no-op; a node with a wrong signature, stale timestamp or reused nonce is refused |
 | 4 | First consumers: Trace (live view, sealed Trace, `run_index`) and Offline Eval (`eval_jobs`, `eval_reports`, intervention classification, the five dimensions) | An uploaded local Run shows per-stage times, tokens and every human answer in the Control Center from Central data only; a dropped event marks its Trace `incomplete`; an Eval report gives all five dimensions or `UNKNOWN`, never a guessed PASS; rebuilding `run_index` from Run records gives the same statistics; `local only` Runs are absent from org stats and counted as not covered; with Central down, local Runs, chat, hooks and MEMORY behave exactly as before |
 | 5 | Slack submit (owner only), confirmation card, `pipeline_submit` job, thread updates, Slack answer button | A non-owner cannot submit; a scheduled Run fires and reports in its thread; a missed fire is recorded `missed(host_offline)` and never submitted late; an overlapping fire is `skipped_overlap`; a replayed occurrence key is a no-op; an owner button press consumes its nonce once and records `human_answer`, while a second click, a non-owner click or an expired nonce is rejected |
-| 6 | Hive credentials moved to the secret store; four-fact completion protocol with landing journal for every placement; EC2 Hive enrolment and Worker through Central; leases; capacity reporting; DDD snapshot manifest and scan | from a Chat tab, a Run can be placed on an EC2 Hive and only Hives allowed for the project are offered; An external Run on EC2 hands in its Run record; the Host takes the result from Central, verifies, re-tests and lands it; a claim raced by two nodes has one winner; a lease survives a simulated 15-minute Central outage and a dead Hive's lease expires 10 minutes after recovery; a revoked-epoch event is rejected; an internal project is rejected for EC2; a crash mid-landing reconciles without double-landing |
+| 6 | Hive credentials moved to the secret store; four-fact completion protocol with landing journal for every placement; EC2 Hive enrolment and Worker through Central; leases; capacity reporting; DDD snapshot manifest and scan | from a Chat tab, a Run can be placed on an EC2 Hive and only Hives allowed for the project are offered; An external Run on EC2 hands in its Run record; the Host takes the result from Central, verifies, re-tests and lands it; a claim raced by two nodes has one winner; a Hive never holds more Attempts than its slots; a queued request fails `queue_timeout` after 24 h and `node_revoked` when its Hive is revoked; an answer given in the tab reaches the Hive Worker once, is acknowledged, and a stale-epoch answer is refused; a lease survives a simulated 15-minute Central outage and a dead Hive's lease expires 10 minutes after recovery; a revoked-epoch event is rejected; an internal project is rejected for EC2; a crash mid-landing reconciles without double-landing |
 | 7 | Cloud Desktop enrolment and Worker; `ddd_origin: repo` fetch with internal git; draft CR handoff. Gated on S6 | from a Chat tab, an internal project offers only Cloud Desktop Hives; An internal Run with an IVTHubSpec-hosted DDD runs on a Cloud Desktop, hands in its Run record and records all four facts ending in `external_handoff` with a draft CR; an external project is rejected for a Cloud Desktop |
 
 Slack scheduling to a named Hive is part of phases 6 and 7 once those Hives exist.
@@ -1147,6 +1230,7 @@ Slack scheduling to a named Hive is part of phases 6 and 7 once those Hives exis
 | S5 | How an owner's Slack button press becomes a `human_answer` without the gateway's unattended path | Phase 5 |
 | S6 | Headless Midway, internal git and `cr` on a Cloud Desktop. `ddd_bindings.bind_repo` defers internal bindings today ("needs Brazil+Midway headless auth") | Phase 7 |
 | S7 | Size of a real Run record (documents, reflect summary, delivery record, event chain with its blobs), measured over recent SwarmAI Runs, to confirm one upload per Run and set S3 lifecycle | Phase 3 |
+| S8 | How a Host-signed answer command enters a blocked Worker `SessionUnit` on a Hive through its daemon-local answer path, so its own hook writes `human_answer` | Phase 6 |
 
 If S1 fails, Phase 2 stops and the design is revised; the jobs `--bare` path is not used
 as a fallback. If S6 fails, internal remote Runs stay unsupported and Phase 7 is
