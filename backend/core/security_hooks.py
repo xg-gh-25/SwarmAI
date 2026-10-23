@@ -382,7 +382,7 @@ def v1_land_card(command: str) -> "str | None":
     sha = payload.get("report_sha")
     if isinstance(sha, str):
         try:
-            text = (engine.store.paths.blobs / sha).read_text(encoding="utf-8")
+            text = engine.store.read_blob(sha).decode("utf-8")
             first = next((ln.strip("# ").strip() for ln in text.splitlines() if ln.strip()), "")
             lines.append(f"REPORT: {first[:120]}")
         except OSError:

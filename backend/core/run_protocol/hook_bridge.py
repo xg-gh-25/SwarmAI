@@ -204,36 +204,6 @@ class ReviewHookBridge:
             )
         return {"answer": answer, "parsed": parsed}
 
-    def record_reuse(self, *, handout_event_id: str, source_answer_event_id: str,
-                     parsed: ParsedAnswer, completed_at: str) -> dict[str, Any]:
-        """Materialize a fact-identical cached answer without replaying another run's IDs."""
-        events = self.store.read_events()
-        handout = next((row for row in events if row.get("event_id") == handout_event_id), None)
-        if handout is None or handout.get("kind") != "handout":
-            raise StoreError("reuse handout is missing")
-        expert = handout["payload"]["expert_id"]
-        if parsed.state not in {"parsed", "partial"}:
-            raise StoreError("only parsed cached answers may be reused")
-        reuse, _ = self.store.append_new(
-            writer=self.store.authority.writer("cli"), kind="answer_reuse",
-            at=completed_at, stage=handout["stage"], round=handout["round"],
-            attempt=handout["attempt"],
-            payload={"handout_event_id": handout_event_id,
-                     "answer_event_id": source_answer_event_id, "expert_id": expert,
-                     "stage": handout["stage"], "round": handout["round"],
-                     "state": parsed.state},
-        )
-        for ordinal, finding in enumerate(parsed.findings, 1):
-            self.store.append_new(
-                writer=self.store.authority.writer("hook"), kind="finding_occ",
-                at=completed_at, stage=handout["stage"], round=handout["round"],
-                attempt=handout["attempt"], ordinal=ordinal,
-                payload={"answer_event_id": reuse["event_id"], "expert": expert,
-                         "severity": finding["severity"], "finding_kind": finding["kind"],
-                         "file": finding["file"], "line": finding["line"],
-                         "claim": finding["claim"], "fix": finding["fix"]})
-        return reuse
-
     def record_usage(self, usage: Mapping[str, Any], *, completed_at: str) -> None:
         values = {
             "input_tokens": int(usage.get("input_tokens") or 0)

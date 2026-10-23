@@ -728,7 +728,7 @@ def execute_request(
     if not isinstance(report_sha, str) or not isinstance(bases, Mapping) or set(bases) != set(repos):
         raise LandingError("land_request lacks its REPORT or bases")
     try:
-        report = (store.paths.blobs / report_sha).read_bytes()
+        report = store.read_blob(report_sha)
     except OSError as exc:
         raise LandingError(f"prepared REPORT blob missing: {exc}") from exc
     code_trees = tree.build_code_trees(repos, request["run_id"], git_tree.write_tree,

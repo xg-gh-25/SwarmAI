@@ -153,6 +153,7 @@ def build_repo_final(
     tdd_required: Sequence[str] | None = None,
     whole_files: Sequence[str] | None = None,
     collected: Sequence[str] | None = None,
+    generated_at: str | None = None,
 ) -> dict[str, Any]:
     """Fold current-tree, runner-signed calls into one repo final row.
 
@@ -261,6 +262,8 @@ def build_repo_final(
         if not SHA40.fullmatch(carried_from):
             raise FinalError("carried_from must be a git commit id")
         final["carried_from"] = carried_from
+    if generated_at is not None:
+        final["generated_at"] = generated_at       # inside the record hash
     provenance["record_hash"] = _final_record_hash(final)
     return final
 

@@ -621,3 +621,11 @@ def test_r3_a_create_that_fails_before_run_create_leaves_no_run_behind(tmp_path,
                          run_id="run_half", requirement="x")
     assert not (tmp_path / "data" / "state" / "pipeline_agent_audit" / "runs" / "run_half").exists()
     assert not (tmp_path / "ws" / "Projects" / "P" / ".artifacts" / "runs" / "run_half").exists()
+
+
+def test_q3_cross_run_answer_reuse_is_removed():
+    """Q3 = c (XG 2026-10-23): no cross-run answer reuse; no half-built path is left."""
+    from core.run_protocol import events, hook_bridge, review
+    assert "answer_reuse" not in events.EVENT_SPECS
+    assert not hasattr(review, "review_cache_key")
+    assert not hasattr(hook_bridge.ReviewHookBridge, "record_reuse")

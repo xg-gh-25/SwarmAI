@@ -11,8 +11,7 @@ import pytest
 from core.run_protocol import events as ev
 from core.run_protocol.hook_bridge import ReviewHookBridge
 from core.run_protocol.review import (OUTPUT_CONTRACT, ReviewError, ReviewOrchestrator,
-                                      lint_prompt, review_cache_key, reviewers,
-                                      validate_fixing_spec)
+                                      lint_prompt, reviewers)
 from core.run_protocol.store import AuditStore
 
 AT = "2026-10-22T00:00:00+00:00"
@@ -81,17 +80,6 @@ def test_r1_finding_clusters_and_minimal_r2_flow(tmp_path):
     assert "## Findings" in review.render_review()
 
 
-def test_fixing_spec_covers_each_open_finding_exactly_once():
-    findings = [{"canonical_id": "CF-aaaaaaaa", "status": "open"},
-                {"canonical_id": "CF-bbbbbbbb", "status": "refuted"}]
-    spec = {"pass": 1, "clusters": [{"id": "K1", "cause": "missing guard",
-             "findings": ["CF-aaaaaaaa"], "sites": ["a.py:1"], "solution": "validate",
-             "evidence_plan": [{"finding": "CF-aaaaaaaa", "type": "test", "ref": "t"}]}],
-            "refuted": [], "reclassify": []}
-    assert validate_fixing_spec(spec, findings) == spec
-    broken = {**spec, "refuted": [{"finding": "CF-aaaaaaaa", "evidence": ["a.py:1"]}]}
-    with pytest.raises(ReviewError, match="exactly once"):
-        validate_fixing_spec(broken, findings)
 
 
 def test_review_document_is_generated_from_events(tmp_path):
@@ -108,14 +96,6 @@ def test_review_document_is_generated_from_events(tmp_path):
     assert "parsed" in (tmp_path / "run" / "REVIEW.md").read_text()
 
 
-def test_review_cache_key_binds_every_reuse_identity():
-    args = dict(repo="r", code_tree="1" * 40, prompt_sha="2" * 64,
-                expert_sha="3" * 64, model_id="m", pipeline_code_hash="4" * 64,
-                protocol_version=1, rules_version="v1")
-    base = review_cache_key(**args)
-    for field in args:
-        changed = dict(args); changed[field] = str(changed[field]) + "x"
-        assert review_cache_key(**changed) != base
 
 
 def test_triggered_review_patterns_dispatch_correctness_even_for_a_small_change():

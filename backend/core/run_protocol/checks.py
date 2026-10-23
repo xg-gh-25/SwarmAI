@@ -339,9 +339,9 @@ def _collected(ref: Any, context: CheckContext) -> bool:
 
 
 def _answers(context: CheckContext, expert: str | None = None) -> list[Mapping[str, Any]]:
-    """Answers and fact-identical reuses of an earlier answer (§C6.2, F-7): a reuse
-    carries the reused answer's parse state, so it counts the same."""
-    return [event for event in context.events if event.get("kind") in ("answer", "answer_reuse")
+    """The experts' answer events (cross-run answer reuse is not implemented: fixing
+    log §15, conformance Q3)."""
+    return [event for event in context.events if event.get("kind") == "answer"
             and (expert is None or event["payload"].get("expert_id") == expert)]
 
 

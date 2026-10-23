@@ -3,8 +3,6 @@
 Public symbols:
 - ``reviewers`` — lightweight P3a roster from deterministic scope facts.
 - ``ReviewOrchestrator`` — handouts, projections, R2 routing and document rendering.
-- ``review_cache_key`` — exact immutable answer-reuse identity.
-- ``validate_fixing_spec`` — every finding is clustered or refuted exactly once.
 """
 from __future__ import annotations
 
@@ -17,7 +15,6 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from core.run_protocol import events as ev
-from core.run_protocol.cache import cache_key
 from core.run_protocol.findings import cluster_findings, fold as fold_findings, push_effect, r2_experts
 from core.run_protocol.store import AuditStore
 
@@ -201,62 +198,7 @@ def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
     return [{"id": expert, "reason": reason} for expert, reason in picked.items()]
 
 
-def review_cache_key(*, repo: str, code_tree: str, prompt_sha: str,
-                     expert_sha: str, model_id: str,
-                     pipeline_code_hash: str, protocol_version: int,
-                     rules_version: str) -> str:
-    return cache_key({
-        "kind": "review-answer", "repo": repo, "tree": code_tree,
-        "prompt_sha": prompt_sha, "expert_sha": expert_sha, "model_id": model_id,
-        "pipeline_code_hash": pipeline_code_hash,
-        "protocol_version": protocol_version, "rules_version": rules_version,
-    })
 
-
-def validate_fixing_spec(value: Any, findings: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or set(value) != {"pass", "clusters", "refuted", "reclassify"}:
-        raise ReviewError("fixing spec has wrong fields")
-    if not isinstance(value["pass"], int) or value["pass"] < 1:
-        raise ReviewError("fixing pass must be positive")
-    known = {row["canonical_id"] for row in findings}
-    assigned: list[str] = []
-    clusters = value["clusters"]
-    if not isinstance(clusters, list):
-        raise ReviewError("clusters must be a list")
-    for index, cluster in enumerate(clusters, 1):
-        required = {"id", "cause", "findings", "sites", "solution", "evidence_plan"}
-        if not isinstance(cluster, Mapping) or set(cluster) != required:
-            raise ReviewError(f"cluster {index} has wrong fields")
-        if not all(isinstance(cluster[key], str) and cluster[key].strip()
-                   for key in ("id", "cause", "solution")):
-            raise ReviewError(f"cluster {index} lacks cause/solution")
-        ids = cluster["findings"]
-        if not isinstance(ids, list) or not ids or any(item not in known for item in ids):
-            raise ReviewError(f"cluster {index} references unknown findings")
-        if not isinstance(cluster["sites"], list) or not cluster["sites"]:
-            raise ReviewError(f"cluster {index} lacks sites")
-        plans = cluster["evidence_plan"]
-        if not isinstance(plans, list) or {p.get("finding") for p in plans if isinstance(p, Mapping)} != set(ids):
-            raise ReviewError(f"cluster {index} evidence plan is incomplete")
-        assigned.extend(ids)
-    refuted = value["refuted"]
-    if not isinstance(refuted, list) or any(
-        not isinstance(row, Mapping) or set(row) != {"finding", "evidence"}
-        or row.get("finding") not in known or not isinstance(row.get("evidence"), list)
-        or not row["evidence"] for row in refuted
-    ):
-        raise ReviewError("refuted rows are malformed")
-    assigned.extend(row["finding"] for row in refuted)
-    open_ids = {row["canonical_id"] for row in findings if row.get("status") in {"open", "invalid_test"}}
-    if set(assigned) != open_ids or len(assigned) != len(set(assigned)):
-        raise ReviewError("each open finding must appear exactly once in clusters or refuted")
-    reclassify = value["reclassify"]
-    if not isinstance(reclassify, list) or any(
-        not isinstance(row, Mapping) or set(row) != {"finding", "from", "to", "reason"}
-        or row.get("finding") not in known for row in reclassify
-    ):
-        raise ReviewError("reclassification rows are malformed")
-    return json.loads(json.dumps(value))
 
 
 class ReviewOrchestrator:
@@ -265,6 +207,7 @@ class ReviewOrchestrator:
     def __init__(self, store: AuditStore, run_dir: str | Path):
         self.store = store
         self.run_dir = Path(run_dir)
+        self.missing_blobs: list[str] = []
 
     @staticmethod
     def _atomic(path: Path, data: str) -> None:
@@ -348,10 +291,13 @@ class ReviewOrchestrator:
         proofs: dict[str, str] = {}
         reclassifications: dict[str, Mapping[str, Any]] = {}
         causes: dict[str, str] = {}
+        solutions: dict[str, str] = {}
+        plans: dict[str, str] = {}
         for index, item in enumerate(items, 1):
             if not isinstance(item, Mapping):
                 raise ReviewError(f"handoff item {index} must be an object")
-            allowed = {"finding_id", "hunk", "proof", "reclassify", "cause"}
+            allowed = {"finding_id", "hunk", "proof", "reclassify", "cause", "solution",
+                       "evidence_plan"}
             if set(item) - allowed:
                 raise ReviewError(f"handoff item {index} has unknown fields")
             finding_id, hunk = item.get("finding_id"), item.get("hunk")
@@ -382,6 +328,20 @@ class ReviewOrchestrator:
             hunks[finding_id] = hunk
             if isinstance(item.get("cause"), str) and item["cause"].strip():
                 causes[finding_id] = item["cause"].strip()[:400]
+            # design §B6: the fix in words, and how it will be proven (planned before
+            # the proof exists; the proof event is the evidence that it was)
+            if item.get("solution") is not None:
+                if not isinstance(item["solution"], str) or not item["solution"].strip():
+                    raise ReviewError(f"handoff item {index} solution must be text")
+                solutions[finding_id] = item["solution"].strip()[:800]
+            plan = item.get("evidence_plan")
+            if plan is not None:
+                if not isinstance(plan, Mapping) or set(plan) - {"type", "ref"} \
+                        or plan.get("type") not in EVIDENCE_TYPES \
+                        or not isinstance(plan.get("ref", ""), str):
+                    raise ReviewError(f"handoff item {index} evidence_plan must be "
+                                      f"{{type: {sorted(EVIDENCE_TYPES)}, ref?: text}}")
+                plans[finding_id] = json.dumps(dict(plan), ensure_ascii=False, sort_keys=True)
         # every item is valid: only now record the pass (no partial pass in the log)
         for finding_id in addressed:
             proposal = reclassifications.get(finding_id)
@@ -392,16 +352,34 @@ class ReviewOrchestrator:
                     payload={"canonical_id": finding_id, "pass": pass_number,
                              "from": proposal["from"], "to": proposal["to"],
                              "reason": proposal["reason"]})
+            payload = {"canonical_id": finding_id, "pass": pass_number,
+                       "hunk": hunks[finding_id]}
+            if finding_id in causes:
+                payload["cause"] = causes[finding_id]
+            if finding_id in proofs:
+                payload["proof"] = proofs[finding_id]
+            if finding_id in solutions:
+                payload["solution"] = solutions[finding_id]
+            if finding_id in plans:
+                payload["evidence_plan"] = plans[finding_id]
             self.store.append_new(
                 writer=self.store.authority.writer("cli"), kind="address", at=at,
-                stage="review", attempt=attempt,
-                payload={"canonical_id": finding_id, "pass": pass_number})
-        handoff = {"pass": pass_number, "addressed": sorted(addressed),
-                   "hunks": hunks, "proofs": proofs, "causes": causes,
-                   "reclassifications": reclassifications}
-        path = self.run_dir / "artifacts" / f"review-handoff-{pass_number}.json"
-        self._atomic(path, json.dumps(handoff, ensure_ascii=False, sort_keys=True, indent=2))
-        return handoff
+                stage="review", attempt=attempt, payload=payload)
+        # the pass lives only in its signed address events (K4, F21): no side file
+        return {"pass": pass_number, "addressed": sorted(addressed),
+                "hunks": hunks, "proofs": proofs, "causes": causes,
+                "reclassifications": reclassifications}
+
+    def _text(self, value: Any) -> str | None:
+        """An event payload string, read from its audit blob when it was moved there. A
+        blob that cannot be read is listed in ``missing_blobs`` (the engine records it)."""
+        if isinstance(value, Mapping) and isinstance(value.get("blob"), str):
+            try:
+                return self.store.read_blob(value["blob"]).decode("utf-8")
+            except (OSError, UnicodeDecodeError):
+                self.missing_blobs.append(value["blob"][:12])
+                return None
+        return value if isinstance(value, str) else None
 
     def record_cli_proofs(self, value: Mapping[str, Any], *, at: str,
                           attempt: int) -> list[dict[str, Any]]:
@@ -450,28 +428,54 @@ class ReviewOrchestrator:
             payload, ensure_ascii=False, sort_keys=True, indent=2)
 
     def render_review(self) -> str:
+        """REVIEW.md, from events only (design §E2, conformance F20): each dispatch with
+        its prompt sha and parse state, each finding with its R2 status, its
+        reclassification and whether that was confirmed, and the event that decided it;
+        the recorded checks; and the rules by which the review checks decide."""
+        from core.run_protocol import checks as check_registry
         events = self.store.read_events()
         findings = self.findings()
-        answers = [row for row in events if row["kind"] in {"answer", "answer_reuse"}]
-        checks = [row for row in events if row["kind"] == "check"]
-        lines = ["# Review", "", "## Review events", "",
-                 "| Stage | Round | Expert | Answer | State |", "|---|---:|---|---|---|"]
-        for answer in answers:
-            payload = answer["payload"]
-            lines.append(f"| {answer.get('stage') or '—'} | {answer.get('round') or '—'} | "
-                         f"{payload.get('expert_id') or answer.get('ckey') or '—'} | "
-                         f"{answer['event_id']} | {payload.get('state') or 'reused'} |")
+        handouts = {row["event_id"]: row for row in events if row["kind"] == "handout"}
+        answers = {row["payload"].get("handout_event_id"): row
+                   for row in events if row["kind"] == "answer"}
+        lines = ["# Review", "", "## Dispatches", "",
+                 "| Stage | Round | Expert | Prompt sha | Handout | Answer | State | Verdict |",
+                 "|---|---:|---|---|---|---|---|---|"]
+        for handout in handouts.values():
+            payload = handout["payload"]
+            answer = answers.get(handout["event_id"])
+            lines.append(
+                f"| {handout.get('stage') or '—'} | {handout.get('round') or '—'} | "
+                f"{payload.get('expert_id') or '—'} | {str(payload.get('prompt_sha') or '—')[:12]} | "
+                f"{handout['event_id'][:12]} | {answer['event_id'][:12] if answer else '—'} | "
+                f"{answer['payload'].get('state') if answer else 'unanswered'} | "
+                f"{(answer['payload'].get('verdict') if answer else None) or '—'} |")
         lines += ["", "## Findings", "",
-                  "| ID | Severity | Kind | Site | State | Push | Claim |",
-                  "|---|---|---|---|---|---|---|"]
+                  "| ID | Severity | Kind | Site | State | R2 | Reclassified | Evidence | Push | Claim |",
+                  "|---|---|---|---|---|---|---|---|---|---|"]
         for row in findings:
+            change = row.get("reclassification")
+            reclass = (f"{change['from']}→{change['to']} "
+                       f"({'confirmed' if change.get('confirmed') else 'unconfirmed'})"
+                       if isinstance(change, Mapping) else "—")
+            evidence = str(row.get("evidence_event_id") or "—")[:12]
             lines.append(f"| {row['canonical_id']} | {row['severity']} | {row['kind']} | "
                          f"{row['file']}:{row['line']} | {row['status']} | "
-                         f"{'yes' if push_effect(row) else 'no'} | {row['claim']} |")
-        lines += ["", "## Deterministic checks", ""]
+                         f"{row.get('r2_status') or '—'} | {reclass} | {evidence} | "
+                         f"{'yes' if push_effect(row) else 'no'} | {plain(row['claim'])} |")
+        lines += ["", "## Recorded checks", ""]
         lines += [f"- {row['payload']['check_id']}: "
                   f"{'PASS' if row['payload']['passed'] else 'FAIL'} — {row['payload']['detail']}"
-                  for row in checks]
+                  f" (event {row['event_id'][:12]})"
+                  for row in events if row["kind"] == "check"]
+        effect_text = {"stage": "blocks the stage", "land": "blocks landing", "push": "blocks push",
+                       "": "recorded only"}
+        lines += ["", "## Decision rules", ""]
+        for spec in check_registry.CHECKS.values():
+            if spec.document == "review":
+                effects = sorted(spec.effects) or [""]
+                lines.append(f"- {spec.check_id} ({', '.join(spec.stages)}): a failure "
+                             + " and ".join(effect_text.get(e, e) for e in effects))
         return "\n".join(lines).rstrip() + "\n"
 
     def render_fixing_passes(self) -> str | None:
@@ -486,13 +490,10 @@ class ReviewOrchestrator:
         rows = {row["canonical_id"]: row for row in self.findings()}
         lines = ["# Fixing Spec", ""]
         for number in passes:
-            addressed = [e["payload"]["canonical_id"] for e in events
-                         if e.get("kind") == "address" and e["payload"]["pass"] == number]
-            try:
-                handoff = json.loads((self.run_dir / "artifacts" /
-                                      f"review-handoff-{number}.json").read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                handoff = {}
+            mine = [e for e in events
+                    if e.get("kind") == "address" and e["payload"]["pass"] == number]
+            addressed = [e["payload"]["canonical_id"] for e in mine]
+            given = {e["payload"]["canonical_id"]: e["payload"] for e in mine}
             lines += [f"## Pass {number}", ""]
             for cluster in cluster_findings([rows[c] for c in addressed if c in rows]):
                 lines += [f"### {cluster['cluster_id']}", "",
@@ -500,12 +501,21 @@ class ReviewOrchestrator:
                           "- Sites: " + ", ".join(f"{site['file']}:{site['line']}"
                                                   for site in cluster["sites"])]
                 for cid in cluster["findings"]:
-                    cause = (handoff.get("causes") or {}).get(cid)
+                    cause = (given.get(cid) or {}).get("cause")
                     if cause:
-                        lines.append(f"- Cause ({cid}): {cause}")
-                    hunk = (handoff.get("hunks") or {}).get(cid)
+                        lines.append(f"- Cause ({cid}): {plain(cause)}")
+                    given_row = given.get(cid) or {}
+                    if given_row.get("solution"):
+                        lines.append(f"- Solution ({cid}): {plain(given_row['solution'])}")
+                    plan = _json_or_none(given_row.get("evidence_plan"))
+                    if plan:
+                        lines.append(f"- Evidence plan ({cid}): {plan.get('type')}"
+                                     + (f" — {plain(plan['ref'])}" if plan.get("ref") else ""))
+                    hunk = self._text(given_row.get("hunk"))
+                    if hunk is None and given_row.get("hunk") is not None:
+                        lines.append(f"- Hunk ({cid}): missing from the audit area")
                     if hunk:
-                        lines += [f"- Solution ({cid}):", "", "```diff", hunk.rstrip(), "```"]
+                        lines += [f"- Hunk ({cid}):", "", "```diff", hunk.rstrip(), "```"]
                 lines.append("")
             refuted = [e for e in events if e.get("kind") == "proof"
                        and e["payload"]["pass"] == number
@@ -526,40 +536,38 @@ class ReviewOrchestrator:
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
-    def write_documents(self, fixing_spec: Mapping[str, Any] | None = None) -> list[str]:
-        """Render .md projections; model-authored JSON is validated before rendering."""
-        written: list[str] = []
-        review_path = self.run_dir / "REVIEW.md"
-        self._atomic(review_path, self.render_review())
-        written.append(str(review_path))
-        fixing = self.render_fixing_passes() if fixing_spec is None else None
-        if fixing is not None:
-            path = self.run_dir / "FIXING_SPEC.md"
-            self._atomic(path, fixing)
-            written.append(str(path))
-        if fixing_spec is not None:
-            value = validate_fixing_spec(fixing_spec, self.findings())
-            artifact = self.run_dir / "artifacts" / "fixing_spec.json"
-            self._atomic(artifact, json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
-            path = self.run_dir / "FIXING_SPEC.md"
-            self._atomic(path, self.render_fixing_spec(value))
-            written.extend([str(artifact), str(path)])
-        return written
+    def write_review(self) -> str:
+        path = self.run_dir / "REVIEW.md"
+        self._atomic(path, self.render_review())
+        return str(path)
 
-    @staticmethod
-    def render_fixing_spec(value: Mapping[str, Any]) -> str:
-        lines = ["# Fixing Spec", "", f"## Pass {value['pass']}", ""]
-        for cluster in value["clusters"]:
-            lines += [f"### {cluster['id']}", "", f"- Cause: {cluster['cause']}",
-                      f"- Findings: {', '.join(cluster['findings'])}",
-                      f"- Sites: {', '.join(str(site) for site in cluster['sites'])}",
-                      f"- Solution: {cluster['solution']}", "- Evidence:"]
-            lines += [f"  - {plan['finding']}: {plan['type']} — {plan.get('ref') or 'pending'}"
-                      for plan in cluster["evidence_plan"]]
-            lines.append("")
-        for row in value["refuted"]:
-            lines.append(f"- Refuted {row['finding']}: {', '.join(row['evidence'])}")
-        return "\n".join(lines).rstrip() + "\n"
+    def write_fixing_spec(self) -> str | None:
+        fixing = self.render_fixing_passes()
+        if fixing is None:
+            return None
+        path = self.run_dir / "FIXING_SPEC.md"
+        self._atomic(path, fixing)
+        return str(path)
+
+    def write_documents(self) -> list[str]:
+        """Render REVIEW.md and FIXING_SPEC.md, projections of the signed events only."""
+        return [p for p in (self.write_review(), self.write_fixing_spec()) if p]
+
+
+def plain(value: Any) -> str:
+    """Model- or person-written words as plain Markdown text (one encoder: audit's)."""
+    from core.run_protocol.audit import _text
+    return _text(value, 800)
+
+
+EVIDENCE_TYPES = frozenset({"test", "probe", "diff_assertion", "refuted"})
+
+
+def _json_or_none(value: Any) -> Any:
+    try:
+        return json.loads(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
 
 
 def _ref_text(ref: Any) -> str:

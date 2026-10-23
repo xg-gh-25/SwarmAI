@@ -381,3 +381,37 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - contract、seals、run 列表的 JSON 写失败没有归为审计区写不进，create 失败还会留下占着 run id 的半成品。`AuditStore._atomic_json` 统一转成 `AuditUnwritable`；create 在 `run_create` 签名前失败时，只删除这次调用自己创建的目录。
 
 **登记的偏差：** trivial profile 的精简 DESIGN_SPEC 没有 `chosen` 字段，decision 不写回它（事件里仍有，检查读事件）。runner 单元测试的合成 run 现在写了 `run_create` 起始事件；proof 关联测试把 finding 账本的 fold 排除在该合成 store 之外，finding 校验由 findings 和真实 E2E 测试覆盖。
+
+## 15. Q3：删除跨 run 审查答案复用（XG 2026-10-23 选 c）
+
+**结论：** 设计 §C6.2 的跨 run 复用不实现，登记为偏差。删除 `review.review_cache_key`、`ReviewHookBridge.record_reuse`、`answer_reuse` 事件种类，以及它在 events、lifecycle、findings、checks、review、engine、audit 里的分支和对应测试。
+
+**依据（按五个维度重新评估）：**
+- 命中条件几乎不成立。缓存键包含被审的整棵代码树和 prompt（专家说明加 `git diff base..tree`），跨 run 命中要求同一 base 上产出逐字节相同的树。修 finding、`land_conflict`、`final_stale` 之后树或 base 都会变；同一 run 内的重复 `review-start` 已由 `engine.review_start` 处理（已答跳过，无输出最多再派一次）。
+- 跨 run 引用无法验签。每个 run 有自己的 `authority.key`，被复用的答案事件属于另一条签名链，验证它要跨 run 读审计区，破坏 Isolation。
+- 原前提不成立。pipeline-expert 是 `model="inherit"`，写死模型会让 expert 不再跟随会话模型（Quality）；按 transcript 观察到的模型做键可行，但为一条几乎不执行的路径加缓存索引、并发冲突处理和审计计数，Token 收益约等于零。
+
+**Token 计数随之简化：** 会话数 = 1 + handout 数。
+
+## 16. 设计符合性修复 K4：文档和审计只从事件生成（含 Q3 删除）
+
+| 项 | 改动 |
+|---|---|
+| F21 | `address` 事件带 hunk（强制 audit blob）、cause、proof。FIXING_SPEC 只读这些事件，不再写也不再读 `review-handoff-*.json`。hunk 的 blob 读不出时，文档写明"hunk missing"，并记一条 `render_failed` |
+| F20 | REVIEW.md 只从事件和 check 注册表渲染：每次派发的 prompt sha 和解析状态；每条 finding 的 R2 状态、改分类及是否确认、证据事件；已记录的检查；审查检查的决定规则（卡阶段、卡落地、卡 push）。在审查各步骤、接受 finding、REVIEW/TEST 阶段完成和 DELIVER 的 REPORT 生成前重新渲染 |
+| F22 | `run_audit.details` 新增 `critical_path`（每阶段的墙钟时间、扣除人工等待后的 active 时间、专家派发区间的并集、attempt/派发/测试调用次数；测试调用没有开始时间，记为 unmeasured）、`experts`、`waits`、`trace_matrix`。`trace_matrix` 由新模块 `core/run_protocol/trace.py::matrix(design, final)` 计算，维度为 R/P/F → task → exit → 各 repo 的结果，以后 NE-4 复用同一个函数 |
+| F23 | Markdown 渲染失败只记一条 `render_failed`，身份为 (document, 所渲染快照的最后一条事件)，同一快照只记一次，不影响阶段判定。基础设施错误照常抛出。REPORT 不走这条路，由 DV-1 负责 |
+| L5 | final 增加 `generated_at`，计入 record hash。auth 和 auth_consumed 不另加时间字段：签名事件的 `at` 就是授权和消费的时间，`session_id` 就是消费者（设计文字修订，见后续 commit） |
+| L6 | REPORT 标题改为 run 标题：direct 用 contract.requirement 的第一行，其余用 requirements 的 understanding.claim，都没有时用 run id。所有不受信任的文字（标题、需求、人的备注、检查的详情）经过统一的纯文本编码：HTML 转义，并转义 Markdown 的强调、代码、链接、图片和表格语法 |
+| §5 | `manual_rescues` 输出 null（这个计数没有生产者），不再参与 Autonomy 判定。删除 `validate_fixing_spec`、`render_fixing_spec`、`write_documents(fixing_spec=)`（没有生产调用方） |
+| Q3 | 见 §15 |
+
+**审查**
+- **第 1 轮（f260a839）：** 1 个 HIGH、4 个 MED。
+  - HIGH：旧日志缺 hunk 读不出。XG 决定不兼容旧 run，hunk 保持必填。
+  - MED：blob 丢失被静默吞掉、追溯矩阵缺 task、critical_path 混入人工等待、标题可注入。四条都按上表修复。
+- **第 2 轮（312aac8c，最后一轮，发现一次修完）：** 0 个 HIGH，4 个 MED。
+  - REVIEW.md 漏了 Gate-0 的 VERDICT：Dispatches 表补上 Verdict 列。
+  - blob 内容被替换后仍会被渲染：新增 `AuditStore.read_blob(digest)`，统一校验文件名和 SHA-256，不匹配按读不出处理。REVIEW/FIXING_SPEC、REPORT 拷贝、land 时读取的 REPORT、hook 的落地卡片都改走它。
+  - 事件化后丢了 §B6 的 solution 和 evidence_plan：address 的条目接受 `solution`（文字）和 `evidence_plan`（{type, ref?}，type ∈ test/probe/diff_assertion/refuted），写入签名事件；FIXING_SPEC 分别渲染 Cause、Solution、Evidence plan 和 Hunk。
+  - FIXING_SPEC 渲染失败被记成 REVIEW：两份文档分开渲染，各自记录失败。表格单元和模型写的文字统一经过 audit 的纯文本编码。

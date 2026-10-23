@@ -28,6 +28,10 @@ class StoreError(RuntimeError):
     """Audit data is unsafe, malformed, conflicting, or unavailable."""
 
 
+class BlobUnreadable(OSError):
+    """An audit blob is missing or its bytes do not match its digest."""
+
+
 class AuditUnwritable(StoreError, InfrastructureError):
     """The audit area cannot be written (an OS error on its files): the run's
     infrastructure failed (conformance F11). Malformed or conflicting data is a
@@ -316,6 +320,18 @@ class AuditStore:
         finally:
             flock_unlock(lock.fileno())
             lock.close()
+
+    def read_blob(self, digest: str) -> bytes:
+        """The one way to read an audit blob (K4 r2): the bytes whose SHA-256 is
+        *digest*. A missing file or a file whose content does not match its name both
+        raise ``BlobUnreadable`` (an ``OSError``), so a reader never uses altered bytes."""
+        if not isinstance(digest, str) or len(digest) != 64 \
+                or any(c not in "0123456789abcdef" for c in digest):
+            raise BlobUnreadable(f"not a blob digest: {str(digest)[:20]!r}")
+        data = (self.paths.blobs / digest).read_bytes()
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise BlobUnreadable(f"blob {digest[:12]} does not match its digest")
+        return data
 
     def put_blob(self, data: bytes) -> str:
         """Persist bytes content-addressed and return sha256 under the run lock."""

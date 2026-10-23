@@ -14,11 +14,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from core.run_protocol import trace as trace_protocol
 from core.run_protocol.findings import push_effect
 
 
 class AuditError(ValueError):
     """Audit inputs are malformed or internally inconsistent."""
+
 
 
 def _time(value: Any) -> float | None:
@@ -60,13 +62,108 @@ def _unsettled(events: Sequence[Mapping[str, Any]]) -> list[str]:
     return []
 
 
+def _union_seconds(spans: Sequence[tuple[float, float]]) -> float:
+    """Length of the union of [start, end] intervals: parallel work counts once."""
+    total, last = 0.0, None
+    for start, end in sorted(spans):
+        if last is None or start > last:
+            total += end - start
+            last = end
+        elif end > last:
+            total += end - last
+            last = end
+    return total
+
+
+def _critical_path(events: Sequence[Mapping[str, Any]],
+                   waits: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Each stage's span, from the event that opened it (run_create, or the previous
+    stage_complete) to its own stage_complete (or the landing for the last one).
+
+    - ``seconds``: the wall span; ``active_seconds``: the span minus the human waits
+      (decision, auth) inside it;
+    - ``dispatch_seconds``: the union of its handout→answer intervals (parallel
+      experts count once);
+    - test calls are counted but not timed: a ``test_call`` event records when it
+      ended, not when it started, so their time is ``unmeasured``, never guessed.
+    An end that is not timed makes the span null, not zero."""
+    answers = {(row.get("payload") or {}).get("handout_event_id"): _time(row.get("at"))
+               for row in events if row.get("kind") == "answer"}
+    closed = [(_time(w.get("opened_at")), _time(w.get("closed_at"))) for w in waits]
+    closed = [(a, b) for a, b in closed if a is not None and b is not None]
+    spans: list[dict[str, Any]] = []
+    start = next((row.get("at") for row in events if row.get("kind") == "run_create"), None)
+    current: dict[str, Any] = {"attempts": 0, "dispatches": 0, "test_calls": 0}
+    dispatch: list[tuple[float, float]] = []
+
+    def close(stage: Any, ended_at: Any) -> None:
+        begin, end = _time(start), _time(ended_at)
+        seconds = end - begin if begin is not None and end is not None else None
+        waited = (_union_seconds([(max(a, begin), min(b, end)) for a, b in closed
+                                  if b > begin and a < end])
+                  if seconds is not None else None)
+        spans.append({"stage": stage, "started_at": start, "ended_at": ended_at,
+                      "seconds": round(seconds, 3) if seconds is not None else None,
+                      "active_seconds": (round(max(0.0, seconds - waited), 3)
+                                         if seconds is not None else None),
+                      "dispatch_seconds": round(_union_seconds(dispatch), 3),
+                      "unmeasured": ["test_calls"] if current["test_calls"] else [],
+                      **current})
+
+    for event in events:
+        kind = event.get("kind")
+        if kind == "stage_attempt":
+            current["attempts"] += 1
+        elif kind == "handout":
+            current["dispatches"] += 1
+            begin, end = _time(event.get("at")), answers.get(event.get("event_id"))
+            if begin is not None and end is not None:
+                dispatch.append((begin, end))
+        elif kind == "test_call":
+            current["test_calls"] += 1
+        if kind in {"stage_complete", "land"}:
+            close(event.get("stage") or "deliver", event.get("at"))
+            start = event.get("at")
+            current = {"attempts": 0, "dispatches": 0, "test_calls": 0}
+            dispatch = []
+    if any(current.values()):
+        spans.append({"stage": "open", "started_at": start, "ended_at": None,
+                      "seconds": None, "active_seconds": None,
+                      "dispatch_seconds": round(_union_seconds(dispatch), 3),
+                      "unmeasured": ["test_calls"] if current["test_calls"] else [],
+                      **current})
+    return spans
+
+
+def _experts(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """One row per expert dispatch: handout to answer, and the answer's parse state."""
+    answers = {(row.get("payload") or {}).get("handout_event_id"): row
+               for row in events if row.get("kind") == "answer"}
+    answers.pop(None, None)
+    rows = []
+    for handout in (row for row in events if row.get("kind") == "handout"):
+        answer = answers.get(handout.get("event_id"))
+        begin = _time(handout.get("at"))
+        end = _time(answer.get("at")) if answer else None
+        rows.append({"expert": (handout.get("payload") or {}).get("expert_id"),
+                     "stage": handout.get("stage"), "round": handout.get("round"),
+                     "handout_event_id": handout.get("event_id"),
+                     "answer_event_id": answer.get("event_id") if answer else None,
+                     "state": (answer.get("payload") or {}).get("state") if answer else None,
+                     "seconds": round(end - begin, 3) if begin is not None
+                     and end is not None else None})
+    return rows
+
+
 def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mapping[str, Any]],
           final: Mapping[str, Any], findings: Sequence[Mapping[str, Any]],
           contract: Mapping[str, Any], push: Mapping[str, Any], audit_through: str,
           commits: Mapping[str, str] | None = None,
           repos_isolated: int | None = None,
           retained: Sequence[Mapping[str, Any]] = (),
-          manual: Mapping[str, Any] | None = None) -> dict[str, Any]:
+          manual: Mapping[str, Any] | None = None,
+          title: str | None = None,
+          design: Mapping[str, Any] | None = None) -> dict[str, Any]:
     if audit_through not in {"DELIVER", "COMPLETED"}:
         raise AuditError("audit_through must be DELIVER or COMPLETED")
     if projection.get("run_id") != run_id or contract.get("run_id") != run_id:
@@ -77,19 +174,27 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     # too few timed events: the time is unknown (null), not zero (§E9.2)
     wall = max(event_times) - min(event_times) if len(event_times) >= 2 else None
     waiting = 0.0
-    opens: dict[tuple[str, str], float] = {}
+    waits: list[dict[str, Any]] = []
+    opens: dict[tuple[str, str], tuple[float, Any]] = {}
     for event in event_rows:
         when = _time(event.get("at"))
         if when is None:
             continue
         if event.get("kind") in {"decision", "land_request"}:
             opens[("decision" if event["kind"] == "decision" else "auth",
-                   event["payload"]["request_id"])] = when
+                   event["payload"]["request_id"])] = (when, event.get("at"))
         elif event.get("kind") in {"human_answer", "auth"}:
             key = ("decision" if event["kind"] == "human_answer" else "auth",
                    event["payload"]["request_id"])
             if key in opens:
-                waiting += max(0.0, when - opens.pop(key))
+                opened, opened_at = opens.pop(key)
+                waiting += max(0.0, when - opened)
+                waits.append({"kind": key[0], "request_id": key[1], "opened_at": opened_at,
+                              "closed_at": event.get("at"),
+                              "seconds": round(max(0.0, when - opened), 3)})
+    waits += [{"kind": kind, "request_id": request_id, "opened_at": opened_at,
+               "closed_at": None, "seconds": None}
+              for (kind, request_id), (_, opened_at) in opens.items()]
     active = max(0.0, wall - waiting) if wall is not None else None
     budget_seconds = contract.get("budget_seconds")
     speed_complete = isinstance(budget_seconds, (int, float)) and budget_seconds > 0
@@ -152,12 +257,12 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     human_decisions = int(projection.get("human_decisions") or 0) + sum(
         1 for event in event_rows if event.get("kind") == "auth_consumed"
         and event.get("payload", {}).get("action") == "accept_finding")
-    rescues = sum(1 for event in event_rows if event.get("kind") == "integrity"
-                  and event.get("payload", {}).get("conflict_type") == "manual_rescue")
     approvals = sum(1 for event in event_rows if event.get("kind") == "metric"
                     and event.get("payload", {}).get("name") == "required_approval")
-    autonomy = {"verdict": "BLOCK" if rescues else "WARN" if human_decisions else "PASS",
-                "human_decisions": human_decisions, "manual_rescues": rescues,
+    # manual rescues have no producer: the count is not measured, so it is null and
+    # never decides the verdict (§E9.2 "what cannot be measured is null"; spec §5)
+    autonomy = {"verdict": "WARN" if human_decisions else "PASS",
+                "human_decisions": human_decisions, "manual_rescues": None,
                 "required_approvals": approvals}
 
     # Token accounting (D3). A transcript measurement (``measure-usage``, cli) covers the
@@ -179,15 +284,14 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
         else:
             experts[name] = experts.get(name, 0) + value
             expert_records += name == "input_tokens"
-    answers = sum(event.get("kind") in {"answer", "answer_reuse"} for event in event_rows)
+    answers = sum(event.get("kind") == "answer" for event in event_rows)
     # Completeness (E5, conformance F7), counted in model SESSIONS from events, never
     # from the measurement itself: the main agent is one, and every handout an expert
-    # was spawned for is one (answered or not — a crashed expert still cost a call),
-    # except a handout served by answer_reuse. A session is accounted when
+    # was spawned for is one (answered or not — a crashed expert still cost a call).
+    # A session is accounted when
     # a measurement covers it: the main agent by a transcript measurement, an expert
     # by its own SubagentStop usage record.
-    spawned = sum(event.get("kind") == "handout" for event in event_rows) \
-        - sum(event.get("kind") == "answer_reuse" for event in event_rows)
+    spawned = sum(event.get("kind") == "handout" for event in event_rows)
     total_calls: int | None = 1 + spawned
     accounted = (1 if measured else 0) + min(expert_records, spawned)
     if measured:
@@ -237,7 +341,13 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "requirement": contract.get("requirement"),
                "high_security_policy": high_policy,
                "retained": [dict(row) for row in retained],
-               "manual": dict(manual) if manual else None}
+               "manual": dict(manual) if manual else None,
+               "title": title or run_id,
+               # §E9.2 (conformance F22): measured from the events and the final only
+               "critical_path": _critical_path(event_rows, waits),
+               "experts": _experts(event_rows),
+               "waits": waits,
+               "trace_matrix": trace_protocol.matrix(design, final)}
     audit = {"run_id": run_id, "audit_through": audit_through, "card": None,
              "outcome": outcome,
              "summary": {"isolation": isolation, "speed": speed, "quality": quality,
@@ -306,10 +416,24 @@ def _isolation_text(row: Mapping[str, Any]) -> str:
     return f"{row['mode']} · {shown} repos · {row['contamination_count']} contamination"
 
 
+# mid-line Markdown that can change meaning: emphasis, code, links/images, tables
+_MD_SPECIAL = str.maketrans({c: "\\" + c for c in "\\`*_[]!|~"})
+
+
+def _text(value: Any, limit: int = 300) -> str:
+    """Untrusted words (the user's requirement, a person's note, a check's detail) as
+    plain Markdown text (K4 r1): one line, HTML-escaped, Markdown syntax escaped, so a
+    REPORT committed into a repo carries no link, image, HTML or heading it did not
+    write itself."""
+    flat = " ".join(str(value).split())[:limit]
+    flat = flat.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return flat.translate(_MD_SPECIAL)
+
+
 def _conclusion(audit: Mapping[str, Any]) -> str:
     """§B8 item 1: what was delivered and whether landing passed; else the reason."""
     outcome, details = audit["outcome"], audit.get("details") or {}
-    what = " ".join(str(details.get("requirement") or f"run {audit['run_id']}").split())[:200]
+    what = _text(details.get("requirement") or f"run {audit['run_id']}", 200)
     landing = outcome.get("landing")
     if audit.get("audit_through") == "DELIVER" and landing is None:
         return f"交付：{what}。落地守卫通过。"
@@ -329,7 +453,7 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
         ("Speed", summary["speed"], _speed_text(summary["speed"])),
         ("Quality", summary["quality"], _quality_text(summary["quality"], outcome.get("reason"))),
         ("Autonomy", summary["autonomy"],
-         f"{summary['autonomy']['human_decisions']} decisions · {summary['autonomy']['manual_rescues']} rescues · {summary['autonomy']['required_approvals']} required approval"
+         f"{summary['autonomy']['human_decisions']} decisions · rescues not measured · {summary['autonomy']['required_approvals']} required approval"
          + ("s" if summary['autonomy']['required_approvals'] != 1 else "")),
         ("Token Cost", summary["token_cost"], _token_text(summary["token_cost"])),
     ]
@@ -341,9 +465,10 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
         return "\n".join([f"Run Audit · {audit['run_id']}", state, ""] + [
             f"{name:<14} {row['verdict']} · {detail}" for name, row, detail in rows]
             + ["", "Final audit through COMPLETED"])
-    title = "Final audit through COMPLETED" if audit["audit_through"] == "COMPLETED" \
+    cutoff = "Final audit through COMPLETED" if audit["audit_through"] == "COMPLETED" \
         else "Audit through DELIVER"
-    lines = [f"# Pipeline Delivery　　{title}", "", _conclusion(audit), "",
+    run_title = _text(details.get("title") or audit["run_id"], 120)
+    lines = [f"# {run_title}　　{cutoff}", "", _conclusion(audit), "",
              "## Run Audit", "", "| Dimension | Result | This run |", "|---|---|---|"]
     lines += [f"| {name} | {row['verdict']} | {detail} |" for name, row, detail in rows]
     lines += ["", "Full machine-readable audit is stored with this run."]
@@ -351,7 +476,7 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
         reasons = dict(details.get("push_reasons") or {})
         high = [f"- {cid}: HIGH security_policy finding still has push effect"
                 for cid in details.get("high_security_policy") or []]
-        items = [f"- {key}: {detail}" for key, detail in reasons.items()]
+        items = [f"- {_text(key, 80)}: {_text(detail)}" for key, detail in reasons.items()]
         if high or items:
             lines += ["", "## Push 前需要你看的"] + high + items[:5]
             if len(items) > 5:
@@ -370,7 +495,7 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
     manual = details.get("manual")
     if manual:
         lines += ["", f"人工落地：request {manual.get('request_id')}"
-                  + (f" — {manual['note']}" if manual.get("note") else "")]
+                  + (f" — {_text(manual['note'])}" if manual.get("note") else "")]
     lines += ["", "push 前还需要：构建 + 部署验证。"]
     retained = details.get("retained") or []
     if retained and outcome.get("landing") not in ("landed", "human_override"):

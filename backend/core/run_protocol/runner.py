@@ -518,6 +518,8 @@ class V1Runner:
                                for path in changed_paths),
             node_results=node_results, tdd_required=tdd_required,
             whole_files=whole_files, collected=collected,
+            # the final is a file, not an event: its own time is on it (L5, §A3.6)
+            generated_at=datetime.now(timezone.utc).isoformat(),
         )
         path = self.run_dir / "evidence" / "tests" / f"final-{self.repo_name}.json"
         warning = evidence_seal.write_sealed(path, json.dumps(final, sort_keys=True))

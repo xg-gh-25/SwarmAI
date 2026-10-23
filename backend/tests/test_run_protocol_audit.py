@@ -89,22 +89,17 @@ def test_without_a_measurement_the_main_agent_is_unaccounted():
               _metric("accounted_calls", 1, "runner")]
     token = _facts(events=events)["summary"]["token_cost"]
     assert token["verdict"] == "WARN"
-    reused = _facts(events=[_ANSWER, {"kind": "answer_reuse", "at": _ANSWER["at"],
-                                      "payload": {}}, *MEASURED])["summary"]["token_cost"]
-    assert reused["total_calls"] == 1 == reused["accounted_calls"] and token["accounted_calls"] == 1 < token["total_calls"] == 2
+    assert token["accounted_calls"] == 1 < token["total_calls"] == 2
 
 
 def test_partial_metering_cannot_read_as_complete():
     """Conformance F7: total_calls is counted from events, never set to what was
     measured. Three experts spawned (answered or not) with no usage record: 1 of 4
-    sessions accounted; a handout served by answer_reuse costs no session."""
+    sessions accounted."""
     events = [_ANSWER, _ANSWER, _ANSWER, *MEASURED]
     token = _facts(events=events)["summary"]["token_cost"]
     assert token["accounted_calls"] == 1 and token["total_calls"] == 4
     assert token["verdict"] == "WARN"
-    reused = _facts(events=[_ANSWER, {"kind": "answer_reuse", "at": _ANSWER["at"],
-                                      "payload": {}}, *MEASURED])["summary"]["token_cost"]
-    assert reused["total_calls"] == 1 == reused["accounted_calls"]
     nothing = _facts(events=[])["summary"]["token_cost"]
     assert nothing["verdict"] == "BLOCK" and nothing["total_tokens"] is None
 

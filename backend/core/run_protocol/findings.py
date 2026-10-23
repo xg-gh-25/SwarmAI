@@ -282,7 +282,7 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority) -> list[
     answered: set[str] = set()
     for event in events:
         kind = event["kind"]
-        if kind in ("answer", "answer_reuse"):
+        if kind == "answer":
             answers[event["event_id"]] = event
         elif kind == "test_call":
             test_calls[event["event_id"]] = event

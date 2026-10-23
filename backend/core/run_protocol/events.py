@@ -47,13 +47,12 @@ def restrict_process(*producers: str) -> None:
         raise EventError("restrict_process needs known producers")
     _process_producers = _process_producers & wanted
     _hook_writer_allowed = _hook_writer_allowed and "hook" in _process_producers
-FORCED_BLOB_KEYS = frozenset({"raw", "prompt", "test_details", "decision_json"})
+FORCED_BLOB_KEYS = frozenset({"raw", "prompt", "test_details", "decision_json", "hunk"})
 
 # Field paths use envelope keys directly and ``payload.<key>`` for payload keys.
 OCCURRENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "handout": ("stage", "round", "payload.expert_id", "attempt"),
     "answer": ("payload.tool_use_id",),
-    "answer_reuse": ("payload.handout_event_id",),
     "finding_occ": ("payload.answer_event_id", "ordinal"),
     "finding_status": ("payload.answer_event_id", "ordinal"),
     "reclassify": ("payload.canonical_id", "payload.pass", "attempt"),
@@ -64,6 +63,7 @@ OCCURRENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "check": ("payload.stage_attempt_event_id", "payload.check_id"),
     "transition": ("payload.from", "payload.to", "payload.trigger_event_id"),
     "render": ("stage", "attempt", "payload.document"),
+    "render_failed": ("payload.document", "payload.source_tail_event_id"),
     "land_intent": ("payload.stage_attempt_event_id|request_id",),
     "land_request": ("payload.request_id",),
     "auth": ("payload.request_id",),
@@ -115,9 +115,6 @@ EVENT_SPECS: dict[str, EventSpec] = {
                     {"handout_event_id": str, "prompt_sha": str, "tool_use_id": str,
                      "expert_id": str, "stage": str, "round": int, "state": str}, {"raw": str, "verdict": (str, type(None)),
                      "n_findings": int, "n_status": int}),
-    "answer_reuse": _spec("cli", ("payload.handout_event_id",), "payload.answer_event_id",
-                          {"handout_event_id": str, "answer_event_id": str,
-                           "expert_id": str, "stage": str, "round": int, "state": str}),
     "finding_occ": _spec("hook", ("payload.answer_event_id", "ordinal"),
                          "event_id:canonical", {"answer_event_id": str,
                          "expert": str, "severity": str,
@@ -130,8 +127,11 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "reclassify": _spec("cli", ("payload.canonical_id", "payload.pass", "attempt"),
                         "payload.canonical_id", {"canonical_id": str, "from": str,
                         "to": str, "reason": str, "pass": int}),
+    # what the fixer gave for this finding (K4, F21): the hunk (always an audit blob),
+    # its cause and proof note — FIXING_SPEC and R2 read them from here only
     "address": _spec("cli", ("payload.canonical_id", "payload.pass", "attempt"),
-                     "payload.canonical_id", {"canonical_id": str, "pass": int}),
+                     "payload.canonical_id", {"canonical_id": str, "pass": int, "hunk": str},
+                     {"cause": str, "proof": str, "solution": str, "evidence_plan": str}),
     "proof": _spec(("runner", "cli"), ("payload.canonical_id", "payload.pass", "attempt"),
                    "payload.canonical_id", {"canonical_id": str, "pass": int,
                    "evidence_type": str, "code_tree": str, "result": str},
@@ -156,6 +156,10 @@ EVENT_SPECS: dict[str, EventSpec] = {
                         "trigger_event_id": str}),
     "render": _spec("cli", ("stage", "attempt", "payload.document"),
                     "payload.document", {"document": str, "blob_sha": str}),
+    # a Markdown projection could not be written (K4, F23): recorded, never decisive
+    "render_failed": _spec("cli", ("payload.document", "payload.source_tail_event_id"),
+                           "payload.document",
+                           {"document": str, "error": str, "source_tail_event_id": str}),
     "land_intent": _spec("cli", ("payload.stage_attempt_event_id|request_id",), None,
                          {}, {"stage_attempt_event_id": str, "request_id": str}),
     "land_request": _spec("cli", ("payload.request_id",), "payload.request_id",

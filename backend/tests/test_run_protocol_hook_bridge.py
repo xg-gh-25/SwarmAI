@@ -122,19 +122,6 @@ def test_usage_metrics_use_legal_runner_producer(tmp_path):
     assert [row["payload"]["value"] for row in metrics] == [7, 2, 1]
 
 
-def test_cached_answer_reuse_gets_current_run_occurrence_ids(tmp_path):
-    from core.run_protocol.answers import parse_answer
-    bridge, store, authority = _bridge(tmp_path)
-    prompt = "EXPERT-ID: correctness\nReview cached diff"
-    handout = _handout(store, authority, prompt)
-    parsed = parse_answer(FINDING, expert_id="correctness", round=1)
-    reuse = bridge.record_reuse(
-        handout_event_id=handout["event_id"], source_answer_event_id="a" * 64,
-        parsed=parsed, completed_at=AT)
-    chain = store.read_events()
-    assert [row["kind"] for row in chain] == ["handout", "answer_reuse", "finding_occ"]
-    assert chain[2]["payload"]["answer_event_id"] == reuse["event_id"]
-    assert chain[2]["ckey"] == "CF-" + chain[2]["event_id"][:8]
 
 
 def test_context_registry_is_per_run(tmp_path):

@@ -12,7 +12,7 @@ import json
 import os
 import uuid
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Callable, Any, Mapping
 
 from core.run_protocol import checks, decision, schemas
 from core.run_protocol.store import AuditStore
@@ -110,8 +110,21 @@ def render_design(document: Mapping[str, Any]) -> str:
 class DocumentStore:
     """Write validated JSON sources and generated Markdown into one run directory."""
 
-    def __init__(self, run_dir: str | Path):
+    def __init__(self, run_dir: str | Path,
+                 on_render_failed: "Callable[[str, Exception], None] | None" = None):
         self.run_dir = Path(run_dir)
+        # the Markdown is a projection of the validated JSON source (K4, F23): with a
+        # recorder, a failed render is recorded and the write still succeeds
+        self.on_render_failed = on_render_failed
+
+    def _render(self, document: str, path: Path, render: "Callable[[], str]") -> None:
+        try:
+            self._atomic(path, render())
+        except Exception as exc:  # noqa: BLE001 — a projection, never the decision
+            from core.run_protocol.infra import find
+            if self.on_render_failed is None or find(exc) is not None:
+                raise
+            self.on_render_failed(document, exc)
 
     @staticmethod
     def _atomic(path: Path, text: str) -> None:
@@ -131,7 +144,7 @@ class DocumentStore:
         source = self.run_dir / "artifacts" / "requirements.json"
         rendered = self.run_dir / "REQUIREMENTS.md"
         self._atomic(source, json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
-        self._atomic(rendered, render_requirements(value))
+        self._render("REQUIREMENTS", rendered, lambda: render_requirements(value))
         return [str(source), str(rendered)]
 
     def write_design(self, value: Mapping[str, Any], *, variant: str, profile: str,
@@ -143,7 +156,7 @@ class DocumentStore:
         source = self.run_dir / "artifacts" / "design_spec.json"
         rendered = self.run_dir / "DESIGN_SPEC.md"
         self._atomic(source, json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
-        self._atomic(rendered, render_design(value))
+        self._render("DESIGN_SPEC", rendered, lambda: render_design(value))
         return [str(source), str(rendered)]
 
 

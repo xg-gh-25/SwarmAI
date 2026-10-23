@@ -159,7 +159,7 @@ def _store(root: Path, run_id: str, authority: EventAuthority,
                       transition_writer=authority.writer(producer))
 
 
-_FINDING_KINDS = frozenset({"answer", "answer_reuse", "finding_occ", "finding_status",
+_FINDING_KINDS = frozenset({"answer", "finding_occ", "finding_status",
                             "reclassify", "address", "proof"})
 
 
@@ -696,7 +696,7 @@ class RunEngine:
         if state["status"] != "active" or state["stage"] != "evaluate" \
                 or state["profile"] not in {"full", "bugfix", "goal"}:
             raise EngineError("Gate-0 requires active EVALUATE on full, bugfix, or goal")
-        docs = DocumentStore(self.run_dir)
+        docs = DocumentStore(self.run_dir, on_render_failed=self._render_failed)
         if requirements is not None:
             docs.write_requirements(requirements, variant="full", profile=state["profile"])
         value = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
@@ -736,7 +736,7 @@ class RunEngine:
         """Two Gate-0 rounds answered and the latest one unparsed or negative."""
         events = self._since_last_answer()
         rounds = [event for event in events
-                  if event.get("kind") in {"answer", "answer_reuse"}
+                  if event.get("kind") == "answer"
                   and event.get("payload", {}).get("expert_id") == "gate0-skeptic"]
         if len(rounds) < 2:
             return False
@@ -753,7 +753,7 @@ class RunEngine:
         if answered and not handouts:
             return "continue"      # the person decided after the gate; nothing newer to wait for
         answers = [event for event in events
-                   if event.get("kind") in {"answer", "answer_reuse"}
+                   if event.get("kind") == "answer"
                    and event.get("payload", {}).get("expert_id") == "gate0-skeptic"]
         if not handouts or len(answers) < len(handouts):
             return "awaiting_answer"
@@ -787,7 +787,7 @@ class RunEngine:
                 expert_id=expert, stage="review", round=2, attempt=2, at=_now(),
                 expert_instructions=(expert_root / f"{expert}.md").read_text(encoding="utf-8"),
                 review_input=review_input, finding_ids=ids))
-        orchestrator.write_documents()
+        self._write_review_documents()
         return {"handoff": handoff, "reviewers": sorted(roster), "handouts": handouts}
 
     def review_proof(self, artifact: Mapping[str, Any]) -> dict[str, Any]:
@@ -873,7 +873,7 @@ class RunEngine:
             {"pass": artifact["pass"], "proofs": derived}, at=_now(),
             attempt=1 + sum(event.get("kind") == "proof"
                             for event in self.store.read_events()))
-        orchestrator.write_documents()
+        self._write_review_documents()
         return {"proofs": events, "findings": orchestrator.findings()}
 
     def request_decision(self, value: Mapping[str, Any], *, document: str) -> dict[str, Any]:
@@ -971,7 +971,7 @@ class RunEngine:
     def _write_back_decisions(self, document: str) -> None:
         """Rewrite *document* (if it exists yet) with its decided decisions and render
         it again; a document written later gets them at its stage-complete."""
-        docs = DocumentStore(self.run_dir)
+        docs = DocumentStore(self.run_dir, on_render_failed=self._render_failed)
         if document == "REQUIREMENTS":
             path = self.run_dir / "artifacts" / "requirements.json"
             if path.is_file():
@@ -1090,6 +1090,7 @@ class RunEngine:
         its one-line conclusion; a manual landing's request and words come in through
         the audit's ``manual`` detail (no extra lines outside the allowed set)."""
         from core.run_protocol import audit as audit_protocol
+        self._write_review_documents()   # DELIVER ends here: REVIEW.md as landed (F20)
         value = dict(audit_value)
         if request_id:
             value["details"] = {**dict(audit_value.get("details") or {}),
@@ -1208,7 +1209,7 @@ class RunEngine:
             return {"ok": False, "reason": "partial_land", "landed": exc.landed,
                     "failed": exc.failed, "error": str(exc), "state": self.projection()}
         try:
-            report = (self.store.paths.blobs / payload["report_sha"]).read_text(encoding="utf-8")
+            report = self.store.read_blob(payload["report_sha"]).decode("utf-8")
         except OSError as exc:
             raise EngineError(f"prepared REPORT blob is missing after landing: {exc}") from exc
         DocumentStore._atomic(self.run_dir / "REPORT.md", report)
@@ -1321,7 +1322,7 @@ class RunEngine:
             self._save_retention([
                 row for row in self._retention_entries()
                 if row.get("repo_name") != repo_name])
-        review.ReviewOrchestrator(self.store, self.run_dir).write_documents()
+        self._write_review_documents()
         self.write_projection()
         return {"auth_event_id": consumed["payload"]["auth_event_id"],
                 "consumed_event_id": consumed["event_id"],
@@ -1357,7 +1358,7 @@ class RunEngine:
                 raise EngineError("DELIVER finishes with `land`; stage-complete is only for "
                                   "the not-landed path")
             return self.finish_not_landed()
-        docs = DocumentStore(self.run_dir)
+        docs = DocumentStore(self.run_dir, on_render_failed=self._render_failed)
         artifact = dict(artifact or {})
         variant = ("lite" if stage == "plan" and profile == "trivial"
                    else "full" if stage in {"evaluate", "plan"} else None)
@@ -1419,8 +1420,55 @@ class RunEngine:
                                         else "red" if "red" in verdicts else "green")
         self.store.append_new(writer=self.authority.writer("cli"), kind="stage_complete",
                               at=_now(), stage=stage, attempt=result["attempt"], payload=payload)
-        self._settle(); self.write_projection()
+        self._settle()
+        if stage in {"review", "test", "deliver"} and "review" in lifecycle.PROFILE_STAGES[profile]:
+            self._write_review_documents()          # its checks and evidence moved on (F20)
+        self.write_projection()
         return {"ok": True, **result, "state": self.projection()}
+
+    def _render_failed(self, document: str, exc: Exception) -> None:
+        """A Markdown projection failed (K4, F23): one ``render_failed`` event; the
+        stage decision is untouched. REPORT is not routed here: DV-1 checks it."""
+        from core.run_protocol.store import StoreError
+        logger.warning("run %s: %s not rendered: %s", self.run_id, document, exc)
+        events = self.store.read_events()
+        # one record per document per snapshot (K4 r1): a retry on the same events is
+        # the same failure, not a new one
+        # the snapshot rendered: its last event other than a render failure itself
+        facts = [e for e in events if e.get("kind") != "render_failed"]
+        tail = facts[-1]["event_id"] if facts else "none"
+
+        def recorded(chain: list[dict[str, Any]]) -> str | None:
+            return "already recorded" if any(
+                e.get("kind") == "render_failed"
+                and e["payload"].get("document") == document
+                and e["payload"].get("source_tail_event_id") == tail for e in chain) else None
+        try:
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="render_failed", at=_now(),
+                payload={"document": document, "source_tail_event_id": tail,
+                         "error": f"{type(exc).__name__}: {exc}"[:300]},
+                refuse=recorded)
+        except StoreError as again:
+            if "already recorded" not in str(again):
+                raise
+
+    def _write_review_documents(self) -> None:
+        """REVIEW.md and FIXING_SPEC.md from the events, at every point their facts can
+        change: each review step, an accepted finding, and TEST / DELIVER completion."""
+        from core.run_protocol.infra import find
+        orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
+        for document, write in (("REVIEW", orchestrator.write_review),
+                                ("FIXING_SPEC", orchestrator.write_fixing_spec)):
+            try:
+                write()
+            except Exception as exc:  # noqa: BLE001 — a projection, never the decision
+                if find(exc) is not None:
+                    raise
+                self._render_failed(document, exc)
+        if orchestrator.missing_blobs:      # written, but a fixer's hunk is unreadable
+            self._render_failed("FIXING_SPEC", FileNotFoundError(
+                "address hunk blob missing: " + ", ".join(orchestrator.missing_blobs)))
 
     def _consume_token(self, token: str | None, scope: str) -> tuple[bool, str]:
         """Burn the session hook's one-time token for *scope*. An unreachable token
@@ -1557,7 +1605,7 @@ class RunEngine:
         prior = [e for e in events if e.get("kind") == "handout" and e.get("stage") == "review"
                  and e.get("round") == 1]
         answers = {e["payload"]["handout_event_id"]: e for e in events
-                   if e.get("kind") in ("answer", "answer_reuse") and e.get("stage") == "review"}
+                   if e.get("kind") == "answer" and e.get("stage") == "review"}
         for item in roster:
             instructions = (expert_root / f"{item['id']}.md").read_text(encoding="utf-8")
             review_input = "\n\n".join(diffs)
@@ -1582,7 +1630,7 @@ class RunEngine:
                 at=_now(), expert_instructions=instructions,
                 review_input=review_input))
         if not handouts:
-            orchestrator.write_documents()
+            self._write_review_documents()
         return {"reviewers": roster, "handouts": handouts}
 
     def _audit_facts(self) -> dict[str, Any]:
@@ -1602,10 +1650,26 @@ class RunEngine:
                         and e.get("payload", {}).get("request_id") == request_id]
             note = ((requests[-1].get("request") or {}).get("note") if requests else None)
             manual = {"request_id": request_id, "note": note}
-        return {"repos_isolated": isolated, "manual": manual,
+        design = self._read_json(self.run_dir / "artifacts" / "design_spec.json", None)
+        if isinstance(design, Mapping):     # the decisions are part of the design (K3)
+            design = self._with_decisions("DESIGN_SPEC", design)
+        return {"repos_isolated": isolated, "manual": manual, "title": self._run_title(),
+                "design": design if isinstance(design, Mapping) else None,
                 "retained": [{"repo_name": row.get("repo_name"), "ledger": row.get("ledger")}
                              for row in self._retention_entries()
                              if isinstance(row, Mapping) and row.get("ledger")]}
+
+    def _run_title(self) -> str:
+        """The run's title (§B8, L6): the first line of what was asked — the user's own
+        words for direct, else the requirements' understanding — or the run id."""
+        requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
+        claim = ((requirements.get("understanding") or {}).get("claim")
+                 if isinstance(requirements, Mapping) else None)
+        for text in (self.contract.get("requirement"), claim):
+            if isinstance(text, str) and text.strip():
+                line = text.strip().splitlines()[0].strip()
+                return line if len(line) <= 80 else line[:79] + "…"
+        return self.run_id
 
     def _delivered_summary(self) -> str | None:
         """What the run delivered, for the report's conclusion (D5): the user's words for
@@ -2024,7 +2088,7 @@ class RunEngine:
         written after the land event; a failure here never undoes a landing."""
         try:
             if text is None:
-                text = (self.store.paths.blobs / str(blob_sha)).read_text(encoding="utf-8")
+                text = self.store.read_blob(str(blob_sha)).decode("utf-8")
             DocumentStore._atomic(self.run_dir / "REPORT.md", text)
         except OSError:
             import logging
