@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Pipelines overlay (Conductor) · mockup v4</title>
+<!-- Mockup for docs/design/pipeline-run-conductor-v1.md §10 and docs/design/pipeline-human-loop-v2.md.
+     Theme variables fall back to a light palette outside the dashboard. -->
+</head><body style="margin:0">
+<style>
+.w{font:13px/1.5 -apple-system,system-ui,sans-serif;color:var(--text,#1d1d1f);background:var(--bg,#f6f6f4);padding:12px}
+.card{background:var(--card,#fff);color:var(--card-fg,#1d1d1f);border:1px solid var(--border,#e2e2de);border-radius:8px}
+.mut{color:var(--muted,#6e6e73)}.sm{font-size:11px}.b{font-weight:600}.row{display:flex;align-items:center;gap:8px}
+.pill{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid var(--border,#e2e2de);white-space:nowrap}
+.dan{color:var(--danger,#c0392b);background:var(--danger-subtle,#fbeaea)}.acc{color:var(--accent,#2f6db5);background:var(--accent-subtle,#e8f0fa)}
+.warn{color:var(--warn,#a86b00);background:var(--warn-subtle,#fdf3e1)}.ok{color:var(--ok,#2e7d4f);background:var(--ok-subtle,#e7f4ec)}
+.btn{font-size:12px;padding:3px 10px;border-radius:6px;border:1px solid var(--border,#e2e2de);background:var(--bg-elevated,#fff);color:var(--text,#1d1d1f);cursor:pointer}
+.btn:hover{background:var(--bg-hover,#efefec)}.pri{background:var(--accent,#2f6db5);color:var(--bg,#fff);border-color:var(--accent,#2f6db5)}
+.tab{padding:6px 12px;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted,#6e6e73)}
+.tab.on{color:var(--text,#1d1d1f);border-color:var(--accent,#2f6db5)}
+.f{font-size:12px;padding:2px 10px;border-radius:12px;border:1px solid var(--border,#e2e2de);cursor:pointer;color:var(--muted,#6e6e73)}
+.f.on{color:var(--accent,#2f6db5);border-color:var(--accent,#2f6db5);background:var(--accent-subtle,#e8f0fa)}
+.bar{height:6px;border-radius:3px;background:var(--border,#e2e2de);overflow:hidden;width:64px}.bar i{display:block;height:100%;background:var(--accent,#2f6db5)}
+.msg{padding:8px 12px;border-bottom:1px solid var(--border,#e2e2de)}.me{background:var(--accent-subtle,#e8f0fa)}
+.sys{color:var(--muted,#6e6e73);font-size:12px;padding:4px 12px;border-bottom:1px solid var(--border,#e2e2de)}
+.rn{cursor:pointer;color:var(--accent,#2f6db5);font-weight:600}
+.done{color:var(--ok,#2e7d4f);font-size:12px}
+input,textarea{font:12px inherit;padding:5px 8px;border-radius:6px;border:1px solid var(--border,#e2e2de);background:var(--bg,#f6f6f4);color:var(--text,#1d1d1f);box-sizing:border-box}
+.st{display:flex;gap:2px}.st span{flex:1;font-size:10px;text-align:center;padding:2px 0;border-radius:3px;background:var(--bg-hover,#efefec);color:var(--muted,#6e6e73)}
+.st .d{background:var(--ok-subtle,#e7f4ec);color:var(--ok,#2e7d4f)}.st .c{background:var(--accent,#2f6db5);color:var(--bg,#fff)}
+.drawer{position:absolute;top:0;right:0;bottom:0;width:48%;border-left:1px solid var(--border,#e2e2de);background:var(--bg-elevated,#fff);padding:12px;overflow:auto;display:none}
+.lane{padding:8px 12px;border-bottom:1px solid var(--border,#e2e2de)}
+</style>
+<div class="w">
+<div class="row" style="justify-content:space-between;margin-bottom:8px">
+ <div class="row"><span class="b" style="font-size:16px">Pipelines</span><span class="pill dan" id="badge">2 open</span></div>
+ <span class="mut sm">live while open · Central synced 4s ago</span>
+</div>
+
+<div class="card" style="padding:8px 12px;margin-bottom:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+ <div><div class="b">Chat tabs</div><div class="sm mut">inline · 1 running</div></div>
+ <div><div class="b">Local Worker</div><div class="row sm"><div class="bar"><i style="width:100%"></i></div>1/1 · 1 queued</div></div>
+ <div><div class="b">hive-ec2-1</div><div class="row sm"><div class="bar"><i id="hivebar" style="width:66%"></i></div><span id="hivecap">2/3 · 1 parked</span></div></div>
+ <div><div class="b">gawan-cdd</div><div class="row sm"><span class="pill warn">offline 12m</span>0/1 · 1 queued</div></div>
+</div>
+
+<div class="card" style="position:relative;min-height:440px">
+ <div class="row" style="padding:0 6px;border-bottom:1px solid var(--border,#e2e2de)">
+  <div class="tab on" data-t="s">Stream</div><div class="tab" data-t="a">Active · 5</div><div class="tab" data-t="c">Schedules · 2</div><div class="tab" data-t="h">History</div><div class="tab" data-t="v">Hives · 2</div>
+ </div>
+
+ <div id="t-s">
+  <div class="row" style="padding:6px 12px;border-bottom:1px solid var(--border,#e2e2de)"><span class="f on" data-f="all">All</span><span class="f" data-f="blk">Blocking</span><span class="f">SwarmAI</span><span class="f">hive-ec2-1</span><span class="mut sm" style="margin-left:auto">newest at bottom</span></div>
+  <div class="sys nb">01:12 · <span class="rn" data-r="7c21">run_7c21</span> · hive-ec2-1 restarted → attempt 2 resumed from PLAN</div>
+  <div class="msg nb"><div class="row"><span class="rn" data-r="7c21">run_7c21</span><span class="mut sm">SwarmAI · bugfix · DESIGN · question round 1</span></div><div>Old <code>/api/jobs</code> route? A keep one release · B remove now</div></div>
+  <div class="msg me nb"><div class="row"><span class="b">You</span><span class="mut sm">→ run_7c21 · via Slack · 01:38</span></div><div>A. 但 Slack adapter 这次一起改掉。</div></div>
+  <div class="msg nb"><div class="row"><span class="rn" data-r="7c21">run_7c21</span><span class="pill acc">notice</span></div><div>Applied: "Slack adapter 一起改" → scope changed (2 more files). Asking you to confirm.</div></div>
+  <div class="msg blk" id="m-q"><div class="row" style="justify-content:space-between"><div class="row"><span class="rn" data-r="7c21">run_7c21</span><span class="mut sm">DESIGN</span></div><span class="pill dan" id="q-pill">question · round 2/3 · parked</span></div>
+   <div>Changing the Slack adapter adds 2 files, so this needs full review. OK? A yes, review together · B adapter in a new Run</div>
+   <div class="row" id="q-act" style="margin-top:6px"><button class="btn" data-ans="A">A</button><button class="btn" data-ans="B">B</button><button class="btn">None of these…</button><input id="q-note" style="flex:1" placeholder="Optional note to run_7c21"></div></div>
+  <div class="sys nb">01:52 · <span class="rn" data-r="7c21">run_7c21</span> parked (waiting 10 min) · hive-ec2-1 slot released → req_0f2 started</div>
+  <div class="msg blk" id="m-ap"><div class="row" style="justify-content:space-between"><div class="row"><span class="rn" data-r="51ae">run_51ae</span><span class="mut sm">SwarmAI · direct · Local Worker</span></div><span class="pill warn" id="ap-pill">approval</span></div>
+   <div>Ready to land 3 files (+48 −12) into <code>main</code> · review PASS · 6/6 tests. <span class="rn">Show diff</span></div>
+   <div class="row" id="ap-act" style="margin-top:6px"><button class="btn" data-ap="Approved">Approve</button><button class="btn" data-ap="Changes requested">Request changes…</button><button class="btn" data-ap="Rejected">Reject…</button></div></div>
+  <div class="msg nb"><div class="row"><span class="rn" data-r="aa04">run_aa04</span><span class="pill acc">notice</span></div><div>Acknowledged your guidance "别跑 integration 目录": excluded <code>tests/integration/</code> (14 tests). Scope unchanged.</div></div>
+  <div class="row" style="padding:8px 12px">
+   <span class="pill">To: run_aa04 ▾</span><input style="flex:1" placeholder="Message a Run · answers its open item if it has one, otherwise sent as guidance"><button class="btn pri">Send</button></div>
+ </div>
+
+ <div id="t-a" style="display:none">
+  <div class="lane"><div class="mut sm b">CHAT TABS</div><div class="row" style="justify-content:space-between"><span><span class="b">run_93fe</span> <span class="mut">SwarmAI · full · tab "Conductor V1"</span></span><span class="pill acc">BUILD · 18m</span></div></div>
+  <div class="lane"><div class="mut sm b">LOCAL WORKER · 1/1</div>
+   <div class="row" style="justify-content:space-between"><span><span class="rn" data-r="51ae">run_51ae</span> <span class="mut">SwarmAI · direct · from chat</span></span><span class="pill warn">approval · 9m</span></div>
+   <div class="row" style="justify-content:space-between"><span class="mut">#1 queued · req_0c9 · SwarmAI · bugfix · from Slack</span><button class="btn">Cancel</button></div></div>
+  <div class="lane"><div class="mut sm b">HIVE-EC2-1 · 2/3</div>
+   <div class="row" style="justify-content:space-between"><span><span class="rn" data-r="7c21">run_7c21</span> <span class="mut">SwarmAI · bugfix · from Slack schedule</span></span><span class="pill warn">parked · slot free</span></div>
+   <div class="row" style="justify-content:space-between"><span><span class="rn" data-r="aa04">run_aa04</span> <span class="mut">oss-lib · full</span></span><span class="pill acc">TEST · 1h 02m</span></div>
+   <div class="row" style="justify-content:space-between"><span><span class="b">req_0f2</span> <span class="mut">SwarmAI · direct</span></span><span class="pill acc">EVALUATE · 1m</span></div></div>
+  <div class="lane"><div class="mut sm b">GAWAN-CDD · offline 12m</div><div class="row" style="justify-content:space-between"><span class="mut">#1 queued · req_9b1 · IVTHub · bugfix</span><span class="mut sm">waits for the Hive · fails after 24h</span></div></div>
+ </div>
+ <div id="t-c" style="display:none;padding:10px 12px"><div class="row" style="justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border,#e2e2de)"><div><span class="b">Nightly dependency bump</span><div class="mut sm">SwarmAI · bugfix · Local Worker · daily 02:00 Asia/Shanghai</div></div><span class="mut sm">last: delivered</span></div><div class="row" style="justify-content:space-between;padding:6px 0"><div><span class="b">Weekly flaky-test sweep</span><div class="mut sm">SwarmAI · direct · hive-ec2-1 · Mon 09:00</div></div><span class="mut sm">last: <span style="color:var(--warn,#a86b00)">missed (Host offline)</span></span></div></div>
+ <div id="t-h" style="display:none;padding:10px 12px"><div class="mut sm">Today's overlay content, unchanged: 30-day summary, throughput trend, runs by project, retro drawer. Two added columns: where it ran · org copy (uploaded / local only / pending).</div></div>
+ <div id="t-v" style="display:none;padding:10px 12px"><div class="row" style="justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border,#e2e2de)"><span><span class="b">hive-ec2-1</span> <span class="mut sm">EC2 · external · 3 slots</span></span><span class="pill ok">active</span></div><div class="row" style="justify-content:space-between;padding:6px 0"><span><span class="b">gawan-cdd</span> <span class="mut sm">Cloud Desktop · internal · 1 slot</span></span><span class="pill warn">offline</span></div><button class="btn" style="margin-top:8px">Enrol a Hive…</button></div>
+
+ <div class="drawer" id="dr">
+  <div class="row" style="justify-content:space-between"><span class="b" style="font-size:14px" id="dr-t">run_7c21</span><button class="btn" id="dx">Close</button></div>
+  <div class="mut sm">SwarmAI · bugfix · "drop the legacy jobs route" · from Slack schedule</div>
+  <div class="row sm" style="margin:8px 0;flex-wrap:wrap"><span class="pill">hive-ec2-1</span><span class="pill">attempt 2</span><span class="pill">DDD @ 9f3c</span><span class="pill">base main @ 4bff62b</span><span class="pill warn" id="dr-park">parked</span></div>
+  <div class="st"><span class="d">EVAL</span><span class="d">THINK</span><span class="d">PLAN</span><span class="c">DESIGN</span><span>BUILD</span><span>REVIEW</span><span>TEST</span><span>DELIVER</span><span>REFLECT</span></div>
+  <div class="mut sm b" style="margin:10px 0 4px">THIS RUN'S THREAD</div>
+  <div class="sm" style="display:grid;grid-template-columns:44px 1fr;row-gap:4px">
+   <span class="mut">01:31</span><span><b>Run</b> · Old /api/jobs route? A keep one release · B remove now</span>
+   <span class="mut">01:38</span><span><b>You</b> (Slack) · A. 但 Slack adapter 这次一起改掉。</span>
+   <span class="mut">01:41</span><span><b>Run</b> · ack: scope changed, asking to confirm</span>
+   <span class="mut">01:42</span><span><b>Run</b> · round 2: needs full review, OK?</span>
+   <span class="mut" id="dr-last-t"></span><span id="dr-last"></span>
+  </div>
+  <textarea rows="2" style="width:100%;margin-top:8px" placeholder="Reply to this Run"></textarea>
+  <div class="row" style="margin-top:6px"><button class="btn">Worker transcript</button><button class="btn">Take over in chat</button><button class="btn" style="color:var(--danger,#c0392b)">Cancel run</button></div>
+ </div>
+</div>
+
+<div class="mut sm b" style="margin:14px 0 6px">OTHER READERS OF THE SAME STREAM</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+ <div class="card" style="padding:10px 12px"><div class="mut sm b">SLACK · #swarm-ops thread of run_7c21</div>
+  <div class="sm" style="margin-top:4px"><b>SwarmAI bot</b> · Round 2: changing the Slack adapter adds 2 files, so this needs full review. OK?</div>
+  <div class="row" id="sl-act" style="margin-top:6px"><button class="btn" data-ans="A">A yes</button><button class="btn" data-ans="B">B new Run</button></div>
+  <div class="mut sm" style="margin-top:4px">Or reply in this thread: your text becomes the note of the one open item.</div></div>
+ <div class="card" style="padding:10px 12px"><div class="mut sm b">CHAT TAB "Release prep" · card of run_51ae</div>
+  <div class="row" style="justify-content:space-between;margin-top:4px"><span class="b">run_51ae</span><span class="pill warn" id="cc-pill">approval</span></div>
+  <div class="sm mut">Local Worker · DELIVER · ready to land 3 files</div>
+  <div class="row" id="cc-act" style="margin-top:6px"><button class="btn" data-ap="Approved">Approve</button><button class="btn" data-ap="Changes requested">Request changes…</button></div>
+  <div class="mut sm" style="margin-top:4px">One card per Run; its content is read from the stream, so the tab gets no message per event.</div></div>
+</div>
+<div class="mut sm" style="margin-top:8px">Try it: answer the question in the Stream or in Slack, or approve in the Stream or the chat card. The first write wins and every other reader shows where it was answered.</div>
+</div>
+<script>
+(function(){
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+let open=2;function badge(){$('#badge').textContent=open?open+' open':'all clear';$('#badge').className='pill '+(open?'dan':'ok')}
+$$('.tab').forEach(t=>t.onclick=()=>{$$('.tab').forEach(x=>x.classList.remove('on'));t.classList.add('on');['s','a','c','h','v'].forEach(k=>$('#t-'+k).style.display=k===t.dataset.t?'':'none');$('#dr').style.display='none'});
+$$('.f[data-f]').forEach(f=>f.onclick=()=>{$$('.f[data-f]').forEach(x=>x.classList.remove('on'));f.classList.add('on');$$('#t-s .nb').forEach(n=>n.style.display=f.dataset.f==='blk'?'none':'')});
+$$('.rn[data-r]').forEach(r=>r.onclick=()=>{$('#dr-t').textContent='run_'+r.dataset.r;$('#dr').style.display='block'});
+$('#dx').onclick=()=>$('#dr').style.display='none';
+let q=null,ap=null;
+function answerQ(opt,where){if(q)return;q=opt+' in '+where;open--;badge();
+ const note=$('#q-note').value;const txt='Answered in '+where+': '+opt+(note&&where==='the dashboard'?' · "'+note+'"':'');
+ $('#q-act').innerHTML='<span class="done">'+txt+' · run_7c21 re-queued first on hive-ec2-1</span>';$('#q-pill').textContent='question · resolved';$('#q-pill').className='pill ok';
+ $('#sl-act').innerHTML='<span class="done">'+(where==='Slack'?'You answered '+opt+' here':'Answered in the dashboard: '+opt)+'</span>';
+ $('#dr-park').textContent='resuming';$('#dr-park').className='pill acc';$('#dr-last-t').textContent='now';$('#dr-last').innerHTML='<b>You</b> ('+where+') · '+opt+(note?' · '+note:'');$('#hivecap').textContent='3/3 · resuming'}
+function answerAp(v,where){if(ap)return;ap=v+' in '+where;open--;badge();
+ $('#ap-act').innerHTML='<span class="done">'+v+' in '+where+'</span>';$('#ap-pill').textContent=v.toLowerCase();$('#ap-pill').className='pill ok';
+ $('#cc-act').innerHTML='<span class="done">'+(where==='this tab'?v+' here':v+' in the dashboard')+'</span>';$('#cc-pill').textContent=v.toLowerCase();$('#cc-pill').className='pill ok'}
+$$('#q-act [data-ans]').forEach(b=>b.onclick=()=>answerQ(b.dataset.ans,'the dashboard'));
+$$('#sl-act [data-ans]').forEach(b=>b.onclick=()=>answerQ(b.dataset.ans,'Slack'));
+$$('#ap-act [data-ap]').forEach(b=>b.onclick=()=>answerAp(b.dataset.ap,'the dashboard'));
+$$('#cc-act [data-ap]').forEach(b=>b.onclick=()=>answerAp(b.dataset.ap,'this tab'));
+})();
+</script>
+</body></html>

@@ -9,6 +9,7 @@ related:
   - docs/design/project-agent-delivery-os-hld.md
   - docs/design/pipeline-run-worktree.md
   - docs/design/pipeline-v1-human-loop.md
+  - docs/design/pipeline-human-loop-v2.md
   - Runtime DDD: ${SWARM_WORKSPACE}/Projects/<project>/bindings.yaml
 ---
 
@@ -334,11 +335,13 @@ records the commit; the content stays in its repo.
   Hive that died before the outage expires 10 minutes after recovery. Leases are never
   extended retroactively.
 - **Waiting for a person.** The Hive keeps heartbeating while its Run is
-  `awaiting_human`. The question expires after 4 hours (the existing answer timeout);
-  the Run then ends `abandoned(decision_timeout)` and its slot is released (§5.1). The
-  timeout is conditional on no answer command having been accepted for that question
-  (§8.3), so an accepted answer and a timeout cannot both win. The same rule applies to
-  the Local Worker.
+  `awaiting_human`. After 10 minutes the Run is parked (§6.2) and its slot released; the
+  lease is renewed by the Hive daemon's heartbeat, with no Worker running. The open item
+  expires after 24 hours (`pipeline-human-loop-v2.md` §5.4; the old 4-hour bound existed
+  to limit a held process, and a parked Run holds nothing); the Run then ends
+  `abandoned(decision_timeout)`. The timeout is conditional on no answer command having
+  been accepted for that item (§8.3), so an accepted answer and a timeout cannot both
+  win. The same rule applies to the Local Worker.
 
 #### 4.3.4 Data handling
 
@@ -635,7 +638,7 @@ request:                       # immutable once accepted
 
 dispatch:                      # mutable, owned by the Conductor
   run_id: <pipeline v1 run id, set when the Run is created>
-  state: submitting | queued | dispatching | running | candidate_ready | landing
+  state: submitting | queued | dispatching | running | parked | candidate_ready | landing
        | cancelling | done | failed | cancelled
   attempts:
     - attempt: 1
@@ -673,6 +676,10 @@ while its executor is running a Worker for it.
 | `dispatching` | `cancelling` | owner cancel (§7.4) | keep |
 | `dispatching`, `running` | `failed(lease_lost)` | lease expiry (sweeper, §4.3.3) | release |
 | `running` | `running` (new Attempt) | `adopt` after a Hive restart, or Local crash recovery | keep (net zero) |
+| `running` | `parked` | an open human item has waited 10 minutes; the Worker is recycled to COLD keeping its session id | release |
+| `parked` | `running` | the item was resolved; the request takes the executor's next free slot ahead of queued requests | acquire |
+| `parked` | `cancelled` | owner cancel (no Worker is running, so no ack is needed) | — |
+| `parked` | `failed(<pipeline reason>)` | the item expired (`decision_timeout`) or the lease was lost | — |
 | `running` | `cancelling` | owner cancel | keep |
 | `running` | `candidate_ready` | executor offered a candidate (Phase 6+); the Worker has ended | release |
 | `running` | `done` | Pipeline terminal `completed`, with its landing outcome (before Phase 6) | release |
@@ -709,6 +716,7 @@ What a user sees is computed on read:
 | `queued` / `dispatching` | (no Run yet) | Queued (position N) / Starting |
 | `running` | `active`, `reflecting` | Running · stage |
 | `running` | `awaiting_human` | Waiting for you |
+| `parked` | `awaiting_human` | Waiting for you (parked, slot free) |
 | `running` | `paused` | Paused |
 | `candidate_ready` / `landing` | any | Landing |
 | `done` | `completed` | Delivered, with the Pipeline landing (`landed`, `not_landed(<reason>)`, `human_override`, `no_code`) |
@@ -851,9 +859,12 @@ has two priority classes:
   wait shows as "Waiting for capacity" on the Pipelines page. It never takes the last
   slot and never preempts an interactive stream.
 
-**Human questions.** A Worker Run that needs a person reaches Pipeline status `awaiting_human`. The
-decision card is routed to the request's origin (§8.3). The Worker session stays alive
-while waiting and holds its epoch, so a long wait is never treated as a crash.
+**Human questions.** A Worker Run that needs a person reaches Pipeline status `awaiting_human`. Its
+open item appears in the Run's message stream and every reader of it (§8.3,
+`pipeline-human-loop-v2.md` §4). Within the first 10 minutes the Worker stays alive and
+holds its epoch, so an answer reaches it at once. After 10 minutes it is **parked**: its
+process is recycled to COLD keeping `_sdk_session_id`, and its slot is released (§5.1).
+When the item is resolved, the Run re-queues ahead of queued requests and resumes.
 
 ### 6.3 `remote_hive`
 
@@ -1168,6 +1179,13 @@ V1 does not replicate schedules to a Hive.
 
 ### 8.3 Human answers for background and remote Runs
 
+How a person talks to a Run (answers with text, follow-up rounds, approval outcomes,
+guidance, one message stream per Run read by every surface, and the single write path
+`submit_human_input`) is specified in `pipeline-human-loop-v2.md`. This section keeps the
+Slack nonce rules and the remote answer command, which that design uses. An answer
+command carries `kind`, `option_id` and `text` (the person's words) besides the binding
+fields below.
+
 A Run in `awaiting_human` posts its decision card to its origin:
 
 | Origin | Where the card goes |
@@ -1257,18 +1275,37 @@ Cancel is always available to the owner until landing starts (§7.4).
 
 ## 10. Surfaces
 
-- **Pipelines page.** Each Run gains placement, executor, queue position, attempt count
-  and origin. The Local Worker slot and each Hive's slots are shown as used / total.
-  A "Run in background" action submits `background_local`; a Hive picker submits
-  `remote_hive`, listing only Hives the placement rules allow for that project.
+Every surface below reads the Conductor Store and the Runs' message streams
+(`pipeline-human-loop-v2.md` §4); none keeps its own copy of a Run's state. The mockup is
+`docs/design/pipeline-conductor-ui-mock.html`.
+
+- **Pipelines overlay.** It becomes the live control surface; today's retro content moves
+  to its History tab unchanged, with two added columns (where the Run executed, org copy
+  state). Layout, top to bottom:
+  - an executor strip: Chat tabs, Local Worker, each Hive, with slots used / total and
+    queue length;
+  - the **message stream**: all Runs' messages in time order, filterable by Blocking,
+    project and executor; Blocking is the Needs-you view. Each message is answerable in
+    place, and one composer at the bottom sends to a chosen Run;
+  - tabs Active (grouped by executor, running then queued with exact positions),
+    Schedules, History, Hives;
+  - a Run drawer: dispatch facts, stage strip, that Run's own thread, usage, the Worker
+    transcript (read-only), Cancel and Take over in chat.
+
+  Live updates come over one SSE connection opened only while the overlay is visible, on
+  the `nav` pool, reading the stream logs and the Conductor Store; no polling of git or
+  files.
 - **Control Center.** The org view of Runs, nodes and registered DDDs / Project Agents
   reads the Central Service. Publishing a DDD or Project Agent revision and enrolling or
   revoking a node happen here.
 - **Chat.** No visible change for inline runs. For other placements: the confirmation
-  card, the Run's status card and its decision cards in the originating tab (§6.4).
-- **Slack.** §8.
+  card (§6.4) and one status card per Run in the originating tab, rendered from the Run's
+  stream, where its open items can be answered.
+- **Slack.** §8; the Run's thread is a reader of its stream.
+- **Left nav.** The Pipelines item shows the count of open items.
 - **API.** `POST /api/conductor/requests`, `GET /api/conductor/requests[/<id>]`,
-  `POST /api/conductor/requests/<id>/cancel`, `GET /api/conductor/capacity`.
+  `POST /api/conductor/requests/<id>/cancel`, `GET /api/conductor/capacity`,
+  `GET /api/conductor/stream` (SSE), `POST /api/conductor/runs/<id>/input`.
   Endpoints run on the `nav` pool, never on the chat path.
 
 ## 11. Pipeline five dimensions
@@ -1288,7 +1325,7 @@ Measure first, then build. Each phase starts with its acceptance tests written a
 | Phase | Scope | Acceptance |
 |---|---|---|
 | 1 | Conductor Store, `submit` / `register_inline`, status join, API, Pipelines page columns | An inline Run appears in the Conductor view with origin `chat`; chat send and stream timings are unchanged (measured before and after); a failing registration never fails `create` |
-| 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery; Chat tab placement choice for `background_local` (§6.4) | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2; from a Chat tab, asking for a background Run shows a confirmation card, only the click submits, the tab stays usable while the Run works, and the Run's questions come back to that tab; a Bash call to the submit route is denied, a direct HTTP call without the card's confirm secret is refused, a second click on a used draft, an expired draft, or a draft whose DDD revision or base commit moved submits nothing |
+| 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery; Chat tab placement choice for `background_local` (§6.4) | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2; from a Chat tab, asking for a background Run shows a confirmation card, only the click submits, the tab stays usable while the Run works, and the Run's questions come back to that tab; an answer with a note given in the overlay reaches the Worker, which acks it, and the tab's card and the overlay both show it answered; a question left 10 minutes parks the Run and frees the slot for the next queued request, and answering it resumes the Run ahead of the queue; a Bash call to the submit route is denied, a direct HTTP call without the card's confirm secret is refused, a second click on a used draft, an expired draft, or a draft whose DDD revision or base commit moved submits nothing |
 | 3-0 | Contracts before code: wire and key specification (§4.3.6) with test vectors; DynamoDB, event, Run-record, trace-cursor and audit schemas; `ddd_origin` in `ddd_bindings.py`; the four-fact event schema; contract fields the Run record needs (`ddd_ref`, `code_ref`, placement, evidence contract id); per-stage, per-model usage instrumentation in `run_protocol/usage.py`; the answer-command envelope (§8.3) | Reviewed documents and red conformance tests for: crash after claim, out-of-order and duplicate events, duplicate-with-different-payload, cancel racing a result, Hive restart and adopt, lease across a simulated outage, key loss and rotation, a poisoned blob upload, a malformed or badly signed Run record that stays in quarantine, a text secret that is registered only through a redacted projection while the canonical record still verifies, a secret in a result bundle that rejects the upload, a sealed Trace with a mirror gap, a mirror write racing the seal, two claims racing for a Hive's last slot, every row of the §5.1 table releasing a slot exactly once, an answer racing cancel, timeout and adopt |
 | 3 | Central Service in the Bedrock account (CDK: HTTP API, Lambdas, DynamoDB, S3, KMS key, sweeper); Host enrolment and signed requests; DDD and Project Agent registry; Run-record upload from the Host outbox for inline and Local Runs; intake with redaction; audit; Control Center reads Central | Every finished local Run with upload on hands its record to Central, which passes intake; with `central_upload: "off"`, or `--no-upload`, a local Run sends nothing to Central and behaves the same locally; a remote request ignores the setting and always uploads; a planted fake secret appears masked in the projection and recorded in audit, while the canonical record still verifies; a Central outage leaves local Runs unaffected and their records upload afterwards; a replayed upload is a no-op; a node with a wrong signature, stale timestamp or reused nonce is refused |
 | 4 | First consumers: Trace (live view, sealed Trace, `run_index`) and Offline Eval (`eval_jobs`, `eval_reports`, intervention classification, the five dimensions) | An uploaded local Run shows per-stage times, tokens and every human answer in the Control Center from Central data only; a dropped event marks its Trace `incomplete`; an Eval report gives all five dimensions or `UNKNOWN`, never a guessed PASS; rebuilding `run_index` from Run records gives the same statistics; `local only` Runs are absent from org stats, which are labelled "of Runs received by Central", and are counted only on the Host's own dashboard; with Central down, local Runs, chat, hooks and MEMORY behave exactly as before |

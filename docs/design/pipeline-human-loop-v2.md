@@ -252,7 +252,12 @@ Conductor (`pipeline-run-conductor-v1.md`):
 
 - Dispatch state `parked` and its transitions; item deadline 24 h.
 - §8.3 answer commands carry `kind`, `option_id` and `text`.
-- §10 surfaces become readers of the stream (§4.3).
+- §10 surfaces become readers of the stream (§4.3); done in that document's §10, with
+  the mockup at `docs/design/pipeline-conductor-ui-mock.html`.
+
+**Phasing.** This design ships in the Conductor's Phase 2 for local Runs (the Local
+Worker is the first Run a person cannot answer from its own tab), its Slack reader in
+Phase 5, and its remote delivery in Phase 6.
 
 Host:
 
