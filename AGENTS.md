@@ -561,6 +561,13 @@ change is fully green on THREE checks — any one unrun or red blocks the push:
 
 1. **Build** — `./prod.sh build` (backend) and/or `cd desktop && npm run build:all`
    (frontend), per what the change touches.
+   **What an agent runs itself (dev build):** `cd desktop && npm run build` (tsc + Vite +
+   bundle-size check, no backend packaging, no install, no deploy) as ONE foreground Bash
+   call with an explicit `timeout: 600000`; the 120s default is too short for it. Never
+   background it. `./prod.sh build`, `npm run build:all` (it runs `build-backend.sh`
+   PyInstaller, `npm install` and `tauri build`) and `build-backend.sh` stay the user's
+   manual step (see `backend/skills/s_swarm-build/INSTRUCTIONS.md`): autonomous work never
+   packages, deploys or restarts the daemon.
 2. **Tests** — at least the affected suites, wrapped with a wall-clock cap:
    `cd backend && perl -e 'alarm 90; exec @ARGV' python -m pytest tests/test_<module>.py -v --timeout=60`
    (the `exec @ARGV` is required — without it perl exits 0 and pytest never runs; `gtimeout`

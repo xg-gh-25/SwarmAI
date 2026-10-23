@@ -35,6 +35,12 @@ When handing off to user, ALWAYS use this exact format:
 - When user says "好了" / "done" / "跑完了": proceed to next agent stage immediately.
 - Do NOT ask "ready?" or offer options. Just hand off or execute.
 
+### What the Agent MAY Run (dev build)
+
+- ✅ `cd desktop && npm run build` (frontend compile check) as one foreground Bash call
+  with explicit `timeout: 600000`. It packages nothing and deploys nothing. Rule lives in
+  AGENTS.md "Before You Push"; this skill's packaging/deploy steps stay manual.
+
 ### What NOT to Do
 
 - ❌ Run `build-backend.sh` directly in session (exit 137)
