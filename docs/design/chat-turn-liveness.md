@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: DESIGN v2 — §7 两点 XG 已同意（2026-10-23）；v2 按独立审查修订；未写代码
+status: P0 DONE — 验收测试已提交（预期失败）；P1 未开始
 related: chat-transcript-single-source.md（S3 会话状态唯一来源，本文是它没覆盖到的那一半）, streaming-spinner-ssot.md（2026-06-30，同类，未按设计落地）
 ---
 
@@ -241,6 +241,10 @@ fresh-context 审查。旧的 `streaming` 字段一直保留（部署脚本在�
 ## 9. 修订记录
 
 - v1（2026-10-23 `43794443f`）：初稿。
+- P0（2026-10-23）：`backend/tests/test_turn_liveness_p0.py`（T1 T3 T4 T5 T8 预期失败，T9 回归）、
+  `desktop/src/__tests__/turnLiveness.p0.test.ts`（T2 T6 T7 预期失败）。每条都确认是在它要验的断言上红
+  （`raises=AssertionError`；前端先以普通 `it` 跑一遍看失败信息）。T5b 已由 `test_injected_turn_empty.py`
+  覆盖，没有重复写。反向验证样例：把 interrupt 成功分支的转 IDLE 去掉，T4 变成 XPASS(strict)。
 - v2（2026-10-23）：按独立审查（12 条，3 条 BLOCKER）修订：
   - #5 事实修正：注入回合空回复已由 `1d060eee` 改为安静结束，是正确行为；剩下的是真失败不重试。
   - 开回合改为原子的 `try_open_turn`，在占槽位之前；已有一轮就转 pending，不会有两个打开的回合（BLOCKER）。
