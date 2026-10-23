@@ -45,6 +45,7 @@ import {
 import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
 import { parseWorkPacket, type WorkPacket } from './todoWorkPacket';
 import { OverlayError } from './OverlayState';
+import { Stat, SectionLabel, StatusBadge as Badge, Hint, tableHeadClass, type Tone } from '../overlay';
 
 export interface ToDoContentProps {
   /** Land a todo into a chat tab (inject + snapshot). Returns true if it landed
@@ -133,12 +134,12 @@ function Segmented<T extends string>({
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)] shrink-0">{label}</span>
+      <span className="text-meta uppercase tracking-wider text-[var(--color-text-muted)] shrink-0">{label}</span>
       <div
         role="tablist"
         aria-label={label}
         data-testid={testid}
-        className="flex items-center gap-0.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-0.5"
+        className="flex items-center gap-0.5 rounded-md border border-[var(--color-border)] p-0.5"
       >
         {options.map((o) => {
           const active = o.value === value;
@@ -149,9 +150,10 @@ function Segmented<T extends string>({
               aria-selected={active}
               onClick={() => onChange(o.value)}
               data-testid={optionTestid?.(o.value)}
-              className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap ${
+              style={active ? { background: 'color-mix(in srgb, var(--color-primary) 15%, transparent)' } : undefined}
+              className={`h-6 px-2.5 rounded text-small transition-colors whitespace-nowrap ${
                 active
-                  ? 'bg-primary text-white shadow-sm'
+                  ? 'text-[var(--color-primary)] font-semibold'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
               }`}
             >{o.label}</button>
@@ -343,7 +345,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
       {truncated && (
         <div
           data-testid="todo-truncated"
-          className="shrink-0 mx-4 mt-2 text-[11px] text-[var(--color-text-faint)] flex items-center gap-1.5"
+          className="shrink-0 mx-4 mt-2 text-meta text-[var(--color-text-faint)] flex items-center gap-1.5"
         >
           <span className="material-symbols-outlined icon-xs">info</span>
           Showing the most recent {TODO_FETCH_CAP} ToDos — narrow the time range to see a focused set.
@@ -364,11 +366,11 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
       {actionErr && (
         <div
           data-testid="todo-action-error"
-          className="mx-4 mt-2 flex items-center gap-2 rounded-md bg-[#d0524a]/10 px-3 py-2 text-[12px] text-[#d0524a]"
+          className="mx-4 mt-2 flex items-center gap-2 rounded-md bg-[var(--color-status-error)]/10 px-3 py-2 text-small text-[var(--color-status-error)]"
         >
           <span className="material-symbols-outlined icon-sm">warning</span>
           <span className="flex-1">{actionErr}</span>
-          <button onClick={() => setActionErr(null)} className="text-[11px] underline opacity-80 hover:opacity-100">dismiss</button>
+          <button onClick={() => setActionErr(null)} className="text-meta underline opacity-80 hover:opacity-100">dismiss</button>
         </div>
       )}
 
@@ -417,29 +419,10 @@ function KpiRow({ kpis, rangeLabel }: { kpis: ReturnType<typeof computeKpis>; ra
   );
 }
 
-function Kpi({ label, value, testid, icon, primary }: { label: string; value: number | string; testid: string; icon: string; primary?: boolean }) {
-  // Each KPI is now a bordered card (subtle bg lift) with a leading icon in a rounded
-  // tile — a coherent "stat card" language shared with the rest of the surface. The
-  // primary card (Open = the actionable headline) gets the accent border + tinted bg
-  // so exactly ONE card dominates (Von Restorff); hierarchy via color+weight, not size.
-  return (
-    <div
-      data-testid={testid}
-      className={`flex items-center gap-2.5 rounded-lg border px-3 py-2.5 ${
-        primary
-          ? 'border-primary/30 bg-primary/[0.07]'
-          : 'border-[var(--color-border)] bg-[var(--color-bg)]/40'
-      }`}
-    >
-      <span
-        className={`material-symbols-outlined icon-md shrink-0 ${primary ? 'text-primary' : 'text-[var(--color-text-muted)]'}`}
-      >{icon}</span>
-      <div className="flex flex-col min-w-0">
-        <span className={`text-[20px] leading-none tabular-nums ${primary ? 'font-bold text-primary' : 'font-semibold text-[var(--color-text)]'}`}>{value}</span>
-        <span className="mt-1 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)] truncate">{label}</span>
-      </div>
-    </div>
-  );
+function Kpi({ label, value, testid, primary }: { label: string; value: number | string; testid: string; icon?: string; primary?: boolean }) {
+  // One stat look across the nav overlays (components/overlay Stat); the actionable
+  // headline (Open) is the one value in the primary colour.
+  return <Stat label={label} value={value} testid={testid} tone={primary ? 'primary' : undefined} />;
 }
 
 // ── Analytics strip (always visible) ─────────────────────────────────
@@ -456,19 +439,19 @@ function AnalyticsStrip({ weekly, sources }: {
     <div className="shrink-0 grid grid-cols-2 gap-3 px-4 py-3 border-b border-[var(--color-border)]" data-testid="todo-analytics">
       {/* Each chart lives in a matching card (same border/radius/bg as the KPI cards
           above) so the whole surface reads as one system, not stacked ad-hoc rows. */}
-      <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-3 py-2.5" data-testid="todo-weekly">
+      <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5" data-testid="todo-weekly">
         <div className="flex items-center justify-between">
-          <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">Weekly activity</div>
+          <SectionLabel>Weekly activity</SectionLabel>
           {/* Legend — was missing entirely; gray vs accent bars were unlabeled. */}
-          <div className="flex items-center gap-2.5 text-[11px] text-[var(--color-text-muted)]">
+          <div className="flex items-center gap-2.5 text-meta text-[var(--color-text-muted)]">
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-[var(--color-text-faint)]/40" />Created</span>
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-primary" />Completed</span>
           </div>
         </div>
         <WeeklyBars data={weekly} />
       </div>
-      <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-3 py-2.5" data-testid="todo-sources">
-        <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">Source distribution</div>
+      <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5" data-testid="todo-sources">
+        <SectionLabel>Source distribution</SectionLabel>
         <SourceBars data={sources} />
       </div>
     </div>
@@ -476,7 +459,7 @@ function AnalyticsStrip({ weekly, sources }: {
 }
 
 function WeeklyBars({ data }: { data: ReturnType<typeof weeklyBuckets> }) {
-  if (data.length === 0) return <div className="text-[11px] text-[var(--color-text-faint)] py-4 text-center">No activity in range</div>;
+  if (data.length === 0) return <div className="text-meta text-[var(--color-text-faint)] py-4 text-center">No activity in range</div>;
   const max = Math.max(1, ...data.map((d) => Math.max(d.created, d.completed)));
   return (
     <div className="flex items-end gap-1.5 h-16">
@@ -493,12 +476,12 @@ function WeeklyBars({ data }: { data: ReturnType<typeof weeklyBuckets> }) {
 }
 
 function SourceBars({ data }: { data: ReturnType<typeof sourceDist> }) {
-  if (data.length === 0) return <div className="text-[11px] text-[var(--color-text-faint)] py-2">No data in range</div>;
+  if (data.length === 0) return <div className="text-meta text-[var(--color-text-faint)] py-2">No data in range</div>;
   const total = Math.max(1, data.reduce((s, d) => s + d.count, 0));
   return (
     <div className="flex flex-col gap-1">
       {data.map((d) => (
-        <div key={d.source} className="flex items-center gap-2 text-[11px]" title={`${d.source}: ${d.count}`}>
+        <div key={d.source} className="flex items-center gap-2 text-meta" title={`${d.source}: ${d.count}`}>
           <span className="w-16 shrink-0 text-[var(--color-text-muted)] truncate">{d.source}</span>
           <div className="flex-1 h-2.5 rounded-sm bg-[var(--color-bg)] overflow-hidden">
             <div className="h-full bg-primary/70 rounded-sm" style={{ width: `${(d.count / total) * 100}%` }} />
@@ -522,8 +505,11 @@ const COLUMNS: { key: SortKey; label: string }[] = [
   { key: 'completed', label: 'Completed' },
 ];
 
+const PRIORITY_TONE: Record<Priority, Tone> = {
+  high: 'error', medium: 'warning', low: 'primary', none: 'neutral',
+};
 const PRIORITY_COLOR: Record<Priority, string> = {
-  high: '#ef4444', medium: '#f59e0b', low: '#3b82f6', none: 'transparent',
+  high: 'var(--color-status-error)', medium: 'var(--color-status-warning)', low: 'var(--color-primary)', none: 'transparent',
 };
 
 function TodoTable({ rows, sortKey, sortDir, onSort, onDispatch, onWithdraw, onSelect }: {
@@ -540,7 +526,7 @@ function TodoTable({ rows, sortKey, sortDir, onSort, onDispatch, onWithdraw, onS
       {rows.length === 0 ? (
         <EmptyTodoHint />
       ) : (
-        <table className="w-full text-[12px]">
+        <table className="w-full text-small">
           <thead className="sticky top-0 bg-[var(--color-card)] z-[1]">
             <tr className="border-b border-[var(--color-border)]">
               {COLUMNS.map((c) => {
@@ -550,16 +536,15 @@ function TodoTable({ rows, sortKey, sortDir, onSort, onDispatch, onWithdraw, onS
                     key={c.key}
                     onClick={() => onSort(c.key)}
                     data-testid={`todo-th-${c.key}`}
-                    className={`text-left px-3 py-2 text-[11px] uppercase tracking-wider cursor-pointer select-none whitespace-nowrap transition-colors ${
-                      active ? 'text-primary' : 'text-[var(--color-text-faint)] hover:text-[var(--color-text)]'
-                    }`}
+                    aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+                    className={`${tableHeadClass} px-3 py-2 cursor-pointer select-none whitespace-nowrap hover:text-[var(--color-text)]`}
                   >
                     {c.label}
-                    <span className="ml-1 text-[11px]">{active ? (sortDir === 'asc' ? '▲' : '▼') : ''}</span>
+                    <span className="ml-1 text-meta">{active ? (sortDir === 'asc' ? '▲' : '▼') : ''}</span>
                   </th>
                 );
               })}
-              <th className="text-right px-3 py-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">Actions</th>
+              <th className={`${tableHeadClass} !text-right px-3 py-2`}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -578,7 +563,6 @@ function TodoRow({ todo, onDispatch, onWithdraw, onSelect }: {
 }) {
   const status = deriveStatus(todo);
   const terminal = status === 'Completed' || status === 'Cancelled';
-  const priColor = PRIORITY_COLOR[todo.priority];
   return (
     <tr
       className="group border-b border-[var(--color-border)]/60 text-[var(--color-text)] hover:bg-[var(--color-hover)] cursor-pointer transition-colors"
@@ -587,19 +571,16 @@ function TodoRow({ todo, onDispatch, onWithdraw, onSelect }: {
     >
       {/* Priority — colored dot + label; the dot doubles as a left status accent. */}
       <td className="px-3 py-2.5">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: priColor === 'transparent' ? 'var(--color-border)' : priColor }} />
-          <span className="text-[11px] text-[var(--color-text-muted)] capitalize">{todo.priority === 'none' ? '—' : todo.priority}</span>
-        </span>
+        <Badge tone={PRIORITY_TONE[todo.priority]}><span className="capitalize">{todo.priority === 'none' ? '—' : todo.priority}</span></Badge>
       </td>
       <td className="px-3 py-2.5 max-w-[320px]">
-        <span className="block truncate font-medium text-[var(--color-text)]">{todo.title}</span>
+        <span className="block truncate text-[var(--color-text)]">{todo.title}</span>
       </td>
-      <td className="px-3 py-2.5 tabular-nums text-[11px] text-[var(--color-text-muted)]">{todo.sourceType}</td>
+      <td className="px-3 py-2.5 tabular-nums text-meta text-[var(--color-text-muted)]">{todo.sourceType}</td>
       <td className="px-3 py-2.5"><StatusBadge status={status} /></td>
-      <td className="px-3 py-2.5 tabular-nums text-[11px] text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.createdAt)}</td>
-      <td className="px-3 py-2.5 tabular-nums text-[11px] text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.updatedAt)}</td>
-      <td className="px-3 py-2.5 tabular-nums text-[11px] text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.completedAt)}</td>
+      <td className="px-3 py-2.5 tabular-nums text-meta text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.createdAt)}</td>
+      <td className="px-3 py-2.5 tabular-nums text-meta text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.updatedAt)}</td>
+      <td className="px-3 py-2.5 tabular-nums text-meta text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.completedAt)}</td>
       {/* Actions must not open the drawer. Quiet until row-hover (opacity) so the
           table scans clean; the primary Dispatch stays accent-colored on reveal. */}
       <td className="px-3 py-2.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
@@ -617,24 +598,12 @@ function TodoRow({ todo, onDispatch, onWithdraw, onSelect }: {
 /** Status badge — colored dot + label so status is legible at a glance and color is
  *  never the SOLE signal (accessibility). Shared by the table AND the detail header. */
 function StatusBadge({ status }: { status: TodoStatusLabel }) {
-  const cls: Record<TodoStatusLabel, string> = {
-    Pending: 'text-[var(--color-text-muted)] bg-[var(--color-hover)]',
-    'In Progress': 'text-amber-400 bg-amber-500/10',
-    Completed: 'text-emerald-400 bg-emerald-500/10',
-    Cancelled: 'text-red-400 bg-red-500/10',
-  };
-  const dot: Record<TodoStatusLabel, string> = {
-    Pending: 'bg-[var(--color-text-muted)]',
-    'In Progress': 'bg-amber-400',
-    Completed: 'bg-emerald-400',
-    Cancelled: 'bg-red-400',
-  };
-  return (
-    <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap ${cls[status]}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${dot[status]}`} />{status}
-    </span>
-  );
+  return <Badge tone={STATUS_TONE[status]}>{status}</Badge>;
 }
+
+const STATUS_TONE: Record<TodoStatusLabel, Tone> = {
+  Pending: 'neutral', 'In Progress': 'warning', Completed: 'success', Cancelled: 'error',
+};
 
 /** Status control for the detail drawer — a StatusBadge that becomes a dropdown when
  *  (and only when) legal manual transitions exist. Covers the case the auto-hook
@@ -696,9 +665,7 @@ function RowBtn({ onClick, icon, label, primary, testid }: { onClick: () => void
       onClick={onClick}
       title={label}
       data-testid={testid}
-      className={`inline-flex items-center gap-0.5 px-2 py-1 text-[11px] font-medium rounded-md transition-colors ${
-        primary ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-red-400'
-      }`}
+      className={`btn-sm ${primary ? 'btn-soft' : 'btn-ghost hover:!text-[var(--color-status-error)]'}`}
     >
       <span className="material-symbols-outlined icon-xs">{icon}</span>{label}
     </button>
@@ -708,8 +675,8 @@ function RowBtn({ onClick, icon, label, primary, testid }: { onClick: () => void
 /** Empty-table hint — the full how-to lives in the persistent GuideBanner. */
 function EmptyTodoHint() {
   return (
-    <div className="text-[12px] text-[var(--color-text-faint)] leading-relaxed px-4 py-10 text-center" data-testid="todo-empty-hint">
-      No ToDos match this filter — ask Swarm in chat, or <span className="text-primary font-medium">+ New ToDo</span>.
+    <div className="text-small text-[var(--color-text-faint)] leading-relaxed px-4 py-10 text-center" data-testid="todo-empty-hint">
+      No ToDos match this filter — ask Swarm in chat, or <span className="text-primary ">+ New ToDo</span>.
     </div>
   );
 }
@@ -720,20 +687,16 @@ function EmptyTodoHint() {
  */
 function GuideBanner() {
   return (
-    <div
-      className="shrink-0 mx-4 mt-3 rounded-lg border border-primary/25 bg-primary/[0.06] px-3.5 py-2.5 flex items-start gap-2.5"
-      data-testid="todo-guide-banner"
-    >
-      <span className="material-symbols-outlined icon-sm text-primary mt-0.5 shrink-0">auto_awesome</span>
-      <div className="flex-1 min-w-0 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-        <span className="text-[var(--color-text)] font-medium">Just ask Swarm in chat</span> — the AI-native way.
-        Say <span className="tabular-nums text-[var(--color-text)]">“add a todo to …”</span> and it captures full context
+    <div className="shrink-0 mx-4 mt-3" data-testid="todo-guide-banner">
+      <Hint>
+        <span className="text-[var(--color-text)]">Just ask Swarm in chat</span> — the AI-native way.
+        Say <span className="text-[var(--color-text)]">“add a todo to …”</span> and it captures full context
         (files, design docs, next step) automatically. Chat also handles{' '}
         <span className="text-[var(--color-text)]">bulk import</span> (e.g. “import my open tasks from another tool”),{' '}
         <span className="text-[var(--color-text)]">updates</span> (“mark the auth todo done”), and{' '}
         <span className="text-[var(--color-text)]">reports</span> (“what’s my throughput this week?”).
-        <span className="text-[var(--color-text-faint)]"> Or add one manually with <span className="text-primary font-medium">+ New ToDo</span>.</span>
-      </div>
+        {' '}Or add one manually with <span className="text-[var(--color-primary)]">+ New ToDo</span>.
+      </Hint>
     </div>
   );
 }
@@ -767,7 +730,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
       <div className="px-4 py-3 border-b border-[var(--color-border)] shrink-0">
         <div className="flex items-start gap-2.5">
           <span className="mt-0.5 w-1 h-5 rounded-full shrink-0" style={{ background: priColor }} />
-          <div className="flex-1 min-w-0 text-[14px] font-semibold text-[var(--color-text)] leading-snug break-words">{todo.title}</div>
+          <div className="flex-1 min-w-0 text-heading font-semibold text-[var(--color-text)] leading-snug break-words">{todo.title}</div>
           <button onClick={onEdit} data-testid="todo-drawer-edit" title="Edit" className="text-[var(--color-text-muted)] hover:text-primary shrink-0">
             <span className="material-symbols-outlined icon-md">edit</span>
           </button>
@@ -778,19 +741,19 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
         <div className="mt-2 flex items-center gap-2 flex-wrap pl-3.5">
           <StatusSelect todo={todo} onSetZone={onSetZone} />
           <PriorityPill priority={todo.priority} />
-          <span className="text-[11px] tabular-nums text-[var(--color-text-faint)]">{todo.sourceType}</span>
+          <span className="text-meta tabular-nums text-[var(--color-text-faint)]">{todo.sourceType}</span>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3.5 flex flex-col gap-4 text-[12px]">
+      <div className="flex-1 overflow-y-auto px-4 py-3.5 flex flex-col gap-4 text-small">
         {/* Next step — THE thing you open a todo to see; promoted to a highlighted
             callout above the fold, not a gray peer of Timeline. */}
         {wp?.next_step && (
           <div className="rounded-lg border border-primary/25 bg-primary/[0.06] px-3 py-2.5" data-testid="todo-drawer-nextstep">
-            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-primary">
+            <div className="flex items-center gap-1.5 text-meta uppercase tracking-wider text-primary">
               <span className="material-symbols-outlined icon-xs">arrow_forward</span>Next step
             </div>
-            <p className="mt-1 text-[12px] text-[var(--color-text)] leading-relaxed break-words">{wp.next_step}</p>
+            <p className="mt-1 text-small text-[var(--color-text)] leading-relaxed break-words">{wp.next_step}</p>
           </div>
         )}
 
@@ -801,14 +764,14 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
         )}
 
         <Section label="Timeline">
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 tabular-nums text-[11px]">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 tabular-nums text-meta">
             <TsRow label="Created" iso={todo.createdAt} />
             <TsRow label="Dispatched" iso={todo.dispatchedAt} />
             <TsRow label="Completed" iso={todo.completedAt} />
             <TsRow label="Reviewed" iso={todo.reviewedAt} />
           </dl>
           {todo.dispatchedTabLabel && (
-            <div className="mt-1 text-[11px] tabular-nums text-[var(--color-text-muted)]">→ {todo.dispatchedTabLabel}</div>
+            <div className="mt-1 text-meta tabular-nums text-[var(--color-text-muted)]">→ {todo.dispatchedTabLabel}</div>
           )}
         </Section>
 
@@ -825,7 +788,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
             {wp.notes && <Section label="Notes"><p className="text-[var(--color-text-muted)] break-words whitespace-pre-wrap">{wp.notes}</p></Section>}
           </>
         ) : (
-          <div className="text-[11px] text-[var(--color-text-faint)] italic">No work-packet context attached.</div>
+          <div className="text-meta text-[var(--color-text-faint)] italic">No work-packet context attached.</div>
         )}
 
         {attachments.length > 0 && (
@@ -838,11 +801,11 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
                     onClick={() => openAttachment(a.relPath)}
                     title={`Open ${a.filename}`}
                     data-testid="todo-detail-attachment-open"
-                    className="w-full flex items-center gap-2 text-[11px] text-[var(--color-text)] hover:text-primary hover:bg-[var(--color-hover)] rounded px-1 py-0.5 -mx-1 transition-colors text-left"
+                    className="w-full flex items-center gap-2 text-meta text-[var(--color-text)] hover:text-primary hover:bg-[var(--color-hover)] rounded px-1 py-0.5 -mx-1 transition-colors text-left"
                   >
                     <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">attach_file</span>
                     <span className="flex-1 truncate">{a.filename}</span>
-                    <span className=" text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
+                    <span className=" text-meta text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
                     <span className="material-symbols-outlined icon-xs text-[var(--color-text-faint)]">open_in_new</span>
                   </button>
                 </li>
@@ -865,13 +828,13 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
             <span className="material-symbols-outlined icon-sm">play_arrow</span>Dispatch to chat
           </button>
         ) : (
-          <span className="flex-1 text-[11px] text-[var(--color-text-faint)]">This ToDo is {status.toLowerCase()} — no action needed.</span>
+          <span className="flex-1 text-meta text-[var(--color-text-faint)]">This ToDo is {status.toLowerCase()} — no action needed.</span>
         )}
         <button
           onClick={() => onWithdraw(todo)}
           data-testid="todo-drawer-withdraw"
           title="Withdraw"
-          className="inline-flex items-center gap-1 px-3 py-2 text-[12px] font-medium rounded-md text-[var(--color-text-muted)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
+          className="btn-md btn-ghost hover:!text-[var(--color-status-error)]"
         >
           <span className="material-symbols-outlined icon-sm">delete</span>Withdraw
         </button>
@@ -883,13 +846,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
 /** Small colored priority pill for the detail header (replaces redundant text). */
 function PriorityPill({ priority }: { priority: Priority }) {
   if (priority === 'none') return null;
-  const color = PRIORITY_COLOR[priority];
-  return (
-    <span
-      className="text-[11px] font-medium px-1.5 py-0.5 rounded capitalize"
-      style={{ color, background: `color-mix(in srgb, ${color} 14%, transparent)` }}
-    >{priority}</span>
-  );
+  return <Badge tone={PRIORITY_TONE[priority]}><span className="capitalize">{priority}</span></Badge>;
 }
 
 /** Human-readable byte size. */
@@ -913,7 +870,7 @@ function openAttachment(relPath: string): void {
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">{label}</div>
+      <div className="text-meta uppercase tracking-wider text-[var(--color-text-faint)]">{label}</div>
       {children}
     </div>
   );
@@ -934,7 +891,7 @@ function MaterialList({ label, items, mono }: { label: string; items?: string[];
     <Section label={label}>
       <ul className="flex flex-col gap-0.5">
         {items.map((it, i) => (
-          <li key={i} className={`text-[var(--color-text)] break-all ${mono ? 'font-mono text-[11px]' : ''}`}>{it}</li>
+          <li key={i} className={`text-[var(--color-text)] break-all ${mono ? 'font-mono text-meta' : ''}`}>{it}</li>
         ))}
       </ul>
     </Section>
@@ -1069,12 +1026,12 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
   return (
     <OverlayDrawer widthPx={520} maxWidthPct={80} z={20} testid={isEdit ? 'todo-edit-form' : 'todo-new-form'}>
       <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
-        <span className="flex-1 text-[13px] font-semibold text-[var(--color-text)]">{isEdit ? 'Edit ToDo' : 'New ToDo'}</span>
+        <span className="flex-1 text-body font-semibold text-[var(--color-text)]">{isEdit ? 'Edit ToDo' : 'New ToDo'}</span>
         <button onClick={onCancel} data-testid="todo-form-cancel" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
           <span className="material-symbols-outlined icon-md">close</span>
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3.5 text-[12px]">
+      <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3.5 text-small">
         <Field label="Title *">
           <textarea
             autoFocus
@@ -1152,7 +1109,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
             {(attachments.length > 0 || staged.length > 0) && (
               <ul className="flex flex-col gap-1">
                 {attachments.map((a) => (
-                  <li key={a.id} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-[11px]" data-testid="todo-form-attachment">
+                  <li key={a.id} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-meta" data-testid="todo-form-attachment">
                     <button
                       type="button"
                       onClick={() => openAttachment(a.relPath)}
@@ -1162,19 +1119,19 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
                     >
                       <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">attach_file</span>
                       <span className="flex-1 truncate text-[var(--color-text)]">{a.filename}</span>
-                      <span className=" text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
+                      <span className=" text-meta text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
                     </button>
-                    <button onClick={() => void removeExisting(a)} title="Remove" className="text-[var(--color-text-muted)] hover:text-red-400 shrink-0">
+                    <button onClick={() => void removeExisting(a)} title="Remove" className="text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] shrink-0">
                       <span className="material-symbols-outlined icon-sm">close</span>
                     </button>
                   </li>
                 ))}
                 {staged.map((s) => (
-                  <li key={s.key} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-[11px]" data-testid="todo-form-staged">
+                  <li key={s.key} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-meta" data-testid="todo-form-staged">
                     <span className="material-symbols-outlined icon-xs text-[var(--color-text-faint)]">schedule</span>
                     <span className="flex-1 truncate text-[var(--color-text-muted)]">{s.file.name}</span>
-                    <span className=" text-[11px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(s.file.size)}</span>
-                    <button onClick={() => setStaged((prev) => prev.filter((x) => x.key !== s.key))} title="Remove" className="text-[var(--color-text-muted)] hover:text-red-400">
+                    <span className=" text-meta text-[var(--color-text-faint)] tabular-nums">{fmtBytes(s.file.size)}</span>
+                    <button onClick={() => setStaged((prev) => prev.filter((x) => x.key !== s.key))} title="Remove" className="text-[var(--color-text-muted)] hover:text-[var(--color-status-error)]">
                       <span className="material-symbols-outlined icon-sm">close</span>
                     </button>
                   </li>
@@ -1182,12 +1139,12 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
               </ul>
             )}
             {!isEdit && staged.length > 0 && (
-              <span className="text-[11px] text-[var(--color-text-faint)]">Files upload when you create the ToDo.</span>
+              <span className="text-meta text-[var(--color-text-faint)]">Files upload when you create the ToDo.</span>
             )}
           </div>
         </Field>
 
-        {err && <div className="text-[11px] text-red-400" data-testid="todo-form-err">{err}</div>}
+        {err && <div className="text-meta text-[var(--color-status-error)]" data-testid="todo-form-err">{err}</div>}
       </div>
       <div className="flex items-center gap-2 px-4 py-3 border-t border-[var(--color-border)] shrink-0">
         <button
@@ -1198,7 +1155,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
         >{busy ? (isEdit ? 'Saving…' : 'Creating…') : (isEdit ? 'Save changes' : 'Create ToDo')}</button>
         <button
           onClick={onCancel}
-          className="px-3 py-1.5 text-[12px] font-medium rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors"
+          className="btn-md btn-ghost"
         >Cancel</button>
       </div>
     </OverlayDrawer>
@@ -1208,7 +1165,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">{label}</label>
+      <label className="text-meta uppercase tracking-wider text-[var(--color-text-faint)]">{label}</label>
       {children}
     </div>
   );

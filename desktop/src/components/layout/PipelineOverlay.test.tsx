@@ -202,10 +202,10 @@ describe('PipelineOverlay', () => {
     fireEvent.click(within(grp.getByTestId('pipeline-run-run_paused1')).getByTitle('Aborted thing'));
     await waitFor(() => expect(screen.getByTestId('pipeline-run-drawer')).toBeInTheDocument());
     // (1) verdict pill: DETAIL is paused + reason 'Gate 1 BLOCK' = a decision-pause →
-    //     statusPill renders "needs you" in rose (colored, not buried mono).
+    //     statusPill renders "needs you" in the error tone (colored, not buried mono).
     const pill = await screen.findByTestId('pipeline-detail-status');
     expect(pill.textContent).toMatch(/needs you/i);
-    expect(pill.className).toMatch(/rose/);
+    expect(pill.getAttribute('data-tone')).toBe('error');
     // (2) timestamp = FINISH (updatedAt), NOT start (createdAt) — matches the list
     //     row for the same run. fmtTs renders in LOCAL time, so compute both stamps
     //     the same way (TZ-agnostic) and assert finish shown / start not shown.

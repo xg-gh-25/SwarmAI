@@ -22,14 +22,15 @@ export const ROW_2 = 'min-h-[48px]';
 
 const TINT = (v: string, pct: number) => `color-mix(in srgb, var(${v}) ${pct}%, transparent)`;
 
-export function Stat({ label, value, hint, testid }: {
-  label: string; value: ReactNode; hint?: ReactNode; testid?: string;
+export function Stat({ label, value, hint, tone, testid }: {
+  label: string; value: ReactNode; hint?: ReactNode; tone?: Tone; testid?: string;
 }) {
   return (
     <div data-testid={testid}
       className="flex flex-col gap-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5 min-w-0">
       <span className="text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)] truncate">{label}</span>
-      <span className="text-display font-semibold text-[var(--color-text)] tabular-nums">{value}</span>
+      <span className="text-display font-semibold tabular-nums"
+        style={{ color: tone ? `var(${TONE_VAR[tone]})` : 'var(--color-text)' }}>{value}</span>
       {hint != null && <span className="text-meta text-[var(--color-text-muted)] truncate">{hint}</span>}
     </div>
   );

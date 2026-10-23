@@ -48,20 +48,20 @@ export interface NavEntry {
 export const NAV: Record<OverlayId, NavEntry> = {
   // Chat zone (rows under the Chat hero + the Need You slot)
   history: { zone: 'chat', navLabel: 'History', mode: 'HISTORY', width: 'xl' },
-  artifacts: { zone: 'chat', navLabel: 'Artifacts', mode: 'ARTIFACTS', width: 'l' },
+  artifacts: { zone: 'chat', navLabel: 'Artifacts', mode: 'ARTIFACTS', width: 'xl' },
   'needs-you': { zone: 'chat', navLabel: 'Need You', mode: 'ATTENTION', width: 'm' },
   // Cognition zone
   context: { zone: 'cognitive', navLabel: 'C&M', subtitle: 'Global Brain', mode: 'BRAIN', width: 'xl' },
   library: { zone: 'cognitive', navLabel: 'Library', subtitle: 'Bookshelf', mode: 'LIBRARY', width: 'xl' },
   'brain-hub': { zone: 'cognitive', navLabel: 'Brain Hub', subtitle: 'phase-1 · read-only lens', mode: 'BRAIN', width: 'xl' },
-  'new-brain': { zone: 'cognitive', navLabel: 'New Brain', subtitle: 'Grow a new brain', mode: 'BRAIN', width: 'l' },
+  'new-brain': { zone: 'cognitive', navLabel: 'New Brain', subtitle: 'Grow a new brain', mode: 'BRAIN', width: 'xl' },
   // Work zone
-  todo: { zone: 'work', navLabel: 'ToDo', mode: 'TODO', width: 'l' },
+  todo: { zone: 'work', navLabel: 'ToDo', mode: 'TODO', width: 'xl' },
   // width 'm': a file tree fills ~45% of an 'xl' panel and leaves a void
   swarmws: { zone: 'work', navLabel: 'Workspace', subtitle: 'SwarmWS workspace explorer', mode: 'WORKSPACE', width: 'm' },
   pipeline: { zone: 'work', navLabel: 'Pipeline', mode: 'PIPELINE', width: 'xl' },
   pollinate: { zone: 'work', navLabel: 'Pollinate', mode: 'POLLINATE', width: 'xl' },
-  community: { zone: 'work', navLabel: 'Community', mode: 'COMMUNITY', width: 'l' },
+  community: { zone: 'work', navLabel: 'Community', mode: 'COMMUNITY', width: 'xl' },
   // System zone
   jobs: { zone: 'system', navLabel: 'Jobs & Runs', mode: 'JOBS', width: 'xl' },
   capabilities: { zone: 'system', navLabel: 'Capabilities', subtitle: 'What your AI can do', mode: 'CAPABILITIES', width: 'xl' },

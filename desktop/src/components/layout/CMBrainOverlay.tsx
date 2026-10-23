@@ -23,6 +23,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery } from './overlayQueries';
 import api, { classifyLoadError } from '../../services/api';
 import { OverlayError } from './OverlayState';
+import { SectionLabel, StatusBadge, tableHeadClass, type Tone } from '../overlay';
 
 // ── Types (mirror the backend context-health token_block, snake_case as served) ──
 type HealthTag = 'fresh' | 'idle' | 'growing' | 'oversized';
@@ -48,11 +49,14 @@ interface TokenFileRow {
 
 // Health tag → tint (backend decides the tag; UI only colors it). fresh=calm,
 // idle=muted, growing=amber-warn, oversized=red-risk.
+const HEALTH_TONE: Record<HealthTag, Tone> = {
+  fresh: 'success', idle: 'neutral', growing: 'warning', oversized: 'error',
+};
 const HEALTH_TINT: Record<HealthTag, string> = {
-  fresh: '#5fc99a',
-  idle: '#7c8194',
-  growing: '#d08a4a',
-  oversized: '#d0524a',
+  fresh: 'var(--color-status-success)',
+  idle: 'var(--color-text-muted)',
+  growing: 'var(--color-status-warning)',
+  oversized: 'var(--color-status-error)',
 };
 interface TokenBlock {
   total_tokens: number;         // DISK total == prompt load (always full-injected)
@@ -134,10 +138,10 @@ const OWNER_LABEL: Record<TokenFileRow['owner'], string> = {
 
 // Ownership → accent tint (aligns to the workspace ownership color model).
 const OWNER_TINT: Record<TokenFileRow['owner'], string> = {
-  system: '#7c8194', // slate — system-owned, non-editable
-  user: '#4a8fb0', // teal — user-owned
-  agent: '#5fc99a', // cognition green — agent-owned (memory/evolution)
-  auto: '#b08fd0', // violet — auto-generated
+  system: 'var(--color-text-muted)', // slate — system-owned, non-editable
+  user: 'var(--color-primary)', // teal — user-owned
+  agent: 'var(--color-status-success)', // cognition green — agent-owned (memory/evolution)
+  auto: 'var(--color-text-secondary)', // violet — auto-generated
 };
 
 function fmtTokens(n: number): string {
@@ -225,34 +229,34 @@ export function CMBrainContent() {
           data-testid="cm-overview-rail"
         >
           <div>
-            <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">Current load</div>
+            <SectionLabel>Current load</SectionLabel>
             <div className="mt-1 flex items-baseline gap-1.5">
               <span
-                className="text-2xl font-semibold"
-                style={{ color: block?.over_budget ? '#d0524a' : 'var(--color-text)' }}
+                className="text-display font-semibold"
+                style={{ color: block?.over_budget ? 'var(--color-status-error)' : 'var(--color-text)' }}
               >
                 {block ? fmtTokens(block.total_tokens) : '—'}
               </span>
-              <span className="text-xs text-[var(--color-text-muted)]">
+              <span className="text-small text-[var(--color-text-muted)]">
                 / {block ? fmtTokens(block.budget) : '—'} budget
               </span>
             </div>
             {healthErr && !block && (
-              <div className="mt-1 text-[11px] text-[#d08a4a]">couldn’t load — not “0”</div>
+              <div className="mt-1 text-meta text-[var(--color-status-warning)]">couldn’t load — not “0”</div>
             )}
             {block?.over_budget && <BudgetAlert block={block} />}
           </div>
 
           {/* 30-day token growth — from the daily snapshot series (collecting until >=2 pts) */}
           <div>
-            <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">30-day token growth</div>
+            <SectionLabel>30-day token growth</SectionLabel>
             <div className="mt-1.5">
               <RailTrend trend={trend} />
             </div>
           </div>
 
           <div>
-            <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">Needs you</div>
+            <SectionLabel>Needs you</SectionLabel>
             {needsErr ? (
               // B1: don't show a false "0" — say the fetch failed + offer Retry.
               <OverlayError
@@ -265,8 +269,8 @@ export function CMBrainContent() {
               />
             ) : (
               <div className="mt-2 flex flex-col gap-1.5">
-                <NeedsBtn testid="cm-needs-review" label={QUEUE_META.review.label} count={reviewCount} tint="#5fc99a" active={needsFilter === 'review'} onClick={() => setNeedsFilter('review')} />
-                <NeedsBtn testid="cm-needs-approve" label={QUEUE_META.approve.label} count={approveCount} tint="#d08a4a" active={needsFilter === 'approve'} onClick={() => setNeedsFilter('approve')} />
+                <NeedsBtn testid="cm-needs-review" label={QUEUE_META.review.label} count={reviewCount} tint="var(--color-status-success)" active={needsFilter === 'review'} onClick={() => setNeedsFilter('review')} />
+                <NeedsBtn testid="cm-needs-approve" label={QUEUE_META.approve.label} count={approveCount} tint="var(--color-status-warning)" active={needsFilter === 'approve'} onClick={() => setNeedsFilter('approve')} />
               </div>
             )}
           </div>
@@ -284,7 +288,7 @@ export function CMBrainContent() {
             />
           ) : (
             <>
-              <div className="flex items-center gap-1 border-b border-[var(--color-border)] px-4 pt-3">
+              <div role="tablist" className="flex items-center border-b border-[var(--color-border)] px-4 pt-3">
                 <TabBtn testid="cm-tab-context" label="Context" active={tab === 'context'} onClick={() => setTab('context')} badge={block?.per_file.length} />
                 <TabBtn testid="cm-tab-memory" label="Memory" active={tab === 'memory'} onClick={() => setTab('memory')} />
                 <TabBtn testid="cm-tab-evolution" label="Evolution" active={tab === 'evolution'} onClick={() => setTab('evolution')} />
@@ -310,8 +314,8 @@ function RailTrend({ trend }: { trend: BrainTrend | undefined }) {
   const pts = trend?.points ?? [];
   if (pts.length < 2) {
     return (
-      <div className="text-[11px] text-[var(--color-text-faint)]">
-        📈 collecting since {trend?.launch_date ?? 'launch'}…
+      <div className="text-meta text-[var(--color-text-faint)]">
+        Collecting since {trend?.launch_date ?? 'launch'}…
       </div>
     );
   }
@@ -326,7 +330,7 @@ function RailTrend({ trend }: { trend: BrainTrend | undefined }) {
   }).join(' ');
   return (
     <svg data-testid="cm-rail-trend-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-10">
-      <path d={path} fill="none" stroke="#5fc99a" strokeWidth="1.5" />
+      <path d={path} fill="none" stroke="var(--color-status-success)" strokeWidth="1.5" />
     </svg>
   );
 }
@@ -346,15 +350,15 @@ function BudgetAlert({ block }: { block: TokenBlock }) {
     <div
       data-testid="cm-budget-alert"
       className="mt-2 rounded-md border px-2.5 py-2"
-      style={{ borderColor: 'color-mix(in srgb, #d0524a 45%, var(--color-border))', background: 'color-mix(in srgb, #d0524a 8%, transparent)' }}
+      style={{ borderColor: 'color-mix(in srgb, var(--color-status-error) 45%, var(--color-border))', background: 'color-mix(in srgb, var(--color-status-error) 8%, transparent)' }}
     >
-      <div className="text-[11px] font-semibold" style={{ color: '#d0524a' }}>
-        ⚠ Over budget by {fmtTokens(over)}
+      <div className="text-meta font-semibold" style={{ color: 'var(--color-status-error)' }}>
+        Over budget by {fmtTokens(over)}
       </div>
-      <div className="mt-1 text-[11px] leading-snug text-[var(--color-text-muted)]">
+      <div className="mt-1 text-meta leading-snug text-[var(--color-text-muted)]">
         {top.map((f) => (
           <span key={f.name} className="block">
-            <span className="font-medium text-[var(--color-text)]">{f.name}</span> {fmtTokens(f.tokens)}
+            <span className="text-[var(--color-text)]">{f.name}</span> {fmtTokens(f.tokens)}
             {f.health && <span style={{ color: HEALTH_TINT[f.health] }}> ({f.health})</span>}
           </span>
         ))}
@@ -365,8 +369,7 @@ function BudgetAlert({ block }: { block: TokenBlock }) {
             key={f.name}
             data-testid={`cm-budget-open-${f.name}`}
             onClick={() => document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `.context/${f.name}` } }))}
-            className="rounded px-2 py-0.5 text-[11px] font-medium text-white"
-            style={{ background: '#d0524a' }}
+            className="btn-sm btn-danger"
           >
             Open {f.name}
           </button>
@@ -400,7 +403,7 @@ function ProposalCard({
     const doc = String(item.target_doc ?? '');
     const section = String(item.target_section ?? '');
     what = `Add to ${doc || 'a DDD doc'}`;
-    where = <>propose in <span className="font-mono" style={{ color: '#4a8fb0' }}>{doc}{section ? ` › ${section}` : ''}</span></>;
+    where = <>propose in <span className="font-mono" style={{ color: 'var(--color-primary)' }}>{doc}{section ? ` › ${section}` : ''}</span></>;
     why = String(item.content ?? '');
   } else {
     const cls = String(item.source_class ?? '');
@@ -416,8 +419,8 @@ function ProposalCard({
       <span
         data-testid="cm-class-phrase"
         title={cls}
-        className="mr-1.5 rounded px-1.5 py-[1px] text-[11px] font-semibold"
-        style={{ color: '#d0524a', background: 'color-mix(in srgb, #d0524a 14%, transparent)' }}
+        className="mr-1.5 rounded px-1.5 py-[1px] text-meta font-semibold"
+        style={{ color: 'var(--color-status-error)', background: 'color-mix(in srgb, var(--color-status-error) 14%, transparent)' }}
       >
         {phrase}
       </span>
@@ -438,25 +441,23 @@ function ProposalCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div data-testid="cm-card-what" className="text-sm font-semibold leading-snug text-[var(--color-text)]">{tag}{what}</div>
-          <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">{where}</div>
+          <div data-testid="cm-card-what" className="text-body font-semibold leading-snug text-[var(--color-text)]">{tag}{what}</div>
+          <div className="mt-0.5 text-meta text-[var(--color-text-muted)]">{where}</div>
           {demoted && (
-            <div data-testid="cm-demoted" className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-[1px] text-[11px] font-medium" style={{ color: '#7c8194', background: 'color-mix(in srgb, #7c8194 12%, transparent)' }}>
-              ⏳ still emerging — not yet actionable
-            </div>
+            <div className="mt-1"><StatusBadge testid="cm-demoted" tone="neutral">still emerging — not yet actionable</StatusBadge></div>
           )}
         </div>
-        {conf != null && <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-[1px] text-[11px] font-medium text-[var(--color-text-faint)]">conf {conf.toFixed(2)}</span>}
+        {conf != null && <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-[1px] text-meta text-[var(--color-text-faint)]">conf {conf.toFixed(2)}</span>}
       </div>
-      {why && <div className="mt-2 border-l-2 border-[var(--color-border)] pl-2.5 text-[12px] leading-relaxed text-[var(--color-text-muted)]">{why}</div>}
+      {why && <div className="mt-2 border-l-2 border-[var(--color-border)] pl-2.5 text-small leading-relaxed text-[var(--color-text-muted)]">{why}</div>}
       <div className="mt-2.5 flex items-center justify-between">
-        <span className="font-mono text-[11px] text-[var(--color-text-faint)]">{id}</span>
+        <span className="font-mono text-meta text-[var(--color-text-faint)]">{id}</span>
         {state ? (
-          <span className="text-[11px] text-[var(--color-text-muted)]">{state}ed ✓</span>
+          <span className="text-meta text-[var(--color-text-muted)]">{state}ed</span>
         ) : (
           <div className="flex gap-1.5">
             {/* Gate-2 MEDIUM: disabled during an in-flight decision — no double-submit. */}
-            <button disabled={state != null} data-testid="cm-card-accept" onClick={() => act('accept')} className="rounded px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50" style={{ color: '#5fc99a', background: 'color-mix(in srgb, #5fc99a 16%, transparent)', border: '1px solid color-mix(in srgb, #5fc99a 45%, var(--color-border))' }}>Accept</button>
+            <button disabled={state != null} data-testid="cm-card-accept" onClick={() => act('accept')} className="btn-sm btn-success disabled:opacity-50">Accept</button>
             <button disabled={state != null} data-testid="cm-card-reject" onClick={() => act('reject')} className="btn-sm btn-secondary disabled:opacity-50">Reject</button>
             {kind === 'approve' && <button disabled={state != null} data-testid="cm-card-defer" onClick={() => act('defer')} className="btn-sm btn-secondary disabled:opacity-50">Defer</button>}
           </div>
@@ -483,18 +484,18 @@ function NeedsList({
     <>
       <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-2.5">
         <button data-testid="cm-needs-back" onClick={onBack} className="btn-sm btn-secondary">← Back to {backLabel}</button>
-        <span className="text-sm font-semibold text-[var(--color-text)]">{qm.label} <span className="tabular-nums text-[var(--color-text-faint)]">({meta.count})</span></span>
+        <span className="text-body font-semibold text-[var(--color-text)]">{qm.label} <span className="tabular-nums text-[var(--color-text-faint)]">({meta.count})</span></span>
       </div>
       {/* AC1: one-line explainer — what this queue governs + what its conf means here. */}
-      <div data-testid="cm-needs-explainer" className="border-b border-[var(--color-border)] px-4 py-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+      <div data-testid="cm-needs-explainer" className="border-b border-[var(--color-border)] px-4 py-2 text-meta leading-relaxed text-[var(--color-text-muted)]">
         {qm.explainer}
       </div>
       <div data-testid="cm-needs-list" className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-2.5">
         {items === null ? (
           // Gate-2 HIGH-1: loading ≠ empty — never a false "nothing to approve".
-          <div data-testid="cm-needs-loading" className="text-[11px] text-[var(--color-text-faint)]">Loading {qm.label.toLowerCase()}…</div>
+          <div data-testid="cm-needs-loading" className="text-meta text-[var(--color-text-faint)]">Loading {qm.label.toLowerCase()}…</div>
         ) : items.length === 0 ? (
-          <div className="text-[11px] text-[var(--color-text-faint)]">Nothing in {qm.label.toLowerCase()} right now.</div>
+          <div className="text-meta text-[var(--color-text-faint)]">Nothing in {qm.label.toLowerCase()} right now.</div>
         ) : (
           items.map((it, i) => (
             // key includes kind — a re-appearing same-id in a DIFFERENT queue remounts
@@ -511,12 +512,12 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
   const rows = block?.per_file ?? [];
   return (
     <div data-testid="cm-panel-context" className="flex flex-col gap-1">
-      <div className="mb-2 text-sm text-[var(--color-text-muted)]">
+      <div className="mb-2 text-body text-[var(--color-text-muted)]">
         The always-injected system prompt — {rows.length} files, priority-ordered. P0–P2 never truncated;
         over budget → cut from the bottom up.
       </div>
-      <div className="mb-3 text-[11px] text-[var(--color-text-faint)]">
-        🔒 P0–P2 never truncated · over budget → cut from P10 upward · click a file to open it in Canvas ·
+      <div className="mb-3 text-meta text-[var(--color-text-faint)]">
+        P0–P2 never truncated · over budget → cut from P10 upward · click a file to open it in Canvas ·
         bar = share of the on-disk context · every file is injected in full (disk size = prompt load) ·
         Health: fresh / idle / growing / oversized
       </div>
@@ -525,7 +526,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
       {rows.length > 0 && (
         <div
           data-testid="cm-file-header"
-          className="grid items-center gap-3 px-3 pb-1 text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] max-w-3xl"
+          className={`grid items-center gap-3 px-3 pb-1 max-w-3xl ${tableHeadClass}`}
           style={{ gridTemplateColumns: '2rem 0.375rem 1fr 4rem 4rem 6rem 4rem 1.5rem' }}
         >
           <span>Pri</span>
@@ -539,7 +540,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
         </div>
       )}
       {rows.length === 0 && (
-        <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">
+        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">
           Context budget not available yet.
         </div>
       )}
@@ -563,14 +564,14 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           className="grid w-full items-center gap-3 rounded-md px-3 py-2 max-w-3xl text-left hover:bg-[var(--color-hover)]"
           style={{ gridTemplateColumns: '2rem 0.375rem 1fr 4rem 4rem 6rem 4rem 1.5rem' }}
         >
-          <span className="tabular-nums text-xs text-[var(--color-text-faint)]">P{f.priority}</span>
+          <span className="tabular-nums text-small text-[var(--color-text-faint)]">P{f.priority}</span>
           <span
             className="w-1.5 h-4 rounded-full"
             style={{ background: OWNER_TINT[f.owner] }}
             aria-hidden
           />
           <span className="flex min-w-0 flex-col">
-            <span className="truncate text-sm font-medium text-[var(--color-text)]">
+            <span className="truncate text-body text-[var(--color-text)]">
               {f.name}
             </span>
             {/* AC4: knowledge-health counts for the 3 lifecycle-governed files.
@@ -580,18 +581,18 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
             {f.health_counts && (f.health_counts.dormant > 0 || f.health_counts.reclaimable > 0 || f.health_counts.duplicate > 0) && (
               <span
                 data-testid={`cm-health-counts-${f.name}`}
-                className="mt-0.5 flex gap-2 text-[11px] tabular-nums text-[var(--color-text-faint)]"
+                className="mt-0.5 flex gap-2 text-meta tabular-nums text-[var(--color-text-faint)]"
                 title="Knowledge health — auto decay+dedup sweep targets these (dormant = no longer injected · reclaimable = archivable noise · duplicate = exact-dup a sweep removes)"
               >
                 {f.health_counts.dormant > 0 && <span>{f.health_counts.dormant} dormant</span>}
                 {f.health_counts.reclaimable > 0 && <span>{f.health_counts.reclaimable} reclaimable</span>}
-                {f.health_counts.duplicate > 0 && <span className="text-[var(--color-warning,#c47)]">{f.health_counts.duplicate} dup</span>}
+                {f.health_counts.duplicate > 0 && <span className="text-[var(--color-warning,var(--color-status-error))]">{f.health_counts.duplicate} dup</span>}
               </span>
             )}
           </span>
-          <span className="text-right text-[11px] text-[var(--color-text-faint)]">{OWNER_LABEL[f.owner]}</span>
+          <span className="text-right text-meta text-[var(--color-text-faint)]">{OWNER_LABEL[f.owner]}</span>
           {/* Tokens — DISK size, right-aligned, fixed col */}
-          <span className="text-right tabular-nums text-xs text-[var(--color-text-muted)]" title={tokenTitle}>
+          <span className="text-right tabular-nums text-small text-[var(--color-text-muted)]" title={tokenTitle}>
             {fmtTokens(f.tokens)}
           </span>
           {/* AC4: SHARE — an explicit visible bar + % number (user-requested; this
@@ -608,21 +609,15 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
                 />
               )}
             </span>
-            <span data-testid="cm-pct-num" className="w-8 shrink-0 text-right font-mono text-[11px] text-[var(--color-text-faint)]">
+            <span data-testid="cm-pct-num" className="w-8 shrink-0 text-right font-mono text-meta text-[var(--color-text-faint)]">
               {typeof f.pct === 'number' ? `${f.pct}%` : '—'}
             </span>
           </span>
           {f.health ? (
-            <span
-              data-testid="cm-health"
-              className="text-center text-[11px] font-medium rounded px-1 py-[1px]"
-              style={{ color: HEALTH_TINT[f.health], background: `color-mix(in srgb, ${HEALTH_TINT[f.health]} 12%, transparent)` }}
-            >
-              {f.health}
-            </span>
+            <StatusBadge testid="cm-health" tone={HEALTH_TONE[f.health]}>{f.health}</StatusBadge>
           ) : <span aria-hidden />}
           {f.locked ? (
-            <span data-testid="cm-lock" className="text-center text-[var(--color-text-faint)]" title="P0–P2 never truncated · opens read-only">🔒</span>
+            <span data-testid="cm-lock" className="material-symbols-outlined icon-xs text-center text-[var(--color-text-faint)]" title="P0–P2 never truncated · opens read-only">lock</span>
           ) : <span aria-hidden />}
         </button>
         );
@@ -639,13 +634,13 @@ interface TrendPoint { date: string; prompt_tokens: number; memory_bytes: number
 interface BrainTrend { points: TrendPoint[]; count: number; launch_date: string | null; }
 
 // 7-type tint (aligns to the ontology; stable across renders). Evolution kinds get
-// their own tints; an unmapped kind falls back to slate in the render (?? '#7c8194').
+// their own tints; an unmapped kind falls back to slate in the render (?? 'var(--color-text-muted)').
 const TYPE_TINT: Record<string, string> = {
-  principle: '#5fc99a', correction: '#d0524a', decision: '#4a8fb0', guideline: '#b08fd0',
-  pitfall: '#d08a4a', process: '#7c8194', model: '#5f9ec9',
+  principle: 'var(--color-status-success)', correction: 'var(--color-status-error)', decision: 'var(--color-primary)', guideline: 'var(--color-text-secondary)',
+  pitfall: 'var(--color-status-warning)', process: 'var(--color-text-muted)', model: 'var(--color-primary)',
   // evolution kinds
-  class: '#d0524a', 'meta-correction': '#c0607a', 'root-cause': '#4a8fb0',
-  'data-point': '#5f9ec9', directive: '#b08fd0', 'failed-evolution': '#d08a4a', entry: '#7c8194',
+  class: 'var(--color-status-error)', 'meta-correction': 'var(--color-status-error)', 'root-cause': 'var(--color-primary)',
+  'data-point': 'var(--color-primary)', directive: 'var(--color-text-secondary)', 'failed-evolution': 'var(--color-status-warning)', entry: 'var(--color-text-muted)',
 };
 
 /**
@@ -666,18 +661,19 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
     <>
       {/* type/kind graph — nodes sized by count, rendered in backend priority order */}
       <section>
-        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
           Knowledge graph · {showDecay ? '7 types' : 'kinds'} as nodes (click to drill in)
         </div>
         <div className="flex flex-wrap gap-3">
           {nodes.map((n) => {
-            const tint = TYPE_TINT[n.type] ?? '#7c8194';
+            const tint = TYPE_TINT[n.type] ?? 'var(--color-text-muted)';
             const size = 44 + Math.round((n.count / maxCount) * 40); // 44-84px by count
             const sel = selType === n.type;
             return (
               <button
                 key={n.type}
                 data-testid={`cm-graph-node-${n.type}`}
+                data-viz
                 onClick={() => setSelType(sel ? null : n.type)}
                 title={showDecay ? `${n.type}: ${n.count} (${n.active} active · ${n.dormant} dim)` : `${n.type}: ${n.count}`}
                 className="flex flex-col items-center justify-center rounded-full border-2 transition-transform hover:scale-105 shrink-0"
@@ -687,25 +683,25 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
                   boxShadow: sel ? `0 0 0 3px color-mix(in srgb, ${tint} 40%, transparent)` : 'none',
                 }}
               >
-                <span className="tabular-nums text-sm font-extrabold" style={{ color: tint }}>{n.count}</span>
-                <span className="tabular-nums text-[11px] font-bold" style={{ color: tint }}>{n.type.slice(0, 4)}</span>
+                <span className="tabular-nums text-body font-extrabold" style={{ color: tint }}>{n.count}</span>
+                <span className="tabular-nums text-meta font-semibold" style={{ color: tint }}>{n.type.slice(0, 4)}</span>
               </button>
             );
           })}
         </div>
-        <div className="mt-1.5 text-[11px] text-[var(--color-text-faint)]">
+        <div className="mt-1.5 text-meta text-[var(--color-text-faint)]">
           node size = entry count{showDecay ? ' · bright = active · dim = dormant/archived' : ''}
         </div>
       </section>
 
       {/* by-type distribution bars (also drill) */}
       <section>
-        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
           By-{showDecay ? 'type' : 'kind'} distribution
         </div>
         <div className="flex flex-col gap-1">
           {nodes.map((n) => {
-            const tint = TYPE_TINT[n.type] ?? '#7c8194';
+            const tint = TYPE_TINT[n.type] ?? 'var(--color-text-muted)';
             return (
               <button
                 key={n.type}
@@ -713,11 +709,11 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
                 onClick={() => setSelType(n.type)}
                 className="flex items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-[var(--color-hover)]"
               >
-                <span className="w-24 shrink-0 tabular-nums text-[11px] text-[var(--color-text-muted)]">{n.type}</span>
+                <span className="w-24 shrink-0 tabular-nums text-meta text-[var(--color-text-muted)]">{n.type}</span>
                 <span className="flex-1 h-2 rounded-full bg-[var(--color-border)] max-w-md">
                   <span className="block h-2 rounded-full" style={{ width: `${Math.max(3, (n.count / maxCount) * 100)}%`, background: tint }} />
                 </span>
-                <span className="w-8 shrink-0 text-right tabular-nums text-[11px] text-[var(--color-text-faint)]">{n.count}</span>
+                <span className="w-8 shrink-0 text-right tabular-nums text-meta text-[var(--color-text-faint)]">{n.count}</span>
               </button>
             );
           })}
@@ -728,18 +724,18 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
       <section>
         <div data-testid="cm-drill-list" className="rounded-lg border border-[var(--color-border)] p-3">
           {!selType ? (
-            <div className="text-[11px] text-[var(--color-text-faint)]">👆 Click a graph node (or a bar) → latest entries of that {showDecay ? 'type' : 'kind'}</div>
+            <div className="text-meta text-[var(--color-text-faint)]">Click a graph node (or a bar) → latest entries of that {showDecay ? 'type' : 'kind'}</div>
           ) : drill.length === 0 ? (
-            <div className="text-[11px] text-[var(--color-text-faint)]">No <b>{selType}</b> entries yet.</div>
+            <div className="text-meta text-[var(--color-text-faint)]">No <b>{selType}</b> entries yet.</div>
           ) : (
             <>
-              <div className="mb-1.5 text-[11px] font-semibold text-[var(--color-text)]">Latest {selType} ({drill.length})</div>
+              <div className="mb-1.5 text-meta font-semibold text-[var(--color-text)]">Latest {selType} ({drill.length})</div>
               <div className="flex flex-col gap-1">
                 {drill.map((e, i) => (
-                  <div key={i} className="flex items-center gap-2 text-xs">
-                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: e.status === 'active' ? '#5fc99a' : '#7c8194' }} />
+                  <div key={i} className="flex items-center gap-2 text-small">
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: e.status === 'active' ? 'var(--color-status-success)' : 'var(--color-text-muted)' }} />
                     <span className="min-w-0 flex-1 truncate text-[var(--color-text)]">{e.title}</span>
-                    {e.meta && <span className="shrink-0 tabular-nums text-[11px] text-[var(--color-text-faint)]">{e.meta}</span>}
+                    {e.meta && <span className="shrink-0 tabular-nums text-meta text-[var(--color-text-faint)]">{e.meta}</span>}
                   </div>
                 ))}
               </div>
@@ -785,10 +781,10 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
 
   return (
     <section data-testid={`cm-archive-${source}`}>
-      <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
+      <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
         Archived {source} · recall-backed cold storage
       </div>
-      <div className="mb-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+      <div className="mb-2 text-meta leading-relaxed text-[var(--color-text-muted)]">
         Shards the size-valve moved out of live {source} (not deleted — open one to read it,
         or search to recall a single entry).
       </div>
@@ -800,15 +796,15 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder={`Recall from archived ${source}…`}
-          className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] focus:border-[#5fc99a] focus:outline-none"
+          className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-body text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] focus:border-[var(--color-status-success)] focus:outline-none"
         />
         {searching && (
           <button
             data-testid={`cm-archive-search-clear-${source}`}
             onClick={() => setQ('')}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-[var(--color-text-faint)] hover:text-[var(--color-text)]"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-small text-[var(--color-text-faint)] hover:text-[var(--color-text)]"
           >
-            clear ✕
+            clear
           </button>
         )}
       </div>
@@ -818,17 +814,17 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
         hitErr ? (
           <ArchiveError what={`recall ${source}`} error={hitError} onRetry={() => void refetchHits()} />
         ) : hitFetching && results.length === 0 ? (
-          <div data-testid={`cm-archive-searching-${source}`} className="text-[11px] text-[var(--color-text-faint)]">Recalling…</div>
+          <div data-testid={`cm-archive-searching-${source}`} className="text-meta text-[var(--color-text-faint)]">Recalling…</div>
         ) : results.length === 0 ? (
-          <div className="text-[11px] text-[var(--color-text-faint)]">No archived {source} matches “{query}”.</div>
+          <div className="text-meta text-[var(--color-text-faint)]">No archived {source} matches “{query}”.</div>
         ) : (
           <div data-testid={`cm-archive-results-${source}`} className="flex flex-col gap-2.5">
-            <div className="text-[11px] text-[var(--color-text-faint)]">{results.length} recall hit{results.length === 1 ? '' : 's'}</div>
+            <div className="text-meta text-[var(--color-text-faint)]">{results.length} recall hit{results.length === 1 ? '' : 's'}</div>
             {results.map((r, i) => (
-              <div key={`${r.shard}-${i}`} className="border-l-2 border-[#5fc99a] pl-2.5">
-                <div className="text-sm font-medium leading-snug text-[var(--color-text)]">{r.title || '(untitled)'}</div>
-                <div className="mt-0.5 text-[12px] leading-relaxed text-[var(--color-text-muted)]">{r.snippet}</div>
-                <div className="mt-0.5 font-mono text-[11px] text-[var(--color-text-faint)]">{r.shard}</div>
+              <div key={`${r.shard}-${i}`} className="border-l-2 border-[var(--color-status-success)] pl-2.5">
+                <div className="text-body leading-snug text-[var(--color-text)]">{r.title || '(untitled)'}</div>
+                <div className="mt-0.5 text-small leading-relaxed text-[var(--color-text-muted)]">{r.snippet}</div>
+                <div className="mt-0.5 font-mono text-meta text-[var(--color-text-faint)]">{r.shard}</div>
               </div>
             ))}
           </div>
@@ -838,9 +834,9 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
         listErr ? (
           <ArchiveError what={`archived ${source}`} error={listError} onRetry={() => void refetchList()} />
         ) : list === undefined ? (
-          <div data-testid={`cm-archive-loading-${source}`} className="text-[11px] text-[var(--color-text-faint)]">Loading archived {source}…</div>
+          <div data-testid={`cm-archive-loading-${source}`} className="text-meta text-[var(--color-text-faint)]">Loading archived {source}…</div>
         ) : files.length === 0 ? (
-          <div data-testid={`cm-archive-empty-${source}`} className="text-[11px] text-[var(--color-text-faint)]">
+          <div data-testid={`cm-archive-empty-${source}`} className="text-meta text-[var(--color-text-faint)]">
             Nothing archived yet — live {source} is fully injected.
           </div>
         ) : (
@@ -858,10 +854,10 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
                 className="flex items-baseline gap-3 rounded-md px-2 py-1.5 text-left hover:bg-[var(--color-hover)]"
               >
                 {/* period is the primary scannable key; filename demoted to mono detail */}
-                <span className="w-16 shrink-0 tabular-nums text-xs font-medium text-[var(--color-text)]">{f.period}</span>
-                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text-muted)]" title={f.name}>{f.name}</span>
-                <span className="shrink-0 text-[11px] text-[var(--color-text-muted)]">{f.entry_count} entr{f.entry_count === 1 ? 'y' : 'ies'}</span>
-                <span className="w-14 shrink-0 text-right tabular-nums text-[11px] text-[var(--color-text-faint)]">{fmtBytes(f.bytes)}</span>
+                <span className="w-16 shrink-0 tabular-nums text-small text-[var(--color-text)]">{f.period}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-meta text-[var(--color-text-muted)]" title={f.name}>{f.name}</span>
+                <span className="shrink-0 text-meta text-[var(--color-text-muted)]">{f.entry_count} entr{f.entry_count === 1 ? 'y' : 'ies'}</span>
+                <span className="w-14 shrink-0 text-right tabular-nums text-meta text-[var(--color-text-faint)]">{fmtBytes(f.bytes)}</span>
               </button>
             ))}
           </div>
@@ -903,7 +899,7 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
 
   return (
     <div data-testid="cm-panel-memory" className="flex flex-col gap-5 max-w-4xl">
-      <div className="text-sm text-[var(--color-text-muted)]">
+      <div className="text-body text-[var(--color-text-muted)]">
         The judgment I've sedimented across all conversations — a 7-type ontology.
         Value (not age) decides survival: idle entries dim, load-bearing ones persist.
       </div>
@@ -913,7 +909,7 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
 
       {/* MEMORY.md size trend (from the daily snapshot series) */}
       <section>
-        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
           MEMORY.md size trend
         </div>
         <TrendChart trend={trend} field="memory_bytes" />
@@ -922,7 +918,7 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
       {/* Archived list + Recall search — the cold layer the size-valve moved out */}
       <ArchivePanel source="memory" enabled={enabled} />
 
-      <div className="text-[11px] text-[var(--color-text-faint)]">
+      <div className="text-meta text-[var(--color-text-faint)]">
         How it works: live memory is injected in FULL every message; reflection sediments new ones (confident-only); when the file grows past its size cap, the lowest-value entries are ARCHIVED to recall-backed cold storage (moved, not deleted — still retrievable via FTS5/BM25 recall), so load-bearing judgment stays live.
       </div>
     </div>
@@ -948,7 +944,7 @@ function EvolutionTab({ enabled }: { enabled: boolean }) {
 
   return (
     <div data-testid="cm-panel-evolution" className="flex flex-col gap-5 max-w-4xl">
-      <div className="text-sm text-[var(--color-text-muted)]">
+      <div className="text-body text-[var(--color-text-muted)]">
         How I evolve — the corrections I've captured and the recurring failure patterns
         they cluster into (class · correction · data-point · directive · …), ordered by
         which matters most to my judgment.
@@ -959,7 +955,7 @@ function EvolutionTab({ enabled }: { enabled: boolean }) {
 
       {/* EVOLUTION.md size trend — real per-file bytes from the daily snapshot series */}
       <section>
-        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
           EVOLUTION.md size trend
         </div>
         <TrendChart trend={trend} field="memory_bytes" />
@@ -968,7 +964,7 @@ function EvolutionTab({ enabled }: { enabled: boolean }) {
       {/* Archived file list + Recall search (source=evolution) */}
       <ArchivePanel source="evolution" enabled={enabled} />
 
-      <div className="text-[11px] text-[var(--color-text-faint)]">
+      <div className="text-meta text-[var(--color-text-faint)]">
         How it works: each correction is captured with a bias tag; recurring patterns (3× threshold)
         surface a governance proposal for your review. Live EVOLUTION.md is injected in FULL; when it
         grows past its size cap, the lowest-value entries are ARCHIVED (moved, not deleted — recall via
@@ -985,8 +981,8 @@ function TrendChart({ trend, field }: { trend: BrainTrend | undefined; field: 'm
   if (pts.length < 2) {
     const since = trend?.launch_date;
     return (
-      <div data-testid="cm-trend-collecting" className="rounded-lg border border-dashed border-[var(--color-border)] p-4 text-center text-[11px] text-[var(--color-text-faint)]">
-        📈 Collecting since {since ?? 'launch'} — the trend appears after 2 daily snapshots.
+      <div data-testid="cm-trend-collecting" className="rounded-lg border border-dashed border-[var(--color-border)] p-4 text-center text-meta text-[var(--color-text-faint)]">
+        Collecting since {since ?? 'launch'} — the trend appears after 2 daily snapshots.
       </div>
     );
   }
@@ -1001,7 +997,7 @@ function TrendChart({ trend, field }: { trend: BrainTrend | undefined; field: 'm
   }).join(' ');
   return (
     <svg data-testid="cm-trend-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-14">
-      <path d={path} fill="none" stroke="#5fc99a" strokeWidth="1.5" />
+      <path d={path} fill="none" stroke="var(--color-status-success)" strokeWidth="1.5" />
     </svg>
   );
 }
@@ -1010,25 +1006,25 @@ function TrendChart({ trend, field }: { trend: BrainTrend | undefined; field: 'm
 // R30: describes MECHANISMS, not counts — NO baked numbers (they'd drift). All
 // content is stable architecture fact, safe to hardcode.
 const LIFECYCLE: Array<{ key: string; icon: string; title: string; desc: string }> = [
-  { key: 'assemble', icon: '📥', title: 'Assemble', desc: 'live memory injected in FULL, by priority' },
-  { key: 'recall', icon: '🔍', title: 'Recall', desc: 'FTS5/BM25 searches the archived cold layer' },
-  { key: 'judge', icon: '🧠', title: 'Judge', desc: 'the model reasons on that context' },
-  { key: 'sediment', icon: '💧', title: 'Sediment', desc: 'reflect → new entries (confident-only)' },
-  { key: 'decay', icon: '🍂', title: 'Decay', desc: 'idle sinks, value survives' },
+  { key: 'assemble', icon: 'move_to_inbox', title: 'Assemble', desc: 'live memory injected in FULL, by priority' },
+  { key: 'recall', icon: 'search', title: 'Recall', desc: 'FTS5/BM25 searches the archived cold layer' },
+  { key: 'judge', icon: 'psychology', title: 'Judge', desc: 'the model reasons on that context' },
+  { key: 'sediment', icon: 'water_drop', title: 'Sediment', desc: 'reflect → new entries (confident-only)' },
+  { key: 'decay', icon: 'eco', title: 'Decay', desc: 'idle sinks, value survives' },
 ];
 const AUTO_ITEMS: Array<{ icon: string; name: string; desc: string; tag: string }> = [
-  { icon: '🔍', name: 'Recall', desc: 'searches the archived cold layer (FTS5) on demand', tag: 'hook' },
-  { icon: '💧', name: 'Cultivation', desc: 'grows DDD docs from sessions, quality-gated', tag: 'hook' },
-  { icon: '🍂', name: 'Decay & archive', desc: 'dormant then archived by idle age', tag: 'job' },
-  { icon: '📋', name: 'Session briefing', desc: 'start-of-session cognition inject', tag: 'hook' },
-  { icon: '🧬', name: 'Evolution capture', desc: 'corrections → pattern detection', tag: 'hook' },
+  { icon: 'search', name: 'Recall', desc: 'searches the archived cold layer (FTS5) on demand', tag: 'hook' },
+  { icon: 'water_drop', name: 'Cultivation', desc: 'grows DDD docs from sessions, quality-gated', tag: 'hook' },
+  { icon: 'eco', name: 'Decay & archive', desc: 'dormant then archived by idle age', tag: 'job' },
+  { icon: 'assignment', name: 'Session briefing', desc: 'start-of-session cognition inject', tag: 'hook' },
+  { icon: 'genetics', name: 'Evolution capture', desc: 'corrections → pattern detection', tag: 'hook' },
 ];
 const MANUAL_ITEMS: Array<{ icon: string; name: string; desc: string; tag: string }> = [
-  { icon: '🧭', name: 'STEERING rules', desc: 'your standing directives (highest precedence)', tag: 'file' },
-  { icon: '👤', name: 'USER profile', desc: 'who you are, how you like to work', tag: 'file' },
-  { icon: '🧩', name: 'Skill allowlist', desc: 'which capabilities this agent may use', tag: 'config' },
-  { icon: '🔌', name: 'MCP tiers', desc: 'always-on vs on-demand tool servers', tag: 'config' },
-  { icon: '🗂', name: 'Create a DDD', desc: 'a domain brain per project (Brain Hub)', tag: 'chat' },
+  { icon: 'explore', name: 'STEERING rules', desc: 'your standing directives (highest precedence)', tag: 'file' },
+  { icon: 'person', name: 'USER profile', desc: 'who you are, how you like to work', tag: 'file' },
+  { icon: 'extension', name: 'Skill allowlist', desc: 'which capabilities this agent may use', tag: 'config' },
+  { icon: 'power', name: 'MCP tiers', desc: 'always-on vs on-demand tool servers', tag: 'config' },
+  { icon: 'folder_copy', name: 'Create a DDD', desc: 'a domain brain per project (Brain Hub)', tag: 'chat' },
 ];
 // The machinery, described by WHAT IT DOES — not by raw source-symbol names (R20:
 // context_health / s_persist mean nothing to a non-technical user). Each line is a
@@ -1049,14 +1045,14 @@ const MACHINERY_MANUAL = [
 function GuidelineTab() {
   return (
     <div data-testid="cm-panel-guideline" className="flex flex-col gap-5 max-w-4xl">
-      <div className="text-sm text-[var(--color-text-muted)]">
+      <div className="text-body text-[var(--color-text-muted)]">
         How a powerful agent brain works — the lifecycle every message flows through, what runs
         itself vs what you steer, and the machinery underneath.
       </div>
 
       {/* Lifecycle flow */}
       <section>
-        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
           Lifecycle — every message flows through this
         </div>
         <div data-testid="cm-guideline-lifecycle" className="flex items-stretch gap-2">
@@ -1066,9 +1062,9 @@ function GuidelineTab() {
                 data-testid={`cm-lc-${s.key}`}
                 className="flex-1 min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-2.5 text-center"
               >
-                <div className="text-lg leading-none">{s.icon}</div>
-                <div className="mt-1 text-xs font-semibold text-[var(--color-text)]">{s.title}</div>
-                <div className="mt-0.5 text-[11px] leading-tight text-[var(--color-text-muted)]">{s.desc}</div>
+                <span className="material-symbols-outlined icon-lg text-[var(--color-text-muted)]">{s.icon}</span>
+                <div className="mt-1 text-small font-semibold text-[var(--color-text)]">{s.title}</div>
+                <div className="mt-0.5 text-meta leading-tight text-[var(--color-text-muted)]">{s.desc}</div>
               </div>
               {i < LIFECYCLE.length - 1 && <span className="shrink-0 text-[var(--color-text-faint)]">→</span>}
             </div>
@@ -1078,35 +1074,35 @@ function GuidelineTab() {
 
       {/* Automatic vs Manual */}
       <section>
-        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
           Automatic vs Manual — what runs itself, what you steer
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <AmColumn testid="cm-guideline-automatic" head="🤖 Runs itself" badge="AUTOMATIC" items={AUTO_ITEMS} accent="#5fc99a" />
-          <AmColumn testid="cm-guideline-manual" head="🖐 You configure" badge="MANUAL" items={MANUAL_ITEMS} accent="#4a8fb0" />
+          <AmColumn testid="cm-guideline-automatic" head="Runs itself" badge="AUTOMATIC" items={AUTO_ITEMS} accent="var(--color-status-success)" />
+          <AmColumn testid="cm-guideline-manual" head="You configure" badge="MANUAL" items={MANUAL_ITEMS} accent="var(--color-primary)" />
         </div>
       </section>
 
       {/* Reference chips */}
       <section>
-        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
+        <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
           Under the hood — the machinery
         </div>
         <div data-testid="cm-guideline-chips" className="flex flex-col gap-2">
           <div className="flex flex-col gap-1">
-            <span className="text-[11px] font-medium text-[var(--color-text-muted)]">Runs automatically:</span>
+            <span className="text-meta text-[var(--color-text-muted)]">Runs automatically:</span>
             {MACHINERY_AUTO.map((c) => (
-              <div key={c} className="flex items-start gap-1.5 text-[11px] text-[var(--color-text-muted)]">
-                <span className="mt-[3px] h-1 w-1 shrink-0 rounded-full" style={{ background: '#5fc99a' }} aria-hidden />
+              <div key={c} className="flex items-start gap-1.5 text-meta text-[var(--color-text-muted)]">
+                <span className="mt-[3px] h-1 w-1 shrink-0 rounded-full" style={{ background: 'var(--color-status-success)' }} aria-hidden />
                 <span>{c}</span>
               </div>
             ))}
           </div>
           <div className="mt-1 flex flex-col gap-1">
-            <span className="text-[11px] font-medium text-[var(--color-text-muted)]">You trigger:</span>
+            <span className="text-meta text-[var(--color-text-muted)]">You trigger:</span>
             {MACHINERY_MANUAL.map((c) => (
-              <div key={c} className="flex items-start gap-1.5 text-[11px] text-[var(--color-text-muted)]">
-                <span className="mt-[3px] h-1 w-1 shrink-0 rounded-full" style={{ background: '#4a8fb0' }} aria-hidden />
+              <div key={c} className="flex items-start gap-1.5 text-meta text-[var(--color-text-muted)]">
+                <span className="mt-[3px] h-1 w-1 shrink-0 rounded-full" style={{ background: 'var(--color-primary)' }} aria-hidden />
                 <span>{c}</span>
               </div>
             ))}
@@ -1122,19 +1118,19 @@ function AmColumn({
 }: { testid: string; head: string; badge: string; items: Array<{ icon: string; name: string; desc: string; tag: string }>; accent: string }) {
   return (
     <div data-testid={testid} className="rounded-lg border border-[var(--color-border)] p-3">
-      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+      <div className="mb-2 flex items-center gap-2 text-body font-semibold text-[var(--color-text)]">
         {head}
-        <span className="rounded-full px-2 py-[1px] tabular-nums text-[11px] tracking-wider" style={{ background: `color-mix(in srgb, ${accent} 16%, transparent)`, color: accent }}>{badge}</span>
+        <span className="rounded-full px-2 py-[1px] tabular-nums text-meta tracking-wider" style={{ background: `color-mix(in srgb, ${accent} 16%, transparent)`, color: accent }}>{badge}</span>
       </div>
       <div className="flex flex-col gap-1.5">
         {items.map((it) => (
           <div key={it.name} className="flex items-center gap-2">
-            <span className="shrink-0 text-sm">{it.icon}</span>
+            <span className="material-symbols-outlined icon-sm shrink-0 text-[var(--color-text-muted)]">{it.icon}</span>
             <div className="min-w-0 flex-1">
-              <div className="text-xs font-medium text-[var(--color-text)]">{it.name}</div>
-              <div className="truncate text-[11px] text-[var(--color-text-muted)]">{it.desc}</div>
+              <div className="text-small text-[var(--color-text)]">{it.name}</div>
+              <div className="truncate text-meta text-[var(--color-text-muted)]">{it.desc}</div>
             </div>
-            <span className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-[1px] tabular-nums text-[11px] text-[var(--color-text-faint)]">{it.tag}</span>
+            <span className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-[1px] tabular-nums text-meta text-[var(--color-text-faint)]">{it.tag}</span>
           </div>
         ))}
       </div>
@@ -1147,17 +1143,20 @@ function TabBtn({
 }: { testid: string; label: string; active: boolean; onClick: () => void; badge?: number }) {
   return (
     <button
+      type="button"
+      role="tab"
+      aria-selected={active}
       data-testid={testid}
       onClick={onClick}
       className={
-        'flex items-center gap-1.5 rounded-t-md px-3 py-2 text-sm font-medium transition-colors ' +
+        'flex items-center h-9 -mb-px px-1 mr-3 text-body border-b-2 transition-colors ' +
         (active
-          ? 'text-[var(--color-text)] border-b-2 border-[#5fc99a]'
-          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] border-b-2 border-transparent')
+          ? 'text-[var(--color-primary)] font-semibold border-[var(--color-primary)]'
+          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] border-transparent')
       }
     >
       {label}
-      {badge != null && <span className="btn-sm btn-secondary rounded-full">{badge}</span>}
+      {badge != null && <span className="ml-1.5 text-meta text-[var(--color-text-muted)] tabular-nums">{badge}</span>}
     </button>
   );
 }
@@ -1169,9 +1168,9 @@ function NeedsBtn({ testid, label, count, tint, active, onClick }: { testid: str
       data-active={active ? 'true' : 'false'}
       onClick={onClick}
       className={
-        'flex w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm text-left transition-colors ' +
+        'flex w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-body text-left transition-colors ' +
         (active
-          ? 'border-[color-mix(in_srgb,#5fc99a_50%,var(--color-border))] bg-[var(--color-hover)]'
+          ? 'border-[color-mix(in_srgb,var(--color-status-success)_50%,var(--color-border))] bg-[var(--color-hover)]'
           : 'border-[var(--color-border)] hover:bg-[var(--color-hover)]')
       }
     >

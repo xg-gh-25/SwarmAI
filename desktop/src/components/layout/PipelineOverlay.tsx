@@ -41,6 +41,7 @@ import {
   type PipelinePauseKind,
 } from '../../services/pipelines';
 import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
+import { Stat as StatCard, SectionLabel, StatusBadge, type Tone } from '../overlay';
 import { OverlayError } from './OverlayState';
 
 export interface PipelineContentProps {
@@ -229,7 +230,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
         <WorkbenchToolbar
           loading={loading}
           left={
-            <span className="text-xs font-medium text-[var(--color-text-muted)]">
+            <span className="text-small text-[var(--color-text-muted)]">
               {/* One window: runs idle for over 30 days carry no meaning (run_index). */}
               Showing runs from the last 30 days
             </span>
@@ -262,7 +263,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
           {/* Trend sparkline (compact bars — throughput per week) */}
           {analytics && analytics.trend.length > 0 && (
             <div data-testid="pipeline-trend">
-              <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Throughput trend</div>
+              <div className="mb-1"><SectionLabel>Throughput trend</SectionLabel></div>
               <div className="flex items-end gap-1 h-12">
                 {analytics.trend.map((t) => {
                   const max = Math.max(...analytics.trend.map((x) => x.runs), 1);
@@ -297,11 +298,11 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
                 .map((r) => ({ run: r, project: g.project })));
             if (needy.length === 0) return null;
             return (
-              <div className="rounded-md border border-rose-500/40 bg-rose-500/5" data-testid="pipeline-needsyou-region">
-                <div className="flex items-center gap-2 px-3 py-2 border-b border-rose-500/30">
-                  <span className="material-symbols-outlined icon-sm text-rose-500">priority_high</span>
-                  <span className="text-sm font-medium text-[var(--color-text)]">Needs you</span>
-                  <span data-testid="pipeline-needsyou-count" className="text-[11px] tabular-nums text-rose-500">{needy.length}</span>
+              <div className="rounded-md border border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)]" data-testid="pipeline-needsyou-region">
+                <div className="flex items-center gap-2 px-3 py-2 border-b border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)]">
+                  <span className="material-symbols-outlined icon-sm text-[var(--color-status-error)]">priority_high</span>
+                  <span className="text-body text-[var(--color-text)]">Needs you</span>
+                  <span data-testid="pipeline-needsyou-count" className="text-meta tabular-nums text-[var(--color-status-error)]">{needy.length}</span>
                 </div>
                 <div>
                   {needy.map(({ run, project }) => (
@@ -314,7 +315,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
 
           {/* By-project groups */}
           {analytics && analytics.byProject.length === 0 && !loading && !loadErr && (
-            <div className="text-center py-10 text-sm text-[var(--color-text-faint)]">
+            <div className="text-center py-10 text-body text-[var(--color-text-faint)]">
               No pipeline runs in this window. Start one by asking Swarm in chat to run a pipeline.
             </div>
           )}
@@ -346,40 +347,31 @@ function Stat({ label, value, sub, accent, onClick, active, testid }: {
   label: string; value: string; sub?: string; accent?: boolean;
   onClick?: () => void; active?: boolean; testid?: string;
 }) {
-  const base = `rounded-md border px-2.5 py-1.5 text-left w-full ${
-    accent ? 'border-rose-500/50 bg-rose-500/10' : 'border-[var(--color-border)] bg-[var(--color-card)]'
-  } ${active ? 'ring-2 ring-rose-500/60' : ''} ${onClick ? 'cursor-pointer hover:brightness-110 transition' : ''}`;
-  const inner = (
-    <>
-      <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] flex items-center gap-1">
-        {label}
-        {onClick && <span className="material-symbols-outlined icon-xs">{active ? 'filter_alt_off' : 'filter_alt'}</span>}
-      </div>
-      <div className={`text-sm tabular-nums ${accent ? 'text-rose-500' : 'text-[var(--color-text)]'}`}>{value}</div>
-      {sub && <div className="text-[11px] text-[var(--color-text-faint)] tabular-nums">{sub}</div>}
-    </>
-  );
+  // One stat look across the nav overlays (components/overlay Stat). The Needs-you
+  // stat is also a filter: the card sits in a plain button, ringed while active.
+  const card = <StatCard label={label} value={value} hint={sub} tone={accent ? 'error' : undefined} />;
   return onClick
-    ? <button type="button" onClick={onClick} className={base} data-testid={testid} aria-pressed={active}>{inner}</button>
-    : <div className={base} data-testid={testid}>{inner}</div>;
+    ? <button type="button" onClick={onClick} data-testid={testid} aria-pressed={active}
+        className={`w-full text-left rounded-lg ${active ? 'ring-2 ring-[var(--color-status-error)]' : ''}`}>{card}</button>
+    : <div data-testid={testid}>{card}</div>;
 }
 
 /** Status → pill {label, dot color, text color}. "Needs you" is DERIVED, not a raw
  *  status: abandoned OR paused-decision → needs you (rose); paused-crash-residue is a
  *  finished zombie → shows "paused" faint; else the raw status. Kept consistent with
  *  statusDot's colors so the pill and any dot never disagree (Gate-1 #5 label table). */
-function statusPill(s: string, pauseKind: PipelinePauseKind, verified: boolean | null = null): { label: string; dot: string; text: string } {
-  if (pauseKind === 'decision') return { label: 'needs your decision', dot: 'bg-rose-500', text: 'text-rose-500' };
-  if (pauseKind === 'stopped') return { label: 'stopped', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
-  if (pauseKind === 'worktree') return { label: 'worktree unavailable', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
-  if (pauseKind === 'idle') return { label: 'idle', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
-  if (s === 'abandoned') return { label: 'needs you', dot: 'bg-rose-500', text: 'text-rose-500' };
+function statusPill(s: string, pauseKind: PipelinePauseKind, verified: boolean | null = null): { label: string; tone: Tone } {
+  if (pauseKind === 'decision') return { label: 'needs your decision', tone: 'error' };
+  if (pauseKind === 'stopped') return { label: 'stopped', tone: 'warning' };
+  if (pauseKind === 'worktree') return { label: 'worktree unavailable', tone: 'warning' };
+  if (pauseKind === 'idle') return { label: 'idle', tone: 'warning' };
+  if (s === 'abandoned') return { label: 'needs you', tone: 'error' };
   // completed ≠ verified: DELIVER was not push-ready on the final code (backend _completion_verdict)
-  if (s === 'completed' && verified === false) return { label: 'unverified', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
-  if (s === 'completed') return { label: 'completed', dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400' };
-  if (s === 'running') return { label: 'running', dot: 'bg-sky-500', text: 'text-sky-600 dark:text-sky-400' };
-  if (s === 'paused') return { label: 'paused', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
-  return { label: s || 'unknown', dot: 'bg-[var(--color-text-faint)]', text: 'text-[var(--color-text-faint)]' };
+  if (s === 'completed' && verified === false) return { label: 'unverified', tone: 'warning' };
+  if (s === 'completed') return { label: 'completed', tone: 'success' };
+  if (s === 'running') return { label: 'running', tone: 'primary' };
+  if (s === 'paused') return { label: 'paused', tone: 'warning' };
+  return { label: s || 'unknown', tone: 'neutral' };
 }
 
 /** One run row — shared by the ProjectGroup roster AND the pinned Needs-you region.
@@ -395,27 +387,25 @@ function RunRow({ r, onOpenRun, close, showProject }: {
       className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-hover)] transition-colors border-b border-[var(--color-border)] last:border-b-0"
     >
       {/* Status pill (dot + label) — replaces the bare color dot (AC2) */}
-      <span className={`inline-flex items-center gap-1 shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-medium ${pill.text}`}>
-        <span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} />{pill.label}
-      </span>
+      <span className="shrink-0 w-36"><StatusBadge tone={pill.tone}>{pill.label}</StatusBadge></span>
       {/* Requirement — click opens the detail drawer; title shows the full text (AC7/D) */}
       <button
         type="button"
         onClick={() => onOpenRun(r.id)}
         title={r.requirement || r.id}
-        className="text-xs text-[var(--color-text)] truncate flex-1 min-w-0 text-left"
+        className="text-small text-[var(--color-text)] truncate flex-1 min-w-0 text-left"
       >
         {showProject && <span className="text-[var(--color-text-faint)]">{showProject} · </span>}
         {r.requirement || r.id}
       </button>
-      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0">{r.profile}</span>
+      <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0">{r.profile}</span>
       {/* Run-time column (run_0e68e235): when this run last updated (= finish time
           for a terminal run). Rows arrive newest-first from the backend
           (summaries.sort updated_at reverse). Absolute stamp, no "N ago" (fmtTs). */}
-      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-32 text-right whitespace-nowrap" title={r.updatedAt || r.createdAt}>{fmtTs(r.updatedAt || r.createdAt)}</span>
-      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-12 text-right whitespace-nowrap">{fmtCycle(r.cycleTimeMin)}</span>
+      <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0 w-32 text-right whitespace-nowrap" title={r.updatedAt || r.createdAt}>{fmtTs(r.updatedAt || r.createdAt)}</span>
+      <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0 w-12 text-right whitespace-nowrap">{fmtCycle(r.cycleTimeMin)}</span>
       {/* wide enough for "2727k/165k": a narrower column overflowed onto the report icon */}
-      <span data-testid={`pipeline-run-tokens-${r.id}`} className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-24 text-right whitespace-nowrap">
+      <span data-testid={`pipeline-run-tokens-${r.id}`} className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0 w-24 text-right whitespace-nowrap">
         {fmtTokens(r.tokensActual)}/{fmtTokens(r.tokensEst)}
       </span>
       {/* Report button (AC2) — only when this run has a REPORT.md. Opens it in Canvas. */}
@@ -433,7 +423,7 @@ function RunRow({ r, onOpenRun, close, showProject }: {
         <span className="w-4 shrink-0" aria-hidden />
       )}
       {isResumable(r.pauseKind) && (
-        <span className="material-symbols-outlined icon-xs text-rose-500 shrink-0" title="resumable">play_circle</span>
+        <span className="material-symbols-outlined icon-xs text-[var(--color-status-error)] shrink-0" title="resumable">play_circle</span>
       )}
     </div>
   );
@@ -464,12 +454,12 @@ function ProjectGroup({ group, onOpenRun, close, defaultExpanded = false, needsY
         <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)]">
           {isOpen ? 'expand_more' : 'chevron_right'}
         </span>
-        <span className="text-sm font-medium text-[var(--color-text)]">{group.project}</span>
-        <span className="text-[11px] text-[var(--color-text-faint)] tabular-nums">
+        <span className="text-body text-[var(--color-text)]">{group.project}</span>
+        <span className="text-meta text-[var(--color-text-faint)] tabular-nums">
           {group.runCount} runs · {Math.round(group.completionRate * 100)}% · avg {fmtCycle(group.avgCycleMin)}
         </span>
         {group.abortedCount > 0 && (
-          <span className="text-[11px] tabular-nums text-rose-500">· {group.abortedCount} need you</span>
+          <span className="text-meta tabular-nums text-[var(--color-status-error)]">· {group.abortedCount} need you</span>
         )}
       </button>
       {isOpen && (
@@ -511,12 +501,12 @@ function RunDetailDrawer({
   return (
     <OverlayDrawer widthPx={420} maxWidthPct={90} z={10} testid="pipeline-run-drawer" stopPropagation={false}>
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
-        <span className="text-xs font-mono text-[var(--color-text-muted)] truncate flex-1">{runId}</span>
+        <span className="text-small font-mono text-[var(--color-text-muted)] truncate flex-1">{runId}</span>
         <button onClick={onClose} className="material-symbols-outlined icon-md text-[var(--color-text-faint)] hover:text-[var(--color-text)]">close</button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
-        {loading && <div className="text-xs text-[var(--color-text-faint)]">Loading…</div>}
-        {!loading && !detail && <div className="text-xs text-[var(--color-text-faint)]">Run detail not found.</div>}
+        {loading && <div className="text-small text-[var(--color-text-faint)]">Loading…</div>}
+        {!loading && !detail && <div className="text-small text-[var(--color-text-faint)]">Run detail not found.</div>}
         {detail && (() => {
           // Conclusion-first header (run_403a5864): the STATUS is the verdict — promote
           // it to a colored pill (reuse statusPill, the SAME one the list row uses, so
@@ -530,13 +520,10 @@ function RunDetailDrawer({
           <>
             <div>
               <div className="flex items-start gap-2">
-                <div className="text-sm text-[var(--color-text)] flex-1 min-w-0">{detail.requirement}</div>
-                <span data-testid="pipeline-detail-status"
-                      className={`inline-flex items-center gap-1 shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-medium ${pill.text}`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} />{pill.label}
-                </span>
+                <div className="text-body text-[var(--color-text)] flex-1 min-w-0">{detail.requirement}</div>
+                <span className="shrink-0"><StatusBadge tone={pill.tone} testid="pipeline-detail-status">{pill.label}</StatusBadge></span>
               </div>
-              <div className="text-[11px] tabular-nums text-[var(--color-text-faint)] mt-1">
+              <div className="text-meta tabular-nums text-[var(--color-text-faint)] mt-1">
                 {detail.project} · {detail.profile} · {fmtCycle(detail.cycleTimeMin)} · {fmtTs(detail.updatedAt || detail.createdAt)}
               </div>
             </div>
@@ -547,12 +534,12 @@ function RunDetailDrawer({
                 (Gate-2 note, run_403a5864). Suppress once the effective verdict is done. */}
             {note ? (
               <div data-testid="pipeline-pause-note"
-                   className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-[var(--color-text)]">
+                   className="rounded border border-[color-mix(in_srgb,var(--color-status-warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] px-2 py-1.5 text-meta text-[var(--color-text)]">
                 ⏸ {note}
               </div>
             ) : detail.checkpointReason && !detail.decision
                 && detail.status !== 'completed' && detail.status !== 'complete' && (
-              <div className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-[var(--color-text)]">
+              <div className="rounded border border-[color-mix(in_srgb,var(--color-status-warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] px-2 py-1.5 text-meta text-[var(--color-text)]">
                 ⏸ {detail.checkpointReason}
               </div>
             )}
@@ -561,11 +548,11 @@ function RunDetailDrawer({
                 A click records the answer, then opens the run's chat to continue. */}
             {detail.decision && (
               <div data-testid="pipeline-decision"
-                   className="rounded-md border border-rose-500/40 bg-rose-500/5 px-2.5 py-2 space-y-2">
-                <div className="text-[11px] uppercase tracking-wide text-rose-500">Needs your decision</div>
-                <div className="text-sm text-[var(--color-text)]">{detail.decision.question}</div>
+                   className="rounded-md border border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] px-2.5 py-2 space-y-2">
+                <div className="text-meta uppercase tracking-wide text-[var(--color-status-error)]">Needs your decision</div>
+                <div className="text-body text-[var(--color-text)]">{detail.decision.question}</div>
                 {detail.decision.whyEvidenceInsufficient && (
-                  <div className="text-[11px] text-[var(--color-text-muted)]">{detail.decision.whyEvidenceInsufficient}</div>
+                  <div className="text-meta text-[var(--color-text-muted)]">{detail.decision.whyEvidenceInsufficient}</div>
                 )}
                 <div className="space-y-1.5">
                   {detail.decision.options.map((opt) => (
@@ -585,25 +572,25 @@ function RunDetailDrawer({
                       }}
                       className="w-full text-left rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2 py-1.5 hover:border-primary/60 transition-colors disabled:opacity-50"
                     >
-                      <div className="text-xs font-medium text-[var(--color-text)]">
+                      <div className="text-small text-[var(--color-text)]">
                         {opt.id} — {opt.choice}
-                        {opt.reversible === false && <span className="ml-1.5 text-[10px] text-rose-500">irreversible</span>}
-                        {opt.risk === 'high' && <span className="ml-1.5 text-[10px] text-rose-500">high risk</span>}
+                        {opt.reversible === false && <span className="ml-1.5 text-meta text-[var(--color-status-error)]">irreversible</span>}
+                        {opt.risk === 'high' && <span className="ml-1.5 text-meta text-[var(--color-status-error)]">high risk</span>}
                       </div>
-                      {opt.consequence && <div className="text-[11px] text-[var(--color-text-muted)]">{opt.consequence}</div>}
+                      {opt.consequence && <div className="text-meta text-[var(--color-text-muted)]">{opt.consequence}</div>}
                     </button>
                   ))}
                 </div>
-                <div className="text-[11px] text-[var(--color-text-faint)]">You can also answer on the question card in the run's chat.</div>
+                <div className="text-meta text-[var(--color-text-faint)]">You can also answer on the question card in the run's chat.</div>
               </div>
             )}
             {answerErr && (
-              <div data-testid="pipeline-answer-error" className="text-[11px] text-rose-500">
+              <div data-testid="pipeline-answer-error" className="text-meta text-[var(--color-status-error)]">
                 Could not record the answer — the question may already be answered.
               </div>
             )}
             {openChatNote && (
-              <div data-testid="pipeline-open-chat-note" className="text-[11px] text-[var(--color-text-muted)]">
+              <div data-testid="pipeline-open-chat-note" className="text-meta text-[var(--color-text-muted)]">
                 Done. Open the run's chat session and ask it to continue run {detail.id}.
               </div>
             )}
@@ -654,19 +641,19 @@ function RunDetailDrawer({
                     if (!ok) { setCancelling(false); setCancelErr(true); }
                   }}
                   data-testid="pipeline-cancel-btn"
-                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md text-rose-500 hover:bg-rose-500/10 transition-colors disabled:opacity-50"
+                  className="btn-sm btn-danger disabled:opacity-50"
                 >
-                  <span className="material-symbols-outlined icon-sm">cancel</span>{cancelling ? 'Cancelling…' : 'Cancel'}
+                  <span className="material-symbols-outlined icon-xs">cancel</span>{cancelling ? 'Cancelling…' : 'Cancel'}
                 </button>
               )}
             </div>
             {resumeErr && (
-              <div data-testid="pipeline-resume-error" className="text-[11px] text-rose-500">
+              <div data-testid="pipeline-resume-error" className="text-meta text-[var(--color-status-error)]">
                 Could not resume this run — its state may have changed.
               </div>
             )}
             {cancelErr && (
-              <div data-testid="pipeline-cancel-error" className="text-[11px] text-rose-500">
+              <div data-testid="pipeline-cancel-error" className="text-meta text-[var(--color-status-error)]">
                 Could not cancel this run — please try again.
               </div>
             )}
@@ -674,7 +661,7 @@ function RunDetailDrawer({
             {detail.auditCard && (
               <pre
                 data-testid="pipeline-detail-audit-card"
-                className="whitespace-pre-wrap rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-2 text-[11px] leading-relaxed text-[var(--color-text-muted)] font-mono"
+                className="whitespace-pre-wrap rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-2 text-meta leading-relaxed text-[var(--color-text-muted)] font-mono"
               >
                 {detail.auditCard}
               </pre>
@@ -683,12 +670,12 @@ function RunDetailDrawer({
             {/* Est-vs-actual token bars */}
             {detail.stageTokens.length > 0 && (
               <div>
-                <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Tokens — est vs actual</div>
+                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Tokens — est vs actual</div>
                 <div className="space-y-1">
                   {detail.stageTokens.map((s) => {
                     const max = Math.max(...detail.stageTokens.flatMap((x) => [x.est, x.actual]), 1);
                     return (
-                      <div key={s.stage} className="text-[11px] tabular-nums">
+                      <div key={s.stage} className="text-meta tabular-nums">
                         <div className="flex justify-between text-[var(--color-text-faint)]">
                           <span>{s.stage}</span><span>{fmtTokens(s.actual)}/{fmtTokens(s.est)}</span>
                         </div>
@@ -706,10 +693,10 @@ function RunDetailDrawer({
             {/* Reflect lessons */}
             {detail.reflectLessons.length > 0 && (
               <div>
-                <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Reflect</div>
+                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Reflect</div>
                 <ul className="space-y-1">
                   {detail.reflectLessons.map((l, i) => (
-                    <li key={i} className="text-[11px] text-[var(--color-text-muted)] leading-snug">• {l}</li>
+                    <li key={i} className="text-meta text-[var(--color-text-muted)] leading-snug">• {l}</li>
                   ))}
                 </ul>
               </div>
@@ -718,9 +705,9 @@ function RunDetailDrawer({
             {/* Related commits */}
             {detail.commits.length > 0 && (
               <div>
-                <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Commits</div>
+                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Commits</div>
                 {detail.commits.map((c, i) => (
-                  <div key={i} className="text-[11px] font-mono text-[var(--color-text-muted)]">
+                  <div key={i} className="text-meta font-mono text-[var(--color-text-muted)]">
                     <span className="text-primary">{c.sha}</span> · {c.files.length} file{c.files.length === 1 ? '' : 's'}
                   </div>
                 ))}
