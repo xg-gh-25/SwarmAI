@@ -5,6 +5,10 @@
  * and renders them in a flat list at the top. The main VirtualizedTree remains below
  * for Knowledge/Projects/Attachments browsing.
  *
+ * `showWorkingFiles={false}` (the Workspace overlay) drops the card: the location
+ * header and the folder counts carry the change stats there (design
+ * workspace-working-location.md §2).
+ *
  * This is a wrapper — it does NOT replace VirtualizedTree. All existing tree behavior
  * (zones, virtualization, context menu, inline rename) is preserved.
  */
@@ -153,7 +157,7 @@ function WorkingFileItem({
 }
 
 
-export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat }: SectionedExplorerProps) {
+export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat, showWorkingFiles = true }: SectionedExplorerProps & { showWorkingFiles?: boolean }) {
   const { treeData } = useTreeData();
   const [workingOpen, setWorkingOpen] = useState(true);
 
@@ -162,7 +166,7 @@ export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat }:
   return (
     <div className="flex flex-col h-full">
       {/* Working Files section — styled as card (AC7: rounded bg + border) */}
-      <div
+      {showWorkingFiles && <div
         className="flex-shrink-0 mx-2 mt-1.5 mb-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-card,var(--color-bg-chrome))]"
         data-testid="working-files-card"
         style={{ display: 'flex', flexDirection: 'column', borderLeft: '3px solid rgba(63,185,80,0.5)' }}
@@ -186,7 +190,7 @@ export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat }:
             No uncommitted changes
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Main tree — fills remaining space */}
       <div className="flex-1 overflow-hidden min-h-0">

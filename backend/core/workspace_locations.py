@@ -90,9 +90,12 @@ def _scan_repos(swarmws_root: str) -> list[dict]:
 
 
 def list_locations(swarmws_root: str) -> list[dict]:
-    """[{key, label, kind}] — SwarmWS first, then active declared repos."""
-    rows = [{"key": SWARMWS_KEY, "label": "SwarmWS", "kind": "default"}]
-    rows += [{k: r[k] for k in ("key", "label", "kind")} for r in _repos(swarmws_root)]
+    """[{key, label, kind, path}] — SwarmWS first, then active declared repos. ``path``
+    is shown and copied; the client still names a location only by its key."""
+    rows = [{"key": SWARMWS_KEY, "label": "SwarmWS", "kind": "default",
+             "path": os.path.realpath(swarmws_root)}]
+    rows += [{"key": r["key"], "label": r["label"], "kind": r["kind"], "path": r["root"]}
+             for r in _repos(swarmws_root)]
     return rows
 
 

@@ -9,6 +9,7 @@
  * - ``workspaceConfigService``  — Singleton SwarmWS config (GET/PUT /api/workspace)
  * - ``projectService``          — Project CRUD (GET/POST/PUT/DELETE /api/projects)
  * - ``folderService``           — Folder create, delete, rename (/api/workspace/folders, /api/workspace/rename)
+ * - ``workspaceLocationsService`` — Workspace overlay locations: list, one location's summary / tree / expand
  *
  * Conversion helpers:
  * - ``configToCamelCase``         — snake_case workspace config response → camelCase
@@ -177,6 +178,8 @@ export function treeNodeToCamelCase(data: Record<string, unknown>): TreeNode {
     children,
     gitStatus: (data.git_status ?? data.gitStatus) as TreeNode['gitStatus'],
     isSymlink: (data.is_symlink ?? data.isSymlink) as boolean | undefined,
+    changedCount: (data.changed_count ?? data.changedCount) as number | undefined,
+    hidden: data.hidden as boolean | undefined,
   };
 }
 
@@ -194,8 +197,9 @@ export const workspaceService = {
    *
    * @param depth - Maximum folder depth (1–5). Omit for server default.
    */
-  async getTree(depth?: number): Promise<TreeNode[]> {
-    const params = depth != null ? `?depth=${depth}` : '';
+  async getTree(depth?: number, opts: { fresh?: boolean } = {}): Promise<TreeNode[]> {
+    const q = [depth != null ? `depth=${depth}` : '', opts.fresh ? 'fresh=true' : ''].filter(Boolean);
+    const params = q.length ? `?${q.join('&')}` : '';
     const headers: Record<string, string> = {};
     if (_treeETag) {
       headers['If-None-Match'] = _treeETag;
@@ -246,7 +250,7 @@ export const workspaceService = {
   async refreshTree(depth?: number): Promise<TreeNode[]> {
     _treeETag = null;
     _cachedTree = null;
-    return this.getTree(depth);
+    return this.getTree(depth, { fresh: true });
   },
 
   /**
@@ -460,6 +464,38 @@ export const projectService = {
       return historyData.map((entry: Record<string, unknown>) => historyEntryToCamelCase(entry));
     }
     return [];
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Workspace locations (design workspace-working-location.md v5): SwarmWS and the
+// declared local repos, each browsed on its own. Every call names ONE location.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface WorkspaceLocation { key: string; label: string; kind: 'default' | 'repo'; path: string }
+export interface WorkspaceSummary { changed: number; lastCommitAt?: number | null }
+
+export const workspaceLocationsService = {
+  async list(): Promise<WorkspaceLocation[]> {
+    return (await api.get<WorkspaceLocation[]>('/workspace/locations')).data;
+  },
+  async summary(key: string, fresh = false): Promise<WorkspaceSummary> {
+    const { data } = await api.get<{ changed: number; last_commit_at?: number | null }>(
+      '/workspace/summary', { params: { location: key, ...(fresh ? { fresh: true } : {}) } });
+    return { changed: data.changed, lastCommitAt: data.last_commit_at ?? null };
+  },
+  /** A repo location's tree (first level by default). */
+  async tree(key: string, depth = 1, fresh = false): Promise<TreeNode[]> {
+    const { data } = await api.get<Record<string, unknown>[]>('/workspace/tree', {
+      params: { location: key, depth, ...(fresh ? { fresh: true } : {}) },
+    });
+    return data.map(treeNodeToCamelCase);
+  },
+  async expand(key: string, path: string): Promise<TreeNode[]> {
+    const { data } = await api.get<Record<string, unknown>[]>('/workspace/tree/expand', {
+      params: { location: key, path, depth: 1 },
+    });
+    return data.map(treeNodeToCamelCase);
   },
 };
 

@@ -1355,6 +1355,10 @@ export interface TreeNode {
   gitStatus?: GitStatus;
   /** True when this entry is a filesystem symlink (e.g., linked project). */
   isSymlink?: boolean;
+  /** Directories: how many uncommitted entries sit under it (local main). */
+  changedCount?: number;
+  /** A dot entry in a repo location: hidden unless the user shows hidden items. */
+  hidden?: boolean;
 }
 
 

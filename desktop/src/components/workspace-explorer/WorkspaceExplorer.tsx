@@ -20,9 +20,10 @@
  * - Multi-workspace listing, archive/unarchive/delete logic
  * - showArchived toggle, workspace dropdown, @tanstack/react-query usage
  *
- * Data fetching is handled by ``ExplorerProvider`` (mounted in ThreeColumnLayout,
- * so the 30s tree poll runs whether or not the SwarmWS overlay is open). This
- * component reads tree state from ``useTreeData()`` and renders accordingly.
+ * Data fetching is handled by ``ExplorerProvider``, mounted by the Workspace
+ * overlay's SwarmWS pane (fetch on open, no poll). This component reads tree state
+ * from ``useTreeData()`` and renders accordingly. ``embedded`` drops the title row
+ * (the overlay's location header owns the name and refresh).
  *
  * Requirements: 9.1, 9.3, 9.4, 9.5, 9.6, 9.7, 10.1, 10.4, 11.1, 15.1
  */
@@ -84,6 +85,8 @@ export interface WorkspaceExplorerProps {
   onFileDoubleClick?: (node: FileTreeItem) => void;
   /** Callback when "Attach to Chat" is selected from the context menu. */
   onAttachToChat?: (item: FileTreeItem) => void;
+  /** Inside the Workspace overlay: no title row, actions on the search row. */
+  embedded?: boolean;
 }
 
 // The explorer is rendered ONLY inside the SwarmWS fullscreen overlay (A10,
@@ -92,15 +95,15 @@ export interface WorkspaceExplorerProps {
 // (the overlay owns the width). The former column-mode machinery
 // (workspaceExplorerCollapsed / width / narrow-viewport auto-collapse) was dead
 // and has been deleted (Gate-2 E-3).
-export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }: WorkspaceExplorerProps) {
+export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat, embedded = false }: WorkspaceExplorerProps) {
   const { treeData, isLoading, error, refreshTree } = useTreeData();
 
   return (
     <div
-      className="relative h-full w-full bg-[var(--color-bg-chrome)] flex flex-col"
+      className={`relative h-full w-full flex flex-col ${embedded ? '' : 'bg-[var(--color-bg-chrome)]'}`}
       data-testid="workspace-explorer"
     >
-      <ExplorerHeader />
+      <ExplorerHeader embedded={embedded} />
 
       {/* Tree content area — fills remaining vertical space.
           min-h-0 is CRITICAL: without it, flex items default to min-height:auto
@@ -121,7 +124,7 @@ export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }:
         )}
 
         {!isLoading && !error && treeData.length > 0 && (
-          <SectionedExplorer onFileDoubleClick={onFileDoubleClick} onAttachToChat={onAttachToChat} />
+          <SectionedExplorer onFileDoubleClick={onFileDoubleClick} onAttachToChat={onAttachToChat} showWorkingFiles={!embedded} />
         )}
       </div>
     </div>

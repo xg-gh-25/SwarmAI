@@ -48,6 +48,9 @@ export const FILES = [
   'components/layout/HiveFleetOverlay.tsx',
   'pages/EvalDashboard.tsx',
   'components/overlay/index.tsx',
+  'components/workspace-explorer/WorkspaceOverlay.tsx',
+  'components/workspace-explorer/RepoPane.tsx',
+  'components/workspace-explorer/workspaceParts.tsx',
 ];
 
 const B = '(?<![\\w-])';

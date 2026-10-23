@@ -32,6 +32,7 @@ import { agentsService } from '../../services/agents';
 import { radarService } from '../../services/radar';
 import { brainsWithPinnedQuery } from '../../services/ddd';
 import { attentionService } from '../../services/attention';
+import { workspaceLocationsService } from '../../services/workspace';
 
 /** A JSON GET whose body is the data (typed by the overlay that reads it). */
 const getJson = <T,>(url: string) => async (): Promise<T> => (await api.get<T>(url)).data;
@@ -49,6 +50,12 @@ const COMMUNITY_FETCH: Record<CommunityPart, () => Promise<unknown>> = {
 };
 import type { OverlayId } from './overlayIds';
 import { loadOverlayChunk } from './overlayChunks';
+
+/** The Workspace location shown last (this app run): the overlay reopens on it and
+ *  the nav prefetches only it. */
+let lastWorkspaceLocation = 'swarmws';
+export const getLastWorkspaceLocation = (): string => lastWorkspaceLocation;
+export const setLastWorkspaceLocation = (key: string): void => { lastWorkspaceLocation = key; };
 
 /** One freshness window for every overlay: older data is still shown at once, then
  *  refreshed in the background. */
@@ -165,6 +172,22 @@ export const overlayQuery = {
   libraryMounts: <T,>() => ({ queryKey: ['library-mounts'] as const, queryFn: getJson<T>('/library/mounts'), staleTime: OVERLAY_STALE_MS }),
   /** Need You's queue (GET /attention). The AlertsPill's own count poll
    *  (useAttentionQueue) is separate and keeps its cadence. */
+  // Workspace: each location has its own keys (design workspace-working-location.md §4)
+  workspaceLocations: () => ({
+    queryKey: ['overlay', 'swarmws', 'locations'] as const,
+    queryFn: () => workspaceLocationsService.list(),
+    staleTime: OVERLAY_STALE_MS,
+  }),
+  workspaceSummary: (key: string) => ({
+    queryKey: ['overlay', 'swarmws', key, 'summary'] as const,
+    queryFn: () => workspaceLocationsService.summary(key),
+    staleTime: OVERLAY_STALE_MS,
+  }),
+  workspaceRepoTree: (key: string) => ({
+    queryKey: ['overlay', 'swarmws', key, 'tree'] as const,
+    queryFn: () => workspaceLocationsService.tree(key, 1),
+    staleTime: OVERLAY_STALE_MS,
+  }),
   needsYou: () => ({
     queryKey: ['overlay', 'needs-you'] as const,
     queryFn: () => attentionService.fetchAttention(),
@@ -192,6 +215,8 @@ export const NAV_PREFETCH: Partial<Record<OverlayId, (ctx: PrefetchCtx) => AnyOp
   capabilities: () => [overlayQuery.capabilities(), overlayQuery.capabilitiesHealth()],
   community: () => [overlayQuery.community('feed'), overlayQuery.community('hotTopics')],
   'needs-you': () => [overlayQuery.needsYou()],
+  // the list + the last-shown location's own summary (its tree loads on open)
+  swarmws: () => [overlayQuery.workspaceLocations(), overlayQuery.workspaceSummary(lastWorkspaceLocation)],
 };
 
 /** Prefetch a nav item's overlay code and data (no-op when loaded / fresh). Never throws. */

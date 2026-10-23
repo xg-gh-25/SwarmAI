@@ -2,7 +2,6 @@ import { ReactNode, useState, useCallback, useRef, useEffect, type CSSProperties
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
-import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { BottomBar } from './BottomBar';
 import { TerminalProvider, useTerminal, useTerminalHotkey } from '../../contexts/TerminalContext';
@@ -782,15 +781,6 @@ function MainChatPanel({ children }: MainChatPanelProps) {
   );
 }
 
-/** Invisible bridge that captures refreshTree from ExplorerContext into a ref
- *  so that code outside the provider (e.g. FileEditorModal save handler) can
- *  trigger a tree refresh. */
-function RefreshTreeBridge({ refreshTreeRef }: { refreshTreeRef: React.MutableRefObject<(() => void) | null> }) {
-  const { refreshTree } = useTreeData();
-  refreshTreeRef.current = refreshTree;
-  return null;
-}
-
 // Inner layout component that uses the context
 // (Canvas tab-scoping moved to ChatPage's useCanvasHost — the former
 // `shouldResetCanvasOnTabChange` reset-on-switch guard is obsolete: Canvas state
@@ -837,8 +827,6 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     return () => window.removeEventListener(EXPLORER_OPEN_TERMINAL, onOpenTerminal);
   }, [openTerminal]);
 
-  /** Ref to hold the ExplorerContext refreshTree function (set by bridge component inside provider). */
-  const refreshTreeRef = useRef<(() => void) | null>(null);
 
   // NOTE (Canvas moved to ChatPage, 2026-08-02, bugs 2+3): the Canvas
   // (FileViewerPanel) + its per-tab state + auto-surface + the swarm:open-file
@@ -908,8 +896,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-[var(--color-bg)]">
-      <ExplorerProvider>
-        <RefreshTreeBridge refreshTreeRef={refreshTreeRef} />
+      <>
 
         {/* Top bar -- session context, draggable */}
         <TopBar />
@@ -936,13 +923,13 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
             button flip panelOpen, which drives the self-hide. */}
         <TerminalPanel />
 
-        {/* SwarmWS migrated to the OverlayHost registry (M3, overlaySurfaces.tsx).
-            OverlayHost renders inside this same ExplorerProvider, so WorkspaceExplorer
-            still reads the live tree state. Legacy SwarmWSOverlay retired. */}
+        {/* SwarmWS lives in the OverlayHost registry (overlaySurfaces.tsx). Its
+            ExplorerProvider is mounted by the Workspace overlay itself, so the tree
+            is fetched only while that overlay is open (no app-wide poll). */}
 
         {/* Bottom status bar */}
         <BottomBar />
-      </ExplorerProvider>
+      </>
 
       {/* Swarm Workspace Warning Dialog */}
       <SwarmWorkspaceWarningDialog

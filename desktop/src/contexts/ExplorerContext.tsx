@@ -18,6 +18,16 @@
  * - ``useSearch``             — Hook for search query (keystroke changes)
  * - ``useExplorerContext``    — Convenience hook composing all three
  *
+ * Fetching (design workspace-working-location.md v5 §4): the provider lives inside
+ * the Workspace overlay's SwarmWS pane, so it fetches when that pane is first shown,
+ * never at app start, and it does not poll. It refetches on the user's refresh and
+ * after a write (``refreshTree``). The first fetch is ``SWARMWS_TREE_DEPTH`` deep
+ * (Knowledge / Projects and their first level); deeper folders load on expand, and
+ * an expanded folder whose children are not loaded yet (restored or auto-expanded)
+ * loads by itself, at most ``MAX_AUTOLOAD`` at a time.
+ * ``showHidden`` (off by default) shows SwarmWS's root dot folders other than the
+ * System section's (``.context`` / ``.claude``).
+ *
  * Session persistence:
  * - ``expandedPaths`` is persisted to sessionStorage under key
  *   ``swarmws-explorer-state``.
@@ -127,11 +137,22 @@ export function loadSessionState(): ExplorerSessionState | null {
 // Sub-context 1: TreeDataContext
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** First-fetch depth: SwarmWS's sections (Knowledge, Projects) show their children. */
+export const SWARMWS_TREE_DEPTH = 2;
+/** Most folders loaded by themselves after one fetch (restored / auto-expanded). */
+export const MAX_AUTOLOAD = 20;
+/** Root dot folders the System section shows; every other root dot entry is hidden. */
+const SYSTEM_DOT = new Set(['.context', '.claude']);
+export const isHiddenRootEntry = (n: TreeNode): boolean => n.name.startsWith('.') && !SYSTEM_DOT.has(n.name);
+
 interface TreeDataContextValue {
   treeData: TreeNode[];
   isLoading: boolean;
   error: string | null;
   refreshTree: () => void;
+  /** Root dot folders (`.artifacts`, backups) are shown only when true. */
+  showHidden: boolean;
+  setShowHidden: (v: boolean) => void;
 }
 
 const TreeDataContext = createContext<TreeDataContextValue | undefined>(undefined);
@@ -418,8 +439,8 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
     setIsLoading(true);
     setError(null);
     try {
-      const tree = await workspaceService.getTree();
-      lastTreeRef.current = tree; // Seed polling ref to avoid redundant first-poll re-render
+      const tree = await workspaceService.getTree(SWARMWS_TREE_DEPTH);
+      lastTreeRef.current = tree;
       setTreeData(tree);
     } catch (err: unknown) {
       const message =
@@ -435,8 +456,12 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
   const refreshTree = useCallback(async () => {
     setError(null);
     try {
-      const tree = await workspaceService.refreshTree();
-      lastTreeRef.current = tree; // Keep polling ref in sync after manual refresh
+      const fresh = await workspaceService.refreshTree(SWARMWS_TREE_DEPTH);
+      // keep the folders the user had loaded (absent ones stay gone: the walk is on
+      // the fresh tree)
+      const tree = mergeExpandedChildren(fresh, lastTreeRef.current, expandedPathsRef.current);
+      lastTreeRef.current = tree;
+      workspaceService.setCachedTree(tree);
       setTreeData(tree);
     } catch (err: unknown) {
       const message =
@@ -451,39 +476,8 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
     fetchTree();
   }, [fetchTree]);
 
-  // ── Auto-refresh via ETag polling ─────────────────────────────────────
-  // Poll getTree() every 30 seconds. The service-layer ETag cache makes
-  // this very lightweight: when nothing changed the server returns 304
-  // and getTree() returns the same cached array reference. We compare
-  // against lastTreeRef so we only call setTreeData on actual changes.
-  // Reduced from 5s → 15s → 30s to cut CPU from git status + fs scan.
-  useEffect(() => {
-    const POLL_INTERVAL_MS = 30_000;
-    const id = setInterval(async () => {
-      // Skip polling when tab is hidden to save resources
-      if (document.hidden) return;
-      try {
-        const tree = await workspaceService.getTree();
-        // On 304, getTree() returns the same _cachedTree reference (setCachedTree keeps it in sync).
-        // Only update state when the reference differs (actual filesystem change → 200 response).
-        if (tree !== lastTreeRef.current) {
-          // A depth-limited 200 response lacks children that were lazily
-          // expanded past the server's default depth. Merge those back from the
-          // previous tree so expanded folders don't collapse to empty on every
-          // filesystem change (which happens frequently in an active workspace).
-          // mergeExpandedChildren walks the FRESH tree, so on-disk deletions are
-          // honored (absent nodes get nothing re-injected).
-          const merged = mergeExpandedChildren(tree, lastTreeRef.current, expandedPathsRef.current);
-          lastTreeRef.current = merged;
-          workspaceService.setCachedTree(merged);
-          setTreeData(merged);
-        }
-      } catch {
-        // Silently ignore polling errors — manual refresh still works
-      }
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, []);
+  // No polling (design workspace-working-location.md v5 §4): the tree is fetched
+  // when the SwarmWS pane opens, on refresh, and after a write.
 
   // ── Default-expand zone folders on first load (no saved session) ───────
   useEffect(() => {
@@ -645,6 +639,37 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
     }
   }, [injectChildren]);
 
+  // An expanded folder whose children are not loaded (restored from the session, or
+  // auto-expanded because it holds a change) loads by itself — bounded per pass.
+  useEffect(() => {
+    if (treeData.length === 0 || expandedPaths.size === 0) return;
+    const pending: string[] = [];
+    const walk = (nodes: TreeNode[]) => {
+      for (const n of nodes) {
+        if (pending.length >= MAX_AUTOLOAD) return;
+        if (n.type !== 'directory' || !expandedPaths.has(n.path)) continue;
+        if (n.children === null) {
+          if (!loadingPaths.current.has(n.path)) pending.push(n.path);
+        } else if (n.children) {
+          walk(n.children);
+        }
+      }
+    };
+    walk(treeData);
+    for (const path of pending) {
+      loadingPaths.current.add(path);
+      workspaceService.expandDirectory(path).then((children) => {
+        setTreeData((prev) => {
+          const updated = injectChildren(prev, path, children);
+          lastTreeRef.current = updated;
+          workspaceService.setCachedTree(updated);
+          return updated;
+        });
+      }).catch(() => { /* stays collapsed-empty; a manual toggle retries */ })
+        .finally(() => { loadingPaths.current.delete(path); });
+    }
+  }, [treeData, expandedPaths, injectChildren]);
+
   const expandAll = useCallback(() => {
     const allPaths = collectAllDirectoryPaths(treeData);
     setExpandedPaths(new Set(allPaths));
@@ -655,9 +680,14 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
   }, []);
 
   // ── Memoized sub-context values ────────────────────────────────────────
+  const [showHidden, setShowHidden] = useState(false);
+  const shownTree = useMemo(
+    () => (showHidden ? treeData : treeData.filter((n) => !isHiddenRootEntry(n))),
+    [treeData, showHidden],
+  );
   const treeDataValue = useMemo<TreeDataContextValue>(
-    () => ({ treeData, isLoading, error, refreshTree }),
-    [treeData, isLoading, error, refreshTree]
+    () => ({ treeData: shownTree, isLoading, error, refreshTree, showHidden, setShowHidden }),
+    [shownTree, isLoading, error, refreshTree, showHidden]
   );
 
   const selectionValue = useMemo<SelectionContextValue>(

@@ -93,8 +93,10 @@ def test_locations_lists_swarmws_then_active_main_checkouts(env):
     assert r.status_code == 200, r.text
     rows = r.json()
     assert [x["label"] for x in rows] == ["SwarmWS", "active", "older"]
-    assert rows[0] == {"key": "swarmws", "label": "SwarmWS", "kind": "default"}
-    assert rows[1]["key"] == env["key"] and set(rows[1]) == {"key", "label", "kind"}
+    assert rows[0] == {"key": "swarmws", "label": "SwarmWS", "kind": "default",
+                       "path": str(env["ws"].resolve())}
+    assert rows[1] == {"key": env["key"], "label": "active", "kind": "repo",
+                       "path": str(env["active"].resolve())}
     assert env["calls"] == []                      # stat only, no git
 
 

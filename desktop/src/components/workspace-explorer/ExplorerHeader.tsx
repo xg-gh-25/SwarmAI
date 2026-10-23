@@ -11,6 +11,10 @@
  * this header is the UI that drives them (run_36f2823c wired the previously-headless
  * engine — the old "no search bar" state, noted in this file's history, is reversed).
  *
+ * `embedded` (the Workspace overlay's SwarmWS pane): no title row — the pane's
+ * location header carries the name and the refresh — and the actions sit on the
+ * search row, with a show-hidden toggle (design workspace-working-location.md §2.1).
+ *
  * Sort: cycles default → name-asc → name-desc → git-first → default. 'default'
  * keeps the built-in ordering (dirs-first + date-desc for Knowledge/Attachments).
  * There is no mtime/size sort — TreeNode carries no timestamp field.
@@ -55,8 +59,8 @@ function HeaderIconButton({
   );
 }
 
-export default function ExplorerHeader() {
-  const { refreshTree } = useTreeData();
+export default function ExplorerHeader({ embedded = false }: { embedded?: boolean } = {}) {
+  const { refreshTree, showHidden, setShowHidden } = useTreeData();
   const { searchQuery, setSearchQuery } = useSearch();
   const { collapseAll, expandAll, sortMode, setSortMode } = useSelection();
 
@@ -65,6 +69,63 @@ export default function ExplorerHeader() {
     const next = SORT_CYCLE[(idx + 1) % SORT_CYCLE.length];
     setSortMode(next);
   };
+
+  const search = (
+    <div className="relative flex flex-1 items-center">
+      <span
+        className="material-symbols-outlined icon-xs absolute left-2 text-[var(--color-text-dim)] pointer-events-none"
+        aria-hidden="true"
+      >
+        search
+      </span>
+      <input
+        type="search"
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        placeholder={embedded ? 'Filter loaded files' : 'Search files…'}
+        aria-label="Search workspace files"
+        data-testid="explorer-search-input"
+        data-workspace-filter={embedded ? '' : undefined}
+        className="w-full h-7 pl-7 pr-7 text-small rounded-md bg-[var(--color-bg-chrome)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-primary,var(--color-text-secondary))] transition-colors [&::-webkit-search-cancel-button]:hidden"
+      />
+      {searchQuery && (
+        <button
+          onClick={() => setSearchQuery('')}
+          title="Clear search"
+          aria-label="Clear search"
+          data-testid="explorer-search-clear"
+          className="absolute right-1.5 p-0.5 rounded text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+        >
+          <span className="material-symbols-outlined icon-sm">close</span>
+        </button>
+      )}
+    </div>
+  );
+
+  if (embedded) {
+    return (
+      <div data-testid="explorer-header" className="flex items-center gap-1 px-3.5 pb-2.5">
+        {search}
+        <HeaderIconButton
+          icon={showHidden ? 'visibility' : 'visibility_off'}
+          title={showHidden ? 'Hide hidden items' : 'Show hidden items'}
+          onClick={() => setShowHidden(!showHidden)}
+          testId="explorer-show-hidden"
+          active={showHidden}
+        />
+        <HeaderIconButton
+          icon={SORT_META[sortMode].icon}
+          title={SORT_META[sortMode].label}
+          onClick={cycleSort}
+          testId="explorer-sort-toggle"
+          active={sortMode !== 'default'}
+        />
+        <HeaderIconButton icon="unfold_less" title="Collapse all folders" onClick={collapseAll} testId="explorer-collapse-all" />
+        <HeaderIconButton icon="unfold_more" title="Expand all folders" onClick={expandAll} testId="explorer-expand-all" />
+        <OpenFileButton />
+      </div>
+    );
+  }
 
   return (
     <div data-testid="explorer-header">

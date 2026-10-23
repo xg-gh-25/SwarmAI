@@ -11,8 +11,7 @@
  */
 import { lazy } from 'react';
 import { registerOverlay } from './overlayRegistry';
-import { WorkspaceExplorer } from '../workspace-explorer';
-import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
+import WorkspaceOverlay from '../workspace-explorer/WorkspaceOverlay';
 import { continueInSession } from './continueInSession';
 import { OVERLAY_CHUNK } from './overlayChunks';
 import { useLayout } from '../../contexts/LayoutContext';
@@ -71,28 +70,16 @@ registerOverlay({
   ),
 });
 
-// ── swarmws (workspace explorer) ──────────────────────────────────────────────────────
-// Was: SwarmWSOverlay + useExclusiveOverlay('swarm:show-swarmws'), onFileDoubleClick a
-// parent callback that closed the overlay then dispatched swarm:open-file. Now: the
-// file-open is app-level (swarm:open-file, handled by ChatPage useCanvasHost) — no
-// bridge needed. The Gate-1 z-index close-first is preserved: close() THEN dispatch.
-// OverlayHost is inside <ExplorerProvider> (ThreeColumnLayout), so the tree context is
-// available. isSwarmWorkspace warning stays owned by ThreeColumnLayout's own dialog
-// (dispatched via the same swarm:open-file path it already guards).
+// ── swarmws (Workspace) ───────────────────────────────────────────────────────────────
+// WorkspaceOverlay (design workspace-working-location.md v5): SwarmWS + declared local
+// repos, each standalone. It mounts its own ExplorerProvider, so nothing is fetched
+// until the overlay opens. Opening a file closes the overlay first (Gate-1 z-index),
+// then dispatches swarm:open-file (handled by ChatPage useCanvasHost).
 registerOverlay({
   id: 'swarmws',
   render: ({ close }) => (
     <div className="flex-1 overflow-hidden" data-testid="swarmws-overlay">
-      <WorkspaceExplorer
-        onFileDoubleClick={(file: FileTreeItem) => {
-          // Gate-1 z-index fix (preserved): close the overlay BEFORE opening the file
-          // so the Canvas/FileViewer is not rendered under the host.
-          close();
-          document.dispatchEvent(new CustomEvent('swarm:open-file', {
-            detail: { path: file.path, gitStatus: file.gitStatus, workspaceId: file.workspaceId },
-          }));
-        }}
-      />
+      <WorkspaceOverlay close={close} />
     </div>
   ),
 });
