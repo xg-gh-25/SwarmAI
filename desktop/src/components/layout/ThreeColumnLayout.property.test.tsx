@@ -1092,10 +1092,10 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       { testId: 'nav-library', label: 'Library' },
       { testId: 'nav-brain-hub', label: 'Brain Hub' },
       { testId: 'nav-todo', label: 'ToDo' },
-      { testId: 'nav-swarmws', label: 'Workspace' },
       // NOTE: no nav-canvas — Canvas is output-triggered, not a nav card (run_990b0a03).
       { testId: 'nav-pipeline', label: 'Pipeline' },
       { testId: 'nav-pollinate', label: 'Pollinate' },
+      { testId: 'nav-swarmws', label: 'Workspace' },  // Work order XG 2026-10-23
       { testId: 'nav-community', label: 'Community' },  // Work: last (run_5165013e)
       { testId: 'nav-jobs', label: 'Jobs & Runs' },
       { testId: 'nav-capabilities', label: 'Capabilities' },  // System: after Jobs (run_5165013e)

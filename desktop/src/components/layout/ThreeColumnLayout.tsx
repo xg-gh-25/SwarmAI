@@ -244,7 +244,7 @@ function LeftSidebar() {
           data-testid="history-row"
         >
           <span data-testid="history-row-icon" className="w-4 flex items-center justify-center opacity-85"><NavSvgIcon name="history" /></span>
-          <span className="flex-1 text-left text-meta tabular-nums tracking-wide">{NAV.history.navLabel}</span>
+          <span className="flex-1 text-left text-meta whitespace-nowrap">{NAV.history.navLabel}</span>
           <span className="text-body text-[var(--color-text-faint)]">›</span>
         </button>
 
@@ -267,8 +267,7 @@ function LeftSidebar() {
               currentColor, so an inline color on the wrapper tints the glyph. */}
           <span data-testid="artifacts-row-icon" className="w-4 flex items-center justify-center" style={{ color: 'var(--color-primary)' }}><NavSvgIcon name="gallery" /></span>
           <span
-            className="flex-1 text-left text-meta tabular-nums tracking-wide"
-            style={{ color: 'var(--color-primary)' }}
+            className="flex-1 text-left text-meta whitespace-nowrap"
           >{NAV.artifacts.navLabel}</span>
           <span className="text-body text-[var(--color-text-faint)]">›</span>
         </button>
@@ -320,15 +319,13 @@ function LeftSidebar() {
           </button>
         </div>
 
-        {/* WORK zone (A4): daily-common pair (ToDo + Workspace) first and
-            `highlight`ed (resting-brighter) to lift them above the power pair
-            (Pipeline + Pollinate). Reuses the existing highlight prop — NOT a 2nd
+        {/* WORK zone order (XG 2026-10-23): ToDo, Pipeline, Pollinate, Workspace,
+            Community. ToDo + Workspace keep `highlight` (resting-brighter). Reuses the existing highlight prop — NOT a 2nd
             green panel: cognition's green zone stays the sole differentiated
             surface (P1). "Workspace" is the de-jargoned label for the SwarmWS
             workspace (testid nav-swarmws + explorer brand title keep SwarmWS). */}
         <A10Group label="Work" tint={ZONE_TINT.work}>
           <A10Card navId="todo" onPrefetch={() => prefetch('todo')} icon="todo" highlight isActive={newActiveOverlay === 'todo'} onClick={() => activateNav('todo')} data-testid="nav-todo" />
-          <A10Card navId="swarmws" onPrefetch={() => prefetch('swarmws')} icon="folder" highlight isActive={newActiveOverlay === 'swarmws'} onClick={() => activateNav('swarmws')} data-testid="nav-swarmws" />
           {/* NOTE: no Canvas nav card by design (run_990b0a03). Canvas is
               OUTPUT-TRIGGERED — it auto-surfaces on a `written` event and opens via
               a chat file-chip click or the agent's swarm:open-canvas command; a
@@ -337,6 +334,7 @@ function LeftSidebar() {
               header unmute toggle (FileViewerPanel), not a global nav button. */}
           <A10Card navId="pipeline" onPrefetch={() => prefetch('pipeline')} icon="pipeline" isActive={newActiveOverlay === 'pipeline'} onClick={() => activateNav('pipeline')} data-testid="nav-pipeline" />
           <A10Card navId="pollinate" onPrefetch={() => prefetch('pollinate')} icon="hive" isActive={newActiveOverlay === 'pollinate'} onClick={() => activateNav('pollinate')} data-testid="nav-pollinate" />
+          <A10Card navId="swarmws" onPrefetch={() => prefetch('swarmws')} icon="folder" highlight isActive={newActiveOverlay === 'swarmws'} onClick={() => activateNav('swarmws')} data-testid="nav-swarmws" />
           {/* Community — SwarmAI's two-way membrane with the outside world (inbound
               signals + outbound engagement). Moved to the Work zone as a resident
               main entry (run_5165013e): it's an active daily surface, not a
@@ -732,7 +730,7 @@ function A10Card({ navId, icon, flag, isActive, highlight, statusDot, onClick, o
           />
         )}
       </span>
-      <span className="flex-1 text-left text-small font-semibold text-[var(--color-text)] leading-tight whitespace-nowrap">{label}</span>
+      <span className="flex-1 min-w-0 text-left text-small font-semibold text-[var(--color-text)] leading-tight whitespace-nowrap overflow-hidden text-ellipsis">{label}</span>
       {flag === 'y' && (
         <span className="a10-flag a10-flag--y" data-testid="flag-y" aria-label="needs attention">Y</span>
       )}

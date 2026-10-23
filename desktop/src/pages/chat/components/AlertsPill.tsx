@@ -49,15 +49,15 @@ export function AlertsPill({ count, onPrefetch }: AlertsPillProps) {
           'mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 border transition-colors',
           calm
             ? 'border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
-            : 'bg-red-500/10 border-red-500/35 text-red-300 hover:bg-red-500/20 hover:border-red-500/60',
+            : 'bg-[color-mix(in_srgb,var(--color-status-error)_8%,transparent)] border-[color-mix(in_srgb,var(--color-status-error)_35%,transparent)] text-[var(--color-status-error)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_14%,transparent)]',
         ].join(' ')}
       >
         <span className="w-4 flex items-center justify-center">
           <span className="material-symbols-outlined icon-md leading-none">notifications</span>
         </span>
-        <span className="flex-1 text-left text-[11.5px] font-mono tracking-wide whitespace-nowrap">{tf(t, 'chat.alerts.label', 'Needs You')}</span>
+        <span className="flex-1 text-left text-meta whitespace-nowrap">{tf(t, 'chat.alerts.label', 'Needs You')}</span>
         {!calm && (
-          <span className="min-w-[16px] h-4 px-1 rounded-lg bg-red-500 text-white text-[11px] font-bold font-mono flex items-center justify-center animate-pulse">
+          <span className="min-w-[16px] h-4 px-1 rounded-lg bg-[var(--color-status-error)] text-[var(--color-on-accent)] text-meta font-semibold tabular-nums flex items-center justify-center animate-pulse motion-reduce:animate-none">
             {count}
           </span>
         )}

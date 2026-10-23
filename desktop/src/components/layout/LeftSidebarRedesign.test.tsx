@@ -17,7 +17,7 @@
  * mocked (a render spawns nothing).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, within, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LayoutProvider } from '../../contexts/LayoutContext';
 import { OverlayProvider } from '../../contexts/OverlayContext';
@@ -73,12 +73,13 @@ const DOMAIN_ORDER = [
   'nav-library',   // cognition zone: the bookshelf, above Brain Hub (XG 2026-08-02)
   'nav-brain-hub',
   'nav-new-brain',
-  'nav-todo',     // A4: daily-common pair (ToDo + Workspace) first, `highlight`ed
-  'nav-swarmws',  // labelled "Workspace" (de-jargoned; testid keeps nav-swarmws)
+  // Work order (XG 2026-10-23): ToDo, Pipeline, Pollinate, Workspace, Community.
   // NOTE: no 'nav-canvas' — Canvas is output-triggered (auto-surface / chat file-chip
   // / agent command), not a nav card (run_990b0a03).
+  'nav-todo',
   'nav-pipeline',
   'nav-pollinate',
+  'nav-swarmws',  // labelled "Workspace" (de-jargoned; testid keeps nav-swarmws)
   'nav-community',  // Work: resident main entry, last in Work (run_5165013e)
   'nav-jobs',      // System: Jobs & Runs FIRST in System (XG 2026-08-02)
   'nav-capabilities',  // System: ability reference, after Jobs (moved from Work, run_5165013e)
@@ -113,7 +114,7 @@ describe('LeftSidebar A10 — chat hero + history', () => {
   // AC1: the Artifacts entry is highlighted by a FIXED accent color (always-on,
   // not hover/active-gated) — the twin entry is emphasized vs the muted History
   // row. The highlight lives on the icon + label; the left accent bar was removed.
-  it('gives the Artifacts row icon + label a fixed accent color (History row stays muted)', () => {
+  it('gives the Artifacts row icon a fixed accent color; the label stays muted like History', () => {
     renderSidebar();
     const artRow = screen.getByTestId('artifacts-row');
     // The left accent bar was removed.
@@ -121,12 +122,13 @@ describe('LeftSidebar A10 — chat hero + history', () => {
     // The icon wrapper carries the always-on accent color (var-based → theme-tracked).
     const artIcon = screen.getByTestId('artifacts-row-icon');
     expect(artIcon.getAttribute('style') || '').toContain('var(--color-primary)');
-    // The "Artifacts" label also carries the accent color.
+    // The label does NOT: an accent-coloured label competed with the Chat hero
+    // (2026-10-23 nav tune) — only the icon keeps the accent.
     const artLabel = Array.from(artRow.querySelectorAll('span')).find(
       (s) => s.textContent === 'Artifacts',
     );
     expect(artLabel).toBeDefined();
-    expect(artLabel!.getAttribute('style') || '').toContain('var(--color-primary)');
+    expect(artLabel!.getAttribute('style') || '').not.toContain('var(--color-primary)');
     // History icon must NOT carry the accent — it stays the muted default.
     const histIcon = screen.getByTestId('history-row-icon');
     expect(histIcon.getAttribute('style') || '').not.toContain('var(--color-primary)');

@@ -576,8 +576,8 @@ body {
   overflow: hidden;
   background: linear-gradient(120deg,
     color-mix(in srgb, var(--color-primary) 42%, transparent),
-    color-mix(in srgb, #8f7dfb 30%, transparent) 60%,
-    color-mix(in srgb, #8f7dfb 16%, transparent) 100%);
+    color-mix(in srgb, var(--color-primary) 22%, transparent) 60%,
+    color-mix(in srgb, var(--color-primary) 10%, transparent) 100%);
   border: 1px solid color-mix(in srgb, var(--color-primary) 55%, transparent);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.14) inset,
     0 3px 12px color-mix(in srgb, var(--color-primary) 18%, transparent);
@@ -602,7 +602,7 @@ body {
   width: 2px;
   border-radius: 2px;
   background: var(--gc);
-  opacity: 0.55;
+  opacity: 0.22;
 }
 
 .a10-card {
@@ -651,10 +651,10 @@ body {
   justify-content: center;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5), 0 0 0 2px var(--color-bg-chrome);
 }
-.a10-flag--y { background: linear-gradient(180deg, #ffd873, #f0a92e); color: #3a2600; }
+.a10-flag--y { background: var(--color-status-warning); color: var(--color-brand-ink); }
 .a10-flag--r {
-  background: linear-gradient(180deg, #ff9d9d, #f05656);
-  color: #4a0000;
+  background: var(--color-status-error);
+  color: var(--color-on-accent);
   animation: a10-flag-blink 1.2s infinite;
 }
 @keyframes a10-flag-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
@@ -673,7 +673,7 @@ body {
    核心差异化：认知区套一个薄荷绿面板容器，明显区别于 Work/System 的裸分组。
    --cz = 认知绿 (#5fc99a). No zone header / no scope labels — 靠视觉+highlight 分层. */
 .a10-zone {
-  --cz: #5fc99a;
+  --cz: var(--color-zone-cognitive);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -699,7 +699,7 @@ body {
   width: 2px;
   border-radius: 2px;
   background: var(--cz);
-  opacity: 0.55;
+  opacity: 0.22;
 }
 /* Brain Hub — highlight resting state (brighter than Context/Memory) */
 .a10-card--hilite {
@@ -736,7 +736,7 @@ body {
   border-color: color-mix(in srgb, var(--ac) 45%, transparent);
 }
 .a10-newbrain .a10-plus {
-  color: #0c1f18;
+  color: var(--color-brand-ink);
   background: linear-gradient(180deg,
     color-mix(in srgb, var(--ac) 80%, white),
     var(--ac));
@@ -750,7 +750,6 @@ body {
 }
 .a10-group--dim .a10-card:not(:hover):not(.a10-card--active) span:not(.a10-chip):not(.a10-flag) {
   color: var(--color-text-muted);
-  font-weight: 500;
 }
 /* An EXPLICITLY highlighted card inside the dimmed System group must escape the
    dimming. The dim chip/title selectors above are specificity (0,5,0); these
