@@ -223,8 +223,8 @@ def _proof(row: dict[str, Any], event: Mapping[str, Any],
     elif etype == "refuted":
         refs = payload.get("refs")
         if row["r2_status"] != "REFUTED" or result != "refuted" \
-                or not isinstance(refs, list) or not refs:
-            raise FindingError("refutation lacks R2 REFUTED and concrete refs")
+                or not isinstance(refs, list) or not refs or not all(_resolved_ref(ref) for ref in refs):
+            raise FindingError("refutation lacks R2 REFUTED and resolved refs")
         row["status"] = "refuted"
     else:
         raise FindingError(f"unknown proof evidence type {etype!r}")
@@ -248,6 +248,23 @@ def _accept(findings: dict[str, dict[str, Any]], event: Mapping[str, Any]) -> No
         raise FindingError("accept_finding authorization was rebound to another finding")
     row["status"] = "accepted"
     row["evidence_event_id"] = event["event_id"]
+
+
+def _resolved_ref(ref: Any) -> bool:
+    """A ref facts.resolve_refs resolved when the proof was recorded (§A3.5)."""
+    if not isinstance(ref, Mapping):
+        return False
+    kind = ref.get("kind")
+    if kind == "path":
+        lines = ref.get("lines")
+        return isinstance(ref.get("path"), str) and isinstance(ref.get("blob"), str) \
+            and isinstance(lines, list) and len(lines) == 2 \
+            and all(isinstance(n, int) and n >= 1 for n in lines) and lines[0] <= lines[1]
+    if kind == "event":
+        return isinstance(ref.get("event_id"), str) and bool(ref["event_id"])
+    if kind == "test":
+        return isinstance(ref.get("node"), str) and isinstance(ref.get("result"), str)
+    return False
 
 
 def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority) -> list[dict[str, Any]]:

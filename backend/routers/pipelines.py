@@ -206,8 +206,13 @@ def _v1_decision(run_dir: Path, raw: dict) -> Optional[PipelineDecision]:
             or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", request_id):
         return None
     try:
-        value = json.loads((run_dir / "artifacts" / f"decision-{request_id}.json")
-                           .read_text(encoding="utf-8"))
+        # the decision as its validated event recorded it (conformance K1), never a
+        # file the agent could rewrite after it was validated
+        from core import pipeline_human
+        engine = pipeline_human.load_engine(str(raw.get("id") or ""), _get_swarmws())
+        value = engine.decision_value(request_id) if engine is not None else None
+        if not isinstance(value, dict):
+            return None
         return PipelineDecision(**{key: value.get(key) for key in (
             "request_id", "kind", "question", "why_evidence_insufficient")},
             options=[row for row in value.get("options") or [] if isinstance(row, dict)])

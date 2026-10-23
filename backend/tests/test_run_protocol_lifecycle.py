@@ -186,7 +186,7 @@ def test_validated_decision_and_answer_return_to_same_stage_and_reset_attempts()
     stream = Stream("full")
     stream.attempt("evaluate", results={"RQ-1": False})
     stream.add("decision", {"request_id": "q1", "decision_kind": "requirement_ambiguity",
-                            "document": "decision-doc"})
+                            "document": "decision-doc", "decision_json": "{}"})
     assert stream.projection()["status"] == "awaiting_human"
     stream.add("session_lost", {"reason": "closed"}, transition=False)
     assert stream.projection()["status"] == "awaiting_human"
@@ -206,11 +206,11 @@ def test_validated_decision_and_answer_return_to_same_stage_and_reset_attempts()
 def test_decision_cap_is_enforced_from_folded_answers():
     stream = Stream("full", decision_cap=1)
     stream.add("decision", {"request_id": "q1", "decision_kind": "requirement_ambiguity",
-                            "document": "decision-doc"})
+                            "document": "decision-doc", "decision_json": "{}"})
     stream.add("human_answer", {"request_id": "q1", "option_id": "A"})
     with pytest.raises(lc.LifecycleError, match="cap"):
         stream.add("decision", {"request_id": "q2", "decision_kind": "design_tradeoff",
-                                "document": "decision-doc"})
+                                "document": "decision-doc", "decision_json": "{}"})
 
 
 def test_third_failed_stage_attempt_enters_not_landed_without_asking_human():
@@ -483,7 +483,7 @@ def test_only_decision_can_enter_awaiting_human():
         candidate.add(kind, payload)
         assert candidate.projection()["status"] != "awaiting_human"
     stream.add("decision", {"request_id": "q", "decision_kind": "requirement_ambiguity",
-                            "document": "decision-doc"})
+                            "document": "decision-doc", "decision_json": "{}"})
     assert stream.projection()["status"] == "awaiting_human"
 
 
@@ -556,3 +556,19 @@ def test_human_override_requires_a_landed_commit_sha():
                transition=False)
     with pytest.raises(lc.LifecycleError, match="landed commit SHA"):
         stream.projection()
+
+
+def test_a_decision_logged_before_its_content_was_stored_folds_and_fails_dc1():
+    """Conformance K1 review round 1 #4: an awaiting_human run whose decision event
+    predates ``decision_json`` stays readable (it can be abandoned or answered by
+    nobody), and DC-1 does not pass a decision whose content it cannot see."""
+    from core.run_protocol import checks
+    stream = Stream("full")
+    stream.add("decision", {"request_id": "q1", "decision_kind": "requirement_ambiguity",
+                            "document": "decision-doc"})
+    assert stream.projection()["status"] == "awaiting_human"
+    ctx = checks.make_context(profile="full", requirement_variant="full", requirements={},
+                              design_variant="full", design={}, events=stream.rows,
+                              authority=stream.authority)
+    ok, detail = checks.evaluate("DC-1", ctx)
+    assert ok is False and "q1" in detail, detail

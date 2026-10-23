@@ -512,7 +512,7 @@ class ReviewOrchestrator:
                        and e["payload"].get("evidence_type") == "refuted"]
             for e in refuted:
                 lines.append(f"- Refuted {e['payload']['canonical_id']}: "
-                             + ", ".join(e["payload"].get("refs") or []))
+                             + ", ".join(_ref_text(ref) for ref in e["payload"].get("refs") or []))
             for e in events:
                 if e.get("kind") == "reclassify" and e["payload"]["pass"] == number:
                     p = e["payload"]
@@ -560,3 +560,15 @@ class ReviewOrchestrator:
         for row in value["refuted"]:
             lines.append(f"- Refuted {row['finding']}: {', '.join(row['evidence'])}")
         return "\n".join(lines).rstrip() + "\n"
+
+
+def _ref_text(ref: Any) -> str:
+    """One resolved refutation ref (facts.resolve_refs) as REVIEW / FIXING_SPEC show it."""
+    if not isinstance(ref, Mapping):
+        return str(ref)
+    if ref.get("kind") == "path":
+        start, end = ref["lines"]
+        return f"{ref['path']}:{start}" + (f"-{end}" if end != start else "")
+    if ref.get("kind") == "event":
+        return f"event:{ref['event_id'][:12]}"
+    return f"test:{ref.get('node')} ({ref.get('result')})"

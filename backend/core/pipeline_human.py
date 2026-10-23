@@ -133,8 +133,7 @@ def record_card_answer(session_id: str, answers: Any) -> list[dict[str, str]]:
             pending = engine.pending_decision()
             if pending is None:
                 continue
-            value = engine._read_json(
-                engine.run_dir / "artifacts" / f"decision-{pending['request_id']}.json", None)
+            value = engine.decision_value(pending["request_id"])
             option_id = decision_protocol.option_from_answer(value or {}, answers)
             if option_id is None:
                 continue

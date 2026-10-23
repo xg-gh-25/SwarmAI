@@ -47,7 +47,7 @@ def restrict_process(*producers: str) -> None:
         raise EventError("restrict_process needs known producers")
     _process_producers = _process_producers & wanted
     _hook_writer_allowed = _hook_writer_allowed and "hook" in _process_producers
-FORCED_BLOB_KEYS = frozenset({"raw", "prompt", "test_details"})
+FORCED_BLOB_KEYS = frozenset({"raw", "prompt", "test_details", "decision_json"})
 
 # Field paths use envelope keys directly and ``payload.<key>`` for payload keys.
 OCCURRENCE_FIELDS: dict[str, tuple[str, ...]] = {
@@ -139,7 +139,7 @@ EVENT_SPECS: dict[str, EventSpec] = {
                     "test_node": str, "probe_target": str,
                     "probe_old": str, "probe_new": str,
                     "touches_finding": bool, "touches_executable": bool,
-                    "refs": list}),
+                    "refs": list, "repo": str}),
     "test_call": _spec("runner", ("payload.seq",), "payload.call_type",
                        {"seq": int, "call_type": str, "code_tree": str, "result": str},
                        {"details": list, "target": str, "snapshot": str}),
@@ -170,7 +170,12 @@ EVENT_SPECS: dict[str, EventSpec] = {
                             "oracle_receipt": str},
                            {"canonical_id": str, "state_hash": str}),
     "decision": _spec("cli", ("payload.request_id",), "payload.request_id",
-                      {"request_id": str, "decision_kind": str, "document": str}),
+                      {"request_id": str, "decision_kind": str, "document": str},
+                      # decision_json: the validated decision itself, always a blob:
+                      # what the person is asked is what DC-1 validated (conformance
+                      # K1). Optional only so a log written before it still folds; such
+                      # a decision has no content to ask and DC-1 fails it.
+                      {"decision_json": str}),
     "human_answer": _spec("hook", ("payload.request_id",), "payload.request_id",
                           {"request_id": str, "option_id": str}),
     "land": _spec("cli", ("ordinal",), None,

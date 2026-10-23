@@ -181,7 +181,7 @@ def test_final_checks_require_exact_nonempty_repos_and_validation_manifest():
                    run={"code_trees": {"api": "1" * 40, "web": "2" * 40},
                         "landing_bases": {"api": "a", "web": "b"},
                         "mode": "isolated", "changed_paths": [],
-                        "validation_rule_paths": [], "landing": "landed"})
+                        "rule_violations": [], "landing": "landed"})
     assert checks.evaluate("TS-1", ctx)[0]
     assert checks.evaluate("LG-1", ctx)[0]
     assert not checks.evaluate("LG-5", ctx)[0]  # web has no required typecheck

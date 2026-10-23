@@ -96,3 +96,22 @@ def test_a_conflicting_baseline_outcome_is_never_trusted(tmp_path):
     assert pt.baseline_lookup(tmp_path, "repo", "a" * 40, "py", "t.py::t") == "passed"
     assert put_once(tmp_path / "v1", "baseline", key, "failed") == "conflict"
     assert pt.baseline_lookup(tmp_path, "repo", "a" * 40, "py", "t.py::t") is None
+
+
+def test_a_baseline_conflict_is_a_signed_integrity_event(tmp_path):
+    """Conformance F10: a baseline cache conflict reaches the run's event log like a
+    test-result conflict does, so E1's cross-run contamination count can see it."""
+    import sys
+    from types import SimpleNamespace
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "scripts"))
+    import pipeline_test as pt
+    recorded = []
+    runner = SimpleNamespace(record_cache_conflict=lambda **kw: recorded.append(kw))
+    ctx = SimpleNamespace(cache=tmp_path, v1=runner, warnings=[], python="py",
+                          repo=tmp_path / "repo")
+    pt._WORKTREE.clear()
+    sha = "b" * 40
+    assert pt._baseline_put(ctx, sha, {"t.py::t": "passed"}) == []
+    assert pt._baseline_put(ctx, sha, {"t.py::t": "failed"}) == ["t.py::t"]
+    assert len(recorded) == 1 and recorded[0]["kind"] == "baseline", recorded
+    assert any("baseline cache key" in w for w in ctx.warnings)

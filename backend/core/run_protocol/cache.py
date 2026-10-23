@@ -28,6 +28,14 @@ _REQUIRED = {"kind", "repo", "tree", "pipeline_code_hash", "protocol_version", "
 
 
 _BACKEND = Path(__file__).resolve().parents[2]
+# backend-relative: the code that decides a v1 result. One list: the pipeline code
+# hash covers it, and QX-2 (facts.RULE_PATHS) refuses a run that changes it.
+PIPELINE_CODE: tuple[str, ...] = (
+    "core/run_protocol/", "scripts/pipeline_test.py", "scripts/pipeline_v1.py",
+    # outside the package but on the same trust path: worktree/base, the evidence
+    # seal, the person's answer, and the gate that issues authorizations
+    "core/run_worktree.py", "core/evidence_seal.py", "core/pipeline_human.py",
+    "core/run_owner_gate.py")
 
 
 def pipeline_code_hash(backend: str | Path | None = None) -> str:
@@ -39,8 +47,9 @@ def _pipeline_code_hash(backend: str) -> str:
     """sha256 over every file of the v1 protocol and both CLIs, path-tagged, in order:
     a change to any of them is a new identity for caches, finals and the contract."""
     root = Path(backend)
-    files = sorted((root / "core" / "run_protocol").rglob("*.py")) + [
-        root / "scripts" / "pipeline_test.py", root / "scripts" / "pipeline_v1.py"]
+    files: list[Path] = []
+    for entry in PIPELINE_CODE:
+        files += sorted((root / entry).rglob("*.py")) if entry.endswith("/") else [root / entry]
     digest = hashlib.sha256()
     for path in files:
         if "__pycache__" in path.parts or not path.is_file():

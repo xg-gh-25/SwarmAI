@@ -66,27 +66,6 @@ def read_integration_branches(data_dir: str | Path, run_id: str) -> dict[str, st
     return {str(k): str(v) for k, v in value.items()} if isinstance(value, dict) else {}
 
 
-def run_base(worktree: str | Path, main: str | Path, branch: str | None) -> str | None:
-    """The run's base (fixing spec B6): where *worktree* forked from *main*'s
-    integration *branch* — the recorded ref, never whatever the main checkout has
-    checked out now. None when git cannot say."""
-    import subprocess
-
-    def git(root, *args):
-        try:
-            out = subprocess.run(["git", "-C", str(root), *args], capture_output=True,
-                                 text=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            return None
-        return out.stdout.strip() if out.returncode == 0 else None
-    ref = branch or git(main, "symbolic-ref", "HEAD")
-    target = git(main, "rev-parse", "--verify", f"{ref}^{{commit}}") if ref else None
-    head = git(worktree, "rev-parse", "HEAD")
-    if not target or not head:
-        return None
-    return git(worktree, "merge-base", head, target)
-
-
 def is_v1_run(data_dir: str | Path, run_id: str) -> bool:
     return read_contract(data_dir, run_id) is not None
 
@@ -325,11 +304,15 @@ class V1Runner:
             pre_existing=verdict == "pass" and bool(evidence and evidence.get("failures")),
             started_at=now, finished_at=now)
 
-    def record_cache_conflict(self, *, key: str, first_hash: str, new_hash: str) -> dict[str, Any]:
-        """Write a signed cross-run integrity event for a poisoned v1 cache key."""
+    def record_cache_conflict(self, *, key: str, first_hash: str, new_hash: str,
+                              kind: str = "test") -> dict[str, Any]:
+        """Write a signed cross-run integrity event for a poisoned v1 cache key of
+        *kind* (``test`` results or ``baseline`` outcomes)."""
+        if kind not in ("test", "baseline"):
+            raise RunnerError(f"unknown cache kind {kind!r}")
         event, _ = self._store.append_new(
             writer=self._writer, kind="integrity", at=_now(), ordinal=time.time_ns(),
-            payload={"conflict_id": key, "conflict_type": "cross_run_test_cache",
+            payload={"conflict_id": key, "conflict_type": f"cross_run_{kind}_cache",
                      "first_hash": first_hash, "new_hash": new_hash})
         return event
 

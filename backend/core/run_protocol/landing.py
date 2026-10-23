@@ -79,7 +79,7 @@ def prepare_request(
     if action == "land_skip_tests":
         # no final is needed (C5): the run's own fork point is its base, and LG-4 holds
         # when main has not moved past it
-        run_bases = {name: _rev(repos[name], "HEAD", roots[name]) for name in repos}
+        run_bases = dict(context.run.get("run_bases") or {})
     else:
         run_bases = {name: context.final["repos"][name]["base"]
                      for name in repos if name in (context.final.get("repos") or {})}

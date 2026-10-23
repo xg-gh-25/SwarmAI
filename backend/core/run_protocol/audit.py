@@ -129,9 +129,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
 
     # Token accounting (D3). A transcript measurement (``measure-usage``, cli) covers the
     # main agent AND every sub-agent of the run's transcripts: its LATEST set is the
-    # whole number, and the per-expert SubagentStop records (runner) are already in
-    # it, so they are not added. Without one, only the experts are measured: their
-    # records are summed, and the main agent's calls are unknown (null), not zero.
+    # token total, and the per-expert SubagentStop records (runner) are already in it,
+    # so they are not added. Without one, only the experts' tokens are known.
     measured: dict[str, float] = {}
     experts: dict[str, float] = {}
     expert_records = 0
@@ -148,25 +147,30 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
             experts[name] = experts.get(name, 0) + value
             expert_records += name == "input_tokens"
     answers = sum(event.get("kind") in {"answer", "answer_reuse"} for event in event_rows)
+    # Completeness (E5, conformance F7), counted in model SESSIONS from events, never
+    # from the measurement itself: the main agent is one, and every handout an expert
+    # was spawned for is one (answered or not — a crashed expert still cost a call),
+    # except a handout served by answer_reuse. A session is accounted when
+    # a measurement covers it: the main agent by a transcript measurement, an expert
+    # by its own SubagentStop usage record.
+    spawned = sum(event.get("kind") == "handout" for event in event_rows) \
+        - sum(event.get("kind") == "answer_reuse" for event in event_rows)
+    total_calls: int | None = 1 + spawned
+    accounted = (1 if measured else 0) + min(expert_records, spawned)
     if measured:
         input_tokens = measured.get("input_tokens")
         output_tokens = measured.get("output_tokens")
-        accounted = int(measured.get("accounted_calls") or 0)
-        total_calls: int | None = accounted           # one unit: model responses
     elif experts:
         input_tokens, output_tokens = experts.get("input_tokens"), experts.get("output_tokens")
-        accounted = int(experts.get("accounted_calls") or 0)
-        total_calls = None                             # the main agent was not measured
     else:
         input_tokens = output_tokens = None
-        accounted, total_calls = 0, None
     total_tokens = ((input_tokens + output_tokens)
                     if isinstance(input_tokens, (int, float)) and isinstance(output_tokens, (int, float))
                     else None)
     budget_tokens = contract.get("budget_tokens")
     if accounted == 0:
         token_verdict = "BLOCK"                        # nothing was metered at all
-    elif total_calls is None or total_tokens is None \
+    elif accounted < total_calls or total_tokens is None \
             or not isinstance(budget_tokens, (int, float)):
         token_verdict = "WARN"
     else:

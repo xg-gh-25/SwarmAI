@@ -478,16 +478,20 @@ def _contained(base: Path, rel: str) -> Path | None:
 
 
 def _run_fork_point(repo: Path) -> "str | None":
-    """Where an isolated run's worktree forked from its main checkout's integration
-    branch (B6), or None: only for a repo this call knows is a run's worktree (the v1
-    contract or the legacy run.json entry said so), never for any linked worktree."""
+    """Where an isolated run's worktree forked from its RECORDED integration branch
+    (B6), or None for a repo this call does not know as a run's worktree (shared run,
+    plain call). One rule, core.run_protocol.facts.resolve_base: a run worktree whose
+    base cannot be named raises — never a guessed HEAD (conformance F5)."""
     if _WORKTREE.get("repo") != repo or not _WORKTREE.get("main"):
         return None
     if "base" not in _WORKTREE:
-        from core.run_protocol.runner import run_base
-        _WORKTREE["base"] = run_base(repo, _WORKTREE["main"], _WORKTREE.get("branch"))
-    base = _WORKTREE.get("base") or ""
-    return base if re.fullmatch(r"[0-9a-f]{40,64}", base) else None
+        from core.run_protocol import facts
+        try:
+            _WORKTREE["base"] = facts.resolve_base(repo, _WORKTREE["main"],
+                                                   _WORKTREE.get("branch"))
+        except facts.FactError as exc:
+            raise RuntimeError(f"v1 runner cannot resolve the run's base: {exc}") from exc
+    return _WORKTREE["base"]
 
 
 def _git_changed_set(repo: Path) -> set[str]:
@@ -2463,11 +2467,16 @@ def _baseline_read(ctx, sha: str, nodeids: list[str]) -> dict[str, str]:
 
 def _baseline_put(ctx, sha: str, fresh: dict[str, str]) -> list[str]:
     """Create each outcome once; a node measured differently before is poisoned
-    (never trusted again) and returned so its call can say so."""
+    (never trusted again), recorded as an integrity event and returned."""
     from core.run_protocol.cache import put_once
     repo_name, pid = _baseline_ids(ctx)
-    return [n for n, o in fresh.items() if put_once(
-        ctx.cache / "v1", "baseline", baseline_key(repo_name, sha, pid, n), o) == "conflict"]
+    conflicts = []
+    for n, o in fresh.items():
+        key = baseline_key(repo_name, sha, pid, n)
+        if put_once(ctx.cache / "v1", "baseline", key, o) == "conflict":
+            conflicts.append(n)
+            _v1_cache_conflict(ctx, ctx.v1, key, o, kind="baseline")
+    return conflicts
 
 
 def _targets_from_nodeids(nodeids: list[str]) -> dict:
@@ -2912,9 +2921,6 @@ def _baseline(ctx, nodeids: list[str], until: float | None = None) -> dict[str, 
             fresh = {n: o for n in need if (o := _head_outcome(n, res)) is not None}
             if fresh:
                 conflicts = _baseline_put(ctx, sha, fresh)
-                if conflicts:
-                    ctx.warnings.append("baseline outcomes conflict with an earlier "
-                                        f"measurement and are not trusted: {conflicts[:5]}")
                 base.update({n: o for n, o in fresh.items() if n not in conflicts})
     return {n: base.get(n) if base.get(n) in ("passed", "failed") else None for n in nodeids}
 
@@ -3124,6 +3130,7 @@ class _Ctx:
         self.head_src: dict[str, str | None] = {}
         self.order_dep: dict[str, dict] = {}  # nodeid → {order_dependent, culprit?}
         self.seq = 0
+        self.v1 = None   # the run's V1Runner, once the v1 contract is read
 
     def left(self) -> float:
         return self.deadline_at - time.monotonic()
@@ -3726,16 +3733,22 @@ def _v1_cache_value(ev: dict) -> dict:
     return value
 
 
-def _v1_cache_conflict(ctx, runner, key: str, new_value=None) -> None:
+def _v1_cache_conflict(ctx, runner, key: str, new_value=None, kind: str = "test") -> None:
+    """One recorder for every poisoned cross-run cache key (test results and
+    baselines): the run gets a signed integrity event, so E1's contamination count
+    sees it (conformance F10), and the call says so."""
     from core.run_protocol.cache import conflict_hashes, value_hash
-    hashes = conflict_hashes(ctx.cache / "v1", "test", key)
+    hashes = conflict_hashes(ctx.cache / "v1", kind, key)
     if hashes is None:
         first_hash = "0" * 64
         new_hash = value_hash(new_value) if new_value is not None else "0" * 64
     else:
         first_hash, new_hash = hashes
-    runner.record_cache_conflict(key=key, first_hash=first_hash, new_hash=new_hash)
-    ctx.warnings.append(f"v1 cache key {key[:12]} is poisoned by conflicting cross-run values; ignored")
+    if runner is not None:
+        runner.record_cache_conflict(key=key, first_hash=first_hash, new_hash=new_hash,
+                                     kind=kind)
+    ctx.warnings.append(f"v1 {kind} cache key {key[:12]} is poisoned by conflicting "
+                        "cross-run values; ignored")
 
 
 def _v1_cache_read(ctx, runner, key: str):
@@ -5370,6 +5383,12 @@ def _v1_runner(ns, run_dir: Path, run_state: dict, ctx):
         return None
     repo_name = str(_WORKTREE.get("name") or ctx.repo.name)
     main = (contract.get("repo_roots") or {}).get(repo_name)
+    if contract.get("mode") == "isolated" and (
+            not main or os.path.realpath(str(main)) == os.path.realpath(str(ctx.repo))):
+        # an isolated run's evidence is about its own worktree only: the main checkout
+        # holds other sessions' work (conformance K1, review round 1 #2)
+        raise RuntimeError(f"{repo_name}: this isolated run has no worktree; "
+                           "run `pipeline_v1.py stage-start` first")
     if main and os.path.realpath(str(main)) != os.path.realpath(str(ctx.repo)):
         # this call tests the run's own worktree: its base is the recorded fork point
         from core.run_protocol.runner import read_integration_branches
@@ -5383,7 +5402,7 @@ def _v1_runner(ns, run_dir: Path, run_state: dict, ctx):
         str(ctx.repo), (f".aidlc/deliverables/{ns.run_id}/",), {})
     # the run's base is where its worktree forked from main (B6): a commit the agent
     # makes in the worktree does not move it
-    base = _run_fork_point(ctx.repo) or _head_sha(ctx.repo)
+    base = _run_fork_point(ctx.repo) or _head_sha(ctx.repo)   # a shared run: HEAD
     if not base:
         raise RuntimeError("v1 runner cannot resolve the run's base")
     return V1Runner(
@@ -5651,7 +5670,7 @@ def execute(ns) -> tuple[dict, int]:
     ctx.warnings.extend(dl_warn)
     for w in dl_warn:
         print(f"pipeline_test.py: warning: {w}", file=sys.stderr)
-    v1 = _v1_runner(ns, run_dir, run_state, ctx) if ns.run_id else None
+    v1 = ctx.v1 = _v1_runner(ns, run_dir, run_state, ctx) if ns.run_id else None
     changed = changed_files(ctx.repo, run_state, ctx.warnings, (ns.project, ns.run_id))
     if ns.mode == "validation":
         if v1 is None:

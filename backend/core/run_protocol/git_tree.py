@@ -88,6 +88,30 @@ def write_tree(root: str, excludes: tuple[str, ...], overlays: Mapping[str, byte
             pass
 
 
+def commit_code_tree(root: str, commit: str, excludes: tuple[str, ...]) -> str:
+    """The code tree of a landed *commit*: its tree with the reserved prefixes removed,
+    by the same rule as ``write_tree`` (a landed run's current code is its commit)."""
+    prefixes = tuple(_safe(path, prefix=True) for path in excludes)
+    fd, index = tempfile.mkstemp(prefix="pipeline-v1-index-")
+    os.close(fd)
+    os.unlink(index)
+    env = {**os.environ, "GIT_INDEX_FILE": index}
+    try:
+        _run(root, "read-tree", f"{commit}^{{tree}}", env=env)
+        for prefix in prefixes:
+            _run(root, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--",
+                 prefix.rstrip("/"), env=env)
+        tree = _run(root, "write-tree", env=env).decode().strip()
+        if len(tree) != 40:
+            raise GitTreeError("git returned an invalid tree id")
+        return tree
+    finally:
+        try:
+            os.unlink(index)
+        except FileNotFoundError:
+            pass
+
+
 def diff_trees(root: str, before: str, after: str) -> list[dict[str, str]]:
     raw = _run(root, "diff-tree", "--no-commit-id", "--name-status", "-r", "-z",
                before, after).decode("utf-8", "strict")

@@ -459,6 +459,11 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         return _result(handouts <= parsed, "other review answers recorded")
     if check_id == "DC-1":
         from core.run_protocol import decision
+        asked = {event["payload"]["request_id"] for event in context.events
+                 if event.get("kind") == "decision"}
+        unrecorded = sorted(asked - set(context.decision_documents))
+        if unrecorded:     # the event carries no decision to validate (pre-K1 log)
+            return False, f"decision content not in its event: {unrecorded}"
         issues = [issue for doc in context.decision_documents.values()
                   for issue in decision.validate(doc, context.known_refs)]
         return _result(not issues, "decisions valid" if not issues else issues[0].message)
@@ -470,7 +475,10 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         from core.run_protocol import findings
         projected = findings.fold(list(context.events), context.authority)
         if check_id == "RV-2":
-            blocking = [row["canonical_id"] for row in projected if findings.push_effect(row)]
+            stale = set(context.run.get("stale_closures") or ())
+            blocking = [row["canonical_id"] for row in projected if findings.push_effect(row)
+                        or (row["canonical_id"] in stale and findings.normalize_severity(
+                            row.get("severity")) in ("HIGH", "CRITICAL"))]
             return _result(not blocking, "no push-effect finding" if not blocking
                            else f"push-effect findings: {blocking}")
         clustered = {cid for cluster in findings.cluster_findings(projected)
@@ -493,7 +501,11 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         required = {row.get("id") for req in context.requirements.get("requirements", [])
                     if isinstance(req, Mapping) for row in req.get("acceptance", [])
                     if isinstance(row, Mapping)}
-        missing = sorted(required - context.trace_covers)
+        # §A2.3: the trace covers every acceptance R, property P and failure mode F
+        for key in ("properties", "failure_modes"):
+            required |= {row.get("id") for row in (context.design or {}).get(key, [])
+                         if isinstance(row, Mapping) and isinstance(row.get("id"), str)}
+        missing = sorted(i for i in required - context.trace_covers if isinstance(i, str))
         return _result(not missing, "trace covers requirements" if not missing
                        else f"trace missing: {missing}")
     if check_id == "BX-2":
@@ -510,7 +522,8 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
             and isinstance(current, Mapping) and set(current) == set(context.expected_repos) and all(
             isinstance(row, Mapping) and row.get("code_tree") == current.get(name)
             for name, row in repos.items())
-        return _result(ok, "final binds current code trees" if ok else "final code tree is stale")
+        return _result(ok, "final binds current code trees" if ok else "; ".join(
+            context.run.get("final_unbound") or ["final code tree is stale"]))
     if check_id == "LG-2":
         verdicts = [(row.get("tests") or {}).get("verdict") for row in repos.values()] \
             if isinstance(repos, Mapping) else []
@@ -570,11 +583,11 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         return _result(ok, "risk expansion within cap"
                        if ok else "risk expansion missing/incomplete")
     if check_id == "QX-2":
-        changed, rules = context.run.get("changed_paths"), context.run.get("validation_rule_paths")
-        ok = isinstance(changed, list) and isinstance(rules, list) \
-            and not (set(changed) & set(rules))
-        return _result(ok, "validation rules unchanged" if ok
-                       else "validation rule provenance missing/changed")
+        violations = context.run.get("rule_violations")
+        ok = isinstance(violations, list) and not violations
+        return _result(ok, "validation rules and pipeline code unchanged" if ok
+                       else "; ".join(violations[:5]) if isinstance(violations, list)
+                       else "rule provenance unknown")
     if check_id == "MD-1":
         mode = context.run.get("mode")
         return _result(mode == "isolated", "isolated" if mode == "isolated"

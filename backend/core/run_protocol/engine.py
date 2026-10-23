@@ -302,6 +302,15 @@ class RunEngine:
         self._settle(); self.write_projection()
         return True
 
+    def decision_value(self, request_id: str) -> dict[str, Any] | None:
+        """The decision exactly as its validated event recorded it (conformance K1)."""
+        from core.run_protocol import facts
+        try:
+            return facts.decision_values(self.store.read_events(),
+                                         self.store.paths.blobs).get(request_id)
+        except facts.FactError as exc:
+            raise EngineError(str(exc)) from exc
+
     def pending_decision(self) -> dict[str, Any] | None:
         """The open decision as the human sees it, with the exact AskUserQuestion
         payload the agent must ask (``ask_user_question``), or None."""
@@ -309,7 +318,7 @@ class RunEngine:
         request_id = state.get("pending_decision")
         if state["status"] != "awaiting_human" or not request_id:
             return None
-        value = self._read_json(self.run_dir / "artifacts" / f"decision-{request_id}.json", None)
+        value = self.decision_value(request_id)
         if not isinstance(value, Mapping):
             return None
         from core.run_protocol import decision as decision_protocol
@@ -355,10 +364,7 @@ class RunEngine:
             for name in self.contract["expected_repos"]:
                 if name in current:
                     continue
-                entry = run_worktree.create(
-                    self.run_id, name, self.contract["repo_roots"][name], workspace=self.workspace)
-                created.append((name, entry))
-                self._record_integration_branch(name, entry.get("integration_branch"))
+                created.append((name, self._create_worktree(name)))
         except run_worktree.WorktreeError as exc:
             for name, entry in created:
                 try:
@@ -407,62 +413,139 @@ class RunEngine:
         if current.get(name) != branch:
             _atomic_json(path, {**current, name: branch})
 
+    def _create_worktree(self, name: str) -> dict:
+        """The one place a run worktree is created: it also records the integration
+        branch it forked from, so the run's base is always nameable (conformance F14)."""
+        main = self.contract["repo_roots"][name]
+        try:
+            branch = _git(main, "symbolic-ref", "-q", "HEAD")
+        except EngineError as exc:
+            raise run_worktree.WorktreeError(
+                "detached_main", f"{name}: main checkout has no branch checked out") from exc
+        # recorded first: a crash between the two steps leaves a record and no worktree
+        # (the next start creates it), never a worktree whose base cannot be named
+        self._record_integration_branch(name, branch)
+        entry = run_worktree.create(self.run_id, name, main, workspace=self.workspace)
+        if entry.get("integration_branch") != branch:
+            try:
+                run_worktree._remove(self.run_id, entry, Path(main), merged=False)
+            finally:
+                raise run_worktree.WorktreeError(
+                    "branch_moved", f"{name}: main switched branches while the worktree was made")
+        return entry
+
     def _fork_base(self, name: str, root: str) -> str:
-        """Where *root* forked from its main checkout's recorded integration branch (the
-        run's base, B6); HEAD for a shared run whose root IS the main checkout."""
-        from core.run_protocol.runner import run_base
-        main = self.contract["repo_roots"].get(name)
-        if not main or Path(main).resolve() == Path(root).resolve():
-            return _git(root, "rev-parse", "HEAD")
+        """The run's base for *root* (facts.resolve_base): never a guess."""
+        from core.run_protocol import facts
         branches = self._read_json(self.store.paths.run / "integration_branches.json", {}) or {}
-        base = run_base(root, main, branches.get(name))
-        if not base:
-            raise EngineError(f"{name}: cannot find where the run forked from main")
-        return base
+        try:
+            return facts.resolve_base(root, self.contract["repo_roots"].get(name),
+                                      branches.get(name))
+        except facts.FactError as exc:
+            raise EngineError(str(exc)) from exc
 
-    def _changed_paths(self, repos: Mapping[str, str]) -> list[str]:
-        """Every path the run changed since its base: committed in the worktree (B6),
-        staged, unstaged and untracked. The base is the fork point from main."""
-        out = []
-        for name, root in repos.items():
-            base = self._fork_base(name, root)
-            out += _git(root, "-c", "core.quotepath=off", "diff", "--name-only",
-                        "--no-renames", base, "HEAD").splitlines()
-            # name-only listings: _git strips its output, so a porcelain status line's
-            # leading space would cost the first path a character
-            out += _git(root, "-c", "core.quotepath=off", "diff", "--name-only",
-                        "--no-renames", "HEAD").splitlines()
-            out += _git(root, "-c", "core.quotepath=off", "ls-files", "--others",
-                        "--exclude-standard").splitlines()
-        return sorted({p for p in out if p})
-
-    def check_context(self) -> checks.CheckContext:
-        requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
-        design = self._read_json(self.run_dir / "artifacts" / "design_spec.json", None)
-        final = self.final()
-        events = self.store.read_events()
-        repos = self.effective_repos() or self.contract["repo_roots"]
-        code_trees = {}
-        existing: set[str] = set()
+    def _changed_by_repo(self, repos: Mapping[str, str]) -> dict[str, list[str]]:
+        """Every path the run changed since its base, per repo: committed in the worktree
+        (B6), staged, unstaged and untracked. A repo whose base cannot be named is left
+        out (facts: never a guess); the checks that need it then fail."""
+        out: dict[str, list[str]] = {}
         for name, root in repos.items():
             try:
-                code_trees[name] = git_tree.write_tree(
-                    root, (f".aidlc/deliverables/{self.run_id}/",), {})
+                base = self._fork_base(name, root)
+            except EngineError:
+                continue
+            paths = _git(root, "-c", "core.quotepath=off", "diff", "--name-only",
+                         "--no-renames", base, "HEAD").splitlines()
+            # name-only listings: _git strips its output, so a porcelain status line's
+            # leading space would cost the first path a character
+            paths += _git(root, "-c", "core.quotepath=off", "diff", "--name-only",
+                          "--no-renames", "HEAD").splitlines()
+            paths += _git(root, "-c", "core.quotepath=off", "ls-files", "--others",
+                          "--exclude-standard").splitlines()
+            out[name] = sorted({p for p in paths if p})
+        return out
+
+    def _current_code(self, expected: Sequence[str]):
+        """Where each repo's current code is (conformance K1, review round 1 #2):
+
+        - a repo this run LANDED: the landed commit (its tree minus the run's REPORT,
+          its parent as base) — never today's main or a released worktree;
+        - an isolated repo: its own worktree only; a missing worktree is unknown,
+          never replaced by the main checkout another session shares;
+        - a shared run: the main checkout.
+        Returns (roots, code_trees, bases, existing_files, changed_by_repo)."""
+        reserved = (f".aidlc/deliverables/{self.run_id}/",)
+        landed = self.landed_commits() if self.projection().get("landing") in (
+            "landed", "human_override") else {}
+        if set(landed) == {"primary"} and len(expected) == 1:
+            landed = {expected[0]: landed["primary"]}
+        live = self.effective_repos()
+        roots: dict[str, str] = {}
+        code_trees: dict[str, str | None] = {}
+        bases: dict[str, str | None] = {}
+        existing: set[str] = set()
+        changed: dict[str, list[str]] = {}
+        log = logging.getLogger(__name__)
+        for name in expected:
+            main = self.contract["repo_roots"].get(name)
+            commit = landed.get(name)
+            try:
+                if commit and main:
+                    roots[name] = main
+                    code_trees[name] = git_tree.commit_code_tree(main, commit, reserved)
+                    bases[name] = _git(main, "rev-parse", f"{commit}^")
+                    existing |= set(_git(main, "ls-tree", "-r", "--name-only", commit).splitlines())
+                    changed[name] = sorted(p for p in _git(
+                        main, "-c", "core.quotepath=off", "diff", "--name-only", "--no-renames",
+                        bases[name], commit).splitlines() if p and not p.startswith(reserved[0]))
+                    continue
+                root = live.get(name)
+                if root is None:
+                    code_trees[name] = bases[name] = None
+                    log.warning("run %s: %s has no worktree; its facts are unknown",
+                                self.run_id, name)
+                    continue
+                roots[name] = root
+                code_trees[name] = git_tree.write_tree(root, reserved, {})
                 existing |= set(_git(root, "ls-files").splitlines())
-            except Exception as exc:  # a missing tree fails its checks below, not here
-                logging.getLogger(__name__).warning(
-                    "run %s: code tree of %s unavailable for checks: %s", self.run_id, name, exc)
+                bases[name] = self._fork_base(name, root)
+                changed[name] = self._changed_by_repo({name: root}).get(name, [])
+            except (EngineError, git_tree.GitTreeError) as exc:
+                code_trees.setdefault(name, None)
+                bases[name] = bases.get(name) if code_trees.get(name) else None
+                log.warning("run %s: facts of %s unavailable: %s", self.run_id, name, exc)
+        return roots, code_trees, bases, existing, changed
+
+    def check_context(self) -> checks.CheckContext:
+        """The facts every check reads (conformance K1): the final only when it binds
+        the current code trees and bases; the required validations from the BASE
+        manifest; the decisions as their events recorded them."""
+        from core.run_protocol import facts
+        from core.run_protocol import findings as finding_protocol
+        requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
+        design = self._read_json(self.run_dir / "artifacts" / "design_spec.json", None)
+        events = self.store.read_events()
+        expected = list(self.contract["expected_repos"])
+        repos, code_trees, bases, existing, changed = self._current_code(expected)
+        recorded = self.final()
+        final, unbound = facts.bind_final(recorded, expected=expected,
+                                          code_trees=code_trees, bases=bases) \
+            if recorded else ({}, ["no final"])
+        try:
+            required = facts.required_validations(
+                {name: repos[name] for name in expected if name in repos}, bases, changed)
+        except facts.FactError as exc:
+            required = {}
+            logging.getLogger(__name__).warning("run %s: %s", self.run_id, exc)
         results: dict[str, str] = {}
         covers: set[str] = set()
         collected: set[str] = set()
-        validation_manifest: dict[str, set[str]] = {}
-        for name, row in final.get("repos", {}).items():
+        for row in final.get("repos", {}).values():
             # what pytest collected (B8) and every node that actually ran on this tree
             tests_row = row.get("tests") or {}
             collected |= set(tests_row.get("collected") or [])
             collected |= {n for n in (tests_row.get("nodes") or {}) if "::" in n
                           and not n.endswith("::*")}
-            validation_manifest[name] = {item["id"] for item in row.get("validations", [])}
             for trace in row.get("trace", []):
                 results[str(trace.get("ref") or trace.get("exit"))] = trace.get("result")
                 covers |= set(trace.get("covers") or [])
@@ -470,18 +553,37 @@ class RunEngine:
         req_variant = "lite" if profile == "direct" else "full"
         design_variant = None if profile in {"research", "direct"} else (
             "lite" if profile == "trivial" else "full")
+        flat_changed = sorted({p for paths in changed.values() for p in paths})
         run = {**self.projection(), "mode": self.contract["mode"],
-               "code_trees": code_trees, "changed_paths": self._changed_paths(repos),
-               "validation_rule_paths": ["validations.json", "backend/core/run_protocol/risk_selection.py"],
+               "code_trees": code_trees, "run_bases": bases, "changed_paths": flat_changed,
+               "final_unbound": unbound,
+               "stale_closures": sorted(facts.stale_closures(
+                   finding_protocol.fold(list(events), self.authority), events, code_trees)),
+               "rule_violations": facts.rule_violations(
+                   flat_changed, recorded, str(self.contract.get("pipeline_code_hash") or "")),
                "lessons": self._read_json(self.run_dir / "artifacts" / "reflect.json", {}).get("lessons", []),
                "agent_after_cap": _agent_after_cap(requirements, design)}
         return checks.make_context(
             profile=profile, requirement_variant=req_variant, design_variant=design_variant,
             requirements=requirements, design=design, events=events, authority=self.authority,
             final=final, run=run, test_results=results, trace_covers=covers,
-            expected_repos=set(self.contract["expected_repos"]),
-            validation_manifest=validation_manifest, existing_files=existing,
-            collected_tests=collected, decision_documents={}, known_refs={})
+            expected_repos=set(expected), validation_manifest=required,
+            existing_files=existing, collected_tests=collected,
+            decision_documents=facts.decision_values(events, self.store.paths.blobs),
+            known_refs=self.decision_refs(events))
+
+    def decision_refs(self, events: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+        """What a decision may cite (DC-1): this run's events, REQUIREMENTS analysis
+        rows (A<n>) and review findings. One builder for asking and for checking."""
+        refs: dict[str, Mapping[str, Any]] = {event["event_id"]: event for event in events}
+        requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
+        for index, row in enumerate(requirements.get("analysis", []) if isinstance(requirements, Mapping) else [], 1):
+            if isinstance(row, Mapping):
+                refs[f"A{index}"] = {**dict(row), "analysis_kind": row.get("kind"),
+                                     "kind": "analysis"}
+        for row in review.ReviewOrchestrator(self.store, self.run_dir).findings():
+            refs[row["canonical_id"]] = row
+        return refs
 
     def write_projection(self) -> Path:
         state = self.projection()
@@ -654,6 +756,7 @@ class RunEngine:
         import re
         hunk_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
         derived = []
+        bound_nodes: dict[str, Any] | None = None
         for index, supplied in enumerate(artifact["proofs"], 1):
             if not isinstance(supplied, Mapping):
                 raise EngineError(f"review proof {index} must be an object")
@@ -682,13 +785,24 @@ class RunEngine:
             code_tree = git_tree.write_tree(
                 root, (f".aidlc/deliverables/{self.run_id}/",), {})
             if evidence_type == "refuted":
-                refs = supplied.get("refs")
-                if not isinstance(refs, list) or not refs or any(
-                        not isinstance(ref, str) or not ref for ref in refs):
-                    raise EngineError(f"{finding_id}: refutation requires concrete refs")
+                # §A3.5: a refutation cites evidence that exists — a file:line of the
+                # tree that lands, an event of this run, or a test result on that tree
+                from core.run_protocol import facts
+                if bound_nodes is None:
+                    bound = self.check_context().final
+                    bound_nodes = {repo: {node: (value or {}).get("result") for node, value in
+                                          ((row.get("tests") or {}).get("nodes") or {}).items()}
+                                   for repo, row in (bound.get("repos") or {}).items()}
+                try:
+                    resolved = facts.resolve_refs(
+                        supplied.get("refs"), root=root, code_tree=code_tree,
+                        event_ids={e["event_id"] for e in self.store.read_events()},
+                        final_nodes=bound_nodes.get(_name, {}))
+                except facts.FactError as exc:
+                    raise EngineError(f"{finding_id}: {exc}") from exc
                 derived.append({"finding_id": finding_id, "evidence_type": "refuted",
                                 "code_tree": code_tree, "result": "refuted",
-                                "refs": list(refs)})
+                                "refs": resolved, "repo": _name})
                 continue
             # base -> the code tree that lands, as REVIEW saw it (a new file included)
             diff = _git(root, "diff", "--unified=0", "--no-renames",
@@ -704,7 +818,7 @@ class RunEngine:
                     break
             non_executable = _comment_only_diff(file, diff)
             derived.append({"finding_id": finding_id,
-                            "evidence_type": "diff_assertion",
+                            "evidence_type": "diff_assertion", "repo": _name,
                             "code_tree": code_tree, "result": "asserted",
                             "touches_finding": touches,
                             "touches_executable": not non_executable})
@@ -720,20 +834,11 @@ class RunEngine:
         if self.contract.get("profile") == "direct":
             raise EngineError("a direct run makes no decisions: abandon it and re-create the "
                               "request as --profile trivial, then ask there")
-        refs: dict[str, Mapping[str, Any]] = {
-            event["event_id"]: event for event in self.store.read_events()}
-        requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
-        for index, row in enumerate(requirements.get("analysis", []) if isinstance(requirements, Mapping) else [], 1):
-            if isinstance(row, Mapping):
-                refs[f"A{index}"] = {**dict(row), "analysis_kind": row.get("kind"),
-                                     "kind": "analysis"}
-        for row in review.ReviewOrchestrator(self.store, self.run_dir).findings():
-            refs[row["canonical_id"]] = row
+        refs = self.decision_refs(self.store.read_events())
         state = self.projection()
         event = record_decision(self.store, value, known_refs=refs, document=document,
                                 at=_now(), decisions_answered=state["human_decisions"],
                                 cap=state["decision_cap"])
-        _atomic_json(self.run_dir / "artifacts" / f"decision-{value['request_id']}.json", dict(value))
         self._settle(); self.write_projection()
         return {"event": event, "decision": dict(value), "state": self.projection(),
                 "ask_user_question": __import__("core.run_protocol.decision",
@@ -746,7 +851,7 @@ class RunEngine:
         state = self.projection()
         if state["status"] != "awaiting_human" or state.get("pending_decision") != request_id:
             raise EngineError("decision answer is not for the current pending decision")
-        value = self._read_json(self.run_dir / "artifacts" / f"decision-{request_id}.json", None)
+        value = self.decision_value(request_id)
         if not isinstance(value, Mapping):
             raise EngineError("pending decision document is missing")
         answer = decision.answer(value, request_id=request_id, option_id=option_id)
@@ -754,10 +859,6 @@ class RunEngine:
             writer=self.authority.writer("hook"), kind="human_answer", at=_now(),
             payload={"request_id": request_id, "option_id": option_id})
         self._settle()
-        answers = self._read_json(self.run_dir / "artifacts" / "decision-answers.json", [])
-        if not isinstance(answers, list):
-            raise EngineError("decision answer projection is malformed")
-        _atomic_json(self.run_dir / "artifacts" / "decision-answers.json", [*answers, answer])
         self.write_projection()
         return {"event": event, "answer": answer, "state": self.projection()}
 
@@ -819,10 +920,13 @@ class RunEngine:
             try:
                 for name in self.contract["expected_repos"]:
                     if name not in self.effective_repos():
-                        run_worktree.create(self.run_id, name, self.contract["repo_roots"][name],
-                                            workspace=self.workspace)
+                        self._create_worktree(name)
             except run_worktree.WorktreeError:
                 ready = False
+            # ready = every worktree exists AND its base is nameable (recorded branch)
+            branches = self._read_json(self.store.paths.run / "integration_branches.json", {}) or {}
+            ready = ready and set(self.effective_repos()) == set(self.contract["expected_repos"]) \
+                and all(isinstance(branches.get(n), str) for n in self.contract["expected_repos"])
         event, _ = self.store.append_new(
             writer=self.authority.writer("cli"), kind="resume", at=_now(),
             ordinal=len(self.store.read_events()) + 1, payload={"worktree_ready": ready})
@@ -1296,6 +1400,8 @@ class RunEngine:
 
     def push_status(self, *, manual_landing: bool = False) -> dict[str, Any]:
         import dataclasses
+        # a run a person landed stays a manual landing on every later recompute
+        manual_landing = manual_landing or self.projection().get("landing") == "human_override"
         context = self.check_context()
         if manual_landing:
             context = dataclasses.replace(
@@ -1652,9 +1758,9 @@ class RunEngine:
         self._refresh_completed_audit()
         return self.projection()
 
-    def _refresh_completed_audit(self) -> None:
-        """The run-directory audit, REPORT and card through COMPLETED (§B8, §E9.5): at
-        REFLECT's end, and again when a person lands a completed(not_landed) run (D5)."""
+    def landed_commits(self) -> dict[str, str]:
+        """repo -> the commit this run landed there (the landing progress files), or
+        the land event's commit as ``primary`` for a run recorded before them."""
         commits: dict[str, str] = {}
         for progress_path in sorted((self.run_dir / "artifacts").glob("landing-progress-*.json")):
             progress = self._read_json(progress_path, {})
@@ -1668,6 +1774,12 @@ class RunEngine:
         if not commits:
             commits = {"primary": event["payload"]["commit"] for event in self.store.read_events()
                        if event.get("kind") == "land" and event.get("payload", {}).get("commit")}
+        return commits
+
+    def _refresh_completed_audit(self) -> None:
+        """The run-directory audit, REPORT and card through COMPLETED (§B8, §E9.5): at
+        REFLECT's end, and again when a person lands a completed(not_landed) run (D5)."""
+        commits = self.landed_commits()
         value = self.build_audit(through="COMPLETED", commits=commits, persist=True)
         from core.run_protocol import audit as audit_protocol
         DocumentStore._atomic(self.run_dir / "REPORT.md",

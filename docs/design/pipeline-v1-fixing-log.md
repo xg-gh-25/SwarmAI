@@ -204,3 +204,43 @@ trivial 不变：`tests/fixtures/pipeline_v1_trivial_profile.json` 是改动前 
 | Token Cost | 有阶段级估算；measure-usage 累加；专家用量重复计算 | 最新一次计量替换之前的；有 transcript 计量时不再加专家记录；没计量为 BLOCK（D3）；handout prompt 进 blob（F-4） | `test_run_protocol_audit.py` 的替换 / 未知 / BLOCK 测试 | PARTIAL | Token 基线为 null（旧 run 没有实测）；需要 v1 run 的实测数据；跨 run 答案复用（F-7）待模型 id |
 
 **总体：PARTIAL。** 没有 BLOCK：Run Isolation 只有一项已知、已记录的进程内签名限制（WARN），Quality 和 Autonomy 有测试证据。Speed 和 Token Cost 的改进要在 XG 重建、重启后由真实 v1 run 实测，现在不能声称已验证。
+
+## 11. 设计符合性修复 K1：事实绑定层（2026-10-23 符合性方案）
+
+依据：`2026-10-23-pipeline-v1-conformance-fixing-spec.md` §3 K1。根因 R-A：判定只看证据有没有，不看证据对不对、是不是当前事实。
+
+**做法：** 新增 `core/run_protocol/facts.py`，作为 check 读取证据的唯一入口。`engine.check_context` 只从这里取 final、base、必需验证和 decision。
+
+| finding | 修法 |
+|---|---|
+| F1 refuted refs | `facts.resolve_refs`：每条 ref 必须能解析成三种之一：当前 code tree 里存在的 `path:L[-M]`、本 run 的 `event:<id>`、bound final 里有结果的 `test:<nodeid>`。解析结果写进 proof 事件；`findings.fold` 只接受已解析的 ref |
+| F2 LG-5 自证 | `facts.required_validations` 读 base 上的 `validations.json`，按改动路径选出必需项；final 自己的列表只表示"跑了什么" |
+| F3 QX-2 | `cache.PIPELINE_CODE` 作为唯一清单，同时决定 pipeline hash 和 `facts.RULE_PATHS`，`pipeline_test.py` 也包含在内；final 用的 pipeline hash 和 contract 不一致时，同样作为 QX-2 的 push 理由 |
+| F4 旧树 final | `facts.bind_final`：final 的 code_tree 和 base 必须都等于当前值，否则 check 拿到的 final 为空；不一致的原因写进 LG-1 的 detail |
+| F5 base 退回 HEAD | `facts.resolve_base` 是 engine 和 runner 唯一的 base 规则。isolated repo 没有记录 integration branch 时直接报错，不再用 `symbolic-ref` 或 HEAD 猜。`runner.run_base` 删除 |
+| F14（并入 K1） | `engine._create_worktree` 是唯一创建 worktree 的地方，同时记录 integration branch；`ensure_worktrees` 和 `resume` 都走它 |
+| F6 DC-1 空输入 | decision 内容写进 decision 事件的 `decision_json` blob（`FORCED_BLOB_KEYS`）。DC-1、`pending_decision`、聊天卡片回答、dashboard 都从事件读，`artifacts/decision-*.json` 不再写入。DC-1 的 known_refs 和提问时用同一个函数 `engine.decision_refs` 生成 |
+| F7 Token 自证 | `total_calls` 以"模型会话"为单位，从事件计数：主 agent 算 1，每个 `answer` 算 1。只有对应的计量存在时才算 accounted：主 agent 要有 transcript 计量，每个专家要有自己的 SubagentStop 记录。accounted 少于 total 时判 WARN |
+| F10 baseline 冲突 | `_v1_cache_conflict(kind)` 统一处理 test 和 baseline 两种 cache 的冲突，都写签名的 integrity 事件（`cross_run_baseline_cache`） |
+| L3 TS-3 | trace 的覆盖要求扩到 R、P、F 全部（设计 §A2.3；TS-3 只记录，不影响判定） |
+
+**先写的失败测试：** `tests/test_pipeline_v1_conformance_k1.py` 里的 6 个端到端用例，在修复前的代码上全部失败，失败原因都对；`test_run_protocol_audit.py::test_partial_metering_cannot_read_as_complete`；`test_run_protocol_cache.py::test_a_baseline_conflict_is_a_signed_integrity_event`。
+
+**删除：** `runner.run_base`、`check_context` 里写死的 `validation_rule_paths`、engine 里重复的 decision refs 构造、landing 里 skip-tests 时自己算 base 的那一份。
+
+**独立审查（两轮）：**
+
+| 轮次 | 发现 | 修法 |
+|---|---|---|
+| R1 HIGH | QX-2 从错误的字段读 pipeline hash，导致每个 run 都不 push ready | 改读 `provenance.pipeline_code_hash`；补一个"未改动的 run 必须通过 QX-2"的正向测试 |
+| R1 HIGH | isolated run 缺 worktree 时退回 main checkout 和 HEAD | `engine._current_code` 规定三种情况：已落地的 repo 取落地 commit 的树（`git_tree.commit_code_tree`），base 取它的父 commit；isolated 只看自己的 worktree，缺失即视为未知；shared 看 main。`pipeline_test._v1_runner` 拒绝把 isolated run 指向 main checkout |
+| R1 HIGH / R2 HIGH | refutation 写入后不随代码树失效；多仓时不同 repo 的 tree id 可能相同 | proof 事件记下所属 repo；`facts.stale_closures` 只拿该 repo 的当前树比较，没记 repo 的 proof 只在单仓 run 中成立；RV-2 会拦下关闭依据已过期的 HIGH finding；`test:` 类型的 ref 只在该 repo 的 final 里解析 |
+| R1 HIGH | 改动前写下的 decision 事件没有 `decision_json` | 该字段改为 optional，旧日志仍能折叠；DC-1 遇到没有内容的 decision 判失败 |
+| R1 MED | pipeline 代码清单太窄 | `PIPELINE_CODE` 加入 `run_worktree`、`evidence_seal`、`pipeline_human`、`run_owner_gate` |
+| R1 MED | Token 会话数漏算主 agent 多轮、崩溃的专家 | 会话数 = 1 + handout 数 − answer_reuse 数；专家是否 accounted 以它自己的 SubagentStop 记录为准 |
+| R1 MED / R2 MED | worktree 创建和 branch 记录不是原子操作 | 先记录 branch 再创建 worktree；实际 branch 与记录不一致时删掉刚建的 worktree；resume 要求每个 worktree 都存在且已记录 branch |
+| R1 MED | `decision-answers.json` 成了第二份事实 | 删掉这份写入 |
+| R2 MED | `human_override` 的 run 在 COMPLETED 重算后 push_ready 变回 true | 是否评估 MD-3 由折叠出的 landing 决定，不再由调用参数决定 |
+| R1 LOW | 遗留死代码 `_changed_paths` | 删除 |
+
+**新增测试：** `tests/test_run_protocol_facts.py`；`test_pipeline_v1_conformance_k1.py` 新增 4 个审查回归用例；`test_run_protocol_lifecycle.py` 新增 DC-1 处理旧 decision 的用例。

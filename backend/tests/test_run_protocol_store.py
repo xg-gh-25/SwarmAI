@@ -25,7 +25,7 @@ def _decision(store, authority, request_id):
     return store.append_new(
         writer=authority.writer("cli"), kind="decision", at=AT,
         payload={"request_id": request_id, "decision_kind": "requirement_ambiguity",
-                 "document": "REQUIREMENTS"},
+                 "document": "REQUIREMENTS", "decision_json": "{}"},
     )
 
 
@@ -76,7 +76,8 @@ def test_cross_run_event_and_unsafe_ids_are_rejected(tmp_path):
     other = AuditStore(tmp_path / "audit", "run_other", authority)
     event, _ = other.append_new(
         writer=authority.writer("cli"), kind="decision", at=AT,
-        payload={"request_id": "q", "decision_kind": "x", "document": "d"})
+        payload={"request_id": "q", "decision_kind": "x", "document": "d",
+                 "decision_json": "{}"})
     with pytest.raises(StoreError, match="another run"):
         store.append(event)
     with pytest.raises(StoreError, match="run_id"):

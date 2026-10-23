@@ -196,6 +196,7 @@ def record_decision(store: AuditStore, value: Mapping[str, Any], *,
     event, _ = store.append_new(
         writer=store.authority.writer("cli"), kind="decision", at=at,
         payload={"request_id": value["request_id"], "decision_kind": value["kind"],
-                 "document": document},
+                 "document": document,
+                 "decision_json": json.dumps(dict(value), sort_keys=True, ensure_ascii=False)},
     )
     return event
