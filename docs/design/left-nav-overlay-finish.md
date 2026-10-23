@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: DESIGN v1 — XG 2026-10-23 要求"剩下没做的全做"，按本设计实施
+status: DONE — A–D 全部落地（2026-10-23），结果见 §7
 related: left-nav-overlay-single-source.md（主设计，已 DONE；本文是它 §11、§12 列出的未做项）
 ---
 
@@ -137,3 +137,33 @@ overlayHostE2E、改到的 overlay 的测试）、tsc、eslint、ff-only 合入�
 - Jobs、Hive：失败时从"空列表"变成出错框 + Retry。
 - Community、Need You 的加载中：样式统一（位置不变）。
 - 各空状态的文案和图标不变，只统一居中和字号。
+
+## 7. 结果（2026-10-23）
+
+| 项 | 提交 | 结果 |
+|---|---|---|
+| B | `9142a01a` | `todoWorkPacket.ts`；ToDoOverlay 成为独立 chunk（33 kB），首包 3,771,284 → 3,737,362 B；新增静态测试：overlay 之外的模块不得静态引用 overlay 文件 |
+| C | `db59328d` | `build` = `tsc -b && vite build && node scripts/check-bundle-size.mjs`；上限 3,832 kB（3,650 kB +5%）；上限调低时构建失败并说明怎么改 |
+| A | `4ddb6fa5` | `OverlayState.tsx`；Need You 改 `overlayQuery.needsYou` + AlertsPill 悬停预取 |
+| A | `670a494d` | Community、Artifacts、Capabilities 出错有 Retry |
+| A | `f623516c` | Jobs、Hive 失败时显示出错 + Retry，不再像空列表 |
+| A | `281bd525` | 其余首次加载出错框全部换成 `OverlayError`（ToDo、Pipeline、Pollinate、Library、C&M、Brain Hub）；新增静态测试：OverlayState 之外不得手写出错框 |
+| D | `9d502862` | `overlayTiming.ts`，`window.__overlayTimings` |
+
+和设计不同的地方：
+- Artifacts 的加载骨架和带 emoji 的空状态保留（骨架比一行字更贴合列表；空状态的图标是它自己的）。
+- Library 的出错框原来贴边，现在和其他 overlay 一样居中、最宽 `max-w-sm`。
+- C&M 的检索出错原来没有 Retry，补上了。
+- 计时的"数据到达"按 overlay 的 `NAV_PREFETCH` 查询何时全部有数据算（读 TanStack Query 缓存），
+  没有用界面上加载态的消失：有几个 overlay 首次加载时界面上不显示加载态，按界面算会不准。
+
+### 真机计时：XG 的操作步骤
+
+1. `./dev.sh`，等窗口出来。
+2. 打开 DevTools（Cmd+Option+I）→ Console。
+3. 对每个 nav 项（和 Need You）：先**不悬停直接点开**，等内容出来，关掉；再**悬停 1 秒后点开**，关掉。
+   每个 id 只保留最近一次，所以想看冷打开就看第一轮后的表，想看预取效果就看第二轮后的表。
+4. 控制台执行 `console.table(window.__overlayTimings)`，把表贴回来。
+
+列的意思：`code_ms` 打开 → 内容代码加载完并挂载；`data_ms` 打开 → 首屏数据全部到达（缓存命中为 0）；
+`cache` hit / miss / n/a（n/a = 该 overlay 没有预取项，如 Settings、Workspace）。

@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: DONE — P0–P4 已落地（2026-10-23），契约测试 KNOWN 为空；未做的见 §11、§12（OverlayState、首包检查接入构建、真机计时）
+status: DONE — P0–P4 已落地（2026-10-23），契约测试 KNOWN 为空；§11、§12 列的未做项已由 left-nav-overlay-finish.md 完成
 related: ~/.swarm-ai/SwarmWS/Knowledge/Designs/2026-08-02-navcard-overlay-uxui-standard.md（现行标准，部分已过时，见 §7）, 2026-08-04-overlayhost-subsystem-design.md（OverlayHost，已落地）, chat-transcript-single-source.md（同一套方法：先列问题、归根因、先写测试）
 ---
 
