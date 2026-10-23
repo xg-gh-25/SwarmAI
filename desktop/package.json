@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:full": "bash scripts/dev-with-backend.sh",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/check-bundle-size.mjs",
     "check:bundle": "node scripts/check-bundle-size.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
