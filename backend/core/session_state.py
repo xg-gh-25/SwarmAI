@@ -161,6 +161,9 @@ async def session_state_entry(unit) -> dict:
 #: per session, the number of the newest push started; an older one that finishes
 #: later is dropped, so the last state published is the newest read
 _LATEST: dict[str, int] = {}
+#: sessions with a push scheduled whose read has not started: a burst of changes
+#: (several queued sends) shares that one read instead of one read each
+_SCHEDULED: dict[str, "asyncio.Task"] = {}
 
 
 def publish(router, session_id: str) -> None:
@@ -168,9 +171,13 @@ def publish(router, session_id: str) -> None:
     unit = router.get_unit(session_id) if router is not None else None
     if unit is None:
         return
+    waiting = _SCHEDULED.get(session_id)
+    if waiting is not None and not waiting.done():
+        return   # the scheduled push has not read yet: it will see this change
     n = _LATEST[session_id] = _LATEST.get(session_id, 0) + 1
 
     async def go():
+        _SCHEDULED.pop(session_id, None)   # changes from here on schedule a new push
         try:
             from . import session_events
             entry = await session_state_entry(unit)
@@ -180,7 +187,7 @@ def publish(router, session_id: str) -> None:
         except Exception as exc:  # noqa: BLE001 — a display aid
             logger.debug("session_state.publish_failed session=%s: %s", session_id, exc)
     try:
-        asyncio.get_running_loop().create_task(go())
+        _SCHEDULED[session_id] = asyncio.get_running_loop().create_task(go())
     except RuntimeError:
         pass   # no loop (a sync test): nothing to push to
 

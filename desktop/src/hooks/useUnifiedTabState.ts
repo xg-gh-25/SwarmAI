@@ -24,7 +24,7 @@
  */
 
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
-import type { Message, UnifiedAttachment, ContentBlock, SystemPromptMetadata, CompactionGuardEvent, TurnPhase, SessionActivity } from '../types/index';
+import type { Message, UnifiedAttachment, SystemPromptMetadata, CompactionGuardEvent, TurnPhase, SessionActivity } from '../types/index';
 import type { PendingQuestion, OpenTab } from '../pages/chat/types';
 import type { ContextWarning } from './useChatStreamingLifecycle';
 import { INITIAL_STATE, type StreamingState } from './streaming-machine';
@@ -209,28 +209,28 @@ export interface UnifiedTab {
     /** the handed-back send's terminal output: the retry carries it again */
     terminalContext?: { bufferTail: string; cwd: string } | null;
   } | null;
-  /** Queued message payload — stored when user sends while streaming.
-   *  Drained automatically when the current stream completes or is stopped. */
-  queuedMessage?: {
-    text: string;
-    attachments: UnifiedAttachment[];
-    displayContent: ContentBlock[];
-    messageId: string;
-    /** the message's client_id: every send of it uses this one (services/clientId) */
-    clientId?: string;
-  };
-  /** Timestamp when queuedMessage was set. Used by reconcile poll to detect
-   *  stale queues (>60s = SSE event lost, drain deadlock). */
-  _queuedAt?: number;
+  /** The session's queue as last read (session_state `pending`, oldest first),
+   *  when it was read (local time) and the push seq it came with: the tab's
+   *  "Queued" marks follow it (docs/design/chat-turn-liveness.md S3). */
+  _serverQueue?: import('../types').PendingQueueEntry[];
+  _serverQueueAt?: number;
+  _serverQueueSeq?: number;
+  /** false when the last list was capped (pending_count > its length): marks of
+   *  messages missing from it are kept, not cleared */
+  _serverQueueComplete?: boolean;
+  /** the session the queue fields above belong to (a new session resets them) */
+  _serverQueueSid?: string;
+  /** a send of this tab is reading its attachments: another Send waits for it
+   *  (the draft is still in the composer, a second click would send it twice) */
+  _preparingSend?: number;
+  /** Messages this tab sent while busy, shown queued until a list read after
+   *  their `accepted` (value: its time; undefined until then) decides. */
+  _queuedLocal?: Map<string, number | undefined>;
   /** The newest transcript rev this tab has seen (feed envelopes, since_rev reads);
    *  a resync asks the server what changed after it (hooks/transcriptFeed). */
   transcriptRev?: number;
   /** Timestamp of last sessionStorage checkpoint write (throttle: max 1 per 10s). */
   _lastCheckpointTime?: number;
-  /** True between result-event (hasQueuedMessage) and drain completion.
-   *  Signals reconcile poll: "backend is IDLE but drain is intentionally
-   *  holding streaming state — do NOT force-clear." */
-  drainPending?: boolean;
   /** True when backend returned SESSION_BUSY — the message is pending on the
    *  server. Send button is disabled, "Waiting..." indicator shown. Cleared when
    *  the drained turn completes (session subscription) or the reconcile's drain

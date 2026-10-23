@@ -1584,6 +1584,9 @@ export interface StreamingStateEntry {
   waitingInput: boolean;
   /** Count of server-side persisted-but-unsent (pending) messages for this session. */
   pendingCount: number;
+  /** the `pending` list holds every queued row (an explicit count says so);
+   *  absent = unknown, so a missing row means nothing */
+  pendingComplete?: boolean;
   /**
    * Authoritative AskUserQuestion payload — lets the frontend re-surface a
    * question whose original SSE event was lost. Null unless waiting_input.
@@ -1602,6 +1605,20 @@ export interface StreamingStateEntry {
    *  Absent from a backend older than the field. */
   activity?: SessionActivity;
   activitySeq?: number;
+  /** The session's queued messages, oldest first (backend session_pending.list_pending,
+   *  capped at 50): the one queue (docs/design/chat-turn-liveness.md S3). */
+  pending?: PendingQueueEntry[];
+}
+
+/** One queued message of a session as the server holds it. ``claimed``: a drain
+ *  has taken it (being delivered, no longer cancellable). */
+export interface PendingQueueEntry {
+  id: string;
+  clientId: string | null;
+  pendingSeq: number;
+  preview: string;
+  createdAt: string;
+  claimed: boolean;
 }
 
 // ============== Health Monitor Types ==============

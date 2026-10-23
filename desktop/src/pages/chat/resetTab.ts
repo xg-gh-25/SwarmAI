@@ -26,7 +26,10 @@ export function resetTabToNewSession(
     store.replace([]);
   }
   updateTabState(tabId, { sessionId: undefined, messages: [], pendingQuestion: null,
-    _unsentRequests: undefined, _openSendCid: undefined });
+    _unsentRequests: undefined, _openSendCid: undefined,
+    _serverQueue: undefined, _serverQueueAt: undefined, _serverQueueSeq: undefined,
+    _serverQueueComplete: undefined, _serverQueueSid: undefined, _queuedLocal: undefined,
+    _preparingSend: undefined, _sendToken: undefined });
   tabNoticeStore.syncSession(tabId, undefined);
   return { reset: true, isActive: activeTabId === tabId };
 }

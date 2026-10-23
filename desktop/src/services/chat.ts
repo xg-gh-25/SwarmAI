@@ -31,6 +31,8 @@ interface RawStreamingStateEntry {
   /** docs/design/chat-turn-liveness.md S1 */
   activity?: string;
   activity_seq?: number;
+  pending?: { id: string; client_id: string | null; pending_seq: number; preview: string;
+    created_at: string; claimed: boolean }[];
   /** core/background_agents.py snapshot (camelCase keys already) */
   background_agents?: unknown[];
 }
@@ -569,6 +571,13 @@ function toStreamingStateEntry(raw: RawStreamingStateEntry): StreamingStateEntry
     ...(typeof raw.activity === 'string' && typeof raw.activity_seq === 'number'
       ? { activity: raw.activity as SessionActivity, activitySeq: raw.activity_seq }
       : {}),
+    ...(Array.isArray(raw.pending)
+      ? { pendingComplete: typeof raw.pending_count === 'number' && raw.pending_count <= raw.pending.length,
+          pending: raw.pending.map((p) => ({
+          id: p.id, clientId: p.client_id ?? null, pendingSeq: p.pending_seq,
+          preview: p.preview ?? '', createdAt: p.created_at, claimed: !!p.claimed,
+        })) }
+      : {}),
   };
 }
 
@@ -660,6 +669,20 @@ export const chatService = {
     }
     backgroundAgentsStore.applySnapshot(bg);
     return out;
+  },
+
+  /** Cancel a queued message (docs/design/chat-turn-liveness.md S3): 'cancelled',
+   *  'claimed' (a drain took it — it is being sent: 409) or 'missing' (404). */
+  async cancelPending(sessionId: string, clientId: string): Promise<'cancelled' | 'claimed' | 'missing'> {
+    try {
+      await api.delete(`/chat/sessions/${encodeURIComponent(sessionId)}/pending/${encodeURIComponent(clientId)}`);
+      return 'cancelled';
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 409) return 'claimed';
+      if (status === 404) return 'missing';
+      throw err;
+    }
   },
 
   /** One session's state as the poll and the subscription's `session_state`

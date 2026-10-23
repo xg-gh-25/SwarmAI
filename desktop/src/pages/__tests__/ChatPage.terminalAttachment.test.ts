@@ -27,7 +27,7 @@ describe('ChatPage terminal output rides its own message', () => {
 
   it('every terminalContext in a request is that message\'s own', () => {
     const uses = [...src.matchAll(/terminalContext:\s*(\w+)/g)].map((m) => m[1]);
-    expect(uses.length).toBeGreaterThanOrEqual(4);   // send, its resend, the queue drain, the hand-back retry
+    expect(uses.length).toBeGreaterThanOrEqual(3);   // send, a busy send, the hand-back retry
     for (const v of uses) {
       if (v === 'retryTerminal') {
         // the QUEUE_TIMEOUT retry re-sends the message the server handed back
@@ -36,12 +36,12 @@ describe('ChatPage terminal output rides its own message', () => {
       }
       const decl = new RegExp(`const ${v} = terminalContextOf\\((\\w+(?:\\.\\w+)?)\\)`).exec(src);
       expect(decl, `${v} must be const ${v} = terminalContextOf(...)`).not.toBeNull();
-      expect(['currentAttachments', 'queued.attachments']).toContain(decl![1]);
+      expect(['currentAttachments', 'usable']).toContain(decl![1]);
     }
   });
 
-  it('the queue drain uses the QUEUED message\'s attachments, the send its own', () => {
-    expect(src).toMatch(/const drainTerminal = terminalContextOf\(queued\.attachments\)/);
+  it('a busy send uses its own attachments, the send its own', () => {
+    expect(src).toMatch(/const terminal = terminalContextOf\(usable\)/);
     expect(src).toMatch(/const sendTerminal = terminalContextOf\(currentAttachments\)/);
   });
 

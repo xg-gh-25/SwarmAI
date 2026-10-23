@@ -46,6 +46,13 @@ describe('resetTabToNewSession', () => {
     expect(resetTabToNewSession(map, 'A', 'A', update).isActive).toBe(true);
   });
 
+  it('a send still reading its attachments does not survive the reset', () => {
+    Object.assign(map.get('B')!, { _sendToken: 1, _preparingSend: 2 });
+    resetTabToNewSession(map, 'B', 'A', update);
+    expect(map.get('B')!._sendToken).toBeUndefined();
+    expect(map.get('B')!._preparingSend).toBeUndefined();
+  });
+
   it('does nothing for a closed tab', () => {
     expect(resetTabToNewSession(map, 'gone', 'A', update)).toEqual({ reset: false, isActive: false });
     expect(map.get('A')!.sessionId).toBe('sA');

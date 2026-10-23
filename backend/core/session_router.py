@@ -4079,8 +4079,16 @@ class SessionRouter:
         end); and if it already ended while the row was converted, kick now."""
         hub = session_events.hub()
         hub.note_waiter(session_id)
+        self.publish_queue(session_id)
         if not self.is_busy(session_id) and hub.take_waiters(session_id):
             self.kick(session_id)
+
+    def publish_queue(self, session_id: str) -> None:
+        """The session's queue changed: push its state (it carries the queue) to its
+        tabs, which show the queue from it (docs/design/chat-turn-liveness.md S3).
+        Scheduled, never raises (core/session_state.publish)."""
+        from . import session_state
+        session_state.publish(self, session_id)
 
     def kick(self, session_id: str) -> None:
         """The session may be free now: try its pending messages and its queued
@@ -4415,6 +4423,7 @@ class SessionRouter:
                 # nothing of this session frees it (it never got a slot): the next
                 # slot that frees kicks it (docs/design/chat-turn-liveness.md S1 v4)
                 self._awaiting_slot.add(session_id)
+                self.publish_queue(session_id)
             else:
                 error_event["retryPayload"] = await self._hand_back_send(
                     client_id, session_id, agent_id, user_message, content, persisted_msg_id,
@@ -5168,6 +5177,7 @@ class SessionRouter:
                         # the unit itself was busy: its IDLE edge (or the CLI's idle
                         # report) kicks the drain; a turn of it ending kicks too
                         session_events.hub().note_waiter(session_id)
+                        self.publish_queue(session_id)
                         logger.info(
                             "session_router.session_busy_pending session_id=%s "
                             "msg=%s seq=%s",

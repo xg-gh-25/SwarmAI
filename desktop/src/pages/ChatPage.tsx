@@ -26,8 +26,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import type { Message, ContentBlock, Agent, AgentCreateRequest, ChatSession, ChatRequest } from '../types';
-import { MAX_ATTACHMENTS } from '../types';
+import type { Message, ContentBlock, Agent, AgentCreateRequest, ChatSession, ChatRequest, UnifiedAttachment } from '../types';
 import { newClientId } from '../services/clientId';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
@@ -54,6 +53,8 @@ import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState } from '../hooks/useUnifiedTabState';
 import { canContinueTurn } from '../hooks/streaming-guards';
 import { retrySend } from './chat/retrySend';
+import { draftToRestore } from './chat/draftToRestore';
+import { tf } from './chat/tf';
 import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
 import { useContextUsageRefresh } from '../hooks/contextUsage';
 import { shouldQueueSend } from '../hooks/streaming-guards';
@@ -64,7 +65,7 @@ import { resetTabToNewSession as resetTabById } from './chat/resetTab';
 import { tabNoticeStore, type NoticeTarget } from '../stores/tabNoticeStore';
 import { terminalLocation } from '../stores/terminalLocation';
 import { ATTACH_TERMINAL_EVENT } from '../stores/TerminalStore';
-import { mergeTerminalAttachments, terminalContextOf } from '../utils/terminalAttachment';
+import { terminalContextOf } from '../utils/terminalAttachment';
 // HistoryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 // parseWorkPacket still used by ChatPage's dispatch (linked_context → work packet);
 // ToDoOverlay itself retired (M4): migrated to the OverlayHost registry.
@@ -309,7 +310,8 @@ export default function ChatPage() {
 
   // File attachment — unified hook replaces both useFileAttachment and LayoutContext.attachedFiles
   const { attachments, addFiles, addWorkspaceFiles, addTerminalText, removeAttachment, clearAll: clearAttachments,
-    isProcessing: isProcessingFiles, error: fileError, canAddMore, restoreAttachments } = useUnifiedAttachments(
+    restoreAttachments,
+    isProcessing: isProcessingFiles, error: fileError, canAddMore } = useUnifiedAttachments(
     activeTabId, tabMapRef, selectedAgentId, effectiveBasePath
   );
 
@@ -339,11 +341,6 @@ export default function ChatPage() {
     };
   }, [addWorkspaceFiles]);
 
-// Ref-bridge for the queue drain callback: drainQueuedMessage depends on
-  // createStreamHandler et al. from the lifecycle hook, so it can't be passed
-  // directly at hook-construction time. Instead we pass a stable wrapper that
-  // reads from this ref, then update the ref once drainQueuedMessage is defined.
-  const drainQueueRef = useRef<(tabId: string) => void>(() => {});
   // Same forward-ref pattern for the recovery_exhausted toast's "Start fresh
   // session" action — handleNewChat is defined below the hook call, so the hook
   // gets a stable wrapper that reads this ref.
@@ -374,6 +371,8 @@ export default function ChatPage() {
     setLocalSending,
     applyActivity,
     noteSend,
+    syncQueuedBadges,
+    rebindQueue,
     pendingStreamTabs,
     clearPendingStreamTab,
     bumpStreamingDerivation,
@@ -398,7 +397,6 @@ export default function ChatPage() {
     updateTabStatus,
     tabMapRef,
     activeTabIdRef,
-    onDrainQueue: (tabId: string) => drainQueueRef.current(tabId),
     onStartFresh: (tabId: string) => startFreshRef.current(tabId),
     // Backfill a dispatched ToDo's session_id the moment its tab binds a session
     // — fires for BACKGROUND tabs too (the active-only effect misses those).
@@ -2143,6 +2141,119 @@ export default function ChatPage() {
     return true;
   }, [insertOptimisticMessages, activeTabIdRef]);
 
+  /** Give a draft back to the tab it was taken from (a send that did not happen):
+   *  into that tab's composer, never another tab's, and never over what the user
+   *  has typed or attached there since. */
+  const restoreDraft = useCallback((tabId: string, text: string, atts: UnifiedAttachment[]) => {
+    const tab = tabMapRef.current.get(tabId);
+    if (!tab) return;
+    const active = activeTabIdRef.current === tabId;
+    const back = draftToRestore(
+      { text: active ? inputValueRef.current : (inputValueMapRef.current.get(tabId) ?? ''),
+        attachments: tab.attachments ?? [] },
+      { text, attachments: atts });
+    if (back.text !== undefined) {
+      if (active) setInputValue(back.text);
+      else inputValueMapRef.current.set(tabId, back.text);
+    }
+    if (back.attachments) {
+      if (active) restoreAttachments(back.attachments);
+      else tab.attachments = back.attachments;
+    }
+  }, [tabMapRef, activeTabIdRef, setInputValue, restoreAttachments]);
+
+  /**
+   * Send while a turn of the session is in progress: POST the message on its own
+   * (no stream handlers of this tab, no stream generation): the backend queues it
+   * (`accepted` with ``queued``, then SESSION_BUSY) or, if the session freed in
+   * between, runs it — that turn then reaches the tab on the subscription like any
+   * drained turn. The bubble shows "Queued" until the server's queue decides; an
+   * unaccepted send is "Not sent · Retry" (P2b).
+   */
+  const sendWhileBusy = useCallback(async (tabId: string, text: string, attachments: UnifiedAttachment[]) => {
+    const tab = tabMapRef.current.get(tabId);
+    const sid = tab?.sessionId;
+    if (!tab || !sid || !selectedAgentId) return;
+    const usable = (attachments || []).filter((a) => !a.error && !a.isLoading);
+    const hasAtt = usable.length > 0;
+    // The draft leaves the composer now (this tab is the active one); if the send
+    // does not happen it goes back to this tab (restoreDraft), never elsewhere.
+    setInputValue('');
+    clearAttachments();
+    const prep = Date.now() + Math.random();
+    tab._preparingSend = prep;
+    let content: ContentBlock[] = [];
+    let failed = false;
+    try {
+      content = await buildContentArray(text, usable);   // the files as they are now
+    } catch (err) {
+      console.error('[ChatPage] busy send: reading attachments failed', err);
+      failed = true;
+    }
+    // Stop or a reset took the preparation away: not sent
+    const stillMine = tab._preparingSend === prep;
+    if (stillMine) tab._preparingSend = undefined;
+    // failed, stopped, closed, reset or rebound to another session meanwhile: not sent
+    if (failed || !stillMine || tabMapRef.current.get(tabId) !== tab || tab.sessionId !== sid || content.length === 0) {
+      restoreDraft(tabId, text, attachments);
+      return;
+    }
+    rebindQueue(tabId);
+    const clientId = newClientId();
+    const trimmed = text.trim();
+    const display: ContentBlock[] = [{ type: 'text', text: trimmed || '[Attachments]' }];
+    if (hasAtt && trimmed) display.push({ type: 'text', text: `📎 ${usable.map((a) => a.name).join(', ')}` });
+    const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: sid });
+    store.append({ id: clientId, role: 'user', content: display, timestamp: new Date().toISOString(),
+      metadata: { client_id: clientId }, isQueued: true });
+    if (!tab._queuedLocal) tab._queuedLocal = new Map();
+    tab._queuedLocal.set(clientId, undefined);
+    const terminal = terminalContextOf(usable);
+    const request: ChatRequest = {
+      agentId: selectedAgentId,
+      ...(hasAtt ? { content } : { message: text }),
+      sessionId: sid,
+      enableSkills,
+      enableMCP,
+      editorContext: editorContextFor(tabId),
+      ...(terminal && { terminalContext: terminal }),
+      clientId,
+    };
+    if (!tab._unsentRequests) tab._unsentRequests = new Map();
+    tab._unsentRequests.set(clientId, request);
+    let acceptedHere = false;
+    const settle = () => {
+      const t = tabMapRef.current.get(tabId);
+      if (!t) return;
+      if (!acceptedHere) {
+        // never accepted: "Not sent · Retry" (the request stays for Retry)
+        t._queuedLocal?.delete(clientId);
+        const st = messageStoreRegistry.get(tabId);
+        if (st?.messages.some((m) => m.id === clientId)) {
+          st.updateById(clientId, (m) => ({ ...m, sendState: 'failed', isQueued: undefined }));
+        }
+      }
+      syncQueuedBadges(tabId);
+    };
+    chatService.streamChat(
+      request,
+      (ev) => {
+        if (ev.type !== 'accepted') return;   // a turn it started renders from the subscription
+        acceptedHere = true;
+        const t = tabMapRef.current.get(tabId);
+        if (!t) return;
+        t._unsentRequests?.delete(clientId);
+        if ((ev as { queued?: boolean }).queued) t._queuedLocal?.set(clientId, Date.now());
+        else t._queuedLocal?.delete(clientId);   // it runs now: not queued
+        syncQueuedBadges(tabId);
+      },
+      () => settle(),
+      () => settle(),
+      () => settle(),
+      streamLivenessFor(tabId),
+    );
+  }, [tabMapRef, selectedAgentId, enableSkills, enableMCP, setInputValue, clearAttachments, buildContentArray, editorContextFor, syncQueuedBadges, rebindQueue, restoreDraft, streamLivenessFor]);
+
   // Handle send message (Req 7.1 — memoized with useCallback, volatile deps via refs)
   const handleSendMessage = useCallback(async () => {
     const messageText = inputValueRef.current;
@@ -2158,143 +2269,18 @@ export default function ChatPage() {
     // Hard guard: session creation in-flight — the tab's first POST is open and it
     // has no session yet; once it has one, the queue path below takes the send.
     if (!activeTabForGuard?.sessionId && activeTabForGuard?.localSending) return;
+    // A send of this tab is still reading its attachments (its draft is still in
+    // the composer): a second Send now would send the same text twice.
+    if (activeTabForGuard?._preparingSend) return;
 
-    // ──── QUEUE PATH: session is busy or in an uncertain post-disconnect state ──
-    // shouldQueueSend covers ALL states where the backend session may still be
-    // busy: isStreaming, isWaitingForBusy (SESSION_BUSY poll), isReconnecting,
-    // _healGraceActive, and _postDisconnectUncertain (heal-grace expired but the
-    // backend subprocess may still be streaming a long agent turn). Previously
-    // isWaitingForBusy hit a `return` that DROPPED the message, and the queue
-    // path only fired on isStreaming — so a post-disconnect send escaped to a
-    // normal send → SESSION_BUSY → orphan delete → silent loss. Queue instead.
-    if (activeTabForGuard && shouldQueueSend(activeTabForGuard)) {
-      const trimmedText = messageText.trim();
-      if (!trimmedText && !hasAttachments) return;
-
-      const displayText = trimmedText || '';
-      const displayContent: ContentBlock[] = [];
-      if (displayText) {
-        displayContent.push({ type: 'text', text: displayText });
-      }
-      if (hasAttachments) {
-        displayContent.push({ type: 'text', text: `📎 ${currentAttachments.filter((a) => !a.error && !a.isLoading).map((a) => a.name).join(', ')}` });
-      }
-
-      // APPEND PATH: if a message is already queued, concatenate new text
-      // and merge attachments. User's first thought shouldn't vanish silently.
-      const existingQueued = activeTabForGuard.queuedMessage;
-      if (existingQueued) {
-        const combinedText = trimmedText
-          ? `${existingQueued.text}\n\n${messageText}`
-          : existingQueued.text;
-        const newAttachments = (currentAttachments || []).filter((a) => !a.error && !a.isLoading);
-        // Terminal chips fold into one before the limit, so appending never drops
-        // terminal output (utils/terminalAttachment.mergeTerminalAttachments).
-        const combinedAttachments = mergeTerminalAttachments(
-          existingQueued.attachments,
-          newAttachments,
-          MAX_ATTACHMENTS, // enforce limit across appends
-        );
-        const combinedDisplayText = trimmedText
-          ? `${existingQueued.text.trim()}\n\n${trimmedText}`
-          : existingQueued.text.trim();
-        const combinedDisplayContent: ContentBlock[] = [];
-        if (combinedDisplayText) {
-          combinedDisplayContent.push({ type: 'text', text: combinedDisplayText });
-        }
-        if (combinedAttachments.length > 0) {
-          combinedDisplayContent.push({
-            type: 'text',
-            text: `📎 ${combinedAttachments.map((a) => a.name).join(', ')}`,
-          });
-        }
-
-        // SINGLE-WRITER: update queued message content through the store.
-        // updateById is not phase-gated — always succeeds during streaming.
-        // Store subscription propagates → setMessages + tabState.messages.
-        const appendStore = activeTabIdRef.current
-          ? messageStoreRegistry.get(activeTabIdRef.current)
-          : null;
-        if (appendStore) {
-          appendStore.updateById(existingQueued.messageId, (m) => ({
-            ...m,
-            content: combinedDisplayContent,
-            timestamp: new Date().toISOString(),
-          }));
-        } else {
-          // Fallback: no store
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === existingQueued.messageId
-                ? { ...m, content: combinedDisplayContent, timestamp: new Date().toISOString() }
-                : m
-            )
-          );
-          if (activeTabForGuard.messages) {
-            activeTabForGuard.messages = activeTabForGuard.messages.map((m) =>
-              m.id === existingQueued.messageId
-                ? { ...m, content: combinedDisplayContent, timestamp: new Date().toISOString() }
-                : m
-            );
-          }
-        }
-
-        activeTabForGuard.queuedMessage = {
-          text: combinedText,
-          attachments: combinedAttachments,
-          displayContent: combinedDisplayContent,
-          messageId: existingQueued.messageId,
-          // still unsent (a drain clears the queue before it sends): one message
-          clientId: existingQueued.clientId,
-        };
-        activeTabForGuard._queuedAt = activeTabForGuard._queuedAt || Date.now(); // preserve original queue time
-
-        setInputValue('');
-        clearAttachments();
-        return;
-      }
-
-      // NEW QUEUE: no existing queued message — create one
-      const queuedMessageId = `queued-${crypto.randomUUID()}`;
-
-      const queuedUserMessage: Message = {
-        id: queuedMessageId,
-        role: 'user',
-        content: displayContent,
-        timestamp: new Date().toISOString(),
-        isQueued: true,
-      };
-
-      // SINGLE-WRITER: route through store — append() is NOT phase-gated,
-      // so it succeeds during streaming. The store→React subscription effect
-      // propagates to setMessages + tabState.messages on the next rAF frame.
-      // Without this, the subscription overwrites the setMessages/tabState
-      // write with the store snapshot (which lacks the queued message),
-      // causing the user message to "disappear" during streaming.
-      const queueStore = activeTabIdRef.current
-        ? messageStoreRegistry.get(activeTabIdRef.current)
-        : null;
-      if (queueStore) {
-        queueStore.append(queuedUserMessage);
-      } else {
-        // Fallback: no store (should not happen in normal flow)
-        setMessages((prev) => [...prev, queuedUserMessage]);
-        if (activeTabForGuard.messages) {
-          activeTabForGuard.messages = [...activeTabForGuard.messages, queuedUserMessage];
-        }
-      }
-
-      activeTabForGuard.queuedMessage = {
-        text: messageText,
-        attachments: (currentAttachments || []).filter((a) => !a.error && !a.isLoading),
-        displayContent,
-        messageId: queuedMessageId,
-        clientId: newClientId(),   // the queued message's own, for every send of it
-      };
-      activeTabForGuard._queuedAt = Date.now();
-
-      setInputValue('');
-      clearAttachments();
+    // ──── BUSY PATH: a turn of the session is in progress (or may be) ──────────
+    // The message is the server's to queue (docs/design/chat-turn-liveness.md S3):
+    // it is POSTed now and the backend queues it (or runs it, if the session is
+    // free by then). It never takes over this tab's stream handlers — the turn in
+    // progress keeps rendering; the queued one arrives as its own (drained) turn
+    // on the session subscription.
+    if (activeTabForGuard?.sessionId && shouldQueueSend(activeTabForGuard)) {
+      void sendWhileBusy(activeTabForGuard.id, messageText, currentAttachments);
       return;
     }
 
@@ -2315,7 +2301,11 @@ export default function ChatPage() {
     const sendToken = Date.now() + Math.random();
     const sendTab = sendTabId ? tabMapRef.current.get(sendTabId) : undefined;
     if (sendTab) sendTab._sendToken = sendToken;
-    const stillThisSend = () => !!sendTabId && tabMapRef.current.get(sendTabId)?._sendToken === sendToken;
+    const sendSid = sendTab?.sessionId;
+    const stillThisSend = () => {
+      const t0 = sendTabId ? tabMapRef.current.get(sendTabId) : undefined;
+      return !!t0 && t0._sendToken === sendToken && t0.sessionId === sendSid;
+    };
 
     // Clear userStopped and reset streaming-related state from a previous
     // stop — this is a fresh send. Without this, stale flags from the old
@@ -2339,12 +2329,28 @@ export default function ChatPage() {
       return;
     }
 
-    const content = await buildContentArray(messageText, currentAttachments);
-    // Stopped, closed or superseded while the attachments were read: nothing of
-    // this send is written and no POST opens (Stop already cleared localSending).
-    if (!stillThisSend()) return;
-    if (content.length === 0) {
-      setLocalSending(false, sendTabId ?? undefined);
+    // The draft leaves the composer now (this tab is the active one); a send that
+    // does not happen gives it back to this tab (restoreDraft), never elsewhere.
+    setInputValue('');
+    clearAttachments();
+    let content: ContentBlock[] = [];
+    let failed = false;
+    const prep = sendToken;
+    if (sendTab) sendTab._preparingSend = prep;
+    try {
+      content = await buildContentArray(messageText, currentAttachments);
+    } catch (err) {
+      console.error('[ChatPage] send: reading attachments failed', err);
+      failed = true;
+    } finally {
+      if (sendTab && sendTab._preparingSend === prep) sendTab._preparingSend = undefined;
+    }
+    // Failed, stopped, closed or superseded while the attachments were read:
+    // nothing of this send is written and no POST opens (Stop already cleared
+    // localSending); the draft goes back to its tab.
+    if (failed || !stillThisSend() || content.length === 0) {
+      if (stillThisSend()) setLocalSending(false, sendTabId ?? undefined);
+      if (sendTabId) restoreDraft(sendTabId, messageText, currentAttachments);
       return;
     }
     // Terminal chips of THIS message: the same value rides the send and any
@@ -2366,8 +2372,6 @@ export default function ChatPage() {
     // the MessageStore (single source of truth) together with the assistant
     // placeholder below, so the store→React sync effect doesn't clobber a
     // setMessages-only write on a fresh tab (whose store starts empty).
-    setInputValue('');
-    clearAttachments();
     incrementStreamGen(); // Fix 1: new stream generation
 
     // Fix 8: Transition tab status to 'streaming' (handles error → streaming case too)
@@ -2510,7 +2514,7 @@ export default function ChatPage() {
         _pendingResendAttempts: 0,
       });
     }
-  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, incrementStreamGen, setLocalSending, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, noteSend, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, queryClient, t, editorContextFor]);
+  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, restoreDraft, incrementStreamGen, setLocalSending, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, noteSend, sendWhileBusy, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, queryClient, t, editorContextFor]);
 
   // Wire handleSendMessage ref for voice conversation mode (avoids circular dep)
   handleSendMessageRef.current = handleSendMessage;
@@ -2538,159 +2542,6 @@ export default function ChatPage() {
     const textarea = document.querySelector<HTMLTextAreaElement>('[data-chat-input]');
     textarea?.focus();
   }, [setInputValue]);
-
-  /**
-   * Drain the queued message for a tab — builds content and starts a new stream.
-   *
-   * Called from:
-   * - createStreamHandler (result event) via onSendQueued — normal completion (site A)
-   * - handleStop (finally block) — user-initiated stop (site B)
-   *
-   * CRITICAL: This is a trusted internal call. It MUST NOT check
-   * pendingStreamTabs or isStreaming — those guards are for user-initiated
-   * sends only. By the time this runs, the previous stream is already done.
-   *
-   * Async because buildContentArray does network I/O (deferred from queue time).
-   */
-  const drainQueuedMessage = useCallback(async (tabId: string) => {
-    const tabState = tabMapRef.current.get(tabId);
-    if (!tabState?.queuedMessage) return; // idempotent — safe if both sites race
-
-    const queued = tabState.queuedMessage;
-    tabState.queuedMessage = undefined; // clear BEFORE send (exactly-once)
-    tabState._queuedAt = undefined;     // clear queue timestamp (reconcile immunity ends)
-    tabState.userStopped = false; // prevent stale flag from suppressing new stream errors
-
-    // Key this drained turn like the main send: the request carries `clientId`,
-    // the assistant placeholder is `${clientId}-asst`, AND — the fix for the
-    // user-row dup (run_cba89e65) — the QUEUED USER BUBBLE is stamped with the
-    // SAME clientId in metadata.client_id. The main path keeps them in sync by
-    // using `id === clientId` on the user bubble; the queued bubble's id is
-    // `queued-{uuid}` (assigned at queue time, before any clientId exists), so
-    // instead we carry the key in metadata. Without it the DB user row (which
-    // the backend stamps with this request's client_id, session_router.py:1958)
-    // correlates with the queued bubble by neither id nor client_id nor the H2
-    // numeric-placeholder guard → a full-history reconcile renders TWO user
-    // bubbles. `_applyMerge` indexes carried metadata.client_id role-agnostically,
-    // so stamping it here makes the queued bubble correlate exactly like the main
-    // path. The queued message's own client_id (minted when it was queued, or the
-    // one the server handed back with it), so a re-drain is the same send.
-    const clientId = queued.clientId ?? newClientId();
-
-    // Remove the "queued" badge from the user message + stamp the correlation key
-    // — route through store for consistency (subscription propagates to React + tabState).
-    const drainStore = messageStoreRegistry.get(tabId);
-    if (drainStore) {
-      drainStore.updateById(queued.messageId, (m) => ({
-        ...m,
-        isQueued: false,
-        metadata: { ...(m.metadata ?? {}), client_id: clientId },
-      }));
-    } else {
-      // Fallback: no store (rare edge case)
-      const stampQueued = (m: Message): Message =>
-        m.id === queued.messageId
-          ? { ...m, isQueued: false, metadata: { ...(m.metadata ?? {}), client_id: clientId } }
-          : m;
-      const isActive = activeTabIdRef.current === tabId;
-      if (isActive) {
-        setMessages((prev) => prev.map(stampQueued));
-      }
-      const drainTab = tabMapRef.current.get(tabId);
-      if (drainTab?.messages) {
-        drainTab.messages = drainTab.messages.map(stampQueued);
-      }
-    }
-
-    // Helper: clean up streaming state on drain failure.
-    // The result handler keeps isStreaming=true when a queued message exists
-    // (seamless indicator), so we must clean up if drain can't start a stream.
-    const cleanupStreamingState = () => {
-      setLocalSending(false, tabId);
-      updateTabStatus(tabId, 'idle');
-    };
-
-    try {
-      // Build content NOW (deferred from queue time — async, reads files)
-      const content = await buildContentArray(queued.text, queued.attachments);
-      if (content.length === 0) {
-        cleanupStreamingState();
-        return;
-      }
-      // The queued message's own terminal chips (never the input box's).
-      const drainTerminal = terminalContextOf(queued.attachments);
-
-      // Set streaming state — idempotent if result handler already kept it
-      // true, but ensures correctness if drain is called from other sites.
-      setLocalSending(true, tabId);
-      if (tabId) updateTabStatus(tabId, 'streaming');
-      incrementStreamGen();
-
-      // clientId was generated above (before the badge-clear) so the queued user
-      // bubble could be stamped with it. The assistant placeholder shares it via
-      // the `${clientId}-asst` suffix; the request carries `clientId`. Without any
-      // of these the turn persists keyless and a later reconcile-tail cut
-      // duplicates the bubble (run_7263ff67 assistant side, run_cba89e65 user side).
-      const assistantMessageId = `${clientId}-asst`;
-      const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
-
-      // SINGLE-WRITER: route through the store so streaming deltas land
-      // (see insertOptimisticMessages). A setMessages-only write left the
-      // placeholder out of the store → updateLast() no-op'd every token.
-      insertOptimisticMessages(tabId, [assistantPlaceholder]);
-
-      // Resolve sessionId STRICTLY from this queued tab's own state — never
-      // fall back to the shared sessionIdRef (would misroute into another tab's
-      // session, Principle 4). No per-tab session yet → undefined (fresh session).
-      const resolvedSessionId = tabState.sessionId;
-
-      // The drained tab may be a background tab: snapshot ITS Canvas (see (d)).
-      const editorContext = editorContextFor(tabId);
-      const drainRequest = noteSend(tabId, {
-        agentId: selectedAgentId!,
-        content,
-        sessionId: resolvedSessionId,
-        enableSkills,
-        enableMCP,
-        clientId,
-        editorContext,
-        ...(drainTerminal && { terminalContext: drainTerminal }),
-      });
-      const drainSend = () => (setLocalSending(true, tabId), noteSend(tabId, drainRequest), chatService.streamChat(
-        { ...drainRequest, sessionId: tabMapRef.current.get(tabId)?.sessionId ?? drainRequest.sessionId },
-        createStreamHandler(assistantMessageId, tabId),
-        createErrorHandler(assistantMessageId, tabId),
-        createCompleteHandler(tabId),
-        createDisconnectHandler(tabId),
-        streamLivenessFor(tabId),
-      ));
-      const abort = drainSend();
-
-      // Store abort function in tab map; a reconnect re-sends THIS message
-      tabState.abortController = { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController;
-      tabState.retryStreamFn = drainSend;
-      tabState.hasReceivedData = false;
-      tabState.isReconnecting = false;
-      tabState.reconnectionAttempt = 0;
-      // Drain started successfully — reconcile can resume normal checks.
-      tabState.drainPending = false;
-      // Post-disconnect recovery succeeded — the queued message is now a live
-      // stream, so the uncertainty is resolved. Cleared HERE (on success) not in
-      // the reconcile block, so a FAILED drain (catch restores the queue) leaves
-      // the flag set and reconcile retries instead of orphaning the message.
-      tabState._postDisconnectUncertain = false;
-    } catch (e) {
-      // Send failed — restore queue so user doesn't lose their message
-      tabState.queuedMessage = queued;
-      tabState.drainPending = false;  // drain over (failed) — reconcile can resume
-      cleanupStreamingState();
-      console.error('[queue-drain] failed, queue restored:', e);
-    }
-  }, [buildContentArray, selectedAgentId, enableSkills, enableMCP, setLocalSending, setMessages, updateTabStatus, incrementStreamGen, noteSend, createStreamHandler, createErrorHandler, createCompleteHandler, tabMapRef, activeTabIdRef, editorContextFor]);
-
-  // Bridge the ref so useChatStreamingLifecycle can drain via deps.onDrainQueue.
-  // Must be assigned after drainQueuedMessage is defined (circular dep with hook).
-  drainQueueRef.current = drainQueuedMessage;
 
   // Bridge the recovery_exhausted "Start fresh session" action. It resets the
   // tab the notice belongs to BY ID — the old select-then-clear-active order
@@ -2729,36 +2580,47 @@ export default function ChatPage() {
     tab.retryStreamFn = send;
   }, [tabMapRef, selectedAgentId, incrementStreamGen, setLocalSending, updateTabStatus, noteSend, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, streamLivenessFor]);
 
-  const handleCancelQueued = useCallback((tabId: string) => {
-    const tabState = tabMapRef.current.get(tabId);
-    if (!tabState?.queuedMessage) return;
-
-    const queued = tabState.queuedMessage;
-
-    // SINGLE-WRITER: remove through store (propagates via subscription).
-    const cancelStore = messageStoreRegistry.get(tabId);
-    if (cancelStore) {
-      cancelStore.remove((m) => m.id === queued.messageId);
-    } else {
-      // Fallback: no store
-      setMessages((prev) => prev.filter((m) => m.id !== queued.messageId));
-      const cancelTab = tabMapRef.current.get(tabId);
-      if (cancelTab?.messages) {
-        cancelTab.messages = cancelTab.messages.filter((m) => m.id !== queued.messageId);
+  /**
+   * Cancel a queued message (docs/design/chat-turn-liveness.md S3): the server
+   * removes it unless a drain already took it ("already sending"). Cancelled: its
+   * bubble goes, its text comes back to an empty input.
+   */
+  const handleCancelQueued = useCallback(async (tabId: string, messageId: string) => {
+    const tab = tabMapRef.current.get(tabId);
+    const store = messageStoreRegistry.get(tabId);
+    const bubble = store?.messages.find((m) => m.id === messageId);
+    if (!tab?.sessionId || !store || !bubble) return;
+    const cid = (bubble.metadata?.client_id as string | undefined) ?? messageId;
+    let result: 'cancelled' | 'claimed' | 'missing';
+    try {
+      result = await chatService.cancelPending(tab.sessionId, cid);
+    } catch {
+      tabNoticeStore.post(tab, tab.sessionId, { id: `cancel-queued-${cid}`, severity: 'warning',
+        message: tf(t, 'chat.queued.cancelFailed', 'Could not cancel the queued message. Try again.') });
+      return;
+    }
+    if (result === 'claimed') {
+      tabNoticeStore.post(tab, tab.sessionId, { id: `cancel-queued-${cid}`, severity: 'info',
+        message: tf(t, 'chat.queued.alreadySending', 'That message is already being sent.') });
+      return;
+    }
+    tab._queuedLocal?.delete(cid);
+    tab._unsentRequests?.delete(cid);
+    if (tab._serverQueue) tab._serverQueue = tab._serverQueue.filter((p) => p.clientId !== cid);
+    if (result === 'cancelled') {
+      // every tab showing this session (a restored layout may hold two)
+      for (const [otherId, other] of tabMapRef.current.entries()) {
+        if (otherId === tabId || other.sessionId !== tab.sessionId) continue;
+        other._queuedLocal?.delete(cid);
+        messageStoreRegistry.get(otherId)?.remove((m) => m.id === messageId
+          || (m.metadata?.client_id as string | undefined) === cid);
       }
+      store.remove((m) => m.id === messageId);
+      const text = bubble.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text)[0] ?? '';
+      if (text && text !== '[Attachments]') restoreDraft(tabId, text, []);
     }
-
-    // Clear queue
-    tabState.queuedMessage = undefined;
-
-    // Restore text to input
-    setInputValue(queued.text);
-
-    // Restore attachments to the attachment bar
-    if (queued.attachments.length > 0) {
-      restoreAttachments(queued.attachments);
-    }
-  }, [setMessages, setInputValue, tabMapRef, restoreAttachments]);
+    syncQueuedBadges(tabId);
+  }, [tabMapRef, restoreDraft, syncQueuedBadges, t]);
 
   // Handle answering AskUserQuestion
   /** The assistant bubble a continuation renders into: the one holding its
@@ -3186,6 +3048,7 @@ export default function ChatPage() {
       const tab = currentTabId ? tabMapRef.current.get(currentTabId) : undefined;
       if (tab) {
         tab._sendToken = undefined;   // a send still reading its attachments stops
+        tab._preparingSend = undefined;
         tab.userStopped = true;
         try { tab.abortController?.abort(); } catch { /* already aborted */ }
         tab.abortController = null;
@@ -3199,6 +3062,7 @@ export default function ChatPage() {
       const tabState = tabMapRef.current.get(currentTabId);
       if (tabState) {
         tabState._sendToken = undefined;   // a send still reading its attachments stops
+        tabState._preparingSend = undefined;   // and a busy send still preparing
         tabState.userStopped = true;
       }
       if (tabState?.abortController) {
@@ -3293,10 +3157,6 @@ export default function ChatPage() {
       console.warn('[handleStop] Backend stop failed (best effort):', err);
     });
 
-    // 6. Drain site B: auto-send queued message after stop
-    if (currentTabId) {
-      setTimeout(() => drainQueuedMessage(currentTabId), 0);
-    }
   };
   // An Agents panel's "Stop all" (chat turn spec v6 §3.2) is the Stop button: it stops
   // the active tab's turn, whose message holds the panel.

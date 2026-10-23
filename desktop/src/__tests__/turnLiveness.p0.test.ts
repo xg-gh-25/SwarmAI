@@ -277,7 +277,7 @@ describe('chat-turn-liveness P0 (frontend)', () => {
     const src = readFileSync(join(__dirname, '..', 'pages', 'ChatPage.tsx'), 'utf8');
     const send = src.slice(src.indexOf('const handleSendMessage = useCallback'), src.indexOf('handleSendMessageRef.current = handleSendMessage'));
     const awaitAt = send.indexOf('await buildContentArray(');
-    const checkAt = send.indexOf('if (!stillThisSend()) return;');
+    const checkAt = send.indexOf('if (failed || !stillThisSend() || content.length === 0) {');
     const postAt = send.indexOf('chatService.streamChat(');
     expect(awaitAt, 'the send reads its attachments').toBeGreaterThan(0);
     expect(checkAt, 'the send re-checks its token after the await').toBeGreaterThan(awaitAt);

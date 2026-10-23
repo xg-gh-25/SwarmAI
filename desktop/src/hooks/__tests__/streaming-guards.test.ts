@@ -12,8 +12,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   shouldQueueSend,
-  queuedMessageFromRetryPayload,
-  retryPayloadHasAttachments,
   shouldResurfaceQuestion,
   shouldResurfacePermission,
   queuedBehindApprovalText,
@@ -180,121 +178,6 @@ describe('healGraceExpiryVerdict (OT01 honest error signal)', () => {
   });
 });
 
-describe('queuedMessageFromRetryPayload', () => {
-  it('a handed-back send\'s terminal output comes back as its terminal chip (and alone is enough)', () => {
-    const q = queuedMessageFromRetryPayload(
-      { sessionId: 's1', agentId: 'a', userMessage: 'why', content: null,
-        terminalContext: { bufferTail: 'FAIL x', cwd: '/r/swarmai' } },
-      'queued-t',
-    );
-    expect(q!.attachments).toHaveLength(1);
-    expect(q!.attachments[0]).toMatchObject({ type: 'terminal', textContent: 'FAIL x',
-      terminal: { cwd: '/r/swarmai' } });
-    const only = queuedMessageFromRetryPayload(
-      { sessionId: 's1', agentId: 'a', userMessage: null, content: null,
-        terminalContext: { bufferTail: 'just output', cwd: '' } },
-      'queued-t2',
-    );
-    expect(only).not.toBeNull();
-    expect(only!.text).toBe('');
-    expect(only!.displayContent).toEqual([{ type: 'text', text: '[Attached terminal output]' }]);
-  });
-  it('builds a queuedMessage from a SESSION_BUSY retryPayload (preserve, not lose)', () => {
-    const q = queuedMessageFromRetryPayload(
-      { sessionId: 's1', agentId: 'default', userMessage: 'Don\'t lose me', content: null },
-      'queued-abc',
-    );
-    expect(q).not.toBeNull();
-    expect(q!.text).toBe('Don\'t lose me');
-    expect(q!.messageId).toBe('queued-abc');
-    expect(q!.attachments).toEqual([]);
-    // displayContent renders the text so the queued bubble shows something
-    expect(q!.displayContent).toEqual([{ type: 'text', text: 'Don\'t lose me' }]);
-  });
-
-  it('returns null when payload is missing (chat.py SESSION_BUSY carries none) — null-guard', () => {
-    expect(queuedMessageFromRetryPayload(undefined, 'queued-x')).toBeNull();
-    expect(queuedMessageFromRetryPayload(null, 'queued-x')).toBeNull();
-  });
-
-  it('Root-1 P2 (L7/2A): server-side pending → no retryPayload → no re-queue (no double-send)', () => {
-    // When the backend persists the message server-side (pendingSeq present), it
-    // OMITS retryPayload because the drain worker now owns delivery. The frontend
-    // re-queue helper must no-op so the message is not ALSO re-sent from the FE
-    // (which would double-deliver). This is the structural double-send guard:
-    // absent retryPayload → null → the SESSION_BUSY handler skips re-queue.
-    const busyEventWithPending = {
-      code: 'SESSION_BUSY',
-      pendingSeq: 7,
-      pendingId: 'msg-uuid',
-      retryPayload: undefined,  // server owns delivery — no FE re-send
-    };
-    const requeued = queuedMessageFromRetryPayload(
-      busyEventWithPending.retryPayload,
-      'queued-should-not-exist',
-    );
-    expect(requeued).toBeNull();  // ← no re-queue → no double-send
-    // The pending coordinates remain available for the mirror to show "queued".
-    expect(busyEventWithPending.pendingSeq).toBe(7);
-  });
-
-  it('HIGH#2 regression: recovers text from content blocks when userMessage is null (the LIVE send path)', () => {
-    // The frontend always sends `content` blocks, never `message`, so the
-    // backend user_message is null and the text lives in content[].text.
-    // Reading only userMessage would silently lose every real message.
-    const q = queuedMessageFromRetryPayload(
-      {
-        sessionId: 's1',
-        agentId: 'default',
-        userMessage: null,
-        content: [{ type: 'text', text: 'recover me from content' }],
-      },
-      'queued-c1',
-    );
-    expect(q).not.toBeNull();
-    expect(q!.text).toBe('recover me from content');
-  });
-
-  it('joins multiple text content blocks', () => {
-    const q = queuedMessageFromRetryPayload(
-      {
-        sessionId: 's1',
-        agentId: 'default',
-        userMessage: null,
-        content: [
-          { type: 'text', text: 'line one' },
-          { type: 'image', source: {} },
-          { type: 'text', text: 'line two' },
-        ] as unknown[],
-      },
-      'queued-c2',
-    );
-    expect(q!.text).toBe('line one\nline two');
-  });
-
-  it('retryPayloadHasAttachments detects non-text blocks (warn the user)', () => {
-    expect(retryPayloadHasAttachments({ sessionId: 's', agentId: 'a', userMessage: null, content: [{ type: 'text', text: 'hi' }] })).toBe(false);
-    expect(retryPayloadHasAttachments({ sessionId: 's', agentId: 'a', userMessage: null, content: [{ type: 'text', text: 'hi' }, { type: 'image', source: {} }] as unknown[] })).toBe(true);
-    expect(retryPayloadHasAttachments({ sessionId: 's', agentId: 'a', userMessage: 'hi', content: null })).toBe(false);
-    expect(retryPayloadHasAttachments(undefined)).toBe(false);
-  });
-
-  it('returns null when there is no recoverable text (nothing to preserve)', () => {
-    expect(
-      queuedMessageFromRetryPayload(
-        { sessionId: 's1', agentId: 'default', userMessage: null, content: null },
-        'queued-x',
-      ),
-    ).toBeNull();
-    expect(
-      queuedMessageFromRetryPayload(
-        { sessionId: 's1', agentId: 'default', userMessage: '   ', content: null },
-        'queued-x',
-      ),
-    ).toBeNull();
-  });
-});
-
 // ═══════════════════════════════════════════════════════════════════
 // AC5 (Root-1 SSOT Phase 3): shouldResurfaceQuestion — the gated, idempotent
 // decision for re-surfacing a lost AskUserQuestion from the authoritative
@@ -399,10 +282,8 @@ describe('shouldResurfaceQuestion (AC5 — lost AskUserQuestion re-surface)', ()
 
 // ═══════════════════════════════════════════════════════════════════
 // AC4 (Root-1 SSOT Phase 3): computeDrainRetirement — mirror the server's
-// pending_count and last_drained_seqs. The local optimistic queue mirror is
-// retired (the badge cleared) once the server reports it has drained the seqs
-// the tab was tracking. Keeps the local queuedMessage as an F7 optimistic
-// fallback; this only decides when the SERVER-side queue indicator clears.
+// pending_count and last_drained_seqs: retire once the server reports it has
+// drained seqs the tab had not seen (the reconcile then pulls the drained turn).
 // ═══════════════════════════════════════════════════════════════════
 describe('computeDrainRetirement (AC4 — server pending_count / last_drained_seqs mirror)', () => {
   it('server drained seqs that advance past the prior mark → retire local mirror', () => {
@@ -488,12 +369,12 @@ describe('nextReconcileDelay (B-1: steady-state primary poll cadence)', () => {
 
 describe('queuedBehindApprovalText (why a sent message is not moving)', () => {
   const perm = { requestId: 'p1', toolName: 'Bash', toolInput: { command: 'make clean' }, reason: '', options: [] };
-  const base = { backendWaitingInput: true, backendPendingPermission: perm, serverPendingCount: 2, hasLocalQueued: false };
+  const base = { backendWaitingInput: true, backendPendingPermission: perm, serverPendingCount: 2 };
 
   it('names the count and the command it waits on', () => {
     expect(queuedBehindApprovalText(base)).toBe(
       '2 messages are waiting for your approval of Bash: make clean. They send after you decide.');
-    expect(queuedBehindApprovalText({ ...base, serverPendingCount: 0, hasLocalQueued: true })).toBe(
+    expect(queuedBehindApprovalText({ ...base, serverPendingCount: 1 })).toBe(
       'Your message is waiting for your approval of Bash: make clean. It sends after you decide.');
   });
 

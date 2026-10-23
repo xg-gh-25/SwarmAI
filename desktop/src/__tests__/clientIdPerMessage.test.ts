@@ -13,7 +13,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { queuedMessageFromRetryPayload } from '../hooks/streaming-guards';
 
 const SRC = join(__dirname, '..');
 
@@ -44,14 +43,9 @@ describe('one client_id per message', () => {
     const assigned = [...s.matchAll(/const clientId = ([^;]+);/g)].map((m) => m[1].trim());
     expect(assigned.sort()).toEqual([
       'newClientId()',                          // a new message
-      'queued.clientId ?? newClientId()',       // a queued message's drain
+      'newClientId()',                          // a message sent while busy (the server queues it)
       'retry.clientId ?? newClientId()',        // a handed-back send, re-sent
     ].sort());
   });
 
-  it('a re-queued handed-back send keeps its client_id', () => {
-    const q = queuedMessageFromRetryPayload(
-      { sessionId: 'S', agentId: 'a', userMessage: 'again', content: null, clientId: 'local-1-x' }, 'queued-1');
-    expect(q?.clientId).toBe('local-1-x');
-  });
 });

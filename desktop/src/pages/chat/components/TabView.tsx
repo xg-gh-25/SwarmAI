@@ -229,7 +229,7 @@ export interface TabViewProps {
   onAnswerQuestion: (toolUseId: string, answers: Record<string, string>) => void;
   onPermissionDecision: (requestId: string, decision: 'approve' | 'deny') => void;
   onEscalationSelect: (escalationId: string, optionLabel: string) => void;
-  onCancelQueued: (tabId: string) => void;
+  onCancelQueued: (tabId: string, messageId: string) => void;
   /** Re-send a user message the backend never accepted (by its id). */
   onRetrySend?: (tabId: string, messageId: string) => void;
   onContinue: () => void;
@@ -815,7 +815,7 @@ function TabViewImpl({
                   sessionId={sessionId}
                   isLastAssistant={idx === lastAssistantIdx}
                   contextWarning={idx === lastAssistantIdx ? contextWarning : null}
-                  onCancelQueued={msg.isQueued && tabId ? () => onCancelQueued(tabId) : undefined}
+                  onCancelQueued={msg.isQueued && tabId ? () => onCancelQueued(tabId, msg.id) : undefined}
                   onRetrySend={msg.sendState === 'failed' && tabId && onRetrySend ? () => onRetrySend(tabId, msg.id) : undefined}
                   onContinue={idx === lastAssistantIdx && !isStreaming ? onContinue : undefined}
                   onRetryError={msg.isError && msg.errorCode === 'QUEUE_TIMEOUT' ? onRetryQueueTimeout : undefined}

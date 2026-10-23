@@ -1,9 +1,10 @@
 /**
  * streaming-guards.ts — pure predicates for the chat send path.
  *
- * Single responsibility: decide whether a user's send must be QUEUED (the
- * session is busy or in an uncertain post-disconnect state) rather than sent
- * directly. Extracting this as a pure function makes the decision unit-testable
+ * Single responsibility: decide whether a user's send goes the BUSY way (the
+ * session is busy or in an uncertain post-disconnect state: the message is POSTed
+ * on its own and the server queues it, docs/design/chat-turn-liveness.md S3)
+ * rather than as this tab's own turn. Extracting this as a pure function makes the decision unit-testable
  * against the exact tab states the SSE-disconnect bug produces.
  *
  * Background: a long agent turn can outlive the SSE connection. When the
@@ -20,112 +21,9 @@
  *      drained when the backend genuinely finishes) instead of escaping.
  */
 
-import type { ContentBlock, PendingPermission, UnifiedAttachment } from '../types';
-import { addTerminalText } from '../utils/terminalAttachment';
+import type { PendingPermission } from '../types';
 
-/** Shape of the retryPayload the backend attaches to a SESSION_BUSY (and
- *  QUEUE_TIMEOUT) SSE event so the frontend can recover the user's message. */
-export interface SessionBusyRetryPayload {
-  sessionId: string;
-  agentId: string;
-  userMessage: string | null;
-  content: unknown[] | null;
-  /** the handed-back send's client_id: re-send with it */
-  clientId?: string | null;
-  /** the handed-back send's attached terminal output (backend _hand_back_send) */
-  terminalContext?: { bufferTail: string; cwd: string } | null;
-}
-
-/** The queuedMessage shape consumed by drainQueuedMessage. */
-export interface QueuedMessage {
-  text: string;
-  attachments: UnifiedAttachment[];
-  displayContent: ContentBlock[];
-  messageId: string;
-  /** the message's client_id: every send of it uses this one (services/clientId) */
-  clientId?: string;
-}
-
-/** Extract the user's text from retryPayload, falling back to content blocks.
- *
- * CRITICAL: the live send path transmits `content` blocks, NOT `message`
- * (see chat.ts streamChat — it uses requestBody.content for any real message
- * and only uses requestBody.message as a legacy fallback). So on the SESSION_BUSY
- * path the backend's `user_message` is almost always null and the text lives in
- * `content[].text`. Reading only `userMessage` would silently lose every real
- * message — the exact failure this fix exists to prevent. We therefore prefer
- * userMessage but fall back to joining the text-type content blocks.
- */
-function extractRetryText(payload: SessionBusyRetryPayload): string {
-  const direct = (payload.userMessage ?? '').trim();
-  if (direct) return direct;
-  if (Array.isArray(payload.content)) {
-    const joined = payload.content
-      .map((block) => {
-        if (block && typeof block === 'object' && 'text' in block) {
-          const t = (block as { text?: unknown }).text;
-          return typeof t === 'string' ? t : '';
-        }
-        return '';
-      })
-      .filter(Boolean)
-      .join('\n');
-    return joined.trim();
-  }
-  return '';
-}
-
-/** True if the retryPayload carried non-text content blocks (image/document).
- *  On the SESSION_BUSY re-queue path the original send already left the client,
- *  so the composer no longer holds these — the caller should WARN the user that
- *  an attachment couldn't be auto-recovered (text IS recovered; blobs are not). */
-export function retryPayloadHasAttachments(
-  payload: SessionBusyRetryPayload | null | undefined,
-): boolean {
-  if (!payload || !Array.isArray(payload.content)) return false;
-  return payload.content.some(
-    (block) =>
-      block != null &&
-      typeof block === 'object' &&
-      'type' in block &&
-      (block as { type?: unknown }).type !== 'text',
-  );
-}
-
-/**
- * Build a queuedMessage from a SESSION_BUSY retryPayload so a busy-session send
- * is never lost. Returns null when there is nothing recoverable (payload absent
- * — e.g. the chat.py "Cannot send() in state" SESSION_BUSY carries none — or no
- * non-empty text in either userMessage or content). Callers MUST null-guard.
- *
- * Recovers TEXT only. Binary attachments (image/document blocks) are NOT
- * recovered — the backend round-trips text-path hints, not blobs, and on this
- * path the composer was already cleared by the original send. Callers should use
- * retryPayloadHasAttachments() to warn the user when blobs were dropped.
- */
-export function queuedMessageFromRetryPayload(
-  payload: SessionBusyRetryPayload | null | undefined,
-  messageId: string,
-): QueuedMessage | null {
-  if (!payload) return null;
-  const text = extractRetryText(payload);
-  // The terminal output rides back too, as the message's terminal chip, so the
-  // re-send carries it (utils/terminalAttachment → terminalContextOf at send).
-  const tc = payload.terminalContext;
-  const attachments = tc?.bufferTail
-    ? addTerminalText([], tc.bufferTail, tc.cwd ?? '', () => `${messageId}-terminal`)
-    : [];
-  if (!text && attachments.length === 0) return null;
-  return {
-    text,
-    attachments,
-    displayContent: [{ type: 'text', text: text || '[Attached terminal output]' }],
-    messageId,
-    ...(payload.clientId ? { clientId: payload.clientId } : {}),
-  };
-}
-
-/** Minimal slice of UnifiedTab needed to decide queue-vs-send. */
+/** Minimal slice of UnifiedTab needed to decide busy-send vs send. */
 export interface QueueGuardState {
   /** a turn of the session is in progress (backend activity) */
   readonly isStreaming: boolean;
@@ -142,7 +40,8 @@ export interface QueueGuardState {
 }
 
 /**
- * True when a user's send must be QUEUED rather than sent directly.
+ * True when a user's send must not start this tab's own turn (it goes as a busy
+ * send: POSTed on its own, queued by the server).
  *
  * Covers every state in which the backend session may still be busy:
  *  - isStreaming: a turn of the session is in progress (backend activity)
@@ -260,8 +159,6 @@ export interface QueuedBehindApprovalInput {
   backendPendingPermission: PendingPermission | null;
   /** Messages the server holds as pending for this session. */
   serverPendingCount: number;
-  /** A message this tab holds back itself (``tabState.queuedMessage``). */
-  hasLocalQueued: boolean;
 }
 
 /**
@@ -270,9 +167,9 @@ export interface QueuedBehindApprovalInput {
  * explanation). Null when nothing is queued or the session waits on nothing.
  */
 export function queuedBehindApprovalText(input: QueuedBehindApprovalInput): string | null {
-  const { backendWaitingInput, backendPendingPermission: perm, serverPendingCount, hasLocalQueued } = input;
+  const { backendWaitingInput, backendPendingPermission: perm, serverPendingCount } = input;
   if (!backendWaitingInput || !perm?.requestId) return null;
-  const n = Math.max(serverPendingCount, 0) || (hasLocalQueued ? 1 : 0);
+  const n = Math.max(serverPendingCount, 0);
   if (n === 0) return null;
   const cmd = typeof perm.toolInput?.command === 'string' ? perm.toolInput.command.trim() : '';
   const what = cmd ? `${perm.toolName}: ${cmd.length > 80 ? `${cmd.slice(0, 79)}…` : cmd}` : perm.toolName;
@@ -312,14 +209,10 @@ export interface DrainRetirementResult {
 }
 
 /**
- * Mirror the server's drain progress. The local optimistic queue mirror retires
- * (the per-message "queued" affordance clears) once the server confirms it has
- * drained a seq the tab was tracking — i.e. currentDrainedSeqs contains a seq
- * not present in priorDrainedSeqs. serverPendingCount is passed through so the
- * caller can drive a session-level "N queued" badge from authoritative state.
- *
- * This does NOT remove the local queuedMessage path (kept as the F7 optimistic
- * fallback); it only decides when the SERVER-owned queue indicator clears.
+ * Mirror the server's drain progress: retire = the server drained a seq the tab
+ * had not seen (currentDrainedSeqs has one priorDrainedSeqs lacks, or the list
+ * reset to empty). The reconcile loop then pulls the drained turn from the DB
+ * when the subscription did not render it. serverPendingCount is passed through.
  */
 export function computeDrainRetirement(input: DrainRetirementInput): DrainRetirementResult {
   const { priorDrainedSeqs, currentDrainedSeqs, serverPendingCount } = input;

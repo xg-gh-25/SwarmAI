@@ -227,7 +227,9 @@
     },
     "queued": {
       "label": "Queued — will send when ready",
-      "cancel": "Cancel queued message"
+      "cancel": "Cancel queued message",
+      "alreadySending": "That message is already being sent.",
+      "cancelFailed": "Could not cancel the queued message. Try again."
     },
     "input": {
       "dropFiles": "Drop files here",

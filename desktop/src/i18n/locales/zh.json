@@ -227,7 +227,9 @@
     },
     "queued": {
       "label": "已排队，轮到时发送",
-      "cancel": "取消排队的消息"
+      "cancel": "取消排队的消息",
+      "alreadySending": "这条消息已经在发送了。",
+      "cancelFailed": "没能取消排队的消息，请再试一次。"
     },
     "input": {
       "dropFiles": "把文件拖到这里",

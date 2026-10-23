@@ -361,3 +361,61 @@ async def test_the_queue_preview_is_computed_without_parsing_on_the_loop():
     with patch.object(session_pending.json, "loads", side_effect=small_only):
         rows = await session_pending.list_pending(sid)
     assert [r["preview"] for r in rows] == ["x" * session_pending._PREVIEW_CHARS, "hello world"]
+
+
+# ── P2c: the queue is pushed (docs/design/chat-turn-liveness.md S3) ─────────────
+
+@pytest.mark.asyncio
+async def test_a_message_queued_while_busy_pushes_the_queue(hub):
+    """A send that cannot take the turn is queued and the session's state, with
+    the queue naming it, is pushed to its tabs (the frontend's only queue)."""
+    r = _router()
+    sid = "s-pushq"
+    unit = r.get_or_create_unit(sid, "default")
+    unit._transition(SessionState.IDLE)
+    assert hub.try_claim_turn(sid, "running")             # a turn holds the session
+    a, b = _patched(_script())
+    with a, b:
+        events = [ev async for ev in r.run_conversation(
+            agent_id="default", user_message="later", session_id=sid, client_id="local-pq")]
+    assert any(e.get("type") == "accepted" and e.get("queued") for e in events)
+    pushed = None
+    for _ in range(50):
+        await asyncio.sleep(0.02)
+        snap = [e for e in hub._logs[sid].buf if e.get("type") == "session_state"]
+        if snap:
+            pushed = snap[-1]
+            break
+    assert pushed is not None, "queuing pushed no session_state"
+    assert [p.get("client_id") for p in pushed["state"]["pending"]] == ["local-pq"]
+
+
+@pytest.mark.asyncio
+async def test_a_burst_of_queue_changes_shares_one_read(monkeypatch):
+    """Several publishes asked for before the scheduled read starts share it (a
+    burst of queued sends is one queue read, not one per send); a publish after
+    the read began schedules a new one; a push cancelled before it ran does not
+    silence the next."""
+    from core import session_state
+    reads = []
+
+    async def entry(unit):
+        reads.append(unit.session_id)
+        return {"pending": []}
+    monkeypatch.setattr(session_state, "session_state_entry", entry)
+    unit = MagicMock(session_id="s-burst")
+    router = MagicMock()
+    router.get_unit.return_value = unit
+    for _ in range(5):
+        session_state.publish(router, "s-burst")
+    await asyncio.sleep(0.05)
+    assert reads == ["s-burst"]
+    session_state.publish(router, "s-burst")
+    await asyncio.sleep(0.05)
+    assert reads == ["s-burst", "s-burst"]
+    session_state.publish(router, "s-burst")
+    session_state._SCHEDULED["s-burst"].cancel()
+    await asyncio.sleep(0)
+    session_state.publish(router, "s-burst")
+    await asyncio.sleep(0.05)
+    assert reads == ["s-burst"] * 3

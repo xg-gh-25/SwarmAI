@@ -154,22 +154,18 @@ describe('session turn wiring', () => {
     expect(testTabMap.get('t4')!.isStreaming).toBe(false);
   });
 
-  it('a drained turn retires the queued mirror without re-sending it', () => {
-    const onDrainQueue = vi.fn();
-    renderHook(() => useChatStreamingLifecycle({ ...createMockDeps(), onDrainQueue }));
+  it('a drained turn ends the waiting state and keeps the queued bubble (the server sent it)', () => {
+    renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => { initTestTab('t5', [makeMessage({ id: 'queued-1', role: 'user', content: [{ type: 'text', text: 'q' }] })]); });
     messageStoreRegistry.getOrCreate('t5').appendMany([makeMessage({ id: 'queued-1', role: 'user', content: [{ type: 'text', text: 'q' }] })]);
     const tab = testTabMap.get('t5')!;
     tab.sessionId = 'S';
     tab.isWaitingForBusy = true;
-    tab.queuedMessage = { messageId: 'queued-1', text: 'q', attachments: [] } as unknown as typeof tab.queuedMessage;
     act(() => { fake.emit(env('D', 1, { type: 'turn_start', source: 'drain', turnClientId: 'drain-z-asst' })); });
-    expect(tab.queuedMessage).toBeUndefined();
     act(() => { fake.emit(env('D', 2, text('answer'))); });
     act(() => { fake.emit(env('D', 3, { type: 'turn_end' })); });
     expect(tab.isWaitingForBusy).toBe(false);
-    expect((messageStoreRegistry.get('t5')?.messages ?? []).some((m) => m.id === 'queued-1')).toBe(false);
-    return new Promise<void>((r) => setTimeout(() => { expect(onDrainQueue).not.toHaveBeenCalled(); r(); }, 10));
+    expect((messageStoreRegistry.get('t5')?.messages ?? []).some((m) => m.id === 'queued-1')).toBe(true);
   });
 
   it('SESSION_BUSY leaves the message to the server: waiting state on, no local re-send', () => {
@@ -204,12 +200,11 @@ describe('session turn wiring', () => {
       post({ type: 'accepted', clientId: 'local-k', sessionId: 'S', userMessageId: 'm1', duplicate: false } as StreamEvent);
       post({ type: 'error', code: 'SESSION_BUSY', message: 'busy', pendingId: 'm1', pendingSeq: 3 } as StreamEvent);
     });
-    expect(store.messages.map((m) => m.id)).toEqual(['local-k']);
-    expect(testTabMap.get('t7')!.queuedMessage).toBeUndefined();   // the server delivers it
+    expect(store.messages.map((m) => m.id)).toEqual(['local-k']);   // the server delivers it
     expect(testTabMap.get('t7')!.isWaitingForBusy).toBe(true);
   });
 
-  it('SESSION_BUSY without a kept row (retryPayload) still re-queues the text locally', () => {
+  it('SESSION_BUSY without a kept row (retryPayload): the message is "Not sent · Retry"', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => { initTestTab('t8'); result.current.setLocalSending(true, 't8'); });
     testTabMap.get('t8')!.sessionId = 'S';
@@ -220,13 +215,13 @@ describe('session turn wiring', () => {
         makeMessage({ id: 'local-r-asst', role: 'assistant', content: [] }),
       ]);
     });
+    act(() => { result.current.noteSend('t8', { agentId: 'a', message: 'lost?', clientId: 'local-r' }); });
     const post = result.current.createStreamHandler('local-r-asst', 't8');
     act(() => {
       post({ type: 'error', code: 'SESSION_BUSY', message: 'busy',
         retryPayload: { sessionId: 'S', agentId: 'a', userMessage: 'lost?' } } as StreamEvent);
     });
-    expect(store.messages).toEqual([]);
-    expect(testTabMap.get('t8')!.queuedMessage).toBeTruthy();
+    expect(store.messages.map((m) => [m.id, m.sendState])).toEqual([['local-r', 'failed']]);
   });
 
   it('a session state pushed on the subscription clears a stale spinner at once (S3), no poll', async () => {

@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: P1 DONE（后端，v4）；P2a DONE（蜜蜂只看活动）；P2b DONE（未受理的消息可重试）；P2c、P3 未开始
+status: P1 DONE（后端，v4）；P2a DONE（蜜蜂只看活动）；P2b DONE（未受理的消息可重试）；P2c DONE（排队只在后端）；P3 未开始
 related: chat-transcript-single-source.md（S3 会话状态唯一来源，本文是它没覆盖到的那一半）, streaming-spinner-ssot.md（2026-06-30，同类，未按设计落地）
 ---
 
@@ -372,6 +372,38 @@ fresh-context 审查。旧的 `streaming` 字段一直保留（部署脚本在�
   - **P2c 删前端队列**：忙时照常 POST，后端回执 `queued: true`；排队气泡读快照的 `pending`，取消调
     `DELETE /pending/{client_id}`（409 显示"已在发送"）；删 `tabState.queuedMessage`、`drainQueuedMessage`、
     `shouldQueueSend` 的排队分支、drain 退役镜像。
+  - P2c 实现（2026-10-24）：前端队列删了，排队只在后端。
+    - **忙时发送**（`ChatPage.sendWhileBusy`）：会话有一轮在跑（或可能在跑：本地请求开着、重连中、断线不确定）时，
+      消息照常 POST，但不接管这个 tab 的流处理（不动 stream generation、不建 handler，否则正在渲染的那一轮会被当成
+      过期丢掉）。后端排队（回执 `queued: true`，再一个 SESSION_BUSY），或者此时会话已空出来就直接跑——那一轮和
+      drain 出来的一样从订阅流到达。附件在点 Send 时读。连发几条就是几条消息。没受理的标"未发送 · 重试"（P2b）。
+    - **排队显示只看服务端的列表**：后端在消息转 pending 的地方（受理排队、drain 输掉竞争、history_dropped、unit
+      报 SESSION_BUSY、QUEUE_TIMEOUT）推一次 `session_state`（`SessionRouter.publish_queue`），里面带 `pending`。
+      用户气泡在它的 `client_id` 在列表上且没被认领时显示"已排队"和取消。推送按 eventSeq 排序；轮询只在发出时间晚于
+      最近一次推送时才用。刚发出、回执还没到的那条先算排队，直到回执之后读到的列表决定（`tab._queuedLocal`）。
+    - **草稿在点 Send 时取走，没发出去就还给原 tab**（普通发送和忙时发送一样）：点 Send 的那一刻这个 tab 一定是当前 tab，
+      所以就在那时清输入框；读附件之后不再碰当前输入框（用户可能已切到别的 tab）。读失败、Stop、tab 关了、重置了或换了会话，
+      什么都不发，文字和附件放回它自己的 tab（`restoreDraft` / `pages/chat/draftToRestore.ts`），不覆盖用户在那里新输入或新加的内容。
+    - **一次只准备一条**：读附件期间（`tab._preparingSend`，一个属于这次发送的令牌，只有它自己能清）再点 Send 不做事。
+    - **列表不完整时不下结论**：`pending` 最多 50 条；只有明确给了 `pending_count` 且不超过列表长度才算完整（`pendingComplete`），否则不在列表上的消息保持原来的标记，回执后的
+      本地排队也不结束；状态里没有 `pending`（旧后端）时不动标记。会话换了（重置、重新绑定），队列字段全部重来（eventSeq 按会话计）。
+      忙时发送记本地排队之前先按当前会话重绑一次。取消成功时，同一会话的每个 tab 都删掉那个气泡（恢复的布局里可能有两个）。
+    - **取消**调 `DELETE /pending/{client_id}`：成功删气泡，文字放回它自己的 tab（`restoreDraft`，取消期间切走了也一样，不覆盖新输入；附件不回填）；409 提示"已在发送"。
+    - **Stop 和重置都会终止还在准备的发送**：两处都清 `_sendToken` 和 `_preparingSend`；忙时发送读完附件后检查准备权还归自己
+      （`stillMine`），普通发送除了令牌还检查会话没变（`sendSid`）。否则重置后旧草稿会发进新会话，Stop 拦不住忙时发送。
+    - **刷新后排队的消息照样看得到**：历史不返回没发出的行（`sent=0`），所以列表上有、store 里没有的未认领条目，按 `preview`
+      补一个排队气泡（id 用 `client_id`），能看到也能取消；送出后库里的行按 `client_id` 替换它。
+    - **排队推送合并**：`session_state.publish` 已安排、还没开始读的那次推送会被后来的变化共用（按 session 记任务，任务已结束或
+      被取消就重新安排），一阵连发只读一次队列。
+    - 删掉：`tabState.queuedMessage` / `_queuedAt` / `drainPending`、`drainQueuedMessage`、`onDrainQueue` 和它在结果、
+      错误、完成、Stop、idle 边沿的所有调用、结果时为排队消息保持蜜蜂、SESSION_BUSY 时在本地重新排队
+      （`queuedMessageFromRetryPayload`、`retryPayloadHasAttachments`、`SessionBusyRetryPayload`）、drain 回合的
+      临时气泡清理、`drain-lifecycle-state-transitions.test.ts`。
+    - 留着：`computeDrainRetirement`（服务端 drain 了而订阅流没渲染时从库里拉那一轮）、`isWaitingForBusy` 提示、
+      streaming-machine 的 `RESULT.hasQueuedMessage`（现在恒为 false，P4 删）。
+    - 测试：`serverQueue.test.ts`（推送顺序、在途轮询不覆盖推送、回执前后的本地排队、忙时发送的请求不被别的标记清掉、
+      截断列表、旧后端、换会话、一次只准备一条、映射、取消的 200/409/404、ChatPage 忙时发送的源码守卫）；后端 `test_a_message_queued_while_busy_pushes_the_queue`。
+      反向验证：推送不排序、轮询不排序、本地排队提前结束、被认领的也算排队、清理时删掉在途请求、排队不推送，各自变红。
 - v4 第二轮独立审查（2026-10-23，3 BLOCKER + 3 MAJOR + 1 MINOR，逐条核实）：
   - 修了：
     - **DEAD 清理不看占位**：`LifecycleManager._cleanup_dead` 在 `_busy()` 为真时跳过（占住的 send 会自己把
