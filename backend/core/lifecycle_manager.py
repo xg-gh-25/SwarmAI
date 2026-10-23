@@ -1132,7 +1132,7 @@ class LifecycleManager:
             from core import session_state as _ss
             _ss.forget(session_id)
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("session state forget failed session=%s", session_id, exc_info=True)
         try:
             from . import session_registry
             session_registry.system_prompt_metadata.pop(session_id, None)

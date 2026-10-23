@@ -217,7 +217,7 @@ def test_history_endpoint_annotates_and_keys_the_etag_on_live_prompts():
     fake_db = MagicMock()
     fake_db.messages.count_by_session = AsyncMock(return_value=len(rows))
     fake_db.messages.list_by_session = AsyncMock(side_effect=lambda sid: json.loads(json.dumps(rows)))
-    fake_db.compaction_signature = AsyncMock(return_value="0.0")
+    fake_db.transcript_rev = AsyncMock(return_value=5)
     fake_db.list_compactions = AsyncMock(return_value=[])
     req = MagicMock()
     req.headers = {}

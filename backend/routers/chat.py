@@ -1064,24 +1064,26 @@ async def get_session_messages(
     # change at or below it is in this body, so a tab applies only the feed's
     # changes above it (core/transcript_feed). A change landing between this read
     # and the rows is in both — applying it again is a no-op.
+    transcript_rev: int | None
     try:
         transcript_rev = await db.transcript_rev(session_id)
     except Exception:  # noqa: BLE001
         logger.debug("transcript rev read failed session=%s", session_id, exc_info=True)
-        transcript_rev = 0
+        transcript_rev = None
 
-    # ── ETag: count query → 304 if unchanged ──
-    # Only for non-cursor queries (before_id changes per request).
+    # ── ETag: transcript rev → 304 if unchanged ──
+    # The rev moves on every insert, in-place update (a decision, an answer, a
+    # background agent's result) and delete of a messages or compactions row
+    # (schema v15 triggers), so it stands for the rows and the spliced compactions;
+    # a row count misses in-place updates and served a stale body on 304. Only for
+    # non-cursor queries (before_id changes per request); no ETag when the rev
+    # could not be read.
     etag: str | None = None
-    if before_id is None:
-        msg_count = await db.messages.count_by_session(session_id)
-        # Compaction rows (and a late summary on one) are spliced into the
-        # history below, so they are part of the content the ETag stands for.
-        compaction_sig = await _compaction_signature(session_id)
+    if before_id is None and transcript_rev is not None:
         # The page shape is part of the body: a turns page and a full fetch of the
         # same session must not share an ETag.
         shape = f"t{turns}" if turns is not None else (f"l{limit}" if limit is not None else "all")
-        etag = f'"{session_id}:{msg_count}:{compaction_sig}:{_perm_prompt.etag_part(_live_perms)}:{shape}"'
+        etag = f'"{session_id}:r{transcript_rev}:{_perm_prompt.etag_part(_live_perms)}:{shape}"'
         if_none_match = request.headers.get("if-none-match")
         if if_none_match and if_none_match == etag:
             return FastAPIResponse(status_code=304, headers={
@@ -1138,7 +1140,8 @@ async def get_session_messages(
         etag = None  # never cache a body that lacks rows the ETag counts
 
     headers = {"ETag": etag} if etag else {}
-    headers["X-Transcript-Rev"] = str(transcript_rev)
+    if transcript_rev is not None:
+        headers["X-Transcript-Rev"] = str(transcript_rev)
     if has_more is not None:
         headers["X-Has-More"] = "1" if has_more else "0"
     return JSONResponse(content=data, headers=headers)
@@ -1166,6 +1169,7 @@ async def get_transcript_since(
     try:
         live = _perm_prompt.live_request_ids(_get_router().get_unit(session_id), session_id)
     except Exception:  # noqa: BLE001
+        logger.debug("live permission read failed session=%s", session_id, exc_info=True)
         live = set()
     fields = ("id", "session_id", "role", "content", "model", "created_at", "metadata")
     msgs = [{k: m[k] for k in fields if k in m} for _, m in out["messages"]]
@@ -1175,15 +1179,6 @@ async def get_transcript_since(
              for rv, c in out["compactions"]]
     rows.sort(key=lambda r: (r["row"].get("created_at") or "", r["rev"]))
     return {"rev": out["rev"], "reset": out["reset"], "rows": rows}
-
-
-async def _compaction_signature(session_id: str) -> str:
-    """Compaction part of the history ETag; "0.0" if the lookup fails."""
-    try:
-        return await db.compaction_signature(session_id)
-    except Exception:  # noqa: BLE001
-        logger.debug("compaction signature failed session=%s", session_id, exc_info=True)
-        return "0.0"
 
 
 async def _pipeline_session_signal(kind: str, session_id: str) -> None:

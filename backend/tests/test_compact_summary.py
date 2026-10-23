@@ -391,7 +391,7 @@ async def test_history_endpoint_splices_and_etag_counts_compactions():
     fake_db = MagicMock()
     fake_db.messages.count_by_session = AsyncMock(return_value=len(rows))
     fake_db.messages.list_by_session = AsyncMock(return_value=rows)
-    fake_db.compaction_signature = AsyncMock(return_value="1.1")
+    fake_db.transcript_rev = AsyncMock(return_value=7)
     fake_db.list_compactions = AsyncMock(return_value=comps)
     req = MagicMock()
     req.headers = {}
@@ -401,8 +401,8 @@ async def test_history_endpoint_splices_and_etag_counts_compactions():
         body = json.loads(resp.body)
         assert [m["id"] for m in body] == ["m1", "m2", "compact-c1", "m3"]
         # ...:-: = no permission prompt is live (core/permission_prompt etag_part)
-        assert resp.headers["ETag"] == '"s:3:1.1:-:all"'
-        req.headers = {"if-none-match": '"s:3:1.1:-:all"'}
+        assert resp.headers["ETag"] == '"s:r7:-:all"'
+        req.headers = {"if-none-match": '"s:r7:-:all"'}
         assert (await chat_router.get_session_messages("s", req, limit=None, before_id=None)).status_code == 304
         # Older page: bounded by the cursor row, so a compaction after it is not here.
         fake_db.messages.list_by_session_paginated = AsyncMock(return_value=rows[:2])

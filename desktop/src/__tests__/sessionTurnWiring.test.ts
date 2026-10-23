@@ -401,6 +401,27 @@ describe('session turn wiring', () => {
     since.mockRestore();
   });
 
+  it('a feed change does not advance the rev a resync asks from (a lower-rev turn row may not be shown yet)', async () => {
+    const tail = vi.spyOn(chatService, 'getReconcileTailWithRev').mockResolvedValue({ messages: [], rev: 42 });
+    const since = vi.spyOn(chatService, 'getTranscriptSince').mockResolvedValue({ rev: 51, reset: false, rows: [] });
+    renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+    act(() => { initTestTab('r2'); });
+    testTabMap.get('r2')!.sessionId = 'S';
+    await act(async () => { fake.emit({ type: 'resync', sessionId: 'S', eventSeq: 99 }); await Promise.resolve(); });
+    expect(testTabMap.get('r2')!.transcriptRev).toBe(42);
+    // rev 50 is a turn row whose event has not reached this tab; the decision at
+    // rev 51 reaches it first through the feed
+    act(() => {
+      fake.emit({ type: 'transcript_row', sessionId: 'S', eventSeq: 100, rev: 51, pending: false, op: 'update',
+        row: { id: 'u9', session_id: 'S', role: 'user', content: [{ type: 'text', text: 'hi' }], created_at: '2026-10-23T10:00:00' } } as never);
+    });
+    expect(testTabMap.get('r2')!.transcriptRev).toBe(42);
+    await act(async () => { fake.emit({ type: 'resync', sessionId: 'S', eventSeq: 130 }); await Promise.resolve(); });
+    expect(since).toHaveBeenCalledWith('S', 42);
+    tail.mockRestore();
+    since.mockRestore();
+  });
+
   it('a POST stream error while the subscription carries the turn is not shown as an error', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => {

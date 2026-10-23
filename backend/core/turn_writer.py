@@ -31,7 +31,7 @@ its clearing of the held results would write them twice.
 
 Its writes are not reported to the transcript feed (core/transcript_feed): the
 turn's own events carry them. Nothing else calls ``_persist_stream_event`` for a turn
-(tests/test_turn_writer.py holds that). P2 assigns the transcript rev here.
+(tests/test_turn_writer.py holds that). The transcript rev is assigned by the schema v15 triggers, not here.
 
 Public: ``TurnWriter`` (``TurnWriter.running``).
 """

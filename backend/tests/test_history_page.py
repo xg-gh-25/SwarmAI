@@ -152,7 +152,7 @@ def test_endpoint_turns_page_sets_has_more_and_a_shape_specific_etag():
     async def paginated(sid, limit, before_id):
         return await fetch(limit, before_id)
     fake_db.messages.list_by_session_paginated = AsyncMock(side_effect=paginated)
-    fake_db.compaction_signature = AsyncMock(return_value="0.0")
+    fake_db.transcript_rev = AsyncMock(return_value=5)
     fake_db.list_compactions = AsyncMock(return_value=[])
     req = MagicMock()
     req.headers = {}

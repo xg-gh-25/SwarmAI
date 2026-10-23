@@ -45,6 +45,7 @@ async def session_state_entry(unit) -> dict:
         from core import session_pending
         pending_count = await session_pending.count_pending(unit.session_id)
     except Exception:
+        logger.debug("pending count read failed session=%s", unit.session_id, exc_info=True)
         pending_count = 0
 
     # The unit's surfaced prompt (WAITING_INPUT), else the oldest open prompt
@@ -75,6 +76,7 @@ async def session_state_entry(unit) -> dict:
                     }
                 break
         except Exception:
+            logger.debug("open prompt read failed session=%s", unit.session_id, exc_info=True)
             pending_question = None
 
     return {

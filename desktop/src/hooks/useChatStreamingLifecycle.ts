@@ -4855,8 +4855,11 @@ export function useChatStreamingLifecycle(
           const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: sid });
           let applied = feedApplied.get(store);
           if (!applied) { applied = new Map(); feedApplied.set(store, applied); }
-          const rev = (ev as { rev?: number }).rev;
-          if (typeof rev === 'number' && rev > (tab.transcriptRev ?? 0)) tab.transcriptRev = rev;
+          // The change's rev does NOT become the tab's transcriptRev: a turn's own
+          // rows are written before their events publish and carry no rev, so a
+          // feed change can arrive ahead of a lower-rev turn row this tab has not
+          // seen yet. Only a read of the record (resync) sets the rev the next
+          // resync asks from, so `since_rev` never skips that row.
           for (const op of planTranscriptChange(store.messages, ev as unknown as TranscriptChange, applied)) {
             if (op.kind === 'append') store.append(op.msg);
             else if (op.kind === 'update') store.updateById(op.id, op.update);
