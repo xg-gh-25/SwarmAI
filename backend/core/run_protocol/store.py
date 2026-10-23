@@ -18,6 +18,7 @@ from typing import Any, Callable, Mapping
 
 from core.run_protocol import events as ev
 from core.run_protocol.identifiers import IdentifierError, validate_run_id
+from core.run_protocol.infra import InfrastructureError
 from utils.file_lock import flock_exclusive, flock_unlock
 
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -25,6 +26,14 @@ _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 class StoreError(RuntimeError):
     """Audit data is unsafe, malformed, conflicting, or unavailable."""
+
+
+class AuditUnwritable(StoreError, InfrastructureError):
+    """The audit area cannot be written (an OS error on its files): the run's
+    infrastructure failed (conformance F11). Malformed or conflicting data is a
+    plain ``StoreError``."""
+
+    component = "audit_store"
 
 
 @dataclass(frozen=True)
@@ -93,15 +102,30 @@ class AuditStore:
         self.paths.blobs.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     def _locked(self):
-        self._ensure()
-        handle = open(self.paths.lock, "a+", encoding="utf-8")
-        flock_exclusive(handle.fileno())
-        return handle
+        handle = None
+        try:
+            self._ensure()
+            handle = open(self.paths.lock, "a+", encoding="utf-8")
+            flock_exclusive(handle.fileno())
+            return handle
+        except OSError as exc:
+            if handle is not None:
+                handle.close()
+            raise AuditUnwritable(f"audit area not writable: {exc}") from exc
 
     @staticmethod
     def _atomic_json(path: Path, value: Any) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        """Every audit-area JSON write (contract, seals, run lists); an OS write
+        failure is the audit store being unwritable (F11, K3 review r3)."""
         raw = json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")
+        try:
+            AuditStore._write_json_file(path, raw)
+        except OSError as exc:
+            raise AuditUnwritable(f"audit file not writable: {exc}") from exc
+
+    @staticmethod
+    def _write_json_file(path: Path, raw: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         temp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         try:
             with open(temp, "xb") as handle:
@@ -257,8 +281,10 @@ class AuditStore:
         try:
             self._discard_torn_tail()
             return self._validated_append(self.read_events(), event, blobs or {})
-        except (ev.EventError, OSError) as exc:
+        except ev.EventError as exc:
             raise StoreError(str(exc)) from exc
+        except OSError as exc:
+            raise AuditUnwritable(f"audit area not writable: {exc}") from exc
         finally:
             flock_unlock(lock.fileno())
             lock.close()
@@ -283,8 +309,10 @@ class AuditStore:
                 **envelope,
             )
             return event, self._validated_append(chain, event, blobs)
-        except (ev.EventError, OSError) as exc:
+        except ev.EventError as exc:
             raise StoreError(str(exc)) from exc
+        except OSError as exc:
+            raise AuditUnwritable(f"audit area not writable: {exc}") from exc
         finally:
             flock_unlock(lock.fileno())
             lock.close()
@@ -298,6 +326,8 @@ class AuditStore:
         try:
             self._write_blob(digest, data)
             return digest
+        except OSError as exc:
+            raise AuditUnwritable(f"audit blob not writable: {exc}") from exc
         finally:
             flock_unlock(lock.fileno())
             lock.close()

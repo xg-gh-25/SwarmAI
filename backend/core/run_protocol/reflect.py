@@ -18,6 +18,9 @@ LAYERS = {"principle": "metacognition", "correction": "metacognition",
           "decision": "cognition", "model": "cognition",
           "guideline": "operation", "pitfall": "operation", "process": "operation"}
 RELATIONS = frozenset({"new", "reinforces", "refines", "contradicts"})
+# a lesson is one line of plain text: it is written into a DDD doc as one bullet, so a
+# line break would let it write its own headings or entries (K3 review r1)
+_MULTILINE = re.compile(r"[\r\n\u2028\u2029\x0b\x0c\x85]")
 _VOLATILE = re.compile(r"\brun_[A-Za-z0-9_-]+\b|/(?:Users|home)/[^/]+/|\b(?:running|pending|done)\b", re.I)
 
 
@@ -69,8 +72,12 @@ def prepare(lessons: Sequence[Mapping[str, Any]], *, event_ids: set[str],
         ids.add(lesson_id)
         statement = raw["statement"]
         if not isinstance(statement, str) or not statement.strip() or len(statement) > 400 \
-                or _VOLATILE.search(statement):
+                or _VOLATILE.search(statement) or _MULTILINE.search(statement):
             raise ReflectError(f"lesson {lesson_id} statement is volatile or invalid")
+        tell = raw["tell"]
+        if not isinstance(tell, str) or not tell.strip() or len(tell) > 400 \
+                or _MULTILINE.search(tell):
+            raise ReflectError(f"lesson {lesson_id} tell must be one line of text")
         evidence = raw["evidence"]
         if not isinstance(evidence, list) or not evidence or not set(evidence) <= event_ids:
             raise ReflectError(f"lesson {lesson_id} evidence is not from this run")

@@ -45,6 +45,12 @@ def _rig(tmp_path, monkeypatch):
                 "event_authority_id": authority.authority_id,
                 "pipeline_code_hash": "a" * 64}
     (audit / "contract.json").write_text(json.dumps(contract))
+    # the runner writes through the run's lifecycle-validated store, so the log
+    # starts with its genesis event as every real run's does
+    from core.run_protocol.store import AuditStore
+    AuditStore(data / "state" / "pipeline_agent_audit", run_id, authority).append_new(
+        writer=authority.writer("cli"), kind="run_create", at="2026-10-23T00:00:00Z",
+        payload={"run_id": run_id, "profile": "direct", "decision_cap": 0})
     run_dir = tmp_path / "run"; run_dir.mkdir()
     evidence_seal.enable(run_id)
     runner = V1Runner(run_dir=run_dir, repo_root=repo, repo_name="repo", run_id=run_id,
@@ -113,6 +119,11 @@ def test_pipeline_receipt_must_be_runner_sealed_to_pass(tmp_path, monkeypatch):
 
 
 def test_prove_receipt_emits_correlated_runner_events(tmp_path, monkeypatch):
+    # this test is about the runner's call/proof correlation; the finding ledger
+    # (which refuses a proof of an unknown finding) is covered by the findings and
+    # real-E2E tests, so its fold is left out of this synthetic run's store
+    from core.run_protocol import engine
+    monkeypatch.setattr(engine, "_FINDING_KINDS", engine._FINDING_KINDS - {"proof"})
     runner, _data, run_dir = _rig(tmp_path, monkeypatch)
     receipt = run_dir / "evidence" / "proofs" / "prove.json"
     receipt.parent.mkdir(parents=True)

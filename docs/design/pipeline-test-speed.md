@@ -214,6 +214,8 @@ break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连�
   选哪些测试没变，只改了续跑时哪些已完成的文件可以不重跑。
 - 2026-10-22 `_risk_expansion` / `_plan`（XG 在 pipeline v13 FINAL §B3.3 批准）：最终范围按路径确定性扩展：pipeline 协议、gate/权限、选测器、共享配置、持久化、公共契约和动态导入各自加选对应套件；上限只读受保护的 `contract.json.risk_test_file_cap`。超过上限时把全部 overflow 写入 evidence，并将 final 记为 `incomplete`，绝不只跑前 N 个后报 green。新增 `_risk_expansion` 到冻结函数集合。
 - 2026-10-22 `_plan` / `_plan_ac_refs`（XG 在 pipeline v1 修复方案 B4 批准："删除旧的 `--mode probe` 和 `probe:` 引用"）：`probe:<name>` 形式的 ac_coverage 引用及其合成结果行删除，`--mode probe` 改为执行 v1 DESIGN_SPEC 的 probe exit（v13 §A2.5）。被删的只是 probe 行；测试文件的选法（改动的测试、直接 importer、AC 点名、import smoke、BVT）不变。
+- 2026-10-23 `_full_scope_refusal`（XG 在 pipeline v1 符合性方案 F17 / §5 批准："runner 从 contract 读 `regression_round_cap`、`recheck_cap`，删掉模块常量"）：完整范围轮数和修复 recheck 次数的上限只读 run 受保护的 `contract.json`；`FULL_SCOPE_MAX_ROUNDS`、`RECHECK_MAX_FIXES` 删除。v1 contract 里的上限读不出时拒绝所有完整范围调用；没有 contract 的旧 run（§D1 切换后已不支持）只由熔断约束。旧 run.json 的"只在 DELIVER"阶段门一起删除：v1 的 run.json 没有 `stage_timing`，这道门对 v1 从未生效，v1 的阶段由 lifecycle 判定。选哪些测试没变。
+- 2026-10-23 `_plan`（XG 在 pipeline v1 符合性方案 F15 批准："`carry` 算出的 `affected_tests` 写入 contract 之外的一个只读 plan 文件。runner 的 recheck 只消费这个 plan"）：main 移动进 final 依赖范围后，engine 把受影响的测试写进审计区的 `carry_plan.json`（按仓库，绑定同步后的 code tree）；显式 `--mode recheck` 在原有的"上次失败 + 之后改过的文件"之外，再加上 plan 里点名的测试。没有 plan、或 plan 不是为当前 tree 算的，选法不变；plan 点不出任何测试（空列表）时，recheck 被拒绝，必须跑 `--mode regression`。
 
 ## 12. main 上已有的红：登记，单独修（2026-10-21，XG 决定）
 

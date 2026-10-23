@@ -23,7 +23,6 @@ from typing import Any, Mapping, Sequence
 from core import evidence_seal
 from core.run_protocol import events as protocol_events
 from core.run_protocol.final import build_repo_final, call_hash
-from core.run_protocol.store import AuditStore
 from core.run_protocol.validations import load_manifest, manifest_digest, required_for
 from utils.file_lock import flock_exclusive, flock_unlock
 
@@ -66,8 +65,74 @@ def read_integration_branches(data_dir: str | Path, run_id: str) -> dict[str, st
     return {str(k): str(v) for k, v in value.items()} if isinstance(value, dict) else {}
 
 
+def carry_plan_path(data_dir: str | Path, run_id: str) -> Path:
+    """The tests a moved main reaches, per repo (§C5.3, conformance F15): written by the
+    engine when the integration base moved into the final's dependency scope, read by
+    the runner's recheck. In the audit area: agents cannot write it."""
+    return contract_path(data_dir, run_id).parent / "carry_plan.json"
+
+
+def read_carry_plan(data_dir: str | Path, run_id: str, repo_name: str,
+                    code_tree: str) -> list[str] | None:
+    """The affected tests of *repo_name* for exactly *code_tree* (the synced tree the
+    engine computed them for), or None when there is no such plan. An EMPTY list is a
+    plan too: no test could be named, so the whole regression scope must run."""
+    try:
+        value = json.loads(carry_plan_path(data_dir, run_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    row = value.get(repo_name) if isinstance(value, dict) else None
+    if not isinstance(row, dict) or row.get("code_tree") != code_tree \
+            or not isinstance(row.get("affected_tests"), list):
+        return None
+    return [str(test) for test in row["affected_tests"]]
+
+
 def is_v1_run(data_dir: str | Path, run_id: str) -> bool:
     return read_contract(data_dir, run_id) is not None
+
+
+def event_channel(run_id: str, contract: Mapping[str, Any]):
+    """(store, runner writer) of *run_id*, checked against its contract's authority."""
+    data_dir = os.environ.get("SWARM_DATA_DIR")
+    if not data_dir:
+        from config import get_app_data_dir
+        data_dir = str(get_app_data_dir())
+    audit_root = Path(data_dir) / "state" / "pipeline_agent_audit"
+    key_path = audit_root / "runs" / run_id / "authority.key"
+    try:
+        authority = protocol_events.EventAuthority(key_path.read_bytes())
+    except (OSError, protocol_events.EventError) as exc:
+        raise RunnerError(f"runner event authority unavailable: {exc}") from exc
+    expected = contract.get("event_authority_id")
+    if not isinstance(expected, str) or expected != authority.authority_id:
+        raise RunnerError("contract event authority does not match runner authority")
+    # the same lifecycle-validated store as the CLI's (K3 review r2): no runner event
+    # can land after a trigger whose transition is still due
+    from core.run_protocol.engine import _store
+    return _store(audit_root, run_id, authority, producer="runner"), authority.writer("runner")
+
+
+def record_infrastructure_failed(run_id: str, contract: Mapping[str, Any],
+                                 failure: Any) -> dict[str, Any] | None:
+    """The run's infrastructure failed under a test call (conformance F11): the run
+    ends ``failed``. None when it already ended. Needs no V1Runner: the failure may
+    have come before one could be built (the code tree's own git objects)."""
+    from core.run_protocol import lifecycle
+    from core.run_protocol.store import StoreError
+    store, writer = event_channel(run_id, contract)
+    try:
+        event, _ = store.append_new(
+            writer=writer, kind="infrastructure_failed", at=_now(), ordinal=time.time_ns(),
+            payload={"reason": f"{failure.component}: {failure}"[:300]},
+            # one per run, checked under the run lock: a second reporter (another
+            # repo's runner) records nothing (K3 review r1)
+            refuse=lambda chain: lifecycle.infrastructure_refusal(chain, store.authority))
+    except StoreError as exc:
+        if str(exc).startswith(lifecycle.ALREADY_ENDED):
+            return None
+        raise
+    return event
 
 
 def _now() -> str:
@@ -107,23 +172,7 @@ class V1Runner:
             raise RunnerError("base/code_tree must be git object ids")
         self.calls_dir = self.run_dir / "evidence" / "tests" / "calls"
         self.lock_path = self.calls_dir / ".index.lock"
-        self._store, self._writer = self._event_channel()
-
-    def _event_channel(self):
-        data_dir = os.environ.get("SWARM_DATA_DIR")
-        if not data_dir:
-            from config import get_app_data_dir
-            data_dir = str(get_app_data_dir())
-        audit_root = Path(data_dir) / "state" / "pipeline_agent_audit"
-        key_path = audit_root / "runs" / self.run_id / "authority.key"
-        try:
-            authority = protocol_events.EventAuthority(key_path.read_bytes())
-        except (OSError, protocol_events.EventError) as exc:
-            raise RunnerError(f"runner event authority unavailable: {exc}") from exc
-        expected = self.contract.get("event_authority_id")
-        if not isinstance(expected, str) or expected != authority.authority_id:
-            raise RunnerError("contract event authority does not match runner authority")
-        return AuditStore(audit_root, self.run_id, authority), authority.writer("runner")
+        self._store, self._writer = event_channel(self.run_id, self.contract)
 
     def _locked(self):
         self.calls_dir.mkdir(parents=True, exist_ok=True)
@@ -303,6 +352,29 @@ class V1Runner:
             target=target, details=details,
             pre_existing=verdict == "pass" and bool(evidence and evidence.get("failures")),
             started_at=now, finished_at=now)
+
+    def record_cap_exceeded(self, cap: str) -> dict[str, Any] | None:
+        """metric(cap_exceeded.<cap>) for a runner-side count cap (full-scope rounds,
+        fix rechecks, the circuit breaker's continuations): conformance F18. One per
+        cap per stage attempt of the run (idempotent)."""
+        from core.run_protocol import lifecycle
+        from core.run_protocol.store import StoreError
+        if cap not in lifecycle.CAPS or cap in ("stage_attempt", "land_attempt",
+                                                "gate0_round", "dispatch"):
+            raise RunnerError(f"unknown runner cap {cap!r}")
+        state = lifecycle.fold(self._store.read_events(), self._store.authority)
+        stage = str(state.get("stage") or "run")
+        attempt = int((state.get("stage_attempts") or {}).get(stage) or 1)
+        try:
+            event, _ = self._store.append_new(
+                writer=self._writer, kind="metric", at=_now(), stage=stage, attempt=attempt,
+                payload={"name": f"cap_exceeded.{cap}", "value": 1, "cap": cap},
+                refuse=lambda chain: lifecycle.cap_already_recorded(chain, cap, stage, attempt))
+        except StoreError as exc:
+            if str(exc) != "cap already recorded":
+                raise
+            return None
+        return event
 
     def record_cache_conflict(self, *, key: str, first_hash: str, new_hash: str,
                               kind: str = "test") -> dict[str, Any]:

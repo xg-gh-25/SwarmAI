@@ -149,7 +149,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "check": _spec("cli", ("payload.stage_attempt_event_id", "payload.check_id"),
                    "payload.check_id", {"stage_attempt_event_id": str, "check_id": str,
                    "passed": bool, "detail": str}),
-    "transition": _spec("cli", ("payload.from", "payload.to", "payload.trigger_event_id"),
+    # the producer of the triggering event signs its transition (the lifecycle decides
+    # what it must say; a transition that differs from the expected one never folds)
+    "transition": _spec(("cli", "runner"), ("payload.from", "payload.to", "payload.trigger_event_id"),
                         None, {"from": (str, type(None)), "to": str,
                         "trigger_event_id": str}),
     "render": _spec("cli", ("stage", "attempt", "payload.document"),
@@ -176,7 +178,10 @@ EVENT_SPECS: dict[str, EventSpec] = {
                       # what the person is asked is what DC-1 validated (conformance
                       # K1). Optional only so a log written before it still folds; such
                       # a decision has no content to ask and DC-1 fails it.
-                      {"decision_json": str}),
+                      {"decision_json": str,
+                       # after the decision cap: the agent's evidence-based choice
+                       # (DC-2, conformance F12); the run is not handed to a person
+                       "decided_by": str, "option_id": str, "evidence_refs": list}),
     "human_answer": _spec("hook", ("payload.request_id",), "payload.request_id",
                           {"request_id": str, "option_id": str}),
     "land": _spec("cli", ("ordinal",), None,
@@ -202,7 +207,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "restore": _spec("cli", ("ordinal",), None, {"snapshot_exists": bool}),
     # hook: the daemon's required_approval count (D4)
     "metric": _spec(("cli", "runner", "hook"), ("stage", "payload.name", "attempt"), "payload.name",
-                    {"name": str, "value": (int, float)}),
+                    {"name": str, "value": (int, float)},
+                    # metric(cap_exceeded.<cap>): a count cap of the run was hit (F18)
+                    {"cap": str}),
     "turn": _spec("cli", ("payload.message_id",), None, {"message_id": str}),
     "integrity": _spec(("cli", "hook", "runner"), ("payload.conflict_id", "ordinal"),
                        "payload.conflict_id", {"conflict_id": str,
@@ -218,7 +225,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
                             {"final_verdict": str, "degraded": bool}),
     "gate0_exhausted": _spec("cli", ("ordinal",), None, {"reason": str}),
     "resume": _spec("cli", ("ordinal",), None, {"worktree_ready": bool}),
-    "infrastructure_failed": _spec("cli", ("ordinal",), None, {"reason": str}),
+    # the run's infrastructure failed (conformance F11): the CLI or the runner that met
+    # the failure records it
+    "infrastructure_failed": _spec(("cli", "runner"), ("ordinal",), None, {"reason": str}),
     "worktree_unavailable": _spec("cli", ("ordinal",), None, {"reason": str}),
     # the daemon's background REFLECT ends REFLECT, never the agent's CLI (D1)
     "reflect_complete": _spec("hook", ("ordinal",), None, {}),

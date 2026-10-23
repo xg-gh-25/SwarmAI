@@ -339,3 +339,45 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 # 用一个临时 git 仓库（--repo）；每个 run 结束后看 $D/state/pipeline_agent_audit/runs/<id>/run_audit.json，
 # 五维都不能是 BLOCK
 ```
+
+## 14. 设计符合性修复 K3：半截机制逐项接上或删除
+
+依据：符合性方案 §3 K3、§5；v13 §A1.2、§A4.4、§B5.2、§B7、§C5.3、E4/E5。根因 R-C：机制只做了一半，有生产者没读者，或有读者没生产者。
+
+| 项 | 修改前 | 现在 |
+|---|---|---|
+| F11 `infrastructure_failed` | 没有生产者 | 新模块 `infra.py` 定义三类基础设施故障：审计区写不进（`store.AuditUnwritable`，覆盖加锁、追加事件、写 blob）、hook token 服务连不上（`engine.HookTokenUnavailable`，三处取 token 统一走 `_consume_token`）、git 对象写不进（`git_tree.GitObjectWriteError`，覆盖 add、hash-object、write-tree）。碰到故障的那一层把它当作基础设施故障抛出，不当作"事实未知"吞掉；CLI 或 runner 捕获后写 `infrastructure_failed`，run 进入 `failed`。每个 run 只写一条：在 run 锁内用 `lifecycle.infrastructure_refusal` 去重。runner 签不了 transition，下一次以 CLI 身份 `load` 时补签。其他异常照常抛出 |
+| F12 DC-2 | `resolve_after_cap` 只有测试在调 | decision 次数用完后，decision-request 带上 `after_cap {option_id, evidence_refs}`，由 `resolve_after_cap` 校验。decision 事件记下 `decided_by: agent_after_cap`，不转到 `awaiting_human`。这个选择会写进 REQUIREMENTS 的 clarification，DC-2 读到后令 push 失败。次数用完却没带选择，直接拒绝 |
+| F13 回答写回 | `human_answer` 不写回源文档 | 写 `human_answer` 的同一处立即把答案写回源文档：REQUIREMENTS 写进 clarifications（qid = request_id），DESIGN_SPEC 写进 `chosen.decisions`，然后重新渲染。答案只从签名事件读，stage-complete 时也会并入。`decision-answers.json` 在 K1 已删除。**偏离：** trivial 的 lite DESIGN_SPEC 没有 `chosen` 字段，这一种不写回，答案只留在签名事件和 REPORT 里 |
+| F14 resume 记录分支 | — | K1 已修（`_create_worktree` 是唯一的创建入口）。本簇只加测试固定这一点 |
+| F15 受影响测试 | 算出来了，没交给 runner | engine 把受影响的测试写进审计区的 `carry_plan.json`（按仓库存，绑定同步后的 code tree）。runner 的 recheck 只跑 plan 里的测试。plan 为空表示点不出测试，此时拒绝 recheck，要求跑 regression |
+| F16 确定性检查在前 | 先派专家 | `review-start` 先跑 REVIEW 阶段里不依赖专家回答的检查（DS-9b）。不通过就不发 handout |
+| F17 caps | contract 字段没人读 | 只读 contract 里的 `regression_round_cap` 和 `recheck_cap`。`FULL_SCOPE_MAX_ROUNDS`、`RECHECK_MAX_FIXES`、旧的"只在 DELIVER"阶段门（`FULL_SCOPE_STAGES`、`_open_stage`）全部删除。旧阶段门对 v1 从未生效，因为 v1 的 run.json 没有 `stage_timing`。**行为变化：** v1 run 的完整范围轮数第一次真正受上限约束，第 3 次 regression 会被拒绝，修复要改走 recheck。两个 E2E 测试按此调整。冻结 digest 和 `pipeline-test-speed.md` §11 已同步 |
+| F18 Speed/Token BLOCK | Speed 永远不会 BLOCK | 任何次数上限被打满都写一条 `metric(cap_exceeded.<cap>)`：not-landed 的原因（`checks_exhausted`、`land_conflict`、`final_stale`、`framing_rejected`）、第三次专家派发、完整范围轮数、修复 recheck 次数、熔断的各个计数器。同一 stage attempt 只记一次。audit 见到这条，Speed 判 BLOCK；超的是模型派发类上限时，Token 也判 BLOCK |
+| F19 REFLECT 关系 | 三种关系处理成一样 | reinforces：在原条目下追加证据引用，不复制文本。refines：保留原文，在下面追加修订。contradicts：不写入，进待审队列并注明冲突的条目。lesson 的 statement 和 tell 必须是单行文本。写文档用随机 O_EXCL\|O_NOFOLLOW 临时文件，并校验目标在项目目录内 |
+
+**Q3 未接线，等 XG 决定。** 前提不成立：pipeline-expert 的 AgentDefinition 写的是 `model="inherit"`（`core/pipeline_expert_agent.py`），模型不固定在 agent 定义里，CLI 在 handout 时拿不到确切的模型 id。`review_cache_key`、`record_reuse` 以及 `answer_reuse` 的 fold、检查、audit 分支暂不动，保持原样，等 XG 定下做法后一次处理。
+
+**审查（第 1 轮，992de277）：** 发现 4 个 HIGH、3 个 MED，已在本簇内修复：
+- git 写失败在收集事实时被当作"事实未知"吞掉；
+- 两个 runner 同时报故障会写出无法 fold 的事件流；
+- lesson 可以注入多行 Markdown，临时文件可能被符号链接覆盖；
+- 空的 carry plan 被当成"没有 plan"；
+- 加锁时的 OSError 没归为审计区写不进；
+- cap 记录漏报、误报，且重复写入；
+- Q3 半截路径（等 XG 决定）。
+
+**审查（第 2 轮，a1ef90c9）：** 3 个 HIGH、1 个 MED，已修复：
+- runner 用的是不带生命周期校验的裸 store，`infrastructure_failed` 之后还能插进别的事件，事件流从此无法 fold。改为 runner 和 CLI 用同一个校验 store（`engine._store(producer=)`），由写触发事件的一方在同一把锁里签它的 transition（`transition` 的 producer 放开为 cli/runner，内容仍由 lifecycle 决定）。上一版"load 时补签"的做法和 `events.may_sign` 一并删除；
+- decision 写回文档失败后没有恢复路径。签名事件是事实，文档只是投影：`check_context` 读需求和设计时先叠加已决定的 decision，每次 `stage-complete` 再投影一次（失败只记日志，基础设施错误照常抛出）；
+- proposal 队列写文件会跟随符号链接。改为从项目目录 fd 逐级 `O_DIRECTORY|O_NOFOLLOW` 打开，`O_CREAT|O_EXCL|O_NOFOLLOW` 新建并 fsync；
+- 两个并发的完整范围调用都能通过次数检查。改为每个 run 一把非阻塞锁（`_full_scope_slot`），第二个并发调用直接拒绝。
+
+**审查（第 3 轮，83d984da，最后一轮，发现一次修完，不再复审）：** 2 个 HIGH、3 个 MED：
+- REFLECT 先看 relation 再看 destination，`product` 或别的项目的 refines 会直接改本项目 DDD。改为先由 destination 定存储：只有目标是本项目 DDD 时才改条目，其余 relation 进待审队列并注明相关条目；
+- run index 写失败被吞掉，完整范围调用不计数，上限可无限绕过。完整范围模式下写失败直接让调用失败；
+- 已存在的 proposal 文件一律当成"已入队"。改为只有内容相同的普通文件才算重放，否则 `rejected_integrity`；
+- Gate-0 两轮后仍未通过、第三次 `gate0-start` 被拒时都没写 `cap_exceeded.gate0_round`。两个出口都补上；
+- contract、seals、run 列表的 JSON 写失败没有归为审计区写不进，create 失败还会留下占着 run id 的半成品。`AuditStore._atomic_json` 统一转成 `AuditUnwritable`；create 在 `run_create` 签名前失败时，只删除这次调用自己创建的目录。
+
+**登记的偏差：** trivial profile 的精简 DESIGN_SPEC 没有 `chosen` 字段，decision 不写回它（事件里仍有，检查读事件）。runner 单元测试的合成 run 现在写了 `run_create` 起始事件；proof 关联测试把 finding 账本的 fold 排除在该合成 store 之外，finding 校验由 findings 和真实 E2E 测试覆盖。

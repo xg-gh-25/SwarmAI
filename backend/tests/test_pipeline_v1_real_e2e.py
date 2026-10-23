@@ -114,10 +114,10 @@ def test_red_then_green_rerun_lands(rig):
     r.drive(until="build")
     r.edit(BREAK_OTHER)
     r.drive(until="test")
-    r.pt("regression")             # red
+    r.pt("regression")             # red (full-scope round 1 of the contract's 2)
     r.edit(FIX_OTHER)
-    r.pt("regression")             # green on the current tree
-    _landed_clean(r.drive())
+    r.pt("recheck")                # the fix is judged by a recheck, not a new round
+    _landed_clean(r.drive())       # TEST's own regression is round 2
 
 
 def test_main_moves_disjoint_lands_on_new_main(rig):
@@ -691,6 +691,7 @@ def test_a_committed_or_new_file_is_in_the_review_diff(rig):
     r.drive(until="review")
     (r.worktree / "backend" / "core" / "new_mod.py").write_text("def n():\n    return 2\n")
     _git(r.worktree, "add", "backend/core/mod.py"); _git(r.worktree, "commit", "-qm", "wip")
+    r.pt("tdd", "--files", "backend/tests/test_x.py")   # DS-9b on this tree first (F16)
     started = r.v1("review-start")
     prompt = "\n".join(h["prompt"] for h in started.get("handouts") or [])
     roster = [row["id"] for row in started.get("reviewers") or []]

@@ -129,6 +129,7 @@ Public symbols:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ast
 import glob
 import hashlib
@@ -3158,8 +3159,12 @@ def _write_evidence(ev_root: Path, mode: str, ev: dict, kind: str = "run",
             "unfinished_files": len({str(f.get("nodeid") or "").split("::")[0]
                                      for f in _unfinished_failures(ev)}),
             "desktop_done": len(_desktop_done(ev))})
-    except OSError:  # bookkeeping only; never fails the evidence write
-        pass
+    except OSError:
+        # the full-scope rows are what the contract caps count (F17): a call whose
+        # row cannot be written fails closed instead of passing uncounted (K3 r3)
+        if mode in FULL_SCOPE_MODES:
+            raise
+        # other rows are bookkeeping only and never fail the evidence write
     try:
         _prune_evidence(tdir)
     except OSError:  # housekeeping only; the evidence above is already written
@@ -3207,20 +3212,13 @@ def _blocking_sig(ev: dict) -> list[str]:
 
 
 # Full-scope runs (verify / regression: the change's whole dependency scope) happen at
-# DELIVER only, after the last change (XG 2026-10-20), at most FULL_SCOPE_MAX_ROUNDS per
-# run: landing reads the latest scope report on the final code, so a scope run in BUILD
-# or TEST was never used. Fix rounds run the affected tests (tdd) or break tests (prove).
-# Continuing the tests a deadline left unrun is the same round. A recheck (also DELIVER
-# only) is not a round: it re-runs the reds of the latest report and the tests of the
-# files changed since, and is how a fix is judged once the rounds are used up; at most
-# RECHECK_MAX_FIXES rechecks on changed code per run. A goal run keeps its own loop.
+# A full-scope round (verify / regression) and a recheck on CHANGED code (a fix) are
+# bounded per run by the run's protected contract: ``regression_round_cap`` and
+# ``recheck_cap`` (v13 E4, conformance F17). The runner has no cap of its own; a legacy
+# run without a v1 contract is bounded only by the circuit breaker. Continuing the
+# tests a deadline left unrun is the same round, and a recheck on unchanged code only
+# finishes what was left: neither is counted.
 FULL_SCOPE_MODES = ("verify", "regression", "recheck")
-FULL_SCOPE_STAGES = ("deliver",)
-FULL_SCOPE_MAX_ROUNDS = 2
-# A recheck on changed code is a fix: this many per run, before or after the round cap
-# (design: each red test gets three fix attempts). A recheck on unchanged code only
-# finishes what was left and is not counted.
-RECHECK_MAX_FIXES = 3
 
 
 def _unfinished(f: dict) -> bool:
@@ -3358,17 +3356,6 @@ def _stalled_calls(series: "list[int]", files: "list[int | None] | None" = None,
     return n
 
 
-def _open_stage(run_state: dict) -> "str | None":
-    """The stage open now: started and not completed (the latest-started if several)."""
-    best = None
-    for stage, t in (run_state.get("stage_timing") or {}).items():
-        if not isinstance(t, dict) or t.get("completed_at") or not t.get("started_at"):
-            continue
-        if best is None or str(t["started_at"]) > best[0]:
-            best = (str(t["started_at"]), stage)
-    return best[1] if best else None
-
-
 def _is_fix_recheck(base: dict, current: dict) -> bool:
     """A recheck runs on CHANGED code (a fix) when the change set's file digests differ
     from those of the report it rechecks; a report with no digests counts as changed."""
@@ -3376,27 +3363,23 @@ def _is_fix_recheck(base: dict, current: dict) -> bool:
     return not isinstance(before, dict) or not before or dict(before) != dict(current)
 
 
-def _full_scope_refusal(ev_root: Path, mode: str, run_state: dict,
+def _full_scope_refusal(ev_root: Path, mode: str, contract: "Mapping | None",
                         fix: bool = True) -> "dict | None":
-    """Refuse a full-scope call outside DELIVER; a NEW verify / regression round past
-    FULL_SCOPE_MAX_ROUNDS; a recheck on changed code (*fix*) past RECHECK_MAX_FIXES.
-    A recheck is not a full-scope round: past the cap it is how a fix is judged, so the
-    cap never locks against the landing check (which reads the overlaid report).
-    Operator override: SWARM_GATE_FORCE=full_scope."""
-    if mode not in FULL_SCOPE_MODES or force_enabled("full_scope"):
+    """Refuse a NEW verify / regression round past the contract's
+    ``regression_round_cap``, and a recheck on changed code (*fix*) past its
+    ``recheck_cap`` (conformance F17: the contract is the one source). A recheck is
+    not a round: past the round cap it is how a fix is judged. A run without a v1
+    contract (a legacy run, unsupported since the v1 cutover, §D1) has no caps here;
+    the circuit breaker still bounds it. A v1 contract whose caps are unreadable
+    refuses every full-scope call. Operator override: SWARM_GATE_FORCE=full_scope."""
+    if mode not in FULL_SCOPE_MODES or force_enabled("full_scope") or contract is None:
         return None
-    if str(run_state.get("profile") or "").strip().lower() == "goal":
-        return None
-    stage = _open_stage(run_state)
-    if stage is None:
-        return None  # no stage open: not a pipeline stage call (manual use, a test rig)
-    narrow = ("for a fix, run the tests it affects: `--mode tdd --files <test files>` "
-              "(or `--mode prove` for break tests)")
-    if stage not in FULL_SCOPE_STAGES:
-        return {"mode": mode, "ok": False, "full_scope": {"refused": True, "stage": stage},
-                "error": (f"--mode {mode} runs the change's whole dependency scope, and that "
-                          f"runs once per run, at DELIVER after the last change (landing reads "
-                          f"only that report). Not in {stage}: {narrow}.")}
+    caps = {key: contract.get(key) for key in ("regression_round_cap", "recheck_cap")}
+    if not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in caps.values()):
+        return {"mode": mode, "ok": False, "full_scope": {"refused": True, "no_caps": True},
+                "error": "this run's contract has no readable regression_round_cap / "
+                         "recheck_cap, so no full-scope round can be counted"}
+    round_cap, fix_cap = caps["regression_round_cap"], caps["recheck_cap"]
     idx, tampered = _index_read(ev_root / "tests" / RUN_INDEX)
     if tampered:
         return {"mode": mode, "ok": False, "full_scope": {"refused": True, "tampered": True},
@@ -3409,34 +3392,59 @@ def _full_scope_refusal(ev_root: Path, mode: str, run_state: dict,
         if not fix:
             return None  # unchanged code: it finishes the last report, it is not a fix
         fixes = [e for e in own if e.get("mode") == "recheck" and e.get("fix", True)]
-        if len(fixes) >= RECHECK_MAX_FIXES:
+        if len(fixes) >= fix_cap:
             return {"mode": mode, "ok": False,
                     "full_scope": {"refused": True, "fix_rechecks": len(fixes)},
                     "error": (f"{len(fixes)} rechecks on changed code already ran in this run "
-                              f"(limit {RECHECK_MAX_FIXES}): stop fixing. The change does not "
-                              "land while a test in latest-regression.json is red or "
-                              "unfinished: complete DELIVER with those tests named in "
-                              "attention_flags (REPORT §10); the code stays in the run's "
-                              "worktree. Operator override only: SWARM_GATE_FORCE=full_scope")}
+                              f"(limit {fix_cap}, the run's contract): stop fixing. The change "
+                              "does not land while a test of the latest regression is red or "
+                              "unfinished: finish TEST; it ends not_landed(tests_red) and the "
+                              "code stays in the run's worktree. Operator override only: "
+                              "SWARM_GATE_FORCE=full_scope")}
         return None
     rounds = [e for e in own if e.get("mode") in ("verify", "regression")]
-    if len(rounds) >= FULL_SCOPE_MAX_ROUNDS:
+    if len(rounds) >= round_cap:
         return {"mode": mode, "ok": False, "full_scope": {"refused": True, "rounds": len(rounds)},
                 "error": (f"{len(rounds)} full-scope rounds already ran in this run (limit "
-                          f"{FULL_SCOPE_MAX_ROUNDS}): no new round. Fix the failing tests, "
-                          "then run `--mode recheck`: it re-runs the failing and unfinished "
-                          "tests of the last report and the tests of every file changed "
-                          "since, on the current code, and updates latest-regression.json "
-                          f"(at most {RECHECK_MAX_FIXES} rechecks on changed code). "
+                          f"{round_cap}, the run's contract): no new round. Fix the failing "
+                          "tests, then run `--mode recheck`: it re-runs the failing and "
+                          "unfinished tests of the last report and the tests of every file "
+                          "changed since, on the current code (at most "
+                          f"{fix_cap} rechecks on changed code). "
                           "Operator override only: SWARM_GATE_FORCE=full_scope")}
     return None
 
 
-def _breaker_result(mode: str, reason: str) -> dict:
+@contextlib.contextmanager
+def _full_scope_slot(ev_root: Path, mode: str, v1):
+    """One full-scope call of a v1 run at a time (K3 review r2): the contract caps
+    are counted from the run index before the call and written after it, so two
+    concurrent calls would both pass the count. A second one is refused, not queued."""
+    if v1 is None or mode not in FULL_SCOPE_MODES:
+        yield None
+        return
+    from utils.file_lock import flock_exclusive_nb, flock_unlock
+    path = ev_root / "tests" / ".full-scope.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+", encoding="utf-8") as handle:
+        try:
+            flock_exclusive_nb(handle)
+        except OSError:
+            yield {"mode": mode, "ok": False, "full_scope": {"refused": True, "busy": True},
+                   "error": "another full-scope call of this run is running; wait for it"}
+            return
+        try:
+            yield None
+        finally:
+            flock_unlock(handle)
+
+
+def _breaker_result(mode: str, reason: str, cap: str | None = None) -> dict:
     """Abort payload (exit 2) when the circuit breaker trips. Re-running is futile (the
     breaker re-trips on the unchanged run_index). The run is autonomous, so the action is
     never a checkpoint or a human: stop testing, finish the run not push-ready."""
-    return {"mode": mode, "ok": False, "circuit_breaker": {"tripped": True, "reason": reason},
+    return {"mode": mode, "ok": False,
+            "circuit_breaker": {"tripped": True, "reason": reason, "cap": cap},
             "error": "circuit breaker: " + reason,
             "action": ("stop re-running tests and stop fixing: the loop is not converging. "
                        "Complete the CURRENT stage now with what remains (stage-complete "
@@ -3469,7 +3477,7 @@ def _circuit_breaker_check(ev_root: Path, mode: str, profile: str = "") -> dict 
             return _breaker_result(
                 mode, f"{n} tdd calls in this goal run (limit {GOAL_TDD_MAX}): the cycle loop "
                 "is not converging — exit UNMET (stage-complete goal_cycle with dod_met "
-                "false and what is left), then DELIVER")
+                "false and what is left), then DELIVER", cap="goal_tdd_calls")
         return None
     if mode not in ("verify", "recheck", "regression"):
         return None
@@ -3484,7 +3492,8 @@ def _circuit_breaker_check(ev_root: Path, mode: str, profile: str = "") -> dict 
     if len(rounds) >= CIRCUIT_MAX_ROUNDS:
         return _breaker_result(
             mode, f"{len(rounds)} verify/recheck/regression rounds in this run (hard limit "
-            f"{CIRCUIT_MAX_ROUNDS}) — the build<->verify loop is not converging")
+            f"{CIRCUIT_MAX_ROUNDS}) — the build<->verify loop is not converging",
+            cap="breaker_rounds")
     if mode in ("verify", "regression"):
         stalled = _stalled_calls(_continuation_series(ev_root, mode),
                                  _continuation_file_series(ev_root, mode),
@@ -3494,7 +3503,7 @@ def _circuit_breaker_check(ev_root: Path, mode: str, profile: str = "") -> dict 
                 mode, f"{stalled} continuation calls in a row cut the count of unfinished "
                 f"tests by less than {STALL_SHRINK:.0%} and finished no file (even split per "
                 "file) — the scope "
-                "does not finish")
+                "does not finish", cap="breaker_stall")
     vr = runs  # regression too: a continuation that stops shrinking is a stall
     sigs = [tuple(e.get("blocking_sig") or []) for e in vr[-CIRCUIT_STALL_ROUNDS:]]
     if len(sigs) >= CIRCUIT_STALL_ROUNDS and sigs[0] and all(s == sigs[0] for s in sigs):
@@ -3502,7 +3511,8 @@ def _circuit_breaker_check(ev_root: Path, mode: str, profile: str = "") -> dict 
         return _breaker_result(
             mode, f"{CIRCUIT_STALL_ROUNDS} consecutive verify/recheck/regression calls left the SAME "
             f"blocking failure(s) unfixed ({', '.join(shown)}"
-            f"{'...' if len(sigs[0]) > 5 else ''}) — re-running is not making progress")
+            f"{'...' if len(sigs[0]) > 5 else ''}) — re-running is not making progress",
+            cap="breaker_same_failure")
     return None
 
 
@@ -3731,6 +3741,44 @@ def _v1_cache_value(ev: dict) -> dict:
     value["results"] = [{key: val for key, val in row.items() if key != "duration"}
                         for row in value.get("results") or [] if isinstance(row, dict)]
     return value
+
+
+_V1_CONTRACT: list = []   # this call's v1 (run_id, contract), for its failure record (F11)
+
+
+def _v1_infrastructure_failed(exc: BaseException) -> dict:
+    """One of the three infrastructure failures (audit area, hook token, git objects)
+    ends the run ``failed``, recorded by the runner that met it (conformance F11)."""
+    from core.run_protocol import infra
+    failure = infra.find(exc)
+    if failure is None or not _V1_CONTRACT:
+        return {}
+    out: dict = {"code": "infrastructure_failed", "component": failure.component}
+    try:
+        from core.run_protocol.runner import record_infrastructure_failed
+        run_id, contract = _V1_CONTRACT[-1]
+        out["recorded"] = record_infrastructure_failed(run_id, contract, failure) is not None
+    except Exception as record_exc:  # noqa: BLE001 — the failure may forbid recording
+        out.update(recorded=False, record_error=f"{type(record_exc).__name__}: {record_exc}"[:300])
+    return out
+
+
+def _v1_carry_tests(ctx, ns) -> "list[str] | None":
+    """The affected tests the engine's carry plan names for this run worktree's code
+    tree (conformance F15): None = no plan, [] = the whole scope must run again."""
+    runner = getattr(ctx, "v1", None)
+    if runner is None or not ns.run_id:
+        return None
+    from config import get_app_data_dir
+    from core.run_protocol.runner import read_carry_plan
+    return read_carry_plan(get_app_data_dir(), ns.run_id, runner.repo_name,
+                           runner.code_tree)
+
+
+def _v1_cap_exceeded(runner, cap: str) -> None:
+    """A count cap of the run was hit here: the run's signed metric (conformance F18)."""
+    if runner is not None:
+        runner.record_cap_exceeded(cap)
 
 
 def _v1_cache_conflict(ctx, runner, key: str, new_value=None, kind: str = "test") -> None:
@@ -4211,6 +4259,17 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
             plan["targets"] = dict(sorted(plan["targets"].items(),
                                           key=lambda kv: kv[0] in started))
             plan["fresh_first"] = True
+        # main moved into the final's dependency scope: the engine named the affected
+        # tests for this exact synced tree; the recheck runs them (§C5.3, F15)
+        carry = _v1_carry_tests(ctx, ns) if not auto_of else None
+        if carry == []:
+            return plan, ("main moved into this run's dependency scope and no affected test "
+                          "could be named: run `--mode regression`, not a recheck")
+        for n in carry or []:
+            if n.startswith("backend/") and (ctx.repo / n.split("::")[0]).is_file():
+                _add_target(plan["targets"], n.split("::")[0], n if "::" in n else None)
+                plan.setdefault("carry_affected", []).append(n)
+                plan["rechecked"] += 1
         before = prev.get("changed_files") if isinstance(prev.get("changed_files"), dict) else {}
         scope = [f for f in changed if before.get(f) != _file_digest(ctx.repo / f)]
     recent = _recent_failure_files(ev_root) if mode != "recheck" else []
@@ -4480,6 +4539,9 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
         tripped = _circuit_breaker_check(ev_root, ns.mode,
                                          str(run_state.get("profile") or "").strip().lower())
         if tripped is not None:
+            cap = tripped["circuit_breaker"].get("cap")
+            if cap:                     # a counted cap; an unreadable index is not one
+                _v1_cap_exceeded(v1, cap)
             return tripped, 2
     sgraph = build_source_graph(ctx.repo, ctx.cache)
     graph = build_import_graph(ctx.repo, ctx.cache, sgraph)
@@ -4533,9 +4595,12 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
         fix = _is_fix_recheck(_read_json(ev_root / "tests" / f"latest-{plan.get('base_mode')}.json"),
                               _digest_map(ctx.repo, plan["changed"]))
     if ns.run_id and not getattr(ns, "auto_recheck_of", None):
-        refused = _full_scope_refusal(ev_root, ns.mode, run_state,
+        refused = _full_scope_refusal(ev_root, ns.mode, v1.contract if v1 is not None else None,
                                       fix=True if fix is None else fix)
         if refused is not None:
+            scope = refused.get("full_scope") or {}
+            if "rounds" in scope or "fix_rechecks" in scope:
+                _v1_cap_exceeded(v1, "recheck" if "fix_rechecks" in scope else "regression_round")
             return refused, 2
     idx_info = {"auto_recheck_of": getattr(ns, "auto_recheck_of", None),
                 "rechecked_from": plan.get("base_finished_at") if ns.mode == "recheck" else None,
@@ -5381,6 +5446,7 @@ def _v1_runner(ns, run_dir: Path, run_state: dict, ctx):
     contract = read_contract(get_app_data_dir(), ns.run_id)
     if contract is None:
         return None
+    _V1_CONTRACT[:] = [(ns.run_id, contract)]
     # which of the run's repos this call measures: the contract is the one authority
     # (v13 §D4 item 4, conformance K1/K5). An isolated run measures only its OWN
     # worktree of a repo (the main checkout holds other sessions' work, another run's
@@ -5722,7 +5788,10 @@ def execute(ns) -> tuple[dict, int]:
                     details={"evidence": output.get("evidence")}, started_at=now,
                     finished_at=now)
             return output, code
-        output, code = _run_test_mode(ctx, ns, ev_root, run_state, deadline, v1=v1)
+        with _full_scope_slot(ev_root, ns.mode, v1) as busy:
+            if busy:
+                return busy, 2
+            output, code = _run_test_mode(ctx, ns, ev_root, run_state, deadline, v1=v1)
         if v1 is not None:
             output = _record_v1_test_result(ns, run_state, v1, output, code, changed)
         return output, code
@@ -5756,6 +5825,7 @@ def main(argv: list[str] | None = None) -> int:
                          "aborted and temporary worktrees removed; nothing was cached"}, 2
         except Exception as exc:  # noqa: BLE001 — the caller always gets one JSON object
             out, code = {"mode": ns.mode, "error": f"runner error: {type(exc).__name__}: {exc}"[:500]}, 2
+            out.update(_v1_infrastructure_failed(exc))
         print(json.dumps(_compact(out), separators=(",", ":")), flush=True)
         return code
     finally:

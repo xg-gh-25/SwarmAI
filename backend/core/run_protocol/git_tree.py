@@ -15,8 +15,21 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping, Sequence
 
 
+from core.run_protocol.infra import InfrastructureError
+
+
 class GitTreeError(RuntimeError):
     """A git tree operation failed or received an unsafe path."""
+
+
+class GitObjectWriteError(GitTreeError, InfrastructureError):
+    """git could not write objects (``add`` / ``hash-object`` / ``write-tree``): the
+    run's infrastructure failed (conformance F11)."""
+
+    component = "git_objects"
+
+
+_OBJECT_WRITERS = frozenset({"add", "hash-object", "write-tree"})
 
 
 def _run(root: str | Path, *args: str, env: Mapping[str, str] | None = None,
@@ -28,7 +41,10 @@ def _run(root: str | Path, *args: str, env: Mapping[str, str] | None = None,
             timeout=120, check=True,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise GitTreeError(f"git {' '.join(args[:2])} failed: {exc}") from exc
+        message = f"git {' '.join(args[:2])} failed: {exc}"
+        if args and args[0] in _OBJECT_WRITERS:
+            raise GitObjectWriteError(message) from exc
+        raise GitTreeError(message) from exc
     return result.stdout
 
 

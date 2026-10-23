@@ -210,11 +210,17 @@ def _clarifications(value: Any, out: list[SchemaIssue]) -> None:
         obj = _object(value, out, "RQ-6", path)
         if obj is None:
             continue
-        _strict(obj, {"qid", "question", "answer", "answered_by"}, out, "RQ-6", path)
+        _strict(obj, {"qid", "question", "answer", "answered_by", "decided_by"},
+                out, "RQ-6", path)
         for key in ("qid", "question", "answer"):
             _text(obj, key, out, "RQ-6", path)
         if obj.get("answered_by") not in ("user", "evidence"):
             _issue(out, "RQ-6", f"{path}.answered_by", "must be user or evidence")
+        if "decided_by" in obj and (obj["decided_by"] != "agent_after_cap"
+                                    or obj.get("answered_by") != "evidence"):
+            # the agent's own choice after the decision cap (DC-2, conformance F12)
+            _issue(out, "RQ-6", f"{path}.decided_by",
+                   "only agent_after_cap, answered by evidence")
 
 
 def _understanding(value: Any, out: list[SchemaIssue]) -> None:

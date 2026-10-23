@@ -24,6 +24,7 @@ from typing import Any, Mapping, Sequence
 
 from core import evidence_seal, run_worktree
 from core.run_protocol import checks, git_tree, lifecycle, review
+from core.run_protocol.infra import InfrastructureError
 from core.run_protocol.documents import DocumentStore, complete_stage
 from core.run_protocol.events import EventAuthority
 from core.run_protocol.final import carry_repo_final, merge_final
@@ -36,6 +37,12 @@ class EngineError(RuntimeError):
     """The run cannot proceed safely or its durable protocol state is invalid."""
 
     code = "engine_error"
+
+
+class HookTokenUnavailable(EngineError, InfrastructureError):
+    """The hook-token service could not be reached (conformance F11)."""
+
+    component = "hook_token"
 
 
 class IntegrationRequired(EngineError):
@@ -127,15 +134,20 @@ def _agent_after_cap(requirements: Any, design: Any) -> bool:
            for row in rows or []):
         return True
     chosen = design.get("chosen") if isinstance(design, Mapping) else None
-    return isinstance(chosen, Mapping) and chosen.get("decided_by") == "agent_after_cap"
+    return isinstance(chosen, Mapping) and (
+        chosen.get("decided_by") == "agent_after_cap"
+        or any(isinstance(row, Mapping) and row.get("decided_by") == "agent_after_cap"
+               for row in chosen.get("decisions") or []))
 
 
-def _store(root: Path, run_id: str, authority: EventAuthority) -> AuditStore:
+def _store(root: Path, run_id: str, authority: EventAuthority,
+           producer: str = "cli") -> AuditStore:
     """The run's store, refusing any event after which the log would not fold.
 
-    One rule for every writer (fixing spec A): an event the lifecycle or the finding
-    ledger cannot apply is never written, and the transition an event triggers is
-    appended in the same lock."""
+    One rule for every writer (fixing spec A), the CLI's and the runner's alike (K3
+    review r2): an event the lifecycle or the finding ledger cannot apply is never
+    written, and the transition an event triggers is appended in the same lock, signed
+    by the *producer* that wrote the trigger."""
     from core.run_protocol import findings as finding_protocol
 
     def validate(chain: list[dict[str, Any]]) -> Any:
@@ -144,7 +156,7 @@ def _store(root: Path, run_id: str, authority: EventAuthority) -> AuditStore:
             finding_protocol.fold(chain, authority)
         return state.get("expected_transition")
     return AuditStore(root, run_id, authority, validator=validate,
-                      transition_writer=authority.writer("cli"))
+                      transition_writer=authority.writer(producer))
 
 
 _FINDING_KINDS = frozenset({"answer", "answer_reuse", "finding_occ", "finding_status",
@@ -199,40 +211,54 @@ class RunEngine:
         except FileExistsError as exc:
             raise EngineError("run already exists") from exc
         audit = data_path / "state" / "pipeline_agent_audit" / "runs" / run_id
-        audit.mkdir(parents=True, exist_ok=False, mode=0o700)
-        key = secrets.token_bytes(32)
-        key_path = audit / "authority.key"
-        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(key); handle.flush(); os.fsync(handle.fileno())
-        authority = EventAuthority(key)
-        engine = cls.__new__(cls)
-        engine.data_dir, engine.workspace = data_path, workspace_path
-        engine.project, engine.run_id, engine.run_dir = project, run_id, run_dir
-        engine.audit_root, engine.authority = data_path / "state" / "pipeline_agent_audit", authority
-        engine.store = _store(engine.audit_root, run_id, authority)
-        from core.run_protocol.cache import pipeline_code_hash
-        pipeline_hash = pipeline_code_hash()   # the whole protocol + both CLIs (B7)
-        contract = {"run_id": run_id, "project": project,
-                    "protocol_version": 1, "profile": profile,
-                    "session_id": session_id, "mode": mode,
-                    "expected_repos": sorted(repos),
-                    "repo_roots": {name: str(Path(root).resolve()) for name, root in repos.items()},
-                    "decision_cap": decision_cap, "risk_test_file_cap": risk_test_file_cap,
-                    "transcript_ids": list(dict.fromkeys(transcript_ids)),
-                    "pipeline_code_hash": pipeline_hash,
-                    "event_authority_id": authority.authority_id,
-                    "created_at": _now(), "stage_attempt_cap": 3,
-                    "regression_round_cap": 2, "recheck_cap": 3,
-                    # reference lines, never limits: the profile's p95 (D2); null = none
-                    **_budgets(profile)}
-        if requirement:
-            contract["requirement"] = requirement
-        engine.contract = contract
-        engine.store.write_contract_once(contract)
-        engine.store.append_new(
-            writer=authority.writer("cli"), kind="run_create", at=contract["created_at"],
-            payload={"run_id": run_id, "profile": profile, "decision_cap": decision_cap})
+        # nothing exists for this run id until its run_create is signed: a failure
+        # before then removes what this call created, so the id is not left taken by
+        # a half-built run (K3 review r3)
+        created = [run_dir]                  # created above with exist_ok=False
+        try:
+            audit.mkdir(parents=True, exist_ok=False, mode=0o700)
+            created.append(audit)
+            key = secrets.token_bytes(32)
+            key_path = audit / "authority.key"
+            fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(key); handle.flush(); os.fsync(handle.fileno())
+            authority = EventAuthority(key)
+            engine = cls.__new__(cls)
+            engine.data_dir, engine.workspace = data_path, workspace_path
+            engine.project, engine.run_id, engine.run_dir = project, run_id, run_dir
+            engine.audit_root, engine.authority = data_path / "state" / "pipeline_agent_audit", authority
+            engine.store = _store(engine.audit_root, run_id, authority)
+            from core.run_protocol.cache import pipeline_code_hash
+            pipeline_hash = pipeline_code_hash()   # the whole protocol + both CLIs (B7)
+            contract = {"run_id": run_id, "project": project,
+                        "protocol_version": 1, "profile": profile,
+                        "session_id": session_id, "mode": mode,
+                        "expected_repos": sorted(repos),
+                        "repo_roots": {name: str(Path(root).resolve()) for name, root in repos.items()},
+                        "decision_cap": decision_cap, "risk_test_file_cap": risk_test_file_cap,
+                        "transcript_ids": list(dict.fromkeys(transcript_ids)),
+                        "pipeline_code_hash": pipeline_hash,
+                        "event_authority_id": authority.authority_id,
+                        "created_at": _now(), "stage_attempt_cap": 3,
+                        "regression_round_cap": 2, "recheck_cap": 3,
+                        # reference lines, never limits: the profile's p95 (D2); null = none
+                        **_budgets(profile)}
+            if requirement:
+                contract["requirement"] = requirement
+            engine.contract = contract
+            engine.store.write_contract_once(contract)
+            engine.store.append_new(
+                writer=authority.writer("cli"), kind="run_create", at=contract["created_at"],
+                payload={"run_id": run_id, "profile": profile, "decision_cap": decision_cap})
+        except BaseException as exc:
+            import shutil
+            for path in created:             # only what this call itself created
+                shutil.rmtree(path, ignore_errors=True)
+            if isinstance(exc, OSError) and not isinstance(exc, StoreError):
+                from core.run_protocol.store import AuditUnwritable
+                raise AuditUnwritable(f"audit area not writable: {exc}") from exc
+            raise
         evidence_seal.enable(run_id)
         engine.write_projection()
         return engine
@@ -510,6 +536,8 @@ class RunEngine:
                 existing |= set(_git(root, "ls-files").splitlines())
                 bases[name] = self._fork_base(name, root)
                 changed[name] = self._changed_by_repo({name: root}).get(name, [])
+            except InfrastructureError:
+                raise                   # the run's infrastructure, not an unknown fact (F11)
             except (EngineError, git_tree.GitTreeError) as exc:
                 code_trees.setdefault(name, None)
                 bases[name] = bases.get(name) if code_trees.get(name) else None
@@ -524,6 +552,12 @@ class RunEngine:
         from core.run_protocol import findings as finding_protocol
         requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
         design = self._read_json(self.run_dir / "artifacts" / "design_spec.json", None)
+        # the decided decisions are facts of the signed log; the documents only
+        # project them, so the checks read them overlaid (K3 review r2)
+        if isinstance(requirements, Mapping) and requirements:
+            requirements = self._with_decisions("REQUIREMENTS", requirements)
+        if isinstance(design, Mapping):
+            design = self._with_decisions("DESIGN_SPEC", design)
         events = self.store.read_events()
         expected = list(self.contract["expected_repos"])
         repos, code_trees, bases, existing, changed = self._current_code(expected)
@@ -675,6 +709,7 @@ class RunEngine:
                  if event.get("kind") == "handout" and event.get("stage") == "evaluate"
                  and event.get("payload", {}).get("expert_id") == "gate0-skeptic"]
         if len(prior) >= 2:
+            self.record_cap_exceeded("gate0_round", stage="evaluate")
             raise EngineError("Gate-0 has reached its two-round cap")
         round_number = len(prior) + 1
         prompt_path = (Path(__file__).resolve().parents[2] / "skills" /
@@ -696,6 +731,18 @@ class RunEngine:
         last = max((index for index, event in enumerate(events)
                     if event.get("kind") == "human_answer"), default=-1)
         return events[last + 1:]
+
+    def _gate0_ended_at_cap(self) -> bool:
+        """Two Gate-0 rounds answered and the latest one unparsed or negative."""
+        events = self._since_last_answer()
+        rounds = [event for event in events
+                  if event.get("kind") in {"answer", "answer_reuse"}
+                  and event.get("payload", {}).get("expert_id") == "gate0-skeptic"]
+        if len(rounds) < 2:
+            return False
+        latest = rounds[-1].get("payload", {})
+        return latest.get("state") != "parsed" or \
+            latest.get("verdict") in {"WRONG-FRAME", "UNSUPPORTED"}
 
     def _gate0_disposition(self) -> str:
         events = self._since_last_answer()
@@ -836,13 +883,111 @@ class RunEngine:
                               "request as --profile trivial, then ask there")
         refs = self.decision_refs(self.store.read_events())
         state = self.projection()
+        value = dict(value)
+        after_cap = value.pop("after_cap", None)
         event = record_decision(self.store, value, known_refs=refs, document=document,
                                 at=_now(), decisions_answered=state["human_decisions"],
-                                cap=state["decision_cap"])
-        self._settle(); self.write_projection()
-        return {"event": event, "decision": dict(value), "state": self.projection(),
+                                cap=state["decision_cap"], after_cap=after_cap)
+        self._settle()
+        if after_cap is not None:
+            self._sync_decision_document(document)     # DC-2: the choice is in the document
+            self.write_projection()
+            return {"event": event, "decision": value, "decided_by": "agent_after_cap",
+                    "state": self.projection()}
+        self.write_projection()
+        return {"event": event, "decision": value, "state": self.projection(),
                 "ask_user_question": __import__("core.run_protocol.decision",
                                                 fromlist=["ask_payload"]).ask_payload(value)}
+
+    def _answered_decisions(self, document: str) -> list[dict[str, Any]]:
+        """Every decided decision of *document*, from the signed log alone: a person's
+        answer (``human_answer``) or the agent's after-cap choice (a ``decision`` with
+        ``decided_by``). The documents carry them as a projection (conformance F13)."""
+        events = self.store.read_events()
+        asked = {e["payload"]["request_id"]: e for e in events if e.get("kind") == "decision"}
+        picks: list[tuple[str, str, Mapping[str, Any]]] = []
+        for event in events:
+            payload = event.get("payload") or {}
+            if event.get("kind") == "human_answer":
+                picks.append((payload["request_id"], payload["option_id"], {"answered_by": "user"}))
+            elif event.get("kind") == "decision" and payload.get("decided_by"):
+                picks.append((payload["request_id"], payload["option_id"],
+                              {"answered_by": "evidence", "decided_by": payload["decided_by"],
+                               "evidence_refs": list(payload.get("evidence_refs") or [])}))
+        out = []
+        for request_id, option_id, how in picks:
+            source = asked.get(request_id)
+            value = self.decision_value(request_id) or {}
+            if source is None or source["payload"].get("document") != document:
+                continue
+            option = next((o for o in value.get("options") or []
+                           if isinstance(o, Mapping) and o.get("id") == option_id), {})
+            out.append({"request_id": request_id, "question": value.get("question"),
+                        "option_id": option_id, "choice": option.get("choice"), **how})
+        return out
+
+    def _with_decisions(self, document: str, value: Mapping[str, Any]) -> dict[str, Any]:
+        """*value* with every decided decision of *document* written in: REQUIREMENTS
+        clarifications (qid = request id), DESIGN_SPEC ``chosen.decisions``."""
+        import copy
+        out = copy.deepcopy(dict(value))
+        rows = self._answered_decisions(document)
+        if not rows or (document == "DESIGN_SPEC" and self.contract["profile"] == "trivial"):
+            # the lite DESIGN_SPEC has no ``chosen``: its decision stays in the signed
+            # log and the REPORT (a registered deviation, conformance F13)
+            return out
+        if document == "REQUIREMENTS":
+            ids = {row["request_id"] for row in rows}
+            kept = [row for row in out.get("clarifications") or []
+                    if not (isinstance(row, Mapping) and row.get("qid") in ids)]
+            out["clarifications"] = kept + [
+                {"qid": row["request_id"], "question": row["question"],
+                 "answer": row["choice"], "answered_by": row["answered_by"],
+                 **({"decided_by": row["decided_by"]} if row.get("decided_by") else {})}
+                for row in rows]
+        else:
+            chosen = out.get("chosen")
+            base = dict(chosen) if isinstance(chosen, Mapping) else (
+                {"alternative": chosen} if chosen else {})
+            base["decisions"] = [
+                {key: row[key] for key in ("request_id", "option_id", "choice", "answered_by",
+                                           "decided_by", "evidence_refs") if key in row}
+                for row in rows]
+            out["chosen"] = base
+        return out
+
+    def _sync_decision_document(self, document: str) -> None:
+        """Project the decided decisions into *document* now; when the write fails the
+        signed event stands, the checks read it overlaid, and the next stage-complete
+        projects it again (K3 review r2)."""
+        try:
+            self._write_back_decisions(document)
+        except Exception as exc:   # noqa: BLE001 — a projection, never the fact
+            if isinstance(exc, InfrastructureError):
+                raise
+            logger.warning("run %s: %s not re-rendered with its decisions: %s",
+                           self.run_id, document, exc)
+
+    def _write_back_decisions(self, document: str) -> None:
+        """Rewrite *document* (if it exists yet) with its decided decisions and render
+        it again; a document written later gets them at its stage-complete."""
+        docs = DocumentStore(self.run_dir)
+        if document == "REQUIREMENTS":
+            path = self.run_dir / "artifacts" / "requirements.json"
+            if path.is_file():
+                docs.write_requirements(self._with_decisions(document, self._read_json(path, {})),
+                                        variant="full", profile=self.contract["profile"],
+                                        blocking=set())
+        else:
+            path = self.run_dir / "artifacts" / "design_spec.json"
+            if path.is_file():
+                docs.write_design(
+                    self._with_decisions(document, self._read_json(path, {})),
+                    variant="lite" if self.contract["profile"] == "trivial" else "full",
+                    profile=self.contract["profile"],
+                    requirements=self._read_json(self.run_dir / "artifacts" / "requirements.json", {}),
+                    requirement_variant="full", existing_files=self.check_context().existing_files,
+                    blocking=set())
 
     def answer_decision(self, *, request_id: str, option_id: str) -> dict[str, Any]:
         """Record a HUMAN's answer. Called only from the daemon (the chat question card
@@ -859,6 +1004,12 @@ class RunEngine:
             writer=self.authority.writer("hook"), kind="human_answer", at=_now(),
             payload={"request_id": request_id, "option_id": option_id})
         self._settle()
+        # the answer goes into its source document at the same place (conformance F13)
+        document = next((e["payload"].get("document") for e in self.store.read_events()
+                         if e.get("kind") == "decision"
+                         and e["payload"].get("request_id") == request_id), None)
+        if document:
+            self._sync_decision_document(document)
         self.write_projection()
         return {"event": event, "answer": answer, "state": self.projection()}
 
@@ -1029,8 +1180,7 @@ class RunEngine:
             raise EngineError("land request was prepared by another owner session")
         token = os.environ.get(hook_token.TOKEN_ENV)
         token_scope = f"run-land:{request_id}"
-        ok, reason = hook_token.consume(
-            self.run_dir, token, self.owner_session(), self.run_id, token_scope)
+        ok, reason = self._consume_token(token, token_scope)
         if not ok:
 
             raise IntegrationRequired("approval_required", reason)
@@ -1152,9 +1302,7 @@ class RunEngine:
             raise EngineError("prepared authorization action is unsupported")
 
         token_scope = f"{str(action).replace('_', '-')}:{request_id}"
-        ok, reason = hook_token.consume(
-            self.run_dir, os.environ.get(hook_token.TOKEN_ENV),
-            self.owner_session(), self.run_id, token_scope)
+        ok, reason = self._consume_token(os.environ.get(hook_token.TOKEN_ENV), token_scope)
         if not ok:
             raise IntegrationRequired("approval_required", reason)
         now = __import__("time").time()
@@ -1202,6 +1350,8 @@ class RunEngine:
         if state["status"] != "active":
             raise EngineError(f"run is {state['status']}")
         stage, profile = state["stage"], state["profile"]
+        for document in ("REQUIREMENTS", "DESIGN_SPEC"):   # the decisions' projection
+            self._sync_decision_document(document)
         if stage == "deliver":
             if state.get("pending_landing") is None and profile != "research":
                 raise EngineError("DELIVER finishes with `land`; stage-complete is only for "
@@ -1214,11 +1364,13 @@ class RunEngine:
         roster = {spec.check_id for spec in checks.stage_checks(profile, stage, variant)}
         try:
             if stage == "evaluate":
+                artifact = self._with_decisions("REQUIREMENTS", artifact)
                 docs.write_requirements(artifact, variant="full", profile=profile,
                                         blocking=roster)
             elif stage == "plan":
                 requirements = self._read_json(
                     self.run_dir / "artifacts" / "requirements.json", {})
+                artifact = self._with_decisions("DESIGN_SPEC", artifact)
                 docs.write_design(artifact, variant="lite" if profile == "trivial" else "full",
                                   profile=profile, requirements=requirements,
                                   requirement_variant="full",
@@ -1237,6 +1389,10 @@ class RunEngine:
             gate_required = profile == "bugfix" or (isinstance(readings, list) and len(readings) >= 2)
             if gate_required:
                 disposition = self._gate0_disposition()
+                if disposition == "continue" and self._gate0_ended_at_cap():
+                    # both rounds ran and the second still did not clear the frame:
+                    # the gate stops at its cap rather than passing (K3 review r3)
+                    self.record_cap_exceeded("gate0_round", stage="evaluate")
                 if disposition in {"awaiting_answer", "needs_round_2"}:
                     self.write_projection()
                     return {"ok": False, "gate0": disposition, "state": self.projection()}
@@ -1266,6 +1422,53 @@ class RunEngine:
         self._settle(); self.write_projection()
         return {"ok": True, **result, "state": self.projection()}
 
+    def _consume_token(self, token: str | None, scope: str) -> tuple[bool, str]:
+        """Burn the session hook's one-time token for *scope*. An unreachable token
+        service is the run's infrastructure failing (conformance F11), not a refusal."""
+        from core import hook_token
+        ok, reason = hook_token.consume(self.run_dir, token, self.owner_session(),
+                                        self.run_id, scope)
+        if not ok and reason.startswith(hook_token.UNREACHABLE):
+            raise HookTokenUnavailable(reason)
+        return ok, reason
+
+    def fail_infrastructure(self, error: "InfrastructureError") -> dict[str, Any]:
+        """Record the run's infrastructure failure (v13 §A1.2): it ends ``failed``. The
+        CLI and the runner call this for the three ``infra`` kinds only."""
+        from core.run_protocol.store import StoreError
+        try:
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="infrastructure_failed", at=_now(),
+                ordinal=len(self.store.read_events()) + 1,
+                payload={"reason": f"{error.component}: {error}"[:300]},
+                refuse=lambda chain: lifecycle.infrastructure_refusal(chain, self.authority))
+            recorded = True
+        except StoreError as exc:
+            if not str(exc).startswith(lifecycle.ALREADY_ENDED):
+                raise
+            recorded = False
+        self._settle(); self.write_projection()
+        return {"recorded": recorded, "state": self.projection()}
+
+    def record_cap_exceeded(self, cap: str, *, stage: str | None = None,
+                            attempt: int | None = None) -> None:
+        """metric(cap_exceeded.<cap>): one of the run's count caps was hit (v13 E4/E5,
+        conformance F18). The audit reads it: Speed BLOCK, and Token BLOCK when the cap
+        bounds model dispatches. Idempotent per (stage, cap, attempt)."""
+        from core.run_protocol.store import StoreError
+        if cap not in lifecycle.CAPS:
+            raise EngineError(f"unknown cap {cap!r}")
+        stage, attempt = stage or "run", attempt or 1
+        try:
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="metric", at=_now(),
+                stage=stage, attempt=attempt,
+                payload={"name": f"cap_exceeded.{cap}", "value": 1, "cap": cap},
+                refuse=lambda chain: lifecycle.cap_already_recorded(chain, cap, stage, attempt))
+        except StoreError as exc:
+            if str(exc) != "cap already recorded":
+                raise
+
     def finish_not_landed(self) -> dict[str, Any]:
         """The not-landed path (design §A1.2): render the run-directory REPORT, then a
         DELIVER attempt whose only stage check is DV-1, then ``reflecting``. Every
@@ -1275,6 +1478,9 @@ class RunEngine:
         if state["status"] != "active" or state["stage"] != "deliver" or (
                 state.get("pending_landing") is None and state["profile"] != "research"):
             raise EngineError("the not-landed path needs active DELIVER with a not-landed reason")
+        cap = lifecycle.REASON_CAPS.get((state.get("pending_landing") or {}).get("reason"))
+        if cap is not None:
+            self.record_cap_exceeded(cap, stage="deliver")
         value = self.build_audit(through="DELIVER", persist=True,
                                  commits=self.landed_commits() or None)
         report = audit_protocol.render(value, fmt="report")
@@ -1304,6 +1510,21 @@ class RunEngine:
         state = self.projection()
         if state["stage"] != "review" or state["status"] != "active":
             raise EngineError("review-start requires active REVIEW")
+        # deterministic checks before any model review (v13 E4, conformance F16): the
+        # REVIEW stage checks that read no expert answer must pass first, or no expert
+        # is spawned for a change that cannot complete REVIEW anyway
+        context = self.check_context()
+        failed = {}
+        for spec in checks.stage_checks(state["profile"], "review"):
+            if spec.document == "review":
+                continue                    # judged from the experts' answers
+            ok, detail = checks.evaluate(spec.check_id, context)
+            if not ok:
+                failed[spec.check_id] = detail
+        if failed:
+            return {"ok": False, "reviewers": [], "handouts": [], "failed": failed,
+                    "error": "deterministic REVIEW checks fail; no expert is spawned until "
+                             f"they pass: {failed}"}
         repos = self.effective_repos()
         changed = []
         diffs = []
@@ -1350,7 +1571,11 @@ class RunEngine:
                 if latest is None or latest["payload"].get("state") in ("parsed", "partial"):
                     continue                # still pending, or answered
                 if len(mine) >= 2:
-                    continue                # no usable output twice: RV-1a/1c decide
+                    # no usable output twice: RV-1a/1c decide; a third dispatch is the
+                    # cap (§A3.2), and hitting it is recorded (F18)
+                    self.record_cap_exceeded("dispatch", stage="review",
+                                             attempt=int(mine[-1]["attempt"]))
+                    continue
                 expert_attempt = int(mine[-1]["attempt"]) + 1
             handouts.append(orchestrator.handout(
                 expert_id=item["id"], stage="review", round=1, attempt=expert_attempt,
@@ -1428,6 +1653,8 @@ class RunEngine:
                 continue  # normal land evaluates no manual-landing penalty
             try:
                 results[spec.check_id] = checks.evaluate(spec.check_id, context)
+            except InfrastructureError:
+                raise
             except Exception as exc:
                 results[spec.check_id] = (False, f"{type(exc).__name__}: {exc}")
         failed = {key: detail for key, (passed, detail) in results.items() if not passed}
@@ -1570,15 +1797,32 @@ class RunEngine:
             except CarryError as exc:
                 raise IntegrationRequired("final_recheck_required", f"{name}: {exc}") from exc
             if sync.get("patch_changed") or not decision.reusable:
-                affected = ", ".join(decision.affected_tests) or "the run regression scope"
+                # the runner's recheck consumes exactly these (§C5.3, conformance F15);
+                # no affected test named means the whole regression scope runs again
+                affected = [] if sync.get("patch_changed") else list(decision.affected_tests)
+                self._write_carry_plan(name, old_base=old_base, new_base=new_base,
+                                       code_tree=new_tree, affected=affected)
                 raise IntegrationRequired(
                     "final_recheck_required",
-                    f"{name}: integration changes intersect final dependencies; rerun {affected}")
+                    f"{name}: integration changes intersect final dependencies; run "
+                    + ("`pipeline_test.py --mode recheck`: it re-runs the affected tests "
+                       f"({', '.join(affected)})" if affected else
+                       "`pipeline_test.py --mode regression` (no affected test could be "
+                       "named)"))
             carried = carry_repo_final(row, new_base=new_base, new_code_tree=new_tree)
             path = self.run_dir / "evidence" / "tests" / f"final-{name}.json"
             warning = evidence_seal.write_sealed(path, json.dumps(carried, sort_keys=True))
             if warning:
                 raise EngineError(warning)
+
+    def _write_carry_plan(self, name: str, *, old_base: str, new_base: str, code_tree: str,
+                          affected: Sequence[str]) -> None:
+        from core.run_protocol.runner import carry_plan_path
+        path = carry_plan_path(self.data_dir, self.run_id)
+        current = self._read_json(path, {}) or {}
+        _atomic_json(path, {**current, name: {"old_base": old_base, "new_base": new_base,
+                                              "code_tree": code_tree,
+                                              "affected_tests": sorted(affected)}})
 
     def _landing_lock(self):
         """One landing of this run at a time (fixing spec C4): land / run-land hold it
@@ -1628,8 +1872,7 @@ class RunEngine:
         if resumed is not None:
             return resumed
         from core import hook_token
-        ok, why = hook_token.consume(self.run_dir, os.environ.get(hook_token.TOKEN_ENV),
-                                     self.owner_session(), self.run_id, "land")
+        ok, why = self._consume_token(os.environ.get(hook_token.TOKEN_ENV), "land")
         if not ok:
             # a landing needs the session's hook (fixing spec A7, design §C5.1): a
             # hookless executor's work is kept and the run ends not_landed

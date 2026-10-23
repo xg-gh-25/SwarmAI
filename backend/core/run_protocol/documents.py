@@ -187,16 +187,34 @@ def complete_stage(store: AuditStore, *, profile: str, stage: str, variant: str 
 
 def record_decision(store: AuditStore, value: Mapping[str, Any], *,
                     known_refs: Mapping[str, Mapping[str, Any]], document: str,
-                    at: str, decisions_answered: int, cap: int) -> dict[str, Any]:
+                    at: str, decisions_answered: int, cap: int,
+                    after_cap: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Record a DC-1-valid decision. Below the cap it asks the person; at the cap the
+    agent's evidence-based choice (*after_cap*: option_id + evidence_refs) is resolved
+    by ``decision.resolve_after_cap`` and recorded instead — DC-2 then fails push
+    (v13 §A1.2/§B5.2, conformance F12). At the cap without a choice it is refused."""
     issues = decision.validate(value, known_refs)
     if issues:
         raise DocumentError("; ".join(f"{row.path}: {row.message}" for row in issues))
+    payload: dict[str, Any] = {
+        "request_id": value["request_id"], "decision_kind": value["kind"],
+        "document": document,
+        "decision_json": json.dumps(dict(value), sort_keys=True, ensure_ascii=False)}
     if not decision.may_ask(decisions_answered, cap):
-        raise DocumentError("decision cap reached; choose from evidence and record DC-2")
-    event, _ = store.append_new(
-        writer=store.authority.writer("cli"), kind="decision", at=at,
-        payload={"request_id": value["request_id"], "decision_kind": value["kind"],
-                 "document": document,
-                 "decision_json": json.dumps(dict(value), sort_keys=True, ensure_ascii=False)},
-    )
+        if not isinstance(after_cap, Mapping):
+            raise DocumentError("decision cap reached: choose from evidence — pass "
+                                "after_cap {option_id, evidence_refs}; DC-2 records it")
+        try:
+            resolved = decision.resolve_after_cap(
+                value, option_id=str(after_cap.get("option_id")),
+                evidence_refs=list(after_cap.get("evidence_refs") or []),
+                known_refs=known_refs, decisions_answered=decisions_answered, cap=cap)
+        except decision.DecisionError as exc:
+            raise DocumentError(str(exc)) from exc
+        payload.update(decided_by="agent_after_cap", option_id=resolved["option_id"],
+                       evidence_refs=resolved["evidence_refs"])
+    elif after_cap is not None:
+        raise DocumentError("after_cap is for a decision past the cap; ask the person")
+    event, _ = store.append_new(writer=store.authority.writer("cli"), kind="decision",
+                                at=at, payload=payload)
     return event

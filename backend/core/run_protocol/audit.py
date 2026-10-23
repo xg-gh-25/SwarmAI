@@ -93,8 +93,15 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     active = max(0.0, wall - waiting) if wall is not None else None
     budget_seconds = contract.get("budget_seconds")
     speed_complete = isinstance(budget_seconds, (int, float)) and budget_seconds > 0
-    speed = {"verdict": ("PASS" if speed_complete and active is not None
+    # a count cap that was hit is unbounded / non-converging work: BLOCK without any
+    # baseline (v13 E4/E5, conformance F18); a dispatch cap is a Token BLOCK too
+    caps_hit = sorted({str(event["payload"].get("cap")) for event in event_rows
+                       if event.get("kind") == "metric"
+                       and str(event.get("payload", {}).get("name", "")).startswith("cap_exceeded.")})
+    speed = {"verdict": ("BLOCK" if caps_hit else
+                         "PASS" if speed_complete and active is not None
                          and active <= budget_seconds else "WARN"),
+             "caps_exceeded": caps_hit,
              "wall_seconds": round(wall, 3) if wall is not None else None,
              "active_seconds": round(active, 3) if active is not None else None,
              "budget_seconds": budget_seconds if speed_complete else None,
@@ -165,7 +172,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
             continue
         name, value = event["payload"].get("name"), event["payload"].get("value")
         if not isinstance(name, str) or not isinstance(value, (int, float)) \
-                or name == "required_approval":
+                or name == "required_approval" or name.startswith("cap_exceeded."):
             continue
         if event.get("producer") == "cli":
             measured[name] = value                     # a later measurement replaces
@@ -194,7 +201,10 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                     if isinstance(input_tokens, (int, float)) and isinstance(output_tokens, (int, float))
                     else None)
     budget_tokens = contract.get("budget_tokens")
-    if accounted == 0:
+    from core.run_protocol.lifecycle import DISPATCH_CAPS
+    if set(caps_hit) & DISPATCH_CAPS:
+        token_verdict = "BLOCK"                        # model dispatches hit their cap
+    elif accounted == 0:
         token_verdict = "BLOCK"                        # nothing was metered at all
     elif accounted < total_calls or total_tokens is None \
             or not isinstance(budget_tokens, (int, float)):

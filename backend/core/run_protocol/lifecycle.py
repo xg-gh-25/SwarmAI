@@ -12,7 +12,7 @@ cannot pass ``authorized``, ``stage_checks_passed``, attempt counts or RF exempt
 from __future__ import annotations
 
 import copy
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from core.run_protocol import events as ev
 
@@ -30,6 +30,44 @@ QUALITY_BLOCK_REASONS = frozenset({
     # half a multi-repo change is on main: what landed no longer is the reviewed change
     "partial_land",
 })
+# count caps a run can hit (conformance F18); DISPATCH_CAPS bound model sessions
+CAPS = frozenset({"stage_attempt", "land_attempt", "gate0_round", "dispatch",
+                  "regression_round", "recheck",
+                  # the runner's circuit breaker (pipeline_test): each its own counter
+                  "breaker_rounds", "breaker_stall", "breaker_same_failure",
+                  "goal_tdd_calls"})
+DISPATCH_CAPS = frozenset({"dispatch", "gate0_round"})
+# the not-landed reasons that ARE a count cap being hit
+REASON_CAPS = {"checks_exhausted": "stage_attempt", "land_conflict": "land_attempt",
+               "final_stale": "land_attempt", "framing_rejected": "gate0_round"}
+
+
+def cap_already_recorded(chain: Sequence[Mapping[str, Any]], cap: str, stage: str,
+                         attempt: int) -> str | None:
+    """A ``refuse`` for ``append_new``: this cap is already recorded for this stage
+    attempt (one metric per hit cap, however often the refused call repeats)."""
+    for event in chain:
+        payload = event.get("payload") or {}
+        if event.get("kind") == "metric" and payload.get("cap") == cap \
+                and event.get("stage") == stage and event.get("attempt") == attempt:
+            return "cap already recorded"
+    return None
+
+
+ALREADY_ENDED = "the run already ended or is ending"
+
+
+def infrastructure_refusal(chain: Sequence[Mapping[str, Any]], authority) -> str | None:
+    """Why ``infrastructure_failed`` must not be appended to *chain*: the run is
+    terminal, a failure is already recorded, or a transition is still due. Evaluated
+    under the run lock by every producer (conformance F11)."""
+    state = fold(list(chain), authority, allow_pending_transition=True)
+    if state["status"] in TERMINAL or state.get("expected_transition") \
+            or any(event.get("kind") == "infrastructure_failed" for event in chain):
+        return ALREADY_ENDED
+    return None
+
+
 RF_CHECKS = frozenset({"RF-1", "RF-2", "RF-3", "RF-4"})
 LG_CHECKS = frozenset({"LG-1", "LG-2", "LG-3", "LG-4", "LG-5"})
 NORMAL_LAND_CHECKS = LG_CHECKS | {"DV-1"}   # RF-1~4 are DELIVER stage checks, not guards
@@ -83,7 +121,7 @@ def _initial(event: Mapping[str, Any]) -> dict[str, Any]:
         "run_id": payload["run_id"], "profile": profile, "status": "active",
         "stage": sequence[0], "stages": stages, "landing": None, "reason": None,
         "reflect": None, "decision_cap": cap, "human_decisions": 0,
-        "pending_decision": None, "pending_landing": None,
+        "pending_decision": None, "pending_landing": None, "agent_after_cap": False,
         "stage_attempts": {}, "attempt_base": {}, "open_attempt": None,
         "last_land_intent": None, "last_report_render": None,
         "land_requests": {}, "auth_grants": {},
@@ -260,6 +298,18 @@ def _complete(run: dict[str, Any], event: Mapping[str, Any]) -> None:
 def _decision(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     if run["status"] != "active" or run["stage"] not in ("evaluate", "think", "plan"):
         raise LifecycleError("decision is legal only in active EVALUATE/THINK/PLAN")
+    payload = event["payload"]
+    if "decided_by" in payload:
+        # the agent's choice after the cap (DC-2): legal only at the cap, asks nobody
+        if payload["decided_by"] != "agent_after_cap" \
+                or run["human_decisions"] < run["decision_cap"] \
+                or not isinstance(payload.get("option_id"), str) \
+                or not isinstance(payload.get("evidence_refs"), list) \
+                or not payload["evidence_refs"]:
+            raise LifecycleError("an agent-after-cap decision needs the cap reached, an "
+                                 "option and evidence refs")
+        run["agent_after_cap"] = True
+        return
     if run["human_decisions"] >= run["decision_cap"]:
         raise LifecycleError("decision cap reached")
     run["pending_decision"] = event["payload"]["request_id"]

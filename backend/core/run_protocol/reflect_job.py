@@ -5,7 +5,11 @@ landing happens here, in the daemon, never in the agent's CLI:
 
 - ``judge`` — the existing deterministic lesson gate (``ddd_cultivation.is_noise`` and
   ``is_quality_lesson``): ``keep`` / ``noise`` / ``suspect``. No model call.
-- ``route`` — writes a kept lesson to its destination: a ``domain:<project>:<section>``
+- ``route`` — writes a kept lesson by its relation (conformance F19): ``reinforces``
+  adds an evidence reference after the existing entry, ``refines`` adds the revision
+  after it (``annotate_entry``; the old text is kept, never copied), ``contradicts``
+  is queued for review naming the conflicting entry and writes nothing. A ``new``
+  lesson goes to its destination: a ``domain:<project>:<section>``
   lesson is appended to that project's DDD doc through ``ddd_cultivation.apply_to_ddd``;
   ``MEMORY`` / ``EVOLUTION`` / ``self-evolution-proposal`` lessons go to the project's
   proposal queue (``.artifacts/proposals/``) for the existing human-reviewed flow —
@@ -16,7 +20,8 @@ landing happens here, in the daemon, never in the agent's CLI:
 - ``schedule`` — fire-and-forget on one worker thread, after a pipeline command of the
   owning session; never on the chat path.
 
-Public symbols: ``judge``, ``route``, ``process_run``, ``schedule``, ``candidates_for``,
+Public symbols: ``judge``, ``route``, ``annotate_entry``, ``process_run``, ``schedule``,
+``candidates_for``,
 ``create_reflect_trigger``.
 """
 from __future__ import annotations
@@ -51,10 +56,141 @@ def _project_dir(workspace: Path, project: str) -> Path:
     return Path(workspace) / "Projects" / project
 
 
+def _queue(workspace: Path, project: str, run_id: str, lesson: Mapping[str, Any],
+           destination: str, **extra: Any) -> str:
+    """Queue *lesson* for the human-reviewed flow. The file is created under the
+    project's ``.artifacts/proposals`` through a directory-fd walk that follows no
+    symlink, into a new O_EXCL file (K3 review r2); an existing file is a replay only when it
+    is the same proposal as a regular file, and is otherwise rejected (K3 review r3)."""
+    import os
+    root = (Path(workspace) / "Projects").resolve()
+    project_dir = _project_dir(workspace, project)
+    if project_dir.resolve().parent != root or project_dir.is_symlink():
+        return "rejected_unknown_project"
+    # run id and lesson id are both validated shapes (run_*, L<n>)
+    name = f"reflect-{run_id}-{lesson['id']}.json"
+    data = json.dumps({"source_run_id": run_id, "destination": destination,
+                       "lesson": dict(lesson), "status": "pending", **extra},
+                      ensure_ascii=False, indent=2).encode("utf-8")
+    fd = os.open(project_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in (".artifacts", "proposals"):
+            try:
+                os.mkdir(part, 0o755, dir_fd=fd)
+            except FileExistsError:
+                pass
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        try:
+            out = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                          0o644, dir_fd=fd)
+        except FileExistsError:
+            # only the same proposal, already written as a regular file, is a replay
+            try:
+                held = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+            except OSError:
+                return "rejected_integrity"
+            try:
+                import stat
+                same = stat.S_ISREG(os.fstat(held).st_mode) and \
+                    os.read(held, len(data) + 1) == data
+            finally:
+                os.close(held)
+            return f"queued:{name}" if same else "rejected_integrity"
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(out, view):]
+            os.fsync(out)
+        finally:
+            os.close(out)
+    finally:
+        os.close(fd)
+    return f"queued:{name}"
+
+
+def annotate_entry(workspace: Path, project: str, entry: str, note: str) -> str:
+    """Add *note* as a sub-bullet right after an existing DDD entry, never copying or
+    rewriting the entry. *entry* is a dedup candidate (``doc#section: text``, from
+    ``candidates_for``). Returns applied / entry_missing / doc_missing / locked."""
+    from core.ddd_paths import ddd_path
+    from utils.file_lock import md_lock
+    head, _, text = entry.partition(": ")
+    doc, _, section = head.partition("#")
+    root = (Path(workspace) / "Projects").resolve()
+    project_dir = _project_dir(workspace, project).resolve()
+    if project_dir.parent != root or not doc or not section or not text.strip():
+        return "entry_missing"
+    path = ddd_path(project_dir, doc)
+    if not path.is_file() or path.is_symlink():
+        return "doc_missing"
+    if project_dir not in path.resolve().parents:
+        return "entry_missing"          # never a doc outside its project
+    with md_lock(path, blocking=False) as got:
+        if not got:
+            return "locked"
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        in_section, at = False, None
+        for index, line in enumerate(lines):
+            if line.startswith("## "):
+                in_section = line[3:].strip() == section.strip()
+            elif in_section and line.startswith("- ") and line[2:].strip().startswith(
+                    text.strip()):
+                at = index
+                break
+        if at is None:
+            return "entry_missing"
+        end = at + 1
+        while end < len(lines) and lines[end].startswith(("  ", "\t")) and lines[end].strip():
+            end += 1                    # the entry's own sub-bullets stay with it
+        lines.insert(end, "  - " + " ".join(note.split()) + "\n")   # one line, always
+        import os
+        import uuid
+        temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.reflect.tmp")
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write("".join(lines))
+            os.replace(temp, path)
+        finally:
+            try:
+                temp.unlink()
+            except FileNotFoundError:
+                pass
+    return "applied"
+
+
 def route(lesson: Mapping[str, Any], destination: str, *, workspace: Path,
           project: str, run_id: str) -> str:
-    """Write one kept lesson; returns the writer's result string."""
+    """Write one kept lesson; returns the writer's result string. Each relation to an
+    existing entry has its own write (design §B7, conformance F19): ``reinforces``
+    adds an evidence reference after that entry (its text is not copied),
+    ``refines`` keeps the old text and adds the revision after it, ``contradicts``
+    writes nothing and queues the lesson for review naming the entry it conflicts
+    with; a ``new`` lesson goes to its destination.
+
+    The destination decides the store first (K3 review r3): an entry is annotated
+    only when the lesson's destination is this project's own DDD, the store its
+    candidates were recalled from; a relation to any other destination is queued for
+    review with the entry it relates to."""
     from core import ddd_cultivation
+    relation = lesson.get("relation") if isinstance(lesson.get("relation"), Mapping) else {}
+    kind, entry = relation.get("kind"), str(relation.get("entry") or "")
+    own_ddd = destination.startswith(f"domain:{project}:")
+    if kind in ("reinforces", "refines") and not own_ddd:
+        return _queue(workspace, project, run_id, lesson, destination,
+                      review=kind, relates_to=entry)
+    if kind == "reinforces":
+        evidence = ", ".join(str(ref)[:12] for ref in lesson.get("evidence") or [])
+        return annotate_entry(workspace, project, entry,
+                              f"reinforced by {run_id} {lesson['id']} (evidence {evidence})")
+    if kind == "refines":
+        return annotate_entry(workspace, project, entry,
+                              f"refined by {run_id} {lesson['id']}: {lesson['statement']}")
+    if kind == "contradicts":
+        return _queue(workspace, project, run_id, lesson, destination,
+                      review="contradiction", conflicts_with=entry)
     if destination.startswith("domain:"):
         _, target_project, doc_section = destination.split(":", 2)
         root = (Path(workspace) / "Projects").resolve()
@@ -67,14 +203,7 @@ def route(lesson: Mapping[str, Any], destination: str, *, workspace: Path,
             content=str(lesson["statement"]), source_run_id=run_id, confidence=0.8)
         return str(ddd_cultivation.apply_to_ddd(
             proposal, _project_dir(workspace, target_project)))
-    queue = _project_dir(workspace, project) / ".artifacts" / "proposals"
-    queue.mkdir(parents=True, exist_ok=True)
-    # run id and lesson id are both validated shapes (run_*, L<n>)
-    path = queue / f"reflect-{run_id}-{lesson['id']}.json"
-    path.write_text(json.dumps({"source_run_id": run_id, "destination": destination,
-                                "lesson": dict(lesson), "status": "pending"},
-                               ensure_ascii=False, indent=2), encoding="utf-8")
-    return f"queued:{path.name}"
+    return _queue(workspace, project, run_id, lesson, destination)
 
 
 def candidates_for(lessons: Any, project: str) -> dict[str, list[str]]:

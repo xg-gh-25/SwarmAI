@@ -235,18 +235,46 @@ def execute(args) -> dict[str, Any]:
     raise ValueError(f"unknown command {args.command}")
 
 
+def _infrastructure_failed(args, failure) -> dict[str, Any]:
+    """The run's infrastructure failed (conformance F11): record it on the run, which
+    ends ``failed``; when the audit area itself cannot be written, say so instead."""
+    payload: dict[str, Any] = {"ok": False, "code": "infrastructure_failed",
+                               "component": failure.component, "error": str(failure)[:500]}
+    if getattr(args, "run_id", None) and getattr(args, "project", None):
+        try:
+            payload.update(_load(args).fail_infrastructure(failure))
+        except Exception as exc:  # noqa: BLE001 — the failure itself may forbid recording
+            payload.update(recorded=False, record_error=f"{type(exc).__name__}: {exc}"[:300])
+    return payload
+
+
 def main(argv: list[str] | None = None) -> int:
+    from core.run_protocol import infra
+    args = None
     try:
-        result = execute(parser().parse_args(argv))
+        args = parser().parse_args(argv)
+        result = execute(args)
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 0 if result.get("ok") is not False else 1
-    except (ValueError, EngineError, LandingError) as exc:   # always JSON (C5)
-        payload = {"ok": False, "error": str(exc)}
-        code = getattr(exc, "code", None)
-        if isinstance(code, str) and code:
-            payload["code"] = code
-        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    except Exception as exc:
+        failure = infra.find(exc)
+        if failure is None:
+            if isinstance(exc, (ValueError, EngineError, LandingError)):
+                return _refused(exc)
+            raise
+        print(json.dumps(_infrastructure_failed(args, failure), ensure_ascii=False,
+                         separators=(",", ":")))
         return 2
+
+
+def _refused(exc: Exception) -> int:
+    """A refused command, always as one JSON object (C5)."""
+    payload = {"ok": False, "error": str(exc)}
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        payload["code"] = code
+    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    return 2
 
 
 if __name__ == "__main__":

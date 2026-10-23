@@ -229,12 +229,15 @@ def issue(run_dir: "str | Path", session_id: str, run_id: str, subcommand: str,
     return nonce
 
 
+UNREACHABLE = "hook-token service unreachable"
+
+
 def _ask_oracle(port: int, digest: str, session_id, run_id, subcommand) -> "tuple[bool, str]":
     path = socket_path(port)
     try:
         st = os.lstat(path)
     except OSError:
-        return False, "hook-token service unreachable (the issuing SwarmAI backend is not running)"
+        return False, UNREACHABLE + " (the issuing SwarmAI backend is not running)"
     if not stat.S_ISSOCK(st.st_mode) or st.st_uid != os.getuid() \
             or not _private_dir(path.parent, create=False):
         return False, "hook-token socket is not private to this user — refused"
@@ -253,7 +256,7 @@ def _ask_oracle(port: int, digest: str, session_id, run_id, subcommand) -> "tupl
                 buf += chunk
         rep = json.loads(buf.decode("utf-8"))
     except (OSError, ValueError, UnicodeDecodeError):
-        return False, "hook-token service unreachable (the issuing SwarmAI backend is not running)"
+        return False, UNREACHABLE + " (the issuing SwarmAI backend is not running)"
     if not isinstance(rep, dict):
         return False, "malformed hook-token reply"
     return bool(rep.get("ok") is True), str(rep.get("reason") or "")
