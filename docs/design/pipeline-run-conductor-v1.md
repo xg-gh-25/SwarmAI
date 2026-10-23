@@ -153,6 +153,8 @@ Each fact has exactly one owner. Every other view is a projection.
 | Node identity, type, allowed class, capacity, heartbeat | **Central Service** `nodes` table | Host Conductor dispatch |
 | Org-wide view of Runs | **Central Service** event mirror, a projection of each node's outbox | Control Center |
 | A Run's full result (Run record) | **Central Service** result store (§4.4.1) | Learning worker, Host landing, Offline Eval |
+| Run Trace statistics | **Central Service** `run_index`, derived from Run records (§4.5.1) | Control Center |
+| Intervention classification and five-dimension results | **Central Service** `eval_reports` (§4.5.3) | Control Center, ADR roll-up |
 | Whether a local Run uploads | `config.json["pipeline"]["central_upload"]` and the request's `upload` flag, fixed in the Run contract at create (§4.4.1) | Conductor, Host outbox |
 | Proposed, approved and applied DDD changes, audit | **Central Service** learning pipeline (§4.4) | Control Center |
 | DDD content | The DDD's own store. Written by the existing local paths as today, plus Central-approved changes from Pipeline Runs through the DDD's adapter (§4.4.3) | Executors |
@@ -221,6 +223,9 @@ owner command, never automatically.
 | `change_sets` | `change_set_id`; GSI `(destination, state)` | §4.4.3 |
 | `audit` | `day`, `ts#id` | §4.4.4 |
 | `enrolments` | `code_hash`; TTL | target node, attempts left, consumed flag (§4.3.6) |
+| `run_index` | `request_id`; GSIs `(project, day)`, `(day)` | Trace projection (§4.5.1), rebuildable |
+| `eval_jobs` | `job_id`; GSI `state` | §4.5.3 |
+| `eval_reports` | `report_id`; GSI `request_id`, `(project, day)` | five-dimension results, intervention classifications, Eval version, input digests |
 
 | S3 prefix | Holds |
 |---|---|
@@ -345,14 +350,16 @@ execute and from how each DDD is stored.
 When the Run is terminal, after REFLECT has completed (`reflect_complete` or
 `reflect_exhausted`) and `REPORT.md` and usage have been finalized, the executor uploads
 one **Run record**. This holds for every placement, including an internal Run, whose
-order is `external_handoff` → REFLECT → `completed` → upload. It holds exactly three kinds
-of content, plus the metadata that ties them together:
+order is `external_handoff` → REFLECT → `completed` → upload. It holds four kinds of
+content, plus the metadata that ties them together:
 
 | Part | Contents | Source today |
 |---|---|---|
 | Pipeline documents | `REQUIREMENTS.md` and `DESIGN_SPEC.md` (profiles that have them), `REVIEW.md`, `FIXING_SPEC.md` (if review asked for fixes), `REPORT.md` | Rendered by the Pipeline into the run directory (`run_protocol/documents.py`, `engine.py`) |
 | Reflect summary | Each lesson the agent wrote, with its destination, relation and the judge's verdict | `artifacts/reflect.json` |
 | Delivery record | Commits: per repo the base, landed commit and message. Or CR: package, CR id, revision, commit, state at handoff (draft) | The landing result (`run_protocol/landing.py`), or the CR handoff (§7.3) |
+| Trace and human-loop record | The full signed Pipeline event chain and the blobs it references: stage attempts and completions with times, checks and test calls with results, review handouts, answers and findings, every `decision` and `human_answer`, `auth` (human approvals), `user_stop`, `resume`, `owner_transfer` (takeover), `session_lost`, `restore`, `abandon`, landing events and usage metrics per stage and model | The run's signed event store (`run_protocol/events.py`), usage from `run_protocol/usage.py` |
+| Dispatch record | Queue wait, Attempts with their start, end and reason, cancel and lease events | Conductor Store (local) or Central `requests` (remote) |
 | Metadata | Below | Conductor and Pipeline records |
 
 The record is a versioned manifest (`run_record_version: 1`). Metadata fields:
@@ -366,7 +373,7 @@ The record is a versioned manifest (`run_record_version: 1`). Metadata fields:
 | Attempts (attempt, epoch, node, start, end, reason) | all |
 | The four completion facts and the landing outcome | all |
 | Candidate tree digest per repo and the result bundle digest | Runs that changed code |
-| Signed event chain: head digest and event count | all |
+| Signed event chain: head digest and event count, so the uploaded chain can be verified complete | all |
 | Token and time usage | all |
 | Digests of transcripts and logs | all |
 
@@ -375,8 +382,10 @@ commit, the ordered patch series (`git format-patch`) and the candidate tree dig
 Host lands from it (§7.2): it applies the series on the base, checks the tree digest, then
 runs the landing. Internal Runs have no result bundle; their delivery record names the CR.
 
-Transcripts, full logs and the signed event chain stay on the node that ran the Run; the
-Run record carries only their digests, so they can be checked if fetched later.
+Agent transcripts and raw process logs stay on the node that ran the Run; the Run record
+carries only their digests, so they can be checked if fetched later. Everything Trace and
+Eval need (§4.5) is in the event chain and the dispatch record, so neither has to reach
+back to a node.
 
 **Upload is the Pipeline standard, with an opt-out for local Runs.**
 
@@ -396,7 +405,10 @@ A local Run with upload off:
 
 - sends nothing to Central: no Run record, no event mirror, no lessons;
 - runs, lands and reflects exactly the same locally;
-- is shown in the Control Center only on this Host, marked `local only`.
+- is shown in the Control Center only on this Host, marked `local only`;
+- is not part of org Trace statistics or Eval (§4.5). The Host's own Control Center shows
+  how many of its Runs are `local only`, counted locally and never sent, so org coverage
+  is not overstated.
 
 A Run that should upload but cannot (Central down) keeps its record locally and retries;
 nothing is lost.
@@ -511,6 +523,67 @@ transition, every applied change with its adapter, base and resulting revision, 
 revert, and every read of Run content. Any DDD line can be traced to
 the Runs and decisions that produced it, and an applied change set can be reverted through
 its adapter.
+
+
+### 4.5 Trace and Offline Eval on Central
+
+Central is the single source for Run Trace statistics and for Eval. Both read only what
+Runs hand in (§4.4.1) and what Central records itself; neither runs in the delivery path.
+
+#### 4.5.1 Trace
+
+- **Live:** while a Run executes, its events reach Central through the event mirror
+  (§4.2 outbox for local Runs, §7.1 for remote Runs), so the Control Center shows stage,
+  waits and human questions as they happen.
+- **Sealed:** the Run record replaces the live view when it arrives after REFLECT. The
+  uploaded event chain is checked against its head digest and count; a gap marks the
+  Run's Trace `incomplete`, never silently complete.
+- **Index:** a `run_index` table is built from Run records and dispatch facts (project,
+  DDD, placement, node, profile, origin, outcome, start and end, per-stage durations,
+  tokens, human events) with GSIs by project and by day, so Control Center statistics are
+  queries, not scans. It is a projection: it can be rebuilt from the Run records at any
+  time and holds no fact of its own.
+
+#### 4.5.2 Human intervention record
+
+Every point where a person entered a Run is a fact in its event chain, with time,
+stage and who:
+
+| Event | Meaning |
+|---|---|
+| `decision` → `human_answer` | The Run asked; a person answered (wait time = answer time − question time) |
+| `auth` | A person approved a landing or another guarded action |
+| `user_stop`, `resume` | A person stopped or resumed the Run |
+| `owner_transfer` | Ownership moved, including a human takeover |
+| `abandon` with a human reason, cancel | A person ended the Run |
+| A Slack or dashboard answer | Same `human_answer`, with its channel (§8.3) |
+
+The Pipeline records what happened, not whether it was avoidable. Offline Eval classifies
+each intervention into the HLD's canonical set (`required_judgment` as neutral, or
+`preventable_question`, `human_correction`, `manual_routing`, `manual_retry`,
+`operational_rescue`, `unnecessary_approval`, `manual_code_fix`, `takeover`), and stores
+the classification and its reasoning in its report, never back into the Run.
+
+#### 4.5.3 Offline Eval
+
+Eval runs as `eval_jobs` claimed by a node with the `eval` role (the Host in V1), the same
+way learning jobs are claimed (§4.4.2), and writes `eval_reports`. It never blocks or
+delays a Run, a landing or the learning pipeline. A report is computed only from Central
+data and records the Eval version and the Run record digests it read, so it can be
+reproduced.
+
+| Dimension | Computed from |
+|---|---|
+| Run Isolation | Worktree mode and paths, owned paths against the contract's repos, landing CAS outcomes, `partial_land`, placement-rule results |
+| Quality | Pipeline verdict, review findings by severity and their status, test calls and results, review rounds, fixing cycles |
+| Autonomy | The classified human interventions (§4.5.2); a Run is autonomous only with zero preventable interventions |
+| Speed | Queue wait, wall time, per-stage durations from `stage_attempt` / `stage_complete`, with time waiting for a person reported separately |
+| Token Cost | Usage metrics per stage and model, retries included |
+
+Missing or unverifiable evidence makes that dimension `UNKNOWN` for the Run, never PASS.
+Org roll-ups (by project, DDD, placement, period) are computed by Eval from reports;
+Autonomous Delivery Rate follows the HLD formula (A / E) and is always shown with its
+evidence coverage, which counts `incomplete` Traces and `local only` Runs as not covered.
 
 ## 5. Data model
 
@@ -1066,7 +1139,7 @@ Measure first, then build. Each phase starts with its acceptance tests written a
 | 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2 |
 | 3-0 | Contracts before code: wire and key specification (§4.3.6) with test vectors; DynamoDB, event, Run-record and audit schemas; `ddd_origin` and adapter fields in `ddd_bindings.py`; the four-fact event schema | Reviewed documents and red conformance tests for: crash after claim, out-of-order and duplicate events, duplicate-with-different-payload, cancel racing a result, Hive restart and adopt, lease across a simulated outage, key loss and rotation, a poisoned blob upload, a Run record that fails intake |
 | 3 | Central Service in the Bedrock account (CDK: HTTP API, Lambdas, DynamoDB, S3, KMS key, sweeper); Host enrolment and signed requests; DDD and Project Agent registry; Run-record upload from the Host outbox for inline and Local Runs; intake with redaction; audit; Control Center reads Central | Every finished local Run with upload on hands its record to Central, which passes intake; with `central_upload: "off"`, or `--no-upload`, a local Run sends nothing to Central and behaves the same locally; a remote request ignores the setting and always uploads; a planted fake secret is masked and recorded; a Central outage leaves local Runs unaffected and their records upload afterwards; a replayed upload is a no-op; a node with a wrong signature, stale timestamp or reused nonce is refused |
-| 4 | Learning pipeline: `learning_jobs` and `change_sets`, learning worker on the Host, review and approve in the Control Center, `host_files` adapter with journal and revert, `reflect_job.route` in proposal mode for `remote_hive` placements only. Exercised with a Host-local Run first (its lessons recorded, not re-applied) and a simulated remote Run record | A local Run behaves exactly as today and its lessons appear in Central with their local outcome, never applied twice; a simulated remote Run's `auto` lesson is applied through `host_files` with an audit trail back to its Run; its MEMORY / EVOLUTION lesson lands in the Host's existing proposal queue; a Gates change waits for approval; a duplicate entry is not written twice; an applied change set can be reverted; no chat, hook or MEMORY behaviour changes |
+| 4 | Trace index, live view and sealed Trace; Offline Eval jobs and reports with intervention classification and the five dimensions; learning pipeline: `learning_jobs` and `change_sets`, learning worker on the Host, review and approve in the Control Center, `host_files` adapter with journal and revert, `reflect_job.route` in proposal mode for `remote_hive` placements only. Exercised with a Host-local Run first (its lessons recorded, not re-applied) and a simulated remote Run record | A local Run behaves exactly as today and its lessons appear in Central with their local outcome, never applied twice; a simulated remote Run's `auto` lesson is applied through `host_files` with an audit trail back to its Run; its MEMORY / EVOLUTION lesson lands in the Host's existing proposal queue; a Gates change waits for approval; a duplicate entry is not written twice; an applied change set can be reverted; no chat, hook or MEMORY behaviour changes; an uploaded local Run shows per-stage times, tokens and every human answer in the Control Center from Central data only; a dropped event marks its Trace `incomplete`; an Eval report for that Run gives all five dimensions or `UNKNOWN`, never a guessed PASS; rebuilding `run_index` from Run records gives the same statistics; `local only` Runs are absent from org stats and counted as not covered |
 | 5 | Slack submit (owner only), confirmation card, `pipeline_submit` job, thread updates, Slack answer button | A non-owner cannot submit; a scheduled Run fires and reports in its thread; a missed fire is recorded `missed(host_offline)` and never submitted late; an overlapping fire is `skipped_overlap`; a replayed occurrence key is a no-op; an owner button press consumes its nonce once and records `human_answer`, while a second click, a non-owner click or an expired nonce is rejected |
 | 6 | Hive credentials moved to the secret store; four-fact completion protocol with landing journal for every placement; EC2 Hive enrolment and Worker through Central; leases; capacity reporting; DDD snapshot manifest and scan; `git_repo` adapter for GitHub DDDs | An external Run on EC2 hands in its Run record; the Host takes the result from Central, verifies, re-tests and lands it; a claim raced by two nodes has one winner; a lease survives a simulated 15-minute Central outage and a dead Hive's lease expires 10 minutes after recovery; a revoked-epoch event is rejected; an internal project is rejected for EC2; a crash mid-landing reconciles without double-landing |
 | 7 | Cloud Desktop enrolment and Worker; `ddd_origin: repo` fetch with internal git; draft CR handoff; `git_repo` adapter for internal git. Gated on S6 | An internal Run with an IVTHubSpec-hosted DDD runs on a Cloud Desktop, hands in its Run record and records all four facts ending in `external_handoff` with a draft CR; its approved lessons are applied to IVTHubSpec as a draft CR; an external project is rejected for a Cloud Desktop |
@@ -1083,7 +1156,7 @@ Slack scheduling to a named Hive is part of phases 6 and 7 once those Hives exis
 | S4 | Lambda authorizer for Ed25519-signed requests: measured added latency, and that a Cloud Desktop can reach the API Gateway endpoint outbound | Phase 3 |
 | S5 | How an owner's Slack button press becomes a `human_answer` without the gateway's unattended path | Phase 5 |
 | S6 | Headless Midway, internal git and `cr` on a Cloud Desktop. `ddd_bindings.bind_repo` defers internal bindings today ("needs Brazil+Midway headless auth") | Phase 7 |
-| S7 | Size of a real Run record (documents, reflect summary, delivery record), measured over recent SwarmAI Runs, to confirm one upload per Run and set S3 lifecycle | Phase 3 |
+| S7 | Size of a real Run record (documents, reflect summary, delivery record, event chain with its blobs), measured over recent SwarmAI Runs, to confirm one upload per Run and set S3 lifecycle | Phase 3 |
 | S8 | How `reflect_job.route` records a remote-placement decision without writing, and which existing outcome values in `artifacts/reflect.json` Central maps to `applied` / `queued` / `noise` | Phase 4 |
 
 If S1 fails, Phase 2 stops and the design is revised; the jobs `--bare` path is not used

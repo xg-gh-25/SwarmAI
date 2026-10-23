@@ -551,7 +551,7 @@ applies the candidate with compare-and-swap semantics, records `result_acceptanc
 
 ## 8. Unified Trace
 
-Unified Trace is a derived, rebuildable index over canonical streams. It is not another
+Unified Trace is a derived, rebuildable index over canonical streams. For Pipeline Runs, those streams are stored in the Central Service and Trace and Offline Eval are computed there (`pipeline-run-conductor-v1.md` §4.5). It is not another
 control ledger and no producer writes an independent copy of a state-changing fact into it.
 The authorities are:
 
