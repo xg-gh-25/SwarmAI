@@ -4,22 +4,22 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: DRAFT v2 — 待审
-related: terminal-locations.md（Terminal 的位置；本文不再与它共用选择）、left-nav-backend-and-visual-system.md（nav 原则：不影响聊天、只读现成记录、30 天窗口）
+status: DRAFT v3 — 待审
+related: terminal-locations.md（只借用它对"工作仓库"的定义，两者不联动）、left-nav-backend-and-visual-system.md（nav 原则：不影响聊天、只读现成记录、30 天窗口）
 ---
 
 # Workspace：SwarmWS 永远在，加上这个月用过的仓库
 
 ## 0. 决定与原则
 
-Gawan 2026-10-23（v2，替换 v1 的"只显示工作仓库、选择与 Terminal 共用"）：
+Gawan 2026-10-23（v3，替换 v1 的"只显示工作仓库、选择与 Terminal 共用"和 v2 的"通过开 terminal 联动"）：
 
 - **SwarmWS 是默认位置，永远在列表第一位。**
 - **其他位置是最近 30 天里你在 pipeline run 中改过的仓库**，当前这个 chat 的工作仓库排在最前。
 - **Workspace 是用户浏览东西的地方。** 按"用户想找什么、看什么"来设计，不按"agent 在哪里干活"。
 - **绝不影响聊天。**
 
-由此带来的一处改动：**Workspace 的选择不再和 Terminal 共用。** Terminal 的默认位置是 repo（它是动手干活的地方），Workspace 的默认位置是 SwarmWS（它是浏览的地方），两边共用就违背了"SwarmWS 是默认"。两边共用的是位置列表和"在这里开 terminal"这个操作，不共用当前选中哪一个。
+**Workspace 和 Terminal 不联动。** 从 Terminal 借来的只有一样东西：它对"workspace"的定义，即 SwarmWS 是默认位置，"工作仓库"取自 `canvas_session.working_repo()`。两边的选择、状态、代码互不读写。SwarmWS 树里原有的右键 "Open terminal here" 保持现状，不改它，也不新增其他 Terminal 操作。
 
 沿用 nav 的原则：
 
@@ -38,7 +38,7 @@ Gawan 2026-10-23（v2，替换 v1 的"只显示工作仓库、选择与 Terminal
 | 找一个文件 | SwarmWS 里有搜索框 | 每个位置都有，搜索的是已经加载出来的树 |
 | 打开到 Canvas 看 | 能 | 每个位置都能 |
 | 附加到 chat、复制路径 | 能 | 每个位置都能 |
-| 在这个目录开 terminal | 能（右键） | 每个位置都能 |
+| 在这个目录开 terminal | SwarmWS 能（右键） | SwarmWS 不变；仓库位置不提供 |
 | 改、删、重命名 | SwarmWS 能 | 只限 SwarmWS；仓库只读，改动走 pipeline run |
 
 ## 2. 现状（2026-10-23 实测）
@@ -77,18 +77,10 @@ Workspace overlay 的顶部放一排位置条，替换现在的 "SWARMWS" 标题
 | Working files | `Knowledge/`、`Projects/` 下的改动（不变） | 整个仓库的 `git status` 改动 |
 | 树 | Knowledge、Projects 分区，系统文件夹保护（不变） | 普通目录树：首屏深度 2，子目录懒加载；跳过 `.git`、`node_modules`、`.venv`、`dist`、`build`、`__pycache__` 和 gitignore 掉的顶层目录 |
 | 搜索框 | 有（不变） | 有，只搜已经加载出来的树，不去后端扫描 |
-| 右键菜单 | 不变 | 打开到 Canvas、附加到 chat、复制路径、在这里开 terminal。没有新建、重命名、删除 |
+| 右键菜单 | 不变 | 打开到 Canvas、附加到 chat、复制路径。没有新建、重命名、删除，也没有开 terminal |
 | 拖动 | 不变 | 只能拖进 chat 作为附件，不能在树里移动 |
 
-### 3.3 在这里开 terminal
-
-在任何位置右键 "Open terminal here"，或者点仓库位置旁边的 terminal 图标：
-
-- 打开 Terminal 面板，切到这个目录。
-- 对 Terminal 来说，这是一个 custom 位置；如果这个目录正好就是这个 chat 的工作仓库，就是 repo 位置。
-- 只改 Terminal 的位置，不改 Workspace 的位置。
-
-### 3.4 加载、空状态、错误
+### 3.3 加载、空状态、错误
 
 - **首次加载失败**：用 `OverlayState` 的 error 显示，带 Retry，并说明是哪个位置，例如 "Couldn't load swarmai"。SwarmWS 那个标签照样能点。
 - **仓库已经不在了**（被删除或移动）：这个位置不会出现在列表里，因为列表本身只收真实存在的 main checkout。如果它在这次打开期间消失，显示一行提示 "swarmai is no longer on disk"，然后回到 SwarmWS。
@@ -154,10 +146,10 @@ Workspace overlay 的顶部放一排位置条，替换现在的 "SWARMWS" 标题
 | T4 | 不认识的 key 返回 404；`path=../..`、绝对路径、软链接逃逸都被拒；写接口带 `location` 返回 422 | 不能读白名单之外、仓库只读 |
 | T5 | 位置列表接口在打桩下没有任何子进程，并且只读 run index | 不跑 git、不扫描磁盘 |
 | T6 | 静态检查：这些接口都不用默认线程池，git 都带 `GIT_OPTIONAL_LOCKS=0` | 不影响聊天 |
-| T7 | 前端：打开 Workspace 默认在 SwarmWS；切到仓库，关掉再打开仍在仓库；app 重启后（清掉 store）回到 SwarmWS；切换 Workspace 的位置不改 Terminal 的位置 | SwarmWS 默认，选择不共用 |
+| T7 | 前端：打开 Workspace 默认在 SwarmWS；切到仓库，关掉再打开仍在仓库；app 重启后（清掉 store）回到 SwarmWS；Workspace 的代码不读写 `terminalLocation`（静态检查） | SwarmWS 默认，不联动 |
 | T8 | 前端：overlay 关着时没有 `/workspace/*` 请求；打开后才取；关掉后轮询停止 | 不在后台刷新 |
 | T9 | 前端：首次加载失败显示 `OverlayState` error 加 Retry；仓库消失时回到 SwarmWS；轮询失败不清空树 | 加载失败有提示 |
-| T10 | `navOverlayContract`、workspace explorer、Terminal 位置相关测试原样通过 | 结构没被碰 |
+| T10 | `navOverlayContract`、workspace explorer、Terminal 相关测试原样通过 | 结构没被碰，Terminal 不受影响 |
 
 每个修复都做反向验证。聊天回归另跑：`test_transcript_real_path.py` 和 liveReload 属性测试。
 
@@ -167,15 +159,15 @@ Workspace overlay 的顶部放一排位置条，替换现在的 "SWARMWS" 标题
 |---|---|
 | W1 | 后端：`/workspace/locations`、`_resolve_root`，tree / expand / file 加 `location`，仓库模式的过滤规则；T1–T6 |
 | W2 | 前端取数：只在 overlay 打开时取，改用 `overlayQueries`；T8 |
-| W3 | 前端界面：位置条、仓库只读、"在这里开 terminal"、加载失败用 `OverlayState`；T7、T9 |
-| W4 | 更新 `terminal-locations.md`（只在"在这里开 terminal"上和 Workspace 交互）和 navcard 标准文档 |
+| W3 | 前端界面：位置条、仓库只读、加载失败用 `OverlayState`；T7、T9 |
+| W4 | 更新 navcard 标准文档里 Workspace 的部分 |
 
 每个阶段在自己的 worktree 里做，ff-only 合进本地 main，不 push。W1 要重启 daemon 才生效，重启前会先提醒你：你正在用的长 session，重启后下一条消息的首字会慢几分钟。
 
 ## 8. 不做的
 
 - bindings 里那些 30 天内没有 run 的仓库。
-- Terminal 选过的 custom 文件夹（它们是任意路径，不进白名单）。
+- 任何和 Terminal 的联动：共用选择、共用最近文件夹、从仓库位置开 terminal。
 - 在仓库里改文件。
 - 后端全文搜索仓库。
 
