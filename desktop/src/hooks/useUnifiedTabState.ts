@@ -181,6 +181,8 @@ export interface UnifiedTab {
     userMessage: string | null;
     content: unknown[] | null;
     clientId?: string | null;
+    /** the handed-back send's terminal output: the retry carries it again */
+    terminalContext?: { bufferTail: string; cwd: string } | null;
   } | null;
   /** Queued message payload — stored when user sends while streaming.
    *  Drained automatically when the current stream completes or is stopped. */

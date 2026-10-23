@@ -83,9 +83,21 @@ function choiceOf(seg: Segment): LocationChoice {
   return { kind: 'custom', path: seg.cwd ?? seg.key };
 }
 
-/** `⋯`: recent folders (global, newest first) and Browse… (a directory dialog). */
-function RecentsMenu({ recents, currentKey, onPick, onClose }: {
-  recents: string[]; currentKey: string; onPick: (path: string) => void; onClose: () => void;
+/** Open the native folder picker; the chosen folder, or null when cancelled. */
+async function browseFolder(): Promise<string | null> {
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const picked = await open({ directory: true, multiple: false, title: 'Open terminal in folder' });
+    return typeof picked === 'string' && picked ? picked : null;
+  } catch (e) {
+    console.error('terminal: folder dialog failed', e);
+    return null;
+  }
+}
+
+/** The chevron next to the folder button: recent folders (global, newest first). */
+function RecentsMenu({ recents, onPick, onClose }: {
+  recents: string[]; onPick: (path: string) => void; onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -95,27 +107,14 @@ function RecentsMenu({ recents, currentKey, onPick, onClose }: {
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
   }, [onClose]);
-  const browse = async () => {
-    onClose();
-    try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const picked = await open({ directory: true, multiple: false, title: 'Open terminal in folder' });
-      if (typeof picked === 'string' && picked) onPick(picked);
-    } catch (e) {
-      console.error('terminal: folder dialog failed', e);
-    }
-  };
-  const shown = recents.filter((r) => r !== currentKey);
   return (
     <div
       ref={ref}
       data-testid="terminal-recents-menu"
-      className="absolute left-0 top-full mt-1 z-50 w-64 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg p-1 text-[12px]"
+      className="absolute left-0 top-full mt-1.5 z-50 w-72 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg p-1.5 text-[12.5px]"
     >
-      {shown.length > 0 && (
-        <div className="px-2 pt-1 pb-0.5 text-[10.5px] text-[var(--color-text-muted)]">Recent</div>
-      )}
-      {shown.map((p) => (
+      <div className="px-2 pt-0.5 pb-1 text-[11px] text-[var(--color-text-muted)]">Recent folders</div>
+      {recents.map((p) => (
         <button
           key={p}
           type="button"
@@ -126,19 +125,9 @@ function RecentsMenu({ recents, currentKey, onPick, onClose }: {
         >
           <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">folder</span>
           <span className="truncate">{baseName(p)}</span>
-          <span className="ml-auto truncate max-w-[45%] text-[10.5px] text-[var(--color-text-muted)]">{parentName(p)}</span>
+          <span className="ml-auto truncate max-w-[45%] text-[11px] text-[var(--color-text-muted)]">{parentName(p)}</span>
         </button>
       ))}
-      {shown.length > 0 && <div className="h-px my-1 bg-[var(--color-border)]" />}
-      <button
-        type="button"
-        data-testid="terminal-browse"
-        onClick={() => void browse()}
-        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-[var(--color-text)] hover:bg-[var(--color-hover)]"
-      >
-        <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">folder_open</span>
-        Browse…
-      </button>
     </div>
   );
 }
@@ -181,6 +170,11 @@ export default function TerminalPanel() {
   const here = useMemo(() => tabs.filter((t) => t.locKey === current.key), [tabs, current.key]);
   const shown = here.find((t) => t.id === activeTabId) ?? null;
   const currentSeg = segments.find((s) => s.key === current.key) ?? segments[0];
+  // Recent folders not already a segment (those are one click away already).
+  const recents = useMemo(
+    () => loc.recents.filter((r) => !segments.some((s) => s.key === r)),
+    [loc.recents, segments],
+  );
 
   useEffect(() => {
     if (shown) lastShown.current.set(shown.locKey, shown.id);
@@ -305,27 +299,34 @@ export default function TerminalPanel() {
   return (
     <div
       data-testid="terminal-panel"
-      className="flex flex-col flex-shrink-0 border-t border-[var(--color-border)] bg-[var(--color-bg)]"
+      // Two layers (docs/design/terminal-locations.md "Layout"): a recessed chrome
+      // gutter that the resize handle lives in, and the terminal as a raised card
+      // inset in it — the same depth Canvas uses, so the terminal reads as its own
+      // surface, not as more chat.
+      className="flex flex-col flex-shrink-0 bg-[var(--color-bg-chrome)] border-t border-[var(--color-border)] px-2.5 pb-2.5"
       // display:none when collapsed (NOT unmount): xterm scrollback + live PTYs
       // survive collapse/reopen, and the element leaves the flow so chat reclaims
       // the full height.
       style={{ height, display: panelOpen ? 'flex' : 'none' }}
     >
-      {/* drag-to-resize handle */}
+      {/* drag-to-resize handle: the gutter above the card, a grip on hover */}
       <div
         data-testid="terminal-resize-handle"
         onMouseDown={onDragStart}
-        className="h-1 w-full cursor-ns-resize hover:bg-[var(--color-primary)]"
-      />
+        className="group h-2.5 w-full flex-shrink-0 cursor-ns-resize flex items-center justify-center"
+      >
+        <span className="h-[3px] w-10 rounded-full bg-[var(--color-border)] opacity-0 group-hover:opacity-100 transition-opacity" />
+      </div>
 
+      <div className="terminal-card flex flex-col flex-1 min-h-0">
       {/* header */}
-      <div className="flex items-center h-8 gap-1 px-1.5 bg-[var(--color-bg-chrome)] border-b border-[var(--color-border)] text-[12px]">
+      <div className="flex items-center h-10 gap-1.5 px-2.5 border-b border-[var(--color-border)] text-[12.5px] flex-shrink-0">
         <div className="relative flex items-center">
           <div
             role="tablist"
             aria-label="Terminal location"
             data-testid="terminal-locations"
-            className="flex items-center gap-0.5 p-0.5 rounded-[7px] bg-[var(--color-hover)]"
+            className="flex items-center gap-0.5 p-[3px] rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)]"
           >
             {segments.map((seg) => {
               const on = seg.key === current.key;
@@ -340,9 +341,9 @@ export default function TerminalPanel() {
                   data-testid={`terminal-loc-${seg.kind}`}
                   data-key={seg.key}
                   onClick={() => selectSegment(seg)}
-                  className={`flex items-center gap-1 h-[22px] px-2 rounded-[5px] max-w-[180px] ${
+                  className={`flex items-center gap-1.5 h-[26px] px-2.5 rounded-md max-w-[200px] transition-colors ${
                     on
-                      ? 'bg-[var(--color-bg)] text-[var(--color-text)] shadow-sm'
+                      ? 'bg-[var(--color-card)] text-[var(--color-text)] shadow-sm ring-1 ring-[var(--color-border)]'
                       : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
                   }`}
                 >
@@ -362,28 +363,39 @@ export default function TerminalPanel() {
           </div>
           <button
             type="button"
-            data-testid="terminal-more-locations"
-            aria-label="Recent folders and browse"
-            title="Recent folders · Browse…"
-            onClick={() => setMenuOpen((v) => !v)}
-            className={`${ICON_BTN} ml-0.5`}
+            data-testid="terminal-browse"
+            aria-label="Open a terminal in a folder"
+            title="Open a terminal in a folder…"
+            onClick={() => void browseFolder().then((p) => { if (p) pickFolder(p); })}
+            className={`${ICON_BTN} ml-1`}
           >
-            <span className="material-symbols-outlined icon-sm">more_horiz</span>
+            <span className="material-symbols-outlined icon-sm">create_new_folder</span>
           </button>
-          {menuOpen && (
+          {recents.length > 0 && (
+            <button
+              type="button"
+              data-testid="terminal-more-locations"
+              aria-label="Recent folders"
+              title="Recent folders"
+              onClick={() => setMenuOpen((v) => !v)}
+              className={`${ICON_BTN} !w-5 -ml-0.5`}
+            >
+              <span className="material-symbols-outlined icon-sm">expand_more</span>
+            </button>
+          )}
+          {menuOpen && recents.length > 0 && (
             <RecentsMenu
-              recents={loc.recents}
-              currentKey={current.key}
+              recents={recents}
               onPick={pickFolder}
               onClose={() => setMenuOpen(false)}
             />
           )}
         </div>
 
-        <span className="w-px h-4 mx-1 bg-[var(--color-border)]" />
+        <span className="w-px h-5 mx-1.5 bg-[var(--color-border)]" />
 
         {/* shells at this location */}
-        <div className="flex items-center gap-0.5 min-w-0 overflow-x-auto">
+        <div className="flex items-center gap-1 min-w-0 overflow-x-auto">
           {here.map((tab) => {
             const isShown = tab.id === shown?.id;
             return (
@@ -391,7 +403,7 @@ export default function TerminalPanel() {
                 key={tab.id}
                 data-testid={`terminal-tab-${tab.id}`}
                 onClick={() => setActiveTab(tab.id)}
-                className={`group flex items-center gap-1.5 h-[22px] pl-2 pr-1 rounded-md cursor-pointer whitespace-nowrap ${
+                className={`group flex items-center gap-2 h-[26px] pl-2.5 pr-1.5 rounded-md cursor-pointer whitespace-nowrap ${
                   isShown
                     ? 'bg-[var(--color-hover)] text-[var(--color-text)]'
                     : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
@@ -534,6 +546,7 @@ export default function TerminalPanel() {
             </div>
           );
         })}
+      </div>
       </div>
     </div>
   );

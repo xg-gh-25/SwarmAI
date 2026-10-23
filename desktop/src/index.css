@@ -1078,6 +1078,17 @@ body {
   background: var(--color-card);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
+/* The terminal panel's raised card (TerminalPanel): the same depth as the Canvas
+   content card, inset in the recessed --color-bg-chrome gutter below the chat, so
+   chat, Canvas and terminal are three distinct surfaces. The xterm surface uses
+   the card colour (TerminalTab themeFor). */
+.terminal-card {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-card);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
 /* The selected row of either Canvas list (Artifacts, Changes): a primary tint on the
    card surface, a primary ring and a 3px primary bar (XG 2026-10-23, variant A — the
    plain card colour sat 3-5% off the list surface and barely showed). Hover stays

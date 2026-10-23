@@ -2897,6 +2897,10 @@ export default function ChatPage() {
     // (it could not keep it) and removed its row, so this resend runs once
     // (backend core/send_requests). A payload without one predates that.
     const clientId = retry.clientId ?? newClientId();
+    // The handed-back message's own terminal output (backend _hand_back_send).
+    const retryTerminal = retry.terminalContext?.bufferTail
+      ? { bufferTail: retry.terminalContext.bufferTail, cwd: retry.terminalContext.cwd ?? '' }
+      : undefined;
     const assistantMessageId = `${clientId}-asst`;
     const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
     // SINGLE-WRITER: clear the error from the store, then append the placeholder
@@ -2917,6 +2921,7 @@ export default function ChatPage() {
         enableSkills,
         enableMCP,
         clientId,
+        ...(retryTerminal && { terminalContext: retryTerminal }),
       },
       wrappedCreateStreamHandler(assistantMessageId),
       createErrorHandler(assistantMessageId, tabId),

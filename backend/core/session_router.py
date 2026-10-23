@@ -3541,6 +3541,7 @@ class SessionRouter:
             return
 
         user_text, content = session_pending.combine_pending(claimed)
+        terminal = session_pending.combine_terminal(claimed)
         seqs = [c.pending_seq for c in claimed]
 
         # Degenerate guard (Gate-2 F1): a corrupt/empty pending row combines to
@@ -3568,6 +3569,7 @@ class SessionRouter:
                 user_message=user_text,
                 content=content,
                 session_id=session_id,
+                terminal_context=terminal,
                 _drained_pending=True,
             )
             # CRITICAL (Gate-2 F1): run_conversation reports many failures as
@@ -3615,10 +3617,12 @@ class SessionRouter:
     async def _hand_back_send(
         self, client_id: Optional[str], session_id: str, agent_id: str,
         user_message: Optional[str], content: Optional[list], user_message_id: Optional[str],
+        terminal_context: Optional[dict] = None,
     ) -> dict:
         """The server could not keep this send (its row could not be made pending):
         hand it back for the client to send again — with its client_id, so the
-        resend is the same send. The written row, never delivered, is removed and
+        resend is the same send, and its terminal output, so the resend carries it.
+        The written row, never delivered, is removed and
         the ledger released (core/send_requests.release), so that resend runs once
         and the transcript holds the message once."""
         from . import send_requests
@@ -3631,8 +3635,13 @@ class SessionRouter:
                              session_id, user_message_id, exc)
         if client_id:
             await send_requests.release(client_id)
-        return {"sessionId": session_id, "agentId": agent_id, "userMessage": user_message,
-                "content": content, "clientId": client_id}
+        payload = {"sessionId": session_id, "agentId": agent_id, "userMessage": user_message,
+                   "content": content, "clientId": client_id}
+        tail = (terminal_context or {}).get("buffer_tail")
+        if isinstance(tail, str) and tail:
+            payload["terminalContext"] = {"bufferTail": tail,
+                                          "cwd": (terminal_context or {}).get("cwd") or ""}
+        return payload
 
     async def _finalize_pending_delivery(
         self,
@@ -4121,7 +4130,7 @@ class SessionRouter:
                 try:
                     from . import session_pending
                     queue_pending_seq = await session_pending.mark_pending_by_id(
-                        session_id, persisted_msg_id,
+                        session_id, persisted_msg_id, terminal_context=terminal_context,
                     )
                 except Exception as pend_exc:
                     logger.warning(
@@ -4133,7 +4142,8 @@ class SessionRouter:
                 error_event["pendingId"] = persisted_msg_id
             else:
                 error_event["retryPayload"] = await self._hand_back_send(
-                    client_id, session_id, agent_id, user_message, content, persisted_msg_id)
+                    client_id, session_id, agent_id, user_message, content, persisted_msg_id,
+                    terminal_context)
             yield error_event
             return
 
@@ -4586,6 +4596,11 @@ class SessionRouter:
                     query_content = self._merge_pending_into_query(
                         _claimed_pending, query_content,
                     )
+                    # The claimed rows' own terminal output (the arriving turn's is
+                    # already prefixed above): same fenced UNTRUSTED block, leading.
+                    from . import session_pending as _sp
+                    query_content = _prepend_terminal_to_query(
+                        query_content, _sp.combine_terminal(_claimed_pending))
                     # MULTIMODAL CONVERSION (Gate-2 MEDIUM, 2nd adversarial round):
                     # the arriving message was block→path-hint converted at ~3509,
                     # BEFORE this merge. If a claimed pending row carries multimodal
@@ -4779,7 +4794,7 @@ class SessionRouter:
                     try:
                         from . import session_pending
                         _seq = await session_pending.mark_pending_by_id(
-                            session_id, persisted_msg_id,
+                            session_id, persisted_msg_id, terminal_context=terminal_context,
                         )
                         logger.info(
                             "session_router.resume_recover_pending "
@@ -4865,7 +4880,7 @@ class SessionRouter:
                     try:
                         from . import session_pending
                         pending_seq = await session_pending.mark_pending_by_id(
-                            session_id, persisted_msg_id,
+                            session_id, persisted_msg_id, terminal_context=terminal_context,
                         )
                         logger.info(
                             "session_router.session_busy_pending session_id=%s "
@@ -4893,7 +4908,8 @@ class SessionRouter:
                     busy_event["pendingId"] = persisted_msg_id
                 else:
                     busy_event["retryPayload"] = await self._hand_back_send(
-                        client_id, session_id, agent_id, user_message, content, persisted_msg_id)
+                        client_id, session_id, agent_id, user_message, content, persisted_msg_id,
+                        terminal_context)
                 yield busy_event
                 return
             raise  # Re-raise non-SessionBusyError exceptions

@@ -73,7 +73,9 @@ function loadWebgl(t: Terminal, gone: () => boolean): void {
 function themeFor(dark: boolean): ITheme {
   const css = typeof document === 'undefined' ? null : getComputedStyle(document.documentElement);
   const v = (name: string, fallback: string) => css?.getPropertyValue(name).trim() || fallback;
-  const background = v('--color-bg', dark ? '#111318' : '#f8fafc');
+  // The card the terminal sits in (TerminalPanel .terminal-card), so the text area
+  // and the card are one surface.
+  const background = v('--color-card', dark ? '#1a1f2b' : '#ffffff');
   return {
     background,
     foreground: v('--color-text', dark ? '#e6edf3' : '#1f2328'),
@@ -176,7 +178,7 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
           // imports only the 400/500 @fontsource faces, so a 600 request just
           // weight-selects the 400 face (resolves, but waits on nothing real);
           // bold text synth-bolds at render regardless. (Gate-2 MEDIUM.)
-          await fonts.load("11px 'JetBrains Mono'");
+          await fonts.load("12px 'JetBrains Mono'");
         }
       } catch {
         /* font preload is best-effort; construct with fallback if it fails */
@@ -188,11 +190,10 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
         cursorBlink: true,
         fontFamily:
           "'SF Mono', Menlo, 'JetBrains Mono', Monaco, 'Courier New', monospace",
-        // Terminal is an auxiliary panel with little vertical space — pack it
-        // densely. fontSize 11 + lineHeight 1.0 (was 12 / 1.3, which wasted ~30%
-        // of every row to leading) fits noticeably more rows in the same height.
-        fontSize: 11,
-        lineHeight: 1.0,
+        // 12px with a little leading (XG 2026-10-23: 11px / 1.0 read as cramped);
+        // 1.3 wasted ~30% of every row, 1.15 keeps rows distinct.
+        fontSize: 12,
+        lineHeight: 1.15,
         letterSpacing: 0,
         fontWeight: 400,
         fontWeightBold: 600,
@@ -393,7 +394,7 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       <div
         ref={hostRef}
         data-testid={`terminal-surface-${tab.id}`}
-        className="h-full w-full overflow-hidden pl-2 pr-1 py-0.5"
+        className="h-full w-full overflow-hidden pl-3.5 pr-2 pt-2 pb-1.5"
       />
       {(hasSelection || sent) && !menu && (
         <button

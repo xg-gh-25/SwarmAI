@@ -166,7 +166,7 @@ describe('TerminalTab — AC1 focus race', () => {
       // Before the font resolves: init() is parked on the await → NO terminal,
       // NO ResizeObserver wired, NO focus.
       await Promise.resolve();
-      expect(loadSpy).toHaveBeenCalledWith("11px 'JetBrains Mono'");
+      expect(loadSpy).toHaveBeenCalledWith("12px 'JetBrains Mono'");
       expect(lastTerm).toBeNull();
       expect(resizeCb).toBeNull();
       expect(focusSpy).not.toHaveBeenCalled();

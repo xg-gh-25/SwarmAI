@@ -55,10 +55,19 @@ or the stream.
 
 ## UI
 
-- Header (32px, `--color-bg-chrome`): a segmented switcher — `SwarmWS`, the repo (when
+- Layout (XG 2026-10-23, "too cramped, can't tell it from chat and Canvas"): the panel
+  is two layers, like Canvas — a recessed `--color-bg-chrome` gutter (10px around;
+  its top 10px is the resize handle, a grip on hover) holding a raised
+  `.terminal-card` (`--color-card`, 1px border, radius 10, soft shadow). The xterm
+  surface uses the card colour, 12px text, line height 1.15, 14/8px inner padding.
+  Header 40px; segments and shell tabs 26px; the BottomBar is 30px with 24px-tall
+  click targets.
+- Header: a segmented switcher — `SwarmWS`, the repo (when
   there is one), the selected custom folder, and any other location that still has live
   shells (so no running shell is ever hidden) — each segment with a shell-count badge
-  when it is not the selected one; `⋯` = recent folders + Browse… (directory dialog).
+  when it is not the selected one; then the folder button, which opens the native
+  folder picker in ONE click, and — only when there are recent folders that are not
+  already a segment — a chevron listing them.
 - Clicking a segment selects it for this chat tab and shows that location's shells; if
   it has none, one is opened there. Switching chat tabs only shows: it never spawns.
 - The tab strip lists only the selected location's shells, numbered within it.
@@ -105,13 +114,13 @@ page-level one-shot ref that leaked a selection into another tab's send or a
 background drain, was cleared before the resend read it, was invisible, and sent
 over-long text that failed the message.
 
-**Known gap (pre-existing, not fixed here):** when the BACKEND parks a send as
-pending (all chat slots busy → QUEUE_TIMEOUT, or SESSION_BUSY), it stores only the
-message text/content (`session_pending.mark_pending_by_id`), so the server-side drain
-later delivers it without its terminal output; the persist-failed `retryPayload`
-omits it too. Fixing it means storing terminal_context with the pending row — a
-message-store schema change, left for a decision. The frontend's own queue (a send
-while this tab is streaming) is not affected.
+When the BACKEND parks a send as pending (all chat slots busy → QUEUE_TIMEOUT, or
+SESSION_BUSY), `mark_pending_by_id` keeps its terminal_context in the row's metadata
+while it is pending (no schema change; `mark_sent_batch` removes it once delivered).
+The IDLE-edge drain passes `combine_terminal(claimed)` to the turn, the cold-spawn
+coalesce prefixes the claimed rows' block (pending output first, the arriving turn's
+after), and the persist-failed `retryPayload` carries `terminalContext` — rebuilt as
+the re-queued message's chip, or sent again by the QUEUE_TIMEOUT Retry.
 
 ## PTY output
 

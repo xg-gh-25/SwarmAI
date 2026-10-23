@@ -15,6 +15,9 @@ const workingRepoMock = vi.fn(async (_sid: string): Promise<{ path: string; name
 vi.mock('../../services/canvasSession', () => ({
   canvasSessionService: { workingRepo: (sid: string) => workingRepoMock(sid) },
 }));
+// The native folder picker (Browse).
+const dialogOpen = vi.fn(async (_o: unknown): Promise<string | null> => null);
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: (o: unknown) => dialogOpen(o) }));
 
 // Mock PTY service so the store's openTerminal doesn't spawn a real shell.
 let spawnCount = 0;
@@ -388,5 +391,55 @@ describe('TerminalPanel locations (docs/design/terminal-locations.md)', () => {
     fireEvent.click(screen.getByTestId('terminal-attach'));
     window.removeEventListener('swarm:attach-terminal', h);
     expect(got).toEqual([{ bufferTail: 'picked', cwd: '' }, { bufferTail: 'tail', cwd: '' }]);
+  });
+});
+
+describe('TerminalPanel Browse (one click)', () => {
+  beforeEach(() => {
+    spawnCount = 0;
+    localStorage.clear();
+    localStorage.setItem('terminalPanelOpen', 'true');
+    terminalStore.clear();
+    terminalLocation.reset();
+    workingRepoMock.mockReset();
+    workingRepoMock.mockResolvedValue(null);
+    dialogOpen.mockReset();
+  });
+
+  it('one click on the folder button opens the picker; the picked folder becomes the location', async () => {
+    dialogOpen.mockResolvedValue('/Users/x/Repos/kiro-crew');
+    await renderPanel();
+    expect(screen.queryByTestId('terminal-more-locations')).toBeNull();   // no recents yet: no chevron
+    fireEvent.click(screen.getByTestId('terminal-browse'));
+    await flush();
+    expect(dialogOpen).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
+    expect(terminalStore.countAt('/Users/x/Repos/kiro-crew')).toBe(1);
+    expect(screen.getByTestId('terminal-loc-custom')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('terminal-loc-custom')).toHaveTextContent('kiro-crew');
+  });
+
+  it('cancelling the picker changes nothing', async () => {
+    dialogOpen.mockResolvedValue(null);
+    await renderPanel();
+    fireEvent.click(screen.getByTestId('terminal-browse'));
+    await flush();
+    expect(terminalStore.count()).toBe(1);   // just the auto-opened SwarmWS shell
+    expect(screen.getByTestId('terminal-loc-swarmws')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('the recents chevron lists only folders that are not already a segment', async () => {
+    act(() => {
+      terminalLocation.choose({ kind: 'custom', path: '/a/one' });
+      terminalLocation.choose({ kind: 'custom', path: '/a/two' });
+      terminalLocation.choose({ kind: 'swarmws' });
+    });
+    terminalStore.openTerminal({ cwd: '/a/two' });   // /a/two has a live shell → a segment
+    await renderPanel();
+    fireEvent.click(screen.getByTestId('terminal-more-locations'));
+    const items = screen.getAllByTestId('terminal-recent').map((b) => b.getAttribute('title'));
+    expect(items).toEqual(['/a/one']);
+    fireEvent.click(screen.getAllByTestId('terminal-recent')[0]);
+    expect(screen.getByText('one')).toBeInTheDocument();
+    expect(screen.queryByTestId('terminal-recents-menu')).toBeNull();
   });
 });

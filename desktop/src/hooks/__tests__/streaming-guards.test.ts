@@ -186,6 +186,24 @@ describe('healGraceExpiryVerdict (OT01 honest error signal)', () => {
 });
 
 describe('queuedMessageFromRetryPayload', () => {
+  it('a handed-back send\'s terminal output comes back as its terminal chip (and alone is enough)', () => {
+    const q = queuedMessageFromRetryPayload(
+      { sessionId: 's1', agentId: 'a', userMessage: 'why', content: null,
+        terminalContext: { bufferTail: 'FAIL x', cwd: '/r/swarmai' } },
+      'queued-t',
+    );
+    expect(q!.attachments).toHaveLength(1);
+    expect(q!.attachments[0]).toMatchObject({ type: 'terminal', textContent: 'FAIL x',
+      terminal: { cwd: '/r/swarmai' } });
+    const only = queuedMessageFromRetryPayload(
+      { sessionId: 's1', agentId: 'a', userMessage: null, content: null,
+        terminalContext: { bufferTail: 'just output', cwd: '' } },
+      'queued-t2',
+    );
+    expect(only).not.toBeNull();
+    expect(only!.text).toBe('');
+    expect(only!.displayContent).toEqual([{ type: 'text', text: '[Attached terminal output]' }]);
+  });
   it('builds a queuedMessage from a SESSION_BUSY retryPayload (preserve, not lose)', () => {
     const q = queuedMessageFromRetryPayload(
       { sessionId: 's1', agentId: 'default', userMessage: 'Don\'t lose me', content: null },

@@ -216,11 +216,11 @@ describe('Layout viewport lock — MUST NOT CHANGE (preserved behaviors)', () =>
     const _layoutFile = readFileSync(
       resolve(PROJECT_ROOT, 'src/components/layout/ThreeColumnLayout.tsx'), 'utf-8'
     );
-    // BottomBar is imported and rendered — its own file has h-[26px] flex-shrink-0
+    // BottomBar is imported and rendered — its own file has h-[30px] flex-shrink-0
     const bottomBarFile = readFileSync(
       resolve(PROJECT_ROOT, 'src/components/layout/BottomBar.tsx'), 'utf-8'
     );
-    expect(bottomBarFile).toMatch(/h-\[26px\]/);
+    expect(bottomBarFile).toMatch(/h-\[30px\]/);
     expect(bottomBarFile).toMatch(/flex-shrink-0/);
   });
 

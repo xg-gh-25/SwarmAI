@@ -25,10 +25,15 @@ describe('ChatPage terminal output rides its own message', () => {
     expect(src).not.toMatch(/useRef<\{\s*bufferTail/);
   });
 
-  it('every terminalContext in a request comes from terminalContextOf(<the message attachments>)', () => {
+  it('every terminalContext in a request is that message\'s own', () => {
     const uses = [...src.matchAll(/terminalContext:\s*(\w+)/g)].map((m) => m[1]);
-    expect(uses.length).toBeGreaterThanOrEqual(3);   // send, its resend, the queue drain
+    expect(uses.length).toBeGreaterThanOrEqual(4);   // send, its resend, the queue drain, the hand-back retry
     for (const v of uses) {
+      if (v === 'retryTerminal') {
+        // the QUEUE_TIMEOUT retry re-sends the message the server handed back
+        expect(src).toMatch(/const retryTerminal = retry\.terminalContext\?\.bufferTail/);
+        continue;
+      }
       const decl = new RegExp(`const ${v} = terminalContextOf\\((\\w+(?:\\.\\w+)?)\\)`).exec(src);
       expect(decl, `${v} must be const ${v} = terminalContextOf(...)`).not.toBeNull();
       expect(['currentAttachments', 'queued.attachments']).toContain(decl![1]);

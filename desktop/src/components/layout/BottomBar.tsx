@@ -209,11 +209,11 @@ export function BottomBar() {
 
   return (
     <div
-      className="h-[26px] bg-[var(--color-bg-chrome)] border-t border-[var(--color-border)] flex items-center px-3.5 text-[11px] text-[var(--color-text-dim,var(--color-text-muted))] select-none flex-shrink-0"
+      className="h-[30px] bg-[var(--color-bg-chrome)] border-t border-[var(--color-border)] flex items-center px-4 text-[11.5px] text-[var(--color-text-dim,var(--color-text-muted))] select-none flex-shrink-0"
       data-testid="bottom-bar"
     >
       {/* Left: status */}
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-3">
         <span className="flex items-center gap-1.5">
           <span
             className={`w-[5px] h-[5px] rounded-full flex-shrink-0 ${
@@ -240,7 +240,7 @@ export function BottomBar() {
           data-testid="bottom-bar-terminal-location"
           onClick={gotoTerminal}
           title={`Open the terminal in ${termLoc.label}${termLoc.cwd ? ` (${termLoc.cwd})` : ''}`}
-          className="flex items-center gap-1 px-1.5 -mx-1.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] cursor-pointer"
+          className="flex items-center gap-1 h-6 px-2 -mx-1 rounded-md hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] cursor-pointer"
         >
           <span className="material-symbols-outlined icon-xs leading-none">
             {termLoc.kind === 'repo' ? 'code' : termLoc.kind === 'custom' ? 'folder' : 'hive'}
@@ -255,7 +255,7 @@ export function BottomBar() {
           <div className="relative" ref={popoverRef}>
             <button
               onClick={() => setShowPopover(prev => !prev)}
-              className={`flex items-center gap-1 hover:opacity-100 opacity-70 transition-opacity cursor-pointer ${freshnessColor}`}
+              className={`flex items-center gap-1 h-6 px-2 -mx-1 rounded-md hover:bg-[var(--color-hover)] hover:opacity-100 opacity-80 transition-opacity cursor-pointer ${freshnessColor}`}
               title="Code Intelligence"
               data-testid="code-intel-indicator"
             >
@@ -277,7 +277,7 @@ export function BottomBar() {
         {/* Integrated terminal toggle + open-count badge (⌘` also toggles). */}
         <button
           onClick={toggleTerminal}
-          className="flex items-center gap-1 hover:opacity-100 opacity-70 transition-opacity cursor-pointer text-[var(--color-text-muted)]"
+          className="flex items-center gap-1 h-6 px-2 -mx-1 rounded-md hover:bg-[var(--color-hover)] hover:opacity-100 opacity-80 transition-opacity cursor-pointer text-[var(--color-text-muted)]"
           title="Toggle terminal (⌘`)"
           data-testid="terminal-toggle"
         >
@@ -305,25 +305,25 @@ export function BottomBar() {
       {/* Right: keyboard hints with badge-style kbd — overflow-hidden allows graceful
           clipping at extreme narrow widths instead of rigid flex-shrink-0 which would
           push the left status section off-screen. pr-1.5 avoids window edge clip. */}
-      <div className="flex items-center gap-3 pr-1.5 tabular-nums text-[11px] overflow-x-hidden">
+      <div className="flex items-center gap-3.5 pr-1.5 tabular-nums text-[11px] overflow-x-hidden">
         <span className="flex items-center gap-1">
-          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">Enter</kbd>
+          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5 rounded-[4px]">Enter</kbd>
           <span>send</span>
         </span>
         <span className="flex items-center gap-1">
-          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">Shift+Enter</kbd>
+          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5 rounded-[4px]">Shift+Enter</kbd>
           <span>newline</span>
         </span>
         <span className="flex items-center gap-1">
-          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">&#8984;N</kbd>
+          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5 rounded-[4px]">&#8984;N</kbd>
           <span>new</span>
         </span>
         <span className="flex items-center gap-1">
-          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">&#8984;1-9</kbd>
+          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5 rounded-[4px]">&#8984;1-9</kbd>
           <span>tab</span>
         </span>
         <span className="flex items-center gap-1">
-          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">&#8984;`</kbd>
+          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5 rounded-[4px]">&#8984;`</kbd>
           <span>terminal</span>
         </span>
       </div>

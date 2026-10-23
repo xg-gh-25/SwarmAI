@@ -56,6 +56,10 @@ logger = logging.getLogger(__name__)
 # are reaped, by which point the session is unambiguously dead.
 _PENDING_TTL_SECONDS = 90 * 24 * 60 * 60
 
+# backend/schemas/message.py TerminalContext.buffer_tail max_length: a pending
+# send's terminal output, and a combined drain's, stay within it.
+_TERMINAL_MAX = 16000
+
 # Transient SQLite errors worth retrying (WAL checkpoint collision, concurrent
 # writers). Mirrors SQLiteTable.put's retry contract — the whole point of this
 # module is to NEVER lose a pending message, so a bare "database is locked" must
@@ -112,6 +116,9 @@ class PendingMessage:
     user_message: str | None  # text path
     content: list[dict] | None  # multimodal blocks path
     created_at: str
+    # The send's attached terminal output ({buffer_tail, cwd}), kept in the row's
+    # metadata while it is pending (mark_pending_by_id) so the drain delivers it.
+    terminal_context: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -173,10 +180,29 @@ def forget_session(session_id: str) -> None:
     _SEQ_LOCKS.pop(session_id, None)
 
 
+def _valid_terminal(tc: object) -> dict | None:
+    """*tc* as {buffer_tail, cwd} when it carries terminal output, else None."""
+    if not isinstance(tc, dict) or not isinstance(tc.get("buffer_tail"), str) or not tc["buffer_tail"]:
+        return None
+    return {"buffer_tail": tc["buffer_tail"][-_TERMINAL_MAX:],
+            "cwd": tc.get("cwd") if isinstance(tc.get("cwd"), str) else ""}
+
+
+def _terminal_of(metadata_json: str | None) -> dict | None:
+    """The pending row's terminal_context from its metadata, or None."""
+    try:
+        meta = json.loads(metadata_json) if metadata_json else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return _valid_terminal(meta.get("terminal_context")) if isinstance(meta, dict) else None
+
+
 def _row_to_pending(row: aiosqlite.Row | tuple) -> PendingMessage:
     """Build a PendingMessage from a (id, session_id, pending_seq, content,
-    created_at) row. ``content`` is the stored JSON for the message payload."""
-    msg_id, session_id, pending_seq, content_json, created_at = row
+    created_at[, metadata]) row. ``content`` is the stored JSON for the message
+    payload; ``metadata`` (when selected) carries a pending send's terminal output."""
+    msg_id, session_id, pending_seq, content_json, created_at = row[:5]
+    terminal_context = _terminal_of(row[5]) if len(row) > 5 else None
     user_message: str | None = None
     content: list[dict] | None = None
     try:
@@ -215,6 +241,7 @@ def _row_to_pending(row: aiosqlite.Row | tuple) -> PendingMessage:
         user_message=user_message,
         content=content,
         created_at=created_at,
+        terminal_context=terminal_context,
     )
 
 
@@ -337,7 +364,8 @@ async def persist_pending(
     return _row_to_pending((msg_id, session_id, next_seq, payload, now))
 
 
-async def mark_pending_by_id(session_id: str, message_id: str) -> int | None:
+async def mark_pending_by_id(session_id: str, message_id: str, *,
+                             terminal_context: dict | None = None) -> int | None:
     """Convert an already-persisted live row (sent=1) into a pending row (sent=0)
     with a fresh monotonic pending_seq, preserving its id and metadata.
 
@@ -353,9 +381,16 @@ async def mark_pending_by_id(session_id: str, message_id: str) -> int | None:
     Returns the assigned ``pending_seq``, or ``None`` if no matching row exists
     (defensive — e.g. the pre-slot persist failed). Idempotent-ish: a row already
     sent=0 keeps its existing seq (we never reassign a pending row).
+
+    ``terminal_context`` (the send's attached terminal output) is kept in the row's
+    metadata while it is pending — it is not part of the message text, and without
+    it the drain would deliver the message without the output. mark_sent_batch
+    removes it again once delivered.
     """
     db_path = _get_db_path()
     now = datetime.now().isoformat()
+    from database.sqlite import dumps_json
+    tc = _valid_terminal(terminal_context)
 
     async def _do() -> int | None:
         # MAX(pending_seq)+1 + UPDATE held under the per-session lock so the seq
@@ -365,7 +400,7 @@ async def mark_pending_by_id(session_id: str, message_id: str) -> int | None:
                 await conn.execute("PRAGMA busy_timeout=5000")
                 # Already pending? keep its seq (don't reassign / don't clobber).
                 cursor = await conn.execute(
-                    "SELECT sent, pending_seq FROM messages "
+                    "SELECT sent, pending_seq, metadata FROM messages "
                     "WHERE id = ? AND session_id = ?",
                     (message_id, session_id),
                 )
@@ -381,10 +416,18 @@ async def mark_pending_by_id(session_id: str, message_id: str) -> int | None:
                     (session_id,),
                 )
                 next_seq = (await cursor.fetchone())[0] + 1
+                metadata = existing[2]
+                if tc:
+                    try:
+                        meta = json.loads(metadata) if metadata else {}
+                    except (json.JSONDecodeError, TypeError):
+                        meta = {}
+                    metadata = dumps_json({**(meta if isinstance(meta, dict) else {}),
+                                           "terminal_context": tc})
                 await conn.execute(
                     "UPDATE messages SET sent = 0, pending_seq = ?, claimed_at = NULL, "
-                    "updated_at = ? WHERE id = ? AND session_id = ?",
-                    (next_seq, now, message_id, session_id),
+                    "metadata = ?, updated_at = ? WHERE id = ? AND session_id = ?",
+                    (next_seq, metadata, now, message_id, session_id),
                 )
                 await conn.commit()
                 return next_seq
@@ -403,7 +446,7 @@ async def peek_pending_batch(session_id: str) -> list[PendingMessage]:
         async with _pooled(db_path, readonly=True) as conn:
             await conn.execute("PRAGMA busy_timeout=5000")
             cursor = await conn.execute(
-                "SELECT id, session_id, pending_seq, content, created_at "
+                "SELECT id, session_id, pending_seq, content, created_at, metadata "
                 "FROM messages WHERE session_id = ? AND sent = 0 "
                 "ORDER BY pending_seq ASC",
                 (session_id,),
@@ -432,7 +475,7 @@ async def claim_pending_batch(session_id: str) -> list[PendingMessage]:
             async with _pooled(db_path) as conn:
                 await conn.execute("PRAGMA busy_timeout=5000")
                 cursor = await conn.execute(
-                    "SELECT id, session_id, pending_seq, content, created_at "
+                    "SELECT id, session_id, pending_seq, content, created_at, metadata "
                     "FROM messages WHERE session_id = ? AND sent = 0 "
                     "AND claimed_at IS NULL ORDER BY pending_seq ASC",
                     (session_id,),
@@ -476,6 +519,21 @@ async def mark_sent_batch(session_id: str, pending_seqs: list[int]) -> None:
                     f"AND pending_seq IN ({placeholders})",
                     (session_id, *pending_seqs),
                 )
+                # Delivered: the terminal output it carried was for the turn only.
+                rows = await (await conn.execute(
+                    f"SELECT id, metadata FROM messages WHERE session_id = ? AND sent = 1 "
+                    f"AND pending_seq IN ({placeholders}) AND metadata LIKE '%terminal_context%'",
+                    (session_id, *pending_seqs),
+                )).fetchall()
+                for mid, meta_json in rows:
+                    try:
+                        meta = json.loads(meta_json) if meta_json else {}
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if isinstance(meta, dict) and meta.pop("terminal_context", None) is not None:
+                        from database.sqlite import dumps_json
+                        await conn.execute("UPDATE messages SET metadata = ? WHERE id = ?",
+                                           (dumps_json(meta), mid))
                 await conn.commit()
 
     await _with_retry(_do)
@@ -505,6 +563,24 @@ async def rollback_claim_batch(session_id: str, pending_seqs: list[int]) -> None
                 await conn.commit()
 
     await _with_retry(_do)
+
+
+def combine_terminal(rows: list[PendingMessage]) -> dict | None:
+    """The terminal output of a coalesced set: every row's buffer_tail in arrival
+    order (a row from another folder headed ``# cwd: …``), the newest kept within
+    the schema limit; cwd is the first row's. None when no row carries any."""
+    parts = [r.terminal_context for r in rows if r.terminal_context]
+    if not parts:
+        return None
+    cwd = parts[0].get("cwd") or ""
+    text = "\n\n".join(
+        (f"# cwd: {p.get('cwd') or 'SwarmWS'}\n" if i and (p.get("cwd") or "") != (parts[i - 1].get("cwd") or "") else "")
+        + p["buffer_tail"]
+        for i, p in enumerate(parts)
+    )
+    if len(text) > _TERMINAL_MAX:
+        text = text[-_TERMINAL_MAX:]
+    return {"buffer_tail": text, "cwd": cwd}
 
 
 def combine_pending(

@@ -840,6 +840,8 @@ export interface StreamEvent {
     content: unknown[] | null;
     /** the handed-back send's client_id: re-send with it (backend core/send_requests) */
     clientId?: string | null;
+    /** the handed-back send's attached terminal output (backend _hand_back_send) */
+    terminalContext?: { bufferTail: string; cwd: string } | null;
   };
   /** Server-side pending message sequence (SESSION_BUSY / QUEUE_TIMEOUT). When
    *  present, the message is durably queued server-side and will auto-drain —

@@ -21,6 +21,7 @@
  */
 
 import type { ContentBlock, PendingPermission, UnifiedAttachment } from '../types';
+import { addTerminalText } from '../utils/terminalAttachment';
 
 /** Shape of the retryPayload the backend attaches to a SESSION_BUSY (and
  *  QUEUE_TIMEOUT) SSE event so the frontend can recover the user's message. */
@@ -31,6 +32,8 @@ export interface SessionBusyRetryPayload {
   content: unknown[] | null;
   /** the handed-back send's client_id: re-send with it */
   clientId?: string | null;
+  /** the handed-back send's attached terminal output (backend _hand_back_send) */
+  terminalContext?: { bufferTail: string; cwd: string } | null;
 }
 
 /** The queuedMessage shape consumed by drainQueuedMessage. */
@@ -106,11 +109,17 @@ export function queuedMessageFromRetryPayload(
 ): QueuedMessage | null {
   if (!payload) return null;
   const text = extractRetryText(payload);
-  if (!text) return null;
+  // The terminal output rides back too, as the message's terminal chip, so the
+  // re-send carries it (utils/terminalAttachment → terminalContextOf at send).
+  const tc = payload.terminalContext;
+  const attachments = tc?.bufferTail
+    ? addTerminalText([], tc.bufferTail, tc.cwd ?? '', () => `${messageId}-terminal`)
+    : [];
+  if (!text && attachments.length === 0) return null;
   return {
     text,
-    attachments: [],
-    displayContent: [{ type: 'text', text }],
+    attachments,
+    displayContent: [{ type: 'text', text: text || '[Attached terminal output]' }],
     messageId,
     ...(payload.clientId ? { clientId: payload.clientId } : {}),
   };
