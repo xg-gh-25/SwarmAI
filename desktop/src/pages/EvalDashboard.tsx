@@ -255,8 +255,10 @@ export default function EvalDashboard() {
           {TABS.map((tab) => (
             <button
               key={tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`px-3 py-2.5 text-sm font-medium transition-colors flex items-center gap-1.5 border-b-2 -mb-px whitespace-nowrap ${
+              className={`px-3 py-2.5 text-body transition-colors flex items-center gap-1.5 border-b-2 -mb-px whitespace-nowrap ${
                 activeTab === tab.id
                   ? 'text-[var(--color-primary)] border-[var(--color-primary)]'
                   : 'text-[var(--color-text-muted)] border-transparent hover:text-[var(--color-text)] hover:border-[var(--color-border)]'
@@ -307,7 +309,7 @@ function OverviewTab() {
           disabled={runCanary.isPending}
           className="btn-md btn-secondary transition-colors disabled:opacity-50"
         >
-          {runCanary.isPending ? 'Running...' : '⚡ Run Canary'}
+          {runCanary.isPending ? 'Running...' : 'Run Canary'}
         </button>
         <button
           onClick={() => triggerRun.mutate({})}
@@ -318,7 +320,7 @@ function OverviewTab() {
         </button>
       </div>
       {(triggerRun.isSuccess || runCanary.isSuccess) && (
-        <div className="mb-3 p-2 rounded border border-green-500/20 bg-green-500/5 text-xs text-green-500">
+        <div className="mb-3 p-2 rounded border border-[color-mix(in_srgb,var(--color-status-success)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-success)_5%,transparent)] text-small text-[var(--color-status-success)]">
           {triggerRun.isSuccess && `✓ Eval started: ${(triggerRun.data as { run_id?: string })?.run_id || 'running'}`}
           {runCanary.isSuccess && `✓ Canary complete: ${(runCanary.data as { overall_score?: number })?.overall_score}%`}
         </div>
@@ -361,15 +363,15 @@ function OverviewTab() {
       {/* Dimension Scores */}
       {dimEntries.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">Dimensions</h3>
+          <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">Dimensions</h3>
           <div className="grid grid-cols-3 gap-3">
             {dimEntries.map(([dim, score]) => (
               <div key={dim} className="flex items-center gap-3 p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-                <div className={`w-2 h-2 rounded-full ${score >= 80 ? 'bg-green-500' : score >= 60 ? 'bg-yellow-500' : 'bg-red-500'}`} />
+                <div className={`w-2 h-2 rounded-full ${score >= 80 ? 'bg-[var(--color-status-success)]' : score >= 60 ? 'bg-[var(--color-status-warning)]' : 'bg-[var(--color-status-error)]'}`} />
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium truncate">{dim.replace(/_/g, ' ')}</div>
+                  <div className="text-small truncate">{dim.replace(/_/g, ' ')}</div>
                 </div>
-                <div className="text-sm tabular-nums font-semibold">{score}%</div>
+                <div className="text-body tabular-nums font-semibold">{score}%</div>
               </div>
             ))}
           </div>
@@ -377,16 +379,16 @@ function OverviewTab() {
       )}
 
       {/* Recent Runs */}
-      <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">Recent Eval Runs</h3>
+      <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">Recent Eval Runs</h3>
       <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-        <table className="w-full text-xs">
+        <table className="w-full text-small">
           <thead>
             <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Date</th>
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Trigger</th>
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Score</th>
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Pass/Fail/Skip</th>
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Duration</th>
+              <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Date</th>
+              <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Trigger</th>
+              <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Score</th>
+              <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Pass/Fail/Skip</th>
+              <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Duration</th>
             </tr>
           </thead>
           <tbody>
@@ -395,16 +397,16 @@ function OverviewTab() {
                 <td className="px-3 py-2 tabular-nums">{run.triggered_at?.slice(0, 10)}</td>
                 <td className="px-3 py-2">{run.triggered_by}</td>
                 <td className="px-3 py-2">
-                  <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-semibold ${
-                    run.overall_score >= 80 ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500'
+                  <span className={`inline-block px-1.5 py-0.5 rounded text-meta font-semibold ${
+                    run.overall_score >= 80 ? 'bg-[color-mix(in_srgb,var(--color-status-success)_10%,transparent)] text-[var(--color-status-success)]' : 'bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] text-[var(--color-status-warning)]'
                   }`}>
                     {run.overall_score}%
                   </span>
                 </td>
                 <td className="px-3 py-2 tabular-nums">
-                  <span className="text-green-500">{run.cases_passed}</span>
+                  <span className="text-[var(--color-status-success)]">{run.cases_passed}</span>
                   {' / '}
-                  <span className="text-red-500">{run.cases_failed}</span>
+                  <span className="text-[var(--color-status-error)]">{run.cases_failed}</span>
                   {' / '}
                   <span className="text-[var(--color-text-muted)]">{run.cases_skipped}</span>
                 </td>
@@ -441,7 +443,7 @@ function ChipGroup({
   const interactive = !!onClick;
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[11px] uppercase tracking-wide text-[var(--color-text-muted)] font-medium">{label}</span>
+      <span className="text-meta uppercase tracking-wide text-[var(--color-text-muted)] ">{label}</span>
       <div className="flex flex-wrap gap-1">
         {entries.map((e) => {
           const isActive = activeKey === e.key;
@@ -452,14 +454,14 @@ function ChipGroup({
               data-testid={`chip-${testidPrefix}-${e.key}`}
               {...(interactive ? { onClick: () => onClick!(e.key), type: 'button' as const } : {})}
               title={interactive ? `Filter by ${label.toLowerCase()}: ${e.key}` : `${e.key}: ${e.count}`}
-              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] border transition-colors ${
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-meta border transition-colors ${
                 isActive
-                  ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)]'
+                  ? 'bg-[var(--color-primary)] text-[var(--color-on-accent)] border-[var(--color-primary)]'
                   : 'bg-[var(--color-bg)] border-[var(--color-border)] text-[var(--color-text-secondary)]'
               } ${interactive ? 'cursor-pointer hover:border-[var(--color-primary)]' : ''}`}
             >
               <span>{e.key.replace(/_/g, ' ')}</span>
-              <span data-testid={`chip-${testidPrefix}-${e.key}-count`} className={`font-semibold ${isActive ? 'text-white' : 'text-[var(--color-text)]'}`}>{e.count}</span>
+              <span data-testid={`chip-${testidPrefix}-${e.key}-count`} className={`font-semibold ${isActive ? 'text-[var(--color-on-accent)]' : 'text-[var(--color-text)]'}`}>{e.count}</span>
             </Tag>
           );
         })}
@@ -539,7 +541,7 @@ export function GoldenSetTab() {
   const toggleCat = (cat: string) =>
     setCollapsedCats((prev) => {
       const next = new Set(prev);
-      next.has(cat) ? next.delete(cat) : next.add(cat);
+      if (next.has(cat)) next.delete(cat); else next.add(cat);
       return next;
     });
 
@@ -562,12 +564,12 @@ export function GoldenSetTab() {
             placeholder="Search by ID or title..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="flex-1 max-w-[240px] px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]"
+            className="flex-1 max-w-[240px] px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-small text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]"
           />
           <select
             value={filterCategory}
             onChange={(e) => setFilterCategory(e.target.value)}
-            className="px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-xs text-[var(--color-text)] outline-none cursor-pointer"
+            className="px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-small text-[var(--color-text)] outline-none cursor-pointer"
           >
             <option value="">All Categories</option>
             {(gs.categories || []).map((cat) => <option key={cat} value={cat}>{cat}</option>)}
@@ -575,7 +577,7 @@ export function GoldenSetTab() {
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
-            className="px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-xs text-[var(--color-text)] outline-none cursor-pointer"
+            className="px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-small text-[var(--color-text)] outline-none cursor-pointer"
           >
             <option value="">All Status</option>
             <option value="passed">Passed</option>
@@ -586,13 +588,13 @@ export function GoldenSetTab() {
             data-testid="filter-tier"
             value={filterTier}
             onChange={(e) => setFilterTier(e.target.value)}
-            className="px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-xs text-[var(--color-text)] outline-none cursor-pointer"
+            className="px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-small text-[var(--color-text)] outline-none cursor-pointer"
           >
             <option value="">All Tiers</option>
             {breakdowns.tier.map((t) => <option key={t.key} value={t.key}>{t.key}</option>)}
           </select>
           <div className="flex-1" />
-          <span className="text-[11px] text-[var(--color-text-muted)]">
+          <span className="text-meta text-[var(--color-text-muted)]">
             {filtered.length}/{gs.total_cases} cases
           </span>
         </div>
@@ -602,7 +604,7 @@ export function GoldenSetTab() {
             test type are distinguishable at a glance (fixes "傻傻分不清"). */}
         <div className="border border-[var(--color-border)] rounded-lg overflow-y-auto flex-1 min-h-0" data-testid="golden-set-groups">
           {groupedByCat.length === 0 && (
-            <div className="px-3 py-8 text-center text-xs text-[var(--color-text-muted)]">No cases match the current filters.</div>
+            <div className="px-3 py-8 text-center text-small text-[var(--color-text-muted)]">No cases match the current filters.</div>
           )}
           {groupedByCat.map(([cat, cases]) => {
             const collapsed = collapsedCats.has(cat);
@@ -616,12 +618,12 @@ export function GoldenSetTab() {
                   <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">
                     {collapsed ? 'chevron_right' : 'expand_more'}
                   </span>
-                  <span className="font-semibold text-xs">{cat}</span>
-                  <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-hover)] text-[11px] text-[var(--color-text-muted)]">{cases.length}</span>
+                  <span className="font-semibold text-small">{cat}</span>
+                  <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-hover)] text-meta text-[var(--color-text-muted)]">{cases.length}</span>
                 </button>
                 {/* Group rows */}
                 {!collapsed && (
-                  <table className="w-full text-xs">
+                  <table className="w-full text-small">
                     <tbody>
                       {cases.map((c) => (
                         <tr
@@ -634,7 +636,7 @@ export function GoldenSetTab() {
                           <td className="px-3 py-2"><OriginBadge origin={c._origin} /></td>
                           <td className="px-3 py-2">
                             {c.eval_method && (
-                              <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[11px] text-[var(--color-text-secondary)]">{c.eval_method}</span>
+                              <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-meta text-[var(--color-text-secondary)]">{c.eval_method}</span>
                             )}
                           </td>
                           <td className="px-3 py-2 text-[var(--color-text-muted)] whitespace-nowrap">{c.dimension?.replace(/_/g, ' ')}</td>
@@ -643,7 +645,7 @@ export function GoldenSetTab() {
                           <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                             <button
                               onClick={() => setArchiveId(c.id)}
-                              className="text-[var(--color-text-muted)] hover:text-red-500 transition-colors"
+                              className="text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] transition-colors"
                               title="Archive"
                             >
                               <span className="material-symbols-outlined icon-sm">archive</span>
@@ -676,7 +678,7 @@ export function GoldenSetTab() {
             className="btn-md btn-secondary opacity-50 cursor-not-allowed"
           >
             Import from Correction
-            <span className="ml-1 text-[8px] uppercase tracking-wide opacity-70">soon</span>
+            <span className="ml-1 text-meta uppercase tracking-wide opacity-70">soon</span>
           </button>
           <button
             disabled
@@ -684,7 +686,7 @@ export function GoldenSetTab() {
             className="btn-md btn-secondary opacity-50 cursor-not-allowed"
           >
             Archive Stable
-            <span className="ml-1 text-[8px] uppercase tracking-wide opacity-70">soon</span>
+            <span className="ml-1 text-meta uppercase tracking-wide opacity-70">soon</span>
           </button>
           <button
             onClick={() => triggerRun.mutate({})}
@@ -706,14 +708,14 @@ export function GoldenSetTab() {
       )}
       {/* B11: in-app archive confirmation (was a jarring native confirm()). */}
       {archiveId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { if (!deleteCase.isPending) { setArchiveId(null); setArchiveErr(false); } }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-scrim-strong)] p-4" onClick={() => { if (!deleteCase.isPending) { setArchiveId(null); setArchiveErr(false); } }}>
           <div className="w-full max-w-sm bg-[var(--color-card)] rounded-xl border border-[var(--color-border)] shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold mb-2">Archive golden case?</h3>
-            <p className="text-xs text-[var(--color-text-muted)] mb-4 break-all">
+            <h3 className="text-body font-semibold mb-2">Archive golden case?</h3>
+            <p className="text-small text-[var(--color-text-muted)] mb-4 break-all">
               <span className="font-mono">{archiveId}</span> will be archived (removed from the active set).
             </p>
             {archiveErr && (
-              <p data-testid="eval-archive-error" className="text-xs text-red-400 mb-3">Could not archive — please try again.</p>
+              <p data-testid="eval-archive-error" className="text-small text-[var(--color-status-error)] mb-3">Could not archive — please try again.</p>
             )}
             <div className="flex justify-end gap-2">
               <button disabled={deleteCase.isPending} onClick={() => { setArchiveId(null); setArchiveErr(false); }} className="btn-md btn-secondary disabled:opacity-50">Cancel</button>
@@ -796,33 +798,33 @@ export function GovernanceProposalCard({
   return (
     <div className="border border-[var(--color-border)] rounded-lg p-3">
       <div className="flex items-center gap-2 mb-1.5">
-        <span className={`px-1.5 py-0.5 text-[11px] font-semibold rounded ${
+        <span className={`px-1.5 py-0.5 text-meta font-semibold rounded ${
           p.proposal_kind === 'gate'
-            ? 'bg-red-500/10 text-red-600'
-            : 'bg-blue-500/10 text-blue-600'
+            ? 'bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] text-[var(--color-status-error)]'
+            : 'bg-[color-mix(in_srgb,var(--color-primary)_10%,transparent)] text-[var(--color-primary)]'
         }`}>
           {p.proposal_kind.toUpperCase()}
         </span>
-        <span className="text-sm font-medium text-[var(--color-text)]">{p.source_class}</span>
-        <span className="text-[11px] text-[var(--color-text-muted)]">{p.occurrence_count}×</span>
+        <span className="text-body text-[var(--color-text)]">{p.source_class}</span>
+        <span className="text-meta text-[var(--color-text-muted)]">{p.occurrence_count}×</span>
       </div>
-      <p className="text-xs text-[var(--color-text)] mb-2">{p.proposed_rule}</p>
+      <p className="text-small text-[var(--color-text)] mb-2">{p.proposed_rule}</p>
 
       {/* Evidence — the actual correction excerpts behind the count. Without this
           the cards are indistinguishable and cannot be judged (Bug1 root cause). */}
       {evidence.length > 0 ? (
         <div className="mb-2 border-l-2 border-[var(--color-border)] pl-2 space-y-1">
-          <div className="text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">
+          <div className="text-meta font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">
             Evidence ({evidence.length})
           </div>
           {evidence.map((e, i) => (
-            <p key={i} className="text-[11px] text-[var(--color-text-muted)] leading-snug">
+            <p key={i} className="text-meta text-[var(--color-text-muted)] leading-snug">
               • {e}
             </p>
           ))}
         </div>
       ) : (
-        <p className="mb-2 text-[11px] italic text-[var(--color-text-muted)]">
+        <p className="mb-2 text-meta italic text-[var(--color-text-muted)]">
           No evidence recorded — judge with caution.
         </p>
       )}
@@ -866,23 +868,23 @@ function GovernanceTab() {
   return (
     <div className="p-6 max-w-3xl mx-auto">
       <div className="mb-4">
-        <h2 className="text-base font-semibold text-[var(--color-text)] flex items-center gap-1.5">
+        <h2 className="text-title font-semibold text-[var(--color-text)] flex items-center gap-1.5">
           <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">gavel</span>
           Governance Proposals
         </h2>
-        <p className="text-xs text-[var(--color-text-muted)] mt-1">
+        <p className="text-small text-[var(--color-text-muted)] mt-1">
           Recurring judgment patterns the system flagged. Accept a <b>rule</b> to record it
           (a class that recurs after a rule escalates to a <b>gate</b>). Accept never edits
           SOUL/AGENT/STEERING — it only records the decision in the tracker.
         </p>
       </div>
 
-      {isError && <div className="text-sm text-red-400">Failed to load governance proposals. Is the backend running?</div>}
+      {isError && <div className="text-body text-[var(--color-status-error)]">Failed to load governance proposals. Is the backend running?</div>}
 
-      {isLoading && !isError && <div className="text-sm text-[var(--color-text-muted)]">Loading…</div>}
+      {isLoading && !isError && <div className="text-body text-[var(--color-text-muted)]">Loading…</div>}
 
       {!isLoading && !isError && proposals.length === 0 && (
-        <div className="text-sm text-[var(--color-text-muted)] border border-dashed border-[var(--color-border)] rounded-lg p-6 text-center">
+        <div className="text-body text-[var(--color-text-muted)] border border-dashed border-[var(--color-border)] rounded-lg p-6 text-center">
           No pending governance proposals. The escalation ladder surfaces them here when a
           correction class recurs ≥3× without a structural fix.
         </div>
@@ -907,7 +909,7 @@ export function TrendsTab() {
   if (!history || history.length === 0) {
     return (
       <div className="max-w-5xl mx-auto p-6">
-        <p className="text-sm text-[var(--color-text-muted)]">
+        <p className="text-body text-[var(--color-text-muted)]">
           Trends require at least 2 eval runs. Run more evaluations to see historical data.
         </p>
       </div>
@@ -921,11 +923,11 @@ export function TrendsTab() {
   return (
     <div className="max-w-5xl mx-auto p-6">
       {/* Recent runs — click to visualize per-case results */}
-      <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Recent Runs</h3>
+      <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Recent Runs</h3>
       <div className="grid grid-cols-3 gap-3 mb-8" data-testid="recent-runs">
         {recent.map((r) => {
           const score = r.overall_score ?? 0;
-          const sc = score >= 80 ? '#22c55e' : score >= 60 ? '#eab308' : '#ef4444';
+          const sc = score >= 80 ? 'var(--color-status-success)' : score >= 60 ? 'var(--color-status-warning)' : 'var(--color-status-error)';
           return (
             <button
               key={r.run_id}
@@ -933,13 +935,13 @@ export function TrendsTab() {
               className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] hover:border-[var(--color-primary)] transition-colors text-left"
             >
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[11px] tabular-nums text-[var(--color-text-muted)]">{r.triggered_at?.slice(0, 10)}</span>
-                <span className="text-sm tabular-nums font-semibold" style={{ color: sc }}>{Math.round(score)}%</span>
+                <span className="text-meta tabular-nums text-[var(--color-text-muted)]">{r.triggered_at?.slice(0, 10)}</span>
+                <span className="text-body tabular-nums font-semibold" style={{ color: sc }}>{Math.round(score)}%</span>
               </div>
-              <div className="text-[11px] text-[var(--color-text-muted)]">{r.triggered_by}</div>
-              <div className="flex gap-2 mt-1 text-[11px]">
-                <span className="text-green-500">{r.cases_passed ?? 0}✓</span>
-                <span className="text-red-500">{r.cases_failed ?? 0}✗</span>
+              <div className="text-meta text-[var(--color-text-muted)]">{r.triggered_by}</div>
+              <div className="flex gap-2 mt-1 text-meta">
+                <span className="text-[var(--color-status-success)]">{r.cases_passed ?? 0}✓</span>
+                <span className="text-[var(--color-status-error)]">{r.cases_failed ?? 0}✗</span>
                 <span className="text-[var(--color-text-muted)]">{r.cases_skipped ?? 0}skip</span>
               </div>
             </button>
@@ -947,7 +949,7 @@ export function TrendsTab() {
         })}
       </div>
 
-      <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Overall Score Trend</h3>
+      <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Overall Score Trend</h3>
       <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] mb-8">
         <Sparkline
           values={runs.map(r => r.overall_score ?? 0)}
@@ -956,23 +958,23 @@ export function TrendsTab() {
           height={48}
           color="var(--color-primary)"
         />
-        <div className="flex justify-between text-[11px] text-[var(--color-text-muted)] mt-1 tabular-nums">
+        <div className="flex justify-between text-meta text-[var(--color-text-muted)] mt-1 tabular-nums">
           <span>{runs[0]?.triggered_at?.slice(0, 10)}</span>
           <span>{runs[runs.length - 1]?.triggered_at?.slice(0, 10)}</span>
         </div>
       </div>
 
-      <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Per-Dimension Sparklines</h3>
+      <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Per-Dimension Sparklines</h3>
       <div className="grid grid-cols-2 gap-4">
         {allDims.map((dim) => {
           const scores = runs.map(r => r.dimensions?.[dim] ?? 0);
           const latest = scores[scores.length - 1] ?? 0;
-          const color = latest >= 80 ? '#22c55e' : latest >= 60 ? '#eab308' : '#ef4444';
+          const color = latest >= 80 ? 'var(--color-status-success)' : latest >= 60 ? 'var(--color-status-warning)' : 'var(--color-status-error)';
           return (
             <div key={dim} className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
               <div className="flex items-center justify-between mb-2">
-                <div className="text-xs text-[var(--color-text-muted)]">{dim.replace(/_/g, ' ')}</div>
-                <div className="text-sm font-mono font-semibold" style={{ color }}>{latest}%</div>
+                <div className="text-small text-[var(--color-text-muted)]">{dim.replace(/_/g, ' ')}</div>
+                <div className="text-body font-mono font-semibold" style={{ color }}>{latest}%</div>
               </div>
               <Sparkline values={scores} height={32} color={color} />
             </div>
@@ -1011,12 +1013,12 @@ function RunDetailPanel({ runId, onClose }: { runId: string; onClose: () => void
   }, [run?.cases]);
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-end bg-[var(--color-scrim-medium)]" onClick={onClose}>
       <div className="w-[460px] h-full bg-[var(--color-card)] border-l border-[var(--color-border)] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="sticky top-0 bg-[var(--color-card)] border-b border-[var(--color-border)] px-4 py-3 flex items-center justify-between">
           <div>
-            <div className="text-xs font-mono font-semibold">{runId}</div>
-            {run && <div className="text-[11px] text-[var(--color-text-muted)]">{run.triggered_at?.slice(0, 19).replace('T', ' ')} · {run.triggered_by}</div>}
+            <div className="text-small font-mono font-semibold">{runId}</div>
+            {run && <div className="text-meta text-[var(--color-text-muted)]">{run.triggered_at?.slice(0, 19).replace('T', ' ')} · {run.triggered_by}</div>}
           </div>
           <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
             <span className="material-symbols-outlined icon-sm">close</span>
@@ -1025,23 +1027,23 @@ function RunDetailPanel({ runId, onClose }: { runId: string; onClose: () => void
         {isLoading || !run ? <Loading /> : (
           <div className="p-4">
             {/* Run summary */}
-            <div className="flex gap-3 mb-4 text-xs">
-              <span className="tabular-nums font-semibold" style={{ color: (run.overall_score ?? 0) >= 80 ? '#22c55e' : '#eab308' }}>{Math.round(run.overall_score ?? 0)}%</span>
-              <span className="text-green-500">{run.cases_passed ?? 0} passed</span>
-              <span className="text-red-500">{run.cases_failed ?? 0} failed</span>
+            <div className="flex gap-3 mb-4 text-small">
+              <span className="tabular-nums font-semibold" style={{ color: (run.overall_score ?? 0) >= 80 ? 'var(--color-status-success)' : 'var(--color-status-warning)' }}>{Math.round(run.overall_score ?? 0)}%</span>
+              <span className="text-[var(--color-status-success)]">{run.cases_passed ?? 0} passed</span>
+              <span className="text-[var(--color-status-error)]">{run.cases_failed ?? 0} failed</span>
               <span className="text-[var(--color-text-muted)]">{run.cases_skipped ?? 0} skipped</span>
-              {(run.cases_error ?? 0) > 0 && <span className="text-orange-500">{run.cases_error} error</span>}
+              {(run.cases_error ?? 0) > 0 && <span className="text-[var(--color-status-warning)]">{run.cases_error} error</span>}
             </div>
             {/* Per-case grouped by status */}
             {grouped.map(([status, cases]) => (
               <div key={status} className="mb-4" data-testid={`run-status-${status}`}>
                 <div className="flex items-center gap-2 mb-1.5">
                   <StatusBadge status={status} />
-                  <span className="text-[11px] text-[var(--color-text-muted)]">{cases.length}</span>
+                  <span className="text-meta text-[var(--color-text-muted)]">{cases.length}</span>
                 </div>
                 <div className="space-y-1">
                   {cases.map((c) => (
-                    <div key={c.id} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-[11px]">
+                    <div key={c.id} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-meta">
                       <span className="font-mono font-semibold">{c.id}</span>
                       {dimById.get(c.id) && <span className="text-[var(--color-text-muted)]">{dimById.get(c.id)?.replace(/_/g, ' ')}</span>}
                       {c.evaluator && <span className="ml-auto text-[var(--color-text-muted)]">{c.evaluator}</span>}
@@ -1096,8 +1098,8 @@ function ContextHealthTab() {
     <div className="max-w-5xl mx-auto p-6 space-y-6">
       {/* Header */}
       <div>
-        <h2 className="text-lg font-semibold text-[var(--color-text)]">Context Health</h2>
-        <p className="text-xs text-[var(--color-text-muted)] mt-1">
+        <h2 className="text-title font-semibold text-[var(--color-text)]">Context Health</h2>
+        <p className="text-small text-[var(--color-text-muted)] mt-1">
           DDD & Memory freshness — auto-refresh activity, staleness signals, and pending decisions.
           {data.weeks_available > 0 && ` Showing ${data.weeks_available} week(s) of history.`}
         </p>
@@ -1106,8 +1108,8 @@ function ContextHealthTab() {
       {!hasActivity && (
         <div className="text-center py-12 text-[var(--color-text-muted)]">
           <span className="material-symbols-outlined icon-xl mb-2 block opacity-40">check_circle</span>
-          <p className="text-sm">No context drift detected. Everything is fresh.</p>
-          <p className="text-xs mt-1 opacity-70">Auto-refresh runs on every code commit + every 30 minutes.</p>
+          <p className="text-body">No context drift detected. Everything is fresh.</p>
+          <p className="text-small mt-1 opacity-70">Auto-refresh runs on every code commit + every 30 minutes.</p>
         </div>
       )}
 
@@ -1117,22 +1119,22 @@ function ContextHealthTab() {
           cases are golden cases whose affected_by depends on a drifted doc. */}
       {driftFindings.length > 0 && (
         <section>
-          <h3 className="text-sm font-medium text-[var(--color-text)] mb-2 flex items-center gap-1.5">
-            <span className="material-symbols-outlined icon-xs text-red-500">rule</span>
+          <h3 className="text-body text-[var(--color-text)] mb-2 flex items-center gap-1.5">
+            <span className="material-symbols-outlined icon-xs text-[var(--color-status-error)]">rule</span>
             Semantic Drift ({driftFindings.length})
             {drift?.report_date && (
-              <span className="text-[11px] text-[var(--color-text-muted)] font-normal">
+              <span className="text-meta text-[var(--color-text-muted)] font-normal">
                 from self-audit {drift.report_date}
               </span>
             )}
           </h3>
-          <div className="border border-red-500/20 rounded-lg overflow-hidden">
-            <table className="w-full text-xs">
-              <thead className="bg-red-500/5">
+          <div className="border border-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] rounded-lg overflow-hidden">
+            <table className="w-full text-small">
+              <thead className="bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)]">
                 <tr>
-                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Project</th>
-                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Doc(s)</th>
-                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">What's Stale</th>
+                  <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Project</th>
+                  <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Doc(s)</th>
+                  <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">What's Stale</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border)]">
@@ -1147,12 +1149,12 @@ function ContextHealthTab() {
             </table>
           </div>
           {(drift?.at_risk_cases?.length ?? 0) > 0 && (
-            <p className="text-[11px] text-[var(--color-text-muted)] mt-1.5">
-              ⚠️ {drift!.at_risk_cases.length} eval case(s) at risk (affected_by a drifted doc):{' '}
+            <p className="text-meta text-[var(--color-text-muted)] mt-1.5">
+              <span className="material-symbols-outlined icon-xs align-middle text-[var(--color-status-warning)]">warning</span> {drift!.at_risk_cases.length} eval case(s) at risk (affected_by a drifted doc):{' '}
               <span className="font-mono">{drift!.at_risk_cases.map(c => c.case_id).join(', ')}</span>
             </p>
           )}
-          <p className="text-[11px] text-[var(--color-text-muted)] mt-1 italic">
+          <p className="text-meta text-[var(--color-text-muted)] mt-1 italic">
             Semantic contradictions found by the weekly DDD self-audit. Fix via chat: "s_persist … correct the claim".
           </p>
         </section>
@@ -1161,18 +1163,18 @@ function ContextHealthTab() {
       {/* Staleness Signals */}
       {data.staleness.length > 0 && (
         <section>
-          <h3 className="text-sm font-medium text-[var(--color-text)] mb-2 flex items-center gap-1.5">
-            <span className="material-symbols-outlined icon-xs text-amber-500">warning</span>
+          <h3 className="text-body text-[var(--color-text)] mb-2 flex items-center gap-1.5">
+            <span className="material-symbols-outlined icon-xs text-[var(--color-status-warning)]">warning</span>
             Stale Documents ({data.staleness.length})
           </h3>
-          <div className="border border-amber-500/20 rounded-lg overflow-hidden">
-            <table className="w-full text-xs">
-              <thead className="bg-amber-500/5">
+          <div className="border border-[color-mix(in_srgb,var(--color-status-warning)_20%,transparent)] rounded-lg overflow-hidden">
+            <table className="w-full text-small">
+              <thead className="bg-[color-mix(in_srgb,var(--color-status-warning)_5%,transparent)]">
                 <tr>
-                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Project</th>
-                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Document</th>
-                  <th className="text-right px-3 py-2 font-medium text-[var(--color-text-muted)]">Days Stale</th>
-                  <th className="text-right px-3 py-2 font-medium text-[var(--color-text-muted)]">Recent Commits</th>
+                  <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Project</th>
+                  <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Document</th>
+                  <th className="text-right px-3 py-2 text-[var(--color-text-muted)]">Days Stale</th>
+                  <th className="text-right px-3 py-2 text-[var(--color-text-muted)]">Recent Commits</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border)]">
@@ -1180,14 +1182,14 @@ function ContextHealthTab() {
                   <tr key={i} className="hover:bg-[var(--color-hover)]">
                     <td className="px-3 py-2 text-[var(--color-text)]">{s.project}</td>
                     <td className="px-3 py-2 text-[var(--color-text-muted)]">{s.doc}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-amber-500">{s.days_stale}d</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-[var(--color-status-warning)]">{s.days_stale}d</td>
                     <td className="px-3 py-2 text-right tabular-nums">{s.recent_commits}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="text-[11px] text-[var(--color-text-muted)] mt-1.5 italic">
+          <p className="text-meta text-[var(--color-text-muted)] mt-1.5 italic">
             Tip: Ask in chat "refresh AIDLC TECH.md" or "update DDD docs" to resolve.
           </p>
         </section>
@@ -1196,23 +1198,23 @@ function ContextHealthTab() {
       {/* Pending Proposals (Layer 3) */}
       {data.pending_proposals.length > 0 && (
         <section>
-          <h3 className="text-sm font-medium text-[var(--color-text)] mb-2 flex items-center gap-1.5">
-            <span className="material-symbols-outlined icon-xs text-blue-500">pending_actions</span>
+          <h3 className="text-body text-[var(--color-text)] mb-2 flex items-center gap-1.5">
+            <span className="material-symbols-outlined icon-xs text-[var(--color-primary)]">pending_actions</span>
             Pending Decisions ({data.pending_proposals.length})
           </h3>
           <div className="space-y-2">
             {data.pending_proposals.map((p) => (
               <div key={p.id} className="border border-[var(--color-border)] rounded-lg p-3 hover:bg-[var(--color-hover)]">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-[var(--color-text)]">
+                  <span className="text-small text-[var(--color-text)]">
                     {p.target_doc} → {p.target_section}
                   </span>
-                  <span className="text-[11px] text-[var(--color-text-muted)]">
+                  <span className="text-meta text-[var(--color-text-muted)]">
                     {new Date(p.created_at).toLocaleDateString()}
                   </span>
                 </div>
-                <p className="text-xs text-[var(--color-text-muted)] mt-1 line-clamp-2">{p.content}</p>
-                <p className="text-[11px] text-[var(--color-text-muted)] mt-1.5 italic">
+                <p className="text-small text-[var(--color-text-muted)] mt-1 line-clamp-2">{p.content}</p>
+                <p className="text-meta text-[var(--color-text-muted)] mt-1.5 italic">
                   Ask in chat: "approve proposal {p.id}" or "reject proposal {p.id}"
                 </p>
               </div>
@@ -1224,18 +1226,18 @@ function ContextHealthTab() {
       {/* Auto-Refresh Log (Layer 1) */}
       {data.refresh_log.length > 0 && (
         <section>
-          <h3 className="text-sm font-medium text-[var(--color-text)] mb-2 flex items-center gap-1.5">
-            <span className="material-symbols-outlined icon-xs text-green-500">auto_fix_high</span>
+          <h3 className="text-body text-[var(--color-text)] mb-2 flex items-center gap-1.5">
+            <span className="material-symbols-outlined icon-xs text-[var(--color-status-success)]">auto_fix_high</span>
             Auto-Applied Fixes ({data.refresh_log.length})
           </h3>
           <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-            <table className="w-full text-xs">
+            <table className="w-full text-small">
               <thead className="bg-[var(--color-bg)]">
                 <tr>
-                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Date</th>
-                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Target</th>
-                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Change</th>
-                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Layer</th>
+                  <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Date</th>
+                  <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Target</th>
+                  <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Change</th>
+                  <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Layer</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border)]">
@@ -1244,19 +1246,19 @@ function ContextHealthTab() {
                     <td className="px-3 py-2 text-[var(--color-text-muted)] whitespace-nowrap">
                       {new Date(entry.timestamp).toLocaleDateString()}
                     </td>
-                    <td className="px-3 py-2 text-[var(--color-text)] font-mono text-[11px] truncate max-w-[200px]">
+                    <td className="px-3 py-2 text-[var(--color-text)] font-mono text-meta truncate max-w-[200px]">
                       {entry.target}
                     </td>
                     <td className="px-3 py-2">
-                      <code className="text-red-400 line-through text-[11px]">{entry.old}</code>
+                      <code className="text-[var(--color-status-error)] line-through text-meta">{entry.old}</code>
                       {' → '}
-                      <code className="text-green-400 text-[11px]">{entry.new}</code>
+                      <code className="text-[var(--color-status-success)] text-meta">{entry.new}</code>
                     </td>
                     <td className="px-3 py-2">
-                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium ${
+                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-meta ${
                         entry.layer === 1
-                          ? 'bg-green-500/10 text-green-500'
-                          : 'bg-blue-500/10 text-blue-500'
+                          ? 'bg-[color-mix(in_srgb,var(--color-status-success)_10%,transparent)] text-[var(--color-status-success)]'
+                          : 'bg-[color-mix(in_srgb,var(--color-primary)_10%,transparent)] text-[var(--color-primary)]'
                       }`}>
                         L{entry.layer}
                       </span>
@@ -1267,7 +1269,7 @@ function ContextHealthTab() {
             </table>
           </div>
           {data.refresh_log.length > 20 && (
-            <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+            <p className="text-meta text-[var(--color-text-muted)] mt-1">
               Showing 20 of {data.refresh_log.length} entries.
             </p>
           )}
@@ -1311,7 +1313,7 @@ export function ReportsTab() {
   if (!reports || reports.length === 0) {
     return (
       <div className="max-w-5xl mx-auto p-6">
-        <p className="text-sm text-[var(--color-text-muted)]">
+        <p className="text-body text-[var(--color-text-muted)]">
           No HTML eval reports found. Run a full eval sweep to generate reports.
         </p>
       </div>
@@ -1320,16 +1322,16 @@ export function ReportsTab() {
 
   return (
     <div className="max-w-5xl mx-auto p-6">
-      <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">
+      <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">
         Eval Reports ({reports.length})
       </h3>
       <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-        <table className="w-full text-xs">
+        <table className="w-full text-small">
           <thead>
             <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
-              <th className="text-left px-4 py-2.5 font-medium text-[var(--color-text-muted)]">Report</th>
-              <th className="text-left px-4 py-2.5 font-medium text-[var(--color-text-muted)]">Date</th>
-              <th className="text-right px-4 py-2.5 font-medium text-[var(--color-text-muted)]">Size</th>
+              <th className="text-left px-4 py-2.5 text-[var(--color-text-muted)]">Report</th>
+              <th className="text-left px-4 py-2.5 text-[var(--color-text-muted)]">Date</th>
+              <th className="text-right px-4 py-2.5 text-[var(--color-text-muted)]">Size</th>
             </tr>
           </thead>
           <tbody>
@@ -1348,7 +1350,7 @@ export function ReportsTab() {
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-2">
                       <span className="material-symbols-outlined icon-xs text-[var(--color-primary)]">description</span>
-                      <span className="font-medium">{label}</span>
+                      <span className="">{label}</span>
                     </div>
                   </td>
                   <td className="px-4 py-2.5 text-[var(--color-text-muted)] tabular-nums">{dateStr}</td>
@@ -1411,7 +1413,7 @@ export function SessionQualityTab() {
     <div className="max-w-5xl mx-auto p-6 space-y-6">
       {/* Overview stat cards + drift sparkline */}
       <div>
-        <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">
+        <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">
           Session Quality — Real-Session Loop (Layer ②③)
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -1421,12 +1423,12 @@ export function SessionQualityTab() {
             { label: 'Drafts harvested', value: overview?.drafts ?? 0 },
           ].map((s) => (
             <div key={s.label} className="border border-[var(--color-border)] rounded-lg p-3 bg-[var(--color-card)]">
-              <div className="text-2xl font-semibold">{s.value}</div>
-              <div className="text-xs text-[var(--color-text-muted)] mt-1">{s.label}</div>
+              <div className="text-display font-semibold">{s.value}</div>
+              <div className="text-small text-[var(--color-text-muted)] mt-1">{s.label}</div>
             </div>
           ))}
         </div>
-        <div className="flex items-center gap-3 mt-3 text-xs text-[var(--color-text-muted)]">
+        <div className="flex items-center gap-3 mt-3 text-small text-[var(--color-text-muted)]">
           <span>Weekly low-rate trend</span>
           <div className="w-[120px]"><Sparkline values={overview?.trend ?? []} height={28} /></div>
           {overview?.last_run && <span className="ml-auto tabular-nums">last run: {overview.last_run}</span>}
@@ -1436,18 +1438,18 @@ export function SessionQualityTab() {
       {/* Low-score session detail (attribution) */}
       {lowDetails.length > 0 && (
         <div>
-          <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">
+          <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">
             Low-Score Sessions ({lowDetails.length})
           </h3>
           <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-            <table className="w-full text-xs">
+            <table className="w-full text-small">
               <thead>
                 <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
-                  <th className="text-left px-4 py-2.5 font-medium text-[var(--color-text-muted)]">Session</th>
-                  <th className="text-left px-4 py-2.5 font-medium text-[var(--color-text-muted)]">Dimension</th>
-                  <th className="text-right px-4 py-2.5 font-medium text-[var(--color-text-muted)]">Goal</th>
-                  <th className="text-right px-4 py-2.5 font-medium text-[var(--color-text-muted)]">Tool</th>
-                  <th className="text-left px-4 py-2.5 font-medium text-[var(--color-text-muted)]">Reason</th>
+                  <th className="text-left px-4 py-2.5 text-[var(--color-text-muted)]">Session</th>
+                  <th className="text-left px-4 py-2.5 text-[var(--color-text-muted)]">Dimension</th>
+                  <th className="text-right px-4 py-2.5 text-[var(--color-text-muted)]">Goal</th>
+                  <th className="text-right px-4 py-2.5 text-[var(--color-text-muted)]">Tool</th>
+                  <th className="text-left px-4 py-2.5 text-[var(--color-text-muted)]">Reason</th>
                 </tr>
               </thead>
               <tbody>
@@ -1505,42 +1507,42 @@ const guideContent = {
   dimensionItems: [
     {
       key: 'capability',
-      icon: '⚡',
+      icon: 'bolt',
       en: { name: 'Capability', question: 'Are my abilities still intact?', method: 'End-to-end feature probes — verify critical capabilities (DDD cultivation, pipeline loops, self-healing) still execute correctly. Evaluators: file_contains, canary_pass, runtime_health.' },
       zh: { name: '能力完整性', question: '我的能力还完整吗？', method: '端到端能力探测 — 验证关键能力（DDD 培育、Pipeline 循环、自愈）仍正确执行。评估器：file_contains, canary_pass, runtime_health。' },
       share: 'largest',
     },
     {
       key: 'judgment_quality',
-      icon: '⚖️',
+      icon: 'balance',
       en: { name: 'Judgment Quality', question: 'Would I give the same answer to the same question?', method: 'Consistency testing — re-present known decisions and verify alignment with historical answers. Evaluator: goal_success.' },
       zh: { name: '判断质量', question: '同一问题我会给同样答案吗？', method: '一致性测试 — 重新呈现已知决策并验证与历史答案的一致性。评估器：goal_success。' },
       share: 'large',
     },
     {
       key: 'compliance',
-      icon: '🛡️',
+      icon: 'shield',
       en: { name: 'Compliance', question: 'Do I follow my own rules?', method: 'Constraint testing — present scenarios designed to trigger known rule violations (CLASS A patterns). Evaluators: trajectory_in_order, goal_success.' },
       zh: { name: '规则合规', question: '我遵守自己的规则吗？', method: '约束测试 — 呈现设计用来触发已知规则违反的场景（CLASS A 模式）。评估器：trajectory_in_order, goal_success。' },
       share: 'large',
     },
     {
       key: 'factual_accuracy',
-      icon: '🧠',
+      icon: 'psychology',
       en: { name: 'Factual Accuracy', question: 'Is what I remember still true?', method: 'Source verification — check referenced files/systems still support stored claims. Evaluators: canary_pass, file_contains.' },
       zh: { name: '事实准确性', question: '我记得的东西还对吗？', method: '源头验证 — 检查被引用的文件/系统是否仍支持存储的断言。评估器：canary_pass, file_contains。' },
       share: 'medium',
     },
     {
       key: 'context_utility',
-      icon: '📐',
+      icon: 'straighten',
       en: { name: 'Context Utility', question: 'Is the context I use actually helpful?', method: 'Ablation testing — measure response quality with/without specific context files. Evaluator: quality_score.' },
       zh: { name: '上下文效用', question: '我用的 context 有用吗？', method: '消融测试 — 比较有/无特定上下文文件时的响应质量。评估器：quality_score。' },
       share: 'medium',
     },
     {
       key: 'recovery',
-      icon: '🔄',
+      icon: 'sync',
       en: { name: 'Recovery', question: 'Do I recover correctly from a crash/interrupt?', method: 'Fault-injection harness — resume, self-heal, and crash-to-cold paths reach a correct state. Evaluator: runtime_health.' },
       zh: { name: '恢复能力', question: '崩溃/中断后我能正确恢复吗？', method: '故障注入 harness — resume、自愈、crash-to-cold 路径达到正确状态。评估器：runtime_health。' },
       share: 'small',
@@ -1678,17 +1680,17 @@ const guideContent = {
   },
   howToWriteSteps: [
     {
-      icon: '🎯',
+      icon: 'track_changes',
       en: { title: '1. Define the Scenario', desc: 'Write the prompt that triggers the behavior you want to test. Include enough context for the agent to act — but not so much that it gives away the answer. Good scenarios are indistinguishable from real user messages.', example: '"Fix the bug in session_unit.py where timeout is too short"' },
       zh: { title: '1. 定义场景', desc: '编写触发你想测试的行为的 prompt。包含足够的上下文让智能体行动 — 但不要多到暗示答案。好的场景与真实用户消息无法区分。', example: '"修复 session_unit.py 中超时时间太短的 bug"' },
     },
     {
-      icon: '🏗️',
+      icon: 'construction',
       en: { title: '2. Set 3-Layer Ground Truth', desc: 'Layer 1 (Trajectory): Which tools must be called, in what order? Layer 2 (Assertions): What semantic properties must the response have? Layer 3 (Response): What keywords must appear in the output?', example: 'trajectory: [Read, Edit, Bash(pytest)]\nassertions: ["Does NOT skip pipeline"]\nkeywords: ["pipeline", "adversarial"]' },
       zh: { title: '2. 设置三层 Ground Truth', desc: '第一层（轨迹）：必须调用哪些工具，什么顺序？第二层（断言）：响应必须具备什么语义属性？第三层（响应）：输出中必须出现什么关键词？', example: 'trajectory: [Read, Edit, Bash(pytest)]\nassertions: ["不跳过 pipeline"]\nkeywords: ["pipeline", "adversarial"]' },
     },
     {
-      icon: '⚙️',
+      icon: 'settings',
       en: { title: '3. Choose Evaluators', desc: 'Rule of thumb: use programmatic evaluators (trajectory_*, file_contains, keyword_match, canary_pass, runtime_health) for mechanical/structural behaviors — they run deterministically at $0; use LLM-judge (goal_success, quality_score) for nuanced judgment. Most cases use 2-3 evaluators. (The Evaluator Methodology section above lists the full current set.)', example: 'evaluators:\n  - trajectory_in_order\n  - goal_success' },
       zh: { title: '3. 选择评估器', desc: '经验法则：对机械/结构行为用程序化评估器（trajectory_*, file_contains, keyword_match, canary_pass, runtime_health）—— 确定性运行、$0；对细微判断用 LLM-judge（goal_success, quality_score）。大多数案例使用 2-3 个评估器。（上面「评估器方法论」列出当前完整集。）', example: 'evaluators:\n  - trajectory_in_order\n  - goal_success' },
     },
@@ -1704,19 +1706,23 @@ export function GuideTab() {
       {/* Language Toggle */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold tracking-tight">{guideContent.title[t]}</h1>
-          <p className="text-[12px] text-[var(--color-text-secondary)] leading-relaxed mt-1 max-w-[600px]">
+          <h1 className="text-display font-semibold tracking-tight">{guideContent.title[t]}</h1>
+          <p className="text-small text-[var(--color-text-secondary)] leading-relaxed mt-1 max-w-[600px]">
             {guideContent.subtitle[t]}
           </p>
         </div>
         <div className="flex items-center gap-1 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-md p-0.5 shrink-0">
           <button
+            role="radio"
+            aria-checked={lang === 'en'}
             onClick={() => setLang('en')}
-            className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${lang === 'en' ? 'bg-[var(--color-primary)] text-white' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
+            className={`px-2.5 py-1 rounded text-meta transition-colors ${lang === 'en' ? 'bg-[var(--color-primary)] text-[var(--color-on-accent)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
           >EN</button>
           <button
+            role="radio"
+            aria-checked={lang === 'zh'}
             onClick={() => setLang('zh')}
-            className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${lang === 'zh' ? 'bg-[var(--color-primary)] text-white' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
+            className={`px-2.5 py-1 rounded text-meta transition-colors ${lang === 'zh' ? 'bg-[var(--color-primary)] text-[var(--color-on-accent)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
           >中文</button>
         </div>
       </div>
@@ -1724,7 +1730,7 @@ export function GuideTab() {
       {/* Overview Cards */}
       <div className="grid grid-cols-3 gap-3 mb-8">
         {guideContent.overview[t].map((title, i) => (
-          <GuideCard key={i} icon={['🎯', '🔄', '⚡'][i]} title={title} desc={guideContent.overviewDesc[t][i]} />
+          <GuideCard key={i} icon={['track_changes', 'sync', 'bolt'][i]} title={title} desc={guideContent.overviewDesc[t][i]} />
         ))}
       </div>
 
@@ -1748,19 +1754,19 @@ export function GuideTab() {
 
       {/* Section 1: The Eval Dimensions */}
       <div className="mb-8">
-        <h2 className="text-[15px] font-semibold mb-3">{guideContent.dimensions[t]}</h2>
+        <h2 className="text-heading font-semibold mb-3">{guideContent.dimensions[t]}</h2>
         <div className="space-y-2">
           {guideContent.dimensionItems.map((dim) => (
             <div key={dim.key} data-dim-key={dim.key} className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
               <div className="flex items-start gap-3">
-                <span className="text-lg shrink-0">{dim.icon}</span>
+                <span className="material-symbols-outlined icon-lg shrink-0 text-[var(--color-primary)]">{dim.icon}</span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
-                    <span className="text-xs font-semibold">{dim[t].name}</span>
-                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] tabular-nums">{dim.share}</span>
+                    <span className="text-small font-semibold">{dim[t].name}</span>
+                    <span className="text-meta px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] tabular-nums">{dim.share}</span>
                   </div>
-                  <div className="text-[11px] text-[var(--color-text-secondary)] italic mb-1">"{dim[t].question}"</div>
-                  <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">{dim[t].method}</div>
+                  <div className="text-meta text-[var(--color-text-secondary)] italic mb-1">"{dim[t].question}"</div>
+                  <div className="text-meta text-[var(--color-text-muted)] leading-relaxed">{dim[t].method}</div>
                 </div>
               </div>
             </div>
@@ -1770,17 +1776,17 @@ export function GuideTab() {
 
       {/* Section 2: Evaluator Methodology */}
       <div className="mb-8">
-        <h2 className="text-[15px] font-semibold mb-1.5">{guideContent.evaluators[t]}</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mb-3">{guideContent.evalIntro[t]}</p>
+        <h2 className="text-heading font-semibold mb-1.5">{guideContent.evaluators[t]}</h2>
+        <p className="text-meta text-[var(--color-text-muted)] mb-3">{guideContent.evalIntro[t]}</p>
 
         <div className="grid grid-cols-3 gap-3">
           {/* Programmatic */}
-          <div className="p-3 rounded-lg border border-green-500/20 bg-green-500/5">
-            <div className="text-[11px] font-bold text-green-600 mb-2">{guideContent.programmatic[t]}</div>
+          <div className="p-3 rounded-lg border border-[color-mix(in_srgb,var(--color-status-success)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-success)_5%,transparent)]">
+            <div className="text-meta font-semibold text-[var(--color-status-success)] mb-2">{guideContent.programmatic[t]}</div>
             <div className="space-y-1.5">
               {guideContent.programmaticItems.map((item) => (
-                <div key={item.name} className="text-[11px]">
-                  <span className="font-mono text-green-600">{item.name}</span>
+                <div key={item.name} className="text-meta">
+                  <span className="font-mono text-[var(--color-status-success)]">{item.name}</span>
                   <span className="text-[var(--color-text-muted)] ml-1">— {item[t]}</span>
                 </div>
               ))}
@@ -1789,10 +1795,10 @@ export function GuideTab() {
 
           {/* LLM-Judge */}
           <div className="p-3 rounded-lg border border-[var(--color-primary)]/20 bg-[var(--color-primary)]/5">
-            <div className="text-[11px] font-bold text-[var(--color-primary)] mb-2">{guideContent.llmJudge[t]}</div>
+            <div className="text-meta font-semibold text-[var(--color-primary)] mb-2">{guideContent.llmJudge[t]}</div>
             <div className="space-y-1.5">
               {guideContent.llmJudgeItems.map((item) => (
-                <div key={item.name} className="text-[11px]">
+                <div key={item.name} className="text-meta">
                   <span className="font-mono text-[var(--color-primary)]">{item.name}</span>
                   <span className="text-[var(--color-text-muted)] ml-1">— {item[t]}</span>
                 </div>
@@ -1801,12 +1807,12 @@ export function GuideTab() {
           </div>
 
           {/* Behavior — third EXECUTION METHOD (real-agent spawn), not a programmatic/LLM evaluator */}
-          <div className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5">
-            <div className="text-[11px] font-bold text-amber-600 mb-2">{guideContent.behavior[t]}</div>
+          <div className="p-3 rounded-lg border border-[color-mix(in_srgb,var(--color-status-warning)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_5%,transparent)]">
+            <div className="text-meta font-semibold text-[var(--color-status-warning)] mb-2">{guideContent.behavior[t]}</div>
             <div className="space-y-1.5">
               {guideContent.behaviorItems.map((item) => (
-                <div key={item.name} className="text-[11px]">
-                  <span className="font-mono text-amber-600">{item.name}</span>
+                <div key={item.name} className="text-meta">
+                  <span className="font-mono text-[var(--color-status-warning)]">{item.name}</span>
                   <span className="text-[var(--color-text-muted)] ml-1">— {item[t]}</span>
                 </div>
               ))}
@@ -1817,9 +1823,9 @@ export function GuideTab() {
 
       {/* Section 3: Execution Architecture */}
       <div className="mb-8">
-        <h2 className="text-[15px] font-semibold mb-3">{guideContent.architecture[t]}</h2>
+        <h2 className="text-heading font-semibold mb-3">{guideContent.architecture[t]}</h2>
         <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-          <pre className="text-[11px] font-mono text-[var(--color-text-secondary)] leading-[2] whitespace-pre overflow-x-auto">
+          <pre className="text-meta font-mono text-[var(--color-text-secondary)] leading-[2] whitespace-pre overflow-x-auto">
 {t === 'en'
 ? `┌─────────────────────────────────────────────────────────────┐
 │  PRODUCTION SESSION              EVAL SESSION (isolated)     │
@@ -1865,10 +1871,10 @@ export function GuideTab() {
 └─────────────────────────────────────────────────────────────┘`}
           </pre>
           <div className="mt-3 space-y-2">
-            <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">{guideContent.archDesc[t]}</p>
-            <div className="p-2 rounded bg-yellow-500/5 border border-yellow-500/20">
-              <div className="text-[11px] font-bold text-yellow-600 mb-0.5">{t === 'en' ? 'Judge Pinning' : 'Judge 版本固定'}</div>
-              <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">{guideContent.archJudge[t]}</p>
+            <p className="text-meta text-[var(--color-text-muted)] leading-relaxed">{guideContent.archDesc[t]}</p>
+            <div className="p-2 rounded bg-[color-mix(in_srgb,var(--color-status-warning)_5%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warning)_20%,transparent)]">
+              <div className="text-meta font-semibold text-[var(--color-status-warning)] mb-0.5">{t === 'en' ? 'Judge Pinning' : 'Judge 版本固定'}</div>
+              <p className="text-meta text-[var(--color-text-muted)] leading-relaxed">{guideContent.archJudge[t]}</p>
             </div>
           </div>
         </div>
@@ -1877,11 +1883,11 @@ export function GuideTab() {
       {/* Section 4: Coverage Distribution — live source is the Golden Set tab (no hardcoded
           snapshot here: a static dim×cat matrix silently drifts every run — R30#4). */}
       <div className="mb-8">
-        <h2 className="text-[15px] font-semibold mb-1.5">{guideContent.coverage[t]}</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mb-3">{guideContent.coverageDesc[t]}</p>
+        <h2 className="text-heading font-semibold mb-1.5">{guideContent.coverage[t]}</h2>
+        <p className="text-meta text-[var(--color-text-muted)] mb-3">{guideContent.coverageDesc[t]}</p>
         <div className="flex items-center gap-2 border border-[var(--color-border)] rounded-lg p-3 bg-[var(--color-bg)]">
           <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">checklist</span>
-          <p className="text-[11px] text-[var(--color-text-muted)]">
+          <p className="text-meta text-[var(--color-text-muted)]">
             {t === 'en'
               ? 'The live, filterable distribution across all 4 axes lives on the Golden Set tab — it grows every run, so it is never snapshotted here.'
               : '沿全部 4 个轴的 live、可筛选分布在 Golden Set tab — 它每次运行都在增长，故这里不做快照。'}
@@ -1891,17 +1897,17 @@ export function GuideTab() {
 
       {/* Section 5: Case Lifecycle */}
       <div className="mb-8">
-        <h2 className="text-[15px] font-semibold mb-3">{guideContent.lifecycle[t]}</h2>
+        <h2 className="text-heading font-semibold mb-3">{guideContent.lifecycle[t]}</h2>
         <div className="flex items-start gap-0">
           {guideContent.lifecycleStages.map((stage, i) => (
             <div key={i} className="flex items-start flex-1">
               <div className="flex flex-col items-center">
-                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0 ${
-                  i === 0 ? 'bg-red-500' : i === 1 ? 'bg-orange-500' : i === 2 ? 'bg-[var(--color-primary)]' : i === 3 ? 'bg-green-500' : 'bg-gray-400'
+                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-meta font-semibold text-[var(--color-on-accent)] shrink-0 ${
+                  i === 0 ? 'bg-[var(--color-status-error)]' : i === 1 ? 'bg-[var(--color-status-warning)]' : i === 2 ? 'bg-[var(--color-primary)]' : i === 3 ? 'bg-[var(--color-status-success)]' : 'bg-[var(--color-text-muted)]'
                 }`}>{i + 1}</div>
                 <div className="mt-1.5 text-center px-1">
-                  <div className="text-[11px] font-semibold">{stage[t].stage}</div>
-                  <div className="text-[11px] text-[var(--color-text-muted)] leading-tight mt-0.5">{stage[t].desc}</div>
+                  <div className="text-meta font-semibold">{stage[t].stage}</div>
+                  <div className="text-meta text-[var(--color-text-muted)] leading-tight mt-0.5">{stage[t].desc}</div>
                 </div>
               </div>
               {i < 4 && <div className="w-full h-px bg-[var(--color-border)] mt-3.5 mx-0.5" />}
@@ -1912,21 +1918,21 @@ export function GuideTab() {
 
       {/* Section 6: Triggers & Cadence */}
       <div className="mb-8">
-        <h2 className="text-[15px] font-semibold mb-3">{guideContent.triggers[t]}</h2>
+        <h2 className="text-heading font-semibold mb-3">{guideContent.triggers[t]}</h2>
         <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-          <table className="w-full text-[11px]">
+          <table className="w-full text-meta">
             <thead>
               <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">{t === 'en' ? 'Trigger' : '触发条件'}</th>
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">{t === 'en' ? 'Cadence' : '频率'}</th>
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">{t === 'en' ? 'What Runs' : '运行内容'}</th>
+                <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">{t === 'en' ? 'Trigger' : '触发条件'}</th>
+                <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">{t === 'en' ? 'Cadence' : '频率'}</th>
+                <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">{t === 'en' ? 'What Runs' : '运行内容'}</th>
               </tr>
             </thead>
             <tbody>
               {guideContent.triggerItems.map((item, i) => (
                 <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
-                  <td className="px-3 py-2 font-medium">{item[t].trigger}</td>
-                  <td className="px-3 py-2 text-[var(--color-primary)] tabular-nums text-[11px]">{item[t].cadence}</td>
+                  <td className="px-3 py-2 ">{item[t].trigger}</td>
+                  <td className="px-3 py-2 text-[var(--color-primary)] tabular-nums text-meta">{item[t].cadence}</td>
                   <td className="px-3 py-2 text-[var(--color-text-muted)]">{item[t].desc}</td>
                 </tr>
               ))}
@@ -1937,9 +1943,9 @@ export function GuideTab() {
 
       {/* Section 7: Case Anatomy (kept from original, enhanced) */}
       <div className="mb-8">
-        <h2 className="text-[15px] font-semibold mb-1.5">{guideContent.caseExample[t]}</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mb-2.5">{guideContent.caseExampleDesc[t]}</p>
-        <pre className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px] font-mono leading-[1.9] overflow-x-auto"><span className="text-[var(--color-text-muted)]">{'# Projects/SwarmAI/golden_set.yaml'}</span>{'\n'}
+        <h2 className="text-heading font-semibold mb-1.5">{guideContent.caseExample[t]}</h2>
+        <p className="text-meta text-[var(--color-text-muted)] mb-2.5">{guideContent.caseExampleDesc[t]}</p>
+        <pre className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-meta font-mono leading-[1.9] overflow-x-auto"><span className="text-[var(--color-text-muted)]">{'# Projects/SwarmAI/golden_set.yaml'}</span>{'\n'}
 {'\n'}
 {'- '}<span className="text-[var(--color-primary)]">id:</span>{' GS_EXAMPLE\n'}
 {'  '}<span className="text-[var(--color-primary)]">category:</span>{' compliance\n'}
@@ -1966,25 +1972,25 @@ export function GuideTab() {
         </pre>
         <div className="grid grid-cols-3 gap-2 mt-3">
           <div className="p-2 rounded border border-[var(--color-primary)]/20 bg-[var(--color-primary)]/5">
-            <div className="text-[11px] font-bold text-[var(--color-primary)] mb-0.5">{t === 'en' ? 'LAYER 1: Trajectory' : '第一层：轨迹'}</div>
-            <div className="text-[11px] text-[var(--color-text-muted)]">{t === 'en' ? 'Right tools, right order?' : '正确的工具，正确的顺序？'}</div>
+            <div className="text-meta font-semibold text-[var(--color-primary)] mb-0.5">{t === 'en' ? 'LAYER 1: Trajectory' : '第一层：轨迹'}</div>
+            <div className="text-meta text-[var(--color-text-muted)]">{t === 'en' ? 'Right tools, right order?' : '正确的工具，正确的顺序？'}</div>
           </div>
-          <div className="p-2 rounded border border-green-500/20 bg-green-500/5">
-            <div className="text-[11px] font-bold text-green-500 mb-0.5">{t === 'en' ? 'LAYER 2: Assertions' : '第二层：断言'}</div>
-            <div className="text-[11px] text-[var(--color-text-muted)]">{t === 'en' ? 'LLM-judge verifies behavior' : 'LLM-judge 验证行为'}</div>
+          <div className="p-2 rounded border border-[color-mix(in_srgb,var(--color-status-success)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-success)_5%,transparent)]">
+            <div className="text-meta font-semibold text-[var(--color-status-success)] mb-0.5">{t === 'en' ? 'LAYER 2: Assertions' : '第二层：断言'}</div>
+            <div className="text-meta text-[var(--color-text-muted)]">{t === 'en' ? 'LLM-judge verifies behavior' : 'LLM-judge 验证行为'}</div>
           </div>
-          <div className="p-2 rounded border border-yellow-500/20 bg-yellow-500/5">
-            <div className="text-[11px] font-bold text-yellow-500 mb-0.5">{t === 'en' ? 'LAYER 3: Response' : '第三层：响应'}</div>
-            <div className="text-[11px] text-[var(--color-text-muted)]">{t === 'en' ? 'Programmatic keyword match' : '程序化关键词匹配'}</div>
+          <div className="p-2 rounded border border-[color-mix(in_srgb,var(--color-status-warning)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_5%,transparent)]">
+            <div className="text-meta font-semibold text-[var(--color-status-warning)] mb-0.5">{t === 'en' ? 'LAYER 3: Response' : '第三层：响应'}</div>
+            <div className="text-meta text-[var(--color-text-muted)]">{t === 'en' ? 'Programmatic keyword match' : '程序化关键词匹配'}</div>
           </div>
         </div>
       </div>
 
       {/* Section 8: The Flywheel */}
       <div className="mb-8">
-        <h2 className="text-[15px] font-semibold mb-3">{guideContent.flywheel[t]}</h2>
+        <h2 className="text-heading font-semibold mb-3">{guideContent.flywheel[t]}</h2>
         <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-          <pre className="text-[11px] font-mono text-center text-[var(--color-text-secondary)] leading-relaxed whitespace-pre">
+          <pre className="text-meta font-mono text-center text-[var(--color-text-secondary)] leading-relaxed whitespace-pre">
 {t === 'en'
   ? `Mistake → Correction → Golden Set Case → Eval Detects Recurrence → Alert → Fix → Stronger
      ↑                                                                                       │
@@ -1993,7 +1999,7 @@ export function GuideTab() {
    ↑                                                                          │
    └────────────────────────────── 自增长覆盖 ─────────────────────────────────┘`}
           </pre>
-          <div className="mt-3 p-2.5 rounded-md bg-[var(--color-hover)] text-[11px] text-[var(--color-text-muted)] leading-relaxed">
+          <div className="mt-3 p-2.5 rounded-md bg-[var(--color-hover)] text-meta text-[var(--color-text-muted)] leading-relaxed">
             <strong className="text-[var(--color-text-secondary)]">{t === 'en' ? 'Key insight:' : '核心洞察：'}</strong>{' '}
             {t === 'en'
               ? 'Every correction the user makes becomes a permanent behavioral test. The eval set is not maintained by QA — it grows organically from real failures. Coverage compounds monotonically.'
@@ -2004,20 +2010,20 @@ export function GuideTab() {
 
       {/* Section 9: vs Enterprise (enhanced) */}
       <div className="mb-8">
-        <h2 className="text-[15px] font-semibold mb-3">{guideContent.comparison[t]}</h2>
+        <h2 className="text-heading font-semibold mb-3">{guideContent.comparison[t]}</h2>
         <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-          <table className="w-full text-[11px]">
+          <table className="w-full text-meta">
             <thead>
               <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]"></th>
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">{t === 'en' ? 'Enterprise Agent Eval' : '企业级 Agent Eval'}</th>
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-primary)]">SwarmAI OS Eval</th>
+                <th className="text-left px-3 py-2 text-[var(--color-text-muted)]"></th>
+                <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">{t === 'en' ? 'Enterprise Agent Eval' : '企业级 Agent Eval'}</th>
+                <th className="text-left px-3 py-2 text-[var(--color-primary)]">SwarmAI OS Eval</th>
               </tr>
             </thead>
             <tbody>
               {guideContent.comparisonRows.map((row, i) => (
                 <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
-                  <td className="px-3 py-2 font-medium">{row[t].dim}</td>
+                  <td className="px-3 py-2 ">{row[t].dim}</td>
                   <td className="px-3 py-2 text-[var(--color-text-muted)]">{row[t].enterprise}</td>
                   <td className="px-3 py-2">{row[t].ours}</td>
                 </tr>
@@ -2029,18 +2035,18 @@ export function GuideTab() {
 
       {/* Section 10: Intelligence Velocity */}
       <div className="mb-8">
-        <h2 className="text-[15px] font-semibold mb-1.5">{guideContent.iv[t]}</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mb-3 leading-relaxed">{guideContent.ivDesc[t]}</p>
+        <h2 className="text-heading font-semibold mb-1.5">{guideContent.iv[t]}</h2>
+        <p className="text-meta text-[var(--color-text-muted)] mb-3 leading-relaxed">{guideContent.ivDesc[t]}</p>
         <div className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] mb-3">
-          <pre className="text-[11px] font-mono text-center text-[var(--color-primary)] font-semibold whitespace-pre-wrap overflow-x-auto">{guideContent.ivFormula[t]}</pre>
+          <pre className="text-meta font-mono text-center text-[var(--color-primary)] font-semibold whitespace-pre-wrap overflow-x-auto">{guideContent.ivFormula[t]}</pre>
         </div>
         <div className="grid grid-cols-3 gap-2">
           {guideContent.ivComponents.map((comp, i) => {
             const c = comp[t] ?? comp['en'];
             return (
               <div key={i} className="p-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-                <div className="text-[11px] font-bold text-[var(--color-text-secondary)] mb-1">{c.name}</div>
-                <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">{c.desc}</div>
+                <div className="text-meta font-semibold text-[var(--color-text-secondary)] mb-1">{c.name}</div>
+                <div className="text-meta text-[var(--color-text-muted)] leading-relaxed">{c.desc}</div>
               </div>
             );
           })}
@@ -2049,17 +2055,17 @@ export function GuideTab() {
 
       {/* Section 11: How to Write a Case */}
       <div className="mb-8">
-        <h2 className="text-[15px] font-semibold mb-1.5">{guideContent.howToWrite[t]}</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mb-3">{guideContent.howToWriteDesc[t]}</p>
+        <h2 className="text-heading font-semibold mb-1.5">{guideContent.howToWrite[t]}</h2>
+        <p className="text-meta text-[var(--color-text-muted)] mb-3">{guideContent.howToWriteDesc[t]}</p>
         <div className="space-y-3">
           {guideContent.howToWriteSteps.map((step, i) => (
             <div key={i} className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
               <div className="flex items-start gap-2">
-                <span className="text-lg shrink-0" aria-hidden="true">{step.icon}</span>
+                <span className="material-symbols-outlined icon-lg shrink-0 text-[var(--color-primary)]" aria-hidden="true">{step.icon}</span>
                 <div className="flex-1 min-w-0">
-                  <div className="text-[11px] font-semibold mb-1">{(step[t] ?? step['en']).title}</div>
-                  <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed mb-2">{(step[t] ?? step['en']).desc}</div>
-                  <pre className="text-[11px] font-mono p-2 rounded bg-[var(--color-hover)] text-[var(--color-text-secondary)] whitespace-pre-wrap">{(step[t] ?? step['en']).example}</pre>
+                  <div className="text-meta font-semibold mb-1">{(step[t] ?? step['en']).title}</div>
+                  <div className="text-meta text-[var(--color-text-muted)] leading-relaxed mb-2">{(step[t] ?? step['en']).desc}</div>
+                  <pre className="text-meta font-mono p-2 rounded bg-[var(--color-hover)] text-[var(--color-text-secondary)] whitespace-pre-wrap">{(step[t] ?? step['en']).example}</pre>
                 </div>
               </div>
             </div>
@@ -2073,32 +2079,32 @@ export function GuideTab() {
 // ─── Shared Components ────────────────────────────────────────────────────────
 
 function MetricCard({ label, value, color, sub }: { label: string; value: string; color: string; sub: string }) {
-  const colorClass = color === 'green' ? 'text-green-500' : color === 'yellow' ? 'text-yellow-500' : color === 'red' ? 'text-red-500' : 'text-[var(--color-text)]';
+  const colorClass = color === 'green' ? 'text-[var(--color-status-success)]' : color === 'yellow' ? 'text-[var(--color-status-warning)]' : color === 'red' ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text)]';
   return (
     <div className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-      <div className="text-[11px] text-[var(--color-text-muted)] mb-1">{label}</div>
-      <div className={`text-xl font-bold tabular-nums ${colorClass}`}>{value}</div>
-      <div className="text-[11px] text-[var(--color-text-muted)] mt-1">{sub}</div>
+      <div className="text-meta text-[var(--color-text-muted)] mb-1">{label}</div>
+      <div className={`text-display font-semibold tabular-nums ${colorClass}`}>{value}</div>
+      <div className="text-meta text-[var(--color-text-muted)] mt-1">{sub}</div>
     </div>
   );
 }
 
 function StatusBadge({ status }: { status?: string }) {
-  if (!status) return <span className="text-[11px] text-[var(--color-text-muted)]">—</span>;
-  const cls = status === 'passed' ? 'bg-green-500/10 text-green-500'
-    : status === 'failed' ? 'bg-red-500/10 text-red-500'
+  if (!status) return <span className="text-meta text-[var(--color-text-muted)]">—</span>;
+  const cls = status === 'passed' ? 'bg-[color-mix(in_srgb,var(--color-status-success)_10%,transparent)] text-[var(--color-status-success)]'
+    : status === 'failed' ? 'bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] text-[var(--color-status-error)]'
     : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]';
-  return <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-semibold uppercase ${cls}`}>{status}</span>;
+  return <span className={`inline-block px-1.5 py-0.5 rounded text-meta font-semibold uppercase ${cls}`}>{status}</span>;
 }
 
 // Distinguishes curated public cases (ship in the repo) from private instance
 // cases (gitignored). The single most-requested distinction for the golden set.
 function OriginBadge({ origin }: { origin?: string }) {
-  if (!origin) return <span className="text-[11px] text-[var(--color-text-muted)]">—</span>;
+  if (!origin) return <span className="text-meta text-[var(--color-text-muted)]">—</span>;
   const isPublic = origin === 'public';
-  const cls = isPublic ? 'bg-green-500/10 text-green-600' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]';
+  const cls = isPublic ? 'bg-[color-mix(in_srgb,var(--color-status-success)_10%,transparent)] text-[var(--color-status-success)]' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]';
   return (
-    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold ${cls}`} title={isPublic ? 'Public — ships in the repo' : 'Private — gitignored instance case'}>
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta font-semibold ${cls}`} title={isPublic ? 'Public — ships in the repo' : 'Private — gitignored instance case'}>
       <span className="material-symbols-outlined icon-xs">{isPublic ? 'public' : 'lock'}</span>
       {origin}
     </span>
@@ -2108,16 +2114,16 @@ function OriginBadge({ origin }: { origin?: string }) {
 function GuideCard({ icon, title, desc }: { icon: string; title: string; desc: string }) {
   return (
     <div className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-      <div className="text-base mb-1">{icon}</div>
-      <div className="text-xs font-semibold mb-1">{title}</div>
-      <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">{desc}</div>
+      <div className="material-symbols-outlined icon-lg mb-1 text-[var(--color-primary)]">{icon}</div>
+      <div className="text-small font-semibold mb-1">{title}</div>
+      <div className="text-meta text-[var(--color-text-muted)] leading-relaxed">{desc}</div>
     </div>
   );
 }
 
 function Loading() {
   return (
-    <div className="flex items-center justify-center flex-1 min-h-[10rem] text-sm text-[var(--color-text-muted)]">
+    <div className="flex items-center justify-center flex-1 min-h-[10rem] text-body text-[var(--color-text-muted)]">
       Loading eval data...
     </div>
   );
@@ -2125,7 +2131,7 @@ function Loading() {
 
 function ErrorState({ message }: { message: string }) {
   return (
-    <div className="flex items-center justify-center flex-1 min-h-[10rem] text-sm text-red-400">
+    <div className="flex items-center justify-center flex-1 min-h-[10rem] text-body text-[var(--color-status-error)]">
       {message}
     </div>
   );
@@ -2154,7 +2160,7 @@ function Sparkline({ values, height = 32, color = 'var(--color-primary)', dates,
     <div className={axis ? 'flex items-stretch gap-1.5' : ''}>
       {/* Optional y-axis min/max labels (only when axis requested) */}
       {axis && (
-        <div className="flex flex-col justify-between text-[8px] text-[var(--color-text-muted)] tabular-nums py-0.5 shrink-0" style={{ height }}>
+        <div className="flex flex-col justify-between text-meta text-[var(--color-text-muted)] tabular-nums py-0.5 shrink-0" style={{ height }}>
           <span>{Math.round(max)}</span>
           <span>{Math.round(min)}</span>
         </div>
@@ -2210,24 +2216,24 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
   return (
     <div className="w-[380px] border-l border-[var(--color-border)] bg-[var(--color-card)] overflow-y-auto shrink-0">
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-card)] z-10">
-        <span className="text-xs font-semibold font-mono">{caseId}</span>
-        <button onClick={onClose} className="p-1 rounded hover:bg-[var(--color-hover)]">
+        <span className="text-small font-semibold font-mono">{caseId}</span>
+        <button onClick={onClose} className="icon-btn hover:bg-[var(--color-hover)]">
           <span className="material-symbols-outlined icon-sm">close</span>
         </button>
       </div>
 
       {isLoading && <Loading />}
       {detail && (
-        <div className="p-4 space-y-4 text-xs">
+        <div className="p-4 space-y-4 text-small">
           {/* Title (editable) */}
           <div>
-            <div className="text-[11px] text-[var(--color-text-muted)] uppercase mb-1">Title</div>
+            <div className="text-meta text-[var(--color-text-muted)] uppercase mb-1">Title</div>
             {editing ? (
               <div className="flex gap-1">
                 <input
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
-                  className="flex-1 px-2 py-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+                  className="flex-1 px-2 py-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-small"
                   autoFocus
                 />
                 <button onClick={saveEdit} className="btn-sm btn-primary">Save</button>
@@ -2235,7 +2241,7 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
               </div>
             ) : (
               <div className="flex items-center gap-2">
-                <span className="font-medium">{detail.title}</span>
+                <span className="">{detail.title}</span>
                 <button onClick={startEdit} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
                   <span className="material-symbols-outlined icon-sm">edit</span>
                 </button>
@@ -2246,30 +2252,30 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {/* Metadata Grid — 2×3 */}
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <div className="text-[11px] text-[var(--color-text-muted)] uppercase">Category</div>
-              <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[11px]">{detail.category}</span>
+              <div className="text-meta text-[var(--color-text-muted)] uppercase">Category</div>
+              <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-meta">{detail.category}</span>
             </div>
             <div>
-              <div className="text-[11px] text-[var(--color-text-muted)] uppercase">Dimension</div>
-              <span className="text-[11px]">{detail.dimension?.replace(/_/g, ' ')}</span>
+              <div className="text-meta text-[var(--color-text-muted)] uppercase">Dimension</div>
+              <span className="text-meta">{detail.dimension?.replace(/_/g, ' ')}</span>
             </div>
             <div>
-              <div className="text-[11px] text-[var(--color-text-muted)] uppercase">Level</div>
-              <span className="text-[11px]">{detail.level || '—'}</span>
+              <div className="text-meta text-[var(--color-text-muted)] uppercase">Level</div>
+              <span className="text-meta">{detail.level || '—'}</span>
             </div>
             <div>
-              <div className="text-[11px] text-[var(--color-text-muted)] uppercase">Tier</div>
-              <span className="text-[11px]">{detail.tier || 'active'}</span>
+              <div className="text-meta text-[var(--color-text-muted)] uppercase">Tier</div>
+              <span className="text-meta">{detail.tier || 'active'}</span>
             </div>
             <div>
-              <div className="text-[11px] text-[var(--color-text-muted)] uppercase">Source</div>
-              <span className="text-[11px] font-mono">{detail.source || '—'}</span>
+              <div className="text-meta text-[var(--color-text-muted)] uppercase">Source</div>
+              <span className="text-meta font-mono">{detail.source || '—'}</span>
             </div>
             <div>
-              <div className="text-[11px] text-[var(--color-text-muted)] uppercase">Evaluators</div>
+              <div className="text-meta text-[var(--color-text-muted)] uppercase">Evaluators</div>
               <div className="flex flex-wrap gap-0.5 mt-0.5">
                 {(detail.evaluators || []).map((ev, i) => (
-                  <span key={i} className="px-1 py-0.5 rounded bg-[var(--color-hover)] text-[11px] font-mono">{ev}</span>
+                  <span key={i} className="px-1 py-0.5 rounded bg-[var(--color-hover)] text-meta font-mono">{ev}</span>
                 ))}
               </div>
             </div>
@@ -2278,10 +2284,10 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {/* Affected By */}
           {detail.affected_by && detail.affected_by.length > 0 && (
             <div>
-              <div className="text-[11px] text-[var(--color-text-muted)] uppercase mb-1">Affected By</div>
+              <div className="text-meta text-[var(--color-text-muted)] uppercase mb-1">Affected By</div>
               <div className="flex flex-wrap gap-1">
                 {detail.affected_by.map((a, i) => (
-                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[11px]">{a}</span>
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-meta">{a}</span>
                 ))}
               </div>
             </div>
@@ -2290,10 +2296,10 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {/* Scenario */}
           {detail.scenario?.turns && detail.scenario.turns.length > 0 && (
             <div>
-              <div className="text-[11px] text-[var(--color-text-muted)] uppercase mb-1">Scenario</div>
+              <div className="text-meta text-[var(--color-text-muted)] uppercase mb-1">Scenario</div>
               <div className="p-2.5 rounded bg-[var(--color-bg)] border border-[var(--color-border)]">
                 {detail.scenario.turns.map((t, i) => (
-                  <div key={i} className="text-[11px] font-mono leading-relaxed">
+                  <div key={i} className="text-meta font-mono leading-relaxed">
                     <span className="text-[var(--color-text-muted)]">→ </span>{t.input}
                   </div>
                 ))}
@@ -2305,14 +2311,14 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {detail.expected_trajectory && detail.expected_trajectory.length > 0 && (
             <div className="p-2.5 rounded border border-[var(--color-primary)]/20 bg-[var(--color-primary)]/5">
               <div className="flex items-center justify-between mb-1.5">
-                <div className="text-[11px] font-bold text-[var(--color-primary)] uppercase">Layer 1: Trajectory</div>
+                <div className="text-meta font-semibold text-[var(--color-primary)] uppercase">Layer 1: Trajectory</div>
                 {detail.trajectory_match && (
-                  <span className="text-[11px] text-[var(--color-text-muted)] font-mono">{detail.trajectory_match}</span>
+                  <span className="text-meta text-[var(--color-text-muted)] font-mono">{detail.trajectory_match}</span>
                 )}
               </div>
               <div className="flex flex-wrap gap-1">
                 {detail.expected_trajectory.map((t, i) => (
-                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] text-[11px] font-mono">{t}</span>
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] text-meta font-mono">{t}</span>
                 ))}
               </div>
             </div>
@@ -2320,12 +2326,12 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
 
           {/* Layer 2: Assertions */}
           {detail.assertions && detail.assertions.length > 0 && (
-            <div className="p-2.5 rounded border border-green-500/20 bg-green-500/5">
-              <div className="text-[11px] font-bold text-green-500 uppercase mb-1.5">Layer 2: Assertions</div>
+            <div className="p-2.5 rounded border border-[color-mix(in_srgb,var(--color-status-success)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-success)_5%,transparent)]">
+              <div className="text-meta font-semibold text-[var(--color-status-success)] uppercase mb-1.5">Layer 2: Assertions</div>
               <ul className="space-y-1">
                 {detail.assertions.map((a, i) => (
-                  <li key={i} className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed flex gap-1.5">
-                    <span className="text-green-500 shrink-0">•</span>
+                  <li key={i} className="text-meta text-[var(--color-text-secondary)] leading-relaxed flex gap-1.5">
+                    <span className="text-[var(--color-status-success)] shrink-0">•</span>
                     <span>{a}</span>
                   </li>
                 ))}
@@ -2335,11 +2341,11 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
 
           {/* Layer 3: Expected Response Contains */}
           {detail.expected_response_contains && detail.expected_response_contains.length > 0 && (
-            <div className="p-2.5 rounded border border-yellow-500/20 bg-yellow-500/5">
-              <div className="text-[11px] font-bold text-yellow-500 uppercase mb-1.5">Layer 3: Response</div>
+            <div className="p-2.5 rounded border border-[color-mix(in_srgb,var(--color-status-warning)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_5%,transparent)]">
+              <div className="text-meta font-semibold text-[var(--color-status-warning)] uppercase mb-1.5">Layer 3: Response</div>
               <div className="flex flex-wrap gap-1">
                 {detail.expected_response_contains.map((kw, i) => (
-                  <span key={i} className="px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 text-[11px] font-mono">{kw}</span>
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] text-[var(--color-status-warning)] text-meta font-mono">{kw}</span>
                 ))}
               </div>
             </div>
@@ -2348,10 +2354,10 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {/* Tags */}
           {detail.tags && detail.tags.length > 0 && (
             <div>
-              <div className="text-[11px] text-[var(--color-text-muted)] uppercase mb-1">Tags</div>
+              <div className="text-meta text-[var(--color-text-muted)] uppercase mb-1">Tags</div>
               <div className="flex flex-wrap gap-1">
                 {detail.tags.map((tag, i) => (
-                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[11px] text-[var(--color-text-muted)]">{tag}</span>
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-meta text-[var(--color-text-muted)]">{tag}</span>
                 ))}
               </div>
             </div>
@@ -2360,21 +2366,21 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
           {/* Promoted From */}
           {detail.promoted_from && (
             <div>
-              <div className="text-[11px] text-[var(--color-text-muted)] uppercase mb-1">Promoted From</div>
-              <span className="text-[11px] text-[var(--color-text-muted)] font-mono">{detail.promoted_from}</span>
+              <div className="text-meta text-[var(--color-text-muted)] uppercase mb-1">Promoted From</div>
+              <span className="text-meta text-[var(--color-text-muted)] font-mono">{detail.promoted_from}</span>
             </div>
           )}
 
           {/* Run History */}
           {detail.history && detail.history.length > 0 && (
             <div>
-              <div className="text-[11px] text-[var(--color-text-muted)] uppercase mb-1">Run History</div>
+              <div className="text-meta text-[var(--color-text-muted)] uppercase mb-1">Run History</div>
               <div className="space-y-1">
                 {detail.history.map((h, i) => (
                   <div key={i} className="flex items-center gap-2 p-1.5 rounded bg-[var(--color-bg)]">
                     <StatusBadge status={h.status} />
-                    <span className="tabular-nums text-[11px]">{h.triggered_at?.slice(0, 10)}</span>
-                    {h.notes && <span className="text-[11px] text-[var(--color-text-muted)] truncate">{h.notes}</span>}
+                    <span className="tabular-nums text-meta">{h.triggered_at?.slice(0, 10)}</span>
+                    {h.notes && <span className="text-meta text-[var(--color-text-muted)] truncate">{h.notes}</span>}
                   </div>
                 ))}
               </div>
@@ -2429,57 +2435,57 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-scrim-strong)] p-4" onClick={onClose}>
       <div className="w-full max-w-md bg-[var(--color-card)] rounded-xl border border-[var(--color-border)] shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-sm font-semibold mb-4">Add Golden Set Case</h3>
+        <h3 className="text-body font-semibold mb-4">Add Golden Set Case</h3>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
-              <span className="text-[11px] text-[var(--color-text-muted)] uppercase">ID</span>
+              <span className="text-meta text-[var(--color-text-muted)] uppercase">ID</span>
               <input
                 value={form.id}
                 onChange={(e) => setForm({ ...form, id: e.target.value })}
                 placeholder="GS021"
                 required
-                className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+                className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-small"
               />
             </label>
             <label className="block">
-              <span className="text-[11px] text-[var(--color-text-muted)] uppercase">Category</span>
+              <span className="text-meta text-[var(--color-text-muted)] uppercase">Category</span>
               <select
                 value={form.category}
                 onChange={(e) => setForm({ ...form, category: e.target.value })}
-                className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+                className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-small"
               >
                 {categories.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </label>
           </div>
           <label className="block">
-            <span className="text-[11px] text-[var(--color-text-muted)] uppercase">Title</span>
+            <span className="text-meta text-[var(--color-text-muted)] uppercase">Title</span>
             <input
               value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               placeholder="Brief description of expected behavior"
               required
-              className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+              className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-small"
             />
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
-              <span className="text-[11px] text-[var(--color-text-muted)] uppercase">Dimension</span>
+              <span className="text-meta text-[var(--color-text-muted)] uppercase">Dimension</span>
               <input
                 value={form.dimension}
                 onChange={(e) => setForm({ ...form, dimension: e.target.value })}
-                className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+                className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-small"
               />
             </label>
             <label className="block">
-              <span className="text-[11px] text-[var(--color-text-muted)] uppercase">Evaluator</span>
+              <span className="text-meta text-[var(--color-text-muted)] uppercase">Evaluator</span>
               <select
                 value={form.evaluators}
                 onChange={(e) => setForm({ ...form, evaluators: e.target.value })}
-                className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+                className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-small"
               >
                 <option value="file_contains">file_contains</option>
                 <option value="canary_pass">canary_pass</option>
@@ -2489,12 +2495,12 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
             </label>
           </div>
           <label className="block">
-            <span className="text-[11px] text-[var(--color-text-muted)] uppercase">Affected By (comma-separated)</span>
+            <span className="text-meta text-[var(--color-text-muted)] uppercase">Affected By (comma-separated)</span>
             <input
               value={form.affected_by}
               onChange={(e) => setForm({ ...form, affected_by: e.target.value })}
               placeholder="AGENT.md, STEERING.md"
-              className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+              className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-small"
             />
           </label>
           <div className="flex justify-end gap-2 pt-2">
@@ -2508,7 +2514,7 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
             </button>
           </div>
           {createCase.isError && (
-            <div className="text-[11px] text-red-500 mt-1">
+            <div className="text-meta text-[var(--color-status-error)] mt-1">
               {(createCase.error as Error)?.message || 'Failed to create case'}
             </div>
           )}

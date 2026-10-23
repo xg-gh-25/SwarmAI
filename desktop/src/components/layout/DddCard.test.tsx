@@ -98,7 +98,7 @@ describe('DddCard — compact (gallery, verdict-first two-zone)', () => {
     // non-important border-t-2 loses to CSS source order. Assert the important form so a
     // regression to the colliding version is caught.
     expect(screen.getByTestId('dddcard-SwarmAI').className).toContain('!border-t-2');
-    expect(screen.getByTestId('dddcard-SwarmAI').className).toContain('!border-t-[#a371f7]');
+    expect(screen.getByTestId('dddcard-SwarmAI').className).toContain('!border-t-[var(--color-primary)]');
 
     // a non-self card: no tag, no violet border
     rerender(

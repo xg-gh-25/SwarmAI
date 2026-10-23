@@ -287,3 +287,14 @@ overlay 里只允许用下面这些角色，全部是已有的主题变量，自
 - 后端：`core/workspace_locations.py` 加 `/workspace/locations`、`/workspace/summary`；tree / expand / file 带 `location`。只读本地 main，不读 run 或 session，git 走 `nav` 池并带 `GIT_OPTIONAL_LOCKS=0`。
 - 取数：`ExplorerProvider` 从 app 外壳移进 overlay，去掉 30 秒轮询。打开 overlay 才取数，切到哪个位置只取哪个位置。
 - 界面：新文件 `WorkspaceOverlay`、`RepoPane`、`workspaceParts` 都已加进棘轮，计数为零。SwarmWS 原来的树组件（`VirtualizedTree` 等）这一轮没迁移视觉，留给 S7。
+
+**S7**（其余 overlay 和 nav 本身，2026-10-23）：棘轮里所有文件归零，`KNOWN` 变成空表，也就是这套视觉系统已经覆盖全部文件。
+- 机械部分：`navcodemod.py` 处理了 19 个文件，约 600 处字号、120 处调色板颜色、95 处字重、100 处十六进制颜色。
+- 手工部分：
+  - 没有对应状色角色的颜色，在 `index.css` 里加了一组主题无关的 token，各定义一次：`--color-on-accent`、`--color-scrim(-medium/-strong)`、`--shadow-overlay`、`--shadow-spout`、`--color-brand-spark/ink`。
+  - 只在深色主题下才对的那些十六进制底色、边框色，改成按状色调的 `color-mix`。
+  - 约 90 个 emoji 改成 Material 图标或者删掉，注释里的也一样。
+  - 自绘按钮：tab 和分段筛选补上 `role="tab"` / `role="radio"`，开关补上 `role="switch"`（棘轮把 switch 也算作例外），其余改用 btn-* / icon-btn 尺度。
+- Workspace 的 SwarmWS 树组件（`VirtualizedTree`、`TreeNodeRow`、`ZoneSeparator`、`ExplorerHeader`、`ExplorerToolbar`、`FileContextMenu`、`SectionedExplorer`、`OpenFileButton`、`WorkspaceExplorer`）也加进了棘轮并归零。行内 `fontSize` 改成字号档位类，`fontWeight` 700/500 改成 600/400。
+- 一共 11 条测试按新的样式改了期望值：断言字面颜色的、断言 emoji 的、按 button 角色查找元素的。这些都是有意的视觉变化。
+- 顺带修掉了改动文件里本来就有的 4 个 eslint error。

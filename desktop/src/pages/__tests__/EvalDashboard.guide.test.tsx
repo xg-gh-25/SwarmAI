@@ -81,7 +81,7 @@ describe('GuideTab fact freshness', () => {
     // default = EN
     expect(screen.getByAltText(/eval.*architecture/i).getAttribute('src')).toBe('/eval-architecture.svg');
     // toggle to Chinese
-    fireEvent.click(screen.getByRole('button', { name: '中文' }));
+    fireEvent.click(screen.getByRole('radio', { name: '中文' }));
     expect(screen.getByAltText(/eval.*architecture/i).getAttribute('src')).toBe('/eval-architecture-zh.svg');
     expect(screen.getByAltText(/one run end to end|sequence/i).getAttribute('src')).toBe('/eval-sequence-zh.svg');
   });

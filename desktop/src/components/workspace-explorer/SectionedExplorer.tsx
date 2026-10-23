@@ -72,7 +72,7 @@ function SectionHeader({
   return (
     <button
       onClick={onToggle}
-      className="w-full flex items-center gap-1.5 px-3.5 py-1 text-[11px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-dim)] cursor-pointer hover:text-[var(--color-text-muted)] transition-colors border-t border-[var(--color-border)] first:border-t-0"
+      className="w-full flex items-center gap-1.5 px-3.5 py-1 text-meta font-semibold uppercase tracking-[0.8px] text-[var(--color-text-dim)] cursor-pointer hover:text-[var(--color-text-muted)] transition-colors border-t border-[var(--color-border)] first:border-t-0"
     >
       <span
         className="material-symbols-outlined icon-xs transition-transform duration-150"
@@ -83,9 +83,9 @@ function SectionHeader({
       {title}
       {count > 0 && (
         <span
-          className={`ml-auto text-[11px] font-medium px-1.5 rounded-full ${
+          className={`ml-auto text-meta px-1.5 rounded-full ${
             badgeColor === 'green'
-              ? 'bg-[rgba(63,185,80,0.12)] text-[#3fb950]'
+              ? 'bg-[color-mix(in_srgb,var(--color-status-success)_12%,transparent)] text-[var(--color-status-success)]'
               : 'bg-[var(--color-hover)] text-[var(--color-text-dim)]'
           }`}
         >
@@ -123,8 +123,8 @@ function WorkingFileItem({
 
   return (
     <div
-      className="flex items-center gap-1 py-[2px] cursor-pointer hover:bg-[var(--color-hover)] transition-colors border-l-2 border-l-[#3fb950]"
-      style={{ paddingLeft: 8, fontSize: '13px', lineHeight: '32px' }}
+      className="flex items-center gap-1 py-[2px] cursor-pointer hover:bg-[var(--color-hover)] transition-colors border-l-2 border-l-[var(--color-status-success)] text-body"
+      style={{ paddingLeft: 8, lineHeight: '32px' }}
       onDoubleClick={handleDoubleClick}
     >
       <span className="file-icon-slot" aria-hidden="true">
@@ -140,13 +140,13 @@ function WorkingFileItem({
         {node.name}
       </span>
       {parentName && (
-        <span className="text-[11px] font-mono text-[var(--color-text-dim)] truncate flex-shrink-0" style={{ maxWidth: 80 }}>
+        <span className="text-meta font-mono text-[var(--color-text-dim)] truncate flex-shrink-0" style={{ maxWidth: 80 }}>
           {parentName}
         </span>
       )}
       {badge && (
         <span
-          className="text-[11px] font-medium px-1 rounded-[3px] flex-shrink-0 ml-auto"
+          className="text-meta px-1 rounded-[3px] flex-shrink-0 ml-auto"
           style={{ color: badge.color, backgroundColor: badge.bg }}
         >
           {badge.label}
@@ -169,7 +169,7 @@ export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat, s
       {showWorkingFiles && <div
         className="flex-shrink-0 mx-2 mt-1.5 mb-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-card,var(--color-bg-chrome))]"
         data-testid="working-files-card"
-        style={{ display: 'flex', flexDirection: 'column', borderLeft: '3px solid rgba(63,185,80,0.5)' }}
+        style={{ display: 'flex', flexDirection: 'column', borderLeft: '3px solid color-mix(in srgb, var(--color-status-success) 50%, transparent)' }}
       >
         <SectionHeader
           title="Working Files"
@@ -186,7 +186,7 @@ export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat, s
           </div>
         )}
         {workingOpen && workingFiles.length === 0 && (
-          <div className="px-3.5 py-2 text-[11px] text-[var(--color-text-dim)] italic">
+          <div className="px-3.5 py-2 text-meta text-[var(--color-text-dim)] italic">
             No uncommitted changes
           </div>
         )}

@@ -46,23 +46,23 @@ interface GovernsOption {
 }
 
 const GOVERNS_OPTIONS: GovernsOption[] = [
-  { kind: 'codebase', icon: '📦', label: 'A codebase' },
-  { kind: 'data', icon: '📊', label: 'A data source' },
-  { kind: 'documents', icon: '📚', label: 'Documents' },
-  { kind: 'service', icon: '🔌', label: 'A service / process' },
-  { kind: 'idea', icon: '💭', label: 'Just an idea — nothing yet' },
+  { kind: 'codebase', icon: 'code', label: 'A codebase' },
+  { kind: 'data', icon: 'database', label: 'A data source' },
+  { kind: 'documents', icon: 'library_books', label: 'Documents' },
+  { kind: 'service', icon: 'settings_input_component', label: 'A service / process' },
+  { kind: 'idea', icon: 'lightbulb', label: 'Just an idea — nothing yet' },
 ];
 
 const ROLE_STYLE: Record<StarterRole, { label: string; cls: string }> = {
   GOVERN: { label: 'GOVERN', cls: 'text-[var(--color-primary)] border-[var(--color-primary)]/40 bg-[var(--color-primary)]/12' },
-  DISTILL: { label: 'DISTILL', cls: 'text-[#c9a15f] border-[#c9a15f]/40 bg-[#c9a15f]/12' },
-  SHELF: { label: 'SHELF', cls: 'text-[#7c9bd6] border-[#7c9bd6]/40 bg-[#7c9bd6]/12' },
+  DISTILL: { label: 'DISTILL', cls: 'text-[var(--color-status-warning)] border-[color-mix(in_srgb,var(--color-status-warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_12%,transparent)]' },
+  SHELF: { label: 'SHELF', cls: 'text-[var(--color-primary)] border-[color-mix(in_srgb,var(--color-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-primary)_12%,transparent)]' },
 };
 
 const ROLE_CYCLE: StarterRole[] = ['GOVERN', 'DISTILL', 'SHELF'];
 
 const KIND_ICON: Record<string, string> = {
-  repo: '📦', folder: '📁', file: '📄', link: '🔗', text: '📝',
+  repo: 'code', folder: 'folder', file: 'description', link: 'link', text: 'notes',
 };
 
 let itemSeq = 0;
@@ -262,10 +262,10 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
       <div className="flex-1 min-h-0 flex flex-col" data-testid="new-brain-overlay">
         {/* Declaration + lifecycle ribbon */}
         <div className="px-6 pt-4 pb-3 border-b border-[var(--color-border)]">
-          <p className="text-[13px] text-[var(--color-text-muted)] max-w-[640px]">
+          <p className="text-body text-[var(--color-text-muted)] max-w-[640px]">
             A brain is a <span className="text-[var(--color-text)] font-semibold">domain that gets smarter every time you work in it</span> — its knowledge, skills &amp; memory compound. Not a folder. Name it, give me what you already have; I set it up with you in chat.
           </p>
-          <div className="mt-2.5 inline-flex items-center gap-2 text-[11px] text-[var(--color-text-muted)] bg-[var(--color-bg)] border border-[var(--color-border)] rounded-full px-3 py-1">
+          <div className="mt-2.5 inline-flex items-center gap-2 text-meta text-[var(--color-text-muted)] bg-[var(--color-bg)] border border-[var(--color-border)] rounded-full px-3 py-1">
             <span><span className="text-[var(--color-primary)] tabular-nums">1</span> tell me</span>
             <span className="text-[var(--color-text-faint)]">→</span>
             <span><span className="text-[var(--color-primary)] tabular-nums">2</span> Create — I take it to chat</span>
@@ -278,18 +278,18 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
         <div className="flex-1 min-h-0 grid grid-cols-[300px_1fr]">
           <div className="p-5 border-r border-[var(--color-border)] flex flex-col gap-5 overflow-y-auto">
             <div>
-              <label htmlFor="new-brain-name-input" className="block text-[11px] font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5">NAME</label>
+              <label htmlFor="new-brain-name-input" className="block text-meta font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5">NAME</label>
               <input
                 id="new-brain-name-input"
                 data-testid="new-brain-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Acme Payments"
-                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-strong)] rounded-lg px-3 py-2 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-strong)] rounded-lg px-3 py-2 text-body text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
               />
             </div>
             <fieldset className="border-0 p-0 m-0">
-              <legend className="block text-[11px] font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5 p-0">WHAT IT GOVERNS</legend>
+              <legend className="block text-meta font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5 p-0">WHAT IT GOVERNS</legend>
               <div className="flex flex-col gap-1.5">
                 {GOVERNS_OPTIONS.map((opt) => (
                   <button
@@ -298,13 +298,13 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                     data-testid={`new-brain-governs-${opt.kind}`}
                     aria-pressed={governs === opt.kind}
                     onClick={() => setGoverns(opt.kind)}
-                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border text-[12.5px] transition-colors text-left ${
+                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border text-small transition-colors text-left ${
                       governs === opt.kind
                         ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10 text-[var(--color-text)]'
                         : 'border-[var(--color-border)] bg-[var(--color-card)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
                     } ${opt.kind === 'idea' ? 'border-dashed' : ''}`}
                   >
-                    <span className="w-5 text-center">{opt.icon}</span> {opt.label}
+                    <span className="w-5 text-center material-symbols-outlined icon-sm">{opt.icon}</span> {opt.label}
                   </button>
                 ))}
               </div>
@@ -313,8 +313,8 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
 
           <div className="p-5 flex flex-col min-w-0">
             <div className="flex items-baseline justify-between mb-2">
-              <span className="text-[11px] font-semibold tracking-wide text-[var(--color-text-muted)]">STARTER MATERIAL</span>
-              <span className="text-[11px] text-[var(--color-text-faint)]">optional</span>
+              <span className="text-meta font-semibold tracking-wide text-[var(--color-text-muted)]">STARTER MATERIAL</span>
+              <span className="text-meta text-[var(--color-text-faint)]">optional</span>
             </div>
 
             {/* Acquisition zone — two DISTINCT input methods, not one box (a local
@@ -323,7 +323,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                 URL / repo / path, or type). */}
             <div className="flex flex-col gap-2 mb-3">
               <div className="flex items-center gap-2">
-                <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--color-text-faint)] w-[42px] shrink-0">Local</span>
+                <span className="text-meta font-semibold tracking-wide uppercase text-[var(--color-text-faint)] w-[42px] shrink-0">Local</span>
                 <button
                   type="button"
                   data-testid="new-brain-add-files"
@@ -331,7 +331,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                   disabled={picking}
                   className="btn-md btn-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <span className="text-sm leading-none">📄</span> Add files…
+                  <span className="material-symbols-outlined icon-sm">description</span> Add files…
                 </button>
                 <button
                   type="button"
@@ -340,11 +340,11 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                   disabled={picking}
                   className="btn-md btn-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <span className="text-sm leading-none">📁</span> Add folder…
+                  <span className="material-symbols-outlined icon-sm">folder</span> Add folder…
                 </button>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--color-text-faint)] w-[42px] shrink-0">Link</span>
+                <span className="text-meta font-semibold tracking-wide uppercase text-[var(--color-text-faint)] w-[42px] shrink-0">Link</span>
                 <input
                   data-testid="new-brain-material-input"
                   value={draft}
@@ -352,7 +352,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(); } }}
                   onBlur={commitDraft}
                   placeholder="https://…  ·  git@…  ·  or paste a path"
-                  className="flex-1 min-w-0 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg px-3 py-1.5 text-[12px] text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] placeholder:text-[var(--color-text-faint)]"
+                  className="flex-1 min-w-0 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg px-3 py-1.5 text-small text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] placeholder:text-[var(--color-text-faint)]"
                 />
                 <button
                   type="button"
@@ -378,16 +378,16 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                 {items.length === 0 && (
                   <div className="flex-1 grid place-items-center text-center text-[var(--color-text-faint)]">
                     <div>
-                      <div className="text-2xl opacity-60 mb-1.5">⤵</div>
-                      <div className="text-[12px] text-[var(--color-text-muted)] font-medium">Add files, a folder, or a link above</div>
-                      <div className="text-[11px] mt-1">…or drag files &amp; folders here · sorted by type, click a pill to change the role</div>
+                      <div className="text-display opacity-60 mb-1.5">⤵</div>
+                      <div className="text-small text-[var(--color-text-muted)] ">Add files, a folder, or a link above</div>
+                      <div className="text-meta mt-1">…or drag files &amp; folders here · sorted by type, click a pill to change the role</div>
                     </div>
                   </div>
                 )}
                 {items.map((it) => (
                   <div key={it.id} className="flex items-center gap-2.5 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg px-3 py-2">
-                    <span className="w-4 text-center text-sm">{KIND_ICON[it.displayKind] ?? '📄'}</span>
-                    <span className="flex-1 min-w-0 truncate text-[12px]" title={it.value}>{it.value}</span>
+                    <span className="w-4 text-center material-symbols-outlined icon-sm text-[var(--color-text-muted)]">{KIND_ICON[it.displayKind] ?? 'description'}</span>
+                    <span className="flex-1 min-w-0 truncate text-small" title={it.value}>{it.value}</span>
                     <button
                       data-testid={`new-brain-role-${it.id}`}
                       onClick={() => cycleRole(it.id)}
@@ -400,7 +400,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                       aria-label="remove"
                       data-testid={`new-brain-remove-${it.id}`}
                       onClick={() => removeItem(it.id)}
-                      className="text-[var(--color-text-faint)] hover:text-[var(--color-text)] text-sm"
+                      className="text-[var(--color-text-faint)] hover:text-[var(--color-text)] text-body"
                     >
                       ✕
                     </button>
@@ -413,7 +413,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
 
         {/* Footer: dispatch */}
         <div className="px-6 py-3.5 border-t border-[var(--color-border)] flex items-center justify-between gap-4 bg-[var(--color-bg-chrome)]">
-          <span className="text-[11px] text-[var(--color-text-muted)]">
+          <span className="text-meta text-[var(--color-text-muted)]">
             On Create, I open a chat tab and set it up live — this window closes. Reading, unreachable links &amp; conflicts surface there.
           </span>
           <button

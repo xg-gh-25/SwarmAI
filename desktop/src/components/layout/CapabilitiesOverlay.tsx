@@ -16,7 +16,7 @@
  *                   skill is present (empty group renders NOTHING, never a void).
  *   • CONNECTIONS — a CONFIG REGISTRY projection of GET /api/mcp: "Enabled" (available
  *                   for a session to use) vs "Off" (disabled), with an in-place toggle
- *                   and a faint load-timing tier marker (⚡ always / 💤 on-demand / 📡
+ *                   and a faint load-timing tier marker (bolt = always / bedtime = on-demand / cell_tower =
  *                   channel). It is NOT a session-liveness view: `enabled` = "a session
  *                   CAN load this", not "a session IS connected right now" — liveness is
  *                   out of scope BY DESIGN (per-session runtime state, not this global
@@ -25,8 +25,8 @@
  *                   and when does a session load it?".
  *
  * SCANNABLE SIGNALS (run_a85e6641): each skill row carries a HEALTH dot (the one standout —
- * 🟢 healthy / 🔴 low_success / 🟡 stale / ⚪️ never_used) and a FAINT tier marker (⚡ always /
- * 💤 lazy, deliberately muted so it never competes with the dot). Health is LAZY-loaded in a
+ * green healthy / red low_success / amber stale / grey never_used) and a FAINT tier marker (bolt always /
+ * bedtime lazy, deliberately muted so it never competes with the dot). Health is LAZY-loaded in a
  * SEPARATE effect from the skill list and is FAIL-SAFE: a rejected/slow /api/skills/health
  * leaves rows fully rendered + clickable with NO dot — it never blocks or crashes the list.
  * MCP rows carry an honest enabled/off dot + a faint tier marker — NO auth/liveness state is
@@ -83,17 +83,17 @@ const STATUS_LABEL: Record<SkillHealthStatus, string> = {
 
 /** Faint tier marker — deliberately muted so it does NOT compete with the health dot. */
 const TIER_MARK: Record<'always' | 'lazy', { icon: string; label: string }> = {
-  always: { icon: '⚡', label: 'Always loaded' },
-  lazy: { icon: '💤', label: 'Lazy — loaded on use' },
+  always: { icon: 'bolt', label: 'Always loaded' },
+  lazy: { icon: 'bedtime', label: 'Lazy — loaded on use' },
 };
 
 /** MCP load-timing marker (distinct from the skill always/lazy map — MCP tiers are
  *  always/channel/ondemand). Faint by design: it says WHEN a session loads the MCP, it
  *  is NOT a live-connection state (this panel is a config registry, not a liveness probe). */
 const MCP_TIER_MARK: Record<'always' | 'channel' | 'ondemand', { icon: string; label: string }> = {
-  always: { icon: '⚡', label: 'Always — loads at session start' },
-  ondemand: { icon: '💤', label: 'On-demand — loads when a session needs it' },
-  channel: { icon: '📡', label: 'Channel — loads in channel sessions' },
+  always: { icon: 'bolt', label: 'Always — loads at session start' },
+  ondemand: { icon: 'bedtime', label: 'On-demand — loads when a session needs it' },
+  channel: { icon: 'cell_tower', label: 'Channel — loads in channel sessions' },
 };
 
 export interface CapabilitiesContentProps {
@@ -109,8 +109,8 @@ type ViewMode = 'skills' | 'connections' | 'experts';
 /** The two signature abilities — rendered as heroes, the ONE thing that stands out.
  *  Keys are the exact folder_name (hyphenated, s_ prefix) — matched by `in SIGNATURE`. */
 const SIGNATURE: Record<string, { icon: string; blurb: string }> = {
-  's_autonomous-pipeline': { icon: '🚀', blurb: 'One sentence in → PR-ready code out. The delivery engine.' },
-  's_pollinate': { icon: '🌸', blurb: 'Your message → poster, video, narrative — the right media, auto.' },
+  's_autonomous-pipeline': { icon: 'rocket_launch', blurb: 'One sentence in → PR-ready code out. The delivery engine.' },
+  's_pollinate': { icon: 'local_florist', blurb: 'Your message → poster, video, narrative — the right media, auto.' },
 };
 
 /** Category display order — the rest fall in alphabetically after these; Internal LAST. */
@@ -229,7 +229,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
       return (
         <div
           data-testid={`cap-healthline-${idSuffix}`}
-          className="mt-auto pt-2 flex items-center gap-1.5 text-[11px] text-[var(--color-text-faint)] opacity-60"
+          className="mt-auto pt-2 flex items-center gap-1.5 text-meta text-[var(--color-text-faint)] opacity-60"
         >
           <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-border-strong)] shrink-0" />
           <span>loading health…</span>
@@ -245,7 +245,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
       <div
         data-testid={`cap-healthline-${idSuffix}`}
         data-status={h.status}
-        className="mt-auto pt-2 flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]"
+        className="mt-auto pt-2 flex items-center gap-1.5 text-meta text-[var(--color-text-muted)]"
       >
         <span
           className="inline-block w-2 h-2 rounded-full shrink-0"
@@ -253,7 +253,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
           title={dot.label}
         />
         <span className="truncate">
-          <span className="font-medium">{label}</span>
+          <span className="">{label}</span>
           {parts.length > 0 && <span className="text-[var(--color-text-faint)]"> · {parts.join(' · ')}</span>}
         </span>
       </div>
@@ -276,19 +276,19 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
       >
         {/* Title row: name + faint tier marker (muted, top-right) */}
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[var(--color-text)] text-sm font-semibold truncate">{s.name}</span>
+          <span className="text-[var(--color-text)] text-body font-semibold truncate">{s.name}</span>
           <span
             data-testid={`cap-tier-${idSuffix}`}
             data-tier={s.tier}
             title={TIER_MARK[s.tier]?.label ?? s.tier}
             aria-label={TIER_MARK[s.tier]?.label ?? s.tier}
-            className="ml-auto shrink-0 text-[11px] text-[var(--color-text-faint)] opacity-50"
+            className="ml-auto shrink-0 material-symbols-outlined icon-xs text-[var(--color-text-faint)] opacity-50"
           >
             {TIER_MARK[s.tier]?.icon ?? ''}
           </span>
         </div>
         {/* One-line plain description */}
-        <div className="text-xs text-[var(--color-text-muted)] mt-1 line-clamp-2 min-w-0">{s.description}</div>
+        <div className="text-small text-[var(--color-text-muted)] mt-1 line-clamp-2 min-w-0">{s.description}</div>
         {/* Health line — DEFAULT on every card (lazy: placeholder until health resolves) */}
         {healthLineFor(s, idSuffix)}
       </button>
@@ -354,12 +354,14 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
             {(['skills', 'experts', 'connections'] as ViewMode[]).map((v) => (
               <button
                 key={v}
+                role="radio"
+                aria-checked={view === v}
                 data-testid={`cap-view-${v}`}
                 onClick={() => setView(v)}
                 className={
-                  'px-3 py-1 text-sm rounded-md ' +
+                  'px-3 py-1 text-body rounded-md ' +
                   (view === v
-                    ? 'bg-[var(--color-primary)] text-white font-medium'
+                    ? 'bg-[color-mix(in_srgb,var(--color-primary)_15%,transparent)] text-[var(--color-primary)] font-semibold '
                     : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]')
                 }
               >
@@ -375,7 +377,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search abilities…"
-              className="w-64 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-md px-3 py-1 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
+              className="w-64 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-md px-3 py-1 text-body text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
             />
           ) : null
         }
@@ -402,11 +404,11 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                     style={{ background: 'linear-gradient(135deg, color-mix(in srgb, var(--panel-accent, var(--color-primary)) 12%, transparent), transparent)' }}
                     data-testid={`cap-skill-${h.folderName}`}
                   >
-                    <div className="text-[11px] tabular-nums tracking-wider text-[var(--color-primary)]">⭐ SIGNATURE</div>
-                    <div className="text-base font-semibold mt-2 flex items-center gap-2">
-                      <span>{SIGNATURE[h.folderName]?.icon ?? '✨'}</span>{h.name}
+                    <div className="text-meta tabular-nums tracking-wider text-[var(--color-primary)]">SIGNATURE</div>
+                    <div className="text-title font-semibold mt-2 flex items-center gap-2">
+                      <span className="material-symbols-outlined icon-md text-[var(--color-primary)]">{SIGNATURE[h.folderName]?.icon ?? 'auto_awesome'}</span>{h.name}
                     </div>
-                    <div className="text-[13px] text-[var(--color-text-muted)] mt-1">
+                    <div className="text-body text-[var(--color-text-muted)] mt-1">
                       {SIGNATURE[h.folderName]?.blurb ?? h.description}
                     </div>
                     {/* Health line ON heroes too — the user asked for it on EVERY card */}
@@ -422,7 +424,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                 (empty until then → no flash). AC2. */}
             {topUsed.length > 0 && (
               <div className="mb-8" data-testid="cap-most-used">
-                <h2 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1">
+                <h2 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1">
                   Most used
                 </h2>
                 <div className="grid grid-cols-2 gap-3">
@@ -437,7 +439,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                 the card grid already shows N (redundant data-ink removed, Tufte / check 2). */}
             {groups.map(([cat, list]) => (
               <div key={cat} className="mb-8" data-testid={`cap-group-${cat}`}>
-                <h2 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1">
+                <h2 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1">
                   {cat}
                 </h2>
                 <div className="grid grid-cols-2 gap-3">
@@ -447,7 +449,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
             ))}
 
             {!loading && groups.length === 0 && heroes.length === 0 && (
-              <div className="text-sm text-[var(--color-text-faint)] py-8 text-center" data-testid="cap-empty">
+              <div className="text-body text-[var(--color-text-faint)] py-8 text-center" data-testid="cap-empty">
                 {query ? 'No abilities match your search.' : 'No abilities found.'}
               </div>
             )}
@@ -466,7 +468,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([domain, list]) => (
                 <div key={domain} className="mb-8" data-testid={`cap-expert-group-${domain}`}>
-                  <h2 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1">
+                  <h2 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1">
                     {DOMAIN_LABEL[domain] ?? domain}
                   </h2>
                   <div className="grid grid-cols-2 gap-3">
@@ -478,16 +480,16 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                       >
                         {/* Title: English name + zh demoted (muted, right) */}
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-[var(--color-text)] text-sm font-semibold truncate">{e.displayNameEn}</span>
-                          <span className="ml-auto shrink-0 text-[11px] text-[var(--color-text-faint)] truncate">{e.displayNameZh}</span>
+                          <span className="text-[var(--color-text)] text-body font-semibold truncate">{e.displayNameEn}</span>
+                          <span className="ml-auto shrink-0 text-meta text-[var(--color-text-faint)] truncate">{e.displayNameZh}</span>
                         </div>
                         {/* Scope — the one-line "what this expert reviews" */}
-                        <div className="text-xs text-[var(--color-text-muted)] mt-1 line-clamp-2 min-w-0">{e.scope}</div>
+                        <div className="text-small text-[var(--color-text-muted)] mt-1 line-clamp-2 min-w-0">{e.scope}</div>
                         {/* Health — the ONE standout signal: an unhealthy expert pops red */}
                         <div
                           data-testid={`cap-expert-health-${e.expertId}`}
                           data-valid={e.isValid}
-                          className="mt-auto pt-2 flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]"
+                          className="mt-auto pt-2 flex items-center gap-1.5 text-meta text-[var(--color-text-muted)]"
                         >
                           <span
                             className="inline-block w-2 h-2 rounded-full shrink-0"
@@ -495,7 +497,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                             title={e.isValid ? 'well-formed' : 'malformed frontmatter'}
                           />
                           <span className="truncate">
-                            <span className="font-medium">{e.isValid ? 'ready' : 'malformed'}</span>
+                            <span className="">{e.isValid ? 'ready' : 'malformed'}</span>
                             {e.spawnAs && <span className="text-[var(--color-text-faint)]"> · {e.spawnAs}</span>}
                           </span>
                         </div>
@@ -505,7 +507,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                 </div>
               ))}
             {expertsSettled && Object.keys(experts).length === 0 && (
-              <div className="text-sm text-[var(--color-text-faint)] py-8 text-center" data-testid="cap-experts-empty">
+              <div className="text-body text-[var(--color-text-faint)] py-8 text-center" data-testid="cap-experts-empty">
                 No experts found.
               </div>
             )}
@@ -517,7 +519,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
             <ConnGroup title="Enabled" tag={`${enabledMcps.length} available`} entries={enabledMcps} onToggle={toggleMcp} statusLabel="ENABLED" statusClass="text-[var(--color-primary)]" />
             <ConnGroup title="Off — one click to enable" tag={`${offMcps.length}`} entries={offMcps} onToggle={toggleMcp} statusLabel="OFF" statusClass="text-[var(--color-text-muted)]" />
             {!loading && enabledMcps.length === 0 && offMcps.length === 0 && (
-              <div className="text-sm text-[var(--color-text-faint)] py-8 text-center">No connections configured.</div>
+              <div className="text-body text-[var(--color-text-faint)] py-8 text-center">No connections configured.</div>
             )}
           </div>
         )}
@@ -531,11 +533,11 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
             onClick={teachNewSkill}
             className="btn-lg btn-primary"
           >
-            ✨ Teach Swarm a new skill
+            <span className="material-symbols-outlined icon-md">auto_awesome</span> Teach Swarm a new skill
           </button>
         ) : (
-          <span className="text-[11px] text-[var(--color-text-faint)]">
-            Enabled = available for a session to use. ⚡ loads at session start · 💤 loads on demand · 📡 in channel sessions. Toggle to enable/disable.
+          <span className="text-meta text-[var(--color-text-faint)]">
+            Enabled = available for a session to use. Bolt: loads at session start · moon: loads on demand · tower: in channel sessions. Toggle to enable/disable.
           </span>
         )}
       </div>
@@ -545,17 +547,17 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
         <div className="absolute inset-0 z-[9]" onClick={() => setSelected(null)}>
           <OverlayDrawer widthPx={380} testid="cap-detail-drawer">
             <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
-              <div className="text-sm font-semibold">{selected.name}</div>
+              <div className="text-body font-semibold">{selected.name}</div>
               <button onClick={() => setSelected(null)} className="text-[var(--color-text-faint)] hover:text-[var(--color-text)]">✕</button>
             </div>
-            <div className="p-4 space-y-4 overflow-y-auto text-sm">
+            <div className="p-4 space-y-4 overflow-y-auto text-body">
               <p className="text-[var(--color-text-muted)]">{selected.description}</p>
               <div>
-                <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">How to use</div>
-                <div className="text-[13px]">Say what you want in chat — Swarm invokes it automatically.</div>
+                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">How to use</div>
+                <div className="text-body">Say what you want in chat — Swarm invokes it automatically.</div>
               </div>
               {/* Demoted dev metadata */}
-              <div className="pt-3 border-t border-[var(--color-border)] text-[12px] text-[var(--color-text-faint)] tabular-nums space-y-1">
+              <div className="pt-3 border-t border-[var(--color-border)] text-small text-[var(--color-text-faint)] tabular-nums space-y-1">
                 <div>source: {selected.sourceTier}</div>
                 <div>version: {selected.version}</div>
                 <div>load: {selected.tier}{selected.tier === 'always' ? ' (at startup)' : ' (on use)'}</div>
@@ -568,7 +570,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                   </div>
                 )}
                 <div>id: {selected.folderName}</div>
-                {selected.visibility === 'internal' && <div className="text-[var(--color-text-muted)]">🔒 internal (owner-only)</div>}
+                {selected.visibility === 'internal' && <div className="text-[var(--color-text-muted)]">internal (owner-only)</div>}
               </div>
             </div>
           </OverlayDrawer>
@@ -591,9 +593,9 @@ function ConnGroup({
   if (entries.length === 0) return null; // never render an empty group
   return (
     <div className="mb-6" data-testid={`cap-conn-${statusLabel.toLowerCase()}`}>
-      <h2 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1 flex items-baseline gap-2">
+      <h2 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1 flex items-baseline gap-2">
         {title}
-        <span className="text-[11px] tabular-nums text-[var(--color-text-faint)]">{tag}</span>
+        <span className="text-meta tabular-nums text-[var(--color-text-faint)]">{tag}</span>
       </h2>
       {entries.map((m) => (
         <div key={m.id} className="flex items-center gap-3 px-2 py-3 rounded-md hover:bg-[var(--color-hover)]">
@@ -610,7 +612,7 @@ function ConnGroup({
           />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 min-w-0">
-              <span className="text-sm font-medium truncate">{m.name}</span>
+              <span className="text-body truncate">{m.name}</span>
               {/* Faint load-timing marker — muted so it never competes with the toggle/name
                   (design-judgment check 4). Says WHEN a session loads it, not that it is live. */}
               <span
@@ -618,25 +620,27 @@ function ConnGroup({
                 data-tier={m.tier}
                 title={MCP_TIER_MARK[m.tier]?.label ?? m.tier}
                 aria-label={MCP_TIER_MARK[m.tier]?.label ?? m.tier}
-                className="shrink-0 text-[11px] text-[var(--color-text-faint)] opacity-50"
+                className="shrink-0 material-symbols-outlined icon-xs text-[var(--color-text-faint)] opacity-50"
               >
                 {MCP_TIER_MARK[m.tier]?.icon ?? ''}
               </span>
             </div>
-            {m.description && <div className="text-xs text-[var(--color-text-faint)] truncate">{m.description}</div>}
+            {m.description && <div className="text-small text-[var(--color-text-faint)] truncate">{m.description}</div>}
           </div>
           <div className="flex-1" />
-          <span className={`text-[11px] tabular-nums font-medium ${statusClass}`}>{statusLabel}</span>
+          <span className={`text-meta tabular-nums ${statusClass}`}>{statusLabel}</span>
           <button
             data-testid={`cap-toggle-${m.id}`}
             onClick={() => onToggle(m)}
             aria-label={`toggle ${m.name}`}
+            role="switch"
+            aria-checked={m.enabled}
             className={
               'w-9 h-5 rounded-full relative transition-colors ' +
               (m.enabled ? 'bg-[var(--color-primary)]' : 'bg-[var(--color-border-strong)]')
             }
           >
-            <span className={'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ' + (m.enabled ? 'left-[18px]' : 'left-0.5')} />
+            <span className={'absolute top-0.5 w-4 h-4 rounded-full bg-[var(--color-on-accent)] transition-all ' + (m.enabled ? 'left-[18px]' : 'left-0.5')} />
           </button>
         </div>
       ))}

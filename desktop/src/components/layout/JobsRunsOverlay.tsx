@@ -55,9 +55,9 @@ type ViewMode = 'jobs' | 'runs';
 /** Health dot color from a roster row: red = failing, grey = disabled, green = ok. */
 function healthColor(j: JobRosterRow): string {
   if (!j.enabled) return 'var(--color-text-faint)';
-  if (j.consecutiveFailures > 0 || j.lastStatus === 'failed') return '#ef4444';
+  if (j.consecutiveFailures > 0 || j.lastStatus === 'failed') return 'var(--color-status-error)';
   if (j.lastStatus === 'never') return 'var(--color-text-faint)';
-  return '#10b981';
+  return 'var(--color-status-success)';
 }
 
 export function JobsRunsContent({ onDispatch, close }: JobsRunsContentProps) {
@@ -110,9 +110,11 @@ export function JobsRunsContent({ onDispatch, close }: JobsRunsContentProps) {
           left={(['jobs', 'runs'] as ViewMode[]).map((v) => (
             <button
               key={v}
+              role="radio"
+              aria-checked={view === v}
               onClick={() => setView(v)}
               data-testid={`jobs-view-${v}`}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+              className={`px-3 py-1 text-small rounded-md transition-colors ${
                 view === v ? 'bg-primary/15 text-primary' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
               }`}
             >
@@ -172,13 +174,13 @@ function GuideBanner() {
       data-testid="jobs-guide-banner"
     >
       <span className="material-symbols-outlined icon-sm text-primary mt-0.5 shrink-0">auto_awesome</span>
-      <div className="flex-1 min-w-0 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-        <span className="text-[var(--color-text)] font-medium">Just ask Swarm in chat</span> — the AI-native way.
+      <div className="flex-1 min-w-0 text-meta leading-relaxed text-[var(--color-text-muted)]">
+        <span className="text-[var(--color-text)] ">Just ask Swarm in chat</span> — the AI-native way.
         Say <span className="tabular-nums text-[var(--color-text)]">“schedule a job to … every weekday 9am”</span> and it
         sets up the cron, prompt, tools, and budget for you (via the job-manager skill). Chat also handles{' '}
         <span className="text-[var(--color-text)]">edits</span> (“pause the stock-analysis job”) and{' '}
         <span className="text-[var(--color-text)]">deletes</span>.
-        <span className="text-[var(--color-text-faint)]"> Or add one manually with <span className="text-primary font-medium">+ New Job</span>.</span>
+        <span className="text-[var(--color-text-faint)]"> Or add one manually with <span className="text-primary ">+ New Job</span>.</span>
       </div>
     </div>
   );
@@ -194,8 +196,8 @@ function JobsView({ roster, overview, onSelect }: {
       {overview && <OverviewStrip o={overview} />}
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-1.5" data-testid="jobs-roster">
         {roster.length === 0 ? (
-          <div className="text-[11px] text-[var(--color-text-faint)] text-center py-8" data-testid="jobs-empty">
-            No jobs yet — ask Swarm in chat to schedule one, or <span className="text-primary font-medium">+ New Job</span>.
+          <div className="text-meta text-[var(--color-text-faint)] text-center py-8" data-testid="jobs-empty">
+            No jobs yet — ask Swarm in chat to schedule one, or <span className="text-primary ">+ New Job</span>.
           </div>
         ) : (
           roster.map((j) => <JobCard key={j.id} job={j} onSelect={onSelect} />)
@@ -217,8 +219,8 @@ function OverviewStrip({ o }: { o: JobsOverview }) {
     <div className="shrink-0 mx-4 mt-3 grid grid-cols-3 sm:grid-cols-5 gap-2" data-testid="jobs-overview">
       {cells.map((c) => (
         <div key={c.label} className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 flex flex-col">
-          <span className={`text-[15px] font-bold ${c.danger ? 'text-red-400' : 'text-[var(--color-text)]'}`}>{c.value}</span>
-          <span className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">{c.label}</span>
+          <span className={`text-heading font-semibold ${c.danger ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text)]'}`}>{c.value}</span>
+          <span className="text-meta uppercase tracking-wider text-[var(--color-text-faint)]">{c.label}</span>
         </div>
       ))}
     </div>
@@ -233,10 +235,10 @@ function JobCard({ job, onSelect }: { job: JobRosterRow; onSelect: (j: JobRoster
       onClick={() => onSelect(job)}
     >
       <span className="w-2 h-2 rounded-full shrink-0" style={{ background: healthColor(job) }} data-testid="job-health-dot" />
-      <span className="flex-1 min-w-0 text-[12.5px] text-[var(--color-text)] truncate">{job.name}</span>
-      <span className="text-[11px] font-mono text-[var(--color-text-faint)] shrink-0">{job.schedule || '—'}</span>
-      <span className="text-[11px] tabular-nums text-[var(--color-text-muted)] shrink-0 w-[110px] text-right">{fmtTs(job.lastRun)}</span>
-      <span className={`text-[11px] uppercase px-1.5 py-0.5 rounded shrink-0 ${
+      <span className="flex-1 min-w-0 text-small text-[var(--color-text)] truncate">{job.name}</span>
+      <span className="text-meta font-mono text-[var(--color-text-faint)] shrink-0">{job.schedule || '—'}</span>
+      <span className="text-meta tabular-nums text-[var(--color-text-muted)] shrink-0 w-[110px] text-right">{fmtTs(job.lastRun)}</span>
+      <span className={`text-meta uppercase px-1.5 py-0.5 rounded shrink-0 ${
         job.source === 'system' ? 'text-[var(--color-text-faint)] bg-[var(--color-hover)]' : 'text-primary bg-primary/10'
       }`}>{job.source}</span>
     </div>
@@ -260,15 +262,15 @@ function RunsView({ roster }: { roster: JobRosterRow[] }) {
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3" data-testid="jobs-runs-view">
       {rows.length === 0 ? (
-        <div className="text-[11px] text-[var(--color-text-faint)] text-center py-8">No runs yet.</div>
+        <div className="text-meta text-[var(--color-text-faint)] text-center py-8">No runs yet.</div>
       ) : (
         <div className="flex flex-col gap-1">
           {rows.map((r) => (
             <div key={r.key} className="flex items-center gap-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5" data-testid="run-row">
-              <span className="flex-1 min-w-0 text-[12px] text-[var(--color-text)] truncate">{r.name}</span>
-              <span className="text-[11px] tabular-nums text-[var(--color-text-muted)] shrink-0">{r.detail}</span>
+              <span className="flex-1 min-w-0 text-small text-[var(--color-text)] truncate">{r.name}</span>
+              <span className="text-meta tabular-nums text-[var(--color-text-muted)] shrink-0">{r.detail}</span>
               <StatusBadge status={r.status} />
-              <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-[110px] text-right">{fmtTs(r.ts)}</span>
+              <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0 w-[110px] text-right">{fmtTs(r.ts)}</span>
             </div>
           ))}
         </div>
@@ -280,8 +282,8 @@ function RunsView({ roster }: { roster: JobRosterRow[] }) {
 function StatusBadge({ status }: { status: string }) {
   const ok = status === 'success' || status === 'completed';
   const bad = status === 'failed' || status === 'cancelled' || status === 'abandoned';
-  const cls = ok ? 'text-emerald-400 bg-emerald-500/10' : bad ? 'text-red-400 bg-red-500/10' : 'text-[var(--color-text-muted)] bg-[var(--color-hover)]';
-  return <span className={`text-[11px] tabular-nums px-1.5 py-0.5 rounded shrink-0 ${cls}`}>{status}</span>;
+  const cls = ok ? 'text-[var(--color-status-success)] bg-[color-mix(in_srgb,var(--color-status-success)_10%,transparent)]' : bad ? 'text-[var(--color-status-error)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)]' : 'text-[var(--color-text-muted)] bg-[var(--color-hover)]';
+  return <span className={`text-meta tabular-nums px-1.5 py-0.5 rounded shrink-0 ${cls}`}>{status}</span>;
 }
 
 // ── Detail drawer ───────────────────────────────────────────────────
@@ -314,8 +316,8 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
       <div className="flex items-start gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
         <span className="mt-1 w-2 h-2 rounded-full shrink-0" style={{ background: healthColor(job) }} />
         <div className="flex-1 min-w-0">
-          <div className="text-[13px] font-semibold text-[var(--color-text)] leading-snug break-words">{job.name}</div>
-          <div className="mt-0.5 flex items-center gap-2 text-[11px] tabular-nums text-[var(--color-text-faint)]">
+          <div className="text-body font-semibold text-[var(--color-text)] leading-snug break-words">{job.name}</div>
+          <div className="mt-0.5 flex items-center gap-2 text-meta tabular-nums text-[var(--color-text-faint)]">
             <span>{job.type || '—'}</span><span>·</span><span>{job.source}</span><span>·</span><span>{job.lastStatus}</span>
           </div>
         </div>
@@ -324,23 +326,23 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-4 text-[12px]">
+      <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-4 text-small">
         <Section label="Schedule">
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 tabular-nums text-[11px]">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 tabular-nums text-meta">
             <dt className="text-[var(--color-text-faint)]">Cron</dt><dd className="font-mono text-[var(--color-text)] break-all">{job.schedule || '—'}</dd>
             <dt className="text-[var(--color-text-faint)]">Total runs</dt><dd className="text-[var(--color-text)]">{job.totalRuns}</dd>
             <dt className="text-[var(--color-text-faint)]">Last run</dt><dd className="text-[var(--color-text)]">{fmtTs(job.lastRun)}</dd>
           </dl>
-          {job.lastError && <div className="mt-1 text-[11px] text-red-400 break-words">{job.lastError}</div>}
+          {job.lastError && <div className="mt-1 text-meta text-[var(--color-status-error)] break-words">{job.lastError}</div>}
         </Section>
 
         <Section label="Last output">
           {loadingRuns ? (
-            <div className="text-[11px] text-[var(--color-text-faint)]">Loading…</div>
+            <div className="text-meta text-[var(--color-text-faint)]">Loading…</div>
           ) : runs?.lastOutput ? (
-            <pre className="text-[11px] text-[var(--color-text)] whitespace-pre-wrap break-words max-h-64 overflow-y-auto bg-[var(--color-bg)] rounded p-2 border border-[var(--color-border)]">{runs.lastOutput}</pre>
+            <pre className="text-meta text-[var(--color-text)] whitespace-pre-wrap break-words max-h-64 overflow-y-auto bg-[var(--color-bg)] rounded p-2 border border-[var(--color-border)]">{runs.lastOutput}</pre>
           ) : (
-            <div className="text-[11px] text-[var(--color-text-faint)] italic">No output captured.</div>
+            <div className="text-meta text-[var(--color-text-faint)] italic">No output captured.</div>
           )}
         </Section>
 
@@ -348,7 +350,7 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
           {runs && runs.recent.length > 0 ? (
             <ul className="flex flex-col gap-0.5">
               {runs.recent.map((r, i) => (
-                <li key={i} className="flex items-center gap-2 text-[11px] tabular-nums">
+                <li key={i} className="flex items-center gap-2 text-meta tabular-nums">
                   <span className="text-[var(--color-text-faint)] w-[80px]">{r.date}</span>
                   <StatusBadge status={r.status} />
                   <span className="text-[var(--color-text-muted)]">{r.tokens ?? 0} tok</span>
@@ -357,14 +359,14 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
               ))}
             </ul>
           ) : (
-            <div className="text-[11px] text-[var(--color-text-faint)] italic">No run history.</div>
+            <div className="text-meta text-[var(--color-text-faint)] italic">No run history.</div>
           )}
         </Section>
       </div>
 
       {/* Action row */}
       {runState === 'error' && (
-        <div className="px-4 pt-2 text-[11px] text-red-400 shrink-0" data-testid="job-run-error">
+        <div className="px-4 pt-2 text-meta text-[var(--color-status-error)] shrink-0" data-testid="job-run-error">
           Run-now failed — check the job's config or logs.
         </div>
       )}
@@ -398,9 +400,7 @@ function DrawerBtn({ icon, label, primary, disabled, onClick }: {
       onClick={onClick}
       disabled={disabled}
       data-testid={`job-action-${label.toLowerCase().replace(/\s/g, '-')}`}
-      className={`flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded transition-colors disabled:opacity-40 ${
-        primary ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
-      }`}
+      className={`btn-sm disabled:opacity-40 ${primary ? 'btn-soft' : 'btn-ghost'}`}
     >
       <span className="material-symbols-outlined icon-xs">{icon}</span>{label}
     </button>
@@ -410,7 +410,7 @@ function DrawerBtn({ icon, label, primary, disabled, onClick }: {
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">{label}</div>
+      <div className="text-meta uppercase tracking-wider text-[var(--color-text-faint)]">{label}</div>
       {children}
     </div>
   );
@@ -467,13 +467,13 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
   return (
     <OverlayDrawer widthPx={420} maxWidthPct={75} z={20} testid="jobs-new-form">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
-        <span className="flex-1 text-[13px] font-semibold text-[var(--color-text)]">New Job</span>
+        <span className="flex-1 text-body font-semibold text-[var(--color-text)]">New Job</span>
         <button onClick={onCancel} data-testid="jobs-new-cancel" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
           <span className="material-symbols-outlined icon-md">close</span>
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 text-[12px]">
-        <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
+      <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 text-small">
+        <div className="text-meta text-[var(--color-text-muted)] leading-relaxed">
           Fills a chat prompt for Swarm to create the job (cron/type/prompt validated by the job-manager skill).
           For tool allowlists, budgets, or dependency schedules, just describe them in chat.
         </div>
@@ -502,14 +502,14 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
             className="w-full px-2 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] focus:border-primary/50 outline-none resize-none"
             placeholder={type === 'agent_task' ? 'What should Swarm do each run?' : 'Shell command to run'} />
         </FormField>
-        {err && <div className="text-[11px] text-red-400" data-testid="jobs-new-err">{err}</div>}
+        {err && <div className="text-meta text-[var(--color-status-error)]" data-testid="jobs-new-err">{err}</div>}
       </div>
       <div className="flex items-center gap-2 px-4 py-3 border-t border-[var(--color-border)] shrink-0">
         <button onClick={submit} data-testid="jobs-new-submit"
           className="btn-md btn-soft flex-1 transition-colors">
           Create in chat
         </button>
-        <button onClick={onCancel} className="px-3 py-1.5 text-[12px] font-medium rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors">Cancel</button>
+        <button onClick={onCancel} className="btn-md btn-ghost">Cancel</button>
       </div>
     </OverlayDrawer>
   );
@@ -518,7 +518,7 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
 function FormField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">{label}</label>
+      <label className="text-meta uppercase tracking-wider text-[var(--color-text-faint)]">{label}</label>
       {children}
     </div>
   );

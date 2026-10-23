@@ -47,18 +47,18 @@ describe('deriveHiveStatusDot — calm, signal-driven', () => {
 
   it('green when any instance is running', () => {
     const dot = deriveHiveStatusDot([inst('running'), inst('stopped')]);
-    expect(dot?.color).toBe('#10b981');
+    expect(dot?.color).toBe('var(--color-status-success)');
     expect(dot?.title).toContain('1 Hive');
   });
 
   it('blue + pulse when any instance is provisioning (transitional)', () => {
     const dot = deriveHiveStatusDot([inst('running'), inst('provisioning')]);
-    expect(dot?.color).toBe('#3b82f6');
+    expect(dot?.color).toBe('var(--color-primary)');
     expect(dot?.pulse).toBe(true);
   });
 
   it('red takes priority over everything when any instance errored', () => {
     const dot = deriveHiveStatusDot([inst('running'), inst('provisioning'), inst('error')]);
-    expect(dot?.color).toBe('#ef4444');
+    expect(dot?.color).toBe('var(--color-status-error)');
   });
 });

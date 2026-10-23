@@ -66,8 +66,8 @@ function fmtDate(iso: string | null): string {
 }
 
 function stateDot(s: string): string {
-  if (s === 'published') return 'bg-emerald-500';
-  if (s === 'ready-to-publish') return 'bg-sky-500';
+  if (s === 'published') return 'bg-[var(--color-status-success)]';
+  if (s === 'ready-to-publish') return 'bg-[var(--color-primary)]';
   return 'bg-[var(--color-text-faint)]'; // ready (unknown)
 }
 
@@ -202,13 +202,15 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
         {/* Sub-header: label + Gallery|Insights toggle (shared WorkbenchToolbar). */}
         <WorkbenchToolbar
           loading={loading}
-          left={<span className="text-xs font-medium text-[var(--color-text-muted)]">Content Assets</span>}
+          left={<span className="text-small text-[var(--color-text-muted)]">Content Assets</span>}
           right={(['gallery', 'insights'] as View[]).map((v) => (
             <button
               key={v}
+              role="radio"
+              aria-checked={view === v}
               onClick={() => setView(v)}
               data-testid={`pollinate-view-${v}`}
-              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+              className={`px-2.5 py-1 text-small rounded-md transition-colors ${
                 view === v ? 'bg-primary/15 text-primary' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
               }`}
             >
@@ -236,13 +238,13 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="🔍 search topic / caption / domain…"
+                placeholder="Search topic / caption / domain…"
                 data-testid="pollinate-search"
-                className="flex-1 min-w-[160px] px-2.5 py-1 text-xs rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
+                className="flex-1 min-w-[160px] px-2.5 py-1 text-small rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
               />
               <Select value={platformFilter} onChange={setPlatform} options={allPlatforms} placeholder="platform" testid="pollinate-filter-platform" />
               <Select value={formatFilter} onChange={setFormat} options={allFormats} placeholder="format" testid="pollinate-filter-format" />
-              {/* ⚪ to-publish state chip — surface what still needs posting (design §1.3). */}
+              {/* to-publish state chip — surface what still needs posting (design §1.3). */}
               <button
                 onClick={() => setToPublishOnly((v) => !v)}
                 data-testid="pollinate-chip-to-publish"
@@ -252,7 +254,7 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
                     : 'text-[var(--color-text-muted)] border-[var(--color-border)] hover:bg-[var(--color-hover)]'
                 }`}
               >
-                ⚪ to publish
+                to publish
               </button>
               <Select
                 value={sort}
@@ -272,8 +274,8 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
                     data-testid={`pollinate-domain-chip-${d}`}
                     className={`btn-sm btn-secondary rounded-full transition-colors whitespace-nowrap ${
                       domainFilter === d
-                        ? 'bg-emerald-500/15 text-emerald-500 border-emerald-500/60'
-                        : 'text-emerald-500/80 border-emerald-500/30 hover:bg-emerald-500/10'
+                        ? 'bg-[color-mix(in_srgb,var(--color-status-success)_15%,transparent)] text-[var(--color-status-success)] border-[color-mix(in_srgb,var(--color-status-success)_60%,transparent)]'
+                        : 'text-[color-mix(in_srgb,var(--color-status-success)_80%,transparent)] border-[color-mix(in_srgb,var(--color-status-success)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-success)_10%,transparent)]'
                     }`}
                   >
                     {d}
@@ -295,7 +297,7 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
                 />
               )}
               {!loading && !loadErr && filtered.length === 0 && (
-                <div className="text-center py-10 text-sm text-[var(--color-text-faint)]">
+                <div className="text-center py-10 text-body text-[var(--color-text-faint)]">
                   {cards.length === 0
                     ? 'No content yet. Ask Swarm in chat to pollinate a topic.'
                     : 'No assets match your search.'}
@@ -352,9 +354,9 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
 
 function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className={`rounded-md border px-2.5 py-1.5 ${accent ? 'border-amber-500/50 bg-amber-500/10' : 'border-[var(--color-border)] bg-[var(--color-card)]'}`}>
-      <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">{label}</div>
-      <div className={`text-sm tabular-nums ${accent ? 'text-amber-500' : 'text-[var(--color-text)]'}`}>{value}</div>
+    <div className={`rounded-md border px-2.5 py-1.5 ${accent ? 'border-[color-mix(in_srgb,var(--color-status-warning)_50%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)]' : 'border-[var(--color-border)] bg-[var(--color-card)]'}`}>
+      <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)]">{label}</div>
+      <div className={`text-body tabular-nums ${accent ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-text)]'}`}>{value}</div>
     </div>
   );
 }
@@ -367,7 +369,7 @@ function Select({ value, onChange, options, placeholder, testid }: {
       value={value}
       onChange={(e) => onChange(e.target.value)}
       data-testid={testid}
-      className="px-2 py-1 text-xs rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-muted)]"
+      className="px-2 py-1 text-small rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-muted)]"
     >
       <option value="">{placeholder}: all</option>
       {options.map((op) => <option key={op} value={op}>{op}</option>)}
@@ -391,18 +393,18 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
         <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)]">
           {expanded ? 'expand_more' : 'chevron_right'}
         </span>
-        <span className="text-sm font-medium text-[var(--color-text)] truncate flex-1 min-w-0">{card.topic}</span>
-        {card.domain && <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0">[{card.domain}]</span>}
-        <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0">{fmtDate(card.createdAt)}</span>
-        <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0">
-          {card.publishedCount > 0 && <span className="text-emerald-500">🟢{card.publishedCount} </span>}
-          ⚪{card.readyCount}
+        <span className="text-body text-[var(--color-text)] truncate flex-1 min-w-0">{card.topic}</span>
+        {card.domain && <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0">[{card.domain}]</span>}
+        <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0">{fmtDate(card.createdAt)}</span>
+        <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0">
+          {card.publishedCount > 0 && <span className="text-[var(--color-status-success)]">{card.publishedCount} published · </span>}
+          {card.readyCount} ready
         </span>
       </button>
       {expanded && (
         <div className="border-t border-[var(--color-border)] p-3">
           {card.assets.length === 0 ? (
-            <div className="text-[11px] text-[var(--color-text-faint)]">No assets produced yet.</div>
+            <div className="text-meta text-[var(--color-text-faint)]">No assets produced yet.</div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
               {card.assets.map((a, i) => (
@@ -428,7 +430,7 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
                   </div>
                   <div className="flex items-center gap-1 px-1.5 py-1">
                     <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${stateDot(a.publishStatus)}`} />
-                    <span className="text-[11px] text-[var(--color-text-muted)] truncate flex-1 min-w-0">
+                    <span className="text-meta text-[var(--color-text-muted)] truncate flex-1 min-w-0">
                       {a.platform || a.format}
                     </span>
                   </div>
@@ -441,7 +443,7 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
             <button
               onClick={() => onProduce(card.platforms[0] || 'the next platform')}
               data-testid={`pollinate-produce-${card.run}`}
-              className="mt-2 flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md text-primary hover:bg-primary/10 transition-colors"
+              className="mt-2 btn-sm btn-soft"
             >
               <span className="material-symbols-outlined icon-xs">add</span>Produce more
             </button>
@@ -539,11 +541,11 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
   return (
     <OverlayDrawer widthPx={460} maxWidthPct={92} z={10} testid="pollinate-asset-drawer" stopPropagation={false}>
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
-        <span className="text-xs font-medium text-[var(--color-text)] truncate flex-1">{asset.platform || asset.format} · {asset.fileName}</span>
+        <span className="text-small text-[var(--color-text)] truncate flex-1">{asset.platform || asset.format} · {asset.fileName}</span>
         <button onClick={onClose} className="material-symbols-outlined icon-md text-[var(--color-text-faint)] hover:text-[var(--color-text)]">close</button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
-        <div className="text-[11px] tabular-nums text-[var(--color-text-faint)]">
+        <div className="text-meta tabular-nums text-[var(--color-text-faint)]">
           {card.topic} · {fmtDate(card.createdAt)}
         </div>
         {asset.isImage ? (
@@ -557,28 +559,28 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
             <span className="material-symbols-outlined icon-xl text-[var(--color-text-faint)]">
               {asset.format === 'video' ? 'movie' : 'description'}
             </span>
-            <div className="text-[11px] text-[var(--color-text-muted)] mt-1 font-mono break-all">{asset.filePath}</div>
+            <div className="text-meta text-[var(--color-text-muted)] mt-1 font-mono break-all">{asset.filePath}</div>
           </div>
         )}
 
         {/* Caption / narrative BODY — the text you grab to go publish (design §4, moment ②) */}
         {(captionPath || bodyLoading) && (
           <div>
-            <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">
+            <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">
               {captionAsset && isPublishKit(captionAsset) ? 'Publish kit'
                 : captionAsset?.format === 'narrative' ? 'Narrative' : 'Caption'}
             </div>
             {bodyLoading ? (
-              <div className="text-[11px] text-[var(--color-text-faint)]">Loading…</div>
+              <div className="text-meta text-[var(--color-text-faint)]">Loading…</div>
             ) : body ? (
               <div
                 data-testid="pollinate-caption-body"
-                className="max-h-56 overflow-y-auto rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2 text-[12px] text-[var(--color-text-muted)] whitespace-pre-wrap leading-relaxed"
+                className="max-h-56 overflow-y-auto rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2 text-small text-[var(--color-text-muted)] whitespace-pre-wrap leading-relaxed"
               >
                 {body}
               </div>
             ) : (
-              <div className="text-[11px] text-[var(--color-text-faint)]">Caption body unavailable.</div>
+              <div className="text-meta text-[var(--color-text-faint)]">Caption body unavailable.</div>
             )}
           </div>
         )}
@@ -586,7 +588,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
         {/* Publish state + manual-assist actions */}
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${stateDot(asset.publishStatus)}`} />
-          <span className="text-[11px] text-[var(--color-text-muted)]">
+          <span className="text-meta text-[var(--color-text-muted)]">
             {asset.publishStatus === 'published' ? 'published'
               : asset.publishStatus === 'ready-to-publish' ? 'ready to publish'
               : 'ready'}
@@ -598,7 +600,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
             <a
               href={asset.postedUrl} target="_blank" rel="noreferrer"
               data-testid="pollinate-posted-url"
-              className="text-[11px] text-primary hover:underline truncate max-w-[180px]"
+              className="text-meta text-primary hover:underline truncate max-w-[180px]"
             >{asset.postedUrl}</a>
           )}
         </div>
@@ -609,7 +611,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
             onClick={async () => { setMarking(true); setMarkErr(false); const ok = await onMarkPublished(false); setMarking(false); if (!ok) setMarkErr(true); }}
             disabled={marking}
             data-testid="pollinate-unpublish-btn"
-            className="self-start flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors disabled:opacity-50"
+            className="self-start btn-sm btn-ghost disabled:opacity-50"
           >
             <span className="material-symbols-outlined icon-xs">undo</span>
             {markErr ? 'Failed — retry' : 'Mark unpublished'}
@@ -620,13 +622,13 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
               type="url" value={urlInput} onChange={(e) => setUrlInput(e.target.value)}
               placeholder="posted URL (optional)"
               data-testid="pollinate-posted-url-input"
-              className="flex-1 min-w-[140px] px-2 py-1 text-[11px] rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text-muted)]"
+              className="flex-1 min-w-[140px] px-2 py-1 text-meta rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text-muted)]"
             />
             <button
               onClick={async () => { setMarking(true); setMarkErr(false); const ok = await onMarkPublished(true, urlInput.trim() || null); setMarking(false); if (ok) setUrlInput(''); else setMarkErr(true); }}
               disabled={marking}
               data-testid="pollinate-mark-published-btn"
-              className="btn-sm btn-success dark:text-emerald-400 transition-colors disabled:opacity-50"
+              className="btn-sm btn-success transition-colors disabled:opacity-50"
             >
               <span className="material-symbols-outlined icon-xs">{markErr ? 'error' : 'check_circle'}</span>
               {marking ? 'Marking…' : markErr ? 'Failed — retry' : 'Mark published'}
@@ -646,7 +648,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
             <button
               onClick={() => onOpenAccount(asset.platform)}
               data-testid="pollinate-open-account-btn"
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors"
+              className="btn-md btn-ghost"
             >
               <span className="material-symbols-outlined icon-sm">open_in_new</span>Open {asset.platform}
             </button>
@@ -656,7 +658,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
         {/* Same topic — platforms not yet produced → offer to make (design §4). */}
         {missingPlatforms.length > 0 && (
           <div>
-            <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Not yet produced for</div>
+            <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Not yet produced for</div>
             <div className="flex gap-1.5 flex-wrap" data-testid="pollinate-missing-platforms">
               {missingPlatforms.map((p) => (
                 <button
@@ -709,8 +711,8 @@ function InsightsView({ data, loading }: { data: PollinateAssetsResponse | null;
     return { byType, byChannel, byDomain, trendPts, produced, readyToPublish, published };
   }, [data]);
 
-  if (loading && !insights) return <div className="flex-1 px-4 py-6 text-xs text-[var(--color-text-faint)]">Loading…</div>;
-  if (!insights) return <div className="flex-1 px-4 py-6 text-xs text-[var(--color-text-faint)]">No data.</div>;
+  if (loading && !insights) return <div className="flex-1 px-4 py-6 text-small text-[var(--color-text-faint)]">Loading…</div>;
+  if (!insights) return <div className="flex-1 px-4 py-6 text-small text-[var(--color-text-faint)]">No data.</div>;
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4" data-testid="pollinate-insights">
@@ -722,7 +724,7 @@ function InsightsView({ data, loading }: { data: PollinateAssetsResponse | null;
           <FunnelBar label="Published" value={insights.published} max={insights.produced} />
         </div>
         {insights.published === 0 && insights.produced > 0 && (
-          <div className="text-[11px] text-amber-500 mt-2">
+          <div className="text-meta text-[var(--color-status-warning)] mt-2">
             {insights.produced} assets made, 0 marked published — a posted-URL state exists once auto-distribution ships.
           </div>
         )}
@@ -743,7 +745,7 @@ function InsightsView({ data, loading }: { data: PollinateAssetsResponse | null;
 
       <Panel title="Production trend — topics per week">
         {insights.trendPts.length === 0 ? (
-          <div className="text-[11px] text-[var(--color-text-faint)]">No dated topics.</div>
+          <div className="text-meta text-[var(--color-text-faint)]">No dated topics.</div>
         ) : (
           <div className="flex items-end gap-1 h-12">
             {insights.trendPts.map(([week, n]) => {
@@ -767,19 +769,19 @@ function InsightsView({ data, loading }: { data: PollinateAssetsResponse | null;
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1.5">{title}</div>
+      <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1.5">{title}</div>
       <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5">{children}</div>
     </div>
   );
 }
 
 function BarList({ entries, sub }: { entries: [string, number][]; sub?: (k: string) => string }) {
-  if (entries.length === 0) return <div className="text-[11px] text-[var(--color-text-faint)]">—</div>;
+  if (entries.length === 0) return <div className="text-meta text-[var(--color-text-faint)]">—</div>;
   const max = Math.max(...entries.map(([, v]) => v), 1);
   return (
     <div className="space-y-1.5">
       {entries.sort(([, a], [, b]) => b - a).map(([k, v]) => (
-        <div key={k} className="text-[11px]">
+        <div key={k} className="text-meta">
           <div className="flex justify-between text-[var(--color-text-muted)]">
             <span>{k}</span>
             <span className="tabular-nums">{sub ? sub(k) : v}</span>
@@ -797,11 +799,11 @@ function FunnelBar({ label, value, max }: { label: string; value: number; max: n
   const pct = max > 0 ? (value / max) * 100 : 0;
   return (
     <div className="flex-1 flex flex-col items-center">
-      <div className="text-sm tabular-nums text-[var(--color-text)]">{value}</div>
+      <div className="text-body tabular-nums text-[var(--color-text)]">{value}</div>
       <div className="w-full h-16 flex items-end">
         <div className="w-full rounded-t bg-primary/40" style={{ height: `${Math.max(pct, 3)}%` }} />
       </div>
-      <div className="text-[11px] text-[var(--color-text-faint)] text-center mt-1">{label}</div>
+      <div className="text-meta text-[var(--color-text-faint)] text-center mt-1">{label}</div>
     </div>
   );
 }

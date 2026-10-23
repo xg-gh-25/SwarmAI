@@ -164,10 +164,10 @@ export function InlineRenameInput({
       onKeyDown={handleKeyDown}
       onClick={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
+      className="text-body"
       style={{
         flex: 1,
         minWidth: 0,
-        fontSize: '13px',
         lineHeight: '20px',
         padding: '1px 4px',
         border: '1px solid var(--color-primary)',
@@ -355,7 +355,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
       aria-expanded={isDirectory ? isExpanded : undefined}
       aria-selected={isSelected}
       tabIndex={isSelected ? 0 : -1}
-      className={`tree-node-row${isDragOver ? ' drag-over' : ''}`}
+      className={`tree-node-row text-small${isDragOver ? ' drag-over' : ''}`}
       draggable
       onDragStart={handleDragStart}
       onDragOver={isDirectory ? onDragOver : undefined}
@@ -374,7 +374,6 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         paddingRight: '12px',
         cursor: 'pointer',
         userSelect: 'none',
-        fontSize: depth === 0 ? '12.5px' : '12px',
         lineHeight: '32px',
         position: style.position,
         boxSizing: 'border-box',
@@ -487,8 +486,8 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         <span
           data-testid="git-status-badge"
           title={node.gitStatus}
+          className="text-meta"
           style={{
-            fontSize: '10px',
             fontWeight: 600,
             lineHeight: '16px',
             padding: '0 4px',

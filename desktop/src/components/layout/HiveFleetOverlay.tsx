@@ -77,7 +77,7 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
             role="tab"
             aria-selected={view === v}
             data-testid={`hive-view-${v}`}
-            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+            className={`px-3 py-1 text-small rounded-md transition-colors ${
               view === v ? 'bg-primary/15 text-primary' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
             }`}
           >
@@ -170,8 +170,8 @@ function OverviewStrip({ instances }: { instances: HiveInstance[] }) {
     <div className="shrink-0 mx-4 mt-3 grid grid-cols-3 sm:grid-cols-5 gap-2" data-testid="hive-overview">
       {cells.map((c) => (
         <div key={c.label} className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 flex flex-col">
-          <span className={`text-[15px] font-bold ${c.danger ? 'text-red-400' : 'text-[var(--color-text)]'}`}>{c.value}</span>
-          <span className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">{c.label}</span>
+          <span className={`text-heading font-semibold ${c.danger ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text)]'}`}>{c.value}</span>
+          <span className="text-meta uppercase tracking-wider text-[var(--color-text-faint)]">{c.label}</span>
         </div>
       ))}
     </div>
@@ -221,7 +221,7 @@ function AccountsView({ accounts, onAction, onAdd }: {
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3" data-testid="hive-accounts-view">
       {accounts.length === 0 ? (
-        <div className="text-[11px] text-[var(--color-text-faint)] text-center py-8" data-testid="hive-accounts-empty">
+        <div className="text-meta text-[var(--color-text-faint)] text-center py-8" data-testid="hive-accounts-empty">
           No AWS accounts yet — add one to deploy your first Hive.
         </div>
       ) : (
@@ -233,7 +233,7 @@ function AccountsView({ accounts, onAction, onAdd }: {
       )}
       <button
         onClick={onAdd}
-        className="mt-3 text-[11px] text-primary hover:underline"
+        className="mt-3 text-meta text-primary hover:underline"
         data-testid="hive-accounts-add-inline"
       >
         + Add another AWS account
@@ -251,8 +251,8 @@ function GuideBanner() {
       data-testid="hive-guide-banner"
     >
       <span className="material-symbols-outlined icon-sm text-primary mt-0.5 shrink-0">cloud</span>
-      <div className="flex-1 min-w-0 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-        <span className="text-[var(--color-text)] font-medium">Your fleet of remote AI clones.</span> Each Hive
+      <div className="flex-1 min-w-0 text-meta leading-relaxed text-[var(--color-text-muted)]">
+        <span className="text-[var(--color-text)] ">Your fleet of remote AI clones.</span> Each Hive
         deploys the whole Agent OS to your own AWS — 100% data sovereignty, a 24/7 stand-in you can share with a
         teammate. Add an AWS account, then <span className="text-[var(--color-text)]">Deploy Hive</span>; deploys
         run in the background (this panel polls while provisioning).

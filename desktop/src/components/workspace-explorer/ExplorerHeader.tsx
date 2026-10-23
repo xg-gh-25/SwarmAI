@@ -48,7 +48,7 @@ function HeaderIconButton({
       title={title}
       aria-label={title}
       data-testid={testId}
-      className={`p-1 rounded transition-colors ${
+      className={`icon-btn transition-colors ${
         active
           ? 'text-[var(--color-text)] bg-[var(--color-hover)]'
           : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
@@ -94,7 +94,7 @@ export default function ExplorerHeader({ embedded = false }: { embedded?: boolea
           title="Clear search"
           aria-label="Clear search"
           data-testid="explorer-search-clear"
-          className="absolute right-1.5 p-0.5 rounded text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+          className="absolute right-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
         >
           <span className="material-symbols-outlined icon-sm">close</span>
         </button>
@@ -142,7 +142,7 @@ export default function ExplorerHeader({ embedded = false }: { embedded?: boolea
             <polyline points="2 17 12 22 22 17" />
             <polyline points="2 12 12 17 22 12" />
           </svg>
-          <span className="text-[11px] font-bold uppercase tracking-[0.6px] text-[var(--color-text-secondary)]">
+          <span className="text-meta font-semibold uppercase tracking-[0.6px] text-[var(--color-text-secondary)]">
             SwarmWS
           </span>
         </span>
@@ -193,7 +193,7 @@ export default function ExplorerHeader({ embedded = false }: { embedded?: boolea
             placeholder="Search files…"
             aria-label="Search workspace files"
             data-testid="explorer-search-input"
-            className="w-full pl-7 pr-7 py-1 text-[12px] rounded-md bg-[var(--color-bg-chrome)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-primary,var(--color-text-secondary))] transition-colors [&::-webkit-search-cancel-button]:hidden"
+            className="w-full pl-7 pr-7 py-1 text-small rounded-md bg-[var(--color-bg-chrome)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-primary,var(--color-text-secondary))] transition-colors [&::-webkit-search-cancel-button]:hidden"
           />
           {searchQuery && (
             <button
@@ -201,7 +201,7 @@ export default function ExplorerHeader({ embedded = false }: { embedded?: boolea
               title="Clear search"
               aria-label="Clear search"
               data-testid="explorer-search-clear"
-              className="absolute right-1.5 p-0.5 rounded text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+              className="absolute right-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
             >
               <span className="material-symbols-outlined icon-sm">close</span>
             </button>

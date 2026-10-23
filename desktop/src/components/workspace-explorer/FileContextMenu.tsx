@@ -360,16 +360,16 @@ export default function FileContextMenu({
         <div className="flex items-start gap-3 mb-4">
           <span className="material-symbols-outlined icon-md text-[var(--color-warning, var(--color-error))]">delete</span>
           <div>
-            <h4 className="text-sm font-medium text-[var(--color-text)] mb-1">
+            <h4 className="text-body text-[var(--color-text)] mb-1">
               Move to Trash?
             </h4>
-            <p className="text-xs text-[var(--color-text-muted)]">
+            <p className="text-small text-[var(--color-text-muted)]">
               "{item.name}" will be moved to the Trash.
               {item.type === 'directory' && ' This includes all contents.'}
               {' '}You can recover it from Finder.
             </p>
             {deleteError && (
-              <p className="text-xs text-[var(--color-error)] mt-1">{deleteError}</p>
+              <p className="text-small text-[var(--color-error)] mt-1">{deleteError}</p>
             )}
           </div>
         </div>
@@ -389,7 +389,7 @@ export default function FileContextMenu({
             data-testid="delete-confirm-button"
           >
             {isDeleting && (
-              <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              <div className="w-3 h-3 border-2 border-[var(--color-on-accent)] border-t-transparent rounded-full animate-spin" />
             )}
             Move to Trash
           </button>
@@ -425,7 +425,7 @@ export default function FileContextMenu({
           <button
             onClick={menuItem.action}
             disabled={menuItem.disabled}
-            className={`w-full px-3 py-2 text-sm text-left flex items-center gap-2 transition-colors ${
+            className={`w-full px-3 py-2 text-body text-left flex items-center gap-2 transition-colors ${
               menuItem.disabled
                 ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
                 : menuItem.danger

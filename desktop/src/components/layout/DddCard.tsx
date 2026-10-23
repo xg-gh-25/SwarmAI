@@ -120,9 +120,9 @@ type DddCardProps = CompactProps | FullProps;
 function CardHeader({ name, kind, verdict }: { name: string; kind: string; verdict?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 mb-2">
-      <span className="material-symbols-outlined icon-sm text-[#f0a500]">psychology</span>
-      <span className="text-[13px] font-semibold">{name}</span>
-      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{kind}</span>
+      <span className="material-symbols-outlined icon-sm text-[var(--color-status-warning)]">psychology</span>
+      <span className="text-body font-semibold">{name}</span>
+      <span className="text-meta tabular-nums text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{kind}</span>
       {verdict != null && <span className="ml-auto">{verdict}</span>}
     </div>
   );
@@ -134,9 +134,9 @@ function CardHeader({ name, kind, verdict }: { name: string; kind: string; verdi
 function VerdictDot({ pending }: { pending: number }) {
   const needs = pending > 0;
   return (
-    <span data-testid="ddd-verdict" className="flex items-center gap-1.5 text-[11px] font-medium"
-      style={{ color: needs ? '#f0a500' : '#3fb950' }}>
-      <span className="w-2 h-2 rounded-full" style={{ background: needs ? '#f0a500' : '#3fb950' }} />
+    <span data-testid="ddd-verdict" className="flex items-center gap-1.5 text-meta "
+      style={{ color: needs ? 'var(--color-status-warning)' : 'var(--color-status-success)' }}>
+      <span className="w-2 h-2 rounded-full" style={{ background: needs ? 'var(--color-status-warning)' : 'var(--color-status-success)' }} />
       {needs ? 'Needs decision' : 'Nothing queued'}
     </span>
   );
@@ -154,8 +154,8 @@ function NeedsActionable({ health }: { health: BrainHealth }) {
   return (
     <div data-testid="dddcard-needs-actionable" className="flex flex-col gap-1 mt-1.5">
       {items.map((it) => (
-        <div key={it.key} className="flex items-baseline gap-2 text-[11px]">
-          <span className="font-semibold text-[#f0a500] min-w-[22px]">{it.n}</span>
+        <div key={it.key} className="flex items-baseline gap-2 text-meta">
+          <span className="font-semibold text-[var(--color-status-warning)] min-w-[22px]">{it.n}</span>
           <span className="text-[var(--color-text-muted)]">{it.label}</span>
         </div>
       ))}
@@ -169,7 +169,7 @@ function NeedsActionable({ health }: { health: BrainHealth }) {
 function CalmMeta({ lifecycleStage, health }: { lifecycleStage: LifecycleStage; health: BrainHealth }) {
   const bits = [lifecycleStage, `${health.sinking} sinking`, health.lastChangeRelative];
   return (
-    <div data-testid="dddcard-calm-meta" className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-faint)] mt-1.5 tabular-nums">
+    <div data-testid="dddcard-calm-meta" className="flex items-center gap-1.5 text-meta text-[var(--color-text-faint)] mt-1.5 tabular-nums">
       {bits.map((b, i) => (
         <span key={i}>{i > 0 ? '· ' : ''}{b}</span>
       ))}
@@ -189,7 +189,7 @@ function CardBriefing({ description }: { description?: string }) {
   return (
     <div
       data-testid="dddcard-briefing"
-      className="mt-2 pt-2 border-t border-[var(--color-border)] text-[11px] leading-snug text-[var(--color-text-muted)] line-clamp-2"
+      className="mt-2 pt-2 border-t border-[var(--color-border)] text-meta leading-snug text-[var(--color-text-muted)] line-clamp-2"
     >
       {description}
     </div>
@@ -220,20 +220,20 @@ export function DddCard(props: DddCardProps) {
     // legible without a legend (the sole card that carries it).
     // Gate-2 (correctness specialist, run_496c3be7 Tailwind trap): both the needs
     // branch (`border-y`) and the calm branch (`border`) also set border-top-width /
-    // border-top-color, so a plain `border-t-2 border-t-[#a371f7]` collides on the
+    // border-top-color, so a plain `border-t-2 border-t-[var(--color-primary)]` collides on the
     // SAME properties — the winner is decided by generated-CSS source order, NOT JSX
     // string order → the violet top could render 1px / wrong-color on the SwarmAI card
     // (the one card that MUST mark correctly). `!` (important) makes the self top-border
     // win deterministically regardless of source order.
-    const selfClasses = props.isSelf ? ' !border-t-2 !border-t-[#a371f7]' : '';
+    const selfClasses = props.isSelf ? ' !border-t-2 !border-t-[var(--color-primary)]' : '';
     return (
       <button onClick={() => onOpen(name)} data-testid={`dddcard-${name}`}
-        className={`relative text-left rounded-lg bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors w-full h-full ${
-          needs ? 'border-l-[3px] border-l-[#f0a500] border-y border-r border-[#4a3a12]' : 'border border-[var(--color-border)]'
+        className={`relative text-left rounded-lg bg-[var(--color-card)] p-3 hover:border-[var(--color-border)] transition-colors w-full h-full ${
+          needs ? 'border-l-[3px] border-l-[var(--color-status-warning)] border-y border-r border-[color-mix(in_srgb,var(--color-status-warning)_30%,transparent)]' : 'border border-[var(--color-border)]'
         }${selfClasses}`}>
         {props.isSelf && (
           <span data-testid="dddcard-self-tag"
-            className="absolute top-2 right-2 text-[8px] font-bold tracking-wider text-[#a371f7] bg-[#1c1530] border border-[#3a2d55] px-1.5 py-0.5 rounded">
+            className="absolute top-2 right-2 text-meta font-semibold tracking-wider text-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_12%,transparent)] border border-[color-mix(in_srgb,var(--color-primary)_30%,transparent)] px-1.5 py-0.5 rounded">
             SELF·OS
           </span>
         )}
@@ -262,7 +262,7 @@ export function DddCard(props: DddCardProps) {
     const onOpen = props.onOpen;
     return (
       <button onClick={() => onOpen(name)} data-testid={`dddcard-${name}`}
-        className="text-left w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors">
+        className="text-left w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3 hover:border-[var(--color-border)] transition-colors">
         {body}
       </button>
     );
@@ -333,13 +333,13 @@ function FullBody(
       {/* ── Needs you ── (suppressed when ontologyOnly: a dedicated §② owns it) */}
       {!ontologyOnly && (
         <div data-testid="ddd-needs-you"
-          className={`rounded-md border px-2.5 py-2 ${needs.length ? 'bg-[#1e1a0e] border-[#5a4a20]' : 'bg-[#0f1a10] border-[#1f3d24]'}`}>
-          <div className={`text-[11px] uppercase tracking-wide font-semibold mb-1 ${needs.length ? 'text-[#f0a500]' : 'text-[#3fb950]'}`}>
+          className={`rounded-md border px-2.5 py-2 ${needs.length ? 'bg-[color-mix(in_srgb,var(--color-status-warning)_8%,transparent)] border-[color-mix(in_srgb,var(--color-status-warning)_25%,transparent)]' : 'bg-[color-mix(in_srgb,var(--color-status-success)_6%,transparent)] border-[color-mix(in_srgb,var(--color-status-success)_25%,transparent)]'}`}>
+          <div className={`text-meta uppercase tracking-wide font-semibold mb-1 ${needs.length ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-status-success)]'}`}>
             {needs.length ? 'Needs you' : '✓ Nothing needs you'}
           </div>
           {needs.map((it) => (
-            <div key={it.label} className="flex items-center gap-2 text-[11px] py-0.5">
-              <span className="font-semibold text-[#f0a500] min-w-[28px]">{it.n}</span>
+            <div key={it.label} className="flex items-center gap-2 text-meta py-0.5">
+              <span className="font-semibold text-[var(--color-status-warning)] min-w-[28px]">{it.n}</span>
               <span className="text-[var(--color-text-muted)]">{it.label}</span>
             </div>
           ))}
@@ -347,20 +347,20 @@ function FullBody(
       )}
 
       {/* ── Two fact lines: trust distribution + activity ── */}
-      <div className="flex flex-col gap-1 text-[11px]">
+      <div className="flex flex-col gap-1 text-meta">
         <div data-testid="ddd-fact-trust" className="flex items-baseline gap-2">
           <span className="text-[var(--color-text-faint)] w-[52px]">Trust</span>
-          <span className={below > 0 ? 'text-[#f0a500]' : 'text-[var(--color-text)]'}>
+          <span className={below > 0 ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-text)]'}>
             {trustStale ? 'not computed' : `${pct}% sections ≥ high`}
           </span>
-          <span className="ml-auto text-[11px] text-[var(--color-text-faint)]">
+          <span className="ml-auto text-meta text-[var(--color-text-faint)]">
             {trustStale ? 'no scheduled score' : `scored ${_ageOf(metrics.computedAt)}`}
           </span>
         </div>
         <div data-testid="ddd-fact-activity" className="flex items-baseline gap-2">
           <span className="text-[var(--color-text-faint)] w-[52px]">Activity</span>
           <span className="text-[var(--color-text)]">edited {freshText}</span>
-          <span className="ml-auto text-[11px] text-[var(--color-text-faint)]">
+          <span className="ml-auto text-meta text-[var(--color-text-faint)]">
             {metrics.recentActivity === undefined ? '—' : metrics.recentActivity} sediments / 30d
           </span>
         </div>
@@ -407,15 +407,15 @@ export function Ontology({ typeCounts }: { typeCounts: Record<EntryType, number>
       {/* NO total-entry-count header — Principle-1: a bigger brain is not a better
           one. The per-layer + per-type counts convey the cognitive SHAPE without a
           headline "size" number (the shape is the signal, not the volume). */}
-      <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">
+      <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)]">
         Knowledge ontology · 3 layers × 7 types
       </div>
       {LAYERS.map((l) => (
         <div key={l.key} data-testid={`ddd-layer-${l.key}`} className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-sm" style={{ background: l.color }} />
-            <span className="text-[11px] font-semibold" style={{ color: l.color }}>{l.label}</span>
-            <span className="text-[11px] text-[var(--color-text-muted)]">{t[l.key]}</span>
+            <span className="text-meta font-semibold" style={{ color: l.color }}>{l.label}</span>
+            <span className="text-meta text-[var(--color-text-muted)]">{t[l.key]}</span>
             <span className="flex-1 h-1.5 rounded-sm bg-[var(--color-bg)] overflow-hidden ml-1">
               <span className="block h-full" style={{ width: `${(t[l.key] / total) * 100}%`, background: l.color }} />
             </span>
@@ -423,7 +423,7 @@ export function Ontology({ typeCounts }: { typeCounts: Record<EntryType, number>
           <div className="flex flex-wrap gap-1 pl-[17px]">
             {l.types.map((ty) => (
               <span key={ty} data-testid={`ddd-type-${ty}`}
-                className={`flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] ${typeCounts[ty] ? 'text-[var(--color-text-muted)]' : 'opacity-40 text-[var(--color-text-faint)]'}`}>
+                className={`flex items-center gap-1 text-meta px-1.5 py-0.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] ${typeCounts[ty] ? 'text-[var(--color-text-muted)]' : 'opacity-40 text-[var(--color-text-faint)]'}`}>
                 <span className="font-semibold text-[var(--color-text)]">{typeCounts[ty] ?? 0}</span> {ty}
               </span>
             ))}

@@ -249,7 +249,7 @@ export default function ExplorerToolbar({
       {/* Creation Dialog */}
       {dialogState.isOpen && (
         <div 
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-scrim-strong)]"
           onClick={handleCancel}
           data-testid="creation-dialog-overlay"
         >
@@ -258,7 +258,7 @@ export default function ExplorerToolbar({
             onClick={e => e.stopPropagation()}
             data-testid="creation-dialog"
           >
-            <h3 className="text-sm font-medium text-[var(--color-text)] mb-3">
+            <h3 className="text-body text-[var(--color-text)] mb-3">
               {dialogState.type === 'file' ? 'Create New File' : 'Create New Folder'}
             </h3>
             
@@ -269,14 +269,14 @@ export default function ExplorerToolbar({
               onChange={handleNameChange}
               onKeyDown={handleKeyDown}
               placeholder={dialogState.type === 'file' ? 'filename.txt' : 'folder-name'}
-              className="w-full px-3 py-2 text-sm rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] focus:border-[var(--color-primary)]"
+              className="w-full px-3 py-2 text-body rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] focus:border-[var(--color-primary)]"
               data-testid="creation-dialog-input"
               aria-label={dialogState.type === 'file' ? 'File name' : 'Folder name'}
             />
             
             {dialogState.error && (
               <p 
-                className="mt-2 text-xs text-[var(--color-error)]"
+                className="mt-2 text-small text-[var(--color-error)]"
                 data-testid="creation-dialog-error"
               >
                 {dialogState.error}
@@ -331,7 +331,7 @@ function ToolbarButton({
       onClick={onClick}
       disabled={disabled}
       title={tooltip || label}
-      className={`p-1.5 rounded transition-colors ${
+      className={`icon-btn transition-colors ${
         disabled
           ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
           : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'

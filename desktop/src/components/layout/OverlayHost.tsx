@@ -200,7 +200,7 @@ export function OverlayHost() {
         'transition-opacity duration-[220ms] ease-out',
         entered ? 'opacity-100' : 'opacity-0',
       )}
-      style={{ background: 'rgba(0,0,0,0.15)' }}
+      style={{ background: 'var(--color-scrim)' }}
       onMouseDown={(e) => { if (e.target === scrimRef.current) closeOverlay(); }}
     >
       <div
@@ -208,7 +208,7 @@ export function OverlayHost() {
           'absolute rounded-[18px] flex flex-col bg-[var(--color-card)] border shadow-2xl',
           'transition-[transform,opacity] duration-[280ms] ease-[cubic-bezier(.16,1,.3,1)]',
           'border-[color-mix(in_srgb,var(--panel-accent)_45%,var(--color-border))]',
-          'shadow-[-8px_24px_80px_rgba(0,0,0,.6)] ring-1 ring-[color-mix(in_srgb,var(--panel-accent)_18%,transparent)]',
+          'shadow-[var(--shadow-overlay)] ring-1 ring-[color-mix(in_srgb,var(--panel-accent)_18%,transparent)]',
           entered ? 'opacity-100 translate-x-0 scale-100' : 'opacity-0 -translate-x-[34px] scale-[0.9]',
         )}
         style={{
@@ -230,8 +230,8 @@ export function OverlayHost() {
             data-testid="overlay-host-spout"
             aria-hidden
             className="absolute w-[20px] h-[20px] rotate-45 rounded-bl-[5px] bg-[var(--color-card)] z-[1]
-              border-l-[1.5px] border-b-[1.5px] border-[var(--panel-accent)]
-              shadow-[-3px_3px_8px_rgba(0,0,0,.35)]"
+ border-l-[1.5px] border-b-[1.5px] border-[var(--panel-accent)]
+              shadow-[var(--shadow-spout)]"
             style={{ left: -11, top: spoutY }}
           />
         )}
@@ -239,26 +239,26 @@ export function OverlayHost() {
         <div className="relative flex items-center gap-3 h-[50px] px-5 shrink-0 rounded-t-[18px] bg-gradient-to-b from-[var(--color-bg-chrome)] to-[var(--color-card)] border-b border-[var(--color-border)] before:absolute before:inset-x-0 before:bottom-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-[var(--panel-accent)] before:to-transparent before:opacity-50">
           {chrome?.mode && (
             <span
-              className=" text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--panel-accent)] bg-[color-mix(in_srgb,var(--panel-accent)_14%,transparent)] ring-1 ring-[color-mix(in_srgb,var(--panel-accent)_25%,transparent)] px-2 py-[3px] rounded-md"
+              className=" text-meta font-semibold uppercase tracking-[0.12em] text-[var(--panel-accent)] bg-[color-mix(in_srgb,var(--panel-accent)_14%,transparent)] ring-1 ring-[color-mix(in_srgb,var(--panel-accent)_25%,transparent)] px-2 py-[3px] rounded-md"
               data-testid="overlay-host-mode-badge"
             >
               {chrome.mode}
             </span>
           )}
-          <h2 className="font-semibold text-[15px] tracking-tight text-[var(--color-text)]">{chrome?.navLabel ?? renderedId}</h2>
+          <h2 className="font-semibold text-heading tracking-tight text-[var(--color-text)]">{chrome?.navLabel ?? renderedId}</h2>
           {chrome?.subtitle && (
-            <span className="text-[12px] text-[var(--color-text-muted)] truncate" data-testid="overlay-host-subtitle">
+            <span className="text-small text-[var(--color-text-muted)] truncate" data-testid="overlay-host-subtitle">
               {chrome.subtitle}
             </span>
           )}
           <div className="ml-auto flex items-center gap-3">
-            <span className="hidden sm:flex items-center gap-1.5 tabular-nums text-[11px] text-[var(--color-text-faint)]">
+            <span className="hidden sm:flex items-center gap-1.5 tabular-nums text-meta text-[var(--color-text-faint)]">
               <kbd className="border border-[var(--color-border)] rounded px-1.5 py-0.5 bg-[var(--color-bg)]">ESC</kbd>
               to close
             </span>
             <button
               onClick={closeOverlay}
-              className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+              className="icon-btn-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
               aria-label="Close"
             >
               <span className="material-symbols-outlined icon-md">close</span>
@@ -275,7 +275,7 @@ export function OverlayHost() {
           <Suspense
             fallback={
               <div
-                className="flex-1 flex items-center justify-center text-sm text-[var(--color-text-muted)]"
+                className="flex-1 flex items-center justify-center text-body text-[var(--color-text-muted)]"
                 data-testid="overlay-loading"
               >
                 Loading…

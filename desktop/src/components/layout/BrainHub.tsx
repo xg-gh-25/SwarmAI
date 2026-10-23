@@ -213,7 +213,7 @@ function BrainDetailShell(
   return (
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
       {/* breadcrumb + brain switcher */}
-      <div className="flex items-center gap-2 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0 text-[12px]" data-testid="brainhub-breadcrumb">
+      <div className="flex items-center gap-2 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0 text-small" data-testid="brainhub-breadcrumb">
         <button
           data-testid="brainhub-back"
           onClick={onBack}
@@ -230,7 +230,7 @@ function BrainDetailShell(
             data-testid="brainhub-switcher"
             value={name}
             onChange={(e) => onSwitchBrain(e.target.value)}
-            className="bg-[var(--color-card)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[12px] font-semibold text-[var(--color-text)]"
+            className="bg-[var(--color-card)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-small font-semibold text-[var(--color-text)]"
           >
             {brains.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}
           </select>
@@ -240,11 +240,11 @@ function BrainDetailShell(
       </div>
 
       {/* 4 true-peer sub-tabs */}
-      <div className="flex items-center gap-1 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0 text-[12px]" data-testid="brainhub-detail-nav">
+      <div className="flex items-center gap-1 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0 text-small" data-testid="brainhub-detail-nav">
         <TabBtn active={detailView === 'overview'} onClick={() => onSelectView('overview')} testid="brainhub-tab-overview">Overview</TabBtn>
         <TabBtn active={detailView === 'browse'} onClick={() => onSelectView('browse')} testid="brainhub-tab-browse">Browse</TabBtn>
         <TabBtn active={detailView === 'review'} onClick={() => onSelectView('review')} testid="brainhub-tab-review">
-          Review{pending > 0 ? <span data-testid="review-tab-badge" className="ml-1 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-[#5a4a20] text-[#f0a500] text-[11px] font-semibold">{pending}</span> : null}
+          Review{pending > 0 ? <span data-testid="review-tab-badge" className="ml-1 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-[color-mix(in_srgb,var(--color-status-warning)_25%,transparent)] text-[var(--color-status-warning)] text-meta font-semibold">{pending}</span> : null}
         </TabBtn>
         <TabBtn active={detailView === 'distribute'} onClick={() => onSelectView('distribute')} testid="brainhub-tab-distribute">Distribute</TabBtn>
       </div>
@@ -286,6 +286,8 @@ function TabBtn({ active, disabled, onClick, testid, children }: {
   return (
     <button
       data-testid={testid}
+      role="tab"
+      aria-selected={active}
       disabled={disabled}
       onClick={onClick}
       className={`px-3 py-1 rounded-md transition-colors ${
@@ -346,7 +348,7 @@ function BrainSearchRow({ name, onOpenFile }: { name: string; onOpenFile: (p: st
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder={`Search ${name}'s knowledge…`}
-          className="flex-1 bg-transparent text-[12px] text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] outline-none"
+          className="flex-1 bg-transparent text-small text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] outline-none"
         />
         {q && (
           <button data-testid="brainhub-search-clear" onClick={() => setQ('')}
@@ -362,14 +364,14 @@ function BrainSearchRow({ name, onOpenFile }: { name: string; onOpenFile: (p: st
               key={`${h.source}-${i}`}
               data-testid="brainhub-search-hit"
               onClick={() => onOpenFile(h.source)}
-              className="text-left rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 hover:border-[#3b4552]"
+              className="text-left rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 hover:border-[var(--color-border)]"
             >
               <div className="flex items-baseline gap-2">
-                <span className="text-[12px] font-medium text-[var(--color-text)] truncate">{h.title || h.source}</span>
-                <span className="ml-auto text-[11px] tabular-nums text-[var(--color-text-faint)] flex-shrink-0">{h.domain}</span>
+                <span className="text-small text-[var(--color-text)] truncate">{h.title || h.source}</span>
+                <span className="ml-auto text-meta tabular-nums text-[var(--color-text-faint)] flex-shrink-0">{h.domain}</span>
               </div>
-              {h.source && <div className="text-[11px] font-mono text-[var(--color-text-faint)] truncate">{h.source}</div>}
-              {h.content && <div className="text-[11px] text-[var(--color-text-muted)] line-clamp-2 mt-0.5">{h.content}</div>}
+              {h.source && <div className="text-meta font-mono text-[var(--color-text-faint)] truncate">{h.source}</div>}
+              {h.content && <div className="text-meta text-[var(--color-text-muted)] line-clamp-2 mt-0.5">{h.content}</div>}
             </button>
           ))}
         </div>
@@ -407,8 +409,8 @@ function Gallery(
   { brains, pinned, onOpen }:
   { brains: BrainSummary[] | null; pinned: string[]; onOpen: (n: string) => void },
 ) {
-  if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading brains…</div>;
-  if (brains.length === 0) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">No DDD brains found.</div>;
+  if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading brains…</div>;
+  if (brains.length === 0) return <div className="p-4 text-[var(--color-text-muted)] text-body">No DDD brains found.</div>;
 
   // SwarmAI-first ordering, data-driven (pinned[0]), NOT a hardcoded name. The self
   // card is hoisted to the front; the rest keep their incoming order. If pinned is
@@ -476,8 +478,8 @@ function BrainView(
     }));
   }, [onRequestClose]);
 
-  if (error) return <div className="p-4 text-[#ef4444] text-[13px]">Failed to load brain: {error}</div>;
-  if (!detail) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading {name}…</div>;
+  if (error) return <div className="p-4 text-[var(--color-status-error)] text-body">Failed to load brain: {error}</div>;
+  if (!detail) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading {name}…</div>;
 
   const hasCodeIntel = detail.hasCodeIntel === true;   // daemon-skew: undefined → false
 
@@ -557,7 +559,7 @@ function BrainOverview(
             <Ontology typeCounts={ontologyCounts} />
           </div>
         ) : (
-          <div className="text-[11px] text-[var(--color-text-faint)] rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2">
+          <div className="text-meta text-[var(--color-text-faint)] rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2">
             Knowledge ontology not yet computed for this brain.
           </div>
         )}
@@ -602,43 +604,43 @@ function NeedYouBlock(
   return (
     <div
       data-testid="brainhub-needyou"
-      className={`rounded-lg border px-3 py-2.5 ${hasWork ? 'bg-[#1e1a0e] border-[#5a4a20]' : 'bg-[var(--color-card)] border-[var(--color-border)]'}`}
+      className={`rounded-lg border px-3 py-2.5 ${hasWork ? 'bg-[color-mix(in_srgb,var(--color-status-warning)_8%,transparent)] border-[color-mix(in_srgb,var(--color-status-warning)_25%,transparent)]' : 'bg-[var(--color-card)] border-[var(--color-border)]'}`}
     >
-      <div className={`text-[11px] uppercase tracking-wide font-semibold mb-1.5 ${hasWork ? 'text-[#f0a500]' : 'text-[var(--color-text-faint)]'}`}>
+      <div className={`text-meta uppercase tracking-wide font-semibold mb-1.5 ${hasWork ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-text-faint)]'}`}>
         {hasWork ? '▲ Needs you' : 'Need you'}
       </div>
       {!hasWork ? (
-        <div data-testid="needyou-empty" className="text-[11px] text-[var(--color-text-faint)]">Nothing queued.</div>
+        <div data-testid="needyou-empty" className="text-meta text-[var(--color-text-faint)]">Nothing queued.</div>
       ) : (
         <div className="flex flex-col gap-1.5">
           {pending > 0 && (
             <button
               data-testid="needyou-review"
               onClick={onGoToReview}
-              className="flex items-center gap-2 text-[11px] text-left rounded-md px-2 py-1 border border-[#5a4a20] hover:bg-[#241f10]"
+              className="flex items-center gap-2 text-meta text-left rounded-md px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-warning)_25%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)]"
             >
-              <span className="font-semibold text-[#f0a500] min-w-[22px]">{pending}</span>
+              <span className="font-semibold text-[var(--color-status-warning)] min-w-[22px]">{pending}</span>
               <span className="text-[var(--color-text-muted)]">proposal{pending === 1 ? '' : 's'} awaiting review</span>
-              <span className="ml-auto flex items-center gap-0.5 text-[#f0a500]">
+              <span className="ml-auto flex items-center gap-0.5 text-[var(--color-status-warning)]">
                 Go to Review <span className="material-symbols-outlined icon-xs">arrow_forward</span>
               </span>
             </button>
           )}
           {liveRun && (
-            <div data-testid="needyou-live-run" className="flex items-center gap-2 text-[11px] px-2 py-1">
-              <span className="material-symbols-outlined icon-xs text-[#db8c3a]">pending_actions</span>
+            <div data-testid="needyou-live-run" className="flex items-center gap-2 text-meta px-2 py-1">
+              <span className="material-symbols-outlined icon-xs text-[var(--color-status-warning)]">pending_actions</span>
               <span className="text-[var(--color-text-muted)]">a pipeline run in progress</span>
             </div>
           )}
           {reclaimable > 0 && (
-            <div data-testid="needyou-reclaimable" className="flex items-center gap-2 text-[11px] px-2 py-1">
-              <span className="font-semibold text-[#f0a500] min-w-[22px]">{reclaimable}</span>
+            <div data-testid="needyou-reclaimable" className="flex items-center gap-2 text-meta px-2 py-1">
+              <span className="font-semibold text-[var(--color-status-warning)] min-w-[22px]">{reclaimable}</span>
               <span className="text-[var(--color-text-muted)]">reclaimable (run reclaim)</span>
             </div>
           )}
           {sinking > 0 && (
-            <div data-testid="needyou-sinking" className="flex items-center gap-2 text-[11px] px-2 py-1">
-              <span className="font-semibold text-[#f0a500] min-w-[22px]">{sinking}</span>
+            <div data-testid="needyou-sinking" className="flex items-center gap-2 text-meta px-2 py-1">
+              <span className="font-semibold text-[var(--color-status-warning)] min-w-[22px]">{sinking}</span>
               <span className="text-[var(--color-text-muted)]">entr{sinking === 1 ? 'y' : 'ies'} sinking (decaying)</span>
             </div>
           )}
@@ -665,10 +667,10 @@ function CoreDocCards(
     <div data-testid="brainhub-coredocs">
       {/* group header — the aggregate "what moved this week" + Weekly Report entry */}
       <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-[11px] uppercase tracking-wide font-semibold text-[var(--color-text-faint)]">
+        <span className="text-meta uppercase tracking-wide font-semibold text-[var(--color-text-faint)]">
           Judgment core · review periodically
         </span>
-        <span className="text-[11px] text-[var(--color-text-muted)]" data-testid="coredocs-agg">
+        <span className="text-meta text-[var(--color-text-muted)]" data-testid="coredocs-agg">
           {hasSignal ? `since last review · ${totalNew} new · ${totalPending} pending` : 'up to date since last review'}
         </span>
         <button
@@ -693,19 +695,19 @@ function CoreDocCards(
               key={m.path}
               data-testid={`coredoc-${docName}`}
               onClick={() => onOpenFile(`Projects/${projectName}/${m.path}`)}
-              className={`text-left rounded-lg bg-[var(--color-card)] p-2.5 transition-colors hover:border-[#3b4552] ${
-                marked ? 'border-l-[3px] border-l-[#f0a500] border-y border-r border-[#4a3a12]' : 'border border-[var(--color-border)]'
+              className={`text-left rounded-lg bg-[var(--color-card)] p-2.5 transition-colors hover:border-[var(--color-border)] ${
+                marked ? 'border-l-[3px] border-l-[var(--color-status-warning)] border-y border-r border-[color-mix(in_srgb,var(--color-status-warning)_30%,transparent)]' : 'border border-[var(--color-border)]'
               }`}
             >
               <div className="flex items-center gap-1.5 mb-0.5">
                 <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">description</span>
-                <span className="text-[12px] font-semibold font-mono">{docName}</span>
-                {marked && <span data-testid={`coredoc-mark-${docName}`} className="ml-auto w-1.5 h-1.5 rounded-full bg-[#f0a500]" />}
+                <span className="text-small font-semibold font-mono">{docName}</span>
+                {marked && <span data-testid={`coredoc-mark-${docName}`} className="ml-auto w-1.5 h-1.5 rounded-full bg-[var(--color-status-warning)]" />}
               </div>
-              <div className="text-[11px] text-[var(--color-text-muted)] mb-1">{DOC_ROLE[docName] ?? 'DDD document'}</div>
-              <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-faint)]">
-                {sig.newCount > 0 && <span className="text-[#7ee787]">{sig.newCount} new</span>}
-                {sig.pendingCount > 0 && <span className="text-[#f0a500]">{sig.pendingCount} pending</span>}
+              <div className="text-meta text-[var(--color-text-muted)] mb-1">{DOC_ROLE[docName] ?? 'DDD document'}</div>
+              <div className="flex items-center gap-2 text-meta text-[var(--color-text-faint)]">
+                {sig.newCount > 0 && <span className="text-[var(--color-status-success)]">{sig.newCount} new</span>}
+                {sig.pendingCount > 0 && <span className="text-[var(--color-status-warning)]">{sig.pendingCount} pending</span>}
                 {!marked && <span>up to date</span>}
                 {m.mtime && <span className="ml-auto">{m.mtime}</span>}
               </div>
@@ -732,14 +734,14 @@ function WeeklyReportPanel({ weekly, projectName }: { weekly: WeeklyReportModel;
   const t = weekly.trustDistribution;
   const scored = t.full + t.high + t.moderate + t.low;
   return (
-    <div data-testid="brainhub-weekly-panel" className="rounded-lg border border-[#1f3a5a] bg-[#0e1723] p-3 mb-2 text-[11px]">
-      <div className="flex items-center gap-1.5 mb-2 font-semibold text-[#58a6ff]">
+    <div data-testid="brainhub-weekly-panel" className="rounded-lg border border-[color-mix(in_srgb,var(--color-primary)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-primary)_6%,transparent)] p-3 mb-2 text-meta">
+      <div className="flex items-center gap-1.5 mb-2 font-semibold text-[var(--color-primary)]">
         <span className="material-symbols-outlined icon-sm">summarize</span>
-        {projectName} · weekly review {weekly.sinceSha && <span className="text-[11px] font-mono text-[var(--color-text-faint)]">since {weekly.sinceSha}</span>}
+        {projectName} · weekly review {weekly.sinceSha && <span className="text-meta font-mono text-[var(--color-text-faint)]">since {weekly.sinceSha}</span>}
       </div>
       <div className="flex flex-col gap-1 text-[var(--color-text-muted)]">
-        <div><span className="text-[#7ee787] font-semibold">{weekly.autoApplied}</span> auto-cultivated change{weekly.autoApplied === 1 ? '' : 's'} since last review</div>
-        <div><span className="text-[#f0a500] font-semibold">{weekly.pending}</span> proposal{weekly.pending === 1 ? '' : 's'} awaiting your decision</div>
+        <div><span className="text-[var(--color-status-success)] font-semibold">{weekly.autoApplied}</span> auto-cultivated change{weekly.autoApplied === 1 ? '' : 's'} since last review</div>
+        <div><span className="text-[var(--color-status-warning)] font-semibold">{weekly.pending}</span> proposal{weekly.pending === 1 ? '' : 's'} awaiting your decision</div>
         <div>
           docs touched: {weekly.changedDocs.length > 0
             ? <span className="font-mono text-[var(--color-text)]">{weekly.changedDocs.join(', ')}</span>
@@ -786,8 +788,8 @@ function BrainBrowse(
         className="flex flex-col rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden"
         style={{ maxWidth: 'clamp(320px, 38%, 560px)', maxHeight: '60vh' }}
       >
-        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-[var(--color-border)] text-[11px] font-medium text-[var(--color-text-muted)] flex-shrink-0">
-          <span className="material-symbols-outlined icon-xs text-[#58a6ff]">folder_open</span>
+        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-[var(--color-border)] text-meta text-[var(--color-text-muted)] flex-shrink-0">
+          <span className="material-symbols-outlined icon-xs text-[var(--color-primary)]">folder_open</span>
           <span>Files · Projects/{name}</span>
         </div>
         <LibraryTree
@@ -806,11 +808,11 @@ function BrainBrowse(
             data-testid="codegraph-toggle"
             aria-expanded={graphOpen}
             onClick={() => setGraphOpen((v) => !v)}
-            className="w-full flex items-center gap-2 px-3 py-2 text-[12px] hover:bg-[var(--color-hover)]"
+            className="w-full flex items-center gap-2 px-3 py-2 text-small hover:bg-[var(--color-hover)]"
           >
-            <span className="material-symbols-outlined icon-sm text-[#58a6ff]">hub</span>
-            <span className="font-medium">Code Graph</span>
-            {!graphOpen && <span className="text-[11px] text-[var(--color-text-faint)]">· expand to load the dependency graph</span>}
+            <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">hub</span>
+            <span className="">Code Graph</span>
+            {!graphOpen && <span className="text-meta text-[var(--color-text-faint)]">· expand to load the dependency graph</span>}
             <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] ml-auto">
               {graphOpen ? 'expand_less' : 'expand_more'}
             </span>
@@ -913,7 +915,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
     } finally { setBusy(false); }
   }, [name, load]);
 
-  // Open a hunk's file in the Canvas (Run 2). ⚠️ Gate-1: hunk.file is ALREADY
+  // Open a hunk's file in the Canvas (Run 2). WARNING Gate-1: hunk.file is ALREADY
   // WORKSPACE-relative (backend runs `git diff` at the workspace root with a
   // `Projects/<name>` pathspec → cur_file = "Projects/<name>/…", ddd_brain.py:162/964;
   // verified test fixture:150 + reject call:564). So dispatch it DIRECTLY — do NOT
@@ -927,8 +929,8 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
     }));
   }, [onRequestClose]);
 
-  if (error) return <div className="p-4 text-[#ef4444] text-[13px]" data-testid="review-error">Failed to load review: {error}</div>;
-  if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading review…</div>;
+  if (error) return <div className="p-4 text-[var(--color-status-error)] text-body" data-testid="review-error">Failed to load review: {error}</div>;
+  if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading review…</div>;
 
   // Zone A = auto-applied hunks; Zone C = pending risky proposals. (F1: the former
   // Zone B "decay·sinking" was removed — the backend never emitted that tag, so it
@@ -948,13 +950,13 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
     <div className="p-4" data-testid="brainhub-review">
       {/* diff header — plain language first, git internals folded */}
       <div className="mb-3" data-testid="review-diff-header">
-        <div className="flex items-center gap-2 text-[13px] text-[var(--color-text)]">
-          <span className="material-symbols-outlined icon-sm text-[#a855f7]">rate_review</span>
+        <div className="flex items-center gap-2 text-body text-[var(--color-text)]">
+          <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">rate_review</span>
           <span>
             {changeCount === 0
               ? 'No changes since your last review'
               : <>{changeCount} change{changeCount === 1 ? '' : 's'} since your last review
-                  {pendingCount > 0 && <> · <span className="text-[#f0a500]">{pendingCount} awaiting your approval</span></>}</>}
+                  {pendingCount > 0 && <> · <span className="text-[var(--color-status-warning)]">{pendingCount} awaiting your approval</span></>}</>}
           </span>
           <button
             onClick={onApproveAll}
@@ -962,11 +964,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
             // the empty/partial hunk list would silently mark unreviewed work as seen.
             disabled={busy || data.hunks.length === 0 || data.diff_incomplete}
             data-testid="review-approve-all"
-            className={`ml-auto flex items-center gap-1 text-[11px] rounded-md px-2 py-0.5 disabled:opacity-40 ${
-              armed
-                ? 'text-[#f0a500] border border-[#5a4a1f] bg-[#241f10] hover:bg-[#2e2814]'
-                : 'text-[#3fb950] border border-[#1f5a2a] hover:bg-[#132918]'
-            }`}
+            className={`ml-auto btn-sm disabled:opacity-40 ${armed ? 'btn-warning' : 'btn-success'}`}
             title={armed ? 'This clears the review queue and records everything as seen — click again to confirm' : 'Records all changes below as reviewed'}
           >
             <span className="material-symbols-outlined icon-xs">{armed ? 'warning' : 'visibility'}</span>
@@ -975,10 +973,10 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
         </div>
         {/* engineer detail — folded, muted; kept for power users */}
         <details className="mt-1">
-          <summary className="text-[11px] text-[var(--color-text-muted)] cursor-pointer select-none opacity-70 hover:opacity-100">
+          <summary className="text-meta text-[var(--color-text-muted)] cursor-pointer select-none opacity-70 hover:opacity-100">
             git detail
           </summary>
-          <div className="mt-1 text-[11px] font-mono text-[var(--color-text-muted)]">
+          <div className="mt-1 text-meta font-mono text-[var(--color-text-muted)]">
             diff <span className="text-[var(--color-text)]">Projects/{name}/</span>
             · last-reviewed <span className="text-[var(--color-text)]">{shortSha(data.last_reviewed_sha)}</span>
             → HEAD <span className="text-[var(--color-text)]">{shortSha(data.head_sha)}</span>
@@ -990,7 +988,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
           Gate-2: give an explicit Retry affordance (not just "retry shortly" text) so a
           large-repo timeout isn't a dead-end lockout of the review. */}
       {data.diff_incomplete && (
-        <div className="flex items-center gap-1.5 mb-3 text-[11px] text-[#f0a500] bg-[#241f10] border border-[#5a4a1f] rounded-md px-2 py-1" data-testid="review-diff-incomplete">
+        <div className="flex items-center gap-1.5 mb-3 text-meta text-[var(--color-status-warning)] bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warning)_32%,transparent)] rounded-md px-2 py-1" data-testid="review-diff-incomplete">
           <span className="material-symbols-outlined icon-xs">warning</span>
           The review diff timed out — this queue may be incomplete. "Mark all seen" is disabled to avoid skipping unreviewed changes.
           <button onClick={() => load()} disabled={busy} data-testid="review-diff-retry"
@@ -1003,11 +1001,11 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
       {/* F3: transient per-action error (reject/proposal 409 etc.) — inline, does NOT
           blank the whole queue (Gate-2). Dismissible; also cleared on next load(). */}
       {actionError && (
-        <div className="flex items-center gap-1.5 mb-3 text-[11px] text-[#ff9a94] bg-[#2a1214] border border-[#5a1f1f] rounded-md px-2 py-1" data-testid="review-action-error">
+        <div className="flex items-center gap-1.5 mb-3 text-meta text-[var(--color-status-error)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] rounded-md px-2 py-1" data-testid="review-action-error">
           <span className="material-symbols-outlined icon-xs">error</span>
           Action failed: {actionError}
           <button onClick={() => setActionError(null)} data-testid="review-action-error-dismiss"
-            className="ml-auto text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1.5">dismiss</button>
+            className="ml-auto text-meta text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline">dismiss</button>
         </div>
       )}
 
@@ -1015,7 +1013,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
       <ReviewZone
         testid="review-zone-a" title="Auto-cultivated · already in brain"
         desc="applied + git-committed — NOT awaiting approval. Reject reverts that hunk."
-        color="#58a6ff"
+        color="var(--color-primary)"
       >
         {zoneA.length === 0 ? <ZoneEmpty text="no auto-applied changes since last review" />
           : zoneA.map((h) => (
@@ -1029,18 +1027,18 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
       <ReviewZone
         testid="review-zone-c" title="Pending approval · NOT yet in brain"
         desc="risky proposals in .artifacts/proposals/ — the real gate."
-        color="#f0a500"
+        color="var(--color-status-warning)"
       >
         {data.proposals.length === 0 && riskyHunks.length === 0
           ? <ZoneEmpty text="no proposals awaiting decision" />
           : data.proposals.map((p) => (
-            <div key={p.id} className="rounded-md border border-dashed border-[#3a2e12] bg-[#1a1710] p-2 mb-1.5" data-testid="review-proposal">
-              <div className="flex items-center gap-1.5 mb-1 text-[11px]">
-                <span className="font-mono text-[#f0a500]">{p.target_doc}</span>
+            <div key={p.id} className="rounded-md border border-dashed border-[color-mix(in_srgb,var(--color-status-warning)_28%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_6%,transparent)] p-2 mb-1.5" data-testid="review-proposal">
+              <div className="flex items-center gap-1.5 mb-1 text-meta">
+                <span className="font-mono text-[var(--color-status-warning)]">{p.target_doc}</span>
                 <span className="text-[var(--color-text-faint)]">· {p.target_section}</span>
                 {/* F4: confidence is the human-gate decision signal — render it
                     (null-guarded: an un-scored proposal shows "—", never "null"). */}
-                <span className="text-[11px] text-[var(--color-text-muted)]" data-testid="proposal-confidence" title="cultivation confidence">
+                <span className="text-meta text-[var(--color-text-muted)]" data-testid="proposal-confidence" title="cultivation confidence">
                   conf {p.confidence != null ? p.confidence.toFixed(2) : '—'}
                 </span>
                 <div className="ml-auto flex gap-1">
@@ -1050,7 +1048,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
                     className="btn-sm btn-danger disabled:opacity-40">Reject</button>
                 </div>
               </div>
-              <div className="text-[11px] text-[var(--color-text-muted)] line-clamp-2">{p.content}</div>
+              <div className="text-meta text-[var(--color-text-muted)] line-clamp-2">{p.content}</div>
             </div>
           ))}
       </ReviewZone>
@@ -1064,8 +1062,8 @@ function ReviewZone({ testid, title, desc, color, children }: {
   return (
     <div className="mb-4" data-testid={testid}>
       <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-[12px] font-semibold" style={{ color }}>{title}</span>
-        <span className="text-[11px] text-[var(--color-text-faint)]">{desc}</span>
+        <span className="text-small font-semibold" style={{ color }}>{title}</span>
+        <span className="text-meta text-[var(--color-text-faint)]">{desc}</span>
       </div>
       {children}
     </div>
@@ -1073,7 +1071,7 @@ function ReviewZone({ testid, title, desc, color, children }: {
 }
 
 function ZoneEmpty({ text }: { text: string }) {
-  return <div className="text-[11px] text-[var(--color-text-faint)] italic px-1 py-1">{text}</div>;
+  return <div className="text-meta text-[var(--color-text-faint)] italic px-1 py-1">{text}</div>;
 }
 
 function HunkCard({ hunk, busy, onReject, onOpenFile }: {
@@ -1087,22 +1085,22 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
   const fileName = hunk.file.split('/').pop() ?? hunk.file;
   const sig = hunk.signature;
   return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[#12161c] mb-1.5 overflow-hidden" data-testid="review-hunk">
+    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-code-bg)] mb-1.5 overflow-hidden" data-testid="review-hunk">
       {/* Plain-language summary line (AC1) — always visible. Primary derivation is
           file + counted +/- + line-range (always reliable); section is best-effort
           (empty for .md — Gate-1), shown only when git gave a non-empty heading. */}
       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-[var(--color-border)]" data-testid={`hunk-summary-${sig}`}>
-        <span className="font-mono text-[11px] text-[var(--color-text)]">{fileName}</span>
-        <span className="text-[11px] tabular-nums">
-          <span className="text-[#7ee787]">+{s.adds}</span>
+        <span className="font-mono text-meta text-[var(--color-text)]">{fileName}</span>
+        <span className="text-meta tabular-nums">
+          <span className="text-[var(--color-status-success)]">+{s.adds}</span>
           <span className="text-[var(--color-text-faint)]"> / </span>
-          <span className="text-[#ff9a94]">-{s.dels}</span>
+          <span className="text-[var(--color-status-error)]">-{s.dels}</span>
         </span>
         {s.startLine != null && (
-          <span className="text-[11px] text-[var(--color-text-faint)]">around line {s.startLine}</span>
+          <span className="text-meta text-[var(--color-text-faint)]">around line {s.startLine}</span>
         )}
         {s.section && (
-          <span className="text-[11px] text-[var(--color-text-faint)] truncate italic">· {s.section}</span>
+          <span className="text-meta text-[var(--color-text-faint)] truncate italic">· {s.section}</span>
         )}
         <div className="ml-auto flex items-center gap-1">
           <button
@@ -1134,10 +1132,10 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
         </div>
       </div>
       {showDiff && (
-        <pre className="text-[11px] font-mono leading-relaxed px-2 py-1 overflow-x-auto max-h-40" data-testid={`hunk-diff-${sig}`}>
+        <pre className="text-meta font-mono leading-relaxed px-2 py-1 overflow-x-auto max-h-40" data-testid={`hunk-diff-${sig}`}>
           {hunk.diff_text.split('\n').slice(0, 20).map((ln, i) => {
-            const c = ln.startsWith('+') && !ln.startsWith('+++') ? '#7ee787'
-              : ln.startsWith('-') && !ln.startsWith('---') ? '#ff9a94'
+            const c = ln.startsWith('+') && !ln.startsWith('+++') ? 'var(--color-status-success)'
+              : ln.startsWith('-') && !ln.startsWith('---') ? 'var(--color-status-error)'
               : 'var(--color-text-faint)';
             return <div key={i} style={{ color: c }}>{ln || ' '}</div>;
           })}
@@ -1220,50 +1218,50 @@ function DistributeView(
     );
   }, [distributeCmd, onDispatch, onRequestClose]);
 
-  if (error) return <div className="p-4 text-[#ef4444] text-[13px]" data-testid="distribute-error">Failed to load distribution: {error}</div>;
-  if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading distribution…</div>;
+  if (error) return <div className="p-4 text-[var(--color-status-error)] text-body" data-testid="distribute-error">Failed to load distribution: {error}</div>;
+  if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading distribution…</div>;
 
   return (
     <div className="p-4" data-testid="brainhub-distribute">
       {/* declared reach — guided Step 2 (confirm targets & freshness) */}
       {data.distributable ? (
         <>
-          <div className="flex items-center gap-2 mb-1.5 text-[11px] uppercase tracking-wider font-semibold text-[#3fb950]" data-testid="distribute-step" data-step="2">
+          <div className="flex items-center gap-2 mb-1.5 text-meta uppercase tracking-wider font-semibold text-[var(--color-status-success)]" data-testid="distribute-step" data-step="2">
             Step 2 · confirm targets &amp; freshness
           </div>
-          <div className="flex items-center gap-2 mb-3 text-[12px]">
-            <span className="material-symbols-outlined icon-sm text-[#3fb950]">outbound</span>
+          <div className="flex items-center gap-2 mb-3 text-small">
+            <span className="material-symbols-outlined icon-sm text-[var(--color-status-success)]">outbound</span>
             <span className="font-semibold text-[var(--color-text)]">Distributable</span>
-            <span className={`text-[11px] px-1.5 py-0.5 rounded tabular-nums ${data.visibility === 'external' ? 'bg-[#3a2412] text-[#f0a500]' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]'}`}>
+            <span className={`text-meta px-1.5 py-0.5 rounded tabular-nums ${data.visibility === 'external' ? 'bg-[color-mix(in_srgb,var(--color-status-warning)_18%,transparent)] text-[var(--color-status-warning)]' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]'}`}>
               {data.visibility}
             </span>
           </div>
           <div className="flex flex-col gap-1.5 mb-4" data-testid="distribute-targets">
             {data.declared_targets.map((t) => (
-              <div key={t} className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[#12161c] px-2.5 py-1.5" data-testid="distribute-target-row">
-                <span className="material-symbols-outlined icon-xs text-[#58a6ff]">deployed_code</span>
-                <span className="font-mono text-[11px] text-[var(--color-text)]">{t}</span>
+              <div key={t} className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-code-bg)] px-2.5 py-1.5" data-testid="distribute-target-row">
+                <span className="material-symbols-outlined icon-xs text-[var(--color-primary)]">deployed_code</span>
+                <span className="font-mono text-meta text-[var(--color-text)]">{t}</span>
                 {/* AC1 (run_8d2ec26c): where it lands — derived read-only from target+visibility. */}
-                <span className="text-[11px] text-[var(--color-text-muted)]" title={repoForTarget(t).install}>
+                <span className="text-meta text-[var(--color-text-muted)]" title={repoForTarget(t).install}>
                   → {repoForTarget(t).label}
                 </span>
                 {/* F2 TRISTATE — three EXPLICIT branches. `null` (freshness unknown,
                     uncommitted output) must NOT fall into "up to date" (the old
                     `!source_changed_since` did exactly that, re-burying staleness). */}
                 {!data.has_output ? (
-                  <span className="ml-auto text-[11px] text-[var(--color-text-faint)]">never distributed</span>
+                  <span className="ml-auto text-meta text-[var(--color-text-faint)]">never distributed</span>
                 ) : data.source_changed_since === true ? (
-                  <span className="ml-auto text-[11px] text-[#f0a500]" title="knowledge changed since last distribute">● source changed since last distribute</span>
+                  <span className="ml-auto text-meta text-[var(--color-status-warning)]" title="knowledge changed since last distribute">● source changed since last distribute</span>
                 ) : data.source_changed_since === false ? (
-                  <span className="ml-auto text-[11px] text-[var(--color-text-faint)]">up to date</span>
+                  <span className="ml-auto text-meta text-[var(--color-text-faint)]">up to date</span>
                 ) : (
-                  <span className="ml-auto text-[11px] text-[var(--color-text-muted)]" title="the distribute output isn't git-committed, so there's no stable anchor to compare against — commit the output to enable freshness tracking">freshness unknown</span>
+                  <span className="ml-auto text-meta text-[var(--color-text-muted)]" title="the distribute output isn't git-committed, so there's no stable anchor to compare against — commit the output to enable freshness tracking">freshness unknown</span>
                 )}
               </div>
             ))}
           </div>
           {data.has_output && (
-            <div className="text-[11px] text-[var(--color-text-faint)] mb-3 font-mono">
+            <div className="text-meta text-[var(--color-text-faint)] mb-3 font-mono">
               last output: {data.output_path} {data.last_distribute_time ? `· ${data.last_distribute_time.slice(0, 10)}` : ''}
             </div>
           )}
@@ -1282,33 +1280,33 @@ function DistributeView(
           </button>
         </>
       ) : (
-        <div className="rounded-md border border-dashed border-[#3a2e12] bg-[#1a1710] p-3 mb-4" data-testid="distribute-not-distributable">
+        <div className="rounded-md border border-dashed border-[color-mix(in_srgb,var(--color-status-warning)_28%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_6%,transparent)] p-3 mb-4" data-testid="distribute-not-distributable">
           {/* Guided header — Gate-1: an ORPHANED brain (has_output && !distributable)
               already completed the flow once; labeling it "Step 1 · declare reach"
               would contradict the orphaned warning below. So split on has_output:
               orphaned → re-declare (a regression state); else → honest Step 1. */}
           {data.has_output ? (
-            <div className="flex items-center gap-2 mb-1.5 text-[11px] uppercase tracking-wider font-semibold text-[#db8c3a]" data-testid="distribute-redeclare">
+            <div className="flex items-center gap-2 mb-1.5 text-meta uppercase tracking-wider font-semibold text-[var(--color-status-warning)]" data-testid="distribute-redeclare">
               Reach removed · re-declare to resume distribution
             </div>
           ) : (
-            <div className="flex items-center gap-2 mb-1.5 text-[11px] uppercase tracking-wider font-semibold text-[#f0a500]" data-testid="distribute-step" data-step="1">
+            <div className="flex items-center gap-2 mb-1.5 text-meta uppercase tracking-wider font-semibold text-[var(--color-status-warning)]" data-testid="distribute-step" data-step="1">
               Step 1 · declare a reach
             </div>
           )}
-          <div className="flex items-center gap-2 text-[12px] text-[#f0a500] mb-1">
+          <div className="flex items-center gap-2 text-small text-[var(--color-status-warning)] mb-1">
             <span className="material-symbols-outlined icon-sm">block</span>
             Not distributable
           </div>
-          <div className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
+          <div className="text-meta text-[var(--color-text-muted)] leading-relaxed">
             This brain has no <span className="font-mono">distribution</span> block in its <span className="font-mono">aim.json</span>.
             The owner must declare a reach before it can be distributed — add to <span className="font-mono">aim.json</span>:
             <code className="block mt-1 px-2 py-1 rounded bg-[var(--color-bg)] text-[var(--color-text-muted)] whitespace-pre">{'"distribution": { "targets": ["open-plugin"], "visibility": "internal" }'}</code>
-            {data.warnings.length > 0 && <span className="block mt-1 text-[#ff9a94]">⚠ {data.warnings.join('; ')}</span>}
+            {data.warnings.length > 0 && <span className="block mt-1 text-[var(--color-status-error)]">{data.warnings.join('; ')}</span>}
             {/* Gate-2 MED: a stale output with the block since removed — surface it, don't hide it. */}
             {data.has_output && (
-              <span className="block mt-1 text-[#db8c3a]" data-testid="distribute-stale-output">
-                ⚠ an orphaned distribute output still exists (<span className="font-mono">{data.output_path}</span>) — the reach was declared before, then removed.
+              <span className="block mt-1 text-[var(--color-status-warning)]" data-testid="distribute-stale-output">
+                An orphaned distribute output still exists (<span className="font-mono">{data.output_path}</span>) — the reach was declared before, then removed.
               </span>
             )}
           </div>
@@ -1334,7 +1332,7 @@ function DistributeView(
           + emit≠publish once the message lands. */}
       <div className="flex flex-col gap-1.5">
         {data.distributable && (
-          <div className="text-[11px] uppercase tracking-wider font-semibold text-[#3fb950]" data-testid="distribute-step" data-step="3">
+          <div className="text-meta uppercase tracking-wider font-semibold text-[var(--color-status-success)]" data-testid="distribute-step" data-step="3">
             Step 3 · run
           </div>
         )}
@@ -1356,7 +1354,7 @@ function DistributeView(
               : 'Distribute a brain'}
           </button>
           {data.distributable && (
-            <span className="text-[11px] text-[var(--color-text-faint)] font-mono">→ {distributeCmd}</span>
+            <span className="text-meta text-[var(--color-text-faint)] font-mono">→ {distributeCmd}</span>
           )}
         </div>
       </div>
@@ -1370,16 +1368,16 @@ function DistributeView(
           data-testid="distribute-guideline-toggle"
           aria-expanded={guidelineOpen}
           onClick={() => setGuidelineOpen((v) => !v)}
-          className="w-full flex items-center gap-2 px-3 py-2 text-[12px] hover:bg-[var(--color-hover)]"
+          className="w-full flex items-center gap-2 px-3 py-2 text-small hover:bg-[var(--color-hover)]"
         >
-          <span className="material-symbols-outlined icon-sm text-[#58a6ff]">help</span>
-          <span className="font-medium">How distribution works</span>
+          <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">help</span>
+          <span className="">How distribution works</span>
           <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] ml-auto">
             {guidelineOpen ? 'expand_less' : 'expand_more'}
           </span>
         </button>
         {guidelineOpen && (
-          <div className="border-t border-[var(--color-border)] px-3 py-2.5 text-[11px] leading-relaxed text-[var(--color-text-muted)] flex flex-col gap-2" data-testid="distribute-guideline-body">
+          <div className="border-t border-[var(--color-border)] px-3 py-2.5 text-meta leading-relaxed text-[var(--color-text-muted)] flex flex-col gap-2" data-testid="distribute-guideline-body">
             <div>
               <span className="font-semibold text-[var(--color-text)]">The 3-step flow (human-in-the-loop):</span>
               <div className="mt-0.5">Step 1 · declare a reach in <span className="font-mono">aim.json</span> (targets + visibility — the SSOT, the ceiling).
@@ -1387,7 +1385,7 @@ function DistributeView(
               Step 3 · run — the command lands in chat, where <span className="font-mono">s_ddd-distribute</span> confirms the subset, runs a content-safety scan, and renders the code package.</div>
             </div>
             <div>
-              <span className="font-semibold text-[var(--color-text)]">🎯 Target → where it lands (git code-package management):</span>
+              <span className="font-semibold text-[var(--color-text)]">Target → where it lands (git code-package management):</span>
               {/* Rendered FROM TARGET_REPO_MAP — the SAME source the per-row label uses,
                   so the legend can never drift from the rows (Gate-2 cross-fix fix). */}
               <div className="mt-0.5 flex flex-col gap-0.5">
@@ -1397,7 +1395,7 @@ function DistributeView(
               </div>
             </div>
             <div>
-              <span className="font-semibold text-[var(--color-text)]">🔒 emit ≠ publish:</span> an <span className="font-mono">internal</span> DDD can EMIT a package for a private install, but public publish is refused until <span className="font-mono">visibility</span> is explicitly <span className="font-mono">external</span> — a deliberate owner edit in <span className="font-mono">aim.json</span>, never a UI toggle.
+              <span className="font-semibold text-[var(--color-text)]">emit ≠ publish:</span> an <span className="font-mono">internal</span> DDD can EMIT a package for a private install, but public publish is refused until <span className="font-mono">visibility</span> is explicitly <span className="font-mono">external</span> — a deliberate owner edit in <span className="font-mono">aim.json</span>, never a UI toggle.
             </div>
           </div>
         )}

@@ -13,7 +13,7 @@ import type React from 'react';
  * The community service is mocked at the boundary (system boundary = HTTP).
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, screen, cleanup, waitFor, fireEvent, within } from '@testing-library/react';
+import { screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
 import { CommunityContent } from './CommunityOverlay';
 import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
 import { render as __render } from '@testing-library/react';
@@ -572,7 +572,7 @@ describe('CommunityOverlay — Hot Topics (live signals.json feed)', () => {
     setup();
     const label = await screen.findByTestId('hot-topics-freshness');
     expect(label.textContent).toMatch(/synced/i);
-    expect(label.className).toContain('emerald');
+    expect(label.className).toContain('--color-status-success');
   });
 
   it('shows a scan-may-be-down (amber) label when the feed is > 21 days old', async () => {
@@ -582,7 +582,7 @@ describe('CommunityOverlay — Hot Topics (live signals.json feed)', () => {
     setup();
     const label = await screen.findByTestId('hot-topics-freshness');
     expect(label.textContent).toMatch(/scan may be down/i);
-    expect(label.className).toContain('amber');
+    expect(label.className).toContain('--color-status-warning');
   });
 
   it('renders nothing when there are no hot topics (fail-quiet, no error banner)', async () => {
@@ -610,7 +610,7 @@ describe('CommunityOverlay — Hot Topics (live signals.json feed)', () => {
     setup();
     const label = await screen.findByTestId('hot-topics-freshness');
     expect(label.textContent).toMatch(/scan time unknown/i);
-    expect(label.className).toContain('amber');
+    expect(label.className).toContain('--color-status-warning');
   });
 });
 

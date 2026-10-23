@@ -51,14 +51,14 @@ export type HiveStatusDot = { color: string; pulse?: boolean; title?: string };
 export function deriveHiveStatusDot(instances: { status: string }[] | undefined): HiveStatusDot | undefined {
   if (!instances || instances.length === 0) return undefined;
   if (instances.some((i) => i.status === 'error')) {
-    return { color: '#ef4444', title: 'A Hive needs attention (error)' };
+    return { color: 'var(--color-status-error)', title: 'A Hive needs attention (error)' };
   }
   if (instances.some((i) => TRANSITIONAL_STATUSES.includes(i.status))) {
-    return { color: '#3b82f6', pulse: true, title: 'A Hive is provisioning' };
+    return { color: 'var(--color-primary)', pulse: true, title: 'A Hive is provisioning' };
   }
   if (instances.some((i) => i.status === 'running')) {
     const n = instances.filter((i) => i.status === 'running').length;
-    return { color: '#10b981', title: `${n} Hive${n > 1 ? 's' : ''} running` };
+    return { color: 'var(--color-status-success)', title: `${n} Hive${n > 1 ? 's' : ''} running` };
   }
   return undefined;  // all stopped → silent
 }
@@ -154,14 +154,14 @@ function TopBar() {
           edge/resize handle. macOS has no right-side controls; Windows/Linux may
           have snap layout button area (~8px). 20px covers both safely. */}
       <div
-        className="flex items-center gap-2 pr-5 text-[11px] text-[var(--color-text-muted)]"
+        className="flex items-center gap-2 pr-5 text-meta text-[var(--color-text-muted)]"
         role="status"
         aria-label="Token usage"
         title={tokenUsage
           ? `Today: $${tokenUsage.today_cost_usd.toFixed(2)} | Total: $${tokenUsage.total_cost_usd.toFixed(2)}`
           : 'Loading...'}
       >
-        <span className="text-[13px]">&#x1FA99;</span>
+        <span className="text-body">&#x1FA99;</span>
         <span>Today <strong className="text-[var(--color-text-secondary)]">{todayDisplay}</strong></span>
         <span className="text-[var(--color-border)]">|</span>
         <span>Total <strong className="text-[var(--color-text-secondary)]">{totalDisplay}</strong></span>
@@ -226,7 +226,7 @@ function LeftSidebar() {
           <span className="flex-shrink-0 w-[26px] h-[26px] rounded-md overflow-hidden flex items-center justify-center">
             <SwarmAILogo />
           </span>
-          <span className="text-[13.5px] font-bold text-white flex-1 text-left">Chat</span>
+          <span className="text-body font-semibold text-[var(--color-on-accent)] flex-1 text-left">Chat</span>
         </button>
 
         {/* History row — a Chat sub-entry (past conversations), muted vs domain cards. */}
@@ -244,8 +244,8 @@ function LeftSidebar() {
           data-testid="history-row"
         >
           <span data-testid="history-row-icon" className="w-4 flex items-center justify-center opacity-85"><NavSvgIcon name="history" /></span>
-          <span className="flex-1 text-left text-[11.5px] tabular-nums tracking-wide">{NAV.history.navLabel}</span>
-          <span className="text-[13px] text-[var(--color-text-faint)]">›</span>
+          <span className="flex-1 text-left text-meta tabular-nums tracking-wide">{NAV.history.navLabel}</span>
+          <span className="text-body text-[var(--color-text-faint)]">›</span>
         </button>
 
         {/* Artifacts row — History's twin: browses recent FILES (not conversations).
@@ -267,13 +267,13 @@ function LeftSidebar() {
               currentColor, so an inline color on the wrapper tints the glyph. */}
           <span data-testid="artifacts-row-icon" className="w-4 flex items-center justify-center" style={{ color: 'var(--color-primary)' }}><NavSvgIcon name="gallery" /></span>
           <span
-            className="flex-1 text-left text-[11.5px] tabular-nums font-medium tracking-wide"
+            className="flex-1 text-left text-meta tabular-nums tracking-wide"
             style={{ color: 'var(--color-primary)' }}
           >{NAV.artifacts.navLabel}</span>
-          <span className="text-[13px] text-[var(--color-text-faint)]">›</span>
+          <span className="text-body text-[var(--color-text-faint)]">›</span>
         </button>
 
-        {/* 🔔 Alerts "Needs You" slot — a stable, fixed-width portal target
+        {/* Alerts "Needs You" slot — a stable, fixed-width portal target
             (run_2bdc68ad). The AlertsPill itself is owned + rendered by ChatPage
             (which holds the useRadarAttention poll + the tab callbacks) and
             createPortal'd INTO this node — so the global attention signal lives
@@ -316,7 +316,7 @@ function LeftSidebar() {
             <span className="a10-plus flex-shrink-0 w-[22px] h-[22px] rounded-[7px] flex items-center justify-center">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
             </span>
-            <span className="flex-1 text-left text-[12px] font-semibold whitespace-nowrap">{NAV['new-brain'].navLabel}</span>
+            <span className="flex-1 text-left text-small font-semibold whitespace-nowrap">{NAV['new-brain'].navLabel}</span>
           </button>
         </div>
 
@@ -374,7 +374,7 @@ function LeftSidebar() {
           <GitHubIcon className="w-4 h-4" />
         </a>
         <button
-          className="a10-fcard flex items-center justify-center gap-1.5 rounded-lg py-2 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+          className="a10-fcard w-full flex items-center justify-center gap-1.5 rounded-lg py-2 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
           title="Terminal (⌘`)"
           onClick={toggleTerminal}
           aria-pressed={terminalPanelOpen}
@@ -400,16 +400,16 @@ function SwarmAILogo() {
       <svg viewBox="0 0 200 200" width="100%" height="100%" aria-label="SwarmAI">
         <defs>
           <linearGradient id="swarmHexNav" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#fde047" />
-            <stop offset="55%" stopColor="#f59e0b" />
-            <stop offset="100%" stopColor="#d97706" />
+            <stop offset="0%" style={{ stopColor: 'var(--color-brand-spark)' }} />
+            <stop offset="55%" stopColor="var(--color-status-warning)" />
+            <stop offset="100%" stopColor="var(--color-status-warning)" />
           </linearGradient>
         </defs>
         <polygon points="100,30 162,65 162,135 100,170 38,135 38,65" fill="url(#swarmHexNav)" />
         <path
           d="M128 74 C128 60 114 54 100 54 C84 54 73 63 73 76 C73 88 84 92 100 95 C116 98 127 102 127 114 C127 127 115 133 100 133 C86 133 73 127 72 114"
           fill="none"
-          stroke="#101527"
+          style={{ stroke: 'var(--color-brand-ink)' }}
           strokeWidth="15"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -665,7 +665,7 @@ function A10Group({ label, tint, dimCards, children }: { label: string; tint: st
   return (
     <div className={`a10-group relative pb-1.5${dimCards ? ' a10-group--dim' : ''}`} style={{ '--gc': tint } as CSSProperties}>
       <div
-        className="flex items-center gap-2 px-1 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-[0.12em]"
+        className="flex items-center gap-2 px-1 pt-2 pb-1 text-meta font-semibold uppercase tracking-[0.12em]"
         style={{ color: tint }}
         data-testid="navgroup-label"
       >
@@ -732,7 +732,7 @@ function A10Card({ navId, icon, flag, isActive, highlight, statusDot, onClick, o
           />
         )}
       </span>
-      <span className="flex-1 text-left text-[12.5px] font-semibold text-[var(--color-text)] leading-tight whitespace-nowrap">{label}</span>
+      <span className="flex-1 text-left text-small font-semibold text-[var(--color-text)] leading-tight whitespace-nowrap">{label}</span>
       {flag === 'y' && (
         <span className="a10-flag a10-flag--y" data-testid="flag-y" aria-label="needs attention">Y</span>
       )}

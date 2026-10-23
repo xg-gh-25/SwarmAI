@@ -118,8 +118,8 @@ describe('AC1: Knowledge section-header', () => {
   it('Knowledge section-header has yellow accent config', () => {
     const knowledgeSection = EXPLORER_SECTIONS.find((s) => s.label === 'Knowledge');
     expect(knowledgeSection).toBeDefined();
-    expect(knowledgeSection!.accentBg).toContain('234,179,8');
-    expect(knowledgeSection!.accentBorder).toContain('234,179,8');
+    expect(knowledgeSection!.accentBg).toContain('--color-status-warning');
+    expect(knowledgeSection!.accentBorder).toContain('--color-status-warning');
   });
 });
 
@@ -157,8 +157,8 @@ describe('AC2: Projects section-header', () => {
   it('Projects section-header has blue accent config', () => {
     const projectsSection = EXPLORER_SECTIONS.find((s) => s.label === 'Projects');
     expect(projectsSection).toBeDefined();
-    expect(projectsSection!.accentBg).toContain('59,130,246');
-    expect(projectsSection!.accentBorder).toContain('59,130,246');
+    expect(projectsSection!.accentBg).toContain('--color-primary');
+    expect(projectsSection!.accentBorder).toContain('--color-primary');
   });
 });
 

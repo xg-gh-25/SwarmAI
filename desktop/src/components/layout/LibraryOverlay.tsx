@@ -52,13 +52,13 @@ interface MountsList { count: number; mounts: MountRow[]; registry_ready: boolea
 type TabKey = 'browse' | 'recent' | 'guide';
 
 const SOURCE_META: Record<RecentItem['source'], { icon: string; label: string }> = {
-  session: { icon: '🤖', label: 'session' },
-  you: { icon: '⬆', label: 'you' },
-  job: { icon: '⏱', label: 'job' },
+  session: { icon: 'smart_toy', label: 'session' },
+  you: { icon: 'person', label: 'you' },
+  job: { icon: 'schedule', label: 'job' },
 };
 
 const HEALTH_TINT: Record<MountRow['health'], string> = {
-  fresh: '#5fc99a', stale: '#d08a4a', missing: '#d0524a',
+  fresh: 'var(--color-status-success)', stale: 'var(--color-status-warning)', missing: 'var(--color-status-error)',
 };
 
 function fmtBytes(n: number): string {
@@ -109,16 +109,16 @@ export function LibraryContent() {
         >
           {/* One quiet vitals line — what the library holds. Not a headline grid;
               a single scannable fact (Native items + Mounted count). */}
-          <div className="flex flex-col gap-1 text-[12px] text-[var(--color-text-muted)]">
+          <div className="flex flex-col gap-1 text-small text-[var(--color-text-muted)]">
             <div className="flex items-center gap-1.5">
-              <span aria-hidden>📗</span>
+              <span aria-hidden className="material-symbols-outlined icon-sm">menu_book</span>
               <span className="text-[var(--color-text)]">{native ? nativeFileTotal : '—'}</span>
               <span className="text-[var(--color-text-faint)]">
                 items in Knowledge/{native ? ` · ${fmtBytes(nativeByteTotal)}` : ''}
               </span>
             </div>
             <div className="flex items-center gap-1.5">
-              <span aria-hidden>🔗</span>
+              <span aria-hidden className="material-symbols-outlined icon-sm">link</span>
               <span className="text-[var(--color-text)]">{mountCount}</span>
               <span className="text-[var(--color-text-faint)]">
                 mounted {mountCount === 1 ? 'folder' : 'folders'}
@@ -202,23 +202,23 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="🔍 Search the library (keyword / FTS5 — what recall would retrieve)…"
-          className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
+          placeholder="Search the library (keyword / FTS5 — what recall would retrieve)…"
+          className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-body text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
         />
         {submitted && (
           <button type="button" data-testid="library-search-clear"
             onClick={() => { setQuery(''); setSubmitted(''); }}
-            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]">clear</button>
+            className="text-small text-[var(--color-text-muted)] hover:text-[var(--color-text)]">clear</button>
         )}
       </form>
 
       {submitted.trim() ? (
         <section data-testid="library-search-results">
-          <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
+          <div className="mb-2 text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
             {isFetching ? 'Searching…' : `${search?.count ?? 0} recall hits for “${submitted}”`}
           </div>
           {(search?.hits ?? []).length === 0 && !isFetching ? (
-            <div className="py-6 text-center text-sm text-[var(--color-text-faint)]">
+            <div className="py-6 text-center text-body text-[var(--color-text-faint)]">
               No recall hits — try different keywords, or the knowledge may not be indexed yet.
             </div>
           ) : (
@@ -234,13 +234,13 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
                   onClick={() => h.source && document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: h.source } }))}
                   className="flex items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-[var(--color-hover)]"
                 >
-                  <span className="shrink-0 rounded px-1.5 py-[1px] text-[11px] tabular-nums"
-                    style={{ background: h.domain === 'codeintel' ? 'color-mix(in srgb,#4a8fb0 16%,transparent)' : 'color-mix(in srgb,#5fc99a 16%,transparent)',
-                             color: h.domain === 'codeintel' ? '#4a8fb0' : '#5fc99a' }}>
+                  <span className="shrink-0 rounded px-1.5 py-[1px] text-meta tabular-nums"
+                    style={{ background: h.domain === 'codeintel' ? 'color-mix(in srgb,var(--color-primary) 16%,transparent)' : 'color-mix(in srgb,var(--color-status-success) 16%,transparent)',
+                             color: h.domain === 'codeintel' ? 'var(--color-primary)' : 'var(--color-status-success)' }}>
                     {h.domain === 'codeintel' ? 'code' : 'docs'}{h.mount_id ? '·mount' : ''}
                   </span>
-                  <span className="flex-1 min-w-0 truncate text-sm text-[var(--color-text)]">{h.title || h.source}</span>
-                  <span className="shrink-0 text-[11px] text-[var(--color-text-faint)] font-mono truncate max-w-[280px]">{h.source}</span>
+                  <span className="flex-1 min-w-0 truncate text-body text-[var(--color-text)]">{h.title || h.source}</span>
+                  <span className="shrink-0 text-meta text-[var(--color-text-faint)] font-mono truncate max-w-[280px]">{h.source}</span>
                 </button>
               ))}
             </div>
@@ -253,8 +253,8 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
       <>
       {/* NATIVE — cognition green. Live Knowledge/ tree: expand to any file, click to open in Canvas. */}
       <section data-testid="library-native-section" className="flex flex-col min-h-0 flex-1">
-        <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-wider shrink-0" style={{ color: '#5fc99a' }}>
-          📗 Native · Knowledge/
+        <div className="mb-2 flex items-center gap-2 text-meta uppercase tracking-wider shrink-0" style={{ color: 'var(--color-status-success)' }}>
+          <span aria-hidden className="material-symbols-outlined icon-sm">menu_book</span> Native · Knowledge/
         </div>
         <LibraryTree />
       </section>
@@ -262,15 +262,15 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
       {/* MOUNTED — cooler tint + link icon; empty-state is compact, not a void (§4) */}
       <section data-testid="library-mounted-section" className="shrink-0">
         <div className="mb-2 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider" style={{ color: '#4a8fb0' }}>
-            🔗 Mounted · external sources
+          <div className="flex items-center gap-2 text-meta uppercase tracking-wider" style={{ color: 'var(--color-primary)' }}>
+            <span aria-hidden className="material-symbols-outlined icon-sm">link</span> Mounted · external sources
           </div>
           <AddFolderButton />
         </div>
         {mountRows.length === 0 ? (
           <div
             data-testid="library-mounted-empty"
-            className="rounded-lg border border-dashed border-[color-mix(in_srgb,#4a8fb0_35%,var(--color-border))] px-4 py-3 text-[11px] text-[var(--color-text-muted)]"
+            className="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--color-primary)_35%,var(--color-border))] px-4 py-3 text-meta text-[var(--color-text-muted)]"
           >
             No mounted folders yet. <b>+ Add Folder</b> registers a local directory —
             the agent judges its kind (code / docs) and indexes it <b>in place</b> (never
@@ -307,25 +307,25 @@ function MountRowView({ m }: { m: MountRow }) {
     >
       <span className="w-1.5 h-4 shrink-0 rounded-full" style={{ background: HEALTH_TINT[m.health] }} aria-hidden title={m.health} />
       <div className="flex-1 min-w-0">
-        <div className="truncate text-sm font-medium text-[var(--color-text)]">{m.path.split('/').pop()}</div>
-        <div className="truncate text-[11px] text-[var(--color-text-faint)] font-mono">{m.path}</div>
+        <div className="truncate text-body text-[var(--color-text)]">{m.path.split('/').pop()}</div>
+        <div className="truncate text-meta text-[var(--color-text-faint)] font-mono">{m.path}</div>
         {/* Honest recall-reachability line — never let a registered-but-unindexed
             mount read as searchable. docs kind needs its cards written in chat. */}
         {indexed ? (
-          <div data-testid={`library-mount-indexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-[11px]" style={{ color: '#5fc99a' }}>
+          <div data-testid={`library-mount-indexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-meta" style={{ color: 'var(--color-status-success)' }}>
             <span aria-hidden>✓</span> indexed — recall reaches it
           </div>
         ) : (
-          <div data-testid={`library-mount-unindexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-[11px]" style={{ color: '#d08a4a' }}>
-            <span aria-hidden>⚠</span>
+          <div data-testid={`library-mount-unindexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-meta" style={{ color: 'var(--color-status-warning)' }}>
+            <span aria-hidden className="material-symbols-outlined icon-xs">warning</span>
             {m.kind === 'docs'
               ? 'no text content found (empty or all-binary) — recall can’t reach it'
               : 'not indexed yet — recall can’t reach it'}
           </div>
         )}
       </div>
-      <span className="shrink-0 rounded px-1.5 py-[1px] text-[11px] tabular-nums self-start" style={{ background: 'color-mix(in srgb, #4a8fb0 16%, transparent)', color: '#4a8fb0' }}>{m.kind}</span>
-      <span className="shrink-0 text-[11px] tabular-nums text-[var(--color-text-faint)] self-start">Local</span>
+      <span className="shrink-0 rounded px-1.5 py-[1px] text-meta tabular-nums self-start" style={{ background: 'color-mix(in srgb, var(--color-primary) 16%, transparent)', color: 'var(--color-primary)' }}>{m.kind}</span>
+      <span className="shrink-0 text-meta tabular-nums text-[var(--color-text-faint)] self-start">Local</span>
     </div>
   );
 }
@@ -375,10 +375,9 @@ function AddFolderButton() {
       data-testid="library-add-folder"
       onClick={onClick}
       disabled={busy}
-      className="flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium text-white disabled:opacity-60"
-      style={{ background: '#4a8fb0' }}
+      className="btn-sm btn-primary disabled:opacity-60"
     >
-      <span className="text-sm leading-none">+</span> Add Folder
+      <span className="material-symbols-outlined icon-xs">add</span> Add Folder
     </button>
   );
 }
@@ -402,8 +401,8 @@ function RecentTab({
     : items;
   return (
     <div data-testid="library-panel-recent" className="flex flex-col gap-3 max-w-3xl">
-      <div className="text-sm text-[var(--color-text-muted)]">
-        Added or edited in the last {recent?.window_days ?? 7} days — session backflow (🤖),
+      <div className="text-body text-[var(--color-text-muted)]">
+        Added or edited in the last {recent?.window_days ?? 7} days — session backflow (robot icon),
         your saves (⬆), and job output (⏱). Nothing to "process"; read what you want.
       </div>
       {/* Search box — filters the loaded feed locally; only shown when there IS a feed. */}
@@ -413,8 +412,8 @@ function RecentTab({
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="🔍 Filter recent by name or category (last 7 days, local)…"
-          className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
+          placeholder="Filter recent by name or category (last 7 days, local)…"
+          className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-body text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
         />
       )}
       {error ? (
@@ -425,11 +424,11 @@ function RecentTab({
           onRetry={onRetry}
         />
       ) : loading ? (
-        <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">Loading…</div>
+        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">Loading…</div>
       ) : items.length === 0 ? (
-        <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">Nothing new in the last week.</div>
+        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">Nothing new in the last week.</div>
       ) : filtered.length === 0 ? (
-        <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">No matches for “{query}”.</div>
+        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">No matches for “{query}”.</div>
       ) : (
         <div className="flex flex-col gap-1">
           {filtered.map((it) => {
@@ -441,10 +440,10 @@ function RecentTab({
                 onClick={() => document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: it.path } }))}
                 className="flex items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-[var(--color-hover)]"
               >
-                <span className="shrink-0 text-sm" title={meta.label}>{meta.icon}</span>
-                <span className="flex-1 min-w-0 truncate text-sm text-[var(--color-text)]">{it.path.replace('Knowledge/', '')}</span>
-                <span className="shrink-0 text-[11px] text-[var(--color-text-faint)]">{it.category}</span>
-                <span className="w-16 shrink-0 text-right tabular-nums text-[11px] text-[var(--color-text-faint)]">{fmtWhen(it.mtime)}</span>
+                <span className="shrink-0 material-symbols-outlined icon-sm text-[var(--color-text-muted)]" title={meta.label}>{meta.icon}</span>
+                <span className="flex-1 min-w-0 truncate text-body text-[var(--color-text)]">{it.path.replace('Knowledge/', '')}</span>
+                <span className="shrink-0 text-meta text-[var(--color-text-faint)]">{it.category}</span>
+                <span className="w-16 shrink-0 text-right tabular-nums text-meta text-[var(--color-text-faint)]">{fmtWhen(it.mtime)}</span>
               </button>
             );
           })}
@@ -459,11 +458,11 @@ function RecentTab({
 // once-per-session latch, keyword/FTS5/BM25, NO vector leg (allow_embed=False),
 // [RECALLED] tag. Describing a vector/hybrid leg here would be a stale-teaching bug.
 const RECALL_STEPS: Array<{ icon: string; title: string; desc: string }> = [
-  { icon: '🕐', title: 'When', desc: 'first substantive message of a session (once-per-session latch), not every message' },
-  { icon: '🔍', title: 'How', desc: 'keywords from your message → keyword / FTS5 / BM25 match across 5 domains (no vector/embed leg)' },
-  { icon: '📥', title: 'What lands', desc: 'matching chunks injected into the system prompt, tagged [RECALLED] — a lead to verify, not fact' },
-  { icon: '🔗', title: 'On a mount hit', desc: 'recall lands on the pointer → the agent Reads the LIVE source (progressive)' },
-  { icon: '💧', title: 'Indexing', desc: 'sync_knowledge_index scans Knowledge/, chunks + delta-syncs to FTS5 on the session hook' },
+  { icon: 'schedule', title: 'When', desc: 'first substantive message of a session (once-per-session latch), not every message' },
+  { icon: 'search', title: 'How', desc: 'keywords from your message → keyword / FTS5 / BM25 match across 5 domains (no vector/embed leg)' },
+  { icon: 'download', title: 'What lands', desc: 'matching chunks injected into the system prompt, tagged [RECALLED] — a lead to verify, not fact' },
+  { icon: 'link', title: 'On a mount hit', desc: 'recall lands on the pointer → the agent Reads the LIVE source (progressive)' },
+  { icon: 'water_drop', title: 'Indexing', desc: 'sync_knowledge_index scans Knowledge/, chunks + delta-syncs to FTS5 on the session hook' },
 ];
 const MANAGE_ROWS: Array<{ want: string; say: string; result: string }> = [
   { want: 'Add a note/fact', say: 'remember: <X>', result: 'routed by s_persist to the right home' },
@@ -479,12 +478,12 @@ function GuideTab() {
       {/* What the Library IS — the index-not-warehouse framing (folded here from the
           rail so there's ONE explainer, not two — run_139d7652). */}
       <section data-testid="library-guide-what">
-        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
-          📚 What the Library is
+        <div className="mb-2 text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
+          What the Library is
         </div>
-        <div className="text-sm text-[var(--color-text-muted)] leading-relaxed">
+        <div className="text-body text-[var(--color-text-muted)] leading-relaxed">
           The Library is an <b>index</b>, not a warehouse. <b>Native</b> is ours
-          (<code className="font-mono text-[12px]">Knowledge/</code> — already in recall).
+          (<code className="font-mono text-small">Knowledge/</code> — already in recall).
           <b> Mounted</b> folders are pointers into your disk, indexed in place and read
           <b> live</b> on a recall hit — never copied.
         </div>
@@ -492,19 +491,19 @@ function GuideTab() {
 
       {/* How recall uses this */}
       <section>
-        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
-          🧠 How recall uses your library
+        <div className="mb-2 text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
+          How recall uses your library
         </div>
-        <div className="text-sm text-[var(--color-text-muted)] mb-3">
+        <div className="text-body text-[var(--color-text-muted)] mb-3">
           Searching Library IS this same recall path, run manually — you see what the agent would retrieve.
         </div>
         <div data-testid="library-recall-steps" className="flex flex-col gap-1.5">
           {RECALL_STEPS.map((s) => (
             <div key={s.title} className="flex items-start gap-3 rounded-md border border-[var(--color-border)] px-3 py-2">
-              <span className="shrink-0 text-base leading-none mt-0.5">{s.icon}</span>
+              <span className="shrink-0 material-symbols-outlined icon-md text-[var(--color-text-muted)] mt-0.5">{s.icon}</span>
               <div className="min-w-0">
-                <span className="text-xs font-semibold text-[var(--color-text)]">{s.title}</span>
-                <span className="ml-2 text-[11px] text-[var(--color-text-muted)]">{s.desc}</span>
+                <span className="text-small font-semibold text-[var(--color-text)]">{s.title}</span>
+                <span className="ml-2 text-meta text-[var(--color-text-muted)]">{s.desc}</span>
               </div>
             </div>
           ))}
@@ -513,19 +512,19 @@ function GuideTab() {
 
       {/* How to manage */}
       <section>
-        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">
-          💬 How to manage — chat-native (heavy ops), overlay (light ops)
+        <div className="mb-2 text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
+          How to manage — chat-native (heavy ops), overlay (light ops)
         </div>
         <div className="flex flex-col gap-1">
           {MANAGE_ROWS.map((r) => (
-            <div key={r.want} className="grid grid-cols-[1fr_1.2fr_1.4fr] items-center gap-3 rounded-md px-3 py-1.5 text-xs">
+            <div key={r.want} className="grid grid-cols-[1fr_1.2fr_1.4fr] items-center gap-3 rounded-md px-3 py-1.5 text-small">
               <span className="text-[var(--color-text)]">{r.want}</span>
-              <code className="font-mono text-[11px] text-[var(--color-text-muted)] bg-[var(--color-hover)] rounded px-1.5 py-[1px] truncate">{r.say}</code>
-              <span className="text-[11px] text-[var(--color-text-faint)]">{r.result}</span>
+              <code className="font-mono text-meta text-[var(--color-text-muted)] bg-[var(--color-hover)] rounded px-1.5 py-[1px] truncate">{r.say}</code>
+              <span className="text-meta text-[var(--color-text-faint)]">{r.result}</span>
             </div>
           ))}
         </div>
-        <div className="mt-2 text-[11px] text-[var(--color-text-faint)]">
+        <div className="mt-2 text-meta text-[var(--color-text-faint)]">
           Overlay = browse + light ops (open · delete · move · unmount · refresh). Chat = add + heavy semantic ops.
         </div>
       </section>
@@ -539,11 +538,13 @@ function TabBtn({
   return (
     <button
       data-testid={testid}
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
       className={
-        'flex items-center gap-1.5 rounded-t-md px-3 py-2 text-sm font-medium transition-colors ' +
+        'flex items-center gap-1.5 rounded-t-md px-3 py-2 text-body transition-colors ' +
         (active
-          ? 'text-[var(--color-text)] border-b-2 border-[#5fc99a]'
+          ? 'text-[var(--color-text)] border-b-2 border-[var(--color-status-success)]'
           : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] border-b-2 border-transparent')
       }
     >

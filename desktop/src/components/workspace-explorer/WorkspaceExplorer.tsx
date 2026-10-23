@@ -69,10 +69,10 @@ function TreeSkeleton() {
 function TreeErrorState({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="p-4 text-center" data-testid="tree-error-state">
-      <p className="text-sm text-[var(--color-text-muted)] mb-2">Failed to load file tree</p>
+      <p className="text-body text-[var(--color-text-muted)] mb-2">Failed to load file tree</p>
       <button
         onClick={onRetry}
-        className="text-xs text-primary hover:underline"
+        className="text-small text-primary hover:underline"
       >
         Retry
       </button>
@@ -116,7 +116,7 @@ export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat, e
 
         {!isLoading && !error && treeData.length === 0 && (
           <div
-            className="flex items-center justify-center h-full px-4 text-center text-sm text-[var(--color-text-muted)]"
+            className="flex items-center justify-center h-full px-4 text-center text-body text-[var(--color-text-muted)]"
             data-testid="explorer-empty"
           >
             SwarmWS is empty. Initialize your workspace to get started.

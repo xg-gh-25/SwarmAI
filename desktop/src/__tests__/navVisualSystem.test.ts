@@ -13,7 +13,7 @@
  *   weight     font-medium / font-bold (the system has 400 and 600 only)
  *   rawButton  a <button> that draws its own chrome (bg / border / rounding / padding)
  *              without btn-* / icon-btn; text or glyph links, clickable list rows
- *              (text-left / w-full), tabs and segments excepted
+ *              (text-left / w-full), tabs, segments and switches excepted
  *   emoji      colour emoji (Emoji_Presentation or a VS16 emoji); icons are Material Symbols
  * The counts must EQUAL `KNOWN`: a new bypass fails, and so does a fixed one still
  * listed. Each migrated file drops to zero; the system is done when KNOWN is empty.
@@ -51,6 +51,15 @@ export const FILES = [
   'components/workspace-explorer/WorkspaceOverlay.tsx',
   'components/workspace-explorer/RepoPane.tsx',
   'components/workspace-explorer/workspaceParts.tsx',
+  'components/workspace-explorer/WorkspaceExplorer.tsx',
+  'components/workspace-explorer/ExplorerHeader.tsx',
+  'components/workspace-explorer/SectionedExplorer.tsx',
+  'components/workspace-explorer/VirtualizedTree.tsx',
+  'components/workspace-explorer/TreeNodeRow.tsx',
+  'components/workspace-explorer/ZoneSeparator.tsx',
+  'components/workspace-explorer/FileContextMenu.tsx',
+  'components/workspace-explorer/ExplorerToolbar.tsx',
+  'components/workspace-explorer/OpenFileButton.tsx',
 ];
 
 const B = '(?<![\\w-])';
@@ -93,11 +102,11 @@ function buttonTags(s: string): string[] {
 
 /** A button that draws its own chrome (a background, border, rounding or padding)
  *  instead of using the btn-* / icon-btn scale. A plain text or glyph link is not
- *  counted, nor are tabs and segments (role tab / radio). */
+ *  counted, nor are tabs and segments (role tab / radio), nor switches (role switch). */
 function rawButtons(s: string): number {
   let n = 0;
   for (const attrs of buttonTags(s)) {
-    if (/role=["{]['"]?(?:tab|radio)\b/.test(attrs)) continue;
+    if (/role=["{]['"]?(?:tab|radio|switch)\b/.test(attrs)) continue;
     if (/(?<![\w-])data-viz(?![\w-])/.test(attrs)) continue;   // a chart mark that is clickable
     const cls = /className=(?:"([^"]*)"|\{([\s\S]*)\})/.exec(attrs);
     const text = cls ? (cls[1] ?? cls[2] ?? '') : '';
@@ -128,27 +137,7 @@ export function measure(): Record<string, Partial<Record<Kind, number>>> {
 
 // The measured baseline (2026-10-23). Only shrinks: a migrated file drops out
 // (pilot S6: CMBrainOverlay, ToDoOverlay, PipelineOverlay).
-const KNOWN: Record<string, Partial<Record<Kind, number>>> = {
-  'components/layout/ThreeColumnLayout.tsx': { fontPx: 10, hex: 7, palette: 1, weight: 2, rawButton: 1, emoji: 1 },
-  'components/layout/OverlayHost.tsx': { fontPx: 4, twText: 1, hex: 3, rawButton: 1 },
-  'components/layout/overlayShell.tsx': { fontPx: 1 },
-  'components/layout/OverlayState.tsx': { fontPx: 4, twText: 2, hex: 1, palette: 2, weight: 2, rawButton: 1 },
-  'components/layout/HistoryOverlay.tsx': { fontPx: 5, weight: 1 },
-  'components/layout/ArtifactsOverlay.tsx': { fontPx: 17, hex: 4, palette: 1, weight: 4, emoji: 1 },
-  'components/layout/NeedYouOverlay.tsx': { fontPx: 8, emoji: 4 },
-  'components/layout/LibraryOverlay.tsx': { fontPx: 22, twText: 20, hex: 15, palette: 1, weight: 3, rawButton: 2, emoji: 16 },
-  'components/layout/LibraryHealth.tsx': { fontPx: 10, hex: 6, palette: 2, weight: 3, rawButton: 2, emoji: 1 },
-  'components/layout/LibraryTree.tsx': { twText: 2 },
-  'components/layout/BrainHub.tsx': { fontPx: 70, hex: 70, weight: 4, rawButton: 3, emoji: 3 },
-  'components/layout/DddCard.tsx': { fontPx: 16, hex: 23, weight: 2 },
-  'components/layout/NewBrainOverlay.tsx': { fontPx: 14, twText: 6, hex: 6, weight: 3, emoji: 13 },
-  'components/layout/PollinateOverlay.tsx': { fontPx: 24, twText: 12, palette: 14, weight: 7, rawButton: 4, emoji: 5 },
-  'components/layout/CommunityOverlay.tsx': { fontPx: 45, palette: 17, weight: 2, rawButton: 5, emoji: 10 },
-  'components/layout/JobsRunsOverlay.tsx': { fontPx: 32, twText: 1, hex: 2, palette: 8, weight: 7, rawButton: 3 },
-  'components/layout/CapabilitiesOverlay.tsx': { fontPx: 14, twText: 18, palette: 2, weight: 5, rawButton: 2, emoji: 24 },
-  'components/layout/HiveFleetOverlay.tsx': { fontPx: 5, twText: 1, palette: 1, weight: 3 },
-  'pages/EvalDashboard.tsx': { fontPx: 131, twText: 74, hex: 8, palette: 89, weight: 60, rawButton: 4, emoji: 14 },
-};
+const KNOWN: Record<string, Partial<Record<Kind, number>>> = {};
 
 describe('nav visual system', () => {
   it('bypass counts equal the known baseline (a ratchet: only shrink it)', () => {

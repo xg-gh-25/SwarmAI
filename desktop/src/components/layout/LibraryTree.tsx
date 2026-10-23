@@ -359,9 +359,9 @@ export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen, showAllFile
           onRetry={() => { void loadRoots(); }}
         />
       ) : loading ? (
-        <div className="py-6 text-center text-sm text-[var(--color-text-faint)]">Loading tree…</div>
+        <div className="py-6 text-center text-body text-[var(--color-text-faint)]">Loading tree…</div>
       ) : rows.length === 0 ? (
-        <div data-testid="library-tree-empty" className="py-6 text-center text-sm text-[var(--color-text-faint)]">
+        <div data-testid="library-tree-empty" className="py-6 text-center text-body text-[var(--color-text-faint)]">
           {/* Distinguish genuinely-empty from all-noise-filtered (meta-review LOW):
               a dir that HAS entries but all were infra-filtered isn't "empty" — say so,
               else the user reads "is empty" as a data-loss bug. */}

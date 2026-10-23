@@ -72,9 +72,9 @@ const ZoneSeparator: React.FC<ZoneSeparatorProps> = React.memo(function ZoneSepa
     >
       <span style={LINE_STYLE} aria-hidden="true" />
       <span
+        className="text-meta"
         style={{
-          fontSize: '11px',
-          fontWeight: 500,
+          fontWeight: 400,
           letterSpacing: '0.03em',
           textTransform: 'uppercase',
           whiteSpace: 'nowrap',
@@ -170,9 +170,9 @@ export const SectionHeader: React.FC<SectionHeaderProps> = React.memo(function S
 
       {/* Section label */}
       <span
+        className="text-body"
         style={{
-          fontSize: '13.5px',
-          fontWeight: 700,
+          fontWeight: 600,
           color: 'var(--color-text-secondary, var(--color-text))',
           whiteSpace: 'nowrap',
         }}
@@ -183,13 +183,13 @@ export const SectionHeader: React.FC<SectionHeaderProps> = React.memo(function S
       {/* Count pill */}
       {count > 0 && (
         <span
+          className="text-meta"
           style={{
             marginLeft: 'auto',
-            fontSize: '10px',
-            fontWeight: 500,
+            fontWeight: 400,
             padding: '0 6px',
             borderRadius: '9999px',
-            backgroundColor: 'var(--color-hover, rgba(255,255,255,0.06))',
+            backgroundColor: 'var(--color-hover)',
             color: 'var(--color-text-dim, var(--color-text-muted))',
             lineHeight: '18px',
           }}

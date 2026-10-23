@@ -3,9 +3,9 @@
  *
  * Design: Knowledge/Designs/2026-08-12-community-overlay-redesign-mockup.html (approved),
  * rebuilt by run_ced271e8. Three tabs = the two hands of the flywheel + reports:
- *   📥 Inbound   — recent signal digests + community reports (local files → Canvas) + Hot Topics
- *   🔗 Watching  — configured feeds — add/toggle/tier/delete a feed AND members
- *   📤 Outbound  — GitHub community engagement (needs-followup hero + collapsed handled)
+ *   Inbound   — recent signal digests + community reports (local files → Canvas) + Hot Topics
+ *   Watching  — configured feeds — add/toggle/tier/delete a feed AND members
+ *   Outbound  — GitHub community engagement (needs-followup hero + collapsed handled)
  *
  * UI craft (KNOWLEDGE.md 5-check + s_frontend-design/data/design-judgment.md):
  *   - NO per-row border box-wall — whitespace + hover-highlight groups (Tufte data-ink,
@@ -48,9 +48,9 @@ type TabId = 'inbound' | 'watching' | 'outbound';
 // Two-hands-of-the-membrane IA (run_edcd9672): Inbound = what we read from the world,
 // Watching = what we watch, Outbound = what we say back. Subtitles make each self-evident.
 const TABS: Array<{ id: TabId; label: string; sub: string }> = [
-  { id: 'inbound', label: '📥 Inbound', sub: 'read the world' },
-  { id: 'watching', label: '🔗 Watching', sub: 'what we watch' },
-  { id: 'outbound', label: '📤 Outbound', sub: 'speak back' },
+  { id: 'inbound', label: 'Inbound', sub: 'read the world' },
+  { id: 'watching', label: 'Watching', sub: 'what we watch' },
+  { id: 'outbound', label: 'Outbound', sub: 'speak back' },
 ];
 
 export function CommunityContent({ close }: CommunityContentProps) {
@@ -59,8 +59,8 @@ export function CommunityContent({ close }: CommunityContentProps) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden" data-testid="community-overlay">
       <div className="px-5 pt-4 pb-0">
-        <h2 className="text-[15px] font-semibold text-[var(--color-text)]">Community</h2>
-        <p className="mt-0.5 text-[11.5px] text-[var(--color-text-dim)]">
+        <h2 className="text-heading font-semibold text-[var(--color-text)]">Community</h2>
+        <p className="mt-0.5 text-meta text-[var(--color-text-dim)]">
           SwarmAI's two-way membrane — what you learn from the world, what you give back.
         </p>
       </div>
@@ -71,17 +71,19 @@ export function CommunityContent({ close }: CommunityContentProps) {
           <button
             key={t.id}
             type="button"
+            role="tab"
+            aria-selected={tab === t.id}
             onClick={() => setTab(t.id)}
             data-testid={`community-tab-${t.id}`}
             className={[
-              'text-[13px] px-3 py-2 border-b-2 transition-colors font-medium',
+              'text-body px-3 py-2 border-b-2 transition-colors ',
               tab === t.id
                 ? 'text-[var(--color-text)] border-[var(--panel-accent,var(--color-primary))]'
                 : 'text-[var(--color-text-muted)] border-transparent hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]',
             ].join(' ')}
           >
             {t.label}
-            <span className="ml-1.5 text-[11px] font-normal text-[var(--color-text-faint)]">{t.sub}</span>
+            <span className="ml-1.5 text-meta font-normal text-[var(--color-text-faint)]">{t.sub}</span>
           </button>
         ))}
       </div>
@@ -141,13 +143,13 @@ function StateBanner({ loading, error, empty, emptyMsg, onRetry }: {
 // chunk a tab into whitespace-separated groups instead of boxing every row.
 function SectionLabel({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={`text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] font-semibold ${className}`}>
+    <div className={`text-meta uppercase tracking-wide text-[var(--color-text-faint)] font-semibold ${className}`}>
       {children}
     </div>
   );
 }
 
-// ── 📥 Inbound tab — latest-report hero + Hot Topics demand ranking + daily signals ──
+// ── Inbound tab — latest-report hero + Hot Topics demand ranking + daily signals ──
 // IA (run_edcd9672 + redesign run_ced271e8): the latest weekly Report is the ONE hero;
 // Hot Topics is the live demand ranking (heat bar); daily Signals are a plain list below.
 // De-boxed: no per-row borders — whitespace + hover-highlight (Tufte / Refactoring UI).
@@ -191,17 +193,17 @@ function InboundTab({ close }: { close: () => void }) {
             onClick={() => openFile(latestReport.path)}
             data-testid="community-report-card"
             className="group relative w-full text-left rounded-[10px] bg-[var(--color-hover)]/50 hover:bg-[var(--color-hover)] transition-colors pl-[18px] pr-4 py-3.5 flex items-center gap-3
-                       before:content-[''] before:absolute before:left-0 before:top-2.5 before:bottom-2.5 before:w-[3px] before:rounded before:bg-[var(--panel-accent,var(--color-primary))]"
+ before:content-[''] before:absolute before:left-0 before:top-2.5 before:bottom-2.5 before:w-[3px] before:rounded before:bg-[var(--panel-accent,var(--color-primary))]"
           >
-            <span className="text-[18px]">📊</span>
+            <span className="material-symbols-outlined icon-lg text-[var(--color-text-muted)]">bar_chart</span>
             <span className="flex-1 min-w-0">
-              <span className="block text-[14px] font-semibold text-[var(--color-text)] truncate">{latestReport.name}</span>
-              <span className="block text-[11.5px] text-[var(--color-text-dim)]">Weekly community report</span>
+              <span className="block text-heading font-semibold text-[var(--color-text)] truncate">{latestReport.name}</span>
+              <span className="block text-meta text-[var(--color-text-dim)]">Weekly community report</span>
             </span>
             {pastReports.length > 0 && (
-              <span className="text-[11px] text-[var(--color-text-faint)] shrink-0">+{pastReports.length} past</span>
+              <span className="text-meta text-[var(--color-text-faint)] shrink-0">+{pastReports.length} past</span>
             )}
-            <span className="text-[12px] text-[var(--panel-accent,var(--color-primary))] shrink-0">open ↗</span>
+            <span className="text-small text-[var(--panel-accent,var(--color-primary))] shrink-0">open ↗</span>
           </button>
         </div>
       )}
@@ -225,7 +227,7 @@ function InboundTab({ close }: { close: () => void }) {
                 data-testid="community-feed-item"
                 className="group w-full text-left rounded-lg px-2 py-2 hover:bg-[var(--color-hover)] transition-colors flex items-center gap-3"
               >
-                <span className="flex-1 text-[13px] text-[var(--color-text)] truncate">{it.name}</span>
+                <span className="flex-1 text-body text-[var(--color-text)] truncate">{it.name}</span>
                 <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] opacity-0 group-hover:opacity-100">
                   open_in_new
                 </span>
@@ -234,7 +236,7 @@ function InboundTab({ close }: { close: () => void }) {
             {truncated && (
               <div
                 data-testid="community-feed-truncated"
-                className="px-2 py-1.5 text-[11px] text-[var(--color-text-faint)]"
+                className="px-2 py-1.5 text-meta text-[var(--color-text-faint)]"
               >
                 Showing the newest {fetchedCount} {fetchedCount === 1 ? 'item' : 'items'} — more on disk.
               </div>
@@ -269,7 +271,7 @@ function _freshnessLabel(scannedAt: string | null): { text: string; stale: boole
   if (Number.isNaN(then)) return { text: 'scan time unknown', stale: true };
   const days = Math.floor((Date.now() - then) / 86_400_000);
   if (days > _STALE_DAYS) {
-    return { text: `⚠ scan may be down — last ${days}d ago`, stale: true };
+    return { text: `scan may be down — last ${days}d ago`, stale: true };
   }
   if (days <= 0) return { text: 'synced today · auto weekly', stale: false };
   return { text: `synced ${days}d ago · auto weekly`, stale: false };
@@ -293,9 +295,9 @@ function HotTopicsSection() {
         <SectionLabel>This week the community is discussing</SectionLabel>
         <span
           data-testid="hot-topics-freshness"
-          className={`text-[11px] flex items-center gap-1.5 ${fresh.stale ? 'text-amber-500' : 'text-emerald-500'}`}
+          className={`text-meta flex items-center gap-1.5 ${fresh.stale ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-status-success)]'}`}
         >
-          <span className={`w-[5px] h-[5px] rounded-full ${fresh.stale ? 'bg-amber-500' : 'bg-emerald-500'}`} aria-hidden />
+          <span className={`w-[5px] h-[5px] rounded-full ${fresh.stale ? 'bg-[var(--color-status-warning)]' : 'bg-[var(--color-status-success)]'}`} aria-hidden />
           {fresh.text}
         </span>
       </div>
@@ -327,22 +329,22 @@ function HotTopicRow({ topic, widthPct }: { topic: CommunityHotTopic; widthPct: 
       title={topic.topTitle || topic.topic}
       className="group flex items-center gap-3 px-2 py-1.5 rounded-lg text-left hover:bg-[var(--color-hover)] transition-colors disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
     >
-      <span className="tabular-nums text-[11px] text-[var(--color-text-faint)] w-3.5 text-right shrink-0">{topic.rank}</span>
-      <span className="flex-1 min-w-0 text-[13px] text-[var(--color-text)] truncate group-hover:text-[var(--panel-accent,var(--color-primary))]">
+      <span className="tabular-nums text-meta text-[var(--color-text-faint)] w-3.5 text-right shrink-0">{topic.rank}</span>
+      <span className="flex-1 min-w-0 text-body text-[var(--color-text)] truncate group-hover:text-[var(--panel-accent,var(--color-primary))]">
         {topic.topic}
         {topic.threads > 0 && (
-          <span className="ml-2 text-[11px] text-[var(--color-text-faint)]">{topic.threads} threads</span>
+          <span className="ml-2 text-meta text-[var(--color-text-faint)]">{topic.threads} threads</span>
         )}
       </span>
       <span className="w-16 h-1 rounded-full bg-[var(--color-border)] shrink-0 overflow-hidden" aria-hidden>
         <span className="block h-full rounded-full bg-[var(--panel-accent,var(--color-primary))]" style={{ width: `${widthPct}%` }} />
       </span>
-      <span className="text-[11px] text-[var(--color-text-dim)] w-8 text-right shrink-0">{topic.comments}</span>
+      <span className="text-meta text-[var(--color-text-dim)] w-8 text-right shrink-0">{topic.comments}</span>
     </button>
   );
 }
 
-// ── 🔗 Watching tab — configured feeds (add/toggle/tier/delete + member editing) ──
+// ── Watching tab — configured feeds (add/toggle/tier/delete + member editing) ──
 // De-boxed (run_ced271e8): rows separated by hover-highlight, not per-row borders. It's
 // a config surface, so it keeps its inline row editor (tier select / toggle / delete).
 
@@ -392,7 +394,7 @@ function SourcesTab() {
     <div className="max-w-[760px]">
       <SectionLabel className="mb-2">Subscribed sources · your edits are never auto-disabled</SectionLabel>
       {actionErr && (
-        <div className="mb-2 text-[11.5px] text-red-400">{actionErr}</div>
+        <div className="mb-2 text-meta text-[var(--color-status-error)]">{actionErr}</div>
       )}
       <div className="flex flex-col gap-0.5">
         {sources.map((s) => (
@@ -417,8 +419,8 @@ function SourcesTab() {
               <span className="w-4" />
             )}
             <div className="min-w-0">
-              <div className="text-[13px] text-[var(--color-text)] truncate">{s.name}</div>
-              <div className="text-[11px] text-[var(--color-text-dim)] truncate">
+              <div className="text-body text-[var(--color-text)] truncate">{s.name}</div>
+              <div className="text-meta text-[var(--color-text-dim)] truncate">
                 {s.type}
                 {s.memberKind !== null && ` · ${s.memberCount} ${s.memberKind}`}
                 {` · ${s.managedBy}`}
@@ -430,7 +432,7 @@ function SourcesTab() {
               value={s.tier}
               disabled={busy === s.id}
               onChange={(e) => mutate(s.id, () => communityService.updateSource(s.id, { tier: e.target.value }))}
-              className="text-[11px] bg-transparent border border-[var(--color-border)] rounded px-1.5 py-1 text-[var(--color-text-muted)]"
+              className="text-meta bg-transparent border border-[var(--color-border)] rounded px-1.5 py-1 text-[var(--color-text-muted)]"
             >
               {['frontier', 'leaders', 'research', 'engineering', 'opinion', 'aggregate'].map((t) => (
                 <option key={t} value={t}>{t}</option>
@@ -440,10 +442,12 @@ function SourcesTab() {
             <button
               type="button"
               data-testid="source-toggle"
+              role="switch"
+              aria-checked={s.enabled}
               disabled={busy === s.id}
               onClick={() => mutate(s.id, () => communityService.updateSource(s.id, { enabled: !s.enabled }))}
               className={[
-                'text-[11px] px-2 py-1 rounded border transition-colors',
+                'text-meta px-2 py-1 rounded border transition-colors',
                 s.enabled
                   ? 'text-[var(--color-text)] border-[var(--color-border-strong)]'
                   : 'text-[var(--color-text-faint)] border-[var(--color-border)]',
@@ -469,7 +473,7 @@ function SourcesTab() {
                 data-testid="source-delete"
                 onClick={() => setConfirmDelete(s.id)}
                 aria-label={`Delete source ${s.name}`}
-                className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] hover:text-red-400 focus-visible:text-red-400"
+                className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] hover:text-[var(--color-status-error)] focus-visible:text-[var(--color-status-error)]"
               >
                 delete
               </button>
@@ -484,7 +488,7 @@ function SourcesTab() {
 
       <AddSourceForm onAdded={reload} busy={!!busy} />
 
-      <p className="mt-3 text-[11px] text-[var(--color-text-faint)] leading-relaxed max-w-[640px]">
+      <p className="mt-3 text-meta text-[var(--color-text-faint)] leading-relaxed max-w-[640px]">
         Your edits are marked <span className="font-mono">user</span>-managed and are never
         auto-disabled by self-tuning. Changes write safely even while a background tune runs.
       </p>
@@ -526,13 +530,13 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
 
   return (
     <div data-testid="member-editor" className="ml-7 mb-1 pl-3 border-l border-[var(--color-border)] flex flex-col gap-0.5 max-w-[720px]">
-      {err && <div className="text-[11px] text-red-400 py-1">{err}</div>}
+      {err && <div className="text-meta text-[var(--color-status-error)] py-1">{err}</div>}
       {source.members.length === 0 && (
-        <div className="text-[11px] text-[var(--color-text-faint)] py-1">No members yet — add one below.</div>
+        <div className="text-meta text-[var(--color-text-faint)] py-1">No members yet — add one below.</div>
       )}
       {source.members.map((m) => (
         <div key={m} data-testid="member-row" className="flex items-center gap-2 py-0.5 group">
-          <span className="flex-1 text-[11.5px] font-mono text-[var(--color-text-muted)] truncate" title={m}>{m}</span>
+          <span className="flex-1 text-meta font-mono text-[var(--color-text-muted)] truncate" title={m}>{m}</span>
           {confirm === m ? (
             <button
               type="button"
@@ -550,7 +554,7 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
               data-testid="member-delete"
               onClick={() => setConfirm(m)}
               aria-label={`Remove member ${m}`}
-              className="material-symbols-outlined icon-xs text-[var(--color-text-faint)] hover:text-red-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              className="material-symbols-outlined icon-xs text-[var(--color-text-faint)] hover:text-[var(--color-status-error)] opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             >
               close
             </button>
@@ -558,7 +562,7 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
         </div>
       ))}
       {source.membersTruncated && (
-        <div className="text-[11px] text-[var(--color-text-faint)] py-0.5">
+        <div className="text-meta text-[var(--color-text-faint)] py-0.5">
           Showing first {source.members.length} of {source.memberCount}.
         </div>
       )}
@@ -570,14 +574,14 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
           onChange={(e) => setAdding(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') submitAdd(); }}
           placeholder={`add ${source.memberKind?.replace(/s$/, '') ?? 'member'}…`}
-          className="flex-1 text-[11.5px] bg-transparent border border-[var(--color-border)] rounded px-2 py-1"
+          className="flex-1 text-meta bg-transparent border border-[var(--color-border)] rounded px-2 py-1"
         />
         <button
           type="button"
           data-testid="member-add-submit"
           disabled={busy || !adding.trim()}
           onClick={submitAdd}
-          className="text-[11px] px-2 py-1 rounded text-[var(--panel-accent,var(--color-primary))] hover:underline disabled:opacity-40"
+          className="btn-sm btn-ghost text-[var(--panel-accent,var(--color-primary))] disabled:opacity-40"
         >
           add
         </button>
@@ -617,7 +621,7 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
         type="button"
         data-testid="source-add-open"
         onClick={() => setOpen(true)}
-        className="mt-3 text-[12.5px] text-[var(--panel-accent,var(--color-primary))] hover:underline"
+        className="mt-3 text-small text-[var(--panel-accent,var(--color-primary))] hover:underline"
       >
         ＋ Add source
       </button>
@@ -626,16 +630,16 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
 
   return (
     <div className="mt-3 rounded-lg border border-[var(--color-border)] p-3 flex flex-col gap-2 max-w-[560px]" data-testid="source-add-form">
-      {err && <div className="text-[11.5px] text-red-400">{err}</div>}
+      {err && <div className="text-meta text-[var(--color-status-error)]">{err}</div>}
       <div className="flex gap-2">
         <input data-testid="add-id" value={id} onChange={(e) => setId(e.target.value)} placeholder="id (unique)"
-          className="flex-1 text-[12px] bg-transparent border border-[var(--color-border)] rounded px-2 py-1" />
+          className="flex-1 text-small bg-transparent border border-[var(--color-border)] rounded px-2 py-1" />
         <input data-testid="add-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="name"
-          className="flex-1 text-[12px] bg-transparent border border-[var(--color-border)] rounded px-2 py-1" />
+          className="flex-1 text-small bg-transparent border border-[var(--color-border)] rounded px-2 py-1" />
       </div>
       <div className="flex gap-2 items-center">
         <select data-testid="add-type" value={type} onChange={(e) => setType(e.target.value)}
-          className="text-[11px] bg-transparent border border-[var(--color-border)] rounded px-1.5 py-1">
+          className="text-meta bg-transparent border border-[var(--color-border)] rounded px-1.5 py-1">
           {/* Must stay in sync with backend FeedType (jobs/models.py). `github-people`
               was MISSING here — the backend accepts it and it has editable `logins`
               members (MEMBER_KEY), but users had no UI to create one (frontend
@@ -645,13 +649,13 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
           ))}
         </select>
         <select data-testid="add-tier" value={tier} onChange={(e) => setTier(e.target.value)}
-          className="text-[11px] bg-transparent border border-[var(--color-border)] rounded px-1.5 py-1">
+          className="text-meta bg-transparent border border-[var(--color-border)] rounded px-1.5 py-1">
           {['frontier', 'leaders', 'research', 'engineering', 'opinion', 'aggregate'].map((t) => (
             <option key={t} value={t}>{t}</option>
           ))}
         </select>
         <span className="flex-1" />
-        <button type="button" onClick={() => setOpen(false)} className="text-[11.5px] text-[var(--color-text-muted)] px-2 py-1">cancel</button>
+        <button type="button" onClick={() => setOpen(false)} className="btn-sm btn-ghost">cancel</button>
         <button type="button" data-testid="add-submit" disabled={saving || busy} onClick={submit}
           className="btn-sm btn-secondary disabled:opacity-50">
           {saving ? 'adding…' : 'add'}
@@ -661,7 +665,7 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
   );
 }
 
-// ── 📤 Outbound tab — demoted KPI strip + needs-followup HERO + collapsed handled ──
+// ── Outbound tab — demoted KPI strip + needs-followup HERO + collapsed handled ──
 // The answer is "who is waiting on me": needs-followup rows are the accent hero. The
 // KPI strip is one muted line (context, not the answer). "Posted / handled" is DEMOTED
 // to a collapsed expandable count — not a wall of stacked boxes (run_ced271e8 redesign).
@@ -690,7 +694,7 @@ function OutboundTab() {
   return (
     <div className="max-w-[760px] flex flex-col gap-5">
       {/* Demoted KPI strip — one muted line, not a wall of big numbers */}
-      <div data-testid="community-kpi-strip" className="text-[11.5px] text-[var(--color-text-muted)]">
+      <div data-testid="community-kpi-strip" className="text-meta text-[var(--color-text-muted)]">
         {kpiParts.join('  ·  ')}
         <span className="text-[var(--color-text-faint)]"> — outbound GitHub engagement (data-backed only)</span>
       </div>
@@ -702,7 +706,7 @@ function OutboundTab() {
           {/* HERO: needs-your-reply — the one thing that stands out */}
           {followups.length > 0 && (
             <div>
-              <SectionLabel className="mb-2 !text-amber-500/90">
+              <SectionLabel className="mb-2 !text-[color-mix(in_srgb,var(--color-status-warning)_90%,transparent)]">
                 Needs your reply — someone answered last, waiting on you ({followups.length})
               </SectionLabel>
               <div className="flex flex-col gap-2">
@@ -721,7 +725,7 @@ function OutboundTab() {
                 data-testid="handled-toggle"
                 onClick={() => setShowHandled((v) => !v)}
                 aria-expanded={showHandled}
-                className="flex items-center gap-2 text-[12px] text-[var(--color-text-faint)] hover:text-[var(--color-text-muted)] px-1 py-1.5 rounded"
+                className="w-full text-left flex items-center gap-2 text-small text-[var(--color-text-faint)] hover:text-[var(--color-text-muted)] py-1.5"
               >
                 <span className="w-[7px] h-[7px] rounded-full bg-[var(--color-text-faint)]" aria-hidden />
                 Posted · handled ({posted.length}{capped ? ` shown of ${e.kpis.commentsPosted}` : ''})
@@ -733,7 +737,7 @@ function OutboundTab() {
                     <PostedRow key={`${it.repo}#${it.issueNumber}-${it.commentUrl}`} item={it} />
                   ))}
                   {capped && (
-                    <div data-testid="community-list-cap" className="mt-1 px-2 text-[11px] text-[var(--color-text-faint)] italic">
+                    <div data-testid="community-list-cap" className="mt-1 px-2 text-meta text-[var(--color-text-faint)] italic">
                       Showing the {items.length} most recent of {e.kpis.commentsPosted} posted comments.
                     </div>
                   )}
@@ -773,27 +777,27 @@ function FollowupRow({ item }: { item: CommunityEngagementItem }) {
       disabled={!hasUrl}
       data-testid="engagement-followup-row"
       title={item.commentUrl || 'no comment URL'}
-      className="group relative w-full text-left rounded-[10px] bg-amber-500/[0.06] hover:bg-amber-500/[0.11] transition-colors pl-4 pr-3.5 py-3 disabled:cursor-default disabled:opacity-50
-                 before:content-[''] before:absolute before:left-0 before:top-2.5 before:bottom-2.5 before:w-[3px] before:rounded before:bg-amber-500"
+      className="group relative w-full text-left rounded-[10px] bg-[var(--color-status-warning)]/[0.06] hover:bg-[var(--color-status-warning)]/[0.11] transition-colors pl-4 pr-3.5 py-3 disabled:cursor-default disabled:opacity-50
+ before:content-[''] before:absolute before:left-0 before:top-2.5 before:bottom-2.5 before:w-[3px] before:rounded before:bg-[var(--color-status-warning)]"
     >
       <div className="flex items-center gap-2.5">
-        <span className="flex-1 min-w-0 text-[13px] font-semibold text-[var(--color-text)] truncate">
+        <span className="flex-1 min-w-0 text-body font-semibold text-[var(--color-text)] truncate">
           {item.repo}{item.issueNumber != null ? ` #${item.issueNumber}` : ''}
         </span>
         {item.hasMaintainerReply && (
-          <span className="text-[11px] uppercase tracking-wide text-amber-500 border border-amber-500/40 rounded px-1.5 py-0.5 shrink-0">
+          <span className="text-meta uppercase tracking-wide text-[var(--color-status-warning)] border border-[color-mix(in_srgb,var(--color-status-warning)_40%,transparent)] rounded px-1.5 py-0.5 shrink-0">
             maintainer
           </span>
         )}
         <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] shrink-0">open_in_new</span>
       </div>
       {latest && (
-        <div className="mt-1.5 flex items-baseline gap-2 text-[12px]">
-          <span className="text-[var(--color-text)] font-medium shrink-0">{latest.author}</span>
+        <div className="mt-1.5 flex items-baseline gap-2 text-small">
+          <span className="text-[var(--color-text)] shrink-0">{latest.author}</span>
           <span className="text-[var(--color-text-dim)] truncate">{latest.body}</span>
         </div>
       )}
-      <div className="mt-1 text-[11px] text-[var(--color-text-faint)]">
+      <div className="mt-1 text-meta text-[var(--color-text-faint)]">
         {item.topic && <span className="tabular-nums">{item.topic}</span>}
         {item.postedAt && <span> · posted {item.postedAt.slice(0, 10)}</span>}
         {item.confidence != null && <span> · conf {item.confidence}</span>}
@@ -815,11 +819,11 @@ function PostedRow({ item }: { item: CommunityEngagementItem }) {
       className="group flex items-center gap-3 px-2 py-1.5 rounded-lg text-left hover:bg-[var(--color-hover)] transition-colors disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
     >
       <span className="w-[6px] h-[6px] rounded-full bg-[var(--color-text-faint)] shrink-0" aria-hidden />
-      <span className="flex-1 min-w-0 text-[12.5px] text-[var(--color-text-dim)] truncate group-hover:text-[var(--color-text)]">
+      <span className="flex-1 min-w-0 text-small text-[var(--color-text-dim)] truncate group-hover:text-[var(--color-text)]">
         {item.repo}{item.issueNumber != null ? ` #${item.issueNumber}` : ''}
       </span>
       {item.replyCount > 0 && (
-        <span className={`text-[11px] shrink-0 ${item.hasMaintainerReply ? 'text-[var(--panel-accent,var(--color-primary))]' : 'text-emerald-500'}`}>
+        <span className={`text-meta shrink-0 ${item.hasMaintainerReply ? 'text-[var(--panel-accent,var(--color-primary))]' : 'text-[var(--color-status-success)]'}`}>
           ● {item.replyCount}
         </span>
       )}

@@ -194,11 +194,11 @@ export function fileBadge(path: string): { badge: string; color: string; kind: s
   if (['pptx', 'ppt', 'key'].includes(ext) || /\/(deck|pollinate)\b/.test(p) || p.includes('-deck'))
     return { badge: 'DECK', color: 'var(--color-git-modified, #d59a26)', kind: 'deck' };
   if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'avif'].includes(ext))
-    return { badge: 'IMG', color: '#b06fd0', kind: 'image' };
-  if (ext === 'pdf') return { badge: 'PDF', color: '#e5484d', kind: 'pdf' };
-  if (ext === 'md' || ext === 'markdown') return { badge: 'MD', color: '#66cc99', kind: 'md' };
+    return { badge: 'IMG', color: 'var(--color-icon-image)', kind: 'image' };
+  if (ext === 'pdf') return { badge: 'PDF', color: 'var(--color-status-error)', kind: 'pdf' };
+  if (ext === 'md' || ext === 'markdown') return { badge: 'MD', color: 'var(--color-icon-markdown)', kind: 'md' };
   if (['html', 'htm'].includes(ext)) return { badge: 'HTML', color: 'var(--color-git-added, #4bb58a)', kind: 'html' };
-  if (['docx', 'doc'].includes(ext)) return { badge: 'DOCX', color: '#5b8def', kind: 'docx' };
+  if (['docx', 'doc'].includes(ext)) return { badge: 'DOCX', color: 'var(--color-primary)', kind: 'docx' };
   return { badge: 'DOC', color: 'var(--color-text-muted, #aab2c0)', kind: 'doc' };
 }
 
@@ -268,7 +268,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
   const [search, setSearch] = useState('');
   // The PRIMARY role shown time-grouped (default Deliverables — the products you reopen).
   const [primaryRole, setPrimaryRole] = useState<ProductRole>('Deliverables');
-  // Starred-only view (the ★ Starred chip). A SEPARATE filter axis from primaryRole:
+  // Starred-only view (the Starred chip). A SEPARATE filter axis from primaryRole:
   // when on, it flattens ALL starred products across every role AND ignores the time
   // window (a favorite is retrieved regardless of recency — the 3rd retrieval path).
   const [starredOnly, setStarredOnly] = useState(false);
@@ -372,10 +372,10 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
           onChange={(e) => setSearchRaw(e.target.value)}
           placeholder="Search all artifacts (ignores the time window)…"
           data-testid="artifacts-search"
-          className="w-full px-3 py-2 rounded-lg bg-[var(--color-input-bg,var(--color-bg-secondary))] border border-[var(--color-border)] text-[12.5px] text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] outline-none focus:border-[var(--color-primary)]"
+          className="w-full px-3 py-2 rounded-lg bg-[var(--color-input-bg,var(--color-bg-secondary))] border border-[var(--color-border)] text-small text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] outline-none focus:border-[var(--color-primary)]"
         />
         <div className="flex items-center gap-1.5 mt-2 flex-wrap" data-testid="artifacts-rolefilter">
-          {/* ★ Starred chip — FIRST (mockup): a separate filter axis. Click toggles a
+          {/* Starred chip — FIRST (mockup): a separate filter axis. Click toggles a
               starred-only, cross-role, window-ignoring view. Clicking it OFF returns to
               the role view. */}
           <button
@@ -388,7 +388,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
                 : 'border-[var(--color-git-modified,#d59a26)] text-[var(--color-git-modified,#d59a26)] hover:bg-[color-mix(in_srgb,var(--color-git-modified,#d59a26)_8%,transparent)]'
             }`}
           >
-            <span aria-hidden="true">★</span> Starred · {starredCount}
+            <span aria-hidden="true" className="material-symbols-outlined icon-xs" style={{ fontVariationSettings: "'FILL' 1" }}>star</span> Starred · {starredCount}
           </button>
           {ROLE_ORDER.map((role) => {
             const on = !starredOnly && primaryRole === role;
@@ -419,7 +419,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
           {/* time-window chip (right-aligned) */}
           <span
             data-testid="artifacts-window-chip"
-            className={`ml-auto text-[11px] px-2.5 py-1 rounded-full border border-[var(--color-border)] ${
+            className={`ml-auto text-meta px-2.5 py-1 rounded-full border border-[var(--color-border)] ${
               ignoreWindow ? 'text-[var(--color-text-faint)] opacity-60' : 'text-[var(--color-text-muted)]'
             }`}
           >
@@ -446,15 +446,15 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
           />
         ) : totalShown === 0 && starredOnly ? (
           <div className="flex flex-col items-center justify-center gap-2 px-3 py-10 text-center" data-testid="artifacts-starred-empty">
-            <span className="text-[22px]" aria-hidden="true">★</span>
-            <p className="text-[11px] text-[var(--color-text-muted)] max-w-[240px]">
-              No favorites yet. Hover any row and click ☆ to star the products you reopen often — they show here across all time.
+            <span className="material-symbols-outlined icon-xl opacity-40" aria-hidden="true">star</span>
+            <p className="text-meta text-[var(--color-text-muted)] max-w-[240px]">
+              No favorites yet. Hover any row and click the star to save the products you reopen often — they show here across all time.
             </p>
           </div>
         ) : totalShown === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 px-3 py-10 text-center" data-testid="artifacts-empty">
-            <span className="text-[22px]" aria-hidden="true">🐝</span>
-            <p className="text-[11px] text-[var(--color-text-muted)] max-w-[240px]">
+            <span className="material-symbols-outlined icon-xl opacity-40" aria-hidden="true">inventory_2</span>
+            <p className="text-meta text-[var(--color-text-muted)] max-w-[240px]">
               {all.length === 0
                 ? 'No products yet. Decks, reports, and files you create show up here.'
                 : 'No products match your search.'}
@@ -465,7 +465,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
             {/* PRIMARY: time-grouped list of the active role */}
             {windowGroups.map((g) => (
               <section key={g.bucket} data-testid={`artifacts-timegroup-${g.bucket.replace(/\s/g, '-')}`}>
-                <div className="flex items-center gap-2 px-1 pt-4 pb-1.5 text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">
+                <div className="flex items-center gap-2 px-1 pt-4 pb-1.5 text-meta uppercase tracking-wide text-[var(--color-text-faint)]">
                   <span>{g.bucket}</span>
                   <span className="opacity-70">· {g.products.length}</span>
                   <span className="flex-1 h-px bg-[var(--color-border)] opacity-40" />
@@ -480,7 +480,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
             {!ignoreWindow && earlierCount > 0 && (
               foldOpen ? (
                 <section data-testid="artifacts-timegroup-Earlier">
-                  <div className="flex items-center gap-2 px-1 pt-4 pb-1.5 text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">
+                  <div className="flex items-center gap-2 px-1 pt-4 pb-1.5 text-meta uppercase tracking-wide text-[var(--color-text-faint)]">
                     <span>Earlier</span>
                     <span className="opacity-70">· {earlierCount}</span>
                     <span className="flex-1 h-px bg-[var(--color-border)] opacity-40" />
@@ -493,10 +493,10 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
                 <button
                   data-testid="artifacts-fold"
                   onClick={() => setFoldOpen(true)}
-                  className="mt-3 mx-1 flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors text-left"
+                  className="mt-3 mx-1 flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-[var(--color-border)] text-small text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors text-left"
                 >
                   <span className="text-[var(--color-text-faint)]">▸</span>
-                  Earlier · <b className="text-[var(--color-text)] font-medium">{earlierCount}</b> more · 点击展开
+                  Earlier · <b className="text-[var(--color-text)] ">{earlierCount}</b> more · 点击展开
                 </button>
               )
             )}
@@ -522,8 +522,8 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
                       >
                         expand_more
                       </span>
-                      <span className="text-[12.5px]">{ROLE_LABEL[role]}</span>
-                      <span className="ml-auto text-[var(--color-text-faint)] text-[11px]">{items.length}</span>
+                      <span className="text-small">{ROLE_LABEL[role]}</span>
+                      <span className="ml-auto text-[var(--color-text-faint)] text-meta">{items.length}</span>
                     </button>
                     {open && (
                       <div className="flex flex-col pb-1">
@@ -578,31 +578,31 @@ function ArtifactRow({
     >
       <span
         data-testid="artifacts-row-badge"
-        className="shrink-0 w-[42px] text-center text-[8.5px] font-bold tracking-wide py-[3px] rounded-[5px] text-black leading-none"
-        style={{ backgroundColor: color }}
+        className="shrink-0 w-[42px] text-center text-meta font-semibold tracking-wide py-[3px] rounded-[5px] leading-none"
+        style={{ color: `color-mix(in srgb, ${color} 80%, var(--color-text))`, backgroundColor: `color-mix(in srgb, ${color} 18%, transparent)` }}
       >
         {badge}
       </span>
       <span className="flex-1 min-w-0">
         <span className="flex items-center gap-1.5">
-          <span className="text-[13px] font-medium text-[var(--color-text)] truncate leading-tight">{label}</span>
+          <span className="text-body text-[var(--color-text)] truncate leading-tight">{label}</span>
           {p.gitignored && (
             <span
               data-testid="artifacts-gitignored-badge"
-              className="shrink-0 text-[8.5px] px-1 py-px rounded bg-[var(--color-git-modified,#d59a26)]/20 text-[var(--color-git-modified,#d59a26)] font-medium leading-none"
+              className="shrink-0 text-meta px-1 py-px rounded bg-[var(--color-git-modified,#d59a26)]/20 text-[var(--color-git-modified,#d59a26)] leading-none"
               title="Not in git (local-only) — surfaced anyway"
             >
               local
             </span>
           )}
         </span>
-        <span className="block text-[11px] text-[var(--color-text-faint)] truncate leading-tight mt-0.5">
+        <span className="block text-meta text-[var(--color-text-faint)] truncate leading-tight mt-0.5">
           {dirDisplay(p.path)}
         </span>
       </span>
       <span
         data-testid="artifacts-row-time"
-        className="shrink-0 text-[11px] text-[var(--color-text-muted)] tabular-nums text-right min-w-[118px] leading-tight"
+        className="shrink-0 text-meta text-[var(--color-text-muted)] tabular-nums text-right min-w-[118px] leading-tight"
         title={relativeTime(p.lastTouched, now)}
       >
         {absoluteTime(p.lastTouched)}
@@ -619,13 +619,13 @@ function ArtifactRow({
           e.stopPropagation();
           onStar(p);
         }}
-        className={`shrink-0 w-5 text-center text-[14px] leading-none transition-opacity ${
+        className={`shrink-0 w-5 text-center text-heading leading-none transition-opacity ${
           starred
             ? 'text-[var(--color-git-modified,#d59a26)] opacity-100'
             : 'text-[var(--color-text-faint)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-git-modified,#d59a26)]'
         }`}
       >
-        {starred ? '★' : '☆'}
+        <span className="material-symbols-outlined icon-sm" style={starred ? { fontVariationSettings: "'FILL' 1" } : undefined}>star</span>
       </button>
     </div>
   );

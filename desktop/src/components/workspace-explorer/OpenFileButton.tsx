@@ -55,7 +55,7 @@ export function OpenFileButton() {
   return (
     <button
       onClick={handleClick}
-      className="p-1 rounded text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
+      className="icon-btn text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
       title="Open file from disk (⌘O)"
       aria-label="Open file from disk"
       data-testid="open-file-button"

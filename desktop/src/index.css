@@ -415,6 +415,20 @@ body {
   --icon-btn: 26px;
   --icon-btn-lg: 30px;
 }
+
+/* Theme-independent tokens for the few colours that have no status / text role
+   (design left-nav-backend-and-visual-system.md V2, S7). Overlays use these names,
+   never the literal values. */
+:root {
+  --color-on-accent: #fff;                         /* text on a filled accent / status */
+  --color-scrim: rgba(0, 0, 0, 0.15);               /* behind an open overlay */
+  --color-scrim-medium: rgba(0, 0, 0, 0.3);         /* behind a side drawer */
+  --color-scrim-strong: rgba(0, 0, 0, 0.5);         /* behind a modal dialog */
+  --shadow-overlay: -8px 24px 80px rgba(0, 0, 0, 0.6);
+  --shadow-spout: -3px 3px 8px rgba(0, 0, 0, 0.35);
+  --color-brand-spark: #fde047;                     /* SwarmAI logo gradient start */
+  --color-brand-ink: #101527;                       /* SwarmAI logo stroke */
+}
 @utility icon-xs { font-size: var(--icon-xs); }
 @utility icon-sm { font-size: var(--icon-sm); }
 @utility icon-md { font-size: var(--icon-md); }

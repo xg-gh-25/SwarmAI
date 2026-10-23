@@ -78,14 +78,14 @@ export const EXPLORER_SECTIONS: SectionConfig[] = [
   {
     label: 'Knowledge',
     paths: ['Knowledge'],
-    accentBg: 'rgba(234,179,8,0.06)',
-    accentBorder: 'rgba(234,179,8,0.45)',
+    accentBg: 'color-mix(in srgb, var(--color-status-warning) 6%, transparent)',
+    accentBorder: 'color-mix(in srgb, var(--color-status-warning) 45%, transparent)',
   },
   {
     label: 'Projects',
     paths: ['Projects'],
-    accentBg: 'rgba(59,130,246,0.06)',
-    accentBorder: 'rgba(59,130,246,0.45)',
+    accentBg: 'color-mix(in srgb, var(--color-primary) 6%, transparent)',
+    accentBorder: 'color-mix(in srgb, var(--color-primary) 45%, transparent)',
   },
 ];
 
@@ -395,7 +395,7 @@ export function flattenTree(
   const systemConfig: SectionConfig = {
     label: 'System',
     paths: [],
-    accentBorder: 'rgba(148,163,184,0.25)',
+    accentBorder: 'color-mix(in srgb, var(--color-text-muted) 25%, transparent)',
     dimmed: true,
     defaultCollapsed: true,
   };
@@ -516,12 +516,12 @@ function RowRenderer(props: {
           boxSizing: 'border-box',
           userSelect: 'none',
           borderTop: '2px solid var(--color-section-divider, #222236)',
-          borderLeft: '3px solid rgba(148,163,184,0.35)',
+          borderLeft: '3px solid color-mix(in srgb, var(--color-text-muted) 35%, transparent)',
         }}
       >
         <span
+          className="text-meta"
           style={{
-            fontSize: '10px',
             fontWeight: 600,
             letterSpacing: '0.05em',
             textTransform: 'uppercase',
@@ -549,10 +549,10 @@ function RowRenderer(props: {
           alignItems: 'center',
           gap: '4px',
           paddingRight: '12px',
-          fontSize: '13px',
           lineHeight: '32px',
           boxSizing: 'border-box',
         }}
+        className="text-body"
       >
         {/* Spacer to align with chevron */}
         <span style={{ width: '16px', flexShrink: 0 }} />

@@ -10,7 +10,7 @@ import type React from 'react';
  *   • Internal is ordered LAST.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
+import { screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
 import { groupSkills, orderedCategories, mostUsed, byFrequencyThenName, CapabilitiesContent } from './CapabilitiesOverlay';
 import type { Skill, SkillHealthMap, ExpertsByDomain } from '../../types';
 import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
@@ -406,8 +406,8 @@ describe('CapabilitiesContent — Connections registry honesty (run_3989a574)', 
     expect(screen.getByTestId('cap-conn-tier-ondemand-mcp').getAttribute('data-tier')).toBe('ondemand');
     expect(screen.getByTestId('cap-conn-tier-channel-mcp').getAttribute('data-tier')).toBe('channel');
     // marker icons render (faint, but present)
-    expect(screen.getByTestId('cap-conn-tier-always-mcp').textContent).toBe('⚡');
-    expect(screen.getByTestId('cap-conn-tier-ondemand-mcp').textContent).toBe('💤');
+    expect(screen.getByTestId('cap-conn-tier-always-mcp').textContent).toBe('bolt');
+    expect(screen.getByTestId('cap-conn-tier-ondemand-mcp').textContent).toBe('bedtime');
   });
 });
 

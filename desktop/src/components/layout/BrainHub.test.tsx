@@ -265,7 +265,7 @@ describe('BrainHub — Gallery (AC3)', () => {
     render(<BrainHub />);
     await waitFor(() => expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy());
     // AIDLC pending=2 → amber left accent on the card itself, still a wall child
-    expect(screen.getByTestId('dddcard-AIDLC').className).toContain('border-l-[#f0a500]');
+    expect(screen.getByTestId('dddcard-AIDLC').className).toContain('border-l-[var(--color-status-warning)]');
     expect(screen.queryByTestId('brainhub-needs-zone')).toBeNull();
   });
 

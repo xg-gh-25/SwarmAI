@@ -55,7 +55,7 @@ export function WorkbenchToolbar({
       data-testid={testid}
     >
       {left}
-      {loading && <span className="ml-2 text-[11px] text-[var(--color-text-faint)]">Loading…</span>}
+      {loading && <span className="ml-2 text-meta text-[var(--color-text-faint)]">Loading…</span>}
       <div className="flex-1" />
       {right}
     </div>
