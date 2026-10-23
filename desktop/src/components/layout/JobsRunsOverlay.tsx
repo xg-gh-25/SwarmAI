@@ -35,6 +35,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery, invalidateOverlay } from './overlayQueries';
+import { OverlayError } from './OverlayState';
+import { classifyLoadError } from '../../services/api';
 import { jobsService, type JobRosterRow, type JobsOverview, type JobRunsResult } from '../../services/jobs';
 import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
 
@@ -130,7 +132,15 @@ export function JobsRunsContent({ onDispatch, close }: JobsRunsContentProps) {
 
         <GuideBanner />
 
-        {view === 'jobs' ? (
+        {/* A failed first roster load is an error, never "No jobs yet" (OverlayState). */}
+        {rosterQ.isError && !rosterQ.data ? (
+          <OverlayError
+            testid="jobs-load-error"
+            retryTestid="jobs-load-retry"
+            message={classifyLoadError(rosterQ.error, 'jobs')}
+            onRetry={() => { void rosterQ.refetch(); }}
+          />
+        ) : view === 'jobs' ? (
           <JobsView roster={roster} overview={overview} onSelect={(j) => { setCreating(false); setSelectedId(j.id); }} />
         ) : (
           <RunsView roster={roster} />

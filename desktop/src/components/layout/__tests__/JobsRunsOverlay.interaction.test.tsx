@@ -67,6 +67,19 @@ describe('JobsRunsOverlay interactions', () => {
     fn(jobsService.runJob).mockResolvedValue({ status: 'success', summary: 'ran' });
   });
 
+  it('a failed roster load is an error with Retry, not "No jobs yet" (OverlayState)', async () => {
+    fn(jobsService.fetchRoster).mockReset()
+      .mockRejectedValueOnce(new Error('down'))
+      .mockResolvedValue([mkRoster()]);
+    renderQ(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
+    await screen.findByTestId('jobs-load-error');
+    expect(screen.queryByTestId('jobs-empty')).toBeNull();
+    fireEvent.click(screen.getByTestId('jobs-load-retry'));
+    await waitFor(() => expect(screen.queryByTestId('jobs-load-error')).toBeNull());
+    expect(screen.queryByTestId('jobs-empty')).toBeNull();
+    expect(fn(jobsService.fetchRoster)).toHaveBeenCalledTimes(2);
+  });
+
   it('AC2: renders roster cards with health dots + real overview stats', async () => {
     renderQ(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();

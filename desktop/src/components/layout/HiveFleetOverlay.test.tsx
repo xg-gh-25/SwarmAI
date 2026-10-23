@@ -58,6 +58,22 @@ beforeEach(() => {
 });
 
 describe('HiveFleetOverlay', () => {
+  it('a failed instances load is an error with Retry, not an empty fleet (OverlayState)', async () => {
+    listInstances.mockReset().mockRejectedValueOnce(new Error('down')).mockResolvedValue([mkInst({ id: 'i1', name: 'xg-hive' })]);
+    renderQ(<HiveFleetContent close={() => {}} />);
+    fireEvent.click(await screen.findByTestId('hive-load-retry'));
+    expect(await screen.findByText('xg-hive')).toBeInTheDocument();
+    expect(listInstances).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failed accounts load shows the error in the Accounts view, not "No AWS accounts yet"', async () => {
+    listAccounts.mockReset().mockRejectedValue(new Error('down'));
+    renderQ(<HiveFleetContent close={() => {}} />);
+    fireEvent.click(await screen.findByRole('tab', { name: /Accounts/i }));
+    expect(await screen.findByTestId('hive-load-error')).toBeInTheDocument();
+    expect(screen.queryByTestId('hive-accounts-empty')).toBeNull();
+  });
+
   it('fetches on mount and renders the fleet overview + instances', async () => {
     renderQ(<HiveFleetContent close={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('hive-overview')).toBeInTheDocument());

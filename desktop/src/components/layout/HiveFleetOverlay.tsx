@@ -29,6 +29,8 @@ import { useCallback, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { HiveAccount, HiveInstance, TRANSITIONAL_STATUSES } from '../../services/hive';
 import { overlayQuery, invalidateOverlay } from './overlayQueries';
+import { OverlayError } from './OverlayState';
+import { classifyLoadError } from '../../services/api';
 import { HiveSection, AccountCard, AddAccountDialog, DeployHiveDialog } from '../settings/hiveComponents';
 import { WorkbenchToolbar } from './overlayShell';
 
@@ -106,7 +108,23 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
 
       <GuideBanner />
 
-      {view === 'fleet' ? (
+      {/* A failed first load of the view's own list is an error, never an empty
+          roster (OverlayState). Fleet needs the instances; Accounts the accounts. */}
+      {view === 'fleet' && instancesQ.isError && !instancesQ.data ? (
+        <OverlayError
+          testid="hive-load-error"
+          retryTestid="hive-load-retry"
+          message={classifyLoadError(instancesQ.error, 'Hive instances')}
+          onRetry={() => { void instancesQ.refetch(); }}
+        />
+      ) : view === 'accounts' && accountsQ.isError && !accountsQ.data ? (
+        <OverlayError
+          testid="hive-load-error"
+          retryTestid="hive-load-retry"
+          message={classifyLoadError(accountsQ.error, 'AWS accounts')}
+          onRetry={() => { void accountsQ.refetch(); }}
+        />
+      ) : view === 'fleet' ? (
         <FleetView
           myHives={myHives}
           sharedHives={sharedHives}
