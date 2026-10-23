@@ -101,27 +101,17 @@ def _blob(root: str, tree: str, file: str) -> tuple[str, bytes | None] | None:
 
 def _python_ast(source: bytes) -> str | None:
     """What a Python file executes, as a canonical AST dump: comments and layout are
-    gone, and so are real docstrings (the first statement of a module, class or
-    function that is a constant str; v13 §A3.4, conformance L4). An f-string or any
-    other string is kept. A file that mentions ``__doc__`` keeps its docstrings: there
-    they are data. None when it does not decode or parse."""
+    gone. Every string stays, docstrings included: a docstring is data another file
+    can read (``__doc__``, ``inspect``, FastAPI descriptions), which no diff shows
+    (XG 2026-10-23, tightening conformance L4). None when it does not decode or parse."""
     import ast
     import io
     import tokenize
     try:
         encoding, _ = tokenize.detect_encoding(io.BytesIO(source).readline)
-        text = source.decode(encoding)
-        tree = ast.parse(text)
+        tree = ast.parse(source.decode(encoding))
     except (SyntaxError, UnicodeDecodeError, LookupError, ValueError):
         return None
-    if "__doc__" not in text:
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
-                                 ast.AsyncFunctionDef)) and node.body:
-                first = node.body[0]
-                if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) \
-                        and isinstance(first.value.value, str):
-                    node.body = node.body[1:] or [ast.Pass()]
     return ast.dump(tree, include_attributes=False)
 
 
@@ -129,8 +119,8 @@ def _comment_only_diff(file: str, diff: str, *,
                        old: "tuple[str, bytes | None] | None | bool" = False,
                        new: "tuple[str, bytes | None] | None | bool" = False) -> bool:
     """True when nothing executable changed (F-8). A document; a ``.py`` file present
-    on both sides with the same regular-file mode whose AST without comments and
-    docstrings is the same (``_python_ast``; L4); any other source file whose every
+    on both sides with the same regular-file mode whose AST is the same: only comments
+    and layout may change (``_python_ast``; L4); any other source file whose every
     added / removed line is blank or a whole-line comment (a trailing comment on a code
     line is code). For ``.py``, *old* / *new* are ``_blob`` results: a file added or
     deleted, a mode or type change, an unreadable side, or one that does not parse is

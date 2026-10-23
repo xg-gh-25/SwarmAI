@@ -523,3 +523,8 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - **`next` 的范围写得过宽：** 修订文档改为准确的范围：`pipeline_v1.py` 的正常响应，以及 `pipeline_test.py` 写完 final 的那些模式。
 - **`partial_land` 写得不准：** 区分普通 DELIVER（not_landed，reason 为 `partial_land`）和人批准的 `run-land`（只记录事件）；仓库明细写在事件和 REPORT 里。
 - **退役标注的位置有误：** stage-start 那一行在 §C2（原写成 §B5）。§D3.3 是已执行、仍有效的决定，只加注已执行。Part F 只标指向旧代码的部分。附录 1 整节标为已退役。
+
+## 22. L4 收紧：docstring 也算代码（XG 2026-10-23）
+
+- `_python_ast` 不再去掉 docstring，只有注释和排版不算代码。原因：docstring 可能被别的文件读取（`__doc__`、`inspect`、FastAPI 的接口说明），diff 里看不出来。
+- `test_pipeline_v1_k6` 和 `test_run_protocol_review` 中，docstring 改动的用例都改为算代码。设计修订文档新增 §8b，修订记录行同步更新。

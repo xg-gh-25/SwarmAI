@@ -80,6 +80,12 @@ v13 设计（`~/.swarm-ai/SwarmWS/Projects/SwarmAI/2-understanding/knowledge/des
 - **谁来计量：** daemon 在 REFLECT 结束时从 run 的 transcript 计量，agent 不调用计量命令。
 - **出处：** r6 §2.3。
 
+## 8b. §A3.4 docs 下限：Python 的字符串一律算代码
+
+- **改为：** `.py` 改动按 AST 判断，只有注释和排版不算代码。所有字符串都算代码，包括 docstring。另外，新增或删除文件、mode 或类型变化、任一侧读不到或解析失败，都算代码。
+- **理由：** docstring 是运行时可读的数据，`__doc__`、`inspect`、FastAPI 的接口说明都会读它，而读取方可能在别的文件里，diff 看不出来。
+- **出处：** XG 2026-10-23，收紧 conformance L4（原文是"注释和 docstring 都不算可执行代码"）。
+
 ## 9. 只支持 v1 run：给旧 pipeline 段落加退役标注
 
 v13 第 4 行已写明"只支持按 v1 协议新建的 run。历史 run 不迁移、不兼容"。下列段落描述的是切换期间与旧 pipeline 的关系，或旧代码的位置。旧 pipeline 已整体删除（R1–R7），标为"已退役"的段落前加一行 `> 已退役（2026-10-23）：旧 pipeline 已删除，本段只作历史记录。`；仍然有效的决定只加执行注记。
@@ -95,5 +101,5 @@ v13 第 4 行已写明"只支持按 v1 协议新建的 run。历史 run 不迁�
 ## 10. 附录 2 要加的修订记录行
 
 ```
-| v13.1 | v1 实施后的文字修订（KiroCrew，conformance fixing spec §4/§6 与 r6（XG 2026-10-23 批准））：final 按 repo 一份（§B3.4）；cache 在 ~/.swarm-ai/cache/pipeline_test/v1（§C4.1）；测试明细在封印的 workspace evidence（§A3.1）；第 2 步之后不产生未记录的 commit，partial_land（§A3.7）；auth 时间即事件 at（§A3.6、§A4.2）；审查答案不跨 run 复用（§C6.2）；每个响应带 next，BUILD/TEST 结果通过即自动完成，TEST 另要 green 与 LG-5（§B3.5）；主 agent transcript 不可得记 usage_not_available，Token WARN（§E5）；旧 pipeline 相关段落标注已退役（§D1、§C2、Part F 的旧代码位置、附录 1；§D3.3 注明已执行） |
+| v13.1 | v1 实施后的文字修订（KiroCrew，conformance fixing spec §4/§6 与 r6（XG 2026-10-23 批准））：final 按 repo 一份（§B3.4）；cache 在 ~/.swarm-ai/cache/pipeline_test/v1（§C4.1）；测试明细在封印的 workspace evidence（§A3.1）；第 2 步之后不产生未记录的 commit，partial_land（§A3.7）；auth 时间即事件 at（§A3.6、§A4.2）；审查答案不跨 run 复用（§C6.2）；每个响应带 next，BUILD/TEST 结果通过即自动完成，TEST 另要 green 与 LG-5（§B3.5）；主 agent transcript 不可得记 usage_not_available，Token WARN（§E5）；.py 只有注释和排版不算代码，docstring 算（§A3.4）；旧 pipeline 相关段落标注已退役（§D1、§C2、Part F 的旧代码位置、附录 1；§D3.3 注明已执行） |
 ```

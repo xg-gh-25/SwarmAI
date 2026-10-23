@@ -128,9 +128,9 @@ def test_a_broken_pattern_table_still_reviews(monkeypatch):
 @pytest.mark.parametrize("file,diff,expected", [
     ("a.py", "@@ -3 +3 @@\n-# old note\n+# new note\n", True),
     ("a.py", "@@ -3 +3 @@\n-x = 1\n+x = 2\n", False),
-    # L4: a .py change is judged by the tokenizer: comments and docstrings are not code
+    # L4: a .py change is judged on its AST: only comments and layout are not code
     ("a.py", "@@ -3 +3 @@\n-x = 1  # n\n+x = 1  # m\n", True),        # trailing comment
-    ("a.py", '@@ -3 +3 @@\n-    """old"""\n+    """new"""\n', True),   # docstring
+    ("a.py", '@@ -3 +3 @@\n-    """old"""\n+    """new"""\n', False),  # a docstring is data
     ("a.py", '@@ -3 +3 @@\n-x = "old"\n+x = "new"\n', False),         # a value
     ("a.ts", "@@ -3,2 +3,2 @@\n- * old\n-// a\n+ * new\n+// b\n", True),
     ("a.go", "@@ -3 +3 @@\n-// a\n+// b\n", False),                 # unknown syntax

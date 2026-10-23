@@ -3,10 +3,9 @@
 - L1: RQ-8b's keyword table is the design's table (v13 §B1), pinned here verbatim;
   a gapped term ("所有…都", "every … SHALL") matches across the gap.
 - L2: a full DESIGN_SPEC must name ``properties`` and ``failure_modes`` (empty is fine).
-- L4: a ``.py`` change is judged on its AST: comments and real docstrings are not
-  code; an f-string, any other string, a docstring in a file that reads ``__doc__``,
-  an added / deleted file, a mode or type change and an unreadable or unparsable side
-  are (review 950a628c).
+- L4: a ``.py`` change is judged on its AST: only comments and layout are not code;
+  every string is, docstrings included (XG 2026-10-23); so are an added / deleted
+  file, a mode or type change and an unreadable or unparsable side (review 950a628c).
 """
 from __future__ import annotations
 
@@ -64,13 +63,13 @@ def _py(text: str, mode: str = "100644") -> tuple[str, bytes]:
 
 
 @pytest.mark.parametrize("new,unchanged", [
-    ('def f(x):\n    """Other doc,\n    two lines."""\n    return x + 1\n', True),
-    ('# header\ndef f(x):\n    return x + 1  # changed comment\n', True),
+    ('def f(x):\n    """Other doc,\n    two lines."""\n    return x + 1\n', False),  # a docstring is data
+    ('# header\ndef f(x):\n    """Doc."""\n    return x + 1  # changed comment\n', True),
     ('def f(x):\n    """Doc."""\n    return x + 2  # add\n', False),
     ('def f(x):\n    """Doc."""\n    return x + 1 or "doc"\n', False),
     ('def f(x):\n    return (x +\n', False),                 # does not parse
 ])
-def test_python_changes_are_judged_without_comments_and_docstrings(new, unchanged):
+def test_python_changes_are_judged_without_comments(new, unchanged):
     assert _comment_only_diff("a.py", "", old=_py(CODE), new=_py(new)) is unchanged
 
 
