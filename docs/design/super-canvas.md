@@ -26,21 +26,38 @@ Known limit (L3/L4): the data has only `firstSeen`, not the last write. A file t
 agent rewrites later keeps its old place, so after a rewrite the first row and the
 file auto-surface opened (the last written) can differ. Not filled by a guess.
 
+Review round 2 fixes (in commit 1, missing from its message): the ~600ms
+auto-surface delay now judges by the chat tab the file will land in, not the tab
+active when the timer fires; a direct `setFile` also writes `canvasTab:
+'artifacts'`; the tab control is controlled only when both value and setter are
+passed.
+
 ## Commit 2 — list and card (visual)
 
-- Header: caret becomes `icon-btn`; every idle icon `--color-text-muted`; tab
-  shadow uses `--color-border`; pin sits in the header for both tabs; the mute
-  button is gone; Changes keeps its refresh, shown only on Changes.
-- Header + list sit on one recessed surface, no divider line; the content is a
-  raised card (radius, border, light shadow, 8px inset).
-- Selected row: 3px primary bar on the left, card-coloured background, bold name;
-  other rows muted text.
-- Artifacts row: type icon, name, folder (dim, truncated), A/M, `firstSeen` time.
-  Height cap stays 140px (~5 rows), scrolls inside. ↑/↓ moves the selection while
-  the list has focus.
-- Changes row: A/M/D, type icon, name, folder, +/−. The per-row `uncommitted`
-  chip moves into the card's one-line title (name · state · +/−). Run titles stick
-  while the list scrolls.
+As built:
+
+- Header: no accent tint and no bottom hairline, so header + list are one recessed
+  `--color-bg` surface; caret is an `icon-btn`; every idle icon (caret, pin, Changes
+  refresh, expand, collapse) is `--color-text-muted`; the active tab chip is
+  `--color-card` with a `--color-border` ring.
+- `.canvas-content-card` (index.css): 0 8px 8px inset, 1px border, 10px radius,
+  light shadow; the old 2px primary top border is gone (the selected row carries the
+  accent now).
+- `.canvas-row-sel` (index.css) is the ONE selected-row style for both lists:
+  card-coloured background, border ring, 3px primary bar. Other rows are muted text
+  with a hover shade; the selected name is bold. Supersedes run_02c5e32a's
+  accent-free list.
+- Artifacts row: type icon, name, A/M, folder (dim, truncated), copy (hover),
+  `firstSeen` time (`clockOf`: HH:MM today, M/D before). The selected row scrolls
+  itself into view. The rail's `<ul>` is focusable; ↑/↓ opens the previous / next
+  openable row through that row's own click (`onOutputListKey`), deleted rows
+  skipped, no wrap.
+- Changes row: A/M/D, type icon, name, folder, +/−; commit rows unchanged in
+  content. The per-row `uncommitted` chip is gone. Run titles are sticky on the
+  list's solid surface. The detail card's three-line header became one line:
+  icon + name (or sha + subject) · state · +/−; the run › repo › path crumb moved
+  to its tooltip.
+- Not done: ↑/↓ in the Changes list (not in the agreed scope).
 
 ## Commit 3 — file chrome and icons
 

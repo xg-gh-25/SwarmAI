@@ -72,8 +72,9 @@ describe('Changes tab (this session\'s runs)', () => {
     const [card, gone] = await screen.findAllByTestId('changes-run');
     expect(card.textContent).toMatch(/Make the gate exact.*SwarmAI.*running.*run\/run_1/);
     const files = screen.getAllByTestId('changes-file');
-    expect(files[0].textContent).toMatch(/M.*src\/a\.ts.*\+3 −1.*uncommitted/);
-    expect(files[1].textContent).toMatch(/A.*src\/new\.ts.*\+4/);
+    expect(files[0].textContent).toMatch(/M.*a\.ts.*src.*\+3 −1/);
+    expect(files[0].textContent).not.toContain('uncommitted'); // the state lives in the card title
+    expect(files[1].textContent).toMatch(/A.*new\.ts.*src.*\+4/);
     expect(screen.getByTestId('changes-commit').textContent).toMatch(/aaaaaaaa.*feat: one.*committed/);
     expect(gone.textContent).toMatch(/Gone.*failed/);
     expect(screen.getByTestId('changes-released').textContent).toContain('Released without landing');
@@ -90,7 +91,11 @@ describe('Changes tab (this session\'s runs)', () => {
     const patch = await screen.findByTestId('changes-patch');
     expect(patch.textContent).toContain('+new');
     expect(patch.textContent).not.toContain('diff --git');
-    expect(screen.getByTestId('changes-detail').textContent).toMatch(/Changes › Make the gate exact › swarmai › src\/a\.ts.*Uncommitted in run\/run_1/);
+    const title = screen.getByTestId('changes-detail-title');
+    expect(title.textContent).toMatch(/a\.ts· uncommitted · run\/run_1\+3 −1$/);
+    expect(title.getAttribute('title')).toBe('Make the gate exact › swarmai › src/a.ts');
+    expect(screen.getAllByTestId('changes-file')[0].className).toContain('canvas-row-sel');
+    expect(screen.getAllByTestId('changes-file')[1].className).not.toContain('canvas-row-sel');
   });
 
   it('a diff no longer there says so', async () => {

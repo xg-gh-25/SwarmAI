@@ -19,6 +19,7 @@ import {
   canvasSessionService, refreshCanvasChanges, useCanvasSession,
   type RunCommit, type RunRepoChange, type SessionRunChange,
 } from '../../services/canvasSession';
+import { fileIcon, fileIconColor } from '../../utils/fileUtils';
 
 export type ChangesSelection =
   | { kind: 'file'; run: string; root: string; path: string }
@@ -30,10 +31,23 @@ export function changesKey(s: ChangesSelection): string {
   return s.kind === 'commit' ? `${s.run}|${s.root}@${s.sha}` : `${s.run}|${s.root}:${s.path}`;
 }
 
-const SEL = 'bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)] text-[var(--color-text)]';
-const HOVER = 'hover:bg-[color-mix(in_srgb,var(--color-text)_5%,transparent)]';
+const SEL = 'canvas-row-sel';
+const HOVER = 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]';
 const CHIP = 'shrink-0 text-[10.5px] px-1.5 rounded border border-[var(--color-border)] text-[var(--color-text-muted)]';
 const SHOWN = 10;
+
+/** `src/a/b.ts` → ['b.ts', 'src/a']. */
+function splitPath(p: string): [string, string] {
+  const i = p.lastIndexOf('/');
+  return i < 0 ? [p, ''] : [p.slice(i + 1), p.slice(0, i)];
+}
+
+function TypeIcon({ name }: { name: string }) {
+  return (
+    <span className="material-symbols-outlined icon-xs shrink-0 leading-none" aria-hidden="true"
+      style={{ color: fileIconColor(name) }}>{fileIcon(name)}</span>
+  );
+}
 
 function useRuns(): SessionRunChange[] | null {
   const { data } = useCanvasSession();
@@ -56,7 +70,7 @@ export function ChangesRefresh() {
   return (
     <button type="button" onClick={() => void refreshCanvasChanges()} title="Refresh"
       aria-label="Refresh changes" data-testid="canvas-changes-refresh"
-      className="ml-1 icon-btn hover:bg-[var(--color-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]">
+      className="ml-1 icon-btn hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
       <span className={`material-symbols-outlined icon-sm block ${loading.changes ? 'animate-spin' : ''}`}>refresh</span>
     </button>
   );
@@ -95,37 +109,44 @@ function RepoBlock({ run, repo, multi, selected, onSelect }: {
           Released without landing: no change is left to show.
         </div>
       )}
-      {files.map((f) => (
-        <button key={f.path} type="button" data-testid="changes-file"
-          onClick={() => onSelect({ kind: 'file', run, root: repo.root, path: f.path })}
-          title={f.path}
-          className={`w-full flex items-center gap-2 pl-5 pr-2 py-[4px] rounded-md text-left text-[12px] ${key === `${run}|${repo.root}:${f.path}` ? SEL : HOVER}`}>
-          <span className={`w-3 shrink-0 text-center text-[10.5px] font-bold ${f.status === 'added' ? 'text-[var(--color-git-added)]' : f.status === 'deleted' ? 'text-[var(--color-git-deleted,#f85149)]' : 'text-[var(--color-git-modified)]'}`}>{STATUS_LETTER[f.status]}</span>
-          <span className="flex-1 min-w-0 truncate font-mono text-[11.5px]">{f.path}</span>
-          <Delta ins={f.added} del={f.deleted} />
-          <span data-testid="changes-state" className={`${CHIP} !text-[var(--color-git-modified)]`}
-            title="In the run's worktree, not committed yet.">uncommitted</span>
-        </button>
-      ))}
+      {files.map((f) => {
+        const on = key === `${run}|${repo.root}:${f.path}`;
+        const [name, dir] = splitPath(f.path);
+        return (
+          <button key={f.path} type="button" data-testid="changes-file"
+            onClick={() => onSelect({ kind: 'file', run, root: repo.root, path: f.path })}
+            title={f.path} data-selected={on || undefined}
+            className={`w-full flex items-center gap-1.5 h-[26px] pl-[18px] pr-2 rounded-md text-left text-[12px] ${on ? SEL : HOVER}`}>
+            <span className={`w-3 shrink-0 text-center text-[10.5px] font-bold ${f.status === 'added' ? 'text-[var(--color-git-added)]' : f.status === 'deleted' ? 'text-[var(--color-git-deleted,#f85149)]' : 'text-[var(--color-git-modified)]'}`}>{STATUS_LETTER[f.status]}</span>
+            <TypeIcon name={name} />
+            <span className={`shrink-0 truncate max-w-[60%] text-[var(--color-text)] ${on ? 'font-semibold' : ''}`}>{name}</span>
+            <span className="flex-1 min-w-0 truncate text-[11px] text-[var(--color-text-faint,var(--color-text-muted))]">{dir}</span>
+            <Delta ins={f.added} del={f.deleted} />
+          </button>
+        );
+      })}
       {repo.files.length > SHOWN && (
         <button type="button" onClick={() => setMore((m) => !m)}
-          className={`w-full text-left pl-5 pr-2 py-1 rounded-md text-[11.5px] text-[var(--color-text-muted)] ${HOVER}`}>
+          className={`w-full text-left pl-[18px] pr-2 py-1 rounded-md text-[11.5px] ${HOVER}`}>
           {more ? '▾ fewer' : `▸ ${repo.files.length - SHOWN} more files`}
         </button>
       )}
-      {repo.commits.map((c) => (
-        <button key={c.sha} type="button" data-testid="changes-commit"
-          onClick={() => onSelect({ kind: 'commit', run, root: repo.root, sha: c.sha })}
-          title={`${c.short} · ${c.at}`}
-          className={`w-full flex items-center gap-2 pl-5 pr-2 py-[4px] rounded-md text-left text-[12px] text-[var(--color-text-secondary)] ${key === `${run}|${repo.root}@${c.sha}` ? SEL : HOVER}`}>
-          <span className="material-symbols-outlined icon-xs text-[var(--color-text-dim)] shrink-0" aria-hidden="true">commit</span>
-          <span className="font-mono text-[11.5px] text-[var(--color-primary)] shrink-0">{c.short}</span>
-          <span className="flex-1 min-w-0 truncate">{c.subject}</span>
-          <span className={CHIP} title={c.pushed ? 'The upstream branch has this commit.' : 'A local commit, not pushed.'}>
-            {c.pushed ? 'pushed' : 'committed'}
-          </span>
-        </button>
-      ))}
+      {repo.commits.map((c) => {
+        const on = key === `${run}|${repo.root}@${c.sha}`;
+        return (
+          <button key={c.sha} type="button" data-testid="changes-commit"
+            onClick={() => onSelect({ kind: 'commit', run, root: repo.root, sha: c.sha })}
+            title={`${c.short} · ${c.at}`} data-selected={on || undefined}
+            className={`w-full flex items-center gap-1.5 h-[26px] pl-[18px] pr-2 rounded-md text-left text-[12px] ${on ? SEL : HOVER}`}>
+            <span className={`material-symbols-outlined icon-xs shrink-0 ${on ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}`} aria-hidden="true">commit</span>
+            <span className="font-mono text-[11.5px] text-[var(--color-primary)] shrink-0">{c.short}</span>
+            <span className={`flex-1 min-w-0 truncate text-[var(--color-text)] ${on ? 'font-semibold' : ''}`}>{c.subject}</span>
+            <span className={CHIP} title={c.pushed ? 'The upstream branch has this commit.' : 'A local commit, not pushed.'}>
+              {c.pushed ? 'pushed' : 'committed'}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -133,15 +154,15 @@ function RepoBlock({ run, repo, multi, selected, onSelect }: {
 function RunCard({ run, selected, onSelect }: {
   run: SessionRunChange; selected: ChangesSelection; onSelect: (s: ChangesSelection) => void;
 }) {
+  // The run title sticks while the list scrolls, so a row far down still says which
+  // run it belongs to. Solid recessed surface (the list's own), not a tint.
   return (
-    <div data-testid="changes-run" className="mb-1.5">
-      <div className="rounded-lg px-2.5 py-1.5 bg-[color-mix(in_srgb,var(--color-text)_4%,transparent)]" title={run.run}>
-        <div className="flex items-center gap-2 min-w-0 text-[12.5px]">
-          <span aria-hidden="true" className="w-[7px] h-[7px] rounded-full shrink-0 bg-[var(--color-git-modified)]" />
-          <span className="font-semibold truncate">{run.title || run.run}</span>
-          {run.project && <span className={CHIP}>{run.project}</span>}
-          {run.status && <span className={CHIP}>{run.status}</span>}
-        </div>
+    <div data-testid="changes-run" className="mb-1">
+      <div className="sticky top-0 z-[1] flex items-center gap-2 min-w-0 h-6 px-2 text-[11.5px] text-[var(--color-text-muted)] bg-[var(--color-bg)]" title={run.run}
+        data-testid="changes-run-title">
+        <span className="font-semibold truncate text-[var(--color-text)]">{run.title || run.run}</span>
+        {run.project && <span className={CHIP}>{run.project}</span>}
+        {run.status && <span className={CHIP}>{run.status}</span>}
       </div>
       {run.repos.map((r) => (
         <RepoBlock key={r.root} run={run.run} repo={r} multi={run.repos.length > 1} selected={selected} onSelect={onSelect} />
@@ -234,7 +255,8 @@ function CommitDetail({ root, commit }: { root: string; commit: RunCommit }) {
       {commit.files.map((f) => (
         <div key={f.path}>
           <button type="button" data-testid="changes-commit-file" onClick={() => setOpen((o) => (o === f.path ? null : f.path))}
-            className={`w-full flex items-center gap-2 px-2 py-[5px] rounded-md text-left text-[12px] ${open === f.path ? SEL : HOVER}`}>
+            className={`w-full flex items-center gap-2 px-2 py-[5px] rounded-md text-left text-[12px] ${open === f.path ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : HOVER}`}>
+            <TypeIcon name={splitPath(f.path)[0]} />
             <span className="font-mono flex-1 min-w-0 truncate" title={f.path}>{f.path}</span>
             <Delta ins={f.added} del={f.deleted} />
           </button>
@@ -258,18 +280,23 @@ export function ChangesDetail({ selected }: { selected: ChangesSelection }) {
       </div>
     );
   }
-  const crumb = commit ? commit.short : file!.path;
-  const title = commit ? commit.subject : file!.path.split('/').pop();
+  // One title line: what (icon + name, or sha + subject) · state · +/− or time. The
+  // run › repo › path crumb is gone: the selected row in the list above already says it.
+  const name = file ? splitPath(file.path)[0] : '';
+  const state = file
+    ? `uncommitted · ${repo.branch ?? 'run worktree'}`
+    : `${commit!.pushed ? 'pushed' : 'committed'} · ${commit!.at}`;
   return (
     <div data-testid="changes-detail" className="h-full flex flex-col">
-      <div className="px-3 py-2 border-b border-[var(--color-border)]">
-        <div className="text-[11px] text-[var(--color-text-muted)] truncate" title={crumb}>
-          Changes › {run.title || run.run} › {repo.repo} › {crumb}
-        </div>
-        <div className="text-[13px] font-semibold truncate" title={title}>{title}</div>
-        <div className="text-[11px] text-[var(--color-text-dim)]">
-          {file ? `Uncommitted in ${repo.branch ?? 'the run worktree'}` : `${commit!.pushed ? 'Pushed' : 'Committed'} · ${commit!.at}`}
-        </div>
+      <div className="flex items-center gap-2 min-w-0 h-9 px-3 border-b border-[var(--color-border)] text-[11.5px] text-[var(--color-text-muted)]"
+        title={`${run.title || run.run} › ${repo.repo} › ${file ? file.path : commit!.short}`}
+        data-testid="changes-detail-title">
+        {file ? <TypeIcon name={name} /> : <span className="font-mono text-[11.5px] text-[var(--color-primary)] shrink-0">{commit!.short}</span>}
+        <span className="min-w-0 truncate text-[12.5px] font-semibold text-[var(--color-text)]">{file ? name : commit!.subject}</span>
+        <span data-testid="changes-state" className="shrink-0 whitespace-nowrap"
+          title={file ? "In the run's worktree, not committed yet." : undefined}>· {state}</span>
+        <span className="flex-1" />
+        {file && <Delta ins={file.added} del={file.deleted} />}
       </div>
       <div className="flex-1 overflow-auto px-2 py-2">
         {file && <FileDiff root={repo.root} start={file.start} end={file.end} path={file.path} />}

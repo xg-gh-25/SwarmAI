@@ -692,14 +692,14 @@ function FileViewerPanelImpl({
             occluded on narrow widths (item 3). */}
         {railTabId !== undefined && (
           <div
-            className="flex-shrink-0 border-b border-[var(--canvas-edge)] canvas-outputs-navbar"
+            className="flex-shrink-0 canvas-outputs-navbar"
             data-testid="canvas-region-outputs"
           >
-            <div className="flex items-center gap-2 px-2 h-8 text-[11px] text-[var(--color-text-muted)] bg-[color-mix(in_srgb,var(--color-primary)_6%,transparent)]">
+            <div className="flex items-center gap-2 px-2 h-[34px] text-[11px] text-[var(--color-text-muted)]">
               {/* Caret — folds ONLY the output list (panel keeps full width). */}
               <button
                 onClick={toggleOutputs}
-                className="shrink-0 p-0.5 -ml-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-all"
+                className="icon-btn shrink-0 hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
                 title={outputsCollapsed ? 'Show list' : 'Hide list'}
                 aria-label={outputsCollapsed ? 'Show list' : 'Hide list'}
                 aria-expanded={!outputsCollapsed}
@@ -722,7 +722,7 @@ function FileViewerPanelImpl({
                       data-testid={`canvas-tab-${id}`}
                       onClick={() => setCanvasTab(id)}
                       title={id === 'artifacts' ? (canvasCountTitle(counts.neu, counts.upd) || undefined) : undefined}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-[2px] rounded-md text-[12px] transition-colors ${canvasTab === id ? 'bg-[var(--color-bg)] text-[var(--color-text)] shadow-[0_1px_2px_rgba(0,0,0,.3)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-[2px] rounded-md text-[12px] transition-colors ${canvasTab === id ? 'bg-[var(--color-card)] text-[var(--color-text)] shadow-[0_0_0_1px_var(--color-border)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
                     >
                       {label}
                       {id === 'artifacts'
@@ -744,8 +744,8 @@ function FileViewerPanelImpl({
                   // conflicts by generated-CSS source order, not className string order,
                   // so a trailing `${pinned ? 'text-primary'}` would LOSE to a leading
                   // idle color and the active accent would never show (Gate-2 CRITICAL).
-                  // --color-text-dim is a real, defined token (fainter than muted).
-                  className={`icon-btn hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors ${pinned ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}`}
+                  // --color-text-muted is the one idle colour of every Canvas header icon.
+                  className={`icon-btn hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors ${pinned ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-muted)]'}`}
                   title={pinned ? 'Pinned — Canvas won’t change by itself (click to unpin)' : 'Pin Canvas — new outputs won’t open or replace what you see (they still list here)'}
                   aria-label="Toggle pin — Canvas does not change by itself"
                   aria-pressed={!!pinned}
@@ -793,13 +793,13 @@ function FileViewerPanelImpl({
                 setCounts) stay live — the bar's "N files · M new" summary keeps
                 updating while folded. */}
             <div
-              className={outputsCollapsed || canvasTab !== 'artifacts' ? 'hidden' : 'max-h-[140px] overflow-y-auto px-1.5 pb-1.5'}
+              className={outputsCollapsed || canvasTab !== 'artifacts' ? 'hidden' : 'max-h-[140px] overflow-y-auto px-2 pb-1.5'}
               data-testid="canvas-outputs-list"
             >
               <CanvasOutputRail files={referencedFiles} onCounts={setCounts} selectedPath={selectedPath} />
             </div>
             {canvasTab === 'changes' && !outputsCollapsed && (
-              <div className="max-h-[220px] overflow-y-auto px-1.5 pb-1.5" data-testid="canvas-changes-list">
+              <div className="max-h-[220px] overflow-y-auto px-2 pb-1.5" data-testid="canvas-changes-list">
                 <ChangesNav selected={changesSel} onSelect={setChangesSel} />
               </div>
             )}

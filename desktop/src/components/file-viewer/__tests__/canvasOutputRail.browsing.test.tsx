@@ -96,31 +96,30 @@ describe('CanvasOutputRail — browsing row + empty guard', () => {
     expect(last).toEqual({ total: 1, neu: 0, upd: 0 });
   });
 
-  // ── region A is accent-FREE: ONLY the header carries the primary accent ──
-  // (run_02c5e32a). Selection/browse use neutral greys (--color-hover / --color-
-  // border), never --color-primary — a colored fill on a list row read as
-  // "region A is also accented", which the header-only rule forbids.
-  it('selected output row carries NO primary accent, and its fill differs from hover', () => {
+  // ── selection (Super Canvas, 2026-10-23) ──
+  // A selected row (output or browsing) wears `.canvas-row-sel`: the content card's
+  // surface + a 3px primary bar, so it reads as the file the card below shows.
+  // (Supersedes run_02c5e32a's accent-free list.) Hover stays a different shade.
+  it('selected output row wears the shared selection class and not the hover fill', () => {
     mockFiles = [mkFile('written.ts')];
     render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="src/written.ts" />);
     const row = screen.getByTestId('canvas-output-row');
-    expect(row.className).not.toContain('color-primary');
-    // Selected fill = --color-border (a STRONGER neutral than the --color-hover the
-    // hover state uses) so a selected row is distinguishable from a merely-hovered
-    // one (Gate-2 F2: same var for both collided the two states).
-    expect(row.className).toContain('bg-[var(--color-border)]');
-    expect(row.className).not.toContain('bg-[var(--color-hover)]');
-    // left-bar is neutral (text-muted), never primary
-    expect(row.innerHTML).not.toContain('bg-[var(--color-primary)]');
+    expect(row.className).toContain('canvas-row-sel');
+    expect(row.className).not.toContain('hover:bg-[var(--color-hover)]');
   });
 
-  it('browsing row carries NO primary accent (neutral fill + neutral bar)', () => {
+  it('an unselected row is muted and hoverable, without the selection class', () => {
+    mockFiles = [mkFile('a.ts'), mkFile('b.ts')];
+    render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="src/a.ts" />);
+    const other = screen.getAllByTestId('canvas-output-row').find((r) => !r.hasAttribute('data-selected'))!;
+    expect(other.className).not.toContain('canvas-row-sel');
+    expect(other.className).toContain('text-[var(--color-text-muted)]');
+    expect(other.className).toContain('hover:bg-[var(--color-hover)]');
+  });
+
+  it('browsing row wears the same selection class', () => {
     mockFiles = [];
     render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="/some/where/deck.html" />);
-    const row = screen.getByTestId('canvas-browsing-row');
-    expect(row.className).not.toContain('color-primary');
-    expect(row.className).toContain('bg-[var(--color-border)]');
-    // the left-bar (::before span) is neutral, not primary
-    expect(row.innerHTML).not.toContain('bg-[var(--color-primary)]');
+    expect(screen.getByTestId('canvas-browsing-row').className).toContain('canvas-row-sel');
   });
 });

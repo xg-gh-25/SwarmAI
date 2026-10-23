@@ -1013,13 +1013,10 @@ body {
   pointer-events: none;
 }
 
-/* Canvas OUTPUTS nav-bar: an accent-tinted top bar (gradient from --color-primary)
-   above the --canvas-edge bottom hairline — reads as "belonging to the active tab",
-   the same visual language as the active chat-tab chip. All theme-var driven. */
 /* Canvas two layers: the navigation layer (tab bar + Artifacts / Changes list) sits
-   on the recessed --color-bg surface; the content (file viewer / change detail) is a
-   raised --color-card card inset below it. Without the two surfaces the list and the
-   document read as one block. */
+   on ONE recessed --color-bg surface with no divider line; the content (file viewer /
+   change detail) is a raised --color-card card inset below it. The two surfaces, not
+   a line, separate "pick a file" from "read it". */
 .canvas-outputs-navbar {
   background: var(--color-bg);
 }
@@ -1027,12 +1024,30 @@ body {
   background: var(--color-bg);
 }
 .canvas-content-card {
-  margin: 2px 8px 8px;
+  margin: 0 8px 8px;
   border: 1px solid var(--color-border);
-  border-top: 2px solid color-mix(in srgb, var(--color-primary) 70%, var(--color-border));
   border-radius: 10px;
   background: var(--color-card);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+/* The selected row of either Canvas list (Artifacts, Changes): the content card's
+   own surface + a 3px primary bar, so the row reads as the thing the card below
+   shows. One definition for both lists. */
+.canvas-row-sel {
+  position: relative;
+  background: var(--color-card);
+  box-shadow: 0 0 0 1px var(--color-border);
+  color: var(--color-text);
+}
+.canvas-row-sel::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--color-primary);
 }
 
 /* Collapsed rail: the whole Canvas as a thin vertical strip. Vertical text reads

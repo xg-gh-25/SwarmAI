@@ -60,16 +60,16 @@ describe('FileViewerPanel — shell-bar redesign', () => {
   // decides the winner — the idle color silently overrides the active accent, so
   // a pinned control never shows its active state. These tests assert the
   // ternary contract: exactly ONE color class per state, primary when active.
-  it('pin button: active state has the primary accent and NOT the idle dim class', () => {
+  it('pin button: active state has the primary accent and NOT the idle muted class', () => {
     render(<FileViewerPanel {...baseProps} pinned />);
     const cls = screen.getByLabelText(/toggle pin/i).className;
     expect(cls).toContain('text-[var(--color-primary)]');
-    expect(cls).not.toContain('text-[var(--color-text-dim)]');
+    expect(cls).not.toContain('text-[var(--color-text-muted)]');
   });
-  it('pin button: idle state has the dim class and NOT the primary accent', () => {
+  it('pin button: idle state has the muted class and NOT the primary accent', () => {
     render(<FileViewerPanel {...baseProps} pinned={false} />);
     const cls = screen.getByLabelText(/toggle pin/i).className;
-    expect(cls).toContain('text-[var(--color-text-dim)]');
+    expect(cls).toContain('text-[var(--color-text-muted)]');
     expect(cls).not.toContain('text-[var(--color-primary)]');
   });
 });

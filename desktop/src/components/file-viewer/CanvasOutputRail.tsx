@@ -24,6 +24,8 @@
  * browsing never leaves a big empty band obscuring the file surface below.
  *
  * @exports CanvasOutputRail
+ * @exports clockOf — a row's first-seen time as shown (HH:MM today, M/D before)
+ * @exports onOutputListKey — ↑/↓ on the focused list opens the previous / next row
  * @exports outputRowOpenDetail, railOrder — re-exported from hooks/railSsot (the
  *   pure open-detail builder and the rail's display order live there, so a test
  *   that stubs this component still gets them)
@@ -104,24 +106,28 @@ const OutputRow = memo(function OutputRow({
   const style = badge ? BADGE_STYLE[badge] : null;
   const dir = dirOf(file.path);
 
-  // Row = [file icon] [name] [A/M chip] [dir · right-aligned] [copy · hover] — the
-  // SwarmWS explorer's standard tree-list style (TreeNodeRow): 12px, ~26px row, a
-  // file-type icon, a compact single-letter git chip. Region A (the list) is kept
-  // accent-FREE by design: ONLY the header carries the primary accent (the
-  // color-primary bottom-border in FileViewerPanel). Selection uses neutral greys —
-  // a --color-border FILL (stronger than the --color-hover hover shade, so
-  // selected ≠ hovered) + a --color-text-muted left bar — never --color-primary.
-  // The A/M chip carries only the git SEMANTIC color (green/yellow).
+  // Row = [file icon] [name] [A/M chip] [dir · right-aligned] [copy · hover] [time]
+  // — 12px, ~26px row. Selected = `.canvas-row-sel` (index.css, shared with the
+  // Changes list): the content card's surface + a 3px primary bar + bold name, so the
+  // row reads as the thing the card below shows. Other rows: muted text, name in text
+  // colour. The A/M chip carries only the git SEMANTIC colour (green/yellow).
+  const rowRef = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    // The selected row stays in view inside the ~5-row list (↑/↓, auto-open).
+    if (selected) rowRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [selected]);
+  const time = clockOf(file.firstSeen);
   return (
     <li
+      ref={rowRef}
       className={`group relative flex h-[26px] items-center gap-1.5 pl-2.5 pr-2 rounded-md text-[12px] transition-colors list-none ${
         file.deleted ? 'cursor-default opacity-60 ' : 'cursor-pointer '
       }${
         fresh ? 'canvas-output-fresh ' : ''
       }${
         selected
-          ? 'bg-[var(--color-border)]'
-          : file.deleted ? '' : 'hover:bg-[var(--color-hover)]'
+          ? 'canvas-row-sel'
+          : file.deleted ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
       }`}
       onClick={handleClick}
       title={file.deleted ? `${file.path} (deleted)` : file.path}
@@ -129,12 +135,6 @@ const OutputRow = memo(function OutputRow({
       data-deleted={file.deleted || undefined}
       data-testid="canvas-output-row"
     >
-      {selected && (
-        <span
-          aria-hidden="true"
-          className="absolute left-0.5 top-1 bottom-1 w-[2.5px] rounded-full bg-[var(--color-text-muted)]"
-        />
-      )}
       <span
         className="material-symbols-outlined icon-sm shrink-0 leading-none"
         style={{ color: fileIconColor(file.fileName) }}
@@ -146,7 +146,7 @@ const OutputRow = memo(function OutputRow({
       <span
         className={`shrink-0 truncate ${
           file.deleted ? 'line-through text-[var(--color-text-muted)]' :
-          selected ? 'text-[var(--color-text)] font-medium' : 'text-[var(--color-text)]'
+          selected ? 'text-[var(--color-text)] font-semibold' : 'text-[var(--color-text)]'
         }`}
       >
         {file.fileName}
@@ -162,7 +162,7 @@ const OutputRow = memo(function OutputRow({
         </span>
       )}
       {dir && (
-        <span className="ml-auto truncate text-[11px] text-[var(--color-text-faint,var(--color-text-muted))]">
+        <span className="ml-auto min-w-0 truncate text-[11px] text-[var(--color-text-faint,var(--color-text-muted))]">
           {dir}
         </span>
       )}
@@ -174,9 +174,44 @@ const OutputRow = memo(function OutputRow({
       >
         <span className="material-symbols-outlined icon-sm">content_copy</span>
       </button>
+      {time && (
+        <span
+          className="shrink-0 text-[11px] tabular-nums text-[var(--color-text-dim)]"
+          title={new Date(file.firstSeen).toLocaleString()}
+          data-testid="canvas-output-time"
+        >
+          {time}
+        </span>
+      )}
     </li>
   );
 });
+
+/** A row's first-seen time as the list shows it: `HH:MM` today, `M/D` before.
+ *  '' when there is no time (an older payload without firstSeen). */
+export function clockOf(ms: number | undefined, now: Date = new Date()): string {
+  if (!ms || !Number.isFinite(ms)) return '';
+  const d = new Date(ms);
+  if (d.toDateString() !== now.toDateString()) return `${d.getMonth() + 1}/${d.getDate()}`;
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** ↑/↓ while the Artifacts list has focus: open the previous / next openable row
+ *  (a deleted row is skipped; a folded Activity group is not rendered, so skipped
+ *  too). Opening goes through the row's own click, so it is the same open a mouse
+ *  click does — one path. */
+export function onOutputListKey(e: React.KeyboardEvent<HTMLElement>): void {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  const rows = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(
+    '[data-testid="canvas-output-row"]:not([data-deleted]), [data-testid="canvas-browsing-row"]',
+  ));
+  if (rows.length === 0) return;
+  e.preventDefault();
+  const cur = rows.findIndex((r) => r.hasAttribute('data-selected'));
+  const step = e.key === 'ArrowDown' ? 1 : -1;
+  const next = cur < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, cur + step));
+  if (next !== cur) rows[next].click();
+}
 
 export interface OutputCounts {
   total: number;
@@ -294,7 +329,13 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
   const activityOpen = activityShown || activity.some((f) => f.path === selectedPath);
 
   return (
-    <ul className="flex flex-col gap-px py-0.5 list-none m-0 p-0" data-testid="canvas-output-rail">
+    <ul
+      className="flex flex-col gap-px py-0.5 list-none m-0 p-0 outline-none"
+      data-testid="canvas-output-rail"
+      tabIndex={0}
+      aria-label="Artifacts (↑/↓ to switch file)"
+      onKeyDown={onOutputListKey}
+    >
       {main.map(renderRow)}
       {activity.length > 0 && (
         <li className="list-none">
@@ -366,20 +407,16 @@ const BrowsingRow = memo(function BrowsingRow({
         Browsing
       </div>
       <div
-        className="group relative flex h-[26px] items-center gap-1.5 pl-2.5 pr-2 cursor-pointer rounded-md text-[12px] transition-colors bg-[var(--color-border)]"
+        className="group canvas-row-sel flex h-[26px] items-center gap-1.5 pl-2.5 pr-2 cursor-pointer rounded-md text-[12px] transition-colors"
         onClick={handleClick}
         title={path}
         data-selected
         data-testid="canvas-browsing-row"
       >
-        <span
-          aria-hidden="true"
-          className="absolute left-0.5 top-1 bottom-1 w-[2.5px] rounded-full bg-[var(--color-text-muted)]"
-        />
         <span className="material-symbols-outlined icon-xs shrink-0 text-[var(--color-text-muted)]" aria-hidden="true">visibility</span>
-        <span className="shrink-0 truncate text-[var(--color-text)] font-medium">{fileName}</span>
+        <span className="shrink-0 truncate text-[var(--color-text)] font-semibold">{fileName}</span>
         {dir && (
-          <span className="ml-auto truncate text-[11px] text-[var(--color-text-faint,var(--color-text-muted))]">
+          <span className="ml-auto min-w-0 truncate text-[11px] text-[var(--color-text-faint,var(--color-text-muted))]">
             {dir}
           </span>
         )}
