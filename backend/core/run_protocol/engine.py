@@ -73,17 +73,84 @@ def _atomic_json(path: Path, value: Any) -> None:
 
 _HASH_COMMENT = re.compile(r"#(?!!)")             # a shebang (#!) is executable
 _SLASH_COMMENT = re.compile(r"(//|/\*|\*/|\*(\s|$))")   # not `*gen()` / `*[Symbol…]`
-_LINE_COMMENT = {".py": _HASH_COMMENT, ".sh": _HASH_COMMENT, ".ts": _SLASH_COMMENT,
+_LINE_COMMENT = {".sh": _HASH_COMMENT, ".ts": _SLASH_COMMENT,
                  ".tsx": _SLASH_COMMENT, ".js": _SLASH_COMMENT, ".jsx": _SLASH_COMMENT}
 
 
-def _comment_only_diff(file: str, diff: str) -> bool:
-    """True when nothing executable changed (F-8): a document, or a source file whose
-    every added / removed line is blank or a whole-line comment. A docstring is a string
-    literal and counts as code; so does a trailing comment on a code line."""
+def _blob(root: str, tree: str, file: str) -> tuple[str, bytes | None] | None:
+    """*file* at *tree* as ``(mode, bytes)``: ``("absent", None)`` when the tree has no
+    such path, ``(mode, None)`` when it is not a regular blob, and None when it cannot be
+    read (review 950a628c: a read error is never mistaken for a missing file)."""
+    try:
+        listed = subprocess.run(["git", "-C", str(root), "ls-tree", "-z", tree, "--",
+                                 f":(literal){file}"], capture_output=True, timeout=60)
+        if listed.returncode != 0:
+            return None
+        if not listed.stdout:
+            return "absent", None
+        meta, _, _path = listed.stdout.rstrip(b"\0").partition(b"\t")
+        mode, kind, sha = meta.decode("ascii").split()
+        if kind != "blob":
+            return mode, None
+        data = subprocess.run(["git", "-C", str(root), "cat-file", "blob", sha],
+                              capture_output=True, timeout=60)
+        return (mode, data.stdout) if data.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def _python_ast(source: bytes) -> str | None:
+    """What a Python file executes, as a canonical AST dump: comments and layout are
+    gone, and so are real docstrings (the first statement of a module, class or
+    function that is a constant str; v13 §A3.4, conformance L4). An f-string or any
+    other string is kept. A file that mentions ``__doc__`` keeps its docstrings: there
+    they are data. None when it does not decode or parse."""
+    import ast
+    import io
+    import tokenize
+    try:
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(source).readline)
+        text = source.decode(encoding)
+        tree = ast.parse(text)
+    except (SyntaxError, UnicodeDecodeError, LookupError, ValueError):
+        return None
+    if "__doc__" not in text:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                 ast.AsyncFunctionDef)) and node.body:
+                first = node.body[0]
+                if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) \
+                        and isinstance(first.value.value, str):
+                    node.body = node.body[1:] or [ast.Pass()]
+    return ast.dump(tree, include_attributes=False)
+
+
+def _comment_only_diff(file: str, diff: str, *,
+                       old: "tuple[str, bytes | None] | None | bool" = False,
+                       new: "tuple[str, bytes | None] | None | bool" = False) -> bool:
+    """True when nothing executable changed (F-8). A document; a ``.py`` file present
+    on both sides with the same regular-file mode whose AST without comments and
+    docstrings is the same (``_python_ast``; L4); any other source file whose every
+    added / removed line is blank or a whole-line comment (a trailing comment on a code
+    line is code). For ``.py``, *old* / *new* are ``_blob`` results: a file added or
+    deleted, a mode or type change, an unreadable side, or one that does not parse is
+    executable (fails closed). Without them only the hunk's two sides are compared."""
     suffix = Path(file).suffix.lower()
     if suffix in {".md", ".txt", ".rst"}:
         return True
+    if suffix == ".py":
+        if old is False or new is False:      # only the hunk: compare its two sides
+            import textwrap
+            rows = [line for line in diff.splitlines() if not line.startswith(("+++", "---"))]
+            old = ("100644", (textwrap.dedent("\n".join(r[1:] for r in rows if r[:1] == "-"))
+                              + "\n").encode())
+            new = ("100644", (textwrap.dedent("\n".join(r[1:] for r in rows if r[:1] == "+"))
+                              + "\n").encode())
+        if not old or not new or old[1] is None or new[1] is None or old[0] != new[0] \
+                or old[0] not in ("100644", "100755"):
+            return False
+        before, after = _python_ast(old[1]), _python_ast(new[1])
+        return before is not None and before == after
     markers = _LINE_COMMENT.get(suffix)
     if markers is None:
         return False
@@ -878,7 +945,9 @@ class RunEngine:
                         or (new_count and new_start <= line < new_start + new_count):
                     touches = True
                     break
-            non_executable = _comment_only_diff(file, diff)
+            non_executable = _comment_only_diff(
+                file, diff, old=_blob(root, self._fork_base(_name, root), file),
+                new=_blob(root, code_tree, file))
             derived.append({"finding_id": finding_id,
                             "evidence_type": "diff_assertion", "repo": _name,
                             "code_tree": code_tree, "result": "asserted",

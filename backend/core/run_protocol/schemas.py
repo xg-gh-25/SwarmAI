@@ -442,6 +442,11 @@ def validate_design_spec(document: Any, *, variant: str,
     if variant == "full":
         if "security_boundaries" not in obj:
             _issue(out, "DS-6", "security_boundaries", "is required in full DESIGN_SPEC")
+        # full names its properties and failure modes, even when there are none
+        # (v13 §B2, conformance L2): an empty list is an answer, a missing key is not
+        for key in ("properties", "failure_modes"):
+            if key not in obj:
+                _issue(out, "DS-6", key, "is required in full DESIGN_SPEC (an empty list is fine)")
         alternatives = _list(obj.get("alternatives"), out, "DS-6", "alternatives",
                              nonempty=True) or []
         if any(not isinstance(item, Mapping) for item in alternatives):

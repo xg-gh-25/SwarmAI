@@ -489,3 +489,22 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - **MED，GOAL_CYCLE 被指向 regression：** 改为 tdd，`why` 也不再说它会自动完成。
 - **MED，已删除的命令仍在文字里出现：** 删掉了 INSTRUCTIONS 中的 measure-usage 一段，runner 缺 worktree 时的报错也不再提 stage-start。
 - **MED，只读命令的 `next` 会写 git 对象，未修：** `write_tree` 用私有 index，写出的是内容寻址、没有 ref 指向的对象，可被 gc 回收，不改变任何 run 状态，也不需要锁。`status` 原本就这样做。
+
+## 20. 收尾 commit 5：K6（conformance L1、L2、L4）
+
+- **L1：** RQ-8b 的关键词表改为 v13 §B1 原文的两行（`checks.RQ8B_TABLE_ZH` / `RQ8B_TABLE_EN`），解析成匹配规则。"…" 表示中间允许任意文字；英文词按词边界匹配。
+  - 测试把这两行和设计原文逐字比对。
+  - 原实现里的"全部""所有""every"单独出现也会命中，设计里没有这几个词，已删掉。
+  - RQ-3 在设计中没有词表（§A2.3 只写了"含糊词没有数字或可测条件"），所以保留现有词表，只记录不阻断，不另造词。
+- **L2：** full DESIGN_SPEC 缺少 `properties` 或 `failure_modes` 时记为 DS-6 问题，空列表可以。
+- **L4：** `.py` 文件改用 Python tokenizer 判断：去掉注释、空行和 docstring（整条语句只是一个字符串）之后，比较前后的 token 序列。
+  - 判断对象是 base 和 code_tree 上的整个文件，所以括号里单独一行的字符串参数仍算代码。
+  - 任一侧 tokenize 失败，都按"有代码改动"处理。
+  - 只有 hunk 时，对两侧 dedent 后同样比较。
+  - 原先的规则（docstring 和行尾注释都算代码）随之改变，`test_run_protocol_review` 的对应用例已更新。
+
+**审查 950a628c（1 轮，3 HIGH），一次修完：**
+- **HIGH，docstring 也可能是数据：** `mode = __doc__` 这类读取 `__doc__` 的代码，会因为 docstring 改动而改变行为。改为用 AST 判断，只去掉真正的 docstring，即 module、class、def 体内第一条常量 str 语句。源码里只要出现 `__doc__`，docstring 就照样算代码。
+- **HIGH，Python 3.11 的 tokenizer 把单独一行的 f-string 当成 STRING：** AST 里 f-string 是 `JoinedStr`，不是 docstring。判断结果因此和解释器版本无关，3.11 和 3.12+ 都一样。
+- **HIGH，文件不存在、读取出错都折叠成空文本，判定 fail open：** `_blob` 用 `ls-tree -z :(literal)<path>` 加 `cat-file blob` 读取，返回 `(mode, bytes)`，并把"文件不存在"和"读取失败"分开返回。以下情况一律算可执行改动：新增或删除文件、mode 变化、symlink 或 gitlink、任一侧读不到、解码或解析失败。源码按 `tokenize.detect_encoding` 解码。
+- **仍有残余：** 另一个文件可能通过 `inspect.getdoc`、FastAPI 等读取这个文件的 docstring。这种跨文件读取无法从 diff 推断出来。按设计 L4 的规定，docstring 不算代码；是否要收紧到"所有字符串都算代码"，需要 XG 决定。

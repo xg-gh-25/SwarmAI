@@ -9,6 +9,7 @@ Public symbols:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -414,6 +415,32 @@ def _bx2(context: CheckContext) -> Result:
                    else "; ".join(problems[:5]))
 
 
+# RQ-8b's keyword table, copied verbatim from the design (v13 §B1, used by §A2.3 RQ-8b;
+# conformance L1). "…" stands for any text between the two parts. The pin test checks
+# these two lines against the parsed terms.
+RQ8B_TABLE_ZH = "不得 / 不再 / 不能出现 / 禁止 / 没有任何 / 不存在 / 不包含 / 全部改为 / 一律改为 / 所有…都"
+RQ8B_TABLE_EN = "SHALL NOT, no longer, never, none of, no … remains, all … SHALL, every … SHALL"
+
+
+def _rq8b_patterns() -> tuple[re.Pattern[str], ...]:
+    terms = [t.strip() for t in RQ8B_TABLE_ZH.split("/")] + \
+            [t.strip() for t in RQ8B_TABLE_EN.split(",")]
+    out = []
+    for term in terms:
+        parts = [re.escape(part.strip()) for part in term.split("…")]
+        body = r".*?".join(parts)
+        # an English word matches on word boundaries; a Chinese term anywhere
+        out.append(re.compile(rf"\b{body}\b" if term.isascii() else body, re.IGNORECASE))
+    return tuple(out)
+
+
+_RQ8B = _rq8b_patterns()
+
+
+def _negative_or_universal(text: str) -> bool:
+    return any(pattern.search(text) for pattern in _RQ8B)
+
+
 def _evaluate_check(check_id: str, context: CheckContext) -> Result:
     schema_ids = {cid for cid in CHECKS if cid.startswith(("RQ-", "DS-"))} | {"BX-1"}
     if check_id in schema_ids - {"RQ-3", "RQ-8b"} \
@@ -656,11 +683,9 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
                and not any(ch.isdigit() for ch in str(row.get("response", "")))]
         return _result(not bad, "no unbounded vague acceptance" if not bad else f"vague: {bad}")
     if check_id == "RQ-8b":
-        terms = ("不得", "不再", "禁止", "全部", "所有", "shall not", "never", "every")
         bad = [row.get("id") for req in context.requirements.get("requirements", [])
                if isinstance(req, Mapping) for row in req.get("acceptance", [])
-               if isinstance(row, Mapping) and any(term in str(row.get("response", "")).lower()
-                                                   for term in terms)
+               if isinstance(row, Mapping) and _negative_or_universal(str(row.get("response", "")))
                and row.get("negative") is not True and row.get("universal") is not True]
         return _result(not bad, "structured flags match text" if not bad else f"unmarked: {bad}")
     raise CheckError(f"no evaluator for {check_id}")
