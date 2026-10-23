@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Pipelines overlay (Conductor) · mockup v6 · Run cards</title>
+<html lang="en"><head><meta charset="utf-8"><title>Pipelines overlay (Conductor) · mockup v7 · Run cards</title>
 <!-- Mockup for docs/design/pipeline-run-conductor-v1.md §10 and docs/design/pipeline-human-loop-v2.md.
      Theme variables fall back to a light palette outside the dashboard. -->
 </head><body style="margin:0">
@@ -55,19 +55,19 @@ input,textarea,select{font:12px inherit;padding:4px 8px;border-radius:6px;border
   </div>
  </div>
 </div>
-<div class="mut sm" style="margin-top:8px">Try it: answer or approve a card in place, or open one and use Prev / Next to walk every waiting Run. An answered card moves to Waiting (resuming).</div>
+<div class="mut sm" style="margin-top:8px">Try it: answer a question on its card (hover an option for its consequence), open an approval (Approve unlocks after Changes is opened), switch the review queue to Delivered to review, and walk with Prev / Next or J / K.</div>
 </div>
 <script>
 (function(){
 const $=s=>document.querySelector(s);
 const ST=['EVAL','THINK','PLAN','DESIGN','BUILD','REVIEW','TEST','DELIVER','REFLECT'];
 let runs=[
- {id:'7c21',t:'Remove legacy /api/jobs route',p:'SwarmAI',pf:'bugfix',x:'hive-ec2-1',s:3,col:'need',age:'waiting 2h 10m',kind:'q',ask:'Round 2/3 · Slack adapter 一起改会多 2 个文件，需要完整 review，可以吗？',opts:['A 一起 review','B 另开 Run'],req:'把老的 /api/jobs 路由删掉，Slack 那边还在用的话先看看怎么处理',un:1,
+ {id:'7c21',t:'Remove legacy /api/jobs route',p:'SwarmAI',pf:'bugfix',x:'hive-ec2-1',s:3,col:'need',age:'waiting 2h 10m',kind:'q',ask:'Round 2/3 · Slack adapter 一起改会多 2 个文件，需要完整 review，可以吗？',opts:['A 一起 review','B 另开 Run'],why:'改 adapter 超出 direct 小改动范围，无法从证据判断你是否接受完整 review',cons:['多 2 个文件，走完整 review，约 +30m','只删路由；adapter 留给新 Run，期间 Slack 仍走旧路由'],req:'把老的 /api/jobs 路由删掉，Slack 那边还在用的话先看看怎么处理',un:1,
   th:[['01:31','<b>Run</b> · 老路由保留一个版本，还是现在就删？A 保留一个版本 · B 现在删'],['01:38','<b>You</b> (Slack) · A。但 Slack adapter 这次一起改掉。'],['01:41','<b>Run</b> · 已采纳：范围变大（+2 个文件），需要你确认'],['01:42','<b>Run</b> · 第 2 轮：需要完整 review，可以吗？']]},
  {id:'51ae',t:'Fix duplicate job submit returning 500',p:'SwarmAI',pf:'direct',x:'Local Worker',s:7,col:'need',age:'waiting 9m',kind:'ap',ask:'Ready to land 3 files (+48 −12) · review PASS · 6/6 tests',req:'重复提交同一个 job 时后端返回 500，应该是幂等的',un:0,
   th:[['01:20','<b>Run</b> · started'],['01:40','<b>Run</b> · REVIEW passed · 6/6 tests'],['01:41','<b>Run</b> · 请求批准合入 3 个文件']]},
- {id:'e310',t:'Canvas: list files changed in this session',p:'SwarmAI',pf:'full',x:'Chat tab',s:1,col:'need',age:'waiting 6m',kind:'q',ask:'Round 1/3 · "最近文件"按编辑时间还是按最近打开？',opts:['A 编辑时间','B 最近打开'],req:'Canvas 里显示最近的文件',un:0,th:[['01:58','<b>Run</b> · "最近文件"按编辑时间还是按最近打开？']]},
- {id:'b902',t:'Spec lint false positive on optional fields',p:'IVTHub',pf:'bugfix',x:'gawan-cdd',s:3,col:'need',age:'waiting 31m',kind:'q',ask:'Round 1/3 · optional 字段缺省时要不要跳过 enum 校验？',opts:['A 跳过','B 仍校验，给 warning'],req:'spec lint 对 optional 字段误报',un:0,th:[['01:35','<b>Run</b> · optional 字段缺省时要不要跳过 enum 校验？']]},
+ {id:'e310',t:'Canvas: list files changed in this session',p:'SwarmAI',pf:'full',x:'Chat tab',s:1,col:'need',age:'waiting 6m',kind:'q',ask:'Round 1/3 · "最近文件"按编辑时间还是按最近打开？',opts:['A 编辑时间','B 最近打开'],why:'需求里"最近"有两种合理解释，代码里两种数据都有',cons:['用文件 mtime，包含非 agent 的改动','需要新记录"打开"事件，多一张表'],req:'Canvas 里显示最近的文件',un:0,th:[['01:58','<b>Run</b> · "最近文件"按编辑时间还是按最近打开？']]},
+ {id:'b902',t:'Spec lint false positive on optional fields',p:'IVTHub',pf:'bugfix',x:'gawan-cdd',s:3,col:'need',age:'waiting 31m',kind:'q',ask:'Round 1/3 · optional 字段缺省时要不要跳过 enum 校验？',opts:['A 跳过','B 仍校验，给 warning'],why:'spec 里没有写 optional 字段缺省时的规则',cons:['误报消失，但真错的 enum 也不报','保留提示，CI 不失败'],req:'spec lint 对 optional 字段误报',un:0,th:[['01:35','<b>Run</b> · optional 字段缺省时要不要跳过 enum 校验？']]},
  {id:'c11f',t:'Slack: keep thread_ts on message edit',p:'SwarmAI',pf:'bugfix',x:'hive-ec2-1',s:7,col:'need',age:'waiting 2m',kind:'ap',ask:'Ready to land 2 files (+19 −4) · review PASS · 4/4 tests',req:'Slack 编辑消息后 thread_ts 丢了，回复跑到频道里',un:0,th:[['02:01','<b>Run</b> · 请求批准合入 2 个文件']]},
  {id:'93fe',t:'Conductor V1 Phase 1 skeleton',p:'SwarmAI',pf:'full',x:'Chat tab',s:4,col:'run',age:'18m',un:0},
  {id:'aa04',t:'Stabilise flaky retry test',p:'oss-lib',pf:'full',x:'hive-ec2-1',s:6,col:'run',age:'1h 02m',un:1},
@@ -87,8 +87,8 @@ const cols=[['need','Needs you'],['run','Running'],['wait','Waiting'],['done','D
 let cur=null,view='th';
 function card(r){let h='<div class="rc'+(r.col==='need'?' need':'')+(cur===r.id?' sel':'')+'" data-id="'+r.id+'"><div class="row" style="justify-content:space-between;align-items:flex-start"><span class="tt">'+r.t+'</span>'+(r.un?'<span class="pill acc">'+r.un+' new</span>':'')+'</div>';
  h+='<div class="sm mut">'+r.p+' · '+r.pf+' · '+r.x+'</div>';
- if(r.col==='need'){h+='<div class="ask">'+(r.kind==='ap'?'<b>Approval</b> · ':'<b>Question</b> · ')+r.ask+'</div><div class="row qa" style="flex-wrap:wrap">';
-  h+=(r.kind==='ap'?'<button class="btn pri" data-a="Approved">Approve</button><button class="btn" data-o="1">Request changes…</button>':r.opts.map(o=>'<button class="btn" data-a="'+o+'">'+o+'</button>').join('')+'<button class="btn" data-o="1">Reply…</button>');
+ if(r.col==='need'){h+='<div class="ask">'+(r.kind==='ap'?'<b>Approval</b> · ':'<b>Question</b> · ')+r.ask+(r.why?'<div class="sm mut" style="margin-top:2px">Why asking: '+r.why+'</div>':'')+'</div><div class="row qa" style="flex-wrap:wrap">';
+  h+=(r.kind==='ap'?'<button class="btn pri" data-o="1">Review evidence → Approve</button>':r.opts.map((o,i)=>'<button class="btn" data-a="'+o+'" title="'+r.cons[i]+'">'+o+'</button>').join('')+'<button class="btn" data-o="1">Reply…</button>');
   h+='<span class="sm mut" style="margin-left:auto">'+r.age+'</span></div>'}
  else if(r.col==='run'){h+='<div class="sb">'+ST.map((_,i)=>'<i class="'+(i<r.s?'d':i===r.s?'c':'')+'"></i>').join('')+'</div><div class="row sm mut" style="justify-content:space-between"><span>'+ST[r.s]+'</span><span>'+r.age+'</span></div>'}
  else if(r.col==='wait'){h+='<div class="sm '+(r.age.startsWith('parked')?'':'mut')+'" style="margin-top:3px">'+r.age+'</div>'}
@@ -98,23 +98,29 @@ function render(){const b=$('#board');b.innerHTML=cols.map(([k,n])=>{const rs=ru
  const n=runs.filter(r=>r.col==='need').length;$('#badge').textContent=n?n+' need you':'all clear';$('#badge').className='pill '+(n?'dan':'ok');
  b.querySelectorAll('.rc').forEach(c=>c.onclick=e=>{const a=e.target.dataset.a;if(a){answer(c.dataset.id,a,'card');e.stopPropagation();return}open(c.dataset.id)})}
 function answer(id,a,where){const r=runs.find(x=>x.id===id);if(!r||r.col!=='need')return;r.col='wait';r.age=r.kind==='ap'?(a+' · landing'):'answered "'+a+'" · resuming first';(r.th=r.th||[]).push(['now','<b>You</b> ('+(where==='card'?'board':'review view')+') · '+a]);render();if(cur===id)show()}
-function needs(){return runs.filter(r=>r.col==='need')}
-function open(id){cur=id;$('#rv').style.display='flex';$('#wrap').classList.add('narrow');render();show()}
+let qmode='need';
+function needs(){if(qmode==='need')return runs.filter(r=>r.col==='need');return runs.filter(r=>r.col==='done').sort((a,b)=>(b.fail||0)-(a.fail||0))}
+function open(id){cur=id;const r=runs.find(x=>x.id===id);qmode=r.col==='done'?'done':'need';if(r.kind==='ap'&&r.col==='need'){view='ch';r.seenEv=1}setTabs();$('#rv').style.display='flex';$('#wrap').classList.add('narrow');render();show()}
+function setTabs(){document.querySelectorAll('#rv-tabs .tab').forEach(x=>x.classList.toggle('on',x.dataset.v===view))}
 function show(){const r=runs.find(x=>x.id===cur);$('#rv-t').textContent=r.t;$('#rv-meta').innerHTML='<span style="font-family:ui-monospace,monospace">run_'+r.id+'</span> · '+r.p+' · '+r.pf+' · '+r.x+' · '+r.age;
- $('#rv-req').textContent='Requirement · '+(r.req||'(requirement as submitted)');const nd=needs(),i=nd.findIndex(x=>x.id===cur);$('#rv-pos').textContent=i>=0?('waiting '+(i+1)+' of '+nd.length):'';
+ $('#rv-req').textContent='Requirement · '+(r.req||'(requirement as submitted)');const nd=needs(),i=nd.findIndex(x=>x.id===cur);
+ $('#rv-pos').innerHTML='<select id="qsel"><option value="need"'+(qmode==='need'?' selected':'')+'>Queue: Needs you</option><option value="done"'+(qmode==='done'?' selected':'')+'>Queue: Delivered to review</option></select> '+(i>=0?(i+1)+' of '+nd.length:'');
+ $('#qsel').onchange=e=>{qmode=e.target.value;const l=needs();if(l.length){open(l[0].id)}};
  let body='';if(view==='th'){body='<div class="th">'+(r.th||[['—','<span class="mut">No messages yet</span>']]).map(x=>'<span class="mut">'+x[0]+'</span><span>'+x[1]+'</span>').join('')+'</div>'}
- else if(view==='ch'){body='<div class="sm"><b>3 files · +48 −12</b><br>backend/routers/jobs.py · backend/core/job_router.py · tests/test_jobs_api.py</div><pre class="sm" style="background:var(--bg,#f6f6f4);padding:8px;border-radius:6px;overflow:auto">- raise HTTPException(500)\n+ return existing  # idempotent by client_id</pre>'}
+ else if(view==='ch'){body='<div class="sm"><b>Target</b> swarmai/main @ 4bff62b · <b>3 files · +48 −12</b> · tests 6/6 · findings 0 open, 1 fixed<br>backend/routers/jobs.py · backend/core/job_router.py · tests/test_jobs_api.py<br><span style="color:var(--warn,#a86b00)">Changed after your notes: none</span></div><pre class="sm" style="background:var(--bg,#f6f6f4);padding:8px;border-radius:6px;overflow:auto">- raise HTTPException(500)\n+ return existing  # idempotent by client_id</pre>'}
  else if(view==='rv'){body='<div class="sm">2 experts · 0 open findings · 1 fixed (MEDIUM: missing test for concurrent duplicate)</div>'}
- else{body='<div class="sm mut">REPORT.md renders here once the Run delivers.</div>'}
+ else{body='<div class="sm mut">'+(r.aud?'Five dimensions: '+r.aud+'<br>':'')+'REPORT.md renders here once the Run delivers.</div>'}
  $('#rv-body').innerHTML=body;
- let ft='';if(r.col==='need'){ft=r.kind==='ap'?'<div class="row"><button class="btn pri" data-a="Approved">Approve landing</button><button class="btn" data-a="Changes requested">Request changes</button><button class="btn" data-a="Rejected">Reject</button></div>':'<div class="row" style="flex-wrap:wrap">'+r.opts.map(o=>'<button class="btn" data-a="'+o+'">'+o+'</button>').join('')+'<button class="btn">None of these…</button></div>';
-  ft+='<textarea rows="2" style="width:100%;margin-top:6px" placeholder="Your note or judgement (optional, sent with your choice)"></textarea>'}
- else{ft='<div class="row"><input style="flex:1" placeholder="Send guidance to this Run"><button class="btn pri">Send</button><button class="btn">Take over in chat</button><button class="btn" style="color:var(--danger,#c0392b)">Cancel</button></div>'}
- $('#rv-ft').innerHTML=ft;$('#rv-ft').querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{answer(cur,b.dataset.a,'rv');const nd=needs();if(nd.length){cur=nd[0].id;render();show()}})}
-function step(d){const nd=needs();if(!nd.length)return;let i=nd.findIndex(x=>x.id===cur);i=i<0?0:(i+d+nd.length)%nd.length;cur=nd[i].id;render();show()}
+ let ft='';if(r.col==='need'){ft=r.kind==='ap'?'<div class="row"><button class="btn pri" data-a="Approved"'+(r.seenEv?'':' disabled')+'>Approve landing</button><button class="btn" data-a="Changes requested">Request changes</button><button class="btn" data-a="Rejected">Reject</button><span class="sm mut">'+(r.seenEv?'evidence reviewed':'open Changes first')+'</span></div>':(r.why?'<div class="sm mut" style="margin-bottom:4px">Why asking: '+r.why+'</div>':'')+r.opts.map((o,i)=>'<div class="row" style="margin:3px 0"><button class="btn" data-a="'+o+'">'+o+'</button><span class="sm mut">'+r.cons[i]+'</span></div>').join('')+'<button class="btn">None of these…</button>';
+  ft+='<textarea rows="2" style="width:100%;margin-top:6px" placeholder="Your note or judgement (text required for Request changes / Reject)"></textarea>'}
+ else if(r.col==='done'){ft='<div class="row"><button class="btn pri" id="seen">Mark reviewed · next</button><button class="btn">Flag for Eval…</button></div>'}
+ else{ft='<div class="row"><input style="flex:1" placeholder="Send guidance to this Run (delivered at its next tool boundary)"><button class="btn pri">Send</button><button class="btn">Take over in chat</button><button class="btn" style="color:var(--danger,#c0392b)">Cancel</button></div>'}
+ $('#rv-ft').innerHTML=ft;$('#rv-ft').querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{answer(cur,b.dataset.a,'rv');const nd=needs();if(nd.length){open(nd[0].id)}});
+ const sn=$('#seen');if(sn)sn.onclick=()=>step(1)}
+function step(d){const nd=needs();if(!nd.length)return;let i=nd.findIndex(x=>x.id===cur);i=i<0?0:(i+d+nd.length)%nd.length;open(nd[i].id)}
 $('#prev').onclick=()=>step(-1);$('#next').onclick=()=>step(1);
 $('#close').onclick=()=>{cur=null;$('#rv').style.display='none';$('#wrap').classList.remove('narrow');render()};
-document.querySelectorAll('#rv-tabs .tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('#rv-tabs .tab').forEach(x=>x.classList.remove('on'));t.classList.add('on');view=t.dataset.v;show()});
+document.querySelectorAll('#rv-tabs .tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('#rv-tabs .tab').forEach(x=>x.classList.remove('on'));t.classList.add('on');view=t.dataset.v;if(view==='ch'){const r=runs.find(x=>x.id===cur);if(r)r.seenEv=1}show()});
 document.addEventListener('keydown',e=>{if(!cur||/INPUT|TEXTAREA/.test(document.activeElement.tagName))return;if(e.key==='j')step(1);if(e.key==='k')step(-1)});
 render();
 })();
