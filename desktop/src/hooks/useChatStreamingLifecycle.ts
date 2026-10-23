@@ -53,6 +53,7 @@ import type {
   PendingPermission,
   StreamingStateEntry,
   SessionActivity,
+  ChatRequest,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import { applyCompactionEvent } from '../pages/chat/compaction';
@@ -887,13 +888,16 @@ export interface ChatStreamingLifecycle {
   isStreaming: boolean;
   /** The active tab has its own POST open (Send / Stop reads both). */
   isSending: boolean;
-  /** The tab's own request opened / ended (not the bee: docs/design/chat-turn-liveness.md S3). */
-  setLocalSending: (sending: boolean, tabId?: string) => void;
+  /** The tab's own request opened / ended (not the bee: docs/design/chat-turn-liveness.md S3).
+   *  ``keepSend``: the POST dropped but its message may still go (a reconnect follows). */
+  setLocalSending: (sending: boolean, tabId?: string, opts?: { keepSend?: boolean }) => void;
   /** The backend's activity for a tab's session (seq-ordered); the only writer of
    *  isStreaming. The subscription and the poll call it. */
   applyActivity: (tabId: string, activity: SessionActivity, seq: number | undefined) => void;
   /** The tab now shows another session: its activity starts over (idle, seq 0). */
   rebindActivity: (tabId: string) => void;
+  /** The POST the tab opens sends this request (kept for Retry until `accepted`). */
+  noteSend: (tabId: string, request: ChatRequest) => ChatRequest;
   streamingActivity: StreamingActivity | null;
   /** Debounced activity — stable for at least MIN_ACTIVITY_DISPLAY_MS. */
   displayedActivity: StreamingActivity | null;
@@ -1637,7 +1641,7 @@ export function useChatStreamingLifecycle(
    * chat-turn-liveness.md S3). When no ``tabId`` is given, the active tab.
    */
   const setLocalSending = useCallback(
-    (sending: boolean, tabId?: string) => {
+    (sending: boolean, tabId?: string, opts?: { keepSend?: boolean }) => {
       const targetTabId = tabId ?? activeTabIdRef.current;
       const tabState = targetTabId ? tabMapRef.current.get(targetTabId) : undefined;
       if (!tabState) return;
@@ -1649,6 +1653,15 @@ export function useChatStreamingLifecycle(
       } else if (!sending && tabMode !== 'idle' && tabMode !== 'error'
         && tabMode !== 'waiting_input' && tabMode !== 'permission_needed') {
         tabState.streamState = streamingReducer(tabState.streamState, { type: 'USER_STOP' });
+      }
+      if (!sending && tabState._openSendCid && !opts?.keepSend) {
+        // The request is over. Its message was never accepted (no `accepted`
+        // receipt): its bubble says "Not sent" and offers Retry (S3, T7). A
+        // stopped send is the user's own end: nothing to retry, forget it.
+        const cid = tabState._openSendCid;
+        tabState._openSendCid = undefined;
+        if (tabState.userStopped) tabState._unsentRequests?.delete(cid);
+        else if (tabState._unsentRequests?.has(cid)) markUnsent(targetTabId!, cid);
       }
       if (tabState.localSending === sending) return;
       // AUTHORIZED WRITER (readonly elsewhere)
@@ -1683,6 +1696,38 @@ export function useChatStreamingLifecycle(
       });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
+
+  /**
+   * The POST this tab opens sends ``request`` (its message, ``request.clientId``):
+   * kept until the backend accepts it, and the request Retry sends again. Every
+   * send path calls this right before chatService.streamChat. Returns the request.
+   */
+  const noteSend = useCallback((tabId: string, request: ChatRequest): ChatRequest => {
+    const tabState = tabMapRef.current.get(tabId);
+    const cid = request.clientId;
+    if (tabState && cid) {
+      if (!tabState._unsentRequests) tabState._unsentRequests = new Map();
+      tabState._unsentRequests.set(cid, request);
+      tabState._openSendCid = cid;
+    }
+    return request;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
+
+  /** Mark the user bubble of an unaccepted message "Not sent", and keep only the
+   *  requests whose bubble can still be retried (a reset / reconcile drops them). */
+  const markUnsent = (tabId: string, cid: string) => {
+    const tabState = tabMapRef.current.get(tabId);
+    const store = messageStoreRegistry.get(tabId);
+    if (!tabState || !store) return;
+    const isBubble = (m: Message, c: string) => m.role === 'user' && (m.id === c || m.metadata?.client_id === c);
+    const bubble = store.messages.find((m) => isBubble(m, cid));
+    if (bubble && bubble.sendState !== 'failed') store.updateById(bubble.id, (m) => ({ ...m, sendState: 'failed' }));
+    for (const kept of [...(tabState._unsentRequests?.keys() ?? [])]) {
+      if (kept === cid || tabState._openSendCid === kept) continue;
+      if (!store.messages.some((m) => isBubble(m, kept) && m.sendState === 'failed')) tabState._unsentRequests!.delete(kept);
+    }
+    if (!bubble) tabState._unsentRequests?.delete(cid);
+  };
 
   /** Turn-end work, run where the session's activity goes back to idle (the one
    *  place a turn is known to have ended, whichever way it ended): align the tab
@@ -2406,6 +2451,17 @@ export function useChatStreamingLifecycle(
               tab.sessionId = event.sessionId;
               watchOpenTabs();
             }
+          }
+          // The send is the server's: no retry needed, and a bubble marked
+          // "Not sent" (an earlier attempt of it) is sent after all.
+          const acceptedCid = (event as { clientId?: string | null }).clientId;
+          if (capturedTabId && acceptedCid) {
+            const tab = tabMapRef.current.get(capturedTabId);
+            if (tab) tab._unsentRequests?.delete(acceptedCid);
+            const store = messageStoreRegistry.get(capturedTabId);
+            const bubble = store?.messages.find((m) => m.role === 'user'
+              && (m.id === acceptedCid || m.metadata?.client_id === acceptedCid));
+            if (store && bubble?.sendState) store.updateById(bubble.id, (m) => ({ ...m, sendState: undefined }));
           }
           // a resend of a send the server already queued: wait for its delivery
           if (event.duplicate && event.queued && capturedTabId) {
@@ -4386,9 +4442,10 @@ export function useChatStreamingLifecycle(
       if (capturedTabId) {
         const tabState = tabMapRef.current.get(capturedTabId);
         if (tabState) {
-          // The POST is gone; the turn may still run (its activity says so)
+          // The POST is gone; the turn may still run (its activity says so), and
+          // its message may still go (a reconnect re-opens it): not its end
           tabState.isReconnecting = true;
-          setLocalSending(false, capturedTabId);
+          setLocalSending(false, capturedTabId, { keepSend: true });
 
           // Safety timeout: if no recovery within 30s, clear reconnecting
           // state and recover content from DB.  The backend persists assistant
@@ -4826,6 +4883,7 @@ export function useChatStreamingLifecycle(
     setLocalSending,
     applyActivity,
     rebindActivity,
+    noteSend,
     streamingActivity,
     displayedActivity,
     elapsedSeconds,

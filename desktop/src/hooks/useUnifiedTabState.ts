@@ -120,6 +120,13 @@ export interface UnifiedTab {
    *  by Stop or replaced by a newer send. A send whose token is no longer current
    *  after its await stops there, before writing anything or opening its POST. */
   _sendToken?: number;
+  /** The request of each send of this tab the backend has not accepted yet, by
+   *  client_id (normally 0-1 entries): removed at `accepted`; after a failure it
+   *  is what Retry sends again (docs/design/chat-turn-liveness.md S3). */
+  _unsentRequests?: Map<string, import('../types').ChatRequest>;
+  /** client_id of the message this tab's open POST sends (noteSend); when the
+   *  request ends while it is still unaccepted, its bubble is marked "Not sent". */
+  _openSendCid?: string;
   abortController: AbortController | null;
   streamGen: number;
   /** Generation of the LIVE complete-handler for this tab's current turn.

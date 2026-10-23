@@ -230,6 +230,8 @@ export interface TabViewProps {
   onPermissionDecision: (requestId: string, decision: 'approve' | 'deny') => void;
   onEscalationSelect: (escalationId: string, optionLabel: string) => void;
   onCancelQueued: (tabId: string) => void;
+  /** Re-send a user message the backend never accepted (by its id). */
+  onRetrySend?: (tabId: string, messageId: string) => void;
   onContinue: () => void;
   /** Stop this tab's background agents while no turn runs (POST /chat/stop). */
   onStopBackground?: (tabId: string) => void;
@@ -283,6 +285,7 @@ function TabViewImpl({
   onPermissionDecision,
   onEscalationSelect,
   onCancelQueued,
+  onRetrySend,
   onContinue,
   onStopBackground,
   onFocusClick,
@@ -813,6 +816,7 @@ function TabViewImpl({
                   isLastAssistant={idx === lastAssistantIdx}
                   contextWarning={idx === lastAssistantIdx ? contextWarning : null}
                   onCancelQueued={msg.isQueued && tabId ? () => onCancelQueued(tabId) : undefined}
+                  onRetrySend={msg.sendState === 'failed' && tabId && onRetrySend ? () => onRetrySend(tabId, msg.id) : undefined}
                   onContinue={idx === lastAssistantIdx && !isStreaming ? onContinue : undefined}
                   onRetryError={msg.isError && msg.errorCode === 'QUEUE_TIMEOUT' ? onRetryQueueTimeout : undefined}
                 />

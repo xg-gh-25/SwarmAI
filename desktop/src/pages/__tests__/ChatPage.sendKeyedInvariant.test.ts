@@ -38,18 +38,31 @@ const CHATPAGE = resolve(__dirname, '../ChatPage.tsx');
  */
 function streamChatRequestsCarryClientId(src: string): { line: number; ok: boolean }[] {
   const lines = src.split('\n');
-  // Names of request-objects built WITH a clientId (so a spread of them is keyed).
+  // The function a line is in: a line opening a function at ChatPage's top level
+  // (two-space indent: `  const name = useCallback(` / `  const name = (` /
+  // `  name.current = (`) starts a new scope. A keyed request name only counts
+  // inside the scope that declares it (a keyless namesake elsewhere is caught).
+  const scopeOf: number[] = [];
+  let scope = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^ {2}(?:const|function|let)\s+\w+|^ {2}\w+(?:Ref)?\.current\s*=/.test(lines[i])) scope = i;
+    scopeOf.push(scope);
+  }
+  // Names of request-objects built WITH a clientId (so a spread of them is keyed),
+  // per scope: `${scope}:${name}`.
   const keyedSpreadSources = new Set<string>();
   for (let i = 0; i < lines.length; i++) {
-    // crude: `const <name> = {` ... a following line has `clientId` before the closing
-    const m = lines[i].match(/const\s+(\w+)\s*=\s*\{/);
+    // crude: `const <name> = {` (or `const <name>: T = {`, or `const <name> =
+    // noteSend(tab, {` — the P2b registration of a send) ... a following line has
+    // `clientId` before the closing
+    const m = lines[i].match(/const\s+(\w+)(?:\s*:\s*\w+)?\s*=\s*(?:noteSend\([^,]+,\s*)?\{/);
     if (m) {
       let block = '';
       for (let j = i + 1; j < Math.min(i + 20, lines.length); j++) {
         block += lines[j] + '\n';
-        if (/^\s*\};?\s*$/.test(lines[j])) break;
+        if (/^\s*\}\)?;?\s*$/.test(lines[j])) break;
       }
-      if (/\bclientId\b/.test(block)) keyedSpreadSources.add(m[1]);
+      if (/\bclientId\b/.test(block)) keyedSpreadSources.add(`${scopeOf[i]}:${m[1]}`);
     }
   }
 
@@ -62,15 +75,41 @@ function streamChatRequestsCarryClientId(src: string): { line: number; ok: boole
       if (/createStreamHandler|wrappedCreateStreamHandler/.test(lines[j])) break;
     }
     const direct = /\bclientId\b/.test(block);
-    const viaSpread = [...keyedSpreadSources].some((name) =>
-      new RegExp(`\\.\\.\\.${name}\\b`).test(block),
-    );
+    const here = `${scopeOf[i]}:`;
+    const viaSpread = [...keyedSpreadSources].filter((k) => k.startsWith(here)).map((k) => k.slice(here.length))
+      .some((name) =>
+        new RegExp(`\\.\\.\\.${name}\\b`).test(block)
+        // or the keyed request object passed as the argument itself
+        || new RegExp(`^\\s*${name}\\s*,`, 'm').test(block),
+      );
     results.push({ line: i + 1, ok: direct || viaSpread });
   }
   return results;
 }
 
 describe('ChatPage — every streamChat send is keyed (run_7263ff67)', () => {
+  it('the guard scopes a keyed request name to its own function', () => {
+    const fixture = [
+      '  const sendA = useCallback(() => {',
+      '    const req = {',
+      '      clientId,',
+      '    };',
+      '    chatService.streamChat(',
+      '      req,',
+      '      createStreamHandler(a, t),',
+      '  });',
+      '  const sendB = useCallback(() => {',
+      '    const req = {',
+      '      message,',
+      '    };',
+      '    chatService.streamChat(',
+      '      req,',
+      '      createStreamHandler(a, t),',
+      '  });',
+    ].join('\n');
+    expect(streamChatRequestsCarryClientId(fixture).map((c) => c.ok)).toEqual([true, false]);
+  });
+
   it('no chatService.streamChat request builder omits clientId', () => {
     const src = readFileSync(CHATPAGE, 'utf8');
     const calls = streamChatRequestsCarryClientId(src);

@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: P1 DONE（后端，v4）；P2a DONE（蜜蜂只看活动）；P2b、P2c、P3 未开始
+status: P1 DONE（后端，v4）；P2a DONE（蜜蜂只看活动）；P2b DONE（未受理的消息可重试）；P2c、P3 未开始
 related: chat-transcript-single-source.md（S3 会话状态唯一来源，本文是它没覆盖到的那一半）, streaming-spinner-ssot.md（2026-06-30，同类，未按设计落地）
 ---
 
@@ -338,6 +338,37 @@ fresh-context 审查。旧的 `streaming` 字段一直保留（部署脚本在�
       新活动会被当成旧的，直到墙钟追上。正常重启（几秒）不会发生。
   - **P2b 本地请求状态**：`localSending` 换成 `building → posting → accepted | failed`；没受理的消息标
     "未发送 · 重试"，同一个 `client_id` 重发。T7 去掉 `it.fails`。
+  - P2b 实现（2026-10-24，按独立审查重做过一次）：
+    - **一条规则，一个地方**：每个发消息的 POST 开之前调 `noteSend(tab, request)`（主发送、前端队列送出、
+      QUEUE_TIMEOUT 重试、重试按钮四处），记下这个请求和它的 `client_id`（`tab._openSendCid`）。这个 tab 的请求
+      结束时（`setLocalSending(false)`：每一种结束都经过它，出错、断线超时、`[DONE]` 没回执、自愈失败），如果那个
+      `client_id` 一直没被受理（还在 `tab._unsentRequests` 里），它的用户气泡标 `sendState: 'failed'`，显示
+      "未发送 · 重试"。用户按 Stop 结束的不标。`accepted` 到了就从 `_unsentRequests` 删掉、清标记。
+      第一版只在错误处理的最后一个分支标，用 tab 级的"最近受理的 client_id"判断，审查指出断线超时、`[DONE]`
+      无回执、前端队列送出这几条路径都漏了，而且队列送出时重连会重发上一条消息。
+    - 标记只在本地；它其实已经写进库的话，下一次对齐时库里的行替换掉它。保留的请求只跟着还能重试的气泡：
+      每次标记时清掉对应气泡已不存在（或已不是"未发送"）的请求；tab 重置（新会话）时全部清掉。
+    - 前端队列送出和 QUEUE_TIMEOUT 重试也装上自己的 `retryStreamFn`（连接期重连重发的是这一条，不是上一条）。
+    - 重试（`pages/chat/retrySend`）发同一个请求、同一个 `client_id`：气泡移到末尾，换一个空的回复占位；这个 tab
+      有一轮在跑或自己有请求开着时不动。
+    - 和 S3 原文不同：输入框不保留文字。文字已经在气泡里，重试就是发它，保留在输入框里会变成两份。
+    - `ChatPage.sendKeyedInvariant.test.ts`（每个 streamChat 都带 clientId 的守卫）认得 `noteSend(...)` 和带类型的
+      请求对象；反向验证：去掉主发送、队列送出、超时重试任一处的 clientId 都变红。
+    - 测试：T7 转为普通测试；T7b（`accepted` 清标记和请求）、T7d（受理过的不标）、T7e（`[DONE]` 无回执也标）、
+      T7f（Stop 不标）、T7g（请求跟着气泡走）、`UserMessageView.unsent.test.tsx`、`retrySend.test.ts`。反向验证：
+      结束时不标、受理过也标、Stop 也标、不清理、受理不删请求、不显示、忙时也重试、不用 tab 当前会话，各自变红。
+  - P2b 第二轮审查（1 BLOCKER + 2 MAJOR + 1 MINOR，都修了）：
+    - **POST 中途断开被当成"没发出去"**：断开处理把本地请求关掉，就把这一次发送消耗掉了，标了"未发送"，而重连
+      还会再发；重试按钮也能在重连的同时再发一次。现在断开只结束请求、不消耗这次发送（`keepSend`）；每个重连
+      函数（主发送、队列送出、超时重试、重试）自己重新打开请求、重新 `noteSend`，所以只有真正算数的那次结束才
+      标记；重连或"恢复后自动重发"还在等着时，重试按钮不动。测试 T7h、`retrySend` 忙时不动。
+    - **审批决定的 POST 断线重连会重发上一条消息**：它没装自己的重连函数，沿用了上一条消息的。决定不是幂等的，
+      所以不重发：审批 POST 开时清掉 `retryStreamFn`。测试 R5（源码守卫）。
+    - **每个 streamChat 都带 clientId 的守卫按变量名全局匹配**：另一个函数里同名但不带 clientId 的请求会被放过。
+      改为按所在函数匹配，并加了反例（两个函数里同名的请求，一个带一个不带，后一个必须报出来）。
+    - **Stop 之后保留的请求不删**：Stop 结束的发送，请求直接删掉。测试 T7i。
+    - 反向验证：断开也消耗、Stop 不删、重连时也允许重试、审批不清重连函数、守卫去掉主发送或队列送出的 clientId，
+      各自变红。
   - **P2c 删前端队列**：忙时照常 POST，后端回执 `queued: true`；排队气泡读快照的 `pending`，取消调
     `DELETE /pending/{client_id}`（409 显示"已在发送"）；删 `tabState.queuedMessage`、`drainQueuedMessage`、
     `shouldQueueSend` 的排队分支、drain 退役镜像。

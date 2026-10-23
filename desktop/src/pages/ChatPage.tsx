@@ -26,7 +26,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import type { Message, ContentBlock, Agent, AgentCreateRequest, ChatSession } from '../types';
+import type { Message, ContentBlock, Agent, AgentCreateRequest, ChatSession, ChatRequest } from '../types';
 import { MAX_ATTACHMENTS } from '../types';
 import { newClientId } from '../services/clientId';
 import { chatService } from '../services/chat';
@@ -53,6 +53,7 @@ import { useUnifiedAttachments } from '../hooks/useUnifiedAttachments';
 import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState } from '../hooks/useUnifiedTabState';
 import { canContinueTurn } from '../hooks/streaming-guards';
+import { retrySend } from './chat/retrySend';
 import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
 import { useContextUsageRefresh } from '../hooks/contextUsage';
 import { shouldQueueSend } from '../hooks/streaming-guards';
@@ -372,6 +373,7 @@ export default function ChatPage() {
     isSending,
     setLocalSending,
     applyActivity,
+    noteSend,
     pendingStreamTabs,
     clearPendingStreamTab,
     bumpStreamingDerivation,
@@ -2433,17 +2435,19 @@ export default function ChatPage() {
       : undefined;
 
     const editorContext = editorContextFor(currentActiveTabId); // sync-read live Canvas state (race fix)
+    const sendRequest: ChatRequest = {
+      agentId: selectedAgentId,
+      ...(hasAttachments ? { content } : { message: messageText }),
+      sessionId: resolvedSessionId,
+      enableSkills,
+      enableMCP,
+      editorContext,
+      ...(sendTerminal && { terminalContext: sendTerminal }),
+      clientId,  // Correlation ID for optimistic message dedup
+    };
+    if (currentActiveTabId) noteSend(currentActiveTabId, sendRequest);
     const abort = chatService.streamChat(
-      {
-        agentId: selectedAgentId,
-        ...(hasAttachments ? { content } : { message: messageText }),
-        sessionId: resolvedSessionId,
-        enableSkills,
-        enableMCP,
-        editorContext,
-        ...(sendTerminal && { terminalContext: sendTerminal }),
-        clientId,  // Correlation ID for optimistic message dedup
-      },
+      sendRequest,
       createStreamHandler(assistantMessageId, currentActiveTabId ?? undefined),
       createErrorHandler(assistantMessageId, currentActiveTabId ?? undefined),
       createCompleteHandler(currentActiveTabId ?? undefined),
@@ -2473,6 +2477,9 @@ export default function ChatPage() {
       };
       const capturedTabIdForRetry = currentActiveTabId;
       const retryStreamFn = () => {
+        // the same message again: its request is open again (docs/design/chat-turn-liveness.md S3)
+        setLocalSending(true, capturedTabIdForRetry);
+        noteSend(capturedTabIdForRetry, streamRequest);
         return chatService.streamChat(
           { ...streamRequest, sessionId: tabMapRef.current.get(capturedTabIdForRetry)?.sessionId ?? streamRequest.sessionId },
           // run_26aa6caa (R27 half-migration close): use the CAPTURED retry tab, NOT
@@ -2503,7 +2510,7 @@ export default function ChatPage() {
         _pendingResendAttempts: 0,
       });
     }
-  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, incrementStreamGen, setLocalSending, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, queryClient, t, editorContextFor]);
+  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, incrementStreamGen, setLocalSending, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, noteSend, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, queryClient, t, editorContextFor]);
 
   // Wire handleSendMessage ref for voice conversation mode (avoids circular dep)
   handleSendMessageRef.current = handleSendMessage;
@@ -2639,26 +2646,29 @@ export default function ChatPage() {
 
       // The drained tab may be a background tab: snapshot ITS Canvas (see (d)).
       const editorContext = editorContextFor(tabId);
-      const abort = chatService.streamChat(
-        {
-          agentId: selectedAgentId!,
-          content,
-          sessionId: resolvedSessionId,
-          enableSkills,
-          enableMCP,
-          clientId,
-          editorContext,
-          ...(drainTerminal && { terminalContext: drainTerminal }),
-        },
+      const drainRequest = noteSend(tabId, {
+        agentId: selectedAgentId!,
+        content,
+        sessionId: resolvedSessionId,
+        enableSkills,
+        enableMCP,
+        clientId,
+        editorContext,
+        ...(drainTerminal && { terminalContext: drainTerminal }),
+      });
+      const drainSend = () => (setLocalSending(true, tabId), noteSend(tabId, drainRequest), chatService.streamChat(
+        { ...drainRequest, sessionId: tabMapRef.current.get(tabId)?.sessionId ?? drainRequest.sessionId },
         createStreamHandler(assistantMessageId, tabId),
         createErrorHandler(assistantMessageId, tabId),
         createCompleteHandler(tabId),
         createDisconnectHandler(tabId),
         streamLivenessFor(tabId),
-      );
+      ));
+      const abort = drainSend();
 
-      // Store abort function in tab map
+      // Store abort function in tab map; a reconnect re-sends THIS message
       tabState.abortController = { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController;
+      tabState.retryStreamFn = drainSend;
       tabState.hasReceivedData = false;
       tabState.isReconnecting = false;
       tabState.reconnectionAttempt = 0;
@@ -2676,7 +2686,7 @@ export default function ChatPage() {
       cleanupStreamingState();
       console.error('[queue-drain] failed, queue restored:', e);
     }
-  }, [buildContentArray, selectedAgentId, enableSkills, enableMCP, setLocalSending, setMessages, updateTabStatus, incrementStreamGen, createStreamHandler, createErrorHandler, createCompleteHandler, tabMapRef, activeTabIdRef, editorContextFor]);
+  }, [buildContentArray, selectedAgentId, enableSkills, enableMCP, setLocalSending, setMessages, updateTabStatus, incrementStreamGen, noteSend, createStreamHandler, createErrorHandler, createCompleteHandler, tabMapRef, activeTabIdRef, editorContextFor]);
 
   // Bridge the ref so useChatStreamingLifecycle can drain via deps.onDrainQueue.
   // Must be assigned after drainQueuedMessage is defined (circular dep with hook).
@@ -2690,6 +2700,35 @@ export default function ChatPage() {
   };
 
   // Cancel a queued message: remove from chat, restore text + attachments to input.
+  /** Retry a "Not sent" message (pages/chat/retrySend): same request, same client_id. */
+  const handleRetrySend = useCallback((tabId: string, messageId: string) => {
+    const tab = tabMapRef.current.get(tabId);
+    const store = messageStoreRegistry.get(tabId);
+    if (!tab || !store || !selectedAgentId) return;
+    const plan = retrySend(tab, store, messageId);
+    if (!plan) return;
+    tab.userStopped = false;
+    tab.hasReceivedData = false;
+    tab.isReconnecting = false;
+    tab.reconnectionAttempt = 0;
+    tab._pendingResendOnRecovery = false;
+    tab._pendingResendAssistantId = undefined;
+    incrementStreamGen();
+    setLocalSending(true, tabId);
+    updateTabStatus(tabId, 'streaming');
+    const send = () => (setLocalSending(true, tabId), noteSend(tabId, plan.request), chatService.streamChat(
+      { ...plan.request, sessionId: tabMapRef.current.get(tabId)?.sessionId ?? plan.request.sessionId, clientId: plan.request.clientId },
+      createStreamHandler(plan.assistantId, tabId),
+      createErrorHandler(plan.assistantId, tabId),
+      createCompleteHandler(tabId),
+      createDisconnectHandler(tabId),
+      streamLivenessFor(tabId),
+    ));
+    const abort = send();
+    tab.abortController = { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController;
+    tab.retryStreamFn = send;
+  }, [tabMapRef, selectedAgentId, incrementStreamGen, setLocalSending, updateTabStatus, noteSend, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, streamLivenessFor]);
+
   const handleCancelQueued = useCallback((tabId: string) => {
     const tabState = tabMapRef.current.get(tabId);
     if (!tabState?.queuedMessage) return;
@@ -2907,31 +2946,34 @@ export default function ChatPage() {
       setMessages((prev) => [...prev.filter(m => !m.isError), assistantPlaceholder]);
     }
 
-    const abort = chatService.streamChat(
-      {
-        agentId: retry.agentId ?? selectedAgentId,
-        sessionId: retry.sessionId,
-        ...(retry.content ? { content: retry.content as ContentBlock[] } : { message: retry.userMessage ?? '' }),
-        enableSkills,
-        enableMCP,
-        clientId,
-        ...(retryTerminal && { terminalContext: retryTerminal }),
-      },
-      wrappedCreateStreamHandler(assistantMessageId),
+    const timeoutRequest = noteSend(tabId, {
+      agentId: retry.agentId ?? selectedAgentId,
+      sessionId: retry.sessionId,
+      ...(retry.content ? { content: retry.content as ContentBlock[] } : { message: retry.userMessage ?? '' }),
+      enableSkills,
+      enableMCP,
+      clientId,
+      ...(retryTerminal && { terminalContext: retryTerminal }),
+    });
+    const timeoutSend = () => (setLocalSending(true, tabId), noteSend(tabId, timeoutRequest), chatService.streamChat(
+      { ...timeoutRequest, sessionId: tabMapRef.current.get(tabId)?.sessionId ?? timeoutRequest.sessionId },
+      createStreamHandler(assistantMessageId, tabId),
       createErrorHandler(assistantMessageId, tabId),
       createCompleteHandler(tabId),
       createDisconnectHandler(tabId),
       streamLivenessFor(tabId),
-    );
+    ));
+    const abort = timeoutSend();
 
-    // Store abort function
+    // Store abort function; a reconnect re-sends THIS message
     updateTabState(tabId, {
       abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
       hasReceivedData: false,
       isReconnecting: false,
       reconnectionAttempt: 0,
+      retryStreamFn: timeoutSend,
     });
-  }, [selectedAgentId, enableSkills, enableMCP, incrementStreamGen, setLocalSending, setMessages, updateTabStatus, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef]);
+  }, [selectedAgentId, enableSkills, enableMCP, incrementStreamGen, setLocalSending, setMessages, updateTabStatus, noteSend, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef]);
 
   // Handle escalation option click — sends the chosen option as a chat message.
   // Marks the escalation block as resolved optimistically, then sends.
@@ -3082,13 +3124,16 @@ export default function ChatPage() {
       streamLivenessFor(capturedTabId),
     );
 
-    // Store abort function in the tab map for per-tab stop isolation.
+    // Store abort function in the tab map for per-tab stop isolation. A decision
+    // is not re-sent by a reconnect (it is not idempotent), and the previous
+    // message's retryStreamFn must not be re-sent in its place.
     if (tabId) {
       updateTabState(tabId, {
         abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
         hasReceivedData: false,
         isReconnecting: false,
         reconnectionAttempt: 0,
+        retryStreamFn: undefined,
       });
     }
   };
@@ -3509,6 +3554,7 @@ export default function ChatPage() {
                     onPermissionDecision={stableHandlePermissionDecision}
                     onEscalationSelect={handleEscalationSelect}
                     onCancelQueued={handleCancelQueued}
+                    onRetrySend={handleRetrySend}
                     onContinue={handleContinue}
                     onStopBackground={stableStopBackground}
                     onFocusClick={handleFocusClick}

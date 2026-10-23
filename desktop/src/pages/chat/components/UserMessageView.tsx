@@ -30,6 +30,8 @@ export interface UserMessageViewProps {
   message: Message;
   /** Called when the user cancels a queued message. Only provided when message.isQueued is true. */
   onCancelQueued?: () => void;
+  /** Re-send a message the backend never accepted (message.sendState === 'failed'). */
+  onRetrySend?: () => void;
 }
 
 /**
@@ -40,7 +42,7 @@ export interface UserMessageViewProps {
  * - ResizeObserver-based overflow re-evaluation (Requirement 8.1)
  * - Queued message badge with cancel button when isQueued is true
  */
-export function UserMessageView({ message, onCancelQueued }: UserMessageViewProps) {
+export function UserMessageView({ message, onCancelQueued, onRetrySend }: UserMessageViewProps) {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
   const [isClamped, setIsClamped] = useState(false);
@@ -130,6 +132,23 @@ export function UserMessageView({ message, onCancelQueued }: UserMessageViewProp
             </div>
           )}
         </div>
+
+        {/* A send the backend never accepted: say so, offer Retry */}
+        {message.sendState === 'failed' && (
+          <div className="flex items-center gap-1.5 mt-1 text-xs text-[var(--color-status-error)] justify-end" role="status">
+            <span className="material-symbols-outlined icon-xs">error</span>
+            <span>{tf(t, 'chat.unsent.label', 'Not sent')}</span>
+            {onRetrySend && (
+              <button
+                type="button"
+                onClick={onRetrySend}
+                className="ml-1 underline hover:text-[var(--color-text)] transition-colors"
+              >
+                {tf(t, 'chat.unsent.retry', 'Retry')}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Queued message badge with cancel button */}
         {message.isQueued && (

@@ -1,9 +1,8 @@
 /**
  * P0 acceptance tests for docs/design/chat-turn-liveness.md (v2) — frontend half.
  *
- * Each test states one invariant the spec requires. One still broken is `it.fails`
- * (vitest: passes while the body fails; turns red the moment the fix lands): T7
- * until P2b. T2 and T6 hold since P2a (the bee follows the backend's activity).
+ * Each test states one invariant the spec requires. T2 and T6 hold since P2a (the
+ * bee follows the backend's activity), T7 since P2b (an unaccepted send is marked).
  *
  * Methodology: the real useChatStreamingLifecycle (the same harness as
  * liveReload.property.test.ts: subscription faked, chatService spied), fake timers
@@ -74,6 +73,27 @@ beforeEach(() => { vi.useFakeTimers(); resetTestState(); fake.listeners.clear();
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe('chat-turn-liveness P0 (frontend)', () => {
+  it('T7b: `accepted` clears a "Not sent" mark and forgets the kept request', () => {
+    const hook = renderHook(() => useChatStreamingLifecycle(createMockDeps())).result;
+    act(() => { initTestTab('A'); });
+    const tab = testTabMap.get('A')!;
+    tab.sessionId = SID;
+    tab._unsentRequests = new Map([['local-a', { agentId: 'x', message: 'hi', clientId: 'local-a' }]]);
+    const store = messageStoreRegistry.getOrCreate('A', { sessionId: SID });
+    act(() => {
+      store.appendMany([{ id: 'local-a', role: 'user', content: [{ type: 'text', text: 'hi' }],
+        timestamp: new Date().toISOString(), sendState: 'failed' } as never]);
+    });
+    const post = hook.current.createStreamHandler('local-a-asst', 'A');
+    act(() => {
+      post({ type: 'accepted', sessionId: SID, clientId: 'local-a', duplicate: true, queued: false,
+        userMessageId: 'u', status: 'persisted' } as never);
+    });
+    expect(store.messages.find((m) => m.id === 'local-a')?.sendState).toBeUndefined();
+    expect(tab._unsentRequests.has('local-a')).toBe(false);
+  });
+
+
   it('T2: the bee stays on through a 68 s cold start', async () => {
     let now: ReturnType<typeof entry> = entry('cold', 'preparing', 1);
     vi.spyOn(chatService, 'getStreamingState').mockImplementation(async () => now as never);
@@ -240,6 +260,17 @@ describe('chat-turn-liveness P0 (frontend)', () => {
     expect(tab.isStreaming).toBe(false);
   });
 
+  it('R5: a permission decision POST clears the previous message\'s reconnect (source guard)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const src = readFileSync(join(__dirname, '..', 'pages', 'ChatPage.tsx'), 'utf8');
+    const start = src.indexOf('const handlePermissionDecision = async');
+    const body = src.slice(start, src.indexOf('\n  };\n', start));
+    const postAt = body.indexOf('chatService.streamCmdPermissionContinue(');
+    expect(postAt).toBeGreaterThan(0);
+    expect(body.slice(postAt), 'the decision POST leaves the old retryStreamFn in place').toMatch(/retryStreamFn:\s*undefined/);
+  });
+
   it('R4: a send stopped while its attachments are read opens no POST (source guard)', async () => {
     const { readFileSync } = await import('node:fs');
     const { join } = await import('node:path');
@@ -256,7 +287,7 @@ describe('chat-turn-liveness P0 (frontend)', () => {
     expect((stop.match(/_sendToken = undefined/g) ?? []).length, 'Stop cancels the pending send').toBe(2);
   });
 
-  it.fails('T7: a send the backend never accepted is marked for retry, not left streaming', async () => {
+  it('T7d: a send the backend accepted is not marked when its stream fails later', () => {
     vi.spyOn(chatService, 'getStreamingState').mockRejectedValue(new Error('Unable to connect to backend service'));
     const hook = renderHook(() => useChatStreamingLifecycle(createMockDeps())).result;
     const tab = sentTab(hook);
@@ -264,8 +295,114 @@ describe('chat-turn-liveness P0 (frontend)', () => {
     act(() => {
       store.appendMany([{ id: 'local-1', role: 'user', content: [{ type: 'text', text: 'hi' }],
         timestamp: new Date().toISOString(), metadata: { client_id: 'local-1' } } as never]);
+    });
+    const post = hook.current.createStreamHandler('local-1-asst', 'T');
+    act(() => {
+      hook.current.noteSend('T', { agentId: 'a', message: 'hi', clientId: 'local-1' });
+      post({ type: 'accepted', sessionId: SID, clientId: 'local-1', duplicate: false, queued: false,
+        userMessageId: 'u1', status: 'persisted' } as never);
       hook.current.createErrorHandler('local-1-asst', 'T')(new TypeError('network error'));
     });
+    expect(tab._unsentRequests?.has('local-1')).toBe(false);
+    expect(store.messages.find((m) => m.id === 'local-1')?.sendState).toBeUndefined();
+    expect(tab.localSending).toBe(false);
+  });
+
+  it('T7e: a POST that ends with [DONE] but no `accepted` is "Not sent" too', () => {
+    vi.spyOn(chatService, 'getStreamingState').mockImplementation(async () => ({}) as never);
+    const hook = renderHook(() => useChatStreamingLifecycle(createMockDeps())).result;
+    const tab = sentTab(hook);
+    const store = messageStoreRegistry.getOrCreate('T', { sessionId: SID });
+    act(() => {
+      store.appendMany([{ id: 'local-2', role: 'user', content: [{ type: 'text', text: 'x' }],
+        timestamp: new Date().toISOString() } as never]);
+      hook.current.noteSend('T', { agentId: 'a', message: 'x', clientId: 'local-2' });
+    });
+    const done = hook.current.createCompleteHandler('T');
+    act(() => { done(); });
+    expect(tab.localSending).toBe(false);
+    expect(store.messages.find((m) => m.id === 'local-2')?.sendState).toBe('failed');
+  });
+
+  it('T7f: a Stop before `accepted` is not "Not sent" (the user ended it)', () => {
+    vi.spyOn(chatService, 'getStreamingState').mockImplementation(async () => ({}) as never);
+    const hook = renderHook(() => useChatStreamingLifecycle(createMockDeps())).result;
+    const tab = sentTab(hook);
+    const store = messageStoreRegistry.getOrCreate('T', { sessionId: SID });
+    act(() => {
+      store.appendMany([{ id: 'local-3', role: 'user', content: [{ type: 'text', text: 'y' }],
+        timestamp: new Date().toISOString() } as never]);
+      hook.current.noteSend('T', { agentId: 'a', message: 'y', clientId: 'local-3' });
+    });
+    tab.userStopped = true;
+    act(() => { hook.current.setLocalSending(false, 'T'); });
+    expect(store.messages.find((m) => m.id === 'local-3')?.sendState).toBeUndefined();
+  });
+
+  it('T7g: kept requests follow the retryable bubbles (a bubble gone takes its request)', () => {
+    vi.spyOn(chatService, 'getStreamingState').mockImplementation(async () => ({}) as never);
+    const hook = renderHook(() => useChatStreamingLifecycle(createMockDeps())).result;
+    const tab = sentTab(hook);
+    const store = messageStoreRegistry.getOrCreate('T', { sessionId: SID });
+    const user = (id: string) => ({ id, role: 'user', content: [{ type: 'text', text: id }], timestamp: new Date().toISOString() });
+    act(() => {
+      store.appendMany([user('local-a'), user('local-b')] as never);
+      hook.current.noteSend('T', { agentId: 'a', message: 'a', clientId: 'local-a' });
+      hook.current.setLocalSending(false, 'T');            // a: not sent
+    });
+    expect(tab._unsentRequests?.has('local-a')).toBe(true);
+    // the DB had a after all: reconcile replaced the marked bubble
+    act(() => { store.remove((m) => m.id === 'local-a'); store.appendMany([{ ...user('db-a') }] as never); });
+    act(() => {
+      hook.current.setLocalSending(true, 'T');
+      hook.current.noteSend('T', { agentId: 'a', message: 'b', clientId: 'local-b' });
+      hook.current.setLocalSending(false, 'T');            // b: not sent; a's request goes
+    });
+    expect([...(tab._unsentRequests?.keys() ?? [])]).toEqual(['local-b']);
+  });
+
+  it('T7h: a dropped POST is not "Not sent"; its reconnect re-opens the same send', () => {
+    vi.spyOn(chatService, 'getStreamingState').mockImplementation(async () => ({}) as never);
+    const hook = renderHook(() => useChatStreamingLifecycle(createMockDeps())).result;
+    const tab = sentTab(hook);
+    const store = messageStoreRegistry.getOrCreate('T', { sessionId: SID });
+    act(() => {
+      store.appendMany([{ id: 'local-4', role: 'user', content: [{ type: 'text', text: 'z' }],
+        timestamp: new Date().toISOString() } as never]);
+      hook.current.noteSend('T', { agentId: 'a', message: 'z', clientId: 'local-4' });
+    });
+    // the POST drops before `accepted`: a reconnect may still deliver it
+    act(() => { hook.current.createDisconnectHandler('T')(); });
+    expect(tab.localSending).toBe(false);
+    expect(store.messages.find((m) => m.id === 'local-4')?.sendState).toBeUndefined();
+    expect(tab._openSendCid).toBe('local-4');
+    // the reconnect fails for good: now it is "Not sent"
+    act(() => { hook.current.setLocalSending(true, 'T'); hook.current.setLocalSending(false, 'T'); });
+    expect(store.messages.find((m) => m.id === 'local-4')?.sendState).toBe('failed');
+  });
+
+  it('T7i: a stopped send forgets its kept request', () => {
+    vi.spyOn(chatService, 'getStreamingState').mockImplementation(async () => ({}) as never);
+    const hook = renderHook(() => useChatStreamingLifecycle(createMockDeps())).result;
+    const tab = sentTab(hook);
+    act(() => { hook.current.noteSend('T', { agentId: 'a', message: 's', clientId: 'local-5' }); });
+    tab.userStopped = true;
+    act(() => { hook.current.setLocalSending(false, 'T'); });
+    expect(tab._unsentRequests?.has('local-5')).toBe(false);
+  });
+
+  it('T7: a send the backend never accepted is marked for retry, not left streaming', async () => {
+    vi.spyOn(chatService, 'getStreamingState').mockRejectedValue(new Error('Unable to connect to backend service'));
+    const hook = renderHook(() => useChatStreamingLifecycle(createMockDeps())).result;
+    const tab = sentTab(hook);
+    const store = messageStoreRegistry.getOrCreate('T', { sessionId: SID });
+    act(() => {
+      store.appendMany([{ id: 'local-1', role: 'user', content: [{ type: 'text', text: 'hi' }],
+        timestamp: new Date().toISOString(), metadata: { client_id: 'local-1' } } as never]);
+      hook.current.noteSend('T', { agentId: 'a', message: 'hi', clientId: 'local-1' });
+      hook.current.createErrorHandler('local-1-asst', 'T')(new TypeError('network error'));
+    });
+    expect(tab._unsentRequests?.get('local-1')?.message, 'the request is kept for Retry').toBe('hi');
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     const user = store.messages.find((m) => m.id === 'local-1') as unknown as { sendState?: string } | undefined;
     expect(tab.isStreaming).toBe(false);

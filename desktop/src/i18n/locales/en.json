@@ -221,6 +221,10 @@
       "timesOutIn": "Times out in",
       "flagged": "Flagged:"
     },
+    "unsent": {
+      "label": "Not sent",
+      "retry": "Retry"
+    },
     "queued": {
       "label": "Queued — will send when ready",
       "cancel": "Cancel queued message"

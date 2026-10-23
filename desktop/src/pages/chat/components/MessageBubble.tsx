@@ -40,6 +40,8 @@ export interface MessageBubbleProps {
   contextWarning?: ContextWarning | null;
   /** Called when user cancels a queued message. Only relevant for user messages with isQueued=true. */
   onCancelQueued?: () => void;
+  /** Re-send a user message the backend never accepted (sendState 'failed'). */
+  onRetrySend?: () => void;
   /** Called when user clicks Continue to request agent continuation */
   onContinue?: () => void;
   /** Called by the assistant's local terminal-error card when retry is available. */
@@ -62,6 +64,7 @@ function MessageBubbleImpl({
   isLastAssistant,
   contextWarning,
   onCancelQueued,
+  onRetrySend,
   onContinue,
   onRetryError,
   readOnly,
@@ -72,6 +75,7 @@ function MessageBubbleImpl({
       <UserMessageView
         message={message}
         onCancelQueued={message.isQueued ? onCancelQueued : undefined}
+        onRetrySend={message.sendState === 'failed' ? onRetrySend : undefined}
       />
     );
   }

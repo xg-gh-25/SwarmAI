@@ -25,7 +25,8 @@ export function resetTabToNewSession(
     if (store.phase === 'streaming') store.endStreaming();
     store.replace([]);
   }
-  updateTabState(tabId, { sessionId: undefined, messages: [], pendingQuestion: null });
+  updateTabState(tabId, { sessionId: undefined, messages: [], pendingQuestion: null,
+    _unsentRequests: undefined, _openSendCid: undefined });
   tabNoticeStore.syncSession(tabId, undefined);
   return { reset: true, isActive: activeTabId === tabId };
 }

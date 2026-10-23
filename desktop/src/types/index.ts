@@ -585,6 +585,10 @@ export interface Message {
   suggestedAction?: string;
   /** Ephemeral — renders "Queued" badge. Never persisted to DB. */
   isQueued?: boolean;
+  /** Ephemeral, user messages only: 'failed' = the backend never accepted this
+   *  send (no `accepted` receipt; e.g. it was unreachable). Renders "Not sent ·
+   *  Retry". A DB row for it (it was persisted after all) replaces the mark. */
+  sendState?: 'failed';
   /** Backend correlation metadata — carries `client_id` so a reconcile can match
    *  this message to its DB counterpart EVEN AFTER its display `id` has been
    *  renamed from the optimistic `local-*` id to the canonical DB id. This is a
