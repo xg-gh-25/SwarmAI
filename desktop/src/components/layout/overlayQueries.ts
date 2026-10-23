@@ -76,7 +76,7 @@ export const overlayQuery = {
     queryFn: () => pollinateService.fetchAssets(),
     staleTime: OVERLAY_STALE_MS,
   }),
-  pipelineAnalytics: (window: '30d' | 'ytd') => ({
+  pipelineAnalytics: (window: '30d') => ({
     queryKey: ['overlay', 'pipeline', 'analytics', window] as const,
     queryFn: () => pipelinesService.fetchAnalytics(window),
     staleTime: OVERLAY_STALE_MS,

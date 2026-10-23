@@ -141,11 +141,13 @@ def _load_pipeline_runs() -> list[dict]:
     to_thread, not by a lossy pre-filter. If the full scan ever becomes a real
     (measured) cost, add a proper active-run index — not an mtime heuristic.
     """
-    # core.run_index: a run.json is parsed again only when it changed (the "proper
-    # run index" the note above asked for; no mtime heuristic, every run is listed).
+    # core.run_index.recent(): the runs active in the last RUN_WINDOW_DAYS (30). The
+    # note above rejected an mtime cutoff because it drops aged paused runs; Gawan
+    # decided 2026-10-23 that runs idle for over 30 days carry no meaning in the
+    # nav, so the window is the rule now (a file is parsed again only when it changed).
     from core import run_index
     runs = []
-    for r in run_index.runs(_get_swarmws()):
+    for r in run_index.recent(_get_swarmws()):
         state = r.data  # a copy: adding _project does not touch the index
         state["_project"] = r.path.parents[3].name
         runs.append(state)
@@ -573,27 +575,21 @@ def _iso_week_start(iso_ts: str) -> Optional[str]:
 
 
 def _window_cutoff(window: str) -> Optional[datetime]:
-    """Start of the analytics window. 30d = 30 days ago; ytd = Jan 1 this year.
-    None = no lower bound (defensive: unknown window → show all, never crash)."""
-    now = datetime.now(timezone.utc)
-    if window == "ytd":
-        return datetime(now.year, 1, 1, tzinfo=timezone.utc)
-    if window == "30d":
-        return now - __import__("datetime").timedelta(days=30)
-    return None
+    """Start of the analytics window: 30 days ago (the run window, run_index)."""
+    from core import run_index
+    return datetime.now(timezone.utc) - __import__("datetime").timedelta(days=run_index.RUN_WINDOW_DAYS)
 
 
 @router.get("/analytics", response_model=PipelineAnalytics)
 async def pipeline_analytics(
-    window: str = Query("30d", description="Trend window: 30d | ytd"),
+    window: str = Query("30d", description="Trend window: always 30d (kept for old clients)"),
 ) -> PipelineAnalytics:
     """Retro-analytics: overall rollup + weekly trend + by-project grouping over
     every pipeline run in the window. RETROSPECTIVE (fetch-once, no live state) —
     chat is the live surface. Reuses _load_pipeline_runs (the existing all-project
     scanner) + _extract_run_metrics (the existing metrics primitive). Always 200.
     """
-    if window not in ("30d", "ytd"):
-        window = "30d"
+    window = "30d"   # one window (older runs carry no meaning); any value answers 30d
     cutoff = _window_cutoff(window)
     # Retro analytics genuinely needs the FULL set (terminal runs included).
     # Off-loop (to_thread): the full scan stat()s + json.loads every run file.

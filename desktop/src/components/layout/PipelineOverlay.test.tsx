@@ -14,7 +14,7 @@ import type React from 'react';
  * - NO polling: fetchAnalytics called once per open (not on an interval).
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, screen, cleanup, act, fireEvent, waitFor, within } from '@testing-library/react';
+import { screen, cleanup, act, fireEvent, waitFor, within } from '@testing-library/react';
 
 const fetchAnalytics = vi.fn();
 const fetchRunDetail = vi.fn();
@@ -175,11 +175,10 @@ describe('PipelineOverlay', () => {
     vi.useRealTimers();
   });
 
-  it('re-fetches when the window toggles to YTD', async () => {
+  it('has one window: no year-to-date toggle', async () => {
     renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-window-ytd')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pipeline-window-ytd'));
-    await waitFor(() => expect(fetchAnalytics).toHaveBeenCalledWith('ytd'));
+    await waitFor(() => expect(fetchAnalytics).toHaveBeenCalledWith('30d'));
+    expect(screen.queryByTestId('pipeline-window-ytd')).toBeNull();
   });
 
   it('opens the detail drawer on run click and fetches its retro', async () => {
@@ -313,11 +312,9 @@ describe('PipelineOverlay', () => {
 
   // ── run_929024a8 redesign ACs ──────────────────────────────────────────────
 
-  it('AC1: states the time window explicitly (last 30 days / YTD)', async () => {
+  it('AC1: states the time window explicitly (last 30 days)', async () => {
     renderAndOpen();
     await waitFor(() => expect(screen.getByText(/Showing runs from the last 30 days/)).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pipeline-window-ytd'));
-    await waitFor(() => expect(screen.getByText(/Showing runs from Jan 1 \(year to date\)/)).toBeInTheDocument());
   });
 
   it('AC4: shows "Running now" (from active pipelines), NOT the profile ciphertext', async () => {

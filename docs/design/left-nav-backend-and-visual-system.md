@@ -259,4 +259,9 @@ overlay 里只允许用下面这些角色，全部是已有的主题变量，自
 
 ## 7. 结果
 
-（实现后填写。）
+**S1**（`9570fb9c`）：reflect 钩子只把 session id 交给 reflect 的单线程池就返回；批准后的计数交给新池 `pipeline_signal`（1 线程）；`owned_runs` 改读 `run_index`。新测试 4 条，相关 143 个测试通过，两处反向验证都变红。
+
+**S2**：`run_index.recent()`（30 天，按 stat 的修改时间先过滤，旧文件不打开）。Pipeline 列表、Pipeline 统计、Need You 的 paused run（以及经它算出的 Brain Hub pending）都改读它。和设计不同的两处：
+- `owned_runs` 仍读全量 `runs()`：它驱动 Stop 暂停、提问卡片记录、reflect 这些 run 生命周期动作，属于安全判断，不是统计；S1 之后它已不在事件循环上，旧文件也已在缓存里，代价只是 stat。
+- Pipeline 统计去掉了"Year to date"：数据源只有 30 天，YTD 和 30 天会是同一份数据，留着是误导。接口仍接受 `window=ytd`（旧客户端），一律按 30 天回答；前端去掉切换按钮。
+- 删掉了 `test_aged_paused_decision_run_still_active`：它锁的正是原则 3 推翻的旧决定（超过 30 天的 paused run 必须显示）。新测试 `test_run_window.py` 锁相反的规则。

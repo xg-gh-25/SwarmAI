@@ -7,6 +7,8 @@ system-stability design).
   one directory walk + one stat per run instead of parsing the whole history
   (1027 files / 7.4 MB measured 2026-10-21: ~200 ms to parse, ~20 ms to stat).
 - ``live_runs(workspace)`` — the same, only status running / paused.
+- ``recent(workspace)`` — runs whose run.json changed in the last
+  ``RUN_WINDOW_DAYS`` (30); older files are not opened. What the nav shows.
 
 Every reader that used to glob + json.load the whole history on its own (the
 worktree write gate, own_isolated_run, the commit / run-state gates, the pipelines
@@ -27,6 +29,7 @@ import json
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -36,6 +39,10 @@ logger = logging.getLogger(__name__)
 # (core.run_protocol.lifecycle.STATUSES - TERMINAL): sweeper and gates must never
 # treat a live v1 run as finished
 LIVE_STATUSES = ("running", "paused", "active", "awaiting_human", "reflecting")
+
+# What the nav shows and counts: runs active in the last 30 days (Gawan 2026-10-23:
+# older runs carry no meaning there). Safety reads ignore it and use runs().
+RUN_WINDOW_DAYS = 30
 
 # run.json path -> ((mtime_ns, size), mtime seconds, parsed dict)
 _CACHE: "dict[str, tuple[tuple[int, int], float, dict]]" = {}
@@ -70,6 +77,21 @@ def _run_files(workspace: str) -> "list[str]":
 
 def runs(workspace: "str | Path") -> "list[RunFile]":
     """Every run.json under *workspace* (module docstring)."""
+    return _scan(workspace, None)
+
+
+def recent(workspace: "str | Path", days: float = None) -> "list[RunFile]":
+    """The runs whose run.json changed within the last *days* (``RUN_WINDOW_DAYS``).
+
+    For what the nav SHOWS and COUNTS (Pipeline, Need You, Brain Hub): older runs
+    are not opened at all — the window is applied on the stat, before parsing. A
+    run.json is rewritten on every state change, so its mtime is the run's last
+    activity. Safety reads (sweeper, gates, a session's own runs) use ``runs()``."""
+    window = RUN_WINDOW_DAYS if days is None else days
+    return _scan(workspace, time.time() - window * 86400)
+
+
+def _scan(workspace: "str | Path", since: "float | None") -> "list[RunFile]":
     ws = str(workspace)
     prefix = os.path.join(ws, "")
     out: "list[RunFile]" = []
@@ -80,6 +102,8 @@ def runs(workspace: "str | Path") -> "list[RunFile]":
         except OSError:
             continue
         seen.add(f)
+        if since is not None and st.st_mtime < since:
+            continue   # outside the window: never opened
         key = (st.st_mtime_ns, st.st_size)
         with _LOCK:
             hit = _CACHE.get(f)

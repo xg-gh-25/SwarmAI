@@ -174,7 +174,7 @@ class PipelineOverall(BaseModel):
 
 class PipelineAnalytics(BaseModel):
     """GET /api/pipelines/analytics — the retro dashboard payload."""
-    window: str = Field("30d", description="30d | ytd")
+    window: str = Field("30d", description="always 30d (the run window)")
     overall: PipelineOverall = Field(default_factory=PipelineOverall)
     trend: list[PipelineTrendPoint] = Field(default_factory=list)
     by_project: list[PipelineProjectGroup] = Field(default_factory=list)

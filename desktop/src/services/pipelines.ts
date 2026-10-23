@@ -276,10 +276,10 @@ export const pipelinesService = {
 
   /**
    * Fetch the retro-analytics payload: overall rollup + weekly trend + by-project
-   * grouping. `window` = '30d' (default) | 'ytd'. Returns a zeroed payload on any
+   * grouping. `window` is always '30d' (the run window). Returns a zeroed payload on any
    * shape surprise — the dashboard must never crash on this.
    */
-  async fetchAnalytics(window: '30d' | 'ytd' = '30d'): Promise<PipelineAnalytics> {
+  async fetchAnalytics(window: '30d' = '30d'): Promise<PipelineAnalytics> {
     const empty: PipelineAnalytics = {
       window,
       overall: {

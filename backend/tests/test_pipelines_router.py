@@ -15,6 +15,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+
+def _days_ago(days: float, hour: int = 0, minute: int = 0) -> str:
+    """An ISO stamp *days* back (inside the 30-day run window), at hour:minute."""
+    from datetime import timedelta
+    d = (datetime.now(timezone.utc) - timedelta(days=days)).replace(
+        hour=hour, minute=minute, second=0, microsecond=0)
+    return d.isoformat()
 from fastapi.testclient import TestClient
 
 # Patch the SwarmWS path before importing the router
@@ -123,25 +131,6 @@ class TestPipelinesEndpoint:
         data = resp.json()
         assert data["count"] == 1
         assert data["pipelines"][0]["id"] == "run_active"
-
-    def test_aged_paused_decision_run_still_active(self, client, workspace):
-        """run_2568c3fb: a paused-decision run whose FILE MTIME is old (paused runs
-        are never re-touched and never auto-abandoned) MUST still appear in
-        ?active=true. A mtime pre-filter was rejected precisely because it would
-        silently drop this run from the 🔔 attention queue — the one item that most
-        needs to stay surfaced. The `active` filter is a pure status filter, not an
-        mtime heuristic."""
-        import os
-        old = _create_run(workspace, "Proj", "run_old_paused", status="paused",
-                          updated_at="2026-01-01T00:00:00+00:00",
-                          checkpoint={"reason": "Gate BLOCK", "stage": "build"})
-        old_epoch = datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()
-        os.utime(old, (old_epoch, old_epoch))  # freeze mtime far in the past
-
-        active = client.get("/api/pipelines?active=true").json()
-        ids_active = {p["id"] for p in active["pipelines"]}
-        assert "run_old_paused" in ids_active, \
-            "an aged paused-decision run must remain in the active/attention queue"
 
     def test_multi_project(self, client, workspace):
         _create_run(workspace, "ProjectA", "run_a1")
@@ -507,10 +496,10 @@ class TestPipelineAnalytics:
                         stages=[{"stage": "deliver", "status": "completed", "token_cost": 3000}],
                         metrics={"total_tokens": 20000, "duration_minutes": 8.0,
                                  "stage_tokens": {"evaluate": 3000}, "stages_completed": 8, "stages_total": 8, "status": "completed"})
-        resp = client.get("/api/pipelines/analytics?window=ytd")
+        resp = client.get("/api/pipelines/analytics?window=30d")
         assert resp.status_code == 200
         d = resp.json()
-        assert d["window"] == "ytd"
+        assert d["window"] == "30d"   # one window (run_index.RUN_WINDOW_DAYS)
         # garbage run_a2 excluded from EVERY rollup:
         assert d["overall"]["total_runs"] == 2  # was 3 — garbage dropped
         assert d["overall"]["completed"] == 2
@@ -552,7 +541,7 @@ class TestPipelineAnalytics:
                         stages=[],
                         metrics={"total_tokens": 100, "duration_minutes": None, "stage_tokens": {},
                                  "stages_completed": 0, "stages_total": 8, "status": "paused"})
-        d = client.get("/api/pipelines/analytics?window=ytd").json()
+        d = client.get("/api/pipelines/analytics?window=30d").json()
         # 2 garbage excluded → total 2 (done + misdone); both count completed
         assert d["overall"]["total_runs"] == 2
         assert d["overall"]["completed"] == 2  # done + misdone (recategorized)
@@ -569,7 +558,7 @@ class TestPipelineAnalytics:
                         budget={"stage_estimates": {"evaluate": 6000, "build": 40000}},
                         metrics={"total_tokens": 30000, "duration_minutes": 5.0,
                                  "stage_tokens": {}, "stages_completed": 7, "stages_total": 7, "status": "completed"})
-        d = client.get("/api/pipelines/analytics?window=ytd").json()
+        d = client.get("/api/pipelines/analytics?window=30d").json()
         assert d["overall"]["tokens_est"] == 46000  # 6000+40000
 
 
@@ -669,7 +658,7 @@ class TestAnalyticsCapAndCache:
                 metrics={"total_tokens": 1000, "duration_minutes": 5.0,
                          "stage_tokens": {}, "stages_completed": 7, "stages_total": 7, "status": "completed"},
             )
-        d = client.get("/api/pipelines/analytics?window=ytd").json()
+        d = client.get("/api/pipelines/analytics?window=30d").json()
         g = next(x for x in d["by_project"] if x["project"] == "BigProj")
         assert g["run_count"] == 25, "run_count must be the TRUE total"
         assert len(g["runs"]) == 20, "detail list capped at 20"
@@ -688,8 +677,8 @@ class TestAnalyticsCapAndCache:
         for i in range(22):
             _create_run_dir(
                 workspace, "BusyProj", f"run_ok{i:02d}", status="completed",
-                created_at=f"2026-08-02T{i:02d}:00:00+00:00",
-                completed_at=f"2026-08-02T{i:02d}:30:00+00:00",
+                created_at=_days_ago(2, hour=i),
+                completed_at=_days_ago(2, hour=i, minute=30),
                 stages=[{"stage": "deliver", "status": "completed"}],
                 metrics={"total_tokens": 1, "duration_minutes": 1.0, "stage_tokens": {},
                          "stages_completed": 7, "stages_total": 7, "status": "completed"},
@@ -699,9 +688,9 @@ class TestAnalyticsCapAndCache:
             workspace, "BusyProj", "run_needy_old", status="paused",
             checkpoint={"reason": "Gate 1 BLOCK: awaiting decision"},
             stages=[{"stage": "evaluate", "status": "completed"}],
-            created_at="2026-01-01T00:00:00+00:00",  # oldest (no completed_at → updated_at=created_at)
+            created_at=_days_ago(20),  # oldest (no completed_at → updated_at=created_at)
         )
-        d = client.get("/api/pipelines/analytics?window=ytd").json()
+        d = client.get("/api/pipelines/analytics?window=30d").json()
         g = next(x for x in d["by_project"] if x["project"] == "BusyProj")
         assert g["run_count"] == 23, "run_count = true total"
         ids = {r["id"] for r in g["runs"]}
@@ -724,7 +713,7 @@ class TestAnalyticsCapAndCache:
                         created_at=now, completed_at=now,
                         metrics={"total_tokens": 1, "duration_minutes": 1.0, "stage_tokens": {},
                                  "stages_completed": 7, "stages_total": 7, "status": "completed"})
-        d = client.get("/api/pipelines/analytics?window=ytd").json()
+        d = client.get("/api/pipelines/analytics?window=30d").json()
         g = next(x for x in d["by_project"] if x["project"] == "RPProj")
         by_id = {r["id"]: r for r in g["runs"]}
         assert by_id["run_has"]["report_path"] == "Projects/RPProj/.artifacts/runs/run_has/REPORT.md"
@@ -736,7 +725,7 @@ class TestAnalyticsCapAndCache:
                         created_at=now, completed_at=now)  # NO metrics file
         mfile = workspace / "Projects/CacheProj/.artifacts/runs/run_c1/METRICS.json"
         assert not mfile.exists()
-        client.get("/api/pipelines/analytics?window=ytd")
+        client.get("/api/pipelines/analytics?window=30d")
         assert mfile.exists(), "on-read metrics for a terminal run must be persisted (cache)"
 
     def test_does_not_persist_metrics_for_running_run(self, client, workspace):
@@ -746,7 +735,7 @@ class TestAnalyticsCapAndCache:
                         created_at=now,
                         stages=[{"stage": "build", "status": "completed"}])
         mfile = workspace / "Projects/LiveProj/.artifacts/runs/run_l1/METRICS.json"
-        client.get("/api/pipelines/analytics?window=ytd")
+        client.get("/api/pipelines/analytics?window=30d")
         assert not mfile.exists(), "a running run's metrics must NOT be cached (stale-freeze)"
 
     def test_persists_metrics_for_finished_but_paused_run(self, client, workspace):
@@ -764,5 +753,5 @@ class TestAnalyticsCapAndCache:
             checkpoint={"reason": "session_crash_auto_detected", "stage": "reflect"},
         )
         mfile = workspace / "Projects/OrphanProj/.artifacts/runs/run_o1/METRICS.json"
-        client.get("/api/pipelines/analytics?window=ytd")
+        client.get("/api/pipelines/analytics?window=30d")
         assert mfile.exists(), "a finished-but-paused (terminal) run's metrics must be cached"

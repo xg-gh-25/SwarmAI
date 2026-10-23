@@ -15,8 +15,8 @@
  * lessons + per-stage est-vs-actual token bars + related commits.
  *
  * NO LIVE POLLING — fetches the analytics payload ONCE on open (it is a retro
- * surface; a running pipeline's live state lives in its chat tab). Trend window
- * defaults to 30d, toggles to YTD.
+ * surface; a running pipeline's live state lives in its chat tab). One trend
+ * window: the last 30 days (runs idle longer carry no meaning, Gawan 2026-10-23).
  *
  * WRITES use protocol-aware backend endpoints: Resume appends a v1 ``resume``
  * event, a decision click appends the run's ``human_answer``, and Cancel appends v1
@@ -55,7 +55,8 @@ export interface PipelineContentProps {
   onContinue?: (sessionId: string, prompt: string) => Promise<boolean>;
 }
 
-type Window = '30d' | 'ytd';
+/** The one analytics window (backend run_index.RUN_WINDOW_DAYS). */
+type Window = '30d';
 
 function fmtCycle(min: number | null): string {
   if (min == null) return '—';
@@ -106,7 +107,7 @@ function openReportInCanvas(reportPath: string, close: () => void) {
 }
 
 export function PipelineContent({ close, onContinue }: PipelineContentProps) {
-  const [window, setWindow] = useState<Window>('30d');
+  const window: Window = '30d';
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [detail, setDetail] = useState<PipelineRunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -224,27 +225,15 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col relative" data-testid="pipeline-overlay">
-        {/* Sub-header: label + window toggle (shared WorkbenchToolbar). */}
+        {/* Sub-header: the one window, stated (shared WorkbenchToolbar). */}
         <WorkbenchToolbar
           loading={loading}
           left={
             <span className="text-xs font-medium text-[var(--color-text-muted)]">
-              {/* AC1: make the window explicit — the toggle IS a time filter. */}
-              Showing runs from {window === '30d' ? 'the last 30 days' : 'Jan 1 (year to date)'}
+              {/* One window: runs idle for over 30 days carry no meaning (run_index). */}
+              Showing runs from the last 30 days
             </span>
           }
-          right={(['30d', 'ytd'] as Window[]).map((w) => (
-            <button
-              key={w}
-              onClick={() => setWindow(w)}
-              data-testid={`pipeline-window-${w}`}
-              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                window === w ? 'bg-primary/15 text-primary' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
-              }`}
-            >
-              {w === '30d' ? 'Last 30 days' : 'Year to date'}
-            </button>
-          ))}
         />
 
         {/* Body: scrollable — overall strip + trend + by-project groups (one screen) */}
