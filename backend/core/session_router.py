@@ -497,11 +497,48 @@ def _prepend_ui_state_to_query(
     )
 
 
+# ── UI state without piling up (canvas-proprioception.md §10) ─────────────────
+# A warm turn's query prefix stays in the model's conversation, so a UI-state block
+# identical to the one this subprocess last received is replaced by one line. Both
+# lines start with the UI-state header, so strip_injected_blocks removes them.
+UI_STATE_UNCHANGED = "## Current UI State\n(unchanged since your previous message)"
+UI_STATE_NOTHING = "## Current UI State\nNothing is shown now: no open file, Canvas closed, no overlay."
+_RENDER = object()  # "render the UI block yourself" (callers that did not decide)
+
+
+def _decide_ui_block(unit: Any, editor_context: Optional[dict], warm: bool) -> Optional[str]:
+    """The UI-state block to put on THIS turn's query, or None. The one writer and
+    reader of ``unit._last_ui_block`` (what this subprocess last received).
+
+    Cold turn → None (the UI state rides the system prompt) and forget, so the next
+    warm turn sends the full block once (no assumption about what the spawn
+    carried). Warm turn → the rendered block; ``UI_STATE_UNCHANGED`` when it is
+    character-for-character the last one; ``UI_STATE_NOTHING`` once when the UI went
+    from something to nothing (a silent prefix would leave the old block standing).
+    """
+    if not warm:
+        unit._last_ui_block = None
+        return None
+    from .prompt_builder import _render_ui_context_section
+
+    block = _render_ui_context_section(editor_context).lstrip("\n") or None
+    last = getattr(unit, "_last_ui_block", None)
+    if block is None:
+        if last is None:
+            return None
+        block = UI_STATE_NOTHING
+    if block == last:
+        return UI_STATE_UNCHANGED
+    unit._last_ui_block = block
+    return block
+
+
 def _prepend_dynamic_context_to_query(
     query_content: Any,
     editor_context: Optional[dict],
     recall_block: Optional[str],
     should_prefix: bool,
+    ui_block: Any = _RENDER,
 ) -> Any:
     """阶段二 prompt-builder 两分 — prefix the per-turn DYNAMIC segment (recall +
     UI-SENSE) onto the user query for a REUSED live subprocess. Pure — no IO, no
@@ -528,7 +565,7 @@ def _prepend_dynamic_context_to_query(
     """
     if not should_prefix:
         return query_content
-    block = _build_dynamic_prefix_block(editor_context, recall_block)
+    block = _build_dynamic_prefix_block(editor_context, recall_block, ui_block=ui_block)
     if not block:  # nothing dynamic to report → clean no-op
         return query_content
     if isinstance(query_content, list):
@@ -539,6 +576,7 @@ def _prepend_dynamic_context_to_query(
 def _build_dynamic_prefix_block(
     editor_context: Optional[dict],
     recall_block: Optional[str],
+    ui_block: Any = _RENDER,
 ) -> Optional[str]:
     """TSCC/security-scan alignment (run_380413c5) — SSoT builder for the
     recall+UI-SENSE prefix block. Returns the exact block string that
@@ -560,10 +598,11 @@ def _build_dynamic_prefix_block(
     # recall_block passed through VERBATIM — preserves the [RECALLED] header (AC4).
     if recall_block and recall_block.strip():
         parts.append(recall_block.strip())
-    ui_block = _render_ui_context_section(editor_context)
+    if ui_block is _RENDER:
+        ui_block = _render_ui_context_section(editor_context)
     if ui_block:
         # _render_ui_context_section returns a leading "\n\n" — strip for a clean join.
-        parts.append(ui_block.lstrip("\n"))
+        parts.append(str(ui_block).lstrip("\n"))
     if not parts:
         return None
     return "\n\n".join(parts)
@@ -4468,6 +4507,8 @@ class SessionRouter:
         # (a non-clean IDLE recycles→COLD→respawn inside send(), where system_prompt
         # DOES carry it → prefixing there would double-inject). COLD/spawn: no prefix.
         _will_reuse_live = _is_warm_reuse(unit)
+        # ONE decision for the delivered prefix and the TSCC capture below (§10).
+        _ui_block = _decide_ui_block(unit, editor_context, _will_reuse_live)
         # 阶段二: the dynamic segment = recall (stashed above on a warm turn) +
         # UI-SENSE, prefixed onto the query for a reused subprocess (which discards
         # system_prompt). recall_query_block is None on a cold turn (recall wrote
@@ -4476,6 +4517,7 @@ class SessionRouter:
             query_content, editor_context,
             recall_block=getattr(unit, "_recall_query_block", None),
             should_prefix=_will_reuse_live,
+            ui_block=_ui_block,
         )
         # resume-context-injection去根 (run_d108b914): INDEPENDENT resume-only prefix,
         # carrying the resume block that build_options stashed this turn.
@@ -4536,6 +4578,7 @@ class SessionRouter:
         if _will_reuse_live:
             _dyn = _build_dynamic_prefix_block(
                 editor_context, getattr(unit, "_recall_query_block", None),
+                ui_block=_ui_block,
             )
             if _dyn:
                 _prefix_parts.append(_dyn)

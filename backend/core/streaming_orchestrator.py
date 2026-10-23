@@ -924,6 +924,9 @@ class StreamingOrchestrator:
             return []
         if subtype == "compact_boundary":
             parent._last_progress_time = awake_time()
+            # The UI-state block the model last saw may be summarized away now:
+            # the next warm turn sends it in full (canvas-proprioception §10).
+            parent._last_ui_block = None
             md = data.get("compact_metadata")
             ctx = getattr(parent, "_hook_session_context", None)
             if isinstance(ctx, dict):

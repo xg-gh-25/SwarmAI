@@ -40,7 +40,7 @@ def test_full_snapshot_renders_every_field():
     ))
     assert "## Current UI State" in out
     assert "- Canvas (output panel): open, Changes tab, output list folded, pinned" in out
-    assert "File: `a.md` (`designs/a.md`) — opened by the user, Preview, Review on, UNSAVED EDITS" in out
+    assert "File: `designs/a.md` — opened by the user, Preview, Review on, UNSAVED EDITS" in out
     assert "discard the unsaved edits and open `notes/b.md`" in out
     assert "Outputs (3 listed, 1 new): `report.md` (new) · `design.md` · `notes.md`" in out
     assert "open-canvas-file → ignored (file not found)" in out

@@ -701,6 +701,10 @@ class SessionUnit:
         # query-channel block — up to ~150K resume history, highest PII risk — was
         # invisible to both). Cleared on teardown by _cleanup_internal.
         self._delivered_query_prefix: Optional[str] = None
+        # The UI-state block this subprocess last received on a warm turn's query
+        # (canvas-proprioception §10). Written/read only by session_router
+        # _decide_ui_block; cleared on a cold turn and on compact_boundary.
+        self._last_ui_block: Optional[str] = None
         # TSCC system-prompt metadata AWAITING DELIVERY. The router stashes the
         # freshly-built metadata here; _spawn() publishes it to
         # session_registry.system_prompt_metadata at the moment the prompt is

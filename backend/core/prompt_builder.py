@@ -323,7 +323,10 @@ def render_terminal_data_block(buffer_tail: str, term_cwd: str = "") -> str:
 
 
 _UI_NAME_MAX = 160
-_UI_SECTION_BUDGET = 1500
+# The whole "## Current UI State" section, in characters (canvas-proprioception
+# §3.3 / §10): every line but the output rows is laid out first; the rows get what
+# is left and the rest is counted as "+N more".
+UI_SECTION_BUDGET = 1500
 _UI_VIEW_LABELS = {"preview": "Preview", "edit": "Edit", "changes": "Changes"}
 _UI_CMD_RESULTS = {"applied", "ignored", "pending"}
 
@@ -341,13 +344,13 @@ def _ui_code(value: object) -> str:
     return f"`{text}`"
 
 
-def _ui_plain(value: object, limit: int = 120) -> str:
+def _ui_plain(value: object, limit: int = 80) -> str:
     """A short single-line plain value (a command result reason)."""
     text = " ".join(str(value or "").replace("`", "'").split()).lstrip("#> ")
     return text[:limit]
 
 
-def _render_canvas_lines(canvas: dict) -> list[str]:
+def _render_canvas_lines(canvas: dict, output_budget: int) -> list[str]:
     """The Canvas lines for a canvas-proprioception.md §3.1 snapshot (new client)."""
     visible = canvas.get("visible")
     head = {"open": "open", "rail": "folded to the side rail", "hidden": "closed"}.get(visible, "closed")
@@ -370,7 +373,11 @@ def _render_canvas_lines(canvas: dict) -> list[str]:
             fbits.append("Review on")
         if f.get("dirty"):
             fbits.append("UNSAVED EDITS — do not replace this file")
-        lines.append(f"  - File: {_ui_code(f.get('name') or f.get('path'))} ({_ui_code(f.get('path'))}) — {', '.join(fbits)}")
+        path = str(f.get("path"))
+        name = str(f.get("name") or "")
+        # the name only when it says more than the path's last segment
+        shown = _ui_code(path) if not name or path.endswith(name) else f"{_ui_code(name)} ({_ui_code(path)})"
+        lines.append(f"  - File: {shown} — {', '.join(fbits)}")
     if canvas.get("pending_open"):
         lines.append(
             f"  - Waiting on the user: discard the unsaved edits and open {_ui_code(canvas.get('pending_open'))}, or keep editing"
@@ -385,7 +392,7 @@ def _render_canvas_lines(canvas: dict) -> list[str]:
         used = len(label)
         for o in outputs:
             item = _ui_code(o["path"]) + (" (new)" if o.get("new") else "")
-            if used + len(item) + 3 > _UI_SECTION_BUDGET // 2:
+            if used + len(item) + 3 > output_budget:
                 break
             shown.append(item)
             used += len(item) + 3
@@ -467,7 +474,8 @@ def _render_ui_context_section(editor_context: Optional[dict]) -> str:
     if has_file and not (new_canvas and (canvas.get("file") or {}).get("path")):
         lines.append(f"- Open file: {_ui_code(file_name)} ({_ui_code(file_path)})")
     if has_canvas and new_canvas:
-        lines.extend(_render_canvas_lines(canvas))
+        canvas_at = len(lines)
+        lines.extend(_render_canvas_lines(canvas, 0))
     elif has_canvas:
         state_bits = []
         state_bits.append("open" if canvas.get("open") else "closed")
@@ -490,6 +498,11 @@ def _render_ui_context_section(editor_context: Optional[dict]) -> str:
                 "  (this overlay is fullscreen and currently covers the "
                 "file/Canvas above — those are open but not visible right now)"
             )
+    if has_canvas and new_canvas:
+        # Lay out every other line first; the output rows get what is left.
+        base = len("\n".join(lines))
+        lines[canvas_at:canvas_at + len(_render_canvas_lines(canvas, 0))] = _render_canvas_lines(
+            canvas, max(0, UI_SECTION_BUDGET - base))
     return "\n".join(lines)
 
 
