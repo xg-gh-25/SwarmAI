@@ -322,30 +322,32 @@ execute and from how each DDD is stored.
 
 #### 4.4.1 What a Run hands in
 
-At the end of REFLECT, the executor uploads one **Run record** (a blob, §4.3.2) and
-registers it:
+At the end of REFLECT, the executor uploads one **Run record** and registers it. It holds
+exactly three kinds of content, plus the metadata that ties them together:
 
-- the request, `ddd_ref`, `code_ref`, placement and Attempts;
-- the four completion facts (§7.2) and the result bundle digest;
-- evidence: test results, review findings and verdicts;
-- the signed Pipeline event chain;
-- REFLECT output: the lessons the agent wrote (`reflect-prepare`), each with its
-  destination and relation, as **proposals**, not applied changes;
-- usage: token and time measurements.
+| Part | Contents | Source today |
+|---|---|---|
+| Pipeline documents | `REQUIREMENTS.md` and `DESIGN_SPEC.md` (profiles that have them), `REVIEW.md`, `FIXING_SPEC.md` (if review asked for fixes), `REPORT.md` | Rendered by the Pipeline into the run directory (`run_protocol/documents.py`, `engine.py`) |
+| Reflect summary | Each lesson the agent wrote, with its destination, relation and the judge's verdict | `artifacts/reflect.json` |
+| Delivery record | Commits: per repo the base, landed commit and message. Or CR: package, CR id, revision, commit, state at handoff (draft) | The landing result (`run_protocol/landing.py`), or the CR handoff (§7.3) |
+| Metadata | Request, `ddd_ref`, `code_ref`, placement, Attempts, the four completion facts, landing outcome, token and time usage | Conductor and Pipeline records |
 
-This applies to inline and Local Runs too: the Host uploads them from its outbox
-(§4.2). A Run that cannot upload keeps its record locally and retries; nothing is lost
-because Central was down.
+Transcripts, full logs and the signed event chain stay on the node that ran the Run; the
+Run record carries only their digests, so they can be checked if fetched later.
+
+This applies to every placement, inline and Local Runs included: the Host uploads them
+from its outbox (§4.2). A Run that cannot upload keeps its record locally and retries;
+nothing is lost because Central was down.
 
 #### 4.4.2 Learning stages
 
 | Stage | What happens | Where it runs |
 |---|---|---|
 | Intake | Schema and digest check; redaction scan of all text (secrets and credential shapes masked, findings recorded); a record that fails is quarantined, not learned from | Central Lambda |
-| Review and distill | Each proposal goes through the existing admission logic: `ingestion_gate` (noise floors, quality, the self-adversarial judge) and `reflect_job.judge`; related proposals across Runs are merged; `contradicts` proposals are held for a person | **Learning worker** on a SwarmAI node (the Host in V1), which claims learning jobs from Central like a Hive claims Runs |
+| Review and distill | Each reflect lesson, and anything distilled from the documents and delivery records across Runs, becomes a proposal and goes through the existing admission logic: `ingestion_gate` (noise floors, quality, the self-adversarial judge) and `reflect_job.judge`; related proposals across Runs are merged; `contradicts` proposals are held for a person | **Learning worker** on a SwarmAI node (the Host in V1), which claims learning jobs from Central like a Hive claims Runs |
 | Approve | Verdict `auto` (DDD knowledge passing every gate), `review` (anything touching Gates, rules or governed context files, and every `contradicts`) or `discard`. `review` items wait for the owner in the Control Center | Central records the decision |
-| Apply | The approved change set is applied to the DDD through its storage adapter (§4.4.3), by the one node that holds that adapter | The adapter's node |
-| Record | The applied DDD revision is published (§4.3.2) and linked back to the Runs and proposals it came from | Central |
+| Apply | The approved change set is applied to its destination (a DDD, or another store such as MEMORY or EVOLUTION) through that destination's adapter (§4.4.3), by the one node that holds the adapter | The adapter's node |
+| Record | The applied revision is recorded, published for a DDD (§4.3.2), and linked back to the Runs and proposals it came from | Central |
 
 The learning worker reuses SwarmAI's existing code instead of reimplementing it in a
 Lambda, and runs as a background job, never on the chat path or in the Local Worker slot.
@@ -356,10 +358,11 @@ docs, and the project's local `.artifacts/proposals/` for MEMORY / EVOLUTION. Fr
 Phase 4, `route` no longer writes; its decision and the lesson become proposals in the
 Run record. No executor writes a DDD. Before Phase 4 it works as today.
 
-#### 4.4.3 DDD storage adapters
+#### 4.4.3 Destination adapters
 
-Central knows a DDD only through its adapter, declared on the `ddds` record. An adapter
-does three things:
+Central knows each destination of learned content only through its adapter. A DDD
+declares its adapter on the `ddds` record; other destinations (MEMORY, EVOLUTION, a
+future knowledge store) are registered the same way. An adapter does three things:
 
 | Operation | Meaning |
 |---|---|
@@ -375,8 +378,9 @@ V1 has two adapters:
   delivery contract (a PR for GitHub, a draft CR for internal git), on a node with access
   to it.
 
-A new storage type is a new adapter and a new value on the `ddds` record; Central, the
-learning stages and the Pipeline do not change.
+A new storage type, or a new kind of destination, is a new adapter and a new registered
+value; Central, the learning stages and the Pipeline do not change. SwarmAI's own DDD on
+`host_files` is the first end-to-end case.
 
 #### 4.4.4 Audit
 
@@ -962,7 +966,7 @@ Slack scheduling to a named Hive is part of phases 6 and 7 once those Hives exis
 | S4 | Lambda authorizer for Ed25519-signed requests: measured added latency, and that a Cloud Desktop can reach the API Gateway endpoint outbound | Phase 3 |
 | S5 | How an owner's Slack button press becomes a `human_answer` without the gateway's unattended path | Phase 5 |
 | S6 | Headless Midway, internal git and `cr` on a Cloud Desktop. `ddd_bindings.bind_repo` defers internal bindings today ("needs Brazil+Midway headless auth") | Phase 7 |
-| S7 | Size of a real Run record (transcripts and evidence), measured over recent SwarmAI Runs, to set upload batching and S3 lifecycle | Phase 3 |
+| S7 | Size of a real Run record (documents, reflect summary, delivery record), measured over recent SwarmAI Runs, to confirm one upload per Run and set S3 lifecycle | Phase 3 |
 | S8 | Every place that writes a DDD today besides `reflect_job.route` (post-session hooks such as distillation and evolution maintenance, cultivation), and which of them move behind the learning pipeline in V1 | Phase 4 |
 
 If S1 fails, Phase 2 stops and the design is revised; the jobs `--bare` path is not used
