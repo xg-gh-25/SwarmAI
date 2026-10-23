@@ -47,6 +47,7 @@ Design conformance:
 from __future__ import annotations
 
 import asyncio
+from core import executors
 import hashlib
 import json
 import logging
@@ -72,6 +73,14 @@ from core.ddd_paths import IDENTITY_FILE, ddd_path, section_dir
 from core.project_registry import DDD_CANONICAL_DOCS, SPEC_DETAILS_DIR, get_pinned_projects
 
 logger = logging.getLogger(__name__)
+
+
+def _GIT_READ_ENV() -> dict:
+    """Environment for this module's git calls: ``GIT_OPTIONAL_LOCKS=0`` so a
+    read (status / diff / log) never refreshes the index, which would take
+    .git/index.lock and collide with chat's per-turn snapshot (design
+    left-nav-backend-and-visual-system.md B5)."""
+    return {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
 
 router = APIRouter(tags=["ddd-brain"])
 
@@ -194,6 +203,7 @@ def _file_git_status(project_dir: Path, file_rel: str) -> str:
         result = subprocess.run(
             ["git", "status", "--porcelain", "-z", "-unormal", "--", rel],
             cwd=str(ws), capture_output=True, text=True, timeout=5,
+            env=_GIT_READ_ENV(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return "clean"
@@ -245,6 +255,7 @@ def _batch_git_status(project_dir: Path) -> dict[str, str]:
         result = subprocess.run(
             ["git", "status", "--porcelain", "-z", "-unormal", "--", proj_rel],
             cwd=str(ws), capture_output=True, text=True, timeout=5,
+            env=_GIT_READ_ENV(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return {}
@@ -977,7 +988,7 @@ async def list_brains() -> dict:
         finally:
             leg_ms[name] = (_time.perf_counter() - t) * 1000
 
-    dirs = await asyncio.to_thread(_list_project_dirs)
+    dirs = await executors.run_nav(_list_project_dirs)
 
     # Two producer legs, run concurrently; neither starts a subprocess (design
     # left-nav-backend-and-visual-system.md B3):
@@ -990,7 +1001,7 @@ async def list_brains() -> dict:
         try:
             from core.attention_authority import collect
 
-            agg = await asyncio.to_thread(collect, _workspace_root())
+            agg = await executors.run_nav(collect, _workspace_root())
             for it in agg.items:
                 if it.brain:  # governance items have brain=None — excluded (parity with _pending_count)
                     by_brain[it.brain] = by_brain.get(it.brain, 0) + 1
@@ -1000,7 +1011,7 @@ async def list_brains() -> dict:
 
     _pending_r, _runs_r = await asyncio.gather(
         _timed("pending", _pending_leg()),
-        _timed("runs", asyncio.to_thread(_run_facts, _workspace_root())),
+        _timed("runs", executors.run_nav(_run_facts, _workspace_root())),
         return_exceptions=True,
     )
     pending_by_brain = _pending_r if isinstance(_pending_r, dict) else {}
@@ -1012,7 +1023,7 @@ async def list_brains() -> dict:
     t_sum = _time.perf_counter()
     results = await asyncio.gather(
         *(
-            asyncio.to_thread(_brain_summary, d, pending_by_brain.get(d.name, 0),
+            executors.run_nav(_brain_summary, d, pending_by_brain.get(d.name, 0),
                               run_facts.get(d.name, {}))
             for d in dirs
         ),
@@ -1054,7 +1065,7 @@ async def get_brain(name: str) -> dict:
             return None
         return _brain_detail(project_dir)
 
-    detail = await asyncio.to_thread(_detail_or_none)
+    detail = await executors.run_nav(_detail_or_none)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
     return detail
@@ -1091,6 +1102,7 @@ def _rev_parse_head(ws: Path) -> Optional[str]:
         r = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=str(ws), capture_output=True, text=True, timeout=5,
+            env=_GIT_READ_ENV(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -1108,6 +1120,7 @@ def _default_watermark(ws: Path, rel: str) -> Optional[str]:
         r = subprocess.run(
             ["git", "log", "-1", "--format=%H", "--", rel],
             cwd=str(ws), capture_output=True, text=True, timeout=5,
+            env=_GIT_READ_ENV(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -1118,6 +1131,7 @@ def _default_watermark(ws: Path, rel: str) -> Optional[str]:
         pr = subprocess.run(
             ["git", "rev-parse", "--verify", "--quiet", f"{last}^"],
             cwd=str(ws), capture_output=True, text=True, timeout=5,
+            env=_GIT_READ_ENV(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return last
@@ -1247,6 +1261,7 @@ def _sha_exists(ws: Path, sha: str) -> bool:
         r = subprocess.run(
             ["git", "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"],
             cwd=str(ws), capture_output=True, text=True, timeout=5,
+            env=_GIT_READ_ENV(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -1296,6 +1311,7 @@ def _scoped_diff_hunks(project_dir: Path, base_sha: str) -> list[dict]:
             ["git", "diff", f"{base_sha}..HEAD", "--unified=3", "--",
              rel, f":(exclude){rel}/.artifacts/**"],
             cwd=str(ws), capture_output=True, text=True, timeout=5,
+            env=_GIT_READ_ENV(),
         )
     except subprocess.TimeoutExpired as e:
         # LOUD on degradation (F8): a silent [] here reads as "nothing to review"
@@ -1387,7 +1403,7 @@ async def get_review(name: str) -> dict:
             "diff_incomplete": diff_incomplete,
         }
 
-    result = await asyncio.to_thread(_work)
+    result = await executors.run_nav(_work)
     if result is None:
         raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
     return result
@@ -1407,7 +1423,7 @@ async def approve_review(name: str) -> dict:
         _write_watermark(project_dir, head)
         return head
 
-    head = await asyncio.to_thread(_work)
+    head = await executors.run_nav(_work)
     if head is None:
         raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
     return {"last_reviewed_sha": head}
@@ -1472,6 +1488,7 @@ async def reject_review(name: str, body: RejectHunkBody) -> dict:
                 _apply_base + ["--check", "-"],
                 input=target["diff_text"], cwd=str(ws),
                 capture_output=True, text=True, timeout=5,
+                env=_GIT_READ_ENV(),
             )
             if check.returncode != 0:
                 # Does NOT apply cleanly (likely a concurrent edit shifted context).
@@ -1484,6 +1501,7 @@ async def reject_review(name: str, body: RejectHunkBody) -> dict:
                 _apply_base + ["-"],
                 input=target["diff_text"], cwd=str(ws),
                 capture_output=True, text=True, timeout=5,
+                env=_GIT_READ_ENV(),
             )
         except (OSError, subprocess.TimeoutExpired) as e:
             raise HTTPException(status_code=500, detail=f"git apply failed: {e}")
@@ -1494,7 +1512,7 @@ async def reject_review(name: str, body: RejectHunkBody) -> dict:
             )
         return {"reverted": True, "file": target["file"], "signature": body.hunk_signature}
 
-    return await asyncio.to_thread(_work)
+    return await executors.run_nav(_work)
 
 
 # ─── Distribute tab (Run 3) ──────────────────────────────────────────────────
@@ -1529,6 +1547,7 @@ def _output_is_committed(project_dir: Path, out_dir: Path) -> bool:
         r = subprocess.run(
             ["git", "log", "-1", "--format=%H", "--", rel],
             cwd=str(ws), capture_output=True, text=True, timeout=5,
+            env=_GIT_READ_ENV(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -1555,6 +1574,7 @@ def _content_changed_since_output(project_dir: Path, out_dir: Path) -> Optional[
         output_commit = subprocess.run(
             ["git", "log", "-1", "--format=%H", "--", output_rel],
             cwd=str(ws), capture_output=True, text=True, timeout=5,
+            env=_GIT_READ_ENV(),
         )
         output_hash = output_commit.stdout.strip()
         if output_commit.returncode != 0 or not output_hash:
@@ -1563,6 +1583,7 @@ def _content_changed_since_output(project_dir: Path, out_dir: Path) -> Optional[
             ["git", "log", "-1", "--format=%H", f"{output_hash}..HEAD", "--",
              project_rel, f":(exclude){project_rel}/.artifacts/**"],
             cwd=str(ws), capture_output=True, text=True, timeout=5,
+            env=_GIT_READ_ENV(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -1621,7 +1642,7 @@ async def get_distribution(name: str) -> dict:
             return None
         return _distribution_state(project_dir)
 
-    result = await asyncio.to_thread(_work)
+    result = await executors.run_nav(_work)
     if result is None:
         raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
     return result
@@ -1652,7 +1673,7 @@ async def brain_recall(name: str, q: str = "") -> dict:
         import time as _time
         from core.recall_multi import recall_all
         _t0 = _time.perf_counter()
-        result = await asyncio.to_thread(
+        result = await executors.run_nav(
             recall_all, q, project=name, domains=_BRAINHUB_RECALL_DOMAINS)
         _latency_ms = (_time.perf_counter() - _t0) * 1000.0
         hits: list[dict] = []

@@ -18,6 +18,7 @@ Endpoints (Run 5):
 from __future__ import annotations
 
 import asyncio
+from core import executors
 import json
 import logging
 import os
@@ -82,7 +83,7 @@ async def native_categories() -> dict:
             })
         return categories
 
-    categories = await asyncio.to_thread(_scan)
+    categories = await executors.run_nav(_scan)
     return {
         "source": "native",
         "root": "Knowledge/",
@@ -128,7 +129,7 @@ async def recent_feed(days: int = Query(default=7, ge=1, le=30)) -> dict:
         items.sort(key=lambda it: it["mtime"], reverse=True)
         return items
 
-    items = await asyncio.to_thread(_scan)
+    items = await executors.run_nav(_scan)
     return {
         "window_days": days,
         "count": len(items),
@@ -176,7 +177,7 @@ async def list_mounts(scope: Optional[str] = Query(default=None)) -> dict:
             conn.close()
 
     try:
-        return await asyncio.to_thread(_read)
+        return await executors.run_nav(_read)
     except Exception as exc:  # noqa: BLE001 — overlay tolerates an empty list
         logger.warning("library mounts list failed: %s", exc)
         return {"count": 0, "mounts": [], "registry_ready": False}
@@ -243,7 +244,7 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
             conn.close()
 
     try:
-        return await asyncio.to_thread(_work)
+        return await executors.run_nav(_work)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -340,7 +341,7 @@ async def library_search(q: str = Query(...), scope: str = Query(default="GLOBAL
         # its sync work via asyncio.to_thread (list_mounts/register_mount/health/
         # categories/items); this was the one leg the offload sweep missed, so the
         # "routers/ is STRICT no-blocking" guarantee was only half-true. Offload it.
-        result = await asyncio.to_thread(recall_library_hits, q, scope)
+        result = await executors.run_nav(recall_library_hits, q, scope)
         _latency_ms = (time.perf_counter() - _t0) * 1000.0
         mount_paths = _docs_mount_paths()  # {mount_id: abs source dir} for key resolution
         hits: list[dict] = []
@@ -418,7 +419,7 @@ async def library_health() -> dict:
         from core.library_health import scan_library_health
         return scan_library_health(kdir)
 
-    return await asyncio.to_thread(_load_health)
+    return await executors.run_nav(_load_health)
 
 
 @router.post("/health/action")

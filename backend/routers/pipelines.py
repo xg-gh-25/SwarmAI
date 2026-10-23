@@ -13,7 +13,7 @@ The router is registered in main.py with prefix ``/api/pipelines``.
 
 from __future__ import annotations
 
-import asyncio
+from core import executors
 import json
 import logging
 import os
@@ -130,7 +130,7 @@ def _load_pipeline_runs() -> list[dict]:
     presented status and the on-disk status intentionally differ.
 
     NOTE (run_2568c3fb): callers MUST offload this to a thread
-    (`await asyncio.to_thread(_load_pipeline_runs)`) — it stat()s + json.loads
+    (`await executors.run_nav(_load_pipeline_runs)`) — it stat()s + json.loads
     every run file, which blocks the event loop (and every parallel request) if
     run inline. A mtime read-boundary "active fast path" was considered and
     REJECTED: file mtime freezes for BOTH terminal and paused runs, so it cannot
@@ -352,14 +352,14 @@ async def cancel_pipeline(run_id: str) -> dict:
             logger.exception("Protocol-aware cancellation failed for %s", run_id)
             return "error"
 
-    outcome = await asyncio.to_thread(_cancel)
+    outcome = await executors.run_nav(_cancel)
     if outcome == "cancelled":
         logger.info("Cancelled pipeline %s", run_id)
         return {"status": "cancelled", "run_id": run_id}
     if outcome == "error":
         return JSONResponse(status_code=500, content={
             "status": "error", "run_id": run_id, "detail": "v1 cancellation failed"})
-    return await asyncio.to_thread(_read_only_or_missing, run_id)
+    return await executors.run_nav(_read_only_or_missing, run_id)
 
 
 @router.patch("/{run_id}/resume")
@@ -389,7 +389,7 @@ async def resume_pipeline(run_id: str) -> dict:
             logger.exception("Protocol-aware resume failed for %s", run_id)
             return ("error", "v1 resume failed")
 
-    outcome, detail = await asyncio.to_thread(_resume)
+    outcome, detail = await executors.run_nav(_resume)
     if outcome == "resumed":
         stage, owner = detail
         # Nothing drives the run until its session continues it: the dashboard
@@ -397,7 +397,7 @@ async def resume_pipeline(run_id: str) -> dict:
         return {"status": "running", "run_id": run_id, "resumed_from": stage,
                 "owner_session_id": owner}
     if outcome == "missing":
-        return await asyncio.to_thread(_read_only_or_missing, run_id)
+        return await executors.run_nav(_read_only_or_missing, run_id)
     code = 409 if outcome == "conflict" else 500
     return JSONResponse(status_code=code, content={"status": outcome, "run_id": run_id,
                                                    "detail": detail})
@@ -430,13 +430,13 @@ async def answer_pipeline_decision(run_id: str, body: PipelineDecisionAnswer) ->
             logger.exception("Dashboard decision answer failed for %s", run_id)
             return ("error", "v1 decision answer failed")
 
-    outcome, detail = await asyncio.to_thread(_answer)
+    outcome, detail = await executors.run_nav(_answer)
     if outcome == "answered":
         return {"status": "answered", "run_id": run_id,
                 "option_id": detail["answer"]["option_id"],
                 "owner_session_id": detail["owner_session_id"]}
     if outcome == "missing":
-        return await asyncio.to_thread(_read_only_or_missing, run_id)
+        return await executors.run_nav(_read_only_or_missing, run_id)
     code = 409 if outcome == "conflict" else 500
     return JSONResponse(status_code=code, content={"status": outcome, "run_id": run_id,
                                                    "detail": detail})
@@ -454,7 +454,7 @@ async def list_pipelines(
     # the event loop (it blocks /health + every parallel request). The `active`
     # filter is a pure in-memory status filter below (run_2568c3fb — a mtime
     # pre-filter was rejected as it silently drops aged paused-decision runs).
-    all_runs = await asyncio.to_thread(_load_pipeline_runs)
+    all_runs = await executors.run_nav(_load_pipeline_runs)
     if not all_runs:
         return PipelineDashboard()
 
@@ -593,7 +593,7 @@ async def pipeline_analytics(
     cutoff = _window_cutoff(window)
     # Retro analytics genuinely needs the FULL set (terminal runs included).
     # Off-loop (to_thread): the full scan stat()s + json.loads every run file.
-    all_runs = await asyncio.to_thread(_load_pipeline_runs)
+    all_runs = await executors.run_nav(_load_pipeline_runs)
 
     def _in_window(raw: dict) -> bool:
         if cutoff is None:
@@ -630,7 +630,7 @@ async def pipeline_analytics(
             out[(project, run_id)] = _run_metrics_cached(project, run_id, raw)
         return out
 
-    metrics_by_run = await asyncio.to_thread(_prefetch_metrics)
+    metrics_by_run = await executors.run_nav(_prefetch_metrics)
 
     by_project: dict[str, list[PipelineRunSummary]] = {}
     trend_buckets: dict[str, dict] = {}
@@ -847,7 +847,7 @@ async def pipeline_run_detail(run_id: str):
             return ("found", raw, report_md, report_path, project_dir.name)
         return ("not_found", None, "", None, None)
 
-    outcome, raw, report_md, report_path, project_dir_name = await asyncio.to_thread(_scan_and_read)
+    outcome, raw, report_md, report_path, project_dir_name = await executors.run_nav(_scan_and_read)
     if outcome != "found":
         return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
 
@@ -869,7 +869,7 @@ async def pipeline_run_detail(run_id: str):
                             ".artifacts" / "runs" / run_id / "artifacts" / "reflect.json")
             try:
                 reflect_artifact = json.loads(
-                    await asyncio.to_thread(reflect_file.read_text, encoding="utf-8"))
+                    await executors.run_nav(reflect_file.read_text, encoding="utf-8"))
                 lessons = reflect_artifact.get("lessons") if isinstance(reflect_artifact, dict) else None
                 if isinstance(lessons, list):
                     reflect_lessons = [
@@ -901,7 +901,7 @@ async def pipeline_run_detail(run_id: str):
         ckpt = raw.get("checkpoint") or {}
         display_status = _display_status(raw)
         v1 = _is_v1(raw)
-        decision = (await asyncio.to_thread(
+        decision = (await executors.run_nav(
             _v1_decision, _get_swarmws() / "Projects" / project_dir_name / ".artifacts"
             / "runs" / run_id, raw) if v1 else None)
         return PipelineRunDetail(

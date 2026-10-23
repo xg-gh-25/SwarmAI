@@ -12,7 +12,7 @@ action is dispatched into a chat tab via the existing onItemClick mechanism.
 """
 from __future__ import annotations
 
-import asyncio
+from core import executors
 import logging
 from typing import Optional
 
@@ -37,7 +37,7 @@ async def get_attention(brain: Optional[str] = None):
     Offloaded to a thread: the paused-run source stat()s+parses every run file
     (see pipelines._load_pipeline_runs), which would block the event loop inline.
     """
-    result = await asyncio.to_thread(
+    result = await executors.run_nav(
         attention_authority.collect, SWARMWS, brain=brain
     )
     return result.to_dict()

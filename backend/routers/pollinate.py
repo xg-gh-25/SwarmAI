@@ -28,7 +28,7 @@ workspace-sandboxed) — no new media endpoint. The frontend points <img> at it.
 
 from __future__ import annotations
 
-import asyncio
+from core import executors
 import hashlib
 import json
 import logging
@@ -675,7 +675,7 @@ async def pollinate_topic_detail(run_name: str):
             content_package = None
         return run, assets, content_package
 
-    run, assets, content_package = await asyncio.to_thread(_read_detail)
+    run, assets, content_package = await executors.run_nav(_read_detail)
     topic = run_name
     domain = None
     status = "unknown"

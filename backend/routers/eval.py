@@ -8,7 +8,7 @@ Read endpoints: health score, run history, case details.
 Mutation endpoints: CRUD on golden set cases, run triggers, promotions.
 """
 
-import asyncio
+from core import executors
 import logging
 from typing import Optional
 
@@ -406,7 +406,7 @@ async def get_context_health():
     try:
         # _build_learning_dashboard walks Projects/*/{IMPROVEMENT,TECH}.md + MEMORY.md
         # (iterdir + per-file read_text) — off the event loop (run_b2d3ece0).
-        result["learning_dashboard"] = await asyncio.to_thread(_build_learning_dashboard, root)
+        result["learning_dashboard"] = await executors.run_nav(_build_learning_dashboard, root)
     except Exception as exc:
         logger.debug("context-health: learning dashboard failed: %s", exc)
         result["learning_dashboard"] = None
@@ -601,7 +601,7 @@ async def get_brain_graph(source: str = "memory"):
         except OSError:
             return ""
 
-    content = await asyncio.to_thread(_read)  # read off the event loop
+    content = await executors.run_nav(_read)  # read off the event loop
     return build_evolution_graph(content) if is_evo else build_brain_graph(content)
 
 
@@ -629,7 +629,7 @@ async def get_archive_list(source: str = "memory"):
     if not ws_path:
         return {"files": [], "total_files": 0, "source": src}
 
-    return await asyncio.to_thread(list_archive_files, Path(ws_path), src)
+    return await executors.run_nav(list_archive_files, Path(ws_path), src)
 
 
 @router.get("/archive-search")
@@ -643,7 +643,7 @@ async def get_archive_search(q: str = "", source: str = "memory"):
     from core.archive_browse import search_archive
 
     src = source if source in _ARCHIVE_SOURCES else "memory"
-    return await asyncio.to_thread(search_archive, q, src)
+    return await executors.run_nav(search_archive, q, src)
 
 
 # ─── Reports (HTML) ───────────────────────────────────────────────────────
@@ -674,7 +674,7 @@ async def list_reports():
             })
         return out
 
-    return await asyncio.to_thread(_scan_reports)  # glob + per-file stat off the loop
+    return await executors.run_nav(_scan_reports)  # glob + per-file stat off the loop
 
 
 @router.get("/reports/{filename}")
@@ -701,7 +701,7 @@ async def get_report(filename: str):
     if report_path.is_symlink() or not report_path.resolve().is_relative_to(reports_dir.resolve()):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    content = await asyncio.to_thread(report_path.read_text, encoding="utf-8")
+    content = await executors.run_nav(report_path.read_text, encoding="utf-8")
     return HTMLResponse(content=content)
 
 

@@ -8,7 +8,7 @@ into a single status view.
 
 from __future__ import annotations
 
-import asyncio
+from core import executors
 import json
 import logging
 
@@ -125,7 +125,7 @@ async def run_job(req: RunJobRequest):
 
         # A job runs LLM calls / scripts for seconds to minutes: a worker thread,
         # never the event loop (on the loop, Run now froze /health for the whole job).
-        result = await asyncio.to_thread(_run_and_save)
+        result = await executors.run_nav(_run_and_save)
 
         return RunJobResponse(
             job_id=result.job_id,
@@ -164,7 +164,7 @@ async def unified_status():
         # both off the event loop in one worker thread (run_b2d3ece0).
         def _load():
             return load_state(), load_jobs()
-        state, jobs = await asyncio.to_thread(_load)
+        state, jobs = await executors.run_nav(_load)
 
         # Only ENABLED jobs count toward health/failing — a disabled job is
         # inert (neither healthy nor failing). brain-push (enabled=False) must
@@ -339,7 +339,7 @@ async def job_runs(job_id: str):
         )
 
     try:
-        return await asyncio.to_thread(_build)
+        return await executors.run_nav(_build)
     except Exception as e:  # fail-soft: the drawer must never 500
         logger.error("job_runs failed for '%s': %s", job_id, e)
         return empty

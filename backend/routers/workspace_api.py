@@ -63,6 +63,14 @@ from schemas.workspace_config import (
 
 logger = logging.getLogger(__name__)
 
+
+def _GIT_READ_ENV() -> dict:
+    """Environment for this module's git calls: ``GIT_OPTIONAL_LOCKS=0`` so a
+    read (status / diff / log) never refreshes the index, which would take
+    .git/index.lock and collide with chat's per-turn snapshot (design
+    left-nav-backend-and-visual-system.md B5)."""
+    return {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
+
 # Latch so the readonly-context check's fail-open degrade (see
 # _is_readonly_context_file) is warned once per process rather than on every
 # workspace file resolution.
@@ -297,6 +305,7 @@ def _get_git_status(workspace_root: Path, pathspec: str | None = None) -> dict[s
             capture_output=True,
             text=True,
             timeout=5,
+            env=_GIT_READ_ENV(),
         )
         if result.returncode != 0:
             return {}
@@ -635,7 +644,7 @@ async def get_workspace_tree(
             )
 
     # Slow path: offload git+fs scan to thread pool (frees event loop)
-    etag_value, body = await asyncio.to_thread(
+    etag_value, body = await executors.run_nav(
         _compute_etag_and_tree_sync, workspace_root, depth,
     )
 
@@ -685,7 +694,7 @@ async def expand_tree_directory(
     # response only contains this subtree — ancestor status propagation (the
     # reason the full-tree endpoint scans everything) does not apply here.
     # Keys stay workspace-relative, so _build_tree prefix-matching is unaffected.
-    git_status = await asyncio.to_thread(_get_git_status, workspace_root, path)
+    git_status = await executors.run_nav(_get_git_status, workspace_root, path)
 
     # Local subrepo cache for this request (mirrors the closure in _compute_etag_and_tree_sync)
     subrepo_cache: dict[str, dict[str, str]] = {}
@@ -696,7 +705,7 @@ async def expand_tree_directory(
             subrepo_cache[key] = _get_git_status(resolved)
         return subrepo_cache[key]
 
-    children = await asyncio.to_thread(
+    children = await executors.run_nav(
         _build_tree, target, workspace_root, depth, git_status, _subrepo_status_cached,
     )
     return children
@@ -860,6 +869,7 @@ def _find_git_root_cached(parent_dir: str) -> Optional[str]:
             capture_output=True,
             text=True,
             timeout=5,
+            env=_GIT_READ_ENV(),
         )
         if result.returncode == 0:
             return result.stdout.strip()

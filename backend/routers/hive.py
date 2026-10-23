@@ -5,6 +5,7 @@ Accounts: CRUD + boto3 STS/EC2/Bedrock verification.
 Instances: full lifecycle via HiveProvisioner (EC2, CloudFront, IAM, S3).
 """
 import asyncio
+from core import executors
 import json
 import logging
 import os
@@ -381,7 +382,7 @@ async def verify_account(account_id: str):
 
     try:
         import asyncio
-        aws_account_id, checks = await asyncio.to_thread(_run_checks)
+        aws_account_id, checks = await executors.run_nav(_run_checks)
 
         async with _conn() as c:
             await c.execute("UPDATE hive_accounts SET verified_at = ? WHERE id = ?", (_now(), account_id))

@@ -267,3 +267,5 @@ overlay 里只允许用下面这些角色，全部是已有的主题变量，自
 - 删掉了 `test_aged_paused_decision_run_still_active`：它锁的正是原则 3 推翻的旧决定（超过 30 天的 paused run 必须显示）。新测试 `test_run_window.py` 锁相反的规则。
 
 **S3**：`/ddd/brains` 不再起任何子进程。新函数 `_run_facts(ws)` 从 `run_index.recent()` 一次算出每个项目的最近合入时间和是否有进行中的 run；删掉了 `_git_status_dirty`、`_batch_dirty_project_dirs`、`_git_last_commit_iso`、`_batch_last_commit_iso`、`_parallel_last_commit_iso` 五个 git 函数和它们的测试。和设计不同的一处：字段 `health.uncommitted` 改名 `health.liveRun`，界面上的"uncommitted changes"改为"run in progress"/"a pipeline run in progress"。原因：值的含义变了，沿用旧名和旧文案就是错的说法。Review tab 的 `git diff` 是查看知识改动的功能本身，不在此列，S4 一并加 `GIT_OPTIONAL_LOCKS=0`。
+
+**S4**：`executors` 新增 `nav` 池（2 线程）和 `run_nav(fn, *args, **kwargs)`（`to_thread` 的同形替代）。只服务 nav 的 10 个 router（attention、community_api、jobs、library_api、eval、ddd_brain、todos、pipelines、pollinate、hive）里的 `asyncio.to_thread` 全部改走 `nav` 池；`workspace_api` 只改两个文件树接口，文件读写接口 Canvas 也在用，保持原样。`ddd_brain`、`workspace_api` 里 14 处 git 调用都带 `GIT_OPTIONAL_LOCKS=0`（包括 Review tab 的 diff/apply）。守护测试是静态扫描，argv 是变量的 git 调用也算在内（`workspace_api` 的 `git status` 就是这种，字面量规则会漏掉）。`artifacts`、`agents`、`chat` 不在范围：前者已在专用池，后两者是聊天本身用的。

@@ -10,6 +10,7 @@ Includes lifecycle management endpoints:
 Requirements: 6.1-6.8
 """
 import json
+from core import executors
 import logging
 import re
 import shutil
@@ -109,7 +110,7 @@ async def list_todo_history(
     import asyncio
     db_rows = await db.todos.list_history(limit=limit, window_days=window_days)
     archive_rows = (
-        await asyncio.to_thread(_load_archive_rows) if include_archive else []
+        await executors.run_nav(_load_archive_rows) if include_archive else []
     )
     # Dedup by id (DB is authoritative over an older archived copy)
     seen = {r["id"] for r in db_rows if r.get("id")}
@@ -125,7 +126,7 @@ async def get_todo_history_stats(include_archive: bool = Query(True)):
     from core.todo_stats import compute_history_stats
     db_rows = await db.todos.list_history(limit=5000)
     archive_rows = (
-        await asyncio.to_thread(_load_archive_rows) if include_archive else []
+        await executors.run_nav(_load_archive_rows) if include_archive else []
     )
     seen = {r["id"] for r in db_rows if r.get("id")}
     merged = list(db_rows) + [r for r in archive_rows if r.get("id") not in seen]
@@ -485,7 +486,7 @@ async def upload_todo_attachment(todo_id: str, request: Request):
             return dest.stat().st_size, dest.name  # type: ignore[return-value]
 
         import asyncio
-        size, final_name = await asyncio.to_thread(_write)
+        size, final_name = await executors.run_nav(_write)
 
         from jobs.paths import SWARMWS
         rel_path = str((target_dir / final_name).relative_to(SWARMWS)) \
@@ -527,7 +528,7 @@ async def delete_todo_attachment(todo_id: str, attachment_id: str):
             def _rm():
                 dest.unlink(missing_ok=True)
             import asyncio
-            await asyncio.to_thread(_rm)
+            await executors.run_nav(_rm)
     await db.todo_attachments.delete(attachment_id)
     logger.info("ToDo %s attachment %s deleted", todo_id[:8], attachment_id[:8])
     return {"deleted": True, "attachment_id": attachment_id}

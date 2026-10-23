@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import functools
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, TypeVar
@@ -103,6 +104,10 @@ _POOL_SPECS: dict[str, int] = {
     "pipeline_signal": 1,  # pipeline v1 bookkeeping a chat hook triggers (an approval's
                       # required-approval count): fire-and-forget, one writer, never
                       # on the event loop and never ahead of a gate.
+    "nav": 2,         # Left Nav overlay endpoints (Brain Hub, Need You, Pipeline, Library,
+                      # Community, Jobs, ToDo, Pollinate, Hive, C&M, the Workspace tree):
+                      # a slow overlay waits here, never ahead of chat or /health. Small
+                      # on purpose: it also bounds how much nav Python competes for the GIL.
 }
 
 _pools: dict[str, ThreadPoolExecutor] = {}
@@ -149,6 +154,13 @@ async def run_in(name: str, fn: Callable[..., T], *args: Any) -> T:
     ``functools.partial(contextvars.copy_context().run, fn, *args)`` at that callsite."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(get_pool(name), fn, *args)
+
+
+async def run_nav(fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    """``asyncio.to_thread`` for Left Nav endpoints: same call shape (kwargs too), on
+    the ``nav`` pool. Design left-nav-backend-and-visual-system.md B4."""
+    call = functools.partial(fn, *args, **kwargs) if kwargs else fn
+    return await run_in("nav", call, *(() if kwargs else args))
 
 
 def shutdown(wait: bool = False) -> None:

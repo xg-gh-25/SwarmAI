@@ -24,7 +24,7 @@ so an invalid feed or member can never reach the adapter's silent-skip path.
 
 from __future__ import annotations
 
-import asyncio
+from core import executors
 import logging
 
 from fastapi import APIRouter, HTTPException
@@ -72,7 +72,7 @@ async def community_feed() -> dict:
     Canvas on click. Community-scoped: only Signals + Reports categories.
     """
     # build_feed does rglob("*.md") + per-file open (blocking I/O) — off the event loop.
-    items = await asyncio.to_thread(build_feed, _knowledge_dir())
+    items = await executors.run_nav(build_feed, _knowledge_dir())
     # `truncated` is honest: build_feed caps the payload, so a consumer can tell
     # "42 shown of exactly 42" from "100 shown, more on disk" (not a silent cut).
     from core.community_data import feed_cap
@@ -95,7 +95,7 @@ async def community_hot_topics() -> dict:
     signals.json → empty topics list (never 500). Read-only; blocking file read
     runs off the event loop.
     """
-    result = await asyncio.to_thread(parse_hot_topics, _signals_path())
+    result = await executors.run_nav(parse_hot_topics, _signals_path())
     return {
         "scanned_at": result["scanned_at"],
         "topics": result["topics"],
@@ -115,7 +115,7 @@ async def community_sources() -> dict:
     /feeds/{id}/members endpoints. Empty list on a fresh install (no config.yaml).
     """
     # parse_sources reads + yaml-parses config.yaml (blocking) — off the event loop.
-    sources = await asyncio.to_thread(parse_sources, _config_path())
+    sources = await executors.run_nav(parse_sources, _config_path())
     return {"count": len(sources), "sources": sources}
 
 
@@ -132,8 +132,8 @@ async def community_engagement() -> dict:
     """
     # Both read JSONL files (blocking) — off the event loop. One dir read each.
     d = _engagement_dir()
-    kpis = await asyncio.to_thread(aggregate_engagement, d)
-    items = await asyncio.to_thread(engagement_items, d)
+    kpis = await executors.run_nav(aggregate_engagement, d)
+    items = await executors.run_nav(engagement_items, d)
     # Each row carries only its latest reply (the list renders one reply line next to
     # reply_count); the whole nested thread made the body ~560 KB for 334 rows.
     return {"kpis": kpis, "items": [_with_latest_reply(it) for it in items]}
@@ -234,7 +234,7 @@ async def add_feed(feed: NewFeed) -> dict:
         })
 
     try:
-        await asyncio.to_thread(mutate_config, _mutator)
+        await executors.run_nav(mutate_config, _mutator)
     except _Dup:
         raise HTTPException(status_code=409, detail=f"Feed id '{feed.id}' already exists")
     return {"ok": True, "id": feed.id}
@@ -266,7 +266,7 @@ async def update_feed(feed_id: str, patch: FeedPatch) -> dict:
         raise _NotFound()
 
     try:
-        await asyncio.to_thread(mutate_config, _mutator)
+        await executors.run_nav(mutate_config, _mutator)
     except _NotFound:
         raise HTTPException(status_code=404, detail=f"Feed '{feed_id}' not found")
     return {"ok": True, "id": feed_id}
@@ -286,7 +286,7 @@ async def delete_feed(feed_id: str) -> dict:
         config["feeds"] = kept
         return removed
 
-    removed = await asyncio.to_thread(mutate_config, _mutator)
+    removed = await executors.run_nav(mutate_config, _mutator)
     return {"ok": True, "id": feed_id, "removed": bool(removed)}
 
 
@@ -410,7 +410,7 @@ async def add_member(feed_id: str, body: MemberBody) -> dict:
         raise _NotFound()
 
     try:
-        await asyncio.to_thread(mutate_config, _mutator)
+        await executors.run_nav(mutate_config, _mutator)
     except _NotFound:
         raise HTTPException(status_code=404, detail=f"Feed '{feed_id}' not found")
     except _NoMemberType:
@@ -450,5 +450,5 @@ async def delete_member(feed_id: str, body: MemberBody) -> dict:
                 return True
         return False
 
-    removed = await asyncio.to_thread(mutate_config, _mutator)
+    removed = await executors.run_nav(mutate_config, _mutator)
     return {"ok": True, "id": feed_id, "value": value, "removed": bool(removed)}
