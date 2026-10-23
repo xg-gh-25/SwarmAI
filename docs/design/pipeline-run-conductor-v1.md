@@ -16,18 +16,40 @@ related:
 
 ## 1. Summary
 
-This design delivers the execution plane of the Organizational Autonomy OS HLD
+### 1.1 The problem
+
+Today a Pipeline Run can only run inline in the Chat tab that started it, one at a time
+per tab, on the Host. This design solves two problems, and nothing more:
+
+1. **Start Pipeline Runs from a Host Chat tab or from Slack (now or on a schedule), and
+   run them where they fit: inline in the tab, on a Local background Worker, on an EC2
+   Hive or on a Cloud Desktop Hive, in parallel where capacity allows and queued where it
+   does not.**
+2. **Copy what happens during each Run (stages, human-in-the-loop questions, answers,
+   approvals, stops, takeovers) and its results afterwards into one remote org store, for
+   Trace, statistics, Eval and later uses.** The node that ran the Run keeps its original
+   data and its local flow is unchanged.
+
+It delivers the execution plane of the Organizational Autonomy OS HLD
 (`project-agent-delivery-os-hld.md` §6.4–§6.6, §7, §17) and nothing above it. One
 deterministic **Pipeline Run Conductor** in the Host daemon accepts a Pipeline request,
-places it, dispatches it, tracks it and lands its result. V1 supports four entry
-paths:
+places it, dispatches it, tracks it and lands its result.
 
-| # | Entry | Placement | Exists today |
-|---|---|---|---|
-| E1 | Chat tab, inline | `inline_local` | Yes. V1 only registers it with the Conductor |
-| E2 | Background run on the Host | `background_local` | No |
-| E3 | Run on a named Hive | `remote_hive` | No |
-| E4 | Slack, immediate or scheduled | `background_local` or `remote_hive` | No |
+### 1.2 Entry points and placements
+
+| Entry point | Can place on | Exists today |
+|---|---|---|
+| Host Chat tab, inline | `inline_local` (that tab) | Yes. V1 only registers it with the Conductor |
+| Host Chat tab, choosing where (§6.4) | `background_local`, an EC2 Hive, a Cloud Desktop Hive | No |
+| Dashboard Pipelines page | `background_local`, a Hive | No |
+| Slack, immediate or scheduled (§8) | `background_local`, a Hive | No |
+
+| Placement | Parallel | Queue |
+|---|---|---|
+| `inline_local` | One per Chat tab, as today | None |
+| `background_local` | At most one Local Worker | Host queue, in submit order; one stream always kept for chat and Slack |
+| `remote_hive`, EC2 (external projects only) | Up to the slots that Hive reports | Behind that Hive in Central; never moved to another Hive |
+| `remote_hive`, Cloud Desktop (internal projects only) | Up to the slots that Hive reports | Same |
 
 Host and Hives never connect to each other. Both connect outbound to one **Central
 Service** (§4.3) in the AWS account SwarmAI uses for Bedrock. It registers DDDs,
@@ -116,8 +138,9 @@ Containers, other clouds and other machine types are out of scope.
 ## 4. Architecture
 
 ```text
- Chat tab ──(pipeline_v1.py create)──┐
- Dashboard "Run in background" ──────┤
+ Chat tab, inline ─(pipeline_v1.py create)──┐
+ Chat tab, choosing where ─(conductor draft)┤
+ Dashboard "Run in background" / Hive ──────┤
  Slack session (owner only) ─────────┼──► Conductor.submit() ──► Conductor Store (Host)
  Host Job Scheduler (pipeline_submit)┘          │
                                                 ├─ inline_local      → chat session owns the Run
@@ -696,7 +719,7 @@ submit and dispatch, the request fails with `classification_changed` and is not 
 
 ## 6. Execution modes
 
-### 6.1 `inline_local` (E1, exists)
+### 6.1 `inline_local` (exists)
 
 Unchanged for the user. `pipeline_v1.py create` calls `Conductor.register_inline()` after
 the run is created: one file write off the event loop, recording origin `chat`, the
@@ -704,7 +727,7 @@ session id and `executor: host:inline`. The chat session stays the Run's signed 
 A registration failure is logged and never fails the create; the Run is then simply
 absent from the Conductor view. Inline runs do not count against the background slot.
 
-### 6.2 `background_local` (E2)
+### 6.2 `background_local`
 
 **One Local Worker slot.** `background_local_slots` is fixed at 1 in V1 and is not a
 setting. A request that finds the slot busy stays `queued`, in submit order.
@@ -743,7 +766,7 @@ has two priority classes:
 decision card is routed to the request's origin (§8.3). The Worker session stays alive
 while waiting and holds its epoch, so a long wait is never treated as a crash.
 
-### 6.3 `remote_hive` (E3)
+### 6.3 `remote_hive`
 
 The request names one Hive. The Conductor checks the placement rules (§5.3) and that the
 Hive is `active` in the Central `nodes` table, of the right type and within its reported
@@ -800,6 +823,29 @@ The trust model is explicit: a registered Hive is the owner's own machine. The H
 its review verdict, and re-checks what can be checked deterministically (identity,
 freshness, that the patch applies, tests). A Hive key is revoked by deregistering the Hive;
 candidates signed with a revoked key are rejected.
+
+
+### 6.4 Choosing a placement from a Chat tab
+
+A person can ask in a Chat tab for a Run anywhere, not only inline: "run this as a
+bugfix pipeline in the background", or "on hive-ec2-1", or "on my Cloud Desktop".
+
+1. The chat agent builds a draft with `pipeline_conductor.py draft` (a Host CLI over the
+   owner-only socket, the same one Slack uses in §8.2), giving project, requirement (the
+   person's words, stored verbatim as data), profile and placement. Draft applies the
+   placement rules (§5.3) and the DDD pin (§5.2), and lists the Hives allowed for that
+   project with their free slots and queue length.
+2. The tab shows a confirmation card: project, profile, placement, queue position or free
+   slot, DDD revision and base commits. Only the person's click on that card submits;
+   the agent has no submit command. An invalid draft shows the rule that failed.
+3. After submit, the Run belongs to its Worker (`pipeline:<run_id>`), not to the chat
+   session. The tab stays free for chat, and a status card in the tab shows queue
+   position, stage and outcome. It reads `GET /api/conductor/requests/<id>` on the `nav`
+   pool when the tab is visible, never on the send or stream path.
+4. Questions from that Run come back to the same tab as decision cards (§8.3, origin
+   `chat`) and to the Pipelines page; the person's pick is recorded as `human_answer`.
+5. Closing the tab does not affect the Run. Its card reappears in that tab's history and
+   on the Pipelines page.
 
 ## 7. Remote Run flow and completion protocol
 
@@ -934,7 +980,7 @@ whichever lands first wins:
 - **Once landing has started** (`landing`), cancel is refused; landing finishes or fails
   on its own (§7.2).
 
-## 8. Slack (E4)
+## 8. Slack
 
 ### 8.1 Who may submit
 
@@ -1056,7 +1102,8 @@ Cancel is always available to the owner until landing starts (§7.4).
 - **Control Center.** The org view of Runs, nodes and registered DDDs / Project Agents
   reads the Central Service. Publishing a DDD or Project Agent revision and enrolling or
   revoking a node happen here.
-- **Chat.** No visible change for inline runs.
+- **Chat.** No visible change for inline runs. For other placements: the confirmation
+  card, the Run's status card and its decision cards in the originating tab (§6.4).
 - **Slack.** §8.
 - **API.** `POST /api/conductor/requests`, `GET /api/conductor/requests[/<id>]`,
   `POST /api/conductor/requests/<id>/cancel`, `GET /api/conductor/capacity`.
@@ -1079,13 +1126,13 @@ Measure first, then build. Each phase starts with its acceptance tests written a
 | Phase | Scope | Acceptance |
 |---|---|---|
 | 1 | Conductor Store, `submit` / `register_inline`, status join, API, Pipelines page columns | An inline Run appears in the Conductor view with origin `chat`; chat send and stream timings are unchanged (measured before and after); a failing registration never fails `create` |
-| 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2 |
+| 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery; Chat tab placement choice for `background_local` (§6.4) | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2; from a Chat tab, asking for a background Run shows a confirmation card, only the click submits, the tab stays usable while the Run works, and the Run's questions come back to that tab |
 | 3-0 | Contracts before code: wire and key specification (§4.3.6) with test vectors; DynamoDB, event, Run-record and audit schemas; `ddd_origin` in `ddd_bindings.py`; the four-fact event schema | Reviewed documents and red conformance tests for: crash after claim, out-of-order and duplicate events, duplicate-with-different-payload, cancel racing a result, Hive restart and adopt, lease across a simulated outage, key loss and rotation, a poisoned blob upload, a Run record that fails intake |
 | 3 | Central Service in the Bedrock account (CDK: HTTP API, Lambdas, DynamoDB, S3, KMS key, sweeper); Host enrolment and signed requests; DDD and Project Agent registry; Run-record upload from the Host outbox for inline and Local Runs; intake with redaction; audit; Control Center reads Central | Every finished local Run with upload on hands its record to Central, which passes intake; with `central_upload: "off"`, or `--no-upload`, a local Run sends nothing to Central and behaves the same locally; a remote request ignores the setting and always uploads; a planted fake secret is masked and recorded; a Central outage leaves local Runs unaffected and their records upload afterwards; a replayed upload is a no-op; a node with a wrong signature, stale timestamp or reused nonce is refused |
 | 4 | First consumers: Trace (live view, sealed Trace, `run_index`) and Offline Eval (`eval_jobs`, `eval_reports`, intervention classification, the five dimensions) | An uploaded local Run shows per-stage times, tokens and every human answer in the Control Center from Central data only; a dropped event marks its Trace `incomplete`; an Eval report gives all five dimensions or `UNKNOWN`, never a guessed PASS; rebuilding `run_index` from Run records gives the same statistics; `local only` Runs are absent from org stats and counted as not covered; with Central down, local Runs, chat, hooks and MEMORY behave exactly as before |
 | 5 | Slack submit (owner only), confirmation card, `pipeline_submit` job, thread updates, Slack answer button | A non-owner cannot submit; a scheduled Run fires and reports in its thread; a missed fire is recorded `missed(host_offline)` and never submitted late; an overlapping fire is `skipped_overlap`; a replayed occurrence key is a no-op; an owner button press consumes its nonce once and records `human_answer`, while a second click, a non-owner click or an expired nonce is rejected |
-| 6 | Hive credentials moved to the secret store; four-fact completion protocol with landing journal for every placement; EC2 Hive enrolment and Worker through Central; leases; capacity reporting; DDD snapshot manifest and scan | An external Run on EC2 hands in its Run record; the Host takes the result from Central, verifies, re-tests and lands it; a claim raced by two nodes has one winner; a lease survives a simulated 15-minute Central outage and a dead Hive's lease expires 10 minutes after recovery; a revoked-epoch event is rejected; an internal project is rejected for EC2; a crash mid-landing reconciles without double-landing |
-| 7 | Cloud Desktop enrolment and Worker; `ddd_origin: repo` fetch with internal git; draft CR handoff. Gated on S6 | An internal Run with an IVTHubSpec-hosted DDD runs on a Cloud Desktop, hands in its Run record and records all four facts ending in `external_handoff` with a draft CR; an external project is rejected for a Cloud Desktop |
+| 6 | Hive credentials moved to the secret store; four-fact completion protocol with landing journal for every placement; EC2 Hive enrolment and Worker through Central; leases; capacity reporting; DDD snapshot manifest and scan | from a Chat tab, a Run can be placed on an EC2 Hive and only Hives allowed for the project are offered; An external Run on EC2 hands in its Run record; the Host takes the result from Central, verifies, re-tests and lands it; a claim raced by two nodes has one winner; a lease survives a simulated 15-minute Central outage and a dead Hive's lease expires 10 minutes after recovery; a revoked-epoch event is rejected; an internal project is rejected for EC2; a crash mid-landing reconciles without double-landing |
+| 7 | Cloud Desktop enrolment and Worker; `ddd_origin: repo` fetch with internal git; draft CR handoff. Gated on S6 | from a Chat tab, an internal project offers only Cloud Desktop Hives; An internal Run with an IVTHubSpec-hosted DDD runs on a Cloud Desktop, hands in its Run record and records all four facts ending in `external_handoff` with a draft CR; an external project is rejected for a Cloud Desktop |
 
 Slack scheduling to a named Hive is part of phases 6 and 7 once those Hives exist.
 
