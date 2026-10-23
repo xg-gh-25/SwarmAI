@@ -14,7 +14,8 @@ event so the window is deterministic.
 Properties:
 - in the window, the reload shows the user's decision (from the durable pending
   request the decision path updates synchronously), not "expired";
-- after the record lands, the body is the same (a 304 is then correct);
+- after the record lands, the body shows the same (its rows' revs, and so the
+  ETag, moved: the record is a write);
 - a prompt nobody decided and nobody waits on still reads "expired".
 """
 from __future__ import annotations
@@ -105,7 +106,11 @@ async def test_a_decision_reads_as_decided_before_and_after_its_record_lands():
                 break
     after = await _history(sid, unit)
     assert _decision(after) == "deny"
-    assert json.loads(after.body) == json.loads(window.body)       # a 304 on the window's ETag is right
+    # the reload in the window shows what the reload after shows; the record moved
+    # the row's rev, so the ETag changes too (no stale 304 either way)
+    strip = lambda resp: [{k: v for k, v in m.items() if k != "row_revs"} for m in json.loads(resp.body)]
+    assert strip(after) == strip(window)
+    assert after.headers["ETag"] != window.headers["ETag"]
     assert await asyncio.wait_for(waiter, 2) == "deny"
 
 

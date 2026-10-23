@@ -685,23 +685,31 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
     _PENDING_EXCLUDE_SQL = "(sent IS NULL OR sent != 0)"
 
     async def list_by_session(
-        self, session_id: str, *, include_pending: bool = False,
+        self, session_id: str, *, include_pending: bool = False, with_rev: bool = False,
     ) -> list[T]:
         """List all messages for a session, ordered by timestamp.
 
         By default excludes unsent pending rows (sent=0). Pass
-        ``include_pending=True`` to return them too.
+        ``include_pending=True`` to return them too. ``with_rev``: each row also
+        carries ``_rev``, its transcript rev, read in the same statement as its
+        content (so the rev is exactly the version of the content returned).
         """
         sent_clause = "" if include_pending else f" AND {self._PENDING_EXCLUDE_SQL}"
+        rev_col = self._rev_col() if with_rev else ""
         async with self._get_connection() as conn:
             conn.row_factory = aiosqlite.Row
             async with conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE session_id = ?{sent_clause} "
+                f"SELECT *{rev_col} FROM {self.table_name} WHERE session_id = ?{sent_clause} "
                 f"ORDER BY created_at ASC",
                 (session_id,)
             ) as cursor:
                 rows = await cursor.fetchall()
                 return [self._row_to_dict(row) for row in rows]
+
+    def _rev_col(self) -> str:
+        """A column giving each row's transcript rev (schema v15), as ``_rev``."""
+        return (f", (SELECT r.rev FROM transcript_revs r WHERE r.row_id = {self.table_name}.id)"
+                " AS _rev")
 
     async def list_session_blocks(self, session_id: str, needles: list[str]) -> list[tuple[str, list]]:
         """``(created_at, blocks)`` of a session's sent rows whose content contains any
@@ -920,6 +928,7 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
         before_id: Optional[str] = None,
         *,
         include_pending: bool = False,
+        with_rev: bool = False,
     ) -> list[T]:
         """List messages for a session with optional cursor-based pagination.
 
@@ -948,12 +957,14 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
         """
         # --- Neither param: backward-compatible full fetch ---
         if limit is None and before_id is None:
-            return await self.list_by_session(session_id, include_pending=include_pending)
+            return await self.list_by_session(session_id, include_pending=include_pending,
+                                              with_rev=with_rev)
 
         # Root-1 SSOT Phase 2: exclude sent=0 pending rows by default (P3).
         # NULL treated as sent (pre-v6). The before_id cursor subqueries look up
         # a SPECIFIC row by id (positioning) and are intentionally unfiltered.
         sent_clause = "" if include_pending else f" AND {self._PENDING_EXCLUDE_SQL}"
+        rev_col = self._rev_col() if with_rev else ""
 
         async with self._get_connection() as conn:
             conn.row_factory = aiosqlite.Row
@@ -965,7 +976,7 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                 #   (created_at < cursor_ca) OR
                 #   (created_at = cursor_ca AND rowid < cursor_rowid)
                 query = (
-                    f"SELECT *, rowid FROM {self.table_name} "
+                    f"SELECT *, rowid{rev_col} FROM {self.table_name} "
                     f"WHERE session_id = ?{sent_clause} "
                     f"  AND ("
                     f"    created_at < (SELECT created_at FROM {self.table_name} WHERE id = ?)"
@@ -981,7 +992,7 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
             elif limit is not None:
                 # Only limit: most recent N messages.
                 query = (
-                    f"SELECT *, rowid FROM {self.table_name} "
+                    f"SELECT *, rowid{rev_col} FROM {self.table_name} "
                     f"WHERE session_id = ?{sent_clause} "
                     f"ORDER BY created_at DESC, rowid DESC "
                     f"LIMIT ?"
@@ -990,7 +1001,7 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
             else:
                 # Only before_id without limit — fetch all older messages.
                 query = (
-                    f"SELECT *, rowid FROM {self.table_name} "
+                    f"SELECT *, rowid{rev_col} FROM {self.table_name} "
                     f"WHERE session_id = ?{sent_clause} "
                     f"  AND ("
                     f"    created_at < (SELECT created_at FROM {self.table_name} WHERE id = ?)"

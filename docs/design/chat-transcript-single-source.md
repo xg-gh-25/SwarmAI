@@ -118,8 +118,8 @@ v2：**版本号在库里分配，和写入同一个事务。** 落地形状（�
   断线后由 hub 回放当前回合或 `resync` 重读。回合之外的写入（用户消息、决定、答案、Stop 回执、后台
   agent 结果、压缩、删除）作为 `transcript_row` / `transcript_delete` 推送，带这次写入后的 rev 和整行。
 - 历史接口**先读 rev、再读记录**（不是一个读事务）：快照里一定有 `rev ≤ R` 的改动，可能还多一点。
-  多出来的那条之后若再经变更流到达，按行 id 和 rev 已应用过就跳过（`planTranscriptChange` 的
-  `applied`）；例外见 3.9。返回 `X-Transcript-Rev: R`。
+  多出来的那条之后若再经变更流到达也不会重复：每条消息带 `row_revs`（它含哪些行、各自的 rev），
+  变更的 rev 不高于其中记录的就跳过（3.9）。返回 `X-Transcript-Rev: R`。
 - **ETag 就是 rev**：`"<session>:r<rev>:<等待中的审批>:<页形状>"`（3.9）。
 - **tab 记下的 rev 只来自读库**（resync 的重读、`since_rev`），不来自变更事件（3.9）。
 - **增量接口** `GET /sessions/{id}/transcript?since_rev=R`：返回 `rev > R` 的记录和 `reset`（R 之后删过
@@ -233,11 +233,19 @@ liveReload 属性测试本身（80 个场景，实时 = 刷新，`KNOWN` 为空�
   rev，变更事件可能先于一条 rev 更低、tab 还没看到的回合行到达；若此时断线、回合也已结束，下一次
   `since_rev` 从更高的 rev 问起，就跳过了那一行。现在只有 resync 的重读和 `since_rev` 更新它
   （`sessionTurnWiring.test.ts`）。
-- **已知的残留**：快照"先读 rev 后读行"，一条回合外的写入可能落在两次读之间、在快照里已被并进某个
-  气泡（合并后的 id 是第一行的 id）。若它的变更事件晚于这次重读才到达 tab，`planTranscriptChange`
-  按行 id 找不到它，没有身份的块（Stop 回执、turn_notice）会再追加一次，刷新后消失。要求同一条本地
-  连接上，事件比之后发出的 HTTP 回复还晚到，没有观察到过。根治是让每次对账都带上快照的 rev，跳过
-  `rev ≤` 它的变更；回合结束对账（`getSessionMessagesReconcileTail`）目前丢掉了 rev。
+- **快照里的消息带 `row_revs`**（修掉了上一版记的残留）。原来：一条回合外的写入落在"读 rev"和"读行"
+  之间，在快照里已被并进某个气泡（合并后的 id 是第一行的 id）；它的变更事件若晚于这次读库才到 tab，
+  `planTranscriptChange` 按行 id 找不到它，没有身份的块（Stop 回执、turn_notice）会再追加一次。
+  - 历史接口读每行时在**同一条 SQL** 里读出它的 rev（`list_by_session*(with_rev=True)` 的子查询列
+    `_rev`），所以记下的 rev 恰好是返回内容的版本；合并时每条消息带 `row_revs: {行 id: rev}`。
+  - 前端：变更的行在某条消息的 `rowRevs` 里、且 rev 不高于记下的，就跳过。比"整份快照一个 rev"
+    更准：回合结束对账只读末尾 50 行，窗口外老行的改动 rev 也可能不高于快照 rev，按整份快照跳过会丢掉
+    它；按行判断只跳过快照里真的有的行。所有读历史的路径都经过同一个合并函数，不需要每个调用点传 rev。
+  - 本地内容胜出的合并（persist-lag 保护：本地更长就保留本地内容）不带 DB 的 `rowRevs`——那份行列表
+    不描述本地内容；`mergeOlderMessages` 拼接分页边界时合并两边的 `rowRevs`。
+  - 测试：`test_history_etag_rev.py`（真实库：合并气泡列出每行和 rev；不传 `with_rev` 的读取没有
+    `_rev`）、`transcriptFeed.rowRevs.test.ts`、`MessageStore.test.ts`；liveReload fixture 现在带
+    `row_revs`，80 个场景照样等于刷新。
 
 #### 3.6 一个回合只有一个写入者（2026-10-22 已落地，P2 的写入点）
 

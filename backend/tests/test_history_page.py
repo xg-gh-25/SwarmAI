@@ -149,7 +149,7 @@ def test_endpoint_turns_page_sets_has_more_and_a_shape_specific_etag():
     fetch = _fetch(rows)
     fake_db = MagicMock()
     fake_db.messages.count_by_session = AsyncMock(return_value=len(rows))
-    async def paginated(sid, limit, before_id):
+    async def paginated(sid, limit, before_id, with_rev=False):
         return await fetch(limit, before_id)
     fake_db.messages.list_by_session_paginated = AsyncMock(side_effect=paginated)
     fake_db.transcript_rev = AsyncMock(return_value=5)

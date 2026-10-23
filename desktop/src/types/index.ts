@@ -207,6 +207,10 @@ export interface ChatMessage {
   createdAt: string;
   /** Backend metadata — includes client_id for optimistic message dedup */
   metadata?: { client_id?: string; [key: string]: unknown };
+  /** Which DB rows this message holds and at which transcript rev (backend
+   *  `row_revs`, history reads only): a transcript change for one of them at or
+   *  below that rev is already here (hooks/transcriptFeed skips it). */
+  rowRevs?: Record<string, number>;
 }
 
 export interface TextContent {
@@ -559,6 +563,10 @@ export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | As
 
 export interface Message {
   id: string;
+  /** Which DB rows this message holds and at which transcript rev (backend
+   *  `row_revs`, history reads only): a transcript change for one of them at or
+   *  below that rev is already here (hooks/transcriptFeed skips it). */
+  rowRevs?: Record<string, number>;
   role: 'user' | 'assistant' | 'system';
   content: ContentBlock[];
   timestamp: string;

@@ -200,6 +200,8 @@ export const toMessageCamelCase = (data: Record<string, unknown>): ChatMessage =
     createdAt: data.created_at as string,
     // Preserve metadata (carries client_id for optimistic message dedup)
     ...(data.metadata ? { metadata: data.metadata as ChatMessage['metadata'] } : {}),
+    ...(data.row_revs && typeof data.row_revs === 'object'
+      ? { rowRevs: data.row_revs as Record<string, number> } : {}),
   };
 };
 

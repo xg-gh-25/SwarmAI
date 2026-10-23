@@ -75,7 +75,7 @@ NET_KINDS = ("gap", "gap_late", "restart", "restart_idle")
 
 WORDS = ("checked the gate", "found two issues", "the test is red", "patched the parser",
          "all green", "looking at the log", "reading session_router", "agent three is back")
-ROW_FIELDS = ("id", "session_id", "role", "content", "model", "created_at", "metadata")
+ROW_FIELDS = ("id", "session_id", "role", "content", "model", "created_at", "metadata", "row_revs")
 
 
 class _Ids:

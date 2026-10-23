@@ -16,7 +16,7 @@ import type { PendingQuestion } from './types';
  */
 export function toDisplayMessage(
   msg: { id: string; role: string; content: ContentBlock[]; createdAt: string; model?: string;
-         metadata?: { client_id?: string; [key: string]: unknown } },
+         metadata?: { client_id?: string; [key: string]: unknown }; rowRevs?: Record<string, number> },
 ): Message {
   return {
     id: msg.id,
@@ -37,6 +37,7 @@ export function toDisplayMessage(
     // single chokepoint every DB-load path funnels through (run_03d6ee38). The
     // display id stays the canonical DB id (pagination `before_id` cursor unaffected).
     ...(msg.metadata ? { metadata: msg.metadata } : {}),
+    ...(msg.rowRevs ? { rowRevs: msg.rowRevs } : {}),
   };
 }
 
@@ -76,6 +77,9 @@ export function mergeOlderMessages(
       ],
       // Newer message's model wins (most recent attribution).
       model: firstCurrent.model ?? lastOlder.model,
+      // the merged bubble holds both sides' rows
+      ...(lastOlder.rowRevs || firstCurrent.rowRevs
+        ? { rowRevs: { ...lastOlder.rowRevs, ...firstCurrent.rowRevs } } : {}),
     };
     return [
       ...older.slice(0, -1),

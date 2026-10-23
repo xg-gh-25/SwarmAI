@@ -875,8 +875,10 @@ export class MessageStore {
         const d = (b as { decision?: string }).decision;
         if (b.type === 'cmd_permission_request' && d) dbDecisions.set(MessageStore._interactiveBlockKey(b), d);
       }
-      if (dbDecisions.size === 0) return { ...dbMsg, content: localMsg.content };
-      return { ...dbMsg, content: localMsg.content.map((b) => {
+      // the content is the local copy's, so the DB's rowRevs (which rows, at which
+      // rev, the content holds) do not describe it
+      if (dbDecisions.size === 0) return { ...dbMsg, content: localMsg.content, rowRevs: localMsg.rowRevs };
+      return { ...dbMsg, rowRevs: localMsg.rowRevs, content: localMsg.content.map((b) => {
         if (b.type !== 'cmd_permission_request' || (b as { decision?: string }).decision) return b;
         const d = dbDecisions.get(MessageStore._interactiveBlockKey(b));
         return d ? ({ ...b, decision: d } as typeof b) : b;
@@ -1160,6 +1162,7 @@ export class MessageStore {
       // ever wired as the local-bubble converter, a stripped key would silently
       // re-open the mid-turn-cut duplicate (run_03d6ee38).
       ...(msg.metadata ? { metadata: msg.metadata } : {}),
+      ...(msg.rowRevs ? { rowRevs: msg.rowRevs } : {}),
     };
   }
 

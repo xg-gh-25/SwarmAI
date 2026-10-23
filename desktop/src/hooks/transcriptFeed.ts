@@ -80,6 +80,11 @@ export function planTranscriptChange(
   if (!row || !rowId) return [];
   const rev = typeof change.rev === 'number' ? change.rev : 0;
   if ((applied.get(rowId) ?? -1) >= rev) return [];
+  // A history read already put this row, at this rev or later, into a message
+  // (backend row_revs): the change is in it. Without this, a change reaching the
+  // tab after a reload that merged its row into an earlier bubble (whose id is
+  // that bubble's first row) found no message with its id and was added again.
+  if (messages.some((m) => (m.rowRevs?.[rowId] ?? -1) >= rev)) return [];
   applied.set(rowId, rev);
   const msg = toDisplayMessage(toMessageCamelCase(row) as never);
 

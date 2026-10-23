@@ -83,3 +83,37 @@ async def test_no_etag_when_the_rev_cannot_be_read():
     resp = await _history(sid, db=broken)
     assert resp.status_code == 200
     assert "ETag" not in resp.headers and "X-Transcript-Rev" not in resp.headers
+
+
+@pytest.mark.asyncio
+async def test_each_message_lists_the_rows_it_holds_and_their_revs():
+    """``row_revs``: a merged bubble names every row in it at the rev of the content
+    returned, so a late feed change for one of them is recognised as already shown."""
+    from database import db
+    sid = f"s-rr-{uuid4().hex[:6]}"
+    t = "2026-10-23T10:00:0"
+    rows = [("u1", "user", [{"type": "text", "text": "go"}]),
+            ("a1", "assistant", [{"type": "text", "text": "one"}]),
+            ("a2", "assistant", [{"type": "turn_stop", "items": []}])]
+    for i, (rid, role, content) in enumerate(rows):
+        await db.messages.put({"id": f"{sid}-{rid}", "session_id": sid, "role": role,
+                               "content": content, "created_at": f"{t}{i}"})
+    revs = await db.row_revs([f"{sid}-{r[0]}" for r in rows])
+    body = json.loads((await _history(sid)).body)
+    assert [m["id"] for m in body] == [f"{sid}-u1", f"{sid}-a1"]          # a1 + a2 merged
+    assert body[0]["row_revs"] == {f"{sid}-u1": revs[f"{sid}-u1"]}
+    assert body[1]["row_revs"] == {f"{sid}-a1": revs[f"{sid}-a1"], f"{sid}-a2": revs[f"{sid}-a2"]}
+    # the rev is the version of the content returned: an update moves both
+    await db.messages.update_agent_result(sid, "none", {})               # no match: nothing moves
+    assert json.loads((await _history(sid)).body)[1]["row_revs"] == body[1]["row_revs"]
+
+
+@pytest.mark.asyncio
+async def test_rows_carry_no_rev_key_unless_asked():
+    """Other readers of the messages table never see the ``_rev`` column."""
+    from database import db
+    sid = f"s-rr-{uuid4().hex[:6]}"
+    await _store_agent_turn(sid, "toolu_bg3")
+    assert all("_rev" not in r for r in await db.messages.list_by_session(sid))
+    assert all("_rev" in r for r in await db.messages.list_by_session(sid, with_rev=True))
+    assert all("_rev" in r for r in await db.messages.list_by_session_paginated(sid, limit=5, with_rev=True))

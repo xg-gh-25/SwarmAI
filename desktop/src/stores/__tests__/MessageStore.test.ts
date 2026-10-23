@@ -1391,4 +1391,17 @@ describe('MessageStore reconcile — persist-lag guard (more-complete content wi
     expect(chars).toBe(300); // DB (more complete) wins
     store.destroy();
   });
+
+  it('when the local content wins, the DB row list (rowRevs) is not kept: it does not describe that content', () => {
+    // rowRevs tells the transcript feed which rows a bubble holds; keeping the
+    // DB's list on local content would make the feed skip a row the bubble lacks.
+    const store = new MessageStore();
+    store.append(makeMsg('m1', 'assistant', 'A'.repeat(500)));
+    store.reconcile([{ ...makeChatMsg('m1', 'assistant', 'AA'), rowRevs: { m1: 4, m2: 9 } }]);
+    const asst = store.messages.find((m) => m.id === 'm1');
+    expect(asst?.rowRevs).toBeUndefined();
+    store.reconcile([{ ...makeChatMsg('m1', 'assistant', 'B'.repeat(600)), rowRevs: { m1: 4, m2: 9 } }]);
+    expect(store.messages.find((m) => m.id === 'm1')?.rowRevs).toEqual({ m1: 4, m2: 9 }); // DB content: its list
+    store.destroy();
+  });
 });

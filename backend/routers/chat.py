@@ -955,6 +955,10 @@ def _merge_consecutive_assistant_messages(
     - The merged message uses the FIRST row's id and created_at (stable reference).
     - The LAST row's model wins (most recent model attribution).
     - Non-assistant rows and user rows are never merged.
+    - A row read with its transcript rev (``_rev``) is listed in its message's
+      ``row_revs`` ({row id: rev}): which rows a merged bubble holds, at which
+      version. A transcript change for one of them at or below that rev is
+      already in the bubble (frontend hooks/transcriptFeed skips it).
     - A compaction (``compaction_times``) between two rows of DIFFERENT turns
       ends the bubble: the divider sits between them, as the live chat shows it
       (a turn after a divider starts its own bubble). Within one turn the bubble
@@ -996,6 +1000,8 @@ def _merge_consecutive_assistant_messages(
             # Take latest model
             if msg.get("model"):
                 prev["model"] = msg["model"]
+            if "_rev" in msg:
+                prev.setdefault("row_revs", {})[msg.get("id")] = msg["_rev"] or 0
         else:
             # New message (user, or first assistant after user)
             entry = {
@@ -1009,6 +1015,8 @@ def _merge_consecutive_assistant_messages(
             # Preserve metadata (carries client_id for optimistic dedup)
             if msg.get("metadata"):
                 entry["metadata"] = msg["metadata"]
+            if "_rev" in msg:
+                entry["row_revs"] = {msg.get("id"): msg["_rev"] or 0}
             merged.append(entry)
 
     return merged
@@ -1095,15 +1103,16 @@ async def get_session_messages(
         from core.history_page import page_by_turns
 
         async def _fetch(n: int, cursor: Optional[str]):
-            return await db.messages.list_by_session_paginated(session_id, limit=n, before_id=cursor)
+            return await db.messages.list_by_session_paginated(
+                session_id, limit=n, before_id=cursor, with_rev=True)
 
         messages, has_more = await page_by_turns(_fetch, turns, before_id)
     elif limit is not None or before_id is not None:
         messages = await db.messages.list_by_session_paginated(
-            session_id, limit=limit, before_id=before_id
+            session_id, limit=limit, before_id=before_id, with_rev=True
         )
     else:
-        messages = await db.messages.list_by_session(session_id)
+        messages = await db.messages.list_by_session(session_id, with_rev=True)
 
     # Merge consecutive assistant messages into one.
     # The backend persists each agentic turn as a separate DB row (crash safety),
