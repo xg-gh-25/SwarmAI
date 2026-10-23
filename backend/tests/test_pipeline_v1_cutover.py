@@ -33,7 +33,7 @@ def test_legacy_mutation_cli_refuses_before_touching_workspace(tmp_path):
          "--project", "P", "--requirement", "x"], env=env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
     assert result.returncode == 2
-    assert "legacy pipeline mutation command removed" in result.stderr
+    assert "invalid choice: 'run-create'" in result.stderr   # not a command any more
     assert not (tmp_path / "workspace").exists()
 
 

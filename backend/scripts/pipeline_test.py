@@ -114,9 +114,7 @@ SWARM_TEST_CACHE_DIR, SWARM_TEST_NPX, SWARM_WORKSPACE.
 Public symbols:
 - ``main(argv)`` — CLI entry; prints the JSON object, returns the exit code
 - ``execute(ns)`` — one invocation, returns ``(output_dict, exit_code)``
-- ``changed_files(repo, run_state, warnings, run_ref)`` — the run's files_touched when it has
-  any in this repo (other changed files named in warnings); else git diff HEAD ∪ untracked
-  ∪ the normalized entries
+- ``changed_files(repo)`` — git's change set since the run's fork point
 - ``build_source_graph(repo, cache_dir)`` — every backend .py file → imported modules (cached)
 - ``build_import_graph(repo, cache_dir)`` — test file → imported module names (cached)
 - ``import_closure(repo, sgraph, roots)`` — transitive backend-local file dependencies
@@ -557,121 +555,12 @@ def _check_repo_mutation(ctx, before: dict[str, str]) -> dict | None:
     return {"restored": restored, "left": left}
 
 
-def _owned_files(repo: Path, run_state: dict | None,
-                 git_set: set[str]) -> tuple[set[str], set[str]]:
-    """(every normalized files_touched entry, the ones that are this repo's)."""
-    named: set[str] = set()
-    owned: set[str] = set()
-    for f in (run_state or {}).get("files_touched") or []:
-        n = _norm_path(repo, f)
-        if not n:
-            continue
-        named.add(n)
-        # Owned only if git reports it changed (a deletion included): an existing but
-        # unchanged entry would replace the real change set (red-team 2026-10-19).
-        if n in git_set:
-            owned.add(n)
-    return named, owned
-
-
-# A sibling run counts as live when its run.json changed within this window (the same
-# 3 h the pipeline test gate uses for "active").
-SIBLING_ACTIVE_S = 3 * 3600
-
-
-def _live_sibling_runs(runs_dir: Path, run_id: str | None) -> list[str]:
-    """Ids of OTHER runs under ``runs_dir`` with status ``running`` and run.json
-    modified within SIBLING_ACTIVE_S."""
-    cutoff = time.time() - SIBLING_ACTIVE_S
-    out: list[str] = []
-    try:
-        entries = sorted(runs_dir.iterdir())
-    except OSError:
-        return out
-    for d in entries:
-        rj = d / "run.json"
-        if d.name == run_id or not rj.is_file():
-            continue
-        try:
-            if rj.stat().st_mtime < cutoff:
-                continue
-        except OSError:
-            continue
-        st = _read_json(rj)
-        if isinstance(st, dict) and st.get("status") == "running":
-            out.append(d.name)
-    return out
-
-
-def shared_tree_scope_error(repo: Path, run_state: dict | None, run_id: str | None,
-                            project: str, runs_dir: Path) -> str | None:
-    """Refuse a verify / regression whose change set would be other runs' work.
-
-    Without a files_touched entry of this repo, ``changed_files`` falls back to the
-    whole ``git diff HEAD`` ∪ untracked set. In a main checkout another live run is
-    also editing, that set is mostly THEIR files: run_a2f2c171 (goal profile, no
-    files_touched yet) selected 70 test files from 44 changed files, half of them a
-    sibling's artifact_cli work plus a ``vitest related`` over the whole chat tree, and
-    5 verify / recheck calls in a row hit the global deadline. Registering the run's
-    own files is one call and makes the selection this run's. An isolated run (own
-    worktree) or a run with no live sibling keeps the fallback."""
-    if _WORKTREE or not run_id:
-        return None
-    git_set = _git_changed_set(repo)
-    if not git_set or _owned_files(repo, run_state, git_set)[1]:
-        return None
-    siblings = _live_sibling_runs(runs_dir, run_id)
-    if not siblings:
-        return None
-    shown = ", ".join(sorted(git_set)[:12]) + (f" (+{len(git_set) - 12} more)"
-                                               if len(git_set) > 12 else "")
-    return (f"this run has no files_touched yet, and the working tree is shared with "
-            f"{len(siblings)} other live run(s) ({', '.join(siblings[:4])}): the "
-            f"{len(git_set)} changed file(s) here ({shown}) are not all yours, and testing "
-            f"all of them does not fit the deadline. This legacy run cannot register its "
-            f"files any more (the artifact_cli run commands are retired): test the change "
-            f"in its own isolated run, python backend/scripts/pipeline_v1.py create "
-            f"--project {project} --profile direct --requirement '<the request>' "
-            f"--repo <name>=<absolute repo path>")
-
-
-def changed_files(repo: Path, run_state: dict | None, warnings: list | None = None,
+def changed_files(repo: Path, run_state: dict | None = None, warnings: list | None = None,
                   run_ref: tuple[str, str] | None = None) -> list[str]:
-    """The change set a run's tests are selected for.
-
-    When run.json ``files_touched`` holds at least one file of THIS repo, the change
-    set is exactly those files: the same set ``run-commit`` commits and the
-    active-run commit gate treats as the run's own. ``git diff HEAD`` and untracked
-    files are NOT added — in a working tree shared with other sessions they are
-    other people's uncommitted work, and once pulled in a run's verify/regression
-    selected 49 test files for 12 touched ones and never reached its own tests
-    before the deadline. Changed files outside ``files_touched`` are named in
-    ``warnings`` with the command that registers them, because an edit made by a
-    shell script is not recorded automatically and its tests would otherwise be
-    skipped without a trace.
-
-    A ``files_touched`` entry counts as this repo's only if git reports it changed
-    (a deleted file included): an existing unchanged entry, or a relative entry naming a workspace file
-    (``Projects/...``) that merely normalizes like a repo path. With no such entry
-    (missing, empty, or every entry in another repo) the change set is
-    ``git diff --name-only HEAD`` ∪ untracked ∪ the normalized entries, as before.
-    """
-    git_set = _git_changed_set(repo)
-    named, owned = _owned_files(repo, run_state, git_set)
-    if not owned:
-        return sorted(named | git_set)
-    extra = sorted(git_set - owned)
-    if extra and warnings is not None:
-        project, run_id = run_ref or ("<project>", "<run_id>")
-        shown = ", ".join(extra[:8]) + (f" (+{len(extra) - 8} more)" if len(extra) > 8 else "")
-        warnings.append(
-            f"{len(extra)} changed file(s) outside this run's files_touched were not used "
-            f"for test selection: {shown}. A legacy run cannot register more files (the "
-            f"artifact_cli run commands are retired); if this run changed them, re-run the "
-            f"change as a v1 run, python backend/scripts/pipeline_v1.py create "
-            f"--project {project} --profile direct --requirement '<the request>' "
-            f"--repo <name>=<absolute repo path>, whose change set is the run's fork point")
-    return sorted(owned)
+    """The change set a v1 run's tests are selected for: what git reports changed
+    since the run's fork point (``_git_changed_set``). Never run.json: it is a
+    projection the agent can edit."""
+    return sorted(_git_changed_set(repo))
 
 
 def _digest_map(repo: Path, files: list[str], cap: int = 2000) -> dict[str, str]:
@@ -944,6 +833,7 @@ _SOURCE_SCAN_SUITES = (
     "backend/tests/test_guard_contracts.py",
     "backend/tests/test_handler_log_safety.py",
     "backend/tests/test_job_model_ssot.py",
+    "backend/tests/test_nav_routers_import.py",
     "backend/tests/test_output_degeneration.py",
     "backend/tests/test_pipeline_v1_cards.py",
     "backend/tests/test_pipeline_v1_cutover.py",
@@ -2928,45 +2818,9 @@ def _baseline(ctx, nodeids: list[str], until: float | None = None) -> dict[str, 
     return {n: base.get(n) if base.get(n) in ("passed", "failed") else None for n in nodeids}
 
 
-# ── regression L1: tests declared by the BUILD artifact's ac_coverage ───────
-def _stage_data(project: str, run_state: dict, stage: str, key: str = "") -> dict | None:
-    """The newest ``stage`` artifact's payload (its ``data`` object when ``key`` is not
-    at the top level), via the project manifest; None when absent or escaping."""
-    stages = [s for s in (run_state or {}).get("stages") or [] if isinstance(s, dict)]
-    aid = next((s.get("artifact_id") for s in reversed(stages)
-                if s.get("stage") == stage and isinstance(s.get("artifact_id"), str)), None)
-    if not aid:
-        return None
-    arts = (_workspace() / "Projects" / project / ".artifacts").resolve()
-    man = _read_json(arts / "manifest.json")
-    items = man.get("artifacts") if isinstance(man, dict) else None
-    entry = next((e for e in items or [] if isinstance(e, dict) and e.get("id") == aid), None)
-    if not entry or not isinstance(entry.get("file"), str):
-        return None
-    path = (arts / entry["file"]).resolve()
-    if arts not in path.parents:
-        return None  # manifest entry escaping .artifacts — ignore
-    data = _read_json(path)
-    key = key or {"build": "ac_coverage", "plan": "exit_criteria"}.get(stage, "")
-    if isinstance(data, dict) and key not in data and isinstance(data.get("data"), dict):
-        data = data["data"]
-    return data if isinstance(data, dict) else None
-
-
-def _ac_entries(project: str, run_state: dict) -> list[list[str]]:
-    """ac_coverage[].test refs per entry: ``file.py::test_fn`` / ``file.py`` (pytest),
-    a desktop vitest file (``desktop/src/...test.tsx``, file-level), or
-    ``probe:<name>`` (verified from the run's probe evidence)."""
-    data = _stage_data(project, run_state, "build")
-    cov = data.get("ac_coverage") if isinstance(data, dict) else None
-    out = []
-    for e in cov if isinstance(cov, list) else []:
-        t = e.get("test") if isinstance(e, dict) else None
-        refs = [x for x in re.split(r"[,;\s]+", t) if x] if isinstance(t, str) else []
-        out.append(refs)
-    return out
-
-
+# ── regression L1: explicit test refs ───────────────────────────────────────
+# A v1 run declares no ac_coverage list (the old BUILD artifact did, read through
+# run.json `stages`, which the agent can edit): the AC layer has no entries (R2 review).
 def _resolve_ref(repo: Path, ref: str) -> tuple[str, str | None] | None:
     """``file.py[::name]`` in any common spelling → (repo-relative file, nodeid|None)."""
     path, _, rest = ref.partition("::")
@@ -3422,7 +3276,7 @@ def _full_scope_slot(ev_root: Path, mode: str, v1):
     """One full-scope call of a v1 run at a time (K3 review r2): the contract caps
     are counted from the run index before the call and written after it, so two
     concurrent calls would both pass the count. A second one is refused, not queued."""
-    if v1 is None or mode not in FULL_SCOPE_MODES:
+    if mode not in FULL_SCOPE_MODES:
         yield None
         return
     from utils.file_lock import flock_exclusive_nb, flock_unlock
@@ -3679,36 +3533,12 @@ def _key_inputs(ctx, targets: dict, smoke: dict[str, str], changed: list[str],
     return {f: _file_digest(ctx.repo / f) for f in sorted(files)}
 
 
-def _cache_key(ctx, mode: str, targets: dict, smoke: dict[str, str], extra: list[str],
-               inputs: dict[str, str], head: str | None) -> str:
-    """digest(version, mode, interpreter, HEAD, target nodeid sets, smoke module names,
-    explicit inputs, and the digest of every file in ``inputs``)."""
-    h = hashlib.sha256()
-
-    def add(label: str, value: str) -> None:
-        h.update(label.encode() + b"\0" + value.encode() + b"\0")
-
-    add("v", RUNNER_VERSION)
-    add("mode", mode)
-    add("python", _python_id(ctx.python))
-    add("head", head or "none")
-    for f in sorted(targets):
-        sel = targets[f]
-        add("n:" + f, json.dumps(sorted(sel) if sel is not None else None))
-    for m in sorted(smoke):
-        add("s", m)
-    for f, d in sorted(inputs.items()):
-        add("f:" + f, d)
-    for x in extra:
-        add("x", x)
-    return h.hexdigest()[:32]
-
-
 def _tree_digest(inputs: dict[str, str], changed: list[str], run_files) -> dict[str, str]:
     """M2: {path: sha256} of the changed inputs and the files actually run, from the
     same digests the cache key was built from (so a cache hit reports the current tree)."""
     keep = set(changed) | set(run_files)
     return {f: d for f, d in sorted(inputs.items()) if f in keep}
+
 
 
 def _v1_cache_key(ctx, runner, mode: str, plan: dict, targets: dict,
@@ -3825,49 +3655,6 @@ def _v1_cache_put(ctx, runner, key: str, ev: dict) -> None:
 # all-pass file on the same HEAD with no changed file edited in between.
 REUSE_MODES = ("verify", "regression")
 _REUSABLE_OUTCOMES = ("passed", "skipped")
-
-
-def _bvt_keys(ctx, files: list[str], sgraph: dict | None) -> dict[str, str]:
-    """BVT file → cross-run key: runner version, interpreter, pytest configs, the file, its
-    conftest chain and their transitive backend-local imports — NOT HEAD and not the run's
-    changed set, so a pass carries over to the next run while none of those inputs moved.
-    Only for the CI BVT manifest (pure OS-layer logic tests, CI re-runs them on push);
-    an edit to anything in a file's closure changes its key and it runs again."""
-    return _l2_file_keys(ctx, files, [], sgraph, None, cross_run=True)
-
-
-def _bvt_cache_reuse(ctx, plan: dict, sgraph: dict | None) -> "tuple[dict, dict]":
-    """(file → cached evidence results, file → key) for this regression's BVT files."""
-    files = [f for f in plan.get("bvt") or [] if plan["targets"].get(f, 0) is None]
-    if not files:
-        return {}, {}
-    keys = _bvt_keys(ctx, files, sgraph)
-    out = {}
-    for f, k in keys.items():
-        hit = _read_json(ctx.cache / "bvt" / f"{k}.json")
-        if isinstance(hit, list) and any(isinstance(r, dict) and r.get("outcome") == "passed"
-                                         for r in hit) and all(
-                isinstance(r, dict) and r.get("outcome") in _REUSABLE_OUTCOMES for r in hit):
-            out[f] = [dict(r) for r in hit]
-    return out, keys
-
-
-def _bvt_cache_store(ctx, ev: dict, keys: dict, reused: dict) -> None:
-    """Cache each BVT file whose every result in ``ev`` passed / skipped (run here)."""
-    by_file: dict[str, list[dict]] = {}
-    for r in ev.get("results") or []:
-        if isinstance(r, dict) and isinstance(r.get("nodeid"), str):
-            by_file.setdefault(_rfile(r), []).append(r)
-    for f, k in keys.items():
-        rs = by_file.get(f)
-        if f in reused or not rs or not any(r.get("outcome") == "passed" for r in rs) \
-                or not all(r.get("outcome") in _REUSABLE_OUTCOMES for r in rs):
-            continue
-        try:
-            (ctx.cache / "bvt").mkdir(parents=True, exist_ok=True)
-            _write_json(ctx.cache / "bvt" / f"{k}.json", rs)
-        except OSError:
-            pass
 
 
 def _l2_file_keys(ctx, files, changed: list[str], sgraph: dict | None,
@@ -4191,11 +3978,6 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
     mode = ns.mode
     if mode == "tdd":
         return plan, _plan_tdd(ctx, ns, plan)
-    if mode in ("verify", "regression") and ns.run_id:
-        err = shared_tree_scope_error(ctx.repo, run_state, ns.run_id, ns.project,
-                                      ev_root.parent.parent)
-        if err:
-            return plan, err
     scope = changed
     prev_failures: list = []
     lost: list[str] = []
@@ -4292,7 +4074,6 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
     if mode in ("verify", "regression"):
         plan["transitive_unrun"] = transitive_unselected(ctx.repo, sgraph, graph, scope, sel)
     if mode == "regression":
-        plan["ac_entries"] = _ac_entries(ns.project, run_state)
         ac_files, probe_refs = _plan_ac_refs(ctx, plan)
         # AC targets first in priority order (a whole-file AC ref is not split out).
         plan["targets"] = {**{f: plan["targets"][f] for f in dict.fromkeys(ac_files)},
@@ -4520,12 +4301,7 @@ def _ref_nodeids(repo: Path, project: str, run_state: dict, ac_entries: list) ->
     """Resolved nodeid refs (not whole-file refs) of the run's BUILD ac_coverage and
     PLAN ``exit_criteria[kind=test].ref``: evidence never caps a nodeid one of them
     names (``_capped_id``), or the ref could no longer match it."""
-    refs = [r for e in (ac_entries or _ac_entries(project, run_state)) for r in e]
-    plan = _stage_data(project, run_state, "plan")
-    crit = plan.get("exit_criteria") if isinstance(plan, dict) else None
-    for c in crit if isinstance(crit, list) else []:
-        if isinstance(c, dict) and c.get("kind") == "test" and isinstance(c.get("ref"), str):
-            refs.append(c["ref"])
+    refs = [r for e in ac_entries or [] for r in e]
     out = []
     for ref in refs:
         rv = _resolve_ref(repo, ref)
@@ -4538,8 +4314,8 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
                    v1=None) -> tuple[dict, int]:
     started_at = _now_iso()
     if ns.run_id:
-        tripped = _circuit_breaker_check(ev_root, ns.mode,
-                                         str(run_state.get("profile") or "").strip().lower())
+        # the profile is the protected contract's, never run.json's (R2 review)
+        tripped = _circuit_breaker_check(ev_root, ns.mode, str(v1.contract.get("profile") or ""))
         if tripped is not None:
             cap = tripped["circuit_breaker"].get("cap")
             if cap:                     # a counted cap; an unreadable index is not one
@@ -4572,9 +4348,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
                                      json.dumps(plan["skipped"])]
                  + ([json.dumps(ordered)] if ordered else [])
                  + ([json.dumps(plan["desktop_done"])] if plan.get("desktop_done") else []))
-    legacy_key = _cache_key(ctx, ns.mode, targets, plan["smoke"], key_extra, inputs, head)
-    key = (_v1_cache_key(ctx, v1, ns.mode, plan, targets, inputs, key_extra, fkey)
-           if v1 is not None else legacy_key)
+    key = _v1_cache_key(ctx, v1, ns.mode, plan, targets, inputs, key_extra, fkey)
     tree = _tree_digest(inputs, changed_in, list(targets) + list(ord_files)
                         + list(plan["smoke"].values()))
     if ns.mode in ("verify", "regression") and not getattr(ns, "auto_recheck_of", None):
@@ -4597,7 +4371,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
         fix = _is_fix_recheck(_read_json(ev_root / "tests" / f"latest-{plan.get('base_mode')}.json"),
                               _digest_map(ctx.repo, plan["changed"]))
     if ns.run_id and not getattr(ns, "auto_recheck_of", None):
-        refused = _full_scope_refusal(ev_root, ns.mode, v1.contract if v1 is not None else None,
+        refused = _full_scope_refusal(ev_root, ns.mode, v1.contract,
                                       fix=True if fix is None else fix)
         if refused is not None:
             scope = refused.get("full_scope") or {}
@@ -4607,8 +4381,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
     idx_info = {"auto_recheck_of": getattr(ns, "auto_recheck_of", None),
                 "rechecked_from": plan.get("base_finished_at") if ns.mode == "recheck" else None,
                 "fix": fix}
-    cpath = ctx.cache / "results" / f"{legacy_key}{fkey[:16]}.json"
-    hit = (_v1_cache_read(ctx, v1, key) if v1 is not None else _read_json(cpath))
+    hit = _v1_cache_read(ctx, v1, key)
     if isinstance(hit, dict) and hit.get("schema") == 1 and _cacheable(hit):
         ev = dict(hit)
         ev.pop("reused_from", None)  # names evidence of the call that wrote the cache entry
@@ -4638,15 +4411,6 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
                 + ", ".join(f"{s['mode']} {s['finished_at']}" for s in sources)
                 + ": nothing they import or may read changed since; not re-run")
     plan["l2_file_keys"] = keys
-    bvt_keys: dict = {}
-    if v1 is None and ns.mode == "regression" and plan.get("bvt"):
-        bvt_hit, bvt_keys = _bvt_cache_reuse(ctx, plan, sgraph)
-        if bvt_hit:
-            reused.update(bvt_hit)
-            ctx.warnings.append(
-                f"reused {len(bvt_hit)} CI BVT file(s) that passed in an earlier run with the "
-                "same file + import closure (cross-run cache); CI re-runs them on push")
-            plan["bvt_reused"] = sorted(bvt_hit)
     run_targets = {f: v for f, v in targets.items() if f not in reused}
     repo_before = _repo_state(ctx.repo)  # a test writing the repo breaks continuation
     # Machine-wide worker tokens: this call runs only as many workers as it holds, so
@@ -4656,9 +4420,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
     vitest_finished = False
     try:
         jobs: list[_Job] = []
-        fpath = ctx.cache / "results" / f"frontend-{fkey}.json"
-        fhit = _read_json(fpath) if fkey and v1 is None else None
-        if fkey and not isinstance(fhit, list):
+        if fkey:
             jobs += _frontend_jobs(ctx, plan["desktop"],
                                    ns.mode in ("verify", "regression") or bool(plan.get("desktop_tsc")),
                                    with_backend=bool(run_targets or ordered),
@@ -4697,15 +4459,6 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
         w = _save_durations(ctx.cache, results)
         if w:
             ctx.warnings.append(w)
-        if isinstance(fhit, list):
-            results += fhit
-        elif fkey:
-            fres = [r for r in results if r.get("layer") in ("vitest", "tsc")]
-            # Cache only an all-green frontend result: a failure (flaky or real) is
-            # always re-run, never served from frontend-{fkey}.json.
-            if (v1 is None and fres and not any(r["outcome"] in _FAIL for r in fres)
-                    and not plan.get("desktop_done")):
-                _write_json(fpath, fres)
         cls = classify_failures(ctx, results)
     finally:
         _release_workers(tokens)
@@ -4718,15 +4471,8 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
         ev["vitest_finished"] = True  # _overlay_evidence: the unrun-rest placeholder is answered
     if mutated:
         ev["repo_mutations"] = mutated
-    if bvt_keys:
-        _bvt_cache_store(ctx, ev, bvt_keys, reused)
-        if plan.get("bvt_reused"):
-            ev["bvt_reused"] = plan["bvt_reused"]
     if _cacheable(ev) and not (mutated and mutated["left"]):  # tests ran on a moving tree
-        if v1 is not None:
-            _v1_cache_put(ctx, v1, key, ev)
-        else:
-            _write_json(cpath, ev)
+        _v1_cache_put(ctx, v1, key, ev)
     wtev = _worktree_evidence(ctx)  # after the cache write: it describes THIS worktree
     if wtev:
         ev["worktree"] = wtev
@@ -4745,8 +4491,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
                                 f"run --mode {base_mode}")
             ev["warnings"] = list(ctx.warnings)
         elif isinstance(base, dict) and base.get("finished_at") == plan.get("base_finished_at"):
-            merged = _overlay_evidence(ctx.repo, base, ev, _ac_entries(ns.project, run_state)
-                                       if base_mode == "regression" else [],
+            merged = _overlay_evidence(ctx.repo, base, ev, [],
                                        auto=bool(getattr(ns, "auto_recheck_of", None)))
             merged["warnings"] = list(dict.fromkeys(list(base.get("warnings") or [])
                                                     + list(ctx.warnings)))
@@ -5379,6 +5124,24 @@ def _compact(out: dict) -> dict:
                     f["summary"] = f["summary"][:n] if n else []
         elif isinstance(out.get(field), list):
             out[field] = out[field][:n]
+    # the v1 block and the handoff are recorded in full (final, events); printed, they
+    # shrink last: per-test node results to a count, then the stage card's text (its
+    # path stays, R2: a call over many tests printed far past the budget)
+    tests = (out.get("v1") or {}).get("tests") if isinstance(out.get("v1"), dict) else None
+    for key in ("nodes", "whole_files", "collected"):
+        if _size(out) > OUTPUT_BUDGET and isinstance(tests, dict) \
+                and isinstance(tests.get(key), (dict, list)):
+            tests[f"{key}_total"] = len(tests[key])
+            tests[key] = {} if isinstance(tests[key], dict) else []
+    if _size(out) > OUTPUT_BUDGET and isinstance(out.get("next"), dict) \
+            and out["next"].get("card_text"):
+        out["next"]["card_text"] = None       # read the card at next.card
+    # last: the lists the evidence file names in full go to their first entry
+    for field in ("failures", "skipped_for_budget", "warnings", "risk_overflow"):
+        if _size(out) <= OUTPUT_BUDGET:
+            break
+        if isinstance(out.get(field), list) and len(out[field]) > 1:
+            out[field] = out[field][:1]
     for k in ("warnings",):
         out[k] = [str(w)[:300] for w in out.get(k) or []]
     return out
@@ -5439,15 +5202,14 @@ def _clamp_seconds(raw) -> tuple[float | None, list[str]]:
 
 
 def _v1_runner(ns, run_dir: Path, run_state: dict, ctx):
-    """Build the v1 adapter only when protected contract.json says protocol v1."""
-    if not ns.run_id:
-        return None
+    """The run's v1 adapter, from its protected contract.json (required)."""
     from config import get_app_data_dir
     from core.run_protocol import git_tree
     from core.run_protocol.runner import V1Runner, read_contract
     contract = read_contract(get_app_data_dir(), ns.run_id)
     if contract is None:
-        return None
+        raise RuntimeError(f"run {ns.run_id} has no Pipeline v1 contract: only v1 runs "
+                           "are tested")
     _V1_CONTRACT[:] = [(ns.run_id, contract)]
     # which of the run's repos this call measures: the contract is the one authority
     # (v13 §D4 item 4, conformance K1/K5). An isolated run measures only its OWN
@@ -5714,13 +5476,14 @@ def _not_the_owner(ns) -> "str | None":
     """Why this call may not test a v1 run (R1 review r1/r2), before anything is written
     (cache, temp dirs, evidence, events): only the run's own session tests it. The owner
     is the signed one (the creator, then each owner_transfer); SWARM_APP_SESSION_ID is
-    kept unforgeable in the Bash call by session_link_gate. None for a run without a v1
-    contract (it is refused later, as before)."""
+    kept unforgeable in the Bash call by session_link_gate. A run without a v1 contract
+    is refused too."""
     from config import get_app_data_dir
     from core.run_protocol.runner import read_contract
     try:
         if read_contract(get_app_data_dir(), ns.run_id) is None:
-            return None
+            return (f"run {ns.run_id} has no Pipeline v1 contract: only v1 runs are "
+                    "tested (this call wrote nothing)")
         from core.run_protocol.engine import RunEngine
         owner = RunEngine.load(data_dir=get_app_data_dir(), workspace=_workspace(),
                                project=ns.project, run_id=ns.run_id,
@@ -5737,29 +5500,27 @@ def execute(ns) -> tuple[dict, int]:
     """Run one parsed invocation; returns (output dict, exit code)."""
     if not _ID_RE.fullmatch(ns.project or ""):
         return {"error": f"unsafe --project: {ns.project!r}"}, 2
-    run_state: dict = {}
-    if ns.run_id:
-        try:
-            run_dir = _run_dir(ns.project, ns.run_id)
-        except ValueError as exc:
-            return {"error": str(exc)}, 2
-        if not run_dir.is_dir():
-            return {"error": f"run dir not found: {run_dir}"}, 2
-        refused = _not_the_owner(ns)
-        if refused:
-            return {"error": refused}, 2
-        rs = _read_json(run_dir / "run.json")
-        run_state = rs if isinstance(rs, dict) else {}
-        ev_root = run_dir / "evidence"
-    cache = _cache_dir()
     if not ns.run_id:
-        ev_root = cache / "evidence" / ns.project
+        # every test call belongs to a v1 run: its evidence, caps and caches are the run's
+        return {"error": "--run-id is required: pipeline_test.py tests a Pipeline v1 run "
+                         "(create one with pipeline_v1.py create)"}, 2
+    try:
+        run_dir = _run_dir(ns.project, ns.run_id)
+    except ValueError as exc:
+        return {"error": str(exc)}, 2
+    if not run_dir.is_dir():
+        return {"error": f"run dir not found: {run_dir}"}, 2
+    refused = _not_the_owner(ns)
+    if refused:
+        return {"error": refused}, 2
+    rs = _read_json(run_dir / "run.json")
+    run_state = rs if isinstance(rs, dict) else {}
+    ev_root = run_dir / "evidence"
+    cache = _cache_dir()
     deadline, dl_warn = _clamp_deadline(ns.deadline)
     if deadline is None:
         return {"error": dl_warn[0]}, 2
     if ns.mode in PROOF_MODES:
-        if not ns.run_id:
-            return {"error": f"--mode {ns.mode} needs --run-id"}, 2
         if not isinstance(ns.round, str) or not re.fullmatch(r"R[0-9]{1,2}", ns.round):
             return {"error": f"--mode {ns.mode} needs --round R1|R2 (got {ns.round!r})"}, 2
     if ns.mode in TEST_MODES + ("prove",) and deadline > SAFE_DEADLINE:
@@ -5776,11 +5537,13 @@ def execute(ns) -> tuple[dict, int]:
     ctx.warnings.extend(dl_warn)
     for w in dl_warn:
         print(f"pipeline_test.py: warning: {w}", file=sys.stderr)
-    v1 = ctx.v1 = _v1_runner(ns, run_dir, run_state, ctx) if ns.run_id else None
+    try:
+        v1 = ctx.v1 = _v1_runner(ns, run_dir, run_state, ctx)
+    except BaseException:
+        shutil.rmtree(ctx.workdir, ignore_errors=True)
+        raise
     changed = changed_files(ctx.repo, run_state, ctx.warnings, (ns.project, ns.run_id))
     if ns.mode == "validation":
-        if v1 is None:
-            return {"mode": "validation", "error": "validation mode requires a v1 contract"}, 2
         return _run_v1_validation(ns, run_state, v1, changed)
     if ns.mode in PROOF_MODES and not _isolated(ctx):
         shutil.rmtree(ctx.workdir, ignore_errors=True)
@@ -5792,20 +5555,15 @@ def execute(ns) -> tuple[dict, int]:
             return run_snapshot(ctx, ns, ev_root)
         if ns.mode == "prove":
             output, code = run_prove(ctx, ns, ev_root)
-            if v1 is not None:
-                bindings = _v1_proof_bindings(list(getattr(ns, "finding", []) or []))
-                recorded = v1.record_proof_result(
-                    output=output, exit_code=code, bindings=bindings)
-                output = {**output, "v1": recorded}
+            bindings = _v1_proof_bindings(list(getattr(ns, "finding", []) or []))
+            recorded = v1.record_proof_result(output=output, exit_code=code, bindings=bindings)
+            output = {**output, "v1": recorded}
             return output, code
         if ns.mode == "probe":
-            if v1 is None:
-                return {"mode": "probe", "error": "probe mode runs a v1 run's DESIGN_SPEC "
-                                                  "probe exits: give --run-id"}, 2
             return _run_v1_probes(ns, run_state, v1, changed)
         if ns.mode == "mutation":
             output, code = run_mutations(ctx, ns, ev_root, run_state)
-            if v1 is not None and code in (0, 1) and not output.get("error"):
+            if code in (0, 1) and not output.get("error"):
                 # B5: the mutation result is evidence of the run, so it is a signed call
                 import time as _time
                 now = _time.time()
@@ -5820,8 +5578,7 @@ def execute(ns) -> tuple[dict, int]:
             if busy:
                 return busy, 2
             output, code = _run_test_mode(ctx, ns, ev_root, run_state, deadline, v1=v1)
-        if v1 is not None:
-            output = _record_v1_test_result(ns, run_state, v1, output, code, changed)
+        output = _record_v1_test_result(ns, run_state, v1, output, code, changed)
         return output, code
     finally:
         shutil.rmtree(ctx.workdir, ignore_errors=True)

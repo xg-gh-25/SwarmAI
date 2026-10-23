@@ -2,7 +2,7 @@
 title: Pipeline 测试提速 — 选得准、跑得快、续跑一定有进展
 date: 2026-10-20
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-10-23
 project: SwarmAI
 status: IMPLEMENTED + FROZEN (§11) — T1 66431d66；T2 由 f88dce48、T6 由 42a4aae8 + d8cbcddd 覆盖（key 不收窄到 import 闭包，见 §3）；T3-T5 d8cbcddd（§8）；§9 worker 调查；§10 熔断误判已修
 related: pipeline-speed-systematic-fix.md, Knowledge/Designs/2026-10-19-pipeline-deterministic-convergence.md
@@ -216,6 +216,7 @@ break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连�
 - 2026-10-22 `_plan` / `_plan_ac_refs`（XG 在 pipeline v1 修复方案 B4 批准："删除旧的 `--mode probe` 和 `probe:` 引用"）：`probe:<name>` 形式的 ac_coverage 引用及其合成结果行删除，`--mode probe` 改为执行 v1 DESIGN_SPEC 的 probe exit（v13 §A2.5）。被删的只是 probe 行；测试文件的选法（改动的测试、直接 importer、AC 点名、import smoke、BVT）不变。
 - 2026-10-23 `_full_scope_refusal`（XG 在 pipeline v1 符合性方案 F17 / §5 批准："runner 从 contract 读 `regression_round_cap`、`recheck_cap`，删掉模块常量"）：完整范围轮数和修复 recheck 次数的上限只读 run 受保护的 `contract.json`；`FULL_SCOPE_MAX_ROUNDS`、`RECHECK_MAX_FIXES` 删除。v1 contract 里的上限读不出时拒绝所有完整范围调用；没有 contract 的旧 run（§D1 切换后已不支持）只由熔断约束。旧 run.json 的"只在 DELIVER"阶段门一起删除：v1 的 run.json 没有 `stage_timing`，这道门对 v1 从未生效，v1 的阶段由 lifecycle 判定。选哪些测试没变。
 - 2026-10-23 `_plan`（XG 在 pipeline v1 符合性方案 F15 批准："`carry` 算出的 `affected_tests` 写入 contract 之外的一个只读 plan 文件。runner 的 recheck 只消费这个 plan"）：main 移动进 final 依赖范围后，engine 把受影响的测试写进审计区的 `carry_plan.json`（按仓库，绑定同步后的 code tree）；显式 `--mode recheck` 在原有的"上次失败 + 之后改过的文件"之外，再加上 plan 里点名的测试。没有 plan、或 plan 不是为当前 tree 算的，选法不变；plan 点不出任何测试（空列表）时，recheck 被拒绝，必须跑 `--mode regression`。
+- 2026-10-23 `_plan`（XG 批准的 r6 设计 §5 R2："`pipeline_test.py` 在任何测试执行前要求 v1 contract"，不兼容旧 pipeline）：删除 `shared_tree_scope_error` 检查。这条检查判断的是"旧 run 没有 `files_touched`，而且有 status 为 `running` 的兄弟 run"，但 v1 run 的 status 从来不是 `running`，所以对 v1 从未生效。变更集只取 git 从 run 的 fork point 起的改动，run.json 的 `files_touched` 不再参与。regression 不再从 run.json 的 `stages` 去读旧 BUILD artifact 的 `ac_coverage`，那是 agent 可以改写的投影；v1 run 本来就没有这个列表，所以 AC 层为空。熔断用的 profile 改取自 contract。其余测试的选法不变。
 
 ## 12. main 上已有的红：登记，单独修（2026-10-21，XG 决定）
 

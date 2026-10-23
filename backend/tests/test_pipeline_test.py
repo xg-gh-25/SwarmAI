@@ -64,6 +64,7 @@ pytestmark = pytest.mark.timeout(120)
 
 PROJECT = "P1"
 RUN_ID = "run_t1"
+SESSION = "session-runner-test"
 
 BASE_FILES = {
     ".gitignore": "__pycache__/\n",
@@ -102,9 +103,18 @@ def rig(tmp_path, monkeypatch):
         _git(repo, "add", "-A")
         _git(repo, "commit", "-q", "-m", "init")
         ws = tmp_path / "ws"
-        run_dir = ws / "Projects" / PROJECT / ".artifacts" / "runs" / RUN_ID
-        run_dir.mkdir(parents=True)
-        (run_dir / "run.json").write_text(json.dumps(run_state or {}), encoding="utf-8")
+        # every test call belongs to a v1 run (R2): a shared-mode run over this repo
+        from core.run_protocol.engine import RunEngine
+        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("SWARM_APP_SESSION_ID", SESSION)
+        engine = RunEngine.create(
+            data_dir=tmp_path / "data", workspace=ws, project=PROJECT, profile="direct",
+            requirement="test the runner", session_id=SESSION, repos={"repo": str(repo)},
+            mode="shared", run_id=RUN_ID)
+        if run_state:
+            run_file = engine.run_dir / "run.json"
+            run_file.write_text(json.dumps({**json.loads(run_file.read_text()), **run_state}),
+                                encoding="utf-8")
         monkeypatch.setenv("SWARM_TEST_REPO_ROOT", str(repo))
         monkeypatch.setenv("SWARM_TEST_PYTHON", sys.executable)
         monkeypatch.setenv("SWARM_TEST_CACHE_DIR", str(tmp_path / "cache"))
@@ -118,6 +128,8 @@ def rig(tmp_path, monkeypatch):
 
 
 def _run(capsys, *args: str) -> tuple[dict, int]:
+    if "--run-id" not in args:
+        args = ("--run-id", RUN_ID, *args)     # only a v1 run is tested (R2)
     code = pt.main(["--project", PROJECT, *args])
     lines = capsys.readouterr().out.strip().splitlines()
     assert len(lines) == 1, lines  # exactly ONE JSON object on stdout
@@ -165,9 +177,9 @@ def test_selection_picks_direct_importers_not_unrelated(rig, tmp_path):
     sel, skipped, mods = pt.select_backend(repo, changed, graph, 40)
     assert set(sel) == {"backend/tests/test_x.py", "backend/tests/test_y.py"}
     assert "backend/tests/test_unrelated.py" not in sel and skipped == [] and mods == ["core.mod"]
-    # files_touched from run.json joins the change set (abs or repo-relative)
-    assert "backend/tests/test_unrelated.py" in pt.changed_files(
-        repo, {"files_touched": [str(repo / "backend/tests/test_unrelated.py")]})
+    # run.json files_touched is not a source of the change set (R2): git's set only
+    assert pt.changed_files(
+        repo, {"files_touched": [str(repo / "backend/tests/test_unrelated.py")]}) == changed
     # no file cap: the reached set is the scope (time grows, scope does not shrink)
     sel1, skipped1, _ = pt.select_backend(repo, changed, graph, 1)
     assert set(sel1) == set(sel) and skipped1 == []
@@ -263,7 +275,8 @@ def test_per_test_hang_still_blocks(rig, capsys, tmp_path, monkeypatch):
 def _write_run_index(tmp_path, entries):
     d = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs" / RUN_ID / "evidence" / "tests"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "run_index.json").write_text(json.dumps(entries), encoding="utf-8")
+    from core import evidence_seal                 # as the runner writes it (sealed)
+    evidence_seal.write_sealed(d / "run_index.json", json.dumps(entries))
 
 
 def test_circuit_breaker_trips_on_stalled_identical_rounds(rig, capsys, tmp_path):
@@ -383,63 +396,12 @@ sys.exit(0)
 """
 
 
-def _ac_build(tmp_path: Path, tests: list[str]) -> dict:
-    """Write a BUILD artifact whose ac_coverage[i].test is tests[i]; return run_state."""
-    arts = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts"
-    arts.mkdir(parents=True, exist_ok=True)
-    (arts / "build.json").write_text(json.dumps({"ac_coverage": [
-        {"ac": f"AC{i + 1}", "impl": "x", "test": t, "verified": True}
-        for i, t in enumerate(tests)]}))
-    (arts / "manifest.json").write_text(json.dumps(
-        {"artifacts": [{"id": "art_b1", "file": "build.json"}]}))
-    return {"stages": [{"stage": "build", "artifact_id": "art_b1"}]}
-
-
 DESKTOP_FILES = {
     "desktop/src/pages/A.test.tsx": "test('works', () => {})\n",
     "desktop/src/B.fails.test.ts": "test('works', () => {})\n",
     "desktop/src/one/C.test.ts": "test('works', () => {})\n",
     "desktop/src/two/C.test.ts": "test('works', () => {})\n",
 }
-
-
-def test_regression_ac_frontend_refs(rig, capsys, monkeypatch, tmp_path):
-    state = _ac_build(tmp_path, [
-        "desktop/src/pages/A.test.tsx",                    # repo-relative -> pass
-        "src/pages/A.test.tsx, A.test.tsx",                # desktop-relative + unique bare -> pass
-        "B.fails.test.ts",                                 # a failing vitest file -> fail
-        "C.test.ts",                                       # ambiguous bare name -> fail
-        "desktop/src/pages/A.test.tsx::suite works",       # ::name rejected (file-level only)
-        "tests/test_x.py::test_add",                       # backend ref, unchanged -> pass
-    ])
-    rig(DESKTOP_FILES, run_state=state)
-    npx = tmp_path / "npx.py"
-    npx.write_text(FAKE_NPX_AC)
-    monkeypatch.setenv("SWARM_TEST_NPX", str(npx))
-    out, _ = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
-    ev = _evidence(tmp_path, "tests/latest-regression.json")
-    assert ev["layers"]["ac_driven"] == {"run": True, "pass": 3, "fail": 3}, ev["layers"]
-    assert "desktop/src/pages/A.test.tsx" in ev["selected_files"]
-    assert "desktop/src/B.fails.test.ts" in ev["selected_files"]
-    # desktop refs never become pytest targets
-    # (a compact pass omits ``file`` when it is the nodeid's own path)
-    assert not any(r.get("file", r["nodeid"].split("::")[0]).startswith("desktop/")
-                   and not r["nodeid"].startswith("desktop/") for r in ev["results"])
-    warns = " ".join(out["warnings"])
-    assert "ambiguous (2 files): C.test.ts" in warns
-    assert "file-level (no ::name)" in warns
-
-
-def test_desktop_ref_outside_src_and_glob_names_do_not_resolve(rig, capsys, monkeypatch, tmp_path):
-    state = _ac_build(tmp_path, ["desktop/e2e/X.test.ts", "*.test.tsx"])
-    rig({**DESKTOP_FILES, "desktop/e2e/X.test.ts": "test('e', () => {})\n"}, run_state=state)
-    npx = tmp_path / "npx.py"
-    npx.write_text(FAKE_NPX_AC)
-    monkeypatch.setenv("SWARM_TEST_NPX", str(npx))
-    out, _ = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
-    ev = _evidence(tmp_path, "tests/latest-regression.json")
-    assert ev["layers"]["ac_driven"]["pass"] == 0
-    assert ev["layers"]["ac_driven"]["fail"] == 2
 
 
 def test_mutation_spec_still_rejects_a_desktop_test(rig, capsys, tmp_path):
@@ -527,14 +489,7 @@ sys.exit(0)
 
 
 def test_regression_fills_three_layers_and_frontend(rig, capsys, monkeypatch, tmp_path):
-    state = {"stages": [{"stage": "build", "artifact_id": "art_b1"}]}
-    repo = rig(run_state=state)
-    arts = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts"
-    (arts / "build.json").write_text(json.dumps({"ac_coverage": [
-        {"ac": "AC1: adds", "impl": "core/mod.py::add", "test": "tests/test_x.py::test_add",
-         "verified": True}]}))
-    (arts / "manifest.json").write_text(json.dumps(
-        {"artifacts": [{"id": "art_b1", "file": "build.json"}]}))
+    repo = rig()
     _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return a + b  # same\n",
                   "desktop/src/a.test.ts": "test('works', () => {})\n"})
     npx = tmp_path / "npx.py"
@@ -544,7 +499,8 @@ def test_regression_fills_three_layers_and_frontend(rig, capsys, monkeypatch, tm
     assert code == 0, out
     ev = _evidence(tmp_path, "tests/latest-regression.json")
     _assert_c2(ev, "regression")
-    assert ev["layers"]["ac_driven"] == {"run": True, "pass": 1, "fail": 0}
+    # a v1 run declares no ac_coverage (its run.json stages are not read): no AC layer
+    assert ev["layers"]["ac_driven"].get("run") is not True
     assert ev["layers"]["dependency_scoped"] == {"run": True, "tests": 1, "pass": 1}
     assert ev["layers"]["import_smoke"] == {"run": True, "modules": 1, "pass": 1}
     assert ev["frontend"] == {"vitest": {"passed": 1, "failed": 0},
@@ -826,87 +782,15 @@ def test_shards_keep_priority_order_serial_suites_do_not_jump_ahead():
                                    "tests/test_beta_importer.py::t"])
 
 
-def test_changed_files_scopes_to_files_touched_and_warns(rig):
-    """A run's change set is its files_touched — the set run-commit commits — not
-    every uncommitted file in a tree shared with other sessions. The others are
-    named in a warning with a command that runs as written."""
-    repo = rig()
-    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n",
-                  "backend/core/other_session.py": "x = 1\n"})
-    warnings: list = []
-    got = pt.changed_files(repo, {"files_touched": [str(repo / "backend/core/mod.py")]},
-                           warnings, ("P1", "run_t1"))
-    assert got == ["backend/core/mod.py"]
-    assert len(warnings) == 1
-    assert "backend/core/other_session.py" in warnings[0]
-    # a legacy run cannot register files any more: the warning names a v1 run instead (E)
-    assert "pipeline_v1.py create --project P1" in warnings[0]
-    assert "artifact_cli" not in warnings[0].replace("artifact_cli run commands", "")
-    assert warnings[0].startswith("1 changed file(s)")
-    # nothing outside files_touched → no warning
-    warnings.clear()
-    pt.changed_files(repo, {"files_touched": ["backend/core/mod.py", "backend/core/other_session.py"]},
-                     warnings, ("P1", "run_t1"))
-    assert warnings == []
-    # more than 8 → count is exact, list is capped with the remainder
-    _write(repo, {f"backend/core/extra_{i}.py": "y = 1\n" for i in range(9)})
-    warnings.clear()
-    pt.changed_files(repo, {"files_touched": ["backend/core/mod.py"]}, warnings, ("P1", "run_t1"))
-    assert warnings[0].startswith("10 changed file(s)") and "(+2 more)" in warnings[0]
-
-
-def test_changed_files_falls_back_without_in_repo_files_touched(rig):
-    """No files_touched, or entries that are not files of this repo (a workspace
-    path like Projects/... normalizes like a repo path but does not exist here),
-    keep the old union so the run is still tested."""
-    repo = rig()
-    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
-    for state in ({}, {"files_touched": []},
-                  {"files_touched": ["Projects/SwarmAI/2-understanding/TECH.md"]}):
-        warnings: list = []
-        got = pt.changed_files(repo, state, warnings, ("P1", "run_t1"))
-        assert "backend/core/mod.py" in got, state
-        assert warnings == [], state
-    # a deleted tracked file in files_touched is still the run's own
-    (repo / "backend/tests/test_unrelated.py").unlink()
-    got = pt.changed_files(repo, {"files_touched": ["backend/tests/test_unrelated.py"]}, [], None)
-    assert got == ["backend/tests/test_unrelated.py"]
-
-
-def test_verify_without_files_touched_refuses_in_a_tree_shared_with_a_live_run(rig, tmp_path, capsys):
-    """run_a2f2c171: no files_touched + a sibling run editing the same checkout → the
-    fallback tested everyone's changes and 5 verify / recheck calls hit the deadline.
-    The runner now asks for files_touched first; nothing runs, no evidence is written."""
-    repo = rig()
-    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
-    runs = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs"
-    sib = runs / "run_sib1"
-    sib.mkdir()
-    (sib / "run.json").write_text(json.dumps({"status": "running"}), encoding="utf-8")
-    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
-    assert code != 0 and "run_sib1" in out["error"] and "pipeline_v1.py create" in out["error"], out
-    assert f"pipeline_v1.py create --project {PROJECT}" in out["error"]
-    assert not (runs / RUN_ID / "evidence" / "tests" / "latest-verify.json").exists()
-    # a sibling that is not running, or whose run.json is stale, does not count
-    (sib / "run.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
-    assert pt.shared_tree_scope_error(repo, {}, RUN_ID, PROJECT, runs) is None
-    (sib / "run.json").write_text(json.dumps({"status": "running"}), encoding="utf-8")
-    old = time.time() - pt.SIBLING_ACTIVE_S - 60
-    os.utime(sib / "run.json", (old, old))
-    assert pt.shared_tree_scope_error(repo, {}, RUN_ID, PROJECT, runs) is None
-    # with a live sibling, registering this run's own file lifts the refusal
-    os.utime(sib / "run.json", None)
-    assert pt.shared_tree_scope_error(repo, {}, RUN_ID, PROJECT, runs)
-    assert pt.shared_tree_scope_error(
-        repo, {"files_touched": ["backend/core/mod.py"]}, RUN_ID, PROJECT, runs) is None
-
-
 def _seed_evidence(tmp_path: Path, mode: str, failures: list, finished_at: str) -> None:
     d = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs" / RUN_ID / "evidence" / "tests"
     d.mkdir(parents=True, exist_ok=True)
-    (d / f"latest-{mode}.json").write_text(json.dumps(
+    # sealed the way the runner writes it: a v1 run's evidence store rejects a file
+    # no runner wrote (core.evidence_seal)
+    from core import evidence_seal
+    evidence_seal.write_sealed(d / f"latest-{mode}.json", json.dumps(
         {"schema": 1, "mode": mode, "finished_at": finished_at, "failures": failures,
-         "changed_files": {}}), encoding="utf-8")
+         "changed_files": {}}))
 
 
 def test_recheck_is_never_green_when_previous_failures_cannot_be_retargeted(rig, capsys, tmp_path):
@@ -1067,7 +951,8 @@ def test_manual_recheck_overlays_onto_the_regression_evidence(rig, capsys, tmp_p
                          "file": "backend/tests/test_x.py"}],
                counts={"passed": 0, "failed": 0, "errors": 0, "timeouts": 1, "skipped": 0},
                layers={"dependency_scoped": {"run": True, "tests": 1, "pass": 0}})
-    (d / "latest-regression.json").write_text(json.dumps(reg))
+    from core import evidence_seal
+    evidence_seal.write_sealed(d / "latest-regression.json", json.dumps(reg))
     out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
     assert code == 0 and out.get("overlaid_onto") == "regression", out
     ev = _evidence(tmp_path, "tests/latest-regression.json")
@@ -1208,10 +1093,13 @@ def _logged_test(log: Path, name: str, imports: str) -> str:
             f"        fh.write({name!r} + '\\n')\n")
 
 
-def test_regression_reuses_passing_files_until_a_changed_file_is_edited(rig, capsys, tmp_path):
+def test_regression_reuses_passing_files_until_a_changed_file_is_edited(rig, capsys, tmp_path,
+                                                                       monkeypatch):
     """verify → regression on an unchanged tree re-runs no L2 file (the whole-run cache
     misses: another mode, other targets); its evidence still counts them. An edit to
     ANY changed file since — even one no test imports — re-runs every file."""
+    # four full-scope calls: past the v1 contract's two rounds (operator override)
+    monkeypatch.setenv("SWARM_GATE_FORCE", "full_scope")
     log = tmp_path / "ran.log"
     repo = rig({
         "backend/core/alpha_mod.py": "def one():\n    return 1\n",
@@ -1483,15 +1371,6 @@ def test_every_direct_importer_runs_and_transitive_ones_are_named(rig, tmp_path,
     assert ev["transitive_unrun"] == ["backend/tests/test_l_facade.py"]
 
 
-def test_files_touched_counts_only_where_git_sees_a_change(rig):
-    """An existing but unchanged files_touched entry must not replace the real change set."""
-    repo = rig()
-    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
-    got = pt.changed_files(repo, {"files_touched": ["backend/tests/test_unrelated.py"]})
-    assert "backend/core/mod.py" in got
-    assert pt.changed_files(repo, {"files_touched": ["backend/core/mod.py"]}) == ["backend/core/mod.py"]
-
-
 def test_a_deleted_modules_importers_still_run(rig, tmp_path):
     repo = rig({"backend/core/gone.py": "def f():\n    return 1\n",
                 "backend/tests/test_gone.py": "from core.gone import f\n\n\ndef test_f():\n    assert f()\n"})
@@ -1625,27 +1504,6 @@ def test_goal_runs_stop_at_the_tdd_ceiling(tmp_path):
     assert pt._circuit_breaker_check(tmp_path, "tdd", "full") is None  # only goal runs
     (tdir / pt.RUN_INDEX).write_text(json.dumps(rows[:-1]))
     assert pt._circuit_breaker_check(tmp_path, "tdd", "goal") is None
-
-
-def test_bvt_files_are_reused_across_runs_until_their_closure_changes(rig, tmp_path, capsys):
-    repo = rig({"backend/tests/test_bvt_two.py": "def test_ok():\n    assert True\n",
-                "backend/tests/bvt_manifest.txt": "test_bvt_two.py\n"},
-               run_state={"files_touched": ["backend/core/mod.py"]})
-    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
-    _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
-    ev = _evidence(tmp_path, "tests/latest-regression.json")
-    assert not ev.get("bvt_reused"), ev.get("warnings")
-    assert list((tmp_path / "cache" / "bvt").glob("*.json"))
-    # a different change (new inputs, new whole-run key): the BVT file is reused
-    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return a + b\n"})
-    _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
-    ev = _evidence(tmp_path, "tests/latest-regression.json")
-    assert ev.get("bvt_reused") == ["backend/tests/test_bvt_two.py"], ev.get("warnings")
-    assert "backend/tests/test_bvt_two.py::test_ok" in {r["nodeid"] for r in ev["results"]}
-    # the BVT file itself changes: it runs again
-    _write(repo, {"backend/tests/test_bvt_two.py": "def test_ok():\n    assert 1\n"})
-    _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
-    assert not _evidence(tmp_path, "tests/latest-regression.json").get("bvt_reused")
 
 
 def test_a_long_prefix_continuation_is_listed_context_unverified():

@@ -32,19 +32,6 @@ def _texts(monkeypatch=None) -> dict[str, str]:
     source = (BACKEND / "core" / "security_hooks.py").read_text(encoding="utf-8")
     start = source.index("def create_session_link_gate")
     texts["session_link"] = source[start:start + 6000]
-    if monkeypatch is not None:       # the runner's two real messages, rendered
-        monkeypatch.setattr(pipeline_test, "_WORKTREE", None, raising=False)
-        monkeypatch.setattr(pipeline_test, "_git_changed_set", lambda repo: {"a.py", "b.py"})
-        monkeypatch.setattr(pipeline_test, "_live_sibling_runs", lambda d, r: ["run_other"])
-        monkeypatch.setattr(pipeline_test, "_owned_files",
-                            lambda repo, state, git_set: (set(), set()))
-        texts["shared_tree"] = pipeline_test.shared_tree_scope_error(
-            Path("."), {}, "run_x", "P", Path("."))
-        monkeypatch.setattr(pipeline_test, "_owned_files",
-                            lambda repo, state, git_set: ({"a.py"}, {"a.py"}))
-        warnings: list = []
-        pipeline_test.changed_files(Path("."), {}, warnings, run_ref=("P", "run_x"))
-        texts["changed_files"] = " ".join(warnings)
     return texts
 
 
@@ -61,8 +48,7 @@ def _commands(text: str) -> list[list[str]]:
     return out
 
 
-@pytest.mark.parametrize("name", ["active_run_commit", "stash", "session_link",
-                                  "shared_tree", "changed_files"])
+@pytest.mark.parametrize("name", ["active_run_commit", "stash", "session_link"])
 def test_no_deny_text_names_a_retired_command(name, monkeypatch):
     text = _texts(monkeypatch)[name]
     assert text
@@ -77,7 +63,7 @@ def test_every_named_pipeline_v1_command_parses(monkeypatch):
         for argv in _commands(text):
             parser.parse_args(argv)          # SystemExit = a command that does not exist
             seen += 1
-    assert seen >= 3
+    assert seen >= 1
 
 
 def test_experts_the_pipeline_does_not_dispatch_say_so():

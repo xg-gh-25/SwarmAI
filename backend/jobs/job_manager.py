@@ -332,70 +332,6 @@ def cmd_validate_cron(expr: str) -> None:
         sys.exit(1)
 
 
-def cmd_pipeline(args_ns: argparse.Namespace) -> None:
-    """Create a pipeline job — convenience wrapper around agent_task.
-
-    Creates a user job that runs the s_autonomous-pipeline orchestrator skill
-    as a headless Claude CLI task. The prompt instructs the agent
-    to execute the full pipeline for the given requirement.
-
-    Usage:
-        python job_manager.py pipeline \\
-          --project SwarmAI \\
-          --requirement "Add retry logic to payment API" \\
-          [--schedule "0 9 * * 1-5"] \\
-          [--profile full] \\
-          [--budget 2.00] \\
-          [--one-shot]
-    """
-    project = args_ns.project
-    requirement = args_ns.requirement
-    profile = args_ns.profile or "full"
-    budget = args_ns.budget
-    schedule = args_ns.schedule
-    one_shot = args_ns.one_shot
-
-    # Build the prompt that triggers s_autonomous-pipeline behavior
-    prompt = (
-        f"Run the full pipeline for project {project}:\n\n"
-        f"{requirement}\n\n"
-        f"Use pipeline profile: {profile}.\n"
-        f"Follow the s_autonomous-pipeline skill instructions exactly.\n"
-        f"Use artifact_cli.py for all state operations.\n"
-        f"Checkpoint on L2 BLOCK or budget limits.\n"
-        f"Present the completion summary when done."
-    )
-
-    # Build job spec
-    job_spec = {
-        "name": f"Pipeline: {requirement[:50]}",
-        "type": "agent_task",
-        "schedule": schedule,
-        "prompt": prompt,
-        "config": {
-            "prompt": prompt,
-            "pipeline_project": project,
-            "pipeline_requirement": requirement,
-            "pipeline_profile": profile,
-        },
-        "safety": {
-            "max_budget_usd": budget,
-            "timeout_seconds": 600,  # 10 min for pipeline execution
-            "allowed_tools": [],     # Pipeline uses bash (artifact_cli), file read/write
-        },
-    }
-
-    if one_shot:
-        # One-shot: schedule far future, disable after first run
-        job_spec["schedule"] = "0 0 1 1 *"  # Jan 1 — effectively "run once manually"
-        job_spec["config"]["one_shot"] = True
-
-    # Delegate to cmd_create
-    cmd_create(json.dumps(job_spec))
-
-
-# ── Main ─────────────────────────────────────────────────────────────────
-
 def main():
     parser = argparse.ArgumentParser(description="Swarm Job Manager")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -425,14 +361,6 @@ def main():
     p_validate.add_argument("expression")
 
     # Pipeline convenience command (v3)
-    p_pipeline = sub.add_parser("pipeline", help="Create a pipeline background job")
-    p_pipeline.add_argument("--project", required=True, help="Project name")
-    p_pipeline.add_argument("--requirement", required=True, help="What to build")
-    p_pipeline.add_argument("--schedule", default="0 9 * * 1-5", help="Cron schedule (default: weekdays 9am)")
-    p_pipeline.add_argument("--profile", default="full", help="Pipeline profile: full/trivial/research/docs/bugfix")
-    p_pipeline.add_argument("--budget", type=float, default=2.00, help="Max spend per run in USD")
-    p_pipeline.add_argument("--one-shot", action="store_true", help="Run once (not recurring)")
-
     args = parser.parse_args()
 
     if args.command == "list":
@@ -451,8 +379,6 @@ def main():
         cmd_show(args.job_id)
     elif args.command == "validate-cron":
         cmd_validate_cron(args.expression)
-    elif args.command == "pipeline":
-        cmd_pipeline(args)
 
 
 if __name__ == "__main__":

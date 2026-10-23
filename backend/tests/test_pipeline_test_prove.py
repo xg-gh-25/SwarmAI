@@ -292,9 +292,21 @@ def test_proof_outcome_labels(res, label):
 def test_proof_modes_need_an_isolated_run(tmp_path, monkeypatch):
     monkeypatch.setattr(pt, "_WORKTREE", {})
     ws = Path(os.path.realpath(tmp_path)) / "ws"
-    rd = ws / "Projects" / "P" / ".artifacts" / "runs" / RID
-    rd.mkdir(parents=True)
-    (rd / "run.json").write_text(json.dumps({"worktree_mode": "shared"}))
+    # a shared-mode v1 run (R2: only a v1 run is tested at all)
+    from core.run_protocol.engine import RunEngine
+    repo = Path(os.path.realpath(tmp_path)) / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "a.txt").write_text("a\n")
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@x.invalid",
+                    "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                    "commit", "-qm", "init", "--allow-empty"], check=True)
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("SWARM_APP_SESSION_ID", "s-prove")
+    monkeypatch.setenv("SWARM_TEST_REPO_ROOT", str(repo))
+    RunEngine.create(data_dir=tmp_path / "data", workspace=ws, project="P", profile="direct",
+                     requirement="r", session_id="s-prove", repos={"repo": str(repo)},
+                     mode="shared", run_id=RID)
     monkeypatch.setenv("SWARM_WORKSPACE", str(ws))
     monkeypatch.setenv("SWARM_TEST_CACHE_DIR", str(tmp_path / "c"))
     ns = pt._parser().parse_args(["--project", "P", "--run-id", RID, "--mode", "snapshot",

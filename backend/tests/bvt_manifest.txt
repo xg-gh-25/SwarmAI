@@ -33,7 +33,6 @@ test_admission_trust_stamp.py
 test_bvt_admission.py
 test_class_key.py
 test_coe_parsing.py
-test_completion_gate.py
 test_context_brain_health.py
 test_context_templates.py
 test_data_point_folding.py

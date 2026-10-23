@@ -177,7 +177,7 @@ async def test_non_bash_tool_ignored():
     'grep -n "def _is_background\\|setsid\\|nohup" core/security_hooks.py | head -20',
     "grep -n 'nohup' tests/x.py",
     "grep -rn setsid backend/core",
-    'python artifact_cli.py run-create --requirement "names nohup / setsid / disown in text"',
+    'python backend/scripts/pipeline_v1.py create --requirement "names nohup / setsid / disown"',
     "echo nohup",
     "git log --grep=setsid",
     "cat > /tmp/x.py <<'EOF'\nimport os  # nohup setsid\nEOF",

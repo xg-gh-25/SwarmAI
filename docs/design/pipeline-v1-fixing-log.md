@@ -592,3 +592,24 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - **MED，token 取最后一条 metric：** 改用 `audit.token_totals`。
 - **LOW，write_projection 读两次 event 链：** 改为只读一次。
 - **LOW，router 自带 run_id 正则：** 改用 `identifiers.validate_run_id`。
+
+## 25. R2（并入 R4）：旧执行入口和旧维护脚本
+
+**为什么把 R4 并进来：** purge、analytics、foreign-stub 这几个脚本引用的就是 artifact_cli 里要删的函数。如果按原计划分成两个 commit，中间那一版是坏的。`contract_readers` 被 `run_docs` 引用，所以挪到 R3 和 `run_docs` 一起删。
+
+**改了什么：**
+- `artifact_cli.py`：从 1927 行减到约 730 行，只留 discover、publish、learn、projects、bind、ddd-*、release-gate 这几个命令。publish 不再接受 `--run-id` / `--stage`。原先专门拒绝旧命令名的那张表删了，旧命令名现在直接是 argparse 报 invalid choice。
+- 删除的脚本：`completion_gate.py`、`purge_garbage_runs.py`、`pipeline_analytics.py`、`clean_foreign_run_stubs.py`、`pipeline_cleanup.py`。另外删了 `system_jobs` 的 `pipeline-retention` 定时任务，以及 `job_manager` 的 `pipeline` 子命令。
+- `pipeline_test.py`：
+  - 在写入任何东西之前，先要求提供 `--run-id`，且该 run 有 v1 contract。
+  - 删掉所有 `v1 is None` 的分支，连同只给旧 run 用的三种缓存：BVT 跨 run 缓存、前端结果缓存、整次调用的缓存 key。
+  - 删掉 `files_touched` 变更集和 `shared_tree_scope_error`。后者判断的是 status 为 `running` 的兄弟 run，而 v1 run 的 status 从来不是 `running`，所以对 v1 从未生效。
+  - `changed_files` 改成只取 git 从 fork point 起的改动。
+  - `_compact` 最后还会把 v1 块里每个测试的结果压成计数，把 card 正文压成只留路径：v1 加了 `next.card_text` 之后，输出超出了 OUTPUT_BUDGET。
+- 冻结的 `_plan` digest 已更新，`pipeline-test-speed.md` §11 记了一条。
+- 测试：删掉旧 pipeline 的测试文件，`test_pipeline_test.py` 的 rig 改为创建一个真实的 shared 模式 v1 run。期间顺手修了 main 上原本就缺的 `test_nav_routers_import.py` 源码扫描登记。
+
+**审查（9f830594，0 HIGH + 2 MED + 1 LOW），一次修完：**
+- **MED，熔断按 run.json 的 `profile` 判断：** goal run 可以把 profile 改成 full，绕过 `GOAL_TDD_MAX`。现在改为取 `v1.contract["profile"]`。
+- **MED，regression 仍从 run.json 的 `stages` 读旧 BUILD artifact 的 `ac_coverage`：** agent 可以借此注入测试、抢占时间预算。现在删了 `_stage_data` 和 `_ac_entries`，也不再读 PLAN 的 `exit_criteria`；v1 本来就没有这个列表，所以 AC 层为空。`_plan` 的 digest 第二次更新。
+- **LOW，还留着空转的旧测试：** 删掉 `test_run_commit_d7.py` 和 `test_stage_boundary_commands.py`。`test_ui_actions` 里 ensure_report 那部分随 R3 一起删。
