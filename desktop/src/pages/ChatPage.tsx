@@ -43,7 +43,7 @@ import { deriveBackendLiveness } from '../hooks/useHealthMonitor';
 import { useSessionMeta } from '../contexts/LayoutContext';
 import { BACK_TO_CHAT_EVENT } from '../components/layout/useExclusiveOverlay';
 import { useOverlay } from '../contexts/OverlayContext';
-import type { UiContextSnapshot, CanvasSnapshot } from '../utils/uiContext';
+import type { UiContextSnapshot } from '../utils/uiContext';
 import { ChatDropZone } from '../components/chat/ChatDropZone';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
 import FileViewerPanel from '../components/file-viewer/FileViewerPanel';
@@ -476,42 +476,11 @@ export default function ChatPage() {
     wasStreamingRef.current = isStreaming;
   }, [isStreaming]);
 
-  // Agent UI proprioception (SENSE): assemble a request-time snapshot of the
-  // agent's own UI state — open file + Canvas state + which nav overlay is open —
-  // so the agent can perceive what it is currently showing the user. Merged from
-  // three existing signals into ONE uiStateRef snapshot (the send path reads
-  // .current and serializes via toEditorContextPayload). Superset of the former
-  // file-only editorContextRef; the wire key stays `editorContext`.
-  const uiStateRef = useRef<UiContextSnapshot | null>(null);
-  const mergeUiState = useCallback((patch: Partial<UiContextSnapshot>) => {
-    uiStateRef.current = { ...(uiStateRef.current ?? {}), ...patch };
-  }, []);
-  // (a) open file — swarm:editor-file-changed carries {filePath, fileName} | null
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as
-        | { filePath: string; fileName: string }
-        | null;
-      mergeUiState({ filePath: detail?.filePath ?? '', fileName: detail?.fileName ?? '' });
-    };
-    window.addEventListener('swarm:editor-file-changed', handler);
-    return () => window.removeEventListener('swarm:editor-file-changed', handler);
-  }, [mergeUiState]);
-  // (b) Canvas state — swarm:canvas-state carries a CanvasSnapshot (open/count/
-  //     pin/mute/collapsed). The emit fires {open:false,...} on close so a stale
-  //     count never lingers. NOTE: the panel is now ALWAYS mounted (run_a263e967 —
-  //     the {canvas.isOpen &&} gate was removed so an empty tab shows a resident
-  //     rail instead of vanishing), so this no longer relies on unmount-on-close;
-  //     the open/false snapshot is emitted from the always-mounted useCanvasHost
-  //     (isOpen = file||manuallyOpen), independent of whether the panel is mounted.
-  useEffect(() => {
-    const handler = (e: Event) => {
-      mergeUiState({ canvas: (e as CustomEvent).detail as CanvasSnapshot | null });
-    };
-    window.addEventListener('swarm:canvas-state', handler);
-    return () => window.removeEventListener('swarm:canvas-state', handler);
-  }, [mergeUiState]);
-  // (c) which fullscreen nav overlay is open — read from the OverlayHost state
+  // Agent UI proprioception (SENSE): a request-time snapshot of the agent's own
+  // UI — the sent-for tab's Canvas (which carries the open file, §3.1 of
+  // canvas-proprioception.md) + which nav overlay is open. Built at send time by
+  // editorContextFor (d) and serialized by toEditorContextPayload.
+  // Which fullscreen nav overlay is open — read from the OverlayHost state
   //     authority (OverlayContext), NOT the legacy useActiveOverlayEvent singleton.
   //     Since every ALL_SHOW_EVENTS surface migrated to the host (M2–M4), the legacy
   //     singleton is only written by the now-unmounted legacy overlays → it is
@@ -523,25 +492,30 @@ export default function ChatPage() {
   // dep-array churn on that hot path — same pattern as isExpandedRef).
   const activeOverlayRef = useRef(activeOverlay);
   activeOverlayRef.current = activeOverlay;
-  useEffect(() => {
-    mergeUiState({ activeOverlay });
-  }, [activeOverlay, mergeUiState]);
-  // (d) SEND-TIME context (race fix, run_e45a04d3). The swarm:canvas-state
-  //     subscription (b) is async — it can lag a fast send — so every send builds
-  //     its editorContext HERE, reading the Canvas of the tab being sent for
-  //     SYNCHRONOUSLY at send time; subscription (b) stays as the passive
-  //     keep-fresh path. getCanvasSnapshotFor has a STABLE identity and reads live
+  // (d) SEND-TIME context (race fix, run_e45a04d3). Every send builds its
+  //     editorContext HERE, reading the Canvas of the tab being sent for
+  //     SYNCHRONOUSLY at send time (an async event mirror could lag a fast send).
+  //     takeCanvasSnapshotFor has a STABLE identity and reads live
   //     state, so a send callback holding an old copy of this function still
   //     snapshots the right tab (a stale copy once reported another tab's Canvas).
   //     The tab id is REQUIRED so a send site cannot silently snapshot the active
-  //     tab. The result is a local copy: a send never writes the shared
-  //     uiStateRef, so a background tab's Canvas cannot leak into it. Known limit:
-  //     the other fields (open file, active overlay) are global UI state and
-  //     describe the foreground view even for a drained background-tab message.
-  const getCanvasSnapshotFor = canvas.getCanvasSnapshotFor;
-  const editorContextFor = useCallback((tabId: string | null): UiContextSnapshot => (
-    { ...(uiStateRef.current ?? {}), canvas: getCanvasSnapshotFor(tabId) }
-  ), [getCanvasSnapshotFor]);
+  //     tab. The result is a local copy, so a background tab's Canvas cannot leak
+  //     into another tab's request.
+  //     The open file comes from that tab's Canvas too (one source; the global
+  //     swarm:editor-file-changed mirror is gone), so a drained background-tab
+  //     message carries ITS file. The overlay is global UI state (foreground).
+  //     takeCanvasSnapshotFor hands over the tab's Canvas command results, so call
+  //     this exactly once per request sent (the two send sites below).
+  const takeCanvasSnapshotFor = canvas.takeCanvasSnapshotFor;
+  const editorContextFor = useCallback((tabId: string | null): UiContextSnapshot => {
+    const c = takeCanvasSnapshotFor(tabId);
+    return {
+      filePath: c?.file?.path ?? '',
+      fileName: c?.file?.name ?? '',
+      canvas: c,
+      activeOverlay: activeOverlayRef.current,
+    };
+  }, [takeCanvasSnapshotFor]);
 
   // Terminal → chat: the text becomes this tab's terminal attachment chip (visible,
   // removable, travels with its message through queue / drain / resend), then the
@@ -3605,6 +3579,7 @@ export default function ChatPage() {
             onCanvasTabChange={canvas.setCanvasTab}
             fileDirty={canvas.fileDirty}
             onFileDirtyChange={canvas.setFileDirty}
+            onViewChange={canvas.setFileView}
             pendingOpen={canvas.pendingOpen}
             onResolvePending={canvas.resolvePending}
             referencedFiles={canvas.referencedFiles}

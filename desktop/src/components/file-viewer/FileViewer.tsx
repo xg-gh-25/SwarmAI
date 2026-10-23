@@ -32,6 +32,7 @@ import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import { isEditableType, isBinaryType } from './utils/fileViewTypes';
 import { useFileViewerTabs } from './hooks/useFileViewerTabs';
 import type { FileTab } from './hooks/useFileViewerTabs';
+import type { CanvasFileViewReport } from '../../utils/uiContext';
 import FileViewerTabBar from './FileViewerTabBar';
 import FileViewerStatusBar from './FileViewerStatusBar';
 import FileEditorCore from '../common/FileEditorCore';
@@ -93,6 +94,9 @@ export interface FileViewerProps {
   /** Reports whether the active file has unsaved edits (the Canvas header shows a
    *  dot by the file name while the list is folded). */
   onDirtyChange?: (dirty: boolean) => void;
+  /** Reports how the shown text file is displayed (Preview / Edit / Changes +
+   *  Review) — the agent's Canvas snapshot reads it (canvas-proprioception §3.2). */
+  onViewChange?: (v: CanvasFileViewReport | null) => void;
 }
 
 /** Status-bar info that renderers can publish via onStatusInfo callback. */
@@ -142,6 +146,7 @@ function FileViewerImpl({
   tabScopeKey,
   closeRequest,
   onDirtyChange,
+  onViewChange,
 }: FileViewerProps) {
   const {
     tabs,
@@ -748,6 +753,7 @@ function FileViewerImpl({
           // and the header's close bumps closeSignal → FileEditorCore runs its existing
           // guarded close (handleCloseAttempt), so the unsaved-changes dialog is preserved.
           closeSignal={closeSignal}
+          onViewChange={onViewChange}
         />
       );
     }

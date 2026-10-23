@@ -1,5 +1,5 @@
 """Message and Chat-related Pydantic models."""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Literal, Any
 from datetime import datetime
 
@@ -31,12 +31,62 @@ class DocumentContent(BaseModel):
     source: DocumentSourceBase64
 
 
+def _clip(v: object, n: int) -> object:
+    """Truncate an over-long string instead of rejecting the whole chat request."""
+    return v[:n] if isinstance(v, str) else v
+
+
+class CanvasFileState(BaseModel):
+    """The file shown in Canvas (canvas-proprioception.md §3.1)."""
+
+    path: str = ""
+    name: str = ""
+    opened_by: str = "user"  # user | canvas
+    dirty: bool = False
+    view: str | None = None  # preview | edit | changes
+    review: bool = False
+
+    @field_validator("path", "name", "opened_by", "view", mode="before")
+    @classmethod
+    def _short(cls, v: object) -> object:
+        return _clip(v, 1024)
+
+
+class CanvasOutputState(BaseModel):
+    """One listed output row (newest first)."""
+
+    path: str = ""
+    kind: str | None = None
+    new: bool = False
+
+    @field_validator("path", "kind", mode="before")
+    @classmethod
+    def _short(cls, v: object) -> object:
+        return _clip(v, 1024)
+
+
+class CanvasCommandState(BaseModel):
+    """What happened to one of the agent's Canvas commands since the last send."""
+
+    cmd: str = ""
+    result: str = ""  # applied | ignored | pending
+    reason: str | None = None
+
+    @field_validator("cmd", "result", "reason", mode="before")
+    @classmethod
+    def _short(cls, v: object) -> object:
+        return _clip(v, 200)
+
+
 class CanvasState(BaseModel):
     """Snapshot of the Canvas (output panel) UI state at request time.
 
-    All fields default-valued so a partial/legacy payload never fails validation.
-    `open` = Canvas panel is showing; `output_count` = number of session output
-    files listed; pin/mute/collapsed = the user's Canvas controls.
+    All fields default-valued so a partial/legacy payload never fails validation,
+    and over-long values are TRUNCATED (never a 422 on the chat request): an
+    untrusted UI snapshot must not be able to break sending. `open` / `output_count`
+    / `pinned` are the original fields; `muted` / `collapsed` are kept for old
+    clients (the current one no longer sends them). The rest is the
+    canvas-proprioception.md §3.1 snapshot; `visible` present = new client.
     """
 
     open: bool = False
@@ -44,6 +94,28 @@ class CanvasState(BaseModel):
     pinned: bool = False
     muted: bool = False
     collapsed: bool = False
+    visible: str | None = None  # hidden | rail | open
+    tab: str | None = None  # artifacts | changes
+    list_folded: bool = False
+    file: CanvasFileState | None = None
+    pending_open: str | None = None
+    outputs: list[CanvasOutputState] = Field(default_factory=list)
+    commands: list[CanvasCommandState] = Field(default_factory=list)
+
+    @field_validator("visible", "tab", "pending_open", mode="before")
+    @classmethod
+    def _short(cls, v: object) -> object:
+        return _clip(v, 1024)
+
+    @field_validator("outputs", mode="before")
+    @classmethod
+    def _cap_outputs(cls, v: object) -> object:
+        return v[:8] if isinstance(v, list) else v
+
+    @field_validator("commands", mode="before")
+    @classmethod
+    def _cap_commands(cls, v: object) -> object:
+        return v[-3:] if isinstance(v, list) else v
 
 
 class EditorContext(BaseModel):

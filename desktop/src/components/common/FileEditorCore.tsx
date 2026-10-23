@@ -50,6 +50,7 @@ import { dispatchInjectChatInput } from '../../pages/chat/injectChatInput';
 // preview table, ./filePreviews, which FileEditorCore imports — no import cycle).
 export { HIGHLIGHT_MAX_CHARS, shouldProcessSync } from './editorLimits';
 import { shouldProcessSync } from './editorLimits';
+import type { CanvasFileViewReport, CanvasFileView } from '../../utils/uiContext';
 
 /**
  * Debounce (ms) for the syntax-highlight overlay. hljs.highlight runs over the
@@ -135,6 +136,10 @@ export interface FileEditorCoreProps {
    *  unified file-chrome header in panel variant, where FileEditorCore's own filename+
    *  close chrome is suppressed. Undefined/0 = no external close (mount baseline). */
   closeSignal?: number;
+  /** Called when the SHOWN view changes (preview / edit / changes, Review on/off) —
+   *  not on typing or scrolling. A huge file whose preview falls back to the raw
+   *  source reports `edit` (canvas-proprioception §3.2). */
+  onViewChange?: (v: CanvasFileViewReport) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -649,6 +654,7 @@ export default function FileEditorCore({
   onSaveWithDiff,
   onContentChange,
   closeSignal,
+  onViewChange,
 }: FileEditorCoreProps) {
   // The file's rendered preview, if it has one — the ONE table in ./filePreviews
   // (md / svg / ipynb / mermaid; canvas-file-types.md P3).
@@ -1530,6 +1536,13 @@ export default function FileEditorCore({
   const floatPad = iconOnly ? { paddingBottom: PANEL_FLOAT_PAD } : undefined;
   const hasPreview = !!previewKind;
   const view: 'preview' | 'source' | 'changes' = showDiff ? 'changes' : previewOn ? 'preview' : 'source';
+  // What the user actually sees: a preview too large to draw shows the raw source.
+  const shownView: CanvasFileView = showDiff ? 'changes'
+    : previewOn && previewKind && canDrawPreview(previewKind, content) ? 'preview' : 'edit';
+  const reviewOn = review.isReviewMode;
+  useEffect(() => {
+    onViewChange?.({ path: filePath, view: shownView, review: reviewOn });
+  }, [onViewChange, filePath, shownView, reviewOn]);
   const changesOff = (!isDirty || !!baselinePending) && !showDiff;
   const pickView = (v: 'preview' | 'source' | 'changes') => {
     if (v === 'changes') { if (!changesOff) setShowDiff(true); return; }

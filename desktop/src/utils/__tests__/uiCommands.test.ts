@@ -11,10 +11,14 @@
  *  - a backend-supplied event/target field is IGNORED (frontend uses its own table).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { dispatchUiCommand, UI_COMMAND_TABLE } from '../uiCommands';
+import { dispatchUiCommand, UI_COMMAND_TABLE, UI_COMMAND_RESULT_EVENT } from '../uiCommands';
 import { ALL_SHOW_EVENTS, BACK_TO_CHAT_EVENT } from '../../components/layout/useExclusiveOverlay';
 
 afterEach(() => vi.restoreAllMocks());
+
+/** The dispatched UI events, without the command-result reports (tested below). */
+const navCalls = (spy: { mock: { calls: unknown[][] } }) =>
+  spy.mock.calls.map((c) => c[0] as CustomEvent).filter((e) => e.type !== UI_COMMAND_RESULT_EVENT);
 
 describe('UI_COMMAND_TABLE', () => {
   it('every command is a swarm:* event; targets are window except open-canvas-file (document)', () => {
@@ -67,9 +71,8 @@ describe('dispatchUiCommand', () => {
     const spy = vi.spyOn(window, 'dispatchEvent');
     const ok = dispatchUiCommand('open-canvas');
     expect(ok).toBe(true);
-    expect(spy).toHaveBeenCalledTimes(1);
-    const ev = spy.mock.calls[0][0] as CustomEvent;
-    expect(ev.type).toBe('swarm:open-canvas');
+    expect(navCalls(spy)).toHaveLength(1);
+    expect(navCalls(spy)[0].type).toBe('swarm:open-canvas');
   });
 
   it('dispatches show-* overlays on window', () => {
@@ -103,11 +106,11 @@ describe('dispatchUiCommand', () => {
     // `path` (for open-canvas-file), never an event name or target — a backend still
     // cannot pick the event or flip the target.
     dispatchUiCommand('open-canvas');
-    expect(spy).toHaveBeenCalledTimes(1);
-    const ev = spy.mock.calls[0][0] as CustomEvent;
+    expect(navCalls(spy)).toHaveLength(1);
+    const ev = navCalls(spy)[0];
     expect(ev.type).toBe('swarm:open-canvas');
-    // payload-less for pure-nav commands — no detail forwarded (Gate-2 LOW).
-    expect(ev.detail).toBeNull();
+    // nothing from the wire: only the frontend-made result id (Gate-2 LOW).
+    expect(Object.keys(ev.detail)).toEqual(['cmdId']);
   });
 
   // ── open-canvas origin-tab stamp (run_10c51cac): forwards ONLY {tabId} ──
@@ -115,19 +118,19 @@ describe('dispatchUiCommand', () => {
     const spy = vi.spyOn(window, 'dispatchEvent');
     const ok = dispatchUiCommand('open-canvas', undefined, 'tab-A');
     expect(ok).toBe(true);
-    const ev = spy.mock.calls[0][0] as CustomEvent;
+    const ev = navCalls(spy)[0];
     expect(ev.type).toBe('swarm:open-canvas');
-    // ONLY the origin tab — no path, no event/target from the wire (crux intact).
-    expect(ev.detail).toEqual({ tabId: 'tab-A' });
+    // ONLY the origin tab + the result id — no path, nothing from the wire (crux intact).
+    expect(ev.detail).toEqual({ tabId: 'tab-A', cmdId: expect.any(String) });
   });
 
   it('open-canvas with NO originTabId dispatches detail-less (user-click path → active-tab fallback)', () => {
     const spy = vi.spyOn(window, 'dispatchEvent');
-    const ok = dispatchUiCommand('open-canvas'); // no originTabId (bare user click)
+    const ok = dispatchUiCommand('open-canvas'); // no originTabId
     expect(ok).toBe(true);
-    const ev = spy.mock.calls[0][0] as CustomEvent;
+    const ev = navCalls(spy)[0];
     expect(ev.type).toBe('swarm:open-canvas');
-    expect(ev.detail).toBeNull(); // useCanvasHost falls back to the active tab
+    expect(ev.detail.tabId).toBeUndefined(); // useCanvasHost falls back to the active tab
   });
 
   // ── open-canvas-file (run_c0550cc2): the ONE path-carrying command ──
@@ -140,16 +143,16 @@ describe('dispatchUiCommand', () => {
     expect(docSpy).toHaveBeenCalledTimes(1);
     const ev = docSpy.mock.calls[0][0] as CustomEvent;
     expect(ev.type).toBe('swarm:open-file');
-    expect(ev.detail).toEqual({ path: 'Knowledge/Designs/x.md' });
-    // NOT dispatched on window.
-    expect(winSpy).not.toHaveBeenCalled();
+    expect(ev.detail).toEqual({ path: 'Knowledge/Designs/x.md', cmdId: expect.any(String) });
+    // NOT dispatched on window (only its pending result report is).
+    expect(navCalls(winSpy)).toHaveLength(0);
   });
 
   it('a pure-nav command IGNORES a supplied path (payload only per-cmd)', () => {
     const spy = vi.spyOn(window, 'dispatchEvent');
     dispatchUiCommand('open-canvas', 'should/be/ignored.md');
-    const ev = spy.mock.calls[0][0] as CustomEvent;
-    expect(ev.detail).toBeNull(); // open-canvas never carries a path
+    const ev = navCalls(spy)[0];
+    expect(ev.detail.path).toBeUndefined(); // open-canvas never carries a path
   });
 
   it('open-canvas-file with NO path is a no-op fail (needs a target file)', () => {
@@ -199,5 +202,39 @@ describe('dispatchUiCommand', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(dispatchUiCommand('swarm:open-terminal-here')).toBe(false);
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('dispatchUiCommand — Canvas command results (canvas-proprioception §5)', () => {
+  const results = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.map((c) => c[0] as CustomEvent).filter((e) => e.type === UI_COMMAND_RESULT_EVENT).map((e) => e.detail);
+
+  it('a forwarded Canvas command reports pending with the same id the event carries', () => {
+    const spy = vi.spyOn(window, 'dispatchEvent');
+    const docSpy = vi.spyOn(document, 'dispatchEvent');
+    dispatchUiCommand('open-canvas-file', 'a.md', 'tab-A');
+    const [r] = results(spy);
+    expect(r).toMatchObject({ cmd: 'open-canvas-file', result: 'pending', tabId: 'tab-A' });
+    expect((docSpy.mock.calls[0][0] as CustomEvent).detail.cmdId).toBe(r.id);
+  });
+
+  it('a path rejected on the spot reports ignored with a reason', () => {
+    const spy = vi.spyOn(window, 'dispatchEvent');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    dispatchUiCommand('open-canvas-file', '../x', 'tab-A');
+    dispatchUiCommand('open-canvas-file', '/etc/passwd', 'tab-A');
+    dispatchUiCommand('open-canvas-file', undefined, 'tab-A');
+    expect(results(spy).map((r) => [r.result, r.reason])).toEqual([
+      ['ignored', 'path must be workspace-relative'],
+      ['ignored', 'absolute paths are not allowed in this session'],
+      ['ignored', 'no path given'],
+    ]);
+  });
+
+  it('non-Canvas commands report nothing', () => {
+    const spy = vi.spyOn(window, 'dispatchEvent');
+    dispatchUiCommand('show-todo');
+    dispatchUiCommand('back-to-chat');
+    expect(results(spy)).toEqual([]);
   });
 });

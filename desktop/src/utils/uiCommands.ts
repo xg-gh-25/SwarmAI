@@ -29,6 +29,25 @@
  * event) — everything else rides the SSOT.
  */
 import { ALL_SHOW_EVENTS, BACK_TO_CHAT_EVENT } from '../components/layout/useExclusiveOverlay';
+import type { UiCommandResult } from './uiContext';
+
+/** The Canvas commands whose outcome the agent sees next turn (canvas-proprioception
+ *  §5). Their result is REPORTED here as an event and RECORDED only by useCanvasHost
+ *  (the one writer of a tab's `commands`). */
+export const CANVAS_RESULT_CMDS: ReadonlySet<string> = new Set(['open-canvas', 'open-canvas-file']);
+export const UI_COMMAND_RESULT_EVENT = 'swarm:ui-command-result';
+
+export interface UiCommandResultDetail extends UiCommandResult {
+  /** Per-dispatch id; a later report with the same id replaces the pending entry. */
+  id: string;
+  /** Origin tab (caller-captured, never wire-derived); absent = the active tab. */
+  tabId?: string;
+}
+
+let resultSeq = 0;
+function reportResult(d: UiCommandResultDetail): void {
+  window.dispatchEvent(new CustomEvent(UI_COMMAND_RESULT_EVENT, { detail: d }));
+}
 
 type EventTarget_ = 'window' | 'document';
 
@@ -107,6 +126,12 @@ export function dispatchUiCommand(
     return false;
   }
   const entry = UI_COMMAND_TABLE[cmd];
+  // A Canvas command's outcome is reported (pending now; useCanvasHost settles it).
+  // Its id rides the event detail as `cmdId` — caller-made, never wire-derived.
+  const tracked = CANVAS_RESULT_CMDS.has(cmd);
+  const cmdId = tracked ? `uic-${++resultSeq}` : '';
+  const tabId = (typeof originTabId === 'string' && originTabId) ? originTabId : undefined;
+  const ignore = (reason: string) => { if (tracked) reportResult({ id: cmdId, tabId, cmd, result: 'ignored', reason }); };
   if (!entry) {
     // Fail-closed: unknown / destructive / raw-injection cmd → dispatch nothing.
     console.warn(`[ui_command] rejected non-allowlisted cmd: ${cmd}`);
@@ -117,6 +142,7 @@ export function dispatchUiCommand(
     // A path-carrying command NEEDS a non-empty string path to be meaningful.
     if (typeof path !== 'string' || !path) {
       console.warn(`[ui_command] '${cmd}' needs a path — dispatching nothing`);
+      ignore('no path given');
       return false;
     }
     // SECURITY (Gate-2 CRITICAL, run_c0550cc2 + run_cbaecb86) — defense in depth: the
@@ -138,18 +164,23 @@ export function dispatchUiCommand(
     //     for that single check while keeping the independent ~/`..` guard intact.
     if (path.startsWith('~') || path.includes('..')) {
       console.warn(`[ui_command] '${cmd}' rejected ~ or .. path (always workspace-relative)`);
+      ignore('path must be workspace-relative');
       return false;
     }
     if (path.startsWith('/') && allowAbs !== true) {
       console.warn(`[ui_command] '${cmd}' rejected absolute path (not a local-desktop owner session)`);
+      ignore('absolute paths are not allowed in this session');
       return false;
     }
     // originTabId (a valid non-empty string) rides as detail.tabId so the file lands
     // on the initiating tab. Omitted when absent → handleOpenFile falls back to the
     // active tab (correct for the synchronous user-click path, which never stamps).
-    const detail = (typeof originTabId === 'string' && originTabId)
-      ? { path, tabId: originTabId }
-      : { path };
+    const detail = {
+      path,
+      ...(tabId ? { tabId } : {}),
+      ...(tracked ? { cmdId } : {}),
+    };
+    if (tracked) reportResult({ id: cmdId, tabId, cmd, result: 'pending' });
     targetObj.dispatchEvent(new CustomEvent(entry.event, { detail }));
     return true;
   }
@@ -158,7 +189,8 @@ export function dispatchUiCommand(
     // command lands on the INITIATING tab. Omitted when absent → useCanvasHost falls
     // back to the active tab (correct for the synchronous user-click path). No path,
     // so no workspace-relative filtering applies.
-    const detail = (typeof originTabId === 'string' && originTabId) ? { tabId: originTabId } : undefined;
+    const detail = (tabId || tracked) ? { ...(tabId ? { tabId } : {}), ...(tracked ? { cmdId } : {}) } : undefined;
+    if (tracked) reportResult({ id: cmdId, tabId, cmd, result: 'pending' });
     targetObj.dispatchEvent(new CustomEvent(entry.event, detail ? { detail } : undefined));
     return true;
   }

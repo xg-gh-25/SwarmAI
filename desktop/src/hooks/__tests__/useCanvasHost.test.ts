@@ -161,21 +161,6 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.isOpen).toBe(false);
   });
 
-  it('canvas-state emit re-fires when outputCount changes (Gate-2 MED: no stale count)', async () => {
-    const events: Array<{ outputCount?: number } | null> = [];
-    const onState = (e: Event) => events.push((e as CustomEvent).detail);
-    window.addEventListener('swarm:canvas-state', onState);
-    const { result } = renderHook(() =>
-      useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
-    );
-    act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' })); // isOpen → emit
-    act(() => emitOutputs('A', 3)); // 3 outputs land → count → must re-emit
-    await settleCanvas();
-    window.removeEventListener('swarm:canvas-state', onState);
-    const counts = events.filter(Boolean).map((d) => d!.outputCount);
-    expect(counts).toContain(3); // the updated count reached a fresh emit (not frozen)
-  });
-
   it('getCanvasSnapshot() reflects open SYNCHRONOUSLY after swarm:open-canvas (race fix)', async () => {
     // The proprioception race (run_e45a04d3): the async swarm:canvas-state emit
     // could lag behind a fast send, so the SENSE snapshot read canvas.open=stale.

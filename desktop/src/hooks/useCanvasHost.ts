@@ -19,8 +19,9 @@
  *                                   document: MarkdownRenderer, Library/CMBrain
  *                                   overlays, OpenFileButton, briefing, auto-surface).
  *   - `swarm:open-canvas`        → listened on **window**.
- *   - `swarm:editor-file-changed`/`swarm:canvas-state`
- *                                → emitted on **window** (ChatPage listens there).
+ *   - `swarm:ui-command-result`  → listened on **window** (uiCommands reports an
+ *                                   agent Canvas command; this hook is the ONLY
+ *                                   writer of a tab's `commands`).
  *   Auto-surface reads the slice directly (pinned, canvasTab, file.auto) — no event.
  * Fullscreen (FileEditorModal) stays in ThreeColumnLayout; when the user asks to
  * fullscreen a Canvas file we re-dispatch `swarm:open-file-fullscreen` (window)
@@ -31,10 +32,11 @@
 import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import api from '../services/api';
 import { useCanvasAutoSurface, type CanvasSuppression } from './useCanvasAutoSurface';
-import { useReferencedFiles, countOutputs, countStoredOutputs, type GroupedReferencedFiles } from './useReferencedFiles';
+import { useReferencedFiles, outputRows, outputKey, storedOutputRows, type GroupedReferencedFiles, type ReferencedFile } from './useReferencedFiles';
 import { refreshCanvasSession, setActiveCanvasSession } from '../services/canvasSession';
 import type { GitStatus } from '../types';
-import type { CanvasSnapshot } from '../utils/uiContext';
+import { MAX_SNAPSHOT_COMMANDS, MAX_SNAPSHOT_OUTPUTS, type CanvasFileViewReport, type CanvasSnapshot, type UiCommandResult } from '../utils/uiContext';
+import { UI_COMMAND_RESULT_EVENT, type UiCommandResultDetail } from '../utils/uiCommands';
 
 export interface CanvasFile {
   filePath: string;
@@ -62,14 +64,18 @@ interface CanvasTabState {
   file: CanvasFile | null;
   pinned: boolean;
   manuallyOpen: boolean;
-  /** The outputCount value at the last time the user had this tab's Canvas OPEN
-   *  (run_9dd59523). The ChatHeader pill shows only when outputCount > this — so once
-   *  the user opens Canvas and reviews, the pill hides and does NOT re-nag for the
-   *  SAME outputs; it reappears only when a NEW output pushes outputCount higher.
-   *  Per-tab (in the slice) so opening tab A's Canvas never marks tab B's outputs seen.
-   *  In-memory per session (NOT persisted) — outputCount itself is session-scoped, and a
-   *  reload legitimately re-surfaces "here's what this tab produced" (lastSeen resets to 0). */
-  lastSeenOutputCount: number;
+  /** The output rows (by outputKey) listed the last time the user had this tab's
+   *  Canvas OPEN (run_9dd59523; a set since canvas-proprioception §3.1a). A row is
+   *  NEW when its key is not in here — exact under deletes, merges and same-stamp
+   *  batches, which a count was not. The ChatHeader pill shows while any row is new.
+   *  Per-tab, in-memory (a reload re-surfaces "here's what this tab produced"). */
+  seen: ReadonlySet<string>;
+  /** The shown file's view mode, reported by FileEditorCore through the panel.
+   *  QUIET: written to mapRef only (nothing renders it — the snapshot reads it). */
+  fileView: CanvasFileViewReport | null;
+  /** The agent's Canvas commands since this tab's last send (§5), newest last.
+   *  QUIET: mapRef only; this hook is the one writer; takeCanvasSnapshotFor clears it. */
+  commands: (UiCommandResult & { id: string })[];
   /** Whether the whole Canvas is collapsed to the thin vertical rail (Bug 2). Per-tab:
    *  the panel does NOT remount on tab switch (tabScopeKey, not React key), so this used
    *  to be panel-local useState + a GLOBAL localStorage key → collapsing tab A's Canvas
@@ -101,7 +107,9 @@ const EMPTY: CanvasTabState = {
   file: null,
   pinned: false,
   manuallyOpen: false,
-  lastSeenOutputCount: 0,
+  seen: new Set<string>(),
+  fileView: null,
+  commands: [],
   railed: false,
   outputsCollapsed: false,
   canvasTab: 'artifacts',
@@ -145,8 +153,8 @@ export interface CanvasHostApi {
    *  for the active tab — the single source of truth for the ChatHeader pill.
    *  Live even when Canvas is closed (that is the whole point). */
   outputCount: number;
-  /** outputCount at the last time this tab's Canvas was open (run_9dd59523). The pill
-   *  shows only when outputCount > this, so it stops nagging once outputs are reviewed. */
+  /** outputCount minus the rows the user has not seen yet (derived from `seen`; the
+   *  ChatHeader pill shows while outputCount > this). */
   lastSeenOutputCount: number;
   /** The active tab's collapse view-state (railed / outputsCollapsed) — Bug 2. Read
    *  by FileViewerPanel; stable across a keystroke render (mirrors the slice). */
@@ -190,6 +198,12 @@ export interface CanvasHostApi {
    *  is no active tab either) / a tab with nothing to report → null — never a
    *  fall back to the active tab. Stable identity. */
   getCanvasSnapshotFor: (tabId: string | null) => CanvasSnapshot | null;
+  /** The SEND read: the same snapshot, and it hands the tab's `commands` over (clears
+   *  them, mapRef only). Call it exactly once per request sent. Stable identity. */
+  takeCanvasSnapshotFor: (tabId: string | null) => CanvasSnapshot | null;
+  /** The panel reports how the shown file is displayed (§3.2). QUIET: no render.
+   *  Stable identity (memo'd panel prop). */
+  setFileView: (v: CanvasFileViewReport | null) => void;
 }
 
 const keyFor = (id: string | null | undefined) => id ?? '__no_tab__';
@@ -231,7 +245,9 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   }, [isStreaming, sessionId]);
   // artifacts only: ChatPage re-renders when the list changes, not on fetch flags
   const { files: referencedFiles } = useReferencedFiles(sessionId ?? null);
-  const outputCount = countOutputs(referencedFiles);
+  // The output rows (pill / snapshot / count share one filter: outputRows).
+  const rows = useMemo(() => outputRows(referencedFiles), [referencedFiles]);
+  const outputCount = rows.length;
 
 
   // Restore the active tab's slice whenever the active tab changes.
@@ -282,6 +298,25 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     const file = dirty && cur.file?.auto ? { ...cur.file, auto: undefined } : cur.file;
     patch({ fileDirty: dirty, file });
   }, [patch, activeTabId]);
+  // QUIET write (canvas-proprioception §3.2 / §5): state only the agent's snapshot
+  // reads goes to mapRef and NEVER through setSlice, so it costs ChatPage no render.
+  const writeQuiet = useCallback((k: string, p: Partial<CanvasTabState>) => {
+    mapRef.current.set(k, { ...(mapRef.current.get(k) ?? EMPTY), ...p });
+  }, []);
+  // The ONE writer of a tab's `commands`: a report with a known id replaces that
+  // entry (pending → applied/ignored); otherwise it is appended; the last few kept.
+  const recordCommand = useCallback((k: string, r: UiCommandResult & { id: string }) => {
+    const list = (mapRef.current.get(k) ?? EMPTY).commands;
+    const i = list.findIndex((c) => c.id === r.id);
+    const next = i >= 0 ? list.map((c, j) => (j === i ? r : c)) : [...list, r];
+    writeQuiet(k, { commands: next.slice(-MAX_SNAPSHOT_COMMANDS) });
+  }, [writeQuiet]);
+  const setFileView = useCallback((v: CanvasFileViewReport | null) => {
+    const k = keyFor(activeTabIdRef.current);
+    const cur = (mapRef.current.get(k) ?? EMPTY).fileView;
+    if (cur === v || (cur && v && cur.path === v.path && cur.view === v.view && cur.review === v.review)) return;
+    writeQuiet(k, { fileView: v });
+  }, [writeQuiet]);
   const resolvePending = useCallback((discard: boolean) => {
     const cur = mapRef.current.get(keyFor(activeTabId)) ?? EMPTY;
     if (!cur.pendingOpen) return;
@@ -300,26 +335,19 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     [slice.railed, slice.outputsCollapsed],
   );
 
-  // ── Mark outputs "seen" while Canvas is open (run_9dd59523, Gate-1 #3) ────────
-  // The ChatHeader pill shows only when outputCount > lastSeenOutputCount. Two rules:
-  //  (1) While OPEN: mark lastSeen = outputCount on every [isOpen, outputCount] (NOT
-  //      the false→true transition only) — the pill is already hidden by its own
-  //      `!canvasOpen` guard while open, and tracking the latest count here is what
-  //      prevents a STALE pill from flashing the moment the user closes Canvas.
-  //  (2) SHRINK clamp (open OR closed): if outputCount drops BELOW lastSeen (cap
-  //      eviction at MAX_FILES, or clear() on a new session), pull lastSeen down to
-  //      outputCount. Without this, a shrink-while-closed leaves lastSeen stuck HIGH,
-  //      and a later genuinely-new output at/below that stale mark would never re-show
-  //      the pill (REVIEW MED, run_9dd59523). The clamp can only LOWER lastSeen, so it
-  //      never marks a real new output as already-seen.
-  // Only writes when the value actually changes (patch would otherwise re-fire).
+  // ── Mark outputs "seen" while Canvas is open (run_9dd59523; a set since §3.1a) ──
+  // While OPEN, every listed row is seen (tracking every change, not only the
+  // open transition, so no stale pill flashes when the user closes Canvas). A row
+  // is new while its key is not in `seen` — so a delete, a merge or rows sharing one
+  // backend stamp cannot mark a real new row as seen or an old one as new (the
+  // count's shrink clamp is no longer needed). Writes only when a row is unseen.
+  const unseenCount = useMemo(
+    () => rows.reduce((n, r) => n + (slice.seen.has(outputKey(r)) ? 0 : 1), 0),
+    [rows, slice.seen],
+  );
   useEffect(() => {
-    const shouldMarkSeen = isOpen && slice.lastSeenOutputCount !== outputCount;
-    const shouldClampDown = slice.lastSeenOutputCount > outputCount;
-    if (shouldMarkSeen || shouldClampDown) {
-      patch({ lastSeenOutputCount: outputCount });
-    }
-  }, [isOpen, outputCount, slice.lastSeenOutputCount, patch]);
+    if (isOpen && unseenCount > 0) patch({ seen: new Set(rows.map(outputKey)) });
+  }, [isOpen, unseenCount, rows, patch]);
 
   // ── Synchronous, send-time proprioception read (race fix, run_e45a04d3) ──────
   // The agent's SENSE snapshot reads Canvas state at chat-SEND time. The async
@@ -343,37 +371,59 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // null — never a silent fall back to the active tab (a queued message drained for
   // a background tab must not carry the foreground tab's Canvas). Returns null when
   // there is nothing reportable.
-  const liveRef = useRef({ activeTabId, outputCount });
+  const liveRef = useRef<{ activeTabId: string | null | undefined; rows: ReferencedFile[] }>({ activeTabId, rows });
   useLayoutEffect(() => {
-    liveRef.current = { activeTabId, outputCount };
+    liveRef.current = { activeTabId, rows };
   });
   const getCanvasSnapshotFor = useCallback((tabId: string | null): CanvasSnapshot | null => {
     const live = liveRef.current;
     const forActive = tabId === (live.activeTabId ?? null); // no tab: undefined ≡ null
     if (!forActive && !tabId) return null;
     const cur = mapRef.current.get(keyFor(tabId)) ?? EMPTY;
-    // Count from the tab's stored rail whenever there is a tab id — the active tab
+    // Rows from the tab's stored rail whenever there is a tab id — the active tab
     // included. useReferencedFiles writes storage in the same update that changes
-    // its rows, so storage is never behind the rendered count, and right after a
+    // its rows, so storage is never behind the rendered rows, and right after a
     // tab switch (before the hook reloads the new tab's rows in a passive effect)
-    // the rendered count still belongs to the PREVIOUS tab while storage does not.
-    // Only "no tab" has no storage key and uses the live count.
-    const count = tabId ? countStoredOutputs(tabId) : live.outputCount;
+    // the rendered rows still belong to the PREVIOUS tab while storage does not.
+    // Only "no tab" has no storage key and uses the live rows. ONE grouping pass:
+    // the count and the listed rows come from the same array.
+    const tabRows = tabId ? storedOutputRows(tabId) : live.rows;
     const openNow = !!(cur.file || cur.manuallyOpen);
-    // Report a snapshot when the panel is open OR there are pending outputs while
-    // CLOSED (run_9e42c066 meta-review): the ChatHeader pill shows the user "N
-    // outputs" on a closed Canvas, so the agent must be able to SENSE the same —
-    // prompt_builder already renders "Canvas: closed, N outputs listed" from
-    // output_count alone. Only truly-empty-and-closed reports null.
-    if (!openNow && count === 0) return null;
+    // Report a snapshot when the panel is open, OR there are outputs while CLOSED
+    // (the ChatHeader pill shows them, run_9e42c066), OR a command result is due.
+    // Only truly-empty-and-closed reports null.
+    if (!openNow && tabRows.length === 0 && cur.commands.length === 0) return null;
+    const f = cur.file;
+    const view = f && cur.fileView?.path === f.filePath ? cur.fileView : null;
     return {
       open: openNow,
-      // the count comes from the rail store (SSOT), NOT a per-slice mirror.
-      outputCount: count,
+      visible: !openNow ? 'hidden' : cur.railed ? 'rail' : 'open',
+      tab: cur.canvasTab,
+      listFolded: cur.outputsCollapsed,
       pinned: cur.pinned,
-      collapsed: false,
+      file: f ? {
+        path: f.filePath,
+        name: f.fileName,
+        openedBy: f.auto ? 'canvas' : 'user',
+        dirty: cur.fileDirty,
+        ...(view ? { view: view.view, review: view.review } : {}),
+      } : null,
+      pendingOpen: cur.pendingOpen?.filePath ?? null,
+      outputCount: tabRows.length,
+      outputs: tabRows.slice(0, MAX_SNAPSHOT_OUTPUTS).map((r) => ({
+        path: r.path,
+        ...(r.kind ? { kind: r.kind } : {}),
+        isNew: !cur.seen.has(outputKey(r)),
+      })),
+      commands: cur.commands.map(({ cmd, result, reason }) => ({ cmd, result, ...(reason ? { reason } : {}) })),
     };
   }, []);
+  const takeCanvasSnapshotFor = useCallback((tabId: string | null): CanvasSnapshot | null => {
+    const snap = getCanvasSnapshotFor(tabId);
+    const k = keyFor(tabId ?? liveRef.current.activeTabId);
+    if ((mapRef.current.get(k) ?? EMPTY).commands.length) writeQuiet(k, { commands: [] });
+    return snap;
+  }, [getCanvasSnapshotFor, writeQuiet]);
   const getCanvasSnapshot = useCallback(
     () => getCanvasSnapshotFor(liveRef.current.activeTabId ?? null),
     [getCanvasSnapshotFor],
@@ -394,17 +444,31 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // only mirrors into React state when that origin tab is still active.
   useEffect(() => {
     const onOpenCanvas = (e: Event) => {
-      const stampedTab = (e as CustomEvent<{ tabId?: string }>).detail?.tabId;
+      const { tabId: stampedTab, cmdId } = (e as CustomEvent<{ tabId?: string; cmdId?: string }>).detail ?? {};
       const landingTab = stampedTab ?? activeTabIdRef.current;
       const k = keyFor(landingTab);
       const cur = mapRef.current.get(k) ?? EMPTY;
       const next = { ...cur, manuallyOpen: true };
       mapRef.current.set(k, next);
       if (activeTabIdRef.current === landingTab) setSlice(next);
+      if (cmdId) {
+        recordCommand(k, { id: cmdId, cmd: 'open-canvas', result: 'applied', ...(cur.railed ? { reason: 'Canvas stays folded to the side rail' } : {}) });
+      }
     };
     window.addEventListener('swarm:open-canvas', onOpenCanvas);
     return () => window.removeEventListener('swarm:open-canvas', onOpenCanvas);
-  }, []);
+  }, [recordCommand]);
+
+  // ── swarm:ui-command-result (window) — uiCommands reports an agent command ──
+  useEffect(() => {
+    const onResult = (e: Event) => {
+      const d = (e as CustomEvent<UiCommandResultDetail>).detail;
+      if (!d?.id || !d.cmd) return;
+      recordCommand(keyFor(d.tabId ?? activeTabIdRef.current), { id: d.id, cmd: d.cmd, result: d.result, ...(d.reason ? { reason: d.reason } : {}) });
+    };
+    window.addEventListener(UI_COMMAND_RESULT_EVENT, onResult);
+    return () => window.removeEventListener(UI_COMMAND_RESULT_EVENT, onResult);
+  }, [recordCommand]);
 
   // ── swarm:open-file (DOCUMENT — Gate-1 Risk 4) — resolve + set active file ──
   // Preserves the resolve-then-open path that lived in ThreeColumnLayout: chat
@@ -419,7 +483,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   useEffect(() => {
     let mounted = true;
     const handleOpenFile = async (e: Event) => {
-      const { path: filePath, autoDiff, gitStatus, workspaceId, baseRef, sessionId: openSessionId, tabId: stampedTab, auto } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string; baseRef?: string; sessionId?: string; tabId?: string; auto?: boolean }>).detail ?? {};
+      const { path: filePath, autoDiff, gitStatus, workspaceId, baseRef, sessionId: openSessionId, tabId: stampedTab, auto, cmdId } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string; baseRef?: string; sessionId?: string; tabId?: string; auto?: boolean; cmdId?: string }>).detail ?? {};
       if (!filePath) return;
       // Landing tab = the event's STAMPED origin tab if present, else the live active
       // tab. Two distinct origin cases:
@@ -434,6 +498,10 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       //    the file lands on whatever tab is active at fire time (the observed bleed).
       const landingTab = stampedTab ?? activeTabIdRef.current;
       const k = keyFor(landingTab);
+      // An agent open-canvas-file (cmdId set by uiCommands) settles its pending entry.
+      const settle = (result: 'applied' | 'ignored', reason?: string) => {
+        if (cmdId) recordCommand(k, { id: cmdId, cmd: 'open-canvas-file', result, ...(reason ? { reason } : {}) });
+      };
       const gen = (openGenRef.current.get(k) ?? 0) + 1;
       openGenRef.current.set(k, gen);
       let resolvedPath = filePath;
@@ -444,7 +512,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       } catch (err: unknown) {
         if (!mounted) return;
         const status = (err as { response?: { status?: number } })?.response?.status;
-        if (status === 400) return; // path traversal / invalid — drop
+        if (status === 400) { settle('ignored', 'invalid path'); return; } // path traversal / invalid — drop
         // 404 = the exhaustive resolve cascade found the file NOWHERE → it is
         // genuinely nonexistent. DROP it (run_f49d3ff3 R1): the old fall-through to
         // the raw path opened Canvas onto a file /workspace/file also can't read →
@@ -458,12 +526,13 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
           document.dispatchEvent(new CustomEvent('swarm:toast', {
             detail: { message: `File not found: ${filePath}`, severity: 'warning', id: 'canvas-file-not-found' },
           }));
+          settle('ignored', 'file not found');
           return;
         }
         // other errors (500/network) → fall through to raw path (unchanged).
       }
       // Stale-resolve guard (B): a newer open on the SAME origin tab superseded us.
-      if (openGenRef.current.get(k) !== gen) return;
+      if (openGenRef.current.get(k) !== gen) { settle('ignored', 'replaced by a newer open'); return; }
       const fileName = resolvedPath.split('/').pop() || resolvedPath;
       // Land the file on its ORIGIN tab's slice (captured pre-await), and only push
       // it into the live React mirror if that ORIGIN tab is STILL active — a switch
@@ -490,6 +559,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
         const held = { ...cur, pendingOpen: opened };
         mapRef.current.set(k, held);
         if (activeTabIdRef.current === landingTab) setSlice(held);
+        settle('ignored', 'the shown file has unsaved edits; the user is asked to discard them or keep editing');
         return;
       }
       const next = {
@@ -503,13 +573,14 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       };
       mapRef.current.set(k, next);
       if (activeTabIdRef.current === landingTab) setSlice(next);
+      settle('applied', !fileChanged && cur.railed ? 'already shown; Canvas stays folded to the side rail' : undefined);
     };
     document.addEventListener('swarm:open-file', handleOpenFile);
     return () => {
       mounted = false;
       document.removeEventListener('swarm:open-file', handleOpenFile);
     };
-  }, []);
+  }, [recordCommand]);
 
   // ── Auto-surface (streaming-gated, fail-closed) ─────────────────────────────
   // activeTabId = the tab-scope key (run_26aa6caa) — the same stable key the rest
@@ -528,39 +599,13 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     isStreaming,
   });
 
-  // ── Proprioception emits (WINDOW) — mirror the file + canvas snapshot ───────
-  // editor-file-changed: the open file (or null). canvas-state: the full snapshot.
-  // Both value-guarded to avoid redundant dispatches.
-  const lastFileEmit = useRef<string>('');
-  useEffect(() => {
-    const detail = slice.file ? { filePath: slice.file.filePath, fileName: slice.file.fileName } : null;
-    const sig = JSON.stringify(detail);
-    if (sig === lastFileEmit.current) return;
-    lastFileEmit.current = sig;
-    window.dispatchEvent(new CustomEvent('swarm:editor-file-changed', { detail }));
-  }, [slice.file]);
-
-  const lastCanvasEmit = useRef<string>('');
-  useEffect(() => {
-    // Emit when open OR there are pending outputs while closed (parity with
-    // getCanvasSnapshot, run_9e42c066): a closed Canvas with N outputs must still
-    // reach the agent's SENSE payload, matching the ChatHeader pill the user sees.
-    const detail = (isOpen || outputCount > 0)
-      ? { open: isOpen, outputCount, pinned: slice.pinned, collapsed: false }
-      : null;
-    const sig = JSON.stringify(detail);
-    if (sig === lastCanvasEmit.current) return;
-    lastCanvasEmit.current = sig;
-    window.dispatchEvent(new CustomEvent('swarm:canvas-state', { detail }));
-  }, [isOpen, outputCount, slice.pinned]);
-
   return {
     file: slice.file,
     pinned: slice.pinned,
     isOpen,
     referencedFiles,
     outputCount,
-    lastSeenOutputCount: slice.lastSeenOutputCount,
+    lastSeenOutputCount: outputCount - unseenCount,
     collapse,
     setCollapse,
     canvasTab: slice.canvasTab,
@@ -576,5 +621,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     resolvePending,
     getCanvasSnapshot,
     getCanvasSnapshotFor,
+    takeCanvasSnapshotFor,
+    setFileView,
   };
 }

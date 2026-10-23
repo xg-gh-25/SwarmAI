@@ -830,8 +830,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
 
   // NOTE (Canvas moved to ChatPage, 2026-08-02, bugs 2+3): the Canvas
   // (FileViewerPanel) + its per-tab state + auto-surface + the swarm:open-file
-  // listener + proprioception emits (editor-file-changed / canvas-state /
-  // editor-panel-state) now live in ChatPage via useCanvasHost — so Canvas
+  // listener + the agent's send-time Canvas snapshot (getCanvasSnapshotFor) now
+  // live in ChatPage via useCanvasHost — so Canvas
   // renders BELOW the tab bar and remembers state per tab. ThreeColumnLayout no
   // longer owns any Canvas panel state. The explorer's file double-click now
   // dispatches `swarm:open-file` (handled by ChatPage's useCanvasHost), the same

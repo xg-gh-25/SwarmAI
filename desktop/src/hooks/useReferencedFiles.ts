@@ -147,8 +147,19 @@ export type GroupedReferencedFiles = Record<FileOperation, ReferencedFile[]>;
  *  deleted rows (the ledger) — so the pill count and the rail row count legitimately
  *  differ by the number of deleted rows; both derive their kind-filter from isRailKind. */
 export function countOutputs(grouped: GroupedReferencedFiles | undefined): number {
-  if (!grouped) return 0;
-  return (grouped.written ?? []).filter((f) => isRailKind(f.kind) && !f.deleted).length;
+  return outputRows(grouped).length;
+}
+
+/** The OUTPUT rows themselves (newest first) — the same filter as countOutputs, so
+ *  the pill, the agent's snapshot rows and the count can never disagree. */
+export function outputRows(grouped: GroupedReferencedFiles | undefined): ReferencedFile[] {
+  if (!grouped) return [];
+  return (grouped.written ?? []).filter((f) => isRailKind(f.kind) && !f.deleted);
+}
+
+/** A row's identity across reloads (the backend keys rows by absolute path). */
+export function outputKey(f: ReferencedFile): string {
+  return f.absolutePath || f.path;
 }
 
 function basename(path: string): string {
@@ -184,8 +195,23 @@ export function groupArtifacts(artifacts: SessionArtifact[] | undefined, session
 
 /** Output count of ANY tab, from its session's cached rows (the store). */
 export function countStoredOutputs(tabId: string): number {
+  return storedOutputRows(tabId).length;
+}
+
+/** Output rows of ANY tab, from its session's cached rows. The store replaces a
+ *  session's array on every refresh (never mutates it), so the grouped rows are
+ *  memoized by that array: repeated send-time reads cost a lookup, not a re-sort. */
+const storedRowsMemo = new WeakMap<SessionArtifact[], ReferencedFile[]>();
+export function storedOutputRows(tabId: string): ReferencedFile[] {
   const sid = sessionForTab(tabId);
-  return countOutputs(groupArtifacts(cachedArtifacts(sid), sid ?? undefined));
+  const arts = cachedArtifacts(sid);
+  if (!arts) return [];
+  let rows = storedRowsMemo.get(arts);
+  if (!rows) {
+    rows = outputRows(groupArtifacts(arts, sid ?? undefined));
+    storedRowsMemo.set(arts, rows);
+  }
+  return rows;
 }
 
 /** The rail rows of *sessionId* (empty until its first load). */

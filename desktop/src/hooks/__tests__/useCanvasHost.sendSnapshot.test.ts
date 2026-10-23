@@ -114,7 +114,8 @@ describe('useCanvasHost — send-time snapshot is never a stale closure', () => 
     await emit('B', 7);
 
     const forA = result.current.getCanvasSnapshotFor('A');
-    expect(forA).toEqual({ open: true, outputCount: 3, pinned: true, collapsed: false });
+    expect(forA).toMatchObject({ open: true, visible: 'open', outputCount: 3, pinned: true, file: { path: 'a.md', openedBy: 'user', dirty: false } });
+    expect(forA!.outputs).toHaveLength(3);
     expect(result.current.getCanvasSnapshotFor('B')!.outputCount).toBe(7);
     expect(result.current.getCanvasSnapshot()!.outputCount).toBe(7); // the active tab
   });
@@ -122,9 +123,11 @@ describe('useCanvasHost — send-time snapshot is never a stale closure', () => 
   it('AC3: a background tab that receives outputs while inactive reports them', async () => {
     const { result } = mount('A', ['BG']);
     await emit('BG', 4); // stamped for a tab that is not active
-    expect(result.current.getCanvasSnapshotFor('BG')).toEqual(
-      { open: false, outputCount: 4, pinned: false, collapsed: false },
+    expect(result.current.getCanvasSnapshotFor('BG')).toMatchObject(
+      { open: false, visible: 'hidden', outputCount: 4, pinned: false, file: null },
     );
+    // the background tab's rows, all new (never seen)
+    expect(result.current.getCanvasSnapshotFor('BG')!.outputs.every((o) => o.isNew)).toBe(true);
   });
 
   it('AC3: an empty tab id yields no snapshot instead of falling back to the active tab', async () => {

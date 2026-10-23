@@ -322,6 +322,92 @@ def render_terminal_data_block(buffer_tail: str, term_cwd: str = "") -> str:
     )
 
 
+_UI_NAME_MAX = 160
+_UI_SECTION_BUDGET = 1500
+_UI_VIEW_LABELS = {"preview": "Preview", "edit": "Edit", "changes": "Changes"}
+_UI_CMD_RESULTS = {"applied", "ignored", "pending"}
+
+
+def _ui_code(value: object) -> str:
+    """A path / file name as inline code that cannot break out of its line.
+
+    Names come from the UI snapshot (the agent or the user wrote the file), so
+    newlines, backticks and leading markdown are removed and the length capped:
+    a crafted file name must not open a fake ``## header`` or instruction line.
+    """
+    text = " ".join(str(value or "").replace("`", "'").split())
+    if len(text) > _UI_NAME_MAX:
+        text = text[: _UI_NAME_MAX - 1] + "…"
+    return f"`{text}`"
+
+
+def _ui_plain(value: object, limit: int = 120) -> str:
+    """A short single-line plain value (a command result reason)."""
+    text = " ".join(str(value or "").replace("`", "'").split()).lstrip("#> ")
+    return text[:limit]
+
+
+def _render_canvas_lines(canvas: dict) -> list[str]:
+    """The Canvas lines for a canvas-proprioception.md §3.1 snapshot (new client)."""
+    visible = canvas.get("visible")
+    head = {"open": "open", "rail": "folded to the side rail", "hidden": "closed"}.get(visible, "closed")
+    bits = [head]
+    if visible != "hidden":
+        bits.append("Changes tab" if canvas.get("tab") == "changes" else "Artifacts tab")
+        if canvas.get("list_folded"):
+            bits.append("output list folded")
+    if canvas.get("pinned"):
+        bits.append("pinned (Canvas does not change by itself)")
+    lines = [f"- Canvas (output panel): {', '.join(bits)}"]
+
+    f = canvas.get("file") or None
+    if f and f.get("path"):
+        fbits = ["opened by Canvas itself" if f.get("opened_by") == "canvas" else "opened by the user"]
+        view = _UI_VIEW_LABELS.get(f.get("view") or "")
+        if view:
+            fbits.append(view)
+        if f.get("review"):
+            fbits.append("Review on")
+        if f.get("dirty"):
+            fbits.append("UNSAVED EDITS — do not replace this file")
+        lines.append(f"  - File: {_ui_code(f.get('name') or f.get('path'))} ({_ui_code(f.get('path'))}) — {', '.join(fbits)}")
+    if canvas.get("pending_open"):
+        lines.append(
+            f"  - Waiting on the user: discard the unsaved edits and open {_ui_code(canvas.get('pending_open'))}, or keep editing"
+        )
+
+    total = int(canvas.get("output_count") or 0)
+    outputs = [o for o in (canvas.get("outputs") or []) if isinstance(o, dict) and o.get("path")]
+    if total:
+        new = sum(1 for o in outputs if o.get("new"))
+        label = f"  - Outputs ({total} listed{f', {new} new' if new else ''}): "
+        shown: list[str] = []
+        used = len(label)
+        for o in outputs:
+            item = _ui_code(o["path"]) + (" (new)" if o.get("new") else "")
+            if used + len(item) + 3 > _UI_SECTION_BUDGET // 2:
+                break
+            shown.append(item)
+            used += len(item) + 3
+        rest = total - len(shown)
+        tail = f" · +{rest} more" if rest > 0 else ""
+        lines.append(label + " · ".join(shown) + tail if shown else label.rstrip(": ") + tail)
+
+    cmds = []
+    for c in (canvas.get("commands") or [])[-3:]:
+        if not isinstance(c, dict):
+            continue
+        cmd = "".join(ch for ch in str(c.get("cmd") or "") if ch.isalnum() or ch == "-")[:40]
+        result = c.get("result") if c.get("result") in _UI_CMD_RESULTS else None
+        if not cmd or not result:
+            continue
+        reason = _ui_plain(c.get("reason")) if c.get("reason") else ""
+        cmds.append(f"{cmd} → {result}" + (f" ({reason})" if reason else ""))
+    if cmds:
+        lines.append("  - Your Canvas commands since the last message: " + " · ".join(cmds))
+    return lines
+
+
 def _render_ui_context_section(editor_context: Optional[dict]) -> str:
     """Render the agent's UI-state proprioception block (SENSE, request-time).
 
@@ -345,13 +431,17 @@ def _render_ui_context_section(editor_context: Optional[dict]) -> str:
     active_overlay = editor_context.get("active_overlay") or None
 
     has_file = bool(file_path)
-    has_canvas = bool(canvas) and (
+    has_canvas = bool(canvas) and bool(
         canvas.get("open")
         or canvas.get("output_count")
         or canvas.get("collapsed")
         or canvas.get("pinned")
         or canvas.get("muted")
+        or canvas.get("commands")
     )
+    # A new client (canvas-proprioception §3.1) reports the shown file inside the
+    # Canvas snapshot; the top-level file_path mirrors it, so it is not listed twice.
+    new_canvas = bool(canvas) and canvas.get("visible") is not None
     has_overlay = bool(active_overlay)
 
     # Nothing to report.
@@ -363,8 +453,8 @@ def _render_ui_context_section(editor_context: Optional[dict]) -> str:
     if has_file and not has_canvas and not has_overlay:
         return (
             f"\n\n## Currently Open File\n"
-            f"The user has `{file_name}` open in the editor "
-            f"(`{file_path}`). Consider this file as relevant "
+            f"The user has {_ui_code(file_name)} open in the editor "
+            f"({_ui_code(file_path)}). Consider this file as relevant "
             f"context when responding."
         )
 
@@ -374,9 +464,11 @@ def _render_ui_context_section(editor_context: Optional[dict]) -> str:
         "This is what you are currently showing the user in the app "
         "(a request-time snapshot — it may change as they interact):",
     ]
-    if has_file:
-        lines.append(f"- Open file: `{file_name}` (`{file_path}`)")
-    if has_canvas:
+    if has_file and not (new_canvas and (canvas.get("file") or {}).get("path")):
+        lines.append(f"- Open file: {_ui_code(file_name)} ({_ui_code(file_path)})")
+    if has_canvas and new_canvas:
+        lines.extend(_render_canvas_lines(canvas))
+    elif has_canvas:
         state_bits = []
         state_bits.append("open" if canvas.get("open") else "closed")
         count = int(canvas.get("output_count") or 0)
