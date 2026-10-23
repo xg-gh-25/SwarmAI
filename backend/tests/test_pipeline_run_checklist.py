@@ -72,13 +72,13 @@ class TestProfileGates:
 class TestChecklist:
     def test_full(self):
         assert _items(pse.checklist("full")) == [
-            ("evaluate", False), ("gate0", True), ("think", False), ("plan", False),
+            ("evaluate", False), ("think", False), ("plan", False),
             ("build", False), ("review", False), ("test", False),
             ("deliver", False), ("reflect", False)]
 
     def test_goal(self):
         assert _items(pse.checklist("goal")) == [
-            ("evaluate", False), ("gate0", True), ("think", False), ("plan", False),
+            ("evaluate", False), ("think", False), ("plan", False),
             ("goal_cycle", False), ("review", False), ("test", False),
             ("deliver", False), ("reflect", False)]
 
@@ -113,17 +113,7 @@ class TestRunBlock:
 
 
 class TestRefreshedRunBlock:
-    def test_profile_set_emits_a_refreshed_run_block(self):
-        before = _state(None)
-        after = _state("goal")
-        blocks = pse.new_stage_blocks("run_c1", before, after, AT)
-        runs = [b for b in blocks if b["type"] == pse.RUN_BLOCK_TYPE]
-        assert len(runs) == 1
-        assert runs[0]["checklist"] == pse.checklist("goal") and runs[0]["runId"] == "run_c1"
 
-    def test_profile_change_emits_a_refreshed_run_block(self):
-        blocks = pse.new_stage_blocks("run_c1", _state("full"), _state("goal"), AT)
-        assert [b["profile"] for b in blocks if b["type"] == pse.RUN_BLOCK_TYPE] == ["goal"]
 
     def test_unchanged_profile_emits_no_run_block(self):
         blocks = pse.new_stage_blocks("run_c1", _state("goal"), _state("goal"), AT)

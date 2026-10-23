@@ -302,7 +302,7 @@ def test_sense_tool_registered_in_ui_server():
         f"sense_attention must be registered in the swarm_ui server — got {names}"
     )
     # sibling tools still present (didn't clobber the list)
-    assert {"ui_action", "surface_run_outputs"} <= names
+    assert "ui_action" in names and "surface_run_outputs" not in names   # retired (R3)
 
 
 # ── R3 闭环 dispatch: _collect_community_digests ──────────────────────────────

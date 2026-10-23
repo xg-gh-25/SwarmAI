@@ -613,3 +613,21 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - **MED，熔断按 run.json 的 `profile` 判断：** goal run 可以把 profile 改成 full，绕过 `GOAL_TDD_MAX`。现在改为取 `v1.contract["profile"]`。
 - **MED，regression 仍从 run.json 的 `stages` 读旧 BUILD artifact 的 `ac_coverage`：** agent 可以借此注入测试、抢占时间预算。现在删了 `_stage_data` 和 `_ac_entries`，也不再读 PLAN 的 `exit_criteria`；v1 本来就没有这个列表，所以 AC 层为空。`_plan` 的 digest 第二次更新。
 - **LOW，还留着空转的旧测试：** 删掉 `test_run_commit_d7.py` 和 `test_stage_boundary_commands.py`。`test_ui_actions` 里 ensure_report 那部分随 R3 一起删。
+
+## 26. R3：旧渲染链
+
+**改了什么：**
+- 删除模块：`run_docs`、`run_delivery_summary`、`run_surface_changes`、`surface_marker`、`contract_readers`。
+- `ui_actions`：删除 `surface_run_outputs` 工具及其辅助函数（build / ensure-report / marker）。
+- `streaming_orchestrator`：删除观察 `surface_run_outputs` 的分支，以及它在 session 上的三组状态。
+- `pipeline_stage_events` 只认 v1，从 870 行减到约 400 行：
+  - **读取：** 只读有 contract 的 run。profile、project、mode、requirement 取自 contract；stages、status、landing、push_ready、audit_card 取自 projection。
+  - **行和卡片：** 阶段行和 stage 的 open/completed/degraded 状态一一对应，不再有 gate 行；提醒卡片只看 not_landed 和 push_ready；总结卡片列出这个 profile 会产出的 v1 文档。
+  - **文档摘录：** `doc_excerpt` 移到这个模块里。
+- **测试：** 阶段、提醒、checklist 的测试改为使用真实的 contract 文件；前端 fixture 重新生成，`pipelineStage.contract.test.ts` 通过。
+
+**审查（36618ae4，1 HIGH + 2 MED + 1 LOW），一次修完：**
+- **HIGH，`_doc_ref` 跟随 symlink，并接受 workspace 外的路径：** agent 可以把 REPORT.md 链接到主机上的敏感文件，它的前 500 字就会进入聊天并被持久化。修法：文档本身是 symlink 就拒绝；解析后必须恰好在 run 目录下，且 run 目录在 workspace 内（用 strict resolve）。删掉了 workspace 外的回退。
+- **MED，contract 没有 requirement 时，回退到 run.json 的 requirement：** 现在只用 contract 的。
+- **MED，run id 正则限制为 64 个字符：** 改用 `identifiers.validate_run_id`。
+- **LOW，过时的注释：** 已更新。

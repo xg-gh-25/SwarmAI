@@ -354,11 +354,8 @@ def _git_ignored_batch(
         might be a gitignored secret, so it is NOT surfaced — WARN-logged, and a
         real deliverable re-emits on the next turn-end sweep)
 
-    ``deadline`` (run_a18d69f5 #2): a duck-typed object with ``.git_timeout()`` (the
-    run_surface_changes._Deadline) that caps this call at the REMAINING shared budget
-    so a serial multi-tree sweep self-terminates near the total budget. None = the
-    default 15s per-call ceiling. Kept duck-typed (no type import) to avoid a circular
-    import — run_surface_changes imports THIS module.
+    ``deadline``: a duck-typed object with ``.git_timeout()`` that caps this call at a
+    caller's remaining shared budget. None = the default 15s per-call ceiling.
 
     Returns {rel_path: True(ignored) | False(not) | None(git-errored)}.
     """

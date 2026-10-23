@@ -3,7 +3,7 @@
 Why this exists: pipeline stage progress used to reach the chat ONLY as text the
 model chose to write (`## ✦ ⑤ BUILD`). Two full runs in one afternoon wrote none,
 so the user saw a wall of folded tool calls and no stage. The fix observes the
-chokepoint the agent always crosses — an ``artifact_cli.py`` Bash call carrying a
+chokepoint the agent always crosses — an ``pipeline_v1.py`` Bash call carrying a
 run id — reads run.json (the authority) when that call returns, and emits one
 persisted ``pipeline_stage`` content block per stage that newly reached a terminal
 status.
@@ -37,43 +37,43 @@ from core import pipeline_stage_events as pse
 class TestParseWatchedRunId:
     def test_run_update_with_literal_run_id(self):
         cmd = ("cd /x/swarmai && source backend/.venv/bin/activate && "
-               "python backend/scripts/artifact_cli.py run-update --project SwarmAI "
+               "python backend/scripts/pipeline_v1.py run-update --project SwarmAI "
                "--run-id run_d9c6d3c0 --stage-json '{\"stage\":\"think\"}'")
         assert pse.parse_watched_run_id(cmd) == "run_d9c6d3c0"
 
     def test_any_subcommand_counts(self):
         for sub in ("publish", "advance", "stage-complete", "stage-start", "run-get"):
-            cmd = f"python backend/scripts/artifact_cli.py {sub} --project P --run-id run_ab12"
+            cmd = f"python backend/scripts/pipeline_v1.py {sub} --project P --run-id run_ab12"
             assert pse.parse_watched_run_id(cmd) == "run_ab12", sub
 
     def test_id_followed_directly_by_a_shell_operator(self):
         assert pse.parse_watched_run_id(
-            "python artifact_cli.py run-get --run-id run_ab; echo exit=$?") == "run_ab"
+            "python pipeline_v1.py run-get --run-id run_ab; echo exit=$?") == "run_ab"
         assert pse.parse_watched_run_id(
-            "python artifact_cli.py run-get --run-id run_ab&& echo ok") == "run_ab"
+            "python pipeline_v1.py run-get --run-id run_ab&& echo ok") == "run_ab"
 
     def test_the_last_artifact_cli_call_owns_the_run_id(self):
         # an id quoted earlier (heredoc / echo) is not the call that runs
         cmd = ("cat <<EOF\nold: --run-id run_old\nEOF\n"
-               "python backend/scripts/artifact_cli.py stage-complete --run-id run_new")
+               "python backend/scripts/pipeline_v1.py stage-complete --run-id run_new")
         assert pse.parse_watched_run_id(cmd) == "run_new"
 
     def test_the_last_assignment_before_the_reference_wins(self):
         assert pse.parse_watched_run_id(
-            "R=run_a; echo x; R=run_b; python artifact_cli.py advance --run-id $R") == "run_b"
+            "R=run_a; echo x; R=run_b; python pipeline_v1.py advance --run-id $R") == "run_b"
         # an assignment AFTER the call cannot be its value
         assert pse.parse_watched_run_id(
-            "python artifact_cli.py advance --run-id $R; R=run_late") is None
+            "python pipeline_v1.py advance --run-id $R; R=run_late") is None
 
     def test_equals_form(self):
         assert pse.parse_watched_run_id(
-            "python artifact_cli.py advance --run-id=run_x9 --state build") == "run_x9"
+            "python pipeline_v1.py advance --run-id=run_x9 --state build") == "run_x9"
 
     def test_shell_variable_run_id_is_not_guessed(self):
         assert pse.parse_watched_run_id(
-            'python backend/scripts/artifact_cli.py run-update --run-id "$RID" --status running') is None
+            'python backend/scripts/pipeline_v1.py run-update --run-id "$RID" --status running') is None
         assert pse.parse_watched_run_id(
-            "python backend/scripts/artifact_cli.py run-update --run-id $RID") is None
+            "python backend/scripts/pipeline_v1.py run-update --run-id $RID") is None
 
     def test_variable_assigned_in_the_same_command_is_resolved(self):
         # Each Bash call is a fresh shell, so a $VAR run id can only come from an
@@ -81,32 +81,32 @@ class TestParseWatchedRunId:
         # (Real shapes: data.db replay, 168 of 170 such calls.)
         assert pse.parse_watched_run_id(
             "source backend/.venv/bin/activate\nRID=run_da39669c\n"
-            "python backend/scripts/artifact_cli.py advance --run-id $RID --state review") == "run_da39669c"
+            "python backend/scripts/pipeline_v1.py advance --run-id $RID --state review") == "run_da39669c"
         assert pse.parse_watched_run_id(
-            'export RUN="run_1b2655df" && python artifact_cli.py run-update --run-id "${RUN}" --status x'
+            'export RUN="run_1b2655df" && python pipeline_v1.py run-update --run-id "${RUN}" --status x'
         ) == "run_1b2655df"
         # a flag bundle in a variable still carries the literal id
         assert pse.parse_watched_run_id(
-            'P="--project SwarmAI --run-id run_bfd8b9d3"; python artifact_cli.py run-update $P --profile full'
+            'P="--project SwarmAI --run-id run_bfd8b9d3"; python pipeline_v1.py run-update $P --profile full'
         ) == "run_bfd8b9d3"
         # an assigned value that is not a valid id is still rejected
         assert pse.parse_watched_run_id(
-            "RID=../../x; python artifact_cli.py advance --run-id $RID") is None
+            "RID=../../x; python pipeline_v1.py advance --run-id $RID") is None
         # a different variable's assignment does not count
         assert pse.parse_watched_run_id(
-            "OTHER=run_aa; python artifact_cli.py advance --run-id $RID") is None
+            "OTHER=run_aa; python pipeline_v1.py advance --run-id $RID") is None
 
     def test_not_artifact_cli(self):
         assert pse.parse_watched_run_id("python other.py --run-id run_x1") is None
-        assert pse.parse_watched_run_id("grep -n run-id backend/scripts/artifact_cli.py") is None
+        assert pse.parse_watched_run_id("grep -n run-id backend/scripts/pipeline_v1.py") is None
 
     def test_traversal_shaped_id_rejected(self):
         assert pse.parse_watched_run_id(
-            "python artifact_cli.py run-update --run-id ../../etc") is None
+            "python pipeline_v1.py run-update --run-id ../../etc") is None
 
     def test_non_string(self):
         assert pse.parse_watched_run_id(None) is None
-        assert pse.parse_watched_run_id(["artifact_cli.py", "--run-id", "run_x"]) is None
+        assert pse.parse_watched_run_id(["pipeline_v1.py", "--run-id", "run_x"]) is None
 
 
 def test_pipeline_v1_commands_are_watched():
@@ -122,7 +122,17 @@ def test_pipeline_v1_commands_are_watched():
 
 # ── run.json reading (real files) ────────────────────────────────────────────
 
-def _write_run(ws: Path, run_id: str, data: dict, project: str = "SwarmAI") -> Path:
+def _write_run(ws: Path, run_id: str, data: dict, project: str = "SwarmAI",
+               profile: str = "full", requirement: str = "") -> Path:
+    """A v1 run's projection beside its protected contract (read_stage_state reads
+    only a run that has one; the test's data dir is the conftest one)."""
+    from config import get_app_data_dir
+    from core.run_protocol.runner import contract_path
+    cp = contract_path(get_app_data_dir(), run_id)
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    cp.write_text(json.dumps({"run_id": run_id, "protocol_version": 1, "project": project,
+                              "profile": profile, "mode": "shared",
+                              "requirement": requirement}))
     d = ws / "Projects" / project / ".artifacts" / "runs" / run_id
     d.mkdir(parents=True, exist_ok=True)
     p = d / "run.json"
@@ -131,22 +141,45 @@ def _write_run(ws: Path, run_id: str, data: dict, project: str = "SwarmAI") -> P
 
 
 class TestReadStageState:
-    def test_reads_profile_and_last_record_per_stage(self, tmp_path, monkeypatch):
+    def test_reads_the_v1_projection_and_live_identity(self, tmp_path, monkeypatch):
         monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
-        _write_run(tmp_path, "run_r1", {
-            "profile": "full",
-            "stages": [
-                {"stage": "evaluate", "status": "completed"},
-                {"stage": "build", "status": "running"},
-                {"stage": "build", "status": "completed", "gate1_verdict": "WARN"},
-            ],
-        })
-        state = pse.read_stage_state("run_r1")
-        assert state["profile"] == "full"
-        assert state["stages"]["evaluate"]["status"] == "completed"
-        # the LAST record for a stage is the one that counts
-        assert state["stages"]["build"]["status"] == "completed"
-        assert state["stages"]["build"]["gate1_verdict"] == "WARN"
+        _write_run(tmp_path, "run_v1", {
+            "status": "active", "stage": "build", "updated_at": "2026-10-22T01:02:03+00:00",
+            "stages": {"evaluate": "completed", "build": "open", "review": "pending",
+                       "bad": 5}}, profile="full", requirement="do x")
+        state = pse.read_stage_state("run_v1")
+        assert state["status"] == "running" and state["profile"] == "full"
+        assert state["requirement"] == "do x" and state["current_stage"] == "build"
+        assert state["stages"]["evaluate"] == {"stage": "evaluate", "status": "completed"}
+        assert "bad" not in state["stages"] and pse.current_stage(state) == "build"
+
+    def test_a_run_without_a_v1_contract_is_not_read(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+        d = tmp_path / "Projects" / "SwarmAI" / ".artifacts" / "runs" / "run_old1"
+        d.mkdir(parents=True)
+        (d / "run.json").write_text(json.dumps({"profile": "full", "stages": []}))
+        assert pse.read_stage_state("run_old1") is None
+
+    def test_the_profile_and_project_are_the_contracts_not_run_json(self, tmp_path,
+                                                                   monkeypatch):
+        monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+        _write_run(tmp_path, "run_v2", {"profile": "research", "project": "Other",
+                                        "stages": {}}, profile="direct")
+        assert pse.read_stage_state("run_v2")["profile"] == "direct"
+
+    def test_isolation_and_landing_come_from_contract_and_projection(self, tmp_path,
+                                                                     monkeypatch):
+        from config import get_app_data_dir
+        from core.run_protocol.runner import contract_path
+        monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+        _write_run(tmp_path, "run_iso", {"stages": {}, "landing": "landed",
+                                         "commits": [{"repo": "r", "sha": "a" * 40,
+                                                      "landed": True}]})
+        cp = contract_path(get_app_data_dir(), "run_iso")
+        cp.write_text(json.dumps({**json.loads(cp.read_text()), "mode": "isolated"}))
+        state = pse.read_stage_state("run_iso")
+        assert state["isolated"] is True and state["landed"] is True
+        assert state["landed_shas"] == ["a" * 40]
 
     def test_missing_corrupt_or_bad_id_is_none(self, tmp_path, monkeypatch):
         monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
@@ -156,25 +189,6 @@ class TestReadStageState:
         assert pse.read_stage_state("run_bad") is None
         assert pse.read_stage_state("../x") is None
         assert pse.read_stage_state(None) is None
-
-    def test_garbage_stage_entries_are_skipped(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
-        _write_run(tmp_path, "run_g", {"profile": "full", "stages": [
-            "nope", {"no_stage": 1}, {"stage": 5}, {"stage": "think", "status": "completed"}]})
-        assert list(pse.read_stage_state("run_g")["stages"]) == ["think"]
-
-    def test_reads_v1_stage_dict_and_live_identity(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
-        _write_run(tmp_path, "run_v1", {
-            "profile": "direct", "status": "active", "stage": "build",
-            "updated_at": "2026-10-22T01:02:03+00:00",
-            "stages": {"plan": "completed", "build": "open", "review": "pending"},
-        })
-        state = pse.read_stage_state("run_v1")
-        assert state["status"] == "running"
-        assert state["current_stage"] == "build"
-        assert state["stages"]["plan"] == {"stage": "plan", "status": "completed"}
-        assert pse.current_stage(state) == "build"
 
 
 # ── diff → blocks ────────────────────────────────────────────────────────────
@@ -209,13 +223,6 @@ class TestNewStageBlocks:
         after = _state("full", evaluate="completed", think="running")
         assert pse.new_stage_blocks("run_t1", before, after, self.AT) == []
 
-    def test_skipped_is_terminal(self):
-        before = _state("docs", evaluate="completed", think="completed")
-        after = _state("docs", evaluate="completed", think="completed", plan="skipped")
-        (b,) = pse.new_stage_blocks("run_t1", before, after, self.AT)
-        assert (b["stage"], b["status"], b["position"], b["total"], b["next"]) == (
-            "plan", "skipped", 3, 5, "deliver")
-        assert b["nextOrdinal"] == 9
 
     def test_next_skips_stages_already_finished(self):
         # resumed run: test was recorded before review finished
@@ -236,16 +243,6 @@ class TestNewStageBlocks:
         assert [b["stage"] for b in pse.new_stage_blocks("run_t1", before, after, self.AT)] == [
             "think", "plan"]
 
-    def test_gate1_and_build_finishing_together_give_two_rows(self):
-        before = _state("full", evaluate="completed", think="completed", plan="completed")
-        after = _state("full", evaluate="completed", think="completed", plan="completed",
-                       build={"stage": "build", "status": "completed", "gate1_verdict": "WARN"})
-        gate, b = pse.new_stage_blocks("run_t1", before, after, self.AT)
-        assert (gate["stage"], gate["ordinal"], gate["gate"]) == (
-            "gate1", 4, {"name": "GATE 1", "verdict": "WARN"})
-        assert gate["next"] == "review"  # build is already done
-        assert b["ordinal"] == 5 and b["nextOrdinal"] == 6 and b["next"] == "review"
-        assert b["gate"] is None  # the verdict lives on the ④ row only
 
     def test_plan_hands_over_to_build_on_v13_profiles(self):
         before = _state("full", evaluate="completed", think="completed")
@@ -257,18 +254,6 @@ class TestNewStageBlocks:
         (g,) = pse.new_stage_blocks("run_t1", gb, ga, self.AT)
         assert g["next"] == "goal_cycle"
 
-    def test_gate1_verdict_before_build_finishes_is_its_own_row(self):
-        before = _state("full", evaluate="completed", think="completed", plan="completed")
-        after = _state("full", evaluate="completed", think="completed", plan="completed",
-                       build={"stage": "build", "gate1_verdict": "PASS"})  # no status yet
-        (g,) = pse.new_stage_blocks("run_t1", before, after, self.AT)
-        assert (g["stage"], g["next"], g["nextOrdinal"], g["gate"]["verdict"]) == (
-            "gate1", "build", 5, "PASS")
-        # recording the same verdict again later is not a new row
-        later = _state("full", evaluate="completed", think="completed", plan="completed",
-                       build={"stage": "build", "status": "completed", "gate1_verdict": "PASS"})
-        (b,) = pse.new_stage_blocks("run_t1", after, later, self.AT)
-        assert b["stage"] == "build"
 
     def test_last_stage_has_no_next(self):
         before = _state("research", evaluate="completed", think="completed")
@@ -284,44 +269,6 @@ class TestNewStageBlocks:
         (b,) = pse.new_stage_blocks("run_t1", before, after, self.AT)
         assert (b["ordinal"], b["next"], b["nextOrdinal"]) == (5, "review", 6)
 
-    def test_legacy_complete_status_counts_as_completed(self):
-        # 13 real run.json records say "complete" (data replay); show them as done
-        after = _state("full", evaluate="complete")
-        (b,) = pse.new_stage_blocks("run_t1", _state("full"), after, self.AT)
-        assert b["status"] == "completed"
-        # and a later "completed" for the same stage is not a new transition
-        assert pse.new_stage_blocks("run_t1", after, _state("full", evaluate="completed"), self.AT) == []
-
-    def test_gate_named_stage_records_get_gate_ordinals(self):
-        # real stage names seen in run.json: adversarial (14), adversarial_review, gate1
-        for name, ordinal in (("adversarial", 8), ("adversarial_review", 8), ("gate1", 4)):
-            (b,) = pse.new_stage_blocks("run_t1", _state("full"), _state("full", **{name: "completed"}), self.AT)
-            assert b["ordinal"] == ordinal, name
-
-    def test_stage_outside_profile_still_emits_without_position(self):
-        before = _state("research", evaluate="completed")
-        after = _state("research", evaluate="completed", build="completed")
-        (b,) = pse.new_stage_blocks("run_t1", before, after, self.AT)
-        assert b["position"] is None and b["next"] is None and b["ordinal"] == 5
-
-    def test_unknown_stage_name_has_no_ordinal(self):
-        before = _state("full")
-        after = _state("full", mystery="completed")
-        (b,) = pse.new_stage_blocks("run_t1", before, after, self.AT)
-        assert b["ordinal"] is None and b["stage"] == "mystery"
-
-    def test_summary_is_plain_capped_and_non_string_dropped(self):
-        long = "x" * 500
-        after = _state("full", evaluate={"stage": "evaluate", "status": "completed", "summary": long})
-        (b,) = pse.new_stage_blocks("run_t1", _state("full"), after, self.AT)
-        assert len(b["summary"]) == pse.SUMMARY_MAX and b["summary"].endswith("…")
-        after2 = _state("full", evaluate={"stage": "evaluate", "status": "completed", "summary": {"a": 1}})
-        (b2,) = pse.new_stage_blocks("run_t1", _state("full"), after2, self.AT)
-        assert b2["summary"] is None
-        after3 = _state("full", evaluate={"stage": "evaluate", "status": "completed",
-                                          "summary": "  line one\n\nline two  "})
-        (b3,) = pse.new_stage_blocks("run_t1", _state("full"), after3, self.AT)
-        assert b3["summary"] == "line one line two"
 
     def test_no_before_means_everything_terminal_is_new(self):
         after = _state("full", evaluate="completed", think="completed")
@@ -346,7 +293,7 @@ def _isolated_queue():
 
 
 CLI = ("cd /x/swarmai && source backend/.venv/bin/activate && python "
-       "backend/scripts/artifact_cli.py run-update --project SwarmAI --run-id {rid} "
+       "backend/scripts/pipeline_v1.py run-update --project SwarmAI --run-id {rid} "
        "--stage-json '{{\"stage\":\"think\",\"status\":\"completed\"}}'")
 
 
@@ -441,8 +388,9 @@ class TestOrchestratorWiring:
     # DELIVER's start row (status in_progress) comes before Gate 2 and push_ready
     # exist: a "needs you" card built then would be partial and stay in history.
     _TEST_DONE = {"stage": "test", "status": "completed"}
-    _STARTED = {"profile": "full", "stages": {"test": _TEST_DONE},
-                "timing": {"deliver": {"started_at": "2026-10-19T02:00:00Z"}}}
+    _STARTED = {"profile": "full", "stages": {"test": _TEST_DONE,
+                                              "deliver": {"stage": "deliver", "status": "open"}},
+                "current_stage": "deliver", "updated_at": "2026-10-19T02:00:00Z"}
 
     def _spy_attention(self, monkeypatch) -> list:
         built: list = []
@@ -454,7 +402,7 @@ class TestOrchestratorWiring:
         from tests.test_tool_call_leak_guard import _make_result_message
         built = self._spy_attention(monkeypatch)
         monkeypatch.setattr(pse, "read_stage_state", _ScriptedReader(
-            {"profile": "full", "stages": {"test": self._TEST_DONE}, "timing": {}}, self._STARTED))
+            {"profile": "full", "stages": {"test": self._TEST_DONE}}, self._STARTED))
         events, raised = _drive_stream(self._orch(), [
             _bash_use("tu1", CLI.format(rid="run_t1")), _result("tu1"), _make_result_message()])
         assert raised is None
@@ -465,8 +413,7 @@ class TestOrchestratorWiring:
     def test_attention_card_when_deliver_ends(self, monkeypatch):
         from tests.test_tool_call_leak_guard import _make_result_message
         built = self._spy_attention(monkeypatch)
-        ended = {"profile": "full", "stages": {"test": self._TEST_DONE, "deliver": {"stage": "deliver", "status": "completed"}},
-                 "timing": {"deliver": {"started_at": "2026-10-19T02:00:00Z", "completed_at": "2026-10-19T02:30:00Z"}}}
+        ended = {"profile": "full", "stages": {"test": self._TEST_DONE, "deliver": {"stage": "deliver", "status": "completed"}}}
         monkeypatch.setattr(pse, "read_stage_state", _ScriptedReader(self._STARTED, ended))
         _, raised = _drive_stream(self._orch(), [
             _bash_use("tu2", CLI.format(rid="run_t1")), _result("tu2"), _make_result_message()])
@@ -582,18 +529,16 @@ FIXTURE = (Path(__file__).resolve().parents[2] / "desktop" / "src" / "pages" / "
 def _fixture_blocks() -> list[dict]:
     """Real new_stage_blocks output for the shapes the frontend must render."""
     at = "2026-10-17T22:00:00+08:00"
-    full0 = _state("full", evaluate="completed", think="completed", plan="completed")
     cases = [
         ("run_fx1", _state("full", evaluate="completed"),
-         _state("full", evaluate="completed", think={
-             "stage": "think", "status": "completed", "summary": "3 alternatives, recommend A"})),
-        ("run_fx1", full0, _state("full", evaluate="completed", think="completed",
-                                  plan="completed", build={"stage": "build", "status": "completed",
-                                                           "gate1_verdict": "WARN"})),
-        ("run_fx2", _state("docs", evaluate="completed", think="completed"),
-         _state("docs", evaluate="completed", think="completed", plan="skipped")),
+         _state("full", evaluate="completed", think="completed")),
+        ("run_fx1", _state("full", evaluate="completed", think="completed", plan="completed"),
+         _state("full", evaluate="completed", think="completed", plan="completed",
+                build="degraded")),
+        ("run_fx2", _state("trivial", build="completed"),
+         _state("trivial", build="completed", review="completed")),
         ("run_fx3", _state("research", evaluate="completed", think="completed"),
-         _state("research", evaluate="completed", think="completed", reflect="completed")),
+         _state("research", evaluate="completed", think="completed", deliver="completed")),
     ]
     out: list[dict] = []
     for rid, before, after in cases:
@@ -610,23 +555,62 @@ def test_frontend_fixture_matches_real_block_output():
     assert json.loads(FIXTURE.read_text()) == blocks, (
         "pipeline_stage block shape changed — regenerate the fixture and re-run the "
         "frontend contract test (pipelineStage.contract.test.ts)")
-    assert len(blocks) == 5  # case 2 yields the ④ Gate-1 row and the ⑤ build row
+    assert len(blocks) == 4
 
 
 # ── end to end: real run.json changed WHILE the call runs, real reader ───────
 
+
+def test_every_ended_run_gets_a_summary_direct_and_abandoned_included():
+    """XG 2026-10-20: the result lists the run's documents for every run that ends —
+    a direct run, and one that ended abandoned or failed. A run still going has none."""
+    for status in ("completed", "abandoned", "failed"):
+        state = {"status": status, "profile": "direct", "stages": {}, "run_dir": None}
+        sb = pse.summary_block("run_x", state, "now")
+        assert sb and sb["status"] == status
+        # a direct run has no EVALUATE / PLAN, so no REQUIREMENTS / DESIGN_SPEC
+        assert [d["name"] for d in sb["docs"]] == ["REVIEW.md", "FIXING_SPEC.md", "REPORT.md"]
+    for status in ("running", "paused"):
+        state = {"status": status, "profile": "direct", "stages": {}, "run_dir": None}
+        assert pse.summary_block("run_x", state, "now") is None
+    full = dict(state, profile="full", status="completed")
+    sb = pse.summary_block("run_x", full, "now")
+    assert sb is not None and sb["type"] == "pipeline_summary"
+    assert [d["name"] for d in sb["docs"]] == [
+        "REQUIREMENTS.md", "DESIGN_SPEC.md", "REVIEW.md", "FIXING_SPEC.md", "REPORT.md"]
+
+
+def test_v1_stage_dict_transition_emits_completion_and_next_live_stage():
+    before = {
+        "profile": "full", "stages": {
+            "plan": {"stage": "plan", "status": "open"},
+            "build": {"stage": "build", "status": "pending"},
+        }, "current_stage": "plan", "updated_at": "2026-10-22T01:00:00+00:00",
+    }
+    after = {
+        "profile": "full", "stages": {
+            "plan": {"stage": "plan", "status": "completed"},
+            "build": {"stage": "build", "status": "open"},
+        }, "current_stage": "build", "updated_at": "2026-10-22T01:01:00+00:00",
+    }
+    blocks = pse.new_stage_blocks("run_v1", before, after, "fallback")
+    assert [(row["stage"], row["status"]) for row in blocks] == [
+        ("plan", "completed"), ("build", "in_progress")]
+    assert blocks[1]["at"] == "2026-10-22T01:01:00+00:00"
+
+
 @pytest.mark.usefixtures("_isolated_queue")
-def test_real_run_json_rewritten_during_the_call_yields_the_new_stage(tmp_path, monkeypatch):
-    """No leaf is scripted: the run.json file is rewritten between the tool_use and
-    its tool_result (as artifact_cli does), and the persist-side cleaner keeps the
+def test_real_projection_rewritten_during_the_call_yields_the_new_stage(tmp_path, monkeypatch):
+    """No leaf is scripted: the v1 run's projection is rewritten between the tool_use
+    and its tool_result (as the CLI does), and the persist-side cleaner keeps the
     block byte-for-byte, so what is streamed is what data.db stores."""
     from claude_agent_sdk import AssistantMessage, ToolResultBlock, ToolUseBlock, UserMessage
     from core.session_router import _clean_blocks_for_persist
     from tests.test_tool_call_leak_guard import _make_orchestrator, _make_result_message
 
     monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
-    path = _write_run(tmp_path, "run_e2e1", {"profile": "full", "stages": [
-        {"stage": "evaluate", "status": "completed"}]})
+    path = _write_run(tmp_path, "run_e2e1", {"stages": {"evaluate": "completed",
+                                                        "think": "open"}})
     cmd = CLI.format(rid="run_e2e1")
 
     class _Client:
@@ -639,11 +623,11 @@ def test_real_run_json_rewritten_during_the_call_yields_the_new_stage(tmp_path, 
             async def _stream():
                 yield AssistantMessage(content=[ToolUseBlock(
                     id="tu1", name="Bash", input={"command": cmd})], model="m")
-                # the CLI call runs here: it records THINK as completed
-                path.write_text(json.dumps({"profile": "full", "stages": [
-                    {"stage": "evaluate", "status": "completed"},
-                    {"stage": "think", "status": "completed", "summary": "2 options, chose A"}]}))
-                yield UserMessage(content=[ToolResultBlock(tool_use_id="tu1", content="ok", is_error=False)])
+                # the CLI call runs here: it completes THINK
+                path.write_text(json.dumps({"stages": {"evaluate": "completed",
+                                                       "think": "completed"}}))
+                yield UserMessage(content=[ToolResultBlock(tool_use_id="tu1", content="ok",
+                                                           is_error=False)])
                 yield _make_result_message()
             return _stream()
 
@@ -655,42 +639,28 @@ def test_real_run_json_rewritten_during_the_call_yields_the_new_stage(tmp_path, 
 
     events = asyncio.run(_run())
     blocks = [b for e in _stage_events(events) for b in e["content"]]
-    assert [(b["stage"], b["ordinal"], b["summary"]) for b in blocks] == [
-        ("think", 2, "2 options, chose A")]
+    assert [(b["stage"], b["ordinal"], b["status"]) for b in blocks] == [
+        ("think", 2, "completed")]
     assert _clean_blocks_for_persist(blocks) == blocks
 
 
-def test_every_ended_run_gets_a_summary_direct_and_abandoned_included():
-    """XG 2026-10-20: the result lists the run's documents for every run that ends —
-    a direct run, and one that ended abandoned or failed. A run still going has none."""
-    for status in ("completed", "abandoned", "failed", "cancelled", "complete"):
-        state = {"status": status, "profile": "direct", "stages": {}, "run_dir": None}
-        sb = pse.summary_block("run_x", state, "now")
-        assert sb and sb["status"] == ("completed" if status == "complete" else status)
-        assert [d["name"] for d in sb["docs"]] == [
-            "REQUIREMENTS.md", "DESIGN_SPEC.md", "REVIEW.md", "FIXING_SPEC.md", "REPORT.md"]
-    for status in ("running", "paused"):
-        state = {"status": status, "profile": "direct", "stages": {}, "run_dir": None}
-        assert pse.summary_block("run_x", state, "now") is None
-    full = dict(state, profile="full", status="completed")
-    sb = pse.summary_block("run_x", full, "now")
-    assert sb is not None and sb["type"] == "pipeline_summary"
+def test_a_run_document_that_is_a_symlink_or_escapes_is_never_read(tmp_path, monkeypatch):
+    """R3 review: the run directory is agent-writable; a REPORT.md symlinked to a
+    host file must not be excerpted into the chat or named by path."""
+    monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+    path = _write_run(tmp_path, "run_doc1", {"stages": {}})
+    secret = tmp_path.parent / "secret.txt"
+    secret.write_text("## S\nTOP SECRET\n")
+    (path.parent / "REPORT.md").symlink_to(secret)
+    (path.parent / "REQUIREMENTS.md").write_text("# R\n## Goal\nreal text\n")
+    assert pse._doc_ref(str(path.parent), "REPORT.md") is None
+    ref = pse._doc_ref(str(path.parent), "REQUIREMENTS.md")
+    assert ref and ref["excerpt"].startswith("## Goal") and not ref["path"].startswith("/")
 
 
-def test_v1_stage_dict_transition_emits_completion_and_next_live_stage():
-    before = {
-        "profile": "direct", "v1": True, "stages": {
-            "plan": {"stage": "plan", "status": "open"},
-            "build": {"stage": "build", "status": "pending"},
-        }, "current_stage": "plan", "updated_at": "2026-10-22T01:00:00+00:00",
-    }
-    after = {
-        "profile": "direct", "v1": True, "stages": {
-            "plan": {"stage": "plan", "status": "completed"},
-            "build": {"stage": "build", "status": "open"},
-        }, "current_stage": "build", "updated_at": "2026-10-22T01:01:00+00:00",
-    }
-    blocks = pse.new_stage_blocks("run_v1", before, after, "fallback")
-    assert [(row["stage"], row["status"]) for row in blocks] == [
-        ("plan", "completed"), ("build", "in_progress")]
-    assert blocks[1]["at"] == "2026-10-22T01:01:00+00:00"
+def test_the_requirement_and_run_id_rules_are_the_protocols(tmp_path, monkeypatch):
+    monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+    _write_run(tmp_path, "run_req1", {"stages": {}, "requirement": "forged words"})
+    assert pse.read_stage_state("run_req1")["requirement"] in ("", None)
+    long_id = "run_" + "a" * 80
+    assert pse.parse_watched_run_id(f"python pipeline_v1.py status --run-id {long_id}") == long_id

@@ -29,104 +29,27 @@ from core.context_injector import _filter_tool_only_messages
 from core.session_router import SessionRouter
 
 
-def _run_dir(tmp: Path, run_id: str, run: dict, artifacts: dict[str, dict]) -> Path:
-    d = tmp / "Projects" / "SwarmAI" / ".artifacts" / "runs" / run_id
-    d.mkdir(parents=True)
-    (d / "run.json").write_text(json.dumps(run), encoding="utf-8")
-    for name, data in artifacts.items():
-        (d / name).write_text(json.dumps(data), encoding="utf-8")
-    return d
-
-
-RUN = {
-    "profile": "full", "status": "running",
-    "requirement": "Add  claude-opus-5-5\n to MODEL_REGISTRY after opus-4-8.",
-    "stages": [
-        {"stage": "evaluate", "status": "completed", "artifact_id": "art_ev1", "gate0_verdict": "WRONG-FRAME → fixed"},
-        {"stage": "build", "status": "completed", "gate1_verdict": "WARN"},
-        {"stage": "deliver", "status": "completed", "artifact_id": "art_dl1", "push_ready": False,
-         "push_ready_reason": "tests: 1 failed; findings: 1 unresolved HIGH"},
-    ],
-}
-EVAL = {"data": {
-    "clarifications": [
-        {"qid": "Q1", "question": "Where does the guard go?", "answer": "B. prompt_builder at runtime",
-         "answered_by": "self", "resolution": "covers stored configs too"},
-        {"qid": "Q2", "question": "Ask the user?", "answer": "A", "answered_by": "user"},
-    ],
-    "requirements": [
-        {"id": "FR-1", "statement": "registry has opus-5-5", "status": "met", "source": {"kind": "user"}},
-        {"id": "FR-3", "statement": "eval later", "status": "proposed", "source": {"kind": "assumption"}},
-        {"id": "FR-5", "statement": "which tab?", "status": "needs-clarification", "source": {"kind": "user"}},
-        {"id": "FR-6", "statement": "confirmed choice", "status": "confirmed", "source": {"kind": "assumption"}},
-    ],
-}}
-DELIVER = {"adversarial_review": {"findings_total": 3, "findings_fixed": 2}}
-
-
-def _state(tmp_path, monkeypatch, run=RUN, arts=None):
-    monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
-    _run_dir(tmp_path, "run_a1", run, arts if arts is not None else {
-        "evaluation-20261018-art_ev1.json": EVAL, "delivery-20261018-art_dl1.json": DELIVER})
-    return pse.read_stage_state("run_a1")
-
-
-def test_run_block_is_the_alignment(tmp_path, monkeypatch):
-    b = pse.run_block("run_a1", _state(tmp_path, monkeypatch), "T")
+def test_run_block_is_the_alignment():
+    state = {"profile": "full", "stages": {}, "requirement":
+             "Add  claude-opus-5-5\n to MODEL_REGISTRY after opus-4-8."}
+    b = pse.run_block("run_a1", state, "T")
     assert b["type"] == "pipeline_run" and b["runId"] == "run_a1"
     assert b["requirement"] == "Add claude-opus-5-5 to MODEL_REGISTRY after opus-4-8."
     assert b["stages"][0] == "evaluate" and "deliver" in b["stages"]
+    assert b["checklist"] == [{"stage": s, "gate": False} for s in b["stages"]]
     assert pse.run_block("run_a1", {"stages": {}, "requirement": "  "}, "T") is None
 
 
-def test_attention_items_come_from_structured_fields_only(tmp_path, monkeypatch):
-    b = pse.attention_block("run_a1", _state(tmp_path, monkeypatch), "T")
-    kinds = [(i["kind"], i.get("name") or i.get("id")) for i in b["items"]]
-    assert kinds == [("gate", "GATE 0"), ("gate", "GATE 1"), ("gate", "GATE 2"),
-                     ("not_push_ready", None), ("self_answered", "Q1"),
-                     ("assumption", "FR-3"), ("assumption", "FR-5"), ("assumption", "FR-6")]
-    # FR-6 says confirmed but its source is still the AI's assumption — it stays
-    # visible, matching REPORT's "AI 替你拍板" count. FR-1 (user, met) stays silent.
-    assert all(i.get("id") != "FR-1" for i in b["items"])
-    q1 = b["items"][4]
-    assert (q1["answer"], q1["reason"]) == ("prompt_builder at runtime", "covers stored configs too")
-    assert b["items"][2]["verdict"] == "1/3 open"
-    assert b["items"][3]["reasons"] == ["Tests failed", "A review finding is still open"]
-    assert b["items"][3]["detail"] == "Details: REPORT §10"
-
-
-def test_attention_cap_never_drops_action_items_behind_audit_detail(tmp_path, monkeypatch):
-    noisy_eval = {"data": {
-        "clarifications": [
-            {"qid": f"Q{i}", "question": f"choice {i}", "answer": "A", "answered_by": "self"}
-            for i in range(10)
-        ],
-        "requirements": [],
-    }}
-    b = pse.attention_block("run_a1", _state(tmp_path, monkeypatch, arts={
-        "evaluation-x-art_ev1.json": noisy_eval,
-        "delivery-x-art_dl1.json": DELIVER,
-    }), "T")
-    assert [i["kind"] for i in b["items"][:4]] == ["gate", "gate", "gate", "not_push_ready"]
-    assert len(b["items"]) == pse.MAX_ATTENTION_ITEMS
-    assert b["more"] == 6
-
-
-@pytest.mark.parametrize("verdict", ["PASS", "SUPPORTED (calibrated)", "SKIPPED", "PROCEED-WITH-FIXES",
-                                     "BLOCK-resolved", "PASS (v2, prior BLOCK resolved)"])
-def test_quiet_verdicts_need_no_one(tmp_path, monkeypatch, verdict):
-    run = {**RUN, "stages": [{"stage": "build", "status": "completed", "gate1_verdict": verdict},
-                             {"stage": "deliver", "status": "completed", "push_ready": True}]}
-    all_fixed = {"delivery-x-art_dl1.json": {"adversarial_review": {"findings_total": 2, "findings_fixed": 2}}}
-    run["stages"][1]["artifact_id"] = "art_dl1"
-    assert pse.attention_block("run_a1", _state(tmp_path, monkeypatch, run, all_fixed), "T") is None
-
-
-def test_unreadable_artifacts_contribute_nothing(tmp_path, monkeypatch):
-    st = _state(tmp_path, monkeypatch, arts={"evaluation-x-art_ev1.json": {}})
-    (Path(st["run_dir"]) / "evaluation-x-art_ev1.json").write_text("{not json", encoding="utf-8")
-    b = pse.attention_block("run_a1", st, "T")
-    assert [i["kind"] for i in b["items"]] == ["gate", "gate", "not_push_ready"]
+def test_attention_names_a_change_that_did_not_land_or_is_not_push_ready():
+    """v1: from the projection's landing / push_ready only (no artifact is read)."""
+    not_landed = pse.attention_block("run_a1", {"landing": "not_landed",
+                                                "reason": "tests_red"}, "T")
+    assert [(i["kind"], i["reasons"]) for i in not_landed["items"]] == [
+        ("not_push_ready", ["Not landed: tests_red"])]
+    blocked = pse.attention_block("run_a1", {"landing": "landed", "push_ready": False}, "T")
+    assert [i["kind"] for i in blocked["items"]] == ["not_push_ready"]
+    assert pse.attention_block("run_a1", {"landing": "landed", "push_ready": True}, "T") is None
+    assert pse.attention_block("run_a1", None, "T") is None
 
 
 # ── orchestrator: alignment once per run, attention only with DELIVER ────────
@@ -136,10 +59,10 @@ from tests.test_pipeline_stage_events import (  # noqa: E402 — shared stream h
 )
 
 _S1 = {"profile": "full", "status": "running", "requirement": "Do X",
-       "stages": {"evaluate": {"stage": "evaluate", "status": "completed", "gate0_verdict": "WRONG-FRAME"}}}
+       "stages": {"evaluate": {"stage": "evaluate", "status": "completed"}}}
 _S2 = {**_S1, "stages": {**_S1["stages"], "think": {"stage": "think", "status": "completed"}}}
-_S3 = {**_S2, "stages": {**_S2["stages"], "deliver": {
-    "stage": "deliver", "status": "completed", "push_ready": False, "push_ready_reason": "tests: 1 failed"}}}
+_S3 = {**_S2, "push_ready": False, "stages": {**_S2["stages"], "deliver": {
+    "stage": "deliver", "status": "completed"}}}
 
 
 def _blocks(events):
@@ -173,7 +96,7 @@ def test_orchestrator_announces_the_run_once_and_attention_rides_deliver(monkeyp
     # the same turn calling the CLI again: no second announce
     later = _turn(orch, monkeypatch, _ScriptedReader(_S3), "tu2")
     assert [(b["type"], b.get("stage")) for b in later] == [("pipeline_stage", "deliver"), ("pipeline_attention", None)]
-    assert [i["kind"] for i in later[1]["items"]] == ["gate", "not_push_ready"]  # the WRONG-FRAME waited for DELIVER
+    assert [i["kind"] for i in later[1]["items"]] == ["not_push_ready"]   # waited for DELIVER
 
 
 @pytest.mark.usefixtures("_isolated_queue")
@@ -274,8 +197,8 @@ def test_run_create_result_inside_an_assistant_message_also_announces(monkeypatc
     (RUN_CREATE, True),
     ("python pipeline_v1.py create --project P --requirement R", True),
     ('python "backend/scripts/pipeline_v1.py" create --project P', True),
-    ("python artifact_cli.py run-create --project P --requirement R", False),
-    ("python artifact_cli.py run-update --project P --run-id run_a --stage-json '{\"s\":\"run-create\"}'", False),
+    ("python pipeline_v1.py run-create --project P --requirement R", False),
+    ("python pipeline_v1.py run-update --project P --run-id run_a --stage-json '{\"s\":\"run-create\"}'", False),
     ("python pipeline_v1.py create --project P && python pipeline_v1.py status --run-id run_a", False),
     ("echo run-create", False),
     (None, False),
@@ -461,38 +384,6 @@ REAL = ("unverified: plan: plan completed DEGRADED: 1 gate error(s) recorded as 
         "passed on a recorded reason, not verified: deliver:gate2_recheck, deliver:gate2_findings")
 
 
-def test_plain_reasons_drop_mechanics_and_say_what_is_missing():
-    assert pse.plain_reasons(REAL) == [
-        "The design does not say which state the change adds or touches",
-        "No smoke test ran the changed code with real objects",
-        "Some tests passed only in a continued test call, never in one run with the rest of their file",
-        "A review step was accepted on a written reason, not on a checked result",
-    ]
-    for r in pse.plain_reasons(REAL, limit=99):
-        assert "DEGRADED" not in r and "not a stop" not in r and "REPORT" not in r and "_" not in r
-
-
-def test_plain_reasons_for_a_run_without_review():
-    """A degraded DELIVER of a run done without Gate-2 experts: every validator error
-    collapses into the few sentences a push decision needs, one each, no field names."""
-    raw = ("no Gate-2 review by user decision (tests decide landing); Missing required field "
-           "'adversarial_review' — depth validation requires this; Missing required field "
-           "'completion_audit' — depth validation requires this; Missing required field "
-           "'ac_verification' — x; meta_review missing from deliver artifact. Run Meta-Review; "
-           "completion_audit.all_green is not true; exit criteria unmet: ['(no exit contract "
-           "declared at PLAN)']; Gate-2 expert(s) have not reviewed the current change: correctness")
-    assert pse.plain_reasons(raw) == [
-        "Not reviewed by the Gate-2 experts",
-        "Some delivery record fields are empty",
-        "No exit contract (the plan was skipped)",
-    ]
-
-
-def test_plain_reasons_keep_an_unknown_reason_as_its_first_clause():
-    assert pse.plain_reasons("unverified: build: lint found 3 errors — fix them (see log)") == ["Build: lint found 3 errors"]
-    assert pse.plain_reasons("") == [] and pse.plain_reasons(None) == []
-
-
 def test_attention_due_waits_for_an_isolated_run_to_land():
     shared = {"isolated": False}
     assert pse.attention_due(shared, shared, True) is True
@@ -506,55 +397,6 @@ def test_attention_due_waits_for_an_isolated_run_to_land():
     assert pse.attention_due(iso, None, True) is False
 
 
-def test_read_stage_state_reports_isolation_and_landing(tmp_path, monkeypatch):
-    run = {**RUN, "worktree_mode": "isolated", "commits": [{"sha": "abc", "landed": True}]}
-    st = _state(tmp_path, monkeypatch, run)
-    assert (st["isolated"], st["landed"]) == (True, True)
-    st = _state(tmp_path / "shared", monkeypatch, RUN)
-    assert (st["isolated"], st["landed"]) == (False, False)
-
-
 # ── one sentence per cause, with a code for the UI language (XG 2026-10-20) ──
 
-def test_the_same_cause_repeated_by_three_records_is_said_once():
-    """The screenshot case: one skipped review, repeated by the push_ready reason, the
-    commit's reason and the degraded DELIVER, each with a different prefix."""
-    err = "adversarial_review.profile_tier='skipped' but profile='direct' requires full adversarial review."
-    raw = "; ".join([err, f"unverified: deliver: completed with 5 open gate error(s): {err}",
-                     f"DELIVER completed with 5 open gate error(s): {err}"])
-    assert pse.plain_reason_items(raw) == [("not_reviewed", "Not reviewed by the Gate-2 experts")]
 
-
-def test_a_findings_record_that_lacks_a_field_is_not_called_unreviewed():
-    raw = ("Fix by class: adversarial_review.findings[1] (correctness, HIGH) names no invariant; "
-           "Gate-2 findings: adversarial_review.findings[] must carry, one record each, every finding")
-    assert pse.plain_reason_items(raw) == [("records_incomplete", "Some delivery record fields are empty")]
-
-
-def test_every_known_cause_has_a_code_and_unknown_ones_none():
-    items = pse.plain_reason_items("test evidence predates later edits (['a.py']); gate2: correctness-1 open: x; "
-                                   "unverified: build: lint found 3 errors — fix them")
-    assert items == [("tests_not_final", "The tests did not run on the final code"),
-                     ("finding_open", "A review finding is still open"),
-                     (None, "Build: lint found 3 errors")]
-
-
-def test_the_not_ready_item_carries_the_codes_beside_the_sentences(tmp_path):
-    state = {"stages": {"deliver": {"stage": "deliver", "status": "completed", "push_ready": False,
-                                    "push_ready_reason": "tests: only tdd; unverified: build: lint failed"}},
-             "run_dir": str(tmp_path)}
-    item = next(i for i in pse.attention_block("run_x", state, "now")["items"] if i["kind"] == "not_push_ready")
-    # "only tdd evidence" = the tests did not cover the change's scope, not stale code
-    assert item["reasons"] == ["The tests did not cover everything the change touches", "Build: lint failed"]
-    assert item["reasonCodes"] == ["tests_scope_partial", None]
-
-
-def test_every_reason_code_has_words_in_every_locale():
-    """The chat looks a code up as chat.turn.attention.reasonCode.<code>: a code the
-    locales do not have falls back to English in every language."""
-    codes = {code for _rx, code, _plain in pse._PLAIN_REASONS}
-    locales = Path(__file__).resolve().parents[2] / "desktop" / "src" / "i18n" / "locales"
-    for name in ("en.json", "zh.json"):
-        have = set(json.loads((locales / name).read_text(encoding="utf-8"))
-                   ["chat"]["turn"]["attention"]["reasonCode"])
-        assert codes <= have, (name, sorted(codes - have))

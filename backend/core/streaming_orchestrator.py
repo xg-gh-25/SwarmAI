@@ -30,13 +30,9 @@ from . import executors
 from . import pipeline_stage_events as _pse
 from .compaction_guard import EscalationLevel
 from .session_healing import get_process_rss_mb
-from . import ui_actions as _ua
 from .ui_actions import (
     build_ui_command_event,
-    build_surface_events_async,
-    ensure_report_for_run,
     UI_ACTION_FULL_TOOL_NAME,
-    SURFACE_OUTPUTS_FULL_TOOL_NAME,
 )
 
 if TYPE_CHECKING:
@@ -386,49 +382,11 @@ class StreamingOrchestrator:
         """Proxy to parent's streaming_stall_seconds."""
         return self._parent.streaming_stall_seconds
 
-    def _auto_surfaced_run_ids(self) -> set:
-        """Session-scoped set of run_ids whose finish-time Canvas surface has already
-        fired this session (run_beff6754) — the explicit surface_run_outputs branch's
-        idempotency guard, so a run is surfaced AT MOST ONCE per session.
-
-        Lazily attached to the parent SessionUnit via getattr rather than declared in
-        SessionUnit.__init__ — that class is CRITICAL (500+ callers) and this state is
-        orchestrator-owned; a lazy attr keeps the change fully local to this module.
-        A per-run-id set (not per-turn) is correct: it dedups auto-vs-explicit within a
-        session while still surfacing a genuinely different run, and a re-run of the
-        SAME completed run_id (retry) correctly does not re-pop the Canvas."""
-        seen = getattr(self._parent, "_auto_surfaced_run_ids_set", None)
-        if seen is None:
-            seen = set()
-            self._parent._auto_surfaced_run_ids_set = seen
-        return seen
-
-    def _surface_marker_pending(self) -> set:
-        """Session-scoped run_ids whose last explicit surface batch was sent but whose
-        completion-gate marker could not be written (run_1a309783). Read only by the
-        explicit surface_run_outputs branch, which re-emits such a run on its next
-        call."""
-        s = getattr(self._parent, "_surface_marker_pending_set", None)
-        if s is None:
-            s = set()
-            self._parent._surface_marker_pending_set = s
-        return s
-
-    def _surfaced_commits(self) -> dict:
-        """Session-scoped ``run_id → frozenset of commit shas`` the explicit
-        surface_run_outputs branch has emitted rows for (run_a87bfe3f); an empty set
-        when the commits could not be read."""
-        m = getattr(self._parent, "_surfaced_commits_map", None)
-        if m is None:
-            m = {}
-            self._parent._surfaced_commits_map = m
-        return m
-
     def _pipeline_stage_snapshot(self) -> dict:
         """Session-scoped ``run_id → last-seen stage state`` (pipeline_stage_events).
 
         The baseline every stage diff is taken against. Session-scoped (lazily on the
-        parent SessionUnit, like ``_auto_surfaced_run_ids``) rather than per turn, so a
+        parent SessionUnit) rather than per turn, so a
         pipeline that spans several turns never repeats a stage row, and two
         artifact_cli calls in one message that both see the same transition emit it
         once: the first result advances the snapshot, the second diffs against it."""
@@ -506,7 +464,7 @@ class StreamingOrchestrator:
                 if ab:
                     blocks.append(ab)
             # The stage's run documents (REQUIREMENTS / DESIGN_SPEC / REVIEW, FIXING_SPEC, REPORT) ride on its
-            # row and opens in the Canvas as a knowledge file (core/run_docs.py).
+            # row and opens in the Canvas as a knowledge file (pipeline_stage_events.STAGE_DOCS).
             docs = await executors.run_in("io", _pse.attach_stage_docs, blocks, after)
             # The run's execution summary, once, when run.json first reaches an end
             # status (however it ended; a direct run too). failed -> abandoned is not
@@ -1492,9 +1450,8 @@ class StreamingOrchestrator:
         # scope), the non-progressive trigger (turn-end batch), and the per-turn full-tree
         # scan cost. Live WRITE surfacing is now event-driven: _build_file_write_events at
         # the ToolResult(success) point below (symmetric with the delete emit). Non-parent
-        # writes (sub-agent/skill/CLI/hook — SDK-sidechain-filtered) surface at PIPELINE
-        # FINISH via sweep_run_changes / surface_run_outputs (the retained author-agnostic
-        # fallback), an XG-accepted tradeoff for removing the per-turn regression.
+        # writes (sub-agent/skill/CLI/hook — SDK-sidechain-filtered) are not surfaced
+        # live; a v1 run's landed change shows in its summary card (pipeline_stage_events).
 
         # Start of the current SDK silence: the last REAL SDK message (seeded
         # from the unit's clock). Unlike _last_event_time, a CPU-gated
@@ -2271,73 +2228,6 @@ class StreamingOrchestrator:
                                 yield _ui_ev
                             # fall through: do NOT `continue` — the SDK runs the tool
                             # and returns its ack result to the agent normally.
-                        # ── Finish-time PR-review batch (run_b8ea6d5c, CHANNEL A) ──
-                        # The agent calls surface_run_outputs(run_id) at pipeline
-                        # COMPLETE; we observe it here (same pattern as ui_action) and
-                        # yield N additive file_changed events — one per committed
-                        # source file, kind=source-final — so N persistent OUTPUTS rows
-                        # appear at once. The SDK still delivers the tool's ack. This is
-                        # the ONLY way N rows reach the rail (run-commit CLI can't emit).
-                        if block.name == SURFACE_OUTPUTS_FULL_TOOL_NAME and isinstance(block.input, dict):
-                            # ORDERING ROOT-FIX (run_f1fbf37d): guarantee the run's
-                            # REPORT.md exists BEFORE we build the batch. The report
-                            # is produced by a SEPARATE agent step (run-report); if
-                            # surface_run_outputs is called before it, the report row
-                            # is silently dropped. The consumer now ensures its own
-                            # input — regenerate a missing/stub report in-process
-                            # (off-loop, fail-safe: never raises) so build_surface_events
-                            # (still PURE) finds it and emits the report row.
-                            _sf_run_id = block.input.get("run_id")
-                            # Idempotency (run_beff6754): surface a run AT MOST ONCE per
-                            # session.
-                            # run_a87bfe3f: the completion gate's marker is written
-                            # HERE, after the batch is yielded, so it only ever attests
-                            # rows this session actually sent. The commits it names come
-                            # from a snapshot read BEFORE the build (a commit landing
-                            # mid-build is left out → the gate blocks, fail closed). A
-                            # run already surfaced this session is skipped unless this
-                            # branch emitted it for fewer commits than the run has now.
-                            _sf_seen = self._auto_surfaced_run_ids()
-                            _sf_snap = None
-                            try:
-                                _sf_snap = await asyncio.to_thread(_ua.surface_snapshot, _sf_run_id)
-                            except Exception as _e:  # noqa: BLE001 — evidence only
-                                logger.debug("surface snapshot failed for %r: %s", _sf_run_id, _e)
-                            _sf_emitted = self._surfaced_commits()
-                            _sf_shas = (frozenset(_ua.snapshot_shas(_sf_snap))
-                                        if _sf_snap else None)
-                            _sf_pending = self._surface_marker_pending()
-                            _sf_already = (
-                                isinstance(_sf_run_id, str) and _sf_run_id in _sf_seen
-                                and _sf_run_id not in _sf_pending
-                                and (_sf_shas is None or _sf_run_id not in _sf_emitted
-                                     or _sf_shas <= _sf_emitted[_sf_run_id])
-                            )
-                            if not _sf_already:
-                                await ensure_report_for_run(_sf_run_id)
-                                # off-loop entry point (glob+read+stat) — keeps the
-                                # shared daemon loop (+/health) free mid-streaming-turn.
-                                _sf_events = await build_surface_events_async(_sf_run_id)
-                                for _sf_ev in _sf_events:
-                                    yield _sf_ev
-                                _sf_marked = False
-                                if _sf_events and _sf_snap:
-                                    _sf_marked = await asyncio.to_thread(
-                                        _ua.record_surface, _sf_snap, _sf_events)
-                                if isinstance(_sf_run_id, str) and _sf_run_id:
-                                    # The rows reached the user: the once-per-session
-                                    # guard holds either way.
-                                    _sf_seen.add(_sf_run_id)
-                                    # An empty set when commits are unknown.
-                                    _sf_emitted[_sf_run_id] = _sf_shas or frozenset()
-                                    # Marker not written although source rows were sent
-                                    # (run_1a309783): re-emit on the next explicit
-                                    # call, commits or not.
-                                    if _ua.surface_counts_as_emitted(_sf_marked, _sf_events):
-                                        _sf_pending.discard(_sf_run_id)
-                                    else:
-                                        _sf_pending.add(_sf_run_id)
-                            # fall through: SDK runs the tool, returns its ack normally.
                         if block.name == "AskUserQuestion":
                             # The ask_question_gate PreToolUse hook intercepts this
                             # tool call BEFORE the CLI self-resolves it: it publishes
@@ -3046,9 +2936,8 @@ class StreamingOrchestrator:
                 # run_cce6f4b9: the TURN-END git sweep (sweep_turn_delta) was DELETED —
                 # live WRITE surfacing is now the event-driven per-tool emit above
                 # (_build_file_write_events at each ToolResult), which is session-correct
-                # and progressive. Non-parent writes (sub-agent/skill/CLI/hook) surface at
-                # PIPELINE FINISH via sweep_run_changes / surface_run_outputs. Nothing to
-                # emit here anymore — go straight to the `result` yield.
+                # and progressive. Non-parent writes (sub-agent/skill/CLI/hook) are not
+                # surfaced live. Nothing to emit here — go straight to the `result` yield.
 
                 yield {
                     "type": "result",
