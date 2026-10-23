@@ -44,6 +44,7 @@ import {
 } from './todoTable';
 import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
 import { parseWorkPacket, type WorkPacket } from './todoWorkPacket';
+import { OverlayError } from './OverlayState';
 
 export interface ToDoContentProps {
   /** Land a todo into a chat tab (inject + snapshot). Returns true if it landed
@@ -351,19 +352,14 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
 
       {/* Fetch failure (distinct from empty) */}
       {loadErr && (
-        <div
-          data-testid="todo-load-error"
-          className="mx-4 mt-2 flex items-center gap-2 rounded-md border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-3 py-2 text-[12px] text-[var(--color-text)]"
-        >
-          <span className="material-symbols-outlined icon-sm text-[#d0524a]">error</span>
-          <span className="flex-1">{loadErr}</span>
-          <button
-            data-testid="todo-load-retry"
-            onClick={() => void refresh()}
-            className="rounded px-2 py-0.5 text-[11px] font-medium text-white"
-            style={{ background: '#d0524a' }}
-          >Retry</button>
-        </div>
+        <OverlayError
+          compact
+          className="mx-4 mt-2"
+          testid="todo-load-error"
+          retryTestid="todo-load-retry"
+          message={loadErr}
+          onRetry={() => void refresh()}
+        />
       )}
       {actionErr && (
         <div

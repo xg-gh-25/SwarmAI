@@ -33,6 +33,7 @@ import { overlayQuery } from './overlayQueries';
 import api from '../../services/api';
 import { LibraryTree } from './LibraryTree';
 import { LibraryHealth } from './LibraryHealth';
+import { OverlayError } from './OverlayState';
 
 // ── Types (mirror the backend library_api payloads, snake_case as served) ──
 interface NativeCategory { name: string; file_count: number; total_bytes: number; }
@@ -164,20 +165,12 @@ interface SearchResult { query: string; count: number; hits: SearchHit[]; }
 // failed backend call is never rendered as a permanent "Loading…" spinner.
 function FetchError({ testid, retryTestid, message, onRetry }: { testid: string; retryTestid: string; message: string; onRetry: () => void }) {
   return (
-    <div
-      data-testid={testid}
-      className="rounded-lg border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-4 py-4 text-center"
-    >
-      <div className="text-sm text-[var(--color-text)]">{message}</div>
-      <button
-        data-testid={retryTestid}
-        onClick={onRetry}
-        className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
-        style={{ background: '#d0524a' }}
-      >
-        Retry
-      </button>
-    </div>
+    <OverlayError
+      testid={testid}
+      retryTestid={retryTestid}
+      message={message}
+      onRetry={onRetry}
+    />
   );
 }
 

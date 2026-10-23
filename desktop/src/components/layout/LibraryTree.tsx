@@ -32,6 +32,7 @@ import { List } from 'react-window';
 import type { TreeNode } from '../../types';
 import { workspaceService } from '../../services/workspace';
 import TreeNodeRow from '../workspace-explorer/TreeNodeRow';
+import { OverlayError } from './OverlayState';
 
 const ROW_HEIGHT = 32;
 const KNOWLEDGE_ROOT = 'Knowledge';
@@ -351,20 +352,12 @@ export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen, showAllFile
   return (
     <div ref={containerRef} data-testid="library-tree" className={containerClass} style={Object.keys(containerStyle).length ? containerStyle : undefined}>
       {error ? (
-        <div
-          data-testid="library-tree-error"
-          className="rounded-lg border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-4 py-4 text-center"
-        >
-          <div className="text-sm text-[var(--color-text)]">Couldn't load the {rootLeaf} tree.</div>
-          <button
-            data-testid="library-tree-retry"
-            onClick={() => { void loadRoots(); }}
-            className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
-            style={{ background: '#d0524a' }}
-          >
-            Retry
-          </button>
-        </div>
+        <OverlayError
+          testid="library-tree-error"
+          retryTestid="library-tree-retry"
+          message={<>Couldn't load the {rootLeaf} tree.</>}
+          onRetry={() => { void loadRoots(); }}
+        />
       ) : loading ? (
         <div className="py-6 text-center text-sm text-[var(--color-text-faint)]">Loading tree…</div>
       ) : rows.length === 0 ? (

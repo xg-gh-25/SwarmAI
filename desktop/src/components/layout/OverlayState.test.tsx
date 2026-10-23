@@ -39,3 +39,27 @@ describe('OverlayEmpty', () => {
     expect(el.querySelector('.material-symbols-outlined')).toHaveTextContent('check_circle');
   });
 });
+
+// Every first-load error box in the overlays is OverlayError: no layout file other
+// than OverlayState.tsx writes the dashed red box by hand, and the known first-load
+// error testids are passed to OverlayError (`testid=`), never set directly.
+describe('OverlayState is the only first-load error box', () => {
+  it('no hand-written dashed error box or first-load error testid outside OverlayState', async () => {
+    const { readFileSync, readdirSync } = await import('fs');
+    const { join, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const BOX = 'border-dashed border-[color-mix(in_srgb,#d0524a_45%';
+    const IDS = ['todo-load-error', 'pipeline-load-error', 'pollinate-load-error', 'library-tree-error',
+      'cm-needs-error', 'brainhub-error', 'artifacts-error', 'cap-error', 'community-load-error',
+      'jobs-load-error', 'hive-load-error', 'needyou-load-error'];
+    const offenders: string[] = [];
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith('.tsx') || name.includes('.test.') || name === 'OverlayState.tsx') continue;
+      const text = readFileSync(join(dir, name), 'utf-8');
+      if (text.includes(BOX)) offenders.push(`${name}: hand-written error box`);
+      for (const id of IDS) if (text.includes(`data-testid="${id}"`)) offenders.push(`${name}: data-testid="${id}"`);
+    }
+    expect(offenders).toEqual([]);
+  });
+});

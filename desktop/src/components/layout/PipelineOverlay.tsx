@@ -41,6 +41,7 @@ import {
   type PipelinePauseKind,
 } from '../../services/pipelines';
 import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
+import { OverlayError } from './OverlayState';
 
 export interface PipelineContentProps {
   /** Hand a prompt to a chat tab (land+activate a tab, THEN inject). Returns true
@@ -288,20 +289,13 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
 
           {/* Fetch failure (B2) — distinct from "no runs", with Retry. */}
           {!!loadErr && !loading && (
-            <div
-              data-testid="pipeline-load-error"
-              className="mx-auto my-8 max-w-sm rounded-lg border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-4 py-4 text-center"
-            >
-              <div className="text-sm text-[var(--color-text)]">{classifyLoadError(loadErr, 'pipeline analytics')}</div>
-              <button
-                data-testid="pipeline-load-retry"
-                onClick={retry}
-                className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
-                style={{ background: '#d0524a' }}
-              >
-                Retry
-              </button>
-            </div>
+            <OverlayError
+              testid="pipeline-load-error"
+              retryTestid="pipeline-load-retry"
+              message={classifyLoadError(loadErr, 'pipeline analytics')}
+              onRetry={retry}
+              className="mx-auto my-8 max-w-sm"
+            />
           )}
           {/* AC6(B): pinned cross-project "Needs you" region — the most-painful runs
               (paused-decision + abandoned) surfaced at the TOP so the user never hunts

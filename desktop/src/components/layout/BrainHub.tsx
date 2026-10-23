@@ -33,6 +33,7 @@ import { DddCard, Ontology } from './DddCard';
 import { CodeGraph } from '../code-intel/CodeGraph';
 import { LibraryTree } from './LibraryTree';
 import { docSignalMap, weeklyReportModel, type WeeklyReportModel } from './dddOverview';
+import { OverlayError } from './OverlayState';
 
 /** hunkSummary — derive a plain-language what/where from a single-hunk `diff_text`
  *  (Run 2, run_32cd6a60). PURE + exported so prod render + tests share one source
@@ -143,17 +144,12 @@ export function BrainHub(
   if (error) {
     return (
       <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
-        <div className="p-4 text-[13px]" data-testid="brainhub-error">
-          <div className="text-[var(--color-error,#ef4444)]">Failed to load brains: {error}</div>
-          <button
-            data-testid="brainhub-retry"
-            onClick={() => void refetch()}
-            className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
-            style={{ background: 'var(--color-error,#ef4444)' }}
-          >
-            Retry
-          </button>
-        </div>
+        <OverlayError
+          testid="brainhub-error"
+          retryTestid="brainhub-retry"
+          message={<>Failed to load brains: {error}</>}
+          onRetry={() => void refetch()}
+        />
       </div>
     );
   }

@@ -34,6 +34,7 @@ import {
   type PollinateAsset,
 } from '../../services/pollinate';
 import { WorkbenchToolbar, OverlayDrawer } from './overlayShell';
+import { OverlayError } from './OverlayState';
 
 export interface PollinateContentProps {
   /** Hand a prompt to a chat tab (land+activate, THEN inject). Mirrors ChatPage's
@@ -285,20 +286,13 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
               {/* Fetch failure (B3) — distinct from "no content", with Retry. */}
               {!!loadErr && !loading && (
-                <div
-                  data-testid="pollinate-load-error"
-                  className="mx-auto my-8 max-w-sm rounded-lg border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-4 py-4 text-center"
-                >
-                  <div className="text-sm text-[var(--color-text)]">{classifyLoadError(loadErr, 'content assets')}</div>
-                  <button
-                    data-testid="pollinate-load-retry"
-                    onClick={reload}
-                    className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
-                    style={{ background: '#d0524a' }}
-                  >
-                    Retry
-                  </button>
-                </div>
+                <OverlayError
+                  testid="pollinate-load-error"
+                  retryTestid="pollinate-load-retry"
+                  message={classifyLoadError(loadErr, 'content assets')}
+                  onRetry={reload}
+                  className="mx-auto my-8 max-w-sm"
+                />
               )}
               {!loading && !loadErr && filtered.length === 0 && (
                 <div className="text-center py-10 text-sm text-[var(--color-text-faint)]">

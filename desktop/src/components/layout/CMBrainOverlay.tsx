@@ -22,6 +22,7 @@ import { useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery } from './overlayQueries';
 import api, { classifyLoadError } from '../../services/api';
+import { OverlayError } from './OverlayState';
 
 // ── Types (mirror the backend context-health token_block, snake_case as served) ──
 type HealthTag = 'fresh' | 'idle' | 'growing' | 'oversized';
@@ -254,17 +255,14 @@ export function CMBrainContent() {
             <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-faint)]">Needs you</div>
             {needsErr ? (
               // B1: don't show a false "0" — say the fetch failed + offer Retry.
-              <div data-testid="cm-needs-error" className="mt-2 rounded-md border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-2.5 py-2 text-[11px] text-[var(--color-text)]">
-                <div>{classifyLoadError(healthError ?? govError, 'the queue', 'Couldn’t load the queue — the backend may be unavailable. This is NOT “nothing to do”.')}</div>
-                <button
-                  data-testid="cm-needs-retry"
-                  onClick={() => { void refetchHealth(); void refetchGov(); }}
-                  className="mt-1.5 rounded px-2 py-0.5 text-[11px] font-medium text-white"
-                  style={{ background: '#d0524a' }}
-                >
-                  Retry
-                </button>
-              </div>
+              <OverlayError
+                compact
+                className="mt-2"
+                testid="cm-needs-error"
+                retryTestid="cm-needs-retry"
+                message={classifyLoadError(healthError ?? govError, 'the queue', 'Couldn’t load the queue — the backend may be unavailable. This is NOT “nothing to do”.')}
+                onRetry={() => { void refetchHealth(); void refetchGov(); }}
+              />
             ) : (
               <div className="mt-2 flex flex-col gap-1.5">
                 <NeedsBtn testid="cm-needs-review" label={QUEUE_META.review.label} count={reviewCount} tint="#5fc99a" active={needsFilter === 'review'} onClick={() => setNeedsFilter('review')} />
@@ -775,7 +773,7 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
     enabled: enabled && !searching,
   });
   // Recall search — only fires when the query is non-empty (Gate-0 #5 enabled-gating).
-  const { data: hits, isError: hitErr, error: hitError, isFetching: hitFetching } = useQuery<ArchiveSearchResp>({
+  const { data: hits, isError: hitErr, error: hitError, isFetching: hitFetching, refetch: refetchHits } = useQuery<ArchiveSearchResp>({
     queryKey: ['cm-archive-search', source, query],
     queryFn: async () => (await api.get<ArchiveSearchResp>(`/eval/archive-search?source=${source}&q=${encodeURIComponent(query)}`)).data,
     staleTime: 30_000,
@@ -818,7 +816,7 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
       {searching ? (
         // ── Recall results ──
         hitErr ? (
-          <ArchiveError what={`recall ${source}`} error={hitError} />
+          <ArchiveError what={`recall ${source}`} error={hitError} onRetry={() => void refetchHits()} />
         ) : hitFetching && results.length === 0 ? (
           <div data-testid={`cm-archive-searching-${source}`} className="text-[11px] text-[var(--color-text-faint)]">Recalling…</div>
         ) : results.length === 0 ? (
@@ -881,14 +879,13 @@ function fmtBytes(n: number): string {
 }
 
 // Shared archive error banner — honest "couldn't load, NOT empty" + optional Retry.
-function ArchiveError({ what, error, onRetry }: { what: string; error: unknown; onRetry?: () => void }) {
+function ArchiveError({ what, error, onRetry }: { what: string; error: unknown; onRetry: () => void }) {
   return (
-    <div className="rounded-md border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-2.5 py-2 text-[11px] text-[var(--color-text)]">
-      <div>{classifyLoadError(error, what, `Couldn’t load ${what} — the backend may be unavailable. This is NOT “nothing archived”.`)}</div>
-      {onRetry && (
-        <button onClick={onRetry} className="mt-1.5 rounded px-2 py-0.5 text-[11px] font-medium text-white" style={{ background: '#d0524a' }}>Retry</button>
-      )}
-    </div>
+    <OverlayError
+      compact
+      message={classifyLoadError(error, what, `Couldn’t load ${what} — the backend may be unavailable. This is NOT “nothing archived”.`)}
+      onRetry={onRetry}
+    />
   );
 }
 
