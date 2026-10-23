@@ -134,7 +134,16 @@ CASES.update({
     "turn": ({"payload": {"message_id": "m1"}}, "payload.message_id", "m2"),
     "integrity": ({"ordinal": 1, "payload": {"conflict_id": "x1"}},
                   "payload.conflict_id", "x2"),
+    "owner_transfer": ({"ordinal": 1, "producer": "hook"}, "ordinal", 2),
+    "partial_land": ({"ordinal": 1}, "ordinal", 2),
+    "gate0_exhausted": ({"ordinal": 1}, "ordinal", 2),
+    "resume": ({"ordinal": 1}, "ordinal", 2),
 })
+
+
+def test_every_event_kind_has_an_occurrence_case():
+    """A new kind without a CASES row fails here, not silently (conformance F24)."""
+    assert set(CASES) == set(ev.EVENT_SPECS)
 
 
 def _changed(kwargs, path, value):

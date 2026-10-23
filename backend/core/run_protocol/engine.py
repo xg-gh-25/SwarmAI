@@ -1042,6 +1042,8 @@ class RunEngine:
                 session_id=self.owner_session(), repos=self.effective_repos(),
                 integration_roots=self.contract["repo_roots"], message=message,
                 at=_now(), now=now, branches=self._recorded_branches(),
+                in_place=self.contract.get("mode") == "shared",
+                adopted=self._partially_landed(),
                 progress_path=self.run_dir / "artifacts" / f"landing-progress-{request_id}.json")
         except landing.PartialLanding as exc:
             # the signed partial_land is written; the person sees what moved (K2)
@@ -1517,21 +1519,8 @@ class RunEngine:
             return partial          # partial_land: the not-landed path's result
         render_event = next((event for event in reversed(self.store.read_events())
                              if event.get("event_id") == rendered.get("event_id")), None)
-        if render_event is None:
-            raise EngineError("normal landing REPORT render event is missing")
-        report_sha = render_event["payload"]["blob_sha"]
-        try:
-            report = (self.store.paths.blobs / report_sha).read_text(encoding="utf-8")
-        except OSError as exc:
-            raise EngineError(f"normal landing REPORT blob is missing: {exc}") from exc
-        DocumentStore._atomic(self.run_dir / "REPORT.md", report)
-        self.store.append_new(
-            writer=self.authority.writer("cli"), kind="land", at=_now(),
-            stage="deliver", attempt=attempt["attempt"],
-            ordinal=len(self.store.read_events()) + 1,
-            payload={"landing": "landed", "commit": next(iter(commits.values())),
-                     "commits": dict(sorted(commits.items())),
-                     "stage_attempt_event_id": attempt["event_id"]})
+        if render_event is not None:
+            self._copy_report(render_event["payload"]["blob_sha"])
         self._settle(); self.write_projection()
         return {"commits": commits, "push": self.push_status(), "state": self.projection(),
                 "resumed": True}
@@ -1744,13 +1733,7 @@ class RunEngine:
             close(f"{type(exc).__name__}: {exc}"[:300])
             self._settle(); self.write_projection()
             raise
-        DocumentStore._atomic(self.run_dir / "REPORT.md", report.decode("utf-8"))
-        self.store.append_new(
-            writer=self.authority.writer("cli"), kind="land", at=_now(),
-            stage="deliver", attempt=attempt, ordinal=len(self.store.read_events()) + 1,
-            payload={"landing": "landed", "commit": next(iter(commits.values())),
-                     "commits": dict(sorted(commits.items())),
-                     "stage_attempt_event_id": opened["event_id"]})
+        self._copy_report(text=report.decode("utf-8"))
         self._settle(); self.write_projection()
         return {"ok": True, "commits": commits, "push": push, "state": self.projection()}
 
@@ -1764,21 +1747,46 @@ class RunEngine:
         Never a silent retry."""
         from core.run_protocol import landing
         try:
-            return landing.commit_repos(
+            commits = landing.commit_repos(
                 run_id=self.run_id, integration_roots=self.contract["repo_roots"],
                 bases=bases, bindings=bindings, message=message,
                 branches=self._recorded_branches(),
-                progress_path=self.run_dir / "artifacts" / "landing-progress-normal.json"), None
+                in_place=self.contract.get("mode") == "shared",
+                progress_path=self.run_dir / "artifacts" / "landing-progress-normal.json")
         except landing.PartialLanding as exc:
             self.store.append_new(
                 writer=self.authority.writer("cli"), kind="partial_land", at=_now(),
                 stage="deliver", attempt=attempt, ordinal=len(self.store.read_events()) + 1,
                 payload={"landed": dict(sorted(exc.landed.items())), "failed": exc.failed,
-                         "detail": str(exc)[:300], "stage_attempt_event_id": attempt_event_id})
+                         "detail": str(exc)[:300], "stage_attempt_event_id": attempt_event_id,
+                         **({"unsettled": list(exc.unsettled)} if exc.unsettled else {})})
             self._settle()
             finished = self.finish_not_landed()
             return dict(exc.landed), {**finished, "ok": False, "landing": "not_landed",
                                       "reason": "partial_land", "landed": exc.landed}
+        # the signed land event comes RIGHT after the refs moved, before any copy or
+        # projection that could fail (K5 review r3); a failure of this append itself is
+        # recovered by the resume path, which adopts the recorded commits
+        self.store.append_new(
+            writer=self.authority.writer("cli"), kind="land", at=_now(),
+            stage="deliver", attempt=attempt, ordinal=len(self.store.read_events()) + 1,
+            payload={"landing": "landed", "commit": next(iter(commits.values())),
+                     "commits": dict(sorted(commits.items())),
+                     **({"unsettled": list(commits.unsettled)} if commits.unsettled else {}),
+                     "stage_attempt_event_id": attempt_event_id})
+        return commits, None
+
+    def _copy_report(self, blob_sha: str | None = None, *, text: str | None = None) -> None:
+        """The run directory's REPORT.md: a projection of the signed render blob,
+        written after the land event; a failure here never undoes a landing."""
+        try:
+            if text is None:
+                text = (self.store.paths.blobs / str(blob_sha)).read_text(encoding="utf-8")
+            DocumentStore._atomic(self.run_dir / "REPORT.md", text)
+        except OSError:
+            import logging
+            logging.getLogger(__name__).warning("run %s: REPORT.md copy not written",
+                                                self.run_id, exc_info=True)
 
     def _land_failed(self, results: Mapping[str, tuple[bool, str]]) -> dict[str, Any]:
         self._settle(); self.write_projection()
@@ -1833,6 +1841,17 @@ class RunEngine:
         commits = {str(k): str(v) for k, v in (progress.get("commits") or {}).items()} \
             if isinstance(progress, Mapping) else {}
         return commits or ({"primary": payload["commit"]} if payload.get("commit") else {})
+
+    def _partially_landed(self) -> dict[str, str]:
+        """repo -> commit of a signed partial_land later than every finished landing:
+        a person's run-land keeps those and lands the rest (review K5 r1)."""
+        events = self.store.read_events()
+        last_finished = max((i for i, e in enumerate(events) if e.get("kind") == "land"
+                             and e["payload"].get("landing") in ("landed", "human_override")),
+                            default=-1)
+        partial = next((e for i, e in reversed(list(enumerate(events)))
+                        if e.get("kind") == "partial_land" and i > last_finished), None)
+        return dict(partial["payload"]["landed"]) if partial else {}
 
     def _recorded_branches(self) -> dict[str, str]:
         if self.contract.get("mode") == "shared":

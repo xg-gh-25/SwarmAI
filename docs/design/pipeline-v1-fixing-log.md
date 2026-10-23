@@ -290,3 +290,52 @@ trivial 不变：`tests/fixtures/pipeline_v1_trivial_profile.json` 是改动前 
 - shared run 的未暂存改动会被 git 拒绝 fast-forward。这在本次修改之前就是如此，留到 K5 的 shared 矩阵里验证。
 
 **新增测试：** `tests/test_pipeline_v1_conformance_k2.py`，共 12 个用例，前 3 个在修改前的代码上失败。
+
+## 13. 设计符合性修复 K5：按 v13 §D4 逐条验收
+
+依据：符合性方案 §3 K5、v13 §D4、§C5.1。根因 R-E：验收测试是按"实现能推出成立"写的，没有按 §D4 逐条写。这次按 §D4 写测试，测试暴露出两处真缺陷。
+
+**测试先失败，暴露出的缺陷：**
+
+| 测试 | 修改前的结果 | 根因与修法 |
+|---|---|---|
+| profile × {isolated, shared} 矩阵 | shared 的 5 个 profile 全部卡在 DELIVER，一次都落不了地 | shared run 的代码就是 checkout 里尚未提交的文件，`merge --ff-only`（以及 K2 的检出演练）会拒绝这次落地自己的改动。新增 `landing._land_in_place`：先拿到 git 自己的 `index.lock`；index 必须仍然恰好等于 base；新 index 在旁边建好；分支用 `update-ref` 做 CAS 移动；然后把建好的 index 改名就位。checkout 里只新建 run 保留目录下缺失的 REPORT 文件（用 O_EXCL 创建），其余路径一律不碰。别的 session 在两段之间删掉的文件不会被写回；staged 的改动、或者 index 正被别的进程锁住时，什么都不落地。整个过程不用 `reset` |
+| §D4 第 4 条：test 不能跨 run | 用 run A 的 id 去测 run B 的 worktree，返回 ok | `pipeline_test._v1_runner` 改为只按 contract 识别被测仓库：按 realpath 在 contract 里找，必须恰好对上一个仓库（isolated 对它自己的 `wt_path`，shared 对 contract 里的 root）。目录名不再当作身份 |
+| events 枚举测试 | `owner_transfer`、`partial_land`、`gate0_exhausted`、`resume` 四种 kind 没有用例 | CASES 补齐这四种；`CASES == EVENT_SPECS` 作为测试固定下来，以后新增 kind 漏写用例会直接失败（F24） |
+
+**新增验收（`tests/test_pipeline_v1_conformance_k5.py`，全部通过真实 CLI 和 hook 驱动）：**
+- 5 个 profile × 2 种模式：落地后的整棵 tree 等于 final 的 `code_tree` 加上 REPORT；checkout 落地后干净；shared run 的 push_ready 为 false，原因含 MD-1。
+- 两种模式各跑一遍：TEST 红走 `not_landed(tests_red)`；熔断走 `checks_exhausted`；人工 run-land 走 `human_override`，land 事件带 commit 表；decision 进入 `awaiting_human`，人回答后继续；abandon → restore → resume 后落地，tree 仍与 final 绑定。
+- §D4 第 1、4、5、6 条：两个 isolated run 改同一文件，各自的 final 只含自己的内容；test、auth、abandon、restore、decision 都不跨 run；shared checkout 的改动不进入 isolated run 的 final；缓存 key 冲突写 integrity，两个值都不复用。
+- shared 落地原语的单元测试：并发删除的文件不被写回；有 staged 改动或 index 被锁时不落地；`partial_land` 之后的 run-land 保留已落地的 commit，只落地剩下的仓库。
+
+**审查第 1 轮（f77bb8ec）的修复：**
+- **HIGH：** shared 落地会把并发删除的文件写回，还可能丢掉 index 里的改动。修法是上面的 index 锁事务。
+- **HIGH：** `partial_land` 之后的 run-land 会重新渲染 REPORT，已落地仓库的 delivery tree 因此变了，落地无法补完。修法：引入 `adopted`，即最近一次晚于所有完成落地的 `partial_land`。这些 commit 必须满足三条：parent 等于 base、Swarm 身份、在集成分支上；满足才保留，只落地剩下的仓库。最终 land 事件记录两部分的并集。
+- **MED：** ref 已移动但 checkout 没收尾。index 的安装是锁内的一次改名；REPORT 写失败只记日志，之后每次重试或接手都会再收尾一次（`_settle_in_place`）。
+- **MED：** 测试按目录名推断仓库身份。改为只认 contract。
+- **MED：** 测试断言过弱。改为上面的整树绑定，并补齐两种模式下的各个场景。
+
+**审查第 2 轮（5cc6b9a2）的修复：**
+- **HIGH：** CAS 之后的失败可能没留下任何记录（OSError 直接抛出），也可能被报告成"已完整收尾"。改为：`_land_in_place` 在 CAS 之后遇到任何失败都抛 `_Unsettled`，只有在什么都没移动时才抛 `LandingError`。`commit_repos` 返回 `Landed`，带上 `.unsettled`。签名的 land 事件用可选字段 `unsettled` 列出这些仓库，lifecycle 校验它必须是 `commits` 的子集，audit 的 details 和 REPORT 都会写出来。
+  - 判定口径：分支已经移动就算落地，commit 已经在 main 上，不丢数据。checkout 没收尾记为 `unsettled`，不记成 `partial_land`；`partial_land` 的含义是有仓库的分支根本没动。
+- **HIGH：** 写 REPORT 时可能顺着符号链接写到仓库外。改由 `_create_owned` 写：从仓库根开始按目录 fd 逐级打开，目录用 `O_DIRECTORY|O_NOFOLLOW`，文件用 `O_CREAT|O_EXCL|O_NOFOLLOW`；文件已存在就不碰。
+- **MED：** 接手 partial 落地的 commit 时跳过了收尾。现在这类 commit、已记录的 commit、崩溃后接手的 commit 都要经过 `_settled()`；收尾没完成的，记为 unsettled。
+
+**审查第 3 轮（c356d389，最后一轮；发现在本 commit 内一次修完，不派第 4 轮）：**
+- **HIGH：** 普通落地在写 run 目录里的 REPORT 副本时失败，会让 main 上已有 commit，却既没有 `land` 也没有 `partial_land` 事件。修法是在落地编排里固定顺序：签名的 land 事件由 `_commit_normal` 写，紧跟在 refs 移动之后（首次落地和恢复落地共用这一处）。run 目录的 REPORT.md 降为投影，在事件之后用 `_copy_report` 写，写失败只记日志。
+- **HIGH：** `partial_land` 丢了已落地仓库的 unsettled 信息。修法：`PartialLanding` 携带 `unsettled`；`partial_land` 事件加可选字段 `unsettled`，lifecycle 校验它是 `landed` 的子集；普通落地和人工落地两条路径都写这个字段；audit 从最新的 land 或 partial_land 读取。
+- **MED：** REPORT 位置上原先就有的错误文件，被当成"已收尾"。修法：已存在的对象必须是普通文件，并且逐字节等于 commit 里的 blob，否则记为 unsettled，文件本身不动。写入也改为循环写，处理短写的情况。
+- **MED：** 验收没有固定 §D4 要求的阶段链，缓存也不是真的并发写。修法：矩阵里每个 profile × 模式都核对签名链 `stage_attempt → 通过的 check → stage_complete → transition`，期望值取自 check 注册表 `checks.stage_checks`，而不是 run 自己写下的 roster；还要求 land attempt 通过全部 land 检查。缓存改用线程屏障，让两个写者在同一时刻写：值相同只留一个，值不同记 conflict，两个都不复用。
+
+**残余风险：** refs 已经移动、签名 land 事件却追加失败时，审计区本身已经不可写。这种情况由恢复路径兜底：它接手 progress 里记下的 commit，再补签事件。审计区不可写时 run 进入 `failed`，这一步留到 K3 F11 的 `infrastructure_failed` 接线时补上。
+
+**dev backend 预演（F25 / §6 Q2）：** 已在 :8000 启动本分支的 backend，`SWARM_DATA_DIR` 指向临时目录，`/health` 正常，`/api/pipelines` 读的是临时目录。但执行环境里没有 AWS 凭证：默认 profile 和 `AWS_PROFILE=bedrock` 都报 "Unable to locate credentials"，`/health` 显示 `auth: expired`。因此起不了 SDK 会话，daemon 侧的 hook 无法真正触发。按 §6 Q2 的备选方案，这一项移到 XG rebuild 之后由 XG 跑，步骤如下：
+
+```bash
+D=$(mktemp -d); cd <swarmai>/backend
+SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py --port 8000
+# 在指向 :8000 的应用里：direct 跑 2 次，trivial / full / bugfix / goal / research 各跑 1 次，
+# 用一个临时 git 仓库（--repo）；每个 run 结束后看 $D/state/pipeline_agent_audit/runs/<id>/run_audit.json，
+# 五维都不能是 BLOCK
+```

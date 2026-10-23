@@ -48,6 +48,18 @@ def _reason(projection: Mapping[str, Any], events: Sequence[Mapping[str, Any]]) 
     return "partial_land" if last_partial > last_finished else projection.get("reason")
 
 
+def _unsettled(events: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Shared checkouts the latest landing outcome (a finished land, or a later
+    partial_land) left unfinished (K5 review r2/r3)."""
+    for event in reversed(list(events)):
+        payload = event.get("payload") or {}
+        if event.get("kind") == "partial_land" or (
+                event.get("kind") == "land"
+                and payload.get("landing") in ("landed", "human_override")):
+            return [str(name) for name in payload.get("unsettled") or []]
+    return []
+
+
 def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mapping[str, Any]],
           final: Mapping[str, Any], findings: Sequence[Mapping[str, Any]],
           contract: Mapping[str, Any], push: Mapping[str, Any], audit_through: str,
@@ -209,6 +221,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "repos": dict(repos) if isinstance(repos, Mapping) else {},
                "commits": commit_map,
                "expected_repos": list(contract.get("expected_repos") or []),
+               "unsettled_checkouts": _unsettled(event_rows),
                "unclosed_high": [row["canonical_id"] for row in findings if push_effect(row)],
                # direct: the user's words are the requirement (no REQUIREMENTS doc)
                "requirement": contract.get("requirement"),
@@ -341,6 +354,9 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
         lines += [f"- 已落地：{name} @ {str(sha)[:12]}" for name, sha in sorted(landed.items())]
         lines += [f"- 未落地：{name}" for name in missing]
         lines.append("- main 上现在只有这次改动的一部分：先处理未落地的仓库，再 push。")
+    for name in details.get("unsettled_checkouts") or []:
+        lines.append(f"- {name}：已落地到分支，但共享 checkout 的 index / REPORT 没能收尾；"
+                     "`git status` 可能显示与 HEAD 的差异，文件没有丢失。")
     manual = details.get("manual")
     if manual:
         lines += ["", f"人工落地：request {manual.get('request_id')}"

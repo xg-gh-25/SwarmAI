@@ -5381,14 +5381,26 @@ def _v1_runner(ns, run_dir: Path, run_state: dict, ctx):
     contract = read_contract(get_app_data_dir(), ns.run_id)
     if contract is None:
         return None
-    repo_name = str(_WORKTREE.get("name") or ctx.repo.name)
-    main = (contract.get("repo_roots") or {}).get(repo_name)
-    if contract.get("mode") == "isolated" and (
-            not main or os.path.realpath(str(main)) == os.path.realpath(str(ctx.repo))):
-        # an isolated run's evidence is about its own worktree only: the main checkout
-        # holds other sessions' work (conformance K1, review round 1 #2)
-        raise RuntimeError(f"{repo_name}: this isolated run has no worktree; "
-                           "run `pipeline_v1.py stage-start` first")
+    # which of the run's repos this call measures: the contract is the one authority
+    # (v13 §D4 item 4, conformance K1/K5). An isolated run measures only its OWN
+    # worktree of a repo (the main checkout holds other sessions' work, another run's
+    # worktree is that run's); a shared run only a checkout its contract names. Exactly
+    # one repo must match by real path; a directory's basename is never an identity.
+    roots = contract.get("repo_roots") or {}
+    here = os.path.realpath(str(ctx.repo))
+    if contract.get("mode") == "isolated":
+        from core import run_worktree
+        names = [n for n in roots
+                 if run_worktree.wt_path(ns.run_id, n).is_dir()
+                 and os.path.realpath(str(run_worktree.wt_path(ns.run_id, n))) == here]
+    else:
+        names = [n for n, root in roots.items() if os.path.realpath(str(root)) == here]
+    if len(names) != 1:
+        raise RuntimeError(f"{ctx.repo} is not one of this run's own repos "
+                           f"({contract.get('mode')}); run `pipeline_v1.py stage-start` "
+                           "first, and test from the run's own worktree")
+    repo_name = names[0]
+    main = roots[repo_name]
     if main and os.path.realpath(str(main)) != os.path.realpath(str(ctx.repo)):
         # this call tests the run's own worktree: its base is the recorded fork point
         from core.run_protocol.runner import read_integration_branches

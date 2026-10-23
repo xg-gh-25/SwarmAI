@@ -306,6 +306,12 @@ def _land(run: dict[str, Any], event: Mapping[str, Any]) -> None:
                 or not all(isinstance(k, str) and k and _commit_sha(v) for k, v in commits.items()) \
                 or payload.get("commit") not in commits.values():
             raise LifecycleError("land event's commit map is malformed")
+    if "unsettled" in payload:
+        names = payload["unsettled"]
+        if not isinstance(names, list) or not names \
+                or not set(names) <= set(payload.get("commits") or {}) \
+                or not all(isinstance(name, str) for name in names):
+            raise LifecycleError("land event's unsettled repos are malformed")
     if landing == "landed":
         if run["status"] != "active" or run["stage"] != "deliver":
             raise LifecycleError("normal land requires active DELIVER")
@@ -400,6 +406,10 @@ def _partial_land(run: dict[str, Any], event: Mapping[str, Any]) -> None:
             or not all(isinstance(k, str) and k and _commit_sha(v) for k, v in landed.items()) \
             or not isinstance(payload.get("failed"), str) or payload["failed"] in landed:
         raise LifecycleError("partial_land must name the landed repo commits and the failed repo")
+    if "unsettled" in payload and (
+            not isinstance(payload["unsettled"], list) or not payload["unsettled"]
+            or not set(payload["unsettled"]) <= set(landed)):
+        raise LifecycleError("partial_land's unsettled repos must be landed repos")
     attempt_id, auth_id = payload.get("stage_attempt_event_id"), payload.get("auth_consumed_event_id")
     if (attempt_id is None) == (auth_id is None):
         raise LifecycleError("partial_land belongs to exactly one landing")
