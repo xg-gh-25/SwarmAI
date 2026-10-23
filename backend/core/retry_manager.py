@@ -255,6 +255,14 @@ class RetryManager:
             return "stalled"
         return getattr(failure_type, "value", None) or "crash"
 
+    def _stopped(self) -> bool:
+        """The user pressed Stop while this retry was between attempts."""
+        if getattr(self._parent, "_user_stopped_current_turn", False) is True:
+            logger.info("session_unit.retry_stopped session_id=%s — Stop during the "
+                        "backoff; no respawn", self._parent.session_id)
+            return True
+        return False
+
     def _superseded(self, gen_at_entry: int) -> bool:
         """A newer send() owns the unit: this retry yields to it (logged once)."""
         now = getattr(self._parent, "_send_generation", 0)
@@ -318,6 +326,30 @@ class RetryManager:
         _continuation_injected = False
 
         _tb_str = initial_tb_str or ""
+        self._parent._retrying = True
+        try:
+            async for event in self._retry_loop(
+                    query_content, options, config, error_str, _tb_str, gen_at_entry,
+                    resume_session_id, _consecutive_timeouts, _continuation_injected):
+                yield event
+        finally:
+            self._parent._retrying = False
+
+    async def _retry_loop(self, query_content, options, config, error_str, _tb_str,
+                          gen_at_entry, resume_session_id, _consecutive_timeouts,
+                          _continuation_injected) -> AsyncIterator[dict]:
+        """The attempts of ``_retry_with_resume`` (split out so the retrying mark
+        covers every exit)."""
+        from .session_utils import (
+            FailureType,
+            _build_error_event,
+            _is_retriable_error,
+            _sanitize_sdk_error,
+            classify_failure,
+            compute_backoff,
+        )
+        import core.session_unit as session_unit_mod
+        from core.session_unit import SessionState
         while (
             _is_retriable_error(error_str, _tb_str)
             and self._parent._retry_count < self._parent.MAX_RETRY_ATTEMPTS
@@ -391,6 +423,7 @@ class RetryManager:
                         self._parent._consecutive_oom_kills, self._parent.session_id,
                     )
                     await self._parent._crash_to_cold_async(clear_identity=True)
+                    yield turn_notice_event("gave_up", self._restart_cause(failure_type))
                     yield _build_error_event(
                         code="OOM_LIMIT_REACHED",
                         message=(
@@ -521,6 +554,9 @@ class RetryManager:
 
             await asyncio.sleep(backoff)
 
+            if self._stopped():
+                yield {"_abort": True}
+                return
             if self._superseded(gen_at_entry):
                 yield turn_notice_event("superseded")
                 yield {"_abort": True}
@@ -624,6 +660,12 @@ class RetryManager:
                 yield turn_notice_event("superseded")
                 yield {"_abort": True}
                 return
+            if self._stopped():
+                # Stop came while spawning: the fresh process never gets the query;
+                # it is recycled as a Stop recycles (identity kept for --resume)
+                await self._parent._crash_to_cold_async(clear_identity=False)
+                yield {"_abort": True}
+                return
 
             self._parent._active_agent_tools = {}  # Clear ghost entries from crashed attempt
             self._parent._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
@@ -652,8 +694,9 @@ class RetryManager:
                 )
                 continue
 
-        # All retries exhausted
+        # All retries exhausted: the reason is written with the turn (S2)
         await self._parent._crash_to_cold_async(clear_identity=True)
+        yield turn_notice_event("gave_up", self._restart_cause(failure_type))
         yield _build_error_event(
             code="ALL_RETRIES_EXHAUSTED",
             message=(

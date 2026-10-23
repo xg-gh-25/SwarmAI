@@ -664,21 +664,30 @@ describe('AC9 — one signal; a stopped turn says so', () => {
     const n = (reason: string, cause?: string) => ({ type: 'turn_notice', reason, ...(cause ? { cause } : {}) }) as ContentBlock;
     const { unmount } = render(view([tx('go'), bash('a', 'make'), tr('a'), bash('b', 'make'), n('restarted', 'stalled')], false));
     expect(screen.getByTestId('turn-stopped').textContent)
-      .toBe('Stopped · the AI process was restarted because it stopped responding (for example while the computer slept); the call it was running was lost');
+      .toBe('Stopped · the Swarm process was restarted because it stopped responding (for example while the computer slept); the call it was running was lost');
     unmount();
     render(view([tx('go'), bash('a', 'make'), tr('a'), bash('b', 'make'), n('superseded')], false));
     expect(screen.getByTestId('turn-stopped').textContent).toBe('Stopped · your newer message continued the conversation');
   });
 
-  it('auto-continue (historical rows): a resumed turn is not stopped; one that gave up says so', () => {
+  it('a restarted turn that went on is not stopped; one that gave up says so', () => {
     const n = (reason: string) => ({ type: 'turn_notice', reason, cause: 'disconnected' }) as ContentBlock;
     // the dropped call, the restarted notice, then the continuation's output
     const { unmount } = render(view([tx('go'), bash('a', 'make'), n('restarted'), bash('b', 'make'), tr('b'), tx('done')], false));
     expect(screen.queryByTestId('turn-stopped')).toBeNull();
     unmount();
-    render(view([tx('go'), bash('a', 'make'), n('gave_up')], false));
+    const r1 = render(view([tx('go'), bash('a', 'make'), n('gave_up')], false));
     expect(screen.getByTestId('turn-stopped').textContent)
-      .toBe('Stopped · the connection dropped 3 times and auto-continue gave up; send a message to continue');
+      .toBe('Stopped · the Swarm process could not be restarted (the chat lost its connection to it); send a message to continue');
+    r1.unmount();
+    const g = (cause: string) => ({ type: 'turn_notice', reason: 'gave_up', cause }) as ContentBlock;
+    const r2 = render(view([tx('go'), bash('a', 'make'), g('spawn_failed')], false));
+    expect(screen.getByTestId('turn-stopped').textContent)
+      .toBe('Stopped · the Swarm process could not be restarted (it could not be started); send a message to continue');
+    r2.unmount();
+    render(view([tx('go'), bash('a', 'make'), g('unknown')], false));
+    expect(screen.getByTestId('turn-stopped').textContent)
+      .toBe('Stopped · the Swarm process could not be restarted; send a message to continue');
   });
 });
 

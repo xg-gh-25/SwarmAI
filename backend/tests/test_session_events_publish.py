@@ -23,7 +23,7 @@ import pytest
 
 from core import session_events
 from core.session_router import SessionRouter
-from core.session_unit import SessionState
+from core.session_unit import SessionState, SessionUnit
 
 
 @pytest.fixture
@@ -185,6 +185,8 @@ async def test_injected_turn_publishes_after_persisting(hub, monkeypatch):
             yield e
 
     unit._read_formatted_response = frames
+    # the real failure policy over the fake CLI read (core/session_unit.read_with_recovery)
+    unit.read_with_recovery = lambda: SessionUnit.read_with_recovery(unit)
 
     async def persist(sid, event, pending, **kw):
         order.append(f"persist:{event['type']}")
@@ -228,6 +230,8 @@ async def test_injected_turn_publishes_its_deliverables(hub, monkeypatch):
         yield {"type": "result"}
 
     unit._read_formatted_response = frames
+    # the real failure policy over the fake CLI read (core/session_unit.read_with_recovery)
+    unit.read_with_recovery = lambda: SessionUnit.read_with_recovery(unit)
 
     async def persist(sid, event, pending, **kw):
         if event["type"] == "result":

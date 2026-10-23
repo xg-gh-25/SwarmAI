@@ -166,13 +166,22 @@ _LATEST: dict[str, int] = {}
 _SCHEDULED: dict[str, "asyncio.Task"] = {}
 
 
+def _on_running_loop(task: "asyncio.Task") -> bool:
+    """The task belongs to the loop running now (one left on a closed loop never
+    runs, so it must not hold back the next push)."""
+    try:
+        return task.get_loop() is asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+
+
 def publish(router, session_id: str) -> None:
     """Push the session's state (scheduled: the entry reads the DB). Never raises."""
     unit = router.get_unit(session_id) if router is not None else None
     if unit is None:
         return
     waiting = _SCHEDULED.get(session_id)
-    if waiting is not None and not waiting.done():
+    if waiting is not None and not waiting.done() and _on_running_loop(waiting):
         return   # the scheduled push has not read yet: it will see this change
     n = _LATEST[session_id] = _LATEST.get(session_id, 0) + 1
 

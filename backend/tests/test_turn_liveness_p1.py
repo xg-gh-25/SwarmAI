@@ -419,3 +419,23 @@ async def test_a_burst_of_queue_changes_shares_one_read(monkeypatch):
     session_state.publish(router, "s-burst")
     await asyncio.sleep(0.05)
     assert reads == ["s-burst"] * 3
+
+
+@pytest.mark.asyncio
+async def test_a_push_left_on_a_closed_loop_does_not_hold_back_the_next(monkeypatch):
+    from core import session_state
+    reads = []
+
+    async def entry(unit):
+        reads.append(unit.session_id)
+        return {"pending": []}
+    monkeypatch.setattr(session_state, "session_state_entry", entry)
+    stale = MagicMock()
+    stale.done.return_value = False
+    stale.get_loop.return_value = object()          # another (closed) loop's task
+    monkeypatch.setitem(session_state._SCHEDULED, "s-stale", stale)
+    router = MagicMock()
+    router.get_unit.return_value = MagicMock(session_id="s-stale")
+    session_state.publish(router, "s-stale")
+    await asyncio.sleep(0.05)
+    assert reads == ["s-stale"]

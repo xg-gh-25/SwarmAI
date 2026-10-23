@@ -2227,6 +2227,11 @@ class SessionRouter:
         # frees, and the set emptied then. At most one entry per unit in _units
         # (docs/design/chat-turn-liveness.md S1 v4).
         self._awaiting_slot: set[str] = set()
+        # sessions whose drained messages went back to pending after a failed
+        # delivery: how many delayed retries have been tried. Popped on delivery,
+        # on giving up and when the session is gone (docs/design/chat-turn-liveness.md S2).
+        self._drain_retries: dict[str, int] = {}
+        self._drain_retry_timers: dict[str, asyncio.TimerHandle] = {}
         # CLI-initiated turns (core/cli_stream_reader.py): one sink task per
         # session at a time, running the unit's queued injected turns in order.
         self._injected_tasks: dict[str, asyncio.Task] = {}
@@ -3513,7 +3518,11 @@ class SessionRouter:
         and a fresh client_id; the orchestrator's result handling returns the
         unit to IDLE. A question or permission inside the turn pauses it in
         WAITING_INPUT exactly as a user turn (its continuation reuses the turn's
-        client_id). An error is logged and ends the turn (F4)."""
+        client_id). A failure follows the one policy of every turn
+        (``SessionUnit.read_with_recovery``, docs/design/chat-turn-liveness.md S2):
+        restarted with --resume up to the retry limit, each try and the final
+        give-up written with the turn; the ``background_finished`` line is written
+        once, before the read, and a retry never writes it again."""
         from .cli_stream_reader import TurnAbandoned
         session_id = unit.session_id
         client_id = f"injected-{uuid4()}"
@@ -3538,8 +3547,8 @@ class SessionRouter:
                 yield event0
             # Persist first, then hand the event on to be published, so a tab
             # that reloads on turn_end finds every row it was shown live.
-            async for event in unit._read_formatted_response():
-                if not isinstance(event, dict):
+            async for event in unit.read_with_recovery():
+                if not isinstance(event, dict) or event.get("_abort"):
                     continue
                 extras = await writer.write(
                     event, files=self._turn_files_of(unit),
@@ -3564,9 +3573,10 @@ class SessionRouter:
             if unit.state == SessionState.STREAMING:
                 unit._transition(SessionState.IDLE)
         except Exception as exc:  # noqa: BLE001
+            # not retriable: read_with_recovery already sent the unit to COLD
             logger.warning("session_router.injected_turn_failed session_id=%s: %s: %s",
                            session_id, type(exc).__name__, exc)
-            if unit.state == SessionState.STREAMING:
+            if unit.state == SessionState.STREAMING:   # an error outside the read
                 await unit._crash_to_cold_async(clear_identity=False)
         logger.info("session_router.injected_turn_end session_id=%s state=%s",
                     session_id, unit.state.value)
@@ -3669,6 +3679,7 @@ class SessionRouter:
         # queue) with a loud log — never silently, never loop.
         if not user_text and not content:
             await session_pending.mark_sent_batch(session_id, seqs)
+            self._forget_drain_retry(session_id)
             logger.error(
                 "session_router.drain_dropped_corrupt session_id=%s seqs=%s — "
                 "pending rows combined to empty payload; marked sent to avoid a "
@@ -3731,6 +3742,54 @@ class SessionRouter:
                 "rolled back to pending",
                 session_id, seqs, exc,
             )
+            self._retry_drain_later(session_id)
+
+    def _forget_drain_retry(self, session_id: str) -> None:
+        """Drop a session's delayed-drain count and cancel its timer (delivered,
+        given up, cancelled)."""
+        getattr(self, "_drain_retries", {}).pop(session_id, None)
+        t = getattr(self, "_drain_retry_timers", {}).pop(session_id, None)
+        if t is not None:
+            t.cancel()
+
+    #: the waits before each delayed retry of a failed drain (the send itself has
+    #: already retried with --resume); then the rows stay queued, shown and
+    #: cancellable, until the next send or IDLE edge
+    _DRAIN_RETRY_DELAYS = (15.0, 60.0, 240.0)
+
+    def _retry_drain_later(self, session_id: str) -> None:
+        """Messages a drain claimed went back to pending (the delivery failed):
+        try them again after a growing wait, a bounded number of times
+        (docs/design/chat-turn-liveness.md S2). Before this they waited for the
+        next IDLE edge or send, which may never come. Never raises."""
+        retries = getattr(self, "_drain_retries", None)
+        timers = getattr(self, "_drain_retry_timers", None)
+        if retries is None or timers is None:
+            return
+        n = retries.get(session_id, 0)
+        if n >= len(self._DRAIN_RETRY_DELAYS):
+            self._forget_drain_retry(session_id)
+            logger.warning("session_router.drain_retry_gave_up session_id=%s after=%d — "
+                           "the messages stay queued", session_id, n)
+            return
+        retries[session_id] = n + 1
+
+        def fire() -> None:
+            timers.pop(session_id, None)
+            if session_id not in self._units:
+                retries.pop(session_id, None)
+                return
+            self.kick(session_id)
+        old = timers.pop(session_id, None)
+        if old is not None:
+            old.cancel()
+        try:
+            timers[session_id] = asyncio.get_running_loop().call_later(
+                self._DRAIN_RETRY_DELAYS[n], fire)
+        except RuntimeError:
+            retries.pop(session_id, None)   # no loop: nothing to schedule on
+        logger.info("session_router.drain_retry_scheduled session_id=%s attempt=%d in=%.0fs",
+                    session_id, n + 1, self._DRAIN_RETRY_DELAYS[n])
 
     async def _hand_back_send(
         self, client_id: Optional[str], session_id: str, agent_id: str,
@@ -3806,6 +3865,7 @@ class SessionRouter:
             return
         if delivered_ok and saw_error is None:
             await session_pending.mark_sent_batch(session_id, seqs)
+            self._forget_drain_retry(session_id)
             logger.info(
                 "session_router.pending_delivered session_id=%s count=%d seqs=%s",
                 session_id, len(seqs), seqs,
@@ -3824,6 +3884,7 @@ class SessionRouter:
             # (NOT rollback) so the row leaves the pending queue and is never
             # re-drained — this is the cut that stops the infinite re-drive loop.
             await session_pending.mark_sent_batch(session_id, seqs)
+            self._forget_drain_retry(session_id)
             logger.warning(
                 "session_router.pending_terminally_undeliverable session_id=%s "
                 "seqs=%s error=%s — permanent (non-retriable) failure; marked sent "
@@ -3837,6 +3898,7 @@ class SessionRouter:
                 "error=%s delivered_ok=%s — rolled back to pending",
                 session_id, seqs, saw_error, delivered_ok,
             )
+            self._retry_drain_later(session_id)
 
     async def _claim_cold_spawn_pending(
         self, unit: Any, session_id: str,
@@ -5252,7 +5314,9 @@ class SessionRouter:
         unit = self.get_unit(session_id)
         if unit is None:
             return {"success": False, "message": f"Session {session_id} not found"}
-        turn_running = unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT)
+        # a retry between attempts leaves the unit COLD while its turn still runs
+        retrying = getattr(unit, "_retrying", False) is True
+        turn_running = retrying or unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT)
         stop_rows = await self._persist_stop_receipt(session_id, unit)
         products = (asyncio.ensure_future(self._turn_products_at_stop(unit, stop_rows))
                     if stop_rows and turn_running else None)
@@ -5262,7 +5326,8 @@ class SessionRouter:
         try:
             if turn_running:
                 interrupted = await unit.interrupt()
-                message = "Interrupted" if interrupted else "Killed (interrupt timed out)"
+                message = ("Interrupted" if interrupted or retrying
+                           else "Killed (interrupt timed out)")
             else:
                 stopped = await unit.stop_background() if stop_rows else False
                 message = "Stopped background agents" if stopped else "Nothing running"
@@ -5672,6 +5737,8 @@ class SessionRouter:
         """
         # Root-1 SSOT Phase 2 (L3): cancel the serial drain worker so it doesn't
         # outlive the event loop on shutdown (a forever-blocking queue.get()).
+        for _sid in list(getattr(self, "_drain_retry_timers", {})):
+            self._forget_drain_retry(_sid)   # no timer may restart the worker below
         if self._drain_worker_task is not None and not self._drain_worker_task.done():
             self._drain_worker_task.cancel()
             try:

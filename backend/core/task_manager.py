@@ -9,6 +9,7 @@ Supports two task types:
 - ``script``: Shell subprocess owned by daemon process tree (survives session death)
 """
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -253,6 +254,7 @@ class TaskManager:
             # Run agent conversation
             # Use aclosing() to ensure generator cleanup happens in this task
             session_id = None
+            question: Optional[dict] = None
             async with aclosing(session_registry.session_router.run_conversation(
                 agent_id=agent_id,
                 user_message=message,
@@ -289,11 +291,12 @@ class TaskManager:
                         })
                         return
 
-                    # Check for ask_user_question - task pauses, waiting for message
+                    # A question pauses the turn (the unit waits on it): let this
+                    # stream end, then answer it as a continuation of that turn
                     if event.get("type") == "ask_user_question":
-                        # Wait for user response via message queue
-                        await self._handle_pending_interaction(task_id, session_id, enable_skills, enable_mcp)
-                        return
+                        question = event
+            if question is not None:
+                await self._handle_pending_interaction(task_id, session_id, question)
 
         except asyncio.CancelledError:
             logger.info(f"Task {task_id} was cancelled")
@@ -318,17 +321,48 @@ class TaskManager:
             # Schedule cleanup of buffers after retention period
             asyncio.create_task(self._schedule_buffer_cleanup(task_id))
 
+    @staticmethod
+    def _answer_for(question: dict, text: str) -> str:
+        """The user's reply as the answer the AskUserQuestion continuation takes:
+        JSON keyed by each question's text (as the chat's answer form sends).
+
+        A reply that is itself a JSON object keyed by those question texts is the
+        answer as given (one answer per question). Plain text answers a single
+        question; with several, the same words answer each one -- they are the
+        user's words for the whole card, never an invented selection."""
+        texts = [q.get("question", "") for q in (question.get("questions") or [])
+                 if isinstance(q, dict)]
+        try:
+            given = json.loads(text)
+        except (ValueError, TypeError):
+            given = None
+        if isinstance(given, dict) and given and set(given) <= set(texts):
+            return json.dumps({k: str(v) for k, v in given.items()})
+        return json.dumps({t: text for t in texts} or {"": text})
+
+    @staticmethod
+    def _reply_text(msg_data: dict) -> str:
+        """The reply's words: the message, else the text blocks of its content."""
+        text = msg_data.get("message") or ""
+        if not text:
+            text = "\n".join(b.get("text", "") for b in (msg_data.get("content") or [])
+                             if isinstance(b, dict) and b.get("type") == "text").strip()
+        return text
+
     async def _handle_pending_interaction(
         self,
         task_id: str,
         session_id: str,
-        enable_skills: bool,
-        enable_mcp: bool,
+        question: dict,
     ) -> None:
         """Handle task paused for user interaction (ask_user_question).
 
-        Uses a loop instead of recursion to handle multiple consecutive
-        ask_user_question events, avoiding potential stack overflow.
+        The turn that asked is paused on the question (the unit waits for the
+        answer), so the user's reply goes in as that turn's continuation
+        (``continue_with_answer`` with the question's tool_use_id), never as a new
+        message: a new one would be queued behind the paused turn and the task
+        marked blocked (docs/design/chat-turn-liveness.md S2). Loops over further
+        questions instead of recursing.
         """
         message_queue = self._message_queues.get(task_id)
         if not message_queue:
@@ -344,15 +378,12 @@ class TaskManager:
                 if not task:
                     return
 
-                needs_another_interaction = False
+                next_question: Optional[dict] = None
 
-                async with aclosing(session_registry.session_router.run_conversation(
-                    agent_id=task["agent_id"],
-                    user_message=msg_data.get("message"),
-                    content=msg_data.get("content"),
+                async with aclosing(session_registry.session_router.continue_with_answer(
                     session_id=session_id,
-                    enable_skills=enable_skills,
-                    enable_mcp=enable_mcp,
+                    answer=self._answer_for(question, self._reply_text(msg_data)),
+                    tool_use_id=question.get("toolUseId"),
                 )) as conversation:
                     async for event in conversation:
                         await self._emit_event(task_id, event)
@@ -375,12 +406,12 @@ class TaskManager:
                             return
 
                         if event.get("type") == "ask_user_question":
-                            # Mark that we need to wait for another interaction
-                            needs_another_interaction = True
+                            next_question = event
 
                 # If no more interactions needed, exit the loop
-                if not needs_another_interaction:
+                if next_question is None:
                     return
+                question = next_question
 
         except asyncio.CancelledError:
             raise

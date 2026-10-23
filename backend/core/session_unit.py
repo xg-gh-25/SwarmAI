@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 from .compaction_guard import EscalationLevel
 from .retry_manager import RetryManager
+from .turn_notice import turn_notice_event
 from .streaming_orchestrator import StreamingOrchestrator
 from .turn_phase import (
     STARTING as TURN_PHASE_STARTING,
@@ -2390,6 +2391,7 @@ class SessionUnit:
         # New user turn — clear the durable "stopped" flag so a prior Stop does
         # not suppress self-heal on this genuinely new turn.
         self._user_stopped_current_turn = False
+        self._retrying = False   # no retry of an earlier turn is in progress now
         # Clear stale recovery checkpoint from a prior aborted kill
         # (e.g. RSS spike armed checkpoint → spike subsided → kill didn't fire).
         # Prevents an unrelated later restart from injecting stale context.
@@ -3254,6 +3256,7 @@ class SessionUnit:
                 error_str[:120],
             )
             await self._crash_to_cold_async()
+            self._retrying = True   # a Stop between attempts ends the retry (S2)
             while (
                 _is_retriable_error(error_str, spawn_tb_str)
                 and self._retry_count < self.MAX_RETRY_ATTEMPTS
@@ -3283,14 +3286,25 @@ class SessionUnit:
                     "code": "RETRY_SPAWN",
                 }
                 await asyncio.sleep(backoff)
+                if self._user_stopped_current_turn is True:
+                    self._retrying = False
+                    yield {"_abort": True}
+                    return
                 try:
                     await self._spawn(options, config)
+                    self._retrying = False
+                    if self._user_stopped_current_turn is True:
+                        await self._crash_to_cold_async(clear_identity=False)
+                        yield {"_abort": True}
+                        return
                     return  # success — state is IDLE
                 except Exception as retry_exc:
                     error_str = str(retry_exc)
                     await self._crash_to_cold_async()
+            self._retrying = False
 
-            # All retries exhausted
+            # All retries exhausted: the reason is written with the turn
+            yield turn_notice_event("gave_up", "spawn_failed")
             friendly, suggested = _sanitize_sdk_error(error_str)
             yield _build_error_event(
                 code="SPAWN_FAILED",
@@ -3327,6 +3341,23 @@ class SessionUnit:
         ):
             yield event
 
+    async def read_with_recovery(self) -> AsyncIterator[dict]:
+        """Read a turn this unit did not send a message for -- an answer or
+        permission continuation, a CLI-initiated (injected) turn -- under the same
+        failure policy as a send (docs/design/chat-turn-liveness.md S2): a
+        retriable failure resumes with ``--resume`` and the continuation prompt, up
+        to MAX_RETRY_ATTEMPTS, each attempt a ``turn_notice(restarted)``, and
+        running out a persisted ``turn_notice(gave_up)``."""
+        from .cli_stream_reader import TurnAbandoned
+        try:
+            async for event in self._read_formatted_response():
+                yield event
+        except TurnAbandoned:
+            raise   # control flow: the CLI is healthy and kept (_end_abandoned_turn)
+        except Exception as exc:
+            async for event in self._retry_continuation(exc, traceback.format_exc()):
+                yield event
+
     async def _retry_continuation(
         self, exc: Exception, tb_str: str,
     ) -> AsyncIterator[dict]:
@@ -3341,13 +3372,21 @@ class SessionUnit:
         from .session_utils import _is_retriable_error
 
         error_str = str(exc)
-        if (
-            self._last_send_options is None
-            or not _is_retriable_error(error_str, tb_str)
-            or self._retry_count >= self.MAX_RETRY_ATTEMPTS
-        ):
+        if self._last_send_options is None or not _is_retriable_error(error_str, tb_str):
             await self._crash_to_cold_async(clear_identity=False)
             raise exc
+        if self._retry_count >= self.MAX_RETRY_ATTEMPTS:
+            # the turn's attempts went on earlier phases (a question in between):
+            # this is the give-up of the one policy, written with the turn (S2)
+            from .session_utils import _build_error_event
+            await self._crash_to_cold_async(clear_identity=False)
+            yield turn_notice_event("gave_up", "crash")
+            yield _build_error_event(
+                code="ALL_RETRIES_EXHAUSTED",
+                message="The AI service couldn't restart after multiple attempts. This is usually temporary.",
+                suggested_action="Your conversation is saved. Wait a moment, then send your message again.",
+            )
+            return
         logger.warning(
             "session_unit.continuation_retry session_id=%s error=%s",
             self.session_id, error_str[:120],
@@ -4085,6 +4124,10 @@ class SessionUnit:
         whole time, no turn is admitted onto the subprocess being recycled (the
         router queues it; ``send`` waits), and its end re-drives the pending
         messages queued meanwhile (``stop_done``)."""
+        if not autonomous and getattr(self, "_retrying", False):
+            # between attempts (COLD, backing off): the retry sees this and stops
+            # instead of respawning (docs/design/chat-turn-liveness.md S2)
+            self._user_stopped_current_turn = True
         if autonomous or self.state not in (SessionState.STREAMING, SessionState.WAITING_INPUT):
             return await self._interrupt_impl(timeout=timeout, autonomous=autonomous)
         self._set_stopping(True)
@@ -4512,12 +4555,8 @@ class SessionUnit:
                 "(session=%s) — hook may time out", self.session_id,
             )
 
-        try:
-            async for event in self._read_formatted_response():
-                yield event
-        except Exception as exc:
-            async for event in self._retry_continuation(exc, traceback.format_exc()):
-                yield event
+        async for event in self.read_with_recovery():
+            yield event
 
     def _deliver_permission_decision(self, request_id: str, allowed: bool) -> bool:
         """Hand the decision to the hook blocked on *request_id*; False (nothing
@@ -4597,12 +4636,8 @@ class SessionUnit:
         self._pending_question = None
         self._transition(SessionState.STREAMING)
 
-        try:
-            async for event in self._read_formatted_response():
-                yield event
-        except Exception as exc:
-            async for event in self._retry_continuation(exc, traceback.format_exc()):
-                yield event
+        async for event in self.read_with_recovery():
+            yield event
 
     async def reclaim_for_mcp_swap(self, mcp_name: Optional[str] = None) -> None:
         """Kill subprocess to prepare for MCP hot-swap.

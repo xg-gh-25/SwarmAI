@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: P1 DONE（后端，v4）；P2a DONE（蜜蜂只看活动）；P2b DONE（未受理的消息可重试）；P2c DONE（排队只在后端）；P3 未开始
+status: P1 DONE（后端，v4）；P2a DONE（蜜蜂只看活动）；P2b DONE（未受理的消息可重试）；P2c DONE（排队只在后端）；P3 DONE（一个失败策略）；P4 未开始
 related: chat-transcript-single-source.md（S3 会话状态唯一来源，本文是它没覆盖到的那一半）, streaming-spinner-ssot.md（2026-06-30，同类，未按设计落地）
 ---
 
@@ -490,3 +490,35 @@ fresh-context 审查。旧的 `streaming` 字段一直保留（部署脚本在�
   - S2 改成一个策略按入口传参数，`gave_up` 重新进库。
   - 测试改用闸门制造并发，预期失败提交，KNOWN 保持为空，补 T5b、T7、T8。
   - 热路径：阶段增量不读库，完整快照只在边界发；要实测端到端耗时。
+- P3 实现（2026-10-24）：S2 落地，和 S2 原文不同的三处（实现时核实出来的）：
+  - **注入回合的重试用续接的同一套**，不另写一份：`SessionUnit.read_with_recovery()` 是答题续接、审批续接、
+    注入回合三处共用的读法（读失败就走 `_retry_continuation`：`--resume` + 续接提示 "Continue the task
+    where you left off"）。S2 原文说重开时发后台结果说明；不需要，`--resume` 后 CLI 自己的记录里就有那条
+    任务通知。`background_finished` 块在读之前写一次，重试不会再写。路由里"WARNING、杀到 cold"的分支只剩
+    读之外的错误（比如写库失败）才用，读里的失败已由策略处理。
+  - **`turn_notice(restarted)` 每回合只写一次**（`retry_manager` 原来就这样，避免每次重试刷一行），
+    S2 原文说"每次写一条"，按实现改。
+  - **`gave_up` 在三个放弃点都写**：重试用完（`ALL_RETRIES_EXHAUSTED`）、连续 OOM 到上限
+    （`OOM_LIMIT_REACHED`）、spawn 重试用完（`SPAWN_FAILED`）。都在错误事件之前，随回合写库，刷新后可见；
+    前端文案改成"AI 进程重启不起来（原因）；发一条消息继续"，旧的"自动续接放弃"说法删掉。
+  - **TaskManager 的问答**：问题出现时让外层流自己结束（不提前关，后面的收尾代码要跑），再用
+    `continue_with_answer`（问题的 `tool_use_id`，答案按问题文本做 key，和聊天的答题表单一样）续上；后续问题同样处理。
+  - **drain 失败后延迟重试**：两处回滚（投递抛错、结束了没投递）都调 `_retry_drain_later`：15s / 60s / 240s
+    三次，之后消息留在队列里（前端看得到、能取消）。投递成功、放弃、会话没了，都清计数。
+  - 测试：T5 转普通测试（真的策略代码，只替换 resume 本身）；`test_session_kill_recovery.py` 加放弃写
+    `gave_up` 的两条路径；新文件 `test_turn_liveness_p3.py`（TaskManager 两条、drain 重试三条）。
+    反向验证 10 处，各自变红。
+  - 审查（42780697）的修复：
+    - **退避期间按 Stop 会被重试忽略**（main 上就有，普通发送一样）：重试在两次尝试之间 unit 是 COLD，`interrupt()`
+      原来什么都不记。现在重试整个过程标 `_retrying`，期间的 Stop 记下 `_user_stopped_current_turn`，退避结束后先看它，
+      不再 respawn。
+    - **`TurnAbandoned` 被当成失败**：它是控制流（CLI 健康、保留），`read_with_recovery` 直接抛出，不走重试。
+    - **续接时次数已经用完**（前面的阶段用掉了）：原来 crash 后直接抛出，没有 `gave_up`；现在和重试循环一样写
+      `gave_up` + `ALL_RETRIES_EXHAUSTED`。
+    - **延迟 drain 的定时器**：每个会话记下自己的 timer，投递成功、放弃、`disconnect_all`（先于取消 worker）都取消它，
+      不会在关停时把 worker 重新拉起来。
+    - **TaskManager 多个问题**：回复本身是按问题文本做 key 的 JSON 对象时按它答；纯文本就是用户对整张卡的原话，每个问题都给这句。
+    - 前端补上 `spawn_failed` / `rate_limit` / `api_error` / `zombie` / `crash` 的说法，`unknown` 不显示原因。
+    - 另外发现 P2c 带进来的测试挂起：`test_send_requests.py` 的排队推送任务在测试的 loop 关掉时还拿着连接池里的连接，
+      会话 teardown 一直等。测试里加 fixture 等完这些推送；`session_state.publish` 的合并也不再被别的（已关闭）loop 上
+      没跑的任务挡住。

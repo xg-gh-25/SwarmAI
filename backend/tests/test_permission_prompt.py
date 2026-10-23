@@ -76,7 +76,7 @@ async def test_persist_stream_event_stores_the_prompt_on_its_own_row():
 async def test_an_injected_cli_turn_that_stops_on_a_permission_stores_it():
     """The incident path end to end: CLI-initiated turn → permission → WAITING_INPUT."""
     from core.session_router import SessionRouter
-    from core.session_unit import SessionState
+    from core.session_unit import SessionState, SessionUnit
     from core.background_agents import BackgroundAgents
 
     router = SessionRouter.__new__(SessionRouter)
@@ -92,6 +92,8 @@ async def test_an_injected_cli_turn_that_stops_on_a_permission_stores_it():
         yield dict(EVENT)
 
     unit._read_formatted_response = _frames
+    # the real failure policy over the fake CLI read (core/session_unit.read_with_recovery)
+    unit.read_with_recovery = lambda: SessionUnit.read_with_recovery(unit)
     rows = []
 
     async def _persist(session_id, blocks, model, **kw):

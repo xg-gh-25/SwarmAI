@@ -275,7 +275,15 @@ async def test_t4_nothing_starts_on_a_subprocess_a_stop_is_recycling(hub, monkey
 class _DeadUnit:
     """The far leaf of an injected turn: the CLI starts answering, then its process
     dies (exit -9 as on 10-22). Every later read answers normally, so a retry
-    recovers the turn. Counts reads so the test sees whether anyone retried."""
+    recovers the turn. Counts reads so the test sees whether anyone retried.
+
+    The failure policy is the real one (SessionUnit.read_with_recovery and
+    _retry_continuation); only the resume itself is replaced, by what the retry
+    manager yields for it: a ``turn_notice(restarted)``, then the resumed stream."""
+
+    MAX_RETRY_ATTEMPTS = 3
+    read_with_recovery = SessionUnit.read_with_recovery
+    _retry_continuation = SessionUnit._retry_continuation
 
     def __init__(self, sid: str) -> None:
         self.session_id = sid
@@ -283,6 +291,9 @@ class _DeadUnit:
         self._turn_changes = None
         self.reads = 0
         self.crashed = 0
+        self._retry_count = 0
+        self._last_send_options = object()
+        self._last_send_config = None
         from core.background_agents import BackgroundAgents
         self.background_agents = BackgroundAgents()
         self.background_agents.launch("ag1", "t5 agent")
@@ -299,6 +310,13 @@ class _DeadUnit:
         self.crashed += 1
         self.state = SessionState.COLD
 
+    async def _retry_with_resume(self, prompt, options, config, err, tb):
+        from core.turn_notice import turn_notice_event
+        self.resumed_with = prompt
+        yield turn_notice_event("restarted", "killed")
+        async for event in self._read_formatted_response():
+            yield event
+
     async def _read_formatted_response(self):
         self.reads += 1
         yield {"type": "session_start", "sessionId": self.session_id}
@@ -310,7 +328,6 @@ class _DeadUnit:
 
 
 @pytest.mark.asyncio
-@red(P3)
 async def test_t5_an_injected_turn_whose_process_dies_is_retried_with_a_reason(hub, monkeypatch):
     r = _router()
     monkeypatch.setattr(r, "_turn_files_of", lambda u: None)

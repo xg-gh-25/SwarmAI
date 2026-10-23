@@ -18,9 +18,9 @@ from typing import Optional
 
 #: restarted  — the AI process was restarted mid-turn; the call it ran was lost.
 #: superseded — a newer message resumed the conversation; this turn stopped.
-#: gave_up    — historical: written by the removed disconnect auto-continue when it ran
-#:              out of attempts. No longer produced (a disconnect no longer stops a
-#:              turn); kept so rows already in the DB still render.
+#: gave_up    — the turn ran out of restart attempts (any entry: a send, an answer or
+#:              permission continuation, a CLI-initiated turn); written with the turn
+#:              so it shows after a reload (docs/design/chat-turn-liveness.md S2).
 REASONS = ("restarted", "superseded", "gave_up")
 
 

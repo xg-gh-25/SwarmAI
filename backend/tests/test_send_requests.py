@@ -22,6 +22,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import pytest_asyncio
 
 import core.session_manager  # noqa: F401 — binds db at import, before any patch
 import routers.chat  # noqa: F401
@@ -43,6 +44,19 @@ def _no_background_drain(monkeypatch):
     async def _skip(self, session_id):
         return None
     monkeypatch.setattr(SessionRouter, "drain_pending", _skip)
+
+
+@pytest_asyncio.fixture(autouse=True, loop_scope="function")
+async def _finish_state_pushes():
+    """A send queued here pushes the session's state (core/session_state.publish:
+    a fire-and-forget task that reads the queue from the DB pool). Each test waits
+    for its pushes, so none is cut off holding a pooled connection when the test's
+    loop closes (that left the session teardown waiting on the pool forever)."""
+    yield
+    pubs = [t for t in asyncio.all_tasks()
+            if not t.done() and "publish" in getattr(t.get_coro(), "__qualname__", "")]
+    if pubs:
+        await asyncio.wait(pubs, timeout=2)
 
 
 def _row(cid: str, sid: str = "s", owner: str = sr.OWNER, status: str = sr.RESERVED, mid=None, at=None):

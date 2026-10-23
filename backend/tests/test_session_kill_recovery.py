@@ -152,3 +152,159 @@ async def test_permission_continuation_non_retriable_error_still_raises():
     unit._last_send_options = MagicMock()
     with pytest.raises(ValueError):
         await _continue(unit, ValueError("bad schema"))
+
+
+@pytest.mark.asyncio
+async def test_running_out_of_restarts_writes_gave_up_with_the_turn():
+    """docs/design/chat-turn-liveness.md S2: when every restart attempt fails, the
+    turn carries a ``turn_notice(gave_up)`` (persisted like any assistant row, so
+    it shows after a reload) before the ALL_RETRIES_EXHAUSTED error."""
+    for oom_limit in (99, 3):   # out of attempts; the OOM limit (a -9 reads as OOM)
+        await _gives_up(oom_limit)
+
+
+async def _gives_up(oom_limit):
+    unit = _unit()
+    unit._OOM_KILL_LIMIT = oom_limit
+
+    async def dies(_q):
+        raise RuntimeError(KILL)
+        yield  # pragma: no cover
+
+    budget = MagicMock(can_spawn=True, reason="")
+    with patch("core.session_unit._oom_cooldown_until", 0), \
+         patch("core.resource_monitor.resource_monitor.spawn_budget", return_value=budget), \
+         patch.object(unit, "_build_retry_options", return_value=MagicMock()), \
+         patch.object(unit, "_crash_to_cold_async", new_callable=AsyncMock), \
+         patch.object(unit, "_transition"), \
+         patch.object(unit, "_spawn", AsyncMock()), \
+         patch.object(unit._streaming_orchestrator, "stream_query", side_effect=dies), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        events = [e async for e in unit._retry_with_resume("msg", MagicMock(), None, KILL, "")]
+    reasons = [b.get("reason") for e in events if e.get("type") == "assistant"
+               for b in e.get("content", []) if b.get("type") == "turn_notice"]
+    assert reasons[0] == "restarted" and reasons.count("restarted") == 1   # once per turn
+    assert reasons[-1] == "gave_up"
+    codes = [e.get("code") for e in events if e.get("type") == "error"]
+    assert codes == (["ALL_RETRIES_EXHAUSTED"] if oom_limit == 99 else ["OOM_LIMIT_REACHED"])
+    i_gave = next(i for i, e in enumerate(events) if e.get("type") == "assistant"
+                  and any(b.get("reason") == "gave_up" for b in e.get("content", [])))
+    i_err = next(i for i, e in enumerate(events) if e.get("type") == "error")
+    assert i_gave < i_err
+
+
+@pytest.mark.asyncio
+async def test_stop_during_the_backoff_ends_the_retry_without_a_respawn():
+    """A user Stop between attempts (the unit is COLD, backing off) ends the retry:
+    no respawn, no further stream (docs/design/chat-turn-liveness.md S2)."""
+    unit = _unit()
+    spawn = AsyncMock()
+    stream = MagicMock()
+
+    async def sleep_then_stop(_s):
+        assert unit._retrying is True
+        await unit.interrupt()          # the user's Stop, while COLD
+
+    budget = MagicMock(can_spawn=True, reason="")
+    with patch("core.session_unit._oom_cooldown_until", 0), \
+         patch("core.resource_monitor.resource_monitor.spawn_budget", return_value=budget), \
+         patch.object(unit, "_build_retry_options", return_value=MagicMock()), \
+         patch.object(unit, "_crash_to_cold_async", new_callable=AsyncMock), \
+         patch.object(unit, "_transition"), \
+         patch.object(unit, "_spawn", spawn), \
+         patch.object(unit._streaming_orchestrator, "stream_query", stream), \
+         patch("asyncio.sleep", side_effect=sleep_then_stop):
+        events = [e async for e in unit._retry_with_resume("msg", MagicMock(), None, KILL, "")]
+    assert spawn.await_count == 0 and stream.call_count == 0
+    assert events[-1] == {"_abort": True}
+    assert unit._retrying is False
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_with_its_attempts_used_up_gives_up_with_the_turn():
+    unit = _unit()
+    unit._last_send_options = MagicMock()
+    unit._retry_count = unit.MAX_RETRY_ATTEMPTS
+    with patch.object(unit, "_crash_to_cold_async", new_callable=AsyncMock):
+        events = [e async for e in unit._retry_continuation(RuntimeError(KILL), "")]
+    assert [b["reason"] for b in events[0]["content"]] == ["gave_up"]
+    assert events[1]["code"] == "ALL_RETRIES_EXHAUSTED"
+
+
+@pytest.mark.asyncio
+async def test_an_abandoned_turn_is_not_a_failure():
+    """TurnAbandoned is control flow: read_with_recovery passes it on without
+    crashing the healthy CLI to COLD or retrying."""
+    from core.cli_stream_reader import TurnAbandoned
+    unit = _unit()
+    unit._last_send_options = MagicMock()
+
+    async def abandoned():
+        raise TurnAbandoned("superseded")
+        yield  # pragma: no cover
+    crash = AsyncMock()
+    with patch.object(unit, "_read_formatted_response", side_effect=abandoned), \
+         patch.object(unit, "_crash_to_cold_async", crash):
+        with pytest.raises(TurnAbandoned):
+            _ = [e async for e in unit.read_with_recovery()]
+    assert crash.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_stop_while_the_retry_spawns_never_sends_the_query():
+    unit = _unit()
+    stream = MagicMock()
+
+    async def spawn_and_stop(*_a, **_k):
+        await unit.interrupt()          # Stop lands while the fresh process starts
+
+    budget = MagicMock(can_spawn=True, reason="")
+    crash = AsyncMock()
+    with patch("core.session_unit._oom_cooldown_until", 0), \
+         patch("core.resource_monitor.resource_monitor.spawn_budget", return_value=budget), \
+         patch.object(unit, "_build_retry_options", return_value=MagicMock()), \
+         patch.object(unit, "_crash_to_cold_async", crash), \
+         patch.object(unit, "_transition"), \
+         patch.object(unit, "_spawn", AsyncMock(side_effect=spawn_and_stop)), \
+         patch.object(unit._streaming_orchestrator, "stream_query", stream), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        events = [e async for e in unit._retry_with_resume("msg", MagicMock(), None, KILL, "")]
+    assert stream.call_count == 0 and events[-1] == {"_abort": True}
+    assert crash.await_args_list[-1].kwargs == {"clear_identity": False}
+
+
+@pytest.mark.asyncio
+async def test_stop_between_spawn_attempts_ends_the_spawn_retry():
+    """The first spawn of a send retries too (_ensure_spawned): a Stop between its
+    attempts ends it without another spawn."""
+    unit = _unit()
+    unit._user_stopped_current_turn = False
+    spawn = AsyncMock(side_effect=RuntimeError(KILL))
+
+    async def sleep_then_stop(_s):
+        assert unit._retrying is True
+        await unit.interrupt()
+
+    cfg = MagicMock()
+    cfg.get.side_effect = lambda k, d=None: False if k == "use_bedrock" else d
+    with patch("core.app_config_manager.AppConfigManager.instance", return_value=cfg), \
+         patch.object(unit, "_build_retry_options", return_value=MagicMock()), \
+         patch.object(unit, "_crash_to_cold_async", new_callable=AsyncMock), \
+         patch.object(unit, "_spawn", spawn), \
+         patch("asyncio.sleep", side_effect=sleep_then_stop):
+        events = [e async for e in unit._ensure_spawned(MagicMock(), None)]
+    assert spawn.await_count == 1, "no spawn after the Stop"
+    assert events[-1] == {"_abort": True} and unit._retrying is False
+
+
+@pytest.mark.asyncio
+async def test_the_stop_endpoint_reaches_a_retry_between_attempts():
+    from core.session_router import SessionRouter
+    r = SessionRouter.__new__(SessionRouter)
+    unit = _unit()
+    unit._retrying = True                     # COLD, backing off
+    r.get_unit = lambda sid: unit
+    with patch.object(SessionRouter, "_persist_stop_receipt", AsyncMock(return_value=[])):
+        out = await r.interrupt_session("kill-1")
+    assert unit._user_stopped_current_turn is True
+    assert out.get("message") == "Interrupted"

@@ -21,7 +21,7 @@ from fastapi import FastAPI
 
 from core import session_events
 from core.session_router import SessionRouter
-from core.session_unit import SessionState
+from core.session_unit import SessionState, SessionUnit
 from routers import chat
 
 
@@ -104,6 +104,8 @@ async def test_cli_initiated_turn_reaches_the_events_subscriber_over_http(hub, m
         yield {"type": "result", "session_id": "S1"}
 
     unit._read_formatted_response = frames
+    # the real failure policy over the fake CLI read (core/session_unit.read_with_recovery)
+    unit.read_with_recovery = lambda: SessionUnit.read_with_recovery(unit)
     from core.background_agents import BackgroundAgents
     unit.background_agents = BackgroundAgents()
     unit.background_agents.launch("ag1", "Background status display test")

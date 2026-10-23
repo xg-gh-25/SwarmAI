@@ -37,6 +37,7 @@ import { usePendingToolElapsed } from '../../../hooks/usePendingToolElapsed';
 import { chatService } from '../../../services/chat';
 import { ANCHOR_PROPS } from '../scrollFocus';
 import { tf } from '../tf';
+import { ASSISTANT_NAME } from '../assistantName';
 import type { ThoughtUnit, ToolStep } from '../turnView';
 import { STOP_TURN_EVENT, agentBatches, mergeStrips, phaseSegments, stripView, zoneStats } from '../turnZones';
 import type { PhaseMember, StageZone, StopReceiptView, StripItem, Zone } from '../turnZones';
@@ -75,18 +76,30 @@ const CAUSE_TEXT: Record<string, string> = {
   killed: 'something outside SwarmAI killed it (the computer was not short of memory)',
   timeout: 'it timed out',
   disconnected: 'the chat lost its connection to it',
+  spawn_failed: 'it could not be started',
+  rate_limit: 'the AI service was rate-limited',
+  api_error: 'the AI service returned an error',
+  zombie: 'it stopped responding',
+  crash: 'it crashed',
 };
+/** causes that say nothing a person can use: the line goes without them */
+const NO_CAUSE = new Set(['unknown']);
 function stoppedNoticeText(t: Parameters<typeof tf>[0], n: { reason: string; cause?: string }): string {
   if (n.reason === 'superseded') {
     return tf(t, 'chat.turn.zone.stoppedSuperseded', 'Stopped · your newer message continued the conversation');
   }
+  const cause = n.cause && !NO_CAUSE.has(n.cause) ? CAUSE_TEXT[n.cause] ?? n.cause : null;
+  // the assistant is named once (pages/chat/assistantName), never "AI"
+  const name = ASSISTANT_NAME;
   if (n.reason === 'gave_up') {
-    return tf(t, 'chat.turn.zone.stoppedGaveUp', 'Stopped · the connection dropped 3 times and auto-continue gave up; send a message to continue');
+    // every restart attempt failed (any turn: a send, a continuation, a CLI-initiated turn)
+    return cause
+      ? tf(t, 'chat.turn.zone.stoppedGaveUpCause', 'Stopped · the {{name}} process could not be restarted ({{cause}}); send a message to continue', { cause, name })
+      : tf(t, 'chat.turn.zone.stoppedGaveUp', 'Stopped · the {{name}} process could not be restarted; send a message to continue', { name });
   }
-  const cause = n.cause ? CAUSE_TEXT[n.cause] ?? n.cause : null;
   return cause
-    ? tf(t, 'chat.turn.zone.stoppedRestartedCause', 'Stopped · the AI process was restarted because {{cause}}; the call it was running was lost', { cause })
-    : tf(t, 'chat.turn.zone.stoppedRestarted', 'Stopped · the AI process was restarted; the call it was running was lost');
+    ? tf(t, 'chat.turn.zone.stoppedRestartedCause', 'Stopped · the {{name}} process was restarted because {{cause}}; the call it was running was lost', { cause, name })
+    : tf(t, 'chat.turn.zone.stoppedRestarted', 'Stopped · the {{name}} process was restarted; the call it was running was lost', { name });
 }
 
 const SPAN_SCOPES = 200;
