@@ -16,7 +16,8 @@ import VirtualizedTree from './VirtualizedTree';
 import type { FileTreeItem } from './FileTreeNode';
 import type { TreeNode } from '../../types';
 import { DEFAULT_WORKSPACE_ID } from '../../types/workspace-config';
-import { fileIcon, fileIconColor, gitStatusBadge } from '../../utils/fileUtils';
+import { gitStatusBadge } from '../../utils/fileUtils';
+import { FileTypeIcon } from '../common/FileTypeIcon';
 
 /** User content directories — the ONLY places a user "works on files".
  *  Working Files section only shows changes inside these directories. */
@@ -100,8 +101,6 @@ function WorkingFileItem({
   onDoubleClick?: (node: FileTreeItem) => void;
 }) {
   const { node, parentName } = file;
-  const icon = node.type === 'directory' ? 'folder' : fileIcon(node.name);
-  const iconColor = node.type === 'directory' ? 'var(--color-icon-folder)' : fileIconColor(node.name);
   const badge = node.gitStatus ? gitStatusBadge(node.gitStatus) : null;
 
   const handleDoubleClick = () => {
@@ -124,9 +123,13 @@ function WorkingFileItem({
       style={{ paddingLeft: 8, fontSize: '13px', lineHeight: '32px' }}
       onDoubleClick={handleDoubleClick}
     >
-      <span className="material-symbols-outlined icon-sm" style={{ color: iconColor, flexShrink: 0 }}>
-        {icon}
-      </span>
+      {node.type === 'directory' ? (
+        <span className="material-symbols-outlined icon-sm" style={{ color: 'var(--color-icon-folder)', flexShrink: 0 }}>
+          folder
+        </span>
+      ) : (
+        <FileTypeIcon name={node.name} />
+      )}
       <span className="truncate text-[var(--color-text)]" style={{ letterSpacing: '-0.01em' }}>
         {node.name}
       </span>

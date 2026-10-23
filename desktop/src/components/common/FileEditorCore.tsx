@@ -24,7 +24,8 @@ import hljs from 'highlight.js';
 import Button from './Button';
 import type { GitStatus } from '../../types';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
-import { fileIcon, fileIconColor, gitStatusBadge } from '../../utils/fileUtils';
+import { gitStatusBadge } from '../../utils/fileUtils';
+import { FileTypeIcon } from './FileTypeIcon';
 import { computeLineDiff } from '../../utils/lineDiff';
 import type { DiffLine } from '../../utils/lineDiff';
 import api from '../../services/api';
@@ -1335,33 +1336,176 @@ export default function FileEditorCore({
     setCurrentMatchIndex((prev) => (prev - 1 + searchMatches.length) % searchMatches.length);
   }, [searchMatches.length]);
 
+  // File actions shared by the modal header and the panel's floating bar.
+  const reviewBtn = (
+    <button
+      onClick={review.toggleReviewMode}
+      className={clsx(
+        toolBtn, 'transition-colors',
+        review.isReviewMode
+          ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 font-medium'
+          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
+      )}
+      data-testid="review-mode-toggle"
+      title={review.isReviewMode ? 'Exit review mode' : 'Review — click line numbers to add comments'}
+    >
+      <span className="material-symbols-outlined icon-sm">rate_review</span>
+      {!iconOnly && (review.isReviewMode ? 'Exit Review' : 'Review')}
+      {review.comments.length > 0 && (
+        <span className="ml-0.5 px-1 py-px rounded-full bg-amber-500/30 text-[11px] font-bold">
+          {review.comments.length}
+        </span>
+      )}
+    </button>
+  );
+  const openExternalBtn = (() => {
+    const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+    const browserRenderable = ['html', 'htm', 'svg'];
+    const externalRenderable = ['html', 'htm', 'pdf', 'svg', 'xml'];
+    if (!externalRenderable.includes(ext)) return null;
+    const useBrowser = browserRenderable.includes(ext);
+    return (
+      <button
+        onClick={async () => {
+          const absolutePath = getAbsolutePath();
+          try {
+            if (useBrowser) {
+              await openExternal(`file://${absolutePath}`);
+            } else {
+              await openInSystemApp(absolutePath);
+            }
+          } catch {
+            // Fallback: copy path to clipboard so user can paste in browser
+            await copyToClipboard(absolutePath);
+          }
+        }}
+        className={clsx(toolBtn, 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors')}
+        data-testid="open-in-browser-btn"
+        title={useBrowser ? 'Open in browser' : 'Open with system app'}
+      >
+        <span className="material-symbols-outlined icon-sm">open_in_browser</span>
+        {!iconOnly && 'Open'}
+      </button>
+    );
+  })();
+  const attachBtn = onAttachToChat ? (
+    <button
+      onClick={handleAttachToChat}
+      disabled={isAttached || attachFeedback}
+      className={clsx(
+        toolBtn, 'transition-colors',
+        isAttached || attachFeedback
+          ? 'text-[var(--color-success)] cursor-default'
+          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
+      )}
+      data-testid="attach-to-chat-btn"
+      title={isAttached || attachFeedback ? 'Attached to chat' : 'Attach to chat'}
+    >
+      <span className="material-symbols-outlined icon-sm">
+        {isAttached || attachFeedback ? 'check_circle' : 'attach_file'}
+      </span>
+      {!iconOnly && (isAttached || attachFeedback ? 'Attached' : 'Attach')}
+    </button>
+  ) : null;
+
+  // ── Panel bar (Super Canvas, docs/design/super-canvas.md commit 3) ──
+  // The panel has no header or footer: one borderless strip at the bottom of the
+  // card holds a floating group on the left (one Preview / Source / Changes control,
+  // Review, Open, Attach) and Save on the right, shown only while there are unsaved
+  // edits. No Reload (the editor reloads itself on an agent write and when the window
+  // comes back), no Copy path (each Canvas list row has it), no Close (the list is
+  // the file selector).
+  const hasPreview = isMarkdown || isSvg;
+  const previewOn = isMarkdown ? showMarkdownPreview : showSvgPreview;
+  const view: 'preview' | 'source' | 'changes' = showDiff ? 'changes' : hasPreview && previewOn ? 'preview' : 'source';
+  const changesOff = !isDirty && !showDiff;
+  const pickView = (v: 'preview' | 'source' | 'changes') => {
+    if (v === 'changes') { if (!changesOff) setShowDiff(true); return; }
+    setShowDiff(false);
+    if (isMarkdown) setShowMarkdownPreview(v === 'preview');
+    else if (isSvg) setShowSvgPreview(v === 'preview');
+  };
+  const views = [
+    ...(hasPreview ? [['preview', 'Preview'] as const] : []),
+    ['source', 'Source'] as const,
+    ['changes', 'Changes'] as const,
+  ];
+  const panelBar = (
+    <div className="flex items-center gap-2 h-10 px-2.5 shrink-0" data-testid="editor-panel-bar">
+      <div className="editor-float-group" role="toolbar" aria-label="File view and actions">
+        <div role="radiogroup" aria-label="View" className="flex items-center gap-px">
+          {views.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={view === id}
+              disabled={id === 'changes' && changesOff}
+              onClick={() => pickView(id)}
+              data-testid={`editor-view-${id}`}
+              title={id === 'changes' ? (changesOff ? 'No changes against the original' : 'Show changes (diff)') : undefined}
+              className={clsx(
+                'h-6 px-2 rounded-md text-[11.5px] transition-colors',
+                view === id
+                  ? 'bg-[var(--color-hover)] text-[var(--color-text)]'
+                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]',
+                id === 'changes' && changesOff && 'opacity-40 cursor-not-allowed hover:text-[var(--color-text-muted)]',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className="w-px h-4 bg-[var(--color-border)] mx-0.5 shrink-0" aria-hidden="true" />
+        {reviewBtn}
+        {openExternalBtn}
+        {attachBtn}
+      </div>
+      {syncDisabled && (
+        <span
+          className="text-[11px] text-[var(--color-warning,#d97706)] truncate"
+          title="Syntax highlighting, search, and diff are disabled on large files to keep the editor responsive."
+          data-testid="large-file-notice"
+        >
+          Large file
+        </span>
+      )}
+      <span className="flex-1" />
+      {hasUnsavedEdits && !readonly && (
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={handleSave}
+          isLoading={isSaving}
+          disabled={showDiff}
+          title={showDiff ? 'Back to Source or Preview to save' : 'Save (⌘S)'}
+          data-testid="file-editor-save"
+        >
+          Save
+        </Button>
+      )}
+    </div>
+  );
+
   return (
     <>
       <div
         ref={rootRef}
-        className="bg-[var(--color-card)] border border-[var(--color-border)] shadow-2xl flex flex-col h-full w-full rounded-xl overflow-hidden"
+        className={iconOnly
+          // Panel: the Canvas content card is the frame; no second card inside it.
+          ? 'bg-[var(--color-card)] flex flex-col h-full w-full overflow-hidden'
+          : 'bg-[var(--color-card)] border border-[var(--color-border)] shadow-2xl flex flex-col h-full w-full rounded-xl overflow-hidden'}
         onMouseDown={(e) => e.stopPropagation()}
         data-testid="file-editor-core"
       >
-        {/* Header */}
-        {/* R2 (run_f49d3ff3): in PANEL variant (iconOnly), FileViewer renders the
-            unified file-chrome header (icon + filename + dirty + close) ABOVE this
-            component, so this header's LEFT identity cluster (icon / git badge /
-            breadcrumb / Modified) is SUPPRESSED to avoid a double header. The RIGHT
-            control cluster (preview/diff/review/copy/attach/mode-toggle) STAYS — those
-            are editor-specific actions the unified header does not own. In MODAL variant
-            (FileEditorModal renders FileEditorCore directly) the full left cluster shows,
-            unchanged. */}
+        {/* Header — modal only. In the panel (Super Canvas) the Canvas list names the
+            file and the editor's controls float at the bottom (PanelBar below). */}
+        {!iconOnly && (
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)] shrink-0">
           <div className="flex items-center gap-2 min-w-0 flex-1">
             {!iconOnly && (
               <>
-                <span
-                  className="material-symbols-outlined icon-sm shrink-0"
-                  style={{ color: fileIconColor(fileName) }}
-                >
-                  {fileIcon(fileName)}
-                </span>
+                <FileTypeIcon name={fileName} />
                 {gitStatus && (() => {
                   const badge = gitStatusBadge(gitStatus);
                   if (!badge) return null;
@@ -1422,10 +1566,6 @@ export default function FileEditorCore({
                 {!iconOnly && (showSvgPreview ? 'Edit' : 'Preview')}
               </button>
             )}
-            {/* Divider: view-toggles (preview/svg) | file-actions group (panel only) */}
-            {iconOnly && (isMarkdown || isSvg) && (
-              <span className="w-px h-4 bg-[var(--color-border-strong,var(--color-border))] mx-0.5 shrink-0" aria-hidden="true" />
-            )}
             {/* Reload button — refetch file from disk */}
             <button
               onClick={async () => {
@@ -1446,26 +1586,7 @@ export default function FileEditorCore({
             >
               <span className="material-symbols-outlined icon-sm">refresh</span>
             </button>
-            {/* Review Mode toggle (L3) */}
-            <button
-              onClick={review.toggleReviewMode}
-              className={clsx(
-                toolBtn, 'transition-colors',
-                review.isReviewMode
-                  ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 font-medium'
-                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
-              )}
-              data-testid="review-mode-toggle"
-              title={review.isReviewMode ? 'Exit review mode' : 'Review — click line numbers to add comments'}
-            >
-              <span className="material-symbols-outlined icon-sm">rate_review</span>
-              {!iconOnly && (review.isReviewMode ? 'Exit Review' : 'Review')}
-              {review.comments.length > 0 && (
-                <span className="ml-0.5 px-1 py-px rounded-full bg-amber-500/30 text-[11px] font-bold">
-                  {review.comments.length}
-                </span>
-              )}
-            </button>
+            {reviewBtn}
             {/* Show Changes toggle */}
             <button
               onClick={handleToggleDiff}
@@ -1485,37 +1606,7 @@ export default function FileEditorCore({
               </span>
               {!iconOnly && (showDiff ? 'Back to Edit' : 'Show Changes')}
             </button>
-            {/* Open externally — browser for HTML/SVG, system app for PDF/XML */}
-            {(() => {
-              const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
-              const browserRenderable = ['html', 'htm', 'svg'];
-              const externalRenderable = ['html', 'htm', 'pdf', 'svg', 'xml'];
-              if (!externalRenderable.includes(ext)) return null;
-              const useBrowser = browserRenderable.includes(ext);
-              return (
-                <button
-                  onClick={async () => {
-                    const absolutePath = getAbsolutePath();
-                    try {
-                      if (useBrowser) {
-                        await openExternal(`file://${absolutePath}`);
-                      } else {
-                        await openInSystemApp(absolutePath);
-                      }
-                    } catch {
-                      // Fallback: copy path to clipboard so user can paste in browser
-                      await copyToClipboard(absolutePath);
-                    }
-                  }}
-                  className={clsx(toolBtn, 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors')}
-                  data-testid="open-in-browser-btn"
-                  title={useBrowser ? 'Open in browser' : 'Open with system app'}
-                >
-                  <span className="material-symbols-outlined icon-sm">open_in_browser</span>
-                  {!iconOnly && 'Open'}
-                </button>
-              );
-            })()}
+            {openExternalBtn}
             {/* Copy absolute file path */}
             <button
               onClick={async () => {
@@ -1543,64 +1634,29 @@ export default function FileEditorCore({
               </span>
               {!iconOnly && (copyPathFeedback ? 'Copied' : 'Copy Path')}
             </button>
-            {/* Attach to Chat */}
-            {onAttachToChat && (
-              <button
-                onClick={handleAttachToChat}
-                disabled={isAttached || attachFeedback}
-                className={clsx(
-                  toolBtn, 'transition-colors',
-                  isAttached || attachFeedback
-                    ? 'text-[var(--color-success)] cursor-default'
-                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
-                )}
-                data-testid="attach-to-chat-btn"
-                title={isAttached || attachFeedback ? 'Attached to chat' : 'Attach to chat'}
-              >
-                <span className="material-symbols-outlined icon-sm">
-                  {isAttached || attachFeedback ? 'check_circle' : 'attach_file'}
-                </span>
-                {!iconOnly && (isAttached || attachFeedback ? 'Attached' : 'Attach')}
-              </button>
-            )}
-            {/* Divider: file-actions | window-controls group (panel only). Gated
-                on onToggleMode too — the window group is just the mode toggle +
-                close; when onToggleMode is absent (the Canvas panel case, which
-                doesn't pass it) the only thing right of the divider is Close, so
-                without this guard the divider would dangle. Close alone still
-                reads fine ungrouped. */}
-            {iconOnly && onToggleMode && (
-              <span className="w-px h-4 bg-[var(--color-border-strong,var(--color-border))] mx-0.5 shrink-0" aria-hidden="true" data-testid="editor-header-window-divider" />
-            )}
+            {attachBtn}
             {/* Mode toggle: panel ↔ modal */}
             {onToggleMode && (
               <button
                 onClick={onToggleMode}
                 className="icon-btn text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
-                aria-label={variant === 'panel' ? 'Pop out to modal' : 'Dock as panel'}
-                title={variant === 'panel' ? 'Pop out to fullscreen' : 'Dock as side panel'}
+                aria-label="Dock as panel"
+                title="Dock as side panel"
                 data-testid="mode-toggle"
               >
-                <span className="material-symbols-outlined icon-sm">
-                  {variant === 'panel' ? 'open_in_full' : 'close_fullscreen'}
-                </span>
+                <span className="material-symbols-outlined icon-sm">close_fullscreen</span>
               </button>
             )}
-            {/* Close — suppressed in PANEL variant (R2): the unified FileViewer
-                file-chrome header owns close there (routed back to this component's
-                guarded close via closeSignal). Kept in MODAL variant (FileEditorModal),
-                which has no FileViewer header. */}
-            {!iconOnly && (
-              <button
-                onClick={handleCloseAttempt}
-                className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
-                aria-label="Close"
-              >
-                <span className="material-symbols-outlined icon-md">close</span>
-              </button>
-            )}
+            <button
+              onClick={handleCloseAttempt}
+              className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+              aria-label="Close"
+            >
+              <span className="material-symbols-outlined icon-md">close</span>
+            </button>
           </div>
         </div>
+        )}
 
         {/* Readonly banner */}
         {readonly && (
@@ -1924,7 +1980,10 @@ export default function FileEditorCore({
         )}
 
 
-        {/* Footer */}
+        {iconOnly && panelBar}
+
+        {/* Footer — modal only (the panel's Save floats in panelBar). */}
+        {!iconOnly && (
         <div className="flex items-center justify-between px-4 py-2.5 border-t border-[var(--color-border)] shrink-0">
           <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
             {language !== 'plaintext' && (
@@ -1971,6 +2030,7 @@ export default function FileEditorCore({
             </Button>
           </div>
         </div>
+        )}
       </div>
 
       {/* Unsaved Changes Warning */}

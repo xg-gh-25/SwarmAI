@@ -1,10 +1,9 @@
 /**
- * Canvas Artifacts — Activity rows fold, and the document card's breadcrumb.
+ * Canvas Artifacts — Activity rows fold.
  *
  * Invariants: rows whose catalog role is Activity sit under one "Activity · N"
  * toggle, closed by default, after the other rows; the toggle opens and closes them;
- * a selected Activity row keeps the group open. The header crumb is
- * "Artifacts › <last two folder levels> ›", with "…" when deeper.
+ * a selected Activity row keeps the group open.
  *
  * Methodology: the real CanvasOutputRail with rows passed in.
  */
@@ -14,7 +13,6 @@ import type { ReferencedFile } from '../../../hooks/useReferencedFiles';
 
 
 import { CanvasOutputRail } from '../CanvasOutputRail';
-import { crumbOf } from '../FileViewer';
 
 const row = (path: string, role: string, firstSeen: number): ReferencedFile => ({
   path, absolutePath: `/ws/${path}`, fileName: path.split('/').pop()!, operation: 'written',
@@ -50,14 +48,5 @@ describe('Artifacts rail — Activity folds', () => {
   it('no Activity rows: no toggle', () => {
     render(<CanvasOutputRail files={{ written: [FILES[1]] }} />);
     expect(screen.queryByTestId('canvas-activity-toggle')).toBeNull();
-  });
-});
-
-describe('document card breadcrumb', () => {
-  it('shows the last two folder levels', () => {
-    expect(crumbOf('Projects/P/designs/plan.md')).toBe('Artifacts › … › P › designs ›');
-    expect(crumbOf('Knowledge/n.md')).toBe('Artifacts › Knowledge ›');
-    expect(crumbOf('/Users/x/SwarmWS/Knowledge/Notes/n.md')).toBe('Artifacts › … › Knowledge › Notes ›');
-    expect(crumbOf('n.md')).toBe('Artifacts ›');
   });
 });

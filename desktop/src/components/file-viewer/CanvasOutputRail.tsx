@@ -37,7 +37,7 @@ import { orderOutputs, outputRowOpenDetail } from '../../hooks/railSsot';
 export { outputRowOpenDetail, railOrder } from '../../hooks/railSsot';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 import { copyToClipboard } from '../../utils/clipboard';
-import { fileIcon, fileIconColor } from '../../utils/fileUtils';
+import { FileTypeIcon } from '../common/FileTypeIcon';
 
 // run_4de279ca: isBookkeepingPath + BOOKKEEPING_DIRS REMOVED. The backend git
 // verdict (`kind`, needs_human_review) is the SOLE surfacing authority — this
@@ -135,14 +135,7 @@ const OutputRow = memo(function OutputRow({
       data-deleted={file.deleted || undefined}
       data-testid="canvas-output-row"
     >
-      <span
-        className="material-symbols-outlined icon-sm shrink-0 leading-none"
-        style={{ color: fileIconColor(file.fileName) }}
-        aria-hidden="true"
-        data-testid="canvas-output-icon"
-      >
-        {fileIcon(file.fileName)}
-      </span>
+      <FileTypeIcon name={file.fileName} testId="canvas-output-icon" />
       <span
         className={`shrink-0 truncate ${
           file.deleted ? 'line-through text-[var(--color-text-muted)]' :
@@ -231,9 +224,11 @@ export interface CanvasOutputRailProps {
   onCounts?: (counts: OutputCounts) => void;
   /** Path of the file currently shown in Region B — gets the accent left-bar. */
   selectedPath?: string;
+  /** The Browsing row's × (on hover): stop browsing that file. Absent → no ×. */
+  onStopBrowsing?: () => void;
 }
 
-export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped, onCounts, selectedPath }: CanvasOutputRailProps) {
+export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped, onCounts, selectedPath, onStopBrowsing }: CanvasOutputRailProps) {
 
   // Mount timestamp — an output whose firstSeen is AFTER this arrived while the
   // user was watching → it gets one land-pulse (§v6 #4). Outputs already present
@@ -359,6 +354,7 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
         <BrowsingRow
           path={browsingFile.path}
           fileName={browsingFile.fileName}
+          onStop={onStopBrowsing}
         />
       )}
     </ul>
@@ -374,9 +370,11 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
 const BrowsingRow = memo(function BrowsingRow({
   path,
   fileName,
+  onStop,
 }: {
   path: string;
   fileName: string;
+  onStop?: () => void;
 }) {
   const handleClick = useCallback(() => {
     document.dispatchEvent(
@@ -428,6 +426,17 @@ const BrowsingRow = memo(function BrowsingRow({
         >
           <span className="material-symbols-outlined icon-sm">content_copy</span>
         </button>
+        {onStop && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onStop(); }}
+            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-all shrink-0"
+            title="Stop browsing this file"
+            aria-label={`Stop browsing ${fileName}`}
+            data-testid="canvas-browsing-close"
+          >
+            <span className="material-symbols-outlined icon-sm">close</span>
+          </button>
+        )}
       </div>
     </li>
   );

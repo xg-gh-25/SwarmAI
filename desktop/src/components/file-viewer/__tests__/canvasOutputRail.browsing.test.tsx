@@ -16,7 +16,7 @@
  *    absolutePath) is NOT re-injected as a browsing row (no duplicate).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import type { ReferencedFile } from '../../../hooks/useReferencedFiles';
 
 let mockFiles: ReferencedFile[] = [];
@@ -121,5 +121,19 @@ describe('CanvasOutputRail — browsing row + empty guard', () => {
     mockFiles = [];
     render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="/some/where/deck.html" />);
     expect(screen.getByTestId('canvas-browsing-row').className).toContain('canvas-row-sel');
+  });
+
+  it('the Browsing row has a × only when the panel wires stop-browsing, and it does not open the row', () => {
+    mockFiles = [];
+    const stop = vi.fn();
+    const { rerender } = render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="/some/where/deck.html" />);
+    expect(screen.queryByTestId('canvas-browsing-close')).toBeNull();
+    rerender(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="/some/where/deck.html" onStopBrowsing={stop} />);
+    const opened = vi.fn();
+    document.addEventListener('swarm:open-file', opened);
+    fireEvent.click(screen.getByTestId('canvas-browsing-close'));
+    document.removeEventListener('swarm:open-file', opened);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(opened).not.toHaveBeenCalled();
   });
 });

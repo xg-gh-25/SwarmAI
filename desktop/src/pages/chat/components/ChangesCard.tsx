@@ -24,7 +24,7 @@ import { chatService } from '../../../services/chat';
 import { useTranslation } from 'react-i18next';
 import type { TurnChangeFile, TurnChangesContent } from '../../../types';
 import { OPEN_FILE_EVENT } from '../../../components/common/MarkdownRenderer';
-import { fileIcon, fileIconColor } from '../../../utils/fileUtils';
+import { FileTypeIcon } from '../../../components/common/FileTypeIcon';
 import { tf } from '../tf';
 import { ReadOnlyContext } from '../readOnlyContext';
 
@@ -121,9 +121,7 @@ function ChangeRow({ file }: { file: TurnChangeFile }) {
             <span aria-hidden="true" className={`material-symbols-outlined icon-sm leading-none transition-transform ${open ? 'rotate-90' : ''}`}>chevron_right</span>
           </button>
         ) : <span className="shrink-0 w-4" />}
-        <span aria-hidden="true" className="material-symbols-outlined icon-sm leading-none shrink-0" style={{ color: fileIconColor(name), filter: 'saturate(0.55)' }}>
-          {fileIcon(name)}
-        </span>
+        <FileTypeIcon name={name} muted />
         {canOpenFile ? (
           <button type="button" onClick={openFile} title={file.absolutePath} className="min-w-0 flex text-left hover:underline">
             {nameEl}

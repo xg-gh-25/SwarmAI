@@ -20,7 +20,7 @@
  * structural and fully assertable). Reverting either fix turns a case RED.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import FileViewer from '../FileViewer';
 import { ApiError } from '../../../services/api';
 
@@ -74,13 +74,13 @@ describe('FileViewer — error-state tab is closable + friendly 404 (run_7f6539b
     expect(screen.queryByTestId('file-editor-textarea')).toBeNull();
   });
 
-  it('AC1: the header X CLOSES a 404 editor tab (contentError-aware close, not a dead closeSignal)', async () => {
+  it('AC1: a close request CLOSES a 404 editor tab (contentError-aware close, not a dead closeSignal)', async () => {
     const onClose = vi.fn();
-    render(<FileViewer {...base('gone.md')} onClose={onClose} />);
+    const { rerender } = render(<FileViewer {...base('gone.md')} onClose={onClose} closeRequest={0} />);
     // Wait for the error state (editor unmounted).
     await waitFor(() => expect(screen.getByText(/no longer available/i)).toBeTruthy());
-    // Click the unified header close — must actually close (single tab → onClose fires).
-    await act(async () => { fireEvent.click(screen.getByTestId('file-chrome-close')); });
+    // A close request (the panel's Browsing-row ×) must actually close (single tab → onClose).
+    await act(async () => { rerender(<FileViewer {...base('gone.md')} onClose={onClose} closeRequest={1} />); });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

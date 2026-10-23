@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: agreed with XG 2026-10-23 (mockups in chat); implementing in 3 commits
+status: implemented 2026-10-23 (3 commits, agreed with XG from chat mockups)
 ---
 
 # Super Canvas
@@ -61,23 +61,42 @@ As built:
 
 ## Commit 3 — file chrome and icons
 
-- Panel variant only (`FileEditorModal` is unchanged): the `FileViewer` file
-  header row and `FileEditorCore`'s right toolbar are removed. Their actions:
-  - Preview / Source / Changes become one segmented control, floating bottom-left
-    with Review and Attach to chat.
-  - Save floats bottom-right, only while there are unsaved edits.
-  - Refresh: dropped for renderers that already auto-reload (to be verified per
-    renderer before removal; any renderer that does not keeps a refresh in the
-    floating group).
-  - Copy path: dropped (each list row has it on hover).
-  - Close: dropped; the Browsing row gets × on hover.
-  - The card gets 52px bottom padding so the floating group never hides the last
-    lines.
-- When the list is folded, the header shows the current file's icon, name and an
-  unsaved dot.
-- `fileIcon` (shared by the file tree, chat file cards and Canvas) becomes a
-  coloured type badge (MD, TS, PY, {}, …; unknown → first 3 letters of the
-  extension), colours from the existing `--color-icon-*` tokens.
+As built (panel variant only; `FileEditorModal` and the modal FileViewer unchanged):
+
+- `FileViewer`'s file header row is gone for every type; so is `crumbOf`.
+- `FileEditorCore` (text / md / svg) has no header and no footer in the panel.
+  One borderless 40px strip at the bottom of the card holds `panelBar`: a raised
+  group (`.editor-float-group`) with ONE Preview / Source / Changes control
+  (radiogroup; Preview only for md / svg; Changes disabled with nothing to
+  compare), Review, Open externally (html / svg / pdf / xml only) and Attach; a
+  "Large file" notice when highlighting is off; Save on the right, rendered only
+  while there are unsaved edits (disabled in Changes). Its root drops its own
+  border / radius / shadow, the Canvas card is the frame.
+  - Deviation: the group sits in that strip instead of over the content with
+    52px padding. The editor scrolls through six synced layers (textarea, highlight
+    overlay, gutter, previews, diff); padding each to keep them aligned is fragile,
+    and the strip costs the same height without ever covering a line.
+  - Reload: dropped for editor types (they reload on an agent write via
+    swarm:file-changed and on window focus). Non-editor renderers (html, image,
+    pdf, csv, media) reload on an agent write but not on an outside edit, so their
+    status bar gains Refresh (`onRefresh`).
+  - Copy path: dropped in the panel (editor bar and status bar, `showCopyPath`);
+    each list row has it on hover.
+  - Close: no button. The Browsing row's × (`onStopBrowsing`) opens the first
+    output, the same open a row click sends; with no output it bumps FileViewer's
+    `closeRequest`, which runs the existing guarded close (FileEditorCore's
+    unsaved-changes dialog) and ends in `canvas.close`.
+  - Error texts no longer say "Close this tab".
+- List folded on Artifacts: the header shows the file's badge, name, and a dot
+  while it has unsaved edits (FileViewer reports `onDirtyChange`).
+- `fileIcon` / `fileIconColor` are deleted. `fileTypeBadge(name)` (utils/fileUtils)
+  gives the label + colour and `<FileTypeIcon>` (components/common) draws it, used
+  by the file tree (including its drag ghost), Working files, chat file cards and
+  change rows, inline file references, the modal editor header and both Canvas
+  lists. Labels: known types (MD, TS, JS, PY, {}, YML, PDF, HTM, IMG, SH, …);
+  unknown extension → first 3 letters; extensionless → first 3 letters, with
+  Dockerfile → DK and Makefile → MK. Colours are existing theme tokens; the label
+  mixes in --color-text so a light type colour stays readable.
 
 ## Hot-path cost
 

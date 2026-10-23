@@ -45,13 +45,15 @@ const base = (fileName: string) => ({
 beforeEach(() => vi.clearAllMocks());
 
 describe('FileViewer — non-text file-op cluster', () => {
-  it('html file: status bar shows copy-path + attach; attach dispatches swarm:attach-file', async () => {
+  it('html file (panel): status bar shows attach + refresh, not copy-path; attach dispatches swarm:attach-file', async () => {
     const events: CustomEvent[] = [];
     const listener = (e: Event) => events.push(e as CustomEvent);
     window.addEventListener('swarm:attach-file', listener);
     try {
       render(<FileViewer {...base('deck.html')} />);
-      await waitFor(() => expect(screen.getByTestId('statusbar-copy-path')).toBeTruthy());
+      await waitFor(() => expect(screen.getByTestId('statusbar-refresh')).toBeTruthy());
+      // Copy path is on each Canvas list row, so the panel's status bar does not repeat it.
+      expect(screen.queryByTestId('statusbar-copy-path')).toBeNull();
       const attach = screen.getByTestId('statusbar-attach');
       fireEvent.click(attach);
       expect(events).toHaveLength(1);
@@ -61,17 +63,17 @@ describe('FileViewer — non-text file-op cluster', () => {
     }
   });
 
-  it('html file (panel): close is in the unified file-chrome header, NOT the status bar (run_f49d3ff3 R2)', async () => {
-    // R2 reclaimed the run_5f5e7675 status-bar close patch. Close is now ONE
-    // type-agnostic affordance in FileViewer's file-chrome header; clicking it →
-    // handleCloseActive → onClose (canvas.close) for a non-editor type.
-    const onClose = vi.fn();
-    render(<FileViewer {...base('deck.html')} onClose={onClose} />);
-    await waitFor(() => expect(screen.getByTestId('file-chrome-close')).toBeTruthy());
-    // The status bar no longer has a close.
+  it('html file (panel): no close anywhere (no file header, no status-bar close)', async () => {
+    render(<FileViewer {...base('deck.html')} />);
+    await waitFor(() => expect(screen.getByTestId('statusbar-attach')).toBeTruthy());
     expect(screen.queryByTestId('statusbar-close')).toBeNull();
-    fireEvent.click(screen.getByTestId('file-chrome-close'));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByLabelText('Close file')).toBeNull();
+  });
+
+  it('html file (modal): status bar keeps copy-path and has no refresh', async () => {
+    render(<FileViewer {...base('deck.html')} variant="modal" />);
+    await waitFor(() => expect(screen.getByTestId('statusbar-copy-path')).toBeTruthy());
+    expect(screen.queryByTestId('statusbar-refresh')).toBeNull();
   });
 
   it('text file: NO status bar (FileEditorCore owns its footer — no double footer)', async () => {

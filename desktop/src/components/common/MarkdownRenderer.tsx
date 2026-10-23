@@ -31,7 +31,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { MarkdownLiveContext } from './markdownLive';
 import { copyToClipboard } from '../../utils/clipboard';
 import { openExternal } from '../../utils/openExternal';
-import { fileIcon, fileIconColor } from '../../utils/fileUtils';
+import { FileTypeIcon } from './FileTypeIcon';
 import { OFFICE_EXTENSIONS } from '../file-viewer/utils/fileViewTypes';
 
 interface MarkdownRendererProps {
@@ -815,13 +815,7 @@ const InlineCode = memo(function InlineCode({ children }: { children: React.Reac
       >
         {/* One file, one look: the same type icon as the Canvas OUTPUTS rail and
             the chat's FileChip, desaturated so a type never reads as a status. */}
-        <span
-          aria-hidden="true"
-          className="material-symbols-outlined icon-xs leading-none"
-          style={{ color: fileIconColor(cleanPath), filter: 'saturate(0.55)' }}
-        >
-          {fileIcon(cleanPath)}
-        </span>
+        <FileTypeIcon name={cleanPath} size="xs" muted />
         {children}
       </code>
     );

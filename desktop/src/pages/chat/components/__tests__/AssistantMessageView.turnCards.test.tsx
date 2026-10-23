@@ -190,7 +190,7 @@ describe('turn_deliverables — what the turn produced', () => {
     const [img, md] = screen.getAllByTestId('deliverable');
     expect(img.querySelector('img')?.getAttribute('src')).toContain(encodeURIComponent('/ws/out/chart.png'));
     expect(md.querySelector('img')).toBeNull();
-    expect(md.querySelector('.material-symbols-outlined')).toBeTruthy();
+    expect(md.querySelector('.file-badge')).toBeTruthy();
     expect(container).toBeTruthy();
   });
 

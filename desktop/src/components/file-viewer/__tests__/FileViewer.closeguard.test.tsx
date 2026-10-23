@@ -1,15 +1,13 @@
 /**
- * FileViewer unified-close dirty-guard (run_f49d3ff3 R2, AC4).
+ * FileViewer close-request dirty-guard (run_f49d3ff3 R2 AC4; Super Canvas: the
+ * request now comes from the panel's closeRequest prop, not a header button).
  *
- * The unified file-chrome header (panel) owns close for ALL types. For editor types
- * (text/md/svg → FileEditorCore) the close MUST reuse FileEditorCore's existing
+ * For editor types (text/md/svg → FileEditorCore) a close MUST reuse FileEditorCore's
  * unsaved-changes guard rather than silently no-op a dirty tab (useFileViewerTabs:107).
- * FileViewer routes editor-type close through a closeSignal counter → FileEditorCore's
- * effect runs its guarded close.
+ * FileViewer routes it through a closeSignal counter → FileEditorCore's guarded close.
  *
- * This test uses the REAL FileEditorCore (NOT stubbed) so the delegation + guard fire
- * end-to-end: edit a text file → dirty → click the unified header close → the
- * unsaved-changes dialog appears (NOT an immediate close, NOT a silent no-op).
+ * Uses the REAL FileEditorCore so the guard fires end-to-end: edit → dirty → close
+ * request → the unsaved-changes dialog (not an immediate close, not a silent no-op).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
@@ -43,70 +41,51 @@ const base = (fileName: string) => ({
 
 beforeEach(() => vi.clearAllMocks());
 
-describe('FileViewer — unified close dirty-guard (R2 AC4)', () => {
-  it('closing a CLEAN text file via the unified header closes immediately (onClose fires)', async () => {
+// The panel has no close button (Super Canvas): a close is requested by bumping the
+// closeRequest prop (FileViewerPanel does it for the Browsing row's × when no output
+// is left). It must still run FileEditorCore's unsaved-changes guard.
+function mount(onClose: () => void, onDirtyChange?: (d: boolean) => void) {
+  const props = { ...base('app.ts'), onClose, onDirtyChange };
+  const r = render(<FileViewer {...props} closeRequest={0} />);
+  let n = 0;
+  const requestClose = async () => {
+    n += 1;
+    await act(async () => { r.rerender(<FileViewer {...props} closeRequest={n} />); });
+  };
+  return requestClose;
+}
+
+describe('FileViewer — close request keeps the dirty guard', () => {
+  it('a CLEAN text file closes immediately (onClose fires)', async () => {
     const onClose = vi.fn();
-    render(<FileViewer {...base('app.ts')} onClose={onClose} />);
-    // Wait for the real editor to mount + content to load.
+    const requestClose = mount(onClose);
     await waitFor(() => expect(screen.getByTestId('file-editor-textarea')).toBeTruthy());
-    // Not dirty → unified close → editor's guarded close → onClose (no dialog).
-    await act(async () => { fireEvent.click(screen.getByTestId('file-chrome-close')); });
+    await requestClose();
     expect(screen.queryByTestId('unsaved-warning-discard')).toBeNull();
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('closing a DIRTY text file via the unified header shows the unsaved-changes dialog (guard preserved, NOT a silent no-op)', async () => {
+  it('a DIRTY text file shows the unsaved-changes dialog; discarding then closes and clears dirty', async () => {
     const onClose = vi.fn();
-    render(<FileViewer {...base('app.ts')} onClose={onClose} />);
+    const onDirty = vi.fn();
+    const requestClose = mount(onClose, onDirty);
     const ta = await screen.findByTestId('file-editor-textarea');
-    // Make it dirty.
     await act(async () => { fireEvent.change(ta, { target: { value: 'hello EDITED' } }); });
-    // Sync point (mirrors the stable sibling below): confirm the dirty state has actually
-    // rendered (the file-chrome-dirty indicator) BEFORE clicking close, so the close guard
-    // reliably reads a settled dirty verdict (FileEditorCore's hasUnsavedEditsRef) and takes
-    // the guarded branch under full-suite parallel load. Defensive robustness — a CI flake
-    // was observed where discard never appeared; clicking close only after dirty is visible
-    // removes the ordering assumption regardless of the exact underlying cause.
-    await waitFor(() => expect(screen.getByTestId('file-chrome-dirty')).toBeTruthy());
-    // Unified header close → delegates to FileEditorCore's guard → dialog, NOT close.
-    await act(async () => { fireEvent.click(screen.getByTestId('file-chrome-close')); });
+    // The dirty state reached the panel (it shows a dot by the folded file name).
+    await waitFor(() => expect(onDirty).toHaveBeenLastCalledWith(true));
+    await requestClose();
     await waitFor(() => expect(screen.getByTestId('unsaved-warning-discard')).toBeTruthy());
     expect(onClose).not.toHaveBeenCalled();
-    // Confirming discard then closes.
     await act(async () => { fireEvent.click(screen.getByTestId('unsaved-warning-discard')); });
     expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onDirty).toHaveBeenLastCalledWith(false);
   });
 
-  it('discarding a dirty editor tab clears its dirty flag so it can actually close (Gate-2 HIGH)', async () => {
-    // The bug: discard reverted content + called onClose but never cleared the tab-store
-    // dirty flag → useFileViewerTabs.closeTab no-op'd on the dirty guard (single-tab
-    // masked it via the tabs.length<=1 fallback; multi-tab left the tab silently open).
-    // The fix feeds the baseline back through onContentChange → markDirty(false). Here we
-    // assert the OBSERVABLE seam: after discard the tab is NOT dirty (dirty dot gone) AND
-    // onClose fired. The mechanism that closeTab removes a clean tab is unit-tested in
-    // useFileViewerTabs; the missing link this fix restores is "discard marks it clean".
-    const onClose = vi.fn();
-    render(<FileViewer {...base('app.ts')} onClose={onClose} />);
-    const ta = await screen.findByTestId('file-editor-textarea');
-    await act(async () => { fireEvent.change(ta, { target: { value: 'hello EDITED' } }); });
-    // Dirty dot now shows in the unified header.
-    await waitFor(() => expect(screen.getByTestId('file-chrome-dirty')).toBeTruthy());
-    await act(async () => { fireEvent.click(screen.getByTestId('file-chrome-close')); });
-    await waitFor(() => expect(screen.getByTestId('unsaved-warning-discard')).toBeTruthy());
-    await act(async () => { fireEvent.click(screen.getByTestId('unsaved-warning-discard')); });
-    expect(onClose).toHaveBeenCalledTimes(1);
-  });
-
-  it('editor type in panel has EXACTLY ONE close affordance (no header-close, no footer Close — truly unified)', async () => {
+  it('editor type in panel has NO close affordance of its own', async () => {
     render(<FileViewer {...base('app.ts')} />);
     await waitFor(() => expect(screen.getByTestId('file-editor-textarea')).toBeTruthy());
-    // The unified file-chrome header close exists exactly once...
-    expect(screen.getAllByTestId('file-chrome-close')).toHaveLength(1);
-    // ...FileEditorCore's own HEADER close (aria-label="Close") is suppressed in panel...
     expect(screen.queryByLabelText('Close')).toBeNull();
-    // ...and its FOOTER Close/Cancel button is ALSO suppressed in panel (R2 review LOW-3:
-    // a footer "Close" would be a 2nd close affordance for editor types). Save stays.
+    expect(screen.queryByLabelText('Close file')).toBeNull();
     expect(screen.queryByTestId('file-editor-cancel')).toBeNull();
-    expect(screen.getByTestId('file-editor-save')).toBeTruthy();
   });
 });

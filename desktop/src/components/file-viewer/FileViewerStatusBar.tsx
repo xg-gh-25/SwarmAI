@@ -28,9 +28,12 @@ export interface FileViewerStatusBarProps {
   /** Attach-to-chat handler — when provided (alongside filePath), an attach button
    *  is shown. Omitted → no attach button (copy-path still shown if filePath set). */
   onAttach?: () => void;
-  // NOTE (run_f49d3ff3 R2): the former `onClose` close button (added run_5f5e7675) is
-  // REMOVED. Close is now a single type-agnostic affordance in FileViewer's unified
-  // file-chrome header — the status bar is info + copy-path/attach only again.
+  /** Reload-from-disk handler — when provided, a refresh button is shown (the
+   *  Canvas panel, which has no file header). */
+  onRefresh?: () => void;
+  /** Show the copy-path button (with filePath). Default true; the Canvas panel
+   *  passes false because each Canvas list row already copies its path. */
+  showCopyPath?: boolean;
 }
 
 /** Format bytes into a human-readable string (KB / MB / GB). */
@@ -50,6 +53,8 @@ export default function FileViewerStatusBar({
   extraInfo,
   filePath,
   onAttach,
+  onRefresh,
+  showCopyPath = true,
 }: FileViewerStatusBarProps) {
   const info = getFileTypeInfo(fileName);
   const extraEntries = extraInfo ? Object.entries(extraInfo) : [];
@@ -109,13 +114,22 @@ export default function FileViewerStatusBar({
           </span>
         ))}
 
-        {/* File-operation cluster — copy-path + attach for renderers (html/image/
-            pdf/csv) that have no footer of their own. Close is NOT here anymore
-            (run_f49d3ff3 R2): it moved to FileViewer's unified file-chrome header,
-            one type-agnostic affordance for all types. */}
+        {/* File-operation cluster — attach / refresh / copy-path for renderers
+            (html/image/pdf/csv) that have no footer of their own. No close button. */}
         {filePath && (
           <>
             <span className="opacity-40">&middot;</span>
+            {onRefresh && (
+              <button
+                onClick={onRefresh}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
+                title="Reload this file from disk"
+                aria-label="Refresh file"
+                data-testid="statusbar-refresh"
+              >
+                <span className="material-symbols-outlined icon-sm leading-none">refresh</span>
+              </button>
+            )}
             {onAttach && (
               <button
                 onClick={onAttach}
@@ -127,7 +141,7 @@ export default function FileViewerStatusBar({
                 <span className="material-symbols-outlined icon-sm leading-none">attach_file</span>
               </button>
             )}
-            <button
+            {showCopyPath && <button
               onClick={handleCopy}
               className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
               title={copied ? tf(t, 'common.copy.copied', 'Copied!') : tf(t, 'common.copy.absolutePath', 'Copy absolute file path')}
@@ -137,7 +151,7 @@ export default function FileViewerStatusBar({
               <span className="material-symbols-outlined icon-xs leading-none">
                 {copied ? 'check' : 'content_copy'}
               </span>
-            </button>
+            </button>}
           </>
         )}
       </div>

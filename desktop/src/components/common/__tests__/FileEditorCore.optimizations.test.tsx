@@ -60,10 +60,12 @@ describe('E — large-file notice + disabled search', () => {
   });
 });
 
-describe('F — reload guards unsaved edits', () => {
+// Reload is a modal-header button (the Canvas panel has none: the editor reloads
+// itself on an agent write and on window focus).
+describe('F — reload guards unsaved edits (modal)', () => {
   it('reload with unsaved edits surfaces the unsaved warning, does not silently refetch', () => {
     const getSpy = vi.spyOn(hljs, 'highlight'); // sanity: component mounts
-    renderCore({ initialContent: 'original' });
+    renderCore({ initialContent: 'original', variant: 'modal' });
     getSpy.mockRestore();
 
     // Make the editor dirty by typing into the textarea.
@@ -80,7 +82,7 @@ describe('F — reload guards unsaved edits', () => {
   });
 
   it('reload warning offers a "Discard & Reload" action (not just discard-and-close)', () => {
-    renderCore({ initialContent: 'original' });
+    renderCore({ initialContent: 'original', variant: 'modal' });
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'edited-unsaved' } });
     fireEvent.click(screen.getByTitle(/reload/i));

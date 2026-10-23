@@ -29,7 +29,6 @@ import { overlayQuery, ARTIFACTS_WORKSPACE } from './overlayQueries';
 import { OverlayError } from './OverlayState';
 import { radarService } from '../../services/radar';
 import type { Product, ProductRole } from '../../services/radar';
-import { fileIcon, fileIconColor } from '../../utils/fileUtils';
 
 /** The window CustomEvent that opens a file in the current tab's Canvas.
  *  Same name LibraryOverlay/BrainHub dispatch — do NOT rename (proprioception contract). */
@@ -632,7 +631,3 @@ function ArtifactRow({
   );
 }
 
-// Keep fileIcon/fileIconColor imported for potential row-icon use; referenced here to avoid
-// an unused-import error while the row uses the extension badge instead of a file icon.
-void fileIcon;
-void fileIconColor;

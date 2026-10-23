@@ -35,7 +35,6 @@ import type { FileTab } from './hooks/useFileViewerTabs';
 import FileViewerTabBar from './FileViewerTabBar';
 import FileViewerStatusBar from './FileViewerStatusBar';
 import FileEditorCore from '../common/FileEditorCore';
-import { fileIcon, fileIconColor } from '../../utils/fileUtils';
 import api from '../../services/api';
 import { subscribeFileChanged } from '../../hooks/fileChangedBroker';
 
@@ -85,6 +84,14 @@ export interface FileViewerProps {
    *  discard the content cache on every tab switch, run_0fb40bbc). Undefined =
    *  no scoping (single-instance callers). */
   tabScopeKey?: string;
+  /** Panel: each increase asks for the active file's close, through the same
+   *  unsaved-changes guard a close button would use. The Canvas has no close button
+   *  (its list is the file selector); FileViewerPanel bumps this for "stop browsing"
+   *  when there is no output to switch to. */
+  closeRequest?: number;
+  /** Reports whether the active file has unsaved edits (the Canvas header shows a
+   *  dot by the file name while the list is folded). */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /** Status-bar info that renderers can publish via onStatusInfo callback. */
@@ -124,16 +131,6 @@ function LoadingFallback() {
 /* ------------------------------------------------------------------ */
 
 
-/** The header breadcrumb before a file name: "Artifacts › …/a/b ›" (the folder's
- *  last two levels). Exported for tests. */
-export function crumbOf(filePath: string): string {
-  const parts = (filePath || '').replace(/\\/g, '/').split('/').filter(Boolean);
-  parts.pop();                                    // the file name is shown on its own
-  if (!parts.length) return 'Artifacts ›';
-  const tail = parts.slice(-2).join(' › ');
-  return `Artifacts › ${parts.length > 2 ? '… › ' : ''}${tail} ›`;
-}
-
 function FileViewerImpl({
   initialFile,
   onClose,
@@ -142,6 +139,8 @@ function FileViewerImpl({
   variant,
   onToggleMode,
   tabScopeKey,
+  closeRequest,
+  onDirtyChange,
 }: FileViewerProps) {
   const {
     tabs,
@@ -189,7 +188,7 @@ function FileViewerImpl({
   const [refetchNonce, setRefetchNonce] = useState(0);
 
   /* ---- Unified close: closeSignal (run_f49d3ff3 R2) ---- */
-  // The type-agnostic file-chrome header (below) owns the ONE close affordance for
+  // A close request (the panel's closeRequest prop) closes the active file for
   // ALL viewTypes. For editor types (text/md/svg → FileEditorCore) the close MUST go
   // through FileEditorCore's existing unsaved-changes guard (handleCloseAttempt) — so
   // instead of calling handleCloseActive directly (which would silently no-op a dirty
@@ -411,7 +410,7 @@ function FileViewerImpl({
         // the user. Show a friendly, actionable notice locally (NOT by editing the
         // shared api.ts 404 interceptor, which 9 other callers depend on).
         if (status === 404) {
-          setContentError('This file is no longer available — it may have been moved or deleted. Close this tab.');
+          setContentError('This file is no longer available — it may have been moved or deleted.');
           return;
         }
         const msg = err instanceof Error ? err.message : 'Failed to load file';
@@ -460,7 +459,7 @@ function FileViewerImpl({
           if (cp === changedPath || changedPath.endsWith(`/${cp}`)) delete contentCache.current[cp];
         }
         if (isActiveMatch) {
-          setContentError('This file was deleted. Close this tab or open another file.');
+          setContentError('This file was deleted.');
           // Clear the dirty flag: the file is gone from disk, so its unsaved buffer
           // can't be saved anywhere. Without this, closeTab no-ops on the dirty guard
           // and a multi-tab panel leaves the dead tab stuck open (run_7f6539b5 Gate-2
@@ -770,6 +769,18 @@ function FileViewerImpl({
     else handleCloseActive();
   }, [isEditorType, contentError, handleCloseActive]);
 
+  // A close request from the panel: a change of the counter after mount runs the
+  // same close (the mount value is the baseline, so a remount never closes).
+  const closeRequestRef = useRef(closeRequest);
+  useEffect(() => {
+    if (closeRequest === undefined || closeRequest === closeRequestRef.current) return;
+    closeRequestRef.current = closeRequest;
+    handleUnifiedClose();
+  }, [closeRequest, handleUnifiedClose]);
+
+  const activeDirty = !!activeTab?.isDirty;
+  useEffect(() => { onDirtyChange?.(activeDirty); }, [activeDirty, onDirtyChange]);
+
   return (
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]">
       {/* Tab bar — the Canvas OUTPUTS list is the file selector in panel variant,
@@ -784,69 +795,9 @@ function FileViewerImpl({
         />
       )}
 
-      {/* Unified file-chrome header (run_f49d3ff3 R2) — the ONE type-agnostic close
-          affordance for EVERY viewType in the Canvas PANEL. Before this, close was
-          scattered: FileEditorCore's own header (text/md/svg), FileViewerStatusBar's
-          footer (the reclaimed run_5f5e7675 patch, html/img/pdf/csv), and NO close at
-          all in the panel's top chrome. Now every open file — regardless of type —
-          closes from here. PANEL-ONLY (Gate-1 amendment 3): the modal variant keeps its
-          tab-bar × + FileEditorCore's own header, so this row must NOT stack there. */}
-      {variant === 'panel' && activeTab && (
-        <div
-          className="flex items-center gap-2 px-3 h-9 shrink-0 border-b border-[var(--color-border)] bg-[var(--color-bg)]"
-          data-testid="file-chrome-header"
-        >
-          <span
-            className="material-symbols-outlined icon-sm leading-none shrink-0"
-            style={{ color: fileIconColor(activeTab.fileName) }}
-            aria-hidden="true"
-          >
-            {fileIcon(activeTab.fileName)}
-          </span>
-          {/* Breadcrumb: where the file lives (Artifacts › its folder, the last two
-              levels; the full path is the tooltip), then the file name. The folder
-              gives way first when the header is narrow. */}
-          <span className="flex items-baseline gap-1 min-w-0 flex-1" title={activeTab.filePath}>
-            <span data-testid="file-chrome-crumb" className="truncate min-w-0 shrink text-[12px] text-[var(--color-text-muted)]">
-              {crumbOf(activeTab.filePath)}
-            </span>
-            <span className="text-[13px] font-medium truncate min-w-0 shrink-0 max-w-[70%] text-[var(--color-text)]">
-              {/* Fallback for a nameless / dir-like path so the header never shows an empty
-                  label (Gate-2 LOW): fileName can be '' for a trailing-slash path. */}
-              {activeTab.fileName || activeTab.filePath || 'Untitled'}
-            </span>
-          </span>
-          {activeTab.isDirty && (
-            <span
-              className="w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] shrink-0"
-              title="Unsaved changes"
-              data-testid="file-chrome-dirty"
-              aria-label="Unsaved changes"
-            />
-          )}
-          {/* Refresh (bug #2): reload the active file from disk. The ONE refresh
-              affordance for EVERY viewType in the panel — non-editor renderers had
-              none (only FileEditorCore's own Reload covered text/md/svg). */}
-          <button
-            onClick={handleRefreshActive}
-            className="icon-btn hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-            title="Reload this file from disk"
-            aria-label="Refresh file"
-            data-testid="file-chrome-refresh"
-          >
-            <span className="material-symbols-outlined icon-sm leading-none">refresh</span>
-          </button>
-          <button
-            onClick={handleUnifiedClose}
-            className="icon-btn hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-            title="Close this file"
-            aria-label="Close file"
-            data-testid="file-chrome-close"
-          >
-            <span className="material-symbols-outlined icon-sm leading-none">close</span>
-          </button>
-        </div>
-      )}
+      {/* Panel: no file header (Super Canvas, docs/design/super-canvas.md). The
+          Canvas list says which file is shown, the editor's own controls float at
+          its bottom, and a non-editor file's refresh / attach live in the status bar. */}
 
       {/* Renderer area */}
       <div className="flex-1 min-h-0 overflow-hidden">
@@ -882,9 +833,11 @@ function FileViewerImpl({
             if (onAttachToChat) onAttachToChat(item);
             else window.dispatchEvent(new CustomEvent('swarm:attach-file', { detail: item }));
           }}
-          // NOTE (run_f49d3ff3 R2): the status-bar close button (added run_5f5e7675)
-          // is REMOVED. Close is now a single type-agnostic affordance in the unified
-          // file-chrome header above — the status bar is info + copy/attach only again.
+          // Panel: refresh lives here (a non-editor renderer reloads on an agent
+          // write but not on an outside edit); copy-path does not (each Canvas list
+          // row has it). The modal keeps copy-path and has no refresh (unchanged).
+          onRefresh={variant === 'panel' ? handleRefreshActive : undefined}
+          showCopyPath={variant !== 'panel'}
         />
       )}
     </div>

@@ -405,6 +405,24 @@ body {
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
 
+/* File-type badge (<FileTypeIcon>, components/common/FileTypeIcon.tsx): a letter
+   label in the type colour (--fb, set inline from fileTypeBadge) on a 16% tint of
+   it. The label mixes in --color-text so a light type colour (JS yellow) stays
+   readable on a light theme. Widths sit on the icon scale above: xs fits an
+   icon-xs slot, sm an icon-sm slot, md an icon-md slot. */
+.file-badge {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  border-radius: 3px;
+  font-family: var(--font-family-mono); font-weight: 700; letter-spacing: -0.02em;
+  line-height: 1; white-space: nowrap;
+  color: color-mix(in srgb, var(--fb, var(--color-icon-default)) 78%, var(--color-text));
+  background: color-mix(in srgb, var(--fb, var(--color-icon-default)) 16%, transparent);
+}
+.file-badge-xs { width: 18px; height: 12px; font-size: 7.5px; }
+.file-badge-sm { width: 21px; height: 14px; font-size: 8.5px; }
+.file-badge-md { width: 24px; height: 16px; font-size: 9.5px; }
+.file-badge-muted { filter: saturate(0.55); }
+
 /* Button scale — buttons with a label (icon-only buttons are icon-btn above).
    One size class + one look class; the size sets height, padding, type and gap, so
    no button hand-rolls px / py / text-size again (guarded by
@@ -1048,6 +1066,18 @@ body {
   width: 3px;
   border-radius: 2px;
   background: var(--color-primary);
+}
+/* The file controls in the Canvas content card (FileEditorCore panelBar): one
+   raised group — view switch, Review, Open, Attach — on the card's bottom strip. */
+.editor-float-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
 }
 
 /* Collapsed rail: the whole Canvas as a thin vertical strip. Vertical text reads

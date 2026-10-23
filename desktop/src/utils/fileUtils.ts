@@ -6,8 +6,7 @@
  * component-level dependency between the two.
  *
  * Key exports:
- * - `fileIcon(name)`         — Material Symbols icon name based on file extension
- * - `fileIconColor(name)`    — CSS variable for the file-type icon color
+ * - `fileTypeBadge(name)`    — the file-type badge (label + colour) `<FileTypeIcon>` draws
  * - `gitStatusColor(status)` — CSS variable for git-status text/icon color
  * - `gitStatusBadge(status)` — Short badge descriptor (label, color, bg) for git status
  */
@@ -52,113 +51,60 @@ export function gitStatusBadge(status?: GitStatus): { label: string; color: stri
 /*  File icon helpers                                                  */
 /* ------------------------------------------------------------------ */
 
-/** Return a Material Symbols icon name based on file extension. */
-export function fileIcon(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'md':
-      return 'description';
-    case 'json':
-      return 'data_object';
-    case 'ts':
-    case 'tsx':
-    case 'js':
-    case 'jsx':
-      return 'javascript';
-    case 'py':
-      return 'code';
-    case 'css':
-    case 'scss':
-      return 'style';
-    case 'html':
-      return 'html';
-    case 'svg':
-    case 'png':
-    case 'jpg':
-    case 'jpeg':
-    case 'gif':
-      return 'image';
-    case 'pdf':
-      return 'picture_as_pdf';
-    case 'yaml':
-    case 'yml':
-    case 'toml':
-    case 'ini':
-    case 'env':
-      return 'settings';
-    case 'sh':
-    case 'bash':
-    case 'zsh':
-      return 'terminal';
-    case 'lock':
-      return 'lock';
-    case 'log':
-      return 'receipt_long';
-    case 'txt':
-      return 'article';
-    case 'doc':
-    case 'docx':
-      return 'description';
-    case 'xls':
-    case 'xlsx':
-    case 'csv':
-      return 'table_chart';
-    case 'ppt':
-    case 'pptx':
-      return 'slideshow';
-    case 'zip':
-    case 'tar':
-    case 'gz':
-    case 'rar':
-    case '7z':
-      return 'folder_zip';
-    default:
-      return 'draft';
-  }
+/** A file's extension (lower case, no dot), or '' when it has none. A leading
+ *  dot alone (`.env`) counts as the extension. */
+function extOf(name: string): string {
+  const base = name.replace(/\\/g, '/').split('/').pop() ?? '';
+  const i = base.lastIndexOf('.');
+  return i < 0 ? '' : base.slice(i + 1).toLowerCase();
 }
 
-/** Return a CSS variable for the file-type icon color. */
-export function fileIconColor(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'ts':
-    case 'tsx':
-      return 'var(--color-icon-typescript)';
-    case 'js':
-    case 'jsx':
-      return 'var(--color-icon-javascript)';
-    case 'py':
-      return 'var(--color-icon-python)';
-    case 'css':
-    case 'scss':
-      return 'var(--color-icon-css)';
-    case 'html':
-      return 'var(--color-icon-html)';
-    case 'json':
-      return 'var(--color-icon-json)';
-    case 'md':
-      return 'var(--color-icon-markdown)';
-    case 'svg':
-    case 'png':
-    case 'jpg':
-    case 'jpeg':
-    case 'gif':
-      return 'var(--color-icon-image)';
-    case 'pdf':
-      return 'var(--color-status-error)';
-    case 'doc':
-    case 'docx':
-      return 'var(--color-icon-typescript)';
-    case 'xls':
-    case 'xlsx':
-    case 'csv':
-      return 'var(--color-status-success)';
-    case 'ppt':
-    case 'pptx':
-      return 'var(--color-status-warning)';
-    default:
-      return 'var(--color-icon-default)';
-  }
+const BADGE_LABEL: Record<string, string> = {
+  md: 'MD', mdx: 'MD', markdown: 'MD',
+  ts: 'TS', tsx: 'TS', mts: 'TS', cts: 'TS',
+  js: 'JS', jsx: 'JS', mjs: 'JS', cjs: 'JS',
+  py: 'PY', json: '{}', jsonl: '{}',
+  yaml: 'YML', yml: 'YML', toml: 'TML', ini: 'INI', env: 'ENV',
+  css: 'CSS', scss: 'CSS', html: 'HTM', htm: 'HTM', xml: 'XML',
+  svg: 'SVG', png: 'IMG', jpg: 'IMG', jpeg: 'IMG', gif: 'IMG', webp: 'IMG', bmp: 'IMG', ico: 'IMG',
+  pdf: 'PDF', sh: 'SH', bash: 'SH', zsh: 'SH',
+  txt: 'TXT', log: 'LOG', lock: 'LCK', csv: 'CSV',
+  doc: 'DOC', docx: 'DOC', xls: 'XLS', xlsx: 'XLS', ppt: 'PPT', pptx: 'PPT',
+  zip: 'ZIP', tar: 'ZIP', gz: 'ZIP', rar: 'ZIP', '7z': 'ZIP',
+  rs: 'RS', go: 'GO', java: 'JV', kt: 'KT', swift: 'SW', rb: 'RB', sql: 'SQL',
+};
+
+/** Extensionless names that still have a known type. */
+const NAMED: Record<string, string> = { dockerfile: 'DK', makefile: 'MK' };
+
+/** Colour per badge label; every value is an existing theme token. */
+const BADGE_COLOR: Record<string, string> = {
+  MD: 'var(--color-icon-markdown)', TS: 'var(--color-icon-typescript)',
+  JS: 'var(--color-icon-javascript)', PY: 'var(--color-icon-python)',
+  '{}': 'var(--color-icon-javascript)', CSS: 'var(--color-icon-css)',
+  HTM: 'var(--color-icon-html)', XML: 'var(--color-icon-html)',
+  SVG: 'var(--color-icon-image)', IMG: 'var(--color-icon-image)',
+  YML: 'var(--color-icon-image)', TML: 'var(--color-icon-image)',
+  PDF: 'var(--color-status-error)', PPT: 'var(--color-status-warning)',
+  CSV: 'var(--color-status-success)', XLS: 'var(--color-status-success)',
+  SH: 'var(--color-status-success)', DOC: 'var(--color-icon-typescript)',
+  DK: 'var(--color-icon-typescript)', RS: 'var(--color-icon-html)',
+  GO: 'var(--color-icon-typescript)',
+};
+
+/**
+ * The file-type badge every file row in the app shows (XG 2026-10-23, option A):
+ * a short label plus its colour. Known types have their own label (MD, TS, {} …);
+ * an unknown extension shows its first 3 letters; an extensionless name its first
+ * 3 letters (Dockerfile → DK, Makefile → MK). Rendered by `<FileTypeIcon>`.
+ */
+export function fileTypeBadge(name: string): { label: string; color: string } {
+  const ext = extOf(name);
+  const base = (name.replace(/\\/g, '/').split('/').pop() ?? '').toLowerCase();
+  const label = ext
+    ? (BADGE_LABEL[ext] ?? ext.slice(0, 3).toUpperCase())
+    : (NAMED[base] ?? (base.slice(0, 3).toUpperCase() || '?'));
+  return { label, color: BADGE_COLOR[label] ?? 'var(--color-icon-default)' };
 }
 
 // ---------------------------------------------------------------------------

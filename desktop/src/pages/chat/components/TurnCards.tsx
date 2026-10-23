@@ -18,7 +18,7 @@ import type {
   PipelineAttentionContent, PipelineAttentionItem, PipelineSummaryContent, PipelineSummaryDoc, TurnDeliverable, TurnChangesContent,
 } from '../../../types';
 import { OPEN_FILE_EVENT, resolveImageSrc } from '../../../components/common/MarkdownRenderer';
-import { fileIcon, fileIconColor } from '../../../utils/fileUtils';
+import { FileTypeIcon } from '../../../components/common/FileTypeIcon';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { tf } from '../tf';
 import { docMeta } from '../runDocMeta';
@@ -167,13 +167,7 @@ function DeliverableTile({ file }: { file: TurnDeliverable }) {
         {thumb ? (
           <img src={thumb} alt="" onError={() => setThumbFailed(true)} className="w-7 h-7 rounded object-cover shrink-0" />
         ) : (
-          <span
-            aria-hidden="true"
-            className="material-symbols-outlined icon-md leading-none shrink-0"
-            style={{ color: fileIconColor(name), filter: 'saturate(0.55)' }}
-          >
-            {fileIcon(name)}
-          </span>
+          <FileTypeIcon name={name} size="md" muted />
         )}
         <span className="min-w-0 font-mono text-[12.5px] text-[var(--color-text-secondary)] truncate">{middleEllipsis(name)}</span>
       </Head>

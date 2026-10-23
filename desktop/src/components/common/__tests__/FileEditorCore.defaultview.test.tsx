@@ -39,7 +39,9 @@ function renderCore(o: Opts) {
       initialContent={o.initialContent ?? '# Title\n\nsome **markdown** body'}
       committedContent={o.committedContent}
       initialShowDiff={o.initialShowDiff}
-      variant="panel"
+      // The modal header's preview / show-changes toggles; the panel's view switch
+      // is covered in FileEditorCore.panelbar.test.tsx.
+      variant="modal"
       onSave={vi.fn().mockResolvedValue(undefined)}
       onClose={vi.fn()}
     />,

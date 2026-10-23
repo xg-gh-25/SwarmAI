@@ -19,7 +19,7 @@ import {
   canvasSessionService, refreshCanvasChanges, useCanvasSession,
   type RunCommit, type RunRepoChange, type SessionRunChange,
 } from '../../services/canvasSession';
-import { fileIcon, fileIconColor } from '../../utils/fileUtils';
+import { FileTypeIcon } from '../common/FileTypeIcon';
 
 export type ChangesSelection =
   | { kind: 'file'; run: string; root: string; path: string }
@@ -43,10 +43,7 @@ function splitPath(p: string): [string, string] {
 }
 
 function TypeIcon({ name }: { name: string }) {
-  return (
-    <span className="material-symbols-outlined icon-xs shrink-0 leading-none" aria-hidden="true"
-      style={{ color: fileIconColor(name) }}>{fileIcon(name)}</span>
-  );
+  return <FileTypeIcon name={name} />;
 }
 
 function useRuns(): SessionRunChange[] | null {

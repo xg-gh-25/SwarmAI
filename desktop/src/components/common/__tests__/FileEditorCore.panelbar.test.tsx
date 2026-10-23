@@ -1,0 +1,84 @@
+/**
+ * FileEditorCore — panel vs modal chrome (Super Canvas commit 3,
+ * docs/design/super-canvas.md).
+ *
+ * Panel (the Canvas): no header and no footer. One bottom strip holds a floating
+ * group — a single Preview / Source / Changes view switch, Review, Attach — and a
+ * Save button that exists only while there are unsaved edits. No Reload, Copy path,
+ * mode toggle or Close. Modal: the labelled header and footer are unchanged and
+ * there is no panel strip.
+ *
+ * Drives the real component; only the workspace-root fetch is stubbed.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import FileEditorCore from '../FileEditorCore';
+
+vi.mock('../../../services/api', () => ({
+  default: { get: vi.fn().mockResolvedValue({ data: {} }), put: vi.fn(), post: vi.fn() },
+}));
+
+const base = {
+  workspaceId: '',
+  onSave: vi.fn().mockResolvedValue(undefined),
+  onClose: vi.fn(),
+  onAttachToChat: vi.fn(),
+};
+const md = { ...base, filePath: 'docs/a.md', fileName: 'a.md', initialContent: '# A\n\nbody\n' };
+const ts = { ...base, filePath: 'src/x.ts', fileName: 'x.ts', initialContent: 'const x = 1;\n' };
+
+beforeEach(() => cleanup());
+
+const checked = () => screen.getAllByRole('radio').find((r) => r.getAttribute('aria-checked') === 'true')?.textContent;
+
+describe('panel chrome', () => {
+  it('has no header or footer controls, only the bottom strip', () => {
+    render(<FileEditorCore {...md} variant="panel" committedContent="# old\n" />);
+    expect(screen.getByTestId('editor-panel-bar')).toBeTruthy();
+    for (const id of ['show-changes-toggle', 'markdown-preview-toggle', 'file-editor-reload', 'copy-path-btn', 'mode-toggle', 'file-editor-cancel']) {
+      expect(screen.queryByTestId(id)).toBeNull();
+    }
+    expect(screen.queryByLabelText('Close')).toBeNull();
+    expect(screen.getByTestId('review-mode-toggle')).toBeTruthy();
+    expect(screen.getByTestId('attach-to-chat-btn')).toBeTruthy();
+  });
+
+  it('a markdown file switches Preview / Source / Changes with one control', () => {
+    render(<FileEditorCore {...md} variant="panel" committedContent="# old\n" />);
+    expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Preview', 'Source', 'Changes']);
+    expect(checked()).toBe('Preview');
+    fireEvent.click(screen.getByTestId('editor-view-source'));
+    expect(checked()).toBe('Source');
+    expect(screen.getByTestId('file-editor-textarea')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('editor-view-changes'));
+    expect(checked()).toBe('Changes');
+    expect(screen.getByTestId('diff-view')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('editor-view-preview'));
+    expect(checked()).toBe('Preview');
+    expect(screen.queryByTestId('diff-view')).toBeNull();
+  });
+
+  it('a code file has Source and Changes only; Changes is off with nothing to compare', () => {
+    render(<FileEditorCore {...ts} variant="panel" />);
+    expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Source', 'Changes']);
+    expect((screen.getByTestId('editor-view-changes') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('Save appears only once there are unsaved edits, and saves', () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<FileEditorCore {...ts} onSave={onSave} variant="panel" />);
+    expect(screen.queryByTestId('file-editor-save')).toBeNull();
+    fireEvent.change(screen.getByTestId('file-editor-textarea'), { target: { value: 'const x = 2;\n' } });
+    fireEvent.click(screen.getByTestId('file-editor-save'));
+    expect(onSave).toHaveBeenCalledWith('const x = 2;\n');
+  });
+});
+
+describe('modal chrome (unchanged)', () => {
+  it('keeps the labelled header toggles and footer, and has no panel strip', () => {
+    render(<FileEditorCore {...ts} variant="modal" committedContent="const x = 0;\n" />);
+    expect(screen.getByTestId('show-changes-toggle').textContent).toContain('Show Changes');
+    expect(screen.getByTestId('file-editor-save')).toBeTruthy();
+    expect(screen.queryByTestId('editor-panel-bar')).toBeNull();
+  });
+});

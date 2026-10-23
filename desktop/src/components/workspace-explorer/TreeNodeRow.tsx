@@ -26,7 +26,8 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import type { TreeNode } from '../../types';
 import type { FileTreeItem } from './FileTreeNode';
-import { fileIcon, fileIconColor, gitStatusColor, gitStatusBadge } from '../../utils/fileUtils';
+import { fileTypeBadge, gitStatusColor, gitStatusBadge } from '../../utils/fileUtils';
+import { FileTypeIcon } from '../common/FileTypeIcon';
 import { SYSTEM_NAMES } from './VirtualizedTree';
 
 /* ------------------------------------------------------------------ */
@@ -232,8 +233,15 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
       'border-radius:6px;font-size:13px;color:var(--color-text);' +
       'position:absolute;top:-1000px;';
     const iconSpan = document.createElement('span');
-    iconSpan.className = 'material-symbols-outlined icon-sm';
-    iconSpan.textContent = fileIcon(node.name);
+    if (node.type === 'directory') {
+      iconSpan.className = 'material-symbols-outlined icon-sm';
+      iconSpan.textContent = 'folder';
+    } else {
+      const b = fileTypeBadge(node.name);
+      iconSpan.className = 'file-badge file-badge-sm';
+      iconSpan.style.setProperty('--fb', b.color);
+      iconSpan.textContent = b.label;
+    }
     ghost.appendChild(iconSpan);
     ghost.appendChild(document.createTextNode(node.name));
     document.body.appendChild(ghost);
@@ -335,7 +343,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
       ? 'var(--color-hidden-icon)'
       : (isDirectory
         ? (isExpanded ? 'var(--color-icon-folder-open)' : 'var(--color-icon-folder)')
-        : fileIconColor(node.name)));
+        : undefined));
 
   /* ---- render ---- */
 
@@ -422,14 +430,18 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}
         aria-hidden="true"
       >
-        <span
-          className="material-symbols-outlined icon-sm"
-          style={{
-            color: iconColor,
-          }}
-        >
-          {isDirectory ? (isExpanded ? 'folder_open' : 'folder') : fileIcon(node.name)}
-        </span>
+        {isDirectory ? (
+          <span
+            className="material-symbols-outlined icon-sm"
+            style={{
+              color: iconColor,
+            }}
+          >
+            {isExpanded ? 'folder_open' : 'folder'}
+          </span>
+        ) : (
+          <FileTypeIcon name={node.name} color={iconColor} />
+        )}
         {node.isSymlink && (
           <span
             className="material-symbols-outlined icon-xs"

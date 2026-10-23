@@ -14,6 +14,7 @@ import { memo, useState, useCallback, useEffect, useRef, useReducer, type CSSPro
 import FileViewer from './FileViewer';
 import type { FileViewerProps } from './FileViewer';
 import { CanvasOutputRail } from './CanvasOutputRail';
+import { FileTypeIcon } from '../common/FileTypeIcon';
 import { outputRowOpenDetail, railOrder } from '../../hooks/railSsot';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 import { ChangesCount, ChangesDetail, ChangesNav, ChangesRefresh, type ChangesSelection } from './CanvasChanges';
@@ -331,6 +332,24 @@ function FileViewerPanelImpl({
 
   // The file shown in Region B — drives the accent left-bar on its output row.
   const selectedPath = props.initialFile?.filePath;
+
+  // Whether that file has unsaved edits (FileViewer reports it): the folded header
+  // shows a dot by its name.
+  const [fileDirty, setFileDirty] = useState(false);
+  // "Stop browsing" (the × on the Browsing row): show the first output instead, the
+  // same open a click on that row does; with no output, ask FileViewer to close the
+  // file through its unsaved-edits guard (closeRequest), which ends in canvas.close.
+  const [closeRequest, setCloseRequest] = useState(0);
+  const stopBrowsing = useCallback(() => {
+    const f = firstOutputRef.current;
+    if (!f) { setCloseRequest((n) => n + 1); return; }
+    document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, {
+      detail: {
+        ...outputRowOpenDetail(f.path, f.change, f.absolutePath, f.baseRef, f.sessionId),
+        ...(railTabId ? { tabId: railTabId } : {}),
+      },
+    }));
+  }, [railTabId]);
 
   // ── Un-rail on new file arrival — MOVED to the write side (Bug 2 root fix, run_5f5e7675) ──
   // A new file reaching Canvas is the "I want to see this" intent → a railed Canvas
@@ -732,6 +751,18 @@ function FileViewerPanelImpl({
                   ))}
                 </div>
                 {canvasTab === 'changes' && <ChangesRefresh />}
+                {/* List folded: the header says which file the card shows. */}
+                {outputsCollapsed && canvasTab === 'artifacts' && props.initialFile && (
+                  <span className="ml-2 inline-flex items-center gap-1.5 min-w-0 text-[12px] font-semibold text-[var(--color-text)]"
+                    title={props.initialFile.filePath} data-testid="canvas-current-file">
+                    <FileTypeIcon name={props.initialFile.fileName} />
+                    <span className="truncate">{props.initialFile.fileName}</span>
+                    {fileDirty && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] shrink-0"
+                        title="Unsaved changes" aria-label="Unsaved changes" data-testid="canvas-current-dirty" />
+                    )}
+                  </span>
+                )}
               </div>
               {/* Pin — acts on the whole Canvas (both tabs): pinned, it does not
                   change by itself (no auto-surface, no tab switch). It replaced the
@@ -796,7 +827,7 @@ function FileViewerPanelImpl({
               className={outputsCollapsed || canvasTab !== 'artifacts' ? 'hidden' : 'max-h-[140px] overflow-y-auto px-2 pb-1.5'}
               data-testid="canvas-outputs-list"
             >
-              <CanvasOutputRail files={referencedFiles} onCounts={setCounts} selectedPath={selectedPath} />
+              <CanvasOutputRail files={referencedFiles} onCounts={setCounts} selectedPath={selectedPath} onStopBrowsing={stopBrowsing} />
             </div>
             {canvasTab === 'changes' && !outputsCollapsed && (
               <div className="max-h-[220px] overflow-y-auto px-2 pb-1.5" data-testid="canvas-changes-list">
@@ -812,6 +843,8 @@ function FileViewerPanelImpl({
             <FileViewer
               {...props}
               variant="panel"
+              closeRequest={closeRequest}
+              onDirtyChange={setFileDirty}
             />
           </div>
           {canvasTab === 'changes' && <ChangesDetail selected={changesSel} />}

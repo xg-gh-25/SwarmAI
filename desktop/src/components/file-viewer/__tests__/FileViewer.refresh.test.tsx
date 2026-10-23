@@ -26,7 +26,10 @@ vi.mock('../../common/FileEditorCore', () => ({
   default: () => <div data-testid="file-editor-core-stub" />,
 }));
 vi.mock('../FileViewerTabBar', () => ({ default: () => <div /> }));
-vi.mock('../FileViewerStatusBar', () => ({ default: () => <div /> }));
+vi.mock('../FileViewerStatusBar', () => ({
+  default: ({ onRefresh }: { onRefresh?: () => void }) =>
+    onRefresh ? <button data-testid="statusbar-refresh" onClick={onRefresh} /> : <div />,
+}));
 vi.mock('../renderers/CsvRenderer', () => ({ default: () => <div data-testid="csv-renderer-stub" /> }));
 vi.mock('../renderers/ImageRenderer', () => ({ default: () => <div /> }));
 vi.mock('../renderers/PdfRenderer', () => ({ default: () => <div /> }));
@@ -111,8 +114,8 @@ describe('FileViewer — swarm:file-changed cache invalidation', () => {
     );
     await waitFor(() => expect(container.querySelector('[data-testid="csv-renderer-stub"]')).toBeTruthy());
     const before = contentFetchCount('/ws/data.csv');
-    // The refresh affordance lives in the panel file-chrome header.
-    fireEvent.click(getByTestId('file-chrome-refresh'));
+    // The panel's refresh for a non-editor renderer lives in its status bar.
+    fireEvent.click(getByTestId('statusbar-refresh'));
     await waitFor(() => expect(contentFetchCount('/ws/data.csv')).toBeGreaterThan(before));
   });
 
