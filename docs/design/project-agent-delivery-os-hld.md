@@ -540,7 +540,7 @@ A Hive persists a dispatch before acknowledging it. A disconnected Hive continue
 stores events in its outbox, and pauses rather than guessing when a Human decision is
 required. The Host resumes from its last acknowledged cursor.
 
-A remote `result_ready` event means execution finished and a sealed result exists. It does
+A remote `result_candidate` event means execution finished and a sealed result exists. It does
 not mean SwarmAI accepted the delivery. The Host first verifies sender, epoch, Definition and
 Context revisions, source base, final tree, event integrity, Pipeline revision, and evidence
 bundle. Final acceptance is not recorded before landing. Under the per-repository integration
@@ -727,7 +727,7 @@ sequenceDiagram
     L->>Host: Publish result_candidate reference
   else Hive result candidate
     P->>X: Seal tree, evidence, REPORT candidate and checkpoint
-    X->>RX: Publish result_ready + immutable reference
+    X->>RX: Publish result_candidate + immutable reference
     RX->>Host: Replay and persist result candidate fact
   end
   Host->>Host: Verify owner, epoch, digests, base, tree and evidence
@@ -890,7 +890,7 @@ future Flows consume the new Brain.
 
 - Local and Hive execute the same Pipeline Protocol and required checks.
 - Project Agent and Conductor cannot manufacture a completion verdict.
-- Remote completion is only `result_ready`; Host acceptance is a separate fact.
+- Remote completion is only `result_candidate`; Host acceptance is a separate fact.
 - Evidence binds to the final tree and recorded base, not merely to a Run ID.
 - Aggregate Intent completion checks integration, not only green child Runs.
 
@@ -971,8 +971,8 @@ placement ineligible rather than guessed safe.
 | Failure | Required behavior | Forbidden behavior |
 |---|---|---|
 | Hive loses network | Continue current safe work, persist events locally, pause at Human Loop, replay later. | Infer failure from one broken SSE connection. |
-| Hive process restarts | Resume the same Attempt only if its session and lease are valid. | Start a second worker before ownership is resolved. |
-| Hive is lost past lease policy | Fence the old epoch; create a new Attempt from sealed state. | Claim lossless cross-host SDK resume without proof. |
+| Hive process restarts | Kill the old worker, then `adopt`: a new Attempt on the same Hive from the Pipeline checkpoint, closing the old one (V1 §7.1). | Start a second worker before ownership is resolved. |
+| Hive is lost past lease policy | Fence the old epoch and fail the request `lease_lost`; in V1 the owner resubmits. Automatic new Attempts on another executor are later work. | Claim lossless cross-host SDK resume without proof. |
 | Old Hive returns | Reject stale-epoch events and result bundles. | Merge whichever result arrives last. |
 | Duplicate command/event | Return already-applied or deduplicate by message ID. | Execute the effect twice. |
 | Event sequence gap | Mark Trace incomplete and replay from cursor. | Continue projecting a precise cost or state from incomplete facts. |
@@ -1058,6 +1058,12 @@ properly authorized decisions. It cannot rewrite immutable quality verdicts, man
 Trace facts, or bypass Pipeline evidence and safety Gates.
 
 ## 20. Implementation sequence
+
+The execution plane is built in the order of `pipeline-run-conductor-v1.md` §12, which
+uses its own phase numbers. Mapping: this HLD's Phase 1 (registration part) = V1 Phase 1;
+Phase 2 = V1 Phases 2 and 5; Phase 1b and Phase 4 = V1 Phase 6 (with Phase 7 for Cloud
+Desktops); the Central Service and learning pipeline are V1 Phases 3 and 4. Phases 1
+(Definition and Flow parts), 3, 5 and 6 below are not in V1.
 
 ### Phase 1 — Definition and Flow facts
 

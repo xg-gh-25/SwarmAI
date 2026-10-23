@@ -214,12 +214,16 @@ owner command, never automatically.
 | `requests` | `request_id`; GSI `(target_node, state)`; GSI `(state, updated_at)` | the immutable request, dispatch state (§7.4), attempt, `lease_epoch`, `lease_renewed_at` (Central clock), `worker_incarnation`, `cancel_deadline` |
 | `events` | `request_id`, sort key `<attempt>#<lease_epoch>#<seq>` (zero-padded) | mirrored Run events with their signed `payload_digest` (§7.1) |
 | `decisions` | `decision_id`; TTL | question, options, answer, answer nonce state, expiry |
-| `blobs` | `digest` | size, media type, producing node, request, attempt, epoch, producer signature (§4.3.2) |
+| `blob_objects` | `digest` | size, media type, first registered at. One row per distinct content |
+| `blob_refs` | `owner_id` (request or DDD revision), `role`; GSI `digest` | the digest, producing node, attempt, epoch, producer signature. One row per use, so the same content used by many Runs keeps every provenance |
+| `learning_jobs` | `job_id`; GSI `(destination, state)` | §4.4.2 |
+| `change_sets` | `change_set_id`; GSI `(destination, state)` | §4.4.3 |
+| `audit` | `day`, `ts#id` | §4.4.5 |
 | `enrolments` | `code_hash`; TTL | target node, attempts left, consumed flag (§4.3.6) |
 
 | S3 prefix | Holds |
 |---|---|
-| `quarantine/<upload_id>` | Uploads in progress. Expire after 1 day |
+| `quarantine/<upload_id>` | Raw uploads awaiting intake. Readable only by the intake Lambda; deleted when intake ends, and by a 1-day lifecycle rule as a backstop |
 | `blobs/sha256/<digest>` | Verified DDD snapshots, Run records and result bundles (§4.4.1). Kept until the owner deletes them; lifecycle rules are set in Phase 3 from measured volume |
 
 How a blob gets in. Content addressing alone does not stop an authorized writer from
@@ -229,11 +233,16 @@ putting wrong bytes under a digest first, so:
    `quarantine/<upload_id>`, scoped to that one key, valid 15 minutes, bound to the
    writer's request, attempt and epoch, and requiring `x-amz-checksum-sha256` equal to the
    claimed digest. S3 rejects a body whose checksum differs.
-2. The writer calls `complete` with its signature over the digest, size and media type.
-   Central checks that the stored object's checksum is that digest, writes the `blobs`
-   manifest row, and copies the object to `blobs/sha256/<digest>` with `If-None-Match: *`.
-   A digest that already exists is not replaced; the upload is discarded.
-3. Every reader verifies the sha256 after download and refuses a mismatch.
+2. The writer calls `complete` with its signature over the digest, size, media type and
+   role. Central checks that the stored object's checksum is that digest.
+3. **Intake runs on the quarantined object before anything is registered** (§4.4.2). Text
+   content is redacted and becomes a new object with its own digest; the raw object is
+   then deleted. A result bundle (code) is never rewritten: a secret finding in it rejects
+   the upload and the candidate cannot land.
+4. Central writes the `blob_objects` row (if new) and a `blob_refs` row for this use, and
+   copies the redacted object to `blobs/sha256/<digest>` with `If-None-Match: *`. Content
+   that already exists is not copied again; the new `blob_refs` row still records this use.
+5. Every reader verifies the sha256 after download and refuses a mismatch.
 
 No node can write to `blobs/` directly.
 
@@ -288,12 +297,22 @@ V1 runs only in internal accounts, so Central stores Run content as it is:
 
 - DynamoDB and S3 are encrypted with a customer-managed KMS key; only the Central
   Lambdas and the Host admin role can use it.
-- Every read and write of a Run record or blob is recorded in the audit table (§4.4.4).
+- Every read and write of a Run record or blob is recorded in the audit table (§4.4.5).
 - Content is redacted at intake (§4.4.2), before anything is distilled from it.
 - `classify_project()` still decides **where** a Run may execute (§5.3). It no longer
   decides what Central may store.
 - Field-level sealing is deferred. If a later DDD needs it, it is added at intake, where
   every result already passes.
+
+#### 4.3.5 What Central never does
+
+- It is never on the chat send or stream path, and Host-local Runs never wait for it.
+- It holds no Pipeline signing key and no credential value. It is not a second
+  authoritative copy of any code or DDD.
+- It does not execute anything; it stores, authorizes and expires.
+- If it is down: Host-local Runs are unaffected; running Hive Runs keep executing and
+  buffer their events locally; new remote submissions fail visibly at submit rather than
+  being queued silently.
 
 #### 4.3.6 Wire and key specification
 
@@ -322,15 +341,38 @@ execute and from how each DDD is stored.
 
 #### 4.4.1 What a Run hands in
 
-At the end of REFLECT, the executor uploads one **Run record** and registers it. It holds
-exactly three kinds of content, plus the metadata that ties them together:
+When the Run is terminal, after REFLECT has completed (`reflect_complete` or
+`reflect_exhausted`) and `REPORT.md` and usage have been finalized, the executor uploads
+one **Run record**. This holds for every placement, including an internal Run, whose
+order is `external_handoff` → REFLECT → `completed` → upload. It holds exactly three kinds
+of content, plus the metadata that ties them together:
 
 | Part | Contents | Source today |
 |---|---|---|
 | Pipeline documents | `REQUIREMENTS.md` and `DESIGN_SPEC.md` (profiles that have them), `REVIEW.md`, `FIXING_SPEC.md` (if review asked for fixes), `REPORT.md` | Rendered by the Pipeline into the run directory (`run_protocol/documents.py`, `engine.py`) |
 | Reflect summary | Each lesson the agent wrote, with its destination, relation and the judge's verdict | `artifacts/reflect.json` |
 | Delivery record | Commits: per repo the base, landed commit and message. Or CR: package, CR id, revision, commit, state at handoff (draft) | The landing result (`run_protocol/landing.py`), or the CR handoff (§7.3) |
-| Metadata | Request, `ddd_ref`, `code_ref`, placement, Attempts, the four completion facts, landing outcome, token and time usage | Conductor and Pipeline records |
+| Metadata | Below | Conductor and Pipeline records |
+
+The record is a versioned manifest (`run_record_version: 1`). Metadata fields:
+
+| Field | Required for |
+|---|---|
+| `request_id`, `run_id`, project, profile, origin, placement, executing node | all |
+| `ddd_ref` (adapter, revision, digest), Project Agent Definition revision if any | all |
+| `code_ref` per repo (base commit) and owned paths | all |
+| Pipeline protocol revision and evidence contract id | all |
+| Attempts (attempt, epoch, node, start, end, reason) | all |
+| The four completion facts and the landing outcome | all |
+| Candidate tree digest per repo and the result bundle digest | Runs that changed code |
+| Signed event chain: head digest and event count | all |
+| Token and time usage | all |
+| Digests of transcripts and logs | all |
+
+The **result bundle** is a separate blob, referenced by digest. Per repo it holds the base
+commit, the ordered patch series (`git format-patch`) and the candidate tree digest. The
+Host lands from it (§7.2): it applies the series on the base, checks the tree digest, then
+runs the landing. Internal Runs have no result bundle; their delivery record names the CR.
 
 Transcripts, full logs and the signed event chain stay on the node that ran the Run; the
 Run record carries only their digests, so they can be checked if fetched later.
@@ -352,6 +394,23 @@ nothing is lost because Central was down.
 The learning worker reuses SwarmAI's existing code instead of reimplementing it in a
 Lambda, and runs as a background job, never on the chat path or in the Local Worker slot.
 
+**Learning jobs.** Intake creates one `learning_jobs` row per accepted Run record:
+
+| State | Next | Written by |
+|---|---|---|
+| `queued` | `claimed` | learning worker (conditional claim with lease and epoch, as for Runs) |
+| `claimed` | `proposed`, `queued` (lease lost), `failed` | worker / sweeper |
+| `proposed` | done when every proposal has a change set or a `discard` | Central |
+| `failed` | `queued` (retry, at most 3), then `dead_letter` | sweeper |
+
+- The worker is a node enrolled with the role `learning` (the Host in V1). It may claim
+  learning jobs, read the Run records they name and write proposals and change sets. It
+  may apply only to destinations whose adapter it holds (§4.4.3). It cannot create or
+  claim Run requests.
+- A `dead_letter` job is shown in the Control Center with its last error.
+- If the adapter node is offline, approved change sets stay `approved` and are applied
+  when it returns. Nothing is applied by another node.
+
 **What changes in the Pipeline.** Today `reflect_job.route` writes a kept lesson directly
 on the executing machine: `ddd_cultivation.apply_to_ddd` or `annotate_entry` for DDD
 docs, and the project's local `.artifacts/proposals/` for MEMORY / EVOLUTION. From
@@ -362,43 +421,88 @@ Run record. No executor writes a DDD. Before Phase 4 it works as today.
 
 Central knows each destination of learned content only through its adapter. A DDD
 declares its adapter on the `ddds` record; other destinations (MEMORY, EVOLUTION, a
-future knowledge store) are registered the same way. An adapter does three things:
+future knowledge store) are registered the same way.
+
+Each approved change becomes a **change set** with a `change_set_id`, its destination and
+the `base_rev` it was reviewed against. Change sets of one destination are applied one at
+a time, in approval order.
+
+| State | Meaning |
+|---|---|
+| `approved` | Waiting for the destination's turn |
+| `applying` | The adapter node holds it (lease, as for jobs) |
+| `handed_off` | `git_repo` only: a PR or CR is open; waiting for it to merge |
+| `applied` | The destination now contains it; `applied_rev` recorded |
+| `conflict` | The destination moved past `base_rev`; back to review |
+| `failed` | The adapter reported an error; retried at most 3 times |
+| `reverted` | A later revert change set removed it |
+
+Adapter operations, all idempotent by `change_set_id`:
 
 | Operation | Meaning |
 |---|---|
-| `read(rev)` | Materialize the DDD at a pinned revision (used by §5.2) |
-| `apply(change_set, base_rev)` | Apply an approved change set if the DDD is still at `base_rev`; otherwise report a conflict, which sends the change set back to review |
-| `head()` | Report the current revision |
+| `read(rev)` | Materialize the destination at a revision (used by §5.2) |
+| `head()` | Current revision |
+| `apply(change_set)` | If the destination is at `base_rev`, apply and return a receipt with `applied_rev`; if this change set was already applied, return the same receipt; otherwise `conflict` |
+| `status(change_set_id)` | `git_repo`: whether its PR / CR merged and at which revision |
+| `revert(change_set_id)` | Apply the inverse as a new change set, through the same path |
+
+A change set is all or nothing for its destination. Changes that span destinations are
+separate change sets and are never assumed atomic together.
 
 V1 has two adapters:
 
-- `host_files`: the SwarmAI DDD on the Host. `apply` writes through the existing
-  `locked_write.py` / `apply_to_ddd`, so there is still one writer for those files.
-- `git_repo`: a DDD in a git repo. `apply` commits to that repo following its
-  delivery contract (a PR for GitHub, a draft CR for internal git), on a node with access
-  to it.
+- `host_files` (SwarmAI DDD and the Host's MEMORY / EVOLUTION): writes through
+  `locked_write.py` under the file lock. The revision is the sha256 of the destination's
+  files; each applied change set is journalled with its inverse, so `revert` is exact.
+- `git_repo`: `apply` opens a PR (GitHub) or a draft CR (internal git) and moves the change
+  set to `handed_off`. The destination's revision is published only when `status` sees the
+  merge. While one change set is `handed_off`, later ones for the same destination wait.
 
 A new storage type, or a new kind of destination, is a new adapter and a new registered
 value; Central, the learning stages and the Pipeline do not change. SwarmAI's own DDD on
 `host_files` is the first end-to-end case.
 
-#### 4.4.4 Audit
+#### 4.4.4 Every writer goes through the adapter
+
+Today several components write these destinations directly:
+
+| Writer | Writes | Source |
+|---|---|---|
+| REFLECT routing | DDD docs (`apply_to_ddd`, `annotate_entry`), proposal queue | `run_protocol/reflect_job.py` |
+| Improvement write-back hook | `IMPROVEMENT.md` via `apply_to_ddd` | `hooks/improvement_writeback_hook.py` |
+| DailyActivity hook | `TECH.md` | `hooks/daily_activity_hook.py` |
+| Context health hook | MEMORY and DDD entry lifecycle (ref bump, decay), indexes | `hooks/context_health_hook.py` |
+| Distillation hook | MEMORY.md | `hooks/distillation_hook.py` |
+| Correction capture | MEMORY.md | `core/runtime_hooks.py` |
+| Save to Memory | MEMORY.md | `core/memory_extractor.py` |
+| Evolution optimizer and maintenance hook | EVOLUTION.md, SKILL.md | `core/evolution_optimizer.py`, `hooks/evolution_maintenance_hook.py` |
+| DDD cultivation | DDD docs | `core/ddd_cultivation.py`, `core/cultivation_dispatcher.py` |
+
+V1 rule:
+
+- **Content learned from Pipeline Runs** goes only through Central (§4.4.2), from Phase 4.
+- **Content learned from chat sessions** (the hooks above, Save to Memory) keeps being
+  decided on the Host in V1, so chat behaviour does not change. But it no longer writes
+  files itself: every one of these writers calls the `host_files` adapter, which is the
+  only code that writes those files. Its change sets are recorded in Central's audit
+  when Central is reachable and queued locally when not.
+- Lifecycle edits (ref bump, decay, deprecation) are change sets too, so the revision and
+  the journal stay complete.
+- A structural test fails the build when any module other than the adapter writes a
+  registered destination path.
+
+Moving session learning itself to Central is a later decision; with every write already
+behind the adapter, it changes who proposes, not who writes.
+
+#### 4.4.5 Audit
 
 Central keeps an append-only `audit` table: every Run record received, every redaction
-finding, every gate verdict, every human approval, every applied change with its adapter,
-base and resulting revision, and every read of Run content. Any DDD line can be traced to
+finding, every gate verdict, every human approval, every learning job and change set
+transition, every applied change with its adapter, base and resulting revision, every
+revert, and every read of Run content. Any DDD line can be traced to
 the Runs and decisions that produced it, and an applied change set can be reverted through
 its adapter.
-
-#### 4.3.5 What Central never does
-
-- It is never on the chat send or stream path, and Host-local Runs never wait for it.
-- It holds no Pipeline signing key and no credential value. It is not a second
-  authoritative copy of any code or DDD.
-- It does not execute anything; it stores, authorizes and expires.
-- If it is down: Host-local Runs are unaffected; running Hive Runs keep executing and
-  buffer their events locally; new remote submissions fail visibly at submit rather than
-  being queued silently.
 
 ## 5. Data model
 
@@ -431,11 +535,11 @@ request:                       # immutable once accepted
 dispatch:                      # mutable, owned by the Conductor
   run_id: <pipeline v1 run id, set when the Run is created>
   state: queued | dispatching | running | candidate_ready | landing
-       | done | failed | cancelled
+       | cancelling | done | failed | cancelled
   attempts:
     - attempt: 1
       executor: host:inline | host:worker | hive_<id>
-      lease_epoch: 1           # revoked only by the Host (§9)
+      lease_epoch: 1           # remote Runs: advanced only by Central (claim, adopt, cancel)
       started_at: <iso>
       ended_at: null
       end_reason: null | completed | lease_lost | crashed | cancelled
@@ -454,7 +558,7 @@ Legal dispatch transitions (any other write is rejected):
 | `dispatching` | `running`, `queued`, `failed` | Conductor (executor accepted / executor refused before start / rule failed) |
 | `running` | `candidate_ready`, `running` (new Attempt), `failed`, `cancelling` | Conductor on executor events |
 | `cancelling` | `cancelled` | `cancel_ack`, or the cancel deadline (§7.4) |
-| `candidate_ready` | `landing`, `running` (new Attempt for rebase), `failed` | Conductor (Phase 6+) |
+| `candidate_ready` | `landing`, `running` (new Attempt for rebase), `failed`, `cancelling` | Conductor (Phase 6+) |
 | `landing` | `done`, `failed` | Landing result |
 
 Before Phase 6, an inline or Local Run goes `running` → `done` directly: today's v1 `land`
@@ -710,9 +814,12 @@ against that node. Requests are idempotent by `request_id`, blobs by digest.
 
 **Hive restart.** A Hive daemon that restarts gets a new incarnation. Before it starts any
 Worker it kills every Worker process recorded in its local state, then calls `adopt` for
-each Attempt it held: a conditional update on the current epoch that bumps the epoch and
-sets the new incarnation. Only then does it resume that Run from the Pipeline checkpoint.
-Any write from the old incarnation is rejected from that point.
+each Attempt it held. `adopt` is one conditional update on the current epoch that starts
+a **new Attempt** (attempt + 1, epoch + 1, the new incarnation) and closes the old one:
+Central records `attempt_closed` with the last `seq` it accepted for it. Late writes to
+the closed Attempt are rejected, and the Host treats it as complete at that `seq`. Only
+then does the Hive resume the Run from the Pipeline checkpoint, as the new Attempt with
+its own `seq` from 1.
 
 Credentials (prerequisite of Phase 6). Today `routers/hive.py` keeps the Caddy basic
 auth password and AWS access-key configuration as plaintext SQLite fields, and the
@@ -791,8 +898,10 @@ whichever lands first wins:
 
 - **Cancel of a queued request:** `queued` → `cancelled`.
 - **Cancel of a running request:** `running` or `candidate_ready` → `cancelling`, epoch
-  + 1, `cancel_deadline = now + 10 min`. The epoch bump fences the old Attempt: no later
-  candidate, event or heartbeat from it is accepted, except one `cancel_ack`.
+  + 1, `cancel_deadline = now + 10 min`, and a random `cancel_token`. The epoch bump fences
+  the old Attempt: no later candidate, event or heartbeat from it is accepted. Its next
+  call is refused with `cancelling` and the `cancel_token`; the only write it may still make
+  is `cancel_ack`, carrying the old epoch and that token, accepted once.
 - **On the executor:** the Worker is stopped and the Pipeline abandons the Run with reason
   `cancelled`; then `cancel_ack` moves the request to `cancelled`. Locally this is
   immediate.
@@ -949,7 +1058,7 @@ Measure first, then build. Each phase starts with its acceptance tests written a
 | 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2 |
 | 3-0 | Contracts before code: wire and key specification (§4.3.6) with test vectors; DynamoDB, event, Run-record and audit schemas; `ddd_origin` and adapter fields in `ddd_bindings.py`; the four-fact event schema | Reviewed documents and red conformance tests for: crash after claim, out-of-order and duplicate events, duplicate-with-different-payload, cancel racing a result, Hive restart and adopt, lease across a simulated outage, key loss and rotation, a poisoned blob upload, a Run record that fails intake |
 | 3 | Central Service in the Bedrock account (CDK: HTTP API, Lambdas, DynamoDB, S3, KMS key, sweeper); Host enrolment and signed requests; DDD and Project Agent registry; Run-record upload from the Host outbox for inline and Local Runs; intake with redaction; audit; Control Center reads Central | Every finished local Run's record reaches Central and passes intake; a planted fake secret is masked and recorded; a Central outage leaves local Runs unaffected and their records upload afterwards; a replayed upload is a no-op; a node with a wrong signature, stale timestamp or reused nonce is refused |
-| 4 | Learning pipeline: learning worker on the Host, review and approve in the Control Center, `host_files` adapter, `reflect_job.route` switched to proposals | A SwarmAI Run's lessons arrive as proposals and no executor writes the DDD; an `auto` lesson is applied through `host_files` and appears in `TECH.md` etc. with an audit trail back to its Run; a Gates change waits for approval; a change whose base moved returns to review; an applied change set can be reverted |
+| 4 | Learning pipeline: `learning_jobs` and `change_sets`, learning worker on the Host, review and approve in the Control Center, `host_files` adapter with journal and revert, every writer of §4.4.4 moved behind the adapter with the structural test, `reflect_job.route` switched to proposals | A SwarmAI Run's lessons arrive as proposals and no executor writes the DDD; an `auto` lesson is applied through `host_files` and appears in `TECH.md` etc. with an audit trail back to its Run; a Gates change waits for approval; a change whose base moved returns to review; an applied change set can be reverted |
 | 5 | Slack submit (owner only), confirmation card, `pipeline_submit` job, thread updates, Slack answer button | A non-owner cannot submit; a scheduled Run fires and reports in its thread; a missed fire is recorded `missed(host_offline)` and never submitted late; an overlapping fire is `skipped_overlap`; a replayed occurrence key is a no-op; an owner button press consumes its nonce once and records `human_answer`, while a second click, a non-owner click or an expired nonce is rejected |
 | 6 | Hive credentials moved to the secret store; four-fact completion protocol with landing journal for every placement; EC2 Hive enrolment and Worker through Central; leases; capacity reporting; DDD snapshot manifest and scan; `git_repo` adapter for GitHub DDDs | An external Run on EC2 hands in its Run record; the Host takes the result from Central, verifies, re-tests and lands it; a claim raced by two nodes has one winner; a lease survives a simulated 15-minute Central outage and a dead Hive's lease expires 10 minutes after recovery; a revoked-epoch event is rejected; an internal project is rejected for EC2; a crash mid-landing reconciles without double-landing |
 | 7 | Cloud Desktop enrolment and Worker; `ddd_origin: repo` fetch with internal git; draft CR handoff; `git_repo` adapter for internal git. Gated on S6 | An internal Run with an IVTHubSpec-hosted DDD runs on a Cloud Desktop, hands in its Run record and records all four facts ending in `external_handoff` with a draft CR; its approved lessons are applied to IVTHubSpec as a draft CR; an external project is rejected for a Cloud Desktop |
@@ -967,7 +1076,7 @@ Slack scheduling to a named Hive is part of phases 6 and 7 once those Hives exis
 | S5 | How an owner's Slack button press becomes a `human_answer` without the gateway's unattended path | Phase 5 |
 | S6 | Headless Midway, internal git and `cr` on a Cloud Desktop. `ddd_bindings.bind_repo` defers internal bindings today ("needs Brazil+Midway headless auth") | Phase 7 |
 | S7 | Size of a real Run record (documents, reflect summary, delivery record), measured over recent SwarmAI Runs, to confirm one upload per Run and set S3 lifecycle | Phase 3 |
-| S8 | Every place that writes a DDD today besides `reflect_job.route` (post-session hooks such as distillation and evolution maintenance, cultivation), and which of them move behind the learning pipeline in V1 | Phase 4 |
+| S8 | Confirm the §4.4.4 writer list is complete (a search for every write to a registered destination path) and measure the adapter's added latency on the hook paths | Phase 4 |
 
 If S1 fails, Phase 2 stops and the design is revised; the jobs `--bare` path is not used
 as a fallback. If S6 fails, internal remote Runs stay unsupported and Phase 7 is
