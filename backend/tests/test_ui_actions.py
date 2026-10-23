@@ -867,3 +867,19 @@ class TestSurfaceHandlerMarker:
             raise OSError("disk full")
         monkeypatch.setattr("core.surface_marker.write_marker", _boom)
         assert ua.record_surface(snap, [{"path": "backend/a.py", "kind": "source-final"}]) is False
+
+
+def test_tool_description_teaches_open_then_tab():
+    """The agent must learn from the tool itself that a canvas-tab-* command does
+    not open a closed / folded Canvas: "show me the changes" = open-canvas, then
+    canvas-tab-changes (canvas-proprioception.md review, 2026-10-23). Reads the
+    description the agent actually gets, through the server's ListTools handler."""
+    import asyncio
+    from mcp.types import ListToolsRequest
+    from core.ui_actions import get_ui_mcp_server
+    inst = get_ui_mcp_server()["instance"]
+    result = asyncio.new_event_loop().run_until_complete(
+        inst.request_handlers[ListToolsRequest](ListToolsRequest(method="tools/list")))
+    desc = next(t.description for t in result.root.tools if t.name == "ui_action")
+    assert "do not open a closed or folded Canvas" in desc
+    assert "call open-canvas, then canvas-tab-changes" in desc
