@@ -172,8 +172,14 @@ preview the same way.
   `execution_count`; outputs: `stream`, `text/plain`, `image/png|jpeg` (base64 →
   `<img>`), `error` (traceback as text). `text/html` and `application/javascript`
   outputs are NOT rendered (untrusted HTML) — shown as "HTML output (not rendered)"
-  with its `text/plain` fallback when present. Invalid JSON → the Edit view with a
-  notice. Edit stays raw JSON.
+  with its `text/plain` fallback when present. Invalid JSON → a notice in the
+  preview pointing to Edit. Edit stays raw JSON.
+- As built: `components/common/filePreviews.tsx` (table, `PreviewBody`,
+  `NotebookView`); the size limits moved to `editorLimits.ts` (shared, no import
+  cycle). One `previewOn` state, one modal toggle (`preview-toggle`), one large-file
+  fallback (`large-preview-fallback`). Notebooks get their own cap (20 MB — their
+  size is mostly base64 images, not text to parse). .markdown / .mdx now get the
+  markdown preview too (the old check was `.md` only).
 - **mmd**: the file body drawn through the existing MermaidDiagram.
 
 ## 6. Order, one commit each, tests first (each mutation-checked)

@@ -30,9 +30,9 @@ import { computeLineDiff } from '../../utils/lineDiff';
 import type { DiffLine } from '../../utils/lineDiff';
 import api from '../../services/api';
 import { CopyPathButton, copyPathNow } from './CopyPathButton';
+import { previewKindOf, canDrawPreview, PreviewBody } from './filePreviews';
 import { openExternal, openInSystemApp } from '../../utils/openExternal';
 import { subscribeFileChanged } from '../../hooks/fileChangedBroker';
-import MarkdownRenderer from './MarkdownRenderer';
 import { detectLanguage, isDirtyState, findAllMatches } from './FileEditorModal';
 import type { SearchMatch } from './FileEditorModal';
 import { useReviewMode } from '../../hooks/useReviewMode';
@@ -46,21 +46,10 @@ import {
 import CommentPopover from './CommentPopover';
 import { dispatchInjectChatInput } from '../../pages/chat/injectChatInput';
 
-/**
- * Character-count ceiling above which O(n) main-thread text work is skipped to
- * avoid freezing the UI. `hljs.highlight`, `computeLineDiff`, and
- * `findAllMatches` all run synchronously over the full content on the render
- * path; on a large file (e.g. a 379K-char doc) each blocks the main thread for
- * hundreds of ms — on every keystroke while editing. Above this threshold the
- * editor degrades gracefully (plaintext, diff/search disabled) rather than hang.
- *
- * 100K chars: a typical source file is well under (fast to highlight); the files
- * that froze the UII in practice were far above. `content.length` (not line
- * count) is the right metric — hljs/diff/search cost scales with total
- * characters, and a single-line minified/base64 blob freezes just as hard as a
- * many-line file of the same size.
- */
-export const HIGHLIGHT_MAX_CHARS = 100_000;
+// HIGHLIGHT_MAX_CHARS / shouldProcessSync live in ./editorLimits (shared with the
+// preview table, ./filePreviews, which FileEditorCore imports — no import cycle).
+export { HIGHLIGHT_MAX_CHARS, shouldProcessSync } from './editorLimits';
+import { shouldProcessSync } from './editorLimits';
 
 /**
  * Debounce (ms) for the syntax-highlight overlay. hljs.highlight runs over the
@@ -106,11 +95,6 @@ export function changedLineSet(before: string, after: string): Set<number> {
   return changed;
 }
 
-/** Whether synchronous main-thread text processing (highlight/diff/search) is
- *  safe for content of this length. Pure — exported for testing. */
-export function shouldProcessSync(contentLength: number): boolean {
-  return contentLength <= HIGHLIGHT_MAX_CHARS;
-}
 
 export interface FileEditorCoreProps {
   filePath: string;
@@ -666,17 +650,12 @@ export default function FileEditorCore({
   onContentChange,
   closeSignal,
 }: FileEditorCoreProps) {
-  // File-type flags — computed from fileName (a prop) ONLY, so they're stable
-  // across renders and safe to read at useState-init time. Hoisted above the
-  // useState block so BOTH the preview-default initializers (below) and the
-  // header toggles (further down) share ONE definition (Gate-1 Risk 2: avoid a
-  // duplicate `isMarkdown` binding).
-  const isMarkdown = /\.md$/i.test(fileName);
-  const isSvg = /\.svg$/i.test(fileName);
-  // Whether the initial content is small enough for the synchronous preview
-  // render (MarkdownRenderer full-parses via ReactMarkdown with no internal cap).
-  // A huge .md must NOT default to preview — it defaults to edit (Gate perf).
-  const canPreviewInitial = shouldProcessSync(initialContent.length);
+  // The file's rendered preview, if it has one — the ONE table in ./filePreviews
+  // (md / svg / ipynb / mermaid; canvas-file-types.md P3).
+  const previewKind = previewKindOf(fileName);
+  // Whether the initial content is small enough to draw the preview. A huge file
+  // must NOT default to preview — it defaults to edit (Gate perf).
+  const canPreviewInitial = !!previewKind && canDrawPreview(previewKind, initialContent);
 
   const [content, setContent] = useState(initialContent);
   const [originalContent, setOriginalContent] = useState(committedContent ?? initialContent);
@@ -695,10 +674,7 @@ export default function FileEditorCore({
   // autoDiff shows the diff, so preview must NOT also be on (Gate-1 Risk 4: else
   // "Back to Edit" would land on preview, not edit) — hence `!(initialShowDiff)`;
   // (2) a huge .md defaults to edit, never preview (perf — canPreviewInitial).
-  const [showMarkdownPreview, setShowMarkdownPreview] = useState(
-    isMarkdown && canPreviewInitial && !initialShowDiff,
-  );
-  const [showSvgPreview, setShowSvgPreview] = useState(isSvg && canPreviewInitial && !initialShowDiff);
+  const [previewOn, setPreviewOn] = useState(canPreviewInitial && !initialShowDiff);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
@@ -789,9 +765,6 @@ export default function FileEditorCore({
   const isDirty = isDirtyState(content, originalContent);
   const hasUnsavedEdits = isDirtyState(content, savedContent ?? initialContent);
   const language = detectLanguage(fileName);
-  // isMarkdown / isSvg are declared once at the top of the component (above the
-  // useState block) so the preview-default initializers and these header toggles
-  // share a single definition.
 
   // ── AC2: Auto-refresh — poll file content every 3s when editor is open ──
   // Uses refs to avoid stale closures without re-creating the interval on every render.
@@ -1141,8 +1114,7 @@ export default function FileEditorCore({
     // initializers). `!initialShowDiff` keeps preview OFF when the file opened on
     // the diff, so toggling the diff off lands on EDIT, not a sticky preview
     // (Gate-1 Risk 4). A huge .md re-defaults to edit via canPreviewInitial.
-    setShowMarkdownPreview(isMarkdown && canPreviewInitial && !initialShowDiff);
-    setShowSvgPreview(isSvg && canPreviewInitial && !initialShowDiff);
+    setPreviewOn(canPreviewInitial && !initialShowDiff);
     setShowSearch(false);
     setSearchQuery('');
     setCurrentMatchIndex(0);
@@ -1153,8 +1125,8 @@ export default function FileEditorCore({
     // Clear diff comment state
     setActiveDiffPopoverIndex(null);
     setEditingDiffComment(null);
-    // fileName is a dep because the reset formula reads isMarkdown/isSvg (both
-    // derived from fileName); filePath already changes in lockstep with it, so
+    // fileName is a dep because the reset formula reads previewKind (derived from
+    // fileName); filePath already changes in lockstep with it, so
     // this adds no extra fires but removes a latent stale-closure (Gate-2 MED).
     // committedContent is NOT a dep: it can land after the content (C5) and must not
     // reset what the user is doing; the effect below takes it on its own.
@@ -1200,7 +1172,7 @@ export default function FileEditorCore({
     }, HIGHLIGHT_DEBOUNCE_MS);
 
     return () => clearTimeout(highlightDebounceRef.current);
-  }, [content, language, showDiff, showMarkdownPreview]);
+  }, [content, language, showDiff, previewOn]);
 
   // Focus-gate helper: in panel mode, only handle keyboard events that
   // originate from within the editor surface. In modal mode, the overlay
@@ -1246,7 +1218,7 @@ export default function FileEditorCore({
   // surface so CMD+F should target it regardless of current focus.
   // Skipped in diff view and markdown preview (search bar operates on raw content only).
   useEffect(() => {
-    if (showDiff || showMarkdownPreview || showSvgPreview) return; // no search in diff/preview modes
+    if (showDiff || previewOn) return; // no search in diff/preview modes
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault();
@@ -1256,7 +1228,7 @@ export default function FileEditorCore({
     };
     document.addEventListener('keydown', handleKeyDown, true); // capture phase
     return () => document.removeEventListener('keydown', handleKeyDown, true);
-  }, [showDiff, showMarkdownPreview, showSvgPreview]);
+  }, [showDiff, previewOn]);
 
   const handleCancel = useCallback(() => {
     if (hasUnsavedEdits) {
@@ -1447,7 +1419,7 @@ export default function FileEditorCore({
       onClick={() => {
         // The review gutter lives in the editable view (round 2, G2): turning Review
         // on from a preview switches there, so the click visibly does something.
-        if (!review.isReviewMode) { setShowMarkdownPreview(false); setShowSvgPreview(false); }
+        if (!review.isReviewMode) setPreviewOn(false);
         review.toggleReviewMode();
       }}
       className={clsx(
@@ -1556,15 +1528,13 @@ export default function FileEditorCore({
   // shown again; an edit made elsewhere can still need it). Copy path is here too
   // (frequent action, canvas-file-types.md §2b). No Close (the list is the selector).
   const floatPad = iconOnly ? { paddingBottom: PANEL_FLOAT_PAD } : undefined;
-  const hasPreview = isMarkdown || isSvg;
-  const previewOn = isMarkdown ? showMarkdownPreview : showSvgPreview;
-  const view: 'preview' | 'source' | 'changes' = showDiff ? 'changes' : hasPreview && previewOn ? 'preview' : 'source';
+  const hasPreview = !!previewKind;
+  const view: 'preview' | 'source' | 'changes' = showDiff ? 'changes' : previewOn ? 'preview' : 'source';
   const changesOff = (!isDirty || !!baselinePending) && !showDiff;
   const pickView = (v: 'preview' | 'source' | 'changes') => {
     if (v === 'changes') { if (!changesOff) setShowDiff(true); return; }
     setShowDiff(false);
-    if (isMarkdown) setShowMarkdownPreview(v === 'preview');
-    else if (isSvg) setShowSvgPreview(v === 'preview');
+    if (hasPreview) setPreviewOn(v === 'preview');
   };
   const views = [
     ...(hasPreview ? [['preview', 'Preview'] as const] : []),
@@ -1682,42 +1652,23 @@ export default function FileEditorCore({
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0 ml-2">
-            {/* Markdown Preview toggle */}
-            {isMarkdown && (
+            {/* Preview toggle (modal) — one for every preview kind */}
+            {previewKind && (
               <button
-                onClick={() => { setShowMarkdownPreview((p) => !p); if (showDiff) setShowDiff(false); }}
-                title={showMarkdownPreview ? 'Edit source' : 'Preview markdown'}
+                onClick={() => { setPreviewOn((p) => !p); if (showDiff) setShowDiff(false); }}
+                title={previewOn ? 'Edit source' : 'Preview'}
                 className={clsx(
                   toolBtn, 'transition-colors',
-                  showMarkdownPreview
+                  previewOn
                     ? 'bg-blue-500/20 text-[var(--color-primary)] font-medium'
                     : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
                 )}
-                data-testid="markdown-preview-toggle"
+                data-testid="preview-toggle"
               >
                 <span className="material-symbols-outlined icon-sm">
-                  {showMarkdownPreview ? 'edit' : 'visibility'}
+                  {previewOn ? 'edit' : 'visibility'}
                 </span>
-                {!iconOnly && (showMarkdownPreview ? 'Edit' : 'Preview')}
-              </button>
-            )}
-            {/* SVG Preview toggle */}
-            {isSvg && (
-              <button
-                onClick={() => { setShowSvgPreview((p) => !p); if (showDiff) setShowDiff(false); }}
-                title={showSvgPreview ? 'Edit source' : 'Preview SVG'}
-                className={clsx(
-                  toolBtn, 'transition-colors',
-                  showSvgPreview
-                    ? 'bg-blue-500/20 text-[var(--color-primary)] font-medium'
-                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
-                )}
-                data-testid="svg-preview-toggle"
-              >
-                <span className="material-symbols-outlined icon-sm">
-                  {showSvgPreview ? 'edit' : 'image'}
-                </span>
-                {!iconOnly && (showSvgPreview ? 'Edit' : 'Preview')}
+                {!iconOnly && (previewOn ? 'Edit' : 'Preview')}
               </button>
             )}
             {reloadBtn}
@@ -1837,66 +1788,35 @@ export default function FileEditorCore({
                 bottomPad={floatPad?.paddingBottom}
               />
             </div>
-          ) : showMarkdownPreview ? (
-            shouldProcessSync(content.length) ? (
+          ) : previewOn && previewKind ? (
+            canDrawPreview(previewKind, content) ? (
               <div
                 ref={previewRef}
                 className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]"
                 style={floatPad}
                 onMouseUp={handlePreviewSelect}
                 onKeyUp={handlePreviewSelect}
-                data-testid="markdown-preview"
+                data-testid={`${previewKind}-preview-box`}
               >
-                <MarkdownRenderer
+                <PreviewBody
+                  kind={previewKind}
                   content={previewContent}
-                  className="canvas-doc max-w-4xl mx-auto"
                   basePath={filePath.includes('/') ? filePath.replace(/\/[^/]*$/, '') : ''}
                 />
               </div>
             ) : (
-              // Large-file guard: MarkdownRenderer full-parses via ReactMarkdown
-              // with no internal cap, so a >HIGHLIGHT_MAX_CHARS doc would jank the
-              // panel. Render the raw source in a plain <pre> + a notice instead
-              // (covers the MANUAL preview-click on a huge file; the default path
-              // never lands here because canPreviewInitial already routes big md
-              // to edit). Mirrors the edit path's syncDisabled degradation.
+              // Large-file guard (one for every kind): drawing a huge preview would
+              // block the panel, so the raw source shows with a notice (a manual
+              // Preview click on a huge file; the default never lands here, it
+              // starts in Edit via canPreviewInitial).
               <div
                 className="flex-1 relative overflow-auto bg-[var(--color-background)]"
                 style={floatPad}
-                data-testid="large-md-preview-fallback"
+                data-testid="large-preview-fallback"
               >
                 <div className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0">
                   <span className="material-symbols-outlined icon-xs">info</span>
-                  <span>Large file — markdown preview disabled to keep the panel responsive. Showing raw source.</span>
-                </div>
-                <pre className="m-0 p-4 font-mono text-sm leading-6 whitespace-pre-wrap break-words [word-break:break-all]">
-                  {content}
-                </pre>
-              </div>
-            )
-          ) : showSvgPreview ? (
-            shouldProcessSync(content.length) ? (
-              <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)] flex items-center justify-center" style={floatPad}>
-                <img
-                  className="max-w-full max-h-full w-auto h-auto"
-                  src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`}
-                  alt="SVG preview"
-                  data-testid="svg-preview"
-                />
-              </div>
-            ) : (
-              // Large-file guard (symmetric with markdown): a huge SVG source
-              // would pay encodeURIComponent over the whole string + risk the
-              // data-URI size ceiling. Show raw source instead (the default path
-              // never lands here — canPreviewInitial routes big svg to edit).
-              <div
-                className="flex-1 relative overflow-auto bg-[var(--color-background)]"
-                style={floatPad}
-                data-testid="large-svg-preview-fallback"
-              >
-                <div className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0">
-                  <span className="material-symbols-outlined icon-xs">info</span>
-                  <span>Large file — SVG preview disabled to keep the panel responsive. Showing raw source.</span>
+                  <span>Large file — preview disabled to keep the panel responsive. Showing raw source.</span>
                 </div>
                 <pre className="m-0 p-4 font-mono text-sm leading-6 whitespace-pre-wrap break-words [word-break:break-all]">
                   {content}

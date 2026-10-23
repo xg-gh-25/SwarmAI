@@ -37,7 +37,7 @@ describe('panel chrome', () => {
   it('has no header or footer controls, only the bottom strip', () => {
     render(<FileEditorCore {...md} variant="panel" committedContent="# old\n" />);
     expect(screen.getByTestId('editor-panel-bar')).toBeTruthy();
-    for (const id of ['show-changes-toggle', 'markdown-preview-toggle', 'mode-toggle', 'file-editor-cancel']) {
+    for (const id of ['show-changes-toggle', 'preview-toggle', 'mode-toggle', 'file-editor-cancel']) {
       expect(screen.queryByTestId(id)).toBeNull();
     }
     expect(screen.queryByLabelText('Close')).toBeNull();

@@ -80,7 +80,7 @@ describe('G3/G4 — selection toolbar', () => {
 
   it('a selection in the markdown preview shows the same toolbar; attach has no line range', () => {
     render(<FileEditorCore {...md} />);
-    const preview = screen.getByTestId('markdown-preview');
+    const preview = screen.getByTestId('markdown-preview-box');
     const p = [...preview.querySelectorAll('p')].find((el) => el.textContent?.includes('alpha'))!;
     const range = document.createRange();
     range.selectNodeContents(p);
@@ -99,7 +99,7 @@ describe('G3/G4 — selection toolbar', () => {
   it('a collapsed selection in the preview shows nothing', () => {
     render(<FileEditorCore {...md} />);
     window.getSelection()!.removeAllRanges();
-    fireEvent.mouseUp(screen.getByTestId('markdown-preview'));
+    fireEvent.mouseUp(screen.getByTestId('markdown-preview-box'));
     expect(screen.queryByTestId('selection-toolbar')).toBeNull();
   });
 });

@@ -116,11 +116,11 @@ describe('FileEditorCore default view — toggle works both ways', () => {
     // Starts in preview.
     expect(hasMarkdownPreview(container)).toBe(true);
     // Click the preview toggle → edit source.
-    fireEvent.click(screen.getByTestId('markdown-preview-toggle'));
+    fireEvent.click(screen.getByTestId('preview-toggle'));
     expect(screen.getByTestId('file-editor-textarea')).toBeInTheDocument();
     expect(hasMarkdownPreview(container)).toBe(false);
     // Click again → back to preview.
-    fireEvent.click(screen.getByTestId('markdown-preview-toggle'));
+    fireEvent.click(screen.getByTestId('preview-toggle'));
     expect(hasMarkdownPreview(container)).toBe(true);
   });
 });
@@ -136,9 +136,9 @@ describe('FileEditorCore default view — large-file guard (perf)', () => {
 
   it('AC6b: manually toggling preview ON for a huge .md renders a large-file notice, NOT MarkdownRenderer', () => {
     const { container } = renderCore({ fileName: 'archive.md', initialContent: huge });
-    fireEvent.click(screen.getByTestId('markdown-preview-toggle'));
+    fireEvent.click(screen.getByTestId('preview-toggle'));
     // Guard: large-file preview fallback is shown, MarkdownRenderer is NOT mounted.
-    expect(screen.getByTestId('large-md-preview-fallback')).toBeInTheDocument();
+    expect(screen.getByTestId('large-preview-fallback')).toBeInTheDocument();
     expect(hasMarkdownPreview(container)).toBe(false);
   });
 
@@ -152,8 +152,8 @@ describe('FileEditorCore default view — large-file guard (perf)', () => {
   it('AC6d: manually toggling preview ON for a huge .svg renders the large-svg fallback, NOT the img', () => {
     const hugeSvg = '<svg xmlns="http://www.w3.org/2000/svg">' + '<rect/>'.repeat(HIGHLIGHT_MAX_CHARS / 7 + 100) + '</svg>';
     renderCore({ fileName: 'huge.svg', initialContent: hugeSvg });
-    fireEvent.click(screen.getByTestId('svg-preview-toggle'));
-    expect(screen.getByTestId('large-svg-preview-fallback')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('preview-toggle'));
+    expect(screen.getByTestId('large-preview-fallback')).toBeInTheDocument();
     expect(screen.queryByTestId('svg-preview')).not.toBeInTheDocument();
   });
 });

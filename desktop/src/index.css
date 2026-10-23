@@ -1105,6 +1105,15 @@ body {
    re-points the theme tokens its buttons already use (--color-text, -muted, -hover,
    -border) at the inverted pair, so every control inside inverts with no
    per-button colours. */
+/* Jupyter notebook preview (components/common/filePreviews.tsx). */
+.nb { display: flex; flex-direction: column; gap: 12px; }
+.nb-cell { border-left: 2px solid var(--color-border); padding-left: 12px; }
+.nb-prompt { font-family: var(--font-family-mono); font-size: 11px; color: var(--color-text-muted); margin-bottom: 2px; }
+.nb-src { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--color-hover); font-family: var(--font-family-mono); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.nb-out { margin: 6px 0 0; padding: 0 2px; font-family: var(--font-family-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--color-text-secondary); }
+.nb-img { display: block; max-width: 100%; margin-top: 6px; border-radius: 4px; }
+.nb-note { margin-top: 6px; font-size: 11.5px; color: var(--color-text-muted); font-style: italic; }
+
 .editor-float-ink {
   --fg-ink: var(--color-text);
   --fg-paper: var(--color-bg);

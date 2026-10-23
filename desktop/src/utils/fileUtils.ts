@@ -63,7 +63,7 @@ const BADGE_LABEL: Record<string, string> = {
   md: 'MD', mdx: 'MD', markdown: 'MD',
   ts: 'TS', tsx: 'TS', mts: 'TS', cts: 'TS',
   js: 'JS', jsx: 'JS', mjs: 'JS', cjs: 'JS',
-  py: 'PY', json: '{}', jsonl: '{}',
+  py: 'PY', ipynb: 'NB', json: '{}', jsonl: '{}', mmd: 'MMD', mermaid: 'MMD',
   yaml: 'YML', yml: 'YML', toml: 'TML', ini: 'INI', env: 'ENV',
   css: 'CSS', scss: 'CSS', html: 'HTM', htm: 'HTM', xml: 'XML',
   svg: 'SVG', png: 'IMG', jpg: 'IMG', jpeg: 'IMG', gif: 'IMG', webp: 'IMG', bmp: 'IMG', ico: 'IMG',
@@ -80,7 +80,8 @@ const NAMED: Record<string, string> = { dockerfile: 'DK', makefile: 'MK' };
 /** Colour per badge label; every value is an existing theme token. */
 const BADGE_COLOR: Record<string, string> = {
   MD: 'var(--color-icon-markdown)', TS: 'var(--color-icon-typescript)',
-  JS: 'var(--color-icon-javascript)', PY: 'var(--color-icon-python)',
+  JS: 'var(--color-icon-javascript)', PY: 'var(--color-icon-python)', NB: 'var(--color-icon-html)',
+  MMD: 'var(--color-icon-markdown)',
   '{}': 'var(--color-icon-javascript)', CSS: 'var(--color-icon-css)',
   HTM: 'var(--color-icon-html)', XML: 'var(--color-icon-html)',
   SVG: 'var(--color-icon-image)', IMG: 'var(--color-icon-image)',

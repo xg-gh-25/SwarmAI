@@ -149,6 +149,7 @@ function detectTextLabel(ext: string): string {
     json: 'JSON', yaml: 'YAML', yml: 'YAML', xml: 'XML', toml: 'TOML', ini: 'INI',
     css: 'CSS', scss: 'SCSS', less: 'LESS',
     txt: 'Plain Text', log: 'Log File', env: 'Environment',
+    ipynb: 'Jupyter Notebook', mmd: 'Mermaid Diagram', mermaid: 'Mermaid Diagram',
   };
   return labels[ext] ?? 'Text File';
 }
