@@ -30,7 +30,8 @@ paths:
 | E4 | Slack, immediate or scheduled | `background_local` or `remote_hive` | No |
 
 Host and Hives never connect to each other. Both connect outbound to one **Central
-Service** (§4.3) in the AWS account SwarmAI uses for Bedrock. It registers DDDs,
+Service** (§4.3), which also stores every Run's result and runs the learning pipeline
+that turns results into DDD changes (§4.4) in the AWS account SwarmAI uses for Bedrock. It registers DDDs,
 Project Agents and execution nodes, coordinates remote Runs and holds their leases, and
 mirrors Run events for the Control Center. It is never on the chat path, and Host-local
 Runs do not depend on it.
@@ -83,9 +84,13 @@ Containers, other clouds and other machine types are out of scope.
   DynamoDB and S3.
 - Every node (Host, EC2 Hive, Cloud Desktop Hive) only makes outbound HTTPS calls to it.
   No node accepts an inbound connection for Runs.
-- For an internal project it stores only the cleartext fields of the data matrix in
-  §4.3.4; everything else is sealed or never sent. Internal remote Runs stay disabled
-  until that exact matrix is approved (O1).
+- It stores the full result of every Run, from every placement, and is the one place
+  results are reviewed, distilled and reflected back into DDDs (§4.4).
+- It never writes a DDD store itself. Approved changes are applied through a per-DDD
+  storage adapter, so new DDD storage types plug in without changing Central (§4.4.3).
+- V1 runs in internal accounts only, so content is stored as is (encrypted at rest, access
+  by role, every access audited). Field-level sealing is deferred (§4.3.4). The SwarmAI
+  DDD is the first end-to-end case; every other DDD follows the same path.
 
 ## 3. Non-goals
 
@@ -101,7 +106,10 @@ Containers, other clouds and other machine types are out of scope.
   owner, who administers the Central Service from the Host.
 - Running Project Agents. V1 registers Project Agent definitions in the Central Service;
   executing them is later work.
-- Backward compatibility for runs created before the Phase 4 protocol cutover.
+- Field-level sealing of internal content in Central. V1 runs in internal accounts.
+- DDD storage types other than Host files and git repos. The adapter interface (§4.4.3)
+  is where they are added later.
+- Backward compatibility for runs created before the Phase 6 protocol cutover.
 - Changing the Chat inline experience. Inline registration must be invisible in chat.
 
 ## 4. Architecture
@@ -144,6 +152,9 @@ Each fact has exactly one owner. Every other view is a projection.
 | Published DDD revisions and Project Agent definitions | **Central Service** registry | Every node |
 | Node identity, type, allowed class, capacity, heartbeat | **Central Service** `nodes` table | Host Conductor dispatch |
 | Org-wide view of Runs | **Central Service** event mirror, a projection of each node's outbox | Control Center |
+| A Run's full result (Run record) | **Central Service** result store (§4.4.1) | Learning worker, Host landing, Offline Eval |
+| Proposed, approved and applied DDD changes, audit | **Central Service** learning pipeline (§4.4) | Control Center |
+| DDD content after an approved change | The DDD's own store, written only by its adapter (§4.4.3) | Executors |
 | Landing on a Host repo | `run_protocol/landing.py` on the Host | Conductor |
 
 `routers/hive.py` keeps only EC2 provisioning (create, start, stop). Hive identity for
@@ -163,7 +174,7 @@ A filesystem store, like the run protocol store, under
 
 It does not use `data.db`, so chat history storage is untouched.
 
-From Phase 4a the Host also writes a local outbox (`outbox.jsonl`) of its own Runs'
+From Phase 3 the Host also writes a local outbox (`outbox.jsonl`) of its own Runs'
 events, which a background task posts to the Central Service mirror every 30 s. The
 outbox is a copy for the org view; the Conductor Store stays the owner of Host-local
 Runs, and a Central outage never blocks or slows a local Run.
@@ -197,8 +208,8 @@ owner command, never automatically.
 
 | Table | Key | Holds |
 |---|---|---|
-| `nodes` | `node_id` | type (`host`, `ec2`, `cloud_desktop`), allowed class, Ed25519 and X25519 public keys, reported `slots`, last heartbeat, status (`enrolling`, `active`, `revoked`) |
-| `ddds` | `ddd_id` (opaque), `rev` | origin (`host` / `repo`), access class, snapshot digest; clone URL and pinned commit, sealed when internal (§4.3.4); published at |
+| `nodes` | `node_id` | type (`host`, `ec2`, `cloud_desktop`), allowed class, Ed25519 public key, reported `slots`, last heartbeat, status (`enrolling`, `active`, `revoked`) |
+| `ddds` | `ddd_id`, `rev` | origin (`host` / `repo`), storage adapter (§4.4.3), access class, clone URL, pinned commit or snapshot digest, published at |
 | `project_agents` | `agent_id`, `rev` | definition (or its blob digest), pinned `ddd_id` + `rev`, published at |
 | `requests` | `request_id`; GSI `(target_node, state)`; GSI `(state, updated_at)` | the immutable request, dispatch state (§7.4), attempt, `lease_epoch`, `lease_renewed_at` (Central clock), `worker_incarnation`, `cancel_deadline` |
 | `events` | `request_id`, sort key `<attempt>#<lease_epoch>#<seq>` (zero-padded) | mirrored Run events with their signed `payload_digest` (§7.1) |
@@ -209,7 +220,7 @@ owner command, never automatically.
 | S3 prefix | Holds |
 |---|---|
 | `quarantine/<upload_id>` | Uploads in progress. Expire after 1 day |
-| `blobs/sha256/<digest>` | Verified SwarmAI DDD snapshots and **external** result bundles only. Bundles of terminal Runs expire after 30 days |
+| `blobs/sha256/<digest>` | Verified DDD snapshots, Run records and result bundles (§4.4.1). Kept until the owner deletes them; lifecycle rules are set in Phase 3 from measured volume |
 
 How a blob gets in. Content addressing alone does not stop an authorized writer from
 putting wrong bytes under a digest first, so:
@@ -236,7 +247,7 @@ records the commit; the content stays in its repo.
   IAM role in the account. It does not reuse the Bedrock role.
 - **Hives (nodes).** One path for both Hive types, since a Cloud Desktop is not in the
   account. The Host enrols a node with a one-time code; the node presents it with its
-  Ed25519 and X25519 public keys. After that, every node request is signed with its
+  Ed25519 public key. After that, every node request is signed with its
   Ed25519 key. The exact rules for codes, signing, nonces and keys are in §4.3.6.
 - **Authorization.** A node may claim and read only requests targeted at it, write events
   and heartbeats only for Attempts it holds at the current epoch and incarnation, and read
@@ -271,32 +282,22 @@ records the commit; the content stays in its repo.
   the Run then ends `abandoned(decision_timeout)` and its slot is released. The same rule
   applies to the Local Worker.
 
-#### 4.3.4 Internal data boundary
+#### 4.3.4 Data handling
 
-For a project whose class is `internal` (including any project with one internal binding
-or an internal `ddd_origin`), every field Central stores falls in one row of this
-matrix. O1 approves this exact matrix; a field not in it is a bug.
+V1 runs only in internal accounts, so Central stores Run content as it is:
 
-| Class | Fields | Why it is acceptable |
-|---|---|---|
-| Cleartext | Opaque random ids (`request_id`, `node_id`, `ddd_id`, `agent_id`, `decision_id`); node type and class; dispatch state; Pipeline stage enum (`evaluate` … `reflect`, defined by SwarmAI); verdict enum; attempt, epoch, seq; counts; slot numbers; Central timestamps; digests; sizes | Needed to coordinate; carries no project content |
-| Sealed | Project and repo names, clone URLs, paths, branches, commit SHAs, requirement text, human questions and answers, summaries, error text, CR ids, any free text | Readable only by the target node and the Host |
-| Never sent | DDD content, code, patches, logs, result bundles | Stay on the Cloud Desktop and internal git |
-
-What remains visible is activity metadata: that an internal Run exists, when it ran,
-which stages it passed and how it ended. O1 must accept that explicitly.
-
-Sealing uses libsodium sealed boxes. A field meant for both the node and the Host is
-sealed twice, once to each X25519 key. Private keys: on the Host in the macOS Keychain; on
-a Hive in its OS keystore, or a `0600` file owned by the service user when there is none.
-A rotated Host key is kept for reading history; a node that loses its key re-enrols and
-can no longer read its old sealed fields, which only the Host still needs.
-
-External projects use the same records without sealing.
+- DynamoDB and S3 are encrypted with a customer-managed KMS key; only the Central
+  Lambdas and the Host admin role can use it.
+- Every read and write of a Run record or blob is recorded in the audit table (§4.4.4).
+- Content is redacted at intake (§4.4.2), before anything is distilled from it.
+- `classify_project()` still decides **where** a Run may execute (§5.3). It no longer
+  decides what Central may store.
+- Field-level sealing is deferred. If a later DDD needs it, it is added at intake, where
+  every result already passes.
 
 #### 4.3.6 Wire and key specification
 
-Written and reviewed as its own document, with test vectors, before any Phase 4a code.
+Written and reviewed as its own document, with test vectors, before any Phase 3 code.
 It must fix at least:
 
 - **Enrolment codes:** 128 bits of randomness, stored as an HMAC with a Central-held
@@ -310,7 +311,80 @@ It must fix at least:
 - **Host admin role:** the Host assumes `swarmai-central-admin` from the owner's AWS
   profile with `sts:AssumeRole` (1-hour sessions); it never stores long-lived keys for it.
   Revocation is an edit of the role's trust policy.
-- **Key lifecycle:** where each private key lives (§4.3.4), rotation, loss and recovery.
+- **Key lifecycle:** node private keys in the OS keystore, or a `0600` file owned by the
+  service user when there is none; rotation, loss and recovery.
+
+### 4.4 Result store and learning pipeline
+
+Every Run, wherever it ran, hands its result to Central. Review, distillation, reflection
+into DDDs, quality, redaction and audit all happen in one place, decoupled from where Runs
+execute and from how each DDD is stored.
+
+#### 4.4.1 What a Run hands in
+
+At the end of REFLECT, the executor uploads one **Run record** (a blob, §4.3.2) and
+registers it:
+
+- the request, `ddd_ref`, `code_ref`, placement and Attempts;
+- the four completion facts (§7.2) and the result bundle digest;
+- evidence: test results, review findings and verdicts;
+- the signed Pipeline event chain;
+- REFLECT output: the lessons the agent wrote (`reflect-prepare`), each with its
+  destination and relation, as **proposals**, not applied changes;
+- usage: token and time measurements.
+
+This applies to inline and Local Runs too: the Host uploads them from its outbox
+(§4.2). A Run that cannot upload keeps its record locally and retries; nothing is lost
+because Central was down.
+
+#### 4.4.2 Learning stages
+
+| Stage | What happens | Where it runs |
+|---|---|---|
+| Intake | Schema and digest check; redaction scan of all text (secrets and credential shapes masked, findings recorded); a record that fails is quarantined, not learned from | Central Lambda |
+| Review and distill | Each proposal goes through the existing admission logic: `ingestion_gate` (noise floors, quality, the self-adversarial judge) and `reflect_job.judge`; related proposals across Runs are merged; `contradicts` proposals are held for a person | **Learning worker** on a SwarmAI node (the Host in V1), which claims learning jobs from Central like a Hive claims Runs |
+| Approve | Verdict `auto` (DDD knowledge passing every gate), `review` (anything touching Gates, rules or governed context files, and every `contradicts`) or `discard`. `review` items wait for the owner in the Control Center | Central records the decision |
+| Apply | The approved change set is applied to the DDD through its storage adapter (§4.4.3), by the one node that holds that adapter | The adapter's node |
+| Record | The applied DDD revision is published (§4.3.2) and linked back to the Runs and proposals it came from | Central |
+
+The learning worker reuses SwarmAI's existing code instead of reimplementing it in a
+Lambda, and runs as a background job, never on the chat path or in the Local Worker slot.
+
+**What changes in the Pipeline.** Today `reflect_job.route` writes a kept lesson directly
+on the executing machine: `ddd_cultivation.apply_to_ddd` or `annotate_entry` for DDD
+docs, and the project's local `.artifacts/proposals/` for MEMORY / EVOLUTION. From
+Phase 4, `route` no longer writes; its decision and the lesson become proposals in the
+Run record. No executor writes a DDD. Before Phase 4 it works as today.
+
+#### 4.4.3 DDD storage adapters
+
+Central knows a DDD only through its adapter, declared on the `ddds` record. An adapter
+does three things:
+
+| Operation | Meaning |
+|---|---|
+| `read(rev)` | Materialize the DDD at a pinned revision (used by §5.2) |
+| `apply(change_set, base_rev)` | Apply an approved change set if the DDD is still at `base_rev`; otherwise report a conflict, which sends the change set back to review |
+| `head()` | Report the current revision |
+
+V1 has two adapters:
+
+- `host_files`: the SwarmAI DDD on the Host. `apply` writes through the existing
+  `locked_write.py` / `apply_to_ddd`, so there is still one writer for those files.
+- `git_repo`: a DDD in a git repo. `apply` commits to that repo following its
+  delivery contract (a PR for GitHub, a draft CR for internal git), on a node with access
+  to it.
+
+A new storage type is a new adapter and a new value on the `ddds` record; Central, the
+learning stages and the Pipeline do not change.
+
+#### 4.4.4 Audit
+
+Central keeps an append-only `audit` table: every Run record received, every redaction
+finding, every gate verdict, every human approval, every applied change with its adapter,
+base and resulting revision, and every read of Run content. Any DDD line can be traced to
+the Runs and decisions that produced it, and an applied change set can be reverted through
+its adapter.
 
 #### 4.3.5 What Central never does
 
@@ -376,10 +450,10 @@ Legal dispatch transitions (any other write is rejected):
 | `dispatching` | `running`, `queued`, `failed` | Conductor (executor accepted / executor refused before start / rule failed) |
 | `running` | `candidate_ready`, `running` (new Attempt), `failed`, `cancelling` | Conductor on executor events |
 | `cancelling` | `cancelled` | `cancel_ack`, or the cancel deadline (§7.4) |
-| `candidate_ready` | `landing`, `running` (new Attempt for rebase), `failed` | Conductor (Phase 4+) |
+| `candidate_ready` | `landing`, `running` (new Attempt for rebase), `failed` | Conductor (Phase 6+) |
 | `landing` | `done`, `failed` | Landing result |
 
-Before Phase 4, an inline or Local Run goes `running` → `done` directly: today's v1 `land`
+Before Phase 6, an inline or Local Run goes `running` → `done` directly: today's v1 `land`
 both judges and lands, so there is no candidate step. Every transition is an event in
 `events.jsonl` with a key `(request_id, attempt, lease_epoch, seq)`; replaying a key that
 was already applied is a no-op.
@@ -556,7 +630,7 @@ Both types enrol the same way and then only make outbound calls. An EC2 Hive's C
 basic auth stays for its own dashboard and is not used by Runs.
 
 **Capacity.** On every heartbeat to the Central Service the Hive reports `slots`, computed on the Hive from its
-own `ResourceMonitor.spawn_budget()` and a per-Run memory figure measured in Phase 4 (§12).
+own `ResourceMonitor.spawn_budget()` and a per-Run memory figure measured in Phase 6 (§12).
 The Conductor dispatches at most `slots` concurrent Runs to that Hive. There is no
 instance-type table on the Host. A Hive with no report counts as one slot.
 
@@ -636,18 +710,18 @@ each Attempt it held: a conditional update on the current epoch that bumps the e
 sets the new incarnation. Only then does it resume that Run from the Pipeline checkpoint.
 Any write from the old incarnation is rejected from that point.
 
-Credentials (prerequisite of Phase 4b). Today `routers/hive.py` keeps the Caddy basic
+Credentials (prerequisite of Phase 6). Today `routers/hive.py` keeps the Caddy basic
 auth password and AWS access-key configuration as plaintext SQLite fields, and the
-instance detail endpoint returns the password. Phase 4b moves these into the Host's
+instance detail endpoint returns the password. Phase 6 moves these into the Host's
 restricted secret store, keeps only a reference in SQLite, and changes every endpoint to
 return credential metadata (present / rotated at), never a value. Credentials are never
 logged. Node keys never leave their node; revoking a node in the Central Service revokes
 its access for Runs.
 
-### 7.2 Completion protocol (one cutover, Phase 4)
+### 7.2 Completion protocol (one cutover, Phase 6)
 
 Today the combined v1 `land` event both judges and lands. That works while the executor
-and the landing repo are on the same Host. A Hive breaks that assumption, so Phase 4
+and the landing repo are on the same Host. A Hive breaks that assumption, so Phase 6
 replaces it, once and for every placement, with the four facts from the HLD:
 
 1. `pipeline_verdict`: the Pipeline's quality result, immutable once written.
@@ -682,7 +756,7 @@ Inline and Local Worker runs use the same four facts after the cutover; their ca
 is local, so the exchange step is a no-op. Runs created before the cutover are not
 migrated.
 
-Phases 1 to 3 keep today's v1 `land`. The cutover is deliberately not done first: the
+Phases 1 to 5 keep today's v1 `land`. The cutover is deliberately not done first: the
 Local Worker runs in the same daemon, with the same hooks, signing and landing as an
 inline run, and does not need it.
 
@@ -694,7 +768,7 @@ facts:
 | Fact | Internal Run |
 |---|---|
 | `pipeline_verdict` | Written by the Cloud Desktop's Pipeline, as for any Run |
-| `result_candidate` | The Cloud Desktop creates a **draft** CR with the `cr` tool from the Run's worktree, and records the CR id (sealed) and the reviewed commit |
+| `result_candidate` | The Cloud Desktop creates a **draft** CR with the `cr` tool from the Run's worktree, and records the CR id and the reviewed commit |
 | `result_acceptance` | Recorded by the Host as `pending_external_review` on a PASS verdict; on any other verdict no CR is created |
 | `integration_landing` | Recorded as `external_handoff` with the CR id. Merging is the person's, in CRUX |
 
@@ -855,7 +929,7 @@ Cancel is always available to the owner until landing starts (§7.4).
 
 | Dimension | Effect of this design | Guard |
 |---|---|---|
-| Run Isolation | Unchanged locally: each Run keeps its own worktree. On a Hive each Run gets its own clone at the pinned base | Placement rules keep internal code off EC2; Central holds only the approved cleartext matrix for internal projects; Hives never push to a protected branch; external landing is a CAS on the Host, internal results are draft CRs |
+| Run Isolation | Unchanged locally: each Run keeps its own worktree. On a Hive each Run gets its own clone at the pinned base | Placement rules keep internal code off EC2; Central stores every result encrypted at rest and audited; Hives never push to a protected branch; external landing is a CAS on the Host, internal results are draft CRs |
 | Quality | Unchanged. The same Pipeline, gates and adversarial review run in every placement | `pipeline_verdict` is immutable; the Host never lands without a PASS verdict or a recorded human acceptance |
 | Autonomy | Background, remote and scheduled Runs need no open chat tab. Human questions reach the origin | Only the owner can submit; only a person's pick counts as an answer |
 | Speed | One extra local Run in parallel, plus Hive slots | One stream stays reserved for chat and Slack; the Conductor is off the send and stream paths |
@@ -869,12 +943,14 @@ Measure first, then build. Each phase starts with its acceptance tests written a
 |---|---|---|
 | 1 | Conductor Store, `submit` / `register_inline`, status join, API, Pipelines page columns | An inline Run appears in the Conductor view with origin `chat`; chat send and stream timings are unchanged (measured before and after); a failing registration never fails `create` |
 | 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2 |
-| 3 | Slack submit (owner only), confirmation card, `pipeline_submit` job, thread updates, Slack answer button | A non-owner cannot submit; a scheduled Run fires and reports in its thread; a missed fire is recorded `missed(host_offline)` and never submitted late; an overlapping fire is `skipped_overlap`; a replayed occurrence key is a no-op; an owner button press consumes its nonce once and records `human_answer`, while a second click, a non-owner click or an expired nonce is rejected |
-| 4a-0 | Contracts before code: wire and key specification (§4.3.6) with test vectors; DynamoDB and event schemas; the internal data matrix submitted for O1; `ddd_origin` model in `ddd_bindings.py`; the four-fact event schema | Reviewed documents and red conformance tests for: crash after claim, out-of-order and duplicate events, duplicate-with-different-payload, cancel racing a result, Hive restart and adopt, lease across a simulated outage, key loss and rotation, a poisoned blob upload |
-| 4a | Central Service in the Bedrock account (CDK: HTTP API, Lambdas, DynamoDB tables, S3 bucket, sweeper); node enrolment and signed requests; DDD and Project Agent registry with publish; Host outbox mirror of local Runs; Control Center reads Central | A node with a wrong signature, a stale timestamp or a reused nonce is refused; a node cannot read another node's requests; a claim races two nodes and exactly one wins; a lease survives a simulated 15-minute Central outage and a dead Hive's lease still expires 10 minutes after recovery; a replayed event is a no-op and a different payload under the same key is rejected; a blob whose bytes do not match its digest never reaches `blobs/`; a local Run's events appear in the org view while a Central outage leaves local Runs unaffected |
-| 4b | Hive credentials moved to the secret store; four-fact completion protocol with landing journal for every placement; EC2 Hive Worker through Central; Hive capacity reporting; SwarmAI DDD snapshot manifest and external scan | No Hive endpoint returns a credential value; an external Run on EC2 returns a signed candidate the Host verifies, re-tests and lands; a revoked-epoch event is rejected; an internal project is rejected for EC2; a snapshot scan finding blocks upload; a crash mid-landing reconciles without double-landing; inline and Local Runs land through the new facts |
-| 4c | Cloud Desktop enrolment and Worker; sealed internal free text; `ddd_origin: repo` fetch with internal git; draft CR handoff. Gated on O1 and S6 | An internal Run with an IVTHubSpec-hosted DDD runs on a Cloud Desktop and records all four facts ending in `external_handoff` with a draft CR; no internal free text in Central is readable without the node or Host key; an external project is rejected for a Cloud Desktop |
-| 5 | Slack scheduling to a named Hive | A scheduled Run targets the named Hive and reports in its thread; external results land on the Host, internal ones end as a draft CR |
+| 3-0 | Contracts before code: wire and key specification (§4.3.6) with test vectors; DynamoDB, event, Run-record and audit schemas; `ddd_origin` and adapter fields in `ddd_bindings.py`; the four-fact event schema | Reviewed documents and red conformance tests for: crash after claim, out-of-order and duplicate events, duplicate-with-different-payload, cancel racing a result, Hive restart and adopt, lease across a simulated outage, key loss and rotation, a poisoned blob upload, a Run record that fails intake |
+| 3 | Central Service in the Bedrock account (CDK: HTTP API, Lambdas, DynamoDB, S3, KMS key, sweeper); Host enrolment and signed requests; DDD and Project Agent registry; Run-record upload from the Host outbox for inline and Local Runs; intake with redaction; audit; Control Center reads Central | Every finished local Run's record reaches Central and passes intake; a planted fake secret is masked and recorded; a Central outage leaves local Runs unaffected and their records upload afterwards; a replayed upload is a no-op; a node with a wrong signature, stale timestamp or reused nonce is refused |
+| 4 | Learning pipeline: learning worker on the Host, review and approve in the Control Center, `host_files` adapter, `reflect_job.route` switched to proposals | A SwarmAI Run's lessons arrive as proposals and no executor writes the DDD; an `auto` lesson is applied through `host_files` and appears in `TECH.md` etc. with an audit trail back to its Run; a Gates change waits for approval; a change whose base moved returns to review; an applied change set can be reverted |
+| 5 | Slack submit (owner only), confirmation card, `pipeline_submit` job, thread updates, Slack answer button | A non-owner cannot submit; a scheduled Run fires and reports in its thread; a missed fire is recorded `missed(host_offline)` and never submitted late; an overlapping fire is `skipped_overlap`; a replayed occurrence key is a no-op; an owner button press consumes its nonce once and records `human_answer`, while a second click, a non-owner click or an expired nonce is rejected |
+| 6 | Hive credentials moved to the secret store; four-fact completion protocol with landing journal for every placement; EC2 Hive enrolment and Worker through Central; leases; capacity reporting; DDD snapshot manifest and scan; `git_repo` adapter for GitHub DDDs | An external Run on EC2 hands in its Run record; the Host takes the result from Central, verifies, re-tests and lands it; a claim raced by two nodes has one winner; a lease survives a simulated 15-minute Central outage and a dead Hive's lease expires 10 minutes after recovery; a revoked-epoch event is rejected; an internal project is rejected for EC2; a crash mid-landing reconciles without double-landing |
+| 7 | Cloud Desktop enrolment and Worker; `ddd_origin: repo` fetch with internal git; draft CR handoff; `git_repo` adapter for internal git. Gated on S6 | An internal Run with an IVTHubSpec-hosted DDD runs on a Cloud Desktop, hands in its Run record and records all four facts ending in `external_handoff` with a draft CR; its approved lessons are applied to IVTHubSpec as a draft CR; an external project is rejected for a Cloud Desktop |
+
+Slack scheduling to a named Hive is part of phases 6 and 7 once those Hives exist.
 
 ### 12.1 Spikes before code
 
@@ -882,14 +958,15 @@ Measure first, then build. Each phase starts with its acceptance tests written a
 |---|---|---|
 | S1 | Can a headless `SessionUnit` with app session id `pipeline:<run_id>` get hook tokens from `run_owner_gate` and land a `direct` Run, the way channel sessions run without a tab? | Phase 2 |
 | S2 | Memory and stream use of one Pipeline Run on the Host, measured; confirms that one extra Worker fits next to chat | Phase 2 |
-| S3 | Per-Run memory on a Hive, measured, to turn `spawn_budget()` into `slots` | Phase 4b |
-| S4 | Lambda authorizer for Ed25519-signed requests: measured added latency, and that a Cloud Desktop can reach the API Gateway endpoint outbound | Phase 4a |
-| S5 | How an owner's Slack button press becomes a `human_answer` without the gateway's unattended path | Phase 3 |
-| O1 | Policy: confirm with security whether sealed internal free text and internal metadata may be stored in the SwarmAI Bedrock account | Phase 4c |
-| S6 | Headless Midway, internal git and `cr` on a Cloud Desktop. `ddd_bindings.bind_repo` defers internal bindings today ("needs Brazil+Midway headless auth") | Phase 4c |
+| S3 | Per-Run memory on a Hive, measured, to turn `spawn_budget()` into `slots` | Phase 6 |
+| S4 | Lambda authorizer for Ed25519-signed requests: measured added latency, and that a Cloud Desktop can reach the API Gateway endpoint outbound | Phase 3 |
+| S5 | How an owner's Slack button press becomes a `human_answer` without the gateway's unattended path | Phase 5 |
+| S6 | Headless Midway, internal git and `cr` on a Cloud Desktop. `ddd_bindings.bind_repo` defers internal bindings today ("needs Brazil+Midway headless auth") | Phase 7 |
+| S7 | Size of a real Run record (transcripts and evidence), measured over recent SwarmAI Runs, to set upload batching and S3 lifecycle | Phase 3 |
+| S8 | Every place that writes a DDD today besides `reflect_job.route` (post-session hooks such as distillation and evolution maintenance, cultivation), and which of them move behind the learning pipeline in V1 | Phase 4 |
 
 If S1 fails, Phase 2 stops and the design is revised; the jobs `--bare` path is not used
-as a fallback. If O1 or S6 fails, internal remote Runs stay unsupported and Phase 4c is
+as a fallback. If S6 fails, internal remote Runs stay unsupported and Phase 7 is
 deferred; external Runs are unaffected.
 
 ## 13. Cost on hot paths
@@ -899,7 +976,7 @@ deferred; external Runs are unaffected.
 - Daemon idle: no Central polling without a live remote Run (10 s while it has one), plus
   one outbox flush every 30 s when there are new events, on the Conductor executor.
 - Central Service: DynamoDB on-demand and Lambda are billed per request, so idle cost is
-  storage plus the one-minute sweeper. Phase 4a measures the real monthly cost before
+  storage plus the one-minute sweeper. Phase 3 measures the real monthly cost before
   Hives are enabled.
 - Each file write: none added outside the Conductor Store and the Run's own files.
 
@@ -910,10 +987,10 @@ on the same machine; a regression blocks the phase.
 
 The HLD (`project-agent-delivery-os-hld.md`) originally put the protocol cutover
 (Phase 1b) before local background execution. It is now edited to match this design:
-Phase 1b ships with the Hive executor (Phase 4), local background execution runs on the
+Phase 1b ships with the Hive executor (Phase 6), local background execution runs on the
 current v1 landing until then, and execution-plane phasing points here. The move is sound
-only under two conditions, both kept here: Phases 1 to 3 create no candidate or acceptance
-authority, and Phase 4 moves every placement to the four facts in one change.
+only under two conditions, both kept here: Phases 1 to 5 create no candidate or acceptance
+authority, and Phase 6 moves every placement to the four facts in one change.
 
 The HLD's Host-to-Hive Run Exchange (§7) is realised through the Central Service: its
 store split is kept, the transport becomes outbound calls from both sides, and lease

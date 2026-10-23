@@ -526,7 +526,7 @@ from observed execution state.
 | **Host Command / Control Ledger** | Host Conductor | Intent, Run Graph, Host-local Run assignment and lease, Human answers, result acceptance, landing, latest Eval report reference. For remote Runs only a cursor-backed projection of the Central record. |
 | **Central Coordination Store** | Central Service | Remote Run requests, assignment, Attempt, lease epoch and worker incarnation, decisions, node registry, published DDD and Project Agent revisions, event mirror. The only owner of remote fencing. |
 | **Hive Execution Store** | Assigned Hive | Accepted dispatch, worker session, Pipeline events, pending decision, sealed result manifest. |
-| **Transfer Blob Store** | Central-verified uploads (S3) | SwarmAI DDD snapshots and external result bundles only. Internal code, DDD content, logs and bundles never enter it. |
+| **Transfer Blob Store** | Central-verified uploads (S3) | DDD snapshots, every Run's Run record and result bundle. The source of the learning pipeline that reviews, distills and reflects results into DDDs through per-DDD storage adapters (`pipeline-run-conductor-v1.md` §4.4). |
 
 Transport uses at-least-once delivery with idempotent effects:
 
