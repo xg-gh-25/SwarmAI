@@ -31,6 +31,7 @@ import { chatService } from '../../services/chat';
 import { agentsService } from '../../services/agents';
 import { radarService } from '../../services/radar';
 import { brainsWithPinnedQuery } from '../../services/ddd';
+import { attentionService } from '../../services/attention';
 
 /** A JSON GET whose body is the data (typed by the overlay that reads it). */
 const getJson = <T,>(url: string) => async (): Promise<T> => (await api.get<T>(url)).data;
@@ -162,6 +163,13 @@ export const overlayQuery = {
   libraryNative: <T,>() => ({ queryKey: ['library-native'] as const, queryFn: getJson<T>('/library/native'), staleTime: OVERLAY_STALE_MS }),
   libraryRecent: <T,>() => ({ queryKey: ['library-recent'] as const, queryFn: getJson<T>('/library/recent'), staleTime: OVERLAY_STALE_MS }),
   libraryMounts: <T,>() => ({ queryKey: ['library-mounts'] as const, queryFn: getJson<T>('/library/mounts'), staleTime: OVERLAY_STALE_MS }),
+  /** Need You's queue (GET /attention). The AlertsPill's own count poll
+   *  (useAttentionQueue) is separate and keeps its cadence. */
+  needsYou: () => ({
+    queryKey: ['overlay', 'needs-you'] as const,
+    queryFn: () => attentionService.fetchAttention(),
+    staleTime: OVERLAY_STALE_MS,
+  }),
 };
 
 type AnyOptions = { queryKey: readonly unknown[]; queryFn: () => Promise<unknown>; staleTime: number };
@@ -183,6 +191,7 @@ export const NAV_PREFETCH: Partial<Record<OverlayId, (ctx: PrefetchCtx) => AnyOp
   hive: () => [overlayQuery.hiveAccounts(), overlayQuery.hiveInstances()],
   capabilities: () => [overlayQuery.capabilities(), overlayQuery.capabilitiesHealth()],
   community: () => [overlayQuery.community('feed'), overlayQuery.community('hotTopics')],
+  'needs-you': () => [overlayQuery.needsYou()],
 };
 
 /** Prefetch a nav item's overlay code and data (no-op when loaded / fresh). Never throws. */

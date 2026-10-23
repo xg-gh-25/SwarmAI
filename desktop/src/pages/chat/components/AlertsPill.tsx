@@ -23,9 +23,11 @@ import { tf } from '../tf';
 interface AlertsPillProps {
   /** Total Need You items (counts.blocking + counts.review). */
   count: number;
+  /** Warm the Need You overlay's code + data on hover/focus (prefetchNav). */
+  onPrefetch?: () => void;
 }
 
-export function AlertsPill({ count }: AlertsPillProps) {
+export function AlertsPill({ count, onPrefetch }: AlertsPillProps) {
   const { t } = useTranslation();
   const calm = count === 0;
 
@@ -34,6 +36,8 @@ export function AlertsPill({ count }: AlertsPillProps) {
       <button
         type="button"
         onClick={() => dispatchUiCommand('show-needs-you')}
+        onMouseEnter={onPrefetch}
+        onFocus={onPrefetch}
         aria-label={calm
           ? tf(t, 'chat.alerts.ariaCalm', 'Alerts — nothing needs you')
           : tf(t, 'chat.alerts.aria', 'Alerts — {{n}} item(s) need you', { n: count })}

@@ -66,6 +66,7 @@ import { tabNoticeStore, type NoticeTarget } from '../stores/tabNoticeStore';
 import { parseWorkPacket } from '../components/layout/todoWorkPacket';
 import { setOverlayCtxBridge } from '../components/layout/overlayRegistry';
 import { OverlayHost } from '../components/layout/OverlayHost';
+import { prefetchNav } from '../components/layout/overlayQueries';
 // ToDo / Jobs & Runs / Pipeline / Pollinate + NewBrain overlays retired (M3+M4):
 // all migrated to the OverlayHost registry (overlaySurfaces.tsx); dispatch reaches
 // them via the ctx bridge (setOverlayCtxBridge below).
@@ -3351,7 +3352,7 @@ export default function ChatPage() {
           every overlay closes on), else the user acts but keeps seeing the overlay,
           not the result. Fires only when an overlay is actually open. */}
       {alertsSlot && createPortal(
-        <AlertsPill count={attentionCount} />,
+        <AlertsPill count={attentionCount} onPrefetch={() => prefetchNav(queryClient, 'needs-you')} />,
         alertsSlot,
       )}
 

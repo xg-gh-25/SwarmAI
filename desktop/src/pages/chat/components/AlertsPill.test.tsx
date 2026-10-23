@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { AlertsPill } from './AlertsPill';
 
@@ -43,5 +43,14 @@ describe('AlertsPill', () => {
     render(<AlertsPill count={3} />);
     fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('hover and focus warm the Need You overlay (onPrefetch)', () => {
+    const onPrefetch = vi.fn();
+    render(<AlertsPill count={0} onPrefetch={onPrefetch} />);
+    const btn = screen.getByRole('button', { name: /Alerts/i });
+    fireEvent.mouseEnter(btn);
+    fireEvent.focus(btn);
+    expect(onPrefetch).toHaveBeenCalledTimes(2);
   });
 });

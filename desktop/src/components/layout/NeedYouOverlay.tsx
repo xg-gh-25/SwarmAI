@@ -15,9 +15,16 @@
  * the work to the agent in chat.
  *
  * No "see more/less" fold — the overlay has room; the full queue is shown.
+ *
+ * Data: `overlayQuery.needsYou()` (TanStack Query, cached + prefetched on the
+ * AlertsPill's hover); first-load states via OverlayState
+ * (docs/design/left-nav-overlay-finish.md §1.3).
  */
-import { useEffect, useState, useCallback } from 'react';
-import { attentionService, type AttentionEntry } from '../../services/attention';
+import { useCallback } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import type { AttentionEntry } from '../../services/attention';
+import { overlayQuery } from './overlayQueries';
+import { OverlayLoading, OverlayError, OverlayEmpty } from './OverlayState';
 
 interface NeedYouContentProps {
   /** Inject the item's message into a chat tab (overlay ctx dispatchPrompt). */
@@ -49,24 +56,10 @@ function groupByBrain(items: AttentionEntry[]): Array<[string, AttentionEntry[]]
 }
 
 export function NeedYouContent({ onDispatch, close }: NeedYouContentProps) {
-  const [items, setItems] = useState<AttentionEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-
-  const load = useCallback(async () => {
-    const res = await attentionService.fetchAttention().catch(() => null);
-    if (res) {
-      setItems(res.items);
-      setError(false);
-    } else {
-      setError(true);
-    }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const q = useQuery(overlayQuery.needsYou());
+  const items: AttentionEntry[] = q.data?.items ?? [];
+  const loading = q.isPending;
+  const error = q.isError && !q.data;
 
   const handleClick = useCallback(
     (it: AttentionEntry) => {
@@ -89,21 +82,19 @@ export function NeedYouContent({ onDispatch, close }: NeedYouContentProps) {
         </p>
       </div>
 
-      {loading && (
-        <div className="py-8 text-center text-[12px] text-[var(--color-text-muted)]">Loading…</div>
-      )}
+      {loading && <OverlayLoading />}
 
-      {error && !loading && (
-        <div className="py-8 text-center text-[12px] text-red-400">
-          Couldn't load the attention queue. Retry shortly.
-        </div>
+      {error && (
+        <OverlayError
+          testid="needyou-load-error"
+          retryTestid="needyou-load-retry"
+          message="Couldn't load the attention queue."
+          onRetry={() => { void q.refetch(); }}
+        />
       )}
 
       {!loading && !error && items.length === 0 && (
-        <div className="py-10 text-center text-[13px] text-[var(--color-text-muted)]">
-          <div className="material-symbols-outlined icon-xl opacity-40">check_circle</div>
-          <div className="mt-1">Nothing needs you right now</div>
-        </div>
+        <OverlayEmpty icon="check_circle">Nothing needs you right now</OverlayEmpty>
       )}
 
       {blocking.length > 0 && (
