@@ -105,7 +105,9 @@ def test_reflect_without_a_transcript_records_usage_not_available(rig):
     audit = json.loads((r.engine().run_dir / "run_audit.json").read_text())
     token = audit["summary"]["token_cost"] if "token_cost" in audit["summary"] \
         else audit["summary"]["token"]
-    assert token["verdict"] == "WARN" and token["not_available"]
+    # the review expert this run spawned was not metered either: still BLOCK (§E5);
+    # with only the main agent unknown it is WARN (test_unmetered_experts_…)
+    assert token["verdict"] == "BLOCK" and token["not_available"]
 
 
 def test_a_completion_decided_on_an_older_stage_is_refused(rig):
@@ -157,3 +159,22 @@ def test_review_dispatches_then_waits_then_completes(rig):
         r.spawn_reviewer(handout["prompt"], "NO FINDINGS", f"review-{i}")
     step = r.v1("status")["next"]
     assert step["action"] == "run" and " stage-complete " in step["command"] + " ", step
+
+
+def test_unmetered_experts_still_block_token_cost():
+    from core.run_protocol import audit
+    base = [{"kind": "run_create", "at": "2026-10-23T00:00:00+00:00", "payload": {}},
+            {"kind": "metric", "at": "2026-10-23T00:00:01+00:00", "producer": "cli",
+             "payload": {"name": "usage_not_available", "value": 1, "reason": "none"}}]
+    handout = {"kind": "handout", "at": "2026-10-23T00:00:02+00:00", "payload": {}}
+
+    def verdict(events):
+        return audit.build(
+            run_id="run_x", projection={"run_id": "run_x", "status": "completed",
+                                        "landing": "landed", "human_decisions": 0},
+            events=events, final={}, findings=[], repos_isolated=1,
+            contract={"run_id": "run_x", "mode": "isolated", "expected_repos": ["a"]},
+            push={"push_ready": False, "reasons": {}},
+            audit_through="COMPLETED")["summary"]["token_cost"]["verdict"]
+    assert verdict(base) == "WARN"                     # only the main agent is unknown
+    assert verdict([*base, handout]) == "BLOCK"        # an expert ran and nothing counts it

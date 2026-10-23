@@ -508,3 +508,18 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - **HIGH，Python 3.11 的 tokenizer 把单独一行的 f-string 当成 STRING：** AST 里 f-string 是 `JoinedStr`，不是 docstring。判断结果因此和解释器版本无关，3.11 和 3.12+ 都一样。
 - **HIGH，文件不存在、读取出错都折叠成空文本，判定 fail open：** `_blob` 用 `ls-tree -z :(literal)<path>` 加 `cat-file blob` 读取，返回 `(mode, bytes)`，并把"文件不存在"和"读取失败"分开返回。以下情况一律算可执行改动：新增或删除文件、mode 变化、symlink 或 gitlink、任一侧读不到、解码或解析失败。源码按 `tokenize.detect_encoding` 解码。
 - **仍有残余：** 另一个文件可能通过 `inspect.getdoc`、FastAPI 等读取这个文件的 docstring。这种跨文件读取无法从 diff 推断出来。按设计 L4 的规定，docstring 不算代码；是否要收紧到"所有字符串都算代码"，需要 XG 决定。
+
+## 21. 收尾 commit 6：设计文字修订（r6 §4）
+
+- **新文档 `docs/design/pipeline-v1-design-revisions.md`：** v13 设计在 `~/.swarm-ai` 下，按它 §F 的规则由 XG 或 SwarmAI 写入，所以修订内容放在这份文档里。文档逐条写明要改的章节、现在的文字、改成的文字和出处，最后附上要加进附录 2 的修订记录行。
+  - **按 fixing spec §4 和 §6 修订的：** §B3.4、§C4.1、§A3.1、§A3.7、§A3.6/§A4.2、§C6.2。
+  - **按 r6 修订的：** §B3.5（`next` 和自动完成）、§E5（usage_not_available）。
+  - **另加：** 给旧 pipeline 相关段落标注已退役（§D1、§D3.3、Part F 及附录里引用旧代码行号的问题清单）。
+- **§E5 的代码随文字一起改：** 主 agent 的 transcript 拿不到时，Token Cost 判 WARN。但如果派发过专家、一个都没计量、主 agent 的计量也没有，仍然判 BLOCK，因为子 agent 的 Token 统计不到。commit 4 里这种情况误判为 WARN，现已修正（`audit.py`），并补了测试。
+
+**审查 6c445c1f（1 轮，5 MED），一次修完：**
+- **测试断言过时：** `test_reflect_without_a_transcript…` 派发过专家却没有任何计量，现在按规则改为期望 BLOCK。只缺主 agent 计量时判 WARN，这一情况由另一个测试覆盖。
+- **审批出处写错：** r6 的 frontmatter 还写着"待 XG 审"，现已改为"XG 2026-10-23 批准"。auth 时间规则的出处更正为 r6 §4。
+- **`next` 的范围写得过宽：** 修订文档改为准确的范围：`pipeline_v1.py` 的正常响应，以及 `pipeline_test.py` 写完 final 的那些模式。
+- **`partial_land` 写得不准：** 区分普通 DELIVER（not_landed，reason 为 `partial_land`）和人批准的 `run-land`（只记录事件）；仓库明细写在事件和 REPORT 里。
+- **退役标注的位置有误：** stage-start 那一行在 §C2（原写成 §B5）。§D3.3 是已执行、仍有效的决定，只加注已执行。Part F 只标指向旧代码的部分。附录 1 整节标为已退役。

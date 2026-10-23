@@ -801,8 +801,9 @@ def test_measuring_after_the_daemon_completed_reflect_refreshes_the_final_audit(
     engine = r.engine()
     audit = json.loads((engine.run_dir / "run_audit.json").read_text())
     token = audit["summary"]["token_cost"]
-    # the daemon found no transcript when REFLECT ended: WARN with the reason (r6 §2.3)
-    assert token["verdict"] == "WARN" and token["not_available"], token
+    # the daemon found no transcript when REFLECT ended (r6 §2.3), and the review
+    # expert it spawned was not metered either: sub-agent tokens are uncounted (§E5)
+    assert token["verdict"] == "BLOCK" and token["not_available"], token
     monkeypatch.setattr(usage.transcript_usage, "resolve_transcripts", lambda ids: ["t"])
     monkeypatch.setattr(usage.transcript_usage, "usage_in_window", lambda *a, **k: {
         "input_tokens": 10, "cache_read_tokens": 0, "cache_creation_tokens": 0,

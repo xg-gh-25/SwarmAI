@@ -2,7 +2,7 @@
 title: Pipeline v1 收尾与旧 pipeline 退役：设计
 created: 2026-10-23
 updated: 2026-10-23
-status: draft r6（加入实测摩擦、旧 pipeline 退役、衔接；待 XG 审）
+status: r6，XG 2026-10-23 批准（§8 五项全部同意；auth 时间即事件 at、incremental fold cache 不做）
 ---
 
 # Pipeline v1 收尾与旧 pipeline 退役：设计

@@ -315,6 +315,10 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
         token_verdict = "BLOCK"                        # model dispatches hit their cap
     elif accounted == 0 and unavailable is None:
         token_verdict = "BLOCK"                        # nothing was metered at all
+    elif spawned and not expert_records and not measured:
+        # the main transcript is not available, and no expert was metered either:
+        # sub-agent tokens cannot be counted (v13 §E5 BLOCK)
+        token_verdict = "BLOCK"
     elif accounted < total_calls or total_tokens is None \
             or not isinstance(budget_tokens, (int, float)):
         token_verdict = "WARN"
