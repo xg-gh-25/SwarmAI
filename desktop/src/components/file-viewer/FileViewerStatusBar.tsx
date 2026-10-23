@@ -122,7 +122,7 @@ export default function FileViewerStatusBar({
             <CopyPathButton
               path={filePath}
               testId="statusbar-copy-path"
-              iconClassName="icon-xs leading-none"
+              iconSize="xs"
               className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
             />
           </>

@@ -36,8 +36,7 @@ import type { BrainHealth, DetailHealth, EntryType } from '../../services/ddd';
 import { LAYERS, layerTotals } from './dddLayers';
 
 // ── Shared constants ─────────────────────────────────────────────────────────
-const LIFECYCLE_STEPS = ['CREATE', 'GROW', 'REVIEW', 'DISTRIBUTE'] as const;
-export type LifecycleStage = (typeof LIFECYCLE_STEPS)[number];
+export type LifecycleStage = 'CREATE' | 'GROW' | 'REVIEW' | 'DISTRIBUTE';
 
 const _TRUST_ORDER = ['low', 'moderate', 'high', 'full'] as const;
 

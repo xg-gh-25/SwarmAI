@@ -49,7 +49,7 @@ function toast(message: string) {
 }
 
 export function CopyPathButton({
-  path, label, className = 'icon-btn', iconClassName = 'icon-sm', testId = 'copy-path-btn',
+  path, label, className = 'icon-btn', iconSize = 'sm', testId = 'copy-path-btn',
 }: {
   /** The file's path in any form the viewer has (absolute, workspace- or repo-relative). */
   path: string;
@@ -57,7 +57,8 @@ export function CopyPathButton({
   label?: string;
   /** Size / colour classes of the button (callers place it in their own bars). */
   className?: string;
-  iconClassName?: string;
+  /** The glyph's tier on the one icon scale (index.css): sm in an icon-btn, xs in a dense bar. */
+  iconSize?: 'xs' | 'sm';
   testId?: string;
 }) {
   const [copied, setCopied] = useState(false);
@@ -85,7 +86,7 @@ export function CopyPathButton({
       data-testid={testId}
       data-copied={copied || undefined}
     >
-      <span className={`material-symbols-outlined ${iconClassName}`} aria-hidden="true">{copied ? 'check' : 'content_copy'}</span>
+      <span className={iconSize === 'xs' ? 'material-symbols-outlined icon-xs leading-none' : 'material-symbols-outlined icon-sm leading-none'} aria-hidden="true">{copied ? 'check' : 'content_copy'}</span>
       {label && <span>{copied ? 'Copied' : label}</span>}
       <span className="sr-only" aria-live="polite">{copied ? 'Copied' : ''}</span>
     </button>

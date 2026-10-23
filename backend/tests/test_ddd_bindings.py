@@ -177,6 +177,28 @@ def test_reject_non_list_bindings(tmp_path: Path):
         load_bindings(p)
 
 
+def test_a_manifest_that_binds_no_repo_loads_as_zero_bindings(tmp_path: Path):
+    """A DDD that governs a skill-set, jobs or nothing (CMHK_SalesIntel,
+    GitHub_Community, PhysicalAI) has a valid bindings.yaml with governed_assets but
+    no ``bindings:`` array: it binds no repo, it is not malformed. Every reader
+    (repo_changes, needs_human_review, classify_project) then sees zero bindings
+    instead of logging the file as unreadable on every call."""
+    import yaml
+
+    for doc in ({"ddd_spec_version": "1.0", "governed_assets": [{"kind": "skill-set", "name": "s"}]},
+                {"ddd_spec_version": "1.0", "governed_assets": [], "jobs": []}):
+        p = tmp_path / "b.yaml"
+        p.write_text(yaml.safe_dump(doc), encoding="utf-8")
+        assert load_bindings(p).bindings == []
+
+
+def test_an_explicit_null_bindings_key_is_still_rejected(tmp_path: Path):
+    p = tmp_path / "b.yaml"
+    p.write_text("bindings:\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_bindings(p)
+
+
 # ---------------------------------------------------------------------------
 # AC2 — clone + codeIntel over a bound repo (real, offline)
 # ---------------------------------------------------------------------------

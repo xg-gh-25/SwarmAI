@@ -9,7 +9,11 @@ Read-only. Every git call runs on the "turn_changes" pool (core/executors), neve
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Path, Query
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/canvas", tags=["canvas"])
 
@@ -49,7 +53,8 @@ async def get_working_repo(session_id: str = Path(..., min_length=1, max_length=
     from core.project_registry import get_swarmws
     try:
         workspace = str(get_swarmws())
-    except Exception:  # noqa: BLE001 — no workspace: no runs
+    except Exception as exc:  # noqa: BLE001 — no workspace: no runs
+        logger.debug("canvas working repo: no workspace: %s", exc)
         workspace = None
     return {"workingRepo": await executors.run_in("canvas_changes", working_repo, session_id, workspace)}
 

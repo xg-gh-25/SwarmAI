@@ -138,10 +138,6 @@ vi.mock('./LibraryTree', () => ({
   },
 }));
 
-// The six canonical section keys, in order (mirrors backend _SECTIONS / SECTION_ORDER).
-const SECTION_KEYS: Array<BrainDetail['sections'][number]['key']> =
-  ['identity', 'knowledge', 'gates', 'capabilities', 'delivery', 'refresher'];
-
 import { BrainHub, hunkSummary } from './BrainHub';
 
 const GALLERY: BrainSummary[] = [
@@ -1073,7 +1069,6 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
   });
 
   it('renders NOTHING when health is undefined (daemon-skew guard)', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { health: _omit, ...noHealth } = DETAIL;
     mockGetBrainDetail.mockResolvedValueOnce(noHealth);
     render(<BrainHub />);

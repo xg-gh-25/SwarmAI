@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -114,9 +114,13 @@ class Binding(BaseModel):
 
 
 class BindingsDoc(BaseModel):
-    """The whole ``bindings.yaml`` — an ARRAY of bindings from v1 (a DDD may bind many repos)."""
+    """The whole ``bindings.yaml`` — an ARRAY of bindings from v1 (a DDD may bind many repos).
 
-    bindings: list[Binding]
+    A DDD that governs no repo (a skill-set, jobs, or nothing — its manifest lists
+    ``governed_assets`` but no ``bindings:``) binds zero repos; the key is optional
+    for that reason. An explicit ``bindings:`` that is not an array is still invalid."""
+
+    bindings: list[Binding] = Field(default_factory=list)
 
 
 @dataclass
