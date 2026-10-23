@@ -676,3 +676,32 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - **HIGH，只改了后端的 run，vitest 超时后无法续跑：** recheck 和续跑只对增量范围做风险扩展，结果为空，前端集合也就是空的；点名的失败文件又只在集合非空时才会加进去。修法：recheck 时，对 run 的整个变更集重新做风险扩展，取出前端测试；点名的失败文件无条件加入。新增参数化测试，覆盖 vitest 超时后的显式 recheck、verify 续跑、regression 续跑，以及显式 recheck 一个红的前端测试。不修时 4 个用例中 3 个失败，修后全部通过。冻结摘要更新为 `8c58545e4bf5d915`，§11 已补记。
 
 **测试清理：** `test_run_session_link`、`test_pipeline_run_mapping`、`test_ui_actions` 中删除了指向旧代码的 fixture 和注释。
+
+## 30. A 类：三方复审的实现问题（10 HIGH + MED）
+
+三方复审（正确性、安全、故障模式）共报 13 个新 HIGH。其中 10 个是实现问题，本节一次修完；3 个是 agent 和 daemon 同用户造成的架构问题（B 类），另有设计。根因有两个：一是授权读的是 agent 可写的文件，二是崩溃或并发时状态会不一致。
+
+**A1 信任和隔离只认签名数据**
+- **知识写入的信任：** 不再读 `run_audit.json`，改为从签名事件经 `RunEngine.build_audit` 重新计算（`_signed_run_audit`）。
+- **worktree gate、`own_isolated_run`、sweeper：** 读签名视图 `_signed_view`，里面的 owner、status、mode 和仓库列表都来自事件和 contract。没有 contract 的就不算 run。没有 run 的 session 写别的 run 的 worktree，一律拒绝。
+- **sweeper 的 integrated 状态：** 只有签名落地事件里列出的仓库，才按 integrated 处理（删除时不做快照）；伪造的 integrated 行按 active 处理，先快照再删。`landed_commits` 只读签名字段，删掉了读 `landing-progress-*.json` 的旧回退。
+- **Canvas 分类器：** 仓库列表从 contract 取。
+- **commit gate：** `owned_paths` 遇到 contract 列出、但读不到代码的仓库时拒绝。contract 损坏时，只有签名日志显示 run 已结束才跳过（`signed_terminal`，只要 authority key 和日志），否则拒绝。
+- **`_doc_ref`：** 从 workspace 根往下，每一级目录都用 O_NOFOLLOW 打开。
+- **其他：** 删除重复定义的 `_v1_mutation_check`。
+
+**A2 崩溃一致性**
+- **触发事件和它的状态转换在同一批写入：** 多条事件一起写之前，先写 intent 文件记下写前长度，并 fsync 文件和所在目录。intent 存在期间，读取方读到这个长度为止；下一个持锁的写入方把多出的部分截掉，再删 intent。签名视图的缓存键里也带上 intent。
+- **落地中途失败：** 已经有仓库落地后再失败，记为 `partial_land`（签名）。人工落地在 `auth_consumed` 之后崩溃，可以续做。
+- **启动修复：** daemon 启动时修补过期的 projection，并给 REFLECT 重新排队。修 projection 要在操作锁里重新判断，锁忙时跳过。REFLECT 的注解写入是幂等的。
+
+**A3 并发**
+- **操作锁：** `RunEngine` 的所有公开 mutator 都持操作锁，同一线程可重入。落地锁一律在操作锁里面拿，有结构测试检查。
+- **测试调用锁：** `pipeline_test` 的所有模式，包括 setup（`_v1_runner` 计算 code tree），都在调用锁里执行。
+- **sweeper：** 释放 worktree 前，在操作锁里、并确认测试调用锁空闲后，用新数据再判一次。
+- **shared run：** 新建的 shared run 和一个还活着的 shared run 用同一个仓库时，拒绝创建；对方 contract 不可读也按冲突处理。
+- **`next_step`：** 有未解析的答案时，下一步指向 review-start。
+
+**审查**：84b72ec1 报 4 HIGH、3 MED，c772dd92 报 2 HIGH、3 MED，都已修。每条修复都有对应测试；凡是能把修复撤回的，都撤回确认过测试会变红（批次截断、目录替换、伪造 integrated、contract 损坏）。
+
+**测试调整：** `test_run_worktree_live_cache` 改用 v1 的状态，并补上 contract（`running`、`done` 已在 R6 退役）。

@@ -162,9 +162,12 @@ def _file_verdict(p: str, own: "_Own | None") -> "dict | None":
     from core.run_worktree import run_for_path
     hit = run_for_path(p)
     if hit is not None:
-        if own is None:
-            return None
         rid, repo = hit
+        if own is None:
+            # a session that owns no run never writes into a run's worktree, whatever
+            # mode it is in (re-audit 536bb62b: this used to be allowed)
+            return _deny(f"{p} is inside run {rid}'s worktree, and this session owns no "
+                         "run. Only that run's session writes there.")
         if rid != own.id or repo not in own.wts:
             return _deny(f"{p} is inside run {rid}'s worktree, not this session's run "
                          f"({own.id}). Write only under {', '.join(own.wts.values())}.")
@@ -201,19 +204,22 @@ class _NoRun:
 
 
 def _session_runs_light(sid: str) -> "list[dict]":
-    """This session's live runs (running/paused) touched in the last 3 days, newest
-    first (core.run_index: one stat per run, a parse only for a changed file)."""
-    from core import run_index
+    """This session's live v1 runs touched in the last 3 days, newest first. Owner,
+    status and mode are the signed ones (``run_worktree._iter_runs``), never run.json's
+    (re-audit 536bb62b: a forged ``worktree_mode: shared`` lifted rule 4)."""
+    from core.run_worktree import _LIVE, _iter_runs
     from core.security_hooks import _pipeline_runs_root
     cutoff = time.time() - 3 * 86400
     out = []
-    for r in run_index.live_runs(_pipeline_runs_root()):
-        d = r.data
-        if r.mtime < cutoff or d.get("session_id") != sid:
+    for f, d in _iter_runs(_pipeline_runs_root()):
+        try:
+            mtime = f.stat().st_mtime
+        except OSError:
             continue
-        out.append((r.mtime, {"id": str(d.get("id") or r.path.parent.name),
-                              "project": str(d.get("project") or ""), "status": d.get("status"),
-                              "worktree_mode": d.get("worktree_mode")}))
+        if mtime < cutoff or d.get("session_id") != sid or d.get("status") not in _LIVE:
+            continue
+        out.append((mtime, {"id": d["id"], "project": d["project"], "status": d.get("status"),
+                            "worktree_mode": d.get("worktree_mode")}))
     return [r for _t, r in sorted(out, key=lambda x: x[0], reverse=True)]
 
 

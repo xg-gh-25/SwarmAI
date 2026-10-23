@@ -2147,7 +2147,7 @@ def admission_band(
 def stamp_trust_from_run(run_id: "str | None", project_dir: "Path | None") -> str:
     """Resolve a proposal's source run → its trust stamp {passed, failed, n/a}.
 
-    Reads ``<project_dir>/.artifacts/runs/<run_id>/run_audit.json`` (Pipeline v1),
+    Rebuilds the v1 run's audit from its signed events (``_signed_run_audit``),
     derives the canonical gate2 outcome (derive_gate2_outcome), and maps it
     (trust_from_gate2_outcome).
 
@@ -2174,13 +2174,23 @@ def stamp_trust_from_run(run_id: "str | None", project_dir: "Path | None") -> st
         # project's runs/ root — a belt to the charset suspenders.
         if runs_root not in run_dir.parents and run_dir != runs_root:
             return "n/a"
-        audit_file = run_dir / "run_audit.json"
-        if not audit_file.is_file():
-            return "n/a"
-        audit = json.loads(audit_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return "n/a"  # unreadable / malformed → fail closed
+        audit = _signed_run_audit(run_id, project_dir)
+    except Exception:  # noqa: BLE001 — no readable signed run → fail closed
+        return "n/a"
     return trust_from_gate2_outcome(derive_gate2_outcome(audit))
+
+
+def _signed_run_audit(run_id: str, project_dir: Path) -> dict:
+    """The run's audit rebuilt from its protected contract and SIGNED events
+    (``RunEngine.build_audit``, not persisted). Never ``run_audit.json``: that is a
+    projection in the project tree an agent can write (re-audit 536bb62b). Raises when
+    the run has no readable protected authority."""
+    from config import get_app_data_dir
+    from core.run_protocol.engine import RunEngine
+    project_dir = Path(project_dir)
+    engine = RunEngine.load(data_dir=get_app_data_dir(), workspace=project_dir.parent.parent,
+                            project=project_dir.name, run_id=run_id)
+    return engine.build_audit(through="COMPLETED", persist=False)
 
 
 _TERMINAL_STATUSES = frozenset({"applied", "rejected", "expired", "dismissed"})

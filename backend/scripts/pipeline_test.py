@@ -3271,6 +3271,40 @@ def _full_scope_refusal(ev_root: Path, mode: str, contract: "Mapping | None",
     return None
 
 
+#: seconds a test call waits for another call of the same run to finish
+CALL_SLOT_WAIT_S = 20.0
+CALL_LOCK_NAME = ".call.lock"
+
+
+@contextlib.contextmanager
+def _run_call_slot(ev_root: Path, mode: str):
+    """One evidence-producing call of a run at a time, every mode (re-audit ca91762f:
+    two TDD calls could pick the same evidence file name, replace each other's
+    latest-tdd.json and update run_index.json without its lock). A second call waits
+    up to CALL_SLOT_WAIT_S, then is refused (exit 2), never run beside the first. The
+    worktree sweeper never releases a run while this lock is held."""
+    from utils.file_lock import flock_exclusive_nb, flock_unlock
+    path = ev_root / "tests" / CALL_LOCK_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+", encoding="utf-8") as handle:
+        deadline = time.monotonic() + CALL_SLOT_WAIT_S
+        while True:
+            try:
+                flock_exclusive_nb(handle)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    yield {"mode": mode, "ok": False, "busy": True,
+                           "error": "another test call of this run is running; wait for "
+                                    "it, then call again"}
+                    return
+                time.sleep(0.2)
+        try:
+            yield None
+        finally:
+            flock_unlock(handle)
+
+
 @contextlib.contextmanager
 def _full_scope_slot(ev_root: Path, mode: str, v1):
     """One full-scope call of a v1 run at a time (K3 review r2): the contract caps
@@ -5542,51 +5576,58 @@ def execute(ns) -> tuple[dict, int]:
     ctx.warnings.extend(dl_warn)
     for w in dl_warn:
         print(f"pipeline_test.py: warning: {w}", file=sys.stderr)
+    # every mode holds the run's call slot for its whole run, setup included: the code
+    # tree _v1_runner records is computed under it, so the sweeper cannot release the
+    # worktree mid-setup and a queued call never uses a tree from before it waited
+    # (re-audits 84b72ec1, c772dd92)
     try:
-        v1 = ctx.v1 = _v1_runner(ns, run_dir, run_state, ctx)
-    except BaseException:
+        with _run_call_slot(ev_root, ns.mode) as busy_call:
+            if busy_call:
+                return busy_call, 2
+            v1 = ctx.v1 = _v1_runner(ns, run_dir, run_state, ctx)
+            return _run_v1_mode(ctx, ns, ev_root, run_dir, run_state, deadline, v1)
+    finally:
         shutil.rmtree(ctx.workdir, ignore_errors=True)
-        raise
+
+
+def _run_v1_mode(ctx, ns, ev_root, run_dir, run_state, deadline, v1):
+    """One v1 call's body, under the run's call slot (taken by the caller)."""
     changed = changed_files(ctx.repo, run_state, ctx.warnings, (ns.project, ns.run_id))
     if ns.mode == "validation":
         return _run_v1_validation(ns, run_state, v1, changed)
     if ns.mode in PROOF_MODES and not _isolated(ctx):
-        shutil.rmtree(ctx.workdir, ignore_errors=True)
         return {"mode": ns.mode, "error": f"--mode {ns.mode} needs an isolated run worktree "
                                           "(worktree_mode isolated): a snapshot of the shared "
                                           "checkout would include other sessions' edits"}, 2
-    try:
-        if ns.mode == "snapshot":
-            return run_snapshot(ctx, ns, ev_root)
-        if ns.mode == "prove":
-            output, code = run_prove(ctx, ns, ev_root)
-            bindings = _v1_proof_bindings(list(getattr(ns, "finding", []) or []))
-            recorded = v1.record_proof_result(output=output, exit_code=code, bindings=bindings)
-            output = {**output, "v1": recorded}
-            return output, code
-        if ns.mode == "probe":
-            return _run_v1_probes(ns, run_state, v1, changed)
-        if ns.mode == "mutation":
-            output, code = run_mutations(ctx, ns, ev_root, run_state)
-            if code in (0, 1) and not output.get("error"):
-                # B5: the mutation result is evidence of the run, so it is a signed call
-                import time as _time
-                now = _time.time()
-                v1._record_result(
-                    call_type="mutation", argv=[str(Path(__file__).resolve()), *sys.argv[1:]],
-                    tool_version=f"pipeline-test-{RUNNER_VERSION}",
-                    result="pass" if code == 0 else "fail", target=str(ns.name or "mutation"),
-                    details={"evidence": output.get("evidence")}, started_at=now,
-                    finished_at=now)
-            return output, code
-        with _full_scope_slot(ev_root, ns.mode, v1) as busy:
-            if busy:
-                return busy, 2
-            output, code = _run_test_mode(ctx, ns, ev_root, run_state, deadline, v1=v1)
-        output = _record_v1_test_result(ns, run_state, v1, output, code, changed)
+    if ns.mode == "snapshot":
+        return run_snapshot(ctx, ns, ev_root)
+    if ns.mode == "prove":
+        output, code = run_prove(ctx, ns, ev_root)
+        bindings = _v1_proof_bindings(list(getattr(ns, "finding", []) or []))
+        recorded = v1.record_proof_result(output=output, exit_code=code, bindings=bindings)
+        output = {**output, "v1": recorded}
         return output, code
-    finally:
-        shutil.rmtree(ctx.workdir, ignore_errors=True)
+    if ns.mode == "probe":
+        return _run_v1_probes(ns, run_state, v1, changed)
+    if ns.mode == "mutation":
+        output, code = run_mutations(ctx, ns, ev_root, run_state)
+        if code in (0, 1) and not output.get("error"):
+            # B5: the mutation result is evidence of the run, so it is a signed call
+            import time as _time
+            now = _time.time()
+            v1._record_result(
+                call_type="mutation", argv=[str(Path(__file__).resolve()), *sys.argv[1:]],
+                tool_version=f"pipeline-test-{RUNNER_VERSION}",
+                result="pass" if code == 0 else "fail", target=str(ns.name or "mutation"),
+                details={"evidence": output.get("evidence")}, started_at=now,
+                finished_at=now)
+        return output, code
+    with _full_scope_slot(ev_root, ns.mode, v1) as busy:
+        if busy:
+            return busy, 2
+        output, code = _run_test_mode(ctx, ns, ev_root, run_state, deadline, v1=v1)
+        output = _record_v1_test_result(ns, run_state, v1, output, code, changed)
+    return output, code
 
 
 # the modes whose results can finish BUILD / TEST (proof modes belong to REVIEW)

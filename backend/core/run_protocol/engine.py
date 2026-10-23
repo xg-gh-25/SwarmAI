@@ -224,6 +224,91 @@ _FINDING_KINDS = frozenset({"answer", "finding_occ", "finding_status",
 REQUIREMENT_MAX = 4000
 
 
+def _log_tail(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    from core.run_protocol import events as ev
+    return {"event_count": len(events),
+            "tail": ev.event_digest(dict(events[-1])) if events else None}
+
+
+def signed_terminal(data_dir: str | Path, run_id: str) -> bool:
+    """Whether the run's SIGNED event log folds to a terminal status. Needs only the
+    authority key and the log, never the contract, so it answers for a run whose
+    contract is unreadable; anything that cannot be verified answers False (not
+    finished: callers fail closed). Never reads the agent-writable run.json
+    (re-audit c772dd92)."""
+    from core.run_protocol.store import AuditStore
+    root = Path(data_dir) / "state" / "pipeline_agent_audit"
+    try:
+        key = (root / "runs" / run_id / "authority.key").read_bytes()
+        authority = EventAuthority(key)
+        events = AuditStore(root, run_id, authority).read_events()
+        return bool(events) and lifecycle.fold(
+            events, authority, allow_pending_transition=True)["status"] in lifecycle.TERMINAL
+    except Exception:  # noqa: BLE001 — unverifiable: not finished
+        return False
+
+
+def repair_stale_projections(data_dir: str | Path, workspace: str | Path) -> list[str]:
+    """Rewrite the run.json of every v1 run whose ``projection_of`` does not name the
+    signed log's current tail (a crash between an event and the projection write).
+    Returns the repaired run ids; a run that cannot be loaded is skipped (logged)."""
+    base = Path(data_dir) / "state" / "pipeline_agent_audit" / "runs"
+    repaired: list[str] = []
+    for entry in sorted(base.iterdir()) if base.is_dir() else []:
+        try:
+            contract = json.loads((entry / "contract.json").read_text(encoding="utf-8"))
+            engine = RunEngine.load(data_dir=data_dir, workspace=workspace,
+                                    project=str(contract.get("project")), run_id=entry.name)
+            try:
+                seen = json.loads((engine.run_dir / "run.json").read_text(
+                    encoding="utf-8")).get("projection_of")
+            except (OSError, ValueError, AttributeError):
+                seen = None
+            if seen != _log_tail(engine.store.read_events()):
+                # under the run's operation lock, judged again there: a command that
+                # appended meanwhile wrote a newer projection, which must not be
+                # overwritten (re-audit 84b72ec1 MED). Busy: that command projects.
+                from core.run_protocol.oplock import RunBusy, operation
+                try:
+                    with operation(engine.audit_root, entry.name, timeout=0.5):
+                        try:
+                            seen = json.loads((engine.run_dir / "run.json").read_text(
+                                encoding="utf-8")).get("projection_of")
+                        except (OSError, ValueError, AttributeError):
+                            seen = None
+                        if seen != _log_tail(engine.store.read_events()):
+                            engine.write_projection()
+                            repaired.append(entry.name)
+                except RunBusy:
+                    continue
+        except FileNotFoundError:
+            continue                      # not a v1 run directory
+        except Exception:  # noqa: BLE001 — one unreadable run never stops the others
+            logging.getLogger(__name__).warning("projection repair skipped %s", entry.name,
+                                                exc_info=True)
+    return repaired
+
+
+#: how long a mutation waits for another operation on the same run (seconds)
+ENGINE_LOCK_TIMEOUT = 60.0
+
+
+def _one_operation(method):
+    """Run an engine mutation under the run's operation lock (``oplock``): the read,
+    decide and write of the daemon's mutations (Cancel, Resume, a decision answer,
+    session stop, owner transfer, REFLECT) never interleave with a CLI command's
+    (re-audit ca91762f). Re-entrant in one thread, so the CLI, which already holds
+    the lock for its whole command, is unaffected."""
+    import functools
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        from core.run_protocol.oplock import operation
+        with operation(self.audit_root, self.run_id, timeout=ENGINE_LOCK_TIMEOUT):
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class RunEngine:
     """One v1 run, projected from signed events and immutable contract metadata."""
 
@@ -244,6 +329,69 @@ class RunEngine:
 
     @classmethod
     def create(cls, *, data_dir: str | Path, workspace: str | Path, project: str,
+               repos: Mapping[str, str] | None = None, mode: str = "isolated",
+               **kwargs: Any) -> "RunEngine":
+        """Create a run. A shared-mode run reserves its repo roots: while another
+        shared run of one of them is not terminal, it is refused (re-audit ca91762f:
+        two shared runs computed finals and delivery trees from the same files). The
+        check and the create hold a per-repo lock, so two creates cannot both pass."""
+        if mode != "shared" or not repos:
+            return cls._create(data_dir=data_dir, workspace=workspace, project=project,
+                               repos=repos or {}, mode=mode, **kwargs)
+        import contextlib
+        import hashlib
+        from utils.file_lock import flock_exclusive, flock_unlock
+        roots = sorted({str(Path(root).resolve()) for root in repos.values()})
+        lock_dir = Path(data_dir) / "state" / "pipeline_agent_audit" / "shared_repos"
+        lock_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with contextlib.ExitStack() as stack:
+            for root in roots:
+                handle = stack.enter_context(open(
+                    lock_dir / (hashlib.sha256(root.encode()).hexdigest()[:32] + ".lock"),
+                    "a+", encoding="utf-8"))
+                flock_exclusive(handle)
+                stack.callback(flock_unlock, handle)
+            holder = cls._live_shared_holder(Path(data_dir), Path(workspace), set(roots))
+            if holder:
+                raise EngineError(f"run {holder} is a live shared run of the same repo: a "
+                                  "second shared run would test and land its edits. Finish "
+                                  "or abandon it first, or use worktree mode")
+            return cls._create(data_dir=data_dir, workspace=workspace, project=project,
+                               repos=repos, mode=mode, **kwargs)
+
+    @classmethod
+    def _live_shared_holder(cls, data_dir: Path, workspace: Path,
+                            roots: "set[str]") -> "str | None":
+        """The id of a non-terminal shared run whose contract names one of *roots*; a
+        run whose signed state cannot be read counts as live (fail closed)."""
+        from core.run_protocol.runner import read_contract
+        base = data_dir / "state" / "pipeline_agent_audit" / "runs"
+        for entry in sorted(base.iterdir()) if base.is_dir() else []:
+            try:
+                contract = read_contract(data_dir, entry.name)
+            except Exception:  # noqa: BLE001 — an unreadable contract: its repos unknown
+                # a run its projection calls finished holds nothing; any other might
+                # hold these repos: fail closed (re-audit 84b72ec1 MED)
+                if not signed_terminal(data_dir, entry.name):
+                    return entry.name
+                continue
+            if not isinstance(contract, dict) or contract.get("mode") != "shared":
+                continue
+            theirs = {str(Path(r).resolve()) for r in (contract.get("repo_roots") or {}).values()}
+            if not theirs & roots:
+                continue
+            try:
+                other = cls.load(data_dir=data_dir, workspace=workspace,
+                                 project=str(contract.get("project")), run_id=entry.name)
+                if other.projection(allow_pending=True)["status"] in lifecycle.TERMINAL:
+                    continue
+            except Exception:  # noqa: BLE001 — unknown state: treated as live
+                pass
+            return entry.name
+        return None
+
+    @classmethod
+    def _create(cls, *, data_dir: str | Path, workspace: str | Path, project: str,
                profile: str, session_id: str, repos: Mapping[str, str],
                mode: str = "isolated", decision_cap: int = 2,
                risk_test_file_cap: int = 200, run_id: str | None = None,
@@ -362,6 +510,7 @@ class RunEngine:
                 owner = payload["to_session"]
         return owner
 
+    @_one_operation
     def transfer_owner(self, to_session: str, *, reason: str) -> bool:
         """Record that *to_session* now drives the run (daemon-written). False when it
         already owns it or the run is terminal; the caller decides liveness first."""
@@ -381,6 +530,7 @@ class RunEngine:
         self.write_projection()
         return True
 
+    @_one_operation
     def record_stop(self, kind: str, *, reason: str) -> bool:
         """Record ``user_stop`` / ``session_lost``: an ACTIVE run becomes paused; a run
         waiting for a human keeps waiting (no event). Returns whether it paused."""
@@ -445,6 +595,7 @@ class RunEngine:
                 out[name] = str(path)
         return out
 
+    @_one_operation
     def ensure_worktrees(self) -> dict[str, str]:
         if self.contract["mode"] == "shared" or self.contract["profile"] == "research":
             return self.effective_repos()
@@ -703,9 +854,12 @@ class RunEngine:
         from a field an agent wrote. Nothing once the run is terminal."""
         if self.projection()["status"] in lifecycle.TERMINAL:
             return set()
-        roots, trees, _bases, _existing, changed = self._current_code(
-            self.contract["expected_repos"])
-        missing = [name for name in roots if not trees.get(name)]
+        expected = list(self.contract["expected_repos"])
+        roots, trees, _bases, _existing, changed = self._current_code(expected)
+        # every repo of the contract, not only those with a root: an isolated repo whose
+        # worktree is gone has none, and its paths are just as unknown (re-audit 99f96949)
+        missing = [name for name in expected
+                   if name not in roots or not trees.get(name) or name not in changed]
         if missing:
             # a repo whose code facts cannot be read owns an unknown set of paths: the
             # caller refuses rather than treat it as owning none (R1 review r2)
@@ -746,7 +900,11 @@ class RunEngine:
                       "worktrees": [{"repo_name": name, "main": self.contract["repo_roots"][name],
                                      "path": root, "state": "active"}
                                     for name, root in self.effective_repos().items()],
-                      "updated_at": _now(), "created_at": self.contract["created_at"]})
+                      "updated_at": _now(), "created_at": self.contract["created_at"],
+                      # what this projection was built from: a reader (and the startup
+                      # repair) can tell a projection the log has moved past (re-audit
+                      # ca91762f)
+                      "projection_of": _log_tail(events)})
         audit_value = self._read_json(self.run_dir / "run_audit.json", {})
         if isinstance(audit_value, Mapping):
             value["audit_card"] = audit_value.get("card")
@@ -808,6 +966,7 @@ class RunEngine:
                             "created_at": self.contract["created_at"], "dep_links": []})
         return entries
 
+    @_one_operation
     def gate0_start(self, requirements: Mapping[str, Any] | None = None) -> dict[str, Any]:
         state = self.projection()
         if state["status"] != "active" or state["stage"] != "evaluate" \
@@ -886,6 +1045,7 @@ class RunEngine:
             return "needs_round_2"
         return "continue"
 
+    @_one_operation
     def review_address(self, artifact: Mapping[str, Any]) -> dict[str, Any]:
         state = self.projection()
         if state["status"] != "active" or state["stage"] != "review":
@@ -907,6 +1067,7 @@ class RunEngine:
         self._write_review_documents()
         return {"handoff": handoff, "reviewers": sorted(roster), "handouts": handouts}
 
+    @_one_operation
     def review_proof(self, artifact: Mapping[str, Any]) -> dict[str, Any]:
         state = self.projection()
         if state["status"] != "active" or state["stage"] != "review":
@@ -995,6 +1156,7 @@ class RunEngine:
         self._write_review_documents()
         return {"proofs": events, "findings": orchestrator.findings()}
 
+    @_one_operation
     def request_decision(self, value: Mapping[str, Any], *, document: str) -> dict[str, Any]:
         from core.run_protocol.documents import record_decision
         if self.contract.get("profile") == "direct":
@@ -1108,6 +1270,7 @@ class RunEngine:
                     requirement_variant="full", existing_files=self.check_context().existing_files,
                     blocking=set())
 
+    @_one_operation
     def answer_decision(self, *, request_id: str, option_id: str) -> dict[str, Any]:
         """Record a HUMAN's answer. Called only from the daemon (the chat question card
         or the dashboard decision card); the agent's CLI has no answer command."""
@@ -1132,6 +1295,7 @@ class RunEngine:
         self.write_projection()
         return {"event": event, "answer": answer, "state": self.projection()}
 
+    @_one_operation
     def abandon(self, *, reason: str) -> dict[str, Any]:
         if not isinstance(reason, str) or not reason.strip():
             raise EngineError("abandon requires a reason")
@@ -1154,6 +1318,7 @@ class RunEngine:
         self._settle(); self.write_projection()
         return {"event": event, "retention": entries, "state": self.projection()}
 
+    @_one_operation
     def restore(self) -> dict[str, Any]:
         state = self.projection()
         if not (state["status"] == "abandoned" or
@@ -1181,6 +1346,7 @@ class RunEngine:
         self._settle(); self.write_projection()
         return {"event": event, "restored": restored, "state": self.projection()}
 
+    @_one_operation
     def resume(self) -> dict[str, Any]:
         state = self.projection()
         if state["status"] != "paused":
@@ -1216,6 +1382,7 @@ class RunEngine:
                                 "manual": {"request_id": request_id, "note": note}}
         return audit_protocol.render(value, fmt="report").encode()
 
+    @_one_operation
     def prepare_land_request(self, *, action: str, note: str | None = None,
                              request_id: str | None = None) -> dict[str, Any]:
         with self._landing_lock():
@@ -1280,6 +1447,7 @@ class RunEngine:
         self.write_projection()
         return {"prepared": prepared, "path": str(path), "push": push}
 
+    @_one_operation
     def execute_land_request(self, request_id: str, *, message: str) -> dict[str, Any]:
         """Consume one daemon-issued approval token and finish a prepared landing."""
         with self._landing_lock():
@@ -1346,6 +1514,7 @@ class RunEngine:
         """Where run_worktree keeps this run's snapshot of *repo_name* (never from JSON)."""
         return run_worktree.ledger_root() / self.run_id / repo_name
 
+    @_one_operation
     def prepare_authorized_action(
         self, *, action: str, target: str, note: str | None = None,
         request_id: str | None = None,
@@ -1384,6 +1553,7 @@ class RunEngine:
         self.write_projection()
         return {"request": request, "path": str(path)}
 
+    @_one_operation
     def execute_authorized_action(self, request_id: str) -> dict[str, Any]:
         """Consume a daemon-issued token, append auth facts, then perform one action."""
         from core import hook_token
@@ -1449,6 +1619,7 @@ class RunEngine:
 
     WORKTREE_STAGES = frozenset({"plan", "build", "goal_cycle", "review", "test", "deliver"})
 
+    @_one_operation
     def ensure_stage_worktrees(self) -> dict[str, str]:
         """The run's worktrees exist whenever it is active in a stage that edits code
         (r6 §2.3: no ``stage-start``; every mutating command ends by calling this, so
@@ -1467,6 +1638,7 @@ class RunEngine:
         """The lifecycle numbers attempts (a human answer restarts the count)."""
         return int(self.projection()["stage_attempts"].get(stage, 0)) + 1
 
+    @_one_operation
     def stage_complete(self, artifact: Mapping[str, Any] | None = None, *,
                        expected_stage: str | None = None) -> dict[str, Any]:
         from core.run_protocol.documents import DocumentError
@@ -1607,6 +1779,7 @@ class RunEngine:
             raise HookTokenUnavailable(reason)
         return ok, reason
 
+    @_one_operation
     def fail_infrastructure(self, error: "InfrastructureError") -> dict[str, Any]:
         """Record the run's infrastructure failure (v13 §A1.2): it ends ``failed``. The
         CLI and the runner call this for the three ``infra`` kinds only."""
@@ -1625,6 +1798,7 @@ class RunEngine:
         self._settle(); self.write_projection()
         return {"recorded": recorded, "state": self.projection()}
 
+    @_one_operation
     def record_cap_exceeded(self, cap: str, *, stage: str | None = None,
                             attempt: int | None = None) -> None:
         """metric(cap_exceeded.<cap>): one of the run's count caps was hit (v13 E4/E5,
@@ -1644,6 +1818,7 @@ class RunEngine:
             if str(exc) != "cap already recorded":
                 raise
 
+    @_one_operation
     def finish_not_landed(self) -> dict[str, Any]:
         """The not-landed path (design §A1.2): render the run-directory REPORT, then a
         DELIVER attempt whose only stage check is DV-1, then ``reflecting``. Every
@@ -1681,6 +1856,7 @@ class RunEngine:
         return {"ok": True, "landing": self.projection()["landing"], **result,
                 "state": self.projection()}
 
+    @_one_operation
     def review_start(self, *, attempt: int = 1) -> dict[str, Any]:
         state = self.projection()
         if state["stage"] != "review" or state["status"] != "active":
@@ -1851,6 +2027,7 @@ class RunEngine:
         failed = {key: detail for key, (passed, detail) in results.items() if not passed}
         return {"push_ready": not failed, "reasons": failed, "checks": results}
 
+    @_one_operation
     def prepare_reflect(self, lessons: Sequence[Mapping[str, Any]],
                         candidates: Mapping[str, Sequence[str]] | None = None) -> dict[str, Any]:
         """Write reflect.json and evaluate RF-1~4 as a DELIVER attempt (design §A1.2).
@@ -1881,6 +2058,7 @@ class RunEngine:
                                                    sort_keys=True, indent=2))
         return {**document, "checks": result["checks"], "passed": result["passed"]}
 
+    @_one_operation
     def note_transcript(self, sid: str) -> None:
         """Remember an SDK transcript that worked on this run (audit area; D3)."""
         from core.session_ids import MAX_TRANSCRIPT_IDS, valid_session_id
@@ -1915,6 +2093,7 @@ class RunEngine:
                 payload={"name": "usage_not_available", "value": 1,
                          "reason": str(exc)[:300]})
 
+    @_one_operation
     def measure_usage(self) -> dict[str, Any]:
         from core.run_protocol import usage
         value = usage.measure(self.store, transcript_ids=self.transcript_ids(),
@@ -2057,6 +2236,7 @@ class RunEngine:
                     flock_unlock(handle)
         return held()
 
+    @_one_operation
     def normal_land(self, *, message: str) -> dict[str, Any]:
         with self._landing_lock():
             return self._normal_land(message=message)
@@ -2257,6 +2437,7 @@ class RunEngine:
         if isinstance(progress, Mapping) and not progress.get("commits"):
             path.unlink(missing_ok=True)
 
+    @_one_operation
     def reflect_complete(self, *, degraded: bool = False, reason: str = "") -> dict[str, Any]:
         state = self.projection()
         if state["status"] != "reflecting":
@@ -2273,8 +2454,8 @@ class RunEngine:
     def landed_commits(self) -> dict[str, str]:
         """repo -> the commit on main, from SIGNED events (review r3): the latest
         landing that finished (``landed`` / ``human_override``) when it is later than
-        any partial_land, else the latest partial_land. A finished land event written
-        before it carried ``commits`` falls back to its progress file."""
+        any partial_land, else the latest partial_land. A finished land event without
+        ``commits`` yields its signed ``commit``."""
         events = self.store.read_events()
         finished = [(i, e) for i, e in enumerate(events) if e.get("kind") == "land"
                     and e["payload"].get("landing") in ("landed", "human_override")]
@@ -2286,16 +2467,9 @@ class RunEngine:
         payload = finished[-1][1]["payload"]
         if isinstance(payload.get("commits"), dict) and payload["commits"]:
             return dict(payload["commits"])
-        artifacts = self.run_dir / "artifacts"
-        path = artifacts / "landing-progress-normal.json"
-        if payload.get("landing") == "human_override":
-            grant = lifecycle.fold(events, self.authority)["auth_consumed"].get(
-                payload.get("auth_consumed_event_id")) or {}
-            path = artifacts / f"landing-progress-{grant.get('request_id')}.json"
-        progress = self._read_json(path, {}) if path.is_file() else {}
-        commits = {str(k): str(v) for k, v in (progress.get("commits") or {}).items()} \
-            if isinstance(progress, Mapping) else {}
-        return commits or ({"primary": payload["commit"]} if payload.get("commit") else {})
+        # signed fields only: the agent-writable landing-progress files are never read
+        # here (re-audit c772dd92 HIGH; old runs without ``commits`` are not supported)
+        return {"primary": payload["commit"]} if payload.get("commit") else {}
 
     def _partially_landed(self) -> dict[str, str]:
         """repo -> commit of a signed partial_land later than every finished landing:

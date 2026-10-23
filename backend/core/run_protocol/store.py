@@ -169,6 +169,9 @@ class AuditStore:
             raw = path.read_bytes()
         except OSError as exc:
             raise StoreError(f"events unreadable: {exc}") from exc
+        pre = self._intent_length()
+        if pre is not None:
+            raw = raw[:pre]        # a batch in flight or torn: none of it counts yet
         lines = raw.splitlines(keepends=True)
         if lines and not lines[-1].endswith(b"\n"):
             lines.pop()
@@ -187,8 +190,22 @@ class AuditStore:
         return result
 
     def _discard_torn_tail(self) -> None:
-        """Truncate only an unterminated final JSONL fragment while holding the lock."""
+        """Under the lock: cut an unfinished batch back to its start, then truncate an
+        unterminated final JSONL fragment."""
         path = self.paths.events
+        intent = self._intent_path()
+        pre = self._intent_length()
+        if pre is not None and path.exists():
+            with open(path, "r+b") as handle:
+                if os.fstat(handle.fileno()).st_size > pre:
+                    handle.truncate(pre)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+        try:
+            intent.unlink()
+            self._fsync_dir()
+        except FileNotFoundError:
+            pass
         if not path.exists():
             return
         with open(path, "r+b") as handle:
@@ -237,11 +254,66 @@ class AuditStore:
                 pass
             raise
 
+    def _write_events(self, events: list[dict[str, Any]]) -> None:
+        """Append *events* to the log, all or none after a crash.
+
+        One event: an unterminated final line is a torn tail, dropped on read. Several
+        (a trigger and the transition it makes due): a write can tear AFTER the first
+        complete line, so the log's length before the batch is first recorded in an
+        intent file; while that file exists readers stop at that length and the next
+        locked writer cuts the log back to it (re-audit 84b72ec1 HIGH)."""
+        data = b"".join(ev.encode_event(item) for item in events)
+        intent = self._intent_path()
+        if len(events) > 1:
+            try:
+                pre = self.paths.events.stat().st_size
+            except FileNotFoundError:
+                pre = 0
+            with open(intent, "wb") as handle:
+                handle.write(f"{pre}\n".encode())
+                handle.flush()
+                os.fsync(handle.fileno())
+            self._fsync_dir()          # the intent's NAME is durable before the append
+        with open(self.paths.events, "ab") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if len(events) > 1:
+            intent.unlink()
+            self._fsync_dir()          # a lost unlink would discard this whole batch
+
+    def _fsync_dir(self) -> None:
+        """Make a create/unlink in the run's audit directory durable (re-audit c772dd92:
+        file fsync alone does not persist the directory entry)."""
+        fd = os.open(str(self.paths.events.parent), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def _intent_path(self) -> Path:
+        return self.paths.events.with_name(self.paths.events.name + ".intent")
+
+    def _intent_length(self) -> "int | None":
+        """The log length before an unfinished batch, or None (no batch in flight; an
+        unparsable intent is one whose own write tore, so the batch never started)."""
+        try:
+            text = self._intent_path().read_text(encoding="ascii")
+        except (OSError, UnicodeDecodeError):
+            return None
+        return int(text) if text.endswith("\n") and text[:-1].isdigit() else None
+
     def _append_locked(
         self, chain: list[dict[str, Any]], event: dict[str, Any], blobs: Mapping[str, bytes],
+        then: "list[dict[str, Any]] | None" = None,
     ) -> str:
+        """Append *event* and, in the same write, the events of *then* (each already
+        chained after the one before it)."""
         updated, status, generated = ev.add_event(self.authority, chain, event)
         available = {**dict(blobs), **generated}
+        for item in then or ():
+            updated, _st, more = ev.add_event(self.authority, updated, item)
+            available.update(more)
         refs = {digest for item in updated[len(chain):]
                 for digest in self._blob_refs(item.get("payload"))}
         for digest in refs:
@@ -250,35 +322,34 @@ class AuditStore:
                 raise StoreError(f"event references missing blob {digest}")
         for digest, data in available.items():
             self._write_blob(digest, data)
-        if status != "duplicate":
-            additions = updated[len(chain):]
-            with open(self.paths.events, "ab") as handle:
-                for item in additions:
-                    handle.write(ev.encode_event(item))
-                handle.flush()
-                os.fsync(handle.fileno())
+        if updated[len(chain):]:
+            self._write_events(updated[len(chain):])
         return status
+
+    def _due_transition(self, chain: list[dict[str, Any]], expected: Any,
+                        at: Any) -> "tuple[dict[str, Any], dict[str, bytes]]":
+        if self.transition_writer is None:
+            raise StoreError("a transition is due but no transition writer is configured")
+        transition, extra = ev.make_event(
+            writer=self.transition_writer, run_id=self.paths.run_id, kind="transition",
+            at=at, payload=expected, prev_hash=ev.event_digest(chain[-1]) if chain else None)
+        self.validator([*chain, transition])
+        return transition, extra
 
     def _validated_append(self, chain: list[dict[str, Any]], event: dict[str, Any],
                           blobs: Mapping[str, bytes]) -> str:
-        """Validate (when configured), append, and append the triggered transition —
-        all under the caller's lock."""
+        """Validate (when configured), then append the event and the transition it makes
+        due in ONE write under the caller's lock (re-audit ca91762f: two writes left a
+        crash window where the chain ended in an expected transition)."""
         if self.validator is None or any(
                 item.get("event_id") == event.get("event_id") for item in chain):
             return self._append_locked(chain, event, blobs)
         expected = self.validator([*chain, event])
-        status = self._append_locked(chain, event, blobs)
-        if expected:
-            if self.transition_writer is None:
-                raise StoreError("a transition is due but no transition writer is configured")
-            chain = self.read_events()
-            transition, extra = ev.make_event(
-                writer=self.transition_writer, run_id=self.paths.run_id, kind="transition",
-                at=event.get("at"), payload=expected,
-                prev_hash=ev.event_digest(chain[-1]) if chain else None)
-            self.validator([*chain, transition])
-            self._append_locked(chain, transition, extra)
-        return status
+        if not expected:
+            return self._append_locked(chain, event, blobs)
+        with_event, _status, _gen = ev.add_event(self.authority, chain, event)
+        transition, extra = self._due_transition(with_event, expected, event.get("at"))
+        return self._append_locked(chain, event, {**dict(blobs), **extra}, then=[transition])
 
     def append(self, event: dict[str, Any], blobs: Mapping[str, bytes] | None = None) -> str:
         """Persist a prebuilt event; callers needing concurrency use ``append_new``."""
@@ -372,20 +443,13 @@ class AuditStore:
                     raise StoreError(f"event references missing blob {digest}")
             for digest, data in blobs.items():
                 self._write_blob(digest, data)
-            with open(self.paths.events, "ab") as handle:
-                handle.write(b"".join(ev.encode_event(item) for item in updated[len(chain):]))
-                handle.flush()
-                os.fsync(handle.fileno())
             expected = self.validator(updated) if self.validator is not None else None
-            if expected:
-                if self.transition_writer is None:
-                    raise StoreError("a transition is due but no transition writer is configured")
-                transition, extra = ev.make_event(
-                    writer=self.transition_writer, run_id=self.paths.run_id, kind="transition",
-                    at=built[-1].get("at"), payload=expected,
-                    prev_hash=ev.event_digest(updated[-1]))
-                self.validator([*updated, transition])
-                self._append_locked(updated, transition, extra)
+            if expected:   # the due transition goes into the batch's own write
+                transition, extra = self._due_transition(updated, expected, built[-1].get("at"))
+                updated, _st, more = ev.add_event(self.authority, updated, transition)
+                for digest, data in {**extra, **more}.items():
+                    self._write_blob(digest, data)
+            self._write_events(updated[len(chain):])
             return built
         except ev.EventError as exc:
             raise StoreError(str(exc)) from exc

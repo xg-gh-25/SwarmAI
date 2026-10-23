@@ -278,3 +278,22 @@ def test_a_later_manual_partial_land_is_the_audits_outcome():
         commits={"a": "c" * 40})
     assert value["outcome"]["reason"] == "partial_land"
     assert "未落地：b" in audit.render(value, fmt="report")
+
+
+def test_a_recovered_landed_repo_then_a_preflight_failure_is_a_partial_land(tmp_path):
+    """Re-audit 99f96949 HIGH: repo a fast-forwarded, then the process died before the
+    progress write; on the retry a is recognised as landed, and then repo b fails its
+    phase-1 check. a IS landed: the result is a partial land, never "nothing moved"."""
+    roots, bases, bindings = _repos(tmp_path)
+    a = Path(roots["a"])
+    made = landing._prepare_commit(roots["a"], bases["a"], bindings["a"]["delivery_tree"],
+                                   "land", in_place=False)
+    landing._fast_forward(roots["a"], made)          # the crash came right after this
+    b = Path(roots["b"])
+    (b / "other.py").write_text("moved\n")
+    _git(b, "add", "-A")
+    _git(b, "commit", "-q", "-m", "another session")
+    with pytest.raises(landing.PartialLanding) as raised:
+        _land(tmp_path, roots, bases, bindings)
+    assert raised.value.landed == {"a": _git(a, "rev-parse", "HEAD")}
+    assert raised.value.failed == "b"

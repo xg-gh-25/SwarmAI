@@ -664,3 +664,52 @@ def test_the_requirement_and_run_id_rules_are_the_protocols(tmp_path, monkeypatc
     assert pse.read_stage_state("run_req1")["requirement"] in ("", None)
     long_id = "run_" + "a" * 80
     assert pse.parse_watched_run_id(f"python pipeline_v1.py status --run-id {long_id}") == long_id
+
+
+def test_a_run_document_swapped_for_a_symlink_mid_check_is_never_read(tmp_path, monkeypatch):
+    """Re-audit 536bb62b HIGH (TOCTOU): REPORT.md is a regular file when checked, then
+    replaced by a symlink to a host file before it is read. The bytes read must be
+    the checked file's or nothing, never the link target's."""
+    import pathlib
+    monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+    path = _write_run(tmp_path, "run_doc2", {"stages": {}})
+    secret = tmp_path.parent / "secret2.txt"
+    secret.write_text("## S\nTOP SECRET\n")
+    doc = path.parent / "REPORT.md"
+    doc.write_text("# R\n## Goal\nreal text\n")
+    real_resolve = pathlib.Path.resolve
+
+    def swap_after_check(self, *a, **k):
+        out = real_resolve(self, *a, **k)
+        if self.name == "REPORT.md" and not doc.is_symlink():
+            doc.unlink()                    # the checks passed on the regular file
+            doc.symlink_to(secret)
+        return out
+    monkeypatch.setattr(pathlib.Path, "resolve", swap_after_check)
+    ref = pse._doc_ref(str(path.parent), "REPORT.md")
+    assert ref is None or "TOP SECRET" not in (ref.get("excerpt") or "")
+
+
+def test_a_run_directory_swapped_for_a_symlink_mid_check_is_never_read(tmp_path, monkeypatch):
+    """Re-audit 84b72ec1 HIGH: the run DIRECTORY (not just the document) is replaced
+    by a symlink to a host directory after the checks. The read must refuse it."""
+    import pathlib
+    monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+    path = _write_run(tmp_path, "run_doc3", {"stages": {}})
+    run_dir = path.parent
+    (run_dir / "REPORT.md").write_text("# R\n## Goal\nreal text\n")
+    host = tmp_path.parent / "hostdir3"
+    host.mkdir()
+    (host / "REPORT.md").write_text("## S\nTOP SECRET\n")
+    real_resolve = pathlib.Path.resolve
+
+    def swap_after_check(self, *a, **k):
+        out = real_resolve(self, *a, **k)
+        if self.name == "REPORT.md" and not run_dir.is_symlink():
+            moved = run_dir.with_name("run_doc3.moved")
+            run_dir.rename(moved)          # the checks passed on the real directory
+            run_dir.symlink_to(host)
+        return out
+    monkeypatch.setattr(pathlib.Path, "resolve", swap_after_check)
+    ref = pse._doc_ref(str(run_dir), "REPORT.md")
+    assert ref is None or "TOP SECRET" not in (ref.get("excerpt") or "")

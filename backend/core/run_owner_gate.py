@@ -366,30 +366,6 @@ def _v1_mutation_check(sid: str, call: dict) -> "str | None":
         return f"Pipeline v1 run {call.get('run_id')} belongs to session {owner}"
     return None
 
-def _v1_mutation_check(sid: str, call: dict) -> "str | None":
-    """A denial reason for an unbound or cross-project/session v1 mutation."""
-    sub = call.get("sub")
-    if sub not in _V1_MUTATIONS:
-        return None
-    projects = call.get("projects") or []
-    if len(projects) != 1 or not _safe_project(projects[0]):
-        return "Pipeline v1 mutations require one explicit, safe --project"
-    if sub == "create":
-        session_ids = call.get("session_ids") or []
-        if session_ids and (len(session_ids) != 1 or session_ids[0] != sid):
-            return "Pipeline v1 create --session-id must equal this app session"
-        return None
-    run_file, data = _v1_run(call)
-    if run_file is None or data is None:
-        return "Pipeline v1 mutation cannot resolve exactly one canonical --run-id"
-    actual_project = run_file.parents[3].name
-    if projects[0] != actual_project or data.get("project") != actual_project:
-        return (f"Pipeline v1 mutation project mismatch: run belongs to {actual_project}, "
-                f"not {projects[0]}")
-    owner = data.get("session_id")
-    if not isinstance(owner, str) or not owner:
-        return "Pipeline v1 mutation has no durable owning session"
-    return None
 
 
 def _decide(sid: str, command: str, tool_input: dict,

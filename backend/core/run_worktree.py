@@ -22,6 +22,7 @@ Key public symbols: ``WorktreeError``, ``wt_root``, ``wt_path``, ``branch_ref``,
 from __future__ import annotations
 
 import hashlib
+import contextlib
 import json
 import os
 import re
@@ -1376,7 +1377,8 @@ def _remove(run_id: str, entry: dict, main: Path, merged: bool,
         pass
 
 
-def release(run_id: str, run_state: dict, mains: "dict[str, Path]", reason: str) -> "list[dict]":
+def release(run_id: str, run_state: dict, mains: "dict[str, Path]", reason: str,
+            landed: "set[str] | None" = None) -> "list[dict]":
     """Release every worktree of a run (§8.1). Integrated → remove; active → verified
     ledger snapshot, then remove; snapshot failure → keep and report. Mutates the
     entries in ``run_state["worktrees"]``. *mains*: repo_name → main checkout."""
@@ -1391,7 +1393,9 @@ def release(run_id: str, run_state: dict, mains: "dict[str, Path]", reason: str)
             continue
         try:
             path = _safe_to_touch(run_id, name, main)
-            if entry.get("state") == "integrated":
+            # *landed*: the repos the run's SIGNED landing says landed; a row claiming
+            # "integrated" for any other repo is snapshotted like an active one
+            if entry.get("state") == "integrated" and (landed is None or name in landed):
                 _remove(run_id, entry, main, merged=True)
                 entry.update(state="released", released_at=_now_iso())
                 results.append({"repo": name, "ok": True, "integrated": True})
@@ -1440,15 +1444,94 @@ def diff_since(run_id: str, entry: dict, main, name: "str | None", stat: bool = 
 
 # ── run discovery ────────────────────────────────────────────────────────────
 def _iter_runs(workspace: "str | Path", ids: "set[str] | None" = None):
-    """(run.json path, data) of every run; *ids*: only the run dirs named in it.
-    Read through core.run_index (a run.json is parsed again only when it changed);
-    *data* is a shallow copy: do not mutate nested values."""
+    """(run.json path, view) of every Pipeline v1 run; *ids*: only the run dirs named
+    in it. A run.json without a protected contract is not a run and is skipped. The
+    view is run.json overlaid with what an agent cannot write (``_signed_view``):
+    id / project from the run directory, owner and status from the signed events,
+    mode from the contract (re-audit 536bb62b / 99f96949). *view* is a shallow copy."""
     from core import run_index
     for r in run_index.runs(workspace):
         name = r.path.parent.name
         if not name.startswith("run_") or (ids is not None and name not in ids):
             continue
-        yield r.path, r.data
+        view = _signed_view(r.path, r.data)
+        if view is not None:
+            yield r.path, view
+
+
+# (data_dir, run_id) -> ((contract stat, events stat), signed fields)
+_SIGNED: "dict[tuple[str, str], tuple[tuple, dict]]" = {}
+
+
+def _file_identity(path: Path) -> tuple:
+    try:
+        st = path.stat()
+        return (st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        return ()
+
+
+def _signed_view(run_file: Path, data: dict) -> "dict | None":
+    """*data* overlaid with the run's signed facts; None when the run has no protected
+    contract (not a v1 run). A contract whose events cannot be verified yields
+    ``_unreadable: True`` with a live status: every reader then keeps the run and
+    claims nothing from it, never treats it as finished. One stat of the contract and
+    of the event log per call; the events are folded again only when they changed."""
+    from config import get_app_data_dir
+    from core.run_protocol.runner import contract_path, read_contract
+    rid, project = run_file.parent.name, run_file.parents[3].name
+    data_dir = Path(get_app_data_dir())
+    try:
+        cpath = contract_path(data_dir, rid)
+    except Exception:  # noqa: BLE001 — not a v1 run id
+        return None
+    if not cpath.exists():
+        return None
+    key = (_file_identity(cpath), _file_identity(cpath.parent / "events.jsonl"),
+           # a batch in flight changes what the log reads as (re-audit c772dd92)
+           _file_identity(cpath.parent / "events.jsonl.intent"))
+    hit = _SIGNED.get((str(data_dir), rid))
+    if hit is not None and hit[0] == key:
+        signed = hit[1]
+    else:
+        try:
+            contract = read_contract(data_dir, rid)
+            from core.run_protocol.engine import RunEngine
+            engine = RunEngine.load(data_dir=data_dir, workspace=run_file.parents[5],
+                                    project=project, run_id=rid)
+            state = engine.projection(allow_pending=True)
+            repos_ = sorted((contract or {}).get("expected_repos") or [])
+            landed: list = []
+            if state.get("landing") in ("landed", "human_override"):
+                commits = engine.landed_commits()
+                if set(commits) == {"primary"} and len(repos_) == 1:
+                    commits = {repos_[0]: commits["primary"]}
+                landed = sorted(commits)
+            signed = {"session_id": engine.owner_session(), "status": state.get("status"),
+                      "stages": dict(state.get("stages") or {}),
+                      "worktree_mode": (contract or {}).get("mode"),
+                      "_repos": repos_, "_landed": landed}
+        except Exception:  # noqa: BLE001 — unverifiable: keep it, claim nothing
+            logger.warning("run %s: signed state unreadable; kept, claims nothing", rid,
+                           exc_info=True)
+            signed = {"session_id": None, "status": "active", "_unreadable": True}
+        _SIGNED[(str(data_dir), rid)] = (key, signed)
+    view = {**data, "id": rid, "project": project, **signed}
+    repos = signed.get("_repos")
+    if repos is not None:   # only the contract's repos can have worktrees
+        landed = set(signed.get("_landed") or ())
+        rows = []
+        for e in data.get("worktrees") or []:
+            if not isinstance(e, dict) or e.get("repo_name") not in repos:
+                continue
+            # "integrated" (removed WITHOUT a snapshot) only when the signed landing
+            # says this repo landed; a forged row is treated as active, so it is
+            # snapshotted before removal (re-audit 84b72ec1 HIGH)
+            if e.get("state") == "integrated" and e.get("repo_name") not in landed:
+                e = {**e, "state": "active"}
+            rows.append(e)
+        view["worktrees"] = rows
+    return view
 
 
 def active_entries(data: dict) -> "list[dict]":
@@ -1490,6 +1573,19 @@ _LIVE_SUMMARY: "dict[str, tuple[tuple[int, int], tuple[tuple[str, str], ...]]]" 
 _LIVE_SUMMARY_LOCK = threading.Lock()
 
 
+def _contract_repos(rid: str) -> "frozenset[str]":
+    """The repo names of *rid*'s protected contract; empty when it has none."""
+    try:
+        from config import get_app_data_dir
+        from core.run_protocol.runner import read_contract
+        contract = read_contract(get_app_data_dir(), rid)
+    except Exception:  # noqa: BLE001 — not a v1 run id / unreadable
+        return frozenset()
+    if not isinstance(contract, dict):
+        return frozenset()
+    return frozenset(str(r) for r in contract.get("expected_repos") or [])
+
+
 def _live_summary(f: str) -> "tuple[tuple[str, str], ...]":
     """(run_id, repo_name) of the active worktrees of the live run at *f*, or ()."""
     try:
@@ -1507,8 +1603,14 @@ def _live_summary(f: str) -> "tuple[tuple[str, str], ...]":
         return ()   # not cached: a half-written file is read again next call
     val: "tuple[tuple[str, str], ...]" = ()
     if isinstance(data, dict) and data.get("status") in _LIVE:
-        rid = str(data.get("id") or "")
-        val = tuple((rid, str(e.get("repo_name"))) for e in active_entries(data))
+        # display only (source classification), never an authority: still, the run id
+        # is its directory's and the repos are its protected contract's, not run.json's
+        # (re-audit 84b72ec1). The contract is read only when run.json changed.
+        rid = Path(f).parent.name
+        repos = _contract_repos(rid)
+        if repos:
+            val = tuple((rid, str(e.get("repo_name"))) for e in active_entries(data)
+                        if e.get("repo_name") in repos)
     with _LIVE_SUMMARY_LOCK:
         _LIVE_SUMMARY[f] = (key, val)
     return val
@@ -1771,25 +1873,84 @@ def _sweep_run(rid, f, data, owner_active, now, report, update_run, RunLockTimeo
                                       if isinstance(e, dict) and e.get("state") == "integrated"]
     if not entries:
         return
+    if data.get("_unreadable"):
+        report["kept"].append(f"{rid}: signed state unreadable")
+        return
     live = data.get("status") in _LIVE
-    reason = None
-    if not live:
-        reason = f"run {data.get('status')}"
-    else:
-        act = last_activity(rid, data) or 0.0
-        # Deliver is recorded completed BEFORE its landing; a landing that is backing off
-        # (busy, blocked by uncommitted main edits) stamps landing_attempt_at.
-        tried = _iso_ts(data.get("landing_attempt_at"))
-        if _deliver_done(data) and any(e.get("state") == "active" for e in entries) \
-                and now - max(act, tried) > 86400:
-            reason = "deliver finished but never integrated"
-        elif now - max(act, f.stat().st_mtime) > STALE_DAYS * 86400:
-            reason = f"no activity for {STALE_DAYS} days"
+    reason = _release_reason(rid, f, data, entries, now)
     if reason is None:
         return
     if owner_active(data.get("session_id")):
         report["kept"].append(f"{rid}: owner session still active")
         return
+    # Judged again under the run's operation lock, from a fresh read, and never while a
+    # test call of the run is running: a run that came back to life after the scan
+    # keeps its worktree (re-audit ca91762f)
+    from config import get_app_data_dir
+    from core.run_protocol.oplock import RunBusy, operation
+    try:
+        with operation(Path(get_app_data_dir()) / "state" / "pipeline_agent_audit", rid,
+                       timeout=5.0), _test_call_idle(f.parent) as idle:
+            if not idle:
+                report["kept"].append(f"{rid}: a test call is running")
+                return
+            try:
+                fresh = _signed_view(f, json.loads(f.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                fresh = None
+            if fresh is None or fresh.get("_unreadable") \
+                    or _release_reason(rid, f, fresh, entries, now) is None \
+                    or owner_active(fresh.get("session_id")):
+                report["kept"].append(f"{rid}: active again")
+                return
+            _release_stale(rid, f, entries, live, reason, report, update_run, RunLockTimeout,
+                           landed=set(fresh.get("_landed") or ()))
+    except RunBusy:
+        report["kept"].append(f"{rid}: busy with another operation")
+
+
+@contextlib.contextmanager
+def _test_call_idle(run_dir: Path):
+    """Holds the run's test-call lock (pipeline_test ``_run_call_slot``) while the
+    release runs; yields False when a test call holds it."""
+    from utils.file_lock import flock_exclusive_nb, flock_unlock
+    path = run_dir / "evidence" / "tests" / ".call.lock"
+    if not path.exists():
+        yield True
+        return
+    with open(path, "a+", encoding="utf-8") as handle:
+        try:
+            flock_exclusive_nb(handle)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            flock_unlock(handle)
+
+
+def _release_reason(rid, f, data, entries, now) -> "str | None":
+    if data.get("status") not in _LIVE:
+        return f"run {data.get('status')}"
+    act = last_activity(rid, data) or 0.0
+    # Deliver is recorded completed BEFORE its landing; a landing that is backing off
+    # (busy, blocked by uncommitted main edits) stamps landing_attempt_at.
+    tried = _iso_ts(data.get("landing_attempt_at"))
+    if _deliver_done(data) and any(e.get("state") == "active" for e in entries) \
+            and now - max(act, tried) > 86400:
+        return "deliver finished but never integrated"
+    try:
+        mtime = f.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    if now - max(act, mtime) > STALE_DAYS * 86400:
+        return f"no activity for {STALE_DAYS} days"
+    return None
+
+
+def _release_stale(rid, f, entries, live, reason, report, update_run, RunLockTimeout,
+                   landed: "set[str] | None" = None) -> None:
     mains = {}
     for e in entries:
         m = main_of(wt_path(rid, e["repo_name"])) if wt_path(rid, e["repo_name"]).exists() else None
@@ -1800,7 +1961,7 @@ def _sweep_run(rid, f, data, owner_active, now, report, update_run, RunLockTimeo
     def _mut(fresh: dict) -> bool:
         if fresh.get("status") in _LIVE and live is False:
             return False                      # revived meanwhile
-        res = release(rid, fresh, mains, reason)
+        res = release(rid, fresh, mains, reason, landed=landed)
         holder["res"] = res
         if live:
             fresh["worktree_released_stale"] = {"at": _now_iso(), "reason": reason}

@@ -181,3 +181,29 @@ def test_unmetered_experts_still_block_token_cost():
             audit_through="COMPLETED")["summary"]["token_cost"]["verdict"]
     assert verdict(base) == "WARN"                     # only the main agent is unknown
     assert verdict([*base, handout]) == "BLOCK"        # an expert ran and nothing counts it
+
+
+def test_an_unparsed_review_answer_routes_to_one_redispatch_not_to_address():
+    """Re-audit 99f96949 MED: an expert answer that was not parsed produced no
+    findings; `next` said review-address (nothing to address). It now says review-start
+    while the one redispatch is still allowed, then stage-complete (RV checks decide)."""
+    from types import SimpleNamespace
+    from core.run_protocol import next_step as ns
+    engine = SimpleNamespace(project="P", run_id="run_x")
+
+    def h(eid, expert="correctness"):
+        return {"kind": "handout", "stage": "review", "round": 1, "event_id": eid,
+                "payload": {"expert_id": expert}}
+
+    def a(hid, state):
+        return {"kind": "answer", "stage": "review", "payload": {"handout_event_id": hid,
+                                                                  "state": state}}
+    blocking = [{"id": "RV-1a", "reason": "no usable answer"}]
+    action, cmd, _ = ns._review_action(engine, [h("h1"), a("h1", "unparsed")], {}, blocking, None)
+    assert action == "run" and "review-start" in cmd
+    two = [h("h1"), a("h1", "unparsed"), h("h2"), a("h2", "unparsed")]
+    action, cmd, _ = ns._review_action(engine, two, {}, blocking, None)
+    assert action == "run" and "stage-complete" in cmd
+    parsed = [h("h1"), a("h1", "parsed")]
+    action, cmd, _ = ns._review_action(engine, parsed, {}, blocking, None)
+    assert action == "fix" and "review-address" in cmd

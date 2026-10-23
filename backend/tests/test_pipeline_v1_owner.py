@@ -204,3 +204,17 @@ def test_the_hook_hands_the_session_id_to_the_first_pipeline_call(tmp_path, monk
 def test_handing_the_session_id_over_is_idempotent():
     once = gate._with_session(_cmd("status"), "session-a")
     assert once and gate._with_session(once, "session-a") is None
+
+
+def test_no_gate_module_defines_a_function_twice():
+    """Re-audit 536bb62b LOW: a second _v1_mutation_check silently replaced the first
+    (and dropped its owner check). A gate module defines each top-level name once."""
+    import ast
+    from pathlib import Path
+    core = Path(__file__).resolve().parent.parent / "core"
+    for name in ("run_owner_gate.py", "worktree_write_gate.py", "security_hooks.py"):
+        tree = ast.parse((core / name).read_text(encoding="utf-8"))
+        names = [n.name for n in tree.body
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+        dup = sorted({n for n in names if names.count(n) > 1})
+        assert not dup, (name, dup)

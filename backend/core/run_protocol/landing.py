@@ -225,6 +225,22 @@ def consume_authorization(store: AuditStore, request_id: str, *, session_id: str
     return {"request": request, "consumed": consumed, "consumption": result.consumption}
 
 
+def _unpaired_consumption(store: AuditStore, request_id: str,
+                          session_id: str) -> "dict[str, Any] | None":
+    """The signed ``auth_consumed`` of *request_id* that no ``land`` / ``partial_land``
+    answers yet, when this same session consumed it; else None."""
+    events = store.read_events()
+    answered = {(event.get("payload") or {}).get("auth_consumed_event_id")
+                for event in events if event.get("kind") in ("land", "partial_land")}
+    for event in reversed(events):
+        payload = event.get("payload") or {}
+        if event.get("kind") == "auth_consumed" and payload.get("request_id") == request_id:
+            if event.get("event_id") in answered or payload.get("session_id") != session_id:
+                return None
+            return event
+    return None
+
+
 def _record_double_consume(store: AuditStore, request_id: str, auth_event_id: str,
                            at: str) -> None:
     from core.run_protocol import events as ev
@@ -367,7 +383,12 @@ class _IndexLock:
 
     def install(self, built: Path) -> None:
         assert self._fd is not None
-        os.write(self._fd, built.read_bytes())
+        data = memoryview(built.read_bytes())
+        while data:                         # a short write must never install a torn index
+            n = os.write(self._fd, data)
+            if n <= 0:
+                raise OSError("index write made no progress")
+            data = data[n:]
         os.fsync(self._fd)
         os.close(self._fd)
         self._fd = None
@@ -652,7 +673,13 @@ def commit_repos(
     prepared: dict[str, str] = {}
     for name in sorted(expected - set(commits)):
         if _branch(integration_roots[name], None) != plan[name]["branch"]:
-            raise LandingError(f"{name}: the main checkout is not on {plan[name]['branch']}")
+            why = f"{name}: the main checkout is not on {plan[name]['branch']}"
+            if commits:
+                progress["commits"] = dict(commits)
+                _atomic_progress(path, progress)
+                raise PartialLanding(why, landed=dict(commits), failed=name,
+                                     unsettled=unsettled)
+            raise LandingError(why)
         root, base, delivery_tree = integration_roots[name], bases[name], bindings[name]["delivery_tree"]
         head = _git(root, "rev-parse", "HEAD")
         if head != base and _ours(root, head, base, delivery_tree, message):
@@ -664,6 +691,13 @@ def commit_repos(
             prepared[name] = _prepare_commit(root, base, delivery_tree, message,
                                              in_place=in_place)
         except LandingError as exc:
+            if commits:
+                # a repo recovered above IS landed: this is a partial land, never
+                # "nothing moved" (re-audit 99f96949)
+                progress["commits"] = dict(commits)
+                _atomic_progress(path, progress)
+                raise PartialLanding(f"{name}: {exc}", landed=dict(commits), failed=name,
+                                     unsettled=unsettled) from exc
             raise LandingError(f"{name}: {exc}") from exc
     if len(commits) != len(progress["commits"]):
         progress["commits"] = dict(commits)
@@ -740,9 +774,14 @@ def execute_request(
                         for name, row in current.items()}
     if current_bindings != bound:
         raise LandingError("trees changed since authorization request")
-    consumed = consume_authorization(
-        store, request_id, session_id=session_id, bindings=current_bindings, at=at,
-        now=time.time() if now is None else now)["consumed"]
+    consumed = _unpaired_consumption(store, request_id, session_id)
+    if consumed is None:
+        consumed = consume_authorization(
+            store, request_id, session_id=session_id, bindings=current_bindings, at=at,
+            now=time.time() if now is None else now)["consumed"]
+    # else: a crash after auth_consumed and before land / partial_land (re-audit
+    # ca91762f). The trees still equal the bound ones (checked above) and the progress
+    # file / the branch heads say what already moved: finish THAT landing.
     path = Path(progress_path) if progress_path is not None else (
         store.paths.run / f"landing-progress-{request_id}.json")
     try:

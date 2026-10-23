@@ -11,6 +11,7 @@ second process. Invariants:
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -154,3 +155,163 @@ def test_a_parsed_answer_missing_a_finding_does_not_count(rig):
         e["kind"] == "finding_occ" and e["payload"]["answer_event_id"] == answer["event_id"])]})
     assert answer not in checks._answers(ctx)
     assert answer in checks._answers(type("C", (), {"events": events}))
+
+
+def test_a_trigger_and_its_transition_reach_the_log_in_one_write(tmp_path, monkeypatch):
+    """Re-audit ca91762f HIGH: abandon (or stage_complete, user_stop, ...) was fsynced,
+    then its due transition appended in a second write; a crash between them left a
+    chain ending in an expected transition that a plain projection() rejects. Both
+    are now one write + one fsync."""
+    from core.run_protocol import store as store_mod
+    from tests.pipeline_v1_rig import Rig
+    r = Rig(tmp_path, monkeypatch)
+    try:
+        r.create()
+        writes: list[list[str]] = []
+        real = store_mod.AuditStore._write_events
+
+        def spy(self, events):
+            writes.append([e.get("kind") for e in events])
+            return real(self, events)
+        monkeypatch.setattr(store_mod.AuditStore, "_write_events", spy)
+        engine = r.engine()
+        engine.abandon(reason="test")
+        assert ["abandon", "transition"] in writes, writes
+        assert engine.projection()["status"] == "abandoned"
+    finally:
+        r.close()
+
+
+def test_a_daemon_mutation_waits_for_the_runs_operation_lock(tmp_path, monkeypatch):
+    """Re-audit ca91762f HIGH: dashboard Cancel (engine.abandon) ran beside a CLI
+    landing without the per-run operation lock. Every public engine mutation now
+    takes it (re-entrant for the CLI, which already holds it)."""
+    import threading
+    from core.run_protocol import engine as eng
+    from core.run_protocol import oplock
+    from tests.pipeline_v1_rig import Rig
+    r = Rig(tmp_path, monkeypatch)
+    try:
+        r.create()
+        engine = r.engine()
+        monkeypatch.setattr(eng, "ENGINE_LOCK_TIMEOUT", 0.3)
+        held, release = threading.Event(), threading.Event()
+
+        def other_process_operation():
+            with oplock.operation(engine.audit_root, engine.run_id):
+                held.set()
+                release.wait(10)
+        t = threading.Thread(target=other_process_operation)
+        t.start()
+        held.wait(5)
+        try:
+            with pytest.raises(oplock.RunBusy):
+                engine.abandon(reason="cancel while landing")
+        finally:
+            release.set()
+            t.join(10)
+        assert engine.projection()["status"] != "abandoned"
+        with oplock.operation(engine.audit_root, engine.run_id):   # re-entrant
+            engine.abandon(reason="now")
+        assert engine.projection()["status"] == "abandoned"
+    finally:
+        r.close()
+
+
+def test_two_live_shared_runs_cannot_share_a_repo(tmp_path):
+    """Re-audit ca91762f HIGH: two shared-mode runs over one checkout computed finals
+    and delivery trees from the same files, so one could test and land the other's
+    edits. A second live shared run of a repo is refused; once the first ends, a new
+    one may start. Isolated runs are not affected (each has its own worktree)."""
+    import subprocess
+    from core.run_protocol.engine import EngineError, RunEngine
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "a.py").write_text("a = 1\n")
+    for args in (("add", "-A"), ("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")):
+        subprocess.run(["git", "-C", str(repo), *args], check=True)
+    ws, data = tmp_path / "ws", tmp_path / "data"
+
+    def make(rid):
+        return RunEngine.create(data_dir=data, workspace=ws, project="P", profile="direct",
+                                requirement="x", session_id="s1", repos={"repo": str(repo)},
+                                mode="shared", run_id=rid)
+    first = make("run_aaaa0001")
+    with pytest.raises(EngineError, match="shared"):
+        make("run_aaaa0002")
+    assert not (ws / "Projects" / "P" / ".artifacts" / "runs" / "run_aaaa0002").exists()
+    first.abandon(reason="done")
+    make("run_aaaa0003")
+
+
+def test_a_stale_projection_is_rebuilt_from_the_signed_log(tmp_path, monkeypatch):
+    """Re-audit ca91762f MED: a signed land event is durable, then the process died
+    before run.json was rewritten; dashboard, Need You and the sweeper kept reading
+    the old state. run.json now names the log tail it was built from, and the startup
+    repair rebuilds every projection whose tail no longer matches."""
+    from core.run_protocol import engine as eng
+    from tests.pipeline_v1_rig import Rig
+    r = Rig(tmp_path, monkeypatch)
+    try:
+        r.create()
+        rj = r.engine().run_dir / "run.json"
+        good = json.loads(rj.read_text())
+        assert good["projection_of"]["event_count"] == len(r.events())
+        rj.write_text(json.dumps({**good, "status": "completed",
+                                  "projection_of": {"event_count": 1, "tail": "0" * 64}}))
+        assert eng.repair_stale_projections(r.data, r.ws) == [r.run_id]
+        fixed = json.loads(rj.read_text())
+        assert fixed["status"] == "active" and fixed["projection_of"] == good["projection_of"]
+        assert eng.repair_stale_projections(r.data, r.ws) == []
+    finally:
+        r.close()
+
+
+def test_a_batch_torn_after_its_first_line_counts_as_never_written(tmp_path, monkeypatch):
+    """Re-audit 84b72ec1 HIGH: one write can tear after the trigger's newline, leaving
+    the trigger without its due transition. The batch's start is recorded first, so
+    readers ignore everything past it and the next locked writer cuts it off."""
+    from core.run_protocol import store as store_mod
+    r = Rig(tmp_path, monkeypatch)
+    try:
+        r.create()
+        engine = r.engine()
+        store = engine.store
+        before = store.paths.events.read_bytes()
+        n_before = len(store.read_events())
+
+        real = store_mod.AuditStore._write_events
+
+        def torn(self, events):              # crash: intent + only the first line
+            self._intent_path().write_text(f"{self.paths.events.stat().st_size}\n")
+            with open(self.paths.events, "ab") as handle:
+                handle.write(store_mod.ev.encode_event(events[0]))
+            raise OSError("simulated crash mid-batch")
+        monkeypatch.setattr(store_mod.AuditStore, "_write_events", torn)
+        with pytest.raises(Exception):
+            engine.abandon(reason="test")
+        monkeypatch.setattr(store_mod.AuditStore, "_write_events", real)
+        assert len(store.paths.events.read_bytes()) > len(before)   # the line IS on disk
+        assert len(r.engine().store.read_events()) == n_before      # but does not count
+        assert r.engine().projection()["status"] != "abandoned"
+        r.engine().abandon(reason="again")                          # next writer cuts it
+        assert r.engine().projection()["status"] == "abandoned"
+        assert not r.engine().store._intent_path().exists()
+    finally:
+        r.close()
+
+
+def test_every_public_engine_mutator_takes_the_operation_lock():
+    """Re-audit 84b72ec1: mutators without the lock interleaved with the CLI, and the
+    landing lock taken before the operation lock in some paths and after it in others
+    could deadlock. Every public method that appends holds the operation lock first."""
+    from core.run_protocol.engine import RunEngine
+    mutators = ["gate0_start", "request_decision", "prepare_land_request",
+                "execute_land_request", "normal_land", "prepare_reflect", "note_transcript",
+                "measure_usage", "abandon", "restore", "resume", "stage_complete",
+                "review_start", "review_address", "review_proof", "answer_decision",
+                "reflect_complete", "finish_not_landed", "ensure_worktrees",
+                "transfer_owner", "record_stop"]
+    missing = [m for m in mutators if not hasattr(getattr(RunEngine, m), "__wrapped__")]
+    assert not missing, missing

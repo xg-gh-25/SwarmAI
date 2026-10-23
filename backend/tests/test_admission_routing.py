@@ -30,13 +30,16 @@ def _improvement_doc(project_dir: Path):
 
 
 class TestSourceRouting:
-    def test_reflect_trusted_high_confidence_autos(self, tmp_path):
+    def test_reflect_trusted_high_confidence_autos(self, tmp_path, monkeypatch):
         # AUTO requires trust=passed AND confidence>=threshold (defense-in-depth: trust
         # gates the ZONE, confidence still gates VALUE). Use a keyword-rich lesson that
         # clears the 0.7 floor via classify_content.
         from core.ddd_cultivation import filter_lessons_for_ddd, admission_band
         _improvement_doc(tmp_path)
         _passed_run(tmp_path, "run_r")
+        import core.ddd_cultivation as dc   # trust reads the SIGNED audit; stand in for it
+        monkeypatch.setattr(dc, "_signed_run_audit", lambda rid, pd: json.loads(
+            (Path(pd) / ".artifacts" / "runs" / rid / "run_audit.json").read_text()))
         lessons = ["Runtime traps: a race condition bug in the async streaming pipeline "
                    "reconcile causes a duplicate bubble regression — verify the fix with a test."]
         props = filter_lessons_for_ddd(lessons, "run_r", "SwarmAI", tmp_path)

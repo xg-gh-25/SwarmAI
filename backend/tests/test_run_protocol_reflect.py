@@ -83,3 +83,32 @@ def test_routing_never_leaves_the_workspace_projects(tmp_path):
                              project="P", run_id="run_1") == "rejected_unknown_project"
     assert reflect_job.route(lesson, "domain:Q:TECH:Conventions", workspace=tmp_path,
                              project="P", run_id="run_1") == "rejected_unknown_project"
+
+
+def test_annotating_an_entry_twice_writes_one_note(tmp_path):
+    """Re-audit ca91762f MED: a crash after annotate_entry and before reflect.json is
+    written replays the lesson; the same note is not added a second time."""
+    from core.run_protocol.reflect_job import annotate_entry
+    project = tmp_path / "Projects" / "P"
+    (project / "2-understanding").mkdir(parents=True)
+    doc = project / "2-understanding" / "TECH.md"
+    doc.write_text("# TECH\n\n## Architecture\n\n- the store is append-only\n")
+    entry = "TECH.md#Architecture: the store is append-only"
+    note = "reinforced by run_a L1 (evidence abc)"
+    assert annotate_entry(tmp_path, "P", entry, note) == "applied"
+    assert annotate_entry(tmp_path, "P", entry, note) == "applied"
+    assert doc.read_text().count(note) == 1
+
+
+def test_reflecting_runs_are_queued_again_after_a_restart(monkeypatch, tmp_path):
+    """Re-audit ca91762f MED: the queue lives in daemon memory; at startup every run
+    whose SIGNED status is reflecting is queued again."""
+    from core import run_worktree
+    from core.run_protocol import reflect_job
+    views = [(tmp_path / "Projects/P/.artifacts/runs/run_r1/run.json", {"status": "reflecting"}),
+             (tmp_path / "Projects/P/.artifacts/runs/run_r2/run.json", {"status": "active"})]
+    monkeypatch.setattr(run_worktree, "_iter_runs", lambda ws: iter(views))
+    queued = []
+    monkeypatch.setattr(reflect_job, "_queue_run", lambda rid: queued.append(rid) or True)
+    assert reflect_job.reschedule_reflecting(tmp_path) == ["run_r1"]
+    assert queued == ["run_r1"]

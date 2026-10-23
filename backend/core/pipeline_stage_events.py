@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Optional
@@ -323,6 +324,10 @@ def doc_excerpt(path: Any, max_chars: int = 500) -> Optional[str]:
         text = Path(str(path)).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError, TypeError):
         return None
+    return _excerpt_of(text, max_chars)
+
+
+def _excerpt_of(text: str, max_chars: int = 500) -> Optional[str]:
     lines = text.splitlines()
     start = next((i for i, ln in enumerate(lines) if ln.startswith("## ")), None)
     if start is None:
@@ -335,6 +340,47 @@ def doc_excerpt(path: Any, max_chars: int = 500) -> Optional[str]:
     if not out:
         return None
     return out if len(out) <= max_chars else out[: max_chars - 1].rstrip() + "…"
+
+
+_DOC_READ_CAP = 256 * 1024
+
+
+def _read_regular_no_follow(base: Path, directory: Path, name: str) -> Optional[str]:
+    """*name* inside *directory* (which lies under *base*), read without following a
+    link anywhere below *base*: every component from *base* down is opened with
+    O_NOFOLLOW relative to its parent's fd, and the file is read from its own fd only
+    when it is a regular file; else None. A swap of the run directory or any parent to
+    a symlink after the caller's checks is refused by the opens themselves (re-audits
+    536bb62b, 84b72ec1)."""
+    import stat
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_DIRECTORY", 0)
+    try:
+        parts = directory.relative_to(base).parts
+        dir_fd = os.open(str(base), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except (ValueError, OSError):
+        return None
+    try:
+        for part in parts:
+            nxt = os.open(part, flags, dir_fd=dir_fd)
+            os.close(dir_fd)
+            dir_fd = nxt
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    except OSError:
+        return None
+    finally:
+        os.close(dir_fd)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(fd, "rb", closefd=True) as f:
+            fd = -1
+            data = f.read(_DOC_READ_CAP)
+        return data.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def _doc_ref(run_dir: Optional[str], name: str) -> Optional[dict[str, str]]:
@@ -355,7 +401,13 @@ def _doc_ref(run_dir: Optional[str], name: str) -> Optional[dict[str, str]]:
         if real.parent != root or ws not in root.parents:
             return None
         ref = {"name": name, "path": str(real.relative_to(ws)), "absolutePath": str(real)}
-        excerpt = doc_excerpt(real)
+        # read through ONE fd opened without following a link, relative to the checked
+        # run directory: a swap to a symlink after the checks above is refused by the
+        # open itself (re-audit 536bb62b TOCTOU)
+        text = _read_regular_no_follow(ws, root, name)
+        if text is None:
+            return None
+        excerpt = _excerpt_of(text)
         if excerpt:
             ref["excerpt"] = excerpt
         return ref

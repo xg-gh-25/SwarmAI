@@ -28,6 +28,18 @@ import pytest
 from core import hook_token, run_lock
 from core import run_worktree as rw
 
+
+@pytest.fixture(autouse=True)
+def _projection_is_the_signed_view(monkeypatch):
+    """These tests drive gate / sweeper LOGIC with hand-written run.json files and no
+    protected contract. Whether those fields can be trusted is tested separately on
+    real signed runs (test_worktree_signed_authority.py); here the projection stands in
+    for the signed view."""
+    from core import run_worktree as _rw
+    monkeypatch.setattr(_rw, "_signed_view", lambda f, d: {
+        **d, "id": f.parent.name, "project": f.parents[3].name})
+
+
 RUN = "run_abc123"
 
 

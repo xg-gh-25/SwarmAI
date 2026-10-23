@@ -103,6 +103,23 @@ def _review_action(engine, events: list[dict[str, Any]], state: dict[str, Any],
         return "run", _cmd(engine, "pipeline_v1.py", "review-start"), \
             "start the review: deterministic checks, then the expert handouts (if it " \
             "dispatches none, complete the stage)"
+    # an expert whose latest answer was not parsed produced no findings: one redispatch
+    # (review-start), then the RV checks decide (re-audit 99f96949)
+    states = {e["payload"].get("handout_event_id"): e["payload"].get("state")
+              for e in events if e.get("kind") == "answer"}
+    per_expert: dict[Any, list[dict[str, Any]]] = {}
+    for event in events:
+        if event.get("kind") == "handout" and event.get("stage") == "review" \
+                and event.get("round") == 1:
+            per_expert.setdefault(event["payload"].get("expert_id"), []).append(event)
+    unusable = [hs for hs in per_expert.values()
+                if states.get(hs[-1]["event_id"]) not in ("parsed", "partial")]
+    if unusable:
+        if any(len(hs) < 2 for hs in unusable):
+            return "run", _cmd(engine, "pipeline_v1.py", "review-start"), \
+                "an expert answer could not be parsed: review-start dispatches it once more"
+        return "run", _cmd(engine, "pipeline_v1.py", "stage-complete"), \
+            "an expert gave no usable answer twice: the review checks decide the stage"
     return "fix", _cmd(engine, "pipeline_v1.py", "review-address --artifact -"), \
         ("address the open findings once (cluster by file ±10 lines), prove each "
          "(review-proof / pipeline_test --mode prove), then review-start for R2")

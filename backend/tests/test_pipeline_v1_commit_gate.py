@@ -208,3 +208,61 @@ def test_a_committed_symlink_in_an_active_run_is_guarded(rig):
     (r.worktree / "backend" / "core" / "link.py").symlink_to("/etc/hostname")
     subprocess.run(["git", "-C", str(r.worktree), "add", "backend/core/link.py"], check=True)
     assert _commit("backend/core/link.py", r.repo)
+
+
+def test_an_expected_repo_with_no_readable_code_refuses(rig, monkeypatch):
+    """Re-audit 99f96949 HIGH: an isolated repo whose worktree is gone has no root at
+    all; its paths are unknown, so owned_paths must raise (the gate then refuses),
+    never return an ownership set without it."""
+    from core.run_protocol import engine as eng
+    r = rig()
+    r.create()
+    engine = r.engine()
+    name = engine.contract["expected_repos"][0]
+    monkeypatch.setattr(eng.RunEngine, "_current_code",
+                        lambda self, expected: ({}, {name: None}, {name: None}, set(), {}))
+    with pytest.raises(eng.EngineError, match="code facts unavailable"):
+        engine.owned_paths()
+
+
+def test_a_corrupt_contract_refuses_rather_than_skips_the_run(rig):
+    """A run whose protected contract exists but cannot be read is not 'no run':
+    which repos it owns is unknown, so the commit is refused (three-way re-audit MED)."""
+    from config import get_app_data_dir
+    from core.run_protocol.runner import contract_path
+    r = rig()
+    r.create()
+    r.edit(Rig.CHANGE)
+    contract_path(get_app_data_dir(), str(r.run_id)).write_text("{not json")
+    (r.repo / "backend" / "core" / "mod.py").write_text("def add(a, b):\n    return 0\n")
+    subprocess.run(["git", "-C", str(r.repo), "add", "backend/core/mod.py"], check=True)
+    assert _commit("backend/core/mod.py", r.repo)
+
+
+def test_a_corrupt_contract_of_a_finished_run_does_not_block_commits(rig):
+    """Re-audit 84b72ec1 MED: one broken OLD run must not deny every commit."""
+    from config import get_app_data_dir
+    from core.run_protocol.runner import contract_path
+    r = rig()
+    r.create()
+    assert r.v1("abandon", "--reason", "done").get("ok") is True
+    contract_path(get_app_data_dir(), str(r.run_id)).write_text("{not json")
+    (r.repo / "backend" / "core" / "other.py").write_text("def other():\n    return 3\n")
+    subprocess.run(["git", "-C", str(r.repo), "add", "backend/core/other.py"], check=True)
+    assert not _commit("backend/core/other.py", r.repo)
+
+
+def test_a_forged_terminal_projection_does_not_unguard_a_corrupt_contract_run(rig):
+    """Re-audit c772dd92 MED: "finished" for a corrupt-contract run is read from the
+    signed log, never run.json."""
+    from config import get_app_data_dir
+    from core.run_protocol.runner import contract_path
+    r = rig()
+    r.create()
+    r.edit(Rig.CHANGE)
+    rj = r.engine().run_dir / "run.json"
+    rj.write_text(json.dumps({**json.loads(rj.read_text()), "status": "completed"}))
+    contract_path(get_app_data_dir(), str(r.run_id)).write_text("{not json")
+    (r.repo / "backend" / "core" / "mod.py").write_text("def add(a, b):\n    return 0\n")
+    subprocess.run(["git", "-C", str(r.repo), "add", "backend/core/mod.py"], check=True)
+    assert _commit("backend/core/mod.py", r.repo)

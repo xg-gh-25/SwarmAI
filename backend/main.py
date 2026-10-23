@@ -1565,6 +1565,21 @@ async def lifespan(app: FastAPI):
                 await asyncio.to_thread(run_worktree_sweep)
             except Exception:  # noqa: BLE001
                 logger.warning("startup worktree sweep failed", exc_info=True)
+            try:
+                # a crash between a signed event and its run.json leaves a stale display
+                from config import get_app_data_dir
+                from core.project_registry import get_swarmws as _ws
+                from core.run_protocol.engine import repair_stale_projections
+                await asyncio.to_thread(repair_stale_projections, get_app_data_dir(), _ws())
+            except Exception:  # noqa: BLE001
+                logger.warning("startup projection repair failed", exc_info=True)
+            try:
+                # REFLECT's queue is daemon memory: requeue every signed-reflecting run
+                from core.project_registry import get_swarmws
+                from core.run_protocol.reflect_job import reschedule_reflecting
+                await asyncio.to_thread(reschedule_reflecting, get_swarmws())
+            except Exception:  # noqa: BLE001
+                logger.warning("startup REFLECT requeue failed", exc_info=True)
         asyncio.create_task(_startup_worktree_sweep())
 
     # Readiness sampler (run_7e8a2030): samples DB + auth health OFF the /health

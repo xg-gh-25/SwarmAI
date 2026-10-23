@@ -3509,6 +3509,14 @@ _ACTIVE_RUN_GLOB_ROOT = os.path.expanduser("~/.swarm-ai/SwarmWS")
 
 
 
+class _UnreadableContract(Exception):
+    """A run directory's protected contract exists but cannot be read."""
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__(run_id)
+        self.run_id = run_id
+
+
 def _runs_touching(pending: set) -> "list[tuple[str, str]]":
     """(project, run_id) of every v1 run whose code a pending path lies in: its
     protected contract names a repo root, or the run has a worktree, that holds the
@@ -3516,6 +3524,7 @@ def _runs_touching(pending: set) -> "list[tuple[str, str]]":
     nothing an agent can edit in run.json (R1 review r1). No git, no event fold."""
     from config import get_app_data_dir
     from core import run_worktree
+    from core.run_protocol.engine import signed_terminal
     from core.run_protocol.runner import read_contract
     data_dir = get_app_data_dir()
     projects = os.path.join(_ACTIVE_RUN_GLOB_ROOT, "Projects")
@@ -3531,12 +3540,23 @@ def _runs_touching(pending: set) -> "list[tuple[str, str]]":
         except OSError:
             continue
         for run_id in run_ids:
+            if not re.fullmatch(r"run_[A-Za-z0-9_-]+", run_id):
+                continue                                 # not a run directory
+            # A contract that EXISTS but cannot be read leaves the run's repos unknown:
+            # raise, so the caller refuses instead of treating it as owning nothing.
             try:
                 contract = read_contract(data_dir, run_id)
-            except Exception:  # noqa: BLE001 — not a run id / not a readable contract
-                contract = None
+            except Exception as exc:  # noqa: BLE001
+                # A run whose SIGNED log says it finished cannot own anything now: skip
+                # it, so one broken old run does not block every commit (re-audit
+                # 84b72ec1 MED). Read from the signed events, never run.json (c772dd92).
+                if signed_terminal(data_dir, run_id):
+                    logger.warning("run %s: contract unreadable, run finished — skipped",
+                                   run_id)
+                    continue
+                raise _UnreadableContract(run_id) from exc
             if not isinstance(contract, dict):
-                continue
+                continue                                 # no contract: not a v1 run
             homes = []
             for name, root in (contract.get("repo_roots") or {}).items():
                 if isinstance(root, str):
@@ -3657,6 +3677,16 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
                 executors.run_in("gate", _runs_touching, pending),
                 timeout=_GATE_COVERAGE_TIMEOUT,
             )
+        except _UnreadableContract as exc:   # its repos are unknown: refuse, never skip
+            logger.warning("active_run_commit_gate: contract of %s unreadable — refusing",
+                           exc.run_id)
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"git commit → DENY: pipeline run {exc.run_id} has a protected contract "
+                    "that cannot be read, so which repositories it owns is unknown. Check "
+                    f"the run (`python backend/scripts/pipeline_v1.py status --project "
+                    f"<project> --run-id {exc.run_id}`) and abandon it if it is broken.")}}
         except Exception:
             logger.warning("_gate: gate infrastructure error — failing open", exc_info=True)
             return {"decision": "approve"}

@@ -21,6 +21,7 @@ landing happens here, in the daemon, never in the agent's CLI:
   owning session; never on the chat path.
 
 Public symbols: ``judge``, ``route``, ``annotate_entry``, ``process_run``, ``schedule``,
+``reschedule_reflecting``,
 ``candidates_for``,
 ``create_reflect_trigger``.
 """
@@ -144,7 +145,10 @@ def annotate_entry(workspace: Path, project: str, entry: str, note: str) -> str:
         end = at + 1
         while end < len(lines) and lines[end].startswith(("  ", "\t")) and lines[end].strip():
             end += 1                    # the entry's own sub-bullets stay with it
-        lines.insert(end, "  - " + " ".join(note.split()) + "\n")   # one line, always
+        line = "  - " + " ".join(note.split()) + "\n"   # one line, always
+        if line in lines[at + 1:end]:
+            return "applied"            # a replay after a crash: already written
+        lines.insert(end, line)
         import os
         import uuid
         temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.reflect.tmp")
@@ -263,34 +267,47 @@ def _pool() -> ThreadPoolExecutor:
 def schedule(session_id: str) -> list[str]:
     """Queue REFLECT for this session's runs that are ``reflecting`` (fire-and-forget)."""
     from core import pipeline_human
-    queued = []
-    for run_id in pipeline_human.owned_runs(session_id, status="reflecting"):
-        with _LOCK:
-            if run_id in _RUNNING:
-                continue
-            _RUNNING.add(run_id)
+    return [run_id for run_id in pipeline_human.owned_runs(session_id, status="reflecting")
+            if _queue_run(run_id)]
 
-        def job(rid=run_id):
-            engine = None
+
+def reschedule_reflecting(workspace: "str | Path") -> list[str]:
+    """Queue every run whose SIGNED status is ``reflecting`` (daemon startup): the queue
+    lives in daemon memory, so a restart would otherwise leave such a run reflecting
+    until its session ran another pipeline command (re-audit ca91762f)."""
+    from core import run_worktree
+    return [f.parent.name for f, view in run_worktree._iter_runs(workspace)
+            if view.get("status") == "reflecting" and _queue_run(f.parent.name)]
+
+
+def _queue_run(run_id: str) -> bool:
+    """Submit one run's REFLECT to the worker unless it is already queued."""
+    with _LOCK:
+        if run_id in _RUNNING:
+            return False
+        _RUNNING.add(run_id)
+
+    def job(rid=run_id):
+        from core import pipeline_human
+        engine = None
+        try:
+            engine = pipeline_human.load_engine(rid)
+            if engine is not None:
+                process_run(engine)
+        except Exception:  # noqa: BLE001 — never leave the run reflecting forever
+            logger.warning("v1 reflect of %s failed", rid, exc_info=True)
             try:
-                engine = pipeline_human.load_engine(rid)
-                if engine is not None:
-                    process_run(engine)
-            except Exception:  # noqa: BLE001 — never leave the run reflecting forever
-                logger.warning("v1 reflect of %s failed", rid, exc_info=True)
-                try:
-                    if engine is not None and engine.projection().get("status") == "reflecting":
-                        engine.reflect_complete(degraded=True,
-                                                reason="background reflection failed")
-                except Exception:  # noqa: BLE001
-                    logger.warning("v1 reflect of %s could not end degraded", rid,
-                                   exc_info=True)
-            finally:
-                with _LOCK:
-                    _RUNNING.discard(rid)
-        _pool().submit(job)
-        queued.append(run_id)
-    return queued
+                if engine is not None and engine.projection().get("status") == "reflecting":
+                    engine.reflect_complete(degraded=True,
+                                            reason="background reflection failed")
+            except Exception:  # noqa: BLE001
+                logger.warning("v1 reflect of %s could not end degraded", rid,
+                               exc_info=True)
+        finally:
+            with _LOCK:
+                _RUNNING.discard(rid)
+    _pool().submit(job)
+    return True
 
 
 def create_reflect_trigger(session_context: dict):

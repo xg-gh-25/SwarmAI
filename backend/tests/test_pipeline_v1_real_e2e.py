@@ -9,6 +9,7 @@ Invariant checked after every case: the run's event log folds (``status`` succee
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -812,3 +813,24 @@ def test_measuring_after_the_daemon_completed_reflect_refreshes_the_final_audit(
     audit = json.loads((engine.run_dir / "run_audit.json").read_text())
     assert audit["summary"]["token_cost"]["verdict"] != "BLOCK", audit["summary"]["token_cost"]
     assert audit["summary"]["token_cost"]["not_available"] is None
+
+
+def test_a_manual_landing_resumes_after_a_crash_past_auth_consumed(rig):
+    """Re-audit ca91762f HIGH: auth_consumed recorded, refs moved, then the process
+    died before the land event. The retry of the same request must finish the
+    landing (append the missing land event), not stop at "already consumed"."""
+    r = rig("trivial")
+    _not_landed_tests_red(r)
+    prepared = _prepare(r)
+    assert _request(r, prepared).get("ok") is True
+    landed_main = _main(r)
+    log = r.data / "state" / "pipeline_agent_audit" / "runs" / r.run_id / "events.jsonl"
+    lines = log.read_text().splitlines(keepends=True)
+    kinds = [json.loads(x)["kind"] for x in lines]
+    cut = max(i for i, k in enumerate(kinds) if k == "land")
+    assert "auth_consumed" in kinds[:cut]
+    log.write_text("".join(lines[:cut]))           # the crash: no land event, refs moved
+    again = _request(r, prepared)
+    assert again.get("ok") is True, again
+    assert _main(r) == landed_main                  # nothing landed twice
+    assert [e["kind"] for e in r.events()].count("land") == 1

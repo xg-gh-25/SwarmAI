@@ -7,6 +7,8 @@ audit does not show a clean reviewed landing → 'n/a', NEVER 'passed'. (Design 
 """
 import json
 import sys
+
+import pytest
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parents[1]
@@ -48,15 +50,33 @@ class TestTrustField:
 
 
 class TestStampTrust:
-    """stamp_trust_from_run(run_id, project_dir) resolves the run and derives trust."""
+    """stamp_trust_from_run(run_id, project_dir) resolves the run and derives trust from
+    the audit rebuilt from the run's SIGNED events (``_signed_run_audit``), never from
+    the run_audit.json projection an agent can write (re-audit 536bb62b HIGH)."""
+
+    @pytest.fixture(autouse=True)
+    def _signed(self, monkeypatch):
+        """The signed audit of a run is what _make_run wrote, read back only for runs
+        _make_run marked as really signed; tests of the forgery case write no mark."""
+        import core.ddd_cultivation as dc
+
+        def fake(run_id, project_dir):
+            d = Path(project_dir) / ".artifacts" / "runs" / run_id
+            if not (d / ".signed").exists():
+                raise RuntimeError("no signed run")
+            return json.loads((d / "run_audit.json").read_text())
+        monkeypatch.setattr(dc, "_signed_run_audit", fake)
 
     def _fn(self):
         from core.ddd_cultivation import stamp_trust_from_run
         return stamp_trust_from_run
 
-    def _make_run(self, tmp_path, project, run_id, verdict, experts=1, stages=None):
+    def _make_run(self, tmp_path, project, run_id, verdict, experts=1, stages=None,
+                  signed=True):
         run_dir = tmp_path / "Projects" / project / ".artifacts" / "runs" / run_id
         run_dir.mkdir(parents=True)
+        if signed:
+            (run_dir / ".signed").write_text("")
         if stages is not None:   # a retired-pipeline run.json, no audit
             (run_dir / "run.json").write_text(json.dumps({"stages": stages}))
         else:
@@ -133,3 +153,17 @@ class TestStampTrust:
         proj = self._make_run(tmp_path, "SwarmAI", "run_old", None, stages=[
             {"stage": "adversarial", "status": "completed", "gate2_outcome": "pass"}])
         assert stamp("run_old", proj) == "n/a"
+
+
+class TestStampTrustReadsSignedEvents:
+    def test_a_forged_audit_projection_earns_no_trust(self, tmp_path):
+        """A run_audit.json claiming a clean reviewed landing, in a run dir with no
+        protected contract or signed events, is not a pass (the real loader runs)."""
+        from core.ddd_cultivation import stamp_trust_from_run
+        run_dir = tmp_path / "Projects" / "SwarmAI" / ".artifacts" / "runs" / "run_fake"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run_audit.json").write_text(json.dumps({
+            "outcome": {"status": "completed", "landing": "landed"},
+            "summary": {"quality": {"verdict": "PASS", "findings_total": 0}},
+            "details": {"experts": [{"expert": "e"}]}}))
+        assert stamp_trust_from_run("run_fake", tmp_path / "Projects" / "SwarmAI") == "n/a"
