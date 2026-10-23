@@ -5,7 +5,9 @@
  * single hook that manages: classify → validate → encode → store → clear.
  *
  * Key exports:
- * - ``useUnifiedAttachments``       — Main hook (tab-isolated via tabMapRef)
+ * - ``useUnifiedAttachments``       — Main hook (tab-isolated via tabMapRef);
+ *   ``addTerminalText`` puts terminal output on the tab's terminal chip
+ *   (utils/terminalAttachment)
  * - ``UseUnifiedAttachmentsReturn`` — Return type interface
  *
  * Tab isolation: Attachments are stored in
@@ -27,6 +29,7 @@ import {
   validateFileSize,
   validateWorkspacePath,
 } from '../utils/fileClassification';
+import { addTerminalText as addTerminalText_, isTerminalAttachment } from '../utils/terminalAttachment';
 
 // ---------------------------------------------------------------------------
 // Return type
@@ -39,6 +42,9 @@ export interface UseUnifiedAttachmentsReturn {
   addFiles: (files: File[]) => Promise<void>;
   /** Add workspace files by path (Workspace Explorer drag). */
   addWorkspaceFiles: (files: FileTreeItem[]) => Promise<void>;
+  /** Add terminal text to the tab's terminal chip (utils/terminalAttachment).
+   *  False when nothing was added (no tab, or the attachment limit). */
+  addTerminalText: (text: string, cwd: string) => boolean;
   /** Remove a single attachment by ID. */
   removeAttachment: (id: string) => void;
   /** Clear all attachments for the current tab. */
@@ -394,6 +400,25 @@ export function useUnifiedAttachments(
     [tabIdRef, tabMapRef, updateAttachments, agentIdRef, basePathRef],
   );
 
+  // ---- addTerminalText: a terminal selection / output tail ----------------
+
+  const addTerminalText = useCallback(
+    (text: string, cwd: string): boolean => {
+      const tid = tabIdRef.current;
+      if (!tid) return false;
+      const tab = tabMapRef.current.get(tid);
+      if (!tab) return false;
+      if (!tab.attachments.some(isTerminalAttachment) && tab.attachments.length >= MAX_ATTACHMENTS) {
+        setError(`Maximum ${MAX_ATTACHMENTS} attachments allowed`);
+        return false;
+      }
+      updateAttachments(tid, (prev) => addTerminalText_(prev, text, cwd, generateId));
+      setError(null);
+      return true;
+    },
+    [tabIdRef, tabMapRef, updateAttachments],
+  );
+
   // ---- removeAttachment ---------------------------------------------------
 
   const removeAttachment = useCallback(
@@ -437,6 +462,7 @@ export function useUnifiedAttachments(
     attachments: displayAttachments,
     addFiles,
     addWorkspaceFiles,
+    addTerminalText,
     removeAttachment,
     clearAll,
     restoreAttachments,

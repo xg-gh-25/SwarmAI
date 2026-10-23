@@ -4,6 +4,9 @@ import type { UnifiedAttachment } from '../../types';
 interface AttachmentPreviewCardProps {
   attachment: UnifiedAttachment;
   onRemove: (id: string) => void;
+  /** Terminal chips: click shows / hides the full text below the row. */
+  onToggleOpen?: (id: string) => void;
+  open?: boolean;
 }
 
 /**
@@ -33,8 +36,46 @@ const getFileIcon = (type: UnifiedAttachment['type']): string => {
   }
 };
 
-export function AttachmentPreviewCard({ attachment, onRemove }: AttachmentPreviewCardProps) {
+export function AttachmentPreviewCard({ attachment, onRemove, onToggleOpen, open }: AttachmentPreviewCardProps) {
   const { id, name, type, size, preview, isLoading, error } = attachment;
+
+  if (type === 'terminal') {
+    const t = attachment.terminal;
+    return (
+      <div
+        data-testid={`attachment-terminal-${id}`}
+        className={clsx(
+          'relative group flex-shrink-0 w-44 h-24 rounded-lg overflow-hidden border transition-colors cursor-pointer',
+          open ? 'border-[var(--color-primary)]' : 'border-[var(--color-border)] hover:border-primary/50',
+          'bg-[var(--color-bg)]',
+        )}
+        onClick={() => onToggleOpen?.(id)}
+        title={open ? 'Hide terminal output' : 'Show terminal output'}
+      >
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onRemove(id); }}
+          className="absolute top-1 right-1 z-10 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
+          title="Remove terminal output"
+          aria-label="Remove terminal output"
+        >
+          <span className="material-symbols-outlined icon-xs">close</span>
+        </button>
+        <div className="h-full w-full flex flex-col">
+          <pre className="flex-1 overflow-hidden px-2 pt-1.5 font-mono text-[8.5px] leading-[1.25] text-[var(--color-text-muted)] whitespace-pre">
+            {preview}
+          </pre>
+          <div className="flex items-center gap-1 px-2 pb-1.5 pt-0.5 bg-[var(--color-card)]">
+            <span className="material-symbols-outlined icon-xs text-[var(--color-primary)]">terminal</span>
+            <span className="text-xs text-[var(--color-text)] truncate" title={t?.cwd || 'SwarmWS'}>{name.replace(/^Terminal · /, '')}</span>
+            <span className="ml-auto text-[10.5px] text-[var(--color-text-muted)] whitespace-nowrap">
+              {t?.lines ?? 0} lines{t?.truncated ? ' · cut' : ''}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

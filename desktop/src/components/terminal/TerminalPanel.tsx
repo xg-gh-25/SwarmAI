@@ -432,14 +432,14 @@ export default function TerminalPanel() {
         <button
           type="button"
           data-testid="terminal-attach"
-          aria-label="Send terminal output to chat"
-          title="Send the selection (or the last 200 lines) to your next chat message"
+          aria-label="Add terminal output to chat"
+          title="Add the selection (or the last 200 lines) to the chat input"
           disabled={!shown}
           onClick={sendToChat}
           className={`${ICON_BTN} ${sentFrom && sentFrom === shown?.id ? '!text-green-500' : ''}`}
         >
           <span className="material-symbols-outlined icon-sm">
-            {sentFrom && sentFrom === shown?.id ? 'check' : 'reply'}
+            {sentFrom && sentFrom === shown?.id ? 'check' : 'add_comment'}
           </span>
         </button>
         <button

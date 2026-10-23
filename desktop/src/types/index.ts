@@ -629,10 +629,11 @@ export interface ChatRequest {
 // ============== File Attachment Types ==============
 
 /** Classified file type for attachment processing. */
-export type AttachmentType = 'image' | 'pdf' | 'document' | 'audio' | 'video' | 'text' | 'csv';
+export type AttachmentType = 'image' | 'pdf' | 'document' | 'audio' | 'video' | 'text' | 'csv' | 'terminal';
 
-/** How a file is delivered to the backend/Claude SDK. */
-export type DeliveryStrategy = 'base64_image' | 'base64_document' | 'inline_text' | 'path_hint';
+/** How a file is delivered to the backend/Claude SDK. `terminal_context` is not a
+ *  content block: it rides the request's terminalContext (utils/terminalAttachment). */
+export type DeliveryStrategy = 'base64_image' | 'base64_document' | 'inline_text' | 'path_hint' | 'terminal_context';
 
 /**
  * Unified attachment representation used by the useUnifiedAttachments hook.
@@ -653,6 +654,9 @@ export interface UnifiedAttachment {
   preview?: string;
   isLoading: boolean;
   error?: string;
+  /** type 'terminal' only: the pieces added (oldest first, each with its shell's
+   *  cwd), and whether older output was cut. textContent is rendered from them. */
+  terminal?: { cwd: string; lines: number; truncated: boolean; pieces?: { cwd: string; text: string }[] };
 }
 
 /** @deprecated Use UnifiedAttachment instead. Kept for backward compatibility. */
@@ -703,6 +707,7 @@ export const SIZE_LIMITS = {
   video: 1024 * 1024 * 1024,     // 1GB   — path_hint only, file stays local
   text: 5 * 1024 * 1024,         // 5MB   — path_hint saves to Attachments/ for large files
   csv: 5 * 1024 * 1024,          // 5MB   — path_hint saves to Attachments/ for large files
+  terminal: 64 * 1024,           // terminal output: never a file; cut to 16000 chars (utils/terminalAttachment)
 } as const;
 
 /** @deprecated Use SIZE_LIMITS instead. */

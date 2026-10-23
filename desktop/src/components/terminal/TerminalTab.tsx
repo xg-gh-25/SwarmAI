@@ -20,6 +20,7 @@ import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { sendTerminalTextToChat, type TerminalTab as TerminalTabModel } from '../../stores/TerminalStore';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface TerminalTabProps {
   tab: TerminalTabModel;
@@ -47,6 +48,25 @@ const LIGHT_ANSI = {
 
 function isDark(): boolean {
   return typeof document === 'undefined' || !document.documentElement.classList.contains('light');
+}
+
+/**
+ * Render with WebGL (GPU) instead of the DOM renderer — the DOM renderer is the
+ * slow path for a fast log or a long scroll. Loaded lazily (its own chunk) after the
+ * terminal opens. No WebGL, a failed init, or a lost context (the webview caps live
+ * GL contexts, so many terminals can lose the oldest) disposes the addon, and xterm
+ * goes back to the DOM renderer on its own. *gone* says the terminal was disposed
+ * while the chunk loaded.
+ */
+function loadWebgl(t: Terminal, gone: () => boolean): void {
+  void import('@xterm/addon-webgl')
+    .then(({ WebglAddon }) => {
+      if (gone()) return;
+      const gl = new WebglAddon();
+      gl.onContextLoss(() => gl.dispose());
+      t.loadAddon(gl);
+    })
+    .catch((e) => console.info('terminal: WebGL renderer unavailable, using DOM', e));
 }
 
 /** The xterm theme for the current app theme, its surface read from CSS variables. */
@@ -81,6 +101,7 @@ function useThemeKey(): string {
 
 export default function TerminalTab({ tab, active }: TerminalTabProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const termRef = useRef<Terminal | null>(null);
   // Mirror of the `active` prop readable from inside the creation effect's
@@ -97,10 +118,11 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
   // does NOT re-focus and steal focus from chat on later resizes.
   const focusedRef = useRef(false);
   const themeKey = useThemeKey();
-  // Whether the user has text selected (drives the "Send to chat" pill), and the
-  // pill's brief "Sent" acknowledgement.
+  // Whether the user has text selected (drives the "Add to chat" pill), the pill's
+  // brief "Added" acknowledgement, and the right-click menu's position.
   const [hasSelection, setHasSelection] = useState(false);
   const [sent, setSent] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const sendSelection = (t: Terminal | null): boolean => {
     const text = t?.getSelection() ?? '';
     if (!sendTerminalTextToChat(text.replace(/\s+$/, ''), tab.cwd)) return false;
@@ -177,6 +199,9 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
         theme: themeFor(isDark()),
         convertEol: false,
         scrollback: 10000,
+        // A program that enables mouse reporting (vim, less, htop, a TUI) takes
+        // every drag; ⌥-drag still selects text (the macOS Terminal / iTerm habit).
+        macOptionClickForcesSelection: true,
       });
       const f = new FitAddon();
       t.loadAddon(f);
@@ -184,18 +209,33 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       term = t;
       termRef.current = t;
       fitRef.current = f;
+      loadWebgl(t, () => disposed);
 
-      // ⌘K clears the screen + scrollback; ⌘↵ sends the selection to chat. Both are
-      // swallowed (not sent to the shell). macOS ⌘ only — Ctrl-K is readline's
-      // kill-line and must reach the shell.
+      // ⌘C copies the selection, ⌘A selects all, ⌘K clears the screen + scrollback,
+      // ⌘↵ adds the selection to the chat input. All swallowed (never sent to the
+      // shell). macOS ⌘ only — Ctrl-C / Ctrl-K must reach the shell. ⌘C goes
+      // through the app's native clipboard command: navigator.clipboard is denied
+      // in the Tauri webview (utils/clipboard). ⌘V is left to the native paste.
       t.attachCustomKeyEventHandler((e) => {
         if (e.type !== 'keydown' || !e.metaKey || e.ctrlKey || e.altKey) return true;
-        if (e.key === 'k' || e.key === 'K') {
+        const k = e.key.toLowerCase();
+        if (k === 'c' && t.hasSelection()) {
+          void copyToClipboard(t.getSelection());
+          return false;
+        }
+        if (k === 'a') {
+          t.selectAll();
+          return false;
+        }
+        if (k === 'k') {
           t.clear();
           return false;
         }
-        if (e.key === 'Enter' && t.hasSelection()) {
-          sendSelectionRef.current(t);
+        if (e.key === 'Enter') {
+          // Never reaches the shell (⌘↵ would run the typed command): the
+          // selection, else the last lines, goes to the chat input.
+          if (t.hasSelection()) sendSelectionRef.current(t);
+          else if (tab.getBuffer) sendTerminalTextToChat(tab.getBuffer(), tab.cwd);
           return false;
         }
         return true;
@@ -330,13 +370,32 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
     // This inner host is always block inside its wrapper — a single source of
     // visibility truth (Gate-2: removed the redundant inner display toggle that
     // duplicated the wrapper's, which risked the two diverging).
-    <div className="relative h-full w-full">
+    <div
+      ref={wrapRef}
+      className="relative h-full w-full"
+      // Right-click: our menu instead of the webview's. macOS right-click already
+      // selects the word under the pointer (xterm rightClickSelectsWord), so
+      // "Add to chat" acts on it. Positions are wrapper-relative; the wrapper's
+      // net scale is 1 (TerminalPanel's counter-zoom), so client px are CSS px.
+      onContextMenu={(e) => {
+        e.preventDefault();
+        const r = wrapRef.current?.getBoundingClientRect();
+        if (!r) return;
+        // Read the selection NOW: macOS right-click just selected the word under the
+        // pointer, and onSelectionChange may not have re-rendered yet.
+        setHasSelection(!!termRef.current?.hasSelection());
+        setMenu({
+          x: Math.min(e.clientX - r.left, Math.max(0, r.width - 196)),
+          y: Math.min(e.clientY - r.top, Math.max(0, r.height - 170)),
+        });
+      }}
+    >
       <div
         ref={hostRef}
         data-testid={`terminal-surface-${tab.id}`}
         className="h-full w-full overflow-hidden pl-2 pr-1 py-0.5"
       />
-      {(hasSelection || sent) && (
+      {(hasSelection || sent) && !menu && (
         <button
           type="button"
           data-testid={`terminal-send-selection-${tab.id}`}
@@ -347,11 +406,86 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
           }}
           className="btn-sm btn-secondary absolute top-1.5 right-3 shadow-sm bg-[var(--color-bg-chrome)]"
         >
-          <span className="material-symbols-outlined icon-xs">{sent ? 'check' : 'reply'}</span>
-          {sent ? 'Sent to chat' : 'Send to chat'}
+          <span className="material-symbols-outlined icon-xs">{sent ? 'check' : 'add_comment'}</span>
+          {sent ? 'Added to chat' : 'Add to chat'}
           {!sent && <span className="text-[var(--color-text-muted)] font-normal">⌘↵</span>}
         </button>
       )}
+      {menu && (
+        <TerminalMenu
+          x={menu.x}
+          y={menu.y}
+          hasSelection={hasSelection}
+          onClose={() => setMenu(null)}
+          onCopy={() => { const t = termRef.current; if (t?.hasSelection()) void copyToClipboard(t.getSelection()); }}
+          onAdd={() => {
+            const t = termRef.current;
+            if (t?.hasSelection()) sendSelection(t);
+            else if (tab.getBuffer) sendTerminalTextToChat(tab.getBuffer(), tab.cwd);
+          }}
+          onSelectAll={() => termRef.current?.selectAll()}
+          onClear={() => termRef.current?.clear()}
+        />
+      )}
+    </div>
+  );
+}
+
+/** The terminal's right-click menu. Items act on mousedown so the xterm selection
+ *  is still there when they run; it closes on outside mousedown, Escape or scroll. */
+function TerminalMenu({ x, y, hasSelection, onClose, onCopy, onAdd, onSelectAll, onClear }: {
+  x: number; y: number; hasSelection: boolean; onClose: () => void;
+  onCopy: () => void; onAdd: () => void; onSelectAll: () => void; onClear: () => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('wheel', onClose, { passive: true });
+    window.addEventListener('blur', onClose);
+    return () => {
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('wheel', onClose);
+      window.removeEventListener('blur', onClose);
+    };
+  }, [onClose]);
+  const item = (key: string, icon: string, label: string, hint: string, run: () => void, disabled = false) => (
+    <button
+      key={key}
+      type="button"
+      role="menuitem"
+      data-testid={`terminal-menu-${key}`}
+      disabled={disabled}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (disabled) return;
+        run();
+        onClose();
+      }}
+      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-[12px] text-[var(--color-text)] hover:bg-[var(--color-hover)] disabled:opacity-40 disabled:hover:bg-transparent"
+    >
+      <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">{icon}</span>
+      <span className="flex-1">{label}</span>
+      <span className="text-[10.5px] text-[var(--color-text-muted)]">{hint}</span>
+    </button>
+  );
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      data-testid="terminal-menu"
+      style={{ left: x, top: y }}
+      className="absolute z-50 w-48 p-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg"
+    >
+      {item('copy', 'content_copy', 'Copy', '⌘C', onCopy, !hasSelection)}
+      {item('add', 'add_comment', hasSelection ? 'Add selection to chat' : 'Add last 200 lines to chat', '⌘↵', onAdd)}
+      <div className="h-px my-1 bg-[var(--color-border)]" />
+      {item('select-all', 'select_all', 'Select all', '⌘A', onSelectAll)}
+      {item('clear', 'mop', 'Clear', '⌘K', onClear)}
     </div>
   );
 }

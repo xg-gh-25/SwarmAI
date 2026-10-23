@@ -215,6 +215,8 @@ export function determineDeliveryStrategy(
     case 'text':
     case 'csv':
       return size <= SIZE_THRESHOLD ? 'inline_text' : 'path_hint';
+    case 'terminal':
+      return 'terminal_context';
   }
 }
 

@@ -4,6 +4,7 @@ use std::env;
 
 /// Integrated-terminal PTY commands (app-level, not a plugin). See terminal.rs.
 mod terminal;
+mod pty_pump;
 use terminal::TerminalState;
 
 /// One-tap screen capture command (app-level, not a plugin). See screen_capture.rs.

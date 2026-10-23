@@ -62,6 +62,7 @@ import { resetTabToNewSession as resetTabById } from './chat/resetTab';
 import { tabNoticeStore, type NoticeTarget } from '../stores/tabNoticeStore';
 import { terminalLocation } from '../stores/terminalLocation';
 import { ATTACH_TERMINAL_EVENT } from '../stores/TerminalStore';
+import { mergeTerminalAttachments, terminalContextOf } from '../utils/terminalAttachment';
 // HistoryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 // parseWorkPacket still used by ChatPage's dispatch (linked_context → work packet);
 // ToDoOverlay itself retired (M4): migrated to the OverlayHost registry.
@@ -296,7 +297,7 @@ export default function ChatPage() {
   } = useUnifiedTabState(selectedAgentId || 'default');
 
   // File attachment — unified hook replaces both useFileAttachment and LayoutContext.attachedFiles
-  const { attachments, addFiles, addWorkspaceFiles, removeAttachment, clearAll: clearAttachments,
+  const { attachments, addFiles, addWorkspaceFiles, addTerminalText, removeAttachment, clearAll: clearAttachments,
     isProcessing: isProcessingFiles, error: fileError, canAddMore, restoreAttachments } = useUnifiedAttachments(
     activeTabId, tabMapRef, selectedAgentId, effectiveBasePath
   );
@@ -533,17 +534,19 @@ export default function ChatPage() {
     { ...(uiStateRef.current ?? {}), canvas: getCanvasSnapshotFor(tabId) }
   ), [getCanvasSnapshotFor]);
 
-  // P2: attached terminal output — set once when the user clicks "Attach to
-  // chat" on a terminal, consumed on the NEXT send, then cleared (one-shot, so
-  // stale build logs don't ride every subsequent turn).
-  const terminalContextRef = useRef<{ bufferTail: string; cwd: string } | null>(null);
+  // Terminal → chat: the text becomes this tab's terminal attachment chip (visible,
+  // removable, travels with its message through queue / drain / resend), then the
+  // chat input takes focus so the user can say what to do with it.
   useEffect(() => {
     const handler = (e: Event) => {
-      terminalContextRef.current = (e as CustomEvent).detail ?? null;
+      const d = (e as CustomEvent<{ bufferTail?: string; cwd?: string }>).detail;
+      if (!d?.bufferTail || !addTerminalText(d.bufferTail, d.cwd ?? '')) return;
+      requestAnimationFrame(() =>
+        document.querySelector<HTMLTextAreaElement>('textarea[data-chat-input]')?.focus());
     };
     window.addEventListener(ATTACH_TERMINAL_EVENT, handler);
     return () => window.removeEventListener(ATTACH_TERMINAL_EVENT, handler);
-  }, []);
+  }, [addTerminalText]);
 
   const agentSkills = selectedAgent?.allowAllSkills
     ? skills
@@ -2017,7 +2020,16 @@ export default function ChatPage() {
               } as ContentBlock);
             }
             break;
+          case 'terminal_context':
+            // Not a content block: rides the request's terminalContext (fenced
+            // UNTRUSTED data on the backend) — terminalContextOf at each send site.
+            break;
         }
+      }
+
+      // A message that is ONLY terminal output still needs a user-turn body.
+      if (content.length === 0 && fileAttachments.some((a) => a.deliveryStrategy === 'terminal_context' && !a.error)) {
+        content.push({ type: 'text', text: '[Attached terminal output]' } as ContentBlock);
       }
 
       return content;
@@ -2186,10 +2198,13 @@ export default function ChatPage() {
           ? `${existingQueued.text}\n\n${messageText}`
           : existingQueued.text;
         const newAttachments = (currentAttachments || []).filter((a) => !a.error && !a.isLoading);
-        const combinedAttachments = [
-          ...existingQueued.attachments,
-          ...newAttachments,
-        ].slice(0, MAX_ATTACHMENTS); // enforce limit across appends
+        // Terminal chips fold into one before the limit, so appending never drops
+        // terminal output (utils/terminalAttachment.mergeTerminalAttachments).
+        const combinedAttachments = mergeTerminalAttachments(
+          existingQueued.attachments,
+          newAttachments,
+          MAX_ATTACHMENTS, // enforce limit across appends
+        );
         const combinedDisplayText = trimmedText
           ? `${existingQueued.text.trim()}\n\n${trimmedText}`
           : existingQueued.text.trim();
@@ -2340,6 +2355,9 @@ export default function ChatPage() {
       setIsStreaming(false, activeTabIdRef.current ?? undefined);
       return;
     }
+    // Terminal chips of THIS message: the same value rides the send and any
+    // reconnect resend of it (it is part of the message, not one-shot state).
+    const sendTerminal = terminalContextOf(currentAttachments);
 
     const displayText = hasText ? messageText : '[Attachments]';
     const userMessageContent: ContentBlock[] = [{ type: 'text', text: displayText }];
@@ -2432,7 +2450,7 @@ export default function ChatPage() {
         enableSkills,
         enableMCP,
         editorContext,
-        ...(terminalContextRef.current && { terminalContext: terminalContextRef.current }),
+        ...(sendTerminal && { terminalContext: sendTerminal }),
         clientId,  // Correlation ID for optimistic message dedup
       },
       wrappedCreateStreamHandler(assistantMessageId),
@@ -2441,10 +2459,6 @@ export default function ChatPage() {
       createDisconnectHandler(activeTabIdRef.current ?? undefined),
       streamLivenessFor(activeTabIdRef.current),
     );
-
-    // P2 one-shot: an attached terminal rides exactly ONE turn, then clears so
-    // a stale build log doesn't silently attach to every subsequent message.
-    terminalContextRef.current = null;
 
     // Store abort function in the tab map for per-tab stop isolation.
     // Only the .abort() method is used by handleStop — no signal needed.
@@ -2463,7 +2477,7 @@ export default function ChatPage() {
         // landing on it duplicates the bubble (run_7263ff67, the 5th entrance).
         clientId,
         editorContext,
-        ...(terminalContextRef.current ? { terminalContext: terminalContextRef.current } : {}),
+        ...(sendTerminal ? { terminalContext: sendTerminal } : {}),
       };
       const capturedTabIdForRetry = currentActiveTabId;
       const retryStreamFn = () => {
@@ -2604,6 +2618,8 @@ export default function ChatPage() {
         cleanupStreamingState();
         return;
       }
+      // The queued message's own terminal chips (never the input box's).
+      const drainTerminal = terminalContextOf(queued.attachments);
 
       // Set streaming state — idempotent if result handler already kept it
       // true, but ensures correctness if drain is called from other sites.
@@ -2640,7 +2656,7 @@ export default function ChatPage() {
           enableMCP,
           clientId,
           editorContext,
-          ...(terminalContextRef.current && { terminalContext: terminalContextRef.current }),
+          ...(drainTerminal && { terminalContext: drainTerminal }),
         },
         createStreamHandler(assistantMessageId, tabId),
         createErrorHandler(assistantMessageId, tabId),
@@ -2648,12 +2664,6 @@ export default function ChatPage() {
         createDisconnectHandler(tabId),
         streamLivenessFor(tabId),
       );
-
-      // P2 one-shot: clear attached terminal on the drain path too, so a
-      // queued message consumes the attachment exactly once (matches the
-      // primary send path clear). Without this the same buffer could ride a
-      // later drained message.
-      terminalContextRef.current = null;
 
       // Store abort function in tab map
       tabState.abortController = { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController;

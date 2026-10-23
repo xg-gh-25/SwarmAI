@@ -37,8 +37,15 @@ use std::{
     },
 };
 
-use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, PtyPair, PtySize};
+use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtyPair, PtySize};
 use tauri::async_runtime::{Mutex, RwLock};
+
+use crate::pty_pump::OutputPump;
+
+/// Most bytes one `pty_read` returns, and how long it waits for more output once
+/// some arrived (pty_pump: a burst becomes one IPC call; an echo waits ≤ this).
+const READ_MAX: usize = 256 * 1024;
+const READ_LINGER: std::time::Duration = std::time::Duration::from_millis(4);
 
 /// Opaque handle for one PTY session (monotonic, process-local).
 pub type PtyHandler = u32;
@@ -108,14 +115,16 @@ fn build_pty_env(mut env: BTreeMap<String, String>) -> BTreeMap<String, String> 
     env
 }
 
-/// A single live PTY session: the pair, the child process, its killer, and the
-/// reader/writer handles onto the master side.
+/// A single live PTY session: the master side (resize), the child process, its
+/// killer, the writer onto the master, and the pump its output is read from. The
+/// parent's slave handle is dropped once the child holds it (portable-pty's own
+/// guidance; nothing here uses it).
 struct Session {
-    pair: Mutex<PtyPair>,
+    master: Mutex<Box<dyn MasterPty + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     child_killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     writer: Mutex<Box<dyn std::io::Write + Send>>,
-    reader: Mutex<Box<dyn std::io::Read + Send>>,
+    output: Arc<OutputPump>,
 }
 
 /// App-managed registry of all live PTY sessions. Registered via
@@ -172,13 +181,16 @@ pub async fn pty_spawn(
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     let child_killer = child.clone_killer();
     let handler = state.session_id.fetch_add(1, Ordering::Relaxed);
+    // The child holds the slave now; the parent has no use for its copy.
+    let PtyPair { master, slave } = pair;
+    drop(slave);
 
     let session = Arc::new(Session {
-        pair: Mutex::new(pair),
+        master: Mutex::new(master),
         child: Mutex::new(child),
         child_killer: Mutex::new(child_killer),
         writer: Mutex::new(writer),
-        reader: Mutex::new(reader),
+        output: OutputPump::start(reader),
     });
     state.sessions.write().await.insert(handler, session);
     Ok(handler)
@@ -207,7 +219,8 @@ pub async fn pty_write(
     Ok(())
 }
 
-/// Read up to 4096 bytes of PTY output. Returns the raw bytes as a Tauri IPC
+/// Read the PTY's buffered output (pty_pump: up to READ_MAX bytes, after lingering
+/// READ_LINGER for more once some arrived). Returns the raw bytes as a Tauri IPC
 /// binary Response (the frontend decodes UTF-8). `Err("EOF")` signals the PTY
 /// has closed so the frontend poll loop stops. The frontend calls this in a
 /// loop; a real byte-stream (progress bars via `\r`, TUI escapes) flows through
@@ -224,31 +237,16 @@ pub async fn pty_read(
         .get(&pid)
         .ok_or("Unavailable pid")?
         .clone();
-    // The PTY read is a BLOCKING syscall that parks until bytes arrive (an idle
-    // shell prompt blocks indefinitely). Running it directly in this async
-    // command would park a shared async-runtime worker for the whole idle time.
-    // Move it onto a dedicated blocking thread via spawn_blocking so the async
-    // workers stay free to schedule pty_write / pty_resize / other commands.
-    //
-    // `session` is Arc<Session> (Send + 'static) so it moves into the closure.
-    // `reader` is a tokio async Mutex; from a NON-async blocking thread we take
-    // it with `blocking_lock()` (the sanctioned tokio API for exactly this —
-    // it would PANIC inside an async context, but spawn_blocking runs off the
-    // async workers, so it is correct here). read() of one PTY serializes on
-    // this lock, which is the desired behavior (a PTY has one byte stream).
+    // Waiting for output is BLOCKING (an idle shell prompt waits indefinitely), so
+    // it runs on a dedicated blocking thread via spawn_blocking: the async workers
+    // stay free to schedule pty_write / pty_resize / other commands. The kernel
+    // reads themselves happen on the session's own pump thread (pty_pump), which
+    // is what lets one call carry a whole burst.
+    let output = Arc::clone(&session.output);
     let read_result: Result<Vec<u8>, String> =
-        tauri::async_runtime::spawn_blocking(move || {
-            let mut buf = vec![0u8; 4096];
-            let n = session
-                .reader
-                .blocking_lock()
-                .read(&mut buf)
-                .map_err(|e| e.to_string())?;
-            buf.truncate(n);
-            Ok(buf)
-        })
-        .await
-        .map_err(|e| e.to_string())?; // JoinError (blocking thread panicked/cancelled)
+        tauri::async_runtime::spawn_blocking(move || output.take(READ_MAX, READ_LINGER))
+            .await
+            .map_err(|e| e.to_string())?; // JoinError (blocking thread panicked/cancelled)
     let buf = read_result?;
     if buf.is_empty() {
         Err(String::from("EOF"))
@@ -273,10 +271,9 @@ pub async fn pty_resize(
         .ok_or("Unavailable pid")?
         .clone();
     session
-        .pair
+        .master
         .lock()
         .await
-        .master
         .resize(PtySize {
             rows,
             cols,
@@ -287,8 +284,12 @@ pub async fn pty_resize(
     Ok(())
 }
 
-/// Kill the PTY's child process (SIGHUP by default). Called on tab close and on
-/// window close so no orphan shells survive (AC6).
+/// Kill the PTY's child process (SIGHUP) and drop the session. Called on tab close
+/// and on window close so no orphan shells survive (AC6). The frontend stops polling
+/// a killed PTY and never asks for its exit status, so the session is removed HERE
+/// (before, it stayed in the registry for the app's lifetime) and the child is
+/// reaped off the async runtime, giving up after REAP_WAIT so a child that ignores
+/// SIGHUP never pins a thread.
 #[tauri::command]
 pub async fn pty_kill(
     pid: PtyHandler,
@@ -296,19 +297,27 @@ pub async fn pty_kill(
 ) -> Result<(), String> {
     let session = state
         .sessions
-        .read()
+        .write()
         .await
-        .get(&pid)
-        .ok_or("Unavailable pid")?
-        .clone();
-    session
-        .child_killer
-        .lock()
-        .await
-        .kill()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+        .remove(&pid)
+        .ok_or("Unavailable pid")?;
+    let killed = session.child_killer.lock().await.kill().map_err(|e| e.to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        let deadline = std::time::Instant::now() + REAP_WAIT;
+        loop {
+            match session.child.blocking_lock().try_wait() {
+                Ok(Some(_)) | Err(_) => break,
+                Ok(None) if std::time::Instant::now() >= deadline => break,
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        }
+        // `session` drops here: master + writer close; the pump thread sees EOF.
+    });
+    killed
 }
+
+/// How long pty_kill waits for a killed child to exit before giving up reaping it.
+const REAP_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Wait for the child to exit and return its exit code, then remove the session
 /// from the registry (only after the child has actually exited).
@@ -368,6 +377,40 @@ pub async fn reap_all_ptys(state: &TerminalState) {
 #[cfg(test)]
 mod tests {
     use super::resolve_default_cwd;
+
+    /// A real PTY: the child's exit reaches the pump as EOF after all its output
+    /// (macOS reports it as EIO, which the pump maps to EOF) — the exited-shell bar
+    /// and exit status depend on it.
+    #[test]
+    fn a_real_pty_reaches_eof_when_the_child_exits() {
+        use crate::pty_pump::OutputPump;
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::time::{Duration, Instant};
+        let pair = native_pty_system()
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let reader = pair.master.try_clone_reader().unwrap();
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.args(["-c", "printf hello"]);
+        cmd.cwd("/"); // other tests here point HOME at temp dirs that may be gone
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        let portable_pty::PtyPair { master, slave } = pair;
+        drop(slave);
+        let pump = OutputPump::start(reader);
+        let t = Instant::now();
+        let mut got = Vec::new();
+        loop {
+            let chunk = pump.take(1 << 16, Duration::from_millis(4)).unwrap();
+            if chunk.is_empty() {
+                break;
+            }
+            got.extend(chunk);
+            assert!(t.elapsed() < Duration::from_secs(10), "no EOF after the child exited");
+        }
+        assert!(String::from_utf8_lossy(&got).contains("hello"));
+        child.wait().unwrap();
+        drop(master);
+    }
 
     // NOTE: these tests mutate the process-global HOME. `resolve_default_cwd`
     // reads HOME, and cargo runs tests in PARALLEL threads by default, so a

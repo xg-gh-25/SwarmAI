@@ -13,6 +13,9 @@ Agreed with XG in chat on 2026-10-23. Owner files:
 `desktop/src/stores/terminalLocation.ts` (where a shell opens),
 `desktop/src/stores/TerminalStore.ts` (the shells),
 `desktop/src/components/terminal/TerminalPanel.tsx` (the switcher),
+`desktop/src/components/terminal/TerminalTab.tsx` (xterm: theme, keys, selection menu),
+`desktop/src/utils/terminalAttachment.ts` (terminal text as a chat attachment),
+`desktop/src-tauri/src/pty_pump.rs` (PTY output batching),
 `backend/core/canvas_session.py::working_repo` + `GET /api/canvas/session/{id}/working-repo`.
 
 ## Problem
@@ -59,15 +62,74 @@ or the stream.
 - Clicking a segment selects it for this chat tab and shows that location's shells; if
   it has none, one is opened there. Switching chat tabs only shows: it never spawns.
 - The tab strip lists only the selected location's shells, numbered within it.
-- Icon buttons use Material Symbols + `icon-btn` / `icon-sm`: new shell, send to chat,
+- Icon buttons use Material Symbols + `icon-btn` / `icon-sm`: new shell, add to chat,
   hide panel.
-- xterm theme follows the app theme (light / dark palettes).
-- Selecting text shows a "Send to chat ⌘↵" pill; the header send button sends the
-  selection when there is one, else the last 200 lines. The cwd rides along.
+- xterm theme follows the app theme (light / dark palettes); WebGL renderer
+  (`@xterm/addon-webgl`, lazy chunk) with the DOM renderer as the fallback when WebGL
+  is missing or its context is lost.
+- BottomBar shows the selected location; clicking it reveals the panel at it.
 - An exited shell shows a bar: `Process exited (code N) · ↵ Restart · Close`. An
   unmodified ↵ typed into the shell restarts it; ⌘↵ and ↵ on the bar's buttons do not.
-- BottomBar shows the selected location; clicking it reveals the panel at it.
-- Keys: ⌘\` toggle panel (existing), ⌘⇧\` SwarmWS ↔ repo, ⌘K clears the terminal.
+- Keys: ⌘\` toggle panel (existing), ⌘⇧\` SwarmWS ↔ repo; in the terminal ⌘C copy
+  (app clipboard command — navigator.clipboard is denied in the webview), ⌘A select
+  all, ⌘K clear, ⌘↵ add the selection to chat. Ctrl-C / Ctrl-K reach the shell.
+
+## Selecting text
+
+Drag, double-click (word), triple-click (line) are xterm's. A program that turns on
+mouse reporting (vim, less, htop, a TUI) takes every drag; ⌥-drag still selects
+(`macOptionClickForcesSelection`). Right-click opens a menu: Copy, Add to chat (the
+selection, else the last 200 lines), Select all, Clear.
+
+## Add to chat
+
+Terminal text becomes ONE terminal attachment chip in the chat input of the chat tab
+in front (`utils/terminalAttachment`, stored by `useUnifiedAttachments` with the tab's
+other attachments in tabMapRef). The chip shows the folder and line count, opens the
+full text, and is removable; the chat input takes focus. The chip keeps its pieces,
+each with its shell's cwd; a piece from a different folder than the one before it is
+headed `# cwd: …`, and the chip's cwd is its first piece's. Its text is held to
+16,000 characters — the backend's `buffer_tail` max_length (a longer value is a 422
+that fails the whole message; a test checks the two agree): whole oldest pieces are
+dropped first, then the oldest lines of the one left, and the chip says it was cut.
+Appending to a queued message folds the terminal chips into one, and the terminal
+chip always survives the 10-attachment limit (a file past it is dropped instead).
+⌘↵ never reaches the shell: it adds the selection, or the last 200 lines.
+
+At send the chip is not a content block: every send site computes
+`terminalContextOf(<that message's attachments>)` into the request's
+`terminalContext`, which the backend fences as UNTRUSTED data on the user turn. So
+the terminal output belongs to its message: a queued message drains with its own, a
+reconnect resend carries the same value, another tab never gets it. This replaced a
+page-level one-shot ref that leaked a selection into another tab's send or a
+background drain, was cleared before the resend read it, was invisible, and sent
+over-long text that failed the message.
+
+**Known gap (pre-existing, not fixed here):** when the BACKEND parks a send as
+pending (all chat slots busy → QUEUE_TIMEOUT, or SESSION_BUSY), it stores only the
+message text/content (`session_pending.mark_pending_by_id`), so the server-side drain
+later delivers it without its terminal output; the persist-failed `retryPayload`
+omits it too. Fixing it means storing terminal_context with the pending row — a
+message-store schema change, left for a decision. The frontend's own queue (a send
+while this tab is streaming) is not affected.
+
+## PTY output
+
+A macOS PTY read returns at most 1024 bytes, usually a few (measured, `seq 1 300000`:
+125,056 reads of 2.3 MB, median 8 bytes; a 64 KB buffer instead of 4 KB changed
+nothing). Each read used to be one `pty_read` IPC call + `spawn_blocking` +
+`xterm.write`. Now a per-session pump thread (`src-tauri/src/pty_pump.rs`) reads
+continuously into a buffer; `pty_read` waits for output, lingers ≤ 4 ms for more and
+returns up to 256 KB. Same command: 56 calls (probe of the same algorithm on a real
+PTY). The pump stops reading at 1 MB buffered until the frontend drains it, so a fast
+producer is still back-pressured. A keystroke echo waits at most the 4 ms linger.
+
+The parent drops its slave handle once the child holds it, and macOS reports the
+closed slave as EIO, which the pump maps to EOF (a real-PTY Rust test checks a
+child's exit arrives as EOF after its output). `pty_kill` removes the session from
+the registry and reaps the child off the async runtime, giving up after 3 s; before,
+a closed terminal's session stayed in the registry for the app's lifetime (the
+frontend never asks a killed PTY for its exit status).
 
 ## Deviations from the chat mock
 
