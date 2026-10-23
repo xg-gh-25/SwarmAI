@@ -23,10 +23,12 @@ LANDINGS = frozenset({"landed", "not_landed", "human_override", "no_code"})
 NOT_LANDED_REASONS = frozenset({
     "tests_red", "tests_incomplete", "validation_failed", "final_stale",
     "report_mismatch", "checks_exhausted", "framing_rejected",
-    "already_satisfied", "needs_hooked_session", "land_conflict",
+    "already_satisfied", "needs_hooked_session", "land_conflict", "partial_land",
 })
 QUALITY_BLOCK_REASONS = frozenset({
     "tests_red", "tests_incomplete", "validation_failed", "final_stale", "report_mismatch",
+    # half a multi-repo change is on main: what landed no longer is the reviewed change
+    "partial_land",
 })
 RF_CHECKS = frozenset({"RF-1", "RF-2", "RF-3", "RF-4"})
 LG_CHECKS = frozenset({"LG-1", "LG-2", "LG-3", "LG-4", "LG-5"})
@@ -298,6 +300,12 @@ def _land(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     payload, landing = event["payload"], event["payload"]["landing"]
     if landing not in LANDINGS:
         raise LifecycleError("land event has invalid landing")
+    if "commits" in payload:
+        commits = payload["commits"]
+        if not isinstance(commits, dict) or not commits \
+                or not all(isinstance(k, str) and k and _commit_sha(v) for k, v in commits.items()) \
+                or payload.get("commit") not in commits.values():
+            raise LifecycleError("land event's commit map is malformed")
     if landing == "landed":
         if run["status"] != "active" or run["stage"] != "deliver":
             raise LifecycleError("normal land requires active DELIVER")
@@ -378,6 +386,47 @@ def _restore(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         run["reflect"] = None
     run["reason"] = None
     _schedule(run, event, "paused")
+
+
+def _partial_land(run: dict[str, Any], event: Mapping[str, Any]) -> None:
+    """Some repos of a landing moved and one could not (§A3.7, conformance K2). The
+    event must name what moved and the landing it belongs to: the normal land attempt
+    whose guards all passed and whose intent and REPORT render are its own (the run
+    then takes the not-landed path), or a person's consumed authorization (record
+    only: what happens next is the person's)."""
+    payload = event["payload"]
+    landed = payload.get("landed")
+    if not isinstance(landed, dict) or not landed \
+            or not all(isinstance(k, str) and k and _commit_sha(v) for k, v in landed.items()) \
+            or not isinstance(payload.get("failed"), str) or payload["failed"] in landed:
+        raise LifecycleError("partial_land must name the landed repo commits and the failed repo")
+    attempt_id, auth_id = payload.get("stage_attempt_event_id"), payload.get("auth_consumed_event_id")
+    if (attempt_id is None) == (auth_id is None):
+        raise LifecycleError("partial_land belongs to exactly one landing")
+    if auth_id is not None:
+        consumed = run["auth_consumed"].get(auth_id)
+        request = (run["land_requests"].get((consumed or {}).get("request_id")) or {}).get("request") \
+            if consumed else None
+        repos = set(((request or {}).get("bindings") or {}).get("repos") or {})
+        if consumed is None or consumed.get("action") not in ("land", "land_skip_tests") \
+                or not repos or not set(landed) | {payload["failed"]} <= repos:
+            raise LifecycleError("partial_land is not bound to a consumed landing "
+                                 "authorization of these repos")
+        return
+    attempt = run.get("open_attempt")
+    intent, render = run.get("last_land_intent"), run.get("last_report_render")
+    if run["status"] != "active" or run["stage"] != "deliver" or attempt is None \
+            or attempt["stage"] != "land" or attempt["event_id"] != attempt_id \
+            or set(attempt["check_ids"]) != LAND_CHECKS \
+            or set(attempt["results"]) != LAND_CHECKS \
+            or not all(value is True for value in attempt["results"].values()) \
+            or intent is None or render is None \
+            or intent["stage_attempt_event_id"] != attempt_id \
+            or render["stage_attempt_event_id"] != attempt_id:
+        raise LifecycleError("partial_land is not bound to a passing land attempt")
+    run["open_attempt"] = None
+    run["last_land_intent"], run["last_report_render"] = None, None
+    _set_pending(run, "partial_land")
 
 
 def _authorization(run: dict[str, Any], event: Mapping[str, Any]) -> None:
@@ -502,6 +551,8 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         _authorization(run, event)
     elif kind == "land":
         _land(run, event)
+    elif kind == "partial_land":
+        _partial_land(run, event)
     elif kind == "abandon":
         if run["status"] in TERMINAL:
             raise LifecycleError("cannot abandon a terminal run")

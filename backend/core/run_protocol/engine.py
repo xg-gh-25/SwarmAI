@@ -1036,12 +1036,25 @@ class RunEngine:
             raise IntegrationRequired("approval_required", reason)
 
         now = __import__("time").time()
-        commits = landing.execute_request(
-            self.store, request_id,
-            session_id=self.owner_session(), repos=self.effective_repos(),
-            integration_roots=self.contract["repo_roots"], message=message,
-            at=_now(), now=now,
-            progress_path=self.run_dir / "artifacts" / f"landing-progress-{request_id}.json")
+        try:
+            commits = landing.execute_request(
+                self.store, request_id,
+                session_id=self.owner_session(), repos=self.effective_repos(),
+                integration_roots=self.contract["repo_roots"], message=message,
+                at=_now(), now=now, branches=self._recorded_branches(),
+                progress_path=self.run_dir / "artifacts" / f"landing-progress-{request_id}.json")
+        except landing.PartialLanding as exc:
+            # the signed partial_land is written; the person sees what moved (K2)
+            self._settle()
+            value = self.build_audit(through="COMPLETED" if self.projection()["status"] ==
+                                     "completed" else "DELIVER", persist=True,
+                                     commits=self.landed_commits() or None)
+            from core.run_protocol import audit as audit_protocol
+            DocumentStore._atomic(self.run_dir / "REPORT.md",
+                                  audit_protocol.render(value, fmt="report"))
+            self.write_projection()
+            return {"ok": False, "reason": "partial_land", "landed": exc.landed,
+                    "failed": exc.failed, "error": str(exc), "state": self.projection()}
         try:
             report = (self.store.paths.blobs / payload["report_sha"]).read_text(encoding="utf-8")
         except OSError as exc:
@@ -1260,7 +1273,8 @@ class RunEngine:
         if state["status"] != "active" or state["stage"] != "deliver" or (
                 state.get("pending_landing") is None and state["profile"] != "research"):
             raise EngineError("the not-landed path needs active DELIVER with a not-landed reason")
-        value = self.build_audit(through="DELIVER", persist=True)
+        value = self.build_audit(through="DELIVER", persist=True,
+                                 commits=self.landed_commits() or None)
         report = audit_protocol.render(value, fmt="report")
         report_sha = self.store.put_blob(report.encode())
         self.store.append_new(
@@ -1473,7 +1487,10 @@ class RunEngine:
         from core.run_protocol import landing
         path = self.run_dir / "artifacts" / "landing-progress-normal.json"
         progress = self._read_json(path, None)
-        if not isinstance(progress, Mapping) or not progress.get("commits"):
+        if not isinstance(progress, Mapping):
+            return None
+        if not progress.get("commits") and not landing.adoptable(
+                self.contract["repo_roots"], progress.get("plan") or {}, message):
             self._discard_empty_progress()   # a failed attempt committed nothing
             return None
         if any(event.get("kind") == "land" and event.get("payload", {}).get("landing") == "landed"
@@ -1493,9 +1510,11 @@ class RunEngine:
         bindings = {name: {"delivery_tree": row["delivery_tree"]}
                     for name, row in plan.items() if isinstance(row, Mapping)}
         bases = {name: row["base"] for name, row in plan.items() if isinstance(row, Mapping)}
-        commits = landing.commit_repos(
-            run_id=self.run_id, integration_roots=self.contract["repo_roots"],
-            bases=bases, bindings=bindings, message=message, progress_path=path)
+        commits, partial = self._commit_normal(bases=bases, bindings=bindings, message=message,
+                                               attempt=attempt["attempt"],
+                                               attempt_event_id=attempt["event_id"])
+        if partial is not None:
+            return partial          # partial_land: the not-landed path's result
         render_event = next((event for event in reversed(self.store.read_events())
                              if event.get("event_id") == rendered.get("event_id")), None)
         if render_event is None:
@@ -1511,6 +1530,7 @@ class RunEngine:
             stage="deliver", attempt=attempt["attempt"],
             ordinal=len(self.store.read_events()) + 1,
             payload={"landing": "landed", "commit": next(iter(commits.values())),
+                     "commits": dict(sorted(commits.items())),
                      "stage_attempt_event_id": attempt["event_id"]})
         self._settle(); self.write_projection()
         return {"commits": commits, "push": self.push_status(), "state": self.projection(),
@@ -1708,12 +1728,14 @@ class RunEngine:
             bases = {name: self.final()["repos"][name]["base"]
                      for name in self.contract["expected_repos"]}
             try:
-                commits = landing.commit_repos(
-                    run_id=self.run_id, integration_roots=self.contract["repo_roots"],
-                    bases=bases, bindings=bindings, message=message,
-                    progress_path=self.run_dir / "artifacts" / "landing-progress-normal.json")
+                commits, partial = self._commit_normal(bases=bases, bindings=bindings,
+                                                       message=message, attempt=attempt,
+                                                       attempt_event_id=opened["event_id"])
+                if partial is not None:
+                    return partial      # partial_land: the not-landed path's result
             except LandingError as exc:
-                # the guards passed and the attempt is closed; the next land supersedes it
+                # nothing moved (phase 1 refused); the attempt is closed, the next land
+                # supersedes it
                 self._discard_empty_progress()
                 self.write_projection()
                 return {"ok": False, "retry": True, "error": f"commit failed: {exc}",
@@ -1727,9 +1749,36 @@ class RunEngine:
             writer=self.authority.writer("cli"), kind="land", at=_now(),
             stage="deliver", attempt=attempt, ordinal=len(self.store.read_events()) + 1,
             payload={"landing": "landed", "commit": next(iter(commits.values())),
+                     "commits": dict(sorted(commits.items())),
                      "stage_attempt_event_id": opened["event_id"]})
         self._settle(); self.write_projection()
         return {"ok": True, "commits": commits, "push": push, "state": self.projection()}
+
+    def _commit_normal(self, *, bases: Mapping[str, str], bindings: Mapping[str, Any],
+                       message: str, attempt: int, attempt_event_id: str
+                       ) -> tuple[dict[str, str], dict[str, Any] | None]:
+        """The one place a normal landing writes main (fresh and resumed): (repo ->
+        commit, None), or — when the fast-forwards raced another session after every repo
+        passed phase 1 — a signed ``partial_land`` with the commits that DID land and
+        the not-landed path's result as the second item (§A3.7, conformance K2).
+        Never a silent retry."""
+        from core.run_protocol import landing
+        try:
+            return landing.commit_repos(
+                run_id=self.run_id, integration_roots=self.contract["repo_roots"],
+                bases=bases, bindings=bindings, message=message,
+                branches=self._recorded_branches(),
+                progress_path=self.run_dir / "artifacts" / "landing-progress-normal.json"), None
+        except landing.PartialLanding as exc:
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="partial_land", at=_now(),
+                stage="deliver", attempt=attempt, ordinal=len(self.store.read_events()) + 1,
+                payload={"landed": dict(sorted(exc.landed.items())), "failed": exc.failed,
+                         "detail": str(exc)[:300], "stage_attempt_event_id": attempt_event_id})
+            self._settle()
+            finished = self.finish_not_landed()
+            return dict(exc.landed), {**finished, "ok": False, "landing": "not_landed",
+                                      "reason": "partial_land", "landed": exc.landed}
 
     def _land_failed(self, results: Mapping[str, tuple[bool, str]]) -> dict[str, Any]:
         self._settle(); self.write_projection()
@@ -1759,22 +1808,37 @@ class RunEngine:
         return self.projection()
 
     def landed_commits(self) -> dict[str, str]:
-        """repo -> the commit this run landed there (the landing progress files), or
-        the land event's commit as ``primary`` for a run recorded before them."""
-        commits: dict[str, str] = {}
-        for progress_path in sorted((self.run_dir / "artifacts").glob("landing-progress-*.json")):
-            progress = self._read_json(progress_path, {})
-            if not isinstance(progress, Mapping):
-                continue
-            for name, commit in (progress.get("commits") or {}).items():
-                if name in commits and commits[name] != commit:
-                    raise EngineError(f"conflicting landing commit for {name}")
-                if isinstance(name, str) and isinstance(commit, str):
-                    commits[name] = commit
-        if not commits:
-            commits = {"primary": event["payload"]["commit"] for event in self.store.read_events()
-                       if event.get("kind") == "land" and event.get("payload", {}).get("commit")}
-        return commits
+        """repo -> the commit on main, from SIGNED events (review r3): the latest
+        landing that finished (``landed`` / ``human_override``) when it is later than
+        any partial_land, else the latest partial_land. A finished land event written
+        before it carried ``commits`` falls back to its progress file."""
+        events = self.store.read_events()
+        finished = [(i, e) for i, e in enumerate(events) if e.get("kind") == "land"
+                    and e["payload"].get("landing") in ("landed", "human_override")]
+        partials = [(i, e) for i, e in enumerate(events) if e.get("kind") == "partial_land"]
+        if partials and (not finished or partials[-1][0] > finished[-1][0]):
+            return dict(partials[-1][1]["payload"]["landed"])
+        if not finished:
+            return {}
+        payload = finished[-1][1]["payload"]
+        if isinstance(payload.get("commits"), dict) and payload["commits"]:
+            return dict(payload["commits"])
+        artifacts = self.run_dir / "artifacts"
+        path = artifacts / "landing-progress-normal.json"
+        if payload.get("landing") == "human_override":
+            grant = lifecycle.fold(events, self.authority)["auth_consumed"].get(
+                payload.get("auth_consumed_event_id")) or {}
+            path = artifacts / f"landing-progress-{grant.get('request_id')}.json"
+        progress = self._read_json(path, {}) if path.is_file() else {}
+        commits = {str(k): str(v) for k, v in (progress.get("commits") or {}).items()} \
+            if isinstance(progress, Mapping) else {}
+        return commits or ({"primary": payload["commit"]} if payload.get("commit") else {})
+
+    def _recorded_branches(self) -> dict[str, str]:
+        if self.contract.get("mode") == "shared":
+            return {}               # the shared checkout's own branch, read at landing
+        value = self._read_json(self.store.paths.run / "integration_branches.json", {}) or {}
+        return {str(k): str(v) for k, v in value.items()}
 
     def _refresh_completed_audit(self) -> None:
         """The run-directory audit, REPORT and card through COMPLETED (§B8, §E9.5): at

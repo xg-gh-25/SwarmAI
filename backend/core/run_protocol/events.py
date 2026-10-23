@@ -71,6 +71,7 @@ OCCURRENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "decision": ("payload.request_id",),
     "human_answer": ("payload.request_id",),
     "land": ("ordinal",),
+    "partial_land": ("ordinal",),
     "abandon": ("ordinal",),
     "restore": ("ordinal",),
     "metric": ("stage", "payload.name", "attempt"),
@@ -181,7 +182,17 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "land": _spec("cli", ("ordinal",), None,
                   {"landing": str, "commit": (str, type(None))},
                   {"reason": str, "stage_attempt_event_id": str,
-                   "auth_consumed_event_id": str}),
+                   "auth_consumed_event_id": str,
+                   # repo -> commit of every repo this landing moved (review r3): the
+                   # signed map; progress files are crash recovery only
+                   "commits": dict}),
+    # a land whose fast-forwards raced another session after every repo passed its
+    # pre-check (§A3.7, conformance K2): the repos that did move, and the one that failed
+    "partial_land": _spec("cli", ("ordinal",), None,
+                          {"landed": dict, "failed": str, "detail": str},
+                          # exactly one: the normal land attempt, or the person's
+                          # consumed authorization, the landing belonged to
+                          {"stage_attempt_event_id": str, "auth_consumed_event_id": str}),
     "abandon": _spec("cli", ("ordinal",), None, {"reason": str}),
     "restore": _spec("cli", ("ordinal",), None, {"snapshot_exists": bool}),
     # hook: the daemon's required_approval count (D4)

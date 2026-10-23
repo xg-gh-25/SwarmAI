@@ -34,6 +34,20 @@ def _verdict(value: bool, warn: bool = False) -> str:
     return "PASS" if value and not warn else "WARN" if value else "BLOCK"
 
 
+def _reason(projection: Mapping[str, Any], events: Sequence[Mapping[str, Any]]) -> Any:
+    """The run's not-landed reason; a person's run-land that raced (a signed
+    partial_land later than every finished landing) is the outcome too, although the
+    lifecycle leaves the run's state to the person (conformance K2, review r3)."""
+    last_partial = last_finished = -1
+    for index, event in enumerate(events):
+        if event.get("kind") == "partial_land":
+            last_partial = index
+        elif event.get("kind") == "land" and (event.get("payload") or {}).get("landing") in (
+                "landed", "human_override"):
+            last_finished = index
+    return "partial_land" if last_partial > last_finished else projection.get("reason")
+
+
 def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mapping[str, Any]],
           final: Mapping[str, Any], findings: Sequence[Mapping[str, Any]],
           contract: Mapping[str, Any], push: Mapping[str, Any], audit_through: str,
@@ -100,9 +114,9 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     closed_states = {"closed_proven", "closed_asserted", "refuted", "accepted"}
     closed = sum(row.get("status") in closed_states for row in findings)
     landing = projection.get("landing")
-    quality_block_reasons = {"tests_red", "tests_incomplete", "validation_failed",
-                             "final_stale", "report_mismatch"}
-    if projection.get("reason") in quality_block_reasons:
+    reason = _reason(projection, event_rows)
+    from core.run_protocol.lifecycle import QUALITY_BLOCK_REASONS   # one list
+    if reason in QUALITY_BLOCK_REASONS:
         quality_verdict = "BLOCK"
     elif landing in {"no_code", "not_landed"}:
         quality_verdict = "N/A"
@@ -186,7 +200,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                    and row.get("kind") == "security_policy"
                    and str(row.get("severity")).upper() in ("HIGH", "CRITICAL")]
     outcome = {"status": projection.get("status"), "landing": landing,
-               "reason": projection.get("reason"),
+               "reason": _reason(projection, event_rows),
                "push_ready": bool(push.get("push_ready", False)),
                "commit": next(iter(commit_map.values()), None)}
     details = {"events": [row.get("event_id") for row in event_rows],
@@ -194,6 +208,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "findings": [dict(row) for row in findings],
                "repos": dict(repos) if isinstance(repos, Mapping) else {},
                "commits": commit_map,
+               "expected_repos": list(contract.get("expected_repos") or []),
                "unclosed_high": [row["canonical_id"] for row in findings if push_effect(row)],
                # direct: the user's words are the requirement (no REQUIREMENTS doc)
                "requirement": contract.get("requirement"),
@@ -318,6 +333,14 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
             lines += ["", "## Push 前需要你看的"] + high + items[:5]
             if len(items) > 5:
                 lines.append(f"- 另有 {len(items) - 5} 条，见 run_audit.json")
+    if outcome.get("reason") == "partial_land":
+        landed = dict(details.get("commits") or {})
+        expected = [str(name) for name in details.get("expected_repos") or []]
+        missing = [name for name in expected if name not in landed]
+        lines += ["", "## 只落地了一部分", ""]
+        lines += [f"- 已落地：{name} @ {str(sha)[:12]}" for name, sha in sorted(landed.items())]
+        lines += [f"- 未落地：{name}" for name in missing]
+        lines.append("- main 上现在只有这次改动的一部分：先处理未落地的仓库，再 push。")
     manual = details.get("manual")
     if manual:
         lines += ["", f"人工落地：request {manual.get('request_id')}"

@@ -267,16 +267,62 @@ def _git(root: str, *args: str, env: Mapping[str, str] | None = None) -> str:
     return result.stdout.strip()
 
 
-def _commit(root: str, base: str, delivery_tree: str, message: str) -> str:
-    env = {**os.environ, "GIT_AUTHOR_NAME": "Swarm", "GIT_AUTHOR_EMAIL": "swarm@swarmai.dev",
-           "GIT_COMMITTER_NAME": "Swarm", "GIT_COMMITTER_EMAIL": "swarm@swarmai.dev"}
+_IDENTITY = {"GIT_AUTHOR_NAME": "Swarm", "GIT_AUTHOR_EMAIL": "swarm@swarmai.dev",
+             "GIT_COMMITTER_NAME": "Swarm", "GIT_COMMITTER_EMAIL": "swarm@swarmai.dev"}
+
+
+class PartialLanding(LandingError):
+    """Every repo passed the pre-check, yet a fast-forward failed after at least one
+    repo had moved (another session raced the window). *landed* is repo -> commit."""
+
+    def __init__(self, message: str, *, landed: Mapping[str, str], failed: str):
+        super().__init__(message)
+        self.landed, self.failed = dict(landed), failed
+
+
+def _prepare_commit(root: str, base: str, delivery_tree: str, message: str) -> str:
+    """Phase 1 for one repo: everything that can fail, and no ref moves (§A3.7).
+    The integration branch is still at *base*; the commit object is written; and git
+    itself, in a dry run of the same two-tree checkout ``merge --ff-only`` performs,
+    confirms the main checkout's index and files (tracked, untracked, case aliases,
+    directory/file swaps, symlinks, gitlinks) let it through. Predicting this in
+    Python instead was the round-1 review's HIGH finding."""
     if _git(root, "rev-parse", "HEAD") != base:
-        raise LandingError("integration branch moved before commit")
-    commit = _git(root, "commit-tree", delivery_tree, "-p", base, "-m", message, env=env)
+        raise LandingError("integration branch moved since the run's base")
+    commit = _git(root, "commit-tree", delivery_tree, "-p", base, "-m", message,
+                  env={**os.environ, **_IDENTITY})
     if len(commit) != 40:
         raise LandingError("commit-tree returned invalid sha")
-    _git(root, "merge", "--ff-only", commit)
+    try:
+        _git(root, "read-tree", "-n", "-m", "-u", "HEAD", commit)
+    except LandingError as exc:
+        raise LandingError(f"the main checkout would refuse the fast-forward "
+                           f"(an uncommitted change is in the way): {exc}") from exc
     return commit
+
+
+def _ours(root: str, commit: str, base: str, delivery_tree: str, message: str) -> bool:
+    """*commit* is the one this landing makes: same parent and tree, the exact message
+    bytes commit-tree stores, and the exact Swarm author and committer (name and
+    email) — not merely a commit that happens to have the same tree."""
+    try:
+        parent, tree_id = _commit_identity(root, commit)
+        raw = subprocess.run(["git", "-C", root, "cat-file", "commit", commit], check=True,
+                             capture_output=True, timeout=30).stdout.decode("utf-8", "replace")
+    except (LandingError, OSError, subprocess.SubprocessError):
+        return False
+    header, _, body = raw.partition("\n\n")
+    people = {line.split(" ", 1)[0]: line.split(" ", 1)[1].rsplit(" ", 2)[0]
+              for line in header.splitlines() if line.startswith(("author ", "committer "))}
+    want = f"{_IDENTITY['GIT_AUTHOR_NAME']} <{_IDENTITY['GIT_AUTHOR_EMAIL']}>"
+    return (parent, tree_id) == (base, delivery_tree) \
+        and body == (message if message.endswith("\n") else message + "\n") \
+        and people.get("author") == want and people.get("committer") == want
+
+
+def _fast_forward(root: str, commit: str) -> None:
+    """Phase 2 for one repo: the only step that moves a ref."""
+    _git(root, "merge", "--ff-only", "-q", commit)
 
 
 def _atomic_progress(path: Path, value: Mapping[str, Any]) -> None:
@@ -300,20 +346,66 @@ def _commit_identity(root: str, commit: str) -> tuple[str, str]:
             _git(root, "rev-parse", f"{commit}^{{tree}}"))
 
 
+def _branch(root: str, expected: str | None) -> str:
+    """The integration branch of *root*: *expected* when the run recorded one, else
+    the branch checked out now. A detached main checkout has none: refused."""
+    try:
+        current = _git(root, "symbolic-ref", "-q", "HEAD")
+    except LandingError as exc:
+        raise LandingError("the main checkout has no branch checked out") from exc
+    return expected if expected else current
+
+
+def _same_plan(old: Any, new: Mapping[str, Mapping[str, Any]]) -> bool:
+    """*old* is *new*, or *new* without fields a plan written before them lacked."""
+    if not isinstance(old, Mapping) or set(old) != set(new):
+        return False
+    return all(isinstance(old[name], Mapping) and all(
+        old[name].get(key, value) == value for key, value in new[name].items())
+        for name in new)
+
+
+def adoptable(integration_roots: Mapping[str, str], plan: Mapping[str, Any],
+              message: str) -> bool:
+    """Some repo's HEAD is the exact commit this plan makes (a crash between its
+    fast-forward and every record of it): the landing must resume, not restart."""
+    for name, row in (plan or {}).items():
+        root = integration_roots.get(name)
+        if not root or not isinstance(row, Mapping):
+            continue
+        try:
+            head = _git(root, "rev-parse", "HEAD")
+        except LandingError:
+            continue
+        if head != row.get("base") and _ours(root, head, row.get("base"),
+                                             row.get("delivery_tree"), message):
+            return True
+    return False
+
+
 def commit_repos(
     *, run_id: str, integration_roots: Mapping[str, str], bases: Mapping[str, str],
     bindings: Mapping[str, Mapping[str, str]], message: str, progress_path: str | Path,
+    branches: Mapping[str, str | None] | None = None,
 ) -> dict[str, str]:
-    """Land repos one at a time and durably preserve every completed commit.
+    """Land every repo or none (design §A3.7, conformance K2).
 
-    A retry verifies recorded facts against git.  It also recovers the narrow crash
-    window where ``merge --ff-only`` succeeded but the progress file was not replaced.
+    Phase 1 checks and prepares EVERY repo while no ref has moved; phase 2 only
+    fast-forwards. A phase-2 failure after a repo moved raises ``PartialLanding``
+    (the caller ends the run not_landed(partial_land)); one before any moved raises
+    ``LandingError`` and nothing landed. Each repo lands on ITS integration branch:
+    *branches* (the run's recorded ones) or, when none was recorded (a shared run), the
+    branch checked out at phase 1; the checkout must still be on it at phase 2. A
+    retry verifies recorded commits against git, and adopts a fast-forward that
+    happened just before a crash (``adoptable``).
     """
     expected = set(integration_roots)
     if not expected or set(bases) != expected or set(bindings) != expected:
         raise LandingError("landing plan must contain the exact non-empty repo set")
     plan = {name: {"base": bases[name],
-                   "delivery_tree": bindings[name]["delivery_tree"]}
+                   "delivery_tree": bindings[name]["delivery_tree"],
+                   "message_sha": hashlib.sha256(message.encode()).hexdigest(),
+                   "branch": _branch(integration_roots[name], (branches or {}).get(name))}
             for name in sorted(expected)}
     path = Path(progress_path)
     if path.exists():
@@ -322,37 +414,67 @@ def commit_repos(
         except (OSError, json.JSONDecodeError) as exc:
             raise LandingError(f"landing progress unreadable: {exc}") from exc
         if not isinstance(progress, dict) or progress.get("run_id") != run_id \
-                or progress.get("plan") != plan or not isinstance(progress.get("commits"), dict):
+                or not isinstance(progress.get("commits"), dict) \
+                or not _same_plan(progress.get("plan"), plan):
             raise LandingError("landing progress belongs to another immutable plan")
+        progress["plan"] = plan     # a plan written before message/branch were bound
     else:
         progress = {"schema": 1, "run_id": run_id, "plan": plan, "commits": {}}
         _atomic_progress(path, progress)
     commits = dict(progress["commits"])
-    for name in sorted(expected):
+    for name, recorded in commits.items():
+        root, base = integration_roots[name], bases[name]
+        if not isinstance(recorded, str) or len(recorded) != 40 \
+                or not _ours(root, recorded, base, plan[name]["delivery_tree"], message) \
+                or subprocess.run(["git", "-C", root, "merge-base", "--is-ancestor",
+                                   recorded, "HEAD"], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, timeout=30).returncode != 0:
+            raise LandingError(f"{name}: persisted landing fact no longer matches git")
+    # phase 1: every remaining repo, before any of them moves (design §A3.7)
+    prepared: dict[str, str] = {}
+    for name in sorted(expected - set(commits)):
+        if _branch(integration_roots[name], None) != plan[name]["branch"]:
+            raise LandingError(f"{name}: the main checkout is not on {plan[name]['branch']}")
         root, base, delivery_tree = integration_roots[name], bases[name], bindings[name]["delivery_tree"]
-        recorded = commits.get(name)
-        if recorded is not None:
-            if not isinstance(recorded, str) or len(recorded) != 40 \
-                    or _commit_identity(root, recorded) != (base, delivery_tree) \
-                    or subprocess.run(["git", "-C", root, "merge-base", "--is-ancestor",
-                                       recorded, "HEAD"], stdout=subprocess.DEVNULL,
-                                      stderr=subprocess.DEVNULL, timeout=30).returncode != 0:
-                raise LandingError(f"{name}: persisted landing fact no longer matches git")
-            continue
         head = _git(root, "rev-parse", "HEAD")
-        if head != base:
-            try:
-                parent, tree_id = _commit_identity(root, head)
-            except LandingError:
-                parent, tree_id = "", ""
-            if (parent, tree_id) != (base, delivery_tree):
-                raise LandingError(f"{name}: integration branch moved")
-            commit = head
-        else:
-            commit = _commit(root, base, delivery_tree, message)
-        commits[name] = commit
+        if head != base and _ours(root, head, base, delivery_tree, message):
+            commits[name] = head        # a crash after the ff, before the progress write
+            continue
+        try:
+            prepared[name] = _prepare_commit(root, base, delivery_tree, message)
+        except LandingError as exc:
+            raise LandingError(f"{name}: {exc}") from exc
+    if len(commits) != len(progress["commits"]):
         progress["commits"] = dict(commits)
         _atomic_progress(path, progress)
+    # phase 2: only fast-forwards remain
+    for name in sorted(prepared):
+        try:
+            if _branch(integration_roots[name], None) != plan[name]["branch"]:
+                raise LandingError(f"the main checkout left {plan[name]['branch']}")
+            _fast_forward(integration_roots[name], prepared[name])
+        except LandingError as exc:
+            try:
+                moved = _git(integration_roots[name], "rev-parse", "HEAD") == prepared[name]
+            except LandingError:
+                moved = False
+            if moved:       # the ref moved, a later step of merge failed: it landed
+                commits[name] = prepared[name]
+                continue
+            if commits:
+                raise PartialLanding(f"{name}: {exc}", landed=commits, failed=name) from exc
+            raise LandingError(f"{name}: {exc}") from exc
+        commits[name] = prepared[name]
+        try:
+            progress["commits"] = dict(commits)
+            _atomic_progress(path, progress)
+        except OSError:
+            # the progress file is crash recovery only: the ref moved, the commit is
+            # returned (and signed by the caller); a failed write never stops the rest
+            # of the landing half way (review round 1 #2)
+            import logging
+            logging.getLogger(__name__).warning(
+                "run %s: landing progress not recorded after %s", run_id, name, exc_info=True)
     return {name: commits[name] for name in sorted(expected)}
 
 
@@ -361,6 +483,7 @@ def execute_request(
     session_id: str, repos: Mapping[str, str], integration_roots: Mapping[str, str],
     message: str, at: str, now: float | None = None,
     progress_path: str | Path | None = None,
+    branches: Mapping[str, str | None] | None = None,
 ) -> dict[str, str]:
     """Consume the hook's approval of *request_id*, then durably land every repo.
     Everything bound — trees, REPORT, bases — is read from the signed land_request
@@ -394,9 +517,19 @@ def execute_request(
         now=time.time() if now is None else now)["consumed"]
     path = Path(progress_path) if progress_path is not None else (
         store.paths.run / f"landing-progress-{request_id}.json")
-    commits = commit_repos(
-        run_id=request["run_id"], integration_roots=integration_roots,
-        bases=dict(bases), bindings=current, message=message, progress_path=path)
+    try:
+        commits = commit_repos(
+            run_id=request["run_id"], integration_roots=integration_roots,
+            bases=dict(bases), bindings=current, message=message, progress_path=path,
+            branches=branches)
+    except PartialLanding as exc:
+        # signed evidence of what moved, before the person sees the error (K2)
+        store.append_new(
+            writer=store.authority.writer("cli"), kind="partial_land", at=at,
+            stage="deliver", attempt=1, ordinal=len(store.read_events()) + 1,
+            payload={"landed": dict(sorted(exc.landed.items())), "failed": exc.failed,
+                     "detail": str(exc)[:300], "auth_consumed_event_id": consumed["event_id"]})
+        raise
     if not any(event.get("kind") == "land" and
                event.get("payload", {}).get("auth_consumed_event_id") == consumed["event_id"]
                for event in store.read_events()):
@@ -404,6 +537,7 @@ def execute_request(
             writer=store.authority.writer("cli"), kind="land", at=at,
             stage="deliver", attempt=1, ordinal=len(store.read_events()) + 1,
             payload={"landing": "human_override", "commit": next(iter(commits.values())),
+                     "commits": dict(sorted(commits.items())),
                      "auth_consumed_event_id": consumed["event_id"]},
         )
     return commits

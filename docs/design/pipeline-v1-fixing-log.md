@@ -244,3 +244,49 @@ trivial 不变：`tests/fixtures/pipeline_v1_trivial_profile.json` 是改动前 
 | R1 LOW | 遗留死代码 `_changed_paths` | 删除 |
 
 **新增测试：** `tests/test_run_protocol_facts.py`；`test_pipeline_v1_conformance_k1.py` 新增 4 个审查回归用例；`test_run_protocol_lifecycle.py` 新增 DC-1 处理旧 decision 的用例。
+
+## 12. 设计符合性修复 K2：多仓落地要么全部落地，要么都不落地
+
+依据：符合性方案 §3 K2、v13 §A3.7。根因 R-B：落地写入 main 的那一步没有"要么全部、要么都不"的语义。
+
+**做法：** `landing.commit_repos` 分两段执行。
+
+- **第 1 段：** 所有仓库先逐个检查完，任何 ref 都还没动。每个仓库要求：
+  - HEAD 等于 run 的 base；
+  - main checkout 当前所在的分支，就是这个仓库的集成分支（run 记录的分支；shared run 取第 1 段时 checkout 所在的分支）；
+  - commit 对象已经写好；
+  - 用 git 自己做一次同样的检出演练 `read-tree -n -m -u HEAD <commit>`，确认 main checkout 允许这次 fast-forward。index-only 改动、未跟踪文件冲突、目录与文件互换、大小写别名、symlink、gitlink 都交给 git 判断，不再用 Python 预测。
+- **第 2 段：** 只做 fast-forward，动手前再确认 checkout 仍在集成分支上。
+
+| 情况 | 结果 |
+|---|---|
+| 第 1 段失败 | `LandingError`：没有任何仓库落地，attempt 关闭，可以重试 |
+| 第 2 段失败，且已有仓库移动过 | 写一条签名的 `partial_land` 事件（repo -> commit、失败的仓库），它只能绑定一次落地：要么是一个全部通过的、仍开着的普通落地 attempt（run 以 `not_landed(partial_land)` 结束，算 Quality BLOCK，REPORT 列出已落地和未落地的仓库），要么是一个人工授权的 consumed 事件（只做记录，并刷新 REPORT） |
+| 崩溃恢复 | 只认这次计划精确会生成的那个 commit（parent、tree、message、Swarm 身份全部一致）；空的 progress 只有在没有任何仓库持有该 commit 时才丢弃；修改前写下的 plan 只要字段一致仍可接受 |
+| `landed_commits` | 只返回最终完成的那次落地（`human_override` 的 request，或普通落地）的 commit 表；没有完成的落地时，返回最近一次 `partial_land`。不再把各次尝试的历史合并在一起 |
+| progress 文件写失败 | 不再中断落地，只记日志；commit 交给调用方签名 |
+
+**删除：** `landing._commit`（第 2 段只调用 `_fast_forward`）；audit 里的 `quality_block_reasons` 副本（改为直接引用 `lifecycle.QUALITY_BLOCK_REASONS`）。
+
+**独立审查（三轮，第 3 轮的发现在本 commit 内一次修完，不再派第 4 轮）：**
+
+| 轮次 | 发现 | 修法 |
+|---|---|---|
+| R1 HIGH | 第 1 段用 Python 预测 git 的检出安全，漏掉 index-only 改动、目录/文件互换、ignored 文件、大小写别名 | 改为直接让 git 做 dry run：`read-tree -n -m -u` |
+| R1 HIGH | progress 写失败后，main 上留下没有任何记录的 commit | progress 写失败不再中断落地；commit 映射由签名的 land 或 `partial_land` 事件携带 |
+| R1 HIGH / R2 HIGH | 人工 run-land 部分落地时没有签名记录；在 `awaiting_human` 和 `reflecting` 状态下 fold 会拒绝该事件 | `partial_land` 必须绑定到一次 consumed 的落地授权，只做记录，不改 run 状态；action 只允许 `land` / `land_skip_tests`，涉及的仓库必须在该 request 的 bindings 里 |
+| R1 MED / R3 MED | 崩溃恢复时，只要 parent 和 tree 相同就把 commit 认作自己的 | 精确比对：commit message 字节相同，author 和 committer 的 name 与 email 都是 Swarm；plan 里绑定 `message_sha` |
+| R1 MED | 恢复时的普通落地绕过了 `PartialLanding` 处理 | 首次落地和恢复落地都走 `_commit_normal` |
+| R1 MED / R2 MED / R3 MED | `partial_land` 和 REPORT 丢了 commit 身份；`landed_commits` 把多次尝试的历史混在一起；结果依赖 progress 文件 | land 事件带上 `commits` 映射（repo → commit）；`landed_commits` 只读签名事件：取最后一次完成的落地，若有更晚的 `partial_land` 则以它为准；progress 文件只在旧事件缺少映射时用来兜底 |
+| R2 HIGH / R3 HIGH | 落到了错误的分支上（普通路径和人工路径都有） | 两条路径都按 run 记录的集成分支落地；第 1 段和第 2 段各核对一次当前所在分支 |
+| R2 HIGH / R3 HIGH | 第 2 段里，ref 已经移动、merge 的后续步骤失败，结果被当成"什么都没动" | 失败后重新读一次 HEAD：如果已经等于准备好的 commit，就按已落地处理 |
+| R2 MED | 修改前写下的 plan 无法恢复 | 新增 `_same_plan`：旧 plan 已有的字段一致即可接受 |
+| R2 MED | 格式不对或孤立的 `partial_land` 被 fold 接受 | 严格校验：commit 必须是合法 sha 的映射；事件必须且只能绑定到"一个通过的普通落地 attempt"或"一个 consumed 授权"之一 |
+| R2 MED / R3 HIGH | 人工落地只落了一部分时，REPORT 和 Quality 仍按旧状态显示 | audit 把"晚于最后一次完成落地的 `partial_land`"直接当作这次的结果（REPORT 列出已落地/未落地的仓库，Quality 判 BLOCK）；engine 同时刷新 REPORT 和 projection |
+
+**残余风险：**
+- fast-forward 完成到签名事件写入之间，进程如果崩溃，那一刻没有签名记录。恢复时依靠精确匹配 commit 来接手，这段缝隙消除不掉，因为任何记录都只能写在 ref 移动之后。
+- 第 2 段里由 git 自身副作用引起的失败（例如 `ORIG_HEAD` lock）同样按 `partial_land` 记录，不再声称只有竞争窗口才会出现这种失败。
+- shared run 的未暂存改动会被 git 拒绝 fast-forward。这在本次修改之前就是如此，留到 K5 的 shared 矩阵里验证。
+
+**新增测试：** `tests/test_pipeline_v1_conformance_k2.py`，共 12 个用例，前 3 个在修改前的代码上失败。
