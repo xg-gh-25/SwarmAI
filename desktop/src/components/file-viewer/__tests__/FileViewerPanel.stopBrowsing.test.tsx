@@ -106,3 +106,46 @@ describe('stop browsing (the Browsing row ×)', () => {
     expect(viewer.closeRequest).toBe(before + 1);
   });
 });
+
+describe('held-back open (unsaved edits, super-canvas-fixing.md C1)', () => {
+  it('shows the prompt with both answers and reports the choice', () => {
+    const onResolvePending = vi.fn();
+    render(
+      <FileViewerPanel {...base} collapse={{ railed: false, outputsCollapsed: false }}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        referencedFiles={{ written: [] } as any} initialFile={browsed as any}
+        pendingOpen={{ filePath: '/ws/b.md', fileName: 'b.md' }} onResolvePending={onResolvePending} />,
+    );
+    const bar = screen.getByTestId('canvas-pending-open');
+    expect(bar.textContent).toContain('notes.md');
+    screen.getByTestId('canvas-pending-keep').click();
+    screen.getByTestId('canvas-pending-discard').click();
+    expect(screen.getByTestId('canvas-pending-discard').textContent).toContain('b.md');
+    expect(onResolvePending.mock.calls).toEqual([[false], [true]]);
+  });
+
+  it('no prompt without a held-back open', () => {
+    render(
+      <FileViewerPanel {...base} collapse={{ railed: false, outputsCollapsed: false }}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        referencedFiles={{ written: [] } as any} initialFile={browsed as any} pendingOpen={null} onResolvePending={vi.fn()} />,
+    );
+    expect(screen.queryByTestId('canvas-pending-open')).toBeNull();
+  });
+
+  it('the folded-header dot follows the slice when controlled', () => {
+    const { rerender } = render(
+      <FileViewerPanel {...base} collapse={{ railed: false, outputsCollapsed: true }}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        referencedFiles={{ written: [] } as any} initialFile={browsed as any} fileDirty={false} onFileDirtyChange={vi.fn()} />,
+    );
+    expect(screen.queryByTestId('canvas-current-dirty')).toBeNull();
+    rerender(
+      <FileViewerPanel {...base} collapse={{ railed: false, outputsCollapsed: true }}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        referencedFiles={{ written: [] } as any} initialFile={browsed as any} fileDirty onFileDirtyChange={vi.fn()} />,
+    );
+    expect(screen.getByTestId('canvas-current-dirty')).toBeTruthy();
+  });
+});
+

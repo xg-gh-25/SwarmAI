@@ -140,6 +140,13 @@ type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
    *  together with onCanvasTabChange; otherwise the panel keeps its own. */
   canvasTab?: CanvasTabId;
   onCanvasTabChange?: (t: CanvasTabId) => void;
+  /** The shown file's unsaved state, owned by the slice (useCanvasHost). Controlled
+   *  when set with onFileDirtyChange; otherwise the panel keeps its own. */
+  fileDirty?: boolean;
+  onFileDirtyChange?: (dirty: boolean) => void;
+  /** A user open held back by unsaved edits, and its answer (useCanvasHost). */
+  pendingOpen?: { filePath: string; fileName: string } | null;
+  onResolvePending?: (discard: boolean) => void;
   /** The referenced-files (rail rows), owned by the RESIDENT useCanvasHost
    *  (run_9e42c066) and passed down. The rail is now pure presentational — the
    *  panel no longer hosts the swarm:file-changed listener, so a write that lands
@@ -335,7 +342,9 @@ function FileViewerPanelImpl({
 
   // Whether that file has unsaved edits (FileViewer reports it): the folded header
   // shows a dot by its name.
-  const [fileDirty, setFileDirty] = useState(false);
+  const [localDirty, setLocalDirty] = useState(false);
+  const fileDirty = props.onFileDirtyChange ? !!props.fileDirty : localDirty;
+  const reportDirty = props.onFileDirtyChange ?? setLocalDirty;
   // "Stop browsing" (the × on the Browsing row): show the first output instead, the
   // same open a click on that row does; with no output, ask FileViewer to close the
   // file through its unsaved-edits guard (closeRequest), which ends in canvas.close.
@@ -836,6 +845,25 @@ function FileViewerPanelImpl({
             )}
           </div>
         )}
+        {/* A user open held back by unsaved edits (super-canvas-fixing.md C1). */}
+        {railTabId !== undefined && props.pendingOpen && props.onResolvePending && (
+          <div
+            className="mx-2 mb-1.5 flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[12px] border border-[color-mix(in_srgb,var(--color-warning)_45%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-warning)_10%,var(--color-card))] text-[var(--color-text)]"
+            role="alert"
+            data-testid="canvas-pending-open"
+          >
+            <span className="material-symbols-outlined icon-sm text-[var(--color-warning)] shrink-0" aria-hidden="true">warning</span>
+            <span className="min-w-0 flex-1 truncate" title={props.initialFile?.filePath}>
+              Unsaved changes in <b>{props.initialFile?.fileName}</b>
+            </span>
+            <button type="button" className="btn-sm btn-ghost shrink-0" onClick={() => props.onResolvePending!(false)}
+              data-testid="canvas-pending-keep">Keep editing</button>
+            <button type="button" className="btn-sm btn-warning shrink-0" onClick={() => props.onResolvePending!(true)}
+              title={props.pendingOpen.filePath} data-testid="canvas-pending-discard">
+              Discard and open {props.pendingOpen.fileName}
+            </button>
+          </div>
+        )}
         {/* Content layer: a raised card below the navigation layer (the header and
             its list sit on the recessed canvas surface). */}
         <div className={`flex-1 min-w-0 overflow-hidden ${railTabId !== undefined ? 'canvas-content-card' : ''}`}>
@@ -844,7 +872,7 @@ function FileViewerPanelImpl({
               {...props}
               variant="panel"
               closeRequest={closeRequest}
-              onDirtyChange={setFileDirty}
+              onDirtyChange={reportDirty}
             />
           </div>
           {canvasTab === 'changes' && <ChangesDetail selected={changesSel} />}

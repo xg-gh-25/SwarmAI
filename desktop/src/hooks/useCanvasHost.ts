@@ -85,6 +85,13 @@ interface CanvasTabState {
    *  tab A's Changes view (and auto-surface's yield) into tab B. Every file open
    *  brings Artifacts forward (the open handler writes it with the file). */
   canvasTab: CanvasTabId;
+  /** The shown file has unsaved edits (FileViewer reports it through the panel).
+   *  While true, a user open of another file waits in `pendingOpen`, and an auto
+   *  open (auto-surface, default selection) is dropped (super-canvas-fixing.md C1). */
+  fileDirty: boolean;
+  /** A user open held back by unsaved edits; the panel asks "discard and open it /
+   *  keep editing" (resolvePending). */
+  pendingOpen: CanvasFile | null;
 }
 
 /** The two Canvas tabs. */
@@ -98,6 +105,8 @@ const EMPTY: CanvasTabState = {
   railed: false,
   outputsCollapsed: false,
   canvasTab: 'artifacts',
+  fileDirty: false,
+  pendingOpen: null,
 };
 
 /** The per-tab collapse view-state the panel reads (Bug 2). `expanded`/`width` are
@@ -161,6 +170,16 @@ export interface CanvasHostApi {
    *  change isOpen's semantics (still file||manuallyOpen) — it just flips the flag
    *  the resident rail exists to flip. useCallback-stable (memo'd panel prop). */
   reveal: () => void;
+  /** The active tab's held-back open (unsaved edits on the shown file), or null. */
+  pendingOpen: CanvasFile | null;
+  /** The shown file has unsaved edits (the panel's folded-header dot reads it). */
+  fileDirty: boolean;
+  /** The panel reports the shown file's unsaved state. Editing an auto-opened file
+   *  makes it the user's (clears `auto`). Stable identity (memo'd panel prop). */
+  setFileDirty: (dirty: boolean) => void;
+  /** Answer the held-back open: discard the edits and open it, or keep editing.
+   *  Stable identity (memo'd panel prop). */
+  resolvePending: (discard: boolean) => void;
   /** Live, synchronous snapshot of Canvas state for the send-time SENSE read
    *  (beats the async canvas-state emit race). STABLE identity: a copy captured
    *  by a memoized send callback still reads the current state. Always the
@@ -249,12 +268,26 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // here — it now derives from the RESIDENT store (useReferencedFiles), which is
   // intentionally per-tab-persistent: closing the panel must not discard the
   // knowledge that N outputs were produced (the ChatHeader pill still shows them).
-  const close = useCallback(() => patch({ file: null, manuallyOpen: false }), [patch]);
+  const close = useCallback(() => patch({ file: null, manuallyOpen: false, fileDirty: false, pendingOpen: null }), [patch]);
   // reveal — manually open Canvas on the active tab (resident empty-state rail click).
   // Reuses patch() (the per-tab write chokepoint keyed on activeTabId) so it lands on
   // the correct tab's slice, mirroring the swarm:open-canvas handler's manuallyOpen
   // write. useCallback dep-[patch] so FileViewerPanel's load-bearing memo stays intact.
   const reveal = useCallback(() => patch({ manuallyOpen: true }), [patch]);
+  const setFileDirty = useCallback((dirty: boolean) => {
+    const cur = mapRef.current.get(keyFor(activeTabId)) ?? EMPTY;
+    if (cur.fileDirty === dirty && !(dirty && cur.file?.auto)) return;
+    // Editing a file Canvas opened by itself makes it the user's: auto-surface must
+    // not replace it, with or without the dirty guard.
+    const file = dirty && cur.file?.auto ? { ...cur.file, auto: undefined } : cur.file;
+    patch({ fileDirty: dirty, file });
+  }, [patch, activeTabId]);
+  const resolvePending = useCallback((discard: boolean) => {
+    const cur = mapRef.current.get(keyFor(activeTabId)) ?? EMPTY;
+    if (!cur.pendingOpen) return;
+    if (!discard) { patch({ pendingOpen: null }); return; }
+    patch({ file: cur.pendingOpen, pendingOpen: null, fileDirty: false, canvasTab: 'artifacts', railed: false });
+  }, [patch, activeTabId]);
 
   const isOpen = !!(slice.file || slice.manuallyOpen);
 
@@ -449,9 +482,20 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       // so a restored railed tab is never un-railed. Only un-rail when the file actually
       // CHANGES (a re-open of the same path must not fight a deliberate manual re-rail).
       const fileChanged = cur.file?.filePath !== resolvedPath;
+      const opened: CanvasFile = { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef, sessionId: openSessionId, auto: auto || undefined };
+      // Unsaved edits on the shown file (C1): Canvas never drops them by itself — an
+      // auto open is ignored; a user open waits for "discard and open / keep editing".
+      if (cur.fileDirty && fileChanged) {
+        if (auto) return;
+        const held = { ...cur, pendingOpen: opened };
+        mapRef.current.set(k, held);
+        if (activeTabIdRef.current === landingTab) setSlice(held);
+        return;
+      }
       const next = {
         ...cur,
-        file: { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef, sessionId: openSessionId, auto: auto || undefined },
+        file: opened,
+        pendingOpen: null,
         // An opened file shows in the document card: bring Artifacts forward (one
         // writer, with the file — the panel used to do this in a render effect).
         canvasTab: 'artifacts' as const,
@@ -526,6 +570,10 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     togglePin,
     close,
     reveal,
+    pendingOpen: slice.pendingOpen,
+    fileDirty: slice.fileDirty,
+    setFileDirty,
+    resolvePending,
     getCanvasSnapshot,
     getCanvasSnapshotFor,
   };

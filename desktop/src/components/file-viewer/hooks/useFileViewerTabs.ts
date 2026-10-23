@@ -6,6 +6,11 @@
  * overflow eviction (max 10 tabs, oldest non-dirty first).
  *
  * Pure React state — no external store. Tab identity is keyed by filePath.
+ *
+ * Single-file mode (the Canvas panel, which shows exactly the Canvas slice's one
+ * file): `showOnly` makes the list that one file and `clearAll` empties it, dirty
+ * or not — the panel decides about unsaved edits before it switches
+ * (docs/design/super-canvas-fixing.md C1).
  */
 
 import { useState, useCallback, useMemo } from 'react';
@@ -34,6 +39,10 @@ export interface UseFileViewerTabsReturn {
   openTab: (filePath: string, fileName: string, gitStatus?: GitStatus) => void;
   closeTab: (tabId: string) => void;
   closeAllTabs: () => void;
+  /** Single-file mode: the list becomes exactly this file (same path keeps its tab). */
+  showOnly: (filePath: string, fileName: string, gitStatus?: GitStatus) => void;
+  /** Single-file mode: drop every tab, dirty included. */
+  clearAll: () => void;
   switchTab: (tabId: string) => void;
   markDirty: (tabId: string, dirty: boolean) => void;
   saveScrollPosition: (tabId: string, position: number) => void;
@@ -124,6 +133,29 @@ export function useFileViewerTabs(): UseFileViewerTabsReturn {
     [],
   );
 
+  const showOnly = useCallback(
+    (filePath: string, fileName: string, gitStatus?: GitStatus) => {
+      setTabs((prev) => {
+        const tab: FileTab = prev.find((t) => t.filePath === filePath) ?? {
+          id: filePath,
+          filePath,
+          fileName,
+          viewType: classifyFileForViewer(fileName),
+          gitStatus,
+          isDirty: false,
+        };
+        setActiveTabId(tab.id);
+        return [tab];
+      });
+    },
+    [],
+  );
+
+  const clearAll = useCallback(() => {
+    setTabs([]);
+    setActiveTabId(null);
+  }, []);
+
   /** Close every tab that is not dirty. Dirty tabs remain open. */
   const closeAllTabs = useCallback(() => {
     setTabs((prev) => {
@@ -158,6 +190,8 @@ export function useFileViewerTabs(): UseFileViewerTabsReturn {
     openTab,
     closeTab,
     closeAllTabs,
+    showOnly,
+    clearAll,
     switchTab,
     markDirty,
     saveScrollPosition,

@@ -148,9 +148,15 @@ function FileViewerImpl({
     openTab,
     closeTab,
     closeAllTabs,
+    showOnly,
+    clearAll,
     switchTab,
     markDirty,
   } = useFileViewerTabs();
+  // The panel shows exactly one file — the Canvas slice's — so it keeps exactly
+  // one (super-canvas-fixing.md C1); the modal keeps its tab list.
+  const single = variant === 'panel';
+  const dropAll = single ? clearAll : closeAllTabs;
 
   /* ---- Per-tab content cache ---- */
   // Keeps fetched content keyed by filePath so we don't re-fetch on tab switch.
@@ -222,11 +228,11 @@ function FileViewerImpl({
   const prevScopeRef = useRef<string | undefined>(tabScopeKey);
   useEffect(() => {
     if (prevScopeRef.current !== undefined && tabScopeKey !== prevScopeRef.current) {
-      closeAllTabs();
+      dropAll();
       prevInitialFileRef.current = undefined;
     }
     prevScopeRef.current = tabScopeKey;
-  }, [tabScopeKey, closeAllTabs]);
+  }, [tabScopeKey, dropAll]);
 
   useEffect(() => {
     if (!initialFile) {
@@ -236,7 +242,7 @@ function FileViewerImpl({
       // clear on the null TRANSITION, not on every render while already empty.
       if (prevInitialFileRef.current !== undefined) {
         prevInitialFileRef.current = undefined;
-        closeAllTabs();
+        dropAll();
       }
       return;
     }
@@ -246,8 +252,15 @@ function FileViewerImpl({
     if (initialFile.workspaceId) {
       workspaceIdRef.current = initialFile.workspaceId;
     }
-    openTab(initialFile.filePath, initialFile.fileName, initialFile.gitStatus);
-  }, [initialFile, openTab, closeAllTabs]);
+    if (single) {
+      // One file shown, one file cached: a file opened again later is re-read
+      // (~10 ms), which also picks up an outside edit made meanwhile.
+      for (const p of Object.keys(contentCache.current)) {
+        if (p !== initialFile.filePath) delete contentCache.current[p];
+      }
+    }
+    (single ? showOnly : openTab)(initialFile.filePath, initialFile.fileName, initialFile.gitStatus);
+  }, [initialFile, openTab, showOnly, single, dropAll]);
 
   /* -------------------------------------------------------------- */
   /*  Fetch content for active tab                                   */
