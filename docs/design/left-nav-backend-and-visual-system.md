@@ -171,16 +171,47 @@ overlay 里只允许用下面这些角色，全部是已有的主题变量，自
 - 字面颜色（hex、`rgb()`，`var(--x, #fallback)` 的兜底值不算）、Tailwind 调色板颜色
 - `font-medium` / `font-bold`
 - 没用 `btn-*` / `icon-btn` 的 `<button>`
+- emoji 字符（V6：只用 Material Symbols）
+- 手写的指标卡、区块标题、状态胶囊（以 V6 组件替换后，overlay 文件里不再出现这些组件的内部 class 组合；具体判据在写测试时按现有写法定）
 
 每个文件的计数和一份基线 `KNOWN` **完全相等**：多了失败，少了但基线没改也失败。每迁移一个 overlay，它的那行降到 0；全部为 0 就是完成。做法和现有的 silent-except baseline、`iconScale.test.ts` 一样。
+
+### V6 共用组件：光统一 token 还不够（依据：Gawan 2026-10-23 的 6 张截图）
+
+截图里看起来"不像一个产品"，主要原因不是字号，而是同一种东西在每个 overlay 里长得不一样。外框已经统一（模式徽标、标题、副标题、ESC、关闭），里面没有统一。
+
+| 同一种东西 | 现在各自的样子（截图） | 统一为 |
+|---|---|---|
+| 主色 | ToDo、Pipeline 用橙色 accent；Library 的 "+ Add Folder"、"Archive to Archives/" 是写死的蓝色；C&M、Library 的 tab 下划线和 "fresh" 是绿色；Brain Hub 的 SwarmAI 卡片顶边和 SELF·OS 是紫色 | 选中、主要操作、当前 tab 一律 `--color-primary`。区色只用在 nav 卡片、模式徽标、overlay 边框和尖角，不用在内容里 |
+| 指标卡 | ToDo：图标 + 22px 大数字 + 大写标签；Pipeline：大写标签在上、数字和标签一样小；C&M：左栏 "86K"；Library：图标 + 数字 + 两行说明挤在一起 | 一个 `<Stat label value hint?>`：标签 `text-meta` 大写，数字 `text-display` 600，可选一行 `text-meta` 说明。不带图标 |
+| 区块标题 | "CURRENT LOAD"、"HEALTH"（带扫帚 emoji）、"WEEKLY ACTIVITY"、"WORKING FILES"、"SWARMWS"，大小、字重、间距各不同 | 一个 `<SectionLabel>`：`text-meta` 600 大写，字距 0.06em，`--color-text-muted`，不带图标和 emoji |
+| 切换视图 | C&M、Library：下划线 tab + 计数小胶囊 | 一个 `<Tabs>`：下划线 tab，下划线和选中文字用主色，计数用 `text-meta` muted |
+| 筛选 | ToDo：实心橙色分段；Pipeline：浅色主色分段，放在右边 | 一个 `<Segmented>`：选中项浅色主色底（`color-mix` 15%）加主色文字，统一放在筛选行左侧 |
+| 状态 | C&M：实心 "fresh/idle" 胶囊；ToDo："• Pending" 灰色胶囊；Pipeline："• stopped/unverified" 彩色文字不带底；Brain Hub："knowledge" 方块 chip；优先级 "• High" 红点 | 一个 `<StatusBadge tone>`：圆点 + 文字，`text-meta`，tone 只有 neutral / success / warning / error / primary，颜色来自状态 token；分类标签（knowledge、chat）用同一组件的 neutral |
+| 表头 | C&M：小号大写灰色；ToDo：粗体白色大写，排序列是橙色；Pipeline、Library：没有表头 | 表格统一 `text-meta` 600 大写 muted 的表头，排序列只多一个箭头，不变色；纯列表（Library Recent、Pipeline 运行列表）不加表头 |
+| 行高 | C&M 约 41px、Library 38、ToDo 47、Pipeline 51（日期折成两行）、Workspace 38 | 两档：单行 36px，两行 48px。日期列定宽不折行 |
+| 说明文字 | ToDo：带边框的黄色提示框；C&M、Library：一段灰色小字 | 一个 `<Hint>`：一段 `text-small` muted 文字，不加框、不加颜色。ToDo 的提示框改成这样 |
+| 图标 | Library 用 emoji（📗 🔗 🧹 🤖 ⬆），其余用 Material Symbols | 只用 Material Symbols，按 icon 尺度 |
+| 按钮 | Library 的 "Delete" 是橙色实心，"Archive" 是蓝色实心，"+ Add Folder" 是整行蓝条 | 主要操作 `btn-primary`，删除 `btn-danger`，其他 `btn-secondary` / `btn-ghost`，按钮宽度跟内容走 |
+| 空图表 | ToDo 的 "WEEKLY ACTIVITY"、Pipeline 的 "THROUGHPUT TREND" 有标题、没有图形 | 没数据时显示 `OverlayState` 的 empty，一行说明 |
+
+组件放在 `desktop/src/components/overlay/`（新目录），每个都是几十行的纯展示组件，不带状态、不取数。overlay 的布局形态不变：C&M、Library 仍是左栏加 tab，Brain Hub 仍是卡片网格，ToDo、Pipeline 仍是筛选、指标、列表，Workspace 仍是文件树。只替换其中的零件。
+
+**宽度**：navTable 现在有 s / m / l / xl 四档。截图里 ToDo（l）比 Pipeline（xl）窄一截，两个都是"指标 + 表格"，并排切换时外框跳动。建议：表格、看板类统一 `xl`（ToDo、Community、Artifacts、New Brain 从 l 改成 xl），文件树 Workspace 保留 `m`，Need You 保留 `m`。
+
+**截图里顺带发现的问题**（不是样式，是显示错了，单独修，和视觉迁移分开提交）：
+- Pipeline 的 "Needs you 0" 框里列着一个 stopped 的 run，数字和内容对不上；同一个 run 在下面的 SwarmAI 分组里又出现一次。
+- Pipeline 的 token 列 "2727k/165k" 被右边的报告图标盖住了一截。
+- Brain Hub 的 "96d ago"、"never" 就是 §1 说的 git 时间，B3 之后改为 run 的合入时间。
+- Brain Hub 的 SwarmAI 卡片和其他卡片排版不同（数字竖排三行，其余是一行 "GROW · N sinking · 时间"）。统一成同一种卡片，SwarmAI 只多一个 SELF·OS 徽标。
 
 ### V5 推进方式
 
 按 lesson：先迁一个，Gawan 看过再推开。
 
-1. 定义 token（V1 字号、V2 区色变量），加 V4 测试，基线 = 现状。这一步不改任何界面。
-2. **试点 Brain Hub**：问题最多（70 处 hex，浅色主题最容易出问题）。迁完报告时写明哪几个画面最可能看起来不同。
-3. Gawan 在深色、浅色主题下各看一眼，确认后再分批迁其余 overlay：C&M、Library、New Brain -> ToDo、Pipeline、Pollinate、Community、Jobs -> Artifacts、Capabilities、Hive、History、Need You -> EvalDashboard -> nav 本身。
+1. 定义 token（V1 字号、V2 区色变量）和 V6 的共用组件，加 V4 测试，基线 = 现状。这一步不改任何界面。
+2. **试点：C&M、ToDo、Pipeline 三个一起迁。** 一个人看不出"像不像一个产品"，要并排比较才看得出；这三个正好覆盖三种形态（左栏加 tab、筛选加指标加表格、指标加列表），截图里差异也最大。迁完报告时写明哪几个画面最可能看起来不同。
+3. Gawan 在深色、浅色主题下各看一眼，确认后再分批迁其余 overlay：Library、Brain Hub、New Brain -> Pollinate、Community、Jobs、Workspace -> Artifacts、Capabilities、Hive、History、Need You -> EvalDashboard -> nav 本身。
 
 ## 4. 验收测试（先写，先红）
 
@@ -209,9 +240,10 @@ overlay 里只允许用下面这些角色，全部是已有的主题变量，自
 | S2 | B2 `run_index.recent()` 和四个读者 | 无 |
 | S3 | B3 Brain Hub 从 run 读，删 git | S2 |
 | S4 | B4 nav 线程池、B5 不拿锁 | 无 |
-| S5 | V1/V2 token、V4 测试和基线 | 无，不改界面 |
-| S6 | 试点 Brain Hub 视觉 | S5，S3 之后做（同一个文件） |
-| S7 | Gawan 看过后，分批迁其余 overlay | S6 确认 |
+| S5 | V1/V2 token、V6 共用组件、V4 测试和基线 | 无，不改界面 |
+| S5b | 截图里的显示错误：Pipeline "Needs you 0" 与内容矛盾、重复列出；token 列被遮挡 | 无，单独提交 |
+| S6 | 试点 C&M、ToDo、Pipeline 视觉，ToDo 宽度改 xl | S5 |
+| S7 | Gawan 看过后，分批迁其余 overlay（Brain Hub 在 S3 之后） | S6 确认 |
 
 每个阶段单独提交，在自己的 worktree 里做，ff-only 合进本地 main，不 push。改后端的阶段需要重建、重启 daemon 才生效。
 
@@ -220,6 +252,10 @@ overlay 里只允许用下面这些角色，全部是已有的主题变量，自
 - 30 天内的旧机制 run 照常统计和显示（Gawan，2026-10-23）。
 - Workspace 文件树的 git 标记保留，改为不拿锁（Gawan，2026-10-23）；Brain Hub 详情页的逐文件标记同样处理。
 - 超过 30 天没动的 paused run 不再出现（原则 3 的直接结果，今天为 0 个）。
+
+**待 Gawan 定**：
+- V6 宽度：ToDo、Community、Artifacts、New Brain 从 l 改成 xl（会改变这四个 overlay 的外框宽度）。
+- V6 主色：区色退出内容区以后，C&M、Library 的 tab 下划线和 "fresh" 从绿色变成主色 / 成功色。
 
 ## 7. 结果
 
