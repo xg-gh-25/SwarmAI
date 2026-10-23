@@ -15,13 +15,11 @@ import { OverlayProvider, useOverlay } from '../../contexts/OverlayContext';
 import { OverlayHost } from './OverlayHost';
 import { registerOverlay } from './overlayRegistry';
 
-// Register a throwaway test surface (does not touch the real registry entries beyond
-// adding one id; getOverlaySpec is a Map so this is isolated per id).
+// Test surfaces registered under REAL ids (this file does not import overlaySurfaces,
+// so the registry holds only these): the host takes their chrome — title, mode badge,
+// width, zone tint, spout target — from navTable.NAV, as it does for every surface.
 registerOverlay({
-  id: '__test_surface__',
-  title: 'Test Surface',
-  mode: 'TEST',
-  width: 'm',
+  id: 'todo',
   render: () => <div data-testid="test-surface-content">hello</div>,
 });
 
@@ -29,7 +27,7 @@ function Harness() {
   const { openOverlay, closeOverlay } = useOverlay();
   return (
     <div>
-      <button data-testid="open" onClick={() => openOverlay('__test_surface__')}>open</button>
+      <button data-testid="open" onClick={() => openOverlay('todo')}>open</button>
       <button data-testid="close" onClick={() => closeOverlay()}>close</button>
       <OverlayHost />
     </div>
@@ -53,7 +51,8 @@ describe('OverlayHost — mount/unmount driven by activeOverlay', () => {
     act(() => screen.getByTestId('open').click());
     expect(screen.getByTestId('overlay-host-scrim')).toBeInTheDocument();
     expect(screen.getByTestId('test-surface-content')).toBeInTheDocument();
-    expect(screen.getByTestId('overlay-host-mode-badge').textContent).toBe('TEST');
+    expect(screen.getByTestId('overlay-host-mode-badge').textContent).toBe('TODO');   // navTable
+    expect(screen.getByRole('heading').textContent).toBe('ToDo');
   });
 });
 
@@ -67,7 +66,7 @@ describe('OverlayHost — fresh mount per open (replaces NewBrain reset-on-reope
     useEffect(() => { mounts += 1; }, []);
     return <div data-testid="stateful-content" />;
   }
-  registerOverlay({ id: '__statefulsurface__', title: 'Stateful', render: () => <StatefulProbe /> });
+  registerOverlay({ id: 'history', render: () => <StatefulProbe /> });
 
   it('mounts a FRESH surface instance on each open (state cannot leak across opens)', () => {
     vi.useFakeTimers();
@@ -76,7 +75,7 @@ describe('OverlayHost — fresh mount per open (replaces NewBrain reset-on-reope
       const { openOverlay, closeOverlay } = useOverlay();
       return (
         <div>
-          <button data-testid="o" onClick={() => openOverlay('__statefulsurface__')}>o</button>
+          <button data-testid="o" onClick={() => openOverlay('history')}>o</button>
           <button data-testid="c" onClick={() => closeOverlay()}>c</button>
           <OverlayHost />
         </div>
@@ -148,10 +147,9 @@ describe('OverlayHost — spout Y is corrected for app zoom (the ×invZoom conve
     cleanup();
   });
 
+  // the spout points at the element carrying data-nav-id=<id> (navTable)
   registerOverlay({
-    id: '__spout_surface__',
-    title: 'Spout Surface',
-    sourceCardTestId: 'nav-spout-card',
+    id: 'jobs',
     render: () => <div data-testid="spout-content" />,
   });
 
@@ -163,8 +161,8 @@ describe('OverlayHost — spout Y is corrected for app zoom (the ×invZoom conve
     const { openOverlay } = useOverlay();
     return (
       <div>
-        <div data-testid="nav-spout-card" />
-        <button data-testid="open-spout" onClick={() => openOverlay('__spout_surface__')}>o</button>
+        <div data-testid="nav-spout-card" data-nav-id="jobs" />
+        <button data-testid="open-spout" onClick={() => openOverlay('jobs')}>o</button>
         <OverlayHost />
       </div>
     );

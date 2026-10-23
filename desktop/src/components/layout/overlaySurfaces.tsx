@@ -41,10 +41,8 @@ const BrainHub = lazy(() => import('./BrainHub').then((m) => ({ default: m.Brain
 const SettingsPage = lazy(() => import('../../pages/SettingsPage'));
 const EvalDashboard = lazy(() => import('../../pages/EvalDashboard'));
 
-// Region tints (mirror ThreeColumnLayout A10_GROUP) — the workbench surfaces spout
-// with their card's zone accent (work = 青蓝, system = slate).
-const TINT_WORK = '#4a8fb0';
-const TINT_SYSTEM = '#7c8194';
+// Chrome (title, mode, width, zone tint, spout target) lives in navTable.NAV, not here:
+// each entry below is only an id + its content.
 
 /** Settings surface content — reads the deep-link tab from LayoutContext (settingsTab
  *  is still LayoutContext state: it's set by nav sub-cards / Capabilities / the
@@ -60,10 +58,6 @@ function SettingsSurface() {
 // <Modal fullscreen>. Now: one registry entry; content is the same <BrainHub/>.
 registerOverlay({
   id: 'brain-hub',
-  title: 'Brain Hub — phase-1 · read-only lens',
-  mode: 'BRAIN',
-  width: 'xl',
-  sourceCardTestId: 'nav-brain-hub',
   render: ({ close, dispatchPrompt }) => (
     <div className="flex-1 overflow-hidden" data-testid="brain-hub-overlay">
       {/* onRequestClose=close (run_a607f2b0): opening a DDD doc closes this overlay
@@ -87,13 +81,6 @@ registerOverlay({
 // (dispatched via the same swarm:open-file path it already guards).
 registerOverlay({
   id: 'swarmws',
-  title: 'SwarmWS — workspace explorer',
-  mode: 'WORKSPACE',
-  // File tree = narrow single-column content → 'm' (max 760px), not 'xl' (max
-  // 1200px). 'xl' left a large right-side whitespace gap (the tree only fills
-  // ~45% of an xl panel). Sized to content, not to the widest tier.
-  width: 'm',
-  sourceCardTestId: 'nav-swarmws',
   render: ({ close }) => (
     <div className="flex-1 overflow-hidden" data-testid="swarmws-overlay">
       <WorkspaceExplorer
@@ -115,20 +102,12 @@ registerOverlay({
 // (self-contained, fetches its own data) registered as content; host owns chrome.
 registerOverlay({
   id: 'context',
-  title: 'C&M · Global Brain',
-  mode: 'BRAIN',
-  width: 'xl',
-  sourceCardTestId: 'nav-context',
   render: () => <CMBrainContent />,
 });
 
 // ── library (bookshelf) ───────────────────────────────────────────────────────────────
 registerOverlay({
   id: 'library',
-  title: 'Library · Bookshelf',
-  mode: 'LIBRARY',
-  width: 'xl',
-  sourceCardTestId: 'nav-library',
   render: () => <LibraryContent />,
 });
 
@@ -137,10 +116,6 @@ registerOverlay({
 // chat tab. Fresh birth per open is automatic now (host mounts fresh each open).
 registerOverlay({
   id: 'new-brain',
-  title: 'Grow a new brain',
-  mode: 'BRAIN',
-  width: 'l',
-  sourceCardTestId: 'nav-new-brain',
   render: ({ close, dispatchPrompt }) => (
     <NewBrainContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
   ),
@@ -151,10 +126,6 @@ registerOverlay({
 // cache (stays reactive); takes only handlers + agent scope via the ctx bridge.
 registerOverlay({
   id: 'history',
-  title: 'History',
-  mode: 'HISTORY',
-  width: 'xl',
-  sourceCardTestId: 'history-row',
   render: ({ close, resumeSession, deleteSession, agentId }) => (
     <HistoryContent
       agentId={agentId ?? null}
@@ -175,15 +146,6 @@ registerOverlay({
 // the horizontal room a single-column list did not.
 registerOverlay({
   id: 'artifacts',
-  title: 'Artifacts',
-  mode: 'ARTIFACTS',
-  width: 'l',
-  // sourceCardTestId is the NAV CARD that OPENS the overlay (ThreeColumnLayout
-  // `data-testid="artifacts-row"`) — OverlayHost reads its rect for the spout
-  // origin. It is NOT the overlay's own row/card testid. Must stay 'artifacts-row'
-  // (Gate-2 API-Contract HIGH: changing it to 'artifacts-card' matched nothing in
-  // the nav → the open animation lost its spout origin).
-  sourceCardTestId: 'artifacts-row',
   render: ({ close }) => <ArtifactsContent close={close} />,
 });
 
@@ -197,11 +159,6 @@ registerOverlay({
 
 registerOverlay({
   id: 'todo',
-  title: 'ToDo',
-  mode: 'TODO',
-  width: 'l',
-  sourceCardTestId: 'nav-todo',
-  tint: TINT_WORK,
   render: ({ close, dispatchTodo }) => (
     <ToDoContent onDispatch={(t: ToDo) => (dispatchTodo ? dispatchTodo(t) : false)} close={close} />
   ),
@@ -215,10 +172,6 @@ registerOverlay({
 // cards are narrower than a file tree; xl leaves a large right-side void).
 registerOverlay({
   id: 'needs-you',
-  title: 'Need You',
-  mode: 'ATTENTION',
-  width: 'm',
-  sourceCardTestId: 'sidebar-alerts-slot',
   render: ({ close, dispatchPrompt }) => (
     <NeedYouContent
       onDispatch={(msg: string) => (dispatchPrompt ? dispatchPrompt(msg) : false)}
@@ -233,21 +186,11 @@ registerOverlay({
 // wider than a single-column list but not the full dashboard 'xl'.
 registerOverlay({
   id: 'community',
-  title: 'Community',
-  mode: 'COMMUNITY',
-  width: 'l',
-  sourceCardTestId: 'nav-community',
-  tint: TINT_WORK,
   render: ({ close }) => <CommunityContent close={close} />,
 });
 
 registerOverlay({
   id: 'jobs',
-  title: 'Jobs & Runs',
-  mode: 'JOBS',
-  width: 'xl',
-  sourceCardTestId: 'nav-jobs',
-  tint: TINT_SYSTEM,
   render: ({ close, dispatchPrompt }) => (
     <JobsRunsContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
   ),
@@ -255,11 +198,6 @@ registerOverlay({
 
 registerOverlay({
   id: 'pipeline',
-  title: 'Pipeline',
-  mode: 'PIPELINE',
-  width: 'xl',
-  sourceCardTestId: 'nav-pipeline',
-  tint: TINT_WORK,
   render: ({ close, dispatchPrompt, resumeSession }) => (
     <PipelineContent onDispatch={dispatchPrompt ?? (() => false)} close={close}
                      onContinue={(sessionId, prompt) => continueInSession(sessionId, prompt, resumeSession)} />
@@ -268,11 +206,6 @@ registerOverlay({
 
 registerOverlay({
   id: 'pollinate',
-  title: 'Pollinate',
-  mode: 'POLLINATE',
-  width: 'xl',
-  sourceCardTestId: 'nav-pollinate',
-  tint: TINT_WORK,
   render: ({ close, dispatchPrompt }) => (
     <PollinateContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
   ),
@@ -284,11 +217,6 @@ registerOverlay({
 // (swarm:show-capabilities). dispatchPrompt lands the "teach a new skill" chat flow.
 registerOverlay({
   id: 'capabilities',
-  title: 'Capabilities — what your AI can do',
-  mode: 'CAPABILITIES',
-  width: 'xl',
-  sourceCardTestId: 'nav-capabilities',
-  tint: TINT_WORK,
   render: ({ close, dispatchPrompt }) => (
     <CapabilitiesContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
   ),
@@ -305,21 +233,11 @@ registerOverlay({
 
 registerOverlay({
   id: 'settings',
-  title: 'Settings',
-  mode: 'SETTINGS',
-  width: 'xl',
-  sourceCardTestId: 'nav-settings',
-  tint: TINT_SYSTEM,
   render: () => <SettingsSurface />,
 });
 
 registerOverlay({
   id: 'eval',
-  title: 'OS Eval',
-  mode: 'EVAL',
-  width: 'xl',
-  sourceCardTestId: 'nav-eval',
-  tint: TINT_SYSTEM,
   render: () => <EvalDashboard />,
 });
 
@@ -331,11 +249,6 @@ registerOverlay({
 // content takes only `close` (no dispatchPrompt bridge — Gate-1 D5).
 registerOverlay({
   id: 'hive',
-  title: 'Hive · Fleet',
-  mode: 'HIVE',
-  width: 'xl',
-  sourceCardTestId: 'nav-hive',
-  tint: TINT_SYSTEM,
   render: ({ close }) => (
     <div className="flex-1 overflow-hidden" data-testid="hive-overlay-wrap">
       <HiveFleetContent close={close} />

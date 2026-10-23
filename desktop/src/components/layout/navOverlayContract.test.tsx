@@ -96,16 +96,6 @@ const ITEMS: Item[] = [
 // Divergences on main at P0 (2026-10-23), grouped by the design's root cause.
 // Each phase deletes what it fixed; the design is done when this is empty.
 const KNOWN = new Set<string>([
-  // RC1 — one nav item, three definitions (P1: nav table)
-  'context:tint', 'library:tint', 'brain-hub:tint', 'new-brain:tint', 'swarmws:tint', 'capabilities:tint',
-  'context:title', 'library:title', 'brain-hub:title', 'new-brain:title', 'swarmws:title',
-  'capabilities:title', 'hive:title',
-  // RC3 — open/close logic in each onClick (P1: activateNav)
-  'history:selected', 'artifacts:selected', 'settings:selectedAtTab',
-  'history:toggle', 'artifacts:toggle', 'context:toggle', 'library:toggle', 'brain-hub:toggle',
-  'new-brain:toggle', 'todo:toggle', 'swarmws:toggle', 'pipeline:toggle', 'pollinate:toggle',
-  'community:toggle', 'jobs:toggle', 'capabilities:toggle', 'hive:toggle',
-  'eval:modalFirst', 'settings:modalFirst',
   // RC2 — fetching without a cache (P2: TanStack Query) and no hover prefetch
   'todo:refetch', 'community:refetch', 'jobs:refetch', 'capabilities:refetch', 'pipeline:refetch',
   'pollinate:refetch', 'hive:refetch',

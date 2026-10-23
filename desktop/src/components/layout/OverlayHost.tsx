@@ -40,6 +40,7 @@ import clsx from 'clsx';
 import { useOverlay } from '../../contexts/OverlayContext';
 import type { OverlayId } from './overlayIds';
 import { getOverlaySpec, getOverlayCtxBridge } from './overlayRegistry';
+import { navEntry, ZONE_TINT } from './navTable';
 
 // Responsive width tiers — CSS clamp(min, preferred%, max), resolved by the browser
 // against the panel's containing block (the scrim = MainContentArea). Ported verbatim
@@ -82,22 +83,19 @@ export function OverlayHost() {
 
     if (isOpen && spec) {
       setRenderedId(activeOverlay);
-      // Capture the spout origin: re-derive the source card's live rect from its
-      // testid (replaces navSource — D4). Same-space as the host rect (read in the
-      // layout effect below), so zoom cancels in the subtraction.
-      if (spec.sourceCardTestId) {
-        const card = document.querySelector<HTMLElement>(`[data-testid="${spec.sourceCardTestId}"]`);
-        if (card) {
-          const r = card.getBoundingClientRect();
-          setSpoutCenterY(r.top + r.height / 2);
-        } else {
-          setSpoutCenterY(null);
-        }
+      // Capture the spout origin: the live rect of the nav item that opens this id
+      // (`[data-nav-id=<id>]`, navTable). None (a deep-link-only id) → no spout.
+      const card = document.querySelector<HTMLElement>(`[data-nav-id="${activeOverlay}"]`);
+      if (card) {
+        const r = card.getBoundingClientRect();
+        setSpoutCenterY(r.top + r.height / 2);
       } else {
         setSpoutCenterY(null);
         setSpoutY(null);
       }
-      setTint(spec.tint ?? null);
+      // the panel accent = the item's zone colour (navTable.ZONE_TINT)
+      const entry = navEntry(activeOverlay);
+      setTint(entry ? ZONE_TINT[entry.zone] : null);
 
       let raf2 = 0;
       const raf1 = requestAnimationFrame(() => {
@@ -176,7 +174,9 @@ export function OverlayHost() {
   const renderSpec = spec ?? getOverlaySpec(renderedId);
   if (!renderSpec) return null;
 
-  const width = OVERLAY_WIDTH[renderSpec.width ?? 'l'];
+  // chrome from navTable; an id with no nav row (tests) falls back to its id as title
+  const chrome = navEntry(renderedId);
+  const width = OVERLAY_WIDTH[chrome?.width ?? 'l'];
 
   return (
     <div
@@ -229,15 +229,20 @@ export function OverlayHost() {
         )}
         {/* Header — ported from Modal fullscreen branch */}
         <div className="relative flex items-center gap-3 h-[50px] px-5 shrink-0 rounded-t-[18px] bg-gradient-to-b from-[var(--color-bg-chrome)] to-[var(--color-card)] border-b border-[var(--color-border)] before:absolute before:inset-x-0 before:bottom-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-[var(--panel-accent)] before:to-transparent before:opacity-50">
-          {renderSpec.mode && (
+          {chrome?.mode && (
             <span
               className=" text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--panel-accent)] bg-[color-mix(in_srgb,var(--panel-accent)_14%,transparent)] ring-1 ring-[color-mix(in_srgb,var(--panel-accent)_25%,transparent)] px-2 py-[3px] rounded-md"
               data-testid="overlay-host-mode-badge"
             >
-              {renderSpec.mode}
+              {chrome.mode}
             </span>
           )}
-          <h2 className="font-semibold text-[15px] tracking-tight text-[var(--color-text)]">{renderSpec.title}</h2>
+          <h2 className="font-semibold text-[15px] tracking-tight text-[var(--color-text)]">{chrome?.navLabel ?? renderedId}</h2>
+          {chrome?.subtitle && (
+            <span className="text-[12px] text-[var(--color-text-muted)] truncate" data-testid="overlay-host-subtitle">
+              {chrome.subtitle}
+            </span>
+          )}
           <div className="ml-auto flex items-center gap-3">
             <span className="hidden sm:flex items-center gap-1.5 tabular-nums text-[11px] text-[var(--color-text-faint)]">
               <kbd className="border border-[var(--color-border)] rounded px-1.5 py-0.5 bg-[var(--color-bg)]">ESC</kbd>

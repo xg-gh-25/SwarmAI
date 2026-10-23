@@ -220,3 +220,24 @@ Need You 的 tint/title。发现的分歧必须与 `KNOWN` 完全相等：多一
 Jobs 已有正确的 tint，spout 全部正常——说明各项检查能区分对错，不是一律报错。连跑两次结果相同。
 
 §5.4（首包上限）、§5.5（真机计时）放到 P3，和按需加载一起做。
+
+## 10. P1 结果（2026-10-23）
+
+`navTable.ts` 是每个 nav 项的唯一定义（zone、navLabel、subtitle、mode、width）；`ZONE_TINT` 是区颜色
+的唯一定义，`A10_GROUP`、`TINT_WORK`、`TINT_SYSTEM` 已删。注册表的 `OverlaySpec` 只剩 `id`、`render`、
+`autoHeight`；OverlayHost 从表里取标题、副标题、mode、宽度、颜色，尖角对准 `[data-nav-id=<id>]`
+（`sourceCardTestId` 已删）。nav 的 13 张 `A10Card` 改为 `navId` 驱动名字和颜色，New Brain、History、
+Artifacts、Need You 槽加 `data-nav-id`；所有 nav 项的点击走同一个 `activateNav`（先关 modal，已打开
+则关闭，XG D1）；选中态统一为 `activeOverlay === id`（Settings 带子 tab 也算，D2）。History、Artifacts
+行的选中样式沿用该行已有的 hover 样式。nav 的分组、顺序、样式未动：两份 nav 顺序测试原样通过。
+
+和 §4 的差别：
+- **agent 能打开哪些 overlay 不进表**。`ALL_SHOW_EVENTS` 仍是 `useExclusiveOverlay.ts` 里的显式列表：
+  它是后端 ui_action 允许列表的来源，是安全边界；放成显示表里的一个开关太容易误改。
+- **图标不进表**：overlay 不用图标，只有 nav 用，留在 nav 里。
+- **`activateNav` 放在 LeftSidebar**，不在 OverlayContext：只有 nav 用它，它要同时用 LayoutContext
+  （关 modal）和 OverlayContext。
+
+`KNOWN` 51 → 19（RC1 13 条、RC3 19 条全部清掉，只剩 RC2）。反向验证：去掉"已打开则关闭"，14 条 toggle
+重新出现；不设 tint，所有 tint 重新出现。OverlayHost.test 的测试 overlay 改为注册在真实 id 下（标题、
+mode、尖角都从表里来）。

@@ -81,24 +81,13 @@ export function getOverlayCtxBridge(): OverlayCtxBridge {
 }
 
 export interface OverlaySpec {
-  /** Stable id — the value stored in `activeOverlay` + the key nav cards open. */
+  /** Stable id — the value stored in `activeOverlay`. Its chrome (title, subtitle,
+   *  mode badge, width, zone tint) and the nav item the spout points at
+   *  (`[data-nav-id=<id>]`) come from navTable.NAV — one definition the nav reads too. */
   id: OverlayId;
-  /** Header title (fullscreen chrome). */
-  title: string;
-  /** Mono mode badge in the header (e.g. "BRAIN", "EVAL"). */
-  mode?: string;
-  /** Content-adaptive width tier — same contract as the old Modal.fullscreenWidth. */
-  width?: 's' | 'm' | 'l' | 'xl';
   /** Height mode: false (default) = fill the chat-area height (definite height for
    *  full-height flex children); true = shrink-to-content, clamped. */
   autoHeight?: boolean;
-  /** `data-testid` on the LeftNav card this surface spouts from — the host re-derives
-   *  the card's live rect at open time (replaces the navSource singleton push). When
-   *  absent, the panel opens with no spout (e.g. deep-link / non-card open). */
-  sourceCardTestId?: string;
-  /** Region tint (hex) for the panel accent (border/ring/spout/header underline).
-   *  Falls back to --color-primary when omitted. */
-  tint?: string;
   /** The CONTENT only — the host wraps it in scrim + panel + header chrome. */
   render: (ctx: OverlayRenderCtx) => ReactNode;
 }

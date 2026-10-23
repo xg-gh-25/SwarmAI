@@ -235,5 +235,5 @@ describe('LeftSidebar A10 — highlight tiers (run_edb48c31)', () => {
 
 // The "nav-source spit-out origin" describe was removed 2026-08-04 (M5): A10Card no
 // longer pushes a navSource singleton on click — the OverlayHost re-derives the source
-// card's live rect from its data-testid (sourceCardTestId) at open time. The spout
+// card's live rect from its data-testid (data-nav-id, navTable) at open time. The spout
 // origin is now covered by OverlayHost.test (geometry contract).

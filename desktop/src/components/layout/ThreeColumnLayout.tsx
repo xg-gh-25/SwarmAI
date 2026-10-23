@@ -8,6 +8,8 @@ import { BottomBar } from './BottomBar';
 import { TerminalProvider, useTerminal, useTerminalHotkey } from '../../contexts/TerminalContext';
 import { OverlayProvider, useOverlay } from '../../contexts/OverlayContext';
 import './overlaySurfaces'; // side-effect: registers fullscreen surfaces with the registry
+import { NAV, ZONE_TINT } from './navTable';
+import type { OverlayId } from './overlayIds';
 import TerminalPanel from '../terminal/TerminalPanel';
 import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 // BrainHubDemoOverlay retired (M2): brain-hub migrated to the OverlayHost registry
@@ -29,12 +31,9 @@ import { hiveService, TRANSITIONAL_STATUSES } from '../../services/hive';
 // Left sidebar width constant
 const LEFT_SIDEBAR_WIDTH = LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH;
 
-// A10 group tint (muted, Radar-like) — Cognitive violet / Work green / System grey.
-const A10_GROUP = {
-  cognitive: '#5fc99a',  // 认知区专属薄荷绿 (run_b57266d2) — 认知区是核心差异化，绿标记它
-  work: '#4a8fb0',       // 青蓝 — 从森林绿改，消除与认知区绿的撞色
-  system: '#7c8194',
-} as const;
+// Zone colours, nav labels and overlay chrome: one definition in navTable (design
+// docs/design/left-nav-overlay-single-source.md S1). The nav's grouping, order and
+// styles stay hand-written below.
 
 // Minimum width for main chat panel to ensure usability
 const MIN_MAIN_CHAT_PANEL_WIDTH = 300;
@@ -175,11 +174,20 @@ function TopBar() {
  *  IS the chronological latest. *-weekly.md (same dir) is excluded. null if none. */
 // Left Sidebar - narrow navigation column with icon-only navigation
 function LeftSidebar() {
-  const { activeModal, closeModal, settingsTab, setSettingsTab } = useLayout();
+  const { activeModal, closeModal, setSettingsTab } = useLayout();
   // New OverlayHost subsystem (M2+). Migrated surfaces open via openOverlay + read
   // their highlight from newActiveOverlay. The hybrid bridge (OverlayContext) keeps
   // legacy + new mutually exclusive until M5 retires the legacy path.
   const { activeOverlay: newActiveOverlay, openOverlay, closeOverlay } = useOverlay();
+  // One rule for every nav item: an open small modal closes first; clicking the item
+  // whose overlay is open closes it (XG D1), otherwise it opens. `before` runs just
+  // before an open (Settings clears its deep-link tab).
+  const activateNav = (id: OverlayId, before?: () => void) => {
+    if (activeModal) closeModal();
+    if (newActiveOverlay === id) { closeOverlay(); return; }
+    before?.();
+    openOverlay(id);
+  };
   // Terminal panel open-state + toggle — LeftSidebar is inside <TerminalProvider>
   // so it reads the real panelOpen (for the active indicator) and shares the SAME
   // togglePanel as the BottomBar button + ⌘` hotkey (all three entries stay synced).
@@ -217,25 +225,29 @@ function LeftSidebar() {
 
         {/* History row — a Chat sub-entry (past conversations), muted vs domain cards. */}
         <button
-          className="a10-histrow mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
+          className={`a10-histrow mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors${newActiveOverlay === 'history' ? ' bg-[var(--color-hover)] text-[var(--color-text)]' : ''}`}
           // Publish THIS row as the spit-out source (like A10Card.handleClick) so the
           // History overlay opens via the OverlayHost (M3). The host re-derives this
-          // row's rect from its testid (sourceCardTestId: 'history-row') for the spout.
-          onClick={() => { if (activeModal) closeModal(); openOverlay('history'); }}
+          // row's rect from its data-nav-id for the spout.
+          onClick={() => activateNav('history')}
+          aria-pressed={newActiveOverlay === 'history'}
+          data-nav-id="history"
           title="History"
           data-testid="history-row"
         >
           <span data-testid="history-row-icon" className="w-4 flex items-center justify-center opacity-85"><NavSvgIcon name="history" /></span>
-          <span className="flex-1 text-left text-[11.5px] tabular-nums tracking-wide">History</span>
+          <span className="flex-1 text-left text-[11.5px] tabular-nums tracking-wide">{NAV.history.navLabel}</span>
           <span className="text-[13px] text-[var(--color-text-faint)]">›</span>
         </button>
 
         {/* Artifacts row — History's twin: browses recent FILES (not conversations).
             Opens the artifacts overlay via OverlayHost; the host re-derives this row's
-            rect from its testid (sourceCardTestId: 'artifacts-row') for the spout. */}
+            rect from its data-nav-id for the spout. */}
         <button
-          className="a10-histrow relative mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-          onClick={() => { if (activeModal) closeModal(); openOverlay('artifacts'); }}
+          className={`a10-histrow relative mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors${newActiveOverlay === 'artifacts' ? ' bg-[var(--color-hover)]' : ''}`}
+          onClick={() => activateNav('artifacts')}
+          aria-pressed={newActiveOverlay === 'artifacts'}
+          data-nav-id="artifacts"
           title="Artifacts"
           data-testid="artifacts-row"
         >
@@ -247,7 +259,7 @@ function LeftSidebar() {
           <span
             className="flex-1 text-left text-[11.5px] tabular-nums font-medium tracking-wide"
             style={{ color: 'var(--color-primary)' }}
-          >Artifacts</span>
+          >{NAV.artifacts.navLabel}</span>
           <span className="text-[13px] text-[var(--color-text-faint)]">›</span>
         </button>
 
@@ -261,6 +273,7 @@ function LeftSidebar() {
         <div
           id="sidebar-alerts-slot"
           data-testid="sidebar-alerts-slot"
+          data-nav-id="needs-you"
           className="relative mt-0.5"
         />
       </div>
@@ -274,23 +287,24 @@ function LeftSidebar() {
       <nav className="flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
         {/* 认知区 — 绿面板容器：无区头、无 scope 文字，靠视觉 + highlight 分层 */}
         <div className="a10-zone" data-testid="cognition-zone">
-          <A10Card icon="layers" label="C&M" tint={A10_GROUP.cognitive} isActive={newActiveOverlay === 'context'} onClick={() => { if (activeModal) closeModal(); openOverlay('context'); }} data-testid="nav-context" />
-          <A10Card icon="menu_book" label="Library" tint={A10_GROUP.cognitive} isActive={newActiveOverlay === 'library'} onClick={() => { if (activeModal) closeModal(); openOverlay('library'); }} data-testid="nav-library" />
-          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} highlight isActive={newActiveOverlay === 'brain-hub'} onClick={() => { if (activeModal) closeModal(); openOverlay('brain-hub'); }} data-testid="nav-brain-hub" />
+          <A10Card navId="context" icon="layers" isActive={newActiveOverlay === 'context'} onClick={() => activateNav('context')} data-testid="nav-context" />
+          <A10Card navId="library" icon="menu_book" isActive={newActiveOverlay === 'library'} onClick={() => activateNav('library')} data-testid="nav-library" />
+          <A10Card navId="brain-hub" icon="hub" highlight isActive={newActiveOverlay === 'brain-hub'} onClick={() => activateNav('brain-hub')} data-testid="nav-brain-hub" />
           <button
             className={`a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors${newActiveOverlay === 'new-brain' ? ' a10-newbrain--active' : ''}`}
-            style={{ '--ac': A10_GROUP.cognitive } as CSSProperties}
+            style={{ '--ac': ZONE_TINT.cognitive } as CSSProperties}
             aria-pressed={newActiveOverlay === 'new-brain'}
             // Raw button (not A10Card) — the host re-derives this card's rect from its
-            // testid (sourceCardTestId: 'nav-new-brain') for the cognition-green spout.
-            onClick={() => { if (activeModal) closeModal(); openOverlay('new-brain'); }}
+            // data-nav-id for the cognition-green spout.
+            onClick={() => activateNav('new-brain')}
             title="New Brain — 建一个新大脑"
             data-testid="nav-new-brain"
+            data-nav-id="new-brain"
           >
             <span className="a10-plus flex-shrink-0 w-[22px] h-[22px] rounded-[7px] flex items-center justify-center">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
             </span>
-            <span className="flex-1 text-left text-[12px] font-semibold whitespace-nowrap">New Brain</span>
+            <span className="flex-1 text-left text-[12px] font-semibold whitespace-nowrap">{NAV['new-brain'].navLabel}</span>
           </button>
         </div>
 
@@ -300,39 +314,39 @@ function LeftSidebar() {
             green panel: cognition's green zone stays the sole differentiated
             surface (P1). "Workspace" is the de-jargoned label for the SwarmWS
             workspace (testid nav-swarmws + explorer brand title keep SwarmWS). */}
-        <A10Group label="Work" tint={A10_GROUP.work}>
-          <A10Card icon="todo" label="ToDo" tint={A10_GROUP.work} highlight isActive={newActiveOverlay === 'todo'} onClick={() => { if (activeModal) closeModal(); openOverlay('todo'); }} data-testid="nav-todo" />
-          <A10Card icon="folder" label="Workspace" tint={A10_GROUP.work} highlight isActive={newActiveOverlay === 'swarmws'} onClick={() => { if (activeModal) closeModal(); openOverlay('swarmws'); }} data-testid="nav-swarmws" />
+        <A10Group label="Work" tint={ZONE_TINT.work}>
+          <A10Card navId="todo" icon="todo" highlight isActive={newActiveOverlay === 'todo'} onClick={() => activateNav('todo')} data-testid="nav-todo" />
+          <A10Card navId="swarmws" icon="folder" highlight isActive={newActiveOverlay === 'swarmws'} onClick={() => activateNav('swarmws')} data-testid="nav-swarmws" />
           {/* NOTE: no Canvas nav card by design (run_990b0a03). Canvas is
               OUTPUT-TRIGGERED — it auto-surfaces on a `written` event and opens via
               a chat file-chip click or the agent's swarm:open-canvas command; a
               manual nav entry that opened an often-empty Outputs panel contradicted
               that "products fly out to you" model. Mute-recovery lives in the Canvas
               header unmute toggle (FileViewerPanel), not a global nav button. */}
-          <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} isActive={newActiveOverlay === 'pipeline'} onClick={() => { if (activeModal) closeModal(); openOverlay('pipeline'); }} data-testid="nav-pipeline" />
-          <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} isActive={newActiveOverlay === 'pollinate'} onClick={() => { if (activeModal) closeModal(); openOverlay('pollinate'); }} data-testid="nav-pollinate" />
+          <A10Card navId="pipeline" icon="pipeline" isActive={newActiveOverlay === 'pipeline'} onClick={() => activateNav('pipeline')} data-testid="nav-pipeline" />
+          <A10Card navId="pollinate" icon="hive" isActive={newActiveOverlay === 'pollinate'} onClick={() => activateNav('pollinate')} data-testid="nav-pollinate" />
           {/* Community — SwarmAI's two-way membrane with the outside world (inbound
               signals + outbound engagement). Moved to the Work zone as a resident
               main entry (run_5165013e): it's an active daily surface, not a
               low-attention System tool — and upgraded from the old soft signal-file
               opener to a real OverlayHost surface (3 tabs). Last in Work. */}
-          <A10Card icon="public" label="Community" tint={A10_GROUP.work} isActive={newActiveOverlay === 'community'} onClick={() => { if (activeModal) closeModal(); openOverlay('community'); }} data-testid="nav-community" />
+          <A10Card navId="community" icon="public" isActive={newActiveOverlay === 'community'} onClick={() => activateNav('community')} data-testid="nav-community" />
         </A10Group>
 
-        <A10Group label="System" tint={A10_GROUP.system} dimCards>
-          <A10Card icon="schedule" label="Jobs & Runs" tint={A10_GROUP.system} highlight isActive={newActiveOverlay === 'jobs'} onClick={() => { if (activeModal) closeModal(); openOverlay('jobs'); }} data-testid="nav-jobs" />
+        <A10Group label="System" tint={ZONE_TINT.system} dimCards>
+          <A10Card navId="jobs" icon="schedule" highlight isActive={newActiveOverlay === 'jobs'} onClick={() => activateNav('jobs')} data-testid="nav-jobs" />
           {/* Capabilities — "what your AI can do" (skills + connections). Moved to the
               System zone after Jobs & Runs (run_5165013e): it's the ability
               reference/config surface, grouped with the other low-frequency System
               tools; the Work zone is reserved for active produce/engage surfaces
               (ToDo/Workspace/Pipeline/Pollinate/Community). Supersedes the earlier
               Work-zone placement (run_b5d98151). */}
-          <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} isActive={newActiveOverlay === 'capabilities'} onClick={() => { if (activeModal) closeModal(); openOverlay('capabilities'); }} data-testid="nav-capabilities" />
+          <A10Card navId="capabilities" icon="extension" isActive={newActiveOverlay === 'capabilities'} onClick={() => activateNav('capabilities')} data-testid="nav-capabilities" />
           {hiveEnabled && (
-            <A10Card icon="cloud" label="Hive" tint={A10_GROUP.system} statusDot={hiveStatusDot} isActive={newActiveOverlay === 'hive'} onClick={() => { if (activeModal) closeModal(); openOverlay('hive'); }} data-testid="nav-hive" />
+            <A10Card navId="hive" icon="cloud" statusDot={hiveStatusDot} isActive={newActiveOverlay === 'hive'} onClick={() => activateNav('hive')} data-testid="nav-hive" />
           )}
-          <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} isActive={newActiveOverlay === 'eval'} onClick={() => { if (newActiveOverlay === 'eval') { closeOverlay(); } else { openOverlay('eval'); } }} data-testid="nav-eval" />
-          <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={newActiveOverlay === 'settings' && !settingsTab} onClick={() => { if (newActiveOverlay === 'settings') { closeOverlay(); } else { setSettingsTab(undefined); openOverlay('settings'); } }} data-testid="nav-settings" />
+          <A10Card navId="eval" icon="heartbeat" isActive={newActiveOverlay === 'eval'} onClick={() => activateNav('eval')} data-testid="nav-eval" />
+          <A10Card navId="settings" icon="gear" isActive={newActiveOverlay === 'settings'} onClick={() => activateNav('settings', () => setSettingsTab(undefined))} data-testid="nav-settings" />
         </A10Group>
       </nav>
 
@@ -653,9 +667,9 @@ function A10Group({ label, tint, dimCards, children }: { label: string; tint: st
 }
 
 interface A10CardProps {
+  /** The nav item: its label and zone colour come from navTable.NAV. */
+  navId: OverlayId;
   icon: string;
-  label: string;
-  tint: string;
   flag?: 'y' | 'r';
   isActive?: boolean;
   /** Highlight the card in its resting state (brighter than siblings) — marks a
@@ -674,15 +688,18 @@ interface A10CardProps {
 /** A10 domain row-card: [chip icon] label …… [Y/R flag]. Title never truncates;
  *  the attention flag is a corner badge (never eats the title). An optional live
  *  statusDot sits on the chip's top-right corner (signal-driven only). */
-function A10Card({ icon, label, tint, flag, isActive, highlight, statusDot, onClick, 'data-testid': testId }: A10CardProps) {
+function A10Card({ navId, icon, flag, isActive, highlight, statusDot, onClick, 'data-testid': testId }: A10CardProps) {
+  const { navLabel: label, zone } = NAV[navId];
+  const tint = ZONE_TINT[zone];
   // (navSource push removed M5: the OverlayHost re-derives THIS card's live rect from
-  // its data-testid — sourceCardTestId — at open time, so the spout origin no longer
+  // its data-nav-id (navTable) at open time, so the spout origin no longer
   // needs a mutable singleton pushed on click.)
   return (
     <button
       onClick={onClick}
       title={label}
       data-testid={testId}
+      data-nav-id={navId}
       aria-pressed={isActive}
       style={{ '--ac': tint } as CSSProperties}
       className={`a10-card${isActive ? ' a10-card--active' : ''}${highlight ? ' a10-card--hilite' : ''} relative w-full flex items-center gap-2.5 rounded-[11px] pl-2 pr-2.5 py-1.5`}
