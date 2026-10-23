@@ -295,14 +295,22 @@ def schedule(session_id: str) -> list[str]:
 
 def create_reflect_trigger(session_context: dict):
     """The PostToolUse (Bash) hook: a pipeline_v1 command may have moved a run into
-    REFLECT; queue it. Stat-light (run.json reads) and off the chat path."""
+    REFLECT; queue it. The run lookup itself runs on the reflect worker, never on
+    the event loop: the hook only hands the session id over and returns."""
     async def _hook(input_data: dict, tool_use_id, context) -> dict:
         try:
             command = ((input_data or {}).get("tool_input") or {}).get("command") or ""
             sid = session_context.get("sdk_session_id")
             if "pipeline_v1" in command and sid:
-                schedule(str(sid))
+                _pool().submit(_schedule_logged, str(sid))
         except Exception:  # noqa: BLE001 — never fail the tool call
             logger.debug("v1 reflect trigger failed", exc_info=True)
         return {}
     return _hook
+
+
+def _schedule_logged(session_id: str) -> None:
+    try:
+        schedule(session_id)
+    except Exception:  # noqa: BLE001 — a background trigger must not raise into the pool
+        logger.warning("v1 reflect schedule for %s failed", session_id, exc_info=True)

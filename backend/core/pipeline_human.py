@@ -18,7 +18,6 @@ Every function is fail-safe for the chat path: an error is logged and reported a
 """
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any, Optional
@@ -56,19 +55,19 @@ def owned_runs(session_id: str, status: Optional[str] = None) -> list[str]:
     """Run ids of non-terminal v1 runs whose projected owner is *session_id* (and,
     with *status*, whose projected status is that one).
 
-    run.json is only the projection; callers re-check the owner on the engine."""
+    run.json is only the projection; callers re-check the owner on the engine.
+    Reads through core.run_index (a file is parsed again only when it changed);
+    blocking: call it off the event loop."""
     if not session_id:
         return []
+    from core import run_index
     out = []
-    for path in (_workspace() / "Projects").glob("*/.artifacts/runs/run_*/run.json"):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if isinstance(data, dict) and data.get("session_id") == session_id \
+    for rf in run_index.runs(_workspace()):
+        data = rf.data
+        if rf.path.parent.name.startswith("run_") and data.get("session_id") == session_id \
                 and data.get("status") not in _TERMINAL and "decision_cap" in data \
                 and (status is None or data.get("status") == status):
-            out.append(path.parent.name)
+            out.append(rf.path.parent.name)
     return sorted(out)
 
 

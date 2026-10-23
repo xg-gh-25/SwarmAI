@@ -100,6 +100,9 @@ _POOL_SPECS: dict[str, int] = {
     "turn_changes": 2,  # core/turn_changes finish diffs + GET /api/chat/turn-diff. Both
                       # are kept off 'subprocess', whose fail-open safety gates
                       # (worktree write gate, commit gates) must never wait on them.
+    "pipeline_signal": 1,  # pipeline v1 bookkeeping a chat hook triggers (an approval's
+                      # required-approval count): fire-and-forget, one writer, never
+                      # on the event loop and never ahead of a gate.
 }
 
 _pools: dict[str, ThreadPoolExecutor] = {}
