@@ -1615,3 +1615,32 @@ def test_add_member_rejects_http_url_for_rss(tmp_config_members: Path) -> None:
         _run(add_member("rssf", MemberBody(value="http://blog.aws.amazon.com/rss")))
     assert ei.value.status_code == 422
     assert "https" in str(ei.value.detail).lower()
+
+
+# ── /engagement carries only the latest reply per item (the list renders only it) ──
+# The full nested thread made the response ~560 KB for 334 items (2026-10-23 measure)
+# while the Outbound list shows one reply line + reply_count. engagement_items() keeps
+# the full thread for its own callers; only the endpoint trims.
+
+def test_engagement_endpoint_returns_latest_reply_only(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+    import routers.community_api as api_mod
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "a1", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "first"},
+        {"author": "m1", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "latest"},
+    ])
+    monkeypatch.setattr(api_mod, "_engagement_dir", lambda: d)
+    eng = asyncio.run(api_mod.community_engagement())
+    item = eng["items"][0]
+    assert "replies" not in item
+    assert item["latest_reply"]["body"] == "latest" and item["latest_reply"]["author"] == "m1"
+    assert item["reply_count"] == 2                       # the total stays
+
+
+def test_engagement_endpoint_latest_reply_none_without_replies(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+    import routers.community_api as api_mod
+    d = _eng_reply_fixture(tmp_path, [])
+    monkeypatch.setattr(api_mod, "_engagement_dir", lambda: d)
+    item = asyncio.run(api_mod.community_engagement())["items"][0]
+    assert item["latest_reply"] is None and item["reply_count"] == 0

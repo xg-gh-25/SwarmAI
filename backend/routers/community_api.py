@@ -124,7 +124,7 @@ async def community_engagement() -> dict:
     """GitHub community engagement metrics + actionable list (data-backed only).
 
     Returns {kpis: {comments_posted, replies_received, maintainer_replies, stars},
-    items: [per-engagement rows with comment_url + nested replies]}. `kpis` is the
+    items: [per-engagement rows with comment_url + latest_reply]}. `kpis` is the
     scalar summary (Outbound strip); `items` is the clickable engagement list
     (needs-followup first — see engagement_items). No fabricated quality score —
     there is no quality-score source on disk. Empty/zeros when GitHub_Community has
@@ -134,7 +134,17 @@ async def community_engagement() -> dict:
     d = _engagement_dir()
     kpis = await asyncio.to_thread(aggregate_engagement, d)
     items = await asyncio.to_thread(engagement_items, d)
-    return {"kpis": kpis, "items": items}
+    # Each row carries only its latest reply (the list renders one reply line next to
+    # reply_count); the whole nested thread made the body ~560 KB for 334 rows.
+    return {"kpis": kpis, "items": [_with_latest_reply(it) for it in items]}
+
+
+def _with_latest_reply(item: dict) -> dict:
+    """An engagement row with `replies` replaced by `latest_reply` (the last one, or None)."""
+    replies = item.get("replies") or []
+    out = {k: v for k, v in item.items() if k != "replies"}
+    out["latest_reply"] = replies[-1] if replies else None
+    return out
 
 
 # ── Phase-2: Sources CRUD (writes config.yaml via the shared serialization authority) ──

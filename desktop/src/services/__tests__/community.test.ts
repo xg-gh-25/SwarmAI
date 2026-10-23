@@ -156,7 +156,7 @@ describe('communityService — snake→camel normalization', () => {
     expect(out[0].memberKind).toBeNull();
   });
 
-  it('fetchEngagement maps the {kpis, items} contract + nested replies → camelCase', async () => {
+  it('fetchEngagement maps the {kpis, items} contract + the latest reply → camelCase', async () => {
     mockApi.get.mockResolvedValue({
       data: {
         kpis: { comments_posted: 216, replies_received: 387, maintainer_replies: 21, stars: null },
@@ -165,7 +165,7 @@ describe('communityService — snake→camel normalization', () => {
             repo: 'a/b', issue_number: 1, topic: 'T-MEM', status: 'published',
             comment_url: 'https://github.com/a/b/issues/1#c1', posted_at: '2026-08-01T10:00:00Z',
             confidence: 9, reply_count: 1, has_maintainer_reply: true, needs_followup: true,
-            replies: [{ author: 'm1', body: 'merged', is_maintainer: true, created_at: '2026-08-02T10:00:00Z' }],
+            latest_reply: { author: 'm1', body: 'merged', is_maintainer: true, created_at: '2026-08-02T10:00:00Z' },
           },
         ],
       },
@@ -177,7 +177,7 @@ describe('communityService — snake→camel normalization', () => {
       repo: 'a/b', issueNumber: 1, topic: 'T-MEM', status: 'published',
       commentUrl: 'https://github.com/a/b/issues/1#c1', postedAt: '2026-08-01T10:00:00Z',
       confidence: 9, replyCount: 1, hasMaintainerReply: true, needsFollowup: true,
-      replies: [{ author: 'm1', body: 'merged', isMaintainer: true, createdAt: '2026-08-02T10:00:00Z' }],
+      latestReply: { author: 'm1', body: 'merged', isMaintainer: true, createdAt: '2026-08-02T10:00:00Z' },
     });
   });
 

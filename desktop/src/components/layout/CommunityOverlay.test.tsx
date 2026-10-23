@@ -408,7 +408,7 @@ describe('CommunityOverlay — Outbound tab', () => {
   const item = (over: Record<string, unknown> = {}) => ({
     repo: 'a/b', issueNumber: 1, topic: 'T-MEM', status: 'published',
     commentUrl: 'https://github.com/a/b/issues/1#c1', postedAt: '2026-08-01T10:00:00Z',
-    confidence: 9, replyCount: 0, hasMaintainerReply: false, needsFollowup: false, replies: [],
+    confidence: 9, replyCount: 0, hasMaintainerReply: false, needsFollowup: false, latestReply: null,
     ...over,
   });
 
@@ -448,7 +448,7 @@ describe('CommunityOverlay — Outbound tab', () => {
       item({ repo: 'c/d', issueNumber: 2, needsFollowup: false }),
       item({
         repo: 'a/b', issueNumber: 1, needsFollowup: true, hasMaintainerReply: true, replyCount: 1,
-        replies: [{ author: 'maintainer1', body: 'merged, thanks', isMaintainer: true, createdAt: '2026-08-02T10:00:00Z' }],
+        latestReply: { author: 'maintainer1', body: 'merged, thanks', isMaintainer: true, createdAt: '2026-08-02T10:00:00Z' },
       }),
     ]));
     setup();
@@ -469,7 +469,7 @@ describe('CommunityOverlay — Outbound tab', () => {
     fetchFeed.mockResolvedValue([]);
     fetchEngagement.mockResolvedValue(engWith([
       item({ repo: 'a/b', issueNumber: 1, needsFollowup: true, replyCount: 1,
-        replies: [{ author: 'user9', body: 'ping?', isMaintainer: false, createdAt: '2026-08-02T10:00:00Z' }] }),
+        latestReply: { author: 'user9', body: 'ping?', isMaintainer: false, createdAt: '2026-08-02T10:00:00Z' } }),
     ]));
     setup();
     fireEvent.click(screen.getByTestId('community-tab-outbound'));

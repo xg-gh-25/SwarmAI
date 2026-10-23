@@ -1143,9 +1143,24 @@ def _knowledge_entries(
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
+#: GET /ddd/brains slower than this logs its per-leg timings.
+_SLOW_GALLERY_MS = 1500
+
+
 @router.get("/brains")
 async def list_brains() -> dict:
     """Gallery: one live summary per DDD project (read-only)."""
+    import time as _time
+    t_start = _time.perf_counter()
+    leg_ms: dict[str, float] = {}
+
+    async def _timed(name: str, coro):
+        t = _time.perf_counter()
+        try:
+            return await coro
+        finally:
+            leg_ms[name] = (_time.perf_counter() - t) * 1000
+
     dirs = await asyncio.to_thread(_list_project_dirs)
 
     # PERF (run_3d371424): the 3 producer legs below are INDEPENDENT of each other
@@ -1180,9 +1195,9 @@ async def list_brains() -> dict:
     # (_parallel_last_commit_iso), replacing the ~1.98s `git log -n 2000 --name-only`
     # whole-tree walk while KEEPING git commit-time semantics (Gate-1 rejected fs-mtime).
     _pending_r, _dirty_r, _commit_r = await asyncio.gather(
-        _pending_leg(),
-        asyncio.to_thread(_batch_dirty_project_dirs, dirs),
-        asyncio.to_thread(_parallel_last_commit_iso, dirs),
+        _timed("pending", _pending_leg()),
+        _timed("dirty", asyncio.to_thread(_batch_dirty_project_dirs, dirs)),
+        _timed("last_commit", asyncio.to_thread(_parallel_last_commit_iso, dirs)),
         return_exceptions=True,
     )
     # Normalize any leg that raised to its neutral fail-soft value (parity with each
@@ -1206,6 +1221,7 @@ async def list_brains() -> dict:
         # A set → authoritative membership (True dirty / False clean).
         return None if dirty_names is None else (name in dirty_names)
 
+    t_sum = _time.perf_counter()
     results = await asyncio.gather(
         *(
             asyncio.to_thread(_brain_summary, d, pending_by_brain.get(d.name, 0),
@@ -1216,6 +1232,14 @@ async def list_brains() -> dict:
         ),
         return_exceptions=True,
     )
+    leg_ms["summaries"] = (_time.perf_counter() - t_sum) * 1000
+    total_ms = (_time.perf_counter() - t_start) * 1000
+    # Measured 2026-10-23: 0.4-0.9 s warm, 3.8 s on the first call after a restart, with no
+    # single leg dominating in a standalone run. Log the legs when slow, so the next slow
+    # gallery says which one it was (design left-nav-overlay-single-source.md S4).
+    if total_ms > _SLOW_GALLERY_MS:
+        logger.warning("brains gallery slow: %.0f ms (%s, %d projects)", total_ms,
+                       ", ".join(f"{k} {v:.0f}" for k, v in leg_ms.items()), len(dirs))
     brains = []
     for d, r in zip(dirs, results):
         if isinstance(r, Exception):

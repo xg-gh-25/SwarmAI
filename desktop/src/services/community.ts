@@ -100,7 +100,8 @@ export interface CommunityReply {
   createdAt: string;
 }
 
-/** One outbound engagement — a comment we posted, with any replies it drew. */
+/** One outbound engagement — a comment we posted, with the latest reply it drew
+ *  (the endpoint sends only that one; `replyCount` is the total). */
 export interface CommunityEngagementItem {
   repo: string;
   issueNumber: number | null;
@@ -112,7 +113,7 @@ export interface CommunityEngagementItem {
   replyCount: number;
   hasMaintainerReply: boolean;
   needsFollowup: boolean;
-  replies: CommunityReply[];
+  latestReply: CommunityReply | null;
 }
 
 /** Outbound engagement — scalar KPIs + the clickable per-engagement list. */
@@ -139,7 +140,7 @@ interface RawEngagementItem {
   reply_count?: number;
   has_maintainer_reply?: boolean;
   needs_followup?: boolean;
-  replies?: RawReply[];
+  latest_reply?: RawReply | null;
 }
 
 interface RawHotTopic {
@@ -249,12 +250,12 @@ export const communityService = {
         replyCount: it.reply_count ?? 0,
         hasMaintainerReply: it.has_maintainer_reply ?? false,
         needsFollowup: it.needs_followup ?? false,
-        replies: (it.replies ?? []).map((r) => ({
-          author: r.author ?? '',
-          body: r.body ?? '',
-          isMaintainer: r.is_maintainer ?? false,
-          createdAt: r.created_at ?? '',
-        })),
+        latestReply: it.latest_reply ? {
+          author: it.latest_reply.author ?? '',
+          body: it.latest_reply.body ?? '',
+          isMaintainer: it.latest_reply.is_maintainer ?? false,
+          createdAt: it.latest_reply.created_at ?? '',
+        } : null,
       })),
     };
   },

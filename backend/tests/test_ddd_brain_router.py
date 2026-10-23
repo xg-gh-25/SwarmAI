@@ -1299,3 +1299,36 @@ class TestListBrainsLegDegradation:
         assert any("last_commit" in r.message and "degraded" in r.message for r in caplog.records), (
             "a leg raise must be LOGGED as degraded, not silently swallowed"
         )
+
+
+class TestGallerySlowLog:
+    """GET /ddd/brains logs its per-leg timings when slow (design S4: measure first),
+    and stays silent when fast."""
+
+    def _stub(self, monkeypatch, tmp_path):
+        import routers.ddd_brain as m
+        monkeypatch.setattr(m, "_list_project_dirs", lambda: [])
+        monkeypatch.setattr(m, "_batch_dirty_project_dirs", lambda dirs: set())
+        monkeypatch.setattr(m, "_parallel_last_commit_iso", lambda dirs: {})
+        monkeypatch.setattr(m, "_workspace_root", lambda: tmp_path)
+        monkeypatch.setattr(m, "get_pinned_projects", lambda: [])
+        return m
+
+    def test_slow_gallery_logs_each_leg(self, monkeypatch, tmp_path, caplog):
+        import asyncio
+        import logging
+        m = self._stub(monkeypatch, tmp_path)
+        monkeypatch.setattr(m, "_SLOW_GALLERY_MS", -1)      # everything counts as slow
+        with caplog.at_level(logging.WARNING, logger=m.logger.name):
+            asyncio.run(m.list_brains())
+        msg = next(r.getMessage() for r in caplog.records if "brains gallery slow" in r.getMessage())
+        for leg in ("pending", "dirty", "last_commit", "summaries"):
+            assert leg in msg
+
+    def test_fast_gallery_logs_nothing(self, monkeypatch, tmp_path, caplog):
+        import asyncio
+        import logging
+        m = self._stub(monkeypatch, tmp_path)
+        with caplog.at_level(logging.WARNING, logger=m.logger.name):
+            asyncio.run(m.list_brains())
+        assert not [r for r in caplog.records if "brains gallery slow" in r.getMessage()]

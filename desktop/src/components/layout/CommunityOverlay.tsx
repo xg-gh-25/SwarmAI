@@ -763,7 +763,7 @@ function useOpenComment(commentUrl: string) {
 // knows WHAT they're being asked, without expanding.
 function FollowupRow({ item }: { item: CommunityEngagementItem }) {
   const { hasUrl, open } = useOpenComment(item.commentUrl);
-  const latest = item.replies.length > 0 ? item.replies[item.replies.length - 1] : null;
+  const latest = item.latestReply;
 
   return (
     <button
