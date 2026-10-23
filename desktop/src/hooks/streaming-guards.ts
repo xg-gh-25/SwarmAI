@@ -127,7 +127,10 @@ export function queuedMessageFromRetryPayload(
 
 /** Minimal slice of UnifiedTab needed to decide queue-vs-send. */
 export interface QueueGuardState {
+  /** a turn of the session is in progress (backend activity) */
   readonly isStreaming: boolean;
+  /** this tab's own POST is open */
+  readonly localSending?: boolean;
   isWaitingForBusy?: boolean;
   isReconnecting?: boolean;
   _healGraceActive?: boolean;
@@ -142,7 +145,8 @@ export interface QueueGuardState {
  * True when a user's send must be QUEUED rather than sent directly.
  *
  * Covers every state in which the backend session may still be busy:
- *  - isStreaming: actively generating
+ *  - isStreaming: a turn of the session is in progress (backend activity)
+ *  - localSending: this tab's own POST is still open
  *  - isWaitingForBusy: SESSION_BUSY recovery poll in progress
  *  - isReconnecting: SSE connection-phase retry in progress
  *  - _healGraceActive: mid-stream disconnect, within the self-heal grace window
@@ -152,11 +156,23 @@ export interface QueueGuardState {
 export function shouldQueueSend(tab: QueueGuardState): boolean {
   return (
     tab.isStreaming ||
+    tab.localSending === true ||
     tab.isWaitingForBusy === true ||
     tab.isReconnecting === true ||
     tab._healGraceActive === true ||
     tab._postDisconnectUncertain === true
   );
+}
+
+/**
+ * May the tab send the continuation of its session's turn (an answer, a permission
+ * decision)? Not while its own request is open; not while a turn runs that is not
+ * waiting for input. While the session waits for input the bee is on (its activity
+ * is waiting_input), and that is exactly when the continuation is due.
+ */
+export function canContinueTurn(tab: { isStreaming: boolean; localSending?: boolean; activity?: string }): boolean {
+  if (tab.localSending) return false;
+  return !tab.isStreaming || tab.activity === 'waiting_input';
 }
 
 // ── Root-1 SSOT Phase 3: AC5 — lost AskUserQuestion re-surface ──────
@@ -322,259 +338,6 @@ export function computeDrainRetirement(input: DrainRetirementInput): DrainRetire
 }
 
 
-// ── Symmetric reconcile: backend-streaming → arm the spinner ──────────────────
-
-/** Inputs to the idle→streaming re-arm decision (reconcile loop). */
-export interface ArmSpinnerInput {
-  /** Backend mirror reports state === 'streaming' for this tab's session. */
-  backendStreaming: boolean;
-  /** The tab currently shows a spinner (isStreaming flag). */
-  tabIsStreaming: boolean;
-  /** The tab has a backend session id to mirror. */
-  hasSessionId: boolean;
-  /** Tab is in post-disconnect recovery (owns its own reconcile path). */
-  postDisconnectUncertain: boolean;
-  /** Tab is in SESSION_BUSY polling (busy-poll owns its display). */
-  isWaitingForBusy: boolean;
-  /** Tab has a queued/optimistic message (queue/drain owns its display). */
-  hasQueuedMessage: boolean;
-  /** Timestamp of the last setIsStreaming(false), or undefined if never. */
-  streamClearedAt: number | undefined;
-  /** Current time (injected for deterministic tests). */
-  now: number;
-  /** Settle window after a clear during which a re-arm is suppressed (ms). */
-  settleMs?: number;
-}
-
-/**
- * Decide whether the reconcile loop should turn the spinner ON for a tab whose
- * frontend shows idle while the backend mirror reports it is actively streaming.
- *
- * This is the SYMMETRIC partner of the force-clear path (which turns a stuck
- * spinner OFF when the backend is idle). It fixes "response renders but no
- * spinner" after a restart — restored tabs init isStreaming=false while their
- * backend session resume-streams, and no SSE session_start arrives to set it.
- *
- * Arm ONLY when ALL hold:
- *  - backend is genuinely streaming (authoritative)
- *  - the tab is NOT already showing a spinner (no-op otherwise)
- *  - the tab has a session id to mirror
- *  - the tab is not in a path that owns its own display (post-disconnect,
- *    busy-poll, queued/drain) — those must not be overridden
- *  - the flap-guard window has elapsed since the last clear, so a user Stop
- *    (frontend idle) is not re-lit during the ~5s before the backend goes IDLE
- *
- * Safe by construction: if a re-arm is ever wrong, the backend will report idle
- * and the force-clear path turns the spinner back off — never a permanent hang.
- */
-export function shouldArmSpinnerFromBackend(input: ArmSpinnerInput): boolean {
-  const {
-    backendStreaming, tabIsStreaming, hasSessionId,
-    postDisconnectUncertain, isWaitingForBusy, hasQueuedMessage,
-    streamClearedAt, now, settleMs = 12_000,
-  } = input;
-  if (!backendStreaming) return false;
-  if (tabIsStreaming) return false;       // already showing — no-op
-  if (!hasSessionId) return false;
-  if (postDisconnectUncertain) return false;
-  if (isWaitingForBusy) return false;
-  if (hasQueuedMessage) return false;
-  if (now - (streamClearedAt ?? 0) <= settleMs) return false; // flap-guard
-  return true;
-}
-
-
-// ── Force-clear reconcile decision (extracted for test-locking) ───────────────
-
-/** Inputs to the force-clear decision (the reconcile loop's stuck-spinner path).
- *  All values are read by the caller from tab state + the backend mirror; the
- *  decision itself is pure so the IDLE/warm-resume invariant can be locked by a
- *  unit test (a force-clear during a live turn was the recurring regression). */
-export interface ForceClearStreamInput {
-  /** Tab has a drain scheduled (result arrived, new stream not yet started). */
-  drainPending: boolean;
-  /** Tab has an optimistic queued message. */
-  hasQueuedMessage: boolean;
-  /** ms since the message was queued (0 if none). */
-  queueAge: number;
-  /** Tab has a backend session id to mirror. */
-  hasSessionId: boolean;
-  /** Backend mirror reports state === 'streaming' for this tab's session. */
-  backendIsStreaming: boolean;
-  /** Backend mirror's reported state string (e.g. 'cold','idle','streaming',
-   *  'waiting_input'), or undefined if the session is missing/evicted. */
-  reportedState: string | undefined;
-  /** A resume is genuinely IN FLIGHT for this tab (the FE saw session_resuming
-   *  and has not yet received data; bounded by its own 60s resume timeout).
-   *  During a cold --resume the backend mirror reports 'cold'/'idle' for the
-   *  spawn + transcript-replay window (often >30s on heavy sessions) even though
-   *  it IS working — without this the reconciler force-clears the spinner mid-
-   *  resume ("resume needs two sends / spinner vanished"). This flag
-   *  disambiguates a spawning resume from a genuinely dead/evicted session. */
-  resumeInProgress?: boolean;
-  /** ms since the tab's reconcile stream-start stamp (for the active-state cap). */
-  activeGuardAge: number;
-  /** Reconcile-owned stamp of when the stuck condition was first observed. */
-  idleStreamingSince: number | undefined;
-  /** SEND-owned absolute hard-cap clock (OT01 route-A): when this turn's stream
-   *  genuinely started. Distinct from idleStreamingSince — it is NOT reset by the
-   *  reconcile loop's reset-and-skip churn, so under abort+recycle churn (where the
-   *  backend momentarily reports streaming between turns and keeps restarting the
-   *  settle window) it still provides an absolute upper bound. Consulted ONLY after
-   *  all three alive guards (backend_streaming/active_backend/resuming), so
-   *  it can NEVER force-clear a genuinely-live turn. undefined → hard-cap disabled
-   *  (opt-in): a tab that never stamped it falls through to the normal settle path. */
-  streamingSinceHardStart?: number;
-  /** Current time (injected for deterministic tests). */
-  now: number;
-  /** Queue immunity window (ms). Default 60s. */
-  queueImmunityMs?: number;
-  /** Settle window before force-clear (ms). Default 30s. */
-  settleMs?: number;
-  /** Cap on the active-state guard (ms) so a lost waiting_input can't hang
-   *  forever. Default 120min. */
-  activeGuardMaxMs?: number;
-  /** Absolute hard-cap (ms) measured from streamingSinceHardStart. Once a
-   *  frontend-streaming tab whose backend is NOT alive (not streaming/active/
-   *  resuming) exceeds this, force-clear EVEN IF churn keeps resetting
-   *  the settle clock. Default 120s. Fires only after the three alive guards. */
-  hardCapMs?: number;
-}
-
-/** Verdict for the reconcile loop's stuck-spinner path.
- *  - 'reset-and-skip': condition does NOT hold — clear the backstop clock, skip.
- *  - 'wait-settle': stuck but within the settle window — keep the clock, skip
- *    (caller stamps idleStreamingSince if undefined).
- *  - 'force-clear': stuck past the settle window — force endStreaming. */
-export type ForceClearVerdict = 'reset-and-skip' | 'wait-settle' | 'force-clear';
-
-/** Why the verdict was reached. Observable so tests (and logs) can assert the
- *  exact guard that fired without a duplicated decision mirror. */
-export type ForceClearReason =
-  | 'drain_or_queue'    // drain gap or fresh (<60s) queued message
-  | 'no_session'        // tab has no backend session id
-  | 'backend_streaming' // backend mirror reports streaming — spinner is correct
-  | 'active_backend'    // backend in an active state (waiting_input) within cap
-  | 'resuming'          // a resume is in flight — cold/idle is spawn, not stuck
-  | 'too_fresh'         // stuck but within the settle window
-  | 'hard_cap'          // churn-immune absolute cap exceeded (backend not alive) → force-clear
-  | 'terminal'          // backend in a terminal state (dead/evicted) → force-clear immediately, skip settle (B-2)
-  | 'stuck';            // stuck past the settle window → force-clear
-
-/** Result of the force-clear decision: the verdict (drives the hook) plus the
- *  reason (single-source observability — no separate decision mirror). */
-export interface ForceClearDecision {
-  verdict: ForceClearVerdict;
-  reason: ForceClearReason;
-}
-
-/**
- * Decide whether the reconcile loop should force-clear a tab's spinner.
- *
- * INVARIANT (the one this exists to protect): a tab whose backend is genuinely
- * streaming — i.e. a normal warm IDLE→streaming resume, a live long turn — must
- * NEVER be force-cleared. `backendIsStreaming` (and the active-state guard for
- * waiting_input) short-circuit to 'reset-and-skip' before any settle/clear path.
- *
- * Faithful extraction of the prior inline logic (order preserved):
- *   drain → queue(<60s) → no-sid → backend-streaming → active-state(capped)
- *   → settle-window → force-clear.
- */
-export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClearDecision {
-  const {
-    drainPending, hasQueuedMessage, queueAge, hasSessionId,
-    backendIsStreaming, reportedState, resumeInProgress, activeGuardAge,
-    idleStreamingSince, streamingSinceHardStart, now,
-    queueImmunityMs = 60_000, settleMs = 30_000, activeGuardMaxMs = 7_200_000,
-    hardCapMs = 120_000,
-  } = input;
-
-  // Drain gap / fresh queue / no session = intentional or unknown, never stuck.
-  if (drainPending) return { verdict: 'reset-and-skip', reason: 'drain_or_queue' };
-  if (hasQueuedMessage && queueAge < queueImmunityMs) {
-    return { verdict: 'reset-and-skip', reason: 'drain_or_queue' };
-  }
-  if (!hasSessionId) return { verdict: 'reset-and-skip', reason: 'no_session' };
-
-  // Backend genuinely streaming → the spinner is CORRECT. Never clear.
-  if (backendIsStreaming) return { verdict: 'reset-and-skip', reason: 'backend_streaming' };
-
-  // Active backend states (subprocess alive + working) are exempt, time-capped
-  // so a lost waiting_input event can't hang the spinner forever.
-  const ACTIVE_BACKEND_STATES = new Set(['waiting_input', 'streaming']);
-  if (reportedState && ACTIVE_BACKEND_STATES.has(reportedState)
-      && activeGuardAge < activeGuardMaxMs) {
-    return { verdict: 'reset-and-skip', reason: 'active_backend' };
-  }
-
-  // A resume genuinely in flight: the backend reports 'cold'/'idle' during the
-  // spawn + --resume replay window, but it IS working. Exempt so the spinner is
-  // not force-cleared mid-resume. Bounded by the FE's own 60s resume timeout,
-  // which clears isResuming → the reconciler resumes force-clearing if it then
-  // turns out genuinely stuck. A dead/evicted session has isResuming=false and
-  // still force-clears below.
-  if (resumeInProgress) return { verdict: 'reset-and-skip', reason: 'resuming' };
-
-  // HARD-CAP (OT01 route-A): we are PAST all three alive guards, so the backend is
-  // provably NOT alive (not streaming / not active / not resuming).
-  // The settle clock (idleStreamingSince) is reset to undefined on every
-  // reset-and-skip tick, so under abort+recycle churn it never accumulates to
-  // settleMs and force-clear is never reached — the "stuck 10+ min" case. The
-  // streamingSinceHardStart clock is set-once per streaming span and NOT reset by
-  // that churn, so once it exceeds hardCapMs we force-clear regardless of the
-  // settle window. Opt-in: undefined (tab never stamped it) falls through to the
-  // normal settle path. Placed AFTER the alive guards by construction.
-  //
-  // DRAIN/QUEUE EXEMPTION (Gate-2 correctness MED, run_251ea3ee): the top-of-fn
-  // drain/queue immunity only covers a queued message younger than queueImmunityMs
-  // (60s). But the hard-cap clock is set-once across a WHOLE multi-turn queued
-  // drain (it is not re-stamped per drained turn — the queued-result path keeps
-  // isStreaming true, so setIsStreaming(false) never fires to clear it). A
-  // legitimate queued drain whose cumulative span exceeds hardCapMs (120s), seen
-  // during an inter-turn backend-idle blip after the 60s queue immunity lapsed,
-  // would otherwise hard_cap-truncate an actively-progressing drain. drainPending
-  // / hasQueuedMessage are INTENTIONAL streaming-hold states (a drain is queued
-  // and progressing), NOT a stuck spinner — exempt them from the hard-cap, same as
-  // the alive guards. A genuinely stuck tab has neither flag set and still clears.
-  if (
-    streamingSinceHardStart !== undefined &&
-    now - streamingSinceHardStart > hardCapMs &&
-    !drainPending &&
-    !hasQueuedMessage
-  ) {
-    return { verdict: 'force-clear', reason: 'hard_cap' };
-  }
-
-  // B-2 (OT01 root-fix): a TERMINAL backend state skips the settle window.
-  // We are past all three alive guards, so the backend is provably NOT alive. The
-  // settle window below exists to absorb a transient idle BLIP (backend momentarily
-  // reads 'idle' between sub-steps, then recovers) — but a terminal state is NOT a
-  // blip: a 'dead'/'evicted' session is gone and will NEVER recover, so waiting
-  // 30s+ (churn-extended to minutes) to clear the spinner is pure latency with zero
-  // protection value — the "frontend stopped refreshing" symptom. Clear it NOW.
-  // Scope is deliberately narrow (terminal only, not all not-alive): 'idle' keeps
-  // its settle window because it CAN be a transient blip; only provably-gone states
-  // skip. Placed AFTER the resume/streaming alive guards by construction,
-  // so this never short-circuits a live or resuming turn (O030 preserved).
-  // Only 'dead' — the sole TERMINAL value SessionState actually emits
-  // (session_unit.py SessionState = cold|idle|streaming|waiting_input|dead; there
-  // is NO 'evicted' state — "eviction" is the ACT of reclaiming an idle unit,
-  // which transitions it idle→dead→cold, never a reported state string). 'dead'
-  // is observable for up to ~60s after an EXTERNAL kill (OOM/jetsam): the PID
-  // watchdog parks the unit in DEAD and the 60s lifecycle sweep finishes it to
-  // COLD — that window is exactly the "session gone forever, spinner stuck" case.
-  if (reportedState === 'dead') {
-    return { verdict: 'force-clear', reason: 'terminal' };
-  }
-
-  // Stuck condition holds (frontend streaming, backend not). Honor the settle
-  // window anchored to the reconcile-owned stamp.
-  const streamAge = idleStreamingSince === undefined ? 0 : now - idleStreamingSince;
-  if (streamAge < settleMs) return { verdict: 'wait-settle', reason: 'too_fresh' };
-  return { verdict: 'force-clear', reason: 'stuck' };
-}
-
-
 // ── Heal-grace expiry: honest error signal (OT01) ────────────────────────────
 
 /** Inputs to the heal-grace expiry decision. Read by the caller from the live
@@ -626,77 +389,11 @@ export function healGraceExpiryVerdict(input: HealGraceExpiryInput): HealGraceVe
   return 'show-error';
 }
 
-// ── Store↔React desync convergence (OT01 sibling path) ───────────────────────
-
-/** Inputs to the desync-convergence decision. The reconcile loop fires this when
- *  a tab shows isStreaming=true but its MessageStore flipped to phase='idle'
- *  (the watchdog's 90s silent endStreaming). Normally that divergence means the
- *  turn is OVER and the spinner should converge to idle. The exception is OT01:
- *  the turn's SSE dropped but the backend turn is STILL running — converging
- *  there drops the spinner mid-turn (truncated content). */
-export interface DesyncConvergeInput {
-  /** MessageStore reports phase==='idle' for this tab. */
-  storeIdle: boolean;
-  /** ms since the tab's reconcile stream-start stamp (same anchor as the
-   *  force-clear 120-min cap). Distinguishes a just-started turn (<10s grace,
-   *  store not yet 'streaming') from a real watchdog-fire desync. */
-  streamStartAge: number;
-  /** Backend mirror reports state==='streaming'. */
-  backendIsStreaming: boolean;
-  /** Backend mirror reports state==='waiting_input'. */
-  backendWaitingInput: boolean;
-  /** Grace before treating idle-store-while-streaming as a desync. Default 10s
-   *  (a just-sent turn awaits buildContentArray before store.startStreaming). */
-  graceMs?: number;
-  /** Cap: above this the turn is presumed dead regardless of an alive mirror, so
-   *  a stuck backend flag can't hang the spinner. Default 120min (matches the
-   *  force-clear activeGuardMaxMs). */
-  capMs?: number;
-}
-
 /**
- * Decide whether the reconcile loop should CONVERGE a store↔React desync
- * (force isStreaming=false because the store says the turn is over).
- *
- * Returns true → converge (stop the spinner). false → leave it (either too fresh,
- * or the backend is provably still alive and converging would truncate).
- *
- * INVARIANT (OT01): never converge while the backend is genuinely alive
- * (streaming / waiting_input) within the cap — that is
- * the long-turn-outlives-SSE case the spinner must survive. Past the cap, a stuck
- * alive-flag cannot hang the spinner: converge anyway.
- */
-export function desyncConvergeVerdict(input: DesyncConvergeInput): boolean {
-  const {
-    storeIdle, streamStartAge, backendIsStreaming, backendWaitingInput,
-    graceMs = 10_000, capMs = 7_200_000,
-  } = input;
-  if (!storeIdle) return false;            // store still streaming → no desync
-  if (streamStartAge < graceMs) return false;  // just-started turn → not a desync
-  const backendAlive = backendIsStreaming || backendWaitingInput;
-  if (backendAlive && streamStartAge < capMs) return false;  // alive → keep spinner
-  return true;                             // genuinely over (or past cap) → converge
-}
-
-/**
- * B-1 (OT01 north-star, Run 1): the reconcile loop's next poll delay.
- *
- * The always-on streaming-state reconcile loop is the STEADY-STATE spinner
- * driver — its per-tick arm (shouldArmSpinnerFromBackend) + clear
- * (forceClearStreamVerdict / desyncConvergeVerdict) decisions are already the
- * backend-authoritative projection of the spinner (frontend = pure projection,
- * backend = SSOT). The only missing B-1 piece was CADENCE: the loop ran at a
- * fixed 15s, so a lost SSE event took up to 15s to self-heal.
- *
- * This makes the cadence streaming-aware: poll FAST (3s) while any tab is
- * streaming so the backend alive predicate drives the spinner within ≤3s
- * (AC5 self-heal bound), and fall back to the cheap 15s safety-net cadence when
- * idle (AC2 power — no need to hammer /streaming-state when nothing streams).
- *
- * Pure function so the cadence is test-locked WITHOUT fake-timer integration;
- * the loop just calls it to schedule its next setTimeout. It changes ONLY poll
- * cadence — never the arm/clear authority (that already lives in the verdict
- * functions above). North-star-safe: no new frontend source of truth.
+ * The reconcile poll's next delay: 3s while any tab shows a turn in progress
+ * (the poll is the fallback for a lost push of the session's activity), 15s
+ * otherwise. Cadence only: the activity itself decides the bee
+ * (docs/design/chat-turn-liveness.md S3).
  *
  * @param anyTabStreaming  true iff at least one tab is currently streaming
  * @returns next poll delay in ms (3s streaming, 15s idle)

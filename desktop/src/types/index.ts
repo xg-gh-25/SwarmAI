@@ -785,6 +785,10 @@ export interface CompactionGuardEvent {
 
 /** Pre-first-token step of a turn (backend core/turn_phase.py). */
 export type TurnPhase = 'preparing' | 'starting' | 'waiting';
+/** Whether a turn of a session is in progress and in which step (backend
+ *  core/session_state ACTIVITIES, docs/design/chat-turn-liveness.md S1). */
+export type SessionActivity =
+  | 'idle' | 'preparing' | 'starting' | 'waiting' | 'streaming' | 'waiting_input' | 'stopping';
 
 export interface StreamEvent {
   type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'accepted' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacting' | 'context_compacted' | 'compaction_guard' | 'mcp_health_warning' | 'recovery_exhausted' | 'still_working' | 'turn_phase' | (string & {});
@@ -1589,6 +1593,11 @@ export interface StreamingStateEntry {
   pendingPermission?: PendingPermission | null;
   /** Pending-message seqs the server drained in its last drain pass. */
   lastDrainedSeqs: number[];
+  /** Whether a turn is in progress (docs/design/chat-turn-liveness.md S1), and
+   *  its seq: a larger seq is newer, whichever channel (push or poll) brought it.
+   *  Absent from a backend older than the field. */
+  activity?: SessionActivity;
+  activitySeq?: number;
 }
 
 // ============== Health Monitor Types ==============

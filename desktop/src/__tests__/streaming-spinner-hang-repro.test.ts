@@ -5,7 +5,7 @@
  * the spinner continues forever even though the backend has completed and sent
  * a `result` event. The user sees "Running: Grep..." with spinner spinning indefinitely.
  *
- * ROOT CAUSE HYPOTHESIS: `setIsStreaming(false)` in the `result` event handler
+ * ROOT CAUSE HYPOTHESIS: `setLocalSending(false)` in the `result` event handler
  * calls `setPendingStreamTabs(prev => { next.delete(tabId); return next })`.
  * If the tabId was never added to pendingStreamTabs (because the stream started
  * via per-tab map's `isStreaming` flag, not through the pending set), the
@@ -201,7 +201,7 @@ describe('Streaming spinner hang — isStreaming derivation race', () => {
 
     const originalSet = new Set<string>(['tab-A']);
 
-    // Simulate: setIsStreaming(false, 'tab-B') where tab-B is NOT in the set
+    // Simulate: setLocalSending(false, 'tab-B') where tab-B is NOT in the set
     const next = new Set(originalSet);
     next.delete('tab-B');  // no-op — tab-B wasn't there
 
@@ -224,7 +224,7 @@ describe('Streaming spinner hang — isStreaming derivation race', () => {
     // activeTabState comes from tabMapRef.current.get(activeTabIdCurrent).
     // tabMapRef is a REF — mutations don't trigger re-render.
     //
-    // When setIsStreaming(false) runs:
+    // When setLocalSending(false) runs:
     //   1. tabState.isStreaming = false (ref mutation — NO re-render)
     //   2. setPendingStreamTabs(...) (state update — triggers re-render)
     //
@@ -277,7 +277,7 @@ describe('Streaming spinner hang — full event sequence repro', () => {
     // 4. result event
     //
     // We verify that after step 3, the message has all content blocks,
-    // and after step 4 equivalent (setIsStreaming(false)), the streaming
+    // and after step 4 equivalent (setLocalSending(false)), the streaming
     // state would correctly derive to false.
 
     const msgId = 'msg-04051ed4';
@@ -332,7 +332,7 @@ describe('Streaming spinner hang — full event sequence repro', () => {
     expect((finalTexts[0] as Record<string, unknown>).text).toContain('Root cause found.');
     expect((finalTexts[0] as Record<string, unknown>)._confirmed).toBe(true);
 
-    // Step 3: result event would now call setIsStreaming(false).
+    // Step 3: result event would now call setLocalSending(false).
     // If we got here, updateMessages didn't drop any content.
     // The remaining question is whether React re-renders — tested below.
   });

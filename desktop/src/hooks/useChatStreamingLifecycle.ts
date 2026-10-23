@@ -52,10 +52,11 @@ import type {
   CompactionGuardEvent,
   PendingPermission,
   StreamingStateEntry,
+  SessionActivity,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import { applyCompactionEvent } from '../pages/chat/compaction';
-import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, shouldResurfacePermission, queuedBehindApprovalText, isServerQueuedErrorCode, hostForInjectedTurn, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
+import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, shouldResurfacePermission, queuedBehindApprovalText, isServerQueuedErrorCode, hostForInjectedTurn, computeDrainRetirement, healGraceExpiryVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
 import { errorFieldsFromEvent } from './errorFields';
 import { chatService } from '../services/chat';
 import { sessionEvents } from '../services/sessionEvents';
@@ -882,8 +883,17 @@ export interface ChatStreamingLifecycle {
   /** Active pending permission request ID (null = no pending permission). */
   pendingPermissionRequestId: string | null;
   setPendingPermissionRequestId: React.Dispatch<React.SetStateAction<string | null>>;
+  /** A turn of the active tab's session is in progress (backend activity). */
   isStreaming: boolean;
-  setIsStreaming: (streaming: boolean, tabId?: string) => void;
+  /** The active tab has its own POST open (Send / Stop reads both). */
+  isSending: boolean;
+  /** The tab's own request opened / ended (not the bee: docs/design/chat-turn-liveness.md S3). */
+  setLocalSending: (sending: boolean, tabId?: string) => void;
+  /** The backend's activity for a tab's session (seq-ordered); the only writer of
+   *  isStreaming. The subscription and the poll call it. */
+  applyActivity: (tabId: string, activity: SessionActivity, seq: number | undefined) => void;
+  /** The tab now shows another session: its activity starts over (idle, seq 0). */
+  rebindActivity: (tabId: string) => void;
   streamingActivity: StreamingActivity | null;
   /** Debounced activity — stable for at least MIN_ACTIVITY_DISPLAY_MS. */
   displayedActivity: StreamingActivity | null;
@@ -1037,7 +1047,7 @@ export function useChatStreamingLifecycle(
   //      there is no flag to read, so the Set covers that window.
   // CRITICAL: once activeTabState exists, the flag is authoritative and the
   // Set is NOT consulted. Previously this used `flag || set.has(id)`, which
-  // let a stale Set entry (orphaned when a clear path skipped setIsStreaming)
+  // let a stale Set entry (orphaned when a clear path skipped setLocalSending)
   // pin isStreaming=true forever → spinner hang. Reading the Set only when
   // tabState is absent makes that orphan structurally unable to hang the UI.
   const activeTabIdCurrent = activeTabIdRef.current;
@@ -1048,6 +1058,9 @@ export function useChatStreamingLifecycle(
   const isStreaming = activeTabState
     ? activeTabState.isStreaming
     : pendingStreamTabs.has(activeTabIdCurrent ?? '');
+  // The active tab has its own POST open (setLocalSending). Re-rendered by renderTick.
+  const [, setRenderTick] = useState(0);
+  const isSending = activeTabState?.localSending ?? false;
 
 
   // --- Refs: streaming lifecycle ---
@@ -1164,9 +1177,7 @@ export function useChatStreamingLifecycle(
   // AND pendingStreamTabs is empty, the effect tore down — leaving stuck
   // background tabs (e.g. sub-agent streams) unrescued forever.
   //
-  // Design: iterates ALL tabs in tabMapRef (not just active). Guards against
-  // race with legitimately-restarted streams via _reconcileStreamStart
-  // timestamp (skips tabs where stream started <10s ago).
+  // Design: iterates ALL tabs in tabMapRef (not just active).
   // Cost: one GET /streaming-state every 15s (~1KB). Acceptable.
   useEffect(() => {
     const RECONCILE_DELAY_MS = 5_000;
@@ -1187,7 +1198,10 @@ export function useChatStreamingLifecycle(
     const reconcile = async (pushed?: Record<string, StreamingStateEntry>) => {
       if (cancelled) return;
       try {
-        const states = pushed && lastStates ? { ...lastStates, ...pushed } : await chatService.getStreamingState();
+        // when this read was sent: a session it does not list was gone at a time
+        // after every activity a tab applied before then (applyActivity)
+        const readAt = Date.now();
+        const states = pushed ? { ...(lastStates ?? {}), ...pushed } : await chatService.getStreamingState();
         if (cancelled) return;
         lastStates = states;
 
@@ -1199,107 +1213,25 @@ export function useChatStreamingLifecycle(
 
         // Check ALL tabs, not just active — background tabs can hang too
         for (const [tabId, tabState] of tabMapRef.current.entries()) {
-          // ── STORE↔REACT DESYNC GUARD (run_1a264fd1) ──────────────────────────
-          // The frozen-tab bug: the MessageStore watchdog (or any silent
-          // endStreaming) flips the store to phase='idle', but tabState.isStreaming
-          // stayed true — the spinner is driven solely by isStreaming (TabView),
-          // and nothing bridged the store phase back to it. Result: a tab frozen
-          // mid-response with NO indicator until the 120min cap. endStreaming now
-          // _notify()s, but the authoritative cross-check is here: if the store
-          // is idle yet React still thinks streaming, the turn is OVER — converge
-          // the flag. Convergent + cause-agnostic (heals ANY desync source), fires
-          // ONLY on the actual divergence edge (no churn when in sync), and covers
-          // background tabs. Turns a 120min freeze into ≤15s.
-          // GRACE (Gate-2 HIGH): a send sets isStreaming=true and stamps
-          // _reconcileStreamStart, THEN `await buildContentArray` (attachment
-          // file/network I/O, ChatPage.tsx:1876) runs BEFORE store.startStreaming
-          // sets phase='streaming'. In that window isStreaming=true && phase=idle
-          // is LEGITIMATE (turn starting), not a desync. Reuse the same ≥10s grace
-          // the force-clear path uses (line ~1158) so a just-started turn is never
-          // cleared. A real watchdog-fire desync is always ≥45s old (the watchdog
-          // timeout), so the grace excludes ONLY the start window, not the fix.
-          if (tabState.isStreaming) {
-            const dsStore = messageStoreRegistry.get(tabId);
-            const dsStartAge = Date.now() - (tabState._reconcileStreamStart ?? 0);
-            // OT01 sibling-path guard: the MessageStore watchdog flips phase→idle
-            // at 90s, but a long turn whose SSE dropped is STILL running on the
-            // backend (a disconnect does not stop it). Converging the
-            // spinner here would drop it mid-turn — the exact truncated-content
-            // bug, just surfacing on THIS branch instead of the force-clear branch.
-            // The desync decision is now backend-state-gated (same alive signal as
-            // forceClearStreamVerdict): converge only when the store is idle AND
-            // the backend is NOT alive (streaming/waiting_input), bounded
-            // by the same 120-min cap so a stuck flag still converges.
-            const dsBackend = tabState.sessionId ? states[tabState.sessionId] : undefined;
-            const dsConverge = dsStore
-              ? desyncConvergeVerdict({
-                  storeIdle: dsStore.phase === 'idle',
-                  streamStartAge: dsStartAge,
-                  backendIsStreaming: dsBackend?.streaming ?? false,
-                  backendWaitingInput: dsBackend?.state === 'waiting_input',
-                })
-              : false;
-            if (dsConverge) {
-              setIsStreaming(false, tabId);
-              const dsSid = tabState.sessionId;
-              if (dsSid) scheduleTurnEndReconcile(dsSid, tabId);
-              anyCleared = true;
-              continue; // desync resolved this tick; other branches re-eval next poll
+          // The bee: the backend's activity for this tab's session
+          // (docs/design/chat-turn-liveness.md S3) — the only thing that turns it
+          // on or off. A pushed read speaks only for the sessions it carries.
+          {
+            rebindActivity(tabId);
+            const aSid = tabState.sessionId;
+            const aEntry = aSid ? states[aSid] : undefined;
+            if (aSid && aEntry?.activity && (!pushed || aSid in pushed)) {
+              applyActivity(tabId, aEntry.activity, aEntry.activitySeq);
+            } else if (aSid && !aEntry && !pushed
+                       && (tabState.activityAt === undefined || tabState.activityAt < readAt)) {
+              applyActivity(tabId, 'idle', undefined);   // its unit is gone
             }
           }
-
-          // POST-DISCONNECT RECOVERY: a tab whose SSE dropped on a long turn is
-          // NOT streaming (heal-grace expiry cleared isStreaming) but is pinned
-          // into queue-only mode via _postDisconnectUncertain. The backend
-          // subprocess may still be finishing. Reconcile is the ONLY owner that
-          // can clear this flag — the normal-send clear (ChatPage) is unreachable
-          // because the flag itself forces the queue path. So: when the backend
-          // confirms the session is genuinely idle, clear the flag and drain any
-          // queued message. Without this the tab is bricked (queues forever).
-          if (!tabState.isStreaming && tabState._postDisconnectUncertain && !tabState.isWaitingForBusy) {
-            // Time cap (matches the streaming-path 120min cap): if stopSession
-            // failed AND the backend never transitions out of streaming
-            // (a stuck turn), the flag would never clear
-            // and the tab would be bricked. After the cap, force-clear regardless
-            // of reported backend state.
-            const pdAge = Date.now() - (tabState._postDisconnectAt ?? 0);
-            const pdCapExceeded = pdAge > 7_200_000; // 120 min
-
-            const pdSid = tabState.sessionId;
-            const pdBackend = pdSid ? states[pdSid] : undefined;
-            const pdStreaming = pdBackend?.streaming ?? false;
-            const pdActive = pdBackend?.state === 'waiting_input' || pdBackend?.state === 'streaming';
-
-            if ((!pdStreaming && !pdActive) || pdCapExceeded) {
-              // Backend idle (or evicted, or cap exceeded) — uncertainty resolved.
-              // CRITICAL: only clear _postDisconnectUncertain when there is NO
-              // queued message to drain. When a message IS queued, leave the flag
-              // set and let drainQueuedMessage clear it on SUCCESS — so a failed
-              // drain (which restores the queue) keeps the flag set and this block
-              // retries on the next tick instead of orphaning the restored queue.
-              if (pdSid) {
-                chatService.invalidateMessageCache(pdSid);
-                chatService.getSessionMessagesReconcileTail(pdSid, RECONCILE_TAIL).then((msgs) => {
-                  if (cancelled) return;
-                  const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: pdSid });
-                  store.reconcile(msgs);
-                  if (store.phase === 'idle') {
-                    if (tabId === activeTabIdRef.current) setMessages(() => store.messages);
-                    else tabState.messages = store.messages;
-                  }
-                }).catch(() => { /* best-effort DB sync */ });
-              }
-              if (tabState.queuedMessage && deps.onDrainQueue) {
-                // Flag stays set; drainQueuedMessage clears it on success.
-                tabState.drainPending = true;
-                setTimeout(() => { if (!cancelled) deps.onDrainQueue?.(tabId); }, 100);
-              } else {
-                // Nothing queued — pure idle recovery, safe to clear now.
-                tabState._postDisconnectUncertain = false;
-              }
-              anyCleared = true;
-            }
-            continue;  // handled (or backend still busy — wait for next poll)
+          // Post-disconnect mode ends once the backend says the session is idle
+          // (whether or not this tab saw it go idle: the turn may have ended first).
+          if (tabState._postDisconnectUncertain && tabState.activity === 'idle'
+              && tabState.activitySeq > 0 && !tabState.isWaitingForBusy) {
+            onActivityIdleRef.current(tabId);
           }
 
           // ── Root-1 SSOT Phase 3: mirror the authoritative read API ──────────
@@ -1542,142 +1474,6 @@ export function useChatStreamingLifecycle(
             }
           }
 
-          // ── Symmetric re-arm: backend streaming but tab shows idle ─────────
-          // The mirror is authoritative BOTH ways. The force-clear below handles
-          // frontend=streaming + backend=idle (the stuck-spinner case). This
-          // handles the OPPOSITE: backend IS streaming but the tab shows no
-          // spinner — which happens after a RESTART (restored tabs init
-          // isStreaming=false while their backend session resume-streams) or a
-          // lost session_start SSE. Without this the response renders (via the DB
-          // reconcile above) with NO spinner. Self-healing: once the backend goes
-          // idle the force-clear branch turns it back off, so a wrong re-arm can
-          // never become a permanent hang.
-          if (
-            shouldArmSpinnerFromBackend({
-              backendStreaming: mirrorState?.streaming === true,
-              tabIsStreaming: tabState.isStreaming,
-              hasSessionId: !!mirrorSid,
-              postDisconnectUncertain: !!tabState._postDisconnectUncertain,
-              isWaitingForBusy: !!tabState.isWaitingForBusy,
-              hasQueuedMessage: !!tabState.queuedMessage,
-              streamClearedAt: tabState._streamClearedAt,
-              now: Date.now(),
-            })
-          ) {
-            console.warn(
-              '[StreamReconcile] Backend streaming but tab idle — arming spinner',
-              { tabId, sessionId: mirrorSid },
-            );
-            // Atomic primitive (flag + Set + re-render + state machine).
-            // NEVER mutate tabState.isStreaming directly.
-            setIsStreaming(true, tabId);
-            continue;  // re-armed — nothing else to reconcile for this tab this tick
-          }
-
-          if (!tabState.isStreaming) continue;  // only check streaming tabs
-
-          // DRAIN/QUEUE IMMUNITY: never force-clear a tab that has a pending
-          // drain or queued message. The "backend=IDLE + frontend=streaming"
-          // state is INTENTIONAL during the drain gap (result arrived, drain
-          // scheduled via setTimeout(0), new stream not yet started).
-          // EXCEPTION: if queue has been waiting >60s, the "drain gap"
-          // explanation no longer applies — SSE event was likely lost.
-          // Without this override, queuedMessage creates a deadlock:
-          // streaming(wrong) → queue msg → reconcile skips → never clears.
-          const queueAge = tabState._queuedAt ? Date.now() - tabState._queuedAt : 0;
-          const sid = tabState.sessionId;
-          if (!sid) { tabState._idleStreamingSince = undefined; continue; }
-          const backendState = states[sid];
-
-          // Decision extracted to forceClearStreamVerdict (pure, test-locked in
-          // streaming-guards.test.ts: "backend streaming → NEVER force-clear" is
-          // the load-bearing invariant). The hook only APPLIES side effects per
-          // verdict — the stuck-vs-live judgement lives in the tested function.
-          const { verdict } = forceClearStreamVerdict({
-            drainPending: !!tabState.drainPending,
-            hasQueuedMessage: !!tabState.queuedMessage,
-            queueAge,
-            hasSessionId: true,
-            backendIsStreaming: backendState?.streaming ?? false,
-            reportedState: backendState?.state,
-            resumeInProgress: !!tabState.isResuming,
-            activeGuardAge: Date.now() - (tabState._reconcileStreamStart ?? 0),
-            idleStreamingSince: tabState._idleStreamingSince,
-            // OT01 AC1: churn-immune absolute bound. Cleared on the streaming→idle
-            // edge (setIsStreaming false), so it is only non-undefined during a
-            // live span; the verdict consults it ONLY after all three alive guards.
-            streamingSinceHardStart: tabState._streamingSinceHardStart,
-            now: Date.now(),
-          });
-
-          if (verdict === 'reset-and-skip') {
-            // Condition does NOT hold (drain gap / fresh queue / backend
-            // streaming / active state). Clear the reconcile-owned backstop
-            // clock so a later genuine stall restarts the 30s window fresh.
-            tabState._idleStreamingSince = undefined;
-            continue;
-          }
-          if (verdict === 'wait-settle') {
-            // Stuck but within the settle window — stamp on first observation,
-            // keep aging the clock (touched ONLY here, so reconnect/heal churn
-            // can't postpone the deadline forever).
-            if (tabState._idleStreamingSince === undefined) {
-              tabState._idleStreamingSince = Date.now();
-            }
-            continue;
-          }
-
-          // verdict === 'force-clear': frontend=streaming, backend idle, settled.
-          console.warn(
-            '[StreamReconcile] Backend idle but tab streaming — forcing clear',
-            { tabId, sessionId: sid, backendState: backendState?.state ?? 'evicted',
-              hasQueuedMessage: !!tabState.queuedMessage },
-          );
-          // Use atomic primitive — handles flag + Set + re-render.
-          // Direct mutation here was the root cause of background-tab hang.
-          setIsStreaming(false, tabId);
-          tabState.isReconnecting = false;
-          tabState.isResuming = false;
-          tabState._idleStreamingSince = undefined;  // condition resolved
-          if (tabState._resumeTimeoutId) { clearTimeout(tabState._resumeTimeoutId); tabState._resumeTimeoutId = undefined; }
-          anyCleared = true;
-
-          // Auto-drain: if a queued message was waiting (deadlock scenario),
-          // trigger drain now that streaming is cleared. Without this, the
-          // user is unstuck (can type) but the already-queued message stays unsent.
-          if (tabState.queuedMessage && deps.onDrainQueue) {
-            // Schedule drain after a tick to let React state settle
-            setTimeout(() => { if (!cancelled) deps.onDrainQueue?.(tabId); }, 100);
-          }
-
-          // Sync messages from DB for this tab (content is there, event was lost).
-          // Phase-gated via MessageStore.reconcile(): preserves local-only
-          // messages (queued, synthetic) and respects streaming gate.
-          chatService.invalidateMessageCache(sid);
-          chatService.getSessionMessagesReconcileTail(sid, RECONCILE_TAIL).then((msgs) => {
-            if (cancelled) return;
-            // Route through store — reconcile handles dedup by ID, preserves
-            // local-only queued messages, and phase-gates (NO-OP if streaming
-            // restarted between fetch and resolve).
-            const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: sid });
-            store.reconcile(msgs);
-            // Only sync back if reconcile actually executed (not queued).
-            if (store.phase === 'idle') {
-              if (tabId === activeTabIdRef.current) {
-                setMessages(() => store.messages);
-              } else {
-                tabState.messages = store.messages;
-              }
-              // Recovery succeeded — clear any prior failure flag.
-              tabState._dbReconcileFailed = false;
-            }
-          }).catch((err) => {
-            console.warn('[useChatStreamingLifecycle] Recovery sync failed:', err);
-            // Backend unreachable — the force-clear left a frozen partial.
-            // Flag for retry; the backend-recovered handler re-reconciles
-            // from DB once the daemon is back.
-            tabState._dbReconcileFailed = true;
-          });
         }
 
         // Force re-render if any tab was cleared
@@ -1835,72 +1631,107 @@ export function useChatStreamingLifecycle(
   }, [messages, sessionId, pendingQuestion]);
 
   /**
-   * Transition isStreaming state for a specific tab. Updates the per-tab map
-   * entry and the ``pendingStreamTabs`` Set (which triggers re-render for
-   * isStreaming derivation). When no ``tabId`` is provided, defaults to
-   * ``activeTabIdRef.current`` for backward compatibility.
+   * This tab's own POST to /chat/stream opened (true) or ended (false). Only the
+   * tab's request state: the Send / Stop button and the queue-or-send decision
+   * read it together with isStreaming; the bee does not (docs/design/
+   * chat-turn-liveness.md S3). When no ``tabId`` is given, the active tab.
    */
-  const setIsStreaming = useCallback(
-    (streaming: boolean, tabId?: string) => {
+  const setLocalSending = useCallback(
+    (sending: boolean, tabId?: string) => {
       const targetTabId = tabId ?? activeTabIdRef.current;
-
-      // Always update per-tab map
-      if (targetTabId) {
-        const tabState = tabMapRef.current.get(targetTabId);
-        if (tabState) {
-          // ── Per-tab state machine dispatch (P5) ──
-          // Dispatch to the tab's own streamState. Coarse events: SEND_MESSAGE
-          // on true-from-idle, USER_STOP on false-from-active. More specific
-          // events (SESSION_START, RESULT, etc.) dispatch at their semantic sites.
-          const tabMode = tabState.streamState.mode;
-          if (streaming && tabMode === 'idle') {
-            tabState.streamState = streamingReducer(tabState.streamState, { type: 'SEND_MESSAGE' });
-          } else if (!streaming && tabMode !== 'idle' && tabMode !== 'error'
-            && tabMode !== 'waiting_input' && tabMode !== 'permission_needed') {
-            tabState.streamState = streamingReducer(tabState.streamState, { type: 'USER_STOP' });
-          }
-
-          // AUTHORIZED WRITER: readonly bypass — this is the ONLY place
-          // that may mutate isStreaming. All other paths get TS2540.
-          (tabState as { isStreaming: boolean }).isStreaming = streaming;
-          if (streaming) {
-            tabState._reconcileStreamStart = Date.now();
-            // OT01 hard-cap clock (AC1): stamp SET-ONCE per continuous streaming
-            // span. Unlike _reconcileStreamStart (re-stamped on every arm, incl.
-            // the reconcile re-arm + post-disconnect handoff — Gate-1 Q3 churn),
-            // this is set only on the FIRST true-edge and left untouched until the
-            // span ends, so abort+recycle churn that re-enters setIsStreaming(true)
-            // cannot postpone the absolute deadline. Cleared on the false-edge below.
-            if (tabState._streamingSinceHardStart === undefined) {
-              tabState._streamingSinceHardStart = Date.now();
-            }
-            // Record stream start time for elapsed timer on tab switch
-            if (!tabState.streamStartTime) {
-              tabState.streamStartTime = Date.now();
-            }
-          } else {
-            tabState.streamStartTime = undefined;
-            // OT01 hard-cap clock: clear on the streaming→idle edge so the NEXT
-            // genuine turn re-stamps fresh (no stale deadline carried across turns).
-            tabState._streamingSinceHardStart = undefined;
-            // Flap-guard stamp: the reconcile loop's idle→streaming re-arm skips
-            // a tab cleared within the settle window, so a Stop (frontend idle)
-            // is not re-lit during the ~5s before the backend transitions to IDLE.
-            tabState._streamClearedAt = Date.now();
-          }
-        }
+      const tabState = targetTabId ? tabMapRef.current.get(targetTabId) : undefined;
+      if (!tabState) return;
+      // ── Per-tab state machine dispatch (P5) ── follows the tab's request:
+      // SEND_MESSAGE when one opens, USER_STOP when it ends early.
+      const tabMode = tabState.streamState.mode;
+      if (sending && tabMode === 'idle') {
+        tabState.streamState = streamingReducer(tabState.streamState, { type: 'SEND_MESSAGE' });
+      } else if (!sending && tabMode !== 'idle' && tabMode !== 'error'
+        && tabMode !== 'waiting_input' && tabMode !== 'permission_needed') {
+        tabState.streamState = streamingReducer(tabState.streamState, { type: 'USER_STOP' });
       }
+      if (tabState.localSending === sending) return;
+      // AUTHORIZED WRITER (readonly elsewhere)
+      (tabState as { localSending: boolean }).localSending = sending;
+      setRenderTick((n) => n + 1);
+    },
+    [], // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
+  );
 
-      // Update pendingStreamTabs (triggers re-render for isStreaming derivation)
+  /**
+   * A tab's activity is its session's: when the tab now shows another session (a
+   * reset, a resumed history, its first session), what it held is no news about
+   * this one. Start over — idle, seq 0 — without the turn-end work (that belongs
+   * to the old session's turn). Called before every apply, from the poll for every
+   * tab, and by ChatPage where it rebinds a tab.
+   */
+  const rebindActivity = useCallback((tabId: string) => {
+    const tabState = tabMapRef.current.get(tabId);
+    if (!tabState || tabState.activitySid === tabState.sessionId) return;
+    tabState.activitySid = tabState.sessionId;
+    tabState.activitySeq = 0;
+    tabState.activityAt = undefined;
+    if ((tabState.activity ?? 'idle') !== 'idle' || tabState.isStreaming) {
+      tabState.activity = 'idle';
+      (tabState as { isStreaming: boolean }).isStreaming = false;   // AUTHORIZED WRITER
+      tabState.streamStartTime = undefined;
       setPendingStreamTabs((prev) => {
+        if (!prev.has(tabId)) return prev;
         const next = new Set(prev);
-        if (streaming && targetTabId) {
-          next.add(targetTabId);
-        } else if (!streaming && targetTabId) {
-          next.delete(targetTabId);
-        }
+        next.delete(tabId);
         return next;
       });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
+
+  /** Turn-end work, run where the session's activity goes back to idle (the one
+   *  place a turn is known to have ended, whichever way it ended): align the tab
+   *  with the DB, leave post-disconnect mode, send a message the tab queued. */
+  const onActivityIdleRef = useRef<(tabId: string) => void>(() => {});
+
+  /**
+   * THE writer of ``tab.isStreaming`` (docs/design/chat-turn-liveness.md S3): the
+   * backend's activity for the tab's session, from the push or the poll. A seq not
+   * larger than the tab's is older news and is ignored. ``seq === undefined`` is a
+   * poll that no longer lists the session (its unit is gone): idle, at the seq the
+   * tab has, so any later activity still wins.
+   */
+  const applyActivity = useCallback(
+    (tabId: string, activity: SessionActivity, seq: number | undefined) => {
+      const tabState = tabMapRef.current.get(tabId);
+      if (!tabState) return;
+      rebindActivity(tabId);
+      if (seq !== undefined) {
+        if (seq <= (tabState.activitySeq ?? 0)) return;
+        tabState.activitySeq = seq;
+      }
+      tabState.activityAt = Date.now();
+      if (tabState.activity === activity) {
+        // Fresh idle news on a tab already idle: when the tab still looks mid-turn
+        // and no POST of it is open, the turn's busy activity and its end were both
+        // lost (a disconnect) — do the turn-end work now.
+        if (activity === 'idle' && seq !== undefined && !tabState.localSending
+            && (messageStoreRegistry.get(tabId)?.phase === 'streaming' || tabState.status === 'streaming'
+                || tabState.isReconnecting || tabState.isResuming || tabState._postDisconnectUncertain)) {
+          onActivityIdleRef.current(tabId);
+        }
+        return;
+      }
+      const wasBusy = (tabState.activity ?? 'idle') !== 'idle';
+      tabState.activity = activity;
+      const busy = activity !== 'idle';
+      if (busy !== wasBusy) {
+        // AUTHORIZED WRITER: readonly bypass — the only place isStreaming changes.
+        (tabState as { isStreaming: boolean }).isStreaming = busy;
+        // elapsed timer of the bee (kept across tab switches)
+        tabState.streamStartTime = busy ? (tabState.streamStartTime ?? Date.now()) : undefined;
+      }
+      setPendingStreamTabs((prev) => {
+        const next = new Set(prev);   // a new Set: the phase text may have moved
+        if (busy) next.add(tabId); else next.delete(tabId);
+        return next;
+      });
+      if (wasBusy && !busy) onActivityIdleRef.current(tabId);
     },
     [], // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
   );
@@ -1981,6 +1812,32 @@ export function useChatStreamingLifecycle(
     },
     [setMessages], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
   );
+
+  // The turn-end work at the session's idle edge (applyActivity): the same for
+  // every way a turn ends, so no path can skip it.
+  onActivityIdleRef.current = (tabId: string) => {
+    const tabState = tabMapRef.current.get(tabId);
+    if (!tabState) return;
+    tabState.isReconnecting = false;
+    tabState.isResuming = false;
+    if (tabState._resumeTimeoutId) { clearTimeout(tabState._resumeTimeoutId); tabState._resumeTimeoutId = undefined; }
+    // The turn is over. A POST of this tab still open ends its own store phase when
+    // its tail arrives; otherwise nothing else will (a lost turn_end, a turn this
+    // tab only watched), and the DB read below would wait behind the phase gate.
+    if (!tabState.localSending) messageStoreRegistry.get(tabId)?.endStreaming();
+    if (tabState.status === 'streaming') updateTabStatus(tabId, 'idle');
+    // the DB has the whole turn: align the tab with it (phase-gated, dedups by id)
+    scheduleTurnEndReconcile(tabState.sessionId, tabId);
+    // A message this tab holds back (its own queue, until P2c) goes now; post-
+    // disconnect mode ends with it (drainQueuedMessage clears the flag on success,
+    // so a failed drain keeps it and the next poll retries).
+    if (tabState.queuedMessage && deps.onDrainQueue && !tabState.drainPending && !tabState.localSending) {
+      tabState.drainPending = true;
+      setTimeout(() => deps.onDrainQueue?.(tabId), 100);
+    } else if (!tabState.queuedMessage) {
+      tabState._postDisconnectUncertain = false;
+    }
+  };
 
   /**
    * Surface an AskUserQuestion into a tab — the single authoritative path for
@@ -2075,7 +1932,7 @@ export function useChatStreamingLifecycle(
 
       // (5) End streaming phase + status → waiting_input
       if (store) store.endStreaming();
-      setIsStreaming(false, tabId);
+      setLocalSending(false, tabId);
       incrementStreamGen();
       updateTabStatus(tabId, 'waiting_input');
 
@@ -2094,7 +1951,7 @@ export function useChatStreamingLifecycle(
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refs + stable setters
-    [dispatch, setMessages, setPendingQuestion, setSessionId, setIsStreaming, incrementStreamGen, updateTabStatus, scheduleTurnEndReconcile],
+    [dispatch, setMessages, setPendingQuestion, setSessionId, setLocalSending, incrementStreamGen, updateTabStatus, scheduleTurnEndReconcile],
   );
 
   /**
@@ -2152,7 +2009,7 @@ export function useChatStreamingLifecycle(
         setPendingPermissionRequestId(perm.requestId);
       }
       if (store) store.endStreaming();
-      setIsStreaming(false, tabId ?? undefined);
+      setLocalSending(false, tabId ?? undefined);
       incrementStreamGen();
       // Turn-end DB reconcile (reconcile-gap): this terminal path emits NO
       // `result`; the block survives reconcile (stored, and carried by _applyMerge).
@@ -2160,7 +2017,7 @@ export function useChatStreamingLifecycle(
       if (tabId) updateTabStatus(tabId, 'permission_needed');
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refs + stable setters
-    [setMessages, setSessionId, setIsStreaming, incrementStreamGen, updateTabStatus, scheduleTurnEndReconcile],
+    [setMessages, setSessionId, setLocalSending, incrementStreamGen, updateTabStatus, scheduleTurnEndReconcile],
   );
 
   // Derive streaming activity for spinner label
@@ -2540,6 +2397,16 @@ export function useChatStreamingLifecycle(
 
         if (event.type === 'accepted') {
           accepted = true;
+          // The message is the session's now: a tab on its first send learns its
+          // session here, before the cold start, and follows that session's
+          // activity from admission on (docs/design/chat-turn-liveness.md S3).
+          if (capturedTabId && event.sessionId) {
+            const tab = tabMapRef.current.get(capturedTabId);
+            if (tab && !tab.sessionId) {
+              tab.sessionId = event.sessionId;
+              watchOpenTabs();
+            }
+          }
           // a resend of a send the server already queued: wait for its delivery
           if (event.duplicate && event.queued && capturedTabId) {
             const tab = tabMapRef.current.get(capturedTabId);
@@ -2947,13 +2814,10 @@ export function useChatStreamingLifecycle(
             tabState.streamState = streamingReducer(tabState.streamState, { type: 'SESSION_START', sessionId: event.sessionId });
           }
 
-          // Update per-tab map. Keep isStreaming true — the tab is still
-          // actively streaming after session_start. The pending phase ends
-          // (pendingStreamTabs removal below) but the tab remains streaming
-          // until result/error/ask_user_question arrives.
+          // The tab's session (usually already bound at `accepted`); the bee follows
+          // that session's activity (docs/design/chat-turn-liveness.md S3).
           if (tabState) {
             tabState.sessionId = event.sessionId;
-            // Keep tabState.isStreaming = true (set by setIsStreaming(true) in handleSendMessage)
             watchOpenTabs();
           }
           // Notify the owner that THIS tab bound a session — fires for background
@@ -3186,7 +3050,7 @@ export function useChatStreamingLifecycle(
             setMessages(auqMessages);
             setPendingQuestion(pq);
             if (event.sessionId) setSessionId(event.sessionId);
-            setIsStreaming(false, undefined);
+            setLocalSending(false, undefined);
             incrementStreamGen();
           }
         } else if (event.type === 'cmd_permission_request') {
@@ -3311,17 +3175,7 @@ export function useChatStreamingLifecycle(
           if (!hasQueuedMessage) {
             // Normal completion — clear streaming state so spinner stops
             // and input re-enables.
-            setIsStreaming(false, capturedTabId ?? undefined);
-          }
-          // Turn boundary: clear the reconcile-owned backstop clock so a stale
-          // stuck-since timestamp from THIS turn cannot leak into the NEXT turn
-          // on the same tab (adversarial HIGH #4). This is deterministic at turn
-          // end — it does NOT depend on the reconcile poll happening to run, and
-          // it is NOT in setIsStreaming (which reconnect churns), so it cannot
-          // re-introduce the re-arm-loop bug.
-          if (capturedTabId) {
-            const resultTab = tabMapRef.current.get(capturedTabId);
-            if (resultTab) resultTab._idleStreamingSince = undefined;
+            setLocalSending(false, capturedTabId ?? undefined);
           }
           // Always bump generation so the old completeHandler no-ops.
           incrementStreamGen();
@@ -3369,7 +3223,7 @@ export function useChatStreamingLifecycle(
             // End store streaming phase + clean up React streaming state.
             const stoppedStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
             if (stoppedStore) stoppedStore.endStreaming();
-            setIsStreaming(false, capturedTabId ?? undefined);
+            setLocalSending(false, capturedTabId ?? undefined);
             incrementStreamGen();
             if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
             return;
@@ -3423,7 +3277,7 @@ export function useChatStreamingLifecycle(
             console.log('[StreamHandler] CONTEXT_TOO_LARGE — circuit breaker activated', { capturedTabId });
             const ctlStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
             if (ctlStore) ctlStore.endStreaming();
-            setIsStreaming(false, capturedTabId ?? undefined);
+            setLocalSending(false, capturedTabId ?? undefined);
             incrementStreamGen();
             if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
             // Terminal idle path with no following `result` event — the 15s
@@ -3463,7 +3317,7 @@ export function useChatStreamingLifecycle(
             console.log('[StreamHandler] SESSION_BUSY — message pending on the server', { capturedTabId });
             const busyEndStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
             if (busyEndStore) busyEndStore.endStreaming();
-            setIsStreaming(false, capturedTabId ?? undefined);
+            setLocalSending(false, capturedTabId ?? undefined);
             incrementStreamGen();
             if (capturedTabId) {
               updateTabStatus(capturedTabId, 'streaming');
@@ -3499,7 +3353,7 @@ export function useChatStreamingLifecycle(
                 // tabState.isStreaming = false. Direct mutation on a background
                 // tab triggers no re-render → spinner frozen true. See the
                 // disconnect-timeout fix for the same root cause.
-                setIsStreaming(false, capturedTabId);
+                setLocalSending(false, capturedTabId);
                 tabState.isWaitingForBusy = true;
                 // Remove this send's assistant placeholder, and — only when the
                 // server did not keep the message (re-queued above) — its user
@@ -3656,7 +3510,7 @@ export function useChatStreamingLifecycle(
             }
           }
           // Tab-aware: clear only this tab's streaming state
-          setIsStreaming(false, capturedTabId ?? undefined);
+          setLocalSending(false, capturedTabId ?? undefined);
           // (The error bubble brings its tab's view to the bottom: TabView,
           // scrollFocus.tailErrorId.)
           incrementStreamGen();
@@ -3670,7 +3524,7 @@ export function useChatStreamingLifecycle(
         // tabStatus='error'. The backend is now retrying with a fresh client on
         // the SAME SSE connection, so we need to re-enter streaming state.
         else if (event.type === 'reconnecting') {
-          setIsStreaming(true, capturedTabId ?? undefined);
+          setLocalSending(true, capturedTabId ?? undefined);
           // Set isReconnecting so TabView renders the soft "Reconnecting…"
           // spinner during the gap. Without this the handler sets only
           // isStreaming → the generic "Thinking…" shows, not "Reconnecting…"
@@ -3709,7 +3563,7 @@ export function useChatStreamingLifecycle(
                 tabState.isResuming = false;
                 const stillActive = capturedTabId === activeTabIdRef.current;
                 if (stillActive) {
-                  setIsStreaming(false, capturedTabId ?? undefined);
+                  setLocalSending(false, capturedTabId ?? undefined);
                   const timeoutStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
                   if (timeoutStore) timeoutStore.endStreaming();
                 }
@@ -3750,7 +3604,7 @@ export function useChatStreamingLifecycle(
             // Force re-render so ChatPage picks up isResuming from tabMapRef.
             const isActive = capturedTabId === activeTabIdRef.current;
             if (isActive) {
-              setIsStreaming(true, capturedTabId ?? undefined);
+              setLocalSending(true, capturedTabId ?? undefined);
             }
           }
         }
@@ -3848,18 +3702,18 @@ export function useChatStreamingLifecycle(
               // HARD_WARN and KILL trigger backend interrupt() which ends the
               // stream.  Clear streaming state immediately so the tab doesn't
               // show "Running" forever after the guard fires. Use the atomic
-              // setIsStreaming(false) primitive (flag + Set + re-render) — a
+              // setLocalSending(false) primitive (flag + Set + re-render) — a
               // direct flag mutation on a background tab triggers no re-render
               // so the spinner would stay frozen true (same root cause as the
               // disconnect-timeout and SESSION_BUSY fixes).
               if (subtype === 'hard_warn' || subtype === 'kill') {
-                setIsStreaming(false, capturedTabId ?? undefined);
+                setLocalSending(false, capturedTabId ?? undefined);
               }
             }
             if (capturedTabId === null || capturedTabId === activeTabIdRef.current) {
               setCompactionGuard(guardEvent);
               if (subtype === 'hard_warn' || subtype === 'kill') {
-                setIsStreaming(false, capturedTabId ?? undefined);
+                setLocalSending(false, capturedTabId ?? undefined);
               }
             }
           }
@@ -3907,7 +3761,7 @@ export function useChatStreamingLifecycle(
       // turn's handler is called by the router directly.
       return source === 'post' ? wrapPostHandler(capturedTabId, inner, assistantMessageId) : inner;
     },
-    [queryClient, setIsStreaming, incrementStreamGen, updateTabStatus, applyContextUsage], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
+    [queryClient, setLocalSending, incrementStreamGen, updateTabStatus, applyContextUsage], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
   );
 
   const createErrorHandlerInner = useCallback(
@@ -3954,7 +3808,7 @@ export function useChatStreamingLifecycle(
         if (tabState?.userStopped) {
           console.log('[ErrorHandler] Suppressing connection error from user-stopped stream', { capturedTabId });
           // Still clean up streaming state
-          setIsStreaming(false, capturedTabId ?? undefined);
+          setLocalSending(false, capturedTabId ?? undefined);
           incrementStreamGen();
           if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
           return;
@@ -3982,7 +3836,7 @@ export function useChatStreamingLifecycle(
           // Mirror to React state if active tab
           if (isActiveTab) {
             // Force re-render so UI can show "Reconnecting..." indicator
-            setIsStreaming(true, capturedTabId ?? undefined);
+            setLocalSending(true, capturedTabId ?? undefined);
           }
 
           const delay = computeReconnectDelay(currentAttempt);
@@ -4089,17 +3943,7 @@ export function useChatStreamingLifecycle(
               console.log(`[HealGrace] Tab ${capturedTabId}: grace expired but backend still working — keeping spinner, reconcile owns recovery`);
               tab2._postDisconnectUncertain = true;
               tab2._postDisconnectAt = Date.now();
-              // Stamp _reconcileStreamStart so the desync (capMs/graceMs) and
-              // force-clear (activeGuardAge) caps in the 15s reconcile loop
-              // anchor to NOW — identical to the disconnect-handler still-working
-              // branch (~:4083). WITHOUT it, this branch hands recovery to the
-              // reconcile loop while _reconcileStreamStart stays stale (~0), so
-              // the next tick computes a huge dsStartAge → the ≥10s start-grace
-              // does NOT apply → the spinner is force-cleared in the backend
-              // dead→cold gap while the answer is still being produced = the exact
-              // OT01 truncated-render bug, just surfacing on the heal-grace path.
-              tab2._reconcileStreamStart = Date.now();
-              // Leave _healGraceActive + isStreaming true (spinner stays).
+              // Leave _healGraceActive set; the bee follows the backend's activity.
               return;
             }
 
@@ -4107,7 +3951,7 @@ export function useChatStreamingLifecycle(
             // failed). Run the original error path.
             tab2._healGraceActive = false;
             console.warn(`[HealGrace] Tab ${capturedTabId}: grace expired, backend genuinely done — showing error`);
-            setIsStreaming(false, capturedTabId ?? undefined);
+            setLocalSending(false, capturedTabId ?? undefined);
             incrementStreamGen();
             if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
             // Mark post-disconnect-uncertain so a follow-up send is QUEUED
@@ -4278,7 +4122,7 @@ export function useChatStreamingLifecycle(
           }
         }
         // Tab-aware: clear only this tab's streaming state
-        setIsStreaming(false, capturedTabId ?? undefined);
+        setLocalSending(false, capturedTabId ?? undefined);
         incrementStreamGen();
 
         // Clean up sessionStorage pending state on stream error
@@ -4300,7 +4144,7 @@ export function useChatStreamingLifecycle(
         }
       };
     },
-    [setIsStreaming, incrementStreamGen, updateTabStatus], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
+    [setLocalSending, incrementStreamGen, updateTabStatus], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
   );
 
   // A transport error of a POST whose turn the session subscription carries is
@@ -4368,12 +4212,9 @@ export function useChatStreamingLifecycle(
       }
 
       // ── Staleness gate (single source of truth) ──
-      // Validate freshness ONCE, then clear streaming via the atomic
-      // setIsStreaming() primitive — which clears BOTH tabState.isStreaming
-      // and the pendingStreamTabs entry together. We must never clear the
-      // flag directly here: doing so before an early-return orphans the
-      // pendingStreamTabs entry, and the `||` in the isStreaming derivation
-      // then pins the spinner true forever (confirmed spinner-hang root cause).
+      // Validate freshness ONCE, then end the tab's request via setLocalSending
+      // (the bee follows the session's activity, not this handler:
+      // docs/design/chat-turn-liveness.md S3).
       if (capturedTabId) {
         const tabState = tabMapRef.current.get(capturedTabId);
         // Live-completer check (run_6adee7d5): clear streaming iff THIS handler
@@ -4381,8 +4222,7 @@ export function useChatStreamingLifecycle(
         // (advanced only by a NEW send), NOT streamGen (churned mid-stream by
         // reconnect/result/error). The old `streamGen !== capturedGen` check
         // self-invalidated a turn's own [DONE] after a single reconnect → the
-        // setIsStreaming(false) below was skipped → spinner pinned true, rescued
-        // only by the 30s reconcile force-clear (~109/114 idle force-clears).
+        // setLocalSending(false) below was skipped (run_6adee7d5).
         // Closed tab (no tabState) → no-op, as before.
         if (!tabState) return; // closed tab
         // Fail-SAFE liveness check (adversarial MED, run_6adee7d5): treat an
@@ -4399,7 +4239,7 @@ export function useChatStreamingLifecycle(
           // Either liveness unknown, or a genuinely newer send superseded this
           // handler — correct no-op.
           // OT01 diag (AC5): a complete-handler no-op means the [DONE] that would
-          // call setIsStreaming(false) was discarded → spinner can pin. ALWAYS
+          // call setLocalSending(false) was discarded → spinner can pin. ALWAYS
           // warn (not DEV-only — DEV is tree-shaken dead in the prod .app where
           // the bug happens, run_3451bbd1); logForwarder persists warn to
           // frontend.log. Fields per Gate-1 Q4 (own-turn vs cross-tab).
@@ -4430,7 +4270,7 @@ export function useChatStreamingLifecycle(
       }
 
       // End store streaming phase — unblocks reconcile/replace, flushes
-      // pending reconcile thunk. Must happen before setIsStreaming(false)
+      // pending reconcile thunk. Must happen before setLocalSending(false)
       // so that the store is in idle state when any post-stream DB fetch fires.
       if (capturedTabId) {
         const completeStore = messageStoreRegistry.get(capturedTabId);
@@ -4440,7 +4280,7 @@ export function useChatStreamingLifecycle(
       // Atomic clear — flag + pendingStreamTabs in one primitive. This is the
       // ONLY place streaming is cleared on the complete path, so the two
       // representations can never drift out of sync.
-      setIsStreaming(false, capturedTabId ?? undefined);
+      setLocalSending(false, capturedTabId ?? undefined);
 
       // Reset tab status to idle — without this, tabs that ended with an
       // error event (SSE disconnect, SDK error) would keep showing the red
@@ -4460,7 +4300,7 @@ export function useChatStreamingLifecycle(
       //     while isStreaming was never cleared (stays true);
       //   • the pre-guard above only drains when isStreaming is ALREADY false,
       //     so it misses the case where isStreaming is still true at [DONE].
-      // This block — AFTER the atomic setIsStreaming(false) — closes that gap.
+      // This block — AFTER the atomic setLocalSending(false) — closes that gap.
       //
       // Guards:
       //   • !drainPending: the `result` path sets drainPending when it schedules
@@ -4501,7 +4341,7 @@ export function useChatStreamingLifecycle(
       if (!live) { inner(); return; }
       turnRunRef.current(capturedTabId, onPostComplete(turnStateOf(live), sessionEvents.isConnected()), undefined, inner);
     };
-  }, [setIsStreaming, updateTabStatus]); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
+  }, [setLocalSending, updateTabStatus]); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
 
   /**
    * Create a handler for premature SSE disconnects (HTTP stream closed
@@ -4546,13 +4386,9 @@ export function useChatStreamingLifecycle(
       if (capturedTabId) {
         const tabState = tabMapRef.current.get(capturedTabId);
         if (tabState) {
-          // Keep isStreaming=true — backend may still be processing
+          // The POST is gone; the turn may still run (its activity says so)
           tabState.isReconnecting = true;
-          // Force re-render so ChatPage shows "Reconnecting..." indicator
-          const isActive = capturedTabId === activeTabIdRef.current;
-          if (isActive) {
-            setIsStreaming(true, capturedTabId);
-          }
+          setLocalSending(false, capturedTabId);
 
           // Safety timeout: if no recovery within 30s, clear reconnecting
           // state and recover content from DB.  The backend persists assistant
@@ -4600,30 +4436,13 @@ export function useChatStreamingLifecycle(
             }
 
             if (verdict === 'still-working') {
-              // Backend alive (streaming / waiting_input). KEEP the
-              // spinner; hand ongoing recovery to the 15s reconcile loop. Do NOT
-              // endStreaming() here (would flip the store idle immediately).
-              //
-              // The 2-stage handoff (verified Gate-2): (1) the MessageStore 90s
-              // watchdog flips store phase -> idle; the next reconcile tick's
-              // desyncConvergeVerdict block (the PRIMARY stage-1 owner — it
-              // `continue`s before control reaches the force-clear block) sees
-              // storeIdle + backend-terminal-idle and calls setIsStreaming(false).
-              // (2) the FOLLOWING tick's _postDisconnectUncertain block (needs
-              // !isStreaming) re-pulls DB + drains. So content surfaces with NO
-              // user send. forceClearStreamVerdict is only the fallback for when
-              // the store never goes idle.
-              //
-              // BLOCKER (Gate-1): stamp _reconcileStreamStart so BOTH the desync
-              // (capMs/graceMs) and force-clear (activeGuardAge) caps anchor to
-              // NOW — without it the age is ~Date.now() (every cap pre-blown) and
-              // the spinner is force-cleared in the backend dead->cold gap.
-              console.log('[DisconnectHandler] Timeout — backend still working; handing recovery to reconcile loop', { capturedTabId });
+              // Backend alive (streaming / waiting_input): no error, and the bee
+              // follows the backend's activity (docs/design/chat-turn-liveness.md
+              // S3); its idle edge ends post-disconnect mode and pulls the DB.
+              console.log('[DisconnectHandler] Timeout — backend still working; the session activity takes over', { capturedTabId });
               currentTabState._postDisconnectUncertain = true;
               currentTabState._postDisconnectAt = Date.now();
-              currentTabState._reconcileStreamStart = Date.now();
               currentTabState._disconnectTimeoutId = undefined;
-              // Leave isReconnecting + isStreaming TRUE (spinner stays).
               return;
             }
 
@@ -4640,8 +4459,8 @@ export function useChatStreamingLifecycle(
             const dcStore = messageStoreRegistry.get(capturedTabId);
             if (!dcStore) return; // Tab was closed — don't re-create store
             dcStore.endStreaming();
-            // Clear via the atomic setIsStreaming(false) primitive for ALL tabs.
-            setIsStreaming(false, capturedTabId);
+            // Clear via the atomic setLocalSending(false) primitive for ALL tabs.
+            setLocalSending(false, capturedTabId);
 
             // Recover content from DB: backend persists messages immediately
             // during streaming, so content generated before the disconnect is
@@ -4663,7 +4482,7 @@ export function useChatStreamingLifecycle(
         }
       }
     };
-  }, [setIsStreaming]); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
+  }, [setLocalSending]); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
 
   /** Begin rendering a turn this tab did not send (drained / CLI-initiated /
    *  channel turn, or a running turn the tab joined after a reload). The bubble
@@ -4738,7 +4557,7 @@ export function useChatStreamingLifecycle(
     }
     if (tab._disconnectTimeoutId) { clearTimeout(tab._disconnectTimeoutId); tab._disconnectTimeoutId = undefined; }
     tab.isReconnecting = false;
-    setIsStreaming(true, tabId);
+    // (the bee comes from the session's activity, not from this event)
     updateTabStatus(tabId, 'streaming');
     incrementStreamGen();
     handlers.subRender = createStreamHandler(id, tabId, 'sub');
@@ -4840,10 +4659,26 @@ export function useChatStreamingLifecycle(
         backgroundAgentsStore.apply(sid, (ev as { agents?: unknown }).agents);
         return;
       }
+      if (ev.type === 'session_activity') {
+        // whether a turn of the session is in progress (backend core/session_state)
+        const a = ev as { activity?: unknown; activity_seq?: unknown };
+        if (typeof a.activity === 'string' && typeof a.activity_seq === 'number') {
+          for (const [tabId, tab] of tabMapRef.current.entries()) {
+            if (tab.sessionId === sid) applyActivity(tabId, a.activity as SessionActivity, a.activity_seq);
+          }
+        }
+        return;
+      }
       if (ev.type === 'session_state') {
         const raw = (ev as { state?: unknown }).state;
         if (raw && typeof raw === 'object') {
-          pushedStateRef.current?.(sid, chatService.toStreamingStateEntry(raw as never));
+          const entry = chatService.toStreamingStateEntry(raw as never);
+          if (entry.activity) {
+            for (const [tabId, tab] of tabMapRef.current.entries()) {
+              if (tab.sessionId === sid) applyActivity(tabId, entry.activity, entry.activitySeq);
+            }
+          }
+          pushedStateRef.current?.(sid, entry);
         }
         return;
       }
@@ -4912,6 +4747,8 @@ export function useChatStreamingLifecycle(
    * every tab switch.
    */
   const bumpStreamingDerivation = useCallback(() => {
+    // a tab whose session changed (reset, resumed history) starts its activity over
+    for (const id of tabMapRef.current.keys()) rebindActivity(id);
     setPendingStreamTabs((prev) => new Set(prev));
 
     // --- Immediate tab-switch state sync (eliminates useEffect lag) ---
@@ -4985,7 +4822,10 @@ export function useChatStreamingLifecycle(
     pendingPermissionRequestId,
     setPendingPermissionRequestId,
     isStreaming,
-    setIsStreaming,
+    isSending,
+    setLocalSending,
+    applyActivity,
+    rebindActivity,
     streamingActivity,
     displayedActivity,
     elapsedSeconds,

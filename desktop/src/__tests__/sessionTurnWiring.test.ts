@@ -73,7 +73,10 @@ describe('session turn wiring', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => { initTestTab('t1'); });
     testTabMap.get('t1')!.sessionId = 'S';
-    act(() => { fake.emit(env('I', 1, { type: 'turn_start', source: 'injected', turnClientId: 'injected-q-asst' })); });
+    act(() => {
+      fake.emit(env('I', 1, { type: 'turn_start', source: 'injected', turnClientId: 'injected-q-asst' }));
+      fake.emit({ type: 'session_activity', sessionId: 'S', turnId: '', activity: 'streaming', activity_seq: 1 });
+    });
     expect(testTabMap.get('t1')!.isStreaming).toBe(true);
     const bubble = lastAssistant('t1')!;
     expect(bubble.id).toBe('local-sub-I');
@@ -82,7 +85,10 @@ describe('session turn wiring', () => {
     act(() => { fake.emit(env('I', 2, text('done in background'))); });
     expect(JSON.stringify(lastAssistant('t1')!.content)).toContain('done in background');
     act(() => { fake.emit(env('I', 3, { type: 'result' })); });
-    act(() => { fake.emit(env('I', 4, { type: 'turn_end' })); });
+    act(() => {
+      fake.emit(env('I', 4, { type: 'turn_end' }));
+      fake.emit({ type: 'session_activity', sessionId: 'S', turnId: '', activity: 'idle', activity_seq: 2 });
+    });
     expect(testTabMap.get('t1')!.isStreaming).toBe(false);
     expect(result.current).toBeTruthy();
   });
@@ -91,7 +97,7 @@ describe('session turn wiring', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => {
       initTestTab('t2');
-      result.current.setIsStreaming(true, 't2');
+      result.current.setLocalSending(true, 't2');
       result.current.setMessages([makeMessage({ id: 'local-c-asst', role: 'assistant', content: [] })]);
     });
     testTabMap.get('t2')!.sessionId = 'S';
@@ -110,7 +116,7 @@ describe('session turn wiring', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => {
       initTestTab('t3');
-      result.current.setIsStreaming(true, 't3');
+      result.current.setLocalSending(true, 't3');
       result.current.setMessages([makeMessage({ id: 'local-d-asst', role: 'assistant', content: [] })]);
     });
     testTabMap.get('t3')!.sessionId = 'S';
@@ -135,7 +141,7 @@ describe('session turn wiring', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => {
       initTestTab('t4');
-      result.current.setIsStreaming(true, 't4');
+      result.current.setLocalSending(true, 't4');
       result.current.setMessages([makeMessage({ id: 'local-e-asst', role: 'assistant', content: [] })]);
     });
     testTabMap.get('t4')!.sessionId = 'S';
@@ -170,7 +176,7 @@ describe('session turn wiring', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => {
       initTestTab('t6');
-      result.current.setIsStreaming(true, 't6');
+      result.current.setLocalSending(true, 't6');
       result.current.setMessages([makeMessage({ id: 'local-f-asst', role: 'assistant', content: [] })]);
     });
     testTabMap.get('t6')!.sessionId = 'S';
@@ -184,7 +190,7 @@ describe('session turn wiring', () => {
 
   it('a send the server accepted keeps its user bubble on SESSION_BUSY (R7); only its placeholder goes', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
-    act(() => { initTestTab('t7'); result.current.setIsStreaming(true, 't7'); });
+    act(() => { initTestTab('t7'); result.current.setLocalSending(true, 't7'); });
     testTabMap.get('t7')!.sessionId = 'S';
     const store = messageStoreRegistry.getOrCreate('t7');
     act(() => {
@@ -205,7 +211,7 @@ describe('session turn wiring', () => {
 
   it('SESSION_BUSY without a kept row (retryPayload) still re-queues the text locally', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
-    act(() => { initTestTab('t8'); result.current.setIsStreaming(true, 't8'); });
+    act(() => { initTestTab('t8'); result.current.setLocalSending(true, 't8'); });
     testTabMap.get('t8')!.sessionId = 'S';
     const store = messageStoreRegistry.getOrCreate('t8');
     act(() => {
@@ -228,12 +234,12 @@ describe('session turn wiring', () => {
     try {
       const reads = vi.spyOn(chatService, 'getStreamingState').mockResolvedValue({
         S: { streaming: true, state: 'streaming', waitingInput: false, pendingCount: 0,
-          pendingQuestion: null, pendingPermission: null, lastDrainedSeqs: [] },
+          pendingQuestion: null, pendingPermission: null, lastDrainedSeqs: [],
+          activity: 'streaming', activitySeq: 1 },
       } as never);
       const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
-      act(() => { initTestTab('p1'); result.current.setIsStreaming(true, 'p1'); });
+      act(() => { initTestTab('p1'); result.current.setLocalSending(true, 'p1'); });
       testTabMap.get('p1')!.sessionId = 'S';
-      testTabMap.get('p1')!._reconcileStreamStart = Date.now() - 60_000;
       messageStoreRegistry.getOrCreate('p1', { sessionId: 'S' });   // its store is idle: the turn is over here
       await act(async () => { await vi.advanceTimersByTimeAsync(5_100); });   // the first full read
       const polled = reads.mock.calls.length;
@@ -241,7 +247,7 @@ describe('session turn wiring', () => {
       await act(async () => {
         fake.emit({ type: 'session_state', sessionId: 'S', turnId: '', eventSeq: 9,
           state: { streaming: false, state: 'idle', waiting_input: false, pending_count: 0,
-            pending_question: null, last_drained_seqs: [] } });
+            pending_question: null, last_drained_seqs: [], activity: 'idle', activity_seq: 2 } });
         await vi.advanceTimersByTimeAsync(0);
       });
       expect(reads.mock.calls.length).toBe(polled);          // no extra read
@@ -345,7 +351,7 @@ describe('session turn wiring', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => {
       initTestTab('n1');
-      result.current.setIsStreaming(true, 'n1');
+      result.current.setLocalSending(true, 'n1');
       result.current.setMessages([makeMessage({ id: 'local-n-asst', role: 'assistant', content: [] })]);
     });
     expect(testTabMap.get('n1')!.sessionId).toBeUndefined();
@@ -426,14 +432,17 @@ describe('session turn wiring', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => {
       initTestTab('e1');
-      result.current.setIsStreaming(true, 'e1');
+      result.current.setLocalSending(true, 'e1');
       result.current.setMessages([makeMessage({ id: 'local-g-asst', role: 'assistant', content: [] })]);
     });
     testTabMap.get('e1')!.sessionId = 'S';
     const post = result.current.createStreamHandler('local-g-asst', 'e1');
     const onError = result.current.createErrorHandler('local-g-asst', 'e1');
     act(() => { post(env('T', 1, { type: 'turn_start', turnClientId: 'local-g-asst' }) as StreamEvent); });
-    act(() => { fake.emit(env('T', 1, { type: 'turn_start', turnClientId: 'local-g-asst' })); });
+    act(() => {
+      fake.emit(env('T', 1, { type: 'turn_start', turnClientId: 'local-g-asst' }));
+      fake.emit({ type: 'session_activity', sessionId: 'S', turnId: '', activity: 'streaming', activity_seq: 1 });
+    });
     act(() => { onError(new Error('Stream stalled: backend not alive after 90s of silence')); });
     expect(testTabMap.get('e1')!.isStreaming).toBe(true);
     expect(JSON.stringify(lastAssistant('e1')!.content)).not.toContain('stalled');
@@ -445,7 +454,7 @@ describe('session turn wiring', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => {
       initTestTab('s1');
-      result.current.setIsStreaming(true, 's1');
+      result.current.setLocalSending(true, 's1');
       result.current.setMessages([makeMessage({ id: 'local-h-asst', role: 'assistant', content: [] })]);
     });
     testTabMap.get('s1')!.sessionId = 'S';
@@ -462,7 +471,7 @@ describe('session turn wiring', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => {
       initTestTab('a1');
-      result.current.setIsStreaming(true, 'a1');
+      result.current.setLocalSending(true, 'a1');
     });
     const store = messageStoreRegistry.getOrCreate('a1');
     store.appendMany([

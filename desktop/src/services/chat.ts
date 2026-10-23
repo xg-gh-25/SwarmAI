@@ -1,4 +1,4 @@
-import type { ChatRequest, StreamEvent, ChatSession, ChatMessage, PermissionResponse, StreamingStateEntry, AskUserQuestion, ContentBlock } from '../types';
+import type { ChatRequest, StreamEvent, ChatSession, ChatMessage, PermissionResponse, StreamingStateEntry, AskUserQuestion, ContentBlock, SessionActivity } from '../types';
 import { toEditorContextPayload } from '../utils/uiContext';
 
 /** Raw snake_case shape of a streaming-state entry as emitted by the backend.
@@ -28,6 +28,9 @@ interface RawStreamingStateEntry {
     options?: string[];
   } | null;
   last_drained_seqs?: number[];
+  /** docs/design/chat-turn-liveness.md S1 */
+  activity?: string;
+  activity_seq?: number;
   /** core/background_agents.py snapshot (camelCase keys already) */
   background_agents?: unknown[];
 }
@@ -563,6 +566,9 @@ function toStreamingStateEntry(raw: RawStreamingStateEntry): StreamingStateEntry
       ? toPendingPermission(rawPq)
       : null,
     lastDrainedSeqs: raw.last_drained_seqs ?? [],
+    ...(typeof raw.activity === 'string' && typeof raw.activity_seq === 'number'
+      ? { activity: raw.activity as SessionActivity, activitySeq: raw.activity_seq }
+      : {}),
   };
 }
 

@@ -28,7 +28,7 @@ function setup() {
   const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
   act(() => {
     initTestTab(TAB);
-    result.current.setIsStreaming(true);
+    result.current.setLocalSending(true);
     messageStoreRegistry.getOrCreate(TAB, { sessionId: 's-th' })
       .replace([makeMessage({ id: MSG, role: 'assistant', content: [] })]);
   });

@@ -153,7 +153,7 @@ describe('lifecycle hook applies backend snapshots', () => {
     act(() => {
       initTestTab(tabId);
       testTabMap.get(tabId)!.sessionId = sessionId;
-      result.current.setIsStreaming(true);
+      result.current.setLocalSending(true);
       messageStoreRegistry.getOrCreate(tabId, { sessionId })
         .replace([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
     });
@@ -225,7 +225,7 @@ describe('lifecycle hook applies backend snapshots', () => {
 
   it('refresh: the stale notice refetches and a source=none answer empties the ring', async () => {
     const { result, handler } = setup('tab-ref', 'sess-ref');
-    act(() => { result.current.setIsStreaming(false); });
+    act(() => { result.current.setLocalSending(false); });
     act(() => { handler(snap({ pct: 70, level: 'warn', measuredAt: 5 }) as never); });
     vi.spyOn(api, 'post').mockResolvedValue({ data: { status: 'refreshed', message: 'ok' } } as never);
     vi.spyOn(api, 'get').mockResolvedValue({ data: snap({ source: 'none', pct: null, measuredAt: 9 }) } as never);
@@ -255,7 +255,7 @@ describe('lifecycle hook applies backend snapshots', () => {
 
   it('end to end: a successful compact refetches the tab from the backend', async () => {
     const { result } = setup('tab-g', 'sess-g');
-    act(() => { result.current.setIsStreaming(false); });
+    act(() => { result.current.setLocalSending(false); });
     vi.spyOn(api, 'post').mockResolvedValue({ data: { status: 'compacted', message: 'ok' } } as never);
     const getSpy = vi.spyOn(api, 'get').mockResolvedValue({ data: snap({ pct: 3, tokensEst: 30_000, measuredAt: 50 }) } as never);
     await act(async () => { await chatService.compactSession('sess-g'); });

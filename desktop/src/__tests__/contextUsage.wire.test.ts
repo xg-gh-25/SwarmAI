@@ -21,7 +21,7 @@ function setup(tabId: string, sessionId: string) {
   act(() => {
     initTestTab(tabId);
     testTabMap.get(tabId)!.sessionId = sessionId;
-    result.current.setIsStreaming(true);
+    result.current.setLocalSending(true);
     messageStoreRegistry.getOrCreate(tabId, { sessionId })
       .replace([makeMessage({ id: `m-${tabId}`, role: 'assistant', content: [] })]);
   });

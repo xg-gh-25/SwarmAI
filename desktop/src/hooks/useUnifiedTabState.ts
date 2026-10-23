@@ -24,7 +24,7 @@
  */
 
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
-import type { Message, UnifiedAttachment, ContentBlock, SystemPromptMetadata, CompactionGuardEvent, TurnPhase } from '../types/index';
+import type { Message, UnifiedAttachment, ContentBlock, SystemPromptMetadata, CompactionGuardEvent, TurnPhase, SessionActivity } from '../types/index';
 import type { PendingQuestion, OpenTab } from '../pages/chat/types';
 import type { ContextWarning } from './useChatStreamingLifecycle';
 import { INITIAL_STATE, type StreamingState } from './streaming-machine';
@@ -98,10 +98,28 @@ export interface UnifiedTab {
   // --- Runtime state (not persisted) ---
   messages: Message[];
   pendingQuestion: PendingQuestion | null;
-  /** Write ONLY via setIsStreaming() — direct mutation bypasses re-render
-   *  and causes spinner-hang on background tabs. Marked readonly to enforce
-   *  at compile time; setIsStreaming() uses a type cast internally. */
+  /** A turn of this tab's session is in progress: `activity !== 'idle'`
+   *  (docs/design/chat-turn-liveness.md S3). The bee reads this. Written ONLY by
+   *  the lifecycle hook's applyActivity — readonly to enforce it at compile time. */
   readonly isStreaming: boolean;
+  /** The session's activity as the backend last reported it (session_activity /
+   *  session_state push, or the poll), and its seq: only a larger seq replaces it. */
+  activity: SessionActivity;
+  activitySeq: number;
+  /** The session `activity` / `activitySeq` belong to: when tab.sessionId is no
+   *  longer it, they are another session's news (rebindActivity starts over). */
+  activitySid?: string;
+  /** Local time the current activity was applied (orders a poll that no longer
+   *  lists the session against the last push: see applyActivity). */
+  activityAt?: number;
+  /** This tab has a POST to /chat/stream open (its own request; the Send / Stop
+   *  button and the queue-or-send decision read it with isStreaming). Written only
+   *  by the lifecycle hook's setLocalSending. */
+  readonly localSending: boolean;
+  /** The send this tab is preparing (handleSendMessage): set when it starts, cleared
+   *  by Stop or replaced by a newer send. A send whose token is no longer current
+   *  after its await stops there, before writing anything or opening its POST. */
+  _sendToken?: number;
   abortController: AbortController | null;
   streamGen: number;
   /** Generation of the LIVE complete-handler for this tab's current turn.
@@ -202,41 +220,6 @@ export interface UnifiedTab {
   transcriptRev?: number;
   /** Timestamp of last sessionStorage checkpoint write (throttle: max 1 per 10s). */
   _lastCheckpointTime?: number;
-  /** Reconciliation race guard: set ONLY by setIsStreaming(true). Never touched by
-   *  elapsed-timer effects or selectTab. Used by reconcile loop to skip fresh streams. */
-  _reconcileStreamStart?: number;
-  /** Timestamp of the most recent setIsStreaming(false) (any clear: user Stop,
-   *  turn end, force-clear). Flap-guard for the reconcile loop's idle→streaming
-   *  re-arm: the loop must NOT re-arm the spinner within the settle window after
-   *  a clear, or the ~5s gap between a user Stop (frontend idle) and the backend
-   *  transitioning STREAMING→IDLE would let a poll re-light a just-stopped tab. */
-  _streamClearedAt?: number;
-  /** Reconcile-OWNED backstop clock. Stamped by the 15s reconcile poll the FIRST
-   *  time it observes the stuck condition (frontend=streaming + backend NOT
-   *  streaming + NOT an active backend state). Reset to undefined by the same poll
-   *  whenever that condition does not hold. Because ONLY the reconcile loop writes
-   *  it — never setIsStreaming / reconnect / elapsed-timer — a daemon-restart
-   *  reconnect loop cannot postpone it. This is the re-arm-immune hard deadline. */
-  _idleStreamingSince?: number;
-  /** Absolute hard-cap clock (OT01 route-A). Stamped SET-ONCE on the streaming
-   *  false→true edge inside setIsStreaming() (guarded by `=== undefined`, so a
-   *  churn re-entry that re-enters setIsStreaming(true) without an intervening
-   *  false does NOT postpone the deadline), and cleared on the streaming→idle edge
-   *  in setIsStreaming(false). It is NOT reset by the reconcile loop's
-   *  reset-and-skip churn — distinct from _idleStreamingSince (which the poll
-   *  resets to undefined every tick the stuck condition lapses): under abort+recycle
-   *  churn the backend momentarily reports streaming between turns, so the settle
-   *  clock keeps restarting and force-clear is never reached (the "stuck 10+ min"
-   *  case, frontend.log forcing-clear ×204). This clock gives forceClearStreamVerdict
-   *  an absolute upper bound (default 120s; effective clear latency is hardCapMs +
-   *  one ~15s reconcile poll). Consulted ONLY after all three alive guards
-   *  (backend_streaming/active_backend/resuming) AND exempted for
-   *  drain/queue holds, so it can never clear a genuinely-live or queued-draining
-   *  turn. NOTE: because every terminal handler routes through setIsStreaming(false),
-   *  the clock is cleared on all turn ends — but a queued-drain result keeps
-   *  isStreaming true (no false edge), so the clock spans a whole multi-turn drain;
-   *  the drain/queue exemption in forceClearStreamVerdict covers that span. */
-  _streamingSinceHardStart?: number;
   /** True between result-event (hasQueuedMessage) and drain completion.
    *  Signals reconcile poll: "backend is IDLE but drain is intentionally
    *  holding streaming state — do NOT force-clear." */
@@ -421,6 +404,9 @@ function createDefaultTab(agentId: string): UnifiedTab {
     messages: [],
     pendingQuestion: null,
     isStreaming: false,
+    activity: 'idle',
+    activitySeq: 0,
+    localSending: false,
     abortController: null,
     streamGen: 0,
     status: 'idle',
@@ -453,6 +439,9 @@ function hydrateTab(s: PersistedTab): UnifiedTab {
     messages: [],
     pendingQuestion: null,
     isStreaming: false,
+    activity: 'idle',
+    activitySeq: 0,
+    localSending: false,
     abortController: null,
     streamGen: 0,
     status: 'idle',
@@ -761,6 +750,9 @@ export function useUnifiedTabState(
         messages: initialMessages ?? [],
         pendingQuestion: null,
         isStreaming: false,
+    activity: 'idle',
+    activitySeq: 0,
+    localSending: false,
         abortController: null,
         streamGen: 0,
         status: 'idle',

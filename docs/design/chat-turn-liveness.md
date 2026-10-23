@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: P1 DONE（后端，v4）；P2 前端、P3 失败策略未开始
+status: P1 DONE（后端，v4）；P2a DONE（蜜蜂只看活动）；P2b、P2c、P3 未开始
 related: chat-transcript-single-source.md（S3 会话状态唯一来源，本文是它没覆盖到的那一半）, streaming-spinner-ssot.md（2026-06-30，同类，未按设计落地）
 ---
 
@@ -279,6 +279,68 @@ fresh-context 审查。旧的 `streaming` 字段一直保留（部署脚本在�
     `test_live_reload_scenarios.py` 的生成器同样关掉自动 drain（它自己按顺序调 `drain_pending`；不关时第 21 个场景
     出现第二个并发 drain，注入回合撞上 STREAMING）。liveReload 80/80，夹具去掉新字段后仍与 main 相同。
     相关后端测试 135 个文件逐个串行：除 `test_daemon_plist_reload.py`（main 上同样超时）外全绿。
+- P2 实施计划（2026-10-23，写代码前）：一个分支三个 commit，每个单独成立（前端和同一仓库的后端一起发）。
+  - **P2a 蜜蜂只看活动**。tab 新增 `activity`、`activitySeq`、`localSending`。
+    - 唯一写 `tab.isStreaming` 的是 `applyActivity(tabId, activity, seq)`：`seq` 大于已知的才生效，
+      `isStreaming = activity !== 'idle'`。来源三个：订阅流的 `session_activity`、`session_state`（含加入时的
+      快照）、轮询。
+    - 轮询里没有这个会话（unit 已释放）时：只有当这次轮询是在 tab 最近一次收到活动**之后**发出的，才把它当
+      idle（seq 不变，之后更大的 seq 照常覆盖）。这是"读到时它已不存在"的确定事实，不是超时猜测。
+    - POST 路径和 ChatPage 原来的 `setIsStreaming(v)` 全部改成 `setLocalSending(v)`：只表示"这个 tab 有一个
+      POST 开着"，不碰蜜蜂。保留原来随它走的本地状态机（`streamState`）派发。
+    - Send / Stop 按钮、"该不该先排队"看 `isStreaming || localSending`（S3 的表）。
+    - 活动从非 idle 变 idle 的那一刻（一个地方）：按原 force-clear 的做法从库里对齐尾部、清
+      `_postDisconnectUncertain`、有前端排队消息就送出（前端队列在 P2c 删）。
+    - 删掉：`forceClearStreamVerdict`、`shouldArmSpinnerFromBackend`、`desyncConvergeVerdict` 及 reconcile
+      里对应的三个分支、post-disconnect 分支里"后端 idle 才清"的判断（改由上面的 idle 边沿）、
+      `_idleStreamingSince`、`_streamingSinceHardStart`、`_streamClearedAt`。`healGraceExpiryVerdict` 只决定
+      POST 断开后报不报"连接断开"，不碰蜜蜂了，留到 P2b 和本地请求状态一起处理。
+    - T2、T6 去掉 `it.fails`。
+  - P2a 实现（2026-10-23）：按上面的计划，另外几处：
+    - `accepted` 到达时，第一次发送的 tab 就绑定会话并订阅（`watchOpenTabs`），冷启动期间就能看到活动；
+      原来要等 `session_start`。
+    - 订阅流的 `turn_start` 不再碰本地请求；POST 断开时 `localSending` 变 false（POST 确实没了，回合还在
+      不在由活动决定）。
+    - 前台恢复（App Nap）那一处原来读 `streaming` 清蜜蜂，改为应用读到的活动。
+    - `useChatStreamingLifecycle` 导出 `applyActivity`（订阅、轮询、ChatPage 前台恢复和测试都调它）。
+    - 测试：`turnLiveness.p0.test.ts` T2、T6 转为普通测试，新增 T2b（`accepted` 绑定会话）、T6b（推送丢了由
+      轮询补上，亮起再熄灭）、T6c（轮询不再列出会话 = idle，只在这次轮询发出之后没有新消息时）。反向验证：
+      去掉 seq 判断、推送处理、"轮询发出之后"这个条件、轮询处理、`accepted` 绑定，各自对应的测试变红。
+    - 旧测试：删 `reconcile-race-condition.test.ts`（整个文件测 force-clear）和 `streaming-guards.test.ts` 里
+      三个已删函数的部分；`useChatStreamingLifecycle.test.ts` 里测请求的断言改看 `isSending`，测蜜蜂显示
+      （活动标签、计时）的改为通过活动开始和结束一轮；`sessionTurnWiring`、`multiTabStreamingIsolation`
+      按后端实际行为同时发出 `session_activity`。
+  - P2a 独立审查（2026-10-23，4 BLOCKER + 2 MAJOR + 1 MINOR + 1 未证实，逐条核实）：
+    - 修了：
+      - **等待输入时不能回答 / 审批**：`waiting_input` 让蜜蜂亮着（它就是"一轮还在"），两个续接入口却以
+        `isStreaming` 拦掉。改用 `canContinueTurn`：本地请求开着不行，一轮在跑且不是在等输入不行。
+      - **活动变 idle 时消息存储的流阶段没结束**（`turn_end` 丢了，只等到轮询的 idle）：idle 边沿在这个 tab
+        没有 POST 开着时调 `endStreaming()`，并把"streaming"的 tab 状态改回 idle，再对齐数据库。
+      - **会话换了，seq 还按旧会话比**：活动记下它属于哪个会话（`activitySid`）。会话变了就从头来（idle、
+        seq 0），不做回合结束的动作；在每次应用活动前、每次轮询、每次切 tab 时检查。
+      - **本地请求开着时关 tab / 落地 / 断线重发不把它算忙**：三处都加上 `localSending`。
+      - **会话还没受理时按 Stop 什么都不做**：没有会话时取消这个 tab 的请求、清 `localSending`。
+      - **前台恢复用旧读数强制合并**：和轮询一样记下发出时间；读完后按 tab 当前状态决定，tab 有更新的消息
+        或这一轮在跑就不动。
+      - 新测试 R1–R3，反向验证各自变红。
+  - P2a 第二轮审查（复核上面的修复，2 MAJOR + 1 MINOR，都修了）：
+    - **活动本来就是 idle 时，再来一个新的 idle 不做回合结束的事**：busy 的活动和回合结束都丢了（断线），
+      tab 的消息存储还在流阶段。现在收到更新的 idle、本地没有请求开着、而 tab 看起来还在一轮里（存储在
+      streaming、状态 streaming、重连 / 恢复中、断线模式）时，同样做回合结束的事。测试 R2b。
+    - **读附件期间按 Stop 拦不住，期间切 tab 消息会发到新 tab**（后一半 main 上也有）：发送开始时记下发起它的
+      tab 和一个令牌（`tab._sendToken`）；Stop 或更新的一次发送清掉它，关 tab 让 tab 消失。`await
+      buildContentArray` 之后令牌不对就直接结束，什么都不写、不开 POST；之后的处理、占位、POST 都用发起的
+      tab。POST 开了令牌清掉（之后 Stop 走 abort）。ChatPage 没有驱动 `handleSendMessage` 的测试环境，所以
+      R4 是源码守卫：await 之后先检查令牌、检查在 POST 之前、中间不读当前 tab、Stop 两个分支都清令牌；
+      反向验证（去掉检查、Stop 不清令牌）变红。
+    - 过期的注释和测试标题（说 `setLocalSending` 写 `isStreaming`、断线时打 `_reconcileStreamStart`）改掉。
+    - 已知限制（未证实，记下）：活动 seq 在 daemon 重启后取墙钟微秒。重启后墙钟如果比重启前倒退得更多，
+      新活动会被当成旧的，直到墙钟追上。正常重启（几秒）不会发生。
+  - **P2b 本地请求状态**：`localSending` 换成 `building → posting → accepted | failed`；没受理的消息标
+    "未发送 · 重试"，同一个 `client_id` 重发。T7 去掉 `it.fails`。
+  - **P2c 删前端队列**：忙时照常 POST，后端回执 `queued: true`；排队气泡读快照的 `pending`，取消调
+    `DELETE /pending/{client_id}`（409 显示"已在发送"）；删 `tabState.queuedMessage`、`drainQueuedMessage`、
+    `shouldQueueSend` 的排队分支、drain 退役镜像。
 - v4 第二轮独立审查（2026-10-23，3 BLOCKER + 3 MAJOR + 1 MINOR，逐条核实）：
   - 修了：
     - **DEAD 清理不看占位**：`LifecycleManager._cleanup_dead` 在 `_busy()` 为真时跳过（占住的 send 会自己把

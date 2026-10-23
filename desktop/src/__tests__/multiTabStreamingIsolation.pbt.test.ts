@@ -114,7 +114,7 @@ describe('Multi-Tab Streaming Isolation — Bug Condition Exploration', () => {
         // Tab A starts streaming
         act(() => {
           testActiveTabIdRef.current = tabAId;
-          result.current.setIsStreaming(true);
+          result.current.setLocalSending(true);
         });
 
         // Mark Tab A as streaming in the per-tab map
@@ -189,7 +189,7 @@ describe('Multi-Tab Streaming Isolation — Bug Condition Exploration', () => {
 
         // Tab A starts streaming on the active tab → _pendingStream = true
         act(() => {
-          result.current.setIsStreaming(true);
+          result.current.setLocalSending(true);
         });
 
         // Tab A receives session_start → _setPendingStream(false) globally
@@ -218,9 +218,10 @@ describe('Multi-Tab Streaming Isolation — Bug Condition Exploration', () => {
   /**
    * Test Case 3 — Tab Switch Corruption
    *
-   * Bug: When Tab A is streaming and the user switches to Tab B,
-   * `handleTabSelect` calls `setIsStreaming(tabState.isStreaming)` where
-   * tabState.isStreaming is false (Tab B is idle). This calls
+   * (Historical) Bug: when Tab A was streaming and the user switched to Tab B,
+   * `handleTabSelect` called `setIsStreaming(tabState.isStreaming)` where
+   * tabState.isStreaming was false (Tab B is idle). Now each tab's bee is its
+   * session's activity, and a switch only re-derives it. That call
    * `_setPendingStream(false)` and removes sessionId from
    * `streamingSessions` globally. If the user then switches BACK to
    * Tab A, the derived `isStreaming` is false because the global state
@@ -253,30 +254,26 @@ describe('Multi-Tab Streaming Isolation — Bug Condition Exploration', () => {
           });
         });
 
-        // Start streaming on Tab A
+        // A turn of Tab A's session is in progress (its activity, as pushed)
         act(() => {
-          result.current.setIsStreaming(true);
+          result.current.setLocalSending(true, tabAId);
+          result.current.applyActivity(tabAId, 'streaming', 1);
         });
-        (testTabMap.get(tabAId)! as { isStreaming: boolean }).isStreaming = true;
 
-        // Simulate tab switch to Tab B: handleTabSelect calls
-        // setIsStreaming(tabState.isStreaming) where Tab B is idle.
+        // Switch to Tab B (idle) and back, as ChatPage does (bumpStreamingDerivation)
         act(() => {
           testActiveTabIdRef.current = tabBId;
-          const tabBState = testTabMap.get(tabBId)!;
-          result.current.setIsStreaming(tabBState.isStreaming); // false
+          result.current.bumpStreamingDerivation();
         });
-
-        // Now switch BACK to Tab A (which should still be streaming)
+        expect(result.current.isStreaming).toBe(false);
         act(() => {
           testActiveTabIdRef.current = tabAId;
-          const tabAState = testTabMap.get(tabAId)!;
-          result.current.setIsStreaming(tabAState.isStreaming); // true
+          result.current.bumpStreamingDerivation();
         });
 
         // BUG: On unfixed code, the global streamingSessions was cleared
-        // when we switched to Tab B (setIsStreaming(false) removed the
-        // sessionId). Even though we call setIsStreaming(true) on switch
+        // when we switched to Tab B (setLocalSending(false) removed the
+        // sessionId). Even though we call setLocalSending(true) on switch
         // back, the sessionId in React state may be stale/wrong, so the
         // derivation `streamingSessions.has(sessionId)` may not work.
         // The derived isStreaming should be true for Tab A.
@@ -401,8 +398,7 @@ describe('Preservation Property Tests', () => {
    *
    * For single-tab scenarios (only one tab in the map), verify:
    *   - `isStreaming` starts as `false`
-   *   - After `setIsStreaming(true)`, `isStreaming` becomes `true`
-   *   - After `setIsStreaming(false)`, `isStreaming` returns to `false`
+   *   - `setLocalSending` moves `isSending` only; the session's activity moves `isStreaming`
    *   - Messages accumulate correctly via stream handler
    *   - Completion handler clears streaming state
    *
@@ -429,24 +425,29 @@ describe('Preservation Property Tests', () => {
         // isStreaming starts as false
         expect(result.current.isStreaming).toBe(false);
 
-        // After setIsStreaming(true), isStreaming becomes true
+        // The tab's request: isSending follows it, the bee does not
         act(() => {
-          result.current.setIsStreaming(true);
+          result.current.setLocalSending(true);
         });
-        expect(result.current.isStreaming).toBe(true);
+        expect(result.current.isSending).toBe(true);
+        expect(result.current.isStreaming).toBe(false);
 
-        // After setIsStreaming(false), isStreaming returns to false
+        // The session's activity: the bee follows it
+        act(() => { result.current.applyActivity(tabId, 'streaming', 1); });
+        expect(result.current.isStreaming).toBe(true);
         act(() => {
-          result.current.setIsStreaming(false);
+          result.current.setLocalSending(false);
+          result.current.applyActivity(tabId, 'idle', 2);
         });
         expect(result.current.isStreaming).toBe(false);
+        expect(result.current.isSending).toBe(false);
 
         // Start streaming again and verify messages accumulate
         const msgId = `msg-${tabId}`;
         const initialMsg = makeMessage({ id: msgId, role: 'assistant', content: [] });
         act(() => {
           result.current.setMessages([initialMsg]);
-          result.current.setIsStreaming(true);
+          result.current.setLocalSending(true);
         });
         // Also seed the tabState.messages so updateMessages can find the message
         const tab = testTabMap.get(tabId);
@@ -475,12 +476,12 @@ describe('Preservation Property Tests', () => {
           .map((b) => b.text);
         expect(textBlocks).toContain(`Hello from ${tabId}`);
 
-        // Completion handler clears streaming state
+        // Completion handler ends the tab's request
         const completeHandler = result.current.createCompleteHandler(tabId);
         act(() => {
           completeHandler();
         });
-        expect(result.current.isStreaming).toBe(false);
+        expect(result.current.isSending).toBe(false);
       }),
       { numRuns: 30 },
     );
@@ -604,7 +605,7 @@ describe('Preservation Property Tests', () => {
             result.current.setMessages([
               makeMessage({ id: msgId, role: 'assistant', content: [] }),
             ]);
-            result.current.setIsStreaming(true);
+            result.current.setLocalSending(true);
           });
 
           const handler = result.current.createStreamHandler(msgId, tabId);
@@ -664,7 +665,7 @@ describe('Preservation Property Tests', () => {
           result.current.setMessages([
             makeMessage({ id: msgId, role: 'assistant', content: [] }),
           ]);
-          result.current.setIsStreaming(true);
+          result.current.setLocalSending(true);
         });
 
         const handler = result.current.createStreamHandler(msgId, tabId);
@@ -709,7 +710,7 @@ describe('Preservation Property Tests', () => {
           result.current.setMessages([
             makeMessage({ id: msgId, role: 'assistant', content: [] }),
           ]);
-          result.current.setIsStreaming(true);
+          result.current.setLocalSending(true);
         });
 
         const handler = result.current.createStreamHandler(msgId, tabId);

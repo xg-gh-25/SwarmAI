@@ -52,6 +52,7 @@ import { useRateLimiter, useRateLimitCountdown } from '../hooks';
 import { useUnifiedAttachments } from '../hooks/useUnifiedAttachments';
 import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState } from '../hooks/useUnifiedTabState';
+import { canContinueTurn } from '../hooks/streaming-guards';
 import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
 import { useContextUsageRefresh } from '../hooks/contextUsage';
 import { shouldQueueSend } from '../hooks/streaming-guards';
@@ -368,7 +369,9 @@ export default function ChatPage() {
     pendingPermissionRequestId,
     setPendingPermissionRequestId,
     isStreaming,
-    setIsStreaming,
+    isSending,
+    setLocalSending,
+    applyActivity,
     pendingStreamTabs,
     clearPendingStreamTab,
     bumpStreamingDerivation,
@@ -696,7 +699,7 @@ export default function ChatPage() {
   // assistant placeholder id.
   const resendTabOnRecovery = useCallback((tabId: string): boolean => {
     const tab = tabMapRef.current.get(tabId);
-    if (!tab || !tab._pendingResendOnRecovery || !tab.retryStreamFn || tab.isStreaming) {
+    if (!tab || !tab._pendingResendOnRecovery || !tab.retryStreamFn || tab.isStreaming || tab.localSending) {
       return false;
     }
     // Clear the flag + bump the attempt count ATOMICALLY before resending so a
@@ -728,7 +731,7 @@ export default function ChatPage() {
     tab.hasReceivedData = false;
 
     // Mark THIS tab streaming (explicit tabId per Principle 1) and re-initiate.
-    setIsStreaming(true, tabId);
+    setLocalSending(true, tabId);
     updateTabStatus(tabId, 'streaming');
     try {
       const newAbort = tab.retryStreamFn();
@@ -742,11 +745,11 @@ export default function ChatPage() {
       return true;
     } catch (err) {
       console.warn(`[ChatPage] Auto-resend failed for tab ${tabId}:`, err);
-      setIsStreaming(false, tabId);
+      setLocalSending(false, tabId);
       updateTabStatus(tabId, 'error');
       return false;
     }
-  }, [tabMapRef, activeTabIdRef, setMessages, setIsStreaming, updateTabStatus]);
+  }, [tabMapRef, activeTabIdRef, setMessages, setLocalSending, updateTabStatus]);
 
   // Backend recovery: when health transitions disconnected → connected,
   // useHealthMonitor dispatches 'swarm:backend-recovered'. We clear
@@ -831,16 +834,21 @@ export default function ChatPage() {
       const tab = tabMapRef.current.get(activeId);
       if (!tab?.sessionId) return;
       try {
+        const sid = tab.sessionId;
+        const readAt = Date.now();   // ordered like the reconcile poll (applyActivity)
         const state = await chatService.getStreamingState();
-        const backendStreaming = state[tab.sessionId]?.streaming === true;
-        if (backendStreaming) return; // genuine live stream — flush above suffices, don't touch
-        // Backend is idle/done. If the frontend still shows streaming, this is
-        // the App-Nap stuck case: clear the stale flag + force-merge DB content.
-        const tabNow = tabMapRef.current.get(activeId);
-        if (tabNow?.isStreaming) {
-          setIsStreaming(false, activeId);
-          updateTabStatus(activeId, 'idle');
-        }
+        const entry = state[sid];
+        const now = tabMapRef.current.get(activeId);
+        if (!now || now.sessionId !== sid) return;   // the tab moved on
+        // the backend's activity is the bee (docs/design/chat-turn-liveness.md S3);
+        // a seq older than what the tab holds is ignored there
+        if (entry?.activity) applyActivity(activeId, entry.activity, entry.activitySeq);
+        // A turn is live by the tab's newest news (this read, or a push that came
+        // after it was sent): the flush above suffices, don't touch.
+        if (now.isStreaming || now.localSending) return;
+        if (!entry && now.activityAt !== undefined && now.activityAt >= readAt) return;
+        // No turn: force-merge the DB content the throttled stream may have missed.
+        updateTabStatus(activeId, 'idle');
         await mergeTabFromDb(activeId, true);
         console.log(`[ChatPage] Foreground reconcile — active tab ${activeId} re-synced from DB (backend idle)`);
       } catch {
@@ -853,7 +861,7 @@ export default function ChatPage() {
       document.removeEventListener('visibilitychange', onForeground);
       window.removeEventListener('focus', onForeground);
     };
-  }, [mergeTabFromDb, setIsStreaming, updateTabStatus]);
+  }, [mergeTabFromDb, applyActivity, updateTabStatus]);
 
   // Load older messages for infinite scroll (paginated)
   const loadOlderMessages = useCallback(async () => {
@@ -978,9 +986,9 @@ export default function ChatPage() {
     setPendingQuestion(null);
     setPendingPermissionRequestId(null);
     setContextWarning(null);
-    setIsStreaming(false, newTab!.id); // New tab is not streaming
+    setLocalSending(false, newTab!.id); // New tab is not streaming
     setIsExpanded(false); // New tab always starts in compact mode
-  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setIsStreaming, setContextWarning, maxTabsInfo.chatMax, systemToasts]);
+  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setLocalSending, setContextWarning, maxTabsInfo.chatMax, systemToasts]);
 
   // Handle tab selection - switches active tab and loads session messages (Req 1.6)
   // Fix 6: Save current tab state, restore target tab state from per-tab map
@@ -1088,7 +1096,7 @@ export default function ChatPage() {
         // never paged here (preloaded) may have more, so let scrolling up ask.
         setHasMoreMessages(hasMoreByTabRef.current.get(tabId) ?? tabState.messages.length > 0);
         // isStreaming derivation automatically reflects target tab's state
-        // from tabMapRef — no need to call setIsStreaming which would corrupt
+        // from tabMapRef — no need to call setLocalSending which would corrupt
         // the source tab's streaming state. Just bump to re-derive.
         bumpStreamingDerivation();
 
@@ -1214,7 +1222,7 @@ export default function ChatPage() {
   const handleTabClose = useCallback((tabId: string) => {
     const tab = tabMapRef.current.get(tabId);
     const tabSessionId = tab?.sessionId;
-    const isStreaming = tab?.isStreaming || pendingStreamTabs.has(tabId);
+    const isStreaming = tab?.isStreaming || tab?.localSending || pendingStreamTabs.has(tabId);
 
     if (isStreaming) {
       // Defer close until the user confirms (handled by the ConfirmDialog).
@@ -1234,7 +1242,7 @@ export default function ChatPage() {
     setCloseConfirmTab(null);
     if (!pending) return;
     const tab = tabMapRef.current.get(pending.tabId);
-    const stillStreaming = (tab?.isStreaming || pendingStreamTabs.has(pending.tabId)) ?? false;
+    const stillStreaming = (tab?.isStreaming || tab?.localSending || pendingStreamTabs.has(pending.tabId)) ?? false;
     doCloseTab(pending.tabId, pending.sessionId, stillStreaming);
   }, [closeConfirmTab, doCloseTab, pendingStreamTabs, tabMapRef]);
 
@@ -1251,7 +1259,7 @@ export default function ChatPage() {
   // (streaming gets its own text), parametrized only by the action verb.
   const tabsSnapshot = useCallback((): ResumeTabInfo[] =>
     Array.from(tabMapRef.current.values()).map((t) => ({
-      id: t.id, sessionId: t.sessionId, status: t.status, isStreaming: t.isStreaming,
+      id: t.id, sessionId: t.sessionId, status: t.status, isStreaming: t.isStreaming || t.localSending,
     })), [tabMapRef]);
 
   const landingToast = useCallback((v: Extract<LandingVerdict, { kind: 'blocked' }>, verb: string): void => {
@@ -2145,12 +2153,9 @@ export default function ChatPage() {
     // Per-tab streaming guard: check only the active tab's state
     const activeTabForGuard = tabMapRef.current.get(activeTabIdRef.current ?? '');
 
-    // Hard guard: session creation in-flight — block ONLY during true pre-session
-    // phase (tab has no sessionId yet). Once a session exists, the streaming guard
-    // at L1333 handles queueing correctly. Previously this blocked ALL sends when
-    // pendingStreamTabs contained the tab — but setIsStreaming(true) during drain
-    // re-adds to pendingStreamTabs (for re-render), silently swallowing user input.
-    if (!activeTabForGuard?.sessionId && pendingStreamTabs.has(activeTabIdRef.current ?? '')) return;
+    // Hard guard: session creation in-flight — the tab's first POST is open and it
+    // has no session yet; once it has one, the queue path below takes the send.
+    if (!activeTabForGuard?.sessionId && activeTabForGuard?.localSending) return;
 
     // ──── QUEUE PATH: session is busy or in an uncertain post-disconnect state ──
     // shouldQueueSend covers ALL states where the backend session may still be
@@ -2292,24 +2297,23 @@ export default function ChatPage() {
     }
 
     // ──── NORMAL SEND PATH (existing code) ──────────────────────────────
-    // Register the active tab in the per-tab map BEFORE setIsStreaming(true).
-    // setIsStreaming only writes tabState.isStreaming when the tab exists; if
-    // registration happened later (it used to, ~60 lines down), the flag write
-    // here would be a silent no-op and only pendingStreamTabs would be set.
-    // Since the isStreaming derivation treats the per-tab flag as authoritative
-    // once a tab is registered, a dropped flag write would leave the spinner
-    // missing for the first turn on a brand-new tab. Registering first makes
-    // the flag write deterministic.
+    // The send belongs to the tab it started in, whatever is active after the
+    // await below. Register the tab first so setLocalSending has a tab to mark.
     const sendTabId = activeTabIdRef.current;
     if (sendTabId && !tabMapRef.current.has(sendTabId)) {
       initTabState(sendTabId, messagesRef.current);
     }
 
-    // Set streaming flag IMMEDIATELY after guard passes to close the race
-    // window between guard check and the old setIsStreaming call ~20 lines
-    // below.  setIsStreaming synchronously mutates tabMapRef.isStreaming,
-    // so a second rapid click/Enter will be caught by the guard above.
-    setIsStreaming(true, activeTabIdRef.current ?? undefined);
+    // Mark the tab's request open IMMEDIATELY after the guard: setLocalSending
+    // writes tabMapRef synchronously, so a second rapid click/Enter is caught by
+    // the queue guard above (shouldQueueSend reads localSending).
+    setLocalSending(true, sendTabId ?? undefined);
+    // This send's token: Stop (or a newer send) replaces it, and the send stops
+    // after its await without writing anything (docs/design/chat-turn-liveness.md P2a).
+    const sendToken = Date.now() + Math.random();
+    const sendTab = sendTabId ? tabMapRef.current.get(sendTabId) : undefined;
+    if (sendTab) sendTab._sendToken = sendToken;
+    const stillThisSend = () => !!sendTabId && tabMapRef.current.get(sendTabId)?._sendToken === sendToken;
 
     // Clear userStopped and reset streaming-related state from a previous
     // stop — this is a fresh send. Without this, stale flags from the old
@@ -2327,15 +2331,18 @@ export default function ChatPage() {
     }
 
     if (messageText.trim().startsWith('/plugin')) {
-      setIsStreaming(false, activeTabIdRef.current ?? undefined);
+      setLocalSending(false, sendTabId ?? undefined);
       setInputValue('');
       await handlePluginCommand(messageText.trim());
       return;
     }
 
     const content = await buildContentArray(messageText, currentAttachments);
+    // Stopped, closed or superseded while the attachments were read: nothing of
+    // this send is written and no POST opens (Stop already cleared localSending).
+    if (!stillThisSend()) return;
     if (content.length === 0) {
-      setIsStreaming(false, activeTabIdRef.current ?? undefined);
+      setLocalSending(false, sendTabId ?? undefined);
       return;
     }
     // Terminal chips of THIS message: the same value rides the send and any
@@ -2362,7 +2369,8 @@ export default function ChatPage() {
     incrementStreamGen(); // Fix 1: new stream generation
 
     // Fix 8: Transition tab status to 'streaming' (handles error → streaming case too)
-    const currentActiveTabId = activeTabIdRef.current;
+    // (the tab the send started in, not whatever is active now)
+    const currentActiveTabId = sendTabId;
     if (currentActiveTabId) {
       updateTabStatus(currentActiveTabId, 'streaming');
     }
@@ -2388,7 +2396,7 @@ export default function ChatPage() {
     const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
 
     // Tab registration — normally already done at the top of the send path
-    // (before setIsStreaming). Kept as a defensive fallback for any path that
+    // (before setLocalSending). Kept as a defensive fallback for any path that
     // reaches here without prior registration. Idempotent: no-op if present.
     // Also guarantees a MessageStore exists for the append below.
     if (currentActiveTabId && !tabMapRef.current.has(currentActiveTabId)) {
@@ -2436,12 +2444,13 @@ export default function ChatPage() {
         ...(sendTerminal && { terminalContext: sendTerminal }),
         clientId,  // Correlation ID for optimistic message dedup
       },
-      wrappedCreateStreamHandler(assistantMessageId),
-      createErrorHandler(assistantMessageId, activeTabIdRef.current ?? undefined),
-      createCompleteHandler(activeTabIdRef.current ?? undefined),
-      createDisconnectHandler(activeTabIdRef.current ?? undefined),
-      streamLivenessFor(activeTabIdRef.current),
+      createStreamHandler(assistantMessageId, currentActiveTabId ?? undefined),
+      createErrorHandler(assistantMessageId, currentActiveTabId ?? undefined),
+      createCompleteHandler(currentActiveTabId ?? undefined),
+      createDisconnectHandler(currentActiveTabId ?? undefined),
+      streamLivenessFor(currentActiveTabId),
     );
+    if (sendTab) sendTab._sendToken = undefined;   // the POST is open: Stop aborts it now
 
     // Store abort function in the tab map for per-tab stop isolation.
     // Only the .abort() method is used by handleStop — no signal needed.
@@ -2494,7 +2503,7 @@ export default function ChatPage() {
         _pendingResendAttempts: 0,
       });
     }
-  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t, editorContextFor]);
+  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, incrementStreamGen, setLocalSending, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, queryClient, t, editorContextFor]);
 
   // Wire handleSendMessage ref for voice conversation mode (avoids circular dep)
   handleSendMessageRef.current = handleSendMessage;
@@ -2590,7 +2599,7 @@ export default function ChatPage() {
     // The result handler keeps isStreaming=true when a queued message exists
     // (seamless indicator), so we must clean up if drain can't start a stream.
     const cleanupStreamingState = () => {
-      setIsStreaming(false, tabId);
+      setLocalSending(false, tabId);
       updateTabStatus(tabId, 'idle');
     };
 
@@ -2606,7 +2615,7 @@ export default function ChatPage() {
 
       // Set streaming state — idempotent if result handler already kept it
       // true, but ensures correctness if drain is called from other sites.
-      setIsStreaming(true, tabId);
+      setLocalSending(true, tabId);
       if (tabId) updateTabStatus(tabId, 'streaming');
       incrementStreamGen();
 
@@ -2667,7 +2676,7 @@ export default function ChatPage() {
       cleanupStreamingState();
       console.error('[queue-drain] failed, queue restored:', e);
     }
-  }, [buildContentArray, selectedAgentId, enableSkills, enableMCP, setIsStreaming, setMessages, updateTabStatus, incrementStreamGen, createStreamHandler, createErrorHandler, createCompleteHandler, tabMapRef, activeTabIdRef, editorContextFor]);
+  }, [buildContentArray, selectedAgentId, enableSkills, enableMCP, setLocalSending, setMessages, updateTabStatus, incrementStreamGen, createStreamHandler, createErrorHandler, createCompleteHandler, tabMapRef, activeTabIdRef, editorContextFor]);
 
   // Bridge the ref so useChatStreamingLifecycle can drain via deps.onDrainQueue.
   // Must be assigned after drainQueuedMessage is defined (circular dep with hook).
@@ -2729,9 +2738,11 @@ export default function ChatPage() {
       return;
     }
 
-    // Defensive guard: prevent double-submit if already streaming.
+    // Defensive guard: prevent double-submit. The session waits for this answer
+    // (activity waiting_input, the bee stays on); only another request of this
+    // tab, or a turn that is not waiting, blocks it.
     const tabState = tabId ? tabMapRef.current.get(tabId) : undefined;
-    if (tabState?.isStreaming) {
+    if (tabState && !canContinueTurn(tabState)) {
       return;
     }
 
@@ -2804,7 +2815,7 @@ export default function ChatPage() {
 
     setPendingQuestion(null);
     incrementStreamGen(); // Fix 1: new stream generation
-    setIsStreaming(true, tabId);
+    setLocalSending(true, tabId);
 
     // Fix 8: Transition tab status from waiting_input → streaming
     if (tabId) updateTabStatus(tabId, 'streaming');
@@ -2873,7 +2884,7 @@ export default function ChatPage() {
 
     // Re-initiate the stream with the saved payload
     incrementStreamGen();
-    setIsStreaming(true, tabId);
+    setLocalSending(true, tabId);
     if (tabId) updateTabStatus(tabId, 'streaming');
 
     // The SAME send again: the server handed this message back with its client_id
@@ -2920,7 +2931,7 @@ export default function ChatPage() {
       isReconnecting: false,
       reconnectionAttempt: 0,
     });
-  }, [selectedAgentId, enableSkills, enableMCP, incrementStreamGen, setIsStreaming, setMessages, updateTabStatus, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef]);
+  }, [selectedAgentId, enableSkills, enableMCP, incrementStreamGen, setLocalSending, setMessages, updateTabStatus, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef]);
 
   // Handle escalation option click — sends the chosen option as a chat message.
   // Marks the escalation block as resolved optimistically, then sends.
@@ -2976,7 +2987,7 @@ export default function ChatPage() {
     // permissionLoadingTabs guards the API call, but a rapid approve click
     // could race with a stream that just started. Read tabMapRef directly.
     const currentTabState = tabId ? tabMapRef.current.get(tabId) : undefined;
-    if (currentTabState?.isStreaming) return;
+    if (currentTabState && !canContinueTurn(currentTabState)) return;
 
     if (tabId) permissionLoadingTabs.current.add(tabId);
     // Decision in flight: the 15s mirror must not re-surface this prompt while
@@ -3043,7 +3054,7 @@ export default function ChatPage() {
     // isStreaming re-entry return, incrementStreamGen stale-stream kill,
     // capturedTabId closure) therefore protect deny identically to approve.
     incrementStreamGen(); // Fix 1: new stream generation
-    setIsStreaming(true, tabId);
+    setLocalSending(true, tabId);
 
     // Fix 8: Transition tab status from permission_needed → streaming
     if (tabId) updateTabStatus(tabId, 'streaming');
@@ -3125,12 +3136,24 @@ export default function ChatPage() {
   const handleStop = () => {
     const currentTabId = activeTabIdRef.current;
     const tabSessionId = currentTabId ? tabMapRef.current.get(currentTabId)?.sessionId : undefined;
-    if (!tabSessionId) return;
+    if (!tabSessionId) {
+      // the first send is not accepted yet (no session): cancel this tab's request
+      const tab = currentTabId ? tabMapRef.current.get(currentTabId) : undefined;
+      if (tab) {
+        tab._sendToken = undefined;   // a send still reading its attachments stops
+        tab.userStopped = true;
+        try { tab.abortController?.abort(); } catch { /* already aborted */ }
+        tab.abortController = null;
+      }
+      if (currentTabId) setLocalSending(false, currentTabId);
+      return;
+    }
 
     // 1. Mark stopped + abort SSE FIRST (synchronous, before any async work)
     if (currentTabId) {
       const tabState = tabMapRef.current.get(currentTabId);
       if (tabState) {
+        tabState._sendToken = undefined;   // a send still reading its attachments stops
         tabState.userStopped = true;
       }
       if (tabState?.abortController) {
@@ -3150,7 +3173,7 @@ export default function ChatPage() {
     }
 
     // 3. Update streaming state immediately — don't wait for backend
-    setIsStreaming(false, currentTabId ?? undefined);
+    setLocalSending(false, currentTabId ?? undefined);
     incrementStreamGen();
     if (currentTabId) updateTabStatus(currentTabId, 'idle');
 
@@ -3516,7 +3539,7 @@ export default function ChatPage() {
                 onInputChange={setInputValue}
                 onSend={handleSendMessage}
                 onStop={handleStop}
-                isStreaming={isStreaming}
+                isStreaming={isStreaming || isSending}
                 isExpanded={isExpanded}
                 onExpandedChange={setIsExpanded}
                 selectedAgentId={selectedAgentId}

@@ -11,7 +11,7 @@
  *   - Hook returns all expected state (messages, sessionId, pendingQuestion,
  *     isStreaming, streamingActivity)
  *   - Hook returns all expected setters (setMessages, setSessionId,
- *     setPendingQuestion, setIsStreaming)
+ *     setPendingQuestion, setLocalSending)
  *   - Hook returns all expected factories (createStreamHandler,
  *     createCompleteHandler, createErrorHandler)
  *   - ``deriveStreamingActivity`` standalone export works identically to
@@ -103,6 +103,26 @@ import {
   resetTestState,
 } from './helpers/streamingTestUtils';
 
+// The session's activity, as the backend pushes it (docs/design/chat-turn-liveness.md
+// S3): the only thing that turns the bee on or off. A turn here = the tab's request
+// opens and its session goes streaming; it ends when the session goes idle.
+let turnSeq = 0;
+function turnTab(tabId?: string): string {
+  const id = tabId ?? testActiveTabIdRef.current ?? 'tab-turn';
+  if (!testTabMap.has(id)) initTestTab(id);
+  return id;
+}
+function startTurn(r: { current: ReturnType<typeof useChatStreamingLifecycle> }, tabId?: string): void {
+  const id = turnTab(tabId);
+  r.current.setLocalSending(true, id);
+  r.current.applyActivity(id, 'streaming', ++turnSeq);
+}
+function endTurn(r: { current: ReturnType<typeof useChatStreamingLifecycle> }, tabId?: string): void {
+  const id = turnTab(tabId);
+  r.current.setLocalSending(false, id);
+  r.current.applyActivity(id, 'idle', ++turnSeq);
+}
+
 // ---------------------------------------------------------------------------
 // Mock useToast — the hook now calls useToast() for reconnection toasts.
 // Hoisted spy so individual tests can assert the toast payload shape
@@ -139,7 +159,7 @@ describe('useChatStreamingLifecycle', () => {
       expect(result.current.messages).toEqual([]);
       expect(result.current.sessionId).toBeUndefined();
       expect(result.current.pendingQuestion).toBeNull();
-      expect(result.current.isStreaming).toBe(false);
+      expect(result.current.isSending).toBe(false);
       expect(result.current.streamingActivity).toBeNull();
     });
 
@@ -151,7 +171,7 @@ describe('useChatStreamingLifecycle', () => {
       expect(typeof result.current.setMessages).toBe('function');
       expect(typeof result.current.setSessionId).toBe('function');
       expect(typeof result.current.setPendingQuestion).toBe('function');
-      expect(typeof result.current.setIsStreaming).toBe('function');
+      expect(typeof result.current.setLocalSending).toBe('function');
     });
 
     it('returns all expected refs', () => {
@@ -183,37 +203,37 @@ describe('useChatStreamingLifecycle', () => {
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
-      expect(result.current.isStreaming).toBe(false);
+      expect(result.current.isSending).toBe(false);
     });
 
-    it('becomes true when setIsStreaming(true) is called', () => {
+    it('becomes true when setLocalSending(true) is called', () => {
       initTestTab('tab-iso-1');
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
       act(() => {
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
       });
 
-      expect(result.current.isStreaming).toBe(true);
+      expect(result.current.isSending).toBe(true);
     });
 
-    it('returns to false when setIsStreaming(false) is called', () => {
+    it('returns to false when setLocalSending(false) is called', () => {
       initTestTab('tab-iso-2');
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
       act(() => {
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
       });
-      expect(result.current.isStreaming).toBe(true);
+      expect(result.current.isSending).toBe(true);
 
       act(() => {
-        result.current.setIsStreaming(false);
+        result.current.setLocalSending(false);
       });
-      expect(result.current.isStreaming).toBe(false);
+      expect(result.current.isSending).toBe(false);
     });
   });
 
@@ -234,7 +254,7 @@ describe('useChatStreamingLifecycle', () => {
       );
 
       act(() => {
-        result.current.setIsStreaming(true);
+        startTurn(result);
       });
 
       // No messages → null (shows "Thinking…")
@@ -248,7 +268,7 @@ describe('useChatStreamingLifecycle', () => {
       );
 
       act(() => {
-        result.current.setIsStreaming(true);
+        startTurn(result);
         result.current.setMessages([
           makeMessage({
             role: 'assistant',
@@ -329,7 +349,7 @@ describe('useChatStreamingLifecycle', () => {
       );
 
       act(() => {
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: msgId, role: 'assistant', content: [] }),
         ]);
@@ -352,7 +372,7 @@ describe('useChatStreamingLifecycle', () => {
 
       expect(result.current.pendingQuestion).not.toBeNull();
       expect(result.current.pendingQuestion!.toolUseId).toBe('tool-1');
-      expect(result.current.isStreaming).toBe(false);
+      expect(result.current.isSending).toBe(false);
     });
 
     it('handles error event by appending error to message content', () => {
@@ -399,7 +419,7 @@ describe('useChatStreamingLifecycle', () => {
       );
       act(() => {
         initTestTab('tab-1');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: msgId, role: 'assistant', content: [] }),
         ]);
@@ -492,7 +512,7 @@ describe('useChatStreamingLifecycle', () => {
       );
       act(() => {
         initTestTab('tab-ot01');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: msgId, role: 'assistant', content: [] }),
         ]);
@@ -541,7 +561,7 @@ describe('useChatStreamingLifecycle', () => {
       );
       act(() => {
         initTestTab('tab-bleed');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: 'm1', role: 'assistant', content: [] }),
         ]);
@@ -593,7 +613,7 @@ describe('useChatStreamingLifecycle', () => {
       act(() => {
         initTestTab('tab-hitl');
         testActiveTabIdRef.current = 'tab-hitl';
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: 'm-hitl', role: 'assistant', content: [] }),
         ]);
@@ -635,7 +655,7 @@ describe('useChatStreamingLifecycle', () => {
       act(() => {
         initTestTab('tab-hitl-disc');
         testActiveTabIdRef.current = 'tab-hitl-disc';
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: 'm-disc', role: 'assistant', content: [] }),
         ]);
@@ -785,9 +805,9 @@ describe('useChatStreamingLifecycle', () => {
       );
 
       act(() => {
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
       });
-      expect(result.current.isStreaming).toBe(true);
+      expect(result.current.isSending).toBe(true);
 
       const completeHandler = result.current.createCompleteHandler();
 
@@ -795,7 +815,7 @@ describe('useChatStreamingLifecycle', () => {
         completeHandler();
       });
 
-      expect(result.current.isStreaming).toBe(false);
+      expect(result.current.isSending).toBe(false);
     });
 
     // ── [DONE] authority vs stale-gen guard (run_6adee7d5) ──────────────
@@ -803,7 +823,7 @@ describe('useChatStreamingLifecycle', () => {
     // early-returned when tabState.streamGen !== capturedGen. But streamGen is
     // bumped mid-stream by reconnect / result / error (incrementStreamGen at 7
     // sites). So a turn that reconnected once → its own [DONE]'s completeHandler
-    // is "stale" → early-returns BEFORE setIsStreaming(false) → spinner spins
+    // is "stale" → early-returns BEFORE setLocalSending(false) → spinner spins
     // forever, rescued only by the 30s reconcile force-clear backstop (~109 of
     // 114 idle force-clears, 3-signal log analysis). Fix: a per-tab
     // latestCompleteGen marks the LIVE completer; reconnect churn no longer
@@ -819,8 +839,8 @@ describe('useChatStreamingLifecycle', () => {
 
       // Handler created at send time (captures current gen as the live completer).
       const completeHandler = result.current.createCompleteHandler(tabId);
-      act(() => { result.current.setIsStreaming(true, tabId); });
-      expect(result.current.isStreaming).toBe(true);
+      act(() => { result.current.setLocalSending(true, tabId); });
+      expect(result.current.isSending).toBe(true);
 
       // Mid-stream reconnect/result bumps streamGen — but NO new send happened,
       // so this handler is still the live completer for the tab's only stream.
@@ -829,7 +849,7 @@ describe('useChatStreamingLifecycle', () => {
       act(() => { completeHandler(); });
 
       // [DONE] is authoritative: streaming must clear despite the gen churn.
-      expect(result.current.isStreaming).toBe(false);
+      expect(result.current.isSending).toBe(false);
     });
 
     it('AC2: stale handler no-ops after a genuinely NEW send supersedes it', () => {
@@ -841,19 +861,19 @@ describe('useChatStreamingLifecycle', () => {
 
       // First turn's handler.
       const oldHandler = result.current.createCompleteHandler(tabId);
-      act(() => { result.current.setIsStreaming(true, tabId); });
+      act(() => { result.current.setLocalSending(true, tabId); });
 
       // A NEW send arrives: it bumps gen THEN creates a new handler (mirrors the
       // send path: incrementStreamGen() precedes createCompleteHandler()).
       act(() => { result.current.incrementStreamGen(); });
       result.current.createCompleteHandler(tabId); // new live completer
-      act(() => { result.current.setIsStreaming(true, tabId); });
-      expect(result.current.isStreaming).toBe(true);
+      act(() => { result.current.setLocalSending(true, tabId); });
+      expect(result.current.isSending).toBe(true);
 
       // The OLD turn's [DONE] arrives late — it must NOT clear the NEW stream.
       act(() => { oldHandler(); });
 
-      expect(result.current.isStreaming).toBe(true);
+      expect(result.current.isSending).toBe(true);
     });
 
     it('AC4: closed tab (no tabState) → handler no-ops without throwing', () => {
@@ -880,7 +900,7 @@ describe('useChatStreamingLifecycle', () => {
       );
 
       act(() => {
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: msgId, role: 'assistant', content: [] }),
         ]);
@@ -892,7 +912,7 @@ describe('useChatStreamingLifecycle', () => {
         errorHandler(new Error('Network failure'));
       });
 
-      expect(result.current.isStreaming).toBe(false);
+      expect(result.current.isSending).toBe(false);
       const content = result.current.messages[0].content;
       expect(content).toHaveLength(1);
       expect((content[0] as { text: string }).text).toContain(
@@ -979,59 +999,6 @@ describe('useChatStreamingLifecycle', () => {
       }
     });
 
-    it('heal-grace still-working: stamps _reconcileStreamStart so the reconcile loop does NOT force-clear the spinner mid-flush', async () => {
-      // GAP THIS CLOSES: the disconnect-handler still-working test (~:3382)
-      // asserts the _reconcileStreamStart stamp, but that is a DIFFERENT branch
-      // (createDisconnectHandler). The heal-grace expiry still-working branch
-      // (createErrorHandler path) hands recovery to the SAME 15s reconcile loop
-      // and MUST stamp the same cap anchor — without it the loop computes a huge
-      // age, the ≥10s start-grace + flushing exemption are pre-blown, and the
-      // spinner is force-cleared in the backend dead→cold gap (OT01 truncation).
-      // MUTATION-PROVEN: deleting `tab2._reconcileStreamStart = Date.now()` in
-      // the heal-grace still-working branch turns this RED.
-      vi.useFakeTimers();
-      const stateSpy = vi
-        .spyOn(chatService, 'getStreamingState')
-        .mockResolvedValue({
-          'sess-heal-sw': { streaming: true, state: 'streaming', waitingInput: false },
-        } as unknown as Awaited<ReturnType<typeof chatService.getStreamingState>>);
-      try {
-        const msgId = 'msg-heal-sw';
-        const tabId = 'tab-heal-sw';
-        initTestTab(tabId, [
-          makeMessage({ id: msgId, role: 'assistant', content: [] }),
-        ]);
-        const tab = testTabMap.get(tabId)!;
-        tab.sessionId = 'sess-heal-sw';
-        tab.hasReceivedData = true; // mid-stream → heal-grace arms
-        tab.reconnectionAttempt = 0; // NOT exhausted → enters heal-grace
-        // _healGraceActive left false → heal-grace branch arms on disconnect.
-
-        const { result } = renderHook(() =>
-          useChatStreamingLifecycle(createMockDeps()),
-        );
-        const errorHandler = result.current.createErrorHandler(msgId, tabId);
-        act(() => { errorHandler(new Error('Premature SSE disconnect')); });
-
-        // Advance past grace; flush the await getStreamingState round-trip.
-        await act(async () => {
-          vi.advanceTimersByTime(HEAL_GRACE_PERIOD_MS + 100);
-          await Promise.resolve(); await Promise.resolve();
-        });
-
-        const t = testTabMap.get(tabId)! as unknown as Record<string, unknown>;
-        expect(stateSpy).toHaveBeenCalled();
-        // backend reported streaming:true → still-working verdict
-        expect(t._postDisconnectUncertain).toBe(true);          // handed to reconcile loop
-        expect(typeof t._reconcileStreamStart).toBe('number');  // the fix: cap anchor stamped
-        expect(t._reconcileStreamStart).toBeGreaterThan(0);
-        // anchored to ~now (not a stale ~0) → reconcile grace applies
-        expect(Date.now() - (t._reconcileStreamStart as number)).toBeLessThan(1000);
-      } finally {
-        stateSpy.mockRestore();
-        vi.useRealTimers();
-      }
-    });
   });
 });
 
@@ -1169,9 +1136,9 @@ describe('Fix 1: Stream generation counter', () => {
 
       act(() => {
         initTestTab('tab-1');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
       });
-      expect(result.current.isStreaming).toBe(true);
+      expect(result.current.isSending).toBe(true);
 
       // Create complete handler at current generation (0)
       const completeHandler = result.current.createCompleteHandler('tab-1');
@@ -1180,7 +1147,7 @@ describe('Fix 1: Stream generation counter', () => {
         completeHandler();
       });
 
-      expect(result.current.isStreaming).toBe(false);
+      expect(result.current.isSending).toBe(false);
     });
 
     it('is a no-op when a NEW send superseded this handler (stale handler)', () => {
@@ -1196,7 +1163,7 @@ describe('Fix 1: Stream generation counter', () => {
 
       act(() => {
         initTestTab('tab-1');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
       });
 
       // Old turn's complete handler.
@@ -1206,12 +1173,12 @@ describe('Fix 1: Stream generation counter', () => {
       // ChatPage send path ordering). This advances latestCompleteGen.
       act(() => { result.current.incrementStreamGen(); });
       result.current.createCompleteHandler('tab-1'); // new live completer
-      act(() => { result.current.setIsStreaming(true); });
+      act(() => { result.current.setLocalSending(true); });
 
       // Stale handler fires — should be a no-op (does not clear the NEW stream).
       act(() => { staleHandler(); });
 
-      expect(result.current.isStreaming).toBe(true);
+      expect(result.current.isSending).toBe(true);
     });
 
     it('is a no-op when tab has been closed', () => {
@@ -1221,7 +1188,7 @@ describe('Fix 1: Stream generation counter', () => {
 
       act(() => {
         initTestTab('tab-1');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
       });
 
       const completeHandler = result.current.createCompleteHandler('tab-1');
@@ -1237,7 +1204,7 @@ describe('Fix 1: Stream generation counter', () => {
       });
 
       // isStreaming remains true (handler was no-op)
-      expect(result.current.isStreaming).toBe(true);
+      expect(result.current.isSending).toBe(true);
     });
   });
 
@@ -1250,7 +1217,7 @@ describe('Fix 1: Stream generation counter', () => {
 
       act(() => {
         initTestTab('tab-1');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: msgId, role: 'assistant', content: [] }),
         ]);
@@ -1282,12 +1249,12 @@ describe('Fix 1: Stream generation counter', () => {
       // pre-question handler.
       act(() => { result.current.incrementStreamGen(); });
       result.current.createCompleteHandler('tab-1');
-      act(() => { result.current.setIsStreaming(true); });
+      act(() => { result.current.setLocalSending(true); });
 
       // Stale pre-question complete handler fires — must NOT clear the new stream.
       act(() => { completeHandler(); });
 
-      expect(result.current.isStreaming).toBe(true);
+      expect(result.current.isSending).toBe(true);
     });
 
     it('error event increments streamGen so completeHandler is no-op', () => {
@@ -1298,7 +1265,7 @@ describe('Fix 1: Stream generation counter', () => {
 
       act(() => {
         initTestTab('tab-1');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: msgId, role: 'assistant', content: [] }),
         ]);
@@ -1318,12 +1285,12 @@ describe('Fix 1: Stream generation counter', () => {
       // (production ordering) → advances latestCompleteGen, supersedes the old.
       act(() => { result.current.incrementStreamGen(); });
       result.current.createCompleteHandler('tab-1');
-      act(() => { result.current.setIsStreaming(true); });
+      act(() => { result.current.setLocalSending(true); });
 
       // Stale pre-error complete handler fires — must NOT clear the new stream.
       act(() => { completeHandler(); });
 
-      expect(result.current.isStreaming).toBe(true);
+      expect(result.current.isSending).toBe(true);
     });
   });
 });
@@ -1722,7 +1689,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           const ts = testTabMap.get('tab-q')!;
           ts.sessionId = 'sess-q';
           result.current.setSessionId('sess-q');
-          result.current.setIsStreaming(true);
+          result.current.setLocalSending(true);
           result.current.setMessages([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
           messageStoreRegistry.getOrCreate('tab-q', { sessionId: 'sess-q' })
             .replace([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
@@ -1768,7 +1735,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           const ts = testTabMap.get('tab-p')!;
           ts.sessionId = 'sess-p';
           result.current.setSessionId('sess-p');
-          result.current.setIsStreaming(true);
+          result.current.setLocalSending(true);
           result.current.setMessages([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
           messageStoreRegistry.getOrCreate('tab-p', { sessionId: 'sess-p' })
             .replace([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
@@ -2086,7 +2053,7 @@ describe('Fix 6: Per-tab state isolation', () => {
       });
 
       // isStreaming should be false for tab-b (no sessionId, no isStreaming)
-      expect(result.current.isStreaming).toBe(false);
+      expect(result.current.isSending).toBe(false);
 
       // Tab-a's isStreaming in the map should still be true
       const tabAState = testTabMap.get('tab-a');
@@ -2237,13 +2204,13 @@ describe('Fix 3: Error handling and visibility', () => {
 
       act(() => {
         initTestTab('tab-1');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: msgId, role: 'assistant', content: [] }),
         ]);
       });
 
-      expect(result.current.isStreaming).toBe(true);
+      expect(result.current.isSending).toBe(true);
 
       const handler = result.current.createStreamHandler(msgId, 'tab-1');
 
@@ -2251,7 +2218,7 @@ describe('Fix 3: Error handling and visibility', () => {
         handler({ type: 'error', message: 'Backend failure' });
       });
 
-      expect(result.current.isStreaming).toBe(false);
+      expect(result.current.isSending).toBe(false);
     });
   });
 
@@ -2414,7 +2381,7 @@ describe('Fix 3: Error handling and visibility', () => {
 
       act(() => {
         initTestTab('tab-1');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: msgId, role: 'assistant', content: [] }),
         ]);
@@ -2490,7 +2457,7 @@ describe('Fix 9: Elapsed time counter during initial wait', () => {
     );
 
     act(() => {
-      result.current.setIsStreaming(true);
+      startTurn(result);
     });
 
     // Advance 12 seconds — should tick elapsed
@@ -2507,7 +2474,7 @@ describe('Fix 9: Elapsed time counter during initial wait', () => {
     );
 
     act(() => {
-      result.current.setIsStreaming(true);
+      startTurn(result);
     });
 
     // Advance 5 seconds
@@ -2541,7 +2508,7 @@ describe('Fix 9: Elapsed time counter during initial wait', () => {
     );
 
     act(() => {
-      result.current.setIsStreaming(true);
+      startTurn(result);
     });
 
     act(() => {
@@ -2551,7 +2518,7 @@ describe('Fix 9: Elapsed time counter during initial wait', () => {
     expect(result.current.elapsedSeconds).toBeGreaterThanOrEqual(7);
 
     act(() => {
-      result.current.setIsStreaming(false);
+      endTurn(result);
     });
 
     // Allow useEffect to fire
@@ -2575,7 +2542,7 @@ describe('Fix 9: Elapsed time counter during initial wait', () => {
           content: [makeToolUse('Bash')],
         }),
       ]);
-      result.current.setIsStreaming(true);
+      startTurn(result);
     });
 
     act(() => {
@@ -2738,7 +2705,7 @@ describe('Fix 4: Activity label debounce', () => {
 
     // Start streaming with a tool
     act(() => {
-      result.current.setIsStreaming(true);
+      startTurn(result);
       result.current.setMessages([
         makeMessage({
           role: 'assistant',
@@ -2790,7 +2757,7 @@ describe('Fix 4: Activity label debounce', () => {
     );
 
     act(() => {
-      result.current.setIsStreaming(true);
+      startTurn(result);
       result.current.setMessages([
         makeMessage({
           role: 'assistant',
@@ -2809,7 +2776,7 @@ describe('Fix 4: Activity label debounce', () => {
 
     // Stop streaming — displayedActivity should become null
     act(() => {
-      result.current.setIsStreaming(false);
+      endTurn(result);
     });
 
     act(() => { vi.advanceTimersByTime(100); });
@@ -3492,7 +3459,7 @@ describe('Fix 8: Tab status indicators', () => {
 
       act(() => {
         initTestTab('tab-s');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: msgId, role: 'assistant', content: [] }),
         ]);
@@ -3518,7 +3485,7 @@ describe('Fix 8: Tab status indicators', () => {
 
       act(() => {
         initTestTab('tab-s');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: msgId, role: 'assistant', content: [] }),
         ]);
@@ -3590,7 +3557,7 @@ describe('Fix 8: Tab status indicators', () => {
 
       act(() => {
         initTestTab('tab-s');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setMessages([
           makeMessage({ id: msgId, role: 'assistant', content: [] }),
         ]);
@@ -3613,7 +3580,7 @@ describe('Fix 8: Tab status indicators', () => {
 
       act(() => {
         initTestTab('tab-s');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setSessionId('sess-result');
         result.current.setMessages([
           makeMessage({ id: msgId, role: 'assistant', content: [] }),
@@ -3779,10 +3746,10 @@ describe('TabStatusIndicator component', () => {
   // ONE-SHOT DB pull. If the backend was still flushing/streaming the answer,
   // it pulled INCOMPLETE content and never re-pulled the finished answer until
   // the user's NEXT send. Fix: consult the backend mirror once at timeout; if
-  // still-working → keep spinner + set _postDisconnectUncertain (hand off to the
-  // reconcile loop) + stamp _reconcileStreamStart; if done → original clear+pull.
+  // still-working → no error + set _postDisconnectUncertain (the session's
+  // activity ends it at its idle edge); if done → original clear+pull.
   describe('disconnect timeout backend-state-gated handoff', () => {
-    it('still-working: keeps spinner, sets _postDisconnectUncertain, stamps _reconcileStreamStart, does NOT clear isStreaming', async () => {
+    it('still-working: no error, sets _postDisconnectUncertain, ends the tab request', async () => {
       vi.useFakeTimers();
       const stateSpy = vi
         .spyOn(chatService, 'getStreamingState')
@@ -3798,7 +3765,7 @@ describe('TabStatusIndicator component', () => {
 
         const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
         // arm a stream so streamGen matches what the handler captures
-        act(() => { result.current.setIsStreaming(true, tabId); });
+        act(() => { result.current.setLocalSending(true, tabId); });
         const handler = result.current.createDisconnectHandler(tabId);
         act(() => { handler(); }); // premature disconnect → keeps isStreaming, arms 30s timer
 
@@ -3811,8 +3778,6 @@ describe('TabStatusIndicator component', () => {
         const t = testTabMap.get(tabId)! as unknown as Record<string, unknown>;
         expect(stateSpy).toHaveBeenCalled();
         expect(t._postDisconnectUncertain).toBe(true);          // handed to reconcile loop
-        expect(typeof t._reconcileStreamStart).toBe('number');  // BLOCKER: cap anchor stamped
-        expect(t._reconcileStreamStart).toBeGreaterThan(0);
         expect(t.isReconnecting).toBe(true);                    // spinner kept (NOT cleared)
         expect(t._disconnectTimeoutId).toBeUndefined();
       } finally {
@@ -3844,7 +3809,7 @@ describe('TabStatusIndicator component', () => {
         messageStoreRegistry.getOrCreate(tabId, { sessionId: 'sess-dc2' });
 
         const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
-        act(() => { result.current.setIsStreaming(true, tabId); });
+        act(() => { result.current.setLocalSending(true, tabId); });
         const handler = result.current.createDisconnectHandler(tabId);
         act(() => { handler(); });
 
@@ -3879,7 +3844,7 @@ describe('TabStatusIndicator component', () => {
         testActiveTabIdRef.current = tabId;
 
         const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
-        act(() => { result.current.setIsStreaming(true, tabId); });
+        act(() => { result.current.setLocalSending(true, tabId); });
         const handler = result.current.createDisconnectHandler(tabId);
         act(() => { handler(); });
 
@@ -3929,7 +3894,7 @@ describe('TabStatusIndicator component', () => {
       );
       act(() => {
         initTestTab('tab-compact');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         messageStoreRegistry.getOrCreate('tab-compact', { sessionId: 'sess-compact' })
           .replace([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
       });
@@ -3963,7 +3928,7 @@ describe('TabStatusIndicator component', () => {
       );
       act(() => {
         initTestTab('tab-compact2');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setContextWarning({
           level: 'critical',
           pct: 95,
@@ -4036,7 +4001,7 @@ describe('TabStatusIndicator component', () => {
       );
       act(() => {
         initTestTab('tab-dedup');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         messageStoreRegistry.getOrCreate('tab-dedup', { sessionId: 'sess-dedup' })
           .replace([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
       });
@@ -4057,7 +4022,7 @@ describe('TabStatusIndicator component', () => {
       );
       act(() => {
         initTestTab('tab-live');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         result.current.setContextWarning({ level: 'warn', pct: 76, tokensEst: 760000, message: 'Context 76%' });
         messageStoreRegistry.getOrCreate('tab-live', { sessionId: 'sess-live' })
           .replace([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
@@ -4104,7 +4069,7 @@ describe('TabStatusIndicator component', () => {
       const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
       act(() => {
         initTestTab('tab-fail');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         messageStoreRegistry.getOrCreate('tab-fail', { sessionId: 'sess-fail' })
           .replace([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
       });
@@ -4124,7 +4089,7 @@ describe('TabStatusIndicator component', () => {
       const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
       act(() => {
         initTestTab('tab-tr');
-        result.current.setIsStreaming(true);
+        result.current.setLocalSending(true);
         messageStoreRegistry.getOrCreate('tab-tr', { sessionId: 'sess-tr' }).replace([makeMessage({
           id: msgId, role: 'assistant',
           content: [{ type: 'tool_use', id: 'tu1', name: 'Read', summary: 'Reading /a.py', category: 'read' } as never],
