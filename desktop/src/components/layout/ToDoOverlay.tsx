@@ -33,6 +33,8 @@
  * @exports ToDoContent, parseWorkPacket, WorkPacket
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { overlayQuery, invalidateOverlay, TODO_DEFAULT_DAYS, TODO_FETCH_CAP } from './overlayQueries';
 import { todosService } from '../../services/todos';
 import { classifyLoadError } from '../../services/api';
 import type { ToDo, Priority, ToDoAttachment } from '../../types/todo';
@@ -114,7 +116,7 @@ export function parseWorkPacket(linkedContext: string | null): WorkPacket | null
 type RangeOpt = { label: string; days: number | null };
 const RANGES: RangeOpt[] = [
   { label: '7d', days: 7 },
-  { label: '30d', days: 30 },
+  { label: '30d', days: TODO_DEFAULT_DAYS },
   { label: '90d', days: 90 },
   { label: 'All', days: null },
 ];
@@ -193,47 +195,31 @@ function mergeRows(list: ToDo[], history: ToDo[]): ToDo[] {
 }
 
 export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
-  const [rows, setRows] = useState<ToDo[]>([]);
   const [rangeIdx, setRangeIdx] = useState(DEFAULT_RANGE_IDX);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('Open');
   const [sortKey, setSortKey] = useState<SortKey>('created');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
-  const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<ToDo | null>(null);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<ToDo | null>(null);
-  const [loadErr, setLoadErr] = useState<string | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
-  // A fetch that hits the 1000-row cap is truncated — surface it so the count is
-  // never silently wrong (meta-review scaling finding). Honest > silent drop.
-  const [truncated, setTruncated] = useState(false);
-
   const windowDays = RANGES[rangeIdx].days;
-  const FETCH_CAP = 1000;
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      // Fetch active + windowed terminal, once. history windowDays is a fetch-breadth
-      // hint; the authoritative range filter is client-side on createdAt (below), so
-      // table/KPI/charts share one口径. 'All' → no window (broad fetch).
-      const [list, hist] = await Promise.all([
-        todosService.list('swarmws', undefined, FETCH_CAP),
-        todosService.history(FETCH_CAP, windowDays ?? undefined),
-      ]);
-      // Either leg hitting the cap means the view may be missing older rows.
-      setTruncated(list.length >= FETCH_CAP || hist.todos.length >= FETCH_CAP);
-      setRows(mergeRows(list, hist.todos));
-      setLoadErr(null);
-    } catch (e) {
-      setRows([]);
-      setLoadErr(classifyLoadError(e, 'ToDos'));
-    } finally {
-      setLoading(false);
-    }
-  }, [windowDays]);
-
-  useEffect(() => { void refresh(); }, [refresh]);
+  const qc = useQueryClient();
+  // Active + windowed terminal, through the shared overlay query (overlayQueries):
+  // a reopen inside the freshness window, or after a nav hover prefetch, shows the
+  // cached rows at once. history windowDays is a fetch-breadth hint; the authoritative
+  // range filter is client-side on createdAt (below), so table/KPI/charts share one口径.
+  const todoQ = overlayQuery.todo(windowDays);
+  type TodoQueryData = Awaited<ReturnType<typeof todoQ.queryFn>>;
+  const query = useQuery(todoQ);
+  const rows = useMemo(() => (query.data ? mergeRows(query.data.list, query.data.history) : []), [query.data]);
+  // A leg at the cap is truncated — surface it so the count is never silently wrong.
+  const truncated = !!query.data
+    && (query.data.list.length >= TODO_FETCH_CAP || query.data.history.length >= TODO_FETCH_CAP);
+  // the toolbar hint shows any fetch; the rows stay on screen during a refresh
+  const loading = query.isFetching;
+  const loadErr = query.isError && !query.data ? classifyLoadError(query.error, 'ToDos') : null;
+  const refresh = useCallback(() => invalidateOverlay(qc, 'todo'), [qc]);
 
   // One range-filtered set feeds charts + KPI (口径统一). The table additionally
   // applies the status chip + sort.
@@ -264,8 +250,11 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
 
   const handleWithdraw = useCallback(async (todo: ToDo) => {
     setActionErr(null);
-    // optimistic removal
-    setRows((prev) => prev.filter((t) => t.id !== todo.id));
+    // optimistic removal, in the cache (every view of it updates)
+    qc.setQueryData(todoQ.queryKey, (d: TodoQueryData | undefined) => d && ({
+      list: d.list.filter((t) => t.id !== todo.id),
+      history: d.history.filter((t) => t.id !== todo.id),
+    }));
     if (selected?.id === todo.id) setSelected(null);
     try {
       await todosService.delete(todo.id);
@@ -273,7 +262,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
       setActionErr('Could not withdraw that ToDo — please try again.');
       void refresh(); // restore truth on failure
     }
-  }, [selected, refresh]);
+  }, [selected, refresh, qc, todoQ.queryKey]);
 
   const handleSaved = useCallback(() => {
     setCreating(false);
@@ -377,7 +366,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
           className="shrink-0 mx-4 mt-2 text-[11px] text-[var(--color-text-faint)] flex items-center gap-1.5"
         >
           <span className="material-symbols-outlined icon-xs">info</span>
-          Showing the most recent {FETCH_CAP} ToDos — narrow the time range to see a focused set.
+          Showing the most recent {TODO_FETCH_CAP} ToDos — narrow the time range to see a focused set.
         </div>
       )}
 

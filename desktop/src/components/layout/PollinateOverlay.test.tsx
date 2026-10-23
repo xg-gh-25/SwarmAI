@@ -1,3 +1,4 @@
+import type React from 'react';
 /**
  * Tests for PollinateOverlay — the content-asset gallery.
  *
@@ -28,6 +29,12 @@ vi.mock('../../services/pollinate', async () => {
 });
 
 import { PollinateContent } from './PollinateOverlay';
+import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
+import { render as __render } from '@testing-library/react';
+// The overlay reads its data through TanStack Query (overlayQueries): a fresh client
+// per render, so no cache carries over between tests.
+const renderQ = (ui: React.ReactElement) =>
+  __render(<__QCP client={new __QC({ defaultOptions: { queries: { retry: false } } })}>{ui}</__QCP>);
 
 const ASSETS = {
   overall: {
@@ -91,7 +98,7 @@ beforeEach(() => {
 
 function renderAndOpen(onDispatch = vi.fn().mockReturnValue(true)) {
   // M4: PollinateContent renders immediately (host owns open + fresh mount per open).
-  render(<PollinateContent onDispatch={onDispatch} close={() => {}} />);
+  renderQ(<PollinateContent onDispatch={onDispatch} close={() => {}} />);
   return { onDispatch };
 }
 

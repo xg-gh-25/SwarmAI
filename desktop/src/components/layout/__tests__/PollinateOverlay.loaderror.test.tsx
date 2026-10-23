@@ -1,3 +1,4 @@
+import type React from 'react';
 /**
  * PollinateOverlay load-error classification (de-mask sweep, run_d6fd2c13).
  * Error-render path had ZERO coverage before. Verifies 4xx vs outage classification
@@ -8,6 +9,12 @@ import { render, screen } from '@testing-library/react';
 import { PollinateContent } from '../PollinateOverlay';
 import { pollinateService } from '../../../services/pollinate';
 import { ApiError } from '../../../services/api';
+import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
+import { render as __render } from '@testing-library/react';
+// The overlay reads its data through TanStack Query (overlayQueries): a fresh client
+// per render, so no cache carries over between tests.
+const renderQ = (ui: React.ReactElement) =>
+  __render(<__QCP client={new __QC({ defaultOptions: { queries: { retry: false } } })}>{ui}</__QCP>);
 
 vi.mock('../../../services/pollinate', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../services/pollinate')>();
@@ -30,7 +37,7 @@ describe('PollinateOverlay load-error classification', () => {
     (pollinateService.fetchAssets as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError({ code: 'VALIDATION_FAILED', message: 'bad' }, 422),
     );
-    render(<PollinateContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<PollinateContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     const err = await screen.findByTestId('pollinate-load-error');
     expect(err.textContent).toContain('HTTP 422');
@@ -42,7 +49,7 @@ describe('PollinateOverlay load-error classification', () => {
     (pollinateService.fetchAssets as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError({ code: 'SERVICE_UNAVAILABLE', message: 'down' }, 500),
     );
-    render(<PollinateContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<PollinateContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     const err = await screen.findByTestId('pollinate-load-error');
     expect(err.textContent).toContain('backend may be unavailable');

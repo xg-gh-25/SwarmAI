@@ -28,7 +28,9 @@
  *
  * @exports PipelineOverlay
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { overlayQuery } from './overlayQueries';
 import api, { classifyLoadError } from '../../services/api';
 import {
   pipelinesService,
@@ -103,11 +105,7 @@ function openReportInCanvas(reportPath: string, close: () => void) {
 }
 
 export function PipelineContent({ close, onContinue }: PipelineContentProps) {
-  const [analytics, setAnalytics] = useState<PipelineAnalytics | null>(null);
   const [window, setWindow] = useState<Window>('30d');
-  const [loading, setLoading] = useState(false);
-  const [loadErr, setLoadErr] = useState<unknown>(null); // B2: fetch failed (was permanent Loading). Stores the error so classifyLoadError can distinguish 4xx contract vs outage.
-  const [reloadTick, setReloadTick] = useState(0); // Retry trigger
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [detail, setDetail] = useState<PipelineRunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -115,36 +113,28 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
   // created before the window would be missed, and analytics doesn't strip zombies).
   // fetchActivePipelines hits /pipelines?active=true, which excludes terminal
   // zombies stage-based (Gate-1 #2). null until loaded.
-  const [runningNow, setRunningNow] = useState<number | null>(null);
   // A (needs-you focus): clicking the "Needs you" stat收窄 the whole view to just
   // needs-you runs. When true, the常驻 top Needs-you区 hides (it would double-show)
   // and the by-project groups are filtered to needs-you rows only.
   const [needsYouFocus, setNeedsYouFocus] = useState(false);
 
-  // Fetch-once-on-mount (host mounts fresh per open) + on window toggle/retry. NO
-  // polling — retro surface. The former reset-on-close effect is gone: the host
-  // unmounts/remounts, so selectedRunId/detail/window start fresh each open.
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setLoadErr(null);
-    // B2: a rejected fetch used to leave loading=true forever (permanent
-    // "Loading…") — now .catch surfaces an error state with Retry.
-    pipelinesService.fetchAnalytics(window)
-      .then((a) => { if (!cancelled) { setAnalytics(a); setLoading(false); } })
-      .catch((e) => { if (!cancelled) { setLoadErr(e); setLoading(false); } });
-    return () => { cancelled = true; };
-  }, [window, reloadTick]);
-
-  // "Running now" — live, window-independent. Fetch-once (retro surface); a running
-  // count is a light read and doesn't need to track the window toggle.
-  useEffect(() => {
-    let cancelled = false;
-    pipelinesService.fetchActivePipelines()
-      .then((runs) => { if (!cancelled) setRunningNow(runs.filter((r) => r.status === 'running').length); })
-      .catch(() => { if (!cancelled) setRunningNow(null); }); // read fail → show — (never crash the overlay)
-    return () => { cancelled = true; };
-  }, [reloadTick]);
+  // Analytics (per window) + the running count, through the shared overlay queries
+  // (overlayQueries): a reopen inside the freshness window or after a nav hover shows
+  // the cached view at once. NO polling — retro surface.
+  const qc = useQueryClient();
+  const analyticsQ = overlayQuery.pipelineAnalytics(window);
+  const aQuery = useQuery(analyticsQ);
+  const analytics: PipelineAnalytics | null = aQuery.data ?? null;
+  const loading = aQuery.isFetching;
+  const loadErr: unknown = aQuery.isError && !aQuery.data ? aQuery.error : null;
+  const rQuery = useQuery(overlayQuery.pipelineRunning());
+  const runningNow: number | null = rQuery.data ?? null;   // read fail → shows —
+  const setAnalytics = useCallback(
+    (a: PipelineAnalytics) => qc.setQueryData(analyticsQ.queryKey, a),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [qc, window],
+  );
+  const retry = useCallback(() => { void aQuery.refetch(); void rQuery.refetch(); }, [aQuery, rQuery]);
 
   // Open the detail drawer → fetch that run's retrospective.
   const openRun = useCallback((runId: string) => {
@@ -173,7 +163,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
                                       pipelinesService.fetchRunDetail(runId)]);
     setAnalytics(a);
     setDetail(d);
-  }, [window]);
+  }, [window, setAnalytics]);
 
   /** 'continued' (owner session opened), 'done' (state changed, open its chat
    *  yourself) or 'failed' (the run's state changed under us). */
@@ -227,7 +217,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
       // happened. Return false so the drawer can surface the failure.
       return false;
     }
-  }, [window]);
+  }, [window, setAnalytics]);
 
   const o = analytics?.overall;
 
@@ -305,7 +295,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
               <div className="text-sm text-[var(--color-text)]">{classifyLoadError(loadErr, 'pipeline analytics')}</div>
               <button
                 data-testid="pipeline-load-retry"
-                onClick={() => setReloadTick((t) => t + 1)}
+                onClick={retry}
                 className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
                 style={{ background: '#d0524a' }}
               >

@@ -1,6 +1,6 @@
 import { ReactNode, useState, useCallback, useRef, useEffect, type CSSProperties } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
@@ -9,6 +9,7 @@ import { TerminalProvider, useTerminal, useTerminalHotkey } from '../../contexts
 import { OverlayProvider, useOverlay } from '../../contexts/OverlayContext';
 import './overlaySurfaces'; // side-effect: registers fullscreen surfaces with the registry
 import { NAV, ZONE_TINT } from './navTable';
+import { prefetchNav } from './overlayQueries';
 import type { OverlayId } from './overlayIds';
 import TerminalPanel from '../terminal/TerminalPanel';
 import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
@@ -182,6 +183,10 @@ function LeftSidebar() {
   // One rule for every nav item: an open small modal closes first; clicking the item
   // whose overlay is open closes it (XG D1), otherwise it opens. `before` runs just
   // before an open (Settings clears its deep-link tab).
+  // Hover / keyboard focus on a nav item loads its overlay's data (overlayQueries),
+  // so the click opens onto content instead of a spinner.
+  const qc = useQueryClient();
+  const prefetch = (id: OverlayId) => prefetchNav(qc, id);
   const activateNav = (id: OverlayId, before?: () => void) => {
     if (activeModal) closeModal();
     if (newActiveOverlay === id) { closeOverlay(); return; }
@@ -230,6 +235,8 @@ function LeftSidebar() {
           // History overlay opens via the OverlayHost (M3). The host re-derives this
           // row's rect from its data-nav-id for the spout.
           onClick={() => activateNav('history')}
+          onMouseEnter={() => prefetch('history')}
+          onFocus={() => prefetch('history')}
           aria-pressed={newActiveOverlay === 'history'}
           data-nav-id="history"
           title="History"
@@ -246,6 +253,8 @@ function LeftSidebar() {
         <button
           className={`a10-histrow relative mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors${newActiveOverlay === 'artifacts' ? ' bg-[var(--color-hover)]' : ''}`}
           onClick={() => activateNav('artifacts')}
+          onMouseEnter={() => prefetch('artifacts')}
+          onFocus={() => prefetch('artifacts')}
           aria-pressed={newActiveOverlay === 'artifacts'}
           data-nav-id="artifacts"
           title="Artifacts"
@@ -287,9 +296,9 @@ function LeftSidebar() {
       <nav className="flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
         {/* 认知区 — 绿面板容器：无区头、无 scope 文字，靠视觉 + highlight 分层 */}
         <div className="a10-zone" data-testid="cognition-zone">
-          <A10Card navId="context" icon="layers" isActive={newActiveOverlay === 'context'} onClick={() => activateNav('context')} data-testid="nav-context" />
-          <A10Card navId="library" icon="menu_book" isActive={newActiveOverlay === 'library'} onClick={() => activateNav('library')} data-testid="nav-library" />
-          <A10Card navId="brain-hub" icon="hub" highlight isActive={newActiveOverlay === 'brain-hub'} onClick={() => activateNav('brain-hub')} data-testid="nav-brain-hub" />
+          <A10Card navId="context" onPrefetch={() => prefetch('context')} icon="layers" isActive={newActiveOverlay === 'context'} onClick={() => activateNav('context')} data-testid="nav-context" />
+          <A10Card navId="library" onPrefetch={() => prefetch('library')} icon="menu_book" isActive={newActiveOverlay === 'library'} onClick={() => activateNav('library')} data-testid="nav-library" />
+          <A10Card navId="brain-hub" onPrefetch={() => prefetch('brain-hub')} icon="hub" highlight isActive={newActiveOverlay === 'brain-hub'} onClick={() => activateNav('brain-hub')} data-testid="nav-brain-hub" />
           <button
             className={`a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors${newActiveOverlay === 'new-brain' ? ' a10-newbrain--active' : ''}`}
             style={{ '--ac': ZONE_TINT.cognitive } as CSSProperties}
@@ -297,6 +306,8 @@ function LeftSidebar() {
             // Raw button (not A10Card) — the host re-derives this card's rect from its
             // data-nav-id for the cognition-green spout.
             onClick={() => activateNav('new-brain')}
+            onMouseEnter={() => prefetch('new-brain')}
+            onFocus={() => prefetch('new-brain')}
             title="New Brain — 建一个新大脑"
             data-testid="nav-new-brain"
             data-nav-id="new-brain"
@@ -315,38 +326,38 @@ function LeftSidebar() {
             surface (P1). "Workspace" is the de-jargoned label for the SwarmWS
             workspace (testid nav-swarmws + explorer brand title keep SwarmWS). */}
         <A10Group label="Work" tint={ZONE_TINT.work}>
-          <A10Card navId="todo" icon="todo" highlight isActive={newActiveOverlay === 'todo'} onClick={() => activateNav('todo')} data-testid="nav-todo" />
-          <A10Card navId="swarmws" icon="folder" highlight isActive={newActiveOverlay === 'swarmws'} onClick={() => activateNav('swarmws')} data-testid="nav-swarmws" />
+          <A10Card navId="todo" onPrefetch={() => prefetch('todo')} icon="todo" highlight isActive={newActiveOverlay === 'todo'} onClick={() => activateNav('todo')} data-testid="nav-todo" />
+          <A10Card navId="swarmws" onPrefetch={() => prefetch('swarmws')} icon="folder" highlight isActive={newActiveOverlay === 'swarmws'} onClick={() => activateNav('swarmws')} data-testid="nav-swarmws" />
           {/* NOTE: no Canvas nav card by design (run_990b0a03). Canvas is
               OUTPUT-TRIGGERED — it auto-surfaces on a `written` event and opens via
               a chat file-chip click or the agent's swarm:open-canvas command; a
               manual nav entry that opened an often-empty Outputs panel contradicted
               that "products fly out to you" model. Mute-recovery lives in the Canvas
               header unmute toggle (FileViewerPanel), not a global nav button. */}
-          <A10Card navId="pipeline" icon="pipeline" isActive={newActiveOverlay === 'pipeline'} onClick={() => activateNav('pipeline')} data-testid="nav-pipeline" />
-          <A10Card navId="pollinate" icon="hive" isActive={newActiveOverlay === 'pollinate'} onClick={() => activateNav('pollinate')} data-testid="nav-pollinate" />
+          <A10Card navId="pipeline" onPrefetch={() => prefetch('pipeline')} icon="pipeline" isActive={newActiveOverlay === 'pipeline'} onClick={() => activateNav('pipeline')} data-testid="nav-pipeline" />
+          <A10Card navId="pollinate" onPrefetch={() => prefetch('pollinate')} icon="hive" isActive={newActiveOverlay === 'pollinate'} onClick={() => activateNav('pollinate')} data-testid="nav-pollinate" />
           {/* Community — SwarmAI's two-way membrane with the outside world (inbound
               signals + outbound engagement). Moved to the Work zone as a resident
               main entry (run_5165013e): it's an active daily surface, not a
               low-attention System tool — and upgraded from the old soft signal-file
               opener to a real OverlayHost surface (3 tabs). Last in Work. */}
-          <A10Card navId="community" icon="public" isActive={newActiveOverlay === 'community'} onClick={() => activateNav('community')} data-testid="nav-community" />
+          <A10Card navId="community" onPrefetch={() => prefetch('community')} icon="public" isActive={newActiveOverlay === 'community'} onClick={() => activateNav('community')} data-testid="nav-community" />
         </A10Group>
 
         <A10Group label="System" tint={ZONE_TINT.system} dimCards>
-          <A10Card navId="jobs" icon="schedule" highlight isActive={newActiveOverlay === 'jobs'} onClick={() => activateNav('jobs')} data-testid="nav-jobs" />
+          <A10Card navId="jobs" onPrefetch={() => prefetch('jobs')} icon="schedule" highlight isActive={newActiveOverlay === 'jobs'} onClick={() => activateNav('jobs')} data-testid="nav-jobs" />
           {/* Capabilities — "what your AI can do" (skills + connections). Moved to the
               System zone after Jobs & Runs (run_5165013e): it's the ability
               reference/config surface, grouped with the other low-frequency System
               tools; the Work zone is reserved for active produce/engage surfaces
               (ToDo/Workspace/Pipeline/Pollinate/Community). Supersedes the earlier
               Work-zone placement (run_b5d98151). */}
-          <A10Card navId="capabilities" icon="extension" isActive={newActiveOverlay === 'capabilities'} onClick={() => activateNav('capabilities')} data-testid="nav-capabilities" />
+          <A10Card navId="capabilities" onPrefetch={() => prefetch('capabilities')} icon="extension" isActive={newActiveOverlay === 'capabilities'} onClick={() => activateNav('capabilities')} data-testid="nav-capabilities" />
           {hiveEnabled && (
-            <A10Card navId="hive" icon="cloud" statusDot={hiveStatusDot} isActive={newActiveOverlay === 'hive'} onClick={() => activateNav('hive')} data-testid="nav-hive" />
+            <A10Card navId="hive" onPrefetch={() => prefetch('hive')} icon="cloud" statusDot={hiveStatusDot} isActive={newActiveOverlay === 'hive'} onClick={() => activateNav('hive')} data-testid="nav-hive" />
           )}
-          <A10Card navId="eval" icon="heartbeat" isActive={newActiveOverlay === 'eval'} onClick={() => activateNav('eval')} data-testid="nav-eval" />
-          <A10Card navId="settings" icon="gear" isActive={newActiveOverlay === 'settings'} onClick={() => activateNav('settings', () => setSettingsTab(undefined))} data-testid="nav-settings" />
+          <A10Card navId="eval" onPrefetch={() => prefetch('eval')} icon="heartbeat" isActive={newActiveOverlay === 'eval'} onClick={() => activateNav('eval')} data-testid="nav-eval" />
+          <A10Card navId="settings" onPrefetch={() => prefetch('settings')} icon="gear" isActive={newActiveOverlay === 'settings'} onClick={() => activateNav('settings', () => setSettingsTab(undefined))} data-testid="nav-settings" />
         </A10Group>
       </nav>
 
@@ -682,13 +693,15 @@ interface A10CardProps {
    *  every existing card omits it and is visually unchanged. */
   statusDot?: { color: string; pulse?: boolean; title?: string };
   onClick?: () => void;
+  /** Hover / focus: prefetch the overlay's data. */
+  onPrefetch?: () => void;
   'data-testid'?: string;
 }
 
 /** A10 domain row-card: [chip icon] label …… [Y/R flag]. Title never truncates;
  *  the attention flag is a corner badge (never eats the title). An optional live
  *  statusDot sits on the chip's top-right corner (signal-driven only). */
-function A10Card({ navId, icon, flag, isActive, highlight, statusDot, onClick, 'data-testid': testId }: A10CardProps) {
+function A10Card({ navId, icon, flag, isActive, highlight, statusDot, onClick, onPrefetch, 'data-testid': testId }: A10CardProps) {
   const { navLabel: label, zone } = NAV[navId];
   const tint = ZONE_TINT[zone];
   // (navSource push removed M5: the OverlayHost re-derives THIS card's live rect from
@@ -697,6 +710,8 @@ function A10Card({ navId, icon, flag, isActive, highlight, statusDot, onClick, '
   return (
     <button
       onClick={onClick}
+      onMouseEnter={onPrefetch}
+      onFocus={onPrefetch}
       title={label}
       data-testid={testId}
       data-nav-id={navId}

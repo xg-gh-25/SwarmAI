@@ -1,3 +1,4 @@
+import type React from 'react';
 /**
  * ToDoOverlay interaction tests (run_7ccfe39f — flat-table redesign).
  *
@@ -20,6 +21,12 @@ import { ToDoContent } from '../ToDoOverlay';
 import { todosService } from '../../../services/todos';
 import { ApiError } from '../../../services/api';
 import type { ToDo } from '../../../types/todo';
+import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
+import { render as __render } from '@testing-library/react';
+// The overlay reads its data through TanStack Query (overlayQueries): a fresh client
+// per render, so no cache carries over between tests.
+const renderQ = (ui: React.ReactElement) =>
+  __render(<__QCP client={new __QC({ defaultOptions: { queries: { retry: false } } })}>{ui}</__QCP>);
 
 vi.mock('../../../services/todos', () => ({
   todosService: {
@@ -73,13 +80,13 @@ describe('ToDoOverlay (flat table)', () => {
   });
 
   it('renders a row for each todo', async () => {
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     expect(await screen.findByTestId('todo-row')).toBeTruthy();
   });
 
   it('New ToDo posts workspace_id=swarmws + encodes next_step', async () => {
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     fireEvent.click(screen.getByTestId('todo-new-btn'));
     fireEvent.change(await screen.findByTestId('todo-form-title'), { target: { value: 'My task' } });
@@ -95,7 +102,7 @@ describe('ToDoOverlay (flat table)', () => {
   });
 
   it('New ToDo blocks empty title (no create call)', async () => {
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     fireEvent.click(screen.getByTestId('todo-new-btn'));
     fireEvent.click(await screen.findByTestId('todo-form-submit'));
@@ -104,7 +111,7 @@ describe('ToDoOverlay (flat table)', () => {
   });
 
   it('clicking a row ACTION does NOT open the drawer (stopPropagation)', async () => {
-    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => false} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     const row = await screen.findByTestId('todo-row');
     fireEvent.click(within(row).getByTestId('todo-action-dispatch'));
@@ -112,7 +119,7 @@ describe('ToDoOverlay (flat table)', () => {
   });
 
   it('clicking the row BODY opens the detail drawer with work packet', async () => {
-    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => false} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     const row = await screen.findByTestId('todo-row');
     fireEvent.click(row);
@@ -121,7 +128,7 @@ describe('ToDoOverlay (flat table)', () => {
   });
 
   it('Withdraw calls delete and removes the row optimistically', async () => {
-    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => false} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     const row = await screen.findByTestId('todo-row');
     fireEvent.click(within(row).getByTestId('todo-action-withdraw'));
@@ -131,7 +138,7 @@ describe('ToDoOverlay (flat table)', () => {
   });
 
   it('drawer status dropdown → Completed routes through the SANCTIONED mark-handled endpoint (NOT a raw PUT)', async () => {
-    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => false} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     fireEvent.click(await screen.findByTestId('todo-row'));
     const drawer = await screen.findByTestId('todo-detail-drawer');
@@ -143,7 +150,7 @@ describe('ToDoOverlay (flat table)', () => {
   });
 
   it('drawer status dropdown → Cancelled routes through the SANCTIONED mark-cancelled endpoint', async () => {
-    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => false} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     fireEvent.click(await screen.findByTestId('todo-row'));
     const drawer = await screen.findByTestId('todo-detail-drawer');
@@ -158,7 +165,7 @@ describe('ToDoOverlay (flat table)', () => {
     // 'In Progress' chip. Seeded row carries dispatchedTabLabel too so deriveStatus
     // is unambiguous In Progress regardless of which branch fires.
     mockList([mkTodo({ id: 'ip1', status: 'in_discussion', dispatchedTabLabel: 'Tab A', title: 'In prog one' })]);
-    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => false} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     fireEvent.click(screen.getByTestId('todo-chip-In-Progress'));
     fireEvent.click(await screen.findByTestId('todo-row'));
@@ -170,7 +177,7 @@ describe('ToDoOverlay (flat table)', () => {
 
   it('a terminal (Completed) todo shows a READ-ONLY status badge — no dead dropdown', async () => {
     mockList([mkTodo({ id: 'done1', status: 'handled', title: 'Done one' })]);
-    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => false} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     // switch filter to Completed so the terminal row is visible, then open it
     fireEvent.click(screen.getByTestId('todo-chip-Completed'));
@@ -185,7 +192,7 @@ describe('ToDoOverlay (flat table)', () => {
       mkTodo({ id: 'open1', status: 'pending' }),
       mkTodo({ id: 'done1', status: 'handled', title: 'Done one' }),
     ]);
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     await waitFor(() => expect(screen.getAllByTestId('todo-row').length).toBe(1)); // only the open one
     // switch to All → both visible
@@ -204,7 +211,7 @@ describe('ToDoOverlay (flat table)', () => {
     // Render inside StrictMode (as main.tsx does) — a nested-setState updater is
     // double-invoked here, which is exactly how the Gate-2 HIGH toggle-no-op bug
     // manifests. Rendering without StrictMode would make this test vacuous.
-    render(<StrictMode><ToDoContent onDispatch={() => true} close={() => {}} /></StrictMode>);
+    renderQ(<StrictMode><ToDoContent onDispatch={() => true} close={() => {}} /></StrictMode>);
     await screen.findByTestId('todo-overlay');
     await waitFor(() => expect(screen.getAllByTestId('todo-row').length).toBe(2));
     const titleTh = screen.getByTestId('todo-th-title');
@@ -222,7 +229,7 @@ describe('ToDoOverlay (flat table)', () => {
     // A todo created 60 days ago: in the 90d window, out of the 7d window.
     const old = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
     mockList([mkTodo({ id: 'old', title: 'Old todo', createdAt: old, updatedAt: old })]);
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     // default 30d → the 60d-old todo is filtered OUT of the table
     await waitFor(() => expect(screen.queryByTestId('todo-row')).toBeNull());
@@ -238,7 +245,7 @@ describe('ToDoOverlay (flat table)', () => {
   it('Withdraw failure undoes the optimistic removal (row restored via refresh)', async () => {
     mockList([mkTodo({ id: 'keep', title: 'Keep me' })]);
     (todosService.delete as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('network'));
-    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => false} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     const row = await screen.findByTestId('todo-row');
     fireEvent.click(within(row).getByTestId('todo-action-withdraw'));
@@ -250,29 +257,29 @@ describe('ToDoOverlay (flat table)', () => {
   it('shows a truncation hint when a fetch hits the 1000-row cap', async () => {
     const many = Array.from({ length: 1000 }, (_, i) => mkTodo({ id: `t${i}` }));
     mockList(many);
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     expect(await screen.findByTestId('todo-truncated')).toBeTruthy();
   });
 
   it('does NOT show truncation hint under the cap', async () => {
     mockList([mkTodo()]);
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     await screen.findByTestId('todo-row');
     expect(screen.queryByTestId('todo-truncated')).toBeNull();
   });
 
   it('renders all 7 sortable column headers', async () => {
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
-    await screen.findByTestId('todo-overlay');
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    await screen.findByTestId('todo-th-priority');   // headers render once rows arrive
     for (const k of ['priority', 'title', 'source', 'status', 'created', 'updated', 'completed']) {
       expect(screen.getByTestId(`todo-th-${k}`)).toBeTruthy();
     }
   });
 
   it('KPI row + analytics strip are always rendered', async () => {
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     expect(await screen.findByTestId('todo-kpis')).toBeTruthy();
     expect(screen.getByTestId('todo-analytics')).toBeTruthy();
@@ -281,7 +288,7 @@ describe('ToDoOverlay (flat table)', () => {
   });
 
   it('guide banner is present', async () => {
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     expect(screen.getByTestId('todo-guide-banner')).toBeTruthy();
   });
@@ -290,7 +297,7 @@ describe('ToDoOverlay (flat table)', () => {
     (todosService.list as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError({ code: 'VALIDATION_FAILED', message: 'bad limit' }, 400),
     );
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
     const err = await screen.findByTestId('todo-load-error');
     expect(err.textContent).toContain('HTTP 400');
     expect(err.textContent).toContain('client error');
@@ -301,7 +308,7 @@ describe('ToDoOverlay (flat table)', () => {
     (todosService.list as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError({ code: 'SERVICE_UNAVAILABLE', message: 'down' }, 503),
     );
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
     const err = await screen.findByTestId('todo-load-error');
     expect(err.textContent).toContain('backend may be unavailable');
     expect(err.textContent).not.toContain('client error');
@@ -309,7 +316,7 @@ describe('ToDoOverlay (flat table)', () => {
 
   it('Flow load non-ApiError (unexpected throw) defaults to unavailable', async () => {
     (todosService.list as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => true} close={() => {}} />);
     const err = await screen.findByTestId('todo-load-error');
     expect(err.textContent).toContain('backend may be unavailable');
     expect(err.textContent).not.toContain('client error');
@@ -329,7 +336,7 @@ describe('ToDoOverlay (flat table)', () => {
     });
     mockList([rich]);
     (todosService.update as ReturnType<typeof vi.fn>).mockResolvedValue(rich);
-    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => false} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     // open detail → edit
     fireEvent.click(await screen.findByTestId('todo-row'));
@@ -361,7 +368,7 @@ describe('ToDoOverlay (flat table)', () => {
     const one = mkTodo({ id: 't1', linkedContext: JSON.stringify({ next_step: 'old step' }) });
     mockList([one]);
     (todosService.update as ReturnType<typeof vi.fn>).mockResolvedValue(one);
-    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    renderQ(<ToDoContent onDispatch={() => false} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     fireEvent.click(await screen.findByTestId('todo-row'));
     fireEvent.click(await screen.findByTestId('todo-drawer-edit'));
@@ -385,7 +392,7 @@ describe('ToDoOverlay (flat table)', () => {
     const openSpy = vi.fn();
     document.addEventListener('swarm:open-file', openSpy as EventListener);
     try {
-      render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+      renderQ(<ToDoContent onDispatch={() => false} close={() => {}} />);
       await screen.findByTestId('todo-overlay');
       fireEvent.click(await screen.findByTestId('todo-row'));
       const openBtn = await screen.findByTestId('todo-detail-attachment-open');

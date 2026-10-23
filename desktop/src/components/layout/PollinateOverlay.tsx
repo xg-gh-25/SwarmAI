@@ -23,6 +23,8 @@
  * @exports PollinateOverlay
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { overlayQuery, invalidateOverlay } from './overlayQueries';
 import { classifyLoadError } from '../../services/api';
 import {
   pollinateService,
@@ -106,10 +108,6 @@ function ImgWithFallback({ src, alt, className, lazy }: { src: string; alt: stri
 }
 
 export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
-  const [data, setData] = useState<PollinateAssetsResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [loadErr, setLoadErr] = useState<unknown>(null); // B3: fetch failed (was permanent Loading/blank). Stores the error so classifyLoadError can distinguish 4xx contract vs outage.
-  const [reloadTick, setReloadTick] = useState(0);
   const [view, setView] = useState<View>('gallery');
   const [query, setQuery] = useState('');
   const [platformFilter, setPlatform] = useState<string>('');
@@ -123,23 +121,17 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
   // it survives open/close while the overlay is open → re-opening an asset is instant.
   const captionCache = useRef<Map<string, string | null>>(new Map());
 
-  // Fetch-once-on-mount (host mounts fresh per open) + on retry. The former
-  // reset-on-close effect is gone: the host unmounts/remounts, so view/filters/
-  // selection start fresh each open by construction.
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setLoadErr(null);
-    // B3: a rejected fetch used to leave loading=true forever (blank gallery) —
-    // now .catch surfaces an error state with Retry.
-    pollinateService.fetchAssets()
-      .then((d) => { if (!cancelled) { setData(d); setLoading(false); } })
-      .catch((e) => { if (!cancelled) { setLoadErr(e); setLoading(false); } });
-    return () => { cancelled = true; };
-  }, [reloadTick]);
+  // The asset list through the shared overlay query (overlayQueries): a reopen inside
+  // the freshness window or after a nav hover shows the cached gallery at once.
+  const qc = useQueryClient();
+  const assetsQ = useQuery(overlayQuery.pollinate());
+  const data: PollinateAssetsResponse | null = assetsQ.data ?? null;
+  const loading = assetsQ.isFetching;
+  const loadErr: unknown = assetsQ.isError && !assetsQ.data ? assetsQ.error : null;
+  const reload = useCallback(() => { void invalidateOverlay(qc, 'pollinate'); }, [qc]);
 
   // Keep the OPEN drawer in sync with the authoritative re-fetched data (GUI101 write→read).
-  // After a mark/unpublish → reloadTick → fetchAssets → setData, re-derive `selected.asset`
+  // After a mark/unpublish → reload → the query refetches, re-derive `selected.asset`
   // from the fresh list by assetId. This is what makes UNPUBLISH correct: the POST response
   // says 'ready', but the backend may recompute a kit 'ready-to-publish' — trusting the
   // re-fetched value (not the response) keeps the drawer and gallery card consistent.
@@ -300,7 +292,7 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
                   <div className="text-sm text-[var(--color-text)]">{classifyLoadError(loadErr, 'content assets')}</div>
                   <button
                     data-testid="pollinate-load-retry"
-                    onClick={() => setReloadTick((t) => t + 1)}
+                    onClick={reload}
                     className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
                     style={{ background: '#d0524a' }}
                   >
@@ -350,12 +342,12 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
               if (!res) return false;
               // Close the write→read loop on the OPEN drawer (GUI101): re-fetch alone won't
               // update `selected` (a by-value snapshot), so optimistically patch it from the
-              // response, THEN bump reloadTick so the gallery rollup/counts refresh too.
+              // response, THEN reload so the gallery rollup/counts refresh too.
               setSelected((prev) => prev && {
                 ...prev,
                 asset: { ...prev.asset, publishStatus: res.publishStatus, postedUrl: res.postedUrl },
               });
-              setReloadTick((t) => t + 1);
+              reload();
               return true;
             }}
           />

@@ -1,3 +1,4 @@
+import type React from 'react';
 /**
  * Tests for PipelineOverlay — the WORK-zone retro-analytics dashboard (run_f8494370).
  *
@@ -36,6 +37,12 @@ vi.mock('../../services/api', () => ({
 }));
 
 import { PipelineContent } from './PipelineOverlay';
+import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
+import { render as __render } from '@testing-library/react';
+// The overlay reads its data through TanStack Query (overlayQueries): a fresh client
+// per render, so no cache carries over between tests.
+const renderQ = (ui: React.ReactElement) =>
+  __render(<__QCP client={new __QC({ defaultOptions: { queries: { retry: false } } })}>{ui}</__QCP>);
 
 const ANALYTICS = {
   window: '30d',
@@ -116,7 +123,7 @@ beforeEach(() => {
 function renderAndOpen(onDispatch = vi.fn().mockReturnValue(true),
                        onContinue = vi.fn().mockResolvedValue(true)) {
   // M4: PipelineContent renders immediately (host owns open + fresh mount per open).
-  render(<PipelineContent onDispatch={onDispatch} close={() => {}} onContinue={onContinue} />);
+  renderQ(<PipelineContent onDispatch={onDispatch} close={() => {}} onContinue={onContinue} />);
   return { onDispatch, onContinue };
 }
 
@@ -326,7 +333,7 @@ describe('PipelineOverlay', () => {
 
   it('AC2: a run with a report shows a report button that opens Canvas (close + swarm:open-file)', async () => {
     const close = vi.fn();
-    render(<PipelineContent onDispatch={vi.fn().mockReturnValue(true)} close={close} />);
+    renderQ(<PipelineContent onDispatch={vi.fn().mockReturnValue(true)} close={close} />);
     await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
     const dispatchSpy = vi.spyOn(document, 'dispatchEvent');
     const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
@@ -343,7 +350,7 @@ describe('PipelineOverlay', () => {
 
   it('AC3: detail drawer opens report in Canvas via a button, not an inline <pre>', async () => {
     const close = vi.fn();
-    render(<PipelineContent onDispatch={vi.fn().mockReturnValue(true)} close={close} />);
+    renderQ(<PipelineContent onDispatch={vi.fn().mockReturnValue(true)} close={close} />);
     await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
     const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
     fireEvent.click(within(grp.getByTestId('pipeline-run-run_done1')).getByTitle('Ship feature X'));
