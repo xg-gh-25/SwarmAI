@@ -8,7 +8,9 @@ Public endpoints:
 
 - ``GET  /workspace``              — Retrieve singleton workspace config
 - ``PUT  /workspace``              — Update workspace config (icon, context)
-- ``GET  /workspace/tree``         — Return workspace filesystem tree as nested JSON
+- ``GET  /workspace/locations``    — SwarmWS + declared local repos (Workspace overlay)
+- ``GET  /workspace/summary``      — One location's uncommitted count / last commit
+- ``GET  /workspace/tree``         — Return a location's filesystem tree as nested JSON
 - ``GET  /workspace/file/committed`` — Return last committed version of a file (git show HEAD:<path>)
 - ``GET  /projects``               — List all projects
 - ``POST /projects``               — Create a new project
@@ -50,9 +52,10 @@ from typing import Callable, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from core import executors
+from core import workspace_locations as wl
 from core.context_directory_loader import CONTEXT_FILES
 from core.swarm_workspace_manager import SYSTEM_MANAGED_FOLDERS, swarm_workspace_manager
 from database import db
@@ -99,6 +102,7 @@ def _invalidate_tree_cache() -> None:
     Forces the next ``/workspace/tree`` poll to recompute git+fs state.
     """
     _etag_cache.clear()
+    wl.invalidate()
 
 router = APIRouter(tags=["workspace-api"])
 
@@ -111,16 +115,19 @@ MAX_PREVIEW_SIZE = 50 * 1024 * 1024  # 50 MB
 
 class FolderCreateRequest(BaseModel):
     """Request body for creating a folder."""
+    model_config = ConfigDict(extra="forbid")  # a Workspace repo location is read-only
     path: str
 
 
 class FolderDeleteRequest(BaseModel):
     """Request body for deleting a folder or file."""
+    model_config = ConfigDict(extra="forbid")  # a Workspace repo location is read-only
     path: str
 
 
 class FolderRenameRequest(BaseModel):
     """Request body for renaming / moving an item."""
+    model_config = ConfigDict(extra="forbid")  # a Workspace repo location is read-only
     old_path: str
     new_path: str
 
@@ -363,6 +370,8 @@ def _build_tree(
     depth: int,
     git_status: dict[str, str] | None = None,
     subrepo_status_fn: "Callable[[Path], dict[str, str]] | None" = None,
+    *,
+    repo_mode: bool = False,
 ) -> list[dict]:
     """Build a nested tree of workspace entries.
 
@@ -372,6 +381,11 @@ def _build_tree(
 
     *subrepo_status_fn* is an optional cached git-status getter that avoids
     duplicate subprocess spawns for symlinked sub-repos across calls.
+
+    *repo_mode* (a Workspace repo location, read-only): list every entry except
+    ``workspace_locations.REPO_SKIP_DIRS``, flag dot entries ``hidden``, and never
+    descend a symlinked directory (it may point out of the repo).
+    Directories carry ``changed_count``: how many changed entries sit under them.
 
     Each node is a plain dict matching ``TreeNodeResponse`` fields so it
     can be serialised directly by FastAPI.
@@ -390,7 +404,10 @@ def _build_tree(
     files: list[Path] = []
     for entry in entries:
         entry_is_dir = entry.is_dir()
-        if not _should_include(entry.name, is_root=is_root, is_dir=entry_is_dir):
+        if repo_mode:
+            if entry.name == ".git" or (entry_is_dir and entry.name in wl.REPO_SKIP_DIRS):
+                continue
+        elif not _should_include(entry.name, is_root=is_root, is_dir=entry_is_dir):
             continue
         if entry_is_dir:
             dirs.append(entry)
@@ -410,9 +427,16 @@ def _build_tree(
         # The parent workspace's git status won't cover files inside these —
         # we need to run git status from the symlink target's own repo root.
         child_git_status = git_status
+        if repo_mode and d.is_symlink():
+            node = {"name": d.name, "path": rel_path, "type": "directory", "children": None,
+                    "is_symlink": True}
+            if d.name.startswith("."):
+                node["hidden"] = True
+            result.append(node)
+            continue
         resolved = d.resolve()
         git_path = resolved / ".git"
-        if d.is_symlink() and (git_path.is_dir() or git_path.is_file()):
+        if not repo_mode and d.is_symlink() and (git_path.is_dir() or git_path.is_file()):
             # Use cached getter if available to avoid duplicate subprocess spawns
             sub_status = subrepo_status_fn(resolved) if subrepo_status_fn else _get_git_status(resolved)
             # Re-key sub-repo paths relative to the workspace root
@@ -420,7 +444,8 @@ def _build_tree(
             for sub_path, sub_st in sub_status.items():
                 child_git_status[f"{rel_path}/{sub_path}"] = sub_st
 
-        children = _build_tree(d, workspace_root, depth - 1, child_git_status, subrepo_status_fn) if depth > 1 else None
+        children = _build_tree(d, workspace_root, depth - 1, child_git_status, subrepo_status_fn,
+                               repo_mode=repo_mode) if depth > 1 else None
 
         # Directory git status: check direct match first, then inherit from children
         dir_status = None
@@ -449,6 +474,11 @@ def _build_tree(
             node["is_symlink"] = True
         if dir_status:
             node["git_status"] = dir_status
+        changed = wl.changed_under(effective_status, rel_path) if effective_status else 0
+        if changed:
+            node["changed_count"] = changed
+        if repo_mode and d.name.startswith("."):
+            node["hidden"] = True
         result.append(node)
 
     for f in files:
@@ -461,6 +491,8 @@ def _build_tree(
         }
         if git_status and rel_path in git_status:
             node["git_status"] = git_status[rel_path]
+        if repo_mode and f.name.startswith("."):
+            node["hidden"] = True
         result.append(node)
 
     return result
@@ -546,7 +578,9 @@ def _compute_etag_and_tree_sync(workspace_root: Path, depth: int) -> tuple[str, 
     Uses a per-invocation sub-repo cache so each symlinked project is
     scanned at most once (shared between ETag computation and tree building).
     """
-    git_status = _get_git_status(workspace_root)
+    # The same cached, single-flight scan /workspace/summary uses, so one overlay
+    # open runs git status in SwarmWS once (workspace_locations.status_map).
+    git_status = wl.status_map(workspace_root)
 
     # Per-invocation cache: resolved_path → {relative_path: status}
     # Prevents duplicate git status calls for symlinked sub-repos
@@ -593,10 +627,50 @@ def _compute_etag_and_tree_sync(workspace_root: Path, depth: int) -> tuple[str, 
     return etag_value, body
 
 
+async def _location_root(location: str | None) -> tuple[Path, str]:
+    """(root, kind) of a Workspace location key; 404 for an unknown key. ``None``
+    and ``swarmws`` are SwarmWS (design workspace-working-location.md §3.2)."""
+    ws = await _get_workspace_path()
+    # not a str: called in-process without the Query default resolved -> SwarmWS
+    if not isinstance(location, str) or not location or location == wl.SWARMWS_KEY:
+        return Path(ws), "default"
+    try:
+        return await executors.run_nav(wl.resolve, location, ws)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Unknown workspace location")
+
+
+@router.get("/workspace/locations")
+async def list_workspace_locations() -> list[dict]:
+    """SwarmWS first, then each declared local repo (a main checkout active in the
+    last 30 days). Stats only; no git. Each location is browsed on its own."""
+    return await executors.run_nav(wl.list_locations, await _get_workspace_path())
+
+
+@router.get("/workspace/summary")
+async def get_workspace_summary(
+    location: str = Query(..., description="A key from /workspace/locations"),
+    fresh: bool = Query(False, description="Rescan now instead of reusing a scan younger than 10s"),
+) -> dict:
+    """ONE location's light stats: ``changed`` (uncommitted entries on local main)
+    and, for a repo, ``last_commit_at`` (epoch seconds)."""
+    root, kind = await _location_root(location)
+    return await executors.run_nav(wl.summary, root, kind, fresh=fresh)
+
+
+def _repo_tree_sync(root: Path, depth: int) -> tuple[str, bytes]:
+    """A repo location's tree + ETag (nav pool): one cached status scan, repo filter."""
+    tree = _build_tree(root, root, depth, wl.status_map(root), None, repo_mode=True)
+    body = json.dumps(tree).encode()
+    return f'"{hashlib.md5(body, usedforsecurity=False).hexdigest()}"', body
+
+
 @router.get("/workspace/tree")
 async def get_workspace_tree(
     depth: int = Query(default=3, ge=1, le=10),
     if_none_match: Optional[str] = Header(default=None),
+    location: Optional[str] = Query(None, description="A key from /workspace/locations; default SwarmWS"),
+    fresh: bool = Query(False, description="The user pressed refresh: rescan now"),
 ) -> list[dict]:
     """Return the SwarmWS filesystem tree as nested JSON.
 
@@ -620,8 +694,7 @@ async def get_workspace_tree(
 
     Requirements: 10.1, 11.5, 15.1
     """
-    expanded_path = await _get_workspace_path()
-    workspace_root = Path(expanded_path)
+    workspace_root, kind = await _location_root(location)
 
     if not workspace_root.is_dir():
         raise HTTPException(
@@ -629,10 +702,13 @@ async def get_workspace_tree(
             detail="Workspace root directory does not exist",
         )
 
-    cache_key = str(depth)
+    cache_key = str(depth) if kind == "default" else f"{location}:{depth}"
     now = time.monotonic()
 
     # Fast path: serve from cache if fresh (< 2s old)
+    if fresh is True:                     # `is True`: a direct in-process call passes the Query
+        _etag_cache.pop(cache_key, None)
+        wl.invalidate(workspace_root)
     cached = _etag_cache.get(cache_key)
     if cached:
         cached_etag, cached_body, cached_time = cached
@@ -647,7 +723,8 @@ async def get_workspace_tree(
 
     # Slow path: offload git+fs scan to thread pool (frees event loop)
     etag_value, body = await executors.run_nav(
-        _compute_etag_and_tree_sync, workspace_root, depth,
+        _compute_etag_and_tree_sync if kind == "default" else _repo_tree_sync,
+        workspace_root, depth,
     )
 
     # Update cache
@@ -672,6 +749,7 @@ async def get_workspace_tree(
 async def expand_tree_directory(
     path: str = Query(..., description="Relative path of the directory to expand"),
     depth: int = Query(default=2, ge=1, le=5),
+    location: Optional[str] = Query(None, description="A key from /workspace/locations; default SwarmWS"),
 ) -> list[dict]:
     """Expand a single directory in the workspace tree (lazy loading).
 
@@ -679,7 +757,7 @@ async def expand_tree_directory(
     Used by the frontend when the user expands a directory that was
     previously returned with ``children: null`` (depth-truncated).
     """
-    workspace_root = Path(await _get_workspace_path())
+    workspace_root, kind = await _location_root(location)
     target = workspace_root / path
 
     # Security: ensure path doesn't escape workspace root (BEFORE any fs operation)
@@ -690,6 +768,11 @@ async def expand_tree_directory(
 
     if not target.is_dir():
         raise HTTPException(status_code=404, detail=f"Directory not found: {path}")
+
+    if kind == "repo":
+        status = await executors.run_nav(wl.status_map, workspace_root)
+        return await executors.run_nav(_build_tree, target, workspace_root, depth, status, None,
+                                       repo_mode=True)
 
     # Scope the git-status scan to the target subtree only. The full-repo scan
     # (~230ms on a large repo) dominated per-expand latency, yet the expand
@@ -976,6 +1059,11 @@ async def get_workspace_file(
         "that is not text then returns 415 after an 8 KB sniff instead of its whole "
         "body as base64 (docs/design/canvas-file-types.md P0).",
     ),
+    location: Optional[str] = Query(
+        None,
+        description="A Workspace repo location key: ``path`` is then relative to that "
+        "repo and the file is read-only. Default SwarmWS.",
+    ),
 ):
     """Read a file's content by path.
 
@@ -991,11 +1079,20 @@ async def get_workspace_file(
     Returns 413 if the file exceeds 50 MB.
     Returns 415 ``{detail: "binary"}`` when ``text_only`` and the file is not text.
     """
-    expanded_path = await _get_workspace_path()
-    workspace_root = Path(expanded_path)
-    _allowed_external = await _allowed_external_for(session_id)
-    target, is_external = _resolve_file_path(path, workspace_root, allowed_external=_allowed_external,
-                                             map_landed=True)
+    loc_root, loc_kind = await _location_root(location)
+    if loc_kind == "repo":
+        if os.path.isabs(path) or ".." in Path(path).parts:
+            raise HTTPException(status_code=400, detail="Path must be relative to the location")
+        target = (loc_root / path).resolve()
+        if not _is_path_under(target, loc_root):
+            raise HTTPException(status_code=400, detail="Path outside the location")
+        is_external = True                # rendered read-only
+    else:
+        workspace_root = loc_root
+        _allowed_external = await _allowed_external_for(session_id)
+        target, is_external = _resolve_file_path(path, workspace_root,
+                                                 allowed_external=_allowed_external,
+                                                 map_landed=True)
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -1588,6 +1685,7 @@ async def get_workspace_file_committed(
 async def put_workspace_file(
     path: str = Query(..., description="Absolute or workspace-relative file path"),
     body: dict = None,
+    location: Optional[str] = Query(None, include_in_schema=False),
 ):
     """Write text content to a file by path.
 
@@ -1595,6 +1693,8 @@ async def put_workspace_file(
     editor can save any file the user has open.
     Expects ``{ "content": "<utf-8 text>" }`` in the request body.
     """
+    if isinstance(location, str):
+        raise HTTPException(status_code=422, detail="Workspace repo locations are read-only")
     if body is None or "content" not in body:
         raise HTTPException(status_code=400, detail="Request body must include 'content'")
 

@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: DRAFT v5 — 待审
+status: v5 — UI 已通过（2026-10-23）；W1 已实现
 related: left-nav-backend-and-visual-system.md（nav 原则：不影响聊天、轻量、30 天窗口）
 ---
 
@@ -54,7 +54,7 @@ v1–v3 里的这些全部去掉：this chat、`working_repo()`、按 run 列出
 - **每个位置的状态各存一份**：展开了哪些目录、搜索词、滚动位置、是否显示隐藏项，都按位置分开记。切回某个位置时，原样恢复。
 - **目录树**：
   - **SwarmWS**：Knowledge、Projects 分区，系统文件夹保护，写操作，全部和现在一样。
-  - **仓库**：普通目录树，首屏深度 2，子目录懒加载。跳过 `.git`、`node_modules`、`.venv`、`dist`、`build`、`__pycache__`。只读，不能新建、重命名、删除。
+  - **仓库**：普通目录树，首屏深度 1，子目录懒加载。跳过 `.git`、`node_modules`、`.venv`、`dist`、`build`、`__pycache__`。只读，不能新建、重命名、删除。
 - **改动标记（简单统计）**：
   - 有未提交改动的文件，沿用现有的 git 标记（M / U / D）；
   - 目录行右侧显示它下面有几个改动文件的计数小字，只显示数字，不显示列表；
@@ -63,6 +63,44 @@ v1–v3 里的这些全部去掉：this chat、`working_repo()`、按 run 列出
 - **搜索框**：只搜已经加载出来的树。
 - **右键菜单**：打开到 Canvas、附加到 chat、复制路径。SwarmWS 另外保留原有的写操作和 "Open terminal here"。
 - **加载失败**：只影响出错的那个位置。首次失败时，这个位置的区域用 `OverlayState` 显示错误和 Retry；切换条照样可以切到其他位置。刷新失败时保留这个位置现在的树，在它的头部加一个小的错误标记。
+
+### 2.1 UI 规范（Gawan 2026-10-23 通过的 mock）
+
+- **外框**：沿用 overlay 外壳和 S5 视觉规范（字号档位、400/600 两种字重、主题色、`--color-zone-*`）。顶部是 `WORKSPACE` 区色徽标、标题、`ESC to close`。
+- **切换条**：做成浏览器标签页的样子，放在凹下去的浅底条上；选中的标签和下面的内容区连成一张卡片。每个标签只有一个徽标加名字：SwarmWS 用 `WS`（区色），仓库用 `</>`（选中时变主色）。标签上不放任何统计。
+- **位置头部**：
+  - 第一行：名字，600 字重；
+  - 第二行：等宽字体的完整路径，太长时截断，鼠标悬停显示全文；
+  - 一排胶囊：`local main`、`N changed`（有改动时带橙色圆点）、`last commit 3h ago`（只给仓库）；
+  - 右侧：复制路径、↻（只刷新这个位置）。
+- **工具栏**：过滤框（只过滤已加载的树，带 `/` 快捷键提示）、◌ 显示隐藏项、⇤ 全部折叠。
+- **目录树**：
+  - 每行 28px，层级缩进 16px，目录前有展开箭头；
+  - 文件用 `FileTypeIcon` 字母徽标；
+  - 目录右侧用 muted 小字显示 `N changed`，文件右侧标 M / U / D（橙 / 绿 / 红）；
+  - 选中行有浅主色底和左侧 3px 主色竖线；
+  - 显示出来的隐藏项名字用浅色。
+- **行悬停**：右侧的计数或标记换成 `Open`、`Attach`、`⧉` 三个小按钮。
+- **底部一行**：左边是 SwarmWS 的分区名，或者仓库的 `local main · read-only`；右边是 `updated <相对时间>`。
+- **键盘**：
+
+  | 按键 | 动作 |
+  |---|---|
+  | `/` | 聚焦过滤框 |
+  | ↑ ↓ | 移动选中行 |
+  | ← → | 收起 / 展开目录 |
+  | ↵ 或双击 | 打开到 Canvas |
+  | ⌘↵ | 附加到 chat |
+  | ⌘1 / ⌘2 … | 切换位置 |
+  | ESC | 关闭 |
+
+- **状态**：
+  - 没有缓存的首次打开：三行骨架，不放转圈；
+  - 有缓存：直接显示，后台刷新；
+  - 过滤没有结果：提示 "No loaded file matches 'x'. Open a folder to search inside it."；
+  - 首次加载失败：只有这个位置的区域显示 `OverlayState` 加 Retry；
+  - 刷新失败：保留现有的树，↻ 旁边加 ⚠。
+- **动效**：只有展开箭头旋转 120 ms；开启"减少动态效果"时不转。
 
 ## 3. 后端
 
@@ -76,8 +114,12 @@ v1–v3 里的这些全部去掉：this chat、`working_repo()`、按 run 列出
 
 - **返回**：`{changed, lastCommitAt?}`，只针对这一个位置。
 - **计算**：`changed` 是对这个位置跑一次 `git status --porcelain -unormal` 的行数，带 `GIT_OPTIONAL_LOCKS=0`；`lastCommitAt` 是 `.git/logs/HEAD` 的修改时间。
-- **缓存**：按 `(根目录, .git/index 修改时间, .git/logs/HEAD 修改时间)`，每个位置一份。没变就不起进程。
-- **实测**：一次 `git status`，swarmai 141 ms，SwarmWS 350 ms；缓存命中时只做两次 stat。
+- **缓存（W1 修正）**：每个位置一份扫描结果，保留 10 秒，同一个位置同时来的请求只扫一次（single-flight）。summary、tree、expand 共用这一份，所以打开一个位置只跑一次 `git status`。SwarmWS 的写操作和 ↻（`fresh=true`）会作废它。
+  - 原来写的"按 `.git/index` 和 `logs/HEAD` 的修改时间判断没变"是错的：改一个已跟踪的文件、新建一个未跟踪的文件，都不会碰这两个文件，统计会一直是旧的。所以改成短 TTL 加显式刷新。
+- **实测（W1，本机，真实数据）**：
+  - `/locations` 65 ms，只 stat，不跑 git；
+  - swarmai：`git status` 约 0.5 s，缓存命中 0.1 ms，第一层树 8 ms、49 个节点、4.4 KB；
+  - SwarmWS：`git status` 约 0.45 s（`.git` 766 MB），第一层树约 0.46 s，其中几乎全部是这次扫描。
 
 ### 3.2 根目录解析与现有接口
 
@@ -124,7 +166,7 @@ v1–v3 里的这些全部去掉：this chat、`working_repo()`、按 run 列出
 
 | 阶段 | 内容 |
 |---|---|
-| W1 | 后端：`/workspace/locations`（只 stat）、`/workspace/summary`（每个位置一份缓存）、`_resolve_root`、tree / expand / file 加 `location`、目录计数；T1–T6 |
+| W1 ✅ | 后端：`/workspace/locations`（只 stat）、`/workspace/summary`（每个位置一份缓存）、`_location_root`、tree / expand / file 加 `location`、tree 加 `fresh`、目录 `changed_count`、仓库模式（跳过目录、`hidden` 标记、不进入软链接）、写接口拒绝 `location`；T1–T6，`tests/test_workspace_locations.py` |
 | W2 | 前端取数：去掉轮询，首屏深度 1，按位置分开的 `overlayQueries`，只取当前位置；T7 |
 | W3 | 前端界面：切换条、位置头部的统计、按位置分开的界面状态、目录计数、隐藏杂项、仓库只读、按位置的 `OverlayState`；去掉 Working files 卡片；T8、T9 |
 | W4 | 更新 navcard 标准文档里 Workspace 的部分 |

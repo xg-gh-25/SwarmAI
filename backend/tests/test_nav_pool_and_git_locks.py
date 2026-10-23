@@ -23,7 +23,8 @@ ROUTERS = Path(__file__).resolve().parents[1] / "routers"
 
 NAV_ONLY = ("attention", "community_api", "jobs", "library_api", "eval", "ddd_brain",
             "todos", "pipelines", "pollinate", "hive")
-NAV_FUNCS_IN_SHARED = {"workspace_api": ("get_workspace_tree", "expand_tree_directory")}
+NAV_FUNCS_IN_SHARED = {"workspace_api": ("get_workspace_tree", "expand_tree_directory",
+                                         "list_workspace_locations", "get_workspace_summary")}
 
 
 def _default_pool_calls(node: ast.AST) -> list[int]:
@@ -79,6 +80,8 @@ def _git_calls_without_optional_locks(src: str) -> list[int]:
 def test_nav_git_never_takes_the_index_lock():
     found = {m: _git_calls_without_optional_locks((ROUTERS / f"{m}.py").read_text())
              for m in ("ddd_brain", "workspace_api")}
+    found["core/workspace_locations"] = _git_calls_without_optional_locks(
+        (ROUTERS.parent / "core" / "workspace_locations.py").read_text())
     assert {m: v for m, v in found.items() if v} == {}
 
 
