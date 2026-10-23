@@ -59,7 +59,10 @@ or the stream.
   is two layers, like Canvas — a recessed `--color-bg-chrome` gutter (10px around;
   its top 10px is the resize handle, a grip on hover) holding a raised
   `.terminal-card` (`--color-card`, 1px border, radius 10, soft shadow). The xterm
-  surface uses the card colour, 12px text, line height 1.15, 14/8px inner padding.
+  surface uses the card colour, 12px text, line height 1.2, 14/8px inner padding.
+  Output text is --color-text eased 80% toward the card (88% in light), bold is 500,
+  and the dark ANSI set is GitHub's dark-dimmed palette (XG 2026-10-23: full-contrast
+  text glared).
   Header 40px; segments and shell tabs 26px; the BottomBar is 30px with 24px-tall
   click targets.
 - Header: a segmented switcher — `SwarmWS`, the repo (when
