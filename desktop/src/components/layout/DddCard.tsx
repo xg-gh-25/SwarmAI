@@ -10,7 +10,7 @@
  *   • compact (gallery) — SELF-SELECTS by health.pending:
  *       NEEDS (pending>0) → amber-accented; header verdict + slim 3-layer ontology
  *         bar + NeedsActionable (the few actionable counts spelled out: N proposals
- *         / N sinking / uncommitted). NOT the boxed 2×2 grid.
+ *         / N sinking / run in progress). NOT the boxed 2×2 grid.
  *       CALM (pending==0) → header verdict + ontology bar + ONE muted CalmMeta line
  *         (lifecycle · N sinking · last-change). No presence/lifecycle/cheap widgets.
  *     Both from the cheap BrainSummary — NO detail fetch — and stay click-to-open.
@@ -145,13 +145,13 @@ function VerdictDot({ pending }: { pending: number }) {
 
 /** The actionable list for a NEEDS card — the 2×2 boxed cheap grid is REPLACED by
  *  the few things that actually need a human, spelled out. Only non-zero items
- *  render (pending is the verdict; sinking/uncommitted are supporting facts).
+ *  render (pending is the verdict; sinking/run in progress are supporting facts).
  *  All from the cheap BrainSummary — no fetch. */
 function NeedsActionable({ health }: { health: BrainHealth }) {
   const items: { key: string; n: string; label: string }[] = [];
   if (health.pending > 0) items.push({ key: 'pending', n: String(health.pending), label: 'proposals awaiting review' });
   if (health.sinking > 0) items.push({ key: 'sinking', n: String(health.sinking), label: 'entries sinking (decaying)' });
-  if (health.uncommitted) items.push({ key: 'uncommitted', n: '•', label: 'uncommitted changes' });
+  if (health.liveRun) items.push({ key: 'liveRun', n: '•', label: 'run in progress' });
   return (
     <div data-testid="dddcard-needs-actionable" className="flex flex-col gap-1 mt-1.5">
       {items.map((it) => (

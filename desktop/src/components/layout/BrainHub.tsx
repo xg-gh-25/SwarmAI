@@ -179,7 +179,7 @@ export function BrainHub(
       onBack={backToGallery}
       onRequestClose={onRequestClose}
       onDispatch={onDispatch}
-      uncommitted={brains?.find((b) => b.name === selected)?.health.uncommitted ?? false}
+      liveRun={brains?.find((b) => b.name === selected)?.health.liveRun ?? false}
     />
   );
 }
@@ -189,12 +189,12 @@ export function BrainHub(
  *  Replaces the old top-level TabBtn row + the inner [Overview|Browse] toggle — one
  *  consistent 4-peer bar for every brain (item 5). */
 function BrainDetailShell(
-  { name, brains, detailView, onSelectView, onSwitchBrain, onBack, onRequestClose, onDispatch, uncommitted }:
+  { name, brains, detailView, onSelectView, onSwitchBrain, onBack, onRequestClose, onDispatch, liveRun }:
   {
     name: string; brains: BrainSummary[] | null;
     detailView: DetailView; onSelectView: (v: DetailView) => void;
     onSwitchBrain: (n: string) => void; onBack: () => void;
-    onRequestClose?: () => void; onDispatch?: (msg: string) => boolean; uncommitted?: boolean;
+    onRequestClose?: () => void; onDispatch?: (msg: string) => boolean; liveRun?: boolean;
   },
 ) {
   // Review sub-tab badge: the pending count from the cheap gallery summary (zero
@@ -261,7 +261,7 @@ function BrainDetailShell(
             name={name}
             onRequestClose={onRequestClose}
             onGoToReview={() => onSelectView('review')}
-            uncommitted={uncommitted}
+            liveRun={liveRun}
           />
         )}
         {detailView === 'browse' && (
@@ -269,7 +269,7 @@ function BrainDetailShell(
             name={name}
             onRequestClose={onRequestClose}
             onGoToReview={() => onSelectView('review')}
-            uncommitted={uncommitted}
+            liveRun={liveRun}
             forceBrowse
           />
         )}
@@ -441,14 +441,14 @@ function Gallery(
 //       §① Ontology (3-layer×7-type) — the existing DddCard density=full IS the
 //          ontology + verdict (Gate-0 C046: relocated, not rebuilt); fixed FIRST.
 //       §② Need-You — a FIXED-POSITION action block (proposals→[Go to Review];
-//          uncommitted; reclaimable; sinking; all-zero → a muted "Nothing queued").
+//          liveRun; reclaimable; sinking; all-zero → a muted "Nothing queued").
 //       §③ 4 core-doc cards (PRODUCT/TECH/IMPROVEMENT/PROJECT) + [Weekly Report].
 //   • BROWSE (forceBrowse=true) — the real Projects/<name> file tree + Code Graph.
 
 function BrainView(
-  { name, onRequestClose, onGoToReview, uncommitted, forceBrowse = false }:
+  { name, onRequestClose, onGoToReview, liveRun, forceBrowse = false }:
   { name: string; onRequestClose?: () => void; onGoToReview?: () => void;
-    uncommitted?: boolean; forceBrowse?: boolean },
+    liveRun?: boolean; forceBrowse?: boolean },
 ) {
   const [showWeekly, setShowWeekly] = useState(false);
 
@@ -493,7 +493,7 @@ function BrainView(
         <BrainOverview
           detail={detail}
           review={review}
-          uncommitted={uncommitted}
+          liveRun={liveRun}
           onGoToReview={onGoToReview}
           onOpenFile={openFile}
           showWeekly={showWeekly}
@@ -507,9 +507,9 @@ function BrainView(
 // ── §Overview — fixed order: ① Ontology → ② Need-You → ③ 4 core-doc cards ───────
 
 function BrainOverview(
-  { detail, review, uncommitted, onGoToReview, onOpenFile, showWeekly, onToggleWeekly }:
+  { detail, review, liveRun, onGoToReview, onOpenFile, showWeekly, onToggleWeekly }:
   {
-    detail: BrainDetail; review: ReviewData | null; uncommitted?: boolean;
+    detail: BrainDetail; review: ReviewData | null; liveRun?: boolean;
     onGoToReview?: () => void; onOpenFile: (p: string) => void;
     showWeekly: boolean; onToggleWeekly: () => void;
   },
@@ -564,12 +564,12 @@ function BrainOverview(
       </div>
 
       {/* §② Need-You — FIXED-position block, never removed. The SINGLE needs-you
-          owner (run_115aa182): besides proposals + uncommitted it also surfaces
+          owner (run_115aa182): besides proposals + liveRun it also surfaces
           reclaimable + sinking (previously only shown by the §① FullBody needs-you,
           which is now suppressed via ontologyOnly to kill the duplicate block). */}
       <NeedYouBlock
         pending={pending}
-        uncommitted={uncommitted}
+        liveRun={liveRun}
         reclaimable={detail.health?.noise?.reclaimable ?? 0}
         sinking={detail.health?.sinking ?? 0}
         onGoToReview={onGoToReview}
@@ -590,15 +590,15 @@ function BrainOverview(
 }
 
 /** §② the fixed-position Need-You block — the SINGLE needs-you owner for the
- *  Overview (run_115aa182): proposals (interactive → Review) + uncommitted +
+ *  Overview (run_115aa182): proposals (interactive → Review) + liveRun +
  *  reclaimable + sinking. reclaimable/sinking moved here from the §① FullBody
  *  needs-you (now suppressed) so they're not lost when the duplicate is removed. */
 function NeedYouBlock(
-  { pending, uncommitted, reclaimable = 0, sinking = 0, onGoToReview }:
-  { pending: number; uncommitted?: boolean; reclaimable?: number; sinking?: number;
+  { pending, liveRun, reclaimable = 0, sinking = 0, onGoToReview }:
+  { pending: number; liveRun?: boolean; reclaimable?: number; sinking?: number;
     onGoToReview?: () => void },
 ) {
-  const hasWork = pending > 0 || !!uncommitted || reclaimable > 0 || sinking > 0;
+  const hasWork = pending > 0 || !!liveRun || reclaimable > 0 || sinking > 0;
   return (
     <div
       data-testid="brainhub-needyou"
@@ -624,10 +624,10 @@ function NeedYouBlock(
               </span>
             </button>
           )}
-          {uncommitted && (
-            <div data-testid="needyou-uncommitted" className="flex items-center gap-2 text-[11px] px-2 py-1">
+          {liveRun && (
+            <div data-testid="needyou-live-run" className="flex items-center gap-2 text-[11px] px-2 py-1">
               <span className="material-symbols-outlined icon-xs text-[#db8c3a]">pending_actions</span>
-              <span className="text-[var(--color-text-muted)]">uncommitted changes in this brain's subtree</span>
+              <span className="text-[var(--color-text-muted)]">a pipeline run in progress</span>
             </div>
           )}
           {reclaimable > 0 && (

@@ -149,13 +149,13 @@ const GALLERY: BrainSummary[] = [
     name: 'SwarmAI', kind: 'code-repo',
     sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: true, delivery: true, refresher: true },
     lifecycleStage: 'GROW',
-    health: { sinking: 3, pending: 0, uncommitted: true, lastChangeRelative: '2h ago' },
+    health: { sinking: 3, pending: 0, liveRun: true, lastChangeRelative: '2h ago' },
   },
   {
     name: 'AIDLC', kind: 'knowledge',
     sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: false, delivery: true, refresher: true },
     lifecycleStage: 'CREATE',
-    health: { sinking: 0, pending: 2, uncommitted: false, lastChangeRelative: '5d ago' },
+    health: { sinking: 0, pending: 2, liveRun: false, lastChangeRelative: '5d ago' },
   },
 ];
 
@@ -514,18 +514,18 @@ describe('BrainHub — Overview §② Need-You + §③ core-doc cards + Weekly (
     await waitFor(() => expect(screen.getByTestId('brainhub-review')).toBeTruthy());
   });
 
-  it('AC3: uncommitted (from gallery summary, NOT detail.health) surfaces in Need-You', async () => {
-    // SwarmAI gallery summary has uncommitted:true; detail.health has NO uncommitted (F3)
+  it('AC3: liveRun (from gallery summary, NOT detail.health) surfaces in Need-You', async () => {
+    // SwarmAI gallery summary has liveRun:true; detail.health has NO liveRun (F3)
     await openOverview();
-    expect(screen.getByTestId('needyou-uncommitted')).toBeTruthy();
+    expect(screen.getByTestId('needyou-live-run')).toBeTruthy();
   });
 
   it('AC3: no work → Need-You block still present with a muted "Nothing queued" line', async () => {
     // §② now also surfaces reclaimable + sinking (run_115aa182), so "no work" means
-    // ALL of pending/uncommitted/reclaimable/sinking are zero.
+    // ALL of pending/liveRun/reclaimable/sinking are zero.
     await openOverview(
       { health: { ...DETAIL.health!, escalationPending: 0, sinking: 0, noise: { reclaimable: 0, rate: 0 } } },
-      [{ ...GALLERY[0], health: { ...GALLERY[0].health, pending: 0, uncommitted: false } }, GALLERY[1]],
+      [{ ...GALLERY[0], health: { ...GALLERY[0].health, pending: 0, liveRun: false } }, GALLERY[1]],
     );
     expect(screen.getByTestId('brainhub-needyou')).toBeTruthy();       // always present
     expect(screen.getByTestId('needyou-empty')).toBeTruthy();

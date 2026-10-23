@@ -21,7 +21,7 @@ const TC: Record<EntryType, number> = {
 };
 const mk = (name: string, over: Partial<BrainSummary['health']> = {}, typeCounts?: Record<EntryType, number>): BrainSummary => ({
   name, kind: 'knowledge', sectionsPresent: SECTIONS, lifecycleStage: 'GROW',
-  health: { sinking: 0, pending: 0, uncommitted: false, lastChangeRelative: '1d ago', ...over },
+  health: { sinking: 0, pending: 0, liveRun: false, lastChangeRelative: '1d ago', ...over },
   typeCounts,
 });
 

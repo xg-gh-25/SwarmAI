@@ -13,7 +13,7 @@ the live workspace happened to contain.
 
 Key invariants under test:
   - AC1: brains list returns every real DDD project with live health signals
-    (sinking = dormant+archived count, pending = staged proposals, uncommitted
+    (sinking = dormant+archived count, pending = staged proposals, liveRun
     = git dirty, last_change = relative time) — NO stored metric, computed live.
   - AC2: brain detail returns the six sections (via ddd_paths SSOT) with real
     member files; ② canonical docs carry per-entry entry_type + decay_state that
@@ -193,7 +193,7 @@ class TestBrainsList:
         h = sw["health"]
         assert isinstance(h["sinking"], int) and h["sinking"] >= 0
         assert isinstance(h["pending"], int) and h["pending"] >= 0
-        assert isinstance(h["uncommitted"], bool)
+        assert isinstance(h["liveRun"], bool)
         assert isinstance(h["lastChangeRelative"], str)
 
         # lifecycle stage is one of the four canonical stages.
@@ -229,80 +229,6 @@ class TestBrainsList:
             f"collect() called {calls['n']}× for {n_projects} projects — "
             f"expected exactly 1 (aggregate-once-then-partition)"
         )
-
-    def test_git_status_batched_not_per_project(self, client, monkeypatch):
-        """Perf: GET /ddd/brains must resolve uncommitted-ness for all projects in ONE
-        whole-repo git status (_batch_dirty_project_dirs), NOT a per-project
-        _git_status_dirty fork. Count _git_status_dirty invocations during one GET —
-        the batched path calls it ZERO times (the batch supplies dirty_override)."""
-        import routers.ddd_brain as m
-
-        calls = {"per_project": 0, "batch": 0}
-        real_dirty = m._git_status_dirty
-        real_batch = m._batch_dirty_project_dirs
-
-        def counting_dirty(*a, **k):
-            calls["per_project"] += 1
-            return real_dirty(*a, **k)
-
-        def counting_batch(*a, **k):
-            calls["batch"] += 1
-            return real_batch(*a, **k)
-
-        monkeypatch.setattr(m, "_git_status_dirty", counting_dirty)
-        monkeypatch.setattr(m, "_batch_dirty_project_dirs", counting_batch)
-
-        resp = client.get("/api/ddd/brains")
-        assert resp.status_code == 200
-        n_projects = len(resp.json()["brains"])
-        assert n_projects >= 2, "test needs ≥2 projects to distinguish batch-vs-per-project"
-        assert calls["batch"] == 1, f"expected ONE batch git status, got {calls['batch']}"
-        # Batched path supplies dirty_override for every project → no per-project fork.
-        assert calls["per_project"] == 0, (
-            f"_git_status_dirty forked {calls['per_project']}× — the batch should have "
-            f"replaced all per-project git-status forks"
-        )
-        # And uncommitted must still be a real bool in the response (not dropped).
-        for b in resp.json()["brains"]:
-            assert isinstance(b["health"]["uncommitted"], bool)
-
-    def test_last_commit_batched_not_per_project(self, client, monkeypatch):
-        """Perf (run_3d371424): GET /ddd/brains must resolve last-commit time via the
-        SINGLE parallel batch helper (_parallel_last_commit_iso), NOT the serial
-        per-project _git_last_commit_iso fork on the request path. The batch mechanism
-        changed from the old `git log -n 2000 --name-only` whole-tree walk to a
-        per-project `git log -1` run in a thread pool (commit-time semantics preserved;
-        Gate-1 rejected fs-mtime), but the invariant is unchanged: the endpoint invokes
-        the batch ONCE and NEVER the serial per-project fork. Count invocations."""
-        import routers.ddd_brain as m
-
-        calls = {"per_project": 0, "batch": 0}
-        real_last = m._git_last_commit_iso
-        real_batch = m._parallel_last_commit_iso
-
-        def counting_last(*a, **k):
-            calls["per_project"] += 1
-            return real_last(*a, **k)
-
-        def counting_batch(*a, **k):
-            calls["batch"] += 1
-            return real_batch(*a, **k)
-
-        monkeypatch.setattr(m, "_git_last_commit_iso", counting_last)
-        monkeypatch.setattr(m, "_parallel_last_commit_iso", counting_batch)
-
-        resp = client.get("/api/ddd/brains")
-        assert resp.status_code == 200
-        n_projects = len(resp.json()["brains"])
-        assert n_projects >= 2, "test needs ≥2 projects to distinguish batch-vs-per-project"
-        assert calls["batch"] == 1, f"expected ONE parallel batch call, got {calls['batch']}"
-        assert calls["per_project"] == 0, (
-            f"_git_last_commit_iso forked {calls['per_project']}× on the request path — the "
-            f"parallel batch should have replaced all serial per-project git-log forks"
-        )
-        # lastChangeRelative must still be present for every brain (not dropped).
-        for b in resp.json()["brains"]:
-            assert "lastChangeRelative" in b["health"]
 
     def test_no_recall_heat_number_anywhere(self, client):
         """ref_count is dead → NO heat/crown/recall number in the payload (R30#4)."""
@@ -686,7 +612,7 @@ class TestHealthBlockInBrainDetail:
         pd.mkdir()
         summ = m._brain_summary(pd)
         assert set(summ["health"].keys()) == {
-            "sinking", "pending", "uncommitted", "lastChangeRelative"
+            "sinking", "pending", "liveRun", "lastChangeRelative"
         }
 
 
@@ -725,7 +651,7 @@ class TestUnifiedBrainStateBuilder:
         assert calls["n"] == 0, "gallery path called compute_reclaimable_noise — N-glob risk"
         # and the cheap health keys are all present
         assert set(state["health"].keys()) == {
-            "sinking", "pending", "uncommitted", "lastChangeRelative"
+            "sinking", "pending", "liveRun", "lastChangeRelative"
         }
 
     def test_detail_path_includes_noise(self, monkeypatch, tmp_path):
@@ -737,7 +663,7 @@ class TestUnifiedBrainStateBuilder:
         state = m.build_brain_state(pd, with_noise=True)
         h = state["health"]
         # cheap base still present (superset, not a different shape)
-        assert {"sinking", "pending", "uncommitted", "lastChangeRelative"} <= set(h.keys())
+        assert {"sinking", "pending", "liveRun", "lastChangeRelative"} <= set(h.keys())
         # detail metrics added
         assert "noise" in h and "trust" in h and "escalationPending" in h and "recall" in h
 
@@ -828,7 +754,7 @@ class TestUnifiedBrainStateBuilder:
         pd = tmp_path / "P"
         self._mk_typed_doc(pd)
         h = m.build_brain_state(pd, with_noise=False)["health"]
-        assert set(h.keys()) == {"sinking", "pending", "uncommitted", "lastChangeRelative"}
+        assert set(h.keys()) == {"sinking", "pending", "liveRun", "lastChangeRelative"}
 
     def test_recent_activity_excludes_undated_and_old(self, monkeypatch, tmp_path):
         """A '30d activity' number must count ONLY entries STAMPED within 30d.
@@ -1093,66 +1019,6 @@ class TestPerfDedupRun9af622ee:
         )
 
 
-class TestBatchDirtyProjectDirs:
-    """_batch_dirty_project_dirs must match per-project _git_status_dirty truth.
-
-    Regression guard (adversarial review): the porcelain -z parser used rec.strip(),
-    which ate the leading SPACE of the XY status field for any purely-UNSTAGED change
-    (X=space, e.g. ' M'), shifting the 'XY ' prefix and mangling the path → the record
-    was dropped → a genuinely DIRTY project was reported CLEAN. These build a real temp
-    git repo and assert the batch equals the per-project truth for each dirty shape.
-    """
-
-    def _git_ws(self, tmp_path):
-        import subprocess
-        ws = tmp_path
-        for name in ("Alpha", "Beta"):
-            d = ws / "Projects" / name
-            d.mkdir(parents=True)
-            (d / "PRODUCT.md").write_text(f"# {name}\ncommitted\n")
-        subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t"], cwd=ws, check=True)
-        subprocess.run(["git", "config", "user.name", "t"], cwd=ws, check=True)
-        subprocess.run(["git", "add", "-A"], cwd=ws, check=True)
-        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=ws, check=True)
-        return ws
-
-    def test_unstaged_modified_project_is_reported_dirty(self, tmp_path, monkeypatch):
-        # The exact bug: a purely-unstaged edit (porcelain ' M ...', X=space).
-        import routers.ddd_brain as m
-        ws = self._git_ws(tmp_path)
-        (ws / "Projects" / "Alpha" / "PRODUCT.md").write_text("# Alpha\nEDITED unstaged\n")
-        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
-        dirs = [ws / "Projects" / "Alpha", ws / "Projects" / "Beta"]
-        batch = m._batch_dirty_project_dirs(dirs)
-        assert batch == {"Alpha"}, f"unstaged-modified Alpha must be dirty, got {batch}"
-        # Batch MUST agree with the per-project fork for every project (the correctness
-        # the perf-only test never checked).
-        for d in dirs:
-            assert (d.name in batch) == m._git_status_dirty(d), \
-                f"batch/per-project disagree for {d.name}"
-
-    def test_cross_project_rename_marks_both_sides(self, tmp_path, monkeypatch):
-        import subprocess
-        import routers.ddd_brain as m
-        ws = self._git_ws(tmp_path)
-        # rename Alpha/PRODUCT.md -> Beta/moved.md (staged rename spans two projects)
-        subprocess.run(["git", "mv", "Projects/Alpha/PRODUCT.md", "Projects/Beta/moved.md"],
-                       cwd=ws, check=True)
-        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
-        dirs = [ws / "Projects" / "Alpha", ws / "Projects" / "Beta"]
-        batch = m._batch_dirty_project_dirs(dirs)
-        assert "Beta" in batch, f"rename destination Beta must be dirty, got {batch}"
-        assert "Alpha" in batch, f"rename origin Alpha must be dirty (was dropped by the bug), got {batch}"
-
-    def test_clean_repo_returns_empty_set_not_none(self, tmp_path, monkeypatch):
-        import routers.ddd_brain as m
-        ws = self._git_ws(tmp_path)
-        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
-        dirs = [ws / "Projects" / "Alpha", ws / "Projects" / "Beta"]
-        assert m._batch_dirty_project_dirs(dirs) == set(), "clean repo → empty set (success), not None"
-
-
 class TestBrainDescription:
     """Item 2: BrainSummary carries a one-line `description` read from aim.json."""
 
@@ -1206,55 +1072,6 @@ class TestBrainDescription:
         assert "description" in state and state["description"] is None
 
 
-class TestParallelLastCommit:
-    """Item 1 (perf): last-commit time comes from a PARALLEL per-project `git log -1`
-    (preserving git COMMIT-time semantics — NOT fs mtime, which Gate-1 rejected as
-    breaking the calm-card's meaning for uncommitted/checkout), replacing the single
-    slow `git log -n 2000 --name-only` whole-tree walk."""
-
-    def _git_ws(self, tmp_path):
-        import subprocess
-        ws = tmp_path
-        subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t"], cwd=ws, check=True)
-        subprocess.run(["git", "config", "user.name", "t"], cwd=ws, check=True)
-        for name in ("Alpha", "Beta"):
-            pd = ws / "Projects" / name
-            pd.mkdir(parents=True)
-            (pd / "PRODUCT.md").write_text(f"# {name}\n", encoding="utf-8")
-        subprocess.run(["git", "add", "-A"], cwd=ws, check=True)
-        subprocess.run(["git", "commit", "-qm", "init"], cwd=ws, check=True)
-        return ws
-
-    def test_returns_iso_per_committed_project(self, tmp_path, monkeypatch):
-        import routers.ddd_brain as m
-        ws = self._git_ws(tmp_path)
-        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
-        dirs = [ws / "Projects" / "Alpha", ws / "Projects" / "Beta"]
-        out = m._parallel_last_commit_iso(dirs)
-        assert out is not None
-        assert out.get("Alpha") and out.get("Beta"), f"both committed projects have an ISO time, got {out}"
-
-    def test_uncommitted_project_absent_from_map(self, tmp_path, monkeypatch):
-        import routers.ddd_brain as m
-        ws = self._git_ws(tmp_path)
-        # a brand-new, never-committed project dir
-        (ws / "Projects" / "Gamma").mkdir(parents=True)
-        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
-        dirs = [ws / "Projects" / "Alpha", ws / "Projects" / "Gamma"]
-        out = m._parallel_last_commit_iso(dirs)
-        assert out is not None
-        assert out.get("Alpha")
-        assert "Gamma" not in out or not out.get("Gamma"), "never-committed project → no commit time (falls to 'never')"
-
-    def test_no_git_returns_none(self, tmp_path, monkeypatch):
-        import routers.ddd_brain as m
-        # no .git → cannot run → None (caller falls back per-project)
-        monkeypatch.setattr(m, "_workspace_root", lambda: tmp_path)
-        (tmp_path / "Projects" / "Alpha").mkdir(parents=True)
-        assert m._parallel_last_commit_iso([tmp_path / "Projects" / "Alpha"]) is None
-
-
 class TestListBrainsLegDegradation:
     """Item 1 (Gate-2 hardening): list_brains gathers its 3 producer legs with
     return_exceptions=True — an UNFORESEEN raise in ONE leg must degrade THAT leg to
@@ -1276,18 +1093,17 @@ class TestListBrainsLegDegradation:
         subprocess.run(["git", "commit", "-qm", "init"], cwd=ws, check=True)
         return ws
 
-    def test_last_commit_leg_raise_degrades_not_500(self, tmp_path, monkeypatch, caplog):
+    def test_runs_leg_raise_degrades_not_500(self, tmp_path, monkeypatch, caplog):
         import asyncio
         import logging
         import routers.ddd_brain as m
         ws = self._one_brain_ws(tmp_path)
         monkeypatch.setattr(m, "_workspace_root", lambda: ws)
 
-        # Force the last-commit leg to raise an UNFORESEEN error (bypasses its own
-        # internal try/except by raising from the helper entry itself).
-        def _boom(_dirs):
-            raise RuntimeError("git subsystem exploded")
-        monkeypatch.setattr(m, "_parallel_last_commit_iso", _boom)
+        # Force the runs leg to raise an UNFORESEEN error.
+        def _boom(_ws):
+            raise RuntimeError("run index exploded")
+        monkeypatch.setattr(m, "_run_facts", _boom)
 
         with caplog.at_level(logging.WARNING, logger="routers.ddd_brain"):
             result = asyncio.run(m.list_brains())
@@ -1296,7 +1112,7 @@ class TestListBrainsLegDegradation:
         # no 500: the gallery still lists the brain
         assert any(b["name"] == "Alpha" for b in brains), "gallery must still render despite a leg raise"
         # the raised leg is logged (degrade-observable, not silent)
-        assert any("last_commit" in r.message and "degraded" in r.message for r in caplog.records), (
+        assert any("runs" in r.message and "degraded" in r.message for r in caplog.records), (
             "a leg raise must be LOGGED as degraded, not silently swallowed"
         )
 
@@ -1308,8 +1124,7 @@ class TestGallerySlowLog:
     def _stub(self, monkeypatch, tmp_path):
         import routers.ddd_brain as m
         monkeypatch.setattr(m, "_list_project_dirs", lambda: [])
-        monkeypatch.setattr(m, "_batch_dirty_project_dirs", lambda dirs: set())
-        monkeypatch.setattr(m, "_parallel_last_commit_iso", lambda dirs: {})
+        monkeypatch.setattr(m, "_run_facts", lambda ws: {})
         monkeypatch.setattr(m, "_workspace_root", lambda: tmp_path)
         monkeypatch.setattr(m, "get_pinned_projects", lambda: [])
         return m
@@ -1322,7 +1137,7 @@ class TestGallerySlowLog:
         with caplog.at_level(logging.WARNING, logger=m.logger.name):
             asyncio.run(m.list_brains())
         msg = next(r.getMessage() for r in caplog.records if "brains gallery slow" in r.getMessage())
-        for leg in ("pending", "dirty", "last_commit", "summaries"):
+        for leg in ("pending", "runs", "summaries"):
             assert leg in msg
 
     def test_fast_gallery_logs_nothing(self, monkeypatch, tmp_path, caplog):

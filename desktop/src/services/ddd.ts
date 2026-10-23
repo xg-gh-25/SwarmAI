@@ -21,9 +21,9 @@ export interface BrainHealth {
   sinking: number;
   /** count of staged risky proposals awaiting a human decision */
   pending: number;
-  /** git dirty in this project subtree */
-  uncommitted: boolean;
-  /** human "N ago" of the last commit touching this project (computed live) */
+  /** a pipeline run of this project is in progress (its runs, last 30 days) */
+  liveRun: boolean;
+  /** human "N ago" of this project's newest landed run in the last 30 days, "--" when none */
   lastChangeRelative: string;
 }
 

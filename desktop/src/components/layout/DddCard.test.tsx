@@ -19,8 +19,8 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { DddCard } from './DddCard';
 import type { BrainHealth, DetailHealth, EntryType } from '../../services/ddd';
 
-const CHEAP: BrainHealth = { sinking: 2, pending: 1, uncommitted: true, lastChangeRelative: '3h ago' };
-const CHEAP_CLEAN: BrainHealth = { sinking: 0, pending: 0, uncommitted: false, lastChangeRelative: '5d ago' };
+const CHEAP: BrainHealth = { sinking: 2, pending: 1, liveRun: true, lastChangeRelative: '3h ago' };
+const CHEAP_CLEAN: BrainHealth = { sinking: 0, pending: 0, liveRun: false, lastChangeRelative: '5d ago' };
 const METRICS: DetailHealth = {
   noise: { reclaimable: 5, rate: 0.1 },
   sinking: 0,
@@ -121,10 +121,10 @@ describe('DddCard — compact (gallery, verdict-first two-zone)', () => {
     expect(screen.getByTestId('dddcard-needs-actionable')).toBeTruthy();
     expect(screen.queryByTestId('dddcard-cheap-sinking')).toBeNull();
     expect(screen.queryByTestId('presence-SwarmAI-knowledge')).toBeNull();
-    // CHEAP = { sinking:2, pending:1, uncommitted:true } → all three surfaced
+    // CHEAP = { sinking:2, pending:1, liveRun:true } → all three surfaced
     expect(card.textContent).toContain('proposals awaiting review');
     expect(card.textContent).toContain('sinking');
-    expect(card.textContent).toContain('uncommitted');
+    expect(card.textContent).toContain('run in progress');
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     expect(onOpen).toHaveBeenCalledWith('SwarmAI');
   });
