@@ -334,6 +334,50 @@ obvious story, read logs LAST. A stale comment is legibility decay, not evidence
 - **Colors**: Always use `bg-[var(--color-*)]`, never hardcoded dark theme colors
 - **i18n**: `i18next` with locales in `desktop/src/i18n/locales/{en,zh}.json`
 
+### Nav visual system (Left Nav, overlays, Workspace)
+
+One type scale, one palette, one button scale for the Left Nav, OverlayHost and every
+overlay (design `docs/design/left-nav-backend-and-visual-system.md` V1–V6):
+
+- **Type**: six steps only, `text-meta/small/body/heading/title/display` = 11/12/13/14/16/20px
+  (each with its line height). No `text-[Npx]`, no inline `fontSize`, no Tailwind
+  `text-xs…2xl`. Weights 400 and 600 only (no `font-medium` / `font-bold`).
+- **Colour**: theme variables only — `--color-status-*`, `--color-primary`, `--color-text*`,
+  zone accents `--color-zone-cognitive/work/system`. A colour with no role gets ONE token in
+  `index.css` (`--color-on-accent`, `--color-scrim[-medium|-strong]`, `--shadow-overlay`, …);
+  a tinted surface is `color-mix(<status colour> N%, transparent)`, never a dark-only hex.
+- **Icons**: Material Symbols, never colour emoji (comments included).
+- **Buttons**: labelled → `btn-sm/md/lg` + one look class; icon-only → `icon-btn` (icon-sm)
+  or `icon-btn-lg` (icon-md). Tabs, segments and switches carry `role="tab"` / `"radio"` /
+  `"switch"`.
+- **Shared parts**: `components/overlay/index.tsx` (`Stat`, `SectionLabel`, `Tabs`,
+  `Segmented`, `StatusBadge`, `Hint`, `tableHeadClass`, `ROW_1/ROW_2`) and
+  `components/layout/OverlayState.tsx` (loading / error / empty). Use them, don't restyle.
+- **Guard**: `desktop/src/__tests__/navVisualSystem.test.ts` counts bypasses per file and
+  must equal `KNOWN`, which is `{}`. A new nav / overlay file is added to its `FILES`.
+
+### Workspace overlay — what it is
+
+The Workspace nav item is where the **user browses their working directories by hand**
+(design `docs/design/workspace-working-location.md` v5). It is not a view of what the agent
+is doing.
+
+- **Locations**: SwarmWS (always first, default) plus each repo a DDD declares in
+  `bindings.yaml` (`worktree`) that is a main checkout (`.git` is a directory) with
+  `.git/logs/HEAD` inside 30 days. No other source (not runs, not the chat's repo).
+- **Local main only**: never a pipeline run's worktree; bound to no session and no run (N
+  runs may be in flight). Repo locations are read-only — write endpoints refuse `location`.
+- **Standalone**: each location has its own tab, stats, tree, filter and error; only the
+  shown location is fetched (`/workspace/locations` stats only, `/workspace/summary?location=`
+  is one location).
+- **Light stats only**: `N changed`, per-folder `changed_count`, last commit time. Never
+  "in progress".
+- **No polling**: fetched on open, on refresh (`fresh=true`) and after a write.
+  `ExplorerProvider` lives inside the overlay, not in the app shell.
+- **Chat-safe**: its endpoints run on the `nav` pool (`executors.run_nav`) and every git read
+  sets `GIT_OPTIONAL_LOCKS=0` — the rule for every Left Nav backend
+  (`tests/test_nav_pool_and_git_locks.py`).
+
 ### Output Format Protocol
 
 Two consumers, two formats. **Never cross the streams.**
