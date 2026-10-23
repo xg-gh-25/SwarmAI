@@ -1059,20 +1059,27 @@ Trace facts, or bypass Pipeline evidence and safety Gates.
 - Introduce the Host Command / Control Ledger and materialized Flow projection.
 - Register existing inline Pipeline runs without changing their execution behavior.
 
-### Phase 1b — Pipeline protocol cutover (prerequisite for all later execution phases)
+### Phase 1b — Pipeline protocol cutover (lands together with the Hive executor, Phase 4)
+
+Execution-plane phasing is specified in `docs/design/pipeline-run-conductor-v1.md` §12,
+which supersedes the order below where they differ.
 
 - Atomically replace the combined `land` transition with the four distinct facts
   (`pipeline_verdict`, `result_candidate`, `result_acceptance`, `integration_landing`).
 - Update lifecycle, event schema, Run Audit, landing, inline execution and migrations together.
-- Route current Chat-inline runs through Host verification and the CAS integration transaction.
+- Route Chat-inline and local background runs through Host verification and the CAS
+  integration transaction at the same time.
 - Ship conformance tests proving the old combined landing path is gone and quality verdict is
   immutable under override.
-- Phases 2 and 4 must not start until this cutover is complete.
+- The cutover is required before any Hive Run, not before local background execution: the
+  Local Worker runs in the same daemon with the same hooks, signing and landing as an inline
+  run, so it adds no second completion path.
 
-### Phase 2 — Local background execution (depends on Phase 1b)
+### Phase 2 — Local background execution (before the cutover, on the current v1 landing)
 
 - Add a first-class Pipeline session kind and dedicated background worker lifecycle on the
-  post-cutover state machine.
+  current v1 state machine; it moves to the post-cutover state machine with every other
+  placement in Phase 1b.
 - Submit scheduled and Slack Pipeline work through the same Conductor and Host path.
 - Preserve the origin Chat while the worker runs independently.
 - Add Human command routing, cancellation, recovery, and Control Center read views.
@@ -1084,7 +1091,7 @@ Trace facts, or bypass Pipeline evidence and safety Gates.
 - Reuse existing transcripts and Pipeline evidence by reference rather than duplication.
 - Measure event volume, write overhead, query latency and Chat-path impact.
 
-### Phase 4 — Hive executor protocol (depends on Phase 1b)
+### Phase 4 — Hive executor protocol (ships with the Phase 1b cutover)
 
 - Define executor registration and capability attestations.
 - Implement Host/Hive Stores, Run Exchange, source and result bundles, event replay,
@@ -1115,7 +1122,7 @@ Trace facts, or bypass Pipeline evidence and safety Gates.
 ### Execution and isolation
 
 - Inline, local background and Hive remote use one post-cutover Pipeline state machine and evidence semantics.
-- The protocol cutover (Phase 1b) lands as one transition; no build precedes it with a second execution path.
+- The protocol cutover (Phase 1b) lands as one transition for every placement, no later than the first Hive Run; no completion path other than today's v1 landing exists before it.
 - The old combined `land` transition is absent; verdict, candidate, acceptance and integration are distinct facts.
 - Every result candidate, including inline and local, passes Host verification and CAS integration.
 - A Run has at most one active lease and one active Attempt owner.
