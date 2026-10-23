@@ -500,9 +500,11 @@ def _git_changed_set(repo: Path) -> set[str]:
     also what the run committed there since it forked (B6: a commit does not hide it)."""
     out: set[str] = set()
     fork = _run_fork_point(repo)
-    committed = (("diff", "--name-only", "--no-renames", fork, "HEAD"),) if fork else ()
-    for args in (("diff", "--name-only", "HEAD"), ("ls-files", "--others", "--exclude-standard"),
-                 *committed):
+    # `git diff <commit>` compares the working tree with that commit: with the fork
+    # point it covers what was committed since the fork AND what is staged or unstaged
+    # now, in one process instead of two (commit 2, efficiency)
+    for args in (("diff", "--name-only", "--no-renames", fork or "HEAD"),
+                 ("ls-files", "--others", "--exclude-standard")):
         for line in (_git(repo, *args) or "").splitlines():
             if line.strip():
                 out.add(line.strip())

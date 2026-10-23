@@ -10,6 +10,7 @@ Public symbols:
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -461,37 +462,44 @@ class RunEngine:
         return entry
 
     def _fork_base(self, name: str, root: str) -> str:
-        """The run's base for *root* (facts.resolve_base): never a guess."""
+        """The run's base for *root* (facts.resolve_base): never a guess. Resolved once
+        per engine for the same worktrees (3 git processes each time)."""
         from core.run_protocol import facts
+        state = tuple(sorted(self.effective_repos().items()))
+        if getattr(self, "_bases", (None,))[0] != state:
+            self._bases = (state, {})
+        memo = self._bases[1]
+        if (name, root) in memo:
+            return memo[(name, root)]
         branches = self._read_json(self.store.paths.run / "integration_branches.json", {}) or {}
         try:
-            return facts.resolve_base(root, self.contract["repo_roots"].get(name),
+            base = facts.resolve_base(root, self.contract["repo_roots"].get(name),
                                       branches.get(name))
         except facts.FactError as exc:
             raise EngineError(str(exc)) from exc
-
-    def _changed_by_repo(self, repos: Mapping[str, str]) -> dict[str, list[str]]:
-        """Every path the run changed since its base, per repo: committed in the worktree
-        (B6), staged, unstaged and untracked. A repo whose base cannot be named is left
-        out (facts: never a guess); the checks that need it then fail."""
-        out: dict[str, list[str]] = {}
-        for name, root in repos.items():
-            try:
-                base = self._fork_base(name, root)
-            except EngineError:
-                continue
-            paths = _git(root, "-c", "core.quotepath=off", "diff", "--name-only",
-                         "--no-renames", base, "HEAD").splitlines()
-            # name-only listings: _git strips its output, so a porcelain status line's
-            # leading space would cost the first path a character
-            paths += _git(root, "-c", "core.quotepath=off", "diff", "--name-only",
-                          "--no-renames", "HEAD").splitlines()
-            paths += _git(root, "-c", "core.quotepath=off", "ls-files", "--others",
-                          "--exclude-standard").splitlines()
-            out[name] = sorted({p for p in paths if p})
-        return out
+        memo[(name, root)] = base
+        return base
 
     def _current_code(self, expected: Sequence[str]):
+        """CodeFacts (commit 2, efficiency): computed once per engine (one command) for
+        a given place of the code — the repos' worktrees and, after landing, the landed
+        commits — not once per check: a command recomputed them up to 3 times, 11 git
+        processes each. Within one command only the command itself moves the code, and
+        each such move (a worktree made or restored, a landing) changes this key. Code
+        an agent edits while a command runs is the next command's input."""
+        state = self.projection(allow_pending=True)
+        key = (tuple(expected), tuple(sorted(self.effective_repos().items())),
+               state.get("landing"),
+               tuple(sorted(self.landed_commits().items()))
+               if state.get("landing") in ("landed", "human_override") else ())
+        cached = getattr(self, "_code_facts", None)
+        if cached is not None and cached[0] == key:
+            return copy.deepcopy(cached[1])
+        value = self._compute_current_code(expected)
+        self._code_facts = (key, copy.deepcopy(value))
+        return value
+
+    def _compute_current_code(self, expected: Sequence[str]):
         """Where each repo's current code is (conformance K1, review round 1 #2):
 
         - a repo this run LANDED: the landed commit (its tree minus the run's REPORT,
@@ -535,7 +543,11 @@ class RunEngine:
                 code_trees[name] = git_tree.write_tree(root, reserved, {})
                 existing |= set(_git(root, "ls-files").splitlines())
                 bases[name] = self._fork_base(name, root)
-                changed[name] = self._changed_by_repo({name: root}).get(name, [])
+                # the tree already holds committed, staged, unstaged and untracked
+                # changes (git_tree adds -A on a private index): one diff against it
+                changed[name] = sorted(p for p in _git(
+                    root, "-c", "core.quotepath=off", "diff", "--name-only", "--no-renames",
+                    bases[name], code_trees[name]).splitlines() if p)
             except InfrastructureError:
                 raise                   # the run's infrastructure, not an unknown fact (F11)
             except (EngineError, git_tree.GitTreeError) as exc:

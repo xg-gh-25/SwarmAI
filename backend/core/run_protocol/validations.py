@@ -8,10 +8,11 @@ Public symbols:
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import re
 import subprocess
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
 
 CALL_TYPES = frozenset({"build", "lint", "typecheck", "security_scan"})
@@ -68,29 +69,47 @@ def validate_manifest(value: Any) -> dict[str, Any]:
 
 
 def load_manifest(repo: str, base: str, *, read_git: Callable[[str, str], bytes] | None = None) -> dict[str, Any]:
-    """Read ``validations.json`` from *base*, never from the run's modified tree."""
+    """Read ``validations.json`` from *base*, never from the run's modified tree. A
+    commit's content never changes, so the git reading of one (repo, base) is kept for
+    the process (commit 2: two git processes per check context)."""
     if not isinstance(base, str) or not re.fullmatch(r"[0-9a-f]{40}", base):
         raise ValidationError("base must be a full git commit id")
     if read_git is None:
-        def read_git(root: str, spec: str) -> bytes:
-            rev, _, path = spec.partition(":")
-            try:
-                listed = subprocess.run(
-                    ["git", "-C", root, "ls-tree", "--name-only", rev, "--", path],
-                    check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15,
-                ).stdout.strip()
-            except (OSError, subprocess.SubprocessError) as exc:
-                raise ValidationError(f"cannot read base validation manifest: {exc}") from exc
-            if not listed:   # the base has no manifest: it requires nothing (G-2)
-                return b'{"schema": 1, "entries": []}'
-            try:
-                return subprocess.run(
-                    ["git", "-C", root, "show", spec], check=True,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15,
-                ).stdout
-            except (OSError, subprocess.SubprocessError) as exc:
-                raise ValidationError(f"cannot read base validation manifest: {exc}") from exc
-    raw = read_git(repo, f"{base}:validations.json")
+        key = (str(Path(repo).resolve()), base)
+        if key not in _MANIFESTS:
+            if len(_MANIFESTS) >= 256:          # a long-lived daemon: keep it bounded
+                _MANIFESTS.clear()
+            _MANIFESTS[key] = _read_manifest(repo, base)
+        return copy.deepcopy(_MANIFESTS[key])
+    return _parse_manifest(read_git(repo, f"{base}:validations.json"))
+
+
+_MANIFESTS: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def _read_manifest(repo: str, base: str) -> dict[str, Any]:
+    def read_git(root: str, spec: str) -> bytes:
+        rev, _, path = spec.partition(":")
+        try:
+            listed = subprocess.run(
+                ["git", "-C", root, "ls-tree", "--name-only", rev, "--", path],
+                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValidationError(f"cannot read base validation manifest: {exc}") from exc
+        if not listed:   # the base has no manifest: it requires nothing (G-2)
+            return b'{"schema": 1, "entries": []}'
+        try:
+            return subprocess.run(
+                ["git", "-C", root, "show", spec], check=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15,
+            ).stdout
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValidationError(f"cannot read base validation manifest: {exc}") from exc
+    return _parse_manifest(read_git(repo, f"{base}:validations.json"))
+
+
+def _parse_manifest(raw: bytes) -> dict[str, Any]:
     try:
         value = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:

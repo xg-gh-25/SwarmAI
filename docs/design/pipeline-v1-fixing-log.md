@@ -415,3 +415,31 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
   - blob 内容被替换后仍会被渲染：新增 `AuditStore.read_blob(digest)`，统一校验文件名和 SHA-256，不匹配按读不出处理。REVIEW/FIXING_SPEC、REPORT 拷贝、land 时读取的 REPORT、hook 的落地卡片都改走它。
   - 事件化后丢了 §B6 的 solution 和 evidence_plan：address 的条目接受 `solution`（文字）和 `evidence_plan`（{type, ref?}，type ∈ test/probe/diff_assertion/refuted），写入签名事件；FIXING_SPEC 分别渲染 Cause、Solution、Evidence plan 和 Hunk。
   - FIXING_SPEC 渲染失败被记成 REVIEW：两份文档分开渲染，各自记录失败。表格单元和模型写的文字统一经过 audit 的纯文本编码。
+
+## 17. 收尾 commit 2：效率（r6 §2.1）
+
+**测量方法：** 用 `$KIROCREW_SCRATCH/friction*` 的 rig 跑真实 run，每个配置一次，冷启动。机器负载约 1.5–3/核，墙钟时间波动很大，同一命令的两次测量最多差 70%；git 进程数是确定的，以它为准。
+
+| | direct 改前 | direct 改后 | full 改前 | full 改后 |
+|---|---:|---:|---:|---:|
+| git 子进程（整个 run） | 293 | 201 | 389 | 223 |
+| `status`（有 worktree 时）的 git 子进程 | 16 | 11 | 16 | 11 |
+| `land` 的 git 子进程 | 70 | 33 | 70 | 33 |
+| `stage-complete` 的 git 子进程 | 16 | 11 | 32 | 11 |
+| `pipeline_test` 每次调用的 git 子进程 | 32 | 28 | 32 | 28 |
+| `land` 墙钟时间 | 2.0 s | 0.8–0.9 s | 2.0 s | 1.1–1.4 s |
+
+**改动：**
+- **CodeFacts：** 每个 engine（也就是一个命令）对同一处代码只计算一次。键为期望的 repo、各 worktree、landing 状态和已落地的 commit；命令自己移动代码时（建 worktree、restore、落地）键会变，于是重算。changed paths 改为对 code_tree 做一次 `git diff base tree`，原先是三次调用的并集。tree 由私有 index 上的 `add -A` 得到，所以已提交、已暂存、未暂存和未跟踪的改动都在里面。
+- **fork base：** 同一组 worktree 只解析一次。
+- **base 的 validations.json：** 按 (repo, commit) 在进程内缓存解析结果，上限 256 条，返回副本。commit 的内容不会变，所以这个缓存不会过期。
+- **`pipeline_test` 的 changed set：** `git diff <fork|HEAD>` 已经覆盖"fork 以来已提交"和"当前已暂存或未暂存"，再加一次未跟踪文件，共两次调用，原先三次。
+- **删除：** `engine._changed_by_repo`，已没有调用方。
+
+**没有做的（审查 f18dbe20 的 HIGH 指出了原因）：**
+- 曾尝试两种做法：按文件字节缓存已验签的事件，以及让已验证过的 chain 跳过重验。
+- 审查证明，原地修改返回的 dict 就能绕过验签。实测整条 56 条事件的链验签只要 1.2 ms，解析只要 0.2 ms，比 deepcopy 一次（0.4 ms）还便宜。
+- 收益不到毫秒级，所以两者都撤掉：日志照旧每次全量读取并验签。
+- r6 §2.1 里的 EventSnapshot 和批量 append 同样不做。理由是数据：一个 run 的事件读写在关键路径里只占毫秒级，时间都花在 git 进程和 pytest 上。
+
+**预算：** `status` 的目标是不超过 150 ms，没有达到。它在有 worktree 时仍需 11 个 git 进程：写 tree 4 个、ls-files 1 个、fork base 3 个、diff 1 个、manifest 2 个，负载下约 250–450 ms。再往下压要改 `git_tree.write_tree`（4 个进程），留到 NE-0 的真实数据出来后再决定是否值得。
