@@ -23,6 +23,7 @@ from typing import Any, Mapping, Sequence
 from core import evidence_seal
 from core.run_protocol import events as protocol_events
 from core.run_protocol.final import build_repo_final, call_hash
+from core.run_protocol.store import NEXT
 from core.run_protocol.validations import load_manifest, manifest_digest, required_for
 from utils.file_lock import flock_exclusive, flock_unlock
 
@@ -707,7 +708,7 @@ class V1Runner:
                          "conflict_type": "probe_changed_tree",
                          "first_hash": hashlib.sha256(before.encode()).hexdigest(),
                          "new_hash": hashlib.sha256(after.encode()).hexdigest()},
-                ordinal=len(self._store.read_events()) + 1)
+                ordinal=NEXT)
         verdict = probe_protocol.evaluate_result(
             probe, rc=None if timed_out else rc, stdout=stdout, timed_out=timed_out,
             overflow=overflow, tree_changed=after != before)

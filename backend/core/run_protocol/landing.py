@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from core.run_protocol import auth, checks, git_tree, tree
-from core.run_protocol.store import AuditStore
+from core.run_protocol.store import NEXT, AuditStore
 
 
 class LandingError(RuntimeError):
@@ -232,7 +232,7 @@ def _record_double_consume(store: AuditStore, request_id: str, auth_event_id: st
     try:
         store.append_new(
             writer=store.authority.writer("cli"), kind="integrity", at=at,
-            ordinal=len(store.read_events()) + 1,
+            ordinal=NEXT,
             payload={"conflict_id": f"auth_consumed:{auth_event_id}:{len(store.read_events())}",
                      "conflict_type": "auth_consumed_twice",
                      "first_hash": auth_event_id, "new_hash": request_id})
@@ -754,7 +754,7 @@ def execute_request(
         # signed evidence of what moved, before the person sees the error (K2)
         store.append_new(
             writer=store.authority.writer("cli"), kind="partial_land", at=at,
-            stage="deliver", attempt=1, ordinal=len(store.read_events()) + 1,
+            stage="deliver", attempt=1, ordinal=NEXT,
             payload={"landed": dict(sorted(exc.landed.items())), "failed": exc.failed,
                      "detail": str(exc)[:300], "auth_consumed_event_id": consumed["event_id"],
                      **({"unsettled": list(exc.unsettled)} if exc.unsettled else {})})
@@ -764,7 +764,7 @@ def execute_request(
                for event in store.read_events()):
         store.append_new(
             writer=store.authority.writer("cli"), kind="land", at=at,
-            stage="deliver", attempt=1, ordinal=len(store.read_events()) + 1,
+            stage="deliver", attempt=1, ordinal=NEXT,
             payload={"landing": "human_override", "commit": next(iter(commits.values())),
                      "commits": dict(sorted(commits.items())),
                      **({"unsettled": list(commits.unsettled)}

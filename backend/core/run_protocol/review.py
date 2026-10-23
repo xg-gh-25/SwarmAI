@@ -248,8 +248,9 @@ class ReviewOrchestrator:
         self._atomic(path, prompt)
         return {"event": event, "prompt": prompt, "path": str(path), "sha": digest}
 
-    def findings(self) -> list[dict[str, Any]]:
-        return fold_findings(self.store.read_events(), self.store.authority)
+    def findings(self, events: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        return fold_findings(self.store.read_events() if events is None else events,
+                             self.store.authority)
 
     def clusters(self) -> list[dict[str, Any]]:
         return cluster_findings(self.findings())
@@ -427,14 +428,14 @@ class ReviewOrchestrator:
         return "R2 ONLY — review these addressed findings, not the whole diff:\n" + json.dumps(
             payload, ensure_ascii=False, sort_keys=True, indent=2)
 
-    def render_review(self) -> str:
+    def render_review(self, events: list[dict[str, Any]] | None = None) -> str:
         """REVIEW.md, from events only (design §E2, conformance F20): each dispatch with
         its prompt sha and parse state, each finding with its R2 status, its
         reclassification and whether that was confirmed, and the event that decided it;
         the recorded checks; and the rules by which the review checks decide."""
         from core.run_protocol import checks as check_registry
-        events = self.store.read_events()
-        findings = self.findings()
+        events = self.store.read_events() if events is None else events
+        findings = self.findings(events)
         handouts = {row["event_id"]: row for row in events if row["kind"] == "handout"}
         answers = {row["payload"].get("handout_event_id"): row
                    for row in events if row["kind"] == "answer"}
@@ -478,16 +479,16 @@ class ReviewOrchestrator:
                              + " and ".join(effect_text.get(e, e) for e in effects))
         return "\n".join(lines).rstrip() + "\n"
 
-    def render_fixing_passes(self) -> str | None:
+    def render_fixing_passes(self, events: list[dict[str, Any]] | None = None) -> str | None:
         """FIXING_SPEC.md from events (design §B6, F-10): one section per fix pass —
         its clusters (the ±10-line groups of what the pass addressed), the hunk and cause
         the fixer gave, refutations and reclassifications, and each finding's result
         (folded state + the proof's evidence type). None when no pass exists."""
-        events = self.store.read_events()
+        events = self.store.read_events() if events is None else events
         passes = sorted({e["payload"]["pass"] for e in events if e.get("kind") == "address"})
         if not passes:
             return None
-        rows = {row["canonical_id"]: row for row in self.findings()}
+        rows = {row["canonical_id"]: row for row in self.findings(events)}
         lines = ["# Fixing Spec", ""]
         for number in passes:
             mine = [e for e in events
@@ -536,17 +537,26 @@ class ReviewOrchestrator:
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
+    @staticmethod
+    def _events_line(events: list[dict[str, Any]]) -> str:
+        """The projection's last line (r6 §2.2): the very events its body was rendered
+        from (one read serves both, so the line never names events the body lacks)."""
+        tail = events[-1]["event_id"] if events else "none"
+        return f"\n<!-- rendered from {len(events)} events, last {tail} -->\n"
+
     def write_review(self) -> str:
         path = self.run_dir / "REVIEW.md"
-        self._atomic(path, self.render_review())
+        events = self.store.read_events()
+        self._atomic(path, self.render_review(events) + self._events_line(events))
         return str(path)
 
     def write_fixing_spec(self) -> str | None:
-        fixing = self.render_fixing_passes()
+        events = self.store.read_events()
+        fixing = self.render_fixing_passes(events)
         if fixing is None:
             return None
         path = self.run_dir / "FIXING_SPEC.md"
-        self._atomic(path, fixing)
+        self._atomic(path, fixing + self._events_line(events))
         return str(path)
 
     def write_documents(self) -> list[str]:

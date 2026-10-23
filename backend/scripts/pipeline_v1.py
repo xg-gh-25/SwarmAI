@@ -167,7 +167,17 @@ def execute(args) -> dict[str, Any]:
             requirement=args.requirement)
         return {"ok": True, "pipeline_id": engine.run_id,
                 "state": engine.projection(), "run_file": str(engine.run_dir / "run.json")}
-    engine = _load(args)
+    if args.command != "status":
+        # one read-decide-write operation at a time on this run (r6 §2.2): a parallel
+        # call waits, then is judged on the state the first one left
+        from core.run_protocol.oplock import operation
+        audit_root = get_app_data_dir() / "state" / "pipeline_agent_audit"
+        with operation(audit_root, args.run_id):
+            return _execute_loaded(args, _load(args))
+    return _execute_loaded(args, _load(args))
+
+
+def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
     if args.command == "status":
         return {"ok": True, "state": engine.projection(), "owner": engine.owner_session(),
                 "decision": engine.pending_decision(),
@@ -259,7 +269,8 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         failure = infra.find(exc)
         if failure is None:
-            if isinstance(exc, (ValueError, EngineError, LandingError)):
+            from core.run_protocol.oplock import RunBusy
+            if isinstance(exc, (ValueError, EngineError, LandingError, RunBusy)):
                 return _refused(exc)
             raise
         print(json.dumps(_infrastructure_failed(args, failure), ensure_ascii=False,

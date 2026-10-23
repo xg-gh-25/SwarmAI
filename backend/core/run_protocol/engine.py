@@ -29,7 +29,7 @@ from core.run_protocol.infra import InfrastructureError
 from core.run_protocol.documents import DocumentStore, complete_stage
 from core.run_protocol.events import EventAuthority
 from core.run_protocol.final import carry_repo_final, merge_final
-from core.run_protocol.store import AuditStore, StoreError
+from core.run_protocol.store import NEXT, AuditStore, StoreError
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +310,7 @@ class RunEngine:
             return False
         self.store.append_new(
             writer=self.authority.writer("hook"), kind="owner_transfer", at=_now(),
-            ordinal=len(self.store.read_events()) + 1,
+            ordinal=NEXT,
             payload={"from_session": current, "to_session": to_session,
                      "reason": reason})
         self.write_projection()
@@ -325,7 +325,7 @@ class RunEngine:
             return False
         self.store.append_new(
             writer=self.authority.writer("cli"), kind=kind, at=_now(),
-            ordinal=len(self.store.read_events()) + 1, payload={"reason": reason})
+            ordinal=NEXT, payload={"reason": reason})
         self._settle(); self.write_projection()
         return True
 
@@ -401,7 +401,7 @@ class RunEngine:
                     pass
             self.store.append_new(
                 writer=self.authority.writer("cli"), kind="worktree_unavailable", at=_now(),
-                ordinal=len(self.store.read_events()) + 1, payload={"reason": exc.message})
+                ordinal=NEXT, payload={"reason": exc.message})
             self._settle(); self.write_projection()
             raise EngineError(f"worktree unavailable: {exc.message}") from exc
         return self.effective_repos()
@@ -1043,7 +1043,7 @@ class RunEngine:
             self._save_retention(entries)
         event, _ = self.store.append_new(
             writer=self.authority.writer("cli"), kind="abandon", at=_now(),
-            ordinal=len(self.store.read_events()) + 1, payload={"reason": reason.strip()})
+            ordinal=NEXT, payload={"reason": reason.strip()})
         self._settle(); self.write_projection()
         return {"event": event, "retention": entries, "state": self.projection()}
 
@@ -1070,7 +1070,7 @@ class RunEngine:
         self._save_retention([by_name[name] for name in self.contract["expected_repos"]])
         event, _ = self.store.append_new(
             writer=self.authority.writer("cli"), kind="restore", at=_now(),
-            ordinal=len(self.store.read_events()) + 1, payload={"snapshot_exists": True})
+            ordinal=NEXT, payload={"snapshot_exists": True})
         self._settle(); self.write_projection()
         return {"event": event, "restored": restored, "state": self.projection()}
 
@@ -1092,7 +1092,7 @@ class RunEngine:
                 and all(isinstance(branches.get(n), str) for n in self.contract["expected_repos"])
         event, _ = self.store.append_new(
             writer=self.authority.writer("cli"), kind="resume", at=_now(),
-            ordinal=len(self.store.read_events()) + 1, payload={"worktree_ready": ready})
+            ordinal=NEXT, payload={"worktree_ready": ready})
         self._settle(); self.write_projection()
         return {"ok": ready, "event": event, "state": self.projection()}
 
@@ -1412,7 +1412,7 @@ class RunEngine:
                 if disposition in {"framing_rejected", "already_satisfied"}:
                     self.store.append_new(
                         writer=self.authority.writer("cli"), kind="gate0_exhausted", at=_now(),
-                        ordinal=len(self.store.read_events()) + 1,
+                        ordinal=NEXT,
                         payload={"reason": disposition})
                     self._settle(); self.write_projection()
                     return {"ok": False, "gate0": disposition, "state": self.projection()}
@@ -1499,7 +1499,7 @@ class RunEngine:
         try:
             self.store.append_new(
                 writer=self.authority.writer("cli"), kind="infrastructure_failed", at=_now(),
-                ordinal=len(self.store.read_events()) + 1,
+                ordinal=NEXT,
                 payload={"reason": f"{error.component}: {error}"[:300]},
                 refuse=lambda chain: lifecycle.infrastructure_refusal(chain, self.authority))
             recorded = True
@@ -1956,7 +1956,7 @@ class RunEngine:
             self.store.append_new(
                 writer=self.authority.writer("cli"), kind="land", at=_now(),
                 stage="deliver", attempt=self._next_attempt("deliver"),
-                ordinal=len(self.store.read_events()) + 1,
+                ordinal=NEXT,
                 payload={"landing": "not_landed", "commit": None,
                          "reason": "needs_hooked_session"})
             self._settle(); self.write_projection()
@@ -2075,7 +2075,7 @@ class RunEngine:
         except landing.PartialLanding as exc:
             self.store.append_new(
                 writer=self.authority.writer("cli"), kind="partial_land", at=_now(),
-                stage="deliver", attempt=attempt, ordinal=len(self.store.read_events()) + 1,
+                stage="deliver", attempt=attempt, ordinal=NEXT,
                 payload={"landed": dict(sorted(exc.landed.items())), "failed": exc.failed,
                          "detail": str(exc)[:300], "stage_attempt_event_id": attempt_event_id,
                          **({"unsettled": list(exc.unsettled)} if exc.unsettled else {})})
@@ -2088,7 +2088,7 @@ class RunEngine:
         # recovered by the resume path, which adopts the recorded commits
         self.store.append_new(
             writer=self.authority.writer("cli"), kind="land", at=_now(),
-            stage="deliver", attempt=attempt, ordinal=len(self.store.read_events()) + 1,
+            stage="deliver", attempt=attempt, ordinal=NEXT,
             payload={"landing": "landed", "commit": next(iter(commits.values())),
                      "commits": dict(sorted(commits.items())),
                      **({"unsettled": list(commits.unsettled)} if commits.unsettled else {}),
@@ -2129,7 +2129,7 @@ class RunEngine:
         kind = "reflect_exhausted" if degraded else "reflect_complete"
         payload = {"reason": reason or "background reflection exhausted"} if degraded else {}
         self.store.append_new(writer=self.authority.writer("hook"), kind=kind, at=_now(),
-                              ordinal=len(self.store.read_events()) + 1, payload=payload)
+                              ordinal=NEXT, payload=payload)
         self._settle()
         self._refresh_completed_audit()
         return self.projection()

@@ -28,6 +28,9 @@ class StoreError(RuntimeError):
     """Audit data is unsafe, malformed, conflicting, or unavailable."""
 
 
+NEXT = object()   # ``append_new(ordinal=NEXT)``: the next ordinal, counted under the lock
+
+
 class BlobUnreadable(OSError):
     """An audit blob is missing or its bytes do not match its digest."""
 
@@ -306,6 +309,9 @@ class AuditStore:
             why = refuse(chain) if refuse is not None else None
             if why:
                 raise StoreError(why)
+            if envelope.get("ordinal") is NEXT:
+                # counted under the lock (r6 §2.2): two writers never compute the same
+                envelope["ordinal"] = len(chain) + 1
             event, blobs = ev.make_event(
                 writer=writer, run_id=self.paths.run_id, kind=kind, at=at,
                 payload=payload,
@@ -313,6 +319,74 @@ class AuditStore:
                 **envelope,
             )
             return event, self._validated_append(chain, event, blobs)
+        except ev.EventError as exc:
+            raise StoreError(str(exc)) from exc
+        except OSError as exc:
+            raise AuditUnwritable(f"audit area not writable: {exc}") from exc
+        finally:
+            flock_unlock(lock.fileno())
+            lock.close()
+
+    def append_batch(self, *, writer: ev.WriterCapability, first: Mapping[str, Any],
+                     children: Callable[[dict[str, Any]], list[Mapping[str, Any]]],
+                     refuse: Callable[[list[dict[str, Any]]], str | None] | None = None,
+                     ) -> list[dict[str, Any]]:
+        """Append *first* and the events *children(first_event)* names as ONE write and
+        one fsync under the run lock (r6 §2.2): a reviewer's answer and its findings are
+        on disk together or not at all. Each spec is ``{kind, at, payload, **envelope}``.
+        Every event is validated against the chain before it; a transition the last one
+        makes due is appended after the batch, as ``append`` does."""
+        lock = self._locked()
+        try:
+            self._discard_torn_tail()
+            chain = self.read_events()
+            why = refuse(chain) if refuse is not None else None
+            if why:
+                raise StoreError(why)
+            built: list[dict[str, Any]] = []
+            blobs: dict[str, bytes] = {}
+
+            def make(spec: Mapping[str, Any]) -> dict[str, Any]:
+                spec = dict(spec)
+                tail = built[-1] if built else (chain[-1] if chain else None)
+                event, extra = ev.make_event(
+                    writer=writer, run_id=self.paths.run_id, kind=spec.pop("kind"),
+                    at=spec.pop("at"), payload=spec.pop("payload"),
+                    prev_hash=ev.event_digest(tail) if tail else None, **spec)
+                if self.validator is not None:
+                    self.validator([*chain, *built, event])
+                built.append(event)
+                blobs.update(extra)
+                return event
+            head = make(first)
+            for spec in children(head):
+                make(spec)
+            updated = list(chain)
+            for event in built:
+                updated, status, generated = ev.add_event(self.authority, updated, event)
+                if status == "duplicate":
+                    raise StoreError("a batch event is already recorded")
+                blobs.update(generated)
+            for digest in {d for item in built for d in self._blob_refs(item.get("payload"))}:
+                if digest not in blobs and not (self.paths.blobs / digest).is_file():
+                    raise StoreError(f"event references missing blob {digest}")
+            for digest, data in blobs.items():
+                self._write_blob(digest, data)
+            with open(self.paths.events, "ab") as handle:
+                handle.write(b"".join(ev.encode_event(item) for item in updated[len(chain):]))
+                handle.flush()
+                os.fsync(handle.fileno())
+            expected = self.validator(updated) if self.validator is not None else None
+            if expected:
+                if self.transition_writer is None:
+                    raise StoreError("a transition is due but no transition writer is configured")
+                transition, extra = ev.make_event(
+                    writer=self.transition_writer, run_id=self.paths.run_id, kind="transition",
+                    at=built[-1].get("at"), payload=expected,
+                    prev_hash=ev.event_digest(updated[-1]))
+                self.validator([*updated, transition])
+                self._append_locked(updated, transition, extra)
+            return built
         except ev.EventError as exc:
             raise StoreError(str(exc)) from exc
         except OSError as exc:

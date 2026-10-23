@@ -110,7 +110,18 @@ class ReviewHookBridge:
         return lines[0] + _BINDING_PREFIX + self._encode_binding(pending) + "\n" + "".join(lines[1:])
 
     def record_answer(self, prompt: str, final_text: str, *, completed_at: str) -> dict[str, Any] | None:
-        """Persist output only for the exact nonce-bound spawn represented by *prompt*."""
+        """Persist output only for the exact nonce-bound spawn represented by *prompt*.
+        The answer and its findings are one operation on the run (r6 §2.2): a CLI
+        command never decides on half of them."""
+        from core.run_protocol.oplock import operation
+        # Every other holder is a CLI call bounded by its Bash call (at most 600 s) and a
+        # flock dies with its process, so this wait always ends with the lock; the
+        # answer is never dropped for a busy run (review f227e2ed).
+        with operation(self.store.paths.root, self.store.paths.run_id, timeout=900.0):
+            return self._record_answer(prompt, final_text, completed_at=completed_at)
+
+    def _record_answer(self, prompt: str, final_text: str, *,
+                       completed_at: str) -> dict[str, Any] | None:
         identity = self._decode_binding(prompt)
         if identity is None or identity.get("run_id") != self.store.paths.run_id:
             return None
@@ -123,7 +134,6 @@ class ReviewHookBridge:
             "nonce": pending.nonce,
         }:
             return None
-        del self._pending[pending.nonce]
         events = self.store.read_events()
         # one answer per handout is checked under the run lock at the append (F-2);
         # a retry of an answered handout needs a new attempt
@@ -154,54 +164,45 @@ class ReviewHookBridge:
                 row.get("kind") == "answer"
                 and row.get("payload", {}).get("handout_event_id") == handout_id
                 for row in chain) else None)
+        stage, attempt = handout["stage"], handout["attempt"]
+
+        def children(answer: dict[str, Any]) -> list[dict[str, Any]]:
+            if parsed.state not in ("parsed", "partial"):
+                return []   # an unparsed answer is no usable output (§A3.2)
+            common = {"at": completed_at, "stage": stage, "round": review_round,
+                      "attempt": attempt}
+            rows = [{**common, "kind": "finding_occ", "ordinal": ordinal, "payload": {
+                        "answer_event_id": answer["event_id"], "expert": expert,
+                        "severity": finding["severity"], "finding_kind": finding["kind"],
+                        "file": finding["file"], "line": finding["line"],
+                        "claim": finding["claim"], "fix": finding["fix"]}}
+                    for ordinal, finding in enumerate(parsed.findings, 1)]
+            rows += [{**common, "kind": "finding_status", "ordinal": ordinal, "payload": {
+                        "answer_event_id": answer["event_id"],
+                        "canonical_id": status["finding_id"], "status": status["status"],
+                        "kind_confirm": status.get("kind_confirm")}}
+                     for ordinal, status in enumerate(parsed.statuses, 1)]
+            for ordinal, note in enumerate(parsed.integrity, 1):
+                digest_note = hashlib.sha256(note.encode("utf-8")).hexdigest()
+                rows.append({**common, "kind": "integrity", "ordinal": ordinal, "payload": {
+                    "conflict_id": digest_note, "conflict_type": "foreign_r2_status",
+                    "first_hash": hashlib.sha256(b"ignored").hexdigest(),
+                    "new_hash": digest_note}})
+            return rows
         try:
-            answer, _ = self.store.append_new(
-                writer=self.store.authority.writer("hook"), kind="answer",
-                at=completed_at, stage=handout["stage"], round=review_round,
-                attempt=handout["attempt"], payload=answer_payload, refuse=answered,
-            )
+            # the answer and everything it says are one write (r6 §2.2, review f227e2ed)
+            answer = self.store.append_batch(
+                writer=self.store.authority.writer("hook"), refuse=answered,
+                first={"kind": "answer", "at": completed_at, "stage": stage,
+                       "round": review_round, "attempt": attempt, "payload": answer_payload},
+                children=children)[0]
         except StoreError as exc:
             if "already answered" in str(exc):
+                self._pending.pop(pending.nonce, None)
                 return None   # a concurrent second answer of the same handout
             raise
+        self._pending.pop(pending.nonce, None)   # only once the answer is on disk
         self.store.copy_to_session(self.session_id, answer)
-        if parsed.state not in ("parsed", "partial"):
-            # an unparsed answer is no usable output (§A3.2): its lines decide nothing
-            return {"answer": answer, "parsed": parsed}
-
-        for ordinal, finding in enumerate(parsed.findings, 1):
-            self.store.append_new(
-                writer=self.store.authority.writer("hook"), kind="finding_occ",
-                at=completed_at, stage=handout["stage"], round=review_round,
-                attempt=handout["attempt"], ordinal=ordinal,
-                payload={
-                    "answer_event_id": answer["event_id"], "expert": expert,
-                    "severity": finding["severity"], "finding_kind": finding["kind"],
-                    "file": finding["file"], "line": finding["line"],
-                    "claim": finding["claim"], "fix": finding["fix"],
-                },
-            )
-        for ordinal, status in enumerate(parsed.statuses, 1):
-            self.store.append_new(
-                writer=self.store.authority.writer("hook"), kind="finding_status",
-                at=completed_at, stage=handout["stage"], round=review_round,
-                attempt=handout["attempt"], ordinal=ordinal,
-                payload={
-                    "answer_event_id": answer["event_id"],
-                    "canonical_id": status["finding_id"], "status": status["status"],
-                    "kind_confirm": status.get("kind_confirm"),
-                },
-            )
-        for ordinal, note in enumerate(parsed.integrity, 1):
-            digest_note = hashlib.sha256(note.encode("utf-8")).hexdigest()
-            self.store.append_new(
-                writer=self.store.authority.writer("hook"), kind="integrity",
-                at=completed_at, stage=handout["stage"], round=review_round,
-                attempt=handout["attempt"], ordinal=ordinal,
-                payload={"conflict_id": digest_note, "conflict_type": "foreign_r2_status",
-                         "first_hash": hashlib.sha256(b"ignored").hexdigest(),
-                         "new_hash": digest_note},
-            )
         return {"answer": answer, "parsed": parsed}
 
     def record_usage(self, usage: Mapping[str, Any], *, completed_at: str) -> None:

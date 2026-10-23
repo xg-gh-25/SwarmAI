@@ -443,3 +443,18 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - r6 §2.1 里的 EventSnapshot 和批量 append 同样不做。理由是数据：一个 run 的事件读写在关键路径里只占毫秒级，时间都花在 git 进程和 pytest 上。
 
 **预算：** `status` 的目标是不超过 150 ms，没有达到。它在有 worktree 时仍需 11 个 git 进程：写 tree 4 个、ls-files 1 个、fork base 3 个、diff 1 个、manifest 2 个，负载下约 250–450 ms。再往下压要改 `git_tree.write_tree`（4 个进程），留到 NE-0 的真实数据出来后再决定是否值得。
+
+## 18. 收尾 commit 3：并发（r6 §2.2）
+
+- **操作锁：** 新增 `core/run_protocol/oplock.py`，锁文件是每个 run 的 `operation.lock`，同一线程内可重入，等待超时报 `RunBusy`。
+  - **拿锁的：** `pipeline_v1.py` 除 `status` 以外的所有命令（先拿锁，再在锁内 load engine，判断用的是锁内读到的状态），以及 daemon 里 hook 写答案的事务（answer 和它的 findings 作为一个操作，超时 60 s）。
+  - **不拿锁的：** `pipeline_test` 跑测试的过程，它每次 append 时只拿 store 锁。
+  - **效果：** 并发的 CLI 调用按顺序执行，后到的一方按新状态被正常判定，不会读到旧状态后撞号报错。
+- **ordinal：** `append_new(ordinal=NEXT)` 在 store 锁内按链长计算。原先 16 处 `len(read_events())+1` 是在锁外算的，全部换成 `NEXT`。finding_occ 和 finding_status 用的是答案里的行序号，不在这 16 处之内，保持不变。
+- **投影的最后一行写明来源：** REQUIREMENTS 和 DESIGN_SPEC 写 JSON source 的 sha256，REVIEW 和 FIXING_SPEC 写事件数和最后一条事件，方便判断文件是否过期。投影的写入都在操作锁内，所以不再需要"同 count 不同 tail 就拒绝覆盖"的比较。
+
+**审查 f227e2ed（1 轮，2 HIGH + 2 MED），一次修完：**
+- **HIGH，`RunBusy` 会丢掉 reviewer 的答案：** 其他持锁方都是 CLI 调用，每次最多活一个 Bash 调用的时长（不超过 600 s），flock 又随进程死亡释放。所以 hook 等锁的上限改为 900 s，这次等待总能拿到锁。`_pending` 改为答案落盘之后才删。
+- **HIGH，answer 和 findings 不是原子写入：** 新增 `AuditStore.append_batch`，在一次 store 锁内逐条验证，然后一次 write、一次 fsync 写入。另在检查层兜底：一个 parsed answer 只有在它声明的 `n_findings` 条 `finding_occ` 和 `n_status` 条 `finding_status` 都在账本上时才算数（`checks._answers`），否则 RV 检查失败。
+- **MED，来源行与正文不是同一次读取（TOCTOU）：** `write_review` 和 `write_fixing_spec` 只读一次事件，正文和来源行都用这一份。REQUIREMENTS 和 DESIGN_SPEC 的哈希取自刚写入的那段文本。
+- **MED，`operation()` 先建路径、后校验 run_id：** 入口先调 `validate_run_id`。

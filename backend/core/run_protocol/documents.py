@@ -107,6 +107,14 @@ def render_design(document: Mapping[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _source_line(name: str, text: str) -> str:
+    """The projection's last line (r6 §2.2): the source bytes it was rendered from (the
+    very text just written), so a reader can tell a stale Markdown file from a current one."""
+    import hashlib
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return f"\n<!-- rendered from {name} sha256:{digest} -->\n"
+
+
 class DocumentStore:
     """Write validated JSON sources and generated Markdown into one run directory."""
 
@@ -143,8 +151,10 @@ class DocumentStore:
         _refuse(schemas.validate_requirements(value, variant=variant, profile=profile), blocking)
         source = self.run_dir / "artifacts" / "requirements.json"
         rendered = self.run_dir / "REQUIREMENTS.md"
-        self._atomic(source, json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
-        self._render("REQUIREMENTS", rendered, lambda: render_requirements(value))
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
+        self._atomic(source, text)
+        self._render("REQUIREMENTS", rendered,
+                     lambda: render_requirements(value) + _source_line(source.name, text))
         return [str(source), str(rendered)]
 
     def write_design(self, value: Mapping[str, Any], *, variant: str, profile: str,
@@ -155,8 +165,10 @@ class DocumentStore:
             design_variant=variant, profile=profile, existing_files=existing_files), blocking)
         source = self.run_dir / "artifacts" / "design_spec.json"
         rendered = self.run_dir / "DESIGN_SPEC.md"
-        self._atomic(source, json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
-        self._render("DESIGN_SPEC", rendered, lambda: render_design(value))
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
+        self._atomic(source, text)
+        self._render("DESIGN_SPEC", rendered,
+                     lambda: render_design(value) + _source_line(source.name, text))
         return [str(source), str(rendered)]
 
 

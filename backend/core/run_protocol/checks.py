@@ -340,9 +340,25 @@ def _collected(ref: Any, context: CheckContext) -> bool:
 
 def _answers(context: CheckContext, expert: str | None = None) -> list[Mapping[str, Any]]:
     """The experts' answer events (cross-run answer reuse is not implemented: fixing
-    log §15, conformance Q3)."""
+    log §15, conformance Q3). A parsed answer counts only when every finding and status
+    line it declares is on the ledger too: an answer whose findings did not all reach
+    disk could otherwise pass a review that hides them (fails closed; r6 §2.2)."""
+    children: dict[tuple[str, str], int] = {}
+    for event in context.events:
+        if event.get("kind") in ("finding_occ", "finding_status"):
+            key = (event["payload"].get("answer_event_id"), event["kind"])
+            children[key] = children.get(key, 0) + 1
+
+    def complete(event: Mapping[str, Any]) -> bool:
+        payload = event["payload"]
+        if payload.get("state") not in ("parsed", "partial"):
+            return True
+        return (children.get((event["event_id"], "finding_occ"), 0) == payload.get("n_findings", 0)
+                and children.get((event["event_id"], "finding_status"), 0)
+                == payload.get("n_status", 0))
     return [event for event in context.events if event.get("kind") == "answer"
-            and (expert is None or event["payload"].get("expert_id") == expert)]
+            and (expert is None or event["payload"].get("expert_id") == expert)
+            and complete(event)]
 
 
 def _bx2(context: CheckContext) -> Result:
