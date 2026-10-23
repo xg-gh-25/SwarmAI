@@ -80,7 +80,7 @@ vi.mock('../../services/chat', async (importOriginal) => {
 });
 
 // ── The target spec (one row per nav item) ─────────────────────────────────────
-const ZONE = { chat: 'var(--color-primary)', cognitive: '#5fc99a', work: '#4a8fb0', system: '#7c8194' } as const;
+const ZONE = { chat: 'var(--color-primary)', cognitive: 'var(--color-zone-cognitive)', work: 'var(--color-zone-work)', system: 'var(--color-zone-system)' } as const;
 interface Item { id: string; nav: string; label: string; zone: keyof typeof ZONE; fetches?: string[] }
 const ITEMS: Item[] = [
   { id: 'history', nav: 'history-row', label: 'History', zone: 'chat', fetches: ['/chat/sessions'] },

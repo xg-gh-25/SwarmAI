@@ -24,12 +24,13 @@ import type { OverlayId } from './overlayIds';
 
 export type NavZone = 'chat' | 'cognitive' | 'work' | 'system';
 
-/** Zone colours. `chat` uses the theme colour (XG D3: no new zone colour). */
+/** Zone colours, from the theme (index.css --color-zone-*, light and dark).
+ *  `chat` uses the theme colour (XG D3: no new zone colour). */
 export const ZONE_TINT: Record<NavZone, string> = {
   chat: 'var(--color-primary)',
-  cognitive: '#5fc99a',  // mint — the cognition zone, the core differentiator
-  work: '#4a8fb0',       // teal-blue — deliberately not green (no clash with cognition)
-  system: '#7c8194',     // slate — low-attention OS mechanics
+  cognitive: 'var(--color-zone-cognitive)',  // mint — the cognition zone
+  work: 'var(--color-zone-work)',            // teal-blue — not green (no clash with cognition)
+  system: 'var(--color-zone-system)',        // slate — low-attention OS mechanics
 };
 
 export interface NavEntry {

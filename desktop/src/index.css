@@ -17,6 +17,11 @@
   --color-status-success: #16a34a;
   --color-status-error: #dc2626;
   --color-status-warning: #d97706;
+  /* Left Nav zone colours (design V2): nav cards, mode badge, overlay frame and
+     notch only — never content. Darker in light theme so they read on white. */
+  --color-zone-cognitive: #1f9d6b;
+  --color-zone-work: #2f7596;
+  --color-zone-system: #5f6577;
   --color-input-bg: #ffffff;
   --color-input-border: #cbd5e1;
   /* Resting sidebar icon: bumped #94a3b8 → #5b6573 for >=3:1 contrast vs
@@ -106,6 +111,9 @@
   --color-status-success: #22c55e;
   --color-status-error: #ef4444;
   --color-status-warning: #f59e0b;
+  --color-zone-cognitive: #5fc99a;
+  --color-zone-work: #4a8fb0;
+  --color-zone-system: #7c8194;
   --color-input-bg: #191e28;
   --color-input-border: #2a3040;
   /* Resting sidebar icon: bumped #545d68 → #8b95a3 for >=3:1 contrast vs
@@ -185,6 +193,22 @@
   --font-family-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif;
   --font-family-mono: ui-monospace, 'SF Mono', Menlo, 'JetBrains Mono', Consolas, monospace;
   --font-mono: var(--font-family-mono); /* alias: older rules reference this name */
+
+  /* The Left Nav + overlay type scale (design left-nav-backend-and-visual-system.md
+     V1): six steps, each with its line height. New names on purpose — Tailwind's own
+     text-xs / text-sm stay as they are for chat and Canvas. Weights: 400 and 600. */
+  --text-meta: 11px;
+  --text-meta--line-height: 16px;
+  --text-small: 12px;
+  --text-small--line-height: 18px;
+  --text-body: 13px;
+  --text-body--line-height: 20px;
+  --text-heading: 14px;
+  --text-heading--line-height: 20px;
+  --text-title: 16px;
+  --text-title--line-height: 22px;
+  --text-display: 20px;
+  --text-display--line-height: 26px;
 
   /* Primary colors (unchanged for both themes) */
   --color-primary: #2b6cee;
