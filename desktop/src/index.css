@@ -422,6 +422,12 @@ body {
 .file-badge-sm { width: 21px; height: 14px; font-size: 8.5px; }
 .file-badge-md { width: 24px; height: 16px; font-size: 9.5px; }
 .file-badge-muted { filter: saturate(0.55); }
+/* A row's icon slot, the width of the sm badge: a folder icon (16px) and a file
+   badge (21px) in the same list keep their names aligned. */
+.file-icon-slot {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 21px;
+}
 
 /* Button scale — buttons with a label (icon-only buttons are icon-btn above).
    One size class + one look class; the size sets height, padding, type and gap, so
@@ -1048,13 +1054,14 @@ body {
   background: var(--color-card);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
-/* The selected row of either Canvas list (Artifacts, Changes): the content card's
-   own surface + a 3px primary bar, so the row reads as the thing the card below
-   shows. One definition for both lists. */
+/* The selected row of either Canvas list (Artifacts, Changes): a primary tint on the
+   card surface, a primary ring and a 3px primary bar (XG 2026-10-23, variant A — the
+   plain card colour sat 3-5% off the list surface and barely showed). Hover stays
+   the neutral --color-hover, so selected != hovered. One definition for both lists. */
 .canvas-row-sel {
   position: relative;
-  background: var(--color-card);
-  box-shadow: 0 0 0 1px var(--color-border);
+  background: color-mix(in srgb, var(--color-primary) 16%, var(--color-card));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 40%, var(--color-border));
   color: var(--color-text);
 }
 .canvas-row-sel::before {

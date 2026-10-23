@@ -426,9 +426,12 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
       )}
 
       {/* Node icon — with symlink overlay for linked directories */}
+      {/* One slot width for files (type badge) and folders, so names line up. */}
       <span
-        style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}
+        className="file-icon-slot"
+        style={{ position: 'relative' }}
         aria-hidden="true"
+        data-testid="tree-icon-slot"
       >
         {isDirectory ? (
           <span

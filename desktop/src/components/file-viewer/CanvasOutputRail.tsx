@@ -325,7 +325,7 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
 
   return (
     <ul
-      className="flex flex-col gap-px py-0.5 list-none m-0 p-0 outline-none"
+      className="flex flex-col gap-px py-0.5 list-none m-0 p-0 rounded-md outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]"
       data-testid="canvas-output-rail"
       tabIndex={0}
       aria-label="Artifacts (↑/↓ to switch file)"

@@ -118,7 +118,8 @@ panel holds exactly one. One source: `CanvasTabState.file`.
 
 ### C6 — small visual fixes (F9, F10, F11)
 
-- F9: directory icons in the file tree and Working files sit in a 21 px slot.
+- F9: directory icons in the file tree and Working files sit in a 21 px slot
+  (`.file-icon-slot`, the sm badge width).
 - F10: the Artifacts `<ul>` shows a `focus-visible` ring (`--color-primary`, 1px).
 - F11: Changes list `max-h` 140 px like Artifacts.
 

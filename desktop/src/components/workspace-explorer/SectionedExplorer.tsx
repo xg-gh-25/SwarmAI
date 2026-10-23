@@ -123,13 +123,15 @@ function WorkingFileItem({
       style={{ paddingLeft: 8, fontSize: '13px', lineHeight: '32px' }}
       onDoubleClick={handleDoubleClick}
     >
-      {node.type === 'directory' ? (
-        <span className="material-symbols-outlined icon-sm" style={{ color: 'var(--color-icon-folder)', flexShrink: 0 }}>
-          folder
-        </span>
-      ) : (
-        <FileTypeIcon name={node.name} />
-      )}
+      <span className="file-icon-slot" aria-hidden="true">
+        {node.type === 'directory' ? (
+          <span className="material-symbols-outlined icon-sm" style={{ color: 'var(--color-icon-folder)' }}>
+            folder
+          </span>
+        ) : (
+          <FileTypeIcon name={node.name} />
+        )}
+      </span>
       <span className="truncate text-[var(--color-text)]" style={{ letterSpacing: '-0.01em' }}>
         {node.name}
       </span>

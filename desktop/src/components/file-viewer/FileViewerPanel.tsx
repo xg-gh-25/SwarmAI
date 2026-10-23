@@ -839,7 +839,7 @@ function FileViewerPanelImpl({
               <CanvasOutputRail files={referencedFiles} onCounts={setCounts} selectedPath={selectedPath} onStopBrowsing={stopBrowsing} />
             </div>
             {canvasTab === 'changes' && !outputsCollapsed && (
-              <div className="max-h-[220px] overflow-y-auto px-2 pb-1.5" data-testid="canvas-changes-list">
+              <div className="max-h-[140px] overflow-y-auto px-2 pb-1.5" data-testid="canvas-changes-list">
                 <ChangesNav selected={changesSel} onSelect={setChangesSel} />
               </div>
             )}
