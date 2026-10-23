@@ -17,7 +17,6 @@ export interface CanvasSnapshot {
   open: boolean;
   outputCount: number;
   pinned: boolean;
-  muted: boolean;
   collapsed: boolean;
 }
 
@@ -39,7 +38,6 @@ export interface EditorContextPayload {
     open: boolean;
     output_count: number;
     pinned: boolean;
-    muted: boolean;
     collapsed: boolean;
   };
   active_overlay?: string;
@@ -47,7 +45,7 @@ export interface EditorContextPayload {
 
 /** True when a canvas snapshot carries any reportable (non-default) state. */
 function canvasHasState(c: CanvasSnapshot | null | undefined): c is CanvasSnapshot {
-  return !!c && (c.open || c.outputCount > 0 || c.pinned || c.muted || c.collapsed);
+  return !!c && (c.open || c.outputCount > 0 || c.pinned || c.collapsed);
 }
 
 /**
@@ -81,7 +79,6 @@ export function toEditorContextPayload(
       open: c.open,
       output_count: c.outputCount,
       pinned: c.pinned,
-      muted: c.muted,
       collapsed: c.collapsed,
     };
   }

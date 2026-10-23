@@ -264,3 +264,34 @@ describe('useCanvasHost — open-file then switch tab (real event path)', () => 
     expect(result.current.file).toBeNull();
   });
 });
+
+describe('useCanvasHost — super-canvas: canvasTab per tab, `auto` on the file', () => {
+  it('canvasTab is per tab, and any file open brings Artifacts forward on its tab', async () => {
+    const { result, rerender } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: 'tab-A' } },
+    );
+    act(() => result.current.setCanvasTab('changes'));
+    expect(result.current.canvasTab).toBe('changes');
+    rerender({ t: 'tab-B' });
+    expect(result.current.canvasTab).toBe('artifacts'); // A's Changes does not bleed into B
+    rerender({ t: 'tab-A' });
+    expect(result.current.canvasTab).toBe('changes');
+    await act(async () => { openFile('x/a.md'); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.file?.fileName).toBe('a.md'));
+    expect(result.current.canvasTab).toBe('artifacts');
+  });
+
+  it('an `auto` open marks the file auto; a user open does not', async () => {
+    const { result } = renderHook(() => useCanvasHost({ activeTabId: 'tab-A', sessionId: 's-A', isStreaming: false }));
+    await act(async () => {
+      document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: '/ws/first.md', auto: true } }));
+      await Promise.resolve(); await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.file?.fileName).toBe('first.md'));
+    expect(result.current.file?.auto).toBe(true);
+    await act(async () => { openFile('/ws/mine.md'); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.file?.fileName).toBe('mine.md'));
+    expect(result.current.file?.auto).toBeUndefined();
+  });
+});

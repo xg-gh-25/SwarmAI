@@ -24,11 +24,15 @@
  * browsing never leaves a big empty band obscuring the file surface below.
  *
  * @exports CanvasOutputRail
- * @exports outputRowOpenDetail — pure builder for the open-file event detail (unit-tested)
+ * @exports outputRowOpenDetail, railOrder — re-exported from hooks/railSsot (the
+ *   pure open-detail builder and the rail's display order live there, so a test
+ *   that stubs this component still gets them)
  */
 import { memo, useCallback, useMemo, useEffect, useRef, useState } from 'react';
 import { type ChangeStatus, type ReferencedFile, type GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
-import { isRailKind } from '../../hooks/railSsot';
+import { orderOutputs, outputRowOpenDetail } from '../../hooks/railSsot';
+
+export { outputRowOpenDetail, railOrder } from '../../hooks/railSsot';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 import { copyToClipboard } from '../../utils/clipboard';
 import { fileIcon, fileIconColor } from '../../utils/fileUtils';
@@ -49,49 +53,6 @@ const BADGE_STYLE: Record<ChangeStatus, { label: string; color: string }> = {
   new: { label: 'A', color: 'var(--color-git-added)' },
   upd: { label: 'M', color: 'var(--color-git-modified)' },
 };
-
-/** Sort: NEW first, then UPD, then unbadged; newest-first within a group. */
-function badgeRank(s: ChangeStatus | undefined): number {
-  return s === 'new' ? 0 : s === 'upd' ? 1 : 2;
-}
-
-/**
- * Build the swarm:open-file event detail for an output row. Pure — unit-tested.
- *
- * CONTENT-DEFAULT (run_d3cc1f2c, XG directive): a row (and the pipeline-finish
- * auto-open) renders the file's CONTENT — `autoDiff:false`. The diff is NOT the open
- * default; it is a per-file "Show Changes" TOGGLE inside FileEditorCore. XG: "Canvas
- * 看的是 changes list; diff 是文件上的一个操作,不是 canvas 要不要渲染的判断."
- * This REVERSES run_b8ea6d5c's PR-review-on-open default, and structurally eliminates
- * the empty-diff BLANK render (a committed file whose working-tree-vs-HEAD diff is
- * empty no longer opens into an empty DiffView) — WITHOUT a DiffView empty-state layer
- * (the wrong-layer patch XG rejected: rendering is the file's concern, not Canvas's).
- * `baseRef` is STILL threaded end-to-end (unchanged): FileViewer fetches the committed
- * baseline regardless of autoDiff, so the Show Changes toggle diffs against the correct
- * pre-run parent (<sha>^ for a source-final row, HEAD for uncommitted content/knowledge).
- */
-export function outputRowOpenDetail(
-  path: string,
-  _badge: ChangeStatus | undefined,
-  absolutePath?: string,
-  baseRef?: string,
-  sessionId?: string,
-): { path: string; autoDiff: boolean; baseRef?: string; sessionId?: string } {
-  // Resolve anchor: prefer the ABSOLUTE path when present. A source-final row
-  // (run_b8ea6d5c) carries a repo-relative display `path` (e.g. `backend/foo.py`)
-  // for a file whose git repo ≠ the SwarmWS workspace — that bare relative path would
-  // 404 at /workspace/file/resolve. The absolutePath resolves for BOTH workspace files
-  // and source-repo files (the resolver accepts absolute paths — the user-click-source
-  // path). Content/knowledge rows have absolutePath === the workspace file, so this is
-  // a no-op for them.
-  // baseRef (run_030dc98e): a source-final row's `<sha>^` — the diff baseline so a
-  // just-committed file opens on this-run's changes, not an empty HEAD diff. Undefined
-  // for content/knowledge rows → they diff against HEAD (correct, still uncommitted).
-  // sessionId (run_c014a4f3): the owning session that surfaced this row — threaded to
-  // the render fetch so an EXTERNAL (outside-SwarmWS) file can render read-only. Absent
-  // for SwarmWS-internal rows (home-only guard renders them, no session id needed).
-  return { path: absolutePath || path, autoDiff: false, baseRef, sessionId };
-}
 
 /** Directory portion of a path (everything before the basename), for the dim
  *  right-aligned locator. Empty string when the path has no directory.
@@ -251,22 +212,10 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
   // is deleted. Filter defensively on kind: keep content/knowledge; drop process; an
   // undefined kind (older backend) falls through to keep (no regression — server
   // already dropped bookkeeping upstream).
-  const outputs = useMemo(
-    // `grouped?.written` — defensive against a caller passing an undefined files prop
-    // (O023: runtime-guard a boundary value; TS requires it, but a stubbed/legacy
-    // caller could still omit it — fail to empty, never crash).
-    () => (grouped?.written ?? []).filter((f) => isRailKind(f.kind)),
-    [grouped?.written],
-  );
-
-
-  // NEW before UPD before unbadged; newest-first (higher firstSeen) within a rank.
-  const ordered = useMemo(() => {
-    return [...outputs].sort((a, b) => {
-      const r = badgeRank(a.change) - badgeRank(b.change);
-      return r !== 0 ? r : b.firstSeen - a.firstSeen;
-    });
-  }, [outputs]);
+  // `grouped?.written` is guarded inside orderOutputs (O023: a stubbed/legacy caller
+  // could omit the files prop — fail to empty, never crash).
+  const ordered = useMemo(() => orderOutputs(grouped), [grouped]);
+  const outputs = ordered;
 
   // Activity rows (DailyActivity, signals, briefs — the session's bookkeeping, by
   // the product catalog's role) fold under one toggle, closed by default; a

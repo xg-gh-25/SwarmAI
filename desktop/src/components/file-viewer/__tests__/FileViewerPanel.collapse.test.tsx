@@ -35,8 +35,6 @@ const baseProps = {
   onClose: vi.fn(),
   pinned: false,
   onTogglePin: vi.fn(),
-  muted: false,
-  onToggleMute: vi.fn(),
   referencedFiles: { written: [] },
   isOpen: true,
   onRevealCanvas: vi.fn(),

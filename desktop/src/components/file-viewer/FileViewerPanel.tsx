@@ -14,9 +14,11 @@ import { memo, useState, useCallback, useEffect, useRef, useReducer, type CSSPro
 import FileViewer from './FileViewer';
 import type { FileViewerProps } from './FileViewer';
 import { CanvasOutputRail } from './CanvasOutputRail';
+import { outputRowOpenDetail, railOrder } from '../../hooks/railSsot';
+import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 import { ChangesCount, ChangesDetail, ChangesNav, ChangesRefresh, type ChangesSelection } from './CanvasChanges';
 import type { GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
-import type { CanvasCollapse } from '../../hooks/useCanvasHost';
+import type { CanvasCollapse, CanvasTabId } from '../../hooks/useCanvasHost';
 import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 import { layoutViewportWidth, clientToCssScale, APP_ZOOM_EVENT } from '../../utils/layoutViewport';
 
@@ -130,11 +132,13 @@ type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
   // Canvas output rail scope = props.tabScopeKey (the owning tab id, inherited
   // from FileViewerProps). The former `sessionId` prop is REMOVED (run_26aa6caa) —
   // the rail keys on the stable tabId now, not the volatile session id.
-  /** Canvas gentle auto-surface controls. */
+  /** Pin: the Canvas does not change by itself (no auto-surface, no tab switch). */
   pinned?: boolean;
   onTogglePin?: () => void;
-  muted?: boolean;
-  onToggleMute?: () => void;
+  /** The owning chat tab's Canvas tab (useCanvasHost slice). Controlled when set
+   *  together with onCanvasTabChange; otherwise the panel keeps its own. */
+  canvasTab?: CanvasTabId;
+  onCanvasTabChange?: (t: CanvasTabId) => void;
   /** The referenced-files (rail rows), owned by the RESIDENT useCanvasHost
    *  (run_9e42c066) and passed down. The rail is now pure presentational — the
    *  panel no longer hosts the swarm:file-changed listener, so a write that lands
@@ -165,8 +169,6 @@ type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
 function FileViewerPanelImpl({
   pinned,
   onTogglePin,
-  muted,
-  onToggleMute,
   referencedFiles,
   collapse,
   setCollapse,
@@ -184,16 +186,22 @@ function FileViewerPanelImpl({
   // Canvas tabs: Artifacts (this session's written files, the existing rail + file
   // viewer) and Changes (each code repo's local state, CanvasChanges). The file
   // viewer stays MOUNTED while Changes shows: it holds open files and unsaved edits.
-  const [canvasTab, setCanvasTab] = useState<'artifacts' | 'changes'>('artifacts');
+  // The tab lives in the owning chat tab's Canvas slice (useCanvasHost), because
+  // this panel never remounts on a chat-tab switch; every file open brings
+  // Artifacts forward there. Uncontrolled fallback only when no host wires it.
+  const [localCanvasTab, setLocalCanvasTab] = useState<CanvasTabId>('artifacts');
+  // Controlled only as a pair: a value without its setter (or the reverse) would
+  // show one state and write another.
+  const controlledTab = props.canvasTab !== undefined && props.onCanvasTabChange !== undefined;
+  const canvasTab = controlledTab ? props.canvasTab! : localCanvasTab;
+  const setCanvasTab = controlledTab ? props.onCanvasTabChange! : setLocalCanvasTab;
   const [changesSel, setChangesSel] = useState<ChangesSelection>(null);
-  // A file opened from anywhere (a chat link, an Artifacts row, the left-nav
-  // Artifacts / Library overlays, a workspace click — every one lands as a new
-  // initialFile via useCanvasHost's single swarm:open-file path) shows in the
-  // document card: bring the Artifacts tab forward, or it opens behind Changes.
   const openedFile = props.initialFile;
+  // Uncontrolled only: bring Artifacts forward when a file opens. Controlled, the
+  // host's swarm:open-file handler writes canvasTab with the file (one writer).
   useEffect(() => {
-    if (openedFile) setCanvasTab('artifacts');
-  }, [openedFile]);
+    if (openedFile && !controlledTab) setLocalCanvasTab('artifacts');
+  }, [openedFile, controlledTab]);
 
   const [width, setWidth] = useState(getStoredWidth);
   const [isDragging, setIsDragging] = useState(false);
@@ -287,6 +295,39 @@ function FileViewerPanelImpl({
   const toggleOutputs = useCallback(() => setCollapse({ outputsCollapsed: !outputsCollapsed }), [setCollapse, outputsCollapsed]);
   const collapseToRail = useCallback(() => setCollapse({ railed: true }), [setCollapse]);
   const expandFromRail = useCallback(() => setCollapse({ railed: false }), [setCollapse]);
+
+  // ── Default selection (XG 2026-10-23, docs/design/super-canvas.md L3) ──
+  // When the Artifacts view BECOMES visible on the SAME tab (a manual open, an
+  // expand from the rail, Changes → Artifacts) with no open file and a non-empty
+  // list, open the list's first row with the same detail a click builds, plus
+  // `auto: true` so auto-surface treats it as Canvas's own choice (a later output
+  // may still replace it). Keyed to that transition, not to "no file": on a tab
+  // switch the rows can still be the previous tab's for one commit, so a same-key
+  // check keeps tab A's file from landing on tab B. Stamped with the tab id so a
+  // switch during the resolve cannot move it either. The first mount counts as a
+  // transition (prev visible = false). A pinned Canvas never selects by itself.
+  const artifactsVisible = isOpen && !railed && canvasTab === 'artifacts';
+  const firstOutputRef = useRef<ReturnType<typeof railOrder>[number] | undefined>(undefined);
+  firstOutputRef.current = railTabId !== undefined ? railOrder(referencedFiles)[0] : undefined;
+  const openedFileRef = useRef(openedFile);
+  openedFileRef.current = openedFile;
+  const pinnedRef = useRef(pinned);
+  pinnedRef.current = pinned;
+  const prevVisibleRef = useRef({ key: railTabId, visible: false });
+  useEffect(() => {
+    const prev = prevVisibleRef.current;
+    prevVisibleRef.current = { key: railTabId, visible: artifactsVisible };
+    if (prev.key !== railTabId || prev.visible || !artifactsVisible) return;
+    const f = firstOutputRef.current;
+    if (!f || openedFileRef.current || pinnedRef.current) return;
+    document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, {
+      detail: {
+        ...outputRowOpenDetail(f.path, f.change, f.absolutePath, f.baseRef, f.sessionId),
+        auto: true,
+        ...(railTabId ? { tabId: railTabId } : {}),
+      },
+    }));
+  }, [railTabId, artifactsVisible]);
 
   // The file shown in Region B — drives the accent left-bar on its output row.
   const selectedPath = props.initialFile?.filePath;
@@ -692,11 +733,10 @@ function FileViewerPanelImpl({
                 </div>
                 {canvasTab === 'changes' && <ChangesRefresh />}
               </div>
-              {/* CONTENT controls (pin + mute) — act on WHAT is shown, grouped
-                  left beside "Outputs". Pin = THIS file (keep it open, don't let
-                  a new output replace the view). Mute = THIS SESSION (stop
-                  auto-surfacing new outputs). Distinct scopes → two controls. */}
-              <div className={`flex items-center gap-0.5 shrink-0 ${canvasTab === 'changes' ? 'invisible' : ''}`} data-testid="canvas-content-controls">
+              {/* Pin — acts on the whole Canvas (both tabs): pinned, it does not
+                  change by itself (no auto-surface, no tab switch). It replaced the
+                  separate mute, which suppressed exactly the same thing. */}
+              <div className="flex items-center gap-0.5 shrink-0" data-testid="canvas-content-controls">
                 <button
                   onClick={onTogglePin}
                   // Idle vs active are MUTUALLY EXCLUSIVE in one color slot (NOT two
@@ -706,22 +746,11 @@ function FileViewerPanelImpl({
                   // idle color and the active accent would never show (Gate-2 CRITICAL).
                   // --color-text-dim is a real, defined token (fainter than muted).
                   className={`icon-btn hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors ${pinned ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}`}
-                  title={pinned ? 'Pinned — this file won’t be auto-replaced (click to unpin)' : 'Pin this file — keep it open; a new output won’t replace your view'}
-                  aria-label="Toggle pin — keep this file open"
+                  title={pinned ? 'Pinned — Canvas won’t change by itself (click to unpin)' : 'Pin Canvas — new outputs won’t open or replace what you see (they still list here)'}
+                  aria-label="Toggle pin — Canvas does not change by itself"
                   aria-pressed={!!pinned}
                 >
                   <span className="material-symbols-outlined icon-sm">keep</span>
-                </button>
-                <button
-                  onClick={onToggleMute}
-                  // Mutually-exclusive color slot — see the pin button above (Gate-2 CRITICAL:
-                  // stacked text-* utilities let the idle color override the active accent).
-                  className={`icon-btn hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors ${muted ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}`}
-                  title={muted ? 'Auto-surface muted for this session (click to unmute)' : 'Mute auto-surface — stop opening new outputs this session (they still list here)'}
-                  aria-label="Toggle auto-surface mute for this session"
-                  aria-pressed={!!muted}
-                >
-                  <span className="material-symbols-outlined icon-sm">{muted ? 'notifications_off' : 'notifications'}</span>
                 </button>
               </div>
               {/* Divider between the two semantic groups (content | window). */}
@@ -798,7 +827,7 @@ function FileViewerPanelImpl({
 // subtree (FileViewer + FileEditorCore ~1780L + CanvasOutputRail) on each key,
 // freezing input whenever Canvas is open. All props from the ChatPage call site
 // are referentially stable across a keystroke render (useCanvasHost callbacks are
-// useCallback dep-[patch]/[patch,activeTabId]; file/pinned/muted/isOpen from slice
+// useCallback dep-[patch]/[patch,activeTabId]; file/pinned/isOpen from slice
 // state; sessionId/tabScopeKey primitive; the always-mounted-panel props isOpen
 // (primitive bool) + onRevealCanvas (useCallback dep-[patch]) are likewise stable),
 // so the default shallow compare blocks

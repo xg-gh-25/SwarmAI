@@ -14,11 +14,12 @@
  * file after the stream goes quiet for `debounceMs`.
  *
  * Suppression (gentle — user intent always wins):
- *   - pinned      → user pinned the panel; never auto-replace
- *   - muted       → user muted auto-surface for this session
- *   - editorOpen  → user is actively viewing/editing a file (swarm:editor-panel-state);
- *                   don't steal the view — the output still lands in the rail,
- *                   just no auto-open.
+ *   - pinned      → user pinned the Canvas; it does not change by itself
+ *   - changes tab → the Canvas shows the Changes tab; an open would replace the
+ *                   Artifacts file and pull the user off the diff
+ *   - viewingUserChoice → the Canvas shows a file the USER opened (the slice's file
+ *                   has no `auto` mark); don't steal the view — the output still
+ *                   lands in the rail, just no auto-open.
  * Bookkeeping paths (.artifacts/, dotfiles, temp) never surface.
  *
  * On fire: dispatch `swarm:open-file` (the EXISTING open path — handled in
@@ -28,15 +29,29 @@
  * @exports useCanvasAutoSurface
  */
 import { useEffect, useRef } from 'react';
-import { samePath } from './railSsot';
 import { subscribeFileChanged } from './fileChangedBroker';
 import { OPEN_FILE_EVENT } from '../components/common/MarkdownRenderer';
 
-export interface CanvasAutoSurfaceOptions {
-  /** User pinned the panel — never auto-replace what they're looking at. */
+export interface CanvasSuppression {
   pinned: boolean;
-  /** User muted auto-surface for this session. */
-  muted: boolean;
+  canvasTab: 'artifacts' | 'changes';
+  viewingUserChoice: boolean;
+}
+
+export interface CanvasAutoSurfaceOptions {
+  /** User pinned the Canvas — it never changes by itself (the one suppression
+   *  switch; the former separate `muted` flag did exactly the same and is gone). */
+  pinned?: boolean;
+  /** The active tab's Canvas shows a file the USER opened (slice.file without the
+   *  `auto` mark). Auto-surface yields; a file Canvas opened itself may be replaced. */
+  viewingUserChoice?: boolean;
+  /** The active tab's Canvas tab. On 'changes' the user is reading a diff: yield. */
+  canvasTab?: 'artifacts' | 'changes';
+  /** The suppression state of ANY tab, read at fire time for the tab the open lands
+   *  on (useCanvasHost passes a stable getter over its per-tab map). When given, it
+   *  is the source and pinned/viewingUserChoice/canvasTab above are not read; they
+   *  remain the standalone contract (the hook's unit tests). */
+  stateFor?: (tabId: string) => CanvasSuppression;
   /** The ACTIVE tab id — the tab-scope key (run_26aa6caa). A file-changed event
    *  stamped with a DIFFERENT tabId (a background keep-mounted tab) is ignored, so
    *  its writes don't auto-pop in the tab you're looking at. tabId is stable and
@@ -72,13 +87,11 @@ export interface CanvasAutoSurfaceOptions {
   debounceMs?: number;
 }
 
-export function useCanvasAutoSurface({ pinned, muted, activeTabId, activeSessionId, isStreaming, debounceMs = 600 }: CanvasAutoSurfaceOptions): void {
+export function useCanvasAutoSurface({ pinned = false, viewingUserChoice = false, canvasTab = 'artifacts', stateFor, activeTabId, activeSessionId, isStreaming, debounceMs = 600 }: CanvasAutoSurfaceOptions): void {
   // Keep suppression flags in a ref so the long-lived listener reads live
   // values without re-subscribing on every flag change.
   const pinnedRef = useRef(pinned);
   pinnedRef.current = pinned;
-  const mutedRef = useRef(muted);
-  mutedRef.current = muted;
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
   const activeSessionIdRef = useRef(activeSessionId);
@@ -86,39 +99,18 @@ export function useCanvasAutoSurface({ pinned, muted, activeTabId, activeSession
   const isStreamingRef = useRef(isStreaming);
   isStreamingRef.current = isStreaming;
 
-  // "User is actively viewing THEIR OWN file" — the suppression signal. The
-  // subtlety (Gate-2 HIGH, 2026-08-02): a panel that AUTO-SURFACE opened must
-  // NOT count as "user is viewing", or the feature fires once then suppresses
-  // itself forever. So we track two things and compare:
-  //   - panelOpenRef      : is a file panel open at all (swarm:editor-panel-state)
-  //   - currentFileRef    : which file is showing (swarm:editor-file-changed)
-  //   - lastAutoOpenedRef : the file WE last auto-surfaced
-  // "User is viewing their own choice" ⇔ panel open AND current file is NOT the
-  // one we auto-opened. In that case we yield. If the panel shows what we put
-  // there (or is closed), the next output is free to replace it.
-  const panelOpenRef = useRef(false);
-  const currentFileRef = useRef<string | null>(null);
-  const lastAutoOpenedRef = useRef<string | null>(null);
-  useEffect(() => {
-    const onPanel = (e: Event) => {
-      const { open } = (e as CustomEvent<{ open: boolean }>).detail ?? {};
-      panelOpenRef.current = !!open;
-      if (!open) {
-        currentFileRef.current = null;
-        lastAutoOpenedRef.current = null;
-      }
-    };
-    const onFileChanged = (e: Event) => {
-      const detail = (e as CustomEvent<{ filePath: string } | null>).detail;
-      currentFileRef.current = detail?.filePath ?? null;
-    };
-    window.addEventListener('swarm:editor-panel-state', onPanel);
-    window.addEventListener('swarm:editor-file-changed', onFileChanged);
-    return () => {
-      window.removeEventListener('swarm:editor-panel-state', onPanel);
-      window.removeEventListener('swarm:editor-file-changed', onFileChanged);
-    };
-  }, []);
+  // "User is viewing THEIR OWN file" and the tab on screen — both read from the
+  // active tab's Canvas slice (useCanvasHost), never mirrored through window events
+  // or a path comparison: an `auto` open (this hook's own, or the panel's default
+  // selection) is marked on the slice's file, so the next output may replace it,
+  // while a user open is not (Gate-2 HIGH 2026-08-02: an auto-opened file must not
+  // count as the user's choice, or the feature fires once and then never again).
+  const viewingUserChoiceRef = useRef(viewingUserChoice);
+  viewingUserChoiceRef.current = viewingUserChoice;
+  const canvasTabRef = useRef(canvasTab);
+  canvasTabRef.current = canvasTab;
+  const stateForRef = useRef(stateFor);
+  stateForRef.current = stateFor;
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -199,26 +191,22 @@ export function useCanvasAutoSurface({ pinned, muted, activeTabId, activeSession
         // stays closed. A live write whose session resolved during the debounce window
         // now passes (the window's transient undefined is gone by fire time).
         if (isStreamingRef.current !== undefined && !activeSessionIdRef.current) return;
-        // Gentle: user pin / session mute always win.
-        if (pinnedRef.current || mutedRef.current) return;
-        // Yield only if the user is viewing a file THEY opened — i.e. the panel
-        // is open showing something OTHER than what we last auto-surfaced. The open
-        // handler resolves the path, so `cur` may be the absolute form while `mine`
-        // is the raw dispatched (relative) form → use samePath (SSOT, railSsot.ts):
-        // segment-anchored, NEVER bare basename (the D3 bug — basename false-matched
-        // a same-named file in a different repo, wrongly suppressing a real auto-pop).
-        if (panelOpenRef.current) {
-          const cur = currentFileRef.current;
-          const mine = lastAutoOpenedRef.current;
-          const viewingUserChoice = !!cur && !samePath(cur, mine);
-          if (viewingUserChoice) return;
-        }
-        lastAutoOpenedRef.current = target;
+        // Gentle: the user's pin always wins, and so does the Changes tab, and so
+        // does a file the user opened. Judged for the tab the open LANDS on (the
+        // write's origin tab, else the active one): a tab switch during the debounce
+        // must not let tab B's state decide an open that changes tab A.
+        const landing = targetTabId ?? activeTabIdRef.current;
+        const st = stateForRef.current && landing
+          ? stateForRef.current(landing)
+          : { pinned: pinnedRef.current, canvasTab: canvasTabRef.current, viewingUserChoice: viewingUserChoiceRef.current };
+        if (st.pinned) return;
+        if (st.canvasTab === 'changes') return;
+        if (st.viewingUserChoice) return;
         // Stamp the write's ORIGIN tab (run_d3cc1f2c edit3) so useCanvasHost lands the
         // file on the producing tab — closes the debounce-window tab-switch gap
         // (run_48a29fc2 class). Omit when unstamped → useCanvasHost falls back to active.
         document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, {
-          detail: targetTabId ? { path: target, tabId: targetTabId } : { path: target },
+          detail: targetTabId ? { path: target, tabId: targetTabId, auto: true } : { path: target, auto: true },
         }));
       }, debounceMs);
     };

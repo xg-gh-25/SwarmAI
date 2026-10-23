@@ -114,7 +114,7 @@ describe('useCanvasHost — send-time snapshot is never a stale closure', () => 
     await emit('B', 7);
 
     const forA = result.current.getCanvasSnapshotFor('A');
-    expect(forA).toEqual({ open: true, outputCount: 3, pinned: true, muted: false, collapsed: false });
+    expect(forA).toEqual({ open: true, outputCount: 3, pinned: true, collapsed: false });
     expect(result.current.getCanvasSnapshotFor('B')!.outputCount).toBe(7);
     expect(result.current.getCanvasSnapshot()!.outputCount).toBe(7); // the active tab
   });
@@ -123,7 +123,7 @@ describe('useCanvasHost — send-time snapshot is never a stale closure', () => 
     const { result } = mount('A', ['BG']);
     await emit('BG', 4); // stamped for a tab that is not active
     expect(result.current.getCanvasSnapshotFor('BG')).toEqual(
-      { open: false, outputCount: 4, pinned: false, muted: false, collapsed: false },
+      { open: false, outputCount: 4, pinned: false, collapsed: false },
     );
   });
 

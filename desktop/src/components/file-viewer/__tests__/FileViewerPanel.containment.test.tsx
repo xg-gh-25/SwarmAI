@@ -31,8 +31,6 @@ const baseProps = {
   onClose: vi.fn(),
   pinned: false,
   onTogglePin: vi.fn(),
-  muted: false,
-  onToggleMute: vi.fn(),
   referencedFiles: { written: [] },
   collapse: { railed: false, outputsCollapsed: false },
   setCollapse: vi.fn(),

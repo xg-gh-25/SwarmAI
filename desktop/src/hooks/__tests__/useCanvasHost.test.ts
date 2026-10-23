@@ -2,7 +2,7 @@
  * Tests for useCanvasHost — per-tab Canvas state (bug2) + host wiring.
  *
  * Business rules under test:
- *  - Canvas state (file / pinned / muted / expanded / manuallyOpen) is kept
+ *  - Canvas state (file / pinned / expanded / manuallyOpen) is kept
  *    PER TAB in a ref-backed Map. Switching tabs restores that tab's slice;
  *    switching back restores the original (no "reset-not-restore", no bleed).
  *  - The active slice is exposed as React state so the panel re-renders.
@@ -66,9 +66,8 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.file).toBeNull();
     expect(result.current.pinned).toBe(false);
 
-    // B opens its own file, muted
+    // B opens its own file
     act(() => result.current.setFile({ filePath: 'b.md', fileName: 'b.md' }));
-    act(() => result.current.setMuted(true));
     expect(result.current.file?.filePath).toBe('b.md');
 
     // Switch back to A → A's file + pin restored, NOT B's
@@ -76,7 +75,6 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     rerender({ t: tabId });
     expect(result.current.file?.filePath).toBe('a.md');
     expect(result.current.pinned).toBe(true);
-    expect(result.current.muted).toBe(false); // A was never muted; B's mute must not bleed
   });
 
   it('keeps collapse state (railed/outputsCollapsed) independent per tab and restores on switch-back', async () => {

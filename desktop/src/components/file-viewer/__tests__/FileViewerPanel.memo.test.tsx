@@ -10,7 +10,7 @@
  *
  * THE FIX: wrap the default export in React.memo. All props passed at the ChatPage
  * call site are referentially stable across a keystroke re-render (useCanvasHost
- * callbacks are useCallback dep-[patch]/[patch,activeTabId]; file/pinned/muted from
+ * callbacks are useCallback dep-[patch]/[patch,activeTabId]; file/pinned from
  * slice state; sessionId/tabScopeKey primitive), so the default shallow compare
  * blocks the re-render.
  *
@@ -44,8 +44,6 @@ const STABLE = {
   onClose: () => {},
   pinned: false,
   onTogglePin: () => {},
-  muted: false,
-  onToggleMute: () => {},
   referencedFiles: { written: [] },
   tabScopeKey: 'tab-1',
   // Bug 2: stable collapse view-object + setter (mirrors useCanvasHost's memoized

@@ -15,13 +15,13 @@ describe('toEditorContextPayload', () => {
     const p = toEditorContextPayload({
       filePath: '/ws/report.html',
       fileName: 'report.html',
-      canvas: { open: true, outputCount: 2, pinned: true, muted: false, collapsed: false },
+      canvas: { open: true, outputCount: 2, pinned: true, collapsed: false },
       activeOverlay: 'swarm:show-todo',
     });
     expect(p).not.toBeNull();
     expect(p!.file_path).toBe('/ws/report.html');
     expect(p!.canvas).toEqual({
-      open: true, output_count: 2, pinned: true, muted: false, collapsed: false,
+      open: true, output_count: 2, pinned: true, collapsed: false,
     });
     expect(p!.active_overlay).toBe('swarm:show-todo');
   });
@@ -35,7 +35,7 @@ describe('toEditorContextPayload', () => {
 
   it('serializes a canvas-only snapshot (Canvas open, no file)', () => {
     const p = toEditorContextPayload({
-      canvas: { open: true, outputCount: 0, pinned: false, muted: false, collapsed: true },
+      canvas: { open: true, outputCount: 0, pinned: false, collapsed: true },
     });
     expect(p).not.toBeNull();
     expect(p!.file_path).toBe('');
@@ -53,7 +53,7 @@ describe('toEditorContextPayload', () => {
     const p = toEditorContextPayload({
       filePath: '/ws/a.md',
       fileName: 'a.md',
-      canvas: { open: false, outputCount: 0, pinned: false, muted: false, collapsed: false },
+      canvas: { open: false, outputCount: 0, pinned: false, collapsed: false },
       activeOverlay: null,
     });
     expect(p!.canvas).toBeUndefined();
@@ -72,11 +72,11 @@ describe('hasUiState', () => {
   it('true when any of file / canvas-state / overlay present', () => {
     expect(hasUiState({ filePath: '/x' })).toBe(true);
     expect(hasUiState({ activeOverlay: 'swarm:show-jobs' })).toBe(true);
-    expect(hasUiState({ canvas: { open: true, outputCount: 0, pinned: false, muted: false, collapsed: false } })).toBe(true);
+    expect(hasUiState({ canvas: { open: true, outputCount: 0, pinned: false, collapsed: false } })).toBe(true);
   });
   it('false for empty / all-default', () => {
     expect(hasUiState(null)).toBe(false);
     expect(hasUiState({})).toBe(false);
-    expect(hasUiState({ canvas: { open: false, outputCount: 0, pinned: false, muted: false, collapsed: false } })).toBe(false);
+    expect(hasUiState({ canvas: { open: false, outputCount: 0, pinned: false, collapsed: false } })).toBe(false);
   });
 });

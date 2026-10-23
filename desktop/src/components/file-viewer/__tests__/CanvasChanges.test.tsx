@@ -137,7 +137,7 @@ describe('FileViewerPanel Canvas tabs', () => {
     vi.doMock('../CanvasOutputRail', () => ({ CanvasOutputRail: () => <div data-testid="rail-stub" /> }));
     const { default: FileViewerPanel } = await import('../FileViewerPanel');
     const base = {
-      onClose: () => {}, pinned: false, onTogglePin: () => {}, muted: false, onToggleMute: () => {},
+      onClose: () => {}, pinned: false, onTogglePin: () => {},
       referencedFiles: { written: [] } as never, tabScopeKey: 't1',
       collapse: { railed: false, outputsCollapsed: false }, setCollapse: () => {}, isOpen: true, onRevealCanvas: () => {},
     };

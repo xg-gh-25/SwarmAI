@@ -31,8 +31,6 @@ const baseProps = {
   onClose: vi.fn(),
   pinned: false,
   onTogglePin: vi.fn(),
-  muted: false,
-  onToggleMute: vi.fn(),
   referencedFiles: { written: [] },
   collapse: { railed: false, outputsCollapsed: false },
   setCollapse: vi.fn(),
@@ -60,7 +58,7 @@ describe('FileViewerPanel — shell-bar redesign', () => {
   // EXCLUSIVE in one slot. If both a dim idle class AND the primary active class
   // are stacked, Tailwind's generated-CSS source order (not className order)
   // decides the winner — the idle color silently overrides the active accent, so
-  // a pinned/muted control never shows its active state. These tests assert the
+  // a pinned control never shows its active state. These tests assert the
   // ternary contract: exactly ONE color class per state, primary when active.
   it('pin button: active state has the primary accent and NOT the idle dim class', () => {
     render(<FileViewerPanel {...baseProps} pinned />);
@@ -73,12 +71,6 @@ describe('FileViewerPanel — shell-bar redesign', () => {
     const cls = screen.getByLabelText(/toggle pin/i).className;
     expect(cls).toContain('text-[var(--color-text-dim)]');
     expect(cls).not.toContain('text-[var(--color-primary)]');
-  });
-  it('mute button: active state has the primary accent and NOT the idle dim class', () => {
-    render(<FileViewerPanel {...baseProps} muted />);
-    const cls = screen.getByLabelText(/toggle auto-surface mute/i).className;
-    expect(cls).toContain('text-[var(--color-primary)]');
-    expect(cls).not.toContain('text-[var(--color-text-dim)]');
   });
 });
 

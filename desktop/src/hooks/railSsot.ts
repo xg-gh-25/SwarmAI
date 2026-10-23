@@ -11,9 +11,14 @@
  *
  * @exports isRailKind — rail membership by review-verdict kind
  * @exports matchesPath — anchored file-identity match (never basename)
+ * @exports orderOutputs / railOrder — the rail's rows in display order (newest
+ *   firstSeen first); the Canvas default selection opens railOrder()[0]
+ *   (docs/design/super-canvas.md)
+ * @exports outputRowOpenDetail — the open-file detail a rail row (and the default
+ *   selection) dispatches
  */
 
-import type { ReviewKind } from './useReferencedFiles';
+import type { ChangeStatus, GroupedReferencedFiles, ReferencedFile, ReviewKind } from './useReferencedFiles';
 
 /**
  * Does a review-verdict kind belong in the OUTPUTS rail?
@@ -86,4 +91,41 @@ export function samePath(a: string | null | undefined, b: string | null | undefi
   if (a.endsWith(`/${b}`)) return true;
   if (b.endsWith(`/${a}`)) return true;
   return false;
+}
+
+/** The rail's rows in display order: real deliverables (backend `kind`), newest
+ *  first by firstSeen. A/M is a badge, not a sort key (XG 2026-10-23: the first row
+ *  is the newest output, the same one a default selection opens). Pure; a missing
+ *  `written` (stubbed/legacy caller) yields []. */
+export function orderOutputs(grouped: GroupedReferencedFiles | undefined): ReferencedFile[] {
+  return (grouped?.written ?? [])
+    .filter((f) => isRailKind(f.kind))
+    .sort((a, b) => b.firstSeen - a.firstSeen);
+}
+
+/** The rail's MAIN rows (Activity rows fold under their own toggle) in display
+ *  order. The single ordering both the rail and the panel's default selection use. */
+export function railOrder(grouped: GroupedReferencedFiles | undefined): ReferencedFile[] {
+  return orderOutputs(grouped).filter((f) => f.role !== 'Activity');
+}
+
+/**
+ * Build the swarm:open-file event detail for an output row. Pure — unit-tested.
+ *
+ * CONTENT-DEFAULT (run_d3cc1f2c, XG directive): a row (and the pipeline-finish
+ * auto-open) renders the file's CONTENT — `autoDiff:false`; the diff is a per-file
+ * "Show Changes" toggle inside FileEditorCore. The ABSOLUTE path is the resolve
+ * anchor when present (a source-final row's display `path` is repo-relative and would
+ * 404 at /workspace/file/resolve). `baseRef` (run_030dc98e) is a source-final row's
+ * `<sha>^` diff baseline; `sessionId` (run_c014a4f3) lets an external file render
+ * read-only.
+ */
+export function outputRowOpenDetail(
+  path: string,
+  _badge: ChangeStatus | undefined,
+  absolutePath?: string,
+  baseRef?: string,
+  sessionId?: string,
+): { path: string; autoDiff: boolean; baseRef?: string; sessionId?: string } {
+  return { path: absolutePath || path, autoDiff: false, baseRef, sessionId };
 }

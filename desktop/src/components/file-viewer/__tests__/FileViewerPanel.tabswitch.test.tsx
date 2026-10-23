@@ -62,8 +62,6 @@ function Harness() {
         onClose={() => setFileByTab((m) => ({ ...m, [activeTabId]: null }))}
         pinned={false}
         onTogglePin={vi.fn()}
-        muted={false}
-        onToggleMute={vi.fn()}
         referencedFiles={{ written: [] }}
         collapse={{ railed: false, outputsCollapsed: false }}
         setCollapse={() => {}}
@@ -125,8 +123,6 @@ function HarnessBoth() {
         onClose={() => setFileByTab((m) => ({ ...m, [activeTabId]: null }))}
         pinned={false}
         onTogglePin={vi.fn()}
-        muted={false}
-        onToggleMute={vi.fn()}
         referencedFiles={{ written: [] }}
         collapse={{ railed: false, outputsCollapsed: false }}
         setCollapse={() => {}}

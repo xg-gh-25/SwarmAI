@@ -7,7 +7,7 @@
  * a full-height sibling of the chat column — so it sat beside the tab bar and
  * lost its state every switch. This hook moves Canvas ownership to ChatPage (the
  * owner of tabs), keyed PER TAB, so:
- *   - each tab remembers its own open file + pin/mute/manuallyOpen (mirrors the
+ *   - each tab remembers its own open file + pin/manuallyOpen (mirrors the
  *     existing per-tab `inputValueMapRef` pattern — a plain useRef Map that NEVER
  *     flows into MessageStore/reconcile, so zero OT01 risk). (Expanded is a
  *     transient panel-local UI state, deliberately NOT per-tab.)
@@ -19,8 +19,9 @@
  *                                   document: MarkdownRenderer, Library/CMBrain
  *                                   overlays, OpenFileButton, briefing, auto-surface).
  *   - `swarm:open-canvas`        → listened on **window**.
- *   - `swarm:editor-file-changed`/`swarm:canvas-state`/`swarm:editor-panel-state`
- *                                → emitted on **window** (ChatPage + auto-surface listen there).
+ *   - `swarm:editor-file-changed`/`swarm:canvas-state`
+ *                                → emitted on **window** (ChatPage listens there).
+ *   Auto-surface reads the slice directly (pinned, canvasTab, file.auto) — no event.
  * Fullscreen (FileEditorModal) stays in ThreeColumnLayout; when the user asks to
  * fullscreen a Canvas file we re-dispatch `swarm:open-file-fullscreen` (window)
  * which ThreeColumnLayout owns — nothing about the modal moves here.
@@ -29,7 +30,7 @@
  */
 import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import api from '../services/api';
-import { useCanvasAutoSurface } from './useCanvasAutoSurface';
+import { useCanvasAutoSurface, type CanvasSuppression } from './useCanvasAutoSurface';
 import { useReferencedFiles, countOutputs, countStoredOutputs, type GroupedReferencedFiles } from './useReferencedFiles';
 import { refreshCanvasSession, setActiveCanvasSession } from '../services/canvasSession';
 import type { GitStatus } from '../types';
@@ -51,12 +52,15 @@ export interface CanvasFile {
   /** Owning session id that surfaced this file (run_c014a4f3). Threaded to the render
    *  fetch so an EXTERNAL surfaced file renders read-only. Absent for internal files. */
   sessionId?: string;
+  /** Canvas opened this file by itself (auto-surface, or the panel's default
+   *  selection), not the user. Auto-surface may replace an `auto` file; a user's
+   *  file it never replaces. Set by the swarm:open-file handler from detail.auto. */
+  auto?: boolean;
 }
 
 interface CanvasTabState {
   file: CanvasFile | null;
   pinned: boolean;
-  muted: boolean;
   manuallyOpen: boolean;
   /** The outputCount value at the last time the user had this tab's Canvas OPEN
    *  (run_9dd59523). The ChatHeader pill shows only when outputCount > this — so once
@@ -76,16 +80,24 @@ interface CanvasTabState {
   /** Whether ONLY the output LIST is folded (panel keeps full width). Per-tab, same
    *  bleed + fix as railed (Bug 2). In-memory. */
   outputsCollapsed: boolean;
+  /** The Canvas tab shown (Artifacts | Changes). Per tab for the same reason as
+   *  railed: the panel never remounts on a tab switch, so panel-local state carried
+   *  tab A's Changes view (and auto-surface's yield) into tab B. Every file open
+   *  brings Artifacts forward (the open handler writes it with the file). */
+  canvasTab: CanvasTabId;
 }
+
+/** The two Canvas tabs. */
+export type CanvasTabId = 'artifacts' | 'changes';
 
 const EMPTY: CanvasTabState = {
   file: null,
   pinned: false,
-  muted: false,
   manuallyOpen: false,
   lastSeenOutputCount: 0,
   railed: false,
   outputsCollapsed: false,
+  canvasTab: 'artifacts',
 };
 
 /** The per-tab collapse view-state the panel reads (Bug 2). `expanded`/`width` are
@@ -114,7 +126,6 @@ export interface CanvasHostApi {
   /** The active tab's open file (null = none). */
   file: CanvasFile | null;
   pinned: boolean;
-  muted: boolean;
   /** Canvas is visible when a file is open OR it was manually opened. */
   isOpen: boolean;
   /** The active tab's referenced-files (the output rail's rows), captured by the
@@ -134,11 +145,13 @@ export interface CanvasHostApi {
   /** Patch the active tab's collapse state (Bug 2). useCallback-stable — FileViewerPanel
    *  is memo'd on referentially-stable props, so this MUST NOT be a fresh fn per render. */
   setCollapse: (p: Partial<CanvasCollapse>) => void;
+  /** The active tab's Canvas tab (per tab, in the slice). */
+  canvasTab: CanvasTabId;
+  /** Switch the active tab's Canvas tab. useCallback-stable (memo'd panel prop). */
+  setCanvasTab: (t: CanvasTabId) => void;
   setFile: (f: CanvasFile | null) => void;
   setPinned: (v: boolean) => void;
-  setMuted: (v: boolean) => void;
   togglePin: () => void;
-  toggleMute: () => void;
   /** Close Canvas on the active tab (clear file + manuallyOpen). */
   close: () => void;
   /** Reveal (manually open) Canvas on the active tab — fired by clicking the
@@ -218,6 +231,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   }, [activeTabId]);
 
   const setCollapse = useCallback((p: Partial<CanvasCollapse>) => patch(p), [patch]);
+  const setCanvasTab = useCallback((t: CanvasTabId) => patch({ canvasTab: t }), [patch]);
   // setFile also un-rails on a NEW non-null file (Bug 2 root fix — no bypass): the
   // swarm:open-file handler is the primary write chokepoint, but setFile is a public
   // CanvasHostApi method, so it carries the SAME un-rail invariant to close the bypass
@@ -226,12 +240,11 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const setFile = useCallback((f: CanvasFile | null) => {
     const cur = mapRef.current.get(keyFor(activeTabId)) ?? EMPTY;
     const unrail = f && cur.file?.filePath !== f.filePath ? { railed: false } : {};
-    patch({ file: f, ...unrail });
+    // Same invariant as the open handler: a file shown brings Artifacts forward.
+    patch({ file: f, ...unrail, ...(f ? { canvasTab: 'artifacts' as const } : {}) });
   }, [patch, activeTabId]);
   const setPinned = useCallback((v: boolean) => patch({ pinned: v }), [patch]);
-  const setMuted = useCallback((v: boolean) => patch({ muted: v }), [patch]);
   const togglePin = useCallback(() => patch({ pinned: !(mapRef.current.get(keyFor(activeTabId))?.pinned) }), [patch, activeTabId]);
-  const toggleMute = useCallback(() => patch({ muted: !(mapRef.current.get(keyFor(activeTabId))?.muted) }), [patch, activeTabId]);
   // close clears the tab's Canvas (file + manuallyOpen). outputCount is NOT reset
   // here — it now derives from the RESIDENT store (useReferencedFiles), which is
   // intentionally per-tab-persistent: closing the panel must not discard the
@@ -279,7 +292,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // The agent's SENSE snapshot reads Canvas state at chat-SEND time. The async
   // swarm:canvas-state emit (effect below) could lag a fast send, so the send
   // path reads this function instead: mapRef (the synchronous source of truth,
-  // written in patch() BEFORE React commits) for open/pinned/muted, plus the
+  // written in patch() BEFORE React commits) for open/pinned, plus the
   // output count. Mirrors the CanvasSnapshot shape exactly (uiContext.ts);
   // collapsed stays false (the dock that could set it true is gone).
   //
@@ -325,7 +338,6 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       // the count comes from the rail store (SSOT), NOT a per-slice mirror.
       outputCount: count,
       pinned: cur.pinned,
-      muted: cur.muted,
       collapsed: false,
     };
   }, []);
@@ -374,7 +386,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   useEffect(() => {
     let mounted = true;
     const handleOpenFile = async (e: Event) => {
-      const { path: filePath, autoDiff, gitStatus, workspaceId, baseRef, sessionId: openSessionId, tabId: stampedTab } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string; baseRef?: string; sessionId?: string; tabId?: string }>).detail ?? {};
+      const { path: filePath, autoDiff, gitStatus, workspaceId, baseRef, sessionId: openSessionId, tabId: stampedTab, auto } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string; baseRef?: string; sessionId?: string; tabId?: string; auto?: boolean }>).detail ?? {};
       if (!filePath) return;
       // Landing tab = the event's STAMPED origin tab if present, else the live active
       // tab. Two distinct origin cases:
@@ -439,7 +451,10 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       const fileChanged = cur.file?.filePath !== resolvedPath;
       const next = {
         ...cur,
-        file: { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef, sessionId: openSessionId },
+        file: { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef, sessionId: openSessionId, auto: auto || undefined },
+        // An opened file shows in the document card: bring Artifacts forward (one
+        // writer, with the file — the panel used to do this in a render effect).
+        canvasTab: 'artifacts' as const,
         ...(fileChanged ? { railed: false } : {}),
       };
       mapRef.current.set(k, next);
@@ -456,7 +471,18 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // activeTabId = the tab-scope key (run_26aa6caa) — the same stable key the rest
   // of this hook uses. activeSessionId stays wired ONLY for the fire-time restart
   // fail-closed (a separate concern from tab-scoping).
-  useCanvasAutoSurface({ pinned: slice.pinned, muted: slice.muted, activeTabId: activeTabId ?? undefined, activeSessionId: sessionId ?? undefined, isStreaming });
+  // Suppression is judged for the tab the open LANDS on (stateFor reads mapRef, the
+  // per-tab source of truth; stable identity so the hook's listener never resubscribes).
+  const stateFor = useCallback((tabId: string): CanvasSuppression => {
+    const s = mapRef.current.get(keyFor(tabId)) ?? EMPTY;
+    return { pinned: s.pinned, canvasTab: s.canvasTab, viewingUserChoice: !!s.file && !s.file.auto };
+  }, []);
+  useCanvasAutoSurface({
+    stateFor,
+    activeTabId: activeTabId ?? undefined,
+    activeSessionId: sessionId ?? undefined,
+    isStreaming,
+  });
 
   // ── Proprioception emits (WINDOW) — mirror the file + canvas snapshot ───────
   // editor-file-changed: the open file (or null). canvas-state: the full snapshot.
@@ -468,8 +494,6 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     if (sig === lastFileEmit.current) return;
     lastFileEmit.current = sig;
     window.dispatchEvent(new CustomEvent('swarm:editor-file-changed', { detail }));
-    // editor-panel-state drives auto-surface's "user is viewing" suppression.
-    window.dispatchEvent(new CustomEvent('swarm:editor-panel-state', { detail: { open: !!slice.file } }));
   }, [slice.file]);
 
   const lastCanvasEmit = useRef<string>('');
@@ -478,29 +502,28 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     // getCanvasSnapshot, run_9e42c066): a closed Canvas with N outputs must still
     // reach the agent's SENSE payload, matching the ChatHeader pill the user sees.
     const detail = (isOpen || outputCount > 0)
-      ? { open: isOpen, outputCount, pinned: slice.pinned, muted: slice.muted, collapsed: false }
+      ? { open: isOpen, outputCount, pinned: slice.pinned, collapsed: false }
       : null;
     const sig = JSON.stringify(detail);
     if (sig === lastCanvasEmit.current) return;
     lastCanvasEmit.current = sig;
     window.dispatchEvent(new CustomEvent('swarm:canvas-state', { detail }));
-  }, [isOpen, outputCount, slice.pinned, slice.muted]);
+  }, [isOpen, outputCount, slice.pinned]);
 
   return {
     file: slice.file,
     pinned: slice.pinned,
-    muted: slice.muted,
     isOpen,
     referencedFiles,
     outputCount,
     lastSeenOutputCount: slice.lastSeenOutputCount,
     collapse,
     setCollapse,
+    canvasTab: slice.canvasTab,
+    setCanvasTab,
     setFile,
     setPinned,
-    setMuted,
     togglePin,
-    toggleMute,
     close,
     reveal,
     getCanvasSnapshot,

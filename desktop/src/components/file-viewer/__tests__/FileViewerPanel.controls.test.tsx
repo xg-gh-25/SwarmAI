@@ -11,7 +11,7 @@
  *    unmount. So the RIGHT group is [expand toggle] + [collapse-to-rail]; there is
  *    no "close/unmount" header button anymore (true unmount survives only via the
  *    intrinsic last-file-tab-closed path inside FileViewer).
- *  - Controls are semantically grouped: pin+mute (content controls) on the LEFT
+ *  - Controls are semantically grouped: the pin (whole-Canvas control) on the LEFT
  *    beside "Outputs"; expand+collapse (window controls) on the RIGHT; a divider
  *    between the two groups.
  *
@@ -34,8 +34,6 @@ const baseProps = {
   onClose: vi.fn(),
   pinned: false,
   onTogglePin: vi.fn(),
-  muted: false,
-  onToggleMute: vi.fn(),
   referencedFiles: { written: [] },
   collapse: { railed: false, outputsCollapsed: false },
   setCollapse: vi.fn(),
@@ -60,13 +58,13 @@ describe('FileViewerPanel — control redesign (bug6)', () => {
     expect(screen.queryByLabelText(/^close canvas$/i)).toBeNull();
   });
 
-  it('groups content controls (pin+mute) LEFT and window controls (expand+collapse) RIGHT, divided', () => {
+  it('groups the pin LEFT and window controls (expand+collapse) RIGHT, divided', () => {
     render(<FileViewerPanel {...baseProps} />);
     const left = screen.getByTestId('canvas-content-controls');
     const right = screen.getByTestId('canvas-window-controls');
-    // pin + mute live in the LEFT (content) group
+    // the pin lives in the LEFT group; the former mute (same effect) is gone
     expect(within(left).getByLabelText(/pin/i)).toBeTruthy();
-    expect(within(left).getByLabelText(/mute/i)).toBeTruthy();
+    expect(screen.queryByLabelText(/mute/i)).toBeNull();
     // expand + collapse-to-rail live in the RIGHT (window) group
     expect(within(right).getByLabelText(/expand/i)).toBeTruthy();
     expect(within(right).getByLabelText(/collapse canvas to a side rail/i)).toBeTruthy();

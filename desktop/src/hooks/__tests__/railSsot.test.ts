@@ -83,3 +83,18 @@ describe('samePath — symmetric anchored path-string equality (D3 basename bug 
     expect(samePath(null, null)).toBe(false);
   });
 });
+
+describe('railOrder (super-canvas L4): newest firstSeen first, A/M is not a sort key', () => {
+  const r = (path: string, firstSeen: number, change?: 'new' | 'upd', extra: Record<string, unknown> = {}) =>
+    ({ path, absolutePath: `/ws/${path}`, fileName: path, operation: 'written', firstSeen, count: 1, change, ...extra });
+  it('orders by firstSeen desc, drops process/source kinds and Activity rows', async () => {
+    const { railOrder } = await import('../railSsot');
+    const written = [
+      r('a-new-old.md', 1, 'new'), r('m-upd-newest.md', 5, 'upd'), r('b-new-mid.md', 3, 'new'),
+      r('proc.md', 9, 'new', { kind: 'process' }), r('daily.md', 8, undefined, { role: 'Activity' }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(railOrder({ written } as any).map((f) => f.path)).toEqual(['m-upd-newest.md', 'b-new-mid.md', 'a-new-old.md']);
+    expect(railOrder(undefined)).toEqual([]);
+  });
+});
