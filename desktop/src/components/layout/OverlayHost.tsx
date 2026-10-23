@@ -35,12 +35,14 @@
  * Chrome (enter/exit state machine, Esc, ref-counted scroll-lock, header, spout nub) is
  * ported faithfully from Modal's fullscreen branch — only the POSITIONING model changes.
  */
-import { Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Suspense, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { QueryClientContext } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { useOverlay } from '../../contexts/OverlayContext';
 import type { OverlayId } from './overlayIds';
 import { getOverlaySpec, getOverlayCtxBridge } from './overlayRegistry';
 import { navEntry, ZONE_TINT } from './navTable';
+import { overlayTiming, timingOpen, timingMounted, timingClose } from './overlayTiming';
 
 // Responsive width tiers — CSS clamp(min, preferred%, max), resolved by the browser
 // against the panel's containing block (the scrim = MainContentArea). Ported verbatim
@@ -52,8 +54,6 @@ export const OVERLAY_WIDTH = {
   xl: 'clamp(760px, 70%, 1200px)',
 } as const;
 
-/** Dev builds log open → content-mounted timings (not in tests, not in production). */
-const DEV_TIMING = import.meta.env.DEV && import.meta.env.MODE !== 'test';
 
 const PANEL_GAP = 20;   // left/right/bottom breathing gap inside the scrim
 const NUB = 20;         // spout square size
@@ -61,6 +61,8 @@ const EXIT_MS = 300;    // exit-transition backstop (> the 280ms card transform)
 
 export function OverlayHost() {
   const { activeOverlay, closeOverlay, agentId } = useOverlay();
+  // optional: the host also renders without a QueryClientProvider (its own tests)
+  const queryClient = useContext(QueryClientContext);
   const spec = getOverlaySpec(activeOverlay);
 
   const scrimRef = useRef<HTMLDivElement>(null);
@@ -86,8 +88,8 @@ export function OverlayHost() {
 
     if (isOpen && spec) {
       setRenderedId(activeOverlay);
-      // dev-only timing: open → content mounted (code loaded), see ContentMountMark
-      if (DEV_TIMING) performance.mark(`overlay-open:${activeOverlay}`);
+      // dev-only timing table (overlayTiming): open → code mounted, open → data
+      timingOpen(queryClient, activeOverlay, { agentId });
       // Capture the spout origin: the live rect of the nav item that opens this id
       // (`[data-nav-id=<id>]`, navTable). None (a deep-link-only id) → no spout.
       const card = document.querySelector<HTMLElement>(`[data-nav-id="${activeOverlay}"]`);
@@ -113,6 +115,7 @@ export function OverlayHost() {
     }
 
     // Closing: play exit, then unmount after the backstop.
+    timingClose();
     setEntered(false);
     if (renderedId != null) {
       unmountTimer.current = setTimeout(() => {
@@ -283,7 +286,7 @@ export function OverlayHost() {
                 open surface re-renders on agent switch) + ref-backed dispatch handlers
                 (from the non-reactive module bridge — stable, never stale). */}
             {renderSpec.render({ close: closeOverlay, agentId, ...getOverlayCtxBridge() })}
-            {DEV_TIMING && <ContentMountMark id={renderedId} />}
+            {overlayTiming.enabled && <ContentMountMark id={renderedId} />}
           </Suspense>
         </div>
       </div>
@@ -295,12 +298,6 @@ export function OverlayHost() {
  *  content's code has loaded; logs open → mounted for the real-machine check
  *  (design left-nav-overlay-single-source.md §5.5). Data arrival is each overlay's. */
 function ContentMountMark({ id }: { id: OverlayId }) {
-  useEffect(() => {
-    const start = `overlay-open:${id}`;
-    if (performance.getEntriesByName(start).length === 0) return;
-    const m = performance.measure(`overlay-mounted:${id}`, start);
-    console.debug(`[overlay] ${id} content mounted ${Math.round(m.duration)} ms after open`);
-    performance.clearMarks(start);
-  }, [id]);
+  useEffect(() => { timingMounted(id); }, [id]);
   return null;
 }
