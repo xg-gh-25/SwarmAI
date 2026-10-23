@@ -73,8 +73,7 @@ describe('classifyFileForViewer', () => {
     ['lib.dll', 'unsupported'],
     ['data.sqlite', 'unsupported'],
     ['font.ttf', 'unsupported'],
-    ['photo.heic', 'unsupported'],
-    ['raw.tiff', 'unsupported'],
+    ['shot.cr2', 'unsupported'],
   ] satisfies [string, FileViewType][])(
     'classifies %s as unsupported', (fileName, expected) => {
       expect(classifyFileForViewer(fileName)).toBe(expected);
