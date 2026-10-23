@@ -66,8 +66,8 @@ export interface CanvasAutoSurfaceOptions {
   activeSessionId?: string;
   /** Whether the active tab is CURRENTLY streaming a response.
    *  CONTRACT (Gate-2, run_5a7be540): this MUST be kept in sync with the real SDK
-   *  streaming state by the caller (ChatPage wires it from useUnifiedTabState's
-   *  setIsStreaming, driven by the SSE start/stop events). The bug1 historical-replay
+   *  streaming state by the caller (ChatPage wires it from the tab's isStreaming,
+   *  which follows the session's activity, docs/design/chat-turn-liveness.md S3). The bug1 historical-replay
    *  suppression depends on it: a stale MergedToolBlock re-dispatch arrives with
    *  isStreaming===false and is dropped AT ARRIVAL (below). If a caller passed a
    *  desynced/stale `true` during a replay, that suppression would weaken — so the

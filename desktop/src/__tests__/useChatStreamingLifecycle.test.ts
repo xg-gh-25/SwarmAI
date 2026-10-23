@@ -693,7 +693,7 @@ describe('useChatStreamingLifecycle', () => {
           id: 'tab-bg-perm', title: 'BG', agentId: 'default', isNew: false,
           messages: [bgMsg], sessionId: 'sess-bg-perm', pendingQuestion: null,
           abortController: null, isStreaming: false,
-          streamState: { mode: 'idle', streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          streamState: { mode: 'idle', streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0, status: 'streaming',
         });
         initTestTab('tab-fg-perm');
@@ -748,14 +748,14 @@ describe('useChatStreamingLifecycle', () => {
           id: 'tab-bg-retry', title: 'BG', agentId: 'default', isNew: false,
           messages: [bgMsg], sessionId: 'sess-bg-retry', pendingQuestion: null,
           abortController: null, isStreaming: true,
-          streamState: { mode: 'streaming', streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          streamState: { mode: 'streaming', streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0, status: 'streaming',
         });
         testTabMap.set('tab-fg-active', {
           id: 'tab-fg-active', title: 'FG', agentId: 'default', isNew: false,
           messages: [fgMsg], sessionId: 'sess-fg-active', pendingQuestion: null,
           abortController: null, isStreaming: true,
-          streamState: { mode: 'streaming', streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          streamState: { mode: 'streaming', streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0, status: 'streaming',
         });
         // Active tab is the FOREGROUND one — the background tab is mid-reconnect.
@@ -1407,7 +1407,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-a',
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 3,
           status: 'idle',
         });
@@ -1417,7 +1417,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-b',
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 1,
           status: 'idle',
         });
@@ -1475,7 +1475,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-a',
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'idle',
         });
@@ -1485,7 +1485,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-b',
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'idle',
         });
@@ -1530,7 +1530,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-a',
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'streaming',
         });
@@ -1579,7 +1579,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: undefined,
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'idle',
         });
@@ -1625,7 +1625,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-bg',
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'streaming',
         });
@@ -1911,7 +1911,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: undefined,
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'idle',
         });
@@ -1955,7 +1955,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-a',
           pendingQuestion: null,
           abortController: controllerA,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'streaming',
         });
@@ -1965,7 +1965,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-b',
           pendingQuestion: null,
           abortController: controllerB,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'streaming',
         });
@@ -1992,7 +1992,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-a',
           pendingQuestion: null,
           abortController: controllerA,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'streaming',
         });
@@ -2002,7 +2002,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-b',
           pendingQuestion: null,
           abortController: controllerB,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'streaming',
         });
@@ -2031,7 +2031,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: undefined,
           pendingQuestion: null,
           abortController: null,
-          isStreaming: true, streamState: { mode: "streaming", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: true, streamState: { mode: "streaming", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'streaming',
         });
@@ -2041,7 +2041,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: undefined,
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'idle',
         });
@@ -2084,7 +2084,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-a',
           pendingQuestion: questionA,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'waiting_input',
         });
@@ -2094,7 +2094,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-b',
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'idle',
         });
@@ -2151,7 +2151,7 @@ describe('Fix 6: Per-tab state isolation', () => {
           sessionId: 'sess-abort',
           pendingQuestion: null,
           abortController: controller,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'streaming',
         });
@@ -2242,7 +2242,7 @@ describe('Fix 3: Error handling and visibility', () => {
           sessionId: undefined,
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'streaming',
         });
@@ -2279,7 +2279,7 @@ describe('Fix 3: Error handling and visibility', () => {
           sessionId: undefined,
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'streaming',
         });
@@ -2319,7 +2319,7 @@ describe('Fix 3: Error handling and visibility', () => {
           sessionId: undefined,
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'streaming',
         });
@@ -2351,7 +2351,7 @@ describe('Fix 3: Error handling and visibility', () => {
           sessionId: undefined,
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'idle',
         });
@@ -3616,7 +3616,7 @@ describe('Fix 8: Tab status indicators', () => {
           sessionId: 'sess-bg',
           pendingQuestion: null,
           abortController: null,
-          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
           streamGen: 0,
           status: 'streaming',
         });

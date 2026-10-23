@@ -150,6 +150,10 @@ export interface UnifiedTab {
    *  → turn-end refresh lost → UI frozen until next send (run_f9adee1e). Sibling of
    *  latestCompleteGen (run_6adee7d5) for the stream-event path. */
   latestStreamGen?: number;
+  /** The POST stream generation the subscription took over for this same turn
+   *  (beginSubscriptionTurn): that POST's later events are discarded by design, so
+   *  their discard is not logged as a warning (docs/design/chat-turn-liveness.md S3). */
+  _handedOverGen?: number;
   /** Token of the newest stream handler created for this tab. A reconnect/resend
    *  builds a new handler with the SAME stream generation, so the gen guard cannot
    *  tell it from the handler it replaces; this token can. Only the newest handler
@@ -365,7 +369,7 @@ export interface UseUnifiedTabStateReturn {
 
   // --- Runtime state ---
   getTabState: (tabId: string) => UnifiedTab | undefined;
-  /** Patch excludes `id` (primary key) and `isStreaming` (write-only via setIsStreaming). */
+  /** Patch excludes `id` (primary key) and `isStreaming` (written only by the session's activity, applyActivity). */
   updateTabState: (
     tabId: string,
     patch: Partial<Omit<UnifiedTab, 'id' | 'isStreaming'>>,

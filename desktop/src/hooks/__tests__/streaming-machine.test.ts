@@ -38,8 +38,7 @@ const ALL_EVENTS: StreamingEvent[] = [
   { type: 'SEND_MESSAGE' },
   { type: 'SESSION_START', sessionId: 'sess-1' },
   { type: 'TEXT_DELTA' },
-  { type: 'RESULT', hasQueuedMessage: false },
-  { type: 'RESULT', hasQueuedMessage: true },
+  { type: 'RESULT' },
   { type: 'ERROR', phase: 'connection', message: 'conn failed' },
   { type: 'ERROR', phase: 'mid_stream', message: 'stream broke' },
   { type: 'USER_STOP' },
@@ -51,7 +50,6 @@ const ALL_EVENTS: StreamingEvent[] = [
   { type: 'PERMISSION_DECIDED' },
   { type: 'HEAL_TIMEOUT' },
   { type: 'HEAL_RECONNECTED' },
-  { type: 'DRAIN_COMPLETE' },
   { type: 'BUSY_RESOLVED' },
   { type: 'RESUME_START' },
   { type: 'RESUME_COMPLETE' },
@@ -63,7 +61,7 @@ const ALL_EVENTS: StreamingEvent[] = [
 const ALL_MODES: StreamingMode[] = [
   'idle', 'pending', 'streaming', 'reconnecting', 'resuming',
   'self_healing', 'waiting_input', 'permission_needed',
-  'session_busy', 'drain_pending', 'error',
+  'session_busy', 'error',
 ];
 
 // ═══════════════════════════════════════════════════════════════════
@@ -109,12 +107,11 @@ describe('streaming-machine: idle mode', () => {
     const noOpEvents: StreamingEvent[] = [
       { type: 'SESSION_START', sessionId: 's' },
       { type: 'TEXT_DELTA' },
-      { type: 'RESULT', hasQueuedMessage: false },
+      { type: 'RESULT' },
       { type: 'ERROR', phase: 'connection', message: '' },
       { type: 'USER_STOP' },
       { type: 'RECONNECT_SUCCESS' },
-      { type: 'DRAIN_COMPLETE' },
-      { type: 'HEAL_TIMEOUT' },
+          { type: 'HEAL_TIMEOUT' },
     ];
     for (const event of noOpEvents) {
       expect(streamingReducer(state, event)).toBe(state);
@@ -177,16 +174,10 @@ describe('streaming-machine: streaming mode', () => {
     expect(next.mode).toBe('streaming');
   });
 
-  it('RESULT (no queue) → idle', () => {
-    const next = streamingReducer(state, { type: 'RESULT', hasQueuedMessage: false });
+  it('RESULT → idle', () => {
+    const next = streamingReducer(state, { type: 'RESULT' });
     expect(next.mode).toBe('idle');
     expect(next.isStalled).toBe(false);
-  });
-
-  it('RESULT (with queue) → drain_pending', () => {
-    const next = streamingReducer(state, { type: 'RESULT', hasQueuedMessage: true });
-    expect(next.mode).toBe('drain_pending');
-    expect(next.drainQueued).toBe(true);
   });
 
   it('ERROR connection → reconnecting', () => {
@@ -393,32 +384,6 @@ describe('streaming-machine: session_busy mode', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// DRAIN_PENDING transitions
-// ═══════════════════════════════════════════════════════════════════
-
-describe('streaming-machine: drain_pending mode', () => {
-  const state = stateWith({ mode: 'drain_pending', drainQueued: true });
-
-  it('DRAIN_COMPLETE → idle, drainQueued cleared', () => {
-    const next = streamingReducer(state, { type: 'DRAIN_COMPLETE' });
-    expect(next.mode).toBe('idle');
-    expect(next.drainQueued).toBe(false);
-  });
-
-  it('SEND_MESSAGE → pending (new message replaces drain)', () => {
-    const next = streamingReducer(state, { type: 'SEND_MESSAGE' });
-    expect(next.mode).toBe('pending');
-    expect(next.drainQueued).toBe(false);
-  });
-
-  it('USER_STOP → idle', () => {
-    const next = streamingReducer(state, { type: 'USER_STOP' });
-    expect(next.mode).toBe('idle');
-    expect(next.drainQueued).toBe(false);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════
 // ERROR transitions
 // ═══════════════════════════════════════════════════════════════════
 
@@ -434,10 +399,9 @@ describe('streaming-machine: error mode', () => {
   it('all other events are no-ops', () => {
     const noOpEvents: StreamingEvent[] = [
       { type: 'TEXT_DELTA' },
-      { type: 'RESULT', hasQueuedMessage: false },
+      { type: 'RESULT' },
       { type: 'RECONNECT_SUCCESS' },
-      { type: 'DRAIN_COMPLETE' },
-    ];
+        ];
     for (const event of noOpEvents) {
       expect(streamingReducer(state, event)).toBe(state);
     }
@@ -477,7 +441,7 @@ describe('streaming-machine: streamGen properties', () => {
     const activeModes: StreamingMode[] = [
       'pending', 'streaming', 'reconnecting', 'resuming',
       'self_healing', 'waiting_input', 'permission_needed',
-      'session_busy', 'drain_pending',
+      'session_busy',
     ];
     for (const mode of activeModes) {
       const state = stateWith({ mode, streamGen: 5 });
@@ -495,7 +459,7 @@ describe('streaming-machine: helper functions', () => {
   describe('isActivelyStreaming', () => {
     it('true for active modes', () => {
       const activeModes: StreamingMode[] = [
-        'streaming', 'pending', 'reconnecting', 'resuming', 'self_healing', 'drain_pending',
+        'streaming', 'pending', 'reconnecting', 'resuming', 'self_healing',
       ];
       for (const mode of activeModes) {
         expect(isActivelyStreaming(inMode(mode))).toBe(true);
@@ -538,7 +502,7 @@ describe('streaming-machine: exhaustive matrix (no crashes)', () => {
   for (const mode of ALL_MODES) {
     describe(`from mode: ${mode}`, () => {
       for (const event of ALL_EVENTS) {
-        it(`handles ${event.type}${('phase' in event) ? ` (${event.phase})` : ''}${('hasQueuedMessage' in event) ? ` (queued=${event.hasQueuedMessage})` : ''}`, () => {
+        it(`handles ${event.type}${('phase' in event) ? ` (${event.phase})` : ''}`, () => {
           const state = inMode(mode);
           const result = streamingReducer(state, event);
           // Must produce a valid state

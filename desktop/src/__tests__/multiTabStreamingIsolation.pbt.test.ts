@@ -104,7 +104,7 @@ describe('Multi-Tab Streaming Isolation — Bug Condition Exploration', () => {
             sessionId: undefined,
             messages: [],
             pendingQuestion: null,
-            isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+            isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
             abortController: null,
             streamGen: 0,
             status: 'idle' as TabStatus,
@@ -175,13 +175,13 @@ describe('Multi-Tab Streaming Isolation — Bug Condition Exploration', () => {
           testTabMap.set(tabAId, {
             id: tabAId, title: 'Tab A', agentId: 'default', isNew: false,
             messages: [makeMessage({ id: msgIdA, role: 'assistant', content: [] })],
-            sessionId: undefined, pendingQuestion: null, isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+            sessionId: undefined, pendingQuestion: null, isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
             abortController: null, streamGen: 0, status: 'idle' as TabStatus,
           });
           testTabMap.set(tabBId, {
             id: tabBId, title: 'Tab B', agentId: 'default', isNew: false,
             messages: [], sessionId: undefined,
-            pendingQuestion: null, isStreaming: true, streamState: { mode: "streaming", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+            pendingQuestion: null, isStreaming: true, streamState: { mode: "streaming", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
             abortController: null, streamGen: 0, status: 'streaming' as TabStatus,
           });
           testActiveTabIdRef.current = tabAId;
@@ -249,7 +249,7 @@ describe('Multi-Tab Streaming Isolation — Bug Condition Exploration', () => {
           testTabMap.set(tabBId, {
             id: tabBId, title: 'Tab B', agentId: 'default', isNew: true,
             sessionId: undefined, messages: [],
-            pendingQuestion: null, isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+            pendingQuestion: null, isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
             abortController: null, streamGen: 0, status: 'idle' as TabStatus,
           });
         });
@@ -319,13 +319,13 @@ describe('Multi-Tab Streaming Isolation — Bug Condition Exploration', () => {
           testTabMap.set(tabAId, {
             id: tabAId, title: 'Tab A', agentId: 'default', isNew: false,
             messages: [makeMessage({ id: msgIdA, role: 'assistant', content: [] })],
-            sessionId: 'sess-a', pendingQuestion: null, isStreaming: true, streamState: { mode: "streaming", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+            sessionId: 'sess-a', pendingQuestion: null, isStreaming: true, streamState: { mode: "streaming", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
             abortController: null, streamGen: 0, status: 'streaming' as TabStatus,
           });
           testTabMap.set(tabBId, {
             id: tabBId, title: 'Tab B', agentId: 'default', isNew: false,
             messages: [makeMessage({ id: msgIdB, role: 'assistant', content: [] })],
-            sessionId: 'sess-b', pendingQuestion: null, isStreaming: true, streamState: { mode: "streaming", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+            sessionId: 'sess-b', pendingQuestion: null, isStreaming: true, streamState: { mode: "streaming", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
             abortController: null, streamGen: 0, status: 'streaming' as TabStatus,
           });
           testActiveTabIdRef.current = tabAId;
@@ -537,7 +537,7 @@ describe('Preservation Property Tests', () => {
               sessionId: undefined,
               messages: [],
               pendingQuestion: null,
-              isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+              isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, isStalled: false, toolExecuting: false, error: null, sessionId: null },
               abortController: null,
               streamGen: 0,
               status: 'idle' as TabStatus,

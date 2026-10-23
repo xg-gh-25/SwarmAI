@@ -4,7 +4,7 @@ date: 2026-10-23
 created: 2026-10-23
 updated: 2026-10-23
 project: SwarmAI
-status: P1 DONE（后端，v4）；P2a DONE（蜜蜂只看活动）；P2b DONE（未受理的消息可重试）；P2c DONE（排队只在后端）；P3 DONE（一个失败策略）；P4 未开始
+status: P1 DONE（后端，v4）；P2a DONE（蜜蜂只看活动）；P2b DONE（未受理的消息可重试）；P2c DONE（排队只在后端）；P3 DONE（一个失败策略）；P4 DONE（收尾）
 related: chat-transcript-single-source.md（S3 会话状态唯一来源，本文是它没覆盖到的那一半）, streaming-spinner-ssot.md（2026-06-30，同类，未按设计落地）
 ---
 
@@ -244,9 +244,15 @@ fresh-context 审查。旧的 `streaming` 字段一直保留（部署脚本在�
 
 - V1：订阅流 `turn_start` 之后，POST 带来的 `turn_phase` 被 GenGuard 丢弃，阶段行可能在
   `session_start` 到首字之间消失（10-23 16:08:26–16:11:48）。S3 改读 activity 后无论如何都会消掉；T2 给出答案。
+  **结论（P2a）**：蜜蜂和阶段只看会话活动，这个丢弃不再影响显示；P4 把它的日志降为 debug。
 - V2：10-23 13:43:42 一次 `STORE-CLOBBER destroy`（1998 字符 → 0），原因未查，P0 时复现。
+  **结论（P4）**：`frontend.log` 里 10-22 以来的 5 次都是 `reason: destroy`、`phase: idle`。`MessageStore.destroy()`
+  在生产代码里只有关 tab 会调用（`ChatPage.doCloseTab`；`useUnifiedTabState.cleanupTabState` 也调，但它目前没有生产调用者），关 tab 时内容消失是预期的，
+  不是丢消息。探针里 destroy 那一支删掉；reconcile 时内容骤减的那一支保留。
 - V3：提问 / 审批等待时，hub 的回合是否已经结束（续接会另开一轮）。S1 的 `waiting_input` 按"没有打开的
   回合但 unit 是 WAITING_INPUT"算；如果回合其实还开着，改为按回合阶段算。T1 的变体验证。
+  **结论（P1）**：`session_state.derive_activity` 先看 unit 状态，WAITING_INPUT 就是 `waiting_input`，与 hub 的
+  回合开没开无关，所以不依赖这个问题的答案。
 
 ## 9. 修订记录
 
@@ -522,3 +528,13 @@ fresh-context 审查。旧的 `streaming` 字段一直保留（部署脚本在�
     - 另外发现 P2c 带进来的测试挂起：`test_send_requests.py` 的排队推送任务在测试的 loop 关掉时还拿着连接池里的连接，
       会话 teardown 一直等。测试里加 fixture 等完这些推送；`session_state.publish` 的合并也不再被别的（已关闭）loop 上
       没跑的任务挡住。
+- P4 收尾（2026-10-24）：
+  - **删除清单逐项核对**：`forceClearStreamVerdict`、`shouldArmSpinnerFromBackend`、`_idleStreamingSince`、
+    `_streamingSinceHardStart`、`_streamClearedAt`、`tabState.queuedMessage`、`drainQueuedMessage`、reconcile 的
+    force-clear / re-arm 分支、聊天路径上的 `setIsStreaming`，生产代码里都已没有（SkillsPage 自己的 `setIsStreaming`
+    按 §S3 不动）；三处还提到 `setIsStreaming` 的注释改成现在的写法。
+  - **streaming-machine 的 `drain_pending`**：只有 `RESULT.hasQueuedMessage=true` 能进入，P2c 之后没人这样发。整个模式、
+    `DRAIN_COMPLETE` 事件、`drainQueued` 字段删掉，`RESULT` 不再带参数。
+  - **GenGuard 日志**：订阅流接管这个 tab 自己的 POST 同一回合时（`beginSubscriptionTurn` 发现 `postBubble`），记下被接管的
+    POST 流代号（`tab._handedOverGen`）；那个 POST 后来的事件按设计丢弃，记 debug。其余的丢弃（被更新的发送取代的旧流）照旧记 WARN。
+  - §8 三条待查证都有了结论（见上）。

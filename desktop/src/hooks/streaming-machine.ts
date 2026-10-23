@@ -30,7 +30,6 @@ export type StreamingMode =
   | 'waiting_input'    // Agent asked a question (AskUserQuestion), waiting for answer.
   | 'permission_needed'// Agent needs permission for dangerous command.
   | 'session_busy'     // SESSION_BUSY error, polling for completion.
-  | 'drain_pending'    // Result received, draining queued message before returning to idle.
   | 'error';           // Unrecoverable error. User can retry or send new message.
 
 /** Events that drive state transitions. */
@@ -38,7 +37,7 @@ export type StreamingEvent =
   | { type: 'SEND_MESSAGE' }
   | { type: 'SESSION_START'; sessionId: string }
   | { type: 'TEXT_DELTA' }       // Hot path marker — reducer just clears stall
-  | { type: 'RESULT'; hasQueuedMessage: boolean }
+  | { type: 'RESULT' }
   | { type: 'ERROR'; phase: 'connection' | 'mid_stream'; message: string }
   | { type: 'USER_STOP' }
   | { type: 'RECONNECT_SUCCESS' }
@@ -49,7 +48,6 @@ export type StreamingEvent =
   | { type: 'PERMISSION_DECIDED' }  // User decided permission → resume streaming
   | { type: 'HEAL_TIMEOUT' }        // 30s grace expired without reconnect
   | { type: 'HEAL_RECONNECTED' }    // Backend reconnected during grace period
-  | { type: 'DRAIN_COMPLETE' }
   | { type: 'BUSY_RESOLVED' }
   | { type: 'RESUME_START' }        // Backend signals subprocess respawning
   | { type: 'RESUME_COMPLETE' }     // Backend resume done, streaming resumes
@@ -66,8 +64,6 @@ export interface StreamingState {
   reconnectAttempt: number;
   /** Max reconnection attempts before giving up. */
   maxReconnectAttempts: number;
-  /** Whether a queued message is waiting to drain after current stream. */
-  drainQueued: boolean;
   /** Whether stream appears stalled (no real events for >threshold). */
   isStalled: boolean;
   /** Whether a tool is currently executing (affects stall threshold). */
@@ -87,7 +83,6 @@ export const INITIAL_STATE: StreamingState = {
   streamGen: 0,
   reconnectAttempt: 0,
   maxReconnectAttempts: 3,
-  drainQueued: false,
   isStalled: false,
   toolExecuting: false,
   error: null,
@@ -156,15 +151,13 @@ export function streamingReducer(
         case 'STALL_CLEARED':
           return { ...state, isStalled: false };
         case 'RESULT':
-          if (event.hasQueuedMessage) {
-            return { ...state, mode: 'drain_pending', drainQueued: true, isStalled: false };
-          }
+          // queued messages are the backend's (docs/design/chat-turn-liveness.md S3):
+          // a result always ends this tab's stream
           return {
             ...state,
             mode: 'idle',
             isStalled: false,
             toolExecuting: false,
-            drainQueued: false,
           };
         case 'ERROR':
           if (event.phase === 'connection') {
@@ -307,25 +300,6 @@ export function streamingReducer(
           return state;
       }
 
-    // ─── DRAIN_PENDING ──────────────────────────────────────────
-    case 'drain_pending':
-      switch (event.type) {
-        case 'DRAIN_COMPLETE':
-          return { ...state, mode: 'idle', drainQueued: false };
-        case 'SEND_MESSAGE':
-          // New message while drain pending — drain becomes the send
-          return { ...state, mode: 'pending', drainQueued: false };
-        case 'USER_STOP':
-          return {
-            ...state,
-            mode: 'idle',
-            drainQueued: false,
-            streamGen: state.streamGen + 1,
-          };
-        default:
-          return state;
-      }
-
     // ─── ERROR ──────────────────────────────────────────────────
     case 'error':
       switch (event.type) {
@@ -351,8 +325,7 @@ export function isActivelyStreaming(state: StreamingState): boolean {
     state.mode === 'pending' ||
     state.mode === 'reconnecting' ||
     state.mode === 'resuming' ||
-    state.mode === 'self_healing' ||
-    state.mode === 'drain_pending'
+    state.mode === 'self_healing'
   );
 }
 

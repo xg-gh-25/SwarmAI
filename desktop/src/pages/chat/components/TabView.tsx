@@ -828,8 +828,8 @@ function TabViewImpl({
         })()
       )}
       {/* Fallback streaming indicator — only when isStreaming is true but
-          no assistant message exists yet (gap between setIsStreaming(true)
-          and assistant placeholder being added to messages). */}
+          no assistant message exists yet (gap between the session's activity
+          turning busy and the assistant placeholder being added). */}
       {isStreaming && lastAssistantIdx < 0 && (
         <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
           <Spinner size="sm" />

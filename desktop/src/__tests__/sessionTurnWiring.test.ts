@@ -112,6 +112,32 @@ describe('session turn wiring', () => {
     expect(body.match(/from-post/g)?.length).toBe(1);
   });
 
+  it('the POST events discarded after the subscription took the same turn over are not warnings; a stale stream still is', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+    act(() => {
+      initTestTab('t9');
+      result.current.setLocalSending(true, 't9');
+      result.current.setMessages([makeMessage({ id: 'local-z-asst', role: 'assistant', content: [] })]);
+    });
+    testTabMap.get('t9')!.sessionId = 'S';
+    const post = result.current.createStreamHandler('local-z-asst', 't9');
+    act(() => { post(env('Z', 1, { type: 'turn_start', turnClientId: 'local-z-asst' }) as StreamEvent); });
+    act(() => { fake.emit(env('Z', 1, { type: 'turn_start', turnClientId: 'local-z-asst' })); });
+    const genGuardWarns = () => warn.mock.calls.filter((c) => String(c[0]).includes('OT01-GenGuard')).length;
+    act(() => { post({ type: 'context_warning' } as unknown as StreamEvent); });
+    expect(genGuardWarns()).toBe(0);
+    expect(debug.mock.calls.some((c) => String(c[0]).includes('OT01-GenGuard'))).toBe(true);
+    // a handler from an older stream that nothing took over still warns
+    const tab = testTabMap.get('t9')!;
+    tab._handedOverGen = undefined;
+    act(() => { post({ type: 'context_warning' } as unknown as StreamEvent); });
+    expect(genGuardWarns()).toBe(1);
+    warn.mockRestore();
+    debug.mockRestore();
+  });
+
   it('a POST lost mid-turn detaches; the subscription finishes the turn (AC3/F4)', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => {

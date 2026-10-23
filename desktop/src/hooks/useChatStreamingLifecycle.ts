@@ -1431,10 +1431,10 @@ export function useChatStreamingLifecycle(
             });
             if (drain.retire) {
               // ── B1: server-side drain SURFACE (the missing wire) ───────────
-              // A server-side drain delivered a coalesced turn to the DB. Root-1
-              // DEFERRED live re-attach (design Scenario 7 / F8): drain_pending
-              // consumes and DISCARDS the live SSE events, so the drained turn's
-              // user+assistant content exists ONLY in the DB. The design's stated
+              // A server-side drain delivered a coalesced turn to the DB. When the
+              // tab's subscription did not render it live (it was down, or the tab
+              // reconnected after), the drained turn's user+assistant content
+              // exists ONLY in the DB. The design's stated
               // recovery — "completed content loads from DB via the existing
               // message reconcile" — was never wired for this case: the only
               // DB-fetch path below sits behind `if (!isStreaming) continue`, which
@@ -2678,7 +2678,12 @@ export function useChatStreamingLifecycle(
             // [DONE]. Skip the warn for high-frequency content deltas; still
             // discard the event itself.
             const _diagNoiseTypes = new Set(['text_delta', 'thinking_delta', 'content_block_delta']);
-            if (!_diagNoiseTypes.has(event.type)) {
+            // the subscription took this POST's turn over (same turn): expected
+            const _handedOver = source === 'post' && currentTabState._handedOverGen === capturedStreamGen;
+            if (_handedOver) {
+              console.debug('[OT01-GenGuard] discard POST event after the subscription took the turn over',
+                { eventType: event.type, capturedTabId });
+            } else if (!_diagNoiseTypes.has(event.type)) {
               console.warn('[OT01-GenGuard] discard stale stream event', {
                 eventType: event.type, capturedTabId,
                 activeTab: activeTabIdRef.current,
@@ -3194,10 +3199,10 @@ export function useChatStreamingLifecycle(
             options: event.options || ['approve', 'deny'],
           }, { isActive: !!isActiveTab, sessionId: sid });
         } else if (event.type === 'result') {
-          // ── State machine dispatch: STREAMING → IDLE or DRAIN_PENDING (global + per-tab) ──
-          dispatch({ type: 'RESULT', hasQueuedMessage: false });
+          // ── State machine dispatch: STREAMING → IDLE (global + per-tab) ──
+          dispatch({ type: 'RESULT' });
           if (tabState) {
-            tabState.streamState = streamingReducer(tabState.streamState, { type: 'RESULT', hasQueuedMessage: false });
+            tabState.streamState = streamingReducer(tabState.streamState, { type: 'RESULT' });
           }
 
           const sid =
@@ -4556,6 +4561,9 @@ export function useChatStreamingLifecycle(
     tab.isReconnecting = false;
     // (the bee comes from the session's activity, not from this event)
     updateTabStatus(tabId, 'streaming');
+    // this tab's own POST of this same turn is taken over: its later events are
+    // expected discards, not a lost stream
+    tab._handedOverGen = postBubble ? tab.latestStreamGen : undefined;
     incrementStreamGen();
     handlers.subRender = createStreamHandler(id, tabId, 'sub');
     handlers.subComplete = createCompleteHandler(tabId, 'sub');
