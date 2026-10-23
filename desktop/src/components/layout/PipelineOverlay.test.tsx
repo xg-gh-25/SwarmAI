@@ -58,12 +58,12 @@ const ANALYTICS = {
         { id: 'run_done1', requirement: 'Ship feature X', status: 'completed', profile: 'full',
           progress: '8/8', cycleTimeMin: 12, tokensActual: 30000, tokensEst: 28000,
           createdAt: '2026-08-01T10:00:00+00:00', updatedAt: '2026-08-01T10:12:00+00:00',
-          pauseKind: null, checkpointReason: null,
+          pauseKind: null, needsYou: false, checkpointReason: null,
           reportPath: 'Projects/SwarmAI/.artifacts/runs/run_done1/REPORT.md' },
         { id: 'run_paused1', requirement: 'Aborted thing', status: 'paused', profile: 'goal',
           progress: '3/6', cycleTimeMin: null, tokensActual: 5000, tokensEst: 40000,
           createdAt: '2026-08-01T09:00:00+00:00', updatedAt: '2026-08-01T09:30:00+00:00',
-          pauseKind: 'decision', checkpointReason: 'Gate 1 BLOCK: needs decision',
+          pauseKind: 'decision', needsYou: true, checkpointReason: 'Gate 1 BLOCK: needs decision',
           reportPath: null },
       ],
     },
@@ -73,7 +73,7 @@ const ANALYTICS = {
         { id: 'run_cmhk1', requirement: 'Report gen', status: 'completed', profile: 'bugfix',
           progress: '8/8', cycleTimeMin: 8, tokensActual: 20000, tokensEst: 22000,
           createdAt: '2026-07-30T10:00:00+00:00', updatedAt: '2026-07-30T10:08:00+00:00',
-          pauseKind: null, checkpointReason: null, reportPath: null },
+          pauseKind: null, needsYou: false, checkpointReason: null, reportPath: null },
       ],
     },
   ],
@@ -315,6 +315,29 @@ describe('PipelineOverlay', () => {
   it('AC1: states the time window explicitly (last 30 days)', async () => {
     renderAndOpen();
     await waitFor(() => expect(screen.getByText(/Showing runs from the last 30 days/)).toBeInTheDocument());
+  });
+
+  it('the Needs-you header counts exactly the rows it lists (one definition: needsYou)', async () => {
+    const stopped = { ...ANALYTICS.byProject[0].runs[0], id: 'run_stop1', status: 'paused',
+      pauseKind: 'stopped', needsYou: true, reportPath: null };
+    fetchAnalytics.mockResolvedValue({
+      ...ANALYTICS, overall: { ...ANALYTICS.overall, abortedCount: 0 },
+      byProject: [{ ...ANALYTICS.byProject[0], runs: [ANALYTICS.byProject[0].runs[0], stopped] }],
+    });
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pipeline-needsyou-region')).toBeInTheDocument());
+    const region = screen.getByTestId('pipeline-needsyou-region');
+    expect(within(region).getByTestId('pipeline-needsyou-count').textContent).toBe('1');
+    expect(within(region).getByTestId('pipeline-run-run_stop1')).toBeTruthy();
+    expect(within(region).queryByTestId('pipeline-run-run_done1')).toBeNull();
+  });
+
+  it('the token column never wraps or overflows onto the report button', async () => {
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pipeline-run-tokens-run_done1')).toBeInTheDocument());
+    const cell = screen.getByTestId('pipeline-run-tokens-run_done1');
+    expect(cell.className).toContain('whitespace-nowrap');
+    expect(cell.className).toContain('w-24');
   });
 
   it('AC4: shows "Running now" (from active pipelines), NOT the profile ciphertext', async () => {

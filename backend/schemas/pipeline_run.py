@@ -117,6 +117,7 @@ class PipelineRunSummary(BaseModel):
     created_at: str = ""
     updated_at: str = ""
     pause_kind: Optional[str] = None
+    needs_you: bool = Field(False, description="the user has to act on this run (routers.pipelines._needs_you)")
     checkpoint_reason: Optional[str] = None
     owner_session_id: Optional[str] = Field(
         None, description="Pipeline v1: the chat session that drives the run now")
@@ -147,7 +148,7 @@ class PipelineProjectGroup(BaseModel):
     # paused, never delivered) is excluded from analytics entirely and is NOT
     # needs-you — the user can take no action on a dead run. Delivered-but-mislabeled
     # abandoned runs are recategorized to completed, not counted here.
-    aborted_count: int = Field(0, description="genuine decision-pauses needing your attention (garbage excluded)")
+    aborted_count: int = Field(0, description="runs that need you (routers.pipelines._needs_you; garbage excluded)")
     runs: list[PipelineRunSummary] = Field(default_factory=list)
 
 

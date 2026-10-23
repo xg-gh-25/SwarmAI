@@ -124,6 +124,8 @@ export interface PipelineRunSummary {
   createdAt: string;
   updatedAt: string;
   pauseKind: PipelinePauseKind;
+  /** The user has to act on this run: the backend's one definition (routers.pipelines._needs_you). */
+  needsYou: boolean;
   checkpointReason: string | null;
   /** v1: the chat session that drives the run now. */
   ownerSessionId: string | null;
@@ -222,6 +224,7 @@ function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
     createdAt: (r.created_at as string) ?? '',
     updatedAt: (r.updated_at as string) ?? '',
     pauseKind: (r.pause_kind as PipelineRunSummary['pauseKind']) ?? null,
+    needsYou: r.needs_you === true,
     checkpointReason: (r.checkpoint_reason as string | null) ?? null,
     ownerSessionId: (r.owner_session_id as string | null) ?? null,
     verified: typeof r.verified === 'boolean' ? r.verified : null,

@@ -190,6 +190,17 @@ def _v1_pause_kind(raw: dict) -> Optional[str]:
     return None
 
 
+# What the user has to act on (the "Needs you" count, the pinned region, the focus
+# filter, the never-capped rows): ONE definition, carried on each summary as
+# ``needs_you`` so the overlay never re-derives it. An abandoned run, or a pause
+# kind the v1 human loop defines (docs/design/pipeline-v1-human-loop.md).
+_NEEDS_YOU_PAUSE_KINDS = frozenset({"decision", "stopped", "worktree", "idle"})
+
+
+def _needs_you(status: str, pause_kind: Optional[str]) -> bool:
+    return status == "abandoned" or pause_kind in _NEEDS_YOU_PAUSE_KINDS
+
+
 def _pause_kind(raw: dict, display_status: str) -> Optional[str]:
     """One classification for list, summary and detail."""
     if _is_v1(raw):
@@ -669,7 +680,7 @@ async def pipeline_analytics(
         # After garbage exclusion, a surviving abandoned/decision-pause is a REAL
         # needs-you item (genuine decision-pause). A mislabeled-done run became
         # eff_status=='completed', so it is NOT aborted.
-        is_aborted = eff_status == "abandoned" or pause_kind == "decision"
+        is_aborted = _needs_you(eff_status, pause_kind)
 
         summary = PipelineRunSummary(
             id=run_id,
@@ -684,6 +695,7 @@ async def pipeline_analytics(
             created_at=raw.get("created_at", ""),
             updated_at=raw.get("updated_at", ""),
             pause_kind=pause_kind,
+            needs_you=is_aborted,
             checkpoint_reason=reason,
             owner_session_id=(raw.get("session_id") if _is_v1(raw) else None),
             verified=(_completion_verdict(raw)[0] if eff_status == "completed" else None),
@@ -721,7 +733,7 @@ async def pipeline_analytics(
     for project, summaries in sorted(by_project.items()):
         completed = sum(1 for s in summaries if s.status == "completed")
         cycles = [s.cycle_time_min for s in summaries if isinstance(s.cycle_time_min, (int, float))]
-        aborted = sum(1 for s in summaries if s.status == "abandoned" or s.pause_kind == "decision")
+        aborted = sum(1 for s in summaries if s.needs_you)
         # newest-first roster
         summaries.sort(key=lambda s: s.updated_at or s.created_at, reverse=True)
         # Cap the DETAIL list to the newest 20 (XG: 再多我们不用显示 — >20 has no
@@ -734,11 +746,9 @@ async def pipeline_analytics(
         # you" while the busiest projects (the ones that HAVE >20 runs, the exact
         # motivating case) hide the older needy ones the user cannot then see/click.
         # So visible = newest-20 ∪ all needy runs (order-preserved, deduped).
-        def _is_needy(s: PipelineRunSummary) -> bool:
-            return s.status == "abandoned" or s.pause_kind == "decision"
         _newest = summaries[:20]
         _newest_ids = {s.id for s in _newest}
-        _extra_needy = [s for s in summaries[20:] if _is_needy(s) and s.id not in _newest_ids]
+        _extra_needy = [s for s in summaries[20:] if s.needs_you and s.id not in _newest_ids]
         visible = _newest + _extra_needy
         # report_path: stat REPORT.md ONLY for the VISIBLE runs (Gate-1 #6 — never
         # stat all 750; needy tail is tiny). Workspace-relative → resolve Stage 1.

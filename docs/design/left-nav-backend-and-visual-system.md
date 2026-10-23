@@ -271,3 +271,8 @@ overlay 里只允许用下面这些角色，全部是已有的主题变量，自
 **S4**：`executors` 新增 `nav` 池（2 线程）和 `run_nav(fn, *args, **kwargs)`（`to_thread` 的同形替代）。只服务 nav 的 10 个 router（attention、community_api、jobs、library_api、eval、ddd_brain、todos、pipelines、pollinate、hive）里的 `asyncio.to_thread` 全部改走 `nav` 池；`workspace_api` 只改两个文件树接口，文件读写接口 Canvas 也在用，保持原样。`ddd_brain`、`workspace_api` 里 14 处 git 调用都带 `GIT_OPTIONAL_LOCKS=0`（包括 Review tab 的 diff/apply）。守护测试是静态扫描，argv 是变量的 git 调用也算在内（`workspace_api` 的 `git status` 就是这种，字面量规则会漏掉）。`artifacts`、`agents`、`chat` 不在范围：前者已在专用池，后两者是聊天本身用的。
 
 **S5**（不改界面）：`index.css` 加了 6 档字号 `text-meta/small/body/heading/title/display`（各带行高，构建产物里确认生成了 utility）和区色 `--color-zone-cognitive/work/system`（深色沿用原值；浅色加深为 `#1f9d6b`、`#2f7596`、`#5f6577`）。`navTable.ZONE_TINT` 改为引用这三个变量（深色主题下外观不变）。新目录 `components/overlay/`：`Stat`、`SectionLabel`、`Tabs`、`Segmented`、`StatusBadge`、`Hint`、`tableHeadClass`、`ROW_1/ROW_2`。棘轮测试 `__tests__/navVisualSystem.test.ts` 扫 22 个文件，基线：手写像素字号 578、Tailwind 自带字号 175、字面颜色 202、调色板颜色 205、`font-medium/bold` 139、未用 btn 尺度的按钮 143、彩色 emoji 113。两处细则：tab / 分段筛选（`role="tab"`/`"radio"`）不算按钮；emoji 只数彩色 emoji（`Emoji_Presentation` 或带 VS16），`↗` 这类文字符号不算。Settings 页面内部（`components/settings/`）不在这一轮的扫描范围。
+
+**S5b**（截图里的两个显示错误）：
+- "Needs you 0" 却列着一个 stopped 的 run：根因是两套定义。后端统计只算 abandoned 和 `decision`；前端从 v1 human loop 起已经把 `stopped`、`worktree`、`idle` 也算进去，后端没跟上。而且后端的"永不被 20 条上限截掉"也用旧定义，stopped 的老 run 甚至会被截掉。现在只有后端一份定义 `_needs_you()`，每条 run 带 `needs_you`，统计、上限例外、前端置顶区和筛选都读它；置顶区标题的数字就是它列出的行数。
+- token 列 "2727k/165k" 被报告图标盖住：列宽 64px 放不下 10 个字符。改为 96px 且不换行；日期列同样不换行（截图里折成了两行）。
+- 截图里同一个 run 既在置顶区又在项目分组里：这是原设计（置顶区是跨项目汇总，测试也写明了），没改。

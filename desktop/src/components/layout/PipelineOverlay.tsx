@@ -76,10 +76,10 @@ function isResumable(pauseKind: PipelinePauseKind): boolean {
   return pauseKind === 'stopped' || pauseKind === 'worktree';
 }
 
-/** Runs the user has to act on (the pinned region and the focus filter). */
-function needsYou(r: { status: string; pauseKind: PipelinePauseKind }): boolean {
-  return r.status === 'abandoned' || r.pauseKind === 'decision' || r.pauseKind === 'stopped'
-    || r.pauseKind === 'worktree' || r.pauseKind === 'idle';
+/** Runs the user has to act on (the pinned region and the focus filter): the
+ *  backend's one definition, so the count and the rows always agree. */
+function needsYou(r: { needsYou: boolean }): boolean {
+  return r.needsYou;
 }
 
 /** The "continue" prompt put in the owner session's composer. */
@@ -301,7 +301,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
                 <div className="flex items-center gap-2 px-3 py-2 border-b border-rose-500/30">
                   <span className="material-symbols-outlined icon-sm text-rose-500">priority_high</span>
                   <span className="text-sm font-medium text-[var(--color-text)]">Needs you</span>
-                  <span className="text-[11px] tabular-nums text-rose-500">{o?.abortedCount ?? needy.length}</span>
+                  <span data-testid="pipeline-needsyou-count" className="text-[11px] tabular-nums text-rose-500">{needy.length}</span>
                 </div>
                 <div>
                   {needy.map(({ run, project }) => (
@@ -412,9 +412,10 @@ function RunRow({ r, onOpenRun, close, showProject }: {
       {/* Run-time column (run_0e68e235): when this run last updated (= finish time
           for a terminal run). Rows arrive newest-first from the backend
           (summaries.sort updated_at reverse). Absolute stamp, no "N ago" (fmtTs). */}
-      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-28 text-right" title={r.updatedAt || r.createdAt}>{fmtTs(r.updatedAt || r.createdAt)}</span>
-      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-12 text-right">{fmtCycle(r.cycleTimeMin)}</span>
-      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-16 text-right">
+      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-32 text-right whitespace-nowrap" title={r.updatedAt || r.createdAt}>{fmtTs(r.updatedAt || r.createdAt)}</span>
+      <span className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-12 text-right whitespace-nowrap">{fmtCycle(r.cycleTimeMin)}</span>
+      {/* wide enough for "2727k/165k": a narrower column overflowed onto the report icon */}
+      <span data-testid={`pipeline-run-tokens-${r.id}`} className="text-[11px] tabular-nums text-[var(--color-text-faint)] shrink-0 w-24 text-right whitespace-nowrap">
         {fmtTokens(r.tokensActual)}/{fmtTokens(r.tokensEst)}
       </span>
       {/* Report button (AC2) — only when this run has a REPORT.md. Opens it in Canvas. */}
@@ -429,7 +430,7 @@ function RunRow({ r, onOpenRun, close, showProject }: {
           description
         </button>
       ) : (
-        <span className="w-[15px] shrink-0" aria-hidden />
+        <span className="w-4 shrink-0" aria-hidden />
       )}
       {isResumable(r.pauseKind) && (
         <span className="material-symbols-outlined icon-xs text-rose-500 shrink-0" title="resumable">play_circle</span>
