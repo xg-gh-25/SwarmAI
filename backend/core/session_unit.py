@@ -4285,12 +4285,9 @@ class SessionUnit:
         try:
             carry = getattr(self._streaming_orchestrator, "_turn_carry", {}) or {}
             fc = carry.get("pending_file_changes") or {}
-            from . import write_snapshot
             for tid, (_start, name) in list(calls.items()):
                 if name == "Bash":
-                    snap = write_snapshot.peek(self._hook_session_context, tid)
-                    paths = list(fc.get(tid) or []) + (write_snapshot.changed(snap) if snap else [])
-                    w = turn_stop.existing_write_targets(paths, self._cwd)
+                    w = turn_stop.existing_write_targets(list(fc.get(tid) or []), self._cwd)
                     if w:
                         writes[tid] = w
                 elif name in ("Agent", "Task"):

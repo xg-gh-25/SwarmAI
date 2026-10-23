@@ -7,22 +7,18 @@ What is tested
    and the negatives (read-only scripts, ``sed -n``, non-interpreter heredocs).
 2. ``governance_file_gate`` now advises on Bash commands that write a governed
    file (sed -i / redirect / heredoc patch) and stays silent otherwise.
-3. The live emit: a heredoc patch surfaces ``file_changed(written)`` ONLY for the
-   candidate whose CONTENT changed during the call (core/write_snapshot: digests
-   taken by a PreToolUse hook before the command runs). A literal it merely read is
-   dropped, and so is one whose mtime moved but whose content did not.
+3. The live emit: a heredoc script's path literals are never reported as writes
+   (only explicit write targets are; a literal may be one the script only reads).
 
 Key invariants
 --------------
-- INV1: heredoc literals are candidates, never proof — the emit confirms by content,
-  never by a timestamp.
+- INV1: heredoc literals are never proof of a write — not by content, not by a timestamp.
 - INV2: the governance gate always approves (advisory); a parse error never blocks.
 """
 from __future__ import annotations
 
 import asyncio
 import os
-import time
 
 import pytest
 
@@ -159,53 +155,9 @@ def _drive_tool_call(orch, use, on_tool_run, final):
     return asyncio.run(_run())
 
 
-def test_heredoc_patch_emits_only_the_file_it_changed(tmp_path, monkeypatch):
-    from claude_agent_sdk import AssistantMessage, ToolUseBlock
-
-    from core.permission_manager import permission_manager
-    from tests.test_orchestrator_surface_wiring import _patch_boundaries
-    from tests.test_tool_call_leak_guard import _make_orchestrator, _make_result_message
-
-    permission_manager.clear_session("sess-test")
-    _patch_boundaries(monkeypatch, review_worthy=True, kind="source")
-    monkeypatch.setattr(
-        "routers.workspace_api.resolve_path_to_physical",
-        lambda raw, _ws: {"relative": os.path.basename(raw), "absolute": raw},
-    )
-    written, read_only, touched = tmp_path / "x.py", tmp_path / "settings.json", tmp_path / "t.md"
-    old = time.time() - 600
-    for f in (written, read_only, touched):
-        f.write_text("old")
-        os.utime(f, (old, old))
-    cmd = (
-        f"cd {tmp_path} && python3 - <<'PY'\n"
-        "s=open('settings.json').read()\nopen('x.py','w').write(s)\nopen('t.md','a')\nPY"
-    )
-    use = AssistantMessage(
-        content=[ToolUseBlock(id="tu-hd", name="Bash", input={"command": cmd})],
-        model="test-model",
-    )
-    from core.write_snapshot import create_heredoc_snapshot_hook
-    orch = _make_orchestrator()
-    ctx: dict = {}
-    orch._parent._hook_session_context = ctx
-    # PreToolUse: before the command runs
-    asyncio.run(create_heredoc_snapshot_hook(ctx)({"tool_input": {"command": cmd}, "cwd": str(tmp_path)}, "tu-hd", None))
-
-    def run_tool():
-        written.write_text("new")
-        os.utime(touched, None)                     # mtime moves, content does not
-    try:
-        events = _drive_tool_call(orch, use, run_tool, _make_result_message())
-    finally:
-        permission_manager.clear_session("sess-test")
-    fc = [e for e in events if e.get("type") == "file_changed" and e.get("operation") == "written"]
-    assert [e["absolutePath"] for e in fc] == [str(written)], "read-only / touched literals must be dropped"
-    assert ctx["_heredoc_write_snapshots"] == {}, "the snapshot is consumed at the result"
-
-
-def test_without_a_snapshot_a_heredoc_literal_is_not_reported(tmp_path, monkeypatch):
-    """No PreToolUse record (e.g. a session without the hook): nothing is guessed."""
+def test_a_heredoc_literal_is_never_reported_as_a_write(tmp_path, monkeypatch):
+    """Heredoc path literals are not tracked as writes: the script really wrote x.py,
+    but only explicit write targets (Write/Edit, redirects, sed -i) surface."""
     from claude_agent_sdk import AssistantMessage, ToolUseBlock
 
     from core.permission_manager import permission_manager
@@ -223,7 +175,6 @@ def test_without_a_snapshot_a_heredoc_literal_is_not_reported(tmp_path, monkeypa
     cmd = f"cd {tmp_path} && python3 - <<'PY'\nopen('x.py','w').write('n')\nPY"
     use = AssistantMessage(content=[ToolUseBlock(id="tu-0", name="Bash", input={"command": cmd})], model="m")
     orch = _make_orchestrator()
-    orch._parent._hook_session_context = {}
     try:
         events = _drive_tool_call(orch, use, lambda: written.write_text("new"), _make_result_message())
     finally:
@@ -231,7 +182,8 @@ def test_without_a_snapshot_a_heredoc_literal_is_not_reported(tmp_path, monkeypa
     assert not [e for e in events if e.get("type") == "file_changed"]
 
 
-def test_snapshot_hook_is_registered_for_bash():
+def test_no_heredoc_snapshot_hook():
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] / "core" / "hook_builder.py").read_text()
-    assert '"heredoc_write_snapshot", matcher="Bash"' in src
+    assert "heredoc_write_snapshot" not in src
+    assert not (Path(__file__).resolve().parents[1] / "core" / "write_snapshot.py").exists()

@@ -174,65 +174,14 @@ def _parse_name_status(out: str) -> dict[str, str]:
 
 
 def code_roots() -> list[str]:
-    """Every code tree a turn may write: bound checkouts + live run worktrees, then
-    every live linked worktree of the bound repos (``_linked_worktrees``)."""
+    """Every code tree a turn may write: bound checkouts + live run worktrees."""
     try:
         from core.needs_human_review import _worktree_roots
         from core.project_registry import get_swarmws
-        roots = [os.path.realpath(p) for p, _repo in _worktree_roots(str(get_swarmws())) if Path(p).is_dir()]
+        return [os.path.realpath(p) for p, _repo in _worktree_roots(str(get_swarmws())) if Path(p).is_dir()]
     except Exception as exc:  # noqa: BLE001 — no roots = no card
         logger.debug("turn_changes: code roots unavailable: %s", exc)
         return []
-    return roots + [w for w in _linked_worktrees(roots) if w not in roots]
-
-
-# A session that follows the repo's worktree rule edits in a `git worktree add` tree
-# outside the bound checkout. Every live one is a code root: snapshotted at the start
-# like the checkout, so its edits reach the turn's card (and the session's Canvas
-# Changes) with an exact baseline. A linked worktree missing from the start list was
-# therefore created DURING the turn, and diffs from its HEAD (_group). The list is
-# cached briefly because allowed_repo asks for it on every diff request.
-_LINKED_TTL_S = 5.0
-_linked_cache: dict[tuple[str, ...], tuple[float, list[str]]] = {}
-
-
-def _linked_worktrees(roots: list[str]) -> list[str]:
-    key = tuple(roots)
-    hit = _linked_cache.get(key)
-    now = time.monotonic()
-    if hit and now - hit[0] < _LINKED_TTL_S:
-        return list(hit[1])
-    found = _scan_linked(roots)
-    _linked_cache[key] = (now, found)
-    return list(found)
-
-
-def _scan_linked(roots: list[str]) -> list[str]:
-    """Live linked worktrees of the checkouts among *roots*, newest index first.
-    Pipeline-test caches and worktrees whose directory is gone are skipped."""
-    found: dict[str, float] = {}
-    for root in roots:
-        try:
-            out = _git(root, "worktree", "list", "--porcelain")
-        except (RuntimeError, OSError, subprocess.SubprocessError):
-            continue
-        for line in out.splitlines():
-            if not line.startswith("worktree "):
-                continue
-            path = os.path.realpath(line[len("worktree "):])
-            if path in roots or path in found or "/cache/pipeline_test/" in path or not os.path.isdir(path):
-                continue
-            try:
-                index = _git(path, "rev-parse", "--path-format=absolute", "--git-path", "index").strip()
-                found[path] = os.stat(index).st_mtime
-            except (RuntimeError, OSError, subprocess.SubprocessError):
-                found[path] = 0.0
-    return sorted(found, key=lambda p: -found[p])
-
-
-def _is_linked(root: str) -> bool:
-    """A linked worktree (its .git is a file), not a main checkout."""
-    return os.path.isfile(os.path.join(root, ".git"))
 
 
 # Start snapshots per send are bounded: past this many trees the rest are not
@@ -385,7 +334,7 @@ class TurnChanges:
                 logger.info("turn_changes: start snapshot of %s came after the first tool call — left off", root)
                 continue
             await self._diff_into(loop, pool, top, paths, start)
-        # Trees that went live during the turn (a run or linked worktree it created): from HEAD.
+        # Run worktrees that went live during the turn: from HEAD.
         for top, paths in sorted(later.items()):
             await self._diff_into(loop, pool, top, paths, None)
 
@@ -415,13 +364,11 @@ def _group(raw: dict[str, str], known: list[str]) -> tuple[dict[str, list[str]],
     later: dict[str, list[str]] = {}
     wt_home = _run_worktree_home()
     if rest:
-        # Only a tree the turn CREATED may diff from HEAD (its HEAD is its base): a run
-        # worktree, or a linked worktree — every linked worktree live at the start is
-        # in *known*, so one missing from it is new. Any other tree missing at the start
-        # (a binding added mid-turn) is left off: HEAD would show earlier uncommitted
-        # work as this turn's.
+        # Only a run worktree the turn CREATED may diff from HEAD (its HEAD is the run's
+        # base). Any other tree missing at the start (a binding added mid-turn) is left
+        # off: HEAD would show earlier uncommitted work as this turn's.
         new = sorted((r for r in code_roots() if r not in known
-                      and ((wt_home and r.startswith(wt_home + os.sep)) or _is_linked(r))),
+                      and wt_home and r.startswith(wt_home + os.sep)),
                      key=len, reverse=True)
         for path in rest:
             root = next((r for r in new if path.startswith(r + os.sep)), None)

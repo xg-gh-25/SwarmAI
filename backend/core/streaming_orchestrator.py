@@ -28,7 +28,6 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Optional, Protocol
 
 from . import executors
 from . import pipeline_stage_events as _pse
-from . import write_snapshot as _write_snapshot
 from .compaction_guard import EscalationLevel
 from .session_healing import get_process_rss_mb
 from . import ui_actions as _ua
@@ -1456,11 +1455,6 @@ class StreamingOrchestrator:
         # run_5a7be540). Separate from _pending_file_changes because one Bash command
         # can both write and delete.
         _pending_file_deletes: dict[str, list[str]] = self._turn_carry["pending_file_deletes"]
-        # A Bash interpreter heredoc patch (`python3 - <<'PY' … open(p,'w')`) names its
-        # paths only as string literals: a PreToolUse hook recorded their content
-        # before the command ran (core/write_snapshot) and the result emits the ones
-        # whose content changed — a literal the script only read is not a write.
-        _hook_ctx = getattr(self._parent, "_hook_session_context", None)
         # tool_use_id → tool name, so a result can be summarized per tool.
         _tool_names: dict[str, str] = self._turn_carry["tool_names"]
         # tool_use_id → the Agent tool_use it ran under (sub-agent steps only).
@@ -1965,12 +1959,6 @@ class StreamingOrchestrator:
                                     )
                                     for _ev in _wr_events:
                                         yield _ev
-                            _hd_snap = _write_snapshot.take(_hook_ctx, _tuid)
-                            if _hd_snap:
-                                _hd_paths = await executors.run_in("io", _write_snapshot.changed, _hd_snap)
-                                if _hd_paths:
-                                    for _ev in await self._build_file_write_events(_hd_paths, _resolve_cache):
-                                        yield _ev
                             if _tuid in _pending_file_deletes:
                                 _um_dels = _pending_file_deletes.pop(_tuid, None)
                                 if _um_dels:
@@ -1994,7 +1982,6 @@ class StreamingOrchestrator:
                             # behave identically.
                             _pending_file_changes.pop(_tuid, None)
                             _pending_file_deletes.pop(_tuid, None)
-                            _write_snapshot.take(_hook_ctx, _tuid)
                             _pending_stage_watch.pop(_tuid, None)
                 # ── Glitch prefix in history → clean + resume at this boundary ──
                 # Tool results just came back, so the model is about to write

@@ -52,7 +52,6 @@ def repo(tmp_path, monkeypatch):
     _git(work, "branch", "-q", "-u", "origin/main")
     real = os.path.realpath(work)
     monkeypatch.setattr(tc, "code_roots", lambda: [real])
-    tc._linked_cache.clear()
     return Path(real)
 
 
@@ -71,37 +70,21 @@ async def _turn(roots, writes: dict, at: str):
     return (at, [block] if block else [])
 
 
-def test_linked_worktrees_are_all_live_ones_and_cached(repo, tmp_path):
-    keep, gone, old = tmp_path / "keep", tmp_path / "gone", tmp_path / "old"
-    cache = tmp_path / "cache" / "pipeline_test" / "x"
-    for p, b in ((keep, "k"), (gone, "g"), (cache, "c"), (old, "o")):
-        _git(repo, "worktree", "add", "-q", "-b", b, str(p))
-    import shutil
-    shutil.rmtree(gone)
-    os.utime(_git(old, "rev-parse", "--path-format=absolute", "--git-path", "index"), (1, 1))
-    assert tc._linked_worktrees([str(repo)]) == [os.path.realpath(keep), os.path.realpath(old)]
-    _git(repo, "worktree", "add", "-q", "-b", "n", str(tmp_path / "n"))
-    assert len(tc._linked_worktrees([str(repo)])) == 2          # cached
-    tc._linked_cache.clear()
-    assert len(tc._linked_worktrees([str(repo)])) == 3
-
-
 @pytest.mark.asyncio
-async def test_a_worktree_created_during_the_turn_diffs_from_its_head(repo, tmp_path, monkeypatch):
+async def test_a_non_run_worktree_is_not_a_code_root(repo, tmp_path, monkeypatch):
+    """Only bound checkouts and run worktrees are code trees: an ad-hoc
+    `git worktree add` tree is never snapshotted, so its edits are left off."""
     import core.needs_human_review as nhr
     monkeypatch.undo()
     monkeypatch.setattr(nhr, "_worktree_roots", lambda ws: ((str(repo), "swarmai"),))
-    tc._linked_cache.clear()
+    wt = tmp_path / "adhoc"
+    _git(repo, "worktree", "add", "-q", "-b", "kiro/adhoc", str(wt))
+    assert tc.code_roots() == [str(repo)]
     t = TurnChanges.start(None)
     await t.ready()
-    wt = tmp_path / "fresh"
-    _git(repo, "worktree", "add", "-q", "-b", "kiro/fresh", str(wt))   # made by the turn
-    tc._linked_cache.clear()
-    (wt / "a.py").write_text("new in fresh\n")
+    (wt / "a.py").write_text("edited in adhoc\n")
     t.note({"type": "file_changed", "absolutePath": str(wt / "a.py"), "path": "a.py", "operation": "written"})
-    block = await t.finish()
-    [row] = block["files"]
-    assert row["path"] == "a.py" and row["status"] == "modified" and row["gitRoot"] == str(repo)
+    assert await t.finish() is None
 
 
 @pytest.mark.asyncio
