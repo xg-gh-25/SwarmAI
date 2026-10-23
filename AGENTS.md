@@ -234,18 +234,19 @@ implementations in `security_hooks.py`). By category:
    repo — any source line with worktree mode on — is sent to `pipeline_v1.py create --profile
    direct`; pure-doc paths are not source (`*.md` and `backend/context/`, defined once in
    `backend/core/doc_paths.py::is_doc_only_path`);
-   other sessions' and unowned runs never exempt it), `active_run_commit_gate` (files owned by an
-   active pipeline run, and that run's own `.aidlc/deliverables/<run_id>/` REPORT.md, land
-   only through the run's DELIVER landing), `adversarial_commit_gate` (no `git commit` without a sub-agent review this
-   session); all fail open. Pipeline v1 review round limits and parallel waves are
+   other sessions' and unowned runs never exempt it), `active_run_commit_gate` (files a live v1 run
+   changed, read from its signed code facts (`RunEngine.owned_paths`) for every run whose
+   contract repo roots or worktrees hold a committed path, land only through the run's
+   landing; it denies when such a run cannot be read, or when `git -C` / `--git-dir`
+   retargets another repo), `adversarial_commit_gate` (no `git commit` without a sub-agent
+   review this session); the others fail open. Pipeline v1 review round limits and parallel waves are
    enforced by signed `handout` / `answer` events in `core/run_protocol/`, not a
    marker-counting PreToolUse gate. `session_link_gate` (Bash, always on, registered
    right before `test_command_gate`: denies removing or overriding `SWARM_APP_SESSION_ID`,
-   the run↔session link both run gates key on; cannot be forced),
-   backed by the PostToolUse (Bash) `session_link_stamper` (with its PreToolUse start-time
-   companion `session_link_stamp_start`): after an artifact_cli call it writes
-   this session's id into legacy running runs (v1 runs carry `session_id` in their protected contract) with no `session_id` that the call created or names
-   (`session_id_source: backend_stamp`), never overwriting an existing one.
+   the run↔session link both run gates key on; cannot be forced). A v1 run's owner is the
+   signed one (its contract's session, then each `owner_transfer`), never run.json; a
+   prewarmed subprocess that has no `SWARM_APP_SESSION_ID` gets this session's id from
+   `run_owner_gate`, which puts it before the one `pipeline_v1` / `pipeline_test` call it binds.
    `audit_marker_write_gate` (Bash and Write|Edit|MultiEdit|NotebookEdit|Read|Grep, always on,
    right after `background_command_guard`, ahead of every HITL gate): denies writes, moves or deletes in
    `state/pipeline_agent_audit`; it also denies reads of each v1 run's `authority.key` while allowing

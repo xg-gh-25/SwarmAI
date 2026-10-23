@@ -19,7 +19,7 @@ Invariants:
   • `function NAME { … }` bodies, ksh / csh / tcsh / dash / fish -c strings, csh
     unsetenv / setenv, fish set, and `su [user] -c STRING` are classified;
   • sudo / env -i / exec -c deny only when the wrapped PROGRAM is a link reader
-    (python* / uv / artifact_cli / pipeline_test, or a path to those scripts), so
+    (python* / uv / pipeline_v1 / pipeline_test, or a path to those scripts), so
     `sudo dnf install python3.11` and `env -i make run` pass; the sudo deny text
     advises -E / --preserve-env, not env -u;
   • a stdin shell's script (heredoc body, echo words) is classified, not matched;
@@ -58,7 +58,7 @@ def _is_deny(res):
 
 # ── item 1: package-manager shell modes ──────────────────────────────────────
 PM_SHELL_DENIED = [
-    "pnpm -c exec 'unset @@; python backend/scripts/artifact_cli.py run-create'",
+    "pnpm -c exec 'unset @@; python backend/scripts/pipeline_v1.py create'",
     "pnpm -rc exec 'unset @@; python a.py'",
     "pnpm --shell-mode dlx 'unset @@; python a.py'",
     "pnpm dlx --shell-mode 'unset @@'",
@@ -108,8 +108,8 @@ PIPELINE_SHELL_CLEAN = [
 INDIRECT_DENIED = [
     "X=@@; unset $X", "X=@@; unset ${X}", "X=@@; unset \"$X\"",
     "X=@@; export -n \"$X\"", "X=@@; eval \"unset $X\"", "X=@@; eval unset \\$X",
-    "X=@@; unset $X; python backend/scripts/artifact_cli.py run-create",
-    "unset ${!SWARM_APP_*}", "unset ${!SWARM_APP_*}; python backend/scripts/artifact_cli.py run-create",
+    "X=@@; unset $X; python backend/scripts/pipeline_v1.py create",
+    "unset ${!SWARM_APP_*}", "unset ${!SWARM_APP_*}; python backend/scripts/pipeline_v1.py create",
     "for v in ${!SWARM_*}; do unset $v; done",
     "unset $(compgen -e | grep SWARM_APP)",
     "unset $'\\x53WARM_APP_SESSION_ID'",
@@ -119,10 +119,10 @@ INDIRECT_DENIED = [
     "env -u \"$(echo @@)\" python a.py", "env -u `echo @@` python a.py",
     "env -u $(env | grep -o '^SWARM_APP[^=]*') python a.py",
     "env --unset=$X python a.py",
-    "echo @@ | xargs -I{} env -u {} python backend/scripts/artifact_cli.py run-create",
+    "echo @@ | xargs -I{} env -u {} python backend/scripts/pipeline_v1.py create",
     "echo @@ | xargs env -u",
     "unset `echo @@`",
-    "declare -n R=@@; R=forged; python backend/scripts/artifact_cli.py run-create",
+    "declare -n R=@@; R=forged; python backend/scripts/pipeline_v1.py create",
     "X=@@; declare -n R=$X; R=forged; python a.py",
     "declare -n R=@@; unset R; python a.py",
     "typeset -n R=@@; R=x", "local -n R=@@", "nameref R=@@",
@@ -140,7 +140,7 @@ INDIRECT_ALLOWED = [
 # ── items 3, 5, 6: function bodies, other shells, su ─────────────────────────
 SHELLS_DENIED = [
     "function f { unset @@; }; f; python a.py",
-    "function f { unset @@; }; f; python backend/scripts/artifact_cli.py run-create",
+    "function f { unset @@; }; f; python backend/scripts/pipeline_v1.py create",
     "function f() { unset @@; }",
     "ksh -c 'unset @@; python a.py'", "mksh -c 'unset @@'", "dash -c 'unset @@'",
     "csh -c 'unsetenv @@; python a.py'", "tcsh -c 'unsetenv @@'",
@@ -150,11 +150,11 @@ SHELLS_DENIED = [
     "su root -c \"env -u @@ python a.py\"",
     "su -c 'unset @@' root",
     "su --command='@@=x python a.py' root",
-    "su - -c 'python3 backend/scripts/artifact_cli.py run-create' root",
+    "su - -c 'python3 backend/scripts/pipeline_v1.py create' root",
     "su -l root -c 'python a.py'",
 ]
 SHELLS_ALLOWED = [
-    "su -c 'python3 backend/scripts/artifact_cli.py run-create' root",
+    "su -c 'python3 backend/scripts/pipeline_v1.py create' root",
     "su - root -c 'ls -la'",
     "function build { make all; }; build",
     "fish -c 'set -x PATH /usr/bin $PATH'",
@@ -163,17 +163,17 @@ SHELLS_ALLOWED = [
 
 # ── items 4, 7: environment resets judged by the PROGRAM word ────────────────
 RESET_DENIED = [
-    "sudo python backend/scripts/artifact_cli.py run-create",
-    "sudo -i python3 backend/scripts/artifact_cli.py run-create",
+    "sudo python backend/scripts/pipeline_v1.py create",
+    "sudo -i python3 backend/scripts/pipeline_v1.py create",
     "sudo python3 -m pip install foo",
     "sudo -iu root python3 a.py", "sudo -- python a.py", "sudo -g wheel python a.py",
     "env -i uv run scripts/a.py",
-    "env -i ./backend/.venv/bin/py scripts/artifact_cli.py",
-    "env -i PATH=$PATH ./scripts/artifact_cli.py run-create",
-    "env -i \"$(which python3)\" backend/scripts/artifact_cli.py run-create",
-    "P=python3; env -i $P backend/scripts/artifact_cli.py run-create",
-    "env -i bash -l -c 'py backend/scripts/artifact_cli.py'",
-    "env -i PATH=/usr/bin /bin/sh -c 'cd backend && .venv/bin/python scripts/artifact_cli.py'",
+    "env -i ./backend/.venv/bin/py scripts/pipeline_v1.py",
+    "env -i PATH=$PATH ./scripts/pipeline_v1.py create",
+    "env -i \"$(which python3)\" backend/scripts/pipeline_v1.py create",
+    "P=python3; env -i $P backend/scripts/pipeline_v1.py create",
+    "env -i bash -l -c 'py backend/scripts/pipeline_v1.py'",
+    "env -i PATH=/usr/bin /bin/sh -c 'cd backend && .venv/bin/python scripts/pipeline_v1.py'",
     "exec -a foo -c python a.py", "arch -arm64 /usr/bin/env -i python3 a.py",
 ]
 RESET_ALLOWED = [
@@ -214,8 +214,8 @@ REVIEW_ALLOWED = [
     "cat <<EOF\\nexport @@=x\\nEOF", "python -c \"print('@@=1')\"",
     "cat notes.md | sh -c 'grep @@'", "curl -s localhost:8000/x | python3 -m json.tool",
     "ps aux | grep -v grep | grep exec", "git log --grep=exec",
-    "python3 backend/scripts/artifact_cli.py run-create --project SwarmAI",
-    "cd backend && .venv/bin/python scripts/artifact_cli.py run-create",
+    "python3 backend/scripts/pipeline_v1.py create --project SwarmAI",
+    "cd backend && .venv/bin/python scripts/pipeline_v1.py create",
     "exec python a.py", "exec 3>&1", "for f in *.py; do python $f; done",
     "env PYTHONPATH=. python a.py", "git diff | grep '@@='", "sed -n '/@@=/p' file",
     "awk '/unset @@/' f", "gh pr create --body \"unset @@\"",

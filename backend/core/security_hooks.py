@@ -13,7 +13,6 @@ Public symbols
 - ``create_file_access_permission_handler``  — workspace file-path sandbox
 - ``create_skill_access_checker``            — skill allow-list enforcement
 - ``create_session_link_gate``               — deny removing/overriding SWARM_APP_SESSION_ID (run↔session link)
-- ``create_session_link_stamper``            — PostToolUse: stamp this session's id into unlinked runs it created
 - ``create_audit_marker_write_gate``         — deny writes/deletes in state/pipeline_agent_audit (forged review markers)
 - ``create_pipeline_test_gate``              — in an active run, tests/builds only via pipeline_test.py
 - ``create_run_amend_gate``                  — in an active run, deny git commit --amend (no HITL prompt)
@@ -256,69 +255,31 @@ _IRREVERSIBLE_FALLBACK_RE = re.compile(
 )
 
 
-_CLAIM_CALL_RE = re.compile(r"\bclaim_main\s*\(")
-# a python interpreter word: only a command that runs one can CALL claim_main(
-_PYTHON_RE = re.compile(r"(?:^|[\s;&|(`'\"/=])python[0-9.]*(?:\s|$|[;&|)`'\"])")
+# the person approved THIS v1 authorization command for THIS tool call (one use)
+_LAND_APPROVALS: "dict[tuple[str, str], float]" = {}
+_LAND_APPROVAL_TTL = 120.0
 
 
-_CLAIM_APPROVALS: "dict[tuple[str, str], float]" = {}
-_CLAIM_APPROVAL_TTL = 120.0
-
-
-def _claim_key(tool_use_id: "str | None", command: str) -> "tuple[str, str]":
+def _approval_key(tool_use_id: "str | None", command: str) -> "tuple[str, str]":
     return (str(tool_use_id or ""), hashlib.sha256(command.encode()).hexdigest())
 
 
-def record_claim_approval(tool_use_id: "str | None", command: str) -> None:
-    """dangerous_command_gate: the user approved THIS claim command (this tool call)."""
+def record_land_approval(tool_use_id: "str | None", command: str) -> None:
+    """dangerous_command_gate: the user approved THIS v1 authorization (this tool call)."""
     now = time.monotonic()
-    for k, t in list(_CLAIM_APPROVALS.items()):
-        if now - t > _CLAIM_APPROVAL_TTL:
-            _CLAIM_APPROVALS.pop(k, None)
-    _CLAIM_APPROVALS[_claim_key(tool_use_id, command)] = now
+    for k, t in list(_LAND_APPROVALS.items()):
+        if now - t > _LAND_APPROVAL_TTL:
+            _LAND_APPROVALS.pop(k, None)
+    _LAND_APPROVALS[_approval_key(tool_use_id, command)] = now
 
 
-def consume_claim_approval(tool_use_id: "str | None", command: str) -> bool:
+def consume_land_approval(tool_use_id: "str | None", command: str) -> bool:
     """run_owner_gate (phase approved): was this exact command approved by the user for
     this tool call? One use. Position after the approval gate is not proof: a hook that
     raises is skipped by the chain, so without this record a crash in the approval gate
-    would hand the claim its token unapproved."""
-    t = _CLAIM_APPROVALS.pop(_claim_key(tool_use_id, command), None)
-    return t is not None and time.monotonic() - t <= _CLAIM_APPROVAL_TTL
-
-
-def _is_main_claim(command: str) -> bool:
-    """Fail-closed predicate: does this command claim main-checkout edits into a run?
-
-    ``run-claim-main`` (run_worktree.claim_main) moves files out of the main checkout,
-    possibly another session's edit, so it never runs on the agent's word alone: True
-    sends it through the approval flow below, independent of dangerous_commands.json
-    (a glob there would never reach an install whose file predates the command). It
-    matches the two ways to RUN it, whatever prefix or wrapper (``cd … &&``, ``env``):
-    a shell token equal to ``run-claim-main`` (the CLI subcommand), or a CALL of the
-    function, ``claim_main(`` (``python -c``, a heredoc). A name that only mentions it —
-    ``grep claim_main``, ``tests/test_run_claim_main.py``, a commit message — is not a
-    claim (each match costs the user a prompt, and a headless agent a deny). On a parse
-    error the raw text is searched the same way."""
-    if "claim" not in command:
-        return False
-    if _CLAIM_CALL_RE.search(command) and _PYTHON_RE.search(command):
-        # a call, in a command that runs python (`python -c`, a heredoc fed to python);
-        # the same text in `grep "def claim_main("` or a commit message is a mention
-        return True
-    if "run-claim-main" not in command:
-        return False
-    # the CLI subcommand: exactly the calls run_owner_gate would issue a token for (a
-    # python running artifact_cli.py with that subcommand); `grep run-claim-main` is a
-    # mention, and any other wrapper (`bash -c "…"`) gets no token, so the CLI refuses it
-    from core.run_owner_gate import parse_cli_calls
-    calls, _single = parse_cli_calls(command)
-    if not calls and _gate_shell_segments(command, []) is None:
-        return True   # unparseable: fail closed
-    return any(c.get("tool") == "artifact_cli" and c.get("sub") == "run-claim-main"
-               for c in calls)
-
-
+    would hand the request its token unapproved."""
+    t = _LAND_APPROVALS.pop(_approval_key(tool_use_id, command), None)
+    return t is not None and time.monotonic() - t <= _LAND_APPROVAL_TTL
 
 
 def _count_required_approval(session_id: "str | None") -> None:
@@ -1691,7 +1652,6 @@ def create_dangerous_command_gate(
             or _is_dangerous_rm(command)
             or _is_irreversible_external_op(command)
             or _targets_irreplaceable_store(command)  # rm/mv of DDD/Library/.context (run_a456640f)
-            or _is_main_claim(command)  # moves main-checkout edits into a run (run_3b9b1515)
             or _is_v1_land_request(command)  # consumes one explicit manual-land approval
         )
         # DoD1: local history-rewrite (rebase / reset --hard / commit --amend /
@@ -1730,9 +1690,9 @@ def create_dangerous_command_gate(
                 }
             }
 
-        # Check session approvals. A claim is asked every time: the same command text
-        # can name a path another session has written since it was approved.
-        if not (_is_main_claim(command) or _is_v1_land_request(command)) \
+        # Check session approvals. A v1 authorization is asked every time: each one is
+        # a person's decision about one signed request.
+        if not _is_v1_land_request(command) \
                 and permission_mgr.is_command_approved(session_key, command):
             logger.info("[APPROVED] Session-approved command: %s", command[:50])
             return {"decision": "approve"}
@@ -1788,8 +1748,8 @@ def create_dangerous_command_gate(
 
         if decision == "approve":
             permission_mgr.approve_command(session_key, command)
-            if _is_main_claim(command) or _is_v1_land_request(command):
-                record_claim_approval(tool_use_id, command)
+            if _is_v1_land_request(command):
+                record_land_approval(tool_use_id, command)
             else:   # a v1 authorization is a human decision, not a required approval
                 _count_required_approval_soon(actual_session_id)
             return {"decision": "approve"}
@@ -2065,9 +2025,9 @@ def _bg_segment_is_text(seg: list[str]) -> bool:
         return not (name == "rg" and any(t.startswith("--pre") for t in seg))
     if name == "git":
         return len(seg) > 1 and seg[1] in _BG_GIT_TEXT_SUBCOMMANDS
-    # The pipeline CLI takes requirement / summary texts that may name a keyword.
+    # The pipeline CLI takes requirement / message texts that may name a keyword.
     return bool(_BG_PYTHONS.match(name)) and len(seg) > 1 and (
-        os.path.basename(seg[1]) == "artifact_cli.py")
+        os.path.basename(seg[1]) == "pipeline_v1.py")
 
 
 # Programs that run a file, a string or their stdin as code: a list that runs one
@@ -3063,6 +3023,74 @@ def _single_commit_only_paths(root: str, dir_path: str, normalized: str) -> set[
     return out
 
 
+def _same_repo(option: str, value: str, root: str) -> bool:
+    """Whether git option *option* (``-C`` / ``--work-tree`` / ``--git-dir``) at *value*
+    still names the repository at *root*. A ``-C`` that resolves to no repo is git's
+    own error (nothing commits). A ``--git-dir`` is that repo's git directory: the same
+    repo when it is *root*'s own ``.git`` (a main checkout) or its common dir."""
+    if option == "--git-dir":
+        real = os.path.realpath(value)
+        if real == os.path.realpath(os.path.join(root, ".git")):
+            return True
+        try:
+            r = subprocess.run(["git", "-C", root, "rev-parse", "--git-common-dir"],
+                               capture_output=True, text=True, timeout=_GATE_GIT_TIMEOUT)
+            common = r.stdout.strip() if r.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return bool(common) and real == os.path.realpath(os.path.join(root, common))
+    other = _gate_repo_root_for(value)
+    return other == root or (other is None and option == "-C")
+
+
+def _effective_commit_dir(dir_path: str, command: str) -> str:
+    return _commit_dirs(dir_path, command)[1]
+
+
+def _commit_dirs(dir_path: str, command: str) -> "tuple[str, str]":
+    """(the shell's directory when the first ``git … commit`` of *command* starts, the
+    directory that commit runs in): *dir_path*, moved by each ``cd <dir>`` before it (R1
+    review r2), then by each ``git -C <dir>`` before ``commit``, in order (a relative
+    one against the previous directory, as the shell and git do). *dir_path* twice when
+    there is none or the command does not split (R1 review r1: a ``git -C <repo>
+    commit`` from a non-repo cwd was unbound)."""
+    import shlex as _shlex
+    try:
+        tokens = _shlex.split(_normalize_newlines_quote_aware(command))
+    except ValueError:
+        return dir_path, dir_path
+    cwd = dir_path
+    for i, tok in enumerate(tokens):
+        if tok == "cd" and (i == 0 or tokens[i - 1] in (";", "&&", "||")) \
+                and i + 1 < len(tokens) and tokens[i + 1] not in (";", "&&", "||", "|", "&"):
+            cwd = os.path.join(cwd, os.path.expanduser(tokens[i + 1]))
+            continue
+        if os.path.basename(tok) != "git":
+            continue
+        here, j = cwd, i + 1
+        while j < len(tokens) and tokens[j] != "commit":
+            if tokens[j] == "-C" and j + 1 < len(tokens):
+                here = os.path.join(here, os.path.expanduser(tokens[j + 1]))
+                j += 2
+                continue
+            if tokens[j] in (";", "&&", "||", "|", "&"):
+                break
+            j += 1
+        if j < len(tokens) and tokens[j] == "commit":
+            return cwd, here
+    return dir_path, dir_path
+
+
+def _commit_identity(path: str) -> str:
+    """The canonical identity of a file a commit names (R1 review r2): its PARENT is
+    realpath'd (so two spellings of the same directory agree), but the final component
+    is kept verbatim. A tracked symlink is committed AS the link, not as what it points
+    at, so resolving the leaf would move it out of the repo and past the gate."""
+    path = path if os.path.isabs(path) else os.path.abspath(path)
+    parent, name = os.path.split(path)
+    return os.path.join(os.path.realpath(parent), name)
+
+
 def _pending_commit_paths(dir_path: str, command: str):
     """The set of ABSOLUTE paths a `git commit` is about to commit; or None if
     uncomputable (not a repo / git error / timeout → gate fails OPEN); or the
@@ -3076,6 +3104,7 @@ def _pending_commit_paths(dir_path: str, command: str):
     repo-root-relative; a positional pathspec is COMMITTER-CWD-relative (git
     semantics), NOT root-relative."""
     import shlex as _shlex
+    origin, dir_path = _commit_dirs(dir_path, command)
     root = _gate_repo_root_for(dir_path)
     if root is None:
         return None
@@ -3170,14 +3199,15 @@ def _pending_commit_paths(dir_path: str, command: str):
         _g = 1  # skip tokens[0] == "git"
         while _g < _ci:
             gt = _seg[_g]
+            # a retarget that names another repo, or one that cannot be resolved to a
+            # work tree (a bare --git-dir), cannot be bound: refused (R1 review r1)
             if gt in ("-C", "--git-dir", "--work-tree") and _g + 1 < _ci:
-                other = _gate_repo_root_for(_seg[_g + 1])
-                if other is not None and other != root:
+                if not _same_repo(gt, os.path.join(origin, _seg[_g + 1]), root):
                     return _PENDING_CROSS_REPO
                 _g += 2; continue
             if gt.startswith(("--git-dir=", "--work-tree=")):
-                other = _gate_repo_root_for(gt.split("=", 1)[1])
-                if other is not None and other != root:
+                name, value = gt.split("=", 1)
+                if not _same_repo(name, os.path.join(origin, value), root):
                     return _PENDING_CROSS_REPO
             if gt == "-c" and _g + 1 < _ci:
                 _g += 2; continue  # -c key=val consumes a value
@@ -3285,11 +3315,9 @@ def _pending_commit_paths(dir_path: str, command: str):
 
     out: set[str] = set()
     for rel in root_rels:  # git-diff output → relative to repo ROOT
-        ap = rel if os.path.isabs(rel) else os.path.join(root, rel)
-        out.add(os.path.realpath(ap))
+        out.add(_commit_identity(rel if os.path.isabs(rel) else os.path.join(root, rel)))
     for p in cwd_paths:    # positional pathspec / -o → relative to committer CWD
-        ap = p if os.path.isabs(p) else os.path.join(dir_path or root, p)
-        out.add(os.path.realpath(ap))
+        out.add(_commit_identity(p if os.path.isabs(p) else os.path.join(dir_path or root, p)))
     return out
 
 
@@ -3490,130 +3518,69 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
 # workspace is ~/.swarm-ai/SwarmWS; runs live at Projects/*/.artifacts/runs/*/run.json.
 _ACTIVE_RUN_GLOB_ROOT = os.path.expanduser("~/.swarm-ai/SwarmWS")
 
-# A run OWNS its files_touched only while NON-TERMINAL. This is an ALLOWLIST of the two
-# live non-terminal states (NOT a terminal denylist — a denylist rots as new terminal
-# statuses appear; live data: running + paused are the only non-terminal values, all of
-# completed/abandoned/cancelled/complete/superseded/rejected/aborted are terminal).
-_ACTIVE_RUN_STATUSES = frozenset({"running", "paused",
-                                  "active", "awaiting_human", "reflecting"})  # + v1 non-terminal
 
 
-# Candidate repo roots a REPO-RELATIVE files_touched entry may be rooted at — resolved
-# DETERMINISTICALLY (NOT os.getcwd()), so canonicalization is correct in the DAEMON.
-# Meta-review HIGH: in the launchd daemon os.getcwd()==BACKEND_DIR (not any pipeline
-# repo), so a cwd-based candidate is a DEAD base in production — the gate would fail
-# OPEN for relative entries while all local tests (cwd happens to BE the repo) pass
-# green. The two daemon-stable roots a SwarmAI run's relative entry can live under:
-#   (1) the SwarmAI SOURCE repo — this module is backend/core/security_hooks.py, so the
-#       repo root is two parents up from __file__ (NOT cwd — survives launchd).
-#   (2) the SwarmWS workspace (_ACTIVE_RUN_GLOB_ROOT).
-# A relative entry from a FOREIGN project (e.g. Agent-DLC's scripts/setup_agent.py)
-# whose repo is not checked out here correctly matches NEITHER — it is not a file in
-# any repo the agent commits here, so NOT denying it is correct, not a miss.
-def _canonical_rel_bases() -> list:
-    bases = [_ACTIVE_RUN_GLOB_ROOT]
-    try:
-        # backend/core/security_hooks.py → repo root = parents[2]
-        bases.append(str(Path(__file__).resolve().parents[2]))
-    except Exception:
-        logger.debug("_canonical_rel_bases: suppressed exception on a fail-safe path", exc_info=True)
-        pass
-    return bases
-
-
-def _canonicalize_owned_path(p: str) -> set:
-    """Canonicalize ONE files_touched entry to the SAME form _pending_commit_paths
-    emits — `os.path.realpath` of an absolute path — so set-intersection actually
-    matches. Gate-2 HIGH (multi-specialist confirmed): a files_touched entry may be
-    ABSOLUTE or REPO-RELATIVE (build.md form; live data is mixed), while the pending
-    set is ALWAYS realpath'd-absolute. A raw-string owned set silently fails to match
-    every relative entry → the gate fails OPEN exactly where it must DENY.
-
-    Returns a SET of candidate realpaths (never raises): an absolute entry → one
-    realpath; a relative entry → realpath against each DETERMINISTIC repo base
-    (`_canonical_rel_bases` — the SwarmWS workspace + the source repo via __file__,
-    NEVER os.getcwd() which is BACKEND_DIR in the daemon, meta-review HIGH). Emitting
-    multiple candidates is safe: a false candidate never intersects a real pending
-    path (distinct files never share a realpath — adversarially confirmed), and a
-    foreign-project relative entry correctly matches nothing."""
-    out: set = set()
-    try:
-        if os.path.isabs(p):
-            out.add(os.path.realpath(p))
-            return out
-        for base in _canonical_rel_bases():
-            try:
-                out.add(os.path.realpath(os.path.join(base, p)))
-            except Exception:
-                logger.debug("_canonicalize_owned_path: suppressed exception on a fail-safe path", exc_info=True)
-                continue
-    except Exception:
-        logger.debug("_canonicalize_owned_path: suppressed exception on a fail-safe path", exc_info=True)
-        pass
-    return out
-
-
-def _active_run_owned_paths() -> set:
-    """REALPATH'd absolute paths currently OWNED by an active (running|paused)
-    pipeline run — i.e. committing them via the agent Bash tool would split code
-    from its REPORT.md.
-
-    Globs ``<root>/Projects/*/.artifacts/runs/*/run.json``, unions the CANONICALIZED
-    ``files_touched`` (see `_canonicalize_owned_path` — matches the realpath form
-    `_pending_commit_paths` emits) of every run whose ``status`` is in
-    ``_ACTIVE_RUN_STATUSES``. Exception-safe per file: a corrupt/unreadable run.json
-    is skipped, never raised (one bad file must not blind the whole gate). Returns a
-    (possibly empty) set."""
-    # KNOWN LIMITATION (meta-review MED, accepted — fail-open, not a blocker): this
-    # globs ALL historical run.json (hundreds+ and growing), parsing each to find the
-    # 0-2 active ones, on every agent git commit. It is bounded only by the caller's
-    # _GATE_COVERAGE_TIMEOUT (which fails OPEN) — so at extreme scale the gate would
-    # silently stop enforcing rather than hang. Acceptable because: (a) it runs ONLY on
-    # a real git commit (gated upstream), not every Bash; (b) worst case is silent
-    # non-enforcement (status-quo), never breakage or false-block. Follow-up if it bites:
-    # maintain a small active-runs index (append-on-start / remove-on-terminal) and read
-    # that instead of globbing all history.
-    owned: set = set()
-    for data in _active_runs():
-        ft = data.get("files_touched")
-        if isinstance(ft, list):
-            for p in ft:
-                if isinstance(p, str) and p:
-                    owned.update(_canonicalize_owned_path(p))
-    return owned
-
-
-def _active_run_ownership() -> "tuple[set, set]":
-    """One scan: (canonical files_touched of active runs, their run ids)."""
-    owned: set = set()
-    ids: set = set()
-    for data in _active_runs():
-        if isinstance(data.get("id"), str):
-            ids.add(data["id"])
-        ft = data.get("files_touched")
-        if isinstance(ft, list):
-            for p in ft:
-                if isinstance(p, str) and p:
-                    owned.update(_canonicalize_owned_path(p))
-    return owned, ids
-
-
-def _active_runs() -> list:
-    """run.json dicts of every active (running|paused) run under _ACTIVE_RUN_GLOB_ROOT.
-    A corrupt/unreadable run.json is skipped (core.run_index); a scan failure yields []."""
-    from core import run_index
+def _runs_touching(pending: set) -> "list[tuple[str, str]]":
+    """(project, run_id) of every v1 run whose code a pending path lies in: its
+    protected contract names a repo root, or the run has a worktree, that holds the
+    path. Read from the run directory's own location and the protected contract only:
+    nothing an agent can edit in run.json (R1 review r1). No git, no event fold."""
+    from config import get_app_data_dir
+    from core import run_worktree
+    from core.run_protocol.runner import read_contract
+    data_dir = get_app_data_dir()
+    projects = os.path.join(_ACTIVE_RUN_GLOB_ROOT, "Projects")
     out: list = []
     try:
-        all_runs = run_index.runs(_ACTIVE_RUN_GLOB_ROOT)
-    except Exception:
-        logger.debug("_active_runs: suppressed exception on a fail-safe path", exc_info=True)
+        project_names = os.listdir(projects)
+    except OSError:
         return out
-    for r in all_runs:
-        data = r.data  # a copy: setting "id" does not touch the index
-        if data.get("status") in _ACTIVE_RUN_STATUSES:
-            data.setdefault("id", r.path.parent.name)
-            out.append(data)
+    for project in project_names:
+        runs_dir = os.path.join(projects, project, ".artifacts", "runs")
+        try:
+            run_ids = os.listdir(runs_dir)
+        except OSError:
+            continue
+        for run_id in run_ids:
+            try:
+                contract = read_contract(data_dir, run_id)
+            except Exception:  # noqa: BLE001 — not a run id / not a readable contract
+                contract = None
+            if not isinstance(contract, dict):
+                continue
+            homes = []
+            for name, root in (contract.get("repo_roots") or {}).items():
+                if isinstance(root, str):
+                    homes.append(os.path.realpath(root))
+                try:
+                    homes.append(os.path.realpath(str(run_worktree.wt_path(run_id, name))))
+                except Exception:  # noqa: BLE001
+                    pass
+            # homes are realpath'd dirs; a pending identity's parent is realpath'd too
+            if any(p == h or p.startswith(h + os.sep) for p in pending for h in homes):
+                out.append((project, run_id))
     return out
+
+
+def _active_run_ownership(touching: "list[tuple[str, str]]") -> "tuple[set, set]":
+    """(real paths owned by those runs that are not terminal, their run ids). Each
+    run's state and paths come from the run itself (``RunEngine``: the signed events'
+    lifecycle, its contract, its code). A run that cannot be read raises: the caller
+    then refuses the commit rather than treat an unreadable run as owning nothing."""
+    from config import get_app_data_dir
+    from core.run_protocol import lifecycle
+    from core.run_protocol.engine import RunEngine
+    owned: set = set()
+    ids: set = set()
+    data_dir = get_app_data_dir()
+    for project, run_id in touching:
+        engine = RunEngine.load(data_dir=data_dir, workspace=_ACTIVE_RUN_GLOB_ROOT,
+                                project=project, run_id=run_id)
+        if engine.projection()["status"] in lifecycle.TERMINAL:
+            continue
+        ids.add(run_id)
+        owned |= engine.owned_paths()
+    return owned, ids
 
 
 # A run's review deliverable (B) lives at <repo>/.aidlc/deliverables/<run_id>/ in
@@ -3647,8 +3614,8 @@ def active_run_commit_deny_text(offending: "list[str]", run_ids: "list[str]") ->
 
 def create_active_run_commit_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse (Bash) gate that DENYs an agent `git commit` whose pending
-    paths belong to an ACTIVE pipeline run's files_touched — routing it to run-commit
-    (which co-commits REPORT.md). Prevents the code/REPORT split at the root.
+    paths are an ACTIVE v1 run's code (``_active_run_ownership``) or its reserved
+    REPORT, routing it to the run's ``land``. Prevents the code/REPORT split.
     session_context is accepted for registration symmetry (unused — ownership is
     global across runs, not session-scoped)."""
 
@@ -3680,22 +3647,49 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
             logger.warning("_gate: gate infrastructure error — failing open", exc_info=True)
             return {"decision": "approve"}
 
-        # None (uncomputable: not a repo / git error) / cross-repo sentinel / empty
-        # (no-op/amend-no-diff) → nothing to bind → fail-open approve.
-        if pending is None or pending is _PENDING_CROSS_REPO or not pending:
+        # None (uncomputable: not a repo / git error) / empty (no-op/amend-no-diff) →
+        # nothing to bind → fail-open approve. A retarget to another repo that cannot be
+        # bound is refused (R1 review r1): it may be a run's repo.
+        if pending is _PENDING_CROSS_REPO:
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "git commit → DENY: this commit points git at another repository "
+                    "(-C / --git-dir / --work-tree) than the one it runs in, so its files "
+                    "cannot be checked against active pipeline runs. Run the commit from "
+                    "inside that repository instead (`cd <repo> && git commit …`).")}}
+        if pending is None or not pending:
             return {"decision": "approve"}
         if not isinstance(pending, set):
             return {"decision": "approve"}
 
         try:
-            owned, run_ids = await asyncio.wait_for(
-                executors.run_in("gate", _active_run_ownership),
+            touching = await asyncio.wait_for(
+                executors.run_in("gate", _runs_touching, pending),
                 timeout=_GATE_COVERAGE_TIMEOUT,
             )
         except Exception:
             logger.warning("_gate: gate infrastructure error — failing open", exc_info=True)
             return {"decision": "approve"}
-
+        if not touching:
+            return {"decision": "approve"}
+        try:
+            owned, run_ids = await asyncio.wait_for(
+                executors.run_in("gate", _active_run_ownership, touching),
+                timeout=_GATE_COVERAGE_TIMEOUT * 2,
+            )
+        except Exception as exc:  # a run this commit touches could not be read in time
+            names = ", ".join(rid for _p, rid in touching[:3])
+            logger.warning("active_run_commit_gate: runs %s unreadable (%r) — refusing",
+                           names, exc)
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"git commit → DENY: this commit touches the code of pipeline run(s) "
+                    f"{names}, whose state could not be read just now ({type(exc).__name__}). "
+                    "Retry the commit; if it keeps failing, check the run with "
+                    "`python backend/scripts/pipeline_v1.py status --project <project> "
+                    "--run-id <run_id>`.")}}
         reports = _active_run_deliverables(pending, run_ids)
         offending = sorted({*(p for p in pending if p in owned), *reports})
         if not offending:
@@ -3742,8 +3736,8 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 # Each session is judged ONLY by runs whose session_id equals its own id: a run with
 # no session_id (pre-C1) is nobody's run, so it neither gates its creator nor exempts
 # anyone else. Creating a run with SWARM_APP_SESSION_ID removed or overridden from a
-# Bash command is denied by session_link_gate (section below), and a run created
-# without the id anyway is stamped with it by session_link_stamper. Only runs active within
+# Bash command is denied by session_link_gate (section below); a v1 run cannot be
+# created without one (its contract names the owner). Only runs active within
 # _RUN_ACTIVE_WINDOW_SECONDS (3 h) count: a running run is rewritten on every stage
 # transition, so an idle "running" file is a crashed or abandoned run and must not
 # pin a gate (the deny text names `run-update --status abandoned`).
@@ -3787,11 +3781,8 @@ def _source_repo_root() -> "str | None":
     """The SwarmAI source repo (a git toplevel). From this module's own path when it is
     one (dev, tests) — in the packaged daemon ``__file__`` lies inside the bundle, so
     that path is never the repo and every gate scoped to it silently failed open. Then
-    from the newest run's recorded CLI (run.json "cli": the absolute artifact_cli.py
-    the pipeline runs), accepted only when that script exists and its repo holds this
-    module's twin. run.json is agent-written, so this is guidance-grade scoping (the
-    gates using it fail open anyway), not a trust boundary. Cached 60 s; None when
-    neither resolves."""
+    from the newest v1 runs' protected contracts (their ``repo_roots``): the first root
+    that holds this module's twin. Cached 60 s; None when neither resolves."""
     if _SOURCE_REPO_ROOT and os.path.isdir(os.path.join(_SOURCE_REPO_ROOT, ".git")):
         return _SOURCE_REPO_ROOT
     import time as _time
@@ -3807,19 +3798,29 @@ def _source_repo_root() -> "str | None":
         except OSError:
             continue
     found = None
+    try:
+        from config import get_app_data_dir
+        from core.run_protocol.runner import read_contract
+        data_dir = get_app_data_dir()
+    except Exception:  # noqa: BLE001 — no config: nothing to read
+        data_dir = None
     for _t, f in sorted(files, reverse=True)[:50]:   # newest first, stop at the first fit
         try:
-            with open(f, encoding="utf-8") as fh:
-                cli = json.load(fh).get("cli")
-            sc = cli.get("script") if isinstance(cli, dict) else None
-        except (OSError, ValueError, AttributeError):
-            continue
-        if not isinstance(sc, str) or not os.path.isabs(sc) or not os.path.isfile(sc):
-            continue
-        root = os.path.realpath(os.path.join(os.path.dirname(sc), os.pardir, os.pardir))
-        if (os.path.basename(sc) == "artifact_cli.py" and os.path.isdir(os.path.join(root, ".git"))
-                and os.path.isfile(os.path.join(root, "backend", "core", "security_hooks.py"))):
-            found = root
+            contract = read_contract(data_dir, os.path.basename(os.path.dirname(f))) \
+                if data_dir is not None else None
+        except Exception:  # noqa: BLE001 — an unreadable contract names no root
+            contract = None
+        roots = (contract or {}).get("repo_roots") if isinstance(contract, dict) else None
+        for root in (roots or {}).values() if isinstance(roots, dict) else ():
+            if not isinstance(root, str) or not os.path.isabs(root):
+                continue
+            root = os.path.realpath(root)
+            # a main checkout (.git a directory), never a linked worktree
+            if os.path.isdir(os.path.join(root, ".git")) and os.path.isfile(
+                    os.path.join(root, "backend", "core", "security_hooks.py")):
+                found = root
+                break
+        if found:
             break
     _SOURCE_ROOT_CACHE[:] = [now, found]
     return found
@@ -3854,29 +3855,17 @@ def _run_activity_time(path: str, data: dict) -> float:
     return t
 
 
-def _recorded_run_cli(project: str, run_id: str) -> "dict | None":
-    """The ``cli`` block a run recorded in its run.json (sync: called via the
-    gate pool from the async pipeline_test_gate, never on the event loop)."""
-    path = os.path.join(_pipeline_runs_root(), "Projects", project, ".artifacts",
-                        "runs", run_id, "run.json")
-    with open(path, encoding="utf-8") as fh:
-        cli = json.load(fh).get("cli")
-    return cli if isinstance(cli, dict) else None
-
-
 def _session_run_state(app_session_id: str) -> "dict[str, str] | None":
     """C6 scan → ``{"project", "id"}`` of THIS session's active run, else None.
 
-    Active = ``status == "running"`` AND ``session_id == app_session_id`` AND last
+    Active = ``status`` active / reflecting AND ``session_id == app_session_id`` AND last
     activity (_run_activity_time) within _RUN_ACTIVE_WINDOW_SECONDS; the most recently
     active match wins. A session is judged ONLY by its own runs: a run with another
     session_id, or with no session_id at all (unowned), is simply not this session's
     run and changes nothing for it — no global fail-open. A Bash command that would
     create a run with SWARM_APP_SESSION_ID removed or overridden is denied by
-    session_link_gate (create_session_link_gate), and a run that still ends up
-    without an id (the variable stripped inside interpreter code or a script) is
-    stamped with this session's id by session_link_stamper after the session's
-    artifact_cli call (artifact_cli still warns at run-create). A corrupt or
+    session_link_gate (create_session_link_gate); a v1 run cannot be created
+    without one. A corrupt or
     unreadable run.json is skipped. A glob failure propagates; each caller fails OPEN on it."""
     import time as _time
     from core import run_index
@@ -3891,7 +3880,7 @@ def _session_run_state(app_session_id: str) -> "dict[str, str] | None":
         try:
             if _r.mtime < cutoff:
                 continue  # cheap pre-filter: every run.json write (incl. updated_at) bumps mtime
-            if data.get("status") not in ("running", "active", "reflecting"):  # + v1 busy
+            if data.get("status") not in ("active", "reflecting"):   # a v1 run at work
                 continue
             if data.get("session_id") != app_session_id:
                 continue
@@ -4854,19 +4843,6 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
         suggest = [_repo_relative(f, cwd) for f in files[:5]]
         mode = "tdd" if suggest else "verify"
         runner = _pipeline_runner_command(own_run["project"], own_run["id"], mode, suggest)
-        try:  # the run's recorded CLI makes it ONE absolute command (pipeline-run-worktree §16.9)
-            from core.worktree_write_gate import cli_command
-            _cli = await asyncio.wait_for(
-                executors.run_in("gate", _recorded_run_cli,
-                                 own_run["project"], own_run["id"]),
-                timeout=_RUN_SCAN_TIMEOUT,
-            )
-            if isinstance(_cli, dict):
-                _rest = runner.split("backend/scripts/pipeline_test.py ", 1)[1]
-                runner = ("perl -e 'alarm 110; exec @ARGV' "
-                          + cli_command(_cli, _rest, script="pipeline_test.py"))
-        except Exception:  # noqa: BLE001 — the relative form is still printed
-            logger.debug("_gate: suppressed exception on a fail-safe path", exc_info=True)
         logger.info("pipeline_test_gate: direct %s in run %s (allowed, not evidence)",
                     ", ".join(hits), own_run["id"])
         return {
@@ -4946,9 +4922,10 @@ def create_run_amend_gate(session_context: dict[str, Any]):
 # session-link gate (PreToolUse, Bash) — keeps the run↔session link of §4-B3/§4-G1
 # ---------------------------------------------------------------------------
 # pipeline_test_gate and direct_commit_gate judge a session only by runs whose
-# run.json session_id equals its app session id. artifact_cli.py run-create reads
-# that id from SWARM_APP_SESSION_ID, which prompt_builder injects into the CLI
-# subprocess env. A Bash command that removes or overrides the variable creates an
+# run.json session_id equals its app session id. `pipeline_v1.py create` reads
+# that id from SWARM_APP_SESSION_ID (prompt_builder injects it into the CLI
+# subprocess env) into the run's protected contract, and pipeline_test.py compares
+# it with the run's owner before it completes a stage. A Bash command that removes or overrides the variable creates an
 # unowned (or foreign) run, and then neither gate applies. session_link_gate DENIES
 # such commands ALWAYS, not only during a run:
 #   • removal: `unset VAR` / `unset VAR[0]`, `env -u VAR` / `-uVAR` / `--unset[=]VAR`
@@ -4967,8 +4944,8 @@ def create_run_amend_gate(session_context: dict[str, Any]):
 #   • a wholesale env reset (`env -i` / `env -` / `--ignore-environment`, `exec -c`,
 #     `sudo` without -E / --preserve-env, `su -|-l -c`) whose wrapped command is a
 #     link reader (_is_link_reader_program: the PROGRAM is python* / uv /
-#     artifact_cli* / pipeline_test* or computed at run time, or a word is a path to
-#     artifact_cli.py / pipeline_test.py). The link is consumed by Python CLIs only,
+#     pipeline_v1* / pipeline_test* or computed at run time, or a word is a path to
+#     pipeline_v1.py / pipeline_test.py). The link is consumed by Python CLIs only,
 #     so `sudo dnf install python3.11`, `env -i make run` or `env -i node a.js` pass;
 #     a reset in front of a shell is judged by the commands of that shell string;
 #   • a shell reading its script from stdin: the script — the echo / printf words
@@ -4992,12 +4969,9 @@ def create_run_amend_gate(session_context: dict[str, Any]):
 # RESIDUAL, no longer an unlink: interpreter code (`python -c "os.environ.pop(…)"`,
 # `subprocess.run(…, env={})`), a script file, `source FILE`, an escaped name a
 # program decodes (`echo -e '\x53…' | sh`) and a command shlex cannot split
-# (bash_syntax_guard denies those) all pass this gate, but a run they create ends
-# linked anyway: session_link_stamper (below) stamps this session's id into it right
-# after that call when its text mentions artifact_cli / run-create, else at the first
-# later artifact_cli call of the session that names the run id. What truly remains is
-# a run that is never named by an artifact_cli call of its session (see the stamper
-# section). Fail-open on
+# (bash_syntax_guard denies those) all pass this gate. A v1 run created that way has
+# no owner and is refused (`create` requires a session id), and pipeline_test.py
+# called without the owner's id completes no stage. Fail-open on
 # internal errors. No operator bypass (gate_force.UNFORCEABLE).
 _SESSION_LINK_VAR = "SWARM_APP_SESSION_ID"
 _SESSION_LINK_MAX_DEPTH = 3
@@ -5013,8 +4987,8 @@ _SESSION_LINK_MAX_CHARS = 32 * 1024
 _SHELL_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?\+?=")
 # Text test for a link reader, used where no command structure is available (a shell
 # reading a heredoc / pipe, a string past the depth limit).
-_SESSION_LINK_READER_RE = re.compile(r"artifact_cli|pipeline_test|\bpython[\d.]*\b|\buv\b")
-_SESSION_LINK_READER_SCRIPTS = ("artifact_cli.py", "pipeline_test.py")
+_SESSION_LINK_READER_RE = re.compile(r"pipeline_v1|pipeline_test|\bpython[\d.]*\b|\buv\b")
+_SESSION_LINK_READER_SCRIPTS = ("pipeline_v1.py", "pipeline_test.py")
 # Cheap pre-filter: a command naming neither the variable nor one of these words is
 # approved without parsing. Indirect forms (`unset $X`, `env -u {}`, `declare -n`,
 # `bash -c 'unset "$1"' _ VAR`) all carry one of the words.
@@ -5302,9 +5276,9 @@ def _reader_in_text(text: str) -> bool:
 def _is_link_reader_program(tokens: list[str]) -> bool:
     """True iff the simple command *tokens* runs a link reader: its PROGRAM word
     (before and after unwrapping, _skip_leading_wrappers / _unwrap_program) is
-    python* / uv / artifact_cli* / pipeline_test* or is computed at run time (`$P`,
-    `"$(which python3)"`), or one of its words is a path ending in artifact_cli.py /
-    pipeline_test.py (`py scripts/artifact_cli.py`). A word merely containing
+    python* / uv / pipeline_v1* / pipeline_test* or is computed at run time (`$P`,
+    `"$(which python3)"`), or one of its words is a path ending in pipeline_v1.py /
+    pipeline_test.py (`py scripts/pipeline_v1.py`). A word merely containing
     "python" (`dnf install python3.11`, `chown … ~/.swarm-ai/python`) is not one."""
     for t in (_skip_leading_wrappers(tokens), _unwrap_program(tokens)):
         if not t:
@@ -5312,7 +5286,7 @@ def _is_link_reader_program(tokens: list[str]) -> bool:
         prog = t[0]
         base = os.path.basename(prog)
         if "$" in prog or "`" in prog or _PY_INTERP_RE.match(base) \
-                or base in ("uv", "uvx") or base.startswith(("artifact_cli", "pipeline_test")):
+                or base in ("uv", "uvx") or base.startswith(("pipeline_v1", "pipeline_test")):
             return True
     return any(os.path.basename(a).endswith(_SESSION_LINK_READER_SCRIPTS) for a in tokens)
 
@@ -6618,184 +6592,6 @@ def create_audit_marker_write_gate(session_context: dict[str, Any]):
         }
 
     return audit_marker_write_gate
-
-
-# ---------------------------------------------------------------------------
-# session-link stamper (PreToolUse companion + PostToolUse, Bash)
-# ---------------------------------------------------------------------------
-# session_link_gate only sees Bash text. Interpreter code (`python -c
-# 'os.environ.pop(...)'`, `subprocess.run(..., env={})`) or a script file can still
-# start artifact_cli.py without SWARM_APP_SESSION_ID, and run-create then records
-# `session_id: null`. The stamper makes the link authoritative from the backend.
-# After a Bash call whose text mentions artifact_cli or run-create, it writes THIS
-# session's app id into each RUNNING run whose session_id is missing or empty and
-#   • whose created_at falls inside that call (from the start time the PreToolUse
-#     companion recorded under the tool_use_id, minus _STAMP_SLACK_SECONDS; without
-#     one, the last _STAMP_FALLBACK_WINDOW_SECONDS), or
-#   • whose run id the call's text names (`run-update --run-id run_x`), so a run a
-#     script file created is linked the next time this session works on it.
-# It adds `session_id_source: "backend_stamp"`. A non-empty session_id is never
-# overwritten (one that differs from ours is logged; a forged one is stopped by
-# session_link_gate). The write is atomic (same-dir temp + os.replace, json.dumps
-# indent=2 like artifact_cli) and is skipped when run.json changed after it was read.
-# Fail-safe: the scan runs in a worker thread bounded by _STAMP_TIMEOUT, every error
-# is logged and swallowed, and a hook context without a valid app session id makes
-# it a no-op. RESIDUAL: a run created by a command that does not mention
-# artifact_cli / run-create, and never named by a later artifact_cli call of the
-# session, stays unlinked (artifact_cli warns at run-create); so does a run another
-# unlinked creator (a terminal, a headless job) makes during this session's
-# artifact_cli call, which is stamped with this session's id instead.
-_STAMP_TRIGGER_RE = re.compile(r"artifact_cli|run-create")
-_STAMP_RUN_ID_RE = re.compile(r"(?<![\w-])run_[0-9A-Za-z]+(?![\w-])")
-_STAMP_SLACK_SECONDS = 2.0
-_STAMP_FALLBACK_WINDOW_SECONDS = 15 * 60
-_STAMP_TIMEOUT = 5.0
-_STAMP_MAX_PENDING = 256
-_APP_SESSION_ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,128}")  # artifact_cli's C1 token
-
-
-def _iso_timestamp(raw: Any) -> "float | None":
-    """POSIX time of an ISO-8601 string (naive = UTC), else None."""
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        from datetime import timezone as _tz
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=_tz.utc)
-        return parsed.timestamp()
-    except (ValueError, OverflowError):
-        return None
-
-
-def _stamp_one_run(path: str, app_session_id: str, since: float, now: float,
-                   named_ids: "set[str]") -> "str | None":
-    """Stamp ONE run.json (see the section comment) → its run id if stamped, else
-    None. Raises on IO / JSON errors (the caller logs and skips the file)."""
-    run_dir = os.path.dirname(path)
-    dir_id = os.path.basename(run_dir)
-    st = os.stat(path)
-    if dir_id not in named_ids and st.st_mtime < since:
-        return None  # cheap pre-filter: run-create's write sets mtime >= created_at
-    from core.run_lock import RunLockTimeout, run_lock
-    try:
-        with run_lock(run_dir, timeout=1.0):  # pipeline-run-worktree §4.1: one writer at a time
-            return _stamp_one_run_locked(path, run_dir, dir_id, st, app_session_id, since, now,
-                                         named_ids)
-    except RunLockTimeout:
-        logger.info("session_link_stamper: run %s stays locked by a command — skipped "
-                    "(the next call naming it stamps it)", dir_id)
-        return None
-
-
-def _stamp_one_run_locked(path, run_dir, dir_id, st, app_session_id, since, now,
-                          named_ids) -> "str | None":
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-    if not isinstance(data, dict) or data.get("status") != "running":
-        return None
-    run_id = str(data.get("id") or dir_id)
-    created = _iso_timestamp(data.get("created_at"))
-    in_call = created is not None and since <= created <= now + _STAMP_SLACK_SECONDS
-    if not (in_call or dir_id in named_ids or run_id in named_ids):
-        return None
-    current = data.get("session_id")
-    if current:
-        if current != app_session_id:
-            logger.warning("session_link_stamper: run %s is linked to session %s, not "
-                           "%s — left unchanged", run_id, current, app_session_id)
-        return None
-    data["session_id"] = app_session_id
-    data["session_id_source"] = "backend_stamp"
-    tmp = os.path.join(run_dir, ".run.json.stamp.%d.tmp" % os.getpid())
-    try:
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(data, indent=2))
-        if os.stat(path).st_mtime_ns != st.st_mtime_ns:
-            logger.info("session_link_stamper: run %s changed while stamping — skipped",
-                        run_id)
-            return None
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-    return run_id
-
-
-def _stamp_unlinked_runs(app_session_id: str, since: float, command: str) -> list[str]:
-    """Scan <workspace>/Projects/*/.artifacts/runs/*/run.json (_pipeline_runs_root)
-    and stamp *app_session_id* into the unlinked running runs created at or after
-    *since* or named in *command* → the stamped run ids. A malformed or unreadable
-    run.json is logged and skipped."""
-    import glob as _glob
-    import time as _time
-
-    now = _time.time()
-    named_ids = set(_STAMP_RUN_ID_RE.findall(command))
-    pattern = os.path.join(
-        _pipeline_runs_root(), "Projects", "*", ".artifacts", "runs", "*", "run.json")
-    stamped: list[str] = []
-    for path in _glob.glob(pattern):
-        try:
-            run_id = _stamp_one_run(path, app_session_id, since, now, named_ids)
-        except Exception as exc:
-            logger.debug("session_link_stamper: skipped %s: %s", path, exc)
-            continue
-        if run_id is not None:
-            stamped.append(run_id)
-            logger.warning("[session-link-stamper] run %s had no session_id; stamped "
-                           "with session %s (backend_stamp)", run_id, app_session_id)
-    return stamped
-
-
-def create_session_link_stamper(session_context: dict[str, Any]):
-    """Factory: PostToolUse (Bash) hook that links unlinked pipeline runs to this
-    session (section comment above). The returned hook carries ``.record_start``, the
-    PreToolUse (Bash) companion that records each call's start time by tool_use_id
-    (at most _STAMP_MAX_PENDING entries, oldest dropped). Both hooks return {} and
-    never raise. session_context is the mutable dict SessionUnit updates; its
-    ``sdk_session_id`` holds the app session id (read at call time)."""
-    import time as _time
-
-    starts: dict[str, float] = {}
-
-    async def _record_start(
-        input_data: dict[str, Any], tool_use_id: str | None, context: Any,
-    ) -> dict[str, Any]:
-        try:
-            if tool_use_id and input_data.get("tool_name") == "Bash":
-                starts[tool_use_id] = _time.time()
-                while len(starts) > _STAMP_MAX_PENDING:
-                    starts.pop(next(iter(starts)))
-        except Exception as exc:
-            logger.debug("session_link_stamper: start not recorded: %s", exc)
-        return {}
-
-    async def _stamp(
-        input_data: dict[str, Any], tool_use_id: str | None, context: Any,
-    ) -> dict[str, Any]:
-        try:
-            start = starts.pop(tool_use_id, None) if tool_use_id else None
-            if input_data.get("tool_name") != "Bash":
-                return {}
-            command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
-            if not isinstance(command, str) or not _STAMP_TRIGGER_RE.search(command):
-                return {}
-            sid = str(session_context.get("sdk_session_id") or "")
-            if not _APP_SESSION_ID_RE.fullmatch(sid):
-                return {}
-            since = (start - _STAMP_SLACK_SECONDS if start is not None
-                     else _time.time() - _STAMP_FALLBACK_WINDOW_SECONDS)
-            await asyncio.wait_for(
-                executors.run_in("gate", _stamp_unlinked_runs, sid, since, command),
-                timeout=_STAMP_TIMEOUT,
-            )
-        except Exception as exc:  # incl. asyncio.TimeoutError — never into the chat path
-            logger.warning("session_link_stamper: stamping skipped: %r", exc)
-        return {}
-
-    _stamp.record_start = _record_start  # type: ignore[attr-defined]
-    return _stamp
 
 
 def _project_for_repo(root: str) -> str:

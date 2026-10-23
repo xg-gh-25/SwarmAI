@@ -262,6 +262,11 @@ class RunEngine:
             raise EngineError("code profile requires at least one repo")
         run_id = run_id or "run_" + secrets.token_hex(4)
         from core.session_ids import valid_session_id
+        # every run has an owner from the start (R1 review r1): the contract is where
+        # that invariant lives, whoever calls create
+        if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}",
+                                                                session_id):
+            raise EngineError("create requires the owning app session id")
         if any(not valid_session_id(value) for value in transcript_ids):
             raise EngineError("invalid transcript id")
         workspace_path, data_path = Path(workspace), Path(data_dir)
@@ -690,6 +695,28 @@ class RunEngine:
         for row in review.ReviewOrchestrator(self.store, self.run_dir).findings():
             refs[row["canonical_id"]] = row
         return refs
+
+    def owned_paths(self) -> set[str]:
+        """The real paths this run's code lives at (R1, active_run_commit_gate): every
+        path it changed against its fork base, in its own checkout and, for an isolated
+        run, at the same place in the main checkout. Read from the run's code, never
+        from a field an agent wrote. Nothing once the run is terminal."""
+        if self.projection()["status"] in lifecycle.TERMINAL:
+            return set()
+        roots, trees, _bases, _existing, changed = self._current_code(
+            self.contract["expected_repos"])
+        missing = [name for name in roots if not trees.get(name)]
+        if missing:
+            # a repo whose code facts cannot be read owns an unknown set of paths: the
+            # caller refuses rather than treat it as owning none (R1 review r2)
+            raise EngineError(f"code facts unavailable for {', '.join(missing)}")
+        from core.security_hooks import _commit_identity
+        out: set[str] = set()
+        for name, paths in changed.items():
+            homes = {roots.get(name), self.contract["repo_roots"].get(name)}
+            for home in filter(None, homes):
+                out.update(_commit_identity(os.path.join(home, p)) for p in paths)
+        return out
 
     def write_projection(self) -> Path:
         state = self.projection()

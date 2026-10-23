@@ -185,6 +185,8 @@ def iso(tmp_path, monkeypatch):
     (rd / "run.json").write_text(json.dumps({
         "id": rid, "project": "P", "status": "running", "session_id": SID,
         "worktree_mode": "isolated", "worktrees": [entry], "cli": cli}))
+    from core import run_owner_gate as og
+    monkeypatch.setattr(og, "_signed_owner", lambda project, run_id: SID)  # no audit area
     hook_token.stop_oracle()
     if not hook_token.start_oracle(51000 + os.getpid() % 9000):
         pytest.skip("hook-token service not supported here")
@@ -194,9 +196,9 @@ def iso(tmp_path, monkeypatch):
 
 def test_run_owner_gate_suggestion_passes_the_chain(iso):
     import shlex
-    cli = f"{shlex.quote(iso['cli']['python'])} {shlex.quote(iso['cli']['script'])}"
-    compound = (f"cd {iso['wt']} && source .venv/bin/activate && {cli} stage-start "
-                f"--project P --run-id {iso['rid']} --stage build")
+    compound = (f"cd {iso['wt']} && source .venv/bin/activate && "
+                f"python backend/scripts/pipeline_v1.py land "
+                f"--project P --run-id {iso['rid']} --message x")
     hits = _chain(compound, cwd=iso["wt"])
     assert any("DENY (run owner gate)" in r for _, r in hits), hits
     _assert_suggestions_pass(hits, cwd=iso["wt"])

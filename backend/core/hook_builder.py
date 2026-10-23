@@ -30,7 +30,6 @@ from .security_hooks import (
     create_adversarial_commit_gate,
     create_active_run_commit_gate,
     create_session_link_gate,
-    create_session_link_stamper,
     create_audit_marker_write_gate,
     create_pipeline_test_gate,
     create_run_amend_gate,
@@ -399,20 +398,8 @@ async def build_hooks(
     # pipeline run to this session; without it pipeline_test_gate and
     # direct_commit_gate silently stop applying. Reads pass. Fail-open; operator bypass
     # none (gate_force.UNFORCEABLE). Registered right before
-    # test_command_gate so both see the command before any HITL prompt.
-    # The session-link stamper (PostToolUse below) needs each Bash call's start time;
-    # its PreToolUse companion records it by tool_use_id (no IO, never denies).
-    # Registered only for a real app session (session_context given): the fallback
-    # context's id may be an agent id, which must never be stamped into a run.
-    session_link_stamper = (
-        create_session_link_stamper(session_context) if session_context is not None
-        else None
-    )
-    if session_link_stamper is not None:
-        registry.register(
-            "PreToolUse", session_link_stamper.record_start,
-            "session_link_stamp_start", matcher="Bash",
-        )
+    # test_command_gate so both see the command before any HITL prompt. (A v1 run's
+    # owner is in its protected contract from create; nothing stamps it afterwards.)
     registry.register(
         "PreToolUse", create_session_link_gate(hook_session_context),
         "session_link_gate", matcher="Bash",
@@ -681,19 +668,6 @@ async def build_hooks(
         logger.info(
             f"Skill access checker hook added for skills: "
             f"{allowed_skill_names} (built-in: {builtin_names})"
-        )
-
-    # ── PostToolUse: session-link stamper (Bash-scoped) ──
-    # After a Bash call that mentions artifact_cli / run-create, stamp THIS session's
-    # app id into every running run with no session_id that the call created (or that
-    # it names by run id), so a run stays linked even when SWARM_APP_SESSION_ID was
-    # stripped inside interpreter code or a script (security_hooks section comment).
-    # Never overwrites an existing session_id. Bounds itself (_STAMP_TIMEOUT); chained
-    # with main_dirty_reporter in the (PostToolUse, "Bash") group, so the chain's 5s
-    # per-hook timeout applies too; fail-safe, returns {}.
-    if session_link_stamper is not None:
-        registry.register(
-            "PostToolUse", session_link_stamper, "session_link_stamper", matcher="Bash",
         )
 
     # ── PostToolUse: Pipeline v1 background REFLECT (Bash-scoped, D1) ──

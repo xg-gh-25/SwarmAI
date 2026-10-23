@@ -32,8 +32,8 @@ while worktree mode is off and no run worktree exists. Judgments:
    direct_commit_gate, which refuses any source commit there from a session with no run.
 
 A file-write deny of rule 1 or 4 whose target is already an uncommitted change in the
-main checkout (an untracked leftover, a stray edit) adds the ``run-claim-main`` route:
-the worktree is made from HEAD and does not have that file (``_claim_note``).
+main checkout (an untracked leftover, a stray edit) adds a note: the worktree is made
+from HEAD and does not have that file (``_main_edit_note``).
 
 Also: a hardlinked file (st_nlink > 1) in the worktree is not writable; Read / Grep
 of the main checkout gets a reminder (allow + additionalContext). Bash parsing is
@@ -96,14 +96,13 @@ def _under(p: str, root: str) -> bool:
 
 class _Own:
     """The session's isolated run: id, {repo: worktree path}, {repo: main checkout},
-    and what is needed to print its ``run-repo-add`` command (project, cli record)."""
+    and its project (for the commands a deny prints)."""
 
     def __init__(self, run_id: str, wts: "list[tuple[str, str]]", project: "str | None" = None,
-                 cli: "dict | None" = None, lazy: bool = True):
+                 lazy: bool = True):
         from core.run_worktree import main_of
         self.id = run_id
         self.project = project
-        self.cli = cli
         self.lazy = lazy   # may still isolate new repos (running, nothing landed yet)
         self.wts = dict(wts)
         self.mains = {}
@@ -114,8 +113,9 @@ class _Own:
 
     def unisolated_repo(self, p: str) -> "str | None":
         """The main checkout of a git repo *p* lies in that this run has no worktree for
-        yet but could have one (run_worktree.repo_for_write) — the write that must wait
-        for ``run-repo-add``. None: not a repo, not isolatable, or already isolated."""
+        yet but could have one (run_worktree.repo_for_write): a v1 run's repos are fixed
+        at create, so that write belongs in a new run. None: not a repo, not isolatable,
+        or already isolated."""
         from core.run_worktree import repo_for_write
         from core.security_hooks import _pipeline_runs_root
         if not self.lazy:
@@ -135,31 +135,6 @@ class _Own:
             if _under(p, main):
                 return name, os.path.join(self.wts[name], os.path.relpath(p, main))
         return None
-
-
-def cli_command(cli: "dict | None", args: str, script: str = "artifact_cli.py") -> str:
-    """``<python> <scripts dir>/<script> <args>`` from a run's recorded CLI (run.json
-    "cli", written by artifact_cli itself at run-create and every stage-start). run.json
-    is untrusted, so the record is used only when it names an absolute, executable python
-    interpreter and an existing absolute artifact_cli.py outside every run worktree;
-    otherwise the main-checkout-relative form is printed (a run created before the CLI
-    recorded itself, until its next stage-start)."""
-    from core.security_hooks import _PY_INTERP_RE
-    py = (cli or {}).get("python") if isinstance(cli, dict) else None
-    sc = (cli or {}).get("script") if isinstance(cli, dict) else None
-    if (isinstance(py, str) and isinstance(sc, str) and os.path.isabs(py) and os.path.isabs(sc)
-            and _PY_INTERP_RE.match(os.path.basename(py))
-            and os.path.basename(sc) == "artifact_cli.py" and os.path.isfile(sc)
-            and os.access(py, os.X_OK)):
-        from core.run_worktree import run_for_path
-        sdir = os.path.dirname(os.path.realpath(sc))
-        target = os.path.join(sdir, script)
-        # the record must look like the real CLI tree, not a planted pair of files
-        if (run_for_path(sc) is None and os.path.isfile(target)
-                and os.path.isfile(os.path.join(sdir, "pipeline_v1.py"))
-                and os.path.isfile(os.path.join(os.path.dirname(sdir), "core", "run_worktree.py"))):
-            return f"{shlex.quote(py)} {shlex.quote(target)} {args}"
-    return f"backend/.venv/bin/python backend/scripts/{script} {args}"
 
 
 def _v1_reserved(p: str, worktree: str, run_id: str) -> "str | None":
@@ -208,7 +183,7 @@ def _file_verdict(p: str, own: "_Own | None") -> "dict | None":
     if own is not None:
         m = own.main_hit(p)
         if m is not None:
-            note = _claim_note(own.mains[m[0]], p, "", "")
+            note = _main_edit_note(own.mains[m[0]], p)
             return _deny(f"this session's run {own.id} works in its own worktree; do not "
                          f"write the main checkout. Use {m[1]} instead of {p}." + note)
         repo = own.unisolated_repo(p)
@@ -238,7 +213,7 @@ def _session_runs_light(sid: str) -> "list[dict]":
             continue
         out.append((r.mtime, {"id": str(d.get("id") or r.path.parent.name),
                               "project": str(d.get("project") or ""), "status": d.get("status"),
-                              "worktree_mode": d.get("worktree_mode"), "cli": d.get("cli")}))
+                              "worktree_mode": d.get("worktree_mode")}))
     return [r for _t, r in sorted(out, key=lambda x: x[0], reverse=True)]
 
 
@@ -253,7 +228,7 @@ def _with_deadline(deadline: float, fn, *args):
 
 
 def _budget_left(cap: float) -> float:
-    """Seconds the optional deny hint (``_claim_note``) may spend on git: *cap*, or less
+    """Seconds the optional deny hint (``_main_edit_note``) may spend on git: *cap*, or less
     when the gate's deadline (``_TL.deadline``, set by ``_decide_by``) minus
     ``_NOTE_MARGIN`` is nearer, so the hint can never push the judgment past
     ``_GATE_TIMEOUT``. Only the hint is budgeted: the checks a deny depends on keep their
@@ -367,7 +342,7 @@ def _no_run_verdict(p: str, nr: "_NoRun", what: "str | None" = None) -> "dict | 
     r = nr.run
     pq = shlex.quote(project)
     if r is not None:
-        note = "" if what is not None else _claim_note(main, p, "", "")
+        note = "" if what is not None else _main_edit_note(main, p)
         rid = shlex.quote(r["id"])
         rp = shlex.quote(r["project"] or project)
         nxt = ("resume it: " + v1_command(f"resume --project {rp} --run-id {rid}")
@@ -383,7 +358,7 @@ def _no_run_verdict(p: str, nr: "_NoRun", what: "str | None" = None) -> "dict | 
                      f"for this repo yet: {nxt}\nThen make this change at the same relative "
                      "path under the worktree its `repos` names." + note)
     create = v1_command(f"create --project {pq} --profile direct {_REQ} --repo {shlex.quote(main)}")
-    note = "" if what is not None else _claim_note(main, p, "", "")
+    note = "" if what is not None else _main_edit_note(main, p)
     return _deny(head + "Start a run (ONE simple command; `--profile direct` for a "
                  "small, fully specified change, otherwise pick the matching profile):\n"
                  f"Run: {create}\nthen follow its `next`, and make this change at the same "
@@ -391,12 +366,11 @@ def _no_run_verdict(p: str, nr: "_NoRun", what: "str | None" = None) -> "dict | 
                  "at once)." + note)
 
 
-def _claim_note(main: str, p: str, claim: str, when: str) -> str:
+def _main_edit_note(main: str, p: str) -> str:
     """The deny's extra line when *p* is already an uncommitted change in the main
     checkout *main* (untracked, modified, deleted, ...): the worktree is made from HEAD,
     so it does not have that version and "the same change in the worktree" cannot reach
-    it — the way is ``run-claim-main`` (the user approves), then edit or delete it in
-    the worktree. '' for a clean path, a directory (claim takes files only), a path
+    it (``V1_MAIN_EDIT_REMEDY``). '' for a clean path, a directory, a path
     outside *main*, or when git cannot tell in time. The git call gets what is left of
     the gate's budget (``_TL.deadline``) minus ``_NOTE_MARGIN``, at most ``_NOTE_CAP``,
     and is skipped below 0.2s: a hint must never push the judgment past the budget,
@@ -415,7 +389,7 @@ def _claim_note(main: str, p: str, claim: str, when: str) -> str:
                 "--no-renames", "--", ":(literal)" + rel, timeout=budget,
                 env={"GIT_OPTIONAL_LOCKS": "0"})
     except Exception:   # noqa: BLE001 — a hint only; the deny stands without it
-        logger.debug("_claim_note: suppressed exception on a fail-safe path", exc_info=True)
+        logger.debug("_main_edit_note: suppressed exception on a fail-safe path", exc_info=True)
         return ""
     if r.returncode != 0 or not r.stdout.strip("\0"):
         return ""
@@ -432,8 +406,7 @@ V1_MAIN_EDIT_REMEDY = (
 
 
 def v1_command(args: str) -> str:
-    """``<python> backend/scripts/pipeline_v1.py <args>``: the only mutation CLI after
-    the v1 cutover (a run.json "cli" record names the retired artifact_cli)."""
+    """``<python> backend/scripts/pipeline_v1.py <args>``: the run CLI."""
     return f"backend/.venv/bin/python backend/scripts/pipeline_v1.py {args}"
 
 
@@ -662,7 +635,7 @@ def create_worktree_write_gate(session_context: "dict[str, Any]"):
         from core.run_worktree import own_isolated_run
         from core.security_hooks import _pipeline_runs_root
         r = own_isolated_run(sid, _pipeline_runs_root()) if sid and any_wt else None
-        own = _Own(r["id"], r["worktrees"], project=r.get("project"), cli=r.get("cli"),
+        own = _Own(r["id"], r["worktrees"], project=r.get("project"),
                    lazy=not r.get("settled") and r.get("status") == "running") if r else None
         nr = None
         if mode_on and sid and own is None and not session_context.get("_unbound"):
@@ -693,7 +666,7 @@ def create_worktree_write_gate(session_context: "dict[str, Any]"):
         finally:
             _TL.no_note = False
         if v is not None and v.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
-            cache.pop(sid, None)  # e.g. run-repo-add just added a worktree: judge afresh
+            cache.pop(sid, None)  # e.g. the run just made a worktree: judge afresh
             return _decide(sid, input_data)
         return v
 

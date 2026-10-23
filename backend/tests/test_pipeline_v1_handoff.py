@@ -120,12 +120,15 @@ def test_a_completion_decided_on_an_older_stage_is_refused(rig):
     assert r.state()["stage"] == "review"
 
 
-def test_another_sessions_test_call_completes_nothing(rig):
+def test_another_sessions_test_call_writes_nothing(rig):
     r = rig()
     r.create()
     r.edit(Rig.CHANGE)
+    before = r.events()
     out = r.pt("tdd", "--files", "backend/tests/test_x.py", session="someone-else")
-    assert out["stage_complete"]["ok"] is False and r.state()["stage"] == "build", out
+    assert "belongs to session" in out.get("error", ""), out
+    assert r.events() == before and r.engine().final() == {}
+    assert r.state()["stage"] == "build"
 
 
 def test_a_red_regression_does_not_finish_test(rig):

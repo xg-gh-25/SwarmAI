@@ -9,7 +9,7 @@ so no global git config or hooks apply). Fail-open paths are forced by pointing 
 non-repo or by monkeypatching a helper to fail.
 
 Invariants:
-  • C6: a run is "this session's" only if status == "running" AND session_id equals
+  • C6: a run is "this session's" only if status is active / reflecting AND session_id equals
     the hook's app session id AND it was active within _RUN_ACTIVE_WINDOW_SECONDS;
     paused / other-session / unowned (no session_id) / idle runs are not, and an
     unowned run changes nothing for any session (no global fail-open).
@@ -63,7 +63,7 @@ def ws(tmp_path, monkeypatch):
 _NO_SID = object()
 
 
-def _seed(ws, project="SwarmAI", run_id="run_abc123", status="running",
+def _seed(ws, project="SwarmAI", run_id="run_abc123", status="active",
           session_id=SID, age_hours=0.0):
     """Write Projects/<project>/.artifacts/runs/<run_id>/run.json (C1 fields)."""
     d = ws / "Projects" / project / ".artifacts" / "runs" / run_id
@@ -161,7 +161,7 @@ class TestSessionRunState:
     def test_missing_id_and_project_fall_back_to_directory_names(self, ws):
         d = ws / "Projects" / "Proj" / ".artifacts" / "runs" / "run_dir"
         d.mkdir(parents=True)
-        (d / "run.json").write_text(json.dumps({"status": "running", "session_id": SID}))
+        (d / "run.json").write_text(json.dumps({"status": "active", "session_id": SID}))
         assert sh._session_run_state(SID) == {"project": "Proj", "id": "run_dir"}
 
 
@@ -813,28 +813,31 @@ class TestRunAmendGate:
 
 def test_source_repo_root_survives_the_packaged_daemon(tmp_path, monkeypatch):
     """In the packaged daemon this module's own path is inside the bundle, never the repo:
-    the root then comes from the newest run's recorded CLI, so the direct-commit gate
-    (and the runner commands) keep applying instead of failing open."""
+    the root then comes from the newest v1 run's protected contract (its repo_roots), so
+    the direct-commit gate keeps applying instead of failing open. A run.json field is
+    never read for it."""
     import json as _json
     import os as _os
     import subprocess as _sp
     from core import security_hooks as sh
     repo = tmp_path / "swarmai"
     (repo / "backend" / "core").mkdir(parents=True)
-    (repo / "backend" / "scripts").mkdir(parents=True)
     (repo / "backend" / "core" / "security_hooks.py").write_text("")
-    (repo / "backend" / "scripts" / "artifact_cli.py").write_text("")
     _sp.run(["git", "init", "-q", str(repo)], check=True)
-    ws = tmp_path / "ws"
+    ws, data = tmp_path / "ws", tmp_path / "data"
     rd = ws / "Projects" / "P" / ".artifacts" / "runs" / "run_aaaabbbb"
     rd.mkdir(parents=True)
-    (rd / "run.json").write_text(_json.dumps({"id": "run_aaaabbbb", "cli": {
-        "python": "/usr/bin/python3", "script": str(repo / "backend" / "scripts" / "artifact_cli.py")}}))
+    (rd / "run.json").write_text(_json.dumps({"id": "run_aaaabbbb"}))
+    audit = data / "state" / "pipeline_agent_audit" / "runs" / "run_aaaabbbb"
+    audit.mkdir(parents=True)
+    (audit / "contract.json").write_text(_json.dumps({
+        "run_id": "run_aaaabbbb", "protocol_version": 1, "repo_roots": {"swarmai": str(repo)}}))
     monkeypatch.setenv("SWARM_WORKSPACE", str(ws))
+    monkeypatch.setenv("SWARM_DATA_DIR", str(data))
     monkeypatch.setattr(sh, "_SOURCE_REPO_ROOT", str(tmp_path / "bundle"))
     monkeypatch.setattr(sh, "_SOURCE_ROOT_CACHE", [0.0, None])
     assert sh._source_repo_root() == _os.path.realpath(str(repo))
-    # a recorded script whose repo is not a SwarmAI source tree is not trusted
+    # a contract root that is not a SwarmAI source tree is not used
     (repo / "backend" / "core" / "security_hooks.py").unlink()
     monkeypatch.setattr(sh, "_SOURCE_ROOT_CACHE", [0.0, None])
     assert sh._source_repo_root() is None

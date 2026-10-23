@@ -5710,6 +5710,29 @@ def _v1_proof_bindings(values: list[str]) -> dict[str, str]:
         bindings[finding_id] = nodeid
     return bindings
 
+def _not_the_owner(ns) -> "str | None":
+    """Why this call may not test a v1 run (R1 review r1/r2), before anything is written
+    (cache, temp dirs, evidence, events): only the run's own session tests it. The owner
+    is the signed one (the creator, then each owner_transfer); SWARM_APP_SESSION_ID is
+    kept unforgeable in the Bash call by session_link_gate. None for a run without a v1
+    contract (it is refused later, as before)."""
+    from config import get_app_data_dir
+    from core.run_protocol.runner import read_contract
+    try:
+        if read_contract(get_app_data_dir(), ns.run_id) is None:
+            return None
+        from core.run_protocol.engine import RunEngine
+        owner = RunEngine.load(data_dir=get_app_data_dir(), workspace=_workspace(),
+                               project=ns.project, run_id=ns.run_id,
+                               producer="runner").owner_session()
+    except Exception as exc:  # noqa: BLE001 — an unreadable run is not tested
+        return f"run {ns.run_id} cannot be read: {type(exc).__name__}: {exc}"[:300]
+    if (os.environ.get("SWARM_APP_SESSION_ID") or "") != owner:
+        return (f"run {ns.run_id} belongs to session {owner}; only that session runs its "
+                "tests (this call wrote nothing)")
+    return None
+
+
 def execute(ns) -> tuple[dict, int]:
     """Run one parsed invocation; returns (output dict, exit code)."""
     if not _ID_RE.fullmatch(ns.project or ""):
@@ -5722,6 +5745,9 @@ def execute(ns) -> tuple[dict, int]:
             return {"error": str(exc)}, 2
         if not run_dir.is_dir():
             return {"error": f"run dir not found: {run_dir}"}, 2
+        refused = _not_the_owner(ns)
+        if refused:
+            return {"error": refused}, 2
         rs = _read_json(run_dir / "run.json")
         run_state = rs if isinstance(rs, dict) else {}
         ev_root = run_dir / "evidence"
@@ -5822,11 +5848,6 @@ def _v1_after_tests(ns) -> dict | None:
     state = engine.projection()
     if not auto_completable(engine, state):
         return {"next": next_step(engine)}
-    # only the run's own session moves it (review 4cfba9d6): the session id is the one
-    # session_link_gate keeps unforgeable in this Bash call's environment
-    if (os.environ.get("SWARM_APP_SESSION_ID") or "") != engine.owner_session():
-        return {"next": next_step(engine), "stage_complete": {
-            "ok": False, "error": "not this run's session: nothing was completed"}}
     cli = Path(__file__).resolve().with_name("pipeline_v1.py")
     try:
         done = subprocess.run(

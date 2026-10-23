@@ -528,3 +528,51 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 
 - `_python_ast` 不再去掉 docstring，只有注释和排版不算代码。原因：docstring 可能被别的文件读取（`__doc__`、`inspect`、FastAPI 的接口说明），diff 里看不出来。
 - `test_pipeline_v1_k6` 和 `test_run_protocol_review` 中，docstring 改动的用例都改为算代码。设计修订文档新增 §8b，修订记录行同步更新。
+
+## 23. 退役 R1a：安全 gate 只认 v1（r6 §5）
+
+- **`active_run_commit_gate` 的放行漏洞：** 原实现读 run.json 里的 `files_touched`，而 v1 不写这个字段，所以手工 `git commit` 一个 v1 run 的代码总是放行。已先用测试复现。现在 run 拥有哪些路径由 `RunEngine.owned_paths()` 给出：run 相对 fork base 改动过的路径，既指 run 自己 checkout 里的位置，也指隔离 run 在 main checkout 里的同名位置。数据来自 contract、worktree 和 git，不读任何 agent 能写的字段。
+  - **规则：** 只有带受保护 contract 的 run 才拥有路径（`is_v1_run`）；run 一进入终态就什么都不拥有；REPORT（`.aidlc/deliverables/<run_id>/`）按路径形状拦截。
+  - **出错时放行：** 读不到的 v1 run 跳过，并记一条 warning，与原 gate 的放行原则一致。
+  - **测试：** `test_pipeline_v1_commit_gate.py` 共 7 个，取代 `test_active_run_commit_gate.py`。
+- **`run_owner_gate` 重写，只认 v1：**
+  - **保留：** owner 和 project 绑定、key 选项重复或缩写一律拒绝、接手时签 `owner_transfer`、`land` 的 token、人批准的 `run-land` / `accept-finding` / `discard-snapshot` 在 approved 阶段发 token 并写 `auth`、human-only API 拒绝。
+  - **删除：** artifact_cli、stage-start、undecided、claim 的分支，以及 `_scope`、`_isolated`、`_claim_*`、`_single_form` 里旧 cli 记录的读取。
+- **删除 claim：** 删除 `_is_main_claim` 和 `run_worktree` 中的 claim 代码（`claim_main`、`plan_claim`、`claim_args` 和只服务它们的辅助函数），`main_dirty` 保留。审批缓存只剩 v1 人工落地在用，改名为 `record_land_approval` / `consume_land_approval`。
+- **删除 `session_link_stamper`**，连同它的注册：v1 run 在 create 时 owner 就写进了 contract。
+- **`session_link_gate` 的 link reader** 由 artifact_cli 改为 `pipeline_v1` 和 `pipeline_test`（原来漏了 `pipeline_v1.py`）。
+- **`_source_repo_root` 在 packaged daemon 里的回退：** 原来读 run.json 的 `cli` 字段（artifact_cli 写的），v1 不写这个字段，回退因此失效，direct_commit_gate 会静默放行。现在改为读 v1 contract 的 `repo_roots`，contract 在受保护的审计区里。
+- **`worktree_write_gate`：** 删除 `cli_command` 和 `_Own.cli`；`_claim_note` 改名为 `_main_edit_note(main, p)`。
+- **只认 v1 的状态：** `_session_run_state` 和 `_ACTIVE_RUN_STATUSES` 不再认旧状态 `running`。
+- **删除的测试：** `test_active_run_commit_gate`、`test_session_link_stamper`、`test_run_claim_main`。`test_worktree_gates`、`test_gate_false_positives`、`test_gate_suggestions`、`test_pipeline_test_gate`、`test_session_link_*` 中的 owner-gate 和 token 绑定用例改用 `pipeline_v1.py land`。
+
+**R1a 第 1 轮审查（1d1e53a3，3 HIGH + 4 MED）：**
+
+上一个审查 agent（a018cda0）拒绝执行（refusal），我改用防御性措辞重新派了一次，问题本身不变。
+
+- **HIGH，`git -C <repo> commit` 在非 repo 的 cwd 下执行时 pending 无法计算而放行：** 新增 `_effective_commit_dir`，按 git 的规则依次应用 `-C`（相对路径以前一个目录为基准），再求 repo root。`-C` / `--git-dir` / `--work-tree` 指向别的 repo，或无法解析成工作树时（例如裸 `--git-dir`），返回 `_PENDING_CROSS_REPO`。active_run_commit_gate 对它改为拒绝，并提示 cd 到那个 repo 再提交。
+- **HIGH，改 run.json 的 `status` / `project` 能让 run 不受保护：** `_runs_touching(pending)` 只从 run 目录的位置和受保护 contract 判断相关的 run，即 pending 路径落在 contract 的 repo root 或 run 的 worktree 内。run 是否终态改由签名事件的 lifecycle 判断。run.json 不再参与。
+- **HIGH，非 owner 的 `pipeline_test` 在检查前已写了别人 run 的 evidence 和事件：** owner 检查前移到 `_v1_runner`，在建 writer、跑测试之前比较 `SWARM_APP_SESSION_ID` 与签名的 `owner_session()`，不一致直接拒绝，什么都不写。`_v1_after_tests` 里原来那处检查随之删除。
+- **MED，`status` 会替别人建 worktree：** 只在调用者是 run 自己的 session 时才补建。
+- **MED，`RunEngine.create` 允许空 owner：** 在 engine 内校验合法的 app session id，入口层的检查保留。
+- **MED，超时后放行：** 先用 `_runs_touching` 筛出相关的 run，这一步不跑 git。没有相关 run 就直接放行；有相关 run 时再计算 ownership，超时（上限 30 s）或读不出来就拒绝并提示重试，不再当成"无人拥有"。
+- **MED，未修，作为残余风险交 XG 决定：** `_source_repo_root` 的 contract 回退。packaged daemon 里，若最新的 v1 run 是用 `--repo` 指向另一个含 `backend/core/security_hooks.py` 的 checkout 创建的，就可能把它当成源码仓库。原实现读的是 run.json 的 `cli` 字段，信任度更低。这次已限定为 main checkout（`.git` 必须是目录）。根治要靠安装或启动配置写明源码路径，属于产品配置，需要 XG 决定。
+
+**新增测试：**
+- `test_pipeline_v1_commit_gate`：`git -C` 两种写法、改 run.json、读不出 run 时拒绝、retarget 拒绝；
+- `test_pipeline_v1_handoff`：别的会话的 pipeline_test 什么都不写；
+- `k1`：另一棵树上的 final 由 REVIEW 的 DS-9b 拒绝。
+
+**R1a 第 2 轮审查（88a36754，4 HIGH + 6 MED）。按规则只修一次，不再加轮：**
+- **HIGH，owner gate 以 run.json 判断 owner 和 project：** `_v1_run` 的 project 改取自 run 目录；owner 来自签名事件，经 `_signed_owner` 取 `RunEngine.owner_session()`。读不出 v1 run 就拒绝。
+- **HIGH，旧 owner 是否在线未知时，接管照样签名：** 新的 `_take_over` 只在确认旧 owner 不在线时，才先签 `owner_transfer`，再改 run.json 和 session map，最后从签名事件确认已经接管成功。在线或未知都拒绝，未知时提示稍后重试。
+- **HIGH，`cd X && git commit` 按原 cwd 判断：** `_commit_dirs` 改为先跟踪段首的 `cd`，再应用 `-C`。retarget 的相对路径以 cd 之后的目录为基准。
+- **MED，同仓库的 `--git-dir=.git` 被误拒：** 新增 `_same_repo`，`--git-dir` 是本仓库的 `.git` 或 common dir 时，算同一个仓库。
+- **MED，`pipeline_test` 在 owner 检查前已写了 cache 和临时目录：** 检查前移到 `execute`，在 run 目录确认存在后立刻进行（`_not_the_owner`），这时还没有建 cache 或 `_Ctx`。
+- **MED，代码事实读不到时 ownership 为空：** `owned_paths` 改为对缺少 code_tree 的 repo 抛错，gate 收到后拒绝。
+- **XG 决定后一并修的（symlink、预热身份）：**
+  1. **HIGH，symlink：** 新增 `_commit_identity(path)`：只对父目录做 realpath，保留末段文件名。commit 提交的是 symlink 本身，不是它指向的目标，所以不再解析末段。`_pending_commit_paths` 和 `owned_paths` 都用它。
+  2. **MED，预热后被采用的 session 环境里没有 `SWARM_APP_SESSION_ID`：** `run_owner_gate` 用 `updatedInput` 把本 session 的 id 加在它绑定的那个 pipeline 调用前面（`_with_session`，沿用 token 绑定的"必须是第一条命令"规则）。值永远不来自模型，session_link_gate 拒绝命令里任何对它的赋值；预热身份不注入。覆盖 `pipeline_v1` 和 `pipeline_test`。
+- **仍作为残余交 XG，放到 NE-0 之后：**
+  3. **MED，每次 commit 都要读所有历史 run 的 contract，可能超时放行；contract 损坏时直接跳过：** 正解是一个受保护的活跃 run 索引。
+  4. **MED，`_source_repo_root` 的 contract 回退：** 根治要在安装或启动配置里写明源码仓库路径。

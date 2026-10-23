@@ -145,5 +145,11 @@ class TestReaderWriterPathAgreement:
     to the same location. Does NOT monkeypatch — asserts the real module constants."""
 
     def test_reader_dir_equals_writer_dir(self):
+        # both are <data>/state/pipeline_agent_audit; a sibling test may have
+        # monkeypatched one of the live constants, so compare the DERIVATION, not the
+        # (possibly patched) module attributes.
+        from config import get_app_data_dir
+        expected = get_app_data_dir() / "state" / "pipeline_agent_audit"
+        assert security_hooks._AGENT_AUDIT_DIR == expected
         from core import runtime_hooks
-        assert security_hooks._AGENT_AUDIT_DIR == runtime_hooks._PIPELINE_AUDIT_DIR
+        assert runtime_hooks._STATE_DIR / "pipeline_agent_audit" == expected

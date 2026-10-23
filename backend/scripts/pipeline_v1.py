@@ -186,9 +186,11 @@ def execute(args) -> dict[str, Any]:
             return _with_next(engine, _execute_loaded(args, engine), previous_stage=before,
                               mutating=True)
     engine = _load(args, note=False)
-    if args.command == "status" and _missing_worktrees(engine):
-        # status is read-only, except that it makes a code stage's missing worktree (a
-        # crash between entering the stage and making it): one operation, under the lock
+    if args.command == "status" and _missing_worktrees(engine) \
+            and (os.environ.get("SWARM_APP_SESSION_ID") or "") == engine.owner_session():
+        # status is read-only, except that the run's OWN session makes a code stage's
+        # missing worktree (a crash between entering the stage and making it): one
+        # operation, under the lock
         from core.run_protocol.oplock import operation
         with operation(get_app_data_dir() / "state" / "pipeline_agent_audit", args.run_id):
             engine = _load(args)

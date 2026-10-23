@@ -31,7 +31,7 @@ from core.security_hooks import (
 
 RUNNER = ("/repo/backend/.venv/bin/python /repo/backend/scripts/pipeline_test.py "
           "--project SwarmAI --run-id run_x --mode tdd --files backend/tests/test_a.py")
-CLI = ("/repo/backend/.venv/bin/python /repo/backend/scripts/artifact_cli.py stage-start "
+CLI = ("/repo/backend/.venv/bin/python /repo/backend/scripts/pipeline_v1.py land "
        "--project SwarmAI --run-id run_x --stage deliver")
 
 # An edit script whose text names rebase and has an odd apostrophe (the shlex split of
@@ -208,7 +208,7 @@ def test_the_cli_call_first_gets_the_token(cmd):
     b = _token_binding(cmd)
     assert b is not None
     head, rest = b
-    assert rest.startswith("/repo/backend/.venv/bin/python /repo/backend/scripts/artifact_cli.py")
+    assert rest.startswith("/repo/backend/.venv/bin/python /repo/backend/scripts/pipeline_v1.py")
     assert cmd == head + rest
 
 
@@ -221,7 +221,7 @@ def test_the_cli_call_first_gets_the_token(cmd):
     "cat > /tmp/f <<'EOF'\nabc\n" + CLI,                     # unterminated heredoc
     "cat > $HOME/f <<'EOF'\nx\nEOF\n" + CLI,                 # a path that expands
     "python3 - <<'EOF'\nprint(1)\nEOF\n" + CLI,              # code runs before the CLI
-    "cat > /repo/backend/scripts/artifact_cli.py <<'EOF'\nprint(1)\nEOF\n" + CLI,  # rewrites the CLI
+    "cat > /repo/backend/scripts/pipeline_v1.py <<'EOF'\nprint(1)\nEOF\n" + CLI,  # rewrites the CLI
 ])
 def test_anything_else_before_the_cli_is_refused(cmd):
     assert _token_binding(cmd) is None

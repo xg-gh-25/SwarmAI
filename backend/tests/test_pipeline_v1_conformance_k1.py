@@ -109,12 +109,11 @@ def test_changing_the_test_selector_is_a_qx2_push_reason(rig):
 def test_a_final_from_another_code_tree_does_not_complete_build(rig):
     r = rig("trivial")
     r.create()
-    r.drive(until="build")
-    # another session's test call: it never completes the stage itself (r6 §2.3)
-    r.pt("tdd", "--files", "backend/tests/test_x.py", session="someone-else")
+    r.drive(until="review")              # BUILD completed on its tdd final (r6 §2.3)
     r.edit({"backend/core/mod.py": "def add(a, b):\n    return a - b\n"})   # after the run
-    out = r.v1("stage-complete")
-    assert out.get("ok") is False and r.state()["stage"] == "build", out
+    out = r.v1("stage-complete")         # REVIEW re-checks DS-9b on the current tree
+    assert out.get("ok") is False and r.state()["stage"] == "review", out
+    assert any(c["id"] == "DS-9b" and not c["passed"] for c in out["checks"]), out
 
 
 def test_an_isolated_repo_with_no_recorded_branch_yields_no_final(rig):

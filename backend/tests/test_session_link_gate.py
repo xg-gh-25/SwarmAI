@@ -2,7 +2,7 @@
 
 What is tested: the PreToolUse Bash gate that keeps the run↔session link intact.
 pipeline_test_gate and direct_commit_gate only apply to runs whose run.json
-session_id is this session's id, which artifact_cli.py run-create reads from
+session_id is this session's id, which pipeline_v1.py create reads from
 SWARM_APP_SESSION_ID. A command that removes or overrides that variable would
 create an unowned run and switch both gates off, so the gate denies it ALWAYS.
 
@@ -18,7 +18,7 @@ Invariants:
     shell strings, a shell reading a heredoc, and behind unknown wrappers;
   • a wholesale env reset (env -i / env - / --ignore-environment, exec -c, sudo
     without -E) is denied only when the wrapped command mentions python,
-    artifact_cli or pipeline_test (directly or in its shell string);
+    pipeline_v1 or pipeline_test (directly or in its shell string);
   • reads pass (echo, env | grep, printenv, declare -p, grep VAR=, quoted text),
     and so do `env -u OTHER`, `export VAR` and clean-env runs of other tools;
   • the deny text explains the unlink and names the operator-only force env;
@@ -57,7 +57,7 @@ REMOVALS = [
     f"unset -v {V}",
     f"unset OTHER {V}",
     f"unset \"SWARM_APP_\"SESSION_ID",
-    f"env -u {V} python backend/scripts/artifact_cli.py run-create",
+    f"env -u {V} python backend/scripts/pipeline_v1.py create",
     f"env -u {V} ls",
     f"env -u{V} ls",
     f"env -iu {V} ls",
@@ -72,7 +72,7 @@ REMOVALS = [
     f"declare {V}",
 ]
 OVERRIDES = [
-    f"{V}=forged python backend/scripts/artifact_cli.py run-create --project SwarmAI",
+    f"{V}=forged python backend/scripts/pipeline_v1.py create --project SwarmAI",
     f"{V}= python a.py",
     f"{V}=x",
     f"{V}+=x",
@@ -119,18 +119,18 @@ NESTED = [
     f"exec env -u {V} python a.py",
 ]
 RESETS_DENIED = [
-    "env -i python backend/scripts/artifact_cli.py run-create --project SwarmAI",
+    "env -i python backend/scripts/pipeline_v1.py create --project SwarmAI",
     "env -i PATH=/usr/bin .venv/bin/python backend/scripts/pipeline_test.py --mode verify",
     "env - python3 a.py",
     "env --ignore-environment python a.py",
     "env -i -- python a.py",
     "env -0i python a.py",
-    "env -i bash -c 'python backend/scripts/artifact_cli.py run-create'",
-    "env -i sh <<EOF\npython backend/scripts/artifact_cli.py run-create\nEOF",
-    "env -i uv run backend/scripts/artifact_cli.py run-create",
+    "env -i bash -c 'python backend/scripts/pipeline_v1.py create'",
+    "env -i sh <<EOF\npython backend/scripts/pipeline_v1.py create\nEOF",
+    "env -i uv run backend/scripts/pipeline_v1.py create",
     "bash -c 'env -i python a.py'",
     "exec -c python a.py",
-    "sudo python backend/scripts/artifact_cli.py run-create",
+    "sudo python backend/scripts/pipeline_v1.py create",
     "sudo -u root python3 a.py",
     "sudo --preserve-env=PATH python a.py",
 ]
