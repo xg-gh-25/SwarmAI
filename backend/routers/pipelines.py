@@ -165,7 +165,7 @@ async def cancel_pipeline(run_id: str) -> dict:
             if engine is None:
                 return "missing"
             if engine.projection().get("status") not in ("completed", "abandoned", "failed"):
-                engine.abandon(reason="cancelled_by_user")
+                engine.abandon(reason=pm.USER_CANCEL_REASON)
             return "cancelled"
         except Exception:  # v1 must fail closed; never rewrite its projection directly
             logger.exception("Protocol-aware cancellation failed for %s", run_id)
@@ -319,7 +319,7 @@ def _summary(raw: dict, project: str) -> PipelineRunSummary:
         created_at=raw.get("created_at", ""),
         updated_at=raw.get("updated_at", ""),
         pause_kind=kind,
-        needs_you=pm.needs_you(status, kind),
+        needs_you=pm.needs_you(status, kind, raw.get("reason")),
         checkpoint_reason=raw.get("reason"),
         owner_session_id=raw.get("session_id"),
         verified=(raw.get("push_ready") if status == "completed"

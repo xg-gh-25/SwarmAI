@@ -63,7 +63,7 @@ export type AttentionItem =
       project: string;
       /** Stage where it paused (e.g. "build"). */
       stage: string;
-      /** The decision text from checkpoint.reason — WHY it needs the user. */
+      /** WHY the run needs the user (the run's own reason). */
       reason: string;
     }
   | {

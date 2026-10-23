@@ -1,18 +1,18 @@
 """Pipeline run schema definitions for the Radar pipeline panel API.
 
-Defines Pydantic models for the ``/api/pipelines`` endpoint, which reads
-pipeline run state from ``.artifacts/runs/*/run.json`` files across
-all projects.
+Defines Pydantic models for the ``/api/pipelines`` endpoint: Pipeline v1 runs only
+(a protected contract), every value from the run's projection through
+``core.pipeline_metrics``; a value never measured is None.
 
 Key models:
 
-- ``PipelineRunStatus``   -- Enum: running, paused, completed, failed, cancelled
+- ``PipelineRunStatus``   -- Enum: running, paused, completed, failed, abandoned
 - ``PipelineRunResponse`` -- Single pipeline run for the dashboard
 - ``PipelineStatusSummary`` -- Aggregate counts across all projects
 - ``PipelineDashboard``   -- Top-level response with list + summary
 
 The frontend service layer converts to camelCase in
-``desktop/src/services/radar.ts``.
+``desktop/src/services/pipelines.ts``.
 """
 
 from enum import Enum
@@ -27,22 +27,7 @@ class PipelineRunStatus(str, Enum):
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
-    CANCELLED = "cancelled"
-    # An abandoned run: a stale orphan that was never resumed, OR a paused run
-    # superseded by a later completed run. The distinction lives in
-    # `abandon_reason` (orphaned_no_resume vs superseded_by_<id>). Without this
-    # enum value, _to_response silently fell abandoned→RUNNING, mis-rendering
-    # abandoned runs as active in the dashboard.
-    ABANDONED = "abandoned"
-
-
-class PipelineCheckpoint(BaseModel):
-    """Checkpoint metadata for a paused pipeline."""
-    reason: str = Field(..., description="Why the pipeline paused")
-    stage: str = Field(..., description="Stage where it paused")
-    checkpointed_at: str = Field(..., description="ISO timestamp")
-    completed_stages: list[str] = Field(default_factory=list)
-    resumed_at: Optional[str] = Field(None, description="ISO timestamp if resumed")
+    ABANDONED = "abandoned"   # a signed abandon event (cancelled by the user included)
 
 
 class PipelineRunResponse(BaseModel):
@@ -60,23 +45,9 @@ class PipelineRunResponse(BaseModel):
     stages_completed: int = Field(0, description="Number of completed stages")
     stages_total: int = Field(8, description="Total stages in profile")
     tokens_consumed: Optional[int] = Field(None, description="Measured tokens; None when never measured")
-    taste_decisions: int = Field(0, description="Number of pending taste decisions")
-    checkpoint: Optional[PipelineCheckpoint] = Field(None, description="Checkpoint info if paused")
     pause_kind: Optional[str] = Field(
-        None,
-        description="Semantic classification of a paused run, for attention-queue "
-                    "consumers (Radar 'NEEDS YOU'). 'crash_residue' = paused by the "
-                    "orphan-transition when a session died (checkpoint.reason == the "
-                    "canonical _CRASH_ZOMBIE_REASON) — NOT a real decision, drop it. "
-                    "'decision' = a genuine pause the user must act on (Gate BLOCK / "
-                    "L2 escalation / budget / retry-exhausted). None for non-paused runs.",
-    )
-    abandon_reason: Optional[str] = Field(
-        None,
-        description="Why an abandoned run was abandoned: 'orphaned_no_resume' "
-                    "(unrecovered crash-orphan) vs 'superseded_by_<id>' "
-                    "(finished by a later run). None for non-abandoned runs.",
-    )
+        None, description="What the run needs from a person: 'decision' / 'stopped' / "
+                          "'worktree' / 'idle' (core.pipeline_metrics.pause_kind), else None")
     created_at: str = Field(..., description="ISO timestamp")
     updated_at: str = Field(..., description="ISO timestamp")
     audit_card: Optional[str] = Field(
@@ -113,7 +84,6 @@ class PipelineRunSummary(BaseModel):
     progress: str = ""
     cycle_time_min: Optional[float] = Field(None, description="duration_minutes; None if not finished")
     tokens_actual: Optional[int] = None  # None when unmeasured (or any run in it is)
-    tokens_est: Optional[int] = None     # v1 has no token estimate
     created_at: str = ""
     updated_at: str = ""
     pause_kind: Optional[str] = None
@@ -125,7 +95,7 @@ class PipelineRunSummary(BaseModel):
         None,
         description=("completed runs only: True when DELIVER was push-ready (every gate and "
                      "the test evidence held on the final code), False when it completed "
-                     "unverified; None when not applicable (artifact_cli._completion_verdict)."),
+                     "unverified; None when not applicable (the run's push_ready)."),
     )
     report_path: Optional[str] = Field(
         None,
@@ -142,12 +112,8 @@ class PipelineProjectGroup(BaseModel):
     """A project/DDD group: its health rollup + its runs."""
     project: str
     run_count: int = 0
-    completion_rate: float = Field(0.0, description="completed / total (garbage excluded), 0-1")
+    completion_rate: float = Field(0.0, description="completed / total, 0-1")
     avg_cycle_min: Optional[float] = None
-    # run_0e68e235: GENUINE decision-pauses only. Garbage (abandoned / crash-residue-
-    # paused, never delivered) is excluded from analytics entirely and is NOT
-    # needs-you — the user can take no action on a dead run. Delivered-but-mislabeled
-    # abandoned runs are recategorized to completed, not counted here.
     aborted_count: int = Field(0, description="runs that need you (core.pipeline_metrics.needs_you)")
     runs: list[PipelineRunSummary] = Field(default_factory=list)
 
@@ -168,7 +134,6 @@ class PipelineOverall(BaseModel):
     completion_rate: float = 0.0
     avg_cycle_min: Optional[float] = None
     tokens_actual: Optional[int] = None  # None when unmeasured (or any run in it is)
-    tokens_est: Optional[int] = None     # v1 has no token estimate
     profile_mix: dict[str, int] = Field(default_factory=dict)
     aborted_count: int = 0
 
@@ -181,15 +146,8 @@ class PipelineAnalytics(BaseModel):
     by_project: list[PipelineProjectGroup] = Field(default_factory=list)
 
 
-class PipelineStageTokens(BaseModel):
-    """Per-stage estimated-vs-actual token cost for the detail view."""
-    stage: str
-    est: int = 0
-    actual: int = 0
-
-
 class PipelineCommit(BaseModel):
-    """A commit this run produced (persisted by run-commit, G1)."""
+    """A commit this run landed (the run's landing progress)."""
     repo: str = ""
     sha: str = ""
     files: list[str] = Field(default_factory=list)
@@ -236,7 +194,6 @@ class PipelineRunDetail(BaseModel):
         ),
     )
     reflect_lessons: list[str] = Field(default_factory=list)
-    stage_tokens: list[PipelineStageTokens] = Field(default_factory=list)
     commits: list[PipelineCommit] = Field(default_factory=list)
     checkpoint_reason: Optional[str] = None
     pause_kind: Optional[str] = Field(

@@ -264,43 +264,60 @@ def _collect_governance() -> list[AttentionItem]:
     return items
 
 
+#: what each v1 state needs, as the Need You item's title and the agent's instruction
+_NEEDS_YOU_TEXT = {
+    "decision": ("Decision needed",
+                 "Pipeline {run} ({project}) waits for a person's decision: show its question "
+                 "card in the run's own chat (owner_session_id) and wait for the answer."),
+    "stopped": ("Stopped",
+                "Pipeline {run} ({project}) was stopped ({reason}). If the user wants it to "
+                "go on, resume it from the Pipeline overlay and continue in its own chat."),
+    "worktree": ("Worktree unavailable",
+                 "Pipeline {run} ({project}) could not create its worktree ({reason}). Fix "
+                 "the cause, then resume it from the Pipeline overlay."),
+    "idle": ("Not driven",
+             "Pipeline {run} ({project}) is active but no session drives it: open its own "
+             "chat (owner_session_id) and continue it, or cancel it."),
+    "abandoned": ("Abandoned",
+                  "Pipeline {run} ({project}) was abandoned ({reason}) without landing. "
+                  "Tell the user; a new run is the way to redo the change."),
+}
+
+
 def _collect_paused_runs(pipeline_runs: Optional[list[dict]] = None) -> list[AttentionItem]:
-    """Paused pipeline runs whose checkpoint reason is a DECISION (not crash residue)
-    → BLOCKING. Reuses the pipelines router's cross-project loader + classifier."""
+    """v1 runs that need a person (``pipeline_metrics.needs_you``: a pending decision,
+    a stopped run, a worktree that could not be made, an active run no session drives,
+    an abandoned run) → BLOCKING. Reuses the pipelines router's loader + classifier."""
     items: list[AttentionItem] = []
     try:
+        from core import pipeline_metrics as pm
         from routers.pipelines import _load_pipeline_runs, _to_response
-        from schemas.pipeline_run import PipelineRunStatus
 
         raws = pipeline_runs if pipeline_runs is not None else _load_pipeline_runs()
         for raw in raws:
             try:
                 resp = _to_response(raw)
-                if resp.status != PipelineRunStatus.PAUSED:
+                reason = raw.get("reason") if isinstance(raw.get("reason"), str) else None
+                if not pm.needs_you(resp.status.value, resp.pause_kind, reason):
                     continue
-                if getattr(resp, "pause_kind", None) != "decision":
-                    continue  # crash_residue is the reaper's job, not the user's
                 project = raw.get("_project", raw.get("project", "unknown"))
-                # PipelineRunResponse names the field `id` (schemas/pipeline_run.py),
-                # and _load_pipeline_runs stores the raw dict under key `id` too —
-                # NOT `run_id`. (adversarial HIGH: `run_id` → empty id, colliding
-                # "paused_run:" ids + a blank resume message.)
-                run_id = getattr(resp, "id", None) or raw.get("id", "")
-                requirement = getattr(resp, "requirement", "") or raw.get("requirement", "")
-                reason = ""
-                cp = raw.get("checkpoint")
-                if isinstance(cp, dict):
-                    reason = cp.get("reason", "")
+                run_id = resp.id
+                requirement = resp.requirement or ""
+                owner = raw.get("session_id") if isinstance(raw.get("session_id"), str) else None
+                title, message = _NEEDS_YOU_TEXT.get(
+                    resp.pause_kind or resp.status.value, _NEEDS_YOU_TEXT["abandoned"])
                 items.append(AttentionItem(
                     id=f"paused_run:{run_id}",
                     source="paused_run",
                     tier=TIER_BLOCKING,
                     brain=project,
-                    title=f"Paused: {requirement[:80]}",
-                    detail=reason,
+                    title=f"{title}: {requirement[:80]}",
+                    detail=reason or "",
                     dispatch={
-                        "message": f"Resume pipeline {run_id} for {project} — decision needed: {reason}",
-                        "context": {"kind": "paused_run", "project": project, "run_id": run_id},
+                        "message": message.format(run=run_id, project=project,
+                                                  reason=reason or "no reason recorded"),
+                        "context": {"kind": "paused_run", "project": project, "run_id": run_id,
+                                    "owner_session_id": owner},
                     },
                 ))
             except Exception as exc:

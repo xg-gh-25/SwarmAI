@@ -631,3 +631,16 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
 - **MED，contract 没有 requirement 时，回退到 run.json 的 requirement：** 现在只用 contract 的。
 - **MED，run id 正则限制为 64 个字符：** 改用 `identifiers.validate_run_id`。
 - **LOW，过时的注释：** 已更新。
+
+## 27. R5：dashboard schema 和前端一起切换
+
+**改了什么：**
+- 后端 schema 删除 `PipelineCheckpoint` 和 `checkpoint`、`taste_decisions`、`abandon_reason`、`tokens_est`、`PipelineStageTokens` 和 `stage_tokens`，以及 `cancelled` 状态。v1 的取消是一个签名的 abandon 事件。
+- 前端 `services/pipelines.ts`：删除 `crash_residue` 暂停类型、`PipelineRun.currentStage` 和 `checkpointReason`、`tokensEst`、`stageTokens`。实测 token 改为 `number | null`，null 表示从未测量，显示为 `—`。
+- `PipelineOverlay` 删除"预估 vs 实际"的条形图和预估数字；`useJobsRuns` 删除 crash-residue 过滤。
+- `attention_authority` 的 Need You 改为列出 `pipeline_metrics.needs_you` 判定的所有 v1 run，原因取自 projection 的 `reason`。
+
+**审查（96e9432a，0 HIGH + 2 MED + 1 LOW），一次修完：**
+- **MED，用户自己点了 Cancel 的 run 也算 needs you，30 天里一直挂着：** `needs_you` 新增 reason 参数，`cancelled_by_user`（`pm.USER_CANCEL_REASON`）不算。router 的 Cancel 也改为使用这个常量。
+- **MED，所有 Need You 项的标题都是 "Paused"，dispatch 只写一句 needs you：** 改为按状态区分标题（Decision needed / Stopped / Worktree unavailable / Not driven / Abandoned），每种状态都写清楚该做什么，并带上 `owner_session_id`。
+- **LOW，测试 fixture 里还在用 `cancelled`：** 已删除。

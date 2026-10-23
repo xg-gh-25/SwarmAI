@@ -21,10 +21,9 @@ import api from './api';
  * - 'stopped'       — v1: the user pressed Stop / closed the owner's tab (Resume)
  * - 'worktree'      — v1: its worktree could not be created (Resume retries)
  * - 'idle'          — v1: active, but no session is driving it (continue in its session)
- * - 'crash_residue' — pre-v1 dead-session residue (the Radar drops it)
  * - null            — nothing needed
  */
-export type PipelinePauseKind = 'crash_residue' | 'decision' | 'stopped' | 'worktree' | 'idle' | null;
+export type PipelinePauseKind = 'decision' | 'stopped' | 'worktree' | 'idle' | null;
 
 /** One option of a pending v1 decision. */
 export interface PipelineDecisionOption {
@@ -68,10 +67,7 @@ export interface PipelineRun {
   id: string;
   project: string;
   requirement: string;
-  status: 'running' | 'paused' | 'completed' | 'failed' | 'cancelled' | 'abandoned';
-  currentStage: string;
-  /** checkpoint.reason — WHY it paused (the decision text). Null if not paused. */
-  checkpointReason: string | null;
+  status: 'running' | 'paused' | 'completed' | 'failed' | 'abandoned';
   /** What the run needs from the user (see PipelinePauseKind). */
   pauseKind: PipelinePauseKind;
   /** Stage progress string "N/M" (backend key ``progress``), e.g. "5/8". */
@@ -89,18 +85,11 @@ export interface PipelineRun {
 
 /** Convert a backend snake_case pipeline run to camelCase PipelineRun. */
 export function pipelineToCamelCase(r: Record<string, unknown>): PipelineRun {
-  const checkpoint = r.checkpoint as Record<string, unknown> | null | undefined;
-  // Derive the "current" stage: for a paused run the checkpoint stage is where
-  // it stopped; otherwise fall back to the progress string (e.g. "5/8" → "build"
-  // is unknown here, so we surface the raw progress as the stage label).
-  const checkpointStage = checkpoint?.stage as string | undefined;
   return {
     id: r.id as string,
     project: r.project as string,
     requirement: r.requirement as string,
     status: r.status as PipelineRun['status'],
-    currentStage: checkpointStage ?? (r.progress as string) ?? '',
-    checkpointReason: (checkpoint?.reason as string | undefined) ?? null,
     pauseKind: (r.pause_kind as PipelineRun['pauseKind']) ?? null,
     progress: (r.progress as string) ?? '',
     updatedAt: (r.updated_at as string) ?? '',
@@ -119,8 +108,8 @@ export interface PipelineRunSummary {
   profile: string;
   progress: string;
   cycleTimeMin: number | null;
-  tokensActual: number;
-  tokensEst: number;
+  /** Measured tokens; null when the run (or any run in the total) was never measured. */
+  tokensActual: number | null;
   createdAt: string;
   updatedAt: string;
   pauseKind: PipelinePauseKind;
@@ -153,7 +142,7 @@ export interface PipelineTrendPoint {
   runs: number;
   completed: number;
   avgCycleMin: number | null;
-  tokens: number;
+  tokens: number | null;
 }
 
 export interface PipelineOverall {
@@ -161,8 +150,8 @@ export interface PipelineOverall {
   completed: number;
   completionRate: number;
   avgCycleMin: number | null;
-  tokensActual: number;
-  tokensEst: number;
+  /** Measured tokens; null when the run (or any run in the total) was never measured. */
+  tokensActual: number | null;
   profileMix: Record<string, number>;
   abortedCount: number;
 }
@@ -172,12 +161,6 @@ export interface PipelineAnalytics {
   overall: PipelineOverall;
   trend: PipelineTrendPoint[];
   byProject: PipelineProjectGroup[];
-}
-
-export interface PipelineStageTokens {
-  stage: string;
-  est: number;
-  actual: number;
 }
 
 export interface PipelineCommit {
@@ -198,7 +181,6 @@ export interface PipelineRunDetail {
    *  "View report in Canvas" button dispatches swarm:open-file{path} (run_929024a8). */
   reportPath: string | null;
   reflectLessons: string[];
-  stageTokens: PipelineStageTokens[];
   commits: PipelineCommit[];
   checkpointReason: string | null;
   pauseKind: PipelinePauseKind;
@@ -219,8 +201,7 @@ function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
     profile: (r.profile as string) ?? '',
     progress: (r.progress as string) ?? '',
     cycleTimeMin: (r.cycle_time_min as number | null) ?? null,
-    tokensActual: (r.tokens_actual as number) ?? 0,
-    tokensEst: (r.tokens_est as number) ?? 0,
+    tokensActual: typeof r.tokens_actual === 'number' ? r.tokens_actual : null,
     createdAt: (r.created_at as string) ?? '',
     updatedAt: (r.updated_at as string) ?? '',
     pauseKind: (r.pause_kind as PipelineRunSummary['pauseKind']) ?? null,
@@ -287,7 +268,7 @@ export const pipelinesService = {
       window,
       overall: {
         totalRuns: 0, completed: 0, completionRate: 0, avgCycleMin: null,
-        tokensActual: 0, tokensEst: 0, profileMix: {}, abortedCount: 0,
+        tokensActual: null, profileMix: {}, abortedCount: 0,
       },
       trend: [],
       byProject: [],
@@ -304,8 +285,7 @@ export const pipelinesService = {
           completed: (o.completed as number) ?? 0,
           completionRate: (o.completion_rate as number) ?? 0,
           avgCycleMin: (o.avg_cycle_min as number | null) ?? null,
-          tokensActual: (o.tokens_actual as number) ?? 0,
-          tokensEst: (o.tokens_est as number) ?? 0,
+          tokensActual: typeof o.tokens_actual === 'number' ? o.tokens_actual : null,
           profileMix: (o.profile_mix as Record<string, number>) ?? {},
           abortedCount: (o.aborted_count as number) ?? 0,
         },
@@ -314,7 +294,7 @@ export const pipelinesService = {
           runs: (t.runs as number) ?? 0,
           completed: (t.completed as number) ?? 0,
           avgCycleMin: (t.avg_cycle_min as number | null) ?? null,
-          tokens: (t.tokens as number) ?? 0,
+          tokens: typeof t.tokens === 'number' ? t.tokens : null,
         })),
         byProject: ((data?.by_project as Record<string, unknown>[]) ?? []).map((g) => ({
           project: (g.project as string) ?? 'unknown',
@@ -331,7 +311,7 @@ export const pipelinesService = {
   },
 
   /**
-   * Fetch one run's full retrospective (REPORT + reflect + stage tokens + commits).
+   * Fetch one run's full retrospective (REPORT + reflect + commits + decision).
    * Returns null on 404/any error — the drawer shows a graceful "not found".
    */
   async fetchRunDetail(runId: string): Promise<PipelineRunDetail | null> {
@@ -348,11 +328,6 @@ export const pipelinesService = {
         reportMd: (data.report_md as string) ?? '',
         reportPath: (data.report_path as string | null) ?? null,
         reflectLessons: (data.reflect_lessons as string[]) ?? [],
-        stageTokens: ((data.stage_tokens as Record<string, unknown>[]) ?? []).map((s) => ({
-          stage: (s.stage as string) ?? '',
-          est: (s.est as number) ?? 0,
-          actual: (s.actual as number) ?? 0,
-        })),
         commits: ((data.commits as Record<string, unknown>[]) ?? []).map((c) => ({
           repo: (c.repo as string) ?? '',
           sha: (c.sha as string) ?? '',

@@ -57,8 +57,16 @@ def pause_kind(raw: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
-def needs_you(status: str, kind: Optional[str]) -> bool:
-    return status == "abandoned" or kind in NEEDS_YOU_PAUSE_KINDS
+#: the abandon reason the dashboard's Cancel records: the person already decided
+USER_CANCEL_REASON = "cancelled_by_user"
+
+
+def needs_you(status: str, kind: Optional[str], reason: Optional[str] = None) -> bool:
+    """A pause a person must act on, or a run that was abandoned without them (a run
+    the user cancelled is their own decision, R5 review)."""
+    if status == "abandoned":
+        return reason != USER_CANCEL_REASON
+    return kind in NEEDS_YOU_PAUSE_KINDS
 
 
 def progress(raw: Mapping[str, Any]) -> tuple[int, int]:

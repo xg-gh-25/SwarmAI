@@ -48,7 +48,7 @@ const ANALYTICS = {
   window: '30d',
   overall: {
     totalRuns: 3, completed: 2, completionRate: 0.667, avgCycleMin: 12.0,
-    tokensActual: 55000, tokensEst: 60000, profileMix: { full: 2, goal: 1 }, abortedCount: 1,
+    tokensActual: 55000, profileMix: { full: 2, goal: 1 }, abortedCount: 1,
   },
   trend: [{ week: '2026-07-27', runs: 2, completed: 1, avgCycleMin: 10, tokens: 30000 }],
   byProject: [
@@ -56,12 +56,12 @@ const ANALYTICS = {
       project: 'SwarmAI', runCount: 2, completionRate: 0.5, avgCycleMin: 12, abortedCount: 1,
       runs: [
         { id: 'run_done1', requirement: 'Ship feature X', status: 'completed', profile: 'full',
-          progress: '8/8', cycleTimeMin: 12, tokensActual: 30000, tokensEst: 28000,
+          progress: '8/8', cycleTimeMin: 12, tokensActual: 30000,
           createdAt: '2026-08-01T10:00:00+00:00', updatedAt: '2026-08-01T10:12:00+00:00',
           pauseKind: null, needsYou: false, checkpointReason: null,
           reportPath: 'Projects/SwarmAI/.artifacts/runs/run_done1/REPORT.md' },
         { id: 'run_paused1', requirement: 'Aborted thing', status: 'paused', profile: 'goal',
-          progress: '3/6', cycleTimeMin: null, tokensActual: 5000, tokensEst: 40000,
+          progress: '3/6', cycleTimeMin: null, tokensActual: 5000,
           createdAt: '2026-08-01T09:00:00+00:00', updatedAt: '2026-08-01T09:30:00+00:00',
           pauseKind: 'decision', needsYou: true, checkpointReason: 'Gate 1 BLOCK: needs decision',
           reportPath: null },
@@ -71,7 +71,7 @@ const ANALYTICS = {
       project: 'CMHK_SalesIntel', runCount: 1, completionRate: 1, avgCycleMin: 8, abortedCount: 0,
       runs: [
         { id: 'run_cmhk1', requirement: 'Report gen', status: 'completed', profile: 'bugfix',
-          progress: '8/8', cycleTimeMin: 8, tokensActual: 20000, tokensEst: 22000,
+          progress: '8/8', cycleTimeMin: 8, tokensActual: 20000,
           createdAt: '2026-07-30T10:00:00+00:00', updatedAt: '2026-07-30T10:08:00+00:00',
           pauseKind: null, needsYou: false, checkpointReason: null, reportPath: null },
       ],
@@ -82,7 +82,6 @@ const ANALYTICS = {
 const DETAIL = {
   id: 'run_paused1', project: 'SwarmAI', requirement: 'Aborted thing', status: 'paused',
   profile: 'goal', cycleTimeMin: null, reportMd: '', reportPath: null, reflectLessons: [],
-  stageTokens: [{ stage: 'evaluate', est: 6000, actual: 4000 }],
   commits: [], checkpointReason: 'Gate 1 BLOCK: needs decision',
   pauseKind: 'decision', ownerSessionId: 'owner-1',
   decision: {
@@ -246,21 +245,6 @@ describe('PipelineOverlay', () => {
     await waitFor(() => expect(screen.getByTestId('pipeline-cancel-btn')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('pipeline-cancel-btn'));
     await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/pipelines/run_paused1/cancel'));
-  });
-
-  it('a crash-residue paused run has NO Resume button in the drawer', async () => {
-    // The Gate-2 HIGH: the drawer must re-derive pause_kind from checkpoint_reason,
-    // not assume every paused run is resumable. A crash-residue zombie is NOT.
-    fetchRunDetail.mockResolvedValueOnce({
-      ...DETAIL, id: 'run_paused1', status: 'paused', pauseKind: 'crash_residue',
-      decision: null, checkpointReason: 'session_crash_auto_detected',  // canonical crash marker
-    });
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
-    const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
-    fireEvent.click(within(grp.getByTestId('pipeline-run-run_paused1')).getByTitle('Aborted thing'));
-    await waitFor(() => expect(screen.getByTestId('pipeline-run-drawer')).toBeInTheDocument());
-    expect(screen.queryByTestId('pipeline-resume-btn')).toBeNull();
   });
 
   it('a run waiting for a decision shows the question and its options, not Resume', async () => {

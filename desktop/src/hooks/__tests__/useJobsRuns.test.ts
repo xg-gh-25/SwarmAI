@@ -31,8 +31,6 @@ function pipe(over: Partial<PipelineRun> = {}): PipelineRun {
     project: 'SwarmAI',
     requirement: 'do a thing',
     status: 'completed',
-    currentStage: 'reflect',
-    checkpointReason: null,
     pauseKind: null,
     progress: '8/8',
     updatedAt: '2026-07-02T10:00:00Z',
@@ -88,11 +86,10 @@ describe('aggregateJobsRuns', () => {
     expect(rows[0].failures).toBe(3);
   });
 
-  it('shows ONLY active runs (running + paused); drops completed/failed/cancelled/abandoned', () => {
+  it('shows ONLY active runs (running + paused); drops completed/failed/abandoned', () => {
     const runs = [
       pipe({ id: 'run_done', status: 'completed' }),
       pipe({ id: 'run_fail', status: 'failed' }),
-      pipe({ id: 'run_cancel', status: 'cancelled' }),
       pipe({ id: 'run_abandon', status: 'abandoned' }),
       pipe({ id: 'run_run', status: 'running' }),
       pipe({ id: 'run_pause', status: 'paused' }),
@@ -125,18 +122,8 @@ describe('aggregateJobsRuns', () => {
     expect(rows.map((r) => r.id)).toEqual(['running', 'new_pause', 'old_pause']);
   });
 
-  it('AC1: a crash-residue paused run is DROPPED from the run roster (mirrors NEEDS YOU)', () => {
+  it('AC2: a decision pause and a running run are both kept', () => {
     const runs = [
-      pipe({ id: 'run_crash', status: 'paused', pauseKind: 'crash_residue',
-             checkpointReason: 'session_crash_auto_detected' }),
-    ];
-    const { runs: rows } = aggregateJobsRuns([], runs);
-    expect(rows).toEqual([]);
-  });
-
-  it('AC2: decision pause + running are KEPT; only crash-residue is dropped', () => {
-    const runs = [
-      pipe({ id: 'run_crash', status: 'paused', pauseKind: 'crash_residue' }),
       pipe({ id: 'run_decision', status: 'paused', pauseKind: 'decision',
              updatedAt: '2026-07-02T00:00:00Z' }),
       pipe({ id: 'run_running', status: 'running', pauseKind: null,

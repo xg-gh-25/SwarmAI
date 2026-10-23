@@ -149,7 +149,8 @@ def test_list_analytics_and_detail_read_the_v1_projection(tmp_path, monkeypatch)
         data = client.get("/api/pipelines/analytics").json()
         assert data["overall"]["tokens_actual"] == 1500
         row = data["by_project"][0]["runs"][0]
-        assert row["status"] == "abandoned" and row["needs_you"] is True
+        # the user cancelled it themselves: nothing for them to act on (R5 review)
+        assert row["status"] == "abandoned" and row["needs_you"] is False
         assert isinstance(row["cycle_time_min"], float)
         assert client.get("/api/pipelines/run_readmodel1").json()["status"] == "abandoned"
     finally:
@@ -174,6 +175,29 @@ def test_the_listed_identity_is_the_run_directory_not_run_json(tmp_path, monkeyp
             ("run_identity_a", "P", "failed")]
         assert rows[0]["tokens_consumed"] is None
         overall = client.get("/api/pipelines/analytics").json()["overall"]
-        assert overall["tokens_actual"] is None and overall["tokens_est"] is None
+        assert overall["tokens_actual"] is None and "tokens_est" not in overall
     finally:
         client._v1_patcher.stop()  # type: ignore[attr-defined]
+
+
+def test_a_run_the_user_cancelled_does_not_need_them(tmp_path, monkeypatch):
+    """R5 review: Cancel is the user's own decision — no Need You item for it; an
+    abandon for any other reason still needs them, with a state-specific title."""
+    from core import attention_authority as aa
+    from core import pipeline_metrics as pm
+    assert pm.needs_you("abandoned", None, pm.USER_CANCEL_REASON) is False
+    assert pm.needs_you("abandoned", None, "checks_exhausted") is True
+    base = {"profile": "direct", "stages": {}, "created_at": "", "updated_at": "",
+            "_project": "P", "session_id": "s-own"}
+    items = aa._collect_paused_runs([
+        {**base, "id": "run_c1", "status": "abandoned", "reason": pm.USER_CANCEL_REASON,
+         "requirement": "a"},
+        {**base, "id": "run_c2", "status": "abandoned", "reason": "checks_exhausted",
+         "requirement": "b"},
+        {**base, "id": "run_c3", "status": "awaiting_human", "requirement": "c"},
+    ])
+    by_id = {i.id: i for i in items}
+    assert set(by_id) == {"paused_run:run_c2", "paused_run:run_c3"}
+    assert by_id["paused_run:run_c3"].title.startswith("Decision needed")
+    assert by_id["paused_run:run_c3"].dispatch["context"]["owner_session_id"] == "s-own"
+    assert "checks_exhausted" in by_id["paused_run:run_c2"].dispatch["message"]

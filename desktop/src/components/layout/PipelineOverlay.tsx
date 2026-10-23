@@ -4,7 +4,7 @@
  * detail drawer), but RETROSPECTIVE, not live: chat is the natural real-time
  * surface for a running pipeline (XG, run_f8494370), so this card gives the
  * system + human an OVERALL cognition of every pipeline run — health, cycle-time,
- * mode, tokens (est-vs-actual), by project/DDD, plus trends — and lets you resume
+ * mode, measured tokens, by project/DDD, plus trends — and lets you resume
  * an aborted/paused run.
  *
  * Opens on `swarm:show-pipeline` (via useExclusiveOverlay → single-overlay mux +
@@ -12,7 +12,7 @@
  * by-project grouping (XG: 全局 + by project 都得一眼看到). Click a run → an
  * absolute right-side detail drawer (z-10, not a flex sibling, so the roster never
  * compresses) that fetches GET /api/pipelines/{run_id} → REPORT retro + reflect
- * lessons + per-stage est-vs-actual token bars + related commits.
+ * lessons + related commits.
  *
  * NO LIVE POLLING — fetches the analytics payload ONCE on open (it is a retro
  * surface; a running pipeline's live state lives in its chat tab). One trend
@@ -65,8 +65,8 @@ function fmtCycle(min: number | null): string {
   return `${(min / 60).toFixed(1)}h`;
 }
 
-function fmtTokens(n: number): string {
-  if (n <= 0) return '—';
+function fmtTokens(n: number | null): string {
+  if (n === null || n <= 0) return '—';      // never measured: unknown, not zero
   if (n >= 1000) return `${(n / 1000).toFixed(0)}k`;
   return String(n);
 }
@@ -245,7 +245,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
               <Stat label="Runs" value={String(o.totalRuns)} />
               <Stat label="Completion" value={o.totalRuns ? `${Math.round(o.completionRate * 100)}%` : '—'} />
               <Stat label="Avg cycle" value={fmtCycle(o.avgCycleMin)} />
-              <Stat label="Tokens (act)" value={fmtTokens(o.tokensActual)} sub={`est ${fmtTokens(o.tokensEst)}`} />
+              <Stat label="Tokens" value={fmtTokens(o.tokensActual)} />
               {/* AC5(A): Needs you is a clickable FILTER — click → focus the view to
                   just needs-you runs; click again to clear. */}
               <Stat label="Needs you" value={o.abortedCount > 0 ? String(o.abortedCount) : '0'}
@@ -357,9 +357,8 @@ function Stat({ label, value, sub, accent, onClick, active, testid }: {
 }
 
 /** Status → pill {label, dot color, text color}. "Needs you" is DERIVED, not a raw
- *  status: abandoned OR paused-decision → needs you (rose); paused-crash-residue is a
- *  finished zombie → shows "paused" faint; else the raw status. Kept consistent with
- *  statusDot's colors so the pill and any dot never disagree (Gate-1 #5 label table). */
+ *  status: abandoned OR a v1 pause kind → needs you; else the raw status. Kept
+ *  consistent with statusDot's colors so the pill and any dot never disagree. */
 function statusPill(s: string, pauseKind: PipelinePauseKind, verified: boolean | null = null): { label: string; tone: Tone } {
   if (pauseKind === 'decision') return { label: 'needs your decision', tone: 'error' };
   if (pauseKind === 'stopped') return { label: 'stopped', tone: 'warning' };
@@ -406,7 +405,7 @@ function RunRow({ r, onOpenRun, close, showProject }: {
       <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0 w-12 text-right whitespace-nowrap">{fmtCycle(r.cycleTimeMin)}</span>
       {/* wide enough for "2727k/165k": a narrower column overflowed onto the report icon */}
       <span data-testid={`pipeline-run-tokens-${r.id}`} className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0 w-24 text-right whitespace-nowrap">
-        {fmtTokens(r.tokensActual)}/{fmtTokens(r.tokensEst)}
+        {fmtTokens(r.tokensActual)}
       </span>
       {/* Report button (AC2) — only when this run has a REPORT.md. Opens it in Canvas. */}
       {r.reportPath ? (
@@ -528,17 +527,14 @@ function RunDetailDrawer({
               </div>
             </div>
 
-            {/* The paused ⏸ banner is only meaningful while the run is genuinely paused.
-                A delivered-then-superseded run carries a stale checkpointReason but now
-                shows a "completed" verdict pill — don't contradict it with a pause banner
-                (Gate-2 note, run_403a5864). Suppress once the effective verdict is done. */}
+            {/* The paused ⏸ banner: the run's own reason, only while it is not done. */}
             {note ? (
               <div data-testid="pipeline-pause-note"
                    className="rounded border border-[color-mix(in_srgb,var(--color-status-warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] px-2 py-1.5 text-meta text-[var(--color-text)]">
                 ⏸ {note}
               </div>
             ) : detail.checkpointReason && !detail.decision
-                && detail.status !== 'completed' && detail.status !== 'complete' && (
+                && detail.status !== 'completed' && (
               <div className="rounded border border-[color-mix(in_srgb,var(--color-status-warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] px-2 py-1.5 text-meta text-[var(--color-text)]">
                 ⏸ {detail.checkpointReason}
               </div>
@@ -665,29 +661,6 @@ function RunDetailDrawer({
               >
                 {detail.auditCard}
               </pre>
-            )}
-
-            {/* Est-vs-actual token bars */}
-            {detail.stageTokens.length > 0 && (
-              <div>
-                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Tokens — est vs actual</div>
-                <div className="space-y-1">
-                  {detail.stageTokens.map((s) => {
-                    const max = Math.max(...detail.stageTokens.flatMap((x) => [x.est, x.actual]), 1);
-                    return (
-                      <div key={s.stage} className="text-meta tabular-nums">
-                        <div className="flex justify-between text-[var(--color-text-faint)]">
-                          <span>{s.stage}</span><span>{fmtTokens(s.actual)}/{fmtTokens(s.est)}</span>
-                        </div>
-                        <div className="relative h-1.5 rounded bg-[var(--color-hover)]">
-                          <div className="absolute top-0 left-0 h-full rounded bg-[var(--color-border-strong)]" style={{ width: `${(s.est / max) * 100}%` }} />
-                          <div className="absolute top-0 left-0 h-full rounded bg-primary/60" style={{ width: `${(s.actual / max) * 100}%` }} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
             )}
 
             {/* Reflect lessons */}
