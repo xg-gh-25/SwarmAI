@@ -153,6 +153,7 @@ Each fact has exactly one owner. Every other view is a projection.
 | Node identity, type, allowed class, capacity, heartbeat | **Central Service** `nodes` table | Host Conductor dispatch |
 | Org-wide view of Runs | **Central Service** event mirror, a projection of each node's outbox | Control Center |
 | A Run's full result (Run record) | **Central Service** result store (§4.4.1) | Learning worker, Host landing, Offline Eval |
+| Whether a local Run uploads | `config.json["pipeline"]["central_upload"]` and the request's `upload` flag, fixed in the Run contract at create (§4.4.1) | Conductor, Host outbox |
 | Proposed, approved and applied DDD changes, audit | **Central Service** learning pipeline (§4.4) | Control Center |
 | DDD content | The DDD's own store. Written by the existing local paths as today, plus Central-approved changes from Pipeline Runs through the DDD's adapter (§4.4.3) | Executors |
 | Landing on a Host repo | `run_protocol/landing.py` on the Host | Conductor |
@@ -174,8 +175,8 @@ A filesystem store, like the run protocol store, under
 
 It does not use `data.db`, so chat history storage is untouched.
 
-From Phase 3 the Host also writes a local outbox (`outbox.jsonl`) of its own Runs'
-events, which a background task posts to the Central Service mirror every 30 s. The
+From Phase 3 the Host also writes a local outbox (`outbox.jsonl`) of the events of its
+own Runs that have upload on (§4.4.1), which a background task posts to the Central Service mirror every 30 s. The
 outbox is a copy for the org view; the Conductor Store stays the owner of Host-local
 Runs, and a Central outage never blocks or slows a local Run.
 
@@ -377,9 +378,28 @@ runs the landing. Internal Runs have no result bundle; their delivery record nam
 Transcripts, full logs and the signed event chain stay on the node that ran the Run; the
 Run record carries only their digests, so they can be checked if fetched later.
 
-This applies to every placement, inline and Local Runs included: the Host uploads them
-from its outbox (§4.2). A Run that cannot upload keeps its record locally and retries;
-nothing is lost because Central was down.
+**Upload is the Pipeline standard, with an opt-out for local Runs.**
+
+| Placement | Upload |
+|---|---|
+| `remote_hive` | Always. Central is how its result reaches the Host, so it cannot be turned off |
+| `inline_local`, `background_local` | On by default; the Host uploads from its outbox (§4.2). Can be turned off |
+
+The switch is `config.json["pipeline"]["central_upload"]`: `"on"` (default) or `"off"`,
+next to `worktree_mode` in the same section and changed through `PUT /api/settings`. A
+request can also set `upload: false` at submit (`pipeline_v1.py create --no-upload`, or the
+Conductor API), which only narrows the setting, never widens it.
+
+The value is decided once, when the Run is created, and recorded in the Conductor Store
+and the Run contract. Changing the setting later does not affect Runs already created.
+A local Run with upload off:
+
+- sends nothing to Central: no Run record, no event mirror, no lessons;
+- runs, lands and reflects exactly the same locally;
+- is shown in the Control Center only on this Host, marked `local only`.
+
+A Run that should upload but cannot (Central down) keeps its record locally and retries;
+nothing is lost.
 
 #### 4.4.2 Learning stages
 
@@ -1045,7 +1065,7 @@ Measure first, then build. Each phase starts with its acceptance tests written a
 | 1 | Conductor Store, `submit` / `register_inline`, status join, API, Pipelines page columns | An inline Run appears in the Conductor view with origin `chat`; chat send and stream timings are unchanged (measured before and after); a failing registration never fails `create` |
 | 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2 |
 | 3-0 | Contracts before code: wire and key specification (§4.3.6) with test vectors; DynamoDB, event, Run-record and audit schemas; `ddd_origin` and adapter fields in `ddd_bindings.py`; the four-fact event schema | Reviewed documents and red conformance tests for: crash after claim, out-of-order and duplicate events, duplicate-with-different-payload, cancel racing a result, Hive restart and adopt, lease across a simulated outage, key loss and rotation, a poisoned blob upload, a Run record that fails intake |
-| 3 | Central Service in the Bedrock account (CDK: HTTP API, Lambdas, DynamoDB, S3, KMS key, sweeper); Host enrolment and signed requests; DDD and Project Agent registry; Run-record upload from the Host outbox for inline and Local Runs; intake with redaction; audit; Control Center reads Central | Every finished local Run's record reaches Central and passes intake; a planted fake secret is masked and recorded; a Central outage leaves local Runs unaffected and their records upload afterwards; a replayed upload is a no-op; a node with a wrong signature, stale timestamp or reused nonce is refused |
+| 3 | Central Service in the Bedrock account (CDK: HTTP API, Lambdas, DynamoDB, S3, KMS key, sweeper); Host enrolment and signed requests; DDD and Project Agent registry; Run-record upload from the Host outbox for inline and Local Runs; intake with redaction; audit; Control Center reads Central | Every finished local Run with upload on hands its record to Central, which passes intake; with `central_upload: "off"`, or `--no-upload`, a local Run sends nothing to Central and behaves the same locally; a remote request ignores the setting and always uploads; a planted fake secret is masked and recorded; a Central outage leaves local Runs unaffected and their records upload afterwards; a replayed upload is a no-op; a node with a wrong signature, stale timestamp or reused nonce is refused |
 | 4 | Learning pipeline: `learning_jobs` and `change_sets`, learning worker on the Host, review and approve in the Control Center, `host_files` adapter with journal and revert, `reflect_job.route` in proposal mode for `remote_hive` placements only. Exercised with a Host-local Run first (its lessons recorded, not re-applied) and a simulated remote Run record | A local Run behaves exactly as today and its lessons appear in Central with their local outcome, never applied twice; a simulated remote Run's `auto` lesson is applied through `host_files` with an audit trail back to its Run; its MEMORY / EVOLUTION lesson lands in the Host's existing proposal queue; a Gates change waits for approval; a duplicate entry is not written twice; an applied change set can be reverted; no chat, hook or MEMORY behaviour changes |
 | 5 | Slack submit (owner only), confirmation card, `pipeline_submit` job, thread updates, Slack answer button | A non-owner cannot submit; a scheduled Run fires and reports in its thread; a missed fire is recorded `missed(host_offline)` and never submitted late; an overlapping fire is `skipped_overlap`; a replayed occurrence key is a no-op; an owner button press consumes its nonce once and records `human_answer`, while a second click, a non-owner click or an expired nonce is rejected |
 | 6 | Hive credentials moved to the secret store; four-fact completion protocol with landing journal for every placement; EC2 Hive enrolment and Worker through Central; leases; capacity reporting; DDD snapshot manifest and scan; `git_repo` adapter for GitHub DDDs | An external Run on EC2 hands in its Run record; the Host takes the result from Central, verifies, re-tests and lands it; a claim raced by two nodes has one winner; a lease survives a simulated 15-minute Central outage and a dead Hive's lease expires 10 minutes after recovery; a revoked-epoch event is rejected; an internal project is rejected for EC2; a crash mid-landing reconciles without double-landing |
