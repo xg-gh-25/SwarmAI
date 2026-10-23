@@ -513,6 +513,10 @@ validates and records.
 
 ## 7. Host-to-Hive Run Exchange
 
+> Realised in `docs/design/pipeline-run-conductor-v1.md` §4.3 and §7.1 through a Central
+> Service that Host and Hives both call outbound; Host and Hive never connect directly, and
+> lease epoch authority for remote Runs sits with the Central Service.
+
 Host and Hive must not update the same mutable row. The protocol separates desired state
 from observed execution state.
 
