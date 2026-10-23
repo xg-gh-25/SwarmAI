@@ -116,8 +116,10 @@ relevant event. It can be rebuilt from the two sources; on rebuild, order is by 
 time, then source, then source seq. Execution detail (each Read, Edit, Bash) is not in the
 stream; it stays in the Worker transcript.
 
-The aggregate feed is the merge of all Runs' streams by time. The "Needs you" view is the
-aggregate feed filtered to open items. No list of open items is stored anywhere else.
+The aggregate feed is the merge of all Runs' streams by time; the overlay shows it only as
+an audit log. The working view is one card per Run, grouped by state (conductor §10), and
+its "Needs you" column is the set of Runs with an open item, computed from the streams.
+No list of open items is stored anywhere else.
 
 ### 4.2 One write path
 
@@ -150,7 +152,7 @@ it may see a message twice and must be idempotent by `stream_seq`.
 
 | Reader | Cursor kept | What it does |
 |---|---|---|
-| Pipelines overlay (each open client) | none stored; SSE `Last-Event-ID` | Live feed and per-Run thread. Connects only while open and visible, on the `nav` pool. Reconnect resumes from the last id |
+| Pipelines overlay (each open client) | none stored; SSE `Last-Event-ID` | Run cards (one per Run, grouped by state), each Run's thread in its review view, and the aggregate feed as an audit log. Connects only while open and visible, on the `nav` pool. Reconnect resumes from the last id |
 | Chat tab of the Run's origin | per (session, run) | One status card per Run in that tab, written once at submit as a single message row that only references `run_id`. Its content (stage, open item, its state) is rendered from the stream on read, so the tab's transcript gets no message per event. An open item is answerable on the card |
 | Slack thread of the Run's origin | per (thread, run), with an outbox | Posts each new message to the thread; records the Slack `ts` per `stream_seq`, so a retry edits instead of posting twice. When an item changes state it edits that item's message: buttons removed, "Answered in the dashboard at 01:38: A" |
 | Central mirror | per run (conductor §4.2 outbox) | Copies the events to the org store. For a remote Run it is also the transport (§5.3) |

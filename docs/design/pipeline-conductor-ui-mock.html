@@ -1,143 +1,122 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Pipelines overlay (Conductor) · mockup v5</title>
-<!-- Mockup for docs/design/pipeline-run-conductor-v1.md §5.4, §10 and docs/design/pipeline-human-loop-v2.md.
+<html lang="en"><head><meta charset="utf-8"><title>Pipelines overlay (Conductor) · mockup v6 · Run cards</title>
+<!-- Mockup for docs/design/pipeline-run-conductor-v1.md §10 and docs/design/pipeline-human-loop-v2.md.
      Theme variables fall back to a light palette outside the dashboard. -->
 </head><body style="margin:0">
 <style>
-.w{font:13px/1.5 -apple-system,system-ui,sans-serif;color:var(--text,#1d1d1f);background:var(--bg,#f6f6f4);padding:12px}
+.w{font:13px/1.45 -apple-system,system-ui,sans-serif;color:var(--text,#1d1d1f);background:var(--bg,#f6f6f4);padding:12px}
 .card{background:var(--card,#fff);color:var(--card-fg,#1d1d1f);border:1px solid var(--border,#e2e2de);border-radius:8px}
-.mut{color:var(--muted,#6e6e73)}.sm{font-size:11px}.b{font-weight:600}.row{display:flex;align-items:center;gap:8px}
-.pill{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid var(--border,#e2e2de);white-space:nowrap}
+.mut{color:var(--muted,#6e6e73)}.sm{font-size:11px}.b{font-weight:600}.row{display:flex;align-items:center;gap:6px}
+.pill{font-size:10px;padding:0 6px;border-radius:9px;border:1px solid var(--border,#e2e2de);white-space:nowrap}
 .dan{color:var(--danger,#c0392b);background:var(--danger-subtle,#fbeaea)}.acc{color:var(--accent,#2f6db5);background:var(--accent-subtle,#e8f0fa)}
 .warn{color:var(--warn,#a86b00);background:var(--warn-subtle,#fdf3e1)}.ok{color:var(--ok,#2e7d4f);background:var(--ok-subtle,#e7f4ec)}
-.btn{font-size:12px;padding:3px 10px;border-radius:6px;border:1px solid var(--border,#e2e2de);background:var(--bg-elevated,#fff);color:var(--text,#1d1d1f);cursor:pointer}
+.btn{font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid var(--border,#e2e2de);background:var(--bg-elevated,#fff);color:var(--text,#1d1d1f);cursor:pointer}
 .btn:hover{background:var(--bg-hover,#efefec)}.pri{background:var(--accent,#2f6db5);color:var(--bg,#fff);border-color:var(--accent,#2f6db5)}
-.tab{padding:6px 12px;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted,#6e6e73)}
-.tab.on{color:var(--text,#1d1d1f);border-color:var(--accent,#2f6db5)}
-.f{font-size:12px;padding:2px 10px;border-radius:12px;border:1px solid var(--border,#e2e2de);cursor:pointer;color:var(--muted,#6e6e73)}
-.f.on{color:var(--accent,#2f6db5);border-color:var(--accent,#2f6db5);background:var(--accent-subtle,#e8f0fa)}
-.bar{height:6px;border-radius:3px;background:var(--border,#e2e2de);overflow:hidden;width:64px}.bar i{display:block;height:100%;background:var(--accent,#2f6db5)}
-.msg{padding:8px 12px;border-bottom:1px solid var(--border,#e2e2de)}.me{background:var(--accent-subtle,#e8f0fa)}
-.sys{color:var(--muted,#6e6e73);font-size:12px;padding:4px 12px;border-bottom:1px solid var(--border,#e2e2de)}
-.rn{cursor:pointer;color:var(--accent,#2f6db5);font-weight:600}.id{font-size:10px;color:var(--muted,#6e6e73);font-family:ui-monospace,monospace}
-.done{color:var(--ok,#2e7d4f);font-size:12px}
-input,textarea,select{font:12px inherit;padding:5px 8px;border-radius:6px;border:1px solid var(--border,#e2e2de);background:var(--bg,#f6f6f4);color:var(--text,#1d1d1f);box-sizing:border-box}
-.st{display:flex;gap:2px}.st span{flex:1;font-size:10px;text-align:center;padding:2px 0;border-radius:3px;background:var(--bg-hover,#efefec);color:var(--muted,#6e6e73)}
-.st .d{background:var(--ok-subtle,#e7f4ec);color:var(--ok,#2e7d4f)}.st .c{background:var(--accent,#2f6db5);color:var(--bg,#fff)}
-.drawer{position:absolute;top:0;right:0;bottom:0;width:50%;border-left:1px solid var(--border,#e2e2de);background:var(--bg-elevated,#fff);padding:12px;overflow:auto;display:none}
-.lane{padding:8px 12px;border-bottom:1px solid var(--border,#e2e2de)}.lr{display:flex;justify-content:space-between;align-items:center;padding:3px 0}
-.intent{border-left:3px solid var(--border-strong,#c8c8c2);padding:4px 10px;margin:8px 0;color:var(--muted-strong,#4a4a4f)}
+.tab{padding:6px 12px;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted,#6e6e73)}.tab.on{color:var(--text,#1d1d1f);border-color:var(--accent,#2f6db5)}
+input,textarea,select{font:12px inherit;padding:4px 8px;border-radius:6px;border:1px solid var(--border,#e2e2de);background:var(--bg,#f6f6f4);color:var(--text,#1d1d1f);box-sizing:border-box}
+.board{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:8px}
+.col{background:var(--bg,#f6f6f4);border-radius:8px;padding:6px;max-height:520px;overflow:auto}
+.ch{display:flex;justify-content:space-between;align-items:center;padding:2px 4px 6px;font-weight:600;font-size:12px}
+.rc{background:var(--card,#fff);border:1px solid var(--border,#e2e2de);border-radius:7px;padding:7px 8px;margin-bottom:6px;cursor:pointer}
+.rc:hover{border-color:var(--border-strong,#c8c8c2)}.rc.sel{border-color:var(--accent,#2f6db5);box-shadow:0 0 0 1px var(--accent,#2f6db5)}
+.rc.need{border-left:3px solid var(--danger,#c0392b)}
+.tt{font-weight:600;font-size:12.5px;line-height:1.3}
+.sb{display:flex;gap:1px;margin:5px 0 3px}.sb i{flex:1;height:4px;border-radius:2px;background:var(--border,#e2e2de)}.sb i.d{background:var(--ok,#2e7d4f)}.sb i.c{background:var(--accent,#2f6db5)}
+.ask{font-size:11.5px;margin:4px 0;padding:4px 6px;border-radius:5px;background:var(--danger-subtle,#fbeaea);color:var(--text,#1d1d1f)}
+.wrap{position:relative}
+.rv{position:absolute;top:0;right:0;bottom:0;width:62%;background:var(--bg-elevated,#fff);border-left:1px solid var(--border,#e2e2de);display:none;flex-direction:column}
+.rv .hd{padding:10px 12px;border-bottom:1px solid var(--border,#e2e2de)}.rv .bd{flex:1;overflow:auto;padding:10px 12px}.rv .ft{padding:8px 12px;border-top:1px solid var(--border,#e2e2de)}
+.intent{border-left:3px solid var(--border-strong,#c8c8c2);padding:3px 10px;margin:6px 0;color:var(--muted-strong,#4a4a4f);font-size:12px}
+.th{display:grid;grid-template-columns:42px 1fr;row-gap:6px;font-size:12px}
+.done{color:var(--ok,#2e7d4f);font-size:11px}
+.narrow .board{grid-template-columns:1fr;width:36%}.narrow .col{max-height:none}.narrow .col .rc .ask,.narrow .col .rc .qa{display:none}
 </style>
 <div class="w">
 <div class="row" style="justify-content:space-between;margin-bottom:8px">
- <div class="row"><span class="b" style="font-size:16px">Pipelines</span><span class="pill dan" id="badge">2 open</span></div>
- <span class="mut sm">live while open · Central synced 4s ago</span>
+ <div class="row"><span class="b" style="font-size:16px">Pipelines</span><span class="pill dan" id="badge"></span></div>
+ <div class="row"><input placeholder="Search titles" style="width:160px"><select><option>All projects</option><option>SwarmAI</option><option>oss-lib</option><option>IVTHub</option></select><select><option>All executors</option><option>Local Worker</option><option>hive-ec2-1</option><option>gawan-cdd</option></select></div>
 </div>
-<div class="card" style="padding:8px 12px;margin-bottom:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
- <div><div class="b">Chat tabs</div><div class="sm mut">inline · 1 running</div></div>
- <div><div class="b">Local Worker</div><div class="row sm"><div class="bar"><i style="width:100%"></i></div>1/1 · 1 queued</div></div>
- <div><div class="b">hive-ec2-1</div><div class="row sm"><div class="bar"><i style="width:66%"></i></div><span id="hivecap">2/3 · 1 parked</span></div></div>
- <div><div class="b">gawan-cdd</div><div class="row sm"><span class="pill warn">offline 12m</span>0/1 · 1 queued</div></div>
+<div class="card" style="padding:6px 12px;margin-bottom:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:12px">
+ <div><b>Chat tabs</b> <span class="mut">· 2 inline</span></div><div><b>Local Worker</b> <span class="mut">· 1/1 · 2 queued</span></div><div><b>hive-ec2-1</b> <span class="mut">· 3/3 · 1 queued</span></div><div><b>gawan-cdd</b> <span class="mut">· 1/1 · 1 parked</span></div>
 </div>
-<div class="card" style="position:relative;min-height:470px">
- <div class="row" style="padding:0 6px;border-bottom:1px solid var(--border,#e2e2de)">
-  <div class="tab on" data-t="s">Stream</div><div class="tab" data-t="a">Active · 6</div><div class="tab" data-t="c">Schedules · 2</div><div class="tab" data-t="h">History</div><div class="tab" data-t="v">Hives · 2</div>
- </div>
- <div id="t-s">
-  <div class="row" style="padding:6px 12px;border-bottom:1px solid var(--border,#e2e2de)"><span class="f on" data-f="all">All</span><span class="f" data-f="blk">Blocking</span><span class="f">SwarmAI</span><span class="f">hive-ec2-1</span><span class="mut sm" style="margin-left:auto">newest at bottom</span></div>
-  <div class="sys nb">01:12 · <span class="rn" data-r="7c21">Remove legacy /api/jobs route</span> · hive-ec2-1 restarted → attempt 2 resumed from PLAN</div>
-  <div class="msg nb"><div class="row"><span class="rn" data-r="7c21">Remove legacy /api/jobs route</span><span class="mut sm">SwarmAI · bugfix · DESIGN</span><span class="id">run_7c21</span></div><div><b>Question · round 1</b> · Keep the old route for one release, or remove it now? A keep one release · B remove now</div></div>
-  <div class="msg me nb"><div class="row"><span class="b">You</span><span class="mut sm">→ Remove legacy /api/jobs route · via Slack · 01:38</span></div><div>A. 但 Slack adapter 这次一起改掉。</div></div>
-  <div class="msg nb"><div class="row"><span class="rn" data-r="7c21">Remove legacy /api/jobs route</span><span class="pill acc">notice</span></div><div>Applied your note "Slack adapter 一起改" → scope changed (2 more files). Asking you to confirm.</div></div>
-  <div class="msg blk"><div class="row" style="justify-content:space-between"><div class="row"><span class="rn" data-r="7c21">Remove legacy /api/jobs route</span><span class="mut sm">SwarmAI · bugfix · DESIGN</span><span class="id">run_7c21</span></div><span class="pill dan" id="q-pill">question · round 2/3 · parked</span></div>
-   <div>Changing the Slack adapter adds 2 files, so this needs full review. OK? A yes, review together · B adapter in a new Run</div>
-   <div class="row" id="q-act" style="margin-top:6px"><button class="btn" data-ans="A">A</button><button class="btn" data-ans="B">B</button><button class="btn">None of these…</button><input id="q-note" style="flex:1" placeholder="Optional note"></div></div>
-  <div class="sys nb">01:52 · <span class="rn" data-r="7c21">Remove legacy /api/jobs route</span> parked (waited 10 min) · hive-ec2-1 slot → <b>Nightly dependency bump · Oct 24</b> started</div>
-  <div class="msg blk"><div class="row" style="justify-content:space-between"><div class="row"><span class="rn" data-r="51ae">Fix duplicate job submit returning 500</span><span class="mut sm">SwarmAI · direct · Local Worker</span><span class="id">run_51ae</span></div><span class="pill warn" id="ap-pill">approval</span></div>
-   <div>Ready to land 3 files (+48 −12) into <code>main</code> · review PASS · 6/6 tests. <span class="rn">Show diff</span></div>
-   <div class="row" id="ap-act" style="margin-top:6px"><button class="btn" data-ap="Approved">Approve</button><button class="btn" data-ap="Changes requested">Request changes…</button><button class="btn" data-ap="Rejected">Reject…</button></div></div>
-  <div class="msg nb"><div class="row"><span class="rn" data-r="aa04">Stabilise flaky retry test</span><span class="mut sm">oss-lib · full · TEST</span><span class="pill acc">notice</span></div><div>Acknowledged your guidance "别跑 integration 目录": excluded <code>tests/integration/</code> (14 tests). Scope unchanged.</div></div>
-  <div class="row" style="padding:8px 12px">
-   <select><option>To: Stabilise flaky retry test</option><option>To: Remove legacy /api/jobs route</option><option>To: Fix duplicate job submit returning 500</option></select>
-   <input style="flex:1" placeholder="Answers its open item if it has one, otherwise sent as guidance"><button class="btn pri">Send</button></div>
- </div>
- <div id="t-a" style="display:none">
-  <div class="lane"><div class="mut sm b">CHAT TABS</div><div class="lr"><span><span class="b">Conductor V1 Phase 1 skeleton</span> <span class="mut sm">SwarmAI · full · tab "Conductor V1"</span></span><span class="pill acc">BUILD · 18m</span></div></div>
-  <div class="lane"><div class="mut sm b">LOCAL WORKER · 1/1</div>
-   <div class="lr"><span><span class="rn" data-r="51ae">Fix duplicate job submit returning 500</span> <span class="mut sm">SwarmAI · direct · from chat</span></span><span class="pill warn">approval · 9m</span></div>
-   <div class="lr"><span class="mut">#1 queued · <b style="color:var(--text,#1d1d1f)">Slack: keep thread_ts on edit</b> · SwarmAI · bugfix · from Slack</span><button class="btn">Cancel</button></div></div>
-  <div class="lane"><div class="mut sm b">HIVE-EC2-1 · 2/3</div>
-   <div class="lr"><span><span class="rn" data-r="7c21">Remove legacy /api/jobs route</span> <span class="mut sm">SwarmAI · bugfix · from Slack</span></span><span class="pill warn">parked · slot free</span></div>
-   <div class="lr"><span><span class="rn" data-r="aa04">Stabilise flaky retry test</span> <span class="mut sm">oss-lib · full</span></span><span class="pill acc">TEST · 1h 02m</span></div>
-   <div class="lr"><span><span class="b">Nightly dependency bump · Oct 24</span> <span class="mut sm">SwarmAI · direct · schedule</span></span><span class="pill acc">EVALUATE · 1m</span></div></div>
-  <div class="lane"><div class="mut sm b">GAWAN-CDD · offline 12m</div><div class="lr"><span class="mut">#1 queued · <b style="color:var(--text,#1d1d1f)">Spec lint false positive on optional fields</b> · IVTHub · bugfix</span><span class="mut sm">fails after 24h</span></div></div>
- </div>
- <div id="t-c" style="display:none;padding:10px 12px"><div class="lr" style="border-bottom:1px solid var(--border,#e2e2de);padding:6px 0"><div><span class="b">Nightly dependency bump</span><div class="mut sm">SwarmAI · direct · hive-ec2-1 · daily 02:00 Asia/Shanghai · each fire is titled "Nightly dependency bump · &lt;date&gt;"</div></div><span class="mut sm">last: delivered</span></div><div class="lr" style="padding:6px 0"><div><span class="b">Weekly flaky-test sweep</span><div class="mut sm">SwarmAI · direct · Local Worker · Mon 09:00</div></div><span class="mut sm">last: <span style="color:var(--warn,#a86b00)">missed (Host offline)</span></span></div></div>
- <div id="t-h" style="display:none;padding:10px 12px"><div class="mut sm">Today's overlay content, unchanged: 30-day summary, throughput trend, runs by project, retro drawer. Rows show the title first. Two added columns: where it ran · org copy (uploaded / local only / pending).</div></div>
- <div id="t-v" style="display:none;padding:10px 12px"><div class="lr" style="border-bottom:1px solid var(--border,#e2e2de);padding:6px 0"><span><span class="b">hive-ec2-1</span> <span class="mut sm">EC2 · external · 3 slots</span></span><span class="pill ok">active</span></div><div class="lr" style="padding:6px 0"><span><span class="b">gawan-cdd</span> <span class="mut sm">Cloud Desktop · internal · 1 slot</span></span><span class="pill warn">offline</span></div><button class="btn" style="margin-top:8px">Enrol a Hive…</button></div>
- <div class="drawer" id="dr">
-  <div class="row" style="justify-content:space-between"><span class="b" style="font-size:14px" id="dr-t"></span><button class="btn" id="dx">Close</button></div>
-  <div class="row sm"><span class="id" id="dr-id"></span><span class="mut" id="dr-meta"></span></div>
-  <div class="intent sm" id="dr-req"></div>
-  <div class="row sm" style="margin:6px 0;flex-wrap:wrap" id="dr-pills"></div>
-  <div class="st" id="dr-st"></div>
-  <div class="mut sm b" style="margin:10px 0 4px">THIS RUN'S THREAD</div>
-  <div class="sm" style="display:grid;grid-template-columns:44px 1fr;row-gap:4px" id="dr-thread"></div>
-  <textarea rows="2" style="width:100%;margin-top:8px" placeholder="Reply to this Run"></textarea>
-  <div class="row" style="margin-top:6px"><button class="btn">Worker transcript</button><button class="btn">Take over in chat</button><button class="btn" style="color:var(--danger,#c0392b)">Cancel run</button></div>
+<div class="card">
+ <div class="row" style="padding:0 6px;border-bottom:1px solid var(--border,#e2e2de)"><div class="tab on">Runs</div><div class="tab">Activity</div><div class="tab">Schedules</div><div class="tab">History</div><div class="tab">Hives</div><span class="mut sm" style="margin-left:auto;padding-right:8px">J / K: next · previous waiting Run</span></div>
+ <div class="wrap" id="wrap">
+  <div class="board" id="board"></div>
+  <div class="rv" id="rv">
+   <div class="hd">
+    <div class="row" style="justify-content:space-between"><span class="tt" style="font-size:15px" id="rv-t"></span><div class="row"><span class="mut sm" id="rv-pos"></span><button class="btn" id="prev">‹ Prev</button><button class="btn" id="next">Next ›</button><button class="btn" id="close">✕</button></div></div>
+    <div class="row sm mut" style="margin-top:2px" id="rv-meta"></div>
+    <div class="intent" id="rv-req"></div>
+    <div class="row" style="border-bottom:1px solid var(--border,#e2e2de);margin-top:6px" id="rv-tabs"><div class="tab on" data-v="th">Thread</div><div class="tab" data-v="ch">Changes</div><div class="tab" data-v="rv">Review</div><div class="tab" data-v="rp">Report</div></div>
+   </div>
+   <div class="bd" id="rv-body"></div>
+   <div class="ft" id="rv-ft"></div>
+  </div>
  </div>
 </div>
-<div class="mut sm b" style="margin:14px 0 6px">IN A CHAT TAB AND IN SLACK (same draft, same stream)</div>
-<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
- <div class="card" style="padding:10px 12px"><div class="mut sm b">CHAT · confirmation card</div>
-  <div class="sm mut" style="margin-top:4px">Title</div><input style="width:100%" value="Remove legacy /api/jobs route">
-  <div class="intent sm">把老的 /api/jobs 路由删掉，Slack 那边还在用的话先看看怎么处理</div>
-  <div class="sm mut">SwarmAI · bugfix · <b style="color:var(--text,#1d1d1f)">hive-ec2-1</b> (1 slot free) · DDD @ 9f3c · main @ 4bff62b</div>
-  <div class="row" style="margin-top:6px"><button class="btn pri">Run on hive-ec2-1</button><button class="btn">Change…</button></div></div>
- <div class="card" style="padding:10px 12px"><div class="mut sm b">SLACK · thread of the Run</div>
-  <div class="sm" style="margin-top:4px"><b>Remove legacy /api/jobs route</b> · round 2: changing the Slack adapter adds 2 files, so this needs full review. OK?</div>
-  <div class="row" id="sl-act" style="margin-top:6px"><button class="btn" data-ans="A">A yes</button><button class="btn" data-ans="B">B new Run</button></div>
-  <div class="mut sm" style="margin-top:4px">Or reply in this thread: your text becomes the note of the one open item.</div></div>
- <div class="card" style="padding:10px 12px"><div class="mut sm b">CHAT TAB "Release prep" · status card</div>
-  <div class="row" style="justify-content:space-between;margin-top:4px"><span class="b">Fix duplicate job submit returning 500</span><span class="pill warn" id="cc-pill">approval</span></div>
-  <div class="sm mut">run_51ae · Local Worker · DELIVER · 3 files</div>
-  <div class="row" id="cc-act" style="margin-top:6px"><button class="btn" data-ap="Approved">Approve</button><button class="btn" data-ap="Changes requested">Request changes…</button></div></div>
-</div>
-<div class="mut sm" style="margin-top:8px">Try it: answer the question in the Stream or in Slack, or approve in the Stream or the chat card. The first write wins and every other reader shows where it was answered. Click a Run title for its drawer.</div>
+<div class="mut sm" style="margin-top:8px">Try it: answer or approve a card in place, or open one and use Prev / Next to walk every waiting Run. An answered card moves to Waiting (resuming).</div>
 </div>
 <script>
 (function(){
-const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
-const R={
- '7c21':{t:'Remove legacy /api/jobs route',m:'SwarmAI · bugfix · from Slack #swarm-ops',req:'把老的 /api/jobs 路由删掉，Slack 那边还在用的话先看看怎么处理',p:['hive-ec2-1','attempt 2','DDD @ 9f3c','main @ 4bff62b','<span class="pill warn" id="dr-park">parked</span>'],s:3,
-  th:[['01:31','<b>Run</b> · Keep the old route for one release, or remove it now?'],['01:38','<b>You</b> (Slack) · A. 但 Slack adapter 这次一起改掉。'],['01:41','<b>Run</b> · ack: scope changed, asking to confirm'],['01:42','<b>Run</b> · round 2: needs full review, OK?']]},
- '51ae':{t:'Fix duplicate job submit returning 500',m:'SwarmAI · direct · from chat tab "Release prep"',req:'重复提交同一个 job 时后端返回 500，应该是幂等的',p:['Local Worker','attempt 1','DDD @ 9f3c','main @ 4bff62b'],s:7,
-  th:[['01:20','<b>Run</b> · started'],['01:40','<b>Run</b> · REVIEW passed · 6/6 tests'],['01:41','<b>Run</b> · approval: ready to land 3 files']]},
- 'aa04':{t:'Stabilise flaky retry test',m:'oss-lib · full · from chat tab "oss-lib"',req:'test_retry_backoff 在 CI 上偶发失败，查原因修掉',p:['hive-ec2-1','attempt 1','oss-lib DDD @ repo 1a2b','main @ 77e0c1'],s:6,
-  th:[['00:50','<b>Run</b> · started'],['01:30','<b>You</b> · guidance: 别跑 integration 目录'],['01:33','<b>Run</b> · ack: excluded tests/integration/, scope unchanged']]}};
+const $=s=>document.querySelector(s);
 const ST=['EVAL','THINK','PLAN','DESIGN','BUILD','REVIEW','TEST','DELIVER','REFLECT'];
-let extra={};
-function drawer(k){const r=R[k];$('#dr-t').textContent=r.t;$('#dr-id').textContent='run_'+k;$('#dr-meta').textContent=r.m;$('#dr-req').textContent='Requirement · '+r.req;
- $('#dr-pills').innerHTML=r.p.map(x=>x.startsWith('<')?x:'<span class="pill">'+x+'</span>').join('');
- $('#dr-st').innerHTML=ST.map((s,i)=>'<span class="'+(i<r.s?'d':i===r.s?'c':'')+'">'+s+'</span>').join('');
- $('#dr-thread').innerHTML=r.th.concat(extra[k]||[]).map(x=>'<span class="mut">'+x[0]+'</span><span>'+x[1]+'</span>').join('');$('#dr').style.display='block'}
-let open=2;function badge(){$('#badge').textContent=open?open+' open':'all clear';$('#badge').className='pill '+(open?'dan':'ok')}
-$$('.tab').forEach(t=>t.onclick=()=>{$$('.tab').forEach(x=>x.classList.remove('on'));t.classList.add('on');['s','a','c','h','v'].forEach(k=>$('#t-'+k).style.display=k===t.dataset.t?'':'none');$('#dr').style.display='none'});
-$$('.f[data-f]').forEach(f=>f.onclick=()=>{$$('.f[data-f]').forEach(x=>x.classList.remove('on'));f.classList.add('on');$$('#t-s .nb').forEach(n=>n.style.display=f.dataset.f==='blk'?'none':'')});
-$$('.rn[data-r]').forEach(r=>r.onclick=()=>drawer(r.dataset.r));
-$('#dx').onclick=()=>$('#dr').style.display='none';
-let q=null,ap=null;
-function answerQ(opt,where){if(q)return;q=opt;open--;badge();const note=$('#q-note').value;
- $('#q-act').innerHTML='<span class="done">Answered in '+where+': '+opt+(note&&where==='the dashboard'?' · "'+note+'"':'')+' · re-queued first on hive-ec2-1</span>';$('#q-pill').textContent='question · resolved';$('#q-pill').className='pill ok';
- $('#sl-act').innerHTML='<span class="done">'+(where==='Slack'?'You answered '+opt+' here':'Answered in the dashboard: '+opt)+'</span>';
- R['7c21'].p[4]='<span class="pill acc">resuming</span>';extra['7c21']=[['now','<b>You</b> ('+where+') · '+opt+(note?' · '+note:'')]];$('#hivecap').textContent='3/3 · resuming'}
-function answerAp(v,where){if(ap)return;ap=v;open--;badge();
- $('#ap-act').innerHTML='<span class="done">'+v+' in '+where+'</span>';$('#ap-pill').textContent=v.toLowerCase();$('#ap-pill').className='pill ok';
- $('#cc-act').innerHTML='<span class="done">'+(where==='this tab'?v+' here':v+' in the dashboard')+'</span>';$('#cc-pill').textContent=v.toLowerCase();$('#cc-pill').className='pill ok';extra['51ae']=[['now','<b>You</b> ('+where+') · '+v]]}
-$$('#q-act [data-ans]').forEach(b=>b.onclick=()=>answerQ(b.dataset.ans,'the dashboard'));
-$$('#sl-act [data-ans]').forEach(b=>b.onclick=()=>answerQ(b.dataset.ans,'Slack'));
-$$('#ap-act [data-ap]').forEach(b=>b.onclick=()=>answerAp(b.dataset.ap,'the dashboard'));
-$$('#cc-act [data-ap]').forEach(b=>b.onclick=()=>answerAp(b.dataset.ap,'this tab'));
+let runs=[
+ {id:'7c21',t:'Remove legacy /api/jobs route',p:'SwarmAI',pf:'bugfix',x:'hive-ec2-1',s:3,col:'need',age:'waiting 2h 10m',kind:'q',ask:'Round 2/3 · Slack adapter 一起改会多 2 个文件，需要完整 review，可以吗？',opts:['A 一起 review','B 另开 Run'],req:'把老的 /api/jobs 路由删掉，Slack 那边还在用的话先看看怎么处理',un:1,
+  th:[['01:31','<b>Run</b> · 老路由保留一个版本，还是现在就删？A 保留一个版本 · B 现在删'],['01:38','<b>You</b> (Slack) · A。但 Slack adapter 这次一起改掉。'],['01:41','<b>Run</b> · 已采纳：范围变大（+2 个文件），需要你确认'],['01:42','<b>Run</b> · 第 2 轮：需要完整 review，可以吗？']]},
+ {id:'51ae',t:'Fix duplicate job submit returning 500',p:'SwarmAI',pf:'direct',x:'Local Worker',s:7,col:'need',age:'waiting 9m',kind:'ap',ask:'Ready to land 3 files (+48 −12) · review PASS · 6/6 tests',req:'重复提交同一个 job 时后端返回 500，应该是幂等的',un:0,
+  th:[['01:20','<b>Run</b> · started'],['01:40','<b>Run</b> · REVIEW passed · 6/6 tests'],['01:41','<b>Run</b> · 请求批准合入 3 个文件']]},
+ {id:'e310',t:'Canvas: list files changed in this session',p:'SwarmAI',pf:'full',x:'Chat tab',s:1,col:'need',age:'waiting 6m',kind:'q',ask:'Round 1/3 · "最近文件"按编辑时间还是按最近打开？',opts:['A 编辑时间','B 最近打开'],req:'Canvas 里显示最近的文件',un:0,th:[['01:58','<b>Run</b> · "最近文件"按编辑时间还是按最近打开？']]},
+ {id:'b902',t:'Spec lint false positive on optional fields',p:'IVTHub',pf:'bugfix',x:'gawan-cdd',s:3,col:'need',age:'waiting 31m',kind:'q',ask:'Round 1/3 · optional 字段缺省时要不要跳过 enum 校验？',opts:['A 跳过','B 仍校验，给 warning'],req:'spec lint 对 optional 字段误报',un:0,th:[['01:35','<b>Run</b> · optional 字段缺省时要不要跳过 enum 校验？']]},
+ {id:'c11f',t:'Slack: keep thread_ts on message edit',p:'SwarmAI',pf:'bugfix',x:'hive-ec2-1',s:7,col:'need',age:'waiting 2m',kind:'ap',ask:'Ready to land 2 files (+19 −4) · review PASS · 4/4 tests',req:'Slack 编辑消息后 thread_ts 丢了，回复跑到频道里',un:0,th:[['02:01','<b>Run</b> · 请求批准合入 2 个文件']]},
+ {id:'93fe',t:'Conductor V1 Phase 1 skeleton',p:'SwarmAI',pf:'full',x:'Chat tab',s:4,col:'run',age:'18m',un:0},
+ {id:'aa04',t:'Stabilise flaky retry test',p:'oss-lib',pf:'full',x:'hive-ec2-1',s:6,col:'run',age:'1h 02m',un:1},
+ {id:'d551',t:'Nightly dependency bump · Oct 24',p:'SwarmAI',pf:'direct',x:'hive-ec2-1',s:0,col:'run',age:'1m',un:0},
+ {id:'f203',t:'Workspace overlay: per-folder change count',p:'SwarmAI',pf:'direct',x:'Local Worker',s:4,col:'run',age:'12m',un:0},
+ {id:'0aa1',t:'Brain Hub: read last landing, not git',p:'SwarmAI',pf:'bugfix',x:'Chat tab',s:5,col:'run',age:'25m',un:0},
+ {id:'5e7d',t:'oss-lib: drop Python 3.8 from CI matrix',p:'oss-lib',pf:'direct',x:'hive-ec2-1',s:2,col:'run',age:'6m',un:0},
+ {id:'q01',t:'Pipeline audit card: show UNKNOWN reasons',p:'SwarmAI',pf:'direct',x:'Local Worker',col:'wait',age:'queued #1',un:0},
+ {id:'q02',t:'Hive: report slots from measured memory',p:'SwarmAI',pf:'bugfix',x:'Local Worker',col:'wait',age:'queued #2',un:0},
+ {id:'q03',t:'oss-lib: retry jitter configurable',p:'oss-lib',pf:'full',x:'hive-ec2-1',col:'wait',age:'queued #1',un:0},
+ {id:'q04',t:'IVTHub: rename spec v2 fields',p:'IVTHub',pf:'bugfix',x:'gawan-cdd',col:'wait',age:'parked · answered, resuming',un:0},
+ {id:'z1',t:'Fix chat tab rev skipping a turn row',p:'SwarmAI',pf:'bugfix',x:'Local Worker',col:'done',age:'landed 40m ago',aud:'Iso ✓ · Qual ✓ · Auto ✓ · 22m · 410k',un:0},
+ {id:'z2',t:'Slack thread replies dedupe',p:'SwarmAI',pf:'direct',x:'hive-ec2-1',col:'done',age:'landed 2h ago',aud:'Iso ✓ · Qual ✓ · Auto ✗ 1 correction · 31m · 520k',un:0},
+ {id:'z3',t:'oss-lib: typed config loader',p:'oss-lib',pf:'full',x:'hive-ec2-1',col:'done',age:'failed 3h ago',aud:'Qual ✗ tests red after 2 fix rounds',un:0,fail:1},
+ {id:'z4',t:'Nightly dependency bump · Oct 23',p:'SwarmAI',pf:'direct',x:'hive-ec2-1',col:'done',age:'landed 23h ago',aud:'Iso ✓ · Qual ✓ · Auto ✓ · 9m · 120k',un:0}];
+const cols=[['need','Needs you'],['run','Running'],['wait','Waiting'],['done','Delivered · 24h']];
+let cur=null,view='th';
+function card(r){let h='<div class="rc'+(r.col==='need'?' need':'')+(cur===r.id?' sel':'')+'" data-id="'+r.id+'"><div class="row" style="justify-content:space-between;align-items:flex-start"><span class="tt">'+r.t+'</span>'+(r.un?'<span class="pill acc">'+r.un+' new</span>':'')+'</div>';
+ h+='<div class="sm mut">'+r.p+' · '+r.pf+' · '+r.x+'</div>';
+ if(r.col==='need'){h+='<div class="ask">'+(r.kind==='ap'?'<b>Approval</b> · ':'<b>Question</b> · ')+r.ask+'</div><div class="row qa" style="flex-wrap:wrap">';
+  h+=(r.kind==='ap'?'<button class="btn pri" data-a="Approved">Approve</button><button class="btn" data-o="1">Request changes…</button>':r.opts.map(o=>'<button class="btn" data-a="'+o+'">'+o+'</button>').join('')+'<button class="btn" data-o="1">Reply…</button>');
+  h+='<span class="sm mut" style="margin-left:auto">'+r.age+'</span></div>'}
+ else if(r.col==='run'){h+='<div class="sb">'+ST.map((_,i)=>'<i class="'+(i<r.s?'d':i===r.s?'c':'')+'"></i>').join('')+'</div><div class="row sm mut" style="justify-content:space-between"><span>'+ST[r.s]+'</span><span>'+r.age+'</span></div>'}
+ else if(r.col==='wait'){h+='<div class="sm '+(r.age.startsWith('parked')?'':'mut')+'" style="margin-top:3px">'+r.age+'</div>'}
+ else{h+='<div class="sm" style="margin-top:3px;color:'+(r.fail?'var(--danger,#c0392b)':'var(--muted,#6e6e73)')+'">'+r.age+'</div><div class="sm mut">'+r.aud+'</div>'}
+ return h+'</div>'}
+function render(){const b=$('#board');b.innerHTML=cols.map(([k,n])=>{const rs=runs.filter(r=>r.col===k);return '<div class="col"><div class="ch"><span>'+n+'</span><span class="pill '+(k==='need'&&rs.length?'dan':'')+'">'+rs.length+'</span></div>'+rs.map(card).join('')+'</div>'}).join('');
+ const n=runs.filter(r=>r.col==='need').length;$('#badge').textContent=n?n+' need you':'all clear';$('#badge').className='pill '+(n?'dan':'ok');
+ b.querySelectorAll('.rc').forEach(c=>c.onclick=e=>{const a=e.target.dataset.a;if(a){answer(c.dataset.id,a,'card');e.stopPropagation();return}open(c.dataset.id)})}
+function answer(id,a,where){const r=runs.find(x=>x.id===id);if(!r||r.col!=='need')return;r.col='wait';r.age=r.kind==='ap'?(a+' · landing'):'answered "'+a+'" · resuming first';(r.th=r.th||[]).push(['now','<b>You</b> ('+(where==='card'?'board':'review view')+') · '+a]);render();if(cur===id)show()}
+function needs(){return runs.filter(r=>r.col==='need')}
+function open(id){cur=id;$('#rv').style.display='flex';$('#wrap').classList.add('narrow');render();show()}
+function show(){const r=runs.find(x=>x.id===cur);$('#rv-t').textContent=r.t;$('#rv-meta').innerHTML='<span style="font-family:ui-monospace,monospace">run_'+r.id+'</span> · '+r.p+' · '+r.pf+' · '+r.x+' · '+r.age;
+ $('#rv-req').textContent='Requirement · '+(r.req||'(requirement as submitted)');const nd=needs(),i=nd.findIndex(x=>x.id===cur);$('#rv-pos').textContent=i>=0?('waiting '+(i+1)+' of '+nd.length):'';
+ let body='';if(view==='th'){body='<div class="th">'+(r.th||[['—','<span class="mut">No messages yet</span>']]).map(x=>'<span class="mut">'+x[0]+'</span><span>'+x[1]+'</span>').join('')+'</div>'}
+ else if(view==='ch'){body='<div class="sm"><b>3 files · +48 −12</b><br>backend/routers/jobs.py · backend/core/job_router.py · tests/test_jobs_api.py</div><pre class="sm" style="background:var(--bg,#f6f6f4);padding:8px;border-radius:6px;overflow:auto">- raise HTTPException(500)\n+ return existing  # idempotent by client_id</pre>'}
+ else if(view==='rv'){body='<div class="sm">2 experts · 0 open findings · 1 fixed (MEDIUM: missing test for concurrent duplicate)</div>'}
+ else{body='<div class="sm mut">REPORT.md renders here once the Run delivers.</div>'}
+ $('#rv-body').innerHTML=body;
+ let ft='';if(r.col==='need'){ft=r.kind==='ap'?'<div class="row"><button class="btn pri" data-a="Approved">Approve landing</button><button class="btn" data-a="Changes requested">Request changes</button><button class="btn" data-a="Rejected">Reject</button></div>':'<div class="row" style="flex-wrap:wrap">'+r.opts.map(o=>'<button class="btn" data-a="'+o+'">'+o+'</button>').join('')+'<button class="btn">None of these…</button></div>';
+  ft+='<textarea rows="2" style="width:100%;margin-top:6px" placeholder="Your note or judgement (optional, sent with your choice)"></textarea>'}
+ else{ft='<div class="row"><input style="flex:1" placeholder="Send guidance to this Run"><button class="btn pri">Send</button><button class="btn">Take over in chat</button><button class="btn" style="color:var(--danger,#c0392b)">Cancel</button></div>'}
+ $('#rv-ft').innerHTML=ft;$('#rv-ft').querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{answer(cur,b.dataset.a,'rv');const nd=needs();if(nd.length){cur=nd[0].id;render();show()}})}
+function step(d){const nd=needs();if(!nd.length)return;let i=nd.findIndex(x=>x.id===cur);i=i<0?0:(i+d+nd.length)%nd.length;cur=nd[i].id;render();show()}
+$('#prev').onclick=()=>step(-1);$('#next').onclick=()=>step(1);
+$('#close').onclick=()=>{cur=null;$('#rv').style.display='none';$('#wrap').classList.remove('narrow');render()};
+document.querySelectorAll('#rv-tabs .tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('#rv-tabs .tab').forEach(x=>x.classList.remove('on'));t.classList.add('on');view=t.dataset.v;show()});
+document.addEventListener('keydown',e=>{if(!cur||/INPUT|TEXTAREA/.test(document.activeElement.tagName))return;if(e.key==='j')step(1);if(e.key==='k')step(-1)});
+render();
 })();
 </script>
 </body></html>

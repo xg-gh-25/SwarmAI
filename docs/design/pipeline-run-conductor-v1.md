@@ -1307,18 +1307,33 @@ Every surface below reads the Conductor Store and the Runs' message streams
 names a Run by its title (§5.4). The mockup is
 `docs/design/pipeline-conductor-ui-mock.html`.
 
-- **Pipelines overlay.** It becomes the live control surface; today's retro content moves
-  to its History tab unchanged, with two added columns (where the Run executed, org copy
-  state). Layout, top to bottom:
-  - an executor strip: Chat tabs, Local Worker, each Hive, with slots used / total and
-    queue length;
-  - the **message stream**: all Runs' messages in time order, filterable by Blocking,
-    project and executor; Blocking is the Needs-you view. Each message is answerable in
-    place, and one composer at the bottom sends to a chosen Run;
-  - tabs Active (grouped by executor, running then queued with exact positions),
-    Schedules, History, Hives;
-  - a Run drawer: dispatch facts, stage strip, that Run's own thread, usage, the Worker
-    transcript (read-only), Cancel and Take over in chat.
+- **Pipelines overlay.** It becomes the live control surface, designed for a person who
+  reviews and judges 20 to 30 Runs at a time. Today's retro content moves to its History
+  tab unchanged, with two added columns (where the Run executed, org copy state). The
+  unit on screen is the **Run card**, never a single message: a mixed message feed of 30
+  Runs cannot be read.
+  - **Executor strip** at the top: Chat tabs, Local Worker, each Hive, with slots used /
+    total and queue length.
+  - **Board** (tab Runs): four columns, each a list of Run cards, scrolled on its own.
+
+    | Column | Cards | Order |
+    |---|---|---|
+    | Needs you | Runs with an open item (question or approval) | longest wait first |
+    | Running | `dispatching`, `running` without an open item | stage, then start time |
+    | Waiting | `queued` (with position), `parked` after its item was answered, `cancelling` | queue order |
+    | Delivered (24 h) | Runs that reached `done` / `failed` / `cancelled` in the last 24 h, with the five-dimension audit line | newest first |
+
+    A card shows: title (§5.4), project · profile · executor, a stage bar, age, an unread
+    count of notices, and for Needs you the open item in one line with its quick actions
+    (option buttons, Approve). Filters: project, executor, origin, text search on titles.
+  - **Review view**: opening a card shows it on the right, the board narrowing to a card
+    list on the left. It holds the title and full requirement, dispatch facts, and tabs
+    Thread (that Run's message stream with the reply box), Changes (diff summary), Review
+    (findings), Report. Previous / Next walk the Needs-you column in order (`J` / `K`), so
+    a person can go through every waiting Run without returning to the board.
+  - **Activity** tab: the aggregate message feed of all Runs, for audit, filterable; not
+    the main working view.
+  - Tabs Schedules, History, Hives as before.
 
   Live updates come over one SSE connection opened only while the overlay is visible, on
   the `nav` pool, reading the stream logs and the Conductor Store; no polling of git or
