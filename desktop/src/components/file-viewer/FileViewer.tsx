@@ -169,6 +169,8 @@ function FileViewerImpl({
         size: number;
         mimeType?: string;
         readonly?: boolean;
+        /** The committed baseline is still loading (it loads after the content). */
+        baselinePending?: boolean;
         committedContent?: string;
         /** PHYSICAL absolute path (from /workspace/file/meta, run_405d221c) — what
          *  the OS opener needs for Open-in-System-App / Reveal / Copy-Path. Only
@@ -192,6 +194,8 @@ function FileViewerImpl({
   // so the fetch effect below (deps [filePath, viewType, …]) would NOT re-run on a
   // cache delete. Bumping this nonce is what actually forces the re-fetch.
   const [refetchNonce, setRefetchNonce] = useState(0);
+  // A committed baseline that landed after the content (C5): re-render to pass it on.
+  const [, setBaselineTick] = useState(0);
 
   /* ---- Unified close: closeSignal (run_f49d3ff3 R2) ---- */
   // A close request (the panel's closeRequest prop) closes the active file for
@@ -351,35 +355,28 @@ function FileViewerImpl({
             initialFile && tab.filePath === initialFile.filePath
               ? initialFile.sessionId
               : undefined;
+          // The committed baseline (for the diff) and the file load IN PARALLEL
+          // (super-canvas-fixing.md C5): `git show` takes ~120 ms against ~10 ms for
+          // the file, and the content must not wait for it. When THIS tab is the
+          // opened file AND it carries a baseRef (a source-final row's `<sha>^`,
+          // run_030dc98e), diff against that pre-run parent instead of HEAD. Only
+          // the initialFile's own path uses its baseRef; other tabs keep HEAD.
+          const isOpened = !!initialFile && tab.filePath === initialFile.filePath;
+          const baseline: Promise<string | undefined> = isEditableType(tab.viewType)
+            ? api.get<{ content: string }>('/workspace/file/committed', {
+                params: { path: tab.filePath, ...(isOpened && initialFile!.baseRef ? { ref: initialFile!.baseRef } : {}) },
+              }).then((r) => r.data.content, () => undefined) // new/untracked: no baseline
+            : Promise.resolve(undefined);
           const resp = await api.get<FileResponse>('/workspace/file', {
             params: { path: tab.filePath, ...(renderSessionId ? { session_id: renderSessionId } : {}) },
           });
           if (cancelled) return;
 
           const d = resp.data;
-          let committedContent: string | undefined;
-
-          // Fetch the committed baseline for the diff (editable types). When THIS tab
-          // is the opened file AND it carries a baseRef (a source-final row's `<sha>^`,
-          // run_030dc98e), diff against that pre-run parent instead of HEAD — else a
-          // just-committed file diffs HEAD-vs-working-tree (identical → empty). Only the
-          // initialFile's own path uses its baseRef; other tabs keep the HEAD baseline.
-          if (isEditableType(tab.viewType)) {
-            const baseRef =
-              initialFile && tab.filePath === initialFile.filePath
-                ? initialFile.baseRef
-                : undefined;
-            try {
-              const cResp = await api.get<{ content: string }>(
-                '/workspace/file/committed',
-                { params: { path: tab.filePath, ...(baseRef ? { ref: baseRef } : {}) } },
-              );
-              if (!cancelled) committedContent = cResp.data.content;
-            } catch {
-              // New/untracked file — no committed version
-            }
-          }
-
+          // A file opened ON its diff (autoDiff) needs the baseline to show anything,
+          // so it waits for it; every other open renders now.
+          const waitForBaseline = isOpened && !!initialFile!.autoDiff && isEditableType(tab.viewType);
+          const committedContent = waitForBaseline ? await baseline : undefined;
           if (cancelled) return;
           contentCache.current[tab.filePath] = {
             content: d.content,
@@ -387,7 +384,18 @@ function FileViewerImpl({
             size: d.size ?? new TextEncoder().encode(d.content).length,
             readonly: d.readonly,
             committedContent,
+            baselinePending: !waitForBaseline && isEditableType(tab.viewType),
           };
+          if (!waitForBaseline && isEditableType(tab.viewType)) {
+            const path = tab.filePath;
+            void baseline.then((c) => {
+              const entry = contentCache.current[path];
+              if (cancelled || !entry) return;
+              entry.committedContent = c;
+              entry.baselinePending = false;
+              setBaselineTick((n) => n + 1);
+            });
+          }
           setStatusBarInfo({
             fileSize: d.size ?? new TextEncoder().encode(d.content).length,
             encoding: d.encoding ?? 'utf-8',
@@ -688,6 +696,7 @@ function FileViewerImpl({
           workspaceId={workspaceIdRef.current}
           initialContent={cached.content}
           committedContent={cached.committedContent}
+          baselinePending={cached.baselinePending}
           onSave={handleSave}
           onClose={handleCloseActive}
           gitStatus={gitStatus}

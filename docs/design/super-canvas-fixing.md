@@ -95,11 +95,20 @@ panel holds exactly one. One source: `CanvasTabState.file`.
 - First load (F6): render as soon as the file arrives. The committed baseline loads
   in parallel and is stored when it lands; until then Changes shows as loading
   (disabled). Target: content visible after the first request alone.
+  As built: a file opened ON its diff (autoDiff) still waits, it has nothing to
+  show without the baseline. FileEditorCore takes a late `committedContent` in its
+  own effect (it only changes what Changes compares against; the reset effect no
+  longer lists it, so a late baseline never resets the text, view or edits).
 - Rewrites (F7): FileEditorCore coalesces `swarm:file-changed` for its file —
-  trailing 250 ms window, at most one GET in flight, a sequence number so only the
-  newest response is applied. The changed-lines overlay draws one absolutely
-  positioned bar per CHANGED line (top = (line − 1) × 24 px + 16 px, moved by
-  scrollTop) instead of a div per line.
+  throttled (the first event schedules a read 250 ms later, later events join it,
+  so a file written continuously still refreshes every 250 ms), at most one GET in
+  flight (an event during it schedules exactly one more), a sequence number so only
+  the newest response is applied. The changed-lines overlay renders one node per
+  changed line and one per run of unchanged lines before it (`changedLineSegments`),
+  nothing after the last change. (Deviation: segments instead of positioned bars —
+  a bar at (line − 1) × 24 px is wrong as soon as a line wraps; a joined text run
+  wraps exactly like the textarea.) jsdom: 2,164-line file, 4 changed lines →
+  104 ms / 2,164 nodes before, 1.2 ms / 7 nodes after.
 - Markdown (F7, F8): the preview renders from `useDeferredValue(content)`, so a
   rewrite or a large document never blocks input, scrolling or the rest of the
   panel; it is not skipped or truncated.

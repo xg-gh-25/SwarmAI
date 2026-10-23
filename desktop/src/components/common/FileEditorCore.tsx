@@ -17,7 +17,7 @@
  * - `SearchBar`      — Floating Cmd+F search bar
  */
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import hljs from 'highlight.js';
@@ -75,6 +75,37 @@ export const HIGHLIGHT_DEBOUNCE_MS = 150;
  *  scroll clear of the floating bar (a ~30px group + 10px inset + breathing room). */
 export const PANEL_FLOAT_PAD = 56;
 
+/** `swarm:file-changed` for the open file: at most one read per this many ms (C5). */
+export const FILE_CHANGE_COALESCE_MS = 250;
+
+/** The changed-lines overlay as segments: each changed line on its own, each run of
+ *  unchanged lines joined into one, nothing after the last changed line. DOM nodes
+ *  grow with the changes, not with the file (C5). */
+export function changedLineSegments(content: string, changed: Set<number>): Array<{ changed: boolean; text: string }> {
+  const lines = content.split('\n');
+  const last = Math.min(lines.length, Math.max(0, ...changed));
+  const out: Array<{ changed: boolean; text: string }> = [];
+  let run: string[] = [];
+  for (let n = 1; n <= last; n++) {
+    if (changed.has(n)) {
+      if (run.length) { out.push({ changed: false, text: run.join('\n') }); run = []; }
+      out.push({ changed: true, text: lines[n - 1] });
+    } else {
+      run.push(lines[n - 1]);
+    }
+  }
+  return out;
+}
+
+/** 1-based numbers of the lines that differ between two versions, by position. */
+export function changedLineSet(before: string, after: string): Set<number> {
+  const a = before.split('\n');
+  const b = after.split('\n');
+  const changed = new Set<number>();
+  for (let i = 0; i < Math.max(a.length, b.length); i++) if (a[i] !== b[i]) changed.add(i + 1);
+  return changed;
+}
+
 /** Whether synchronous main-thread text processing (highlight/diff/search) is
  *  safe for content of this length. Pure — exported for testing. */
 export function shouldProcessSync(contentLength: number): boolean {
@@ -93,6 +124,9 @@ export interface FileEditorCoreProps {
   isAttached?: boolean;
   readonly?: boolean;
   committedContent?: string;
+  /** The committed baseline is still loading (FileViewer renders the content first
+   *  and passes `committedContent` when it lands). Changes stays off until then. */
+  baselinePending?: boolean;
   /**
    * When true, the editor opens with the diff view already shown (instead of
    * the default edit view). Used by the Radar ✍ Changes section so clicking a
@@ -624,6 +658,7 @@ export default function FileEditorCore({
   isAttached,
   readonly,
   committedContent,
+  baselinePending,
   initialShowDiff,
   variant,
   onToggleMode,
@@ -745,6 +780,10 @@ export default function FileEditorCore({
   // the panel, a labelled chip in the modal. One definition for every button below.
   const toolBtn = iconOnly ? 'icon-btn' : 'flex items-center gap-1 px-2 py-1 rounded-lg text-xs';
 
+  // The markdown preview renders from a deferred copy (C5): parsing a large document
+  // or one the agent is rewriting never blocks typing, scrolling or the panel; React
+  // renders the newest content as soon as it is idle. Nothing is skipped.
+  const previewContent = useDeferredValue(content);
   const isDirty = isDirtyState(content, originalContent);
   const hasUnsavedEdits = isDirtyState(content, savedContent ?? initialContent);
   const language = detectLanguage(fileName);
@@ -762,15 +801,23 @@ export default function FileEditorCore({
   onContentChangeRef.current = onContentChange;
 
   // ── Auto-refresh via SSE file_changed event + diff highlight ──
+  // A file the agent is writing can change many times a second. Events for this
+  // file are coalesced (super-canvas-fixing.md C5): the first event schedules a read
+  // FILE_CHANGE_COALESCE_MS later and the events after it join that read, at most one
+  // read in flight (an event during a read schedules one more
+  // after it), and a sequence number so only the newest read is ever applied.
   useEffect(() => {
-    const handler = async (e: Event) => {
-      const changedPath = (e as CustomEvent<{ path: string }>).detail?.path;
-      if (!changedPath) return;
-      // Match: exact path, or absolute path ends with workspace-relative filePath
-      const isMatch = changedPath === filePath
-        || changedPath.endsWith(`/${filePath}`);
-      if (!isMatch) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let inFlight = false;
+    let again = false;
+    let seq = 0;
+    let alive = true;
+    const read = async () => {
+      timer = undefined;
+      if (inFlight) { again = true; return; }
       if (hasUnsavedEditsRef.current) return; // Don't overwrite user's unsaved edits
+      inFlight = true;
+      const mine = ++seq;
       try {
         const resp = await api.get<{ content: string }>('/workspace/file', {
           params: { path: filePath },
@@ -778,34 +825,37 @@ export default function FileEditorCore({
         const freshContent = resp.data.content;
         // Re-check after the await: the user may have typed while the read was in
         // flight, and those edits must not be overwritten by the disk copy.
-        if (hasUnsavedEditsRef.current) return;
+        if (!alive || mine !== seq || hasUnsavedEditsRef.current) return;
         if (freshContent !== contentRef.current) {
-          // Compute changed lines for highlight
-          const oldLines = (contentRef.current || '').split('\n');
-          const newLines = freshContent.split('\n');
-          const changed = new Set<number>();
-          const maxLen = Math.max(oldLines.length, newLines.length);
-          for (let i = 0; i < maxLen; i++) {
-            if (oldLines[i] !== newLines[i]) changed.add(i + 1); // 1-based
-          }
+          setHighlightedLines(changedLineSet(contentRef.current || '', freshContent));
           setContent(freshContent);
           setSavedContent(freshContent);
           onContentChangeRef.current?.(freshContent);
-          // Highlight changed lines for 5s
-          if (changed.size > 0) {
-            setHighlightedLines(changed);
-            clearTimeout(highlightTimerRef.current); highlightTimerRef.current = setTimeout(() => setHighlightedLines(new Set()), 5000);
-          }
+          clearTimeout(highlightTimerRef.current);
+          highlightTimerRef.current = setTimeout(() => setHighlightedLines(new Set()), 5000);
           lastFetchRef.current = Date.now();
         }
       } catch {
         // Silently ignore — file may have been deleted
+      } finally {
+        inFlight = false;
+        if (alive && again) { again = false; timer = setTimeout(read, FILE_CHANGE_COALESCE_MS); }
       }
     };
-    // D1 (run_5d9178bf): subscribe via the single fileChangedBroker (was a raw
-    // window listener). handler signature unchanged — broker forwards the event.
+    const handler = (e: Event) => {
+      const changedPath = (e as CustomEvent<{ path: string }>).detail?.path;
+      if (!changedPath) return;
+      // Match: exact path, or absolute path ends with workspace-relative filePath
+      const isMatch = changedPath === filePath
+        || changedPath.endsWith(`/${filePath}`);
+      if (!isMatch) return;
+      // Throttle, not debounce: a later event never pushes the read back, so a file
+      // written continuously still refreshes every FILE_CHANGE_COALESCE_MS.
+      if (timer === undefined) timer = setTimeout(read, FILE_CHANGE_COALESCE_MS);
+    };
+    // D1 (run_5d9178bf): subscribe via the single fileChangedBroker.
     const unsub = subscribeFileChanged(handler);
-    return () => { unsub(); clearTimeout(highlightTimerRef.current); };
+    return () => { alive = false; unsub(); clearTimeout(timer); clearTimeout(highlightTimerRef.current); };
   }, [filePath]);
 
   // ── Visibility-based refetch: reload when app/tab becomes visible if >3s idle ──
@@ -819,19 +869,12 @@ export default function FileEditorCore({
         const fresh = resp.data.content;
         if (hasUnsavedEditsRef.current) return;   // typed during the read: keep the edits
         if (fresh !== contentRef.current) {
-          const oldLines = (contentRef.current || '').split('\n');
-          const newLines = fresh.split('\n');
-          const changed = new Set<number>();
-          for (let i = 0; i < Math.max(oldLines.length, newLines.length); i++) {
-            if (oldLines[i] !== newLines[i]) changed.add(i + 1);
-          }
+          setHighlightedLines(changedLineSet(contentRef.current || '', fresh));
           setContent(fresh);
           setSavedContent(fresh);
           onContentChangeRef.current?.(fresh);
-          if (changed.size > 0) {
-            setHighlightedLines(changed);
-            clearTimeout(highlightTimerRef.current); highlightTimerRef.current = setTimeout(() => setHighlightedLines(new Set()), 5000);
-          }
+          clearTimeout(highlightTimerRef.current);
+          highlightTimerRef.current = setTimeout(() => setHighlightedLines(new Set()), 5000);
           lastFetchRef.current = Date.now();
         }
       } catch { /* ignore */ }
@@ -1078,7 +1121,15 @@ export default function FileEditorCore({
     // fileName is a dep because the reset formula reads isMarkdown/isSvg (both
     // derived from fileName); filePath already changes in lockstep with it, so
     // this adds no extra fires but removes a latent stale-closure (Gate-2 MED).
-  }, [initialContent, committedContent, filePath, fileName, initialShowDiff, review.resetReviewMode]); // eslint-disable-line react-hooks/exhaustive-deps -- review object stable
+    // committedContent is NOT a dep: it can land after the content (C5) and must not
+    // reset what the user is doing; the effect below takes it on its own.
+  }, [initialContent, filePath, fileName, initialShowDiff, review.resetReviewMode]); // eslint-disable-line react-hooks/exhaustive-deps -- review object stable
+
+  // The committed baseline landing after the content: it only changes what Changes
+  // compares against, never the text, the view or the unsaved state.
+  useEffect(() => {
+    if (committedContent !== undefined) setOriginalContent(committedContent);
+  }, [committedContent]);
 
   // Syntax highlighting
   useEffect(() => {
@@ -1457,7 +1508,7 @@ export default function FileEditorCore({
   const hasPreview = isMarkdown || isSvg;
   const previewOn = isMarkdown ? showMarkdownPreview : showSvgPreview;
   const view: 'preview' | 'source' | 'changes' = showDiff ? 'changes' : hasPreview && previewOn ? 'preview' : 'source';
-  const changesOff = !isDirty && !showDiff;
+  const changesOff = (!isDirty || !!baselinePending) && !showDiff;
   const pickView = (v: 'preview' | 'source' | 'changes') => {
     if (v === 'changes') { if (!changesOff) setShowDiff(true); return; }
     setShowDiff(false);
@@ -1485,7 +1536,9 @@ export default function FileEditorCore({
               disabled={id === 'changes' && changesOff}
               onClick={() => pickView(id)}
               data-testid={`editor-view-${id}`}
-              title={id === 'changes' ? (changesOff ? 'No changes against the original' : 'Show changes (diff)') : undefined}
+              title={id === 'changes'
+                ? (baselinePending && !showDiff ? 'Loading the committed version…' : changesOff ? 'No changes against the original' : 'Show changes (diff)')
+                : undefined}
               className={clsx(
                 'h-6 px-2 rounded-md text-[11.5px] transition-colors',
                 view === id
@@ -1732,7 +1785,7 @@ export default function FileEditorCore({
             shouldProcessSync(content.length) ? (
               <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]" style={floatPad}>
                 <MarkdownRenderer
-                  content={content}
+                  content={previewContent}
                   className="canvas-doc max-w-4xl mx-auto"
                   basePath={filePath.includes('/') ? filePath.replace(/\/[^/]*$/, '') : ''}
                 />
@@ -1849,22 +1902,19 @@ export default function FileEditorCore({
                       style={{ tabSize: 4, transform: `translateY(-${scrollTop}px)` }}
                       aria-hidden="true"
                     >
-                      {content.split('\n').map((line, lineIdx) => {
-                        const lineNum = lineIdx + 1;
-                        const isHighlighted = highlightedLines.has(lineNum);
-                        return (
-                          <div
-                            key={lineIdx}
-                            className={isHighlighted
-                              ? 'border-l-3 border-green-500 bg-green-500/10 transition-opacity duration-1000'
-                              : ''
-                            }
-                          >
-                            <span className="invisible">{line || ' '}</span>
+                      {changedLineSegments(content, highlightedLines).map((seg, i) => (
+                        seg.changed ? (
+                          <div key={i} className="border-l-3 border-green-500 bg-green-500/10 transition-opacity duration-1000" data-testid="changed-line">
+                            <span className="invisible">{seg.text || ' '}</span>
                             {'\n'}
                           </div>
-                        );
-                      })}
+                        ) : (
+                          // A run of unchanged lines: one text node, laid out (and
+                          // wrapped) exactly like the textarea, so the marks below it
+                          // land on the right rows without one node per line.
+                          <span key={i} className="invisible">{seg.text}{'\n'}</span>
+                        )
+                      ))}
                     </pre>
                     {/* Confirm/Redo floating bar */}
                     <div className="absolute top-2 right-2 z-[2] flex items-center gap-1 px-2 py-1 rounded-lg bg-green-500/15 border border-green-500/30 backdrop-blur-sm">
