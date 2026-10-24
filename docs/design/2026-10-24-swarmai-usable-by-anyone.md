@@ -3,7 +3,7 @@ title: SwarmAI 让别人装上就能用 — 产品原则、安装包、通用 pi
 created: 2026-10-24
 updated: 2026-10-24
 project: SwarmAI
-status: final r7 — XG 2026-10-24 定稿（待 fresh-context skeptic 证伪，修订后进入实施）；r1–r6 的演进见末尾"修订记录"
+status: final r8 — XG 2026-10-24 定稿；skeptic fc5328aa 的发现已并入；r1–r8 的演进见末尾"修订记录"
 ---
 
 # SwarmAI 让别人装上就能用（Sev-1）
@@ -61,20 +61,30 @@ B-d（人工接口鉴权）、sandbox 子进程、首次批准、agent 进程隔
 
 保留 PyInstaller onedir（它已经打进 Claude CLI、`sqlite_vec`、`tree_sitter`、`awscrt` 等原生依赖），只修打包：
 
-- `build-backend.sh` 把 onedir 输出到 Tauri resources 里的 `python-backend/`，`tauri.conf.json` 的 `bundle.resources` 加这一项；`lib.rs` 现有的读取路径不变。macOS、Windows、Linux 同一条路径。
+- `build-backend.sh` 把 onedir 输出到 Tauri resources 里的 `python-backend/`，`tauri.conf.json` 的 `bundle.resources` 加这一项。
 - 删除 `prod.sh` 的"打包后 rsync 注入"，本机和 CI 走同一条打包路径。
-- daemon 永远从外置的版本化目录运行，不直接跑 app 包里那份（更新会在进程运行时替换文件）：现有 `~/.swarm-ai/daemon` + 备份 + 回滚机制补强为 `~/.swarm-ai/runtime/<version>/` + `current` 原子切换 + 保留一个回滚版本，切换前先 drain 旧 daemon、核对文件哈希。
+- **三个平台同一套部署和启动**（r8：今天只有 macOS 的安装逻辑读 `Resources/python-backend/`，Windows/Linux 的 `find_backend_binary()` 只找 exe 旁边或 `~/.swarm-ai/daemon`，`lib.rs:1719-1779,2548-2623`）：
+  - app 启动时，从 resource 目录把 `python-backend/` 部署到 `~/.swarm-ai/runtime/<version>/`（Windows 为 `%LOCALAPPDATA%\SwarmAI\runtime\<version>\`），核对文件哈希，原子切换 `current`，保留一个回滚版本；切换前先 drain 旧 daemon。
+  - daemon 永远从 `runtime/<version>/` 启动，不直接跑 app 包里那份（更新会在进程运行时替换文件）。macOS 的 launchd wrapper（`desktop/resources/daemon/swarmai_backend.sh:15-17,131-142`）改为读 `current`；Windows/Linux 由 Tauri 子进程启动，同样读 `current`。
+  - 可执行文件名：macOS/Linux `python-backend`，Windows `python-backend.exe`。
+  - 现有 `~/.swarm-ai/daemon` 首次升级时迁移到 `runtime/<version>/`，迁移后删除。
 - 发布目标：macOS arm64、macOS x64、Windows x64、Linux x64。
 - 第一版不签名（XG 定）：下载页写明 macOS 上"系统设置 → 隐私与安全性 → 仍要打开"（macOS 15 起右键打开不再有效），Windows SmartScreen 上"更多信息 → 仍要运行"；验收检查 arm64 可执行文件至少有 ad-hoc 签名。
 
-### 3.2 pipeline 客户端用后端程序自己的子命令
+### 3.2 产品自己需要的 Python 操作，都由后端程序的子命令执行
 
-- 冻结后的 `python-backend` 在导入 FastAPI 之前分发子命令：`daemon`（默认，现行为）、`pipeline-v1 <args>`、`mcp <name>`。模块都在包里，和 daemon 同版本，不需要系统 Python、源码 checkout 或额外的包。
-- 每个 agent 会话注入 `SWARM_BACKEND_BIN=<外置 runtime 里 python-backend 的绝对路径>`。打包版生成 `"$SWARM_BACKEND_BIN" pipeline-v1 …`，dev 版保持 `backend/.venv/bin/python backend/scripts/pipeline_v1.py …`。`source_repo.json` 和 `utils/source_repo.py` 删除。
-- gate 识别 pipeline 命令：在现有"python + 确切脚本路径"之外，加"确切可执行文件路径 + 子命令"：`argv[0]` 解析后必须等于外置 runtime 里那份 `python-backend`，`argv[1]` 必须是 `pipeline-v1`。
-- MCP 脚本改用 `python-backend mcp <name>`。
+r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版里还有这些地方会去找系统 Python：`bundle_paths.get_python_executable()` 本身（`bundle_paths.py:27-64`）、channel MCP 脚本（`mcp_config_loader.py:415-420`）、daemon 自升级脚本（`main.py:2455-2468`）、以及 skill 里让 agent 执行的 Python 脚本。
+
+- 冻结后的 `python-backend` 在导入 FastAPI 之前分发子命令：
+  - `daemon`（默认，现行为）；
+  - `pipeline-v1 <args>`；
+  - `py <script.py> [args]`：用包里自带的解释器和已打包的模块执行一个 Python 脚本（`runpy.run_path`）。MCP 脚本、自升级脚本、skill 脚本都改用它。只能用包里有的模块；需要别的第三方包的 skill 在 frontmatter 里声明依赖，缺依赖时 agent 告诉用户。
+- `get_python_executable()` 在打包版里返回 `[python-backend, "py"]`，不再找系统 Python。
+- S3 实施前先列一份清单：打包版里每一个会起 Python 子进程的地方，逐个改成子命令；G1 在没有系统 Python 的环境里覆盖 MCP、自升级和有代表性的 skill 脚本。
+- 每个 agent 会话注入 `SWARM_BACKEND_BIN` = daemon 自己的 `sys.executable`（指向 `runtime/<version>/` 里确定版本的那份，不指向会变的 `current`；升级后 daemon 重启，新会话拿到新值）。打包版的 pipeline 命令是 `"$SWARM_BACKEND_BIN" pipeline-v1 …`；dev 版保持 `backend/.venv/bin/python backend/scripts/pipeline_v1.py …`。`source_repo.json` 和 `utils/source_repo.py` 删除。
+- gate 识别 pipeline 命令：在现有"python + 确切脚本路径"之外，加"确切可执行文件路径 + 子命令"：`argv[0]` 解析后必须等于 daemon 自己的 `sys.executable`，`argv[1]` 必须是 `pipeline-v1`。
 - 不再有 `pipeline-test` 子命令：pipeline 不执行测试（§3.3）。
-- Windows 不启用 pipeline：`pipeline-v1` 在 Windows 上返回"Windows 上不支持 pipeline，请直接用 native 方式完成"，agent 照此执行。
+- Windows 不启用 pipeline：`pipeline-v1` 在 Windows 上返回"Windows 上不支持 pipeline，请直接用 native 方式完成"，agent 照此执行。`py` 子命令在 Windows 上照常可用。
 
 ### 3.3 通用 pipeline：流程控制和质量收敛
 
@@ -93,29 +103,44 @@ B-d（人工接口鉴权）、sandbox 子进程、首次批准、agent 进程隔
 - **阶段全部保留**：evaluate、think、plan、build / goal_cycle、review、test、deliver、reflect。
 - **文档规范保留**：REQUIREMENTS（结构化 EARS、R 编号）、DESIGN_SPEC（P/F/T/X 编号、properties、failure_modes、trace 矩阵）、fixing-spec、REFLECT 的 lessons。这是质量收敛的骨架，本身和编程语言无关。
 - **两道审查保留**：Gate-0（EVALUATE 的问题定义审查）、Gate-2（REVIEW 的专家审查：R1 全量 + R2 只复查已处理的 finding，finding 账本、聚类、fixing-spec、修复、复审、轮数上限）。原来的 Gate-1 已在 10 月的简化里删除，本设计不恢复。
-- **REFLECT 保留**：daemon 后台判断并沉淀 lessons 到项目 DDD（产品能力，每个用户的项目都有 DDD）。
+- **REFLECT 保留**：daemon 后台判断并沉淀 lessons 到项目 DDD（产品能力，每个用户的项目都有 DDD）。r8：project 在 SwarmWS 里不存在或没有 DDD 文档时，lessons 写进 run 自己的 REFLECT 记录并在 REPORT 里列出，不再静默丢弃（今天 `reflect_job.py:56-70,168-209` 会拒收未知项目）。
 - **落地协议和签名保留**：签名事件、producer 权限、不可变 contract 和 tree 绑定、owner 转移、一次性授权、`auth_consumed`、`land_intent`、REPORT 渲染、交付 tree、base 复核、部分落地记录、隔离 worktree。
 - **上限和熔断保留**：阶段尝试上限、决策上限、复审轮数上限。
 
 #### 3.3.3 测试：用 agent 自己的结果，不观察、不重跑
 
 - BUILD 和 TEST 阶段，agent 用 native 方式写代码、写测试、跑测试，和不走 pipeline 时一样。
-- 阶段完成时，agent 在 artifact 里报告：跑了哪些命令、在哪个目录、结果如何、新增或修改了哪些测试、为什么认为它们能证明改动正确。pipeline 原样记入签名事件和 REPORT。
-- 测试是否充分、报告是否可信，由 **Gate-2 专家判断**。专家 sub-agent 有 Bash，可疑时自己用 native 方式跑测试核实；不足、不实就记成 finding，走 fixing-spec → 修复 → R2 复查。"至少有一个测试在改动前会失败"成为专家检查清单里的一项，不再由机器判定。
+- **验证报告（`validation_report`）**：BUILD 和 TEST 阶段都以 `stage-complete --artifact -` 显式完成（不再有 runner 自动完成），artifact 是一份验证报告，由 CLI 写成签名事件。每个仓库一条，字段：
+  - `repo`、`code_tree`（daemon 在写事件时自己算当前 worktree 的 tree，不取 agent 给的值）；
+  - `commands`：跑了哪些命令、在哪个目录、结果（通过 / 失败 / 未运行，以及原因）；
+  - `tests_changed`：新增或修改了哪些测试文件；
+  - `rationale`：为什么认为这些测试能证明改动正确。
+  签名只证明"这份报告是本 run 在这个 tree 上提交的"，不证明报告内容为真；内容是否可信由审查判断。
+- **审查和最终 tree 的关系（r8，skeptic BLOCKER 1）**：阶段顺序 build → review → test 不变。规则是：
+  - Gate-2 审查的对象是 REVIEW 时的代码 tree，以及 BUILD 的验证报告。测试是否充分、报告是否可信，由 Gate-2 专家判断；专家 sub-agent 有 Bash，可疑时自己用 native 方式跑测试核实；不足、不实就记成 finding，走 fixing-spec → 修复 → R2 复查。"至少有一个测试在改动前会失败"是专家检查清单里的一项。
+  - TEST 阶段是在审查后的最终 tree 上做最后一次验证，并提交 TEST 的验证报告。**TEST 阶段不改代码**：如果最终验证发现问题、需要改代码，run 退回 REVIEW（R2 复查这次改动），再回到 TEST。
+  - 落地时 LG-1 要求 TEST 验证报告的 `code_tree` 等于落地的 tree，并且这个 tree 经过了 Gate-2（R1 或 R2）。这样每一次进入落地的代码都被审查过，最终验证报告也对应同一份代码。
 - REPORT 里分开写：agent 报告的测试，和审查员核实过的部分。不再有机器打的 verified / unverified 标签。
-- 挡不挡落地沿用现有规则：还有未解决的 HIGH/CRITICAL finding 就挡（RV-2）；MEDIUM/LOW 作为残余风险写进 REPORT。
+- 挡不挡落地：还有未解决的 HIGH/CRITICAL finding 就挡（RV-2）；TEST 验证报告里有"失败"的命令也挡（agent 自己报告失败，就不能交付）；MEDIUM/LOW 作为残余风险写进 REPORT。
 
 #### 3.3.4 核心里要改成通用的地方
 
 | 部分 | 改法 |
 |---|---|
-| 测试执行器 `pipeline_test.py`（选测、执行、续跑、基线缓存、mutation、probe、prove 模式）及其子命令、gate（`pipeline_test_gate`）、runner lease | 从 pipeline 删除。SwarmAI 仓库的精细选测逻辑保留为 SwarmAI 仓库自己的工具 `backend/scripts/swarm_select_tests.py`，SwarmAI 的 agent 用 native 方式调用它 |
-| 依赖测试执行器证据的机器判定：BX-1、BX-2、TS-1/TS-2 的"必须通过"、DS-2b/DS-4b/DS-9b 的"必须收集到、必须通过"、LG-2"每个 verdict 必须 green"、LG-5 validation manifest、QX-1 风险扩展上限、QX-2 选测规则绑定、MD-2"最终必须是 regression" | 删除机器判定。对应的要求（设计里的测试存在且通过、回归不变量有测试、validation 跑过）进入 Gate-2 检查清单，由专家判断，不满足记 finding |
-| DS-2a / DS-9a 测试引用按文件后缀白名单 | 改为通用：引用是仓库里的路径（可带测试名），格式不限语言 |
-| finding 的关闭证据：old/old/new 由测试执行器签名 | 改为通用证据类型：`diff_assertion`、`refuted`（带 path:line 引用）、`test`（agent 报告的测试命令和结果）；R2 专家复查确认后关闭 |
-| RQ-3（模糊词）、RQ-8b（K6 中英文否定词表） | 不再用词表匹配；"需求要可验证、没有含糊的否定表述"这条规则进入 Gate-0 检查清单，由 LLM 判断，任何自然语言都适用 |
+| 测试执行器 `pipeline_test.py`（选测、执行、续跑、基线缓存、mutation、probe、prove 模式）及其子命令、gate（`pipeline_test_gate`）、runner lease 和 `runner_service`、`test_call` 事件和 runner producer | 从 pipeline 删除。SwarmAI 仓库的精细选测逻辑保留为 SwarmAI 仓库自己的工具 `backend/scripts/swarm_select_tests.py`，SwarmAI 的 agent 用 native 方式调用它 |
+| 依赖 runner 证据的机器判定：BX-1、BX-2、TS-2、DS-2b/DS-4b/DS-9b、LG-2、LG-5、QX-1、QX-2、MD-2 | 删除这些机器判定。对应要求（设计里的测试存在且通过、回归不变量有测试、validation 跑过）进入 Gate-2 检查清单 |
+| TS-1 | 改为"每个仓库都有 schema 合法的 TEST 验证报告" |
+| TS-3（trace 矩阵） | 保留矩阵本身；不再有"通过"语义，作为 agent 的声明和 Gate-2 的检查对象 |
+| LG-1 / LG-3 / DV-1 | 保留：LG-1 绑定 TEST 验证报告的 `code_tree` 和审查过的 tree；LG-3、DV-1 绑定并渲染 REPORT，REPORT 改为读验证报告 |
+| lifecycle 里 TEST 的 `final_verdict`、`tests_red`、`tests_incomplete`、`validation_failed` 状态和 runner 熔断上限（`lifecycle.py:23-42,235-239,264-278`） | 删除；TEST 的结果来自验证报告；"报告里有失败"是唯一的测试类挡点 |
+| `next_step` 里的 runner 命令和自动完成（`next_step.py:30-69,127-129,187-197`） | 改为提示"用 native 方式测试，然后 `stage-complete` 提交验证报告" |
+| engine 里 final 的加载、过期 tree 拒绝、carry / recheck（`engine.py:700-713,1473-1486,2208-2267`） | 删除；tree 绑定由验证报告的 `code_tree` 和 LG-1 承担 |
+| 五维审计里的"验证通过 / 需要验证"比例和 `test_call` 计时（`audit.py:265-291`、`trace.py`） | 改为列出报告的命令和结果、审查员确认过的部分；Speed 只用阶段事件的时间 |
+| finding 的关闭证据：test / probe proof 要求 runner producer 和 old/old/new `test_call`（`findings.py:162-214`、`review.py:318-327`） | 新证据类型 `reported_test`：引用验证报告事件 id 和其中的命令与结果；R2 专家判为 `ADEQUATE` 才关闭。保留 `diff_assertion`、`refuted`（带 path:line）。删除 runner 作者、nodeid、old/old/new |
+| DESIGN_SPEC 的测试引用：pytest 风格 nodeid、固定后缀名单、`kind=example\|pbt`（`schemas.py:88-98,339-419`） | 改为不透明的仓库引用（路径，可带测试名，格式不限）；`kind` 改为可选的描述字段；properties / failure_modes 与测试框架无关 |
+| RQ-3（模糊词）、RQ-8b（K6 中英文否定词表） | 不再用词表匹配；"需求要可验证、没有含糊的否定表述"进入 Gate-0 检查清单，由 LLM 判断，任何自然语言都适用 |
 | `REVIEW_PATTERNS.md` 里按 SwarmAI 经验写的检查清单 | 通用 review 改用一份和语言无关的检查清单；仓库可在 `.swarmai/review.md` 里补充自己的（SwarmAI 仓库把原清单放在这里） |
-| review 触发里对 `*.py` 的特判、prompt 里调用 Python 的命令 | 按改动行数和风险关键词判断；命令改用 `python-backend` 子命令 |
+| review 派 security 专家时按 Python API、Python/React 路径判断（`review.py:28-36,99-117`）；prompt 里调用 Python 的命令 | 删掉内置的语言启发式：PLAN 或验证报告里声明 `risk: security`、或仓库 `.swarmai/review.md` 声明的路径模式命中时派 security；correctness 专家也可以在 R1 里要求加派。命令改用 `python-backend` 子命令 |
 | 落地作者固定 Swarm + Swarm trailer | 默认用仓库自己的 git 身份、不加 trailer；仓库在 `pipeline.toml` 的 `[landing]` 里声明（SwarmAI 仓库声明 Swarm 那一行） |
 | worktree 只软链 `desktop/node_modules` | 由 `pipeline.toml` 的 `[worktree] link` 声明；没有声明就不软链 |
 | skill 卡片（INSTRUCTIONS.md、stages/*） | 去掉 Python CLI、`pipeline_test.py`、TDD 文件上限等写死的内容；测试一节改成"用 native 方式测试并在 artifact 里报告"；命令改用 `$SWARM_BACKEND_BIN pipeline-v1` |
@@ -145,7 +170,10 @@ link = []                     # 例如 ["desktop/node_modules"]
 |---|---|---|
 | 所有用户的安全和会话机制 | `dangerous_command_gate`、`external_approval_gate`、`ask_question_gate`、`bash_syntax_guard`、`skill_access_checker`、工具日志和审计、compaction 前后的连续性、失败诊断、文件跟踪、用户纠正捕获、observation 记录 | 保留 |
 | SwarmAI 产品的记忆和 DDD 系统（只提示、不拦截） | `governance_file_gate`、`memory_edit_guard`、DailyActivity / DDD 相关 hook | 保留 |
-| 用户开启的 pipeline run 的完整性（只在 run 里生效） | `run_owner_gate`、`run_amend_gate`、`session_link_gate`（收窄为只管 pipeline 命令）、`expert_type_gate`、`expert_budget_gate`、worktree rule 1–3、`audit_marker_write_gate`（只保护 pipeline 内部目录）、`main_dirty_reporter`、`v1_reflect_trigger`、`active_run_commit_gate`（只拦 run 自己那个 session 手动提交 run 的文件；其他 session 只提示） | 保留 |
+| 用户开启的 pipeline run 的完整性（只在 run 里生效） | `run_owner_gate`、`run_amend_gate`、`session_link_gate`（收窄为只管 pipeline 命令）、`expert_type_gate`、`expert_budget_gate`、worktree rule 1–3、`main_dirty_reporter`、`v1_reflect_trigger` | 保留 |
+| `active_run_commit_gate` | r8：今天它扫描所有 session 的 run，别的 run 读不出来时也会拒绝（`security_hooks.py:3628-3732`） | 改为按 owner 判断：只在提交者就是该 run 的签名 owner session、且提交的是 run 改过的文件时拒绝；其他 session 只提示；读不出来的 run 不再导致拒绝 |
+| `audit_marker_write_gate` | r8：今天一直生效，保护整个共享审计目录，包括 commit 前审查用的通用 marker（`security_hooks.py:6586-6644`） | 拆成两部分：签名事件和 `authority.key` 的保护保留，始终生效（它们只在 pipeline 内部目录里，普通用户碰不到）；审查 marker 的保护只在仓库开启了 `require_review` 时生效 |
+| `external_approval_gate` | r8：靠工具名里的词（create / add / set / save）推断风险，会把远端的写操作误判成本地写（`tool_risk.py:65-75,137-154`） | 保留这个产品级 gate，但改为按每个工具的元数据判断（工具声明自己是否有对外副作用），不再靠名字猜 |
 | 产品功能：按仓库开启的 commit 前审查 | `adversarial_commit_gate` | 默认关闭、只提示；仓库在 `pipeline.toml` 的 `[commit] require_review = true` 或 Settings 里开启后才拦截。SwarmAI 仓库用同一个声明开启。拦截提示写给用户看（为什么拦、怎么满足、在哪里关） |
 | 挡 native、或把人赶进 pipeline | worktree rule 4、`direct_commit_gate`、`pytest_command_guard`、`background_command_guard`、`image_read_dedup_guard`、`enforcement_injector` 里"必须对抗审查"的提示、`pipeline_test_gate` | 删除 |
 | 只对 SwarmAI 仓库有意义 | `design_lint_guard`、`inclusive_term_guard`、`change_triggered_eval`、`session_checkpoint` 里写死的 pytest 提醒 | 移出产品：改由 SwarmAI 仓库自己的配置或脚本提供 |
@@ -168,16 +196,18 @@ link = []                     # 例如 ["desktop/node_modules"]
 
 ### 5.1 让"安装包缺东西"这类错误再也发生不了
 
-- **G1 真实安装验收**：每个发布目标，在一次性的干净 VM/容器里（没有源码 checkout，PATH 里没有开发工具），安装刚打出的安装包，验证：app 启动、外置 runtime 部署、`/health`、自带 Claude CLI 可执行、seed 和迁移、onboarding 可达、更新到下一个版本再回滚；再在一个样例仓库上跑通一次 native 修改 + commit，和一次 direct profile 的 pipeline run 到落地。
+- **G1 真实安装验收**，分两版（r8：第一版还没有通用 pipeline，Windows 也不启用 pipeline）：
+  - **第一版（native 和安装）**：每个发布目标（macOS arm64/x64、Windows x64、Linux x64），在一次性的干净 VM/容器里（没有源码 checkout，没有系统 Python，PATH 里没有开发工具），安装刚打出的安装包，验证：app 启动、外置 runtime 部署、`/health`、自带 Claude CLI 可执行、seed 和迁移、onboarding 可达、MCP 工具可用、`py` 子命令能跑一个有代表性的 skill 脚本、更新到下一个版本再回滚；再在一个样例仓库上跑通一次 native 修改 + commit。
+  - **第二版（通用 pipeline）**：macOS 和 Linux 上，在样例仓库矩阵上跑 pipeline（见 §5.2）。Windows 只验证 `pipeline-v1` 返回"不支持"。
 - **G2 包内容清单**：构建时生成一份清单（必需文件、哈希、架构、可执行文件、原生库），G1 安装后逐项核对，缺一项就失败。
 - G1、G2 是 release workflow 发布步骤的前置 job，不过不发布。本地也能用同一个脚本 `scripts/verify_installer.sh` 跑。
 
 ### 5.2 产品原则
 
-- 结构测试：pipeline 核心模块里没有按编程语言、框架、包管理器分支的逻辑（不出现 pytest、npm、go test 之类的名字）。
+- 语言无关用**行为测试**证明，不用"核心源码里搜不到某些词"这种字面检查（r8）：样例仓库矩阵（Python、Node、Go、Rust、无测试、monorepo、unborn）上各跑一个 direct 和一个 full 的 pipeline run，都能走到落地，REPORT 里写着 agent 报告的测试和审查结论。核心里如果确有必须出现语言名的地方（例如 SwarmAI 仓库自己的工具），列入一份经过审查的例外清单。
 - 结构测试：默认配置下（没有 `pipeline.toml`、没有 Settings 开关），在任意仓库里 native 写文件、跑任意测试命令、后台起进程、`git commit`，都不被任何 gate 拒绝。
 - 结构测试：hook_builder 里注册的每个会拒绝的 gate，都在 §3.4 的表里有归类；新增 gate 不进表就失败。
-- 样例仓库（Python、Node、Go、Rust、无测试、monorepo、unborn）上各跑一个 direct 和一个 full 的 pipeline run：都能走到落地，REPORT 里写着 agent 报告的测试和审查结论。
+- 结构测试：TEST 验证报告的 `code_tree` 不等于落地 tree、或这个 tree 没经过 Gate-2 时，落地被拒绝（§3.3.3）。
 - SwarmAI 仓库：声明 `pipeline.toml` 后，它的 pipeline run 照常落地，Swarm trailer、commit 前审查、worktree 软链都按声明生效。
 
 ## 6. 度量（P5：先量再加）
@@ -190,12 +220,14 @@ link = []                     # 例如 ["desktop/node_modules"]
 
 | 步 | 内容 | 发布 |
 |---|---|---|
-| S1 | 安装验收 G1/G2 脚本，先在 v2.3.0 上跑红 | 第一版 |
-| S2 | 打包修复 + 外置版本化 runtime + 四个发布目标（§3.1）；G1/G2 转绿才允许发布 | 第一版 |
-| S3 | `python-backend` 子命令（`pipeline-v1`、`mcp`）+ `SWARM_BACKEND_BIN` + gate 确切路径识别 + Windows 返回不支持（§3.2） | 第一版 |
-| S4 | gate 按 §3.4 删改；`adversarial_commit_gate` 改为按仓库开关；`pipeline.toml` 的 `[commit]`、`[landing]`、`[worktree]`、`[pipeline]` 读取；Settings 开关 | 第一版 |
+| S1 | 第一版 G1/G2 安装验收脚本，先在 v2.3.0 上跑红 | 第一版 |
+| S2 | 打包修复 + 三平台统一的版本化 runtime 部署和启动 + 四个发布目标（§3.1） | 第一版 |
+| S3 | `python-backend` 子命令（`pipeline-v1`、`py`）+ 打包版里所有起 Python 子进程的地方改用子命令 + `SWARM_BACKEND_BIN` + gate 确切路径识别 + Windows 返回不支持（§3.2）。S2、S3 完成后第一版 G1/G2 转绿，才允许发布 | 第一版 |
+| S4 | gate 按 §3.4 删改：删挡 native 的 gate；`adversarial_commit_gate` 改为按仓库开关；`active_run_commit_gate` 按 owner；`audit_marker_write_gate` 拆分；`external_approval_gate` 按工具元数据；`pipeline.toml` 的 `[commit]`、`[landing]`、`[worktree]`、`[pipeline]` 读取；Settings 开关 | 第一版 |
 | S5 | 度量（§6） | 第一版 |
-| S6 | pipeline 通用化（§3.3.3、§3.3.4）：删测试执行器和依赖它的机器判定；Gate-2 和 Gate-0 检查清单补上对应要求；finding 关闭证据通用化；通用 review 清单；skill 卡片重写；SwarmAI 仓库的 `pipeline.toml`、`.swarmai/review.md`、`swarm_select_tests.py`；重写受影响的 E2E 测试 | 第二版 |
+| S6 | pipeline 通用化（§3.3.3、§3.3.4）：验证报告事件和显式完成；删测试执行器、runner 证据相关的机器判定和状态；TEST 不改代码、改了退回 REVIEW；LG-1 绑定审查过的 tree；`reported_test` 证据；DESIGN_SPEC 测试引用通用化；Gate-0、Gate-2 检查清单补上对应要求；review 去掉语言启发式；REFLECT 的未知项目回退；通用 review 清单；skill 卡片重写；SwarmAI 仓库的 `pipeline.toml`、`.swarmai/review.md`、`swarm_select_tests.py`；重写受影响的 E2E 测试；第二版 G1 | 第二版 |
+
+S4 删掉 `pipeline_test_gate` 时，S6 之前的 pipeline run 里 runner 仍然存在：S4 只删 gate 中"挡 native 测试命令"的部分，runner 自己的调用约束随 S6 和 runner 一起删除。
 
 第一版（S1–S5）：别人装上就能用，能聊天，能用 native 改自己的代码和 commit，SwarmAI 仓库按自己的声明受保护。第二版（S6）：pipeline 在任意语言的仓库上都能完整走到落地。
 
@@ -204,7 +236,7 @@ link = []                     # 例如 ["desktop/node_modules"]
 | 维度 | 影响 | 风险 | 缓解 |
 |---|---|---|---|
 | Run Isolation | 不变：worktree、签名、owner、落地协议都保留 | 无 | — |
-| Quality | 测试证据从"runner 签名"变成"agent 报告 + 专家核实" | agent 报告不实而专家没发现 | 专家检查清单把"测试是否真实、是否充分"列为必查项，可自己跑测试核实；HIGH finding 照样挡落地 |
+| Quality | 测试证据从"runner 签名"变成"agent 的签名验证报告 + 专家核实"；落地的 tree 必须经过审查，且和 TEST 报告的 tree 一致 | agent 报告不实而专家没发现 | 专家检查清单把"测试是否真实、是否充分"列为必查项，可自己跑测试核实；HIGH finding 和报告里的失败照样挡落地 |
 | Autonomy | 非 SwarmAI 仓库从必然卡死变成能自主完成；删掉测试执行器后 agent 少一类机械性的失败和重试 | 无 | — |
 | Speed | 不再有 runner 的选测、续跑和重复执行 | 专家自己跑测试会增加审查时间 | 只在可疑时跑 |
 | Token Cost | 去掉 runner 的输出和续跑往返 | 专家核实增加少量 token | 由 §6 的度量确认 |
@@ -222,3 +254,4 @@ link = []                     # 例如 ["desktop/node_modules"]
 - r4（XG）：任何仓库都不强制走 pipeline；默认"相称"；commit 前审查按仓库开关；冻结加固、先量再加。
 - r5/r6（XG + skeptic edec2210）：pipeline 与语言无关，不逐个适配。
 - r7（XG，定稿）：pipeline 只做流程控制和质量收敛，不观察、不执行测试，用 agent 自己的结果，质量由 Gate-0 和 Gate-2 审查收敛；文档规范、六个 profile、REFLECT 全部保留；只允许产品级 gate（P3）；r6 里的测试 profile、argv 模板、base 试跑、按路径的验证结论全部取消。
+- r8（skeptic fc5328aa：5 个 BLOCKER、4 个 MAJOR）：定义签名的验证报告和 BUILD/TEST 显式完成；TEST 不改代码、改了退回 REVIEW，LG-1 绑定审查过的 tree；补全依赖 runner 的检查、状态、next_step、engine、审计清单；`reported_test` 关闭证据；DESIGN_SPEC 测试引用、review 的 security 启发式通用化；REFLECT 未知项目回退；三平台统一的 runtime 部署；`py` 子命令覆盖所有打包版的 Python 子进程；`active_run_commit_gate` 按 owner、`audit_marker_write_gate` 拆分、`external_approval_gate` 按工具元数据；验收拆成第一版（native + 安装）和第二版（pipeline），语言无关用行为测试证明。
