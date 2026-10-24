@@ -566,11 +566,14 @@ export function appendThinkingDelta(
  * Append text token to a message's last unconfirmed text block.
  * If no unconfirmed text block exists, creates a new one.
  */
-export function applyTextDelta(msg: Message, text: string, fresh = false, block?: string): Message {
+export function applyTextDelta(
+  msg: Message, text: string, fresh = false, block?: string, onRestart?: () => void,
+): Message {
   const content = [...msg.content];
   const lastBlock = content[content.length - 1];
   if (lastBlock && lastBlock.type === 'text' && !lastBlock._confirmed
       && (!fresh || sameStreamBlock(lastBlock, block))) {
+    if (fresh) onRestart?.();
     content[content.length - 1] = {
       ...lastBlock,
       text: (lastBlock.text ?? '') + text,
@@ -594,14 +597,30 @@ function sameStreamBlock(b: ContentBlock, block: string | undefined): boolean {
 }
 
 /**
+ * Which transport delivered a block-start event (A0 evidence, docs/design/
+ * 2026-10-24-chat-stream-structure.md). Set at the two entry points (this tab's
+ * POST, the window's subscription) for text_start / thinking_start only; the
+ * handler that renders it may be the other one (a POST turn_start begins the turn
+ * as the subscription would), so the handler's own label does not say this.
+ */
+const startDeliveredBy = new WeakMap<object, 'post' | 'sub'>();
+function tagStart(ev: unknown, via: 'post' | 'sub'): void {
+  const t = (ev as { type?: unknown } | null)?.type;
+  if (t === 'text_start' || t === 'thinking_start') startDeliveredBy.set(ev as object, via);
+}
+
+/**
  * Append thinking token to a message's last unconfirmed thinking block.
  * If no unconfirmed thinking block exists, creates a new one.
  */
-export function applyThinkingDelta(msg: Message, thinking: string, fresh = false, block?: string): Message {
+export function applyThinkingDelta(
+  msg: Message, thinking: string, fresh = false, block?: string, onRestart?: () => void,
+): Message {
   const content = [...msg.content];
   const lastBlock = content[content.length - 1];
   if (lastBlock && lastBlock.type === 'thinking' && !lastBlock._confirmed
       && (!fresh || sameStreamBlock(lastBlock, block))) {
+    if (fresh) onRestart?.();
     content[content.length - 1] = {
       ...lastBlock,
       thinking: ((lastBlock as { thinking?: string }).thinking ?? '') + thinking,
@@ -2435,6 +2454,7 @@ export function useChatStreamingLifecycle(
     turnHandlersOf(tab).postBubbleId = bubbleId;
     return (event: StreamEvent) => {
       const live = tabMapRef.current.get(tabId);
+      tagStart(event, 'post');
       if (!live) { inner(event); return; }
       // this POST's own handler renders what the router gives the POST side
       turnRunRef.current(tabId, routePostEvent(
@@ -2448,6 +2468,23 @@ export function useChatStreamingLifecycle(
       // Capture the tab this handler belongs to. Falls back to active tab
       // for backward compatibility with single-tab usage.
       const capturedTabId = tabId ?? activeTabIdRef.current;
+      // Evidence (docs/design/2026-10-24-chat-stream-structure.md A0): a repeated
+      // start of a block already streaming, absorbed by its block key. Which path
+      // delivers it decides whether Track B is needed. Once per block, no content.
+      const restartedBlocks = new Set<string>();
+      // the transport of the start that opened the current text / thinking block
+      let textStartVia: 'post' | 'sub' | null = null;
+      let thinkingStartVia: 'post' | 'sub' | null = null;
+      const logStreamRestart = (block: string, kind: 'text' | 'thinking', ev: StreamEvent): void => {
+        const key = `${kind}:${block}`;
+        if (restartedBlocks.has(key)) return;
+        restartedBlocks.add(key);
+        const seq = (ev as { eventSeq?: unknown }).eventSeq;
+        console.warn('[stream-restart]', {
+          block, kind, via: kind === 'text' ? textStartVia : thinkingStartVia, handler: source,
+          eventSeq: typeof seq === 'number' ? seq : null,
+        });
+      };
       // Where this turn begins in its bubble: >0 when the bubble also holds the
       // turns before it (beginSubscriptionTurn hostedTurn); read per event, since
       // the begin sets it right before this handler gets its first event.
@@ -3057,7 +3094,8 @@ export function useChatStreamingLifecycle(
           const textStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
           if (textStore) {
             textStore.updateLast(
-              (msg) => applyTextDelta(msg, event.text!, textFresh, event.block),
+              (msg) => applyTextDelta(msg, event.text!, textFresh, event.block,
+                textFresh ? () => logStreamRestart(event.block!, 'text', event) : undefined),
               (msg) => msg.id === assistantMessageId,
             );
           } else {
@@ -3081,7 +3119,8 @@ export function useChatStreamingLifecycle(
           const thinkStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
           if (thinkStore) {
             thinkStore.updateLast(
-              (msg) => applyThinkingDelta(msg, event.thinking!, thinkFresh, event.block),
+              (msg) => applyThinkingDelta(msg, event.thinking!, thinkFresh, event.block,
+                thinkFresh ? () => logStreamRestart(event.block!, 'thinking', event) : undefined),
               (msg) => msg.id === assistantMessageId,
             );
           } else {
@@ -3121,8 +3160,10 @@ export function useChatStreamingLifecycle(
           }
         } else if (event.type === 'text_start') {
           freshText = true;
+          textStartVia = startDeliveredBy.get(event) ?? null;
         } else if (event.type === 'thinking_start') {
           freshThinking = true;
+          thinkingStartVia = startDeliveredBy.get(event) ?? null;
           // Thinking block started — update tab status to streaming.
           // The actual content arrives via thinking_delta events.
           if (capturedTabId && tabState && tabState.status !== 'streaming') {
@@ -4727,6 +4768,7 @@ export function useChatStreamingLifecycle(
       // Every tab sees every event; the router's ownership rule decides what is
       // the tab's own (its session, its bound turn, or a candidate while its
       // first send has no session yet) — one rule, in sessionTurnRouter.
+      tagStart(ev, 'sub');
       for (const [tabId, tab] of tabMapRef.current.entries()) {
         turnRunRef.current(tabId, routeSubEvent(turnStateOf(tab), ev as TurnEnvelope));
       }

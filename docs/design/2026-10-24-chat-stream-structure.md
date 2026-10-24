@@ -56,6 +56,32 @@ So v3 builds now what is certain and cheap, and gates the turn record on evidenc
   is the evidence that gates Track B.
 - Root-cause `test_session_injected_turn`'s teardown hang (4/10 on main) and the
   `sessionTurnWiring` resync flake.
+- Result (2026-10-24, A0 commit):
+  - `test_session_injected_turn`: a fire-and-forget `session_state` push left
+    pending at the end of a test reads the DB on the test's own loop. When
+    pytest-asyncio closes that loop, the aiosqlite worker answers a closed loop,
+    raises twice and dies (the next pool `close()` waits on it forever: teardown
+    hang), or a connect cut off mid-flight is in no pool list (its NON-daemon worker
+    blocks interpreter exit). Fix: the pool tracks connections from before the
+    connect and ends their workers on close / on a failed connect, on the running
+    loop (production benefit: a task pending at daemon shutdown no longer blocks
+    exit); the test fixture cancels the test's leftover tasks and closes that loop's
+    pools while it runs (`close_loop_pools`). 25/25 runs clean (was ~1/2 hung).
+  - `sessionTurnWiring` resync: a turn ended in an earlier test leaves its 200 ms
+    turn-end reconcile timer; under full-suite load it fires inside the resync
+    case's window and counts as a tail read. Fix: `resetTestState` clears each
+    tab's timers, as `closeTab` does. Test: `streamingTestIsolation.test.ts`.
+  - Seen once each in 3 full frontend runs after these fixes, not yet root-caused
+    (not in this commit's scope): `sessionEvents.test.ts` "a silent stream is
+    cancelled and reconnected" (a 30 ms silence timer against an 80 ms wait under
+    load) and `overlayHostE2E.test.tsx` "back-to-chat closes the open surface".
+  - Review deviations: `[stream-restart]` carries `via` (the transport that
+    delivered the start, tagged at the POST and subscription entry points) and
+    `handler` (whose handler rendered it): a POST `turn_start` begins the turn as
+    the subscription would, so the handler label alone does not answer R1.
+    `[live-diverged]` carries `where` (load / reconcile-id / reconcile-cid), not the
+    store phase: both paths run only at idle. The pool's `start()` is transactional
+    and a cancelled lazy read grow returns its slot (found by review; pre-existing).
 
 ### A1. ChatPage controllers become testable (R5)
 - Extract send / stop / continue into `pages/chat/turnControls.ts` with injected deps;

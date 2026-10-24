@@ -151,18 +151,59 @@ class _ConnectionPool:
         self._start_lock = asyncio.Lock()  # guards start() against concurrent first-borrows
         self._read_pool: asyncio.Queue = asyncio.Queue()
         self._all_conns: list[aiosqlite.Connection] = []
+        self._connecting: set[aiosqlite.Connection] = set()
         self._read_created = 0  # how many read conns created so far (lazy grow ≤ read_size)
         self._started = False
         self._closed = False
 
+    #: How long ending a connecting connection's worker may take (a teardown path:
+    #: the worker finishes the connect it is running, then the stop).
+    END_WORKER_S: float = 2.0
+
+    @classmethod
+    async def _end_worker(cls, conn: aiosqlite.Connection) -> None:
+        """End a connection's NON-daemon worker thread and wait for it while this
+        loop runs (an answer to a loop that has closed makes the worker raise).
+        aiosqlite stops it itself when its connect fails or is cancelled
+        (``_running`` is then False); stopping twice would wait for an answer the
+        exited worker never sends, so only stop a running one. ``_running`` and
+        ``_thread`` are aiosqlite internals (0.22): without them this only stops."""
+        thread = getattr(conn, "_thread", None)
+        if getattr(conn, "_running", True):
+            conn.stop()
+        if thread is None:
+            return
+        deadline = time.monotonic() + cls.END_WORKER_S
+        while thread.is_alive() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        if thread.is_alive():
+            logger.warning("pool: a connection worker did not end within %.0fs", cls.END_WORKER_S)
+
     async def _new_conn(self) -> aiosqlite.Connection:
-        conn = await aiosqlite.connect(self._db_path)
-        # WAL + busy_timeout set ONCE per connection at creation. journal_mode=WAL
-        # persists in the DB file (idempotent); busy_timeout is per-connection.
-        await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.execute("PRAGMA busy_timeout=5000")
-        await conn.execute("PRAGMA wal_autocheckpoint=1000")
-        self._all_conns.append(conn)
+        # Tracked from before the connect until it joins the pool: a borrow whose
+        # task never resumes (its loop stopped running: a test's loop after the
+        # test, a task pending at daemon shutdown) never reaches the append, and
+        # close() must still stop the NON-daemon worker thread it started.
+        conn = aiosqlite.connect(self._db_path)
+        self._connecting.add(conn)
+        try:
+            await conn
+            # WAL + busy_timeout set ONCE per connection at creation. journal_mode=WAL
+            # persists in the DB file (idempotent); busy_timeout is per-connection.
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA busy_timeout=5000")
+            await conn.execute("PRAGMA wal_autocheckpoint=1000")
+            if self._closed:
+                # close() ran while this connect was in flight: it stopped this
+                # connection's worker; fail the borrow.
+                raise RuntimeError(f"connection pool for {self._db_path} closed during connect")
+            self._all_conns.append(conn)
+        except BaseException:
+            if conn in self._connecting:
+                await self._end_worker(conn)
+            raise
+        finally:
+            self._connecting.discard(conn)
         return conn
 
     async def start(self) -> None:
@@ -184,8 +225,21 @@ class _ConnectionPool:
         async with self._start_lock:
             if self._started:
                 return
-            self._write_conn = await self._new_conn()
-            self._read_pool.put_nowait(await self._new_conn())
+            # Transactional: a failed or cancelled second connect closes the first,
+            # so a retry starts from nothing (never 2 write conns in _all_conns).
+            write = await self._new_conn()
+            try:
+                read = await self._new_conn()
+            except BaseException:
+                if write in self._all_conns:
+                    self._all_conns.remove(write)
+                    try:
+                        await write.close()
+                    except Exception as exc:  # noqa: BLE001 - already failing
+                        logger.debug("pool start: closing the write conn failed: %s", exc)
+                raise
+            self._write_conn = write
+            self._read_pool.put_nowait(read)
             self._read_created = 1
             self._started = True
             logger.info(
@@ -214,6 +268,15 @@ class _ConnectionPool:
             except Exception as exc:  # pragma: no cover - best-effort teardown
                 logger.debug("pool close: conn.close failed: %s", exc)
         self._all_conns.clear()
+        # Connections still connecting (their borrow's task may never resume):
+        # stop their workers (closes the sqlite handle, ends the thread); the
+        # borrow, if it ever resumes, finds the pool closed.
+        for conn in list(self._connecting):
+            try:
+                await self._end_worker(conn)
+            except Exception as exc:  # pragma: no cover - best-effort teardown
+                logger.debug("pool close: stopping a connecting conn failed: %s", exc)
+        self._connecting.clear()
         self._write_conn = None
         self._read_created = 0
         self._started = False
@@ -255,7 +318,14 @@ class _PoolBorrow:
             # rather than pre-allocating all N at start (keeps short-lived pools cheap).
             if pool._read_created < pool._read_size:
                 pool._read_created += 1
-                self._conn = await pool._new_conn()
+                try:
+                    self._conn = await pool._new_conn()
+                except BaseException:
+                    # the slot was never filled: give it back, or the pool counts
+                    # a connection it lacks and later borrows wait out the timeout
+                    if not pool._closed:
+                        pool._read_created -= 1
+                    raise
                 return self._conn
             # At capacity and all busy: wait for a return, with a backpressure bound.
             try:
@@ -366,6 +436,22 @@ def _get_pool(db_path: str) -> _ConnectionPool:
         pool = _ConnectionPool(str(db_path))
         _POOL_REGISTRY[key] = pool
     return pool
+
+
+async def close_loop_pools() -> None:
+    """Drain + close the pools of the RUNNING event loop only: a test's own loop,
+    before pytest-asyncio closes it (tests/test_session_injected_turn.py), since
+    the autouse reset_database teardown runs on the session loop, after it."""
+    try:
+        loop_id = id(asyncio.get_running_loop())
+    except RuntimeError:
+        return
+    for key in [k for k in _POOL_REGISTRY if k[1] == loop_id]:
+        pool = _POOL_REGISTRY.pop(key)
+        try:
+            await pool.close()
+        except Exception as exc:  # pragma: no cover - best-effort teardown
+            logger.debug("close_loop_pools: %s", exc)
 
 
 async def close_all_pools() -> None:

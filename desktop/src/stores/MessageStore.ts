@@ -359,7 +359,7 @@ export class MessageStore {
         // store fuller → keep the store's complete content for that one message
         if (sameMsg && MessageStore._textLen(prevLastAsst) > MessageStore._textLen(loadedLastAsst)) {
           const merged = loaded.slice();
-          merged[loadedIdx] = MessageStore._mergePreservingInteractive(loadedLastAsst, prevLastAsst);
+          merged[loadedIdx] = MessageStore._mergePreservingInteractive(loadedLastAsst, prevLastAsst, 'load');
           this.replace(merged);
           return;
         }
@@ -842,7 +842,30 @@ export class MessageStore {
    * relative to each other, at the end — they are always the trailing
    * turn-terminal block in practice).
    */
-  private static _mergePreservingInteractive(dbMsg: Message, localMsg: Message): Message {
+  /** Evidence (docs/design/2026-10-24-chat-stream-structure.md A0): the record
+   *  lost to a longer local copy. Logged once per (message, lengths), no content.
+   *  `where` names the path (load / reconcile-id / reconcile-cid); both paths run
+   *  only at idle (seedFromLoad refuses, reconcile defers while streaming). */
+  private static _divergedSeen = new Set<string>();
+
+  private static _logLiveDiverged(dbMsg: Message, localMsg: Message, where: string): void {
+    const localLen = MessageStore._textLen(localMsg);
+    const dbLen = MessageStore._textLen(dbMsg);
+    const key = `${dbMsg.id}:${localLen}:${dbLen}`;
+    if (MessageStore._divergedSeen.has(key)) return;
+    if (MessageStore._divergedSeen.size >= 500) MessageStore._divergedSeen.clear();
+    MessageStore._divergedSeen.add(key);
+    const kinds = (m: Message): Record<string, number> => {
+      const out: Record<string, number> = {};
+      for (const b of Array.isArray(m.content) ? m.content : []) out[b.type] = (out[b.type] ?? 0) + 1;
+      return out;
+    };
+    console.warn('[live-diverged]', {
+      id: dbMsg.id, localLen, dbLen, localKinds: kinds(localMsg), dbKinds: kinds(dbMsg), where,
+    });
+  }
+
+  private static _mergePreservingInteractive(dbMsg: Message, localMsg: Message, where: string): Message {
     // ── Persist-lag guard (THE reconcile race / #1 recurring "答到一半/白屏") ──
     // The 200ms turn-end reconcile can fetch the DB BEFORE the backend finishes
     // persisting this assistant message → a shorter/empty DB row. Plain DB-wins
@@ -859,6 +882,7 @@ export class MessageStore {
     // two confirmed blocks are the record's own repeat and both stay).
     localMsg = { ...localMsg, content: collapseAdjacentDuplicateBlocks(localMsg.content, 'store-merge') };
     if (MessageStore._textLen(localMsg) > MessageStore._textLen(dbMsg)) {
+      MessageStore._logLiveDiverged(dbMsg, localMsg, where);
       // local already carries its own interactive blocks, so no further merge —
       // except a stored permission's outcome (decided elsewhere, or expired) that
       // the local copy does not have yet.
@@ -1011,7 +1035,7 @@ export class MessageStore {
           // DB is source of truth for completed messages (server-side edits propagate),
           // but carry forward local-only interactive blocks the DB never persisted
           // (ask_user_question / cmd_permission_request / escalation).
-          merged.push(carryCid(MessageStore._mergePreservingInteractive(dbMsg, localMatch)));
+          merged.push(carryCid(MessageStore._mergePreservingInteractive(dbMsg, localMatch, 'reconcile-id')));
         }
       } else {
         // No direct ID match — try clientId correlation (AC4). The DB row's
@@ -1024,7 +1048,7 @@ export class MessageStore {
           matchedByClientId.add(dbClientId);
           const localIdx = clientIdToLocalIdx.get(dbClientId)!;
           matchedLocalIdx.add(localIdx);
-          merged.push(carryCid(MessageStore._mergePreservingInteractive(dbMsg, this._messages[localIdx])));
+          merged.push(carryCid(MessageStore._mergePreservingInteractive(dbMsg, this._messages[localIdx], 'reconcile-cid')));
         } else {
           // New from DB — but skip if it belongs to pre-boundary content
           // (prevents old messages from "leaking" into current view after resume)

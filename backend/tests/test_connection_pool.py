@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import threading
+import time
 import os
 
 import pytest
@@ -199,3 +200,208 @@ async def test_close_drains_connections(tmp_db_path):
     await asyncio.sleep(0.2)
     after = threading.active_count()
     assert after <= before, f"threads not drained: before={before} after={after}"
+
+
+def _live_workers() -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if "_connection_worker_thread" in t.name and t.is_alive()]
+
+
+@pytest.mark.asyncio
+async def test_close_during_an_in_flight_start_leaks_no_connection(tmp_db_path):
+    """A borrow whose start() is still connecting when close() runs (a background
+    task at test teardown or daemon shutdown) must not leave a connection behind:
+    each aiosqlite connection owns a NON-daemon worker thread, and one nobody closes
+    blocks interpreter exit (the test_session_injected_turn teardown hang)."""
+    before = set(_live_workers())
+    pool = _ConnectionPool(tmp_db_path, read_size=2)
+    started = asyncio.Event()
+    real_new_conn = pool._new_conn
+
+    async def slow_new_conn():
+        started.set()
+        await asyncio.sleep(0.05)   # close() runs while this connect is in flight
+        return await real_new_conn()
+
+    pool._new_conn = slow_new_conn
+
+    async def borrow():
+        async with pool.borrow(readonly=True) as conn:
+            await conn.execute("SELECT 1")
+
+    task = asyncio.create_task(borrow())
+    await started.wait()
+    await pool.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        await task
+    await asyncio.sleep(0.2)
+    leaked = set(_live_workers()) - before
+    assert not leaked, f"{len(leaked)} connection worker thread(s) outlived close()"
+    assert pool._all_conns == []
+
+
+@pytest.mark.asyncio
+async def test_close_during_a_lazy_read_grow_leaks_no_connection(tmp_db_path):
+    """The same for a read connection created on demand after start()."""
+    pool = await _make_pool(tmp_db_path, read_size=3)
+    before = set(_live_workers())
+    real_new_conn = pool._new_conn
+    started = asyncio.Event()
+
+    async def slow_new_conn():
+        started.set()
+        await asyncio.sleep(0.05)
+        return await real_new_conn()
+
+    held = pool.borrow(readonly=True)
+    await held.__aenter__()          # take the primed read conn: the next borrow grows
+    pool._new_conn = slow_new_conn
+
+    async def borrow():
+        async with pool.borrow(readonly=True) as conn:
+            await conn.execute("SELECT 1")
+
+    task = asyncio.create_task(borrow())
+    await started.wait()
+    await held.__aexit__(None, None, None)
+    await pool.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        await task
+    await asyncio.sleep(0.2)
+    assert not (set(_live_workers()) - before)
+
+
+def test_close_stops_a_connect_whose_loop_never_runs_again(tmp_db_path):
+    """A borrow started by a task on a loop that stops running mid-connect (a
+    test's loop after the test; a task pending at daemon shutdown) never resumes,
+    so it never adds its connection to the pool: close() must still stop that
+    connection's NON-daemon worker thread, or it blocks interpreter exit (the
+    test_session_injected_turn teardown hang)."""
+    before = set(_live_workers())
+    pool = _ConnectionPool(tmp_db_path, read_size=2)
+    side = asyncio.new_event_loop()
+
+    async def borrow():
+        async with pool.borrow(readonly=True) as conn:
+            await conn.execute("SELECT 1")
+
+    task = side.create_task(borrow())
+    side.run_until_complete(asyncio.sleep(0))   # the borrow is now inside connect
+    try:
+        asyncio.run(pool.close())
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and set(_live_workers()) - before:
+            time.sleep(0.05)
+        leaked = set(_live_workers()) - before
+        assert not leaked, f"{len(leaked)} connection worker thread(s) outlived close()"
+    finally:
+        task.cancel()
+        side.close()
+
+
+def test_a_connect_cancelled_mid_flight_ends_its_worker_before_the_loop_closes(tmp_db_path):
+    """A borrow cancelled while connecting (a test's leftover tasks cancelled at
+    teardown; tasks cancelled at daemon shutdown) must end its connection's worker
+    on the still-running loop. Left running, the worker answers a loop that then
+    closes: call_soon_threadsafe raises, the thread dies, and a later close() of
+    anything queued on it waits forever."""
+    before = set(_live_workers())
+    died: list[str] = []
+    prev_hook = threading.excepthook
+    threading.excepthook = lambda args: died.append(repr(args.exc_value))
+    pool = _ConnectionPool(tmp_db_path, read_size=2)
+    loop = asyncio.new_event_loop()
+    try:
+        async def borrow():
+            async with pool.borrow(readonly=True) as conn:
+                await conn.execute("SELECT 1")
+
+        async def cancel_mid_connect():
+            task = asyncio.create_task(borrow())
+            await asyncio.sleep(0)          # inside aiosqlite.connect now
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        loop.run_until_complete(cancel_mid_connect())
+    finally:
+        loop.close()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and set(_live_workers()) - before:
+        time.sleep(0.05)
+    threading.excepthook = prev_hook
+    assert not died, died
+    assert not (set(_live_workers()) - before)
+
+
+def test_the_aiosqlite_internals_the_pool_relies_on_exist(tmp_db_path):
+    """_ConnectionPool._end_worker reads aiosqlite's ``_running`` / ``_thread``
+    (unpinned dependency): an upgrade that drops them must show up here, not as a
+    silent return of the teardown hang."""
+    import aiosqlite
+
+    async def check():
+        conn = await aiosqlite.connect(tmp_db_path)
+        try:
+            assert isinstance(conn._running, bool)
+            assert isinstance(conn._thread, threading.Thread) and conn._thread.is_alive()
+        finally:
+            await conn.close()
+
+    asyncio.run(check())
+
+
+async def _cancel_inside_nth_connect(pool, n: int, borrow_coro):
+    """Run borrow_coro, cancelling it while it is inside the n-th _new_conn call."""
+    real = pool._new_conn
+    calls = {"n": 0}
+    entered = asyncio.Event()
+
+    async def counting():
+        calls["n"] += 1
+        if calls["n"] == n:
+            entered.set()
+            await asyncio.sleep(10)        # cancelled here
+        return await real()
+
+    pool._new_conn = counting
+    task = asyncio.create_task(borrow_coro())
+    await entered.wait()
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    pool._new_conn = real
+
+
+@pytest.mark.asyncio
+async def test_a_start_cancelled_at_its_read_connect_leaves_no_extra_connection(tmp_db_path):
+    """start() is transactional: cancelled while opening its read connection, it
+    keeps no write connection, and the retry ends with 1 write + 1 read."""
+    pool = _ConnectionPool(tmp_db_path, read_size=2)
+
+    async def borrow():
+        async with pool.borrow(readonly=True) as conn:
+            await conn.execute("SELECT 1")
+
+    await _cancel_inside_nth_connect(pool, 2, borrow)
+    assert pool._all_conns == [] and not pool._started
+    await borrow()
+    assert len(pool._all_conns) == 2
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_lazy_read_grow_gives_its_slot_back(tmp_db_path):
+    """A read grow cancelled mid-connect returns its slot: the pool can still grow
+    to read_size instead of waiting out the borrow timeout for a ghost conn."""
+    pool = await _make_pool(tmp_db_path, read_size=2)
+    pool.borrow_timeout = 0.5
+    held = pool.borrow(readonly=True)
+    await held.__aenter__()                 # the primed read conn is in use
+
+    async def borrow():
+        async with pool.borrow(readonly=True) as conn:
+            await conn.execute("SELECT 1")
+
+    await _cancel_inside_nth_connect(pool, 1, borrow)
+    assert pool._read_created == 1
+    await borrow()                          # grows to the 2nd read conn, no timeout
+    await held.__aexit__(None, None, None)
+    await pool.close()

@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import warnings
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -94,6 +95,16 @@ async def _until(pred, timeout: float = 3.0) -> None:
 _ROUTERS: list[SessionRouter] = []
 
 
+#: Fire-and-forget tasks the code under test starts by design and a test may leave
+#: pending: (coroutine name, file). Anything else left on the loop is reported as a
+#: warning (not a failure: a new fire-and-forget task must not make this file flaky).
+_EXPECTED_BACKGROUND = {
+    ("go", "session_state.py"),    # session_state.publish: the state push (reads the DB)
+    ("kick", "turn_changes.py"),   # TurnChanges.start: the per-send start snapshot
+    ("record_token_usage", "sqlite.py"),  # the result's usage row
+}
+
+
 @pytest_asyncio.fixture(autouse=True, loop_scope="function")
 async def _no_task_outlives_the_test(monkeypatch):
     """Close every reader and cancel every router task a test started, also when
@@ -118,8 +129,30 @@ async def _no_task_outlives_the_test(monkeypatch):
         for t in router._injected_tasks.values():
             t.cancel()
             tasks.append(t)
+    # The session_state push a test left on its loop (it reads the DB): abandoned
+    # mid-DB-call when the loop closes, its aiosqlite worker posts to a closed
+    # loop, raises and dies, and the next pool close waits on it forever (the
+    # teardown / exit hang, 2026-10-24). That one is expected: cancel it here.
+    # Any OTHER leftover task is cancelled too (so teardown cannot hang) and
+    # reported as a warning.
+    current = asyncio.current_task()
+    unexpected = []
+    for t in asyncio.all_tasks():
+        if t is current or t.done() or t in tasks:
+            continue
+        code = getattr(t.get_coro(), "cr_code", None)
+        if not (code and (code.co_name, Path(code.co_filename).name) in _EXPECTED_BACKGROUND):
+            unexpected.append(repr(t)[:200])
+        t.cancel()
+        tasks.append(t)
     if tasks:
         await asyncio.wait(tasks, timeout=2)
+    # This loop's pools, closed while it still runs (reset_database's teardown
+    # runs on the session loop, after this loop is gone).
+    from database.sqlite import close_loop_pools
+    await close_loop_pools()
+    if unexpected:
+        warnings.warn(f"tasks left pending by the test (cancelled): {unexpected}", stacklevel=1)
 
 
 def _router() -> SessionRouter:

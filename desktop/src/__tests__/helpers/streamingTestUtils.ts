@@ -123,6 +123,14 @@ export function makeToolUse(name: string, id?: string): ContentBlock {
 export function resetTestState(): void {
   // In-tab notices live in a module singleton keyed by tabId: drop every tab's.
   for (const id of testTabMap.keys()) tabNoticeStore.clearTab(id);
+  // A tab's pending timers go with it, as closeTab does (useUnifiedTabState): a
+  // turn-end reconcile left by one test otherwise reads the DB 200 ms later,
+  // inside the next test (the sessionTurnWiring resync flake, 2026-10-24).
+  for (const tab of testTabMap.values()) {
+    clearTimeout(tab._turnEndReconcileTimer);
+    clearTimeout(tab._resumeTimeoutId);
+    clearTimeout(tab._disconnectTimeoutId);
+  }
   testTabMap.clear();
   testActiveTabIdRef.current = null;
   messageStoreRegistry.clear();
