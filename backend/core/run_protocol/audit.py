@@ -192,6 +192,11 @@ def _experts(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+def _validation_lines(event_rows) -> list[str]:
+    from core.run_protocol.validation_report import report_lines
+    return report_lines(event_rows)
+
+
 def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mapping[str, Any]],
           final: Mapping[str, Any], findings: Sequence[Mapping[str, Any]],
           contract: Mapping[str, Any], push: Mapping[str, Any], audit_through: str,
@@ -370,6 +375,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "critical_path": _critical_path(event_rows, waits),
                "experts": _experts(event_rows),
                "waits": waits,
+               # S6-1: the agent's own validation reports (counts per stage and repo)
+               "validation": _validation_lines(event_rows),
                "trace_matrix": trace_protocol.matrix(design, final)}
     audit = {"run_id": run_id, "audit_through": audit_through, "card": None,
              "outcome": outcome,
@@ -495,6 +502,8 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
              "## Run Audit", "", "| Dimension | Result | This run |", "|---|---|---|"]
     lines += [f"| {name} | {row['verdict']} | {detail} |" for name, row, detail in rows]
     lines += ["", "Full machine-readable audit is stored with this run."]
+    if details.get("validation"):
+        lines += [""] + [str(line) for line in details["validation"]]
     if not outcome.get("push_ready"):
         reasons = dict(details.get("push_reasons") or {})
         high = [f"- {cid}: HIGH security_policy finding still has push effect"

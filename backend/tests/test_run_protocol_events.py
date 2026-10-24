@@ -48,6 +48,8 @@ def _make(kind: str, *, previous=None, **overrides):
     if kind == "test_call":
         payload.update({"seq": 1, "call_type": "test", "code_tree": "1" * 40,
                         "result": "pass"})
+    if kind == "validation_report":
+        payload.update({"stage": "build", "repo": "repo", "code_tree": "1" * 40})
     if kind == "run_create":
         payload["run_id"] = overrides.get("run_id", "run_abc")
     if kind == "auth_consumed":
@@ -127,6 +129,7 @@ CASES.update({
     "stage_complete": ({"stage": "plan", "attempt": 1}, "attempt", 2),
     "infrastructure_failed": ({"ordinal": 1}, "ordinal", 2),
     "session_lost": ({"ordinal": 1}, "ordinal", 2),
+    "validation_report": ({"ordinal": 1}, "ordinal", 2),
     "user_stop": ({"ordinal": 1}, "ordinal", 2),
     "worktree_unavailable": ({"ordinal": 1}, "ordinal", 2),
     "reflect_complete": ({"ordinal": 1}, "ordinal", 2),

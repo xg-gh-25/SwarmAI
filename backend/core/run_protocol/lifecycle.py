@@ -84,7 +84,8 @@ PROFILE_STAGES = {
 }
 IGNORED = frozenset({
     "handout", "answer", "finding_occ", "finding_status",
-    "reclassify", "address", "proof", "test_call", "metric", "turn", "integrity",
+    "reclassify", "address", "proof", "test_call", "validation_report", "metric", "turn",
+    "integrity",
     "owner_transfer", "render_failed",
 })
 

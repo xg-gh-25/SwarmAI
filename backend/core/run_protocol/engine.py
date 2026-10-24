@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from core import evidence_seal, run_worktree
-from core.run_protocol import checks, git_tree, lifecycle, review
+from core.run_protocol import checks, git_tree, lifecycle, review, validation_report
 from core.run_protocol.infra import InfrastructureError
 from core.run_protocol.documents import DocumentStore, complete_stage
 from core.run_protocol.events import EventAuthority
@@ -1715,6 +1715,8 @@ class RunEngine:
             raise EngineError(f"stale: the run is in {stage}, not {expected_stage}")
         for document in ("REQUIREMENTS", "DESIGN_SPEC"):   # the decisions' projection
             self._sync_decision_document(document)
+        if stage in validation_report.STAGES and artifact and "reports" in artifact:
+            self._record_validation_reports(stage, artifact)
         if stage == "deliver":
             if state.get("pending_landing") is None and profile != "research":
                 raise EngineError("DELIVER finishes with `land`; stage-complete is only for "
@@ -1787,6 +1789,26 @@ class RunEngine:
             self._write_review_documents()          # its checks and evidence moved on (F20)
         self.write_projection()
         return {"ok": True, **result, "state": self.projection()}
+
+    def _record_validation_reports(self, stage: str, artifact: Mapping[str, Any]) -> None:
+        """One ``validation_report`` event per expected repo (S6-1): the agent's report,
+        bound to the tree the engine computes now for that repo's worktree. Nothing is
+        written unless every report is valid and every repo's tree is known."""
+        expected = list(self.contract["expected_repos"])
+        try:
+            reports = validation_report.parse(artifact, expected)
+        except validation_report.ReportError as exc:
+            raise EngineError(f"validation report: {exc}") from exc
+        _roots, code_trees, _bases, _existing, _changed = self._current_code(expected)
+        unknown = sorted(name for name in expected if not code_trees.get(name))
+        if unknown:
+            raise EngineError(f"validation report: the code of {unknown} is unknown "
+                              "(no worktree); nothing recorded")
+        for report in reports:
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="validation_report", at=_now(),
+                ordinal=NEXT, payload=validation_report.event_payload(
+                    stage, report, code_trees[report["repo"]]))
 
     def _render_failed(self, document: str, exc: Exception) -> None:
         """A Markdown projection failed (K4, F23): one ``render_failed`` event; the

@@ -133,6 +133,7 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
   - `tests_changed`：新增或修改了哪些测试文件；
   - `rationale`：为什么认为这些测试能证明改动正确。
   日志只记录"这份报告是在这个 tree 上提交的"，不证明报告内容为真；内容是否可信由审查判断。
+  S6-1a 实现（2026-10-24，`core/run_protocol/validation_report.py`）：artifact 是 `{"reports": [每个仓库一份]}`，每份 `{"repo", "commands": [{"command", "cwd", "result": "pass|fail|not_run", "reason"}], "tests_changed", "rationale"}`；`fail` 和 `not_run` 必须写 `reason`；多出的键（包括 agent 自己填的 `code_tree`）直接拒绝。每个仓库写一条 `validation_report` 事件：`stage`、`repo`、`code_tree`（engine 当场算的 worktree tree）、三个计数内联，完整报告存成 blob（事件行有 4 KB 上限）。任何一份不合法、或某个仓库的 tree 算不出来，一条都不写。REPORT 里新增"测试（agent 自己报告的结果，pipeline 没有重跑）"一节，只用事件里的计数生成。S6-1a 期间 runner 路径照旧可用，报告是可选的；S6-1b 起报告是 BUILD、TEST 完成的必要条件。
 - **审查和最终 tree 的关系（r8，skeptic BLOCKER 1）**：阶段顺序 build → review → test 不变。规则是：
   - Gate-2 审查的对象是 REVIEW 时的代码 tree，以及 BUILD 的验证报告。测试是否充分、报告是否可信，由 Gate-2 专家判断；专家 sub-agent 有 Bash，可疑时自己用 native 方式跑测试核实；不足、不实就记成 finding，走 fixing-spec → 修复 → R2 复查。"至少有一个测试在改动前会失败"是专家检查清单里的一项。
   - TEST 阶段是在审查后的最终 tree 上做最后一次验证，并提交 TEST 的验证报告。**TEST 阶段不改代码**：如果最终验证发现问题、需要改代码，run 退回 REVIEW，做一次**增量审查**，再回到 TEST。

@@ -1,0 +1,147 @@
+"""validation_report — the agent's own test report for BUILD / TEST (design
+docs/design/2026-10-24-swarmai-usable-by-anyone.md §3.3.3, S6-1).
+
+The pipeline does not run or observe tests. BUILD and TEST end with
+``stage-complete --artifact -`` carrying ``{"reports": [<one per repo>]}``:
+
+    {"repo": "<expected repo name>",
+     "commands": [{"command": "...", "cwd": "...", "result": "pass|fail|not_run",
+                   "reason": "..."}],          # reason required for fail / not_run
+     "tests_changed": ["path", ...],            # tests added or changed
+     "rationale": "why these tests show the change is right"}
+
+The engine writes one ``validation_report`` event per repo; the event's ``code_tree``
+is the tree the engine computes for that repo's worktree at that moment, never a value
+the agent supplied. The log records only that this report was submitted on this tree;
+whether its content is true is for review to judge.
+
+Public: ``parse``, ``event_payload``, ``read``, ``latest``, ``report_lines``,
+``STAGES``, ``RESULTS``, ``ReportError``.
+"""
+from __future__ import annotations
+
+import json
+from typing import Any, Mapping, Sequence
+
+STAGES = frozenset({"build", "goal_cycle", "test"})
+RESULTS = ("pass", "fail", "not_run")
+MAX_COMMANDS = 50
+MAX_TESTS = 200
+MAX_COMMAND_CHARS = 2_000
+MAX_REASON_CHARS = 1_000
+MAX_RATIONALE_CHARS = 6_000
+_KEYS = {"repo", "commands", "tests_changed", "rationale"}
+_COMMAND_KEYS = {"command", "cwd", "result", "reason"}
+
+
+class ReportError(ValueError):
+    """The submitted report does not follow the schema; the message says what to fix."""
+
+
+def _text(value: Any, where: str, limit: int, *, empty: bool = False) -> str:
+    if not isinstance(value, str) or (not empty and not value.strip()):
+        raise ReportError(f"{where} must be a non-empty string")
+    if len(value) > limit:
+        raise ReportError(f"{where} is longer than {limit} characters")
+    return value
+
+
+def _one(row: Any, i: int, expected: Sequence[str]) -> dict[str, Any]:
+    where = f"reports[{i}]"
+    if not isinstance(row, Mapping):
+        raise ReportError(f"{where} must be an object")
+    extra = set(row) - _KEYS
+    if extra:
+        raise ReportError(f"{where} has unknown keys {sorted(extra)}")
+    repo = row.get("repo")
+    if repo not in expected:
+        raise ReportError(f"{where}.repo must be one of this run's repos {list(expected)}, "
+                          f"not {repo!r}")
+    commands = row.get("commands")
+    if not isinstance(commands, list) or len(commands) > MAX_COMMANDS:
+        raise ReportError(f"{where}.commands must be a list of at most {MAX_COMMANDS}")
+    out_commands = []
+    for j, cmd in enumerate(commands):
+        cw = f"{where}.commands[{j}]"
+        if not isinstance(cmd, Mapping) or set(cmd) - _COMMAND_KEYS:
+            raise ReportError(f"{cw} must be an object with keys {sorted(_COMMAND_KEYS)}")
+        result = cmd.get("result")
+        if result not in RESULTS:
+            raise ReportError(f"{cw}.result must be one of {list(RESULTS)}")
+        item = {"command": _text(cmd.get("command"), f"{cw}.command", MAX_COMMAND_CHARS),
+                "cwd": _text(cmd.get("cwd", ""), f"{cw}.cwd", MAX_COMMAND_CHARS, empty=True),
+                "result": result}
+        if result != "pass":
+            item["reason"] = _text(cmd.get("reason"), f"{cw}.reason (required when the "
+                                   f"result is {result})", MAX_REASON_CHARS)
+        elif cmd.get("reason"):
+            item["reason"] = _text(cmd.get("reason"), f"{cw}.reason", MAX_REASON_CHARS)
+        out_commands.append(item)
+    tests = row.get("tests_changed")
+    if not isinstance(tests, list) or len(tests) > MAX_TESTS:
+        raise ReportError(f"{where}.tests_changed must be a list of at most {MAX_TESTS}")
+    tests = [_text(t, f"{where}.tests_changed[{k}]", MAX_COMMAND_CHARS)
+             for k, t in enumerate(tests)]
+    return {"repo": repo, "commands": out_commands, "tests_changed": tests,
+            "rationale": _text(row.get("rationale"), f"{where}.rationale",
+                               MAX_RATIONALE_CHARS)}
+
+
+def parse(artifact: Any, expected_repos: Sequence[str]) -> list[dict[str, Any]]:
+    """The normalised reports in *artifact* (``{"reports": [...]}``): exactly one per
+    expected repo. Raises ReportError."""
+    if not isinstance(artifact, Mapping) or not isinstance(artifact.get("reports"), list):
+        raise ReportError('the artifact must be {"reports": [one report per repo]}')
+    expected = list(expected_repos)
+    rows = [_one(row, i, expected) for i, row in enumerate(artifact["reports"])]
+    names = [row["repo"] for row in rows]
+    if len(names) != len(set(names)):
+        raise ReportError("one report per repo: a repo appears twice")
+    missing = sorted(set(expected) - set(names))
+    if missing:
+        raise ReportError(f"missing a report for {missing}")
+    return rows
+
+
+def event_payload(stage: str, report: Mapping[str, Any], code_tree: str) -> dict[str, Any]:
+    """The ``validation_report`` event payload: summary inline, the report as a blob."""
+    counts = {r: sum(1 for c in report["commands"] if c["result"] == r) for r in RESULTS}
+    return {"stage": stage, "repo": report["repo"], "code_tree": code_tree,
+            "n_pass": counts["pass"], "n_fail": counts["fail"],
+            "n_not_run": counts["not_run"], "report_json": json.dumps(
+                report, ensure_ascii=False, sort_keys=True)}
+
+
+def read(store: Any, event: Mapping[str, Any]) -> dict[str, Any]:
+    """The full report of one ``validation_report`` event (its blob)."""
+    raw = event["payload"]["report_json"]
+    if isinstance(raw, Mapping):
+        raw = store.read_blob(raw["blob"]).decode("utf-8")
+    return json.loads(raw)
+
+
+def latest(events: Sequence[Mapping[str, Any]], stage: str | None = None) -> dict[str, dict]:
+    """repo -> the last ``validation_report`` event (of *stage*, when given)."""
+    out: dict[str, dict] = {}
+    for event in events:
+        if event.get("kind") != "validation_report":
+            continue
+        payload = event.get("payload") or {}
+        if stage is None or payload.get("stage") == stage:
+            out[payload.get("repo")] = dict(event)
+    return out
+
+
+def report_lines(events: Sequence[Mapping[str, Any]]) -> list[str]:
+    """REPORT lines from the events alone (the REPORT is a pure function of the log):
+    per stage and repo, the latest report's tree and counts. The commands themselves
+    are in the report blob (``read``)."""
+    lines: list[str] = []
+    for stage in ("build", "goal_cycle", "test"):
+        for repo, event in sorted(latest(events, stage).items()):
+            p = event["payload"]
+            lines.append(f"- {stage} · {repo} @ {str(p['code_tree'])[:12]}："
+                         f"{p['n_pass']} 通过，{p['n_fail']} 失败，{p['n_not_run']} 未运行")
+    if lines:
+        lines = ["## 测试（agent 自己报告的结果，pipeline 没有重跑）", ""] + lines
+    return lines

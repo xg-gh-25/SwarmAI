@@ -52,7 +52,8 @@ def restrict_process(*producers: str) -> None:
         raise EventError("restrict_process needs known producers")
     _process_producers = _process_producers & wanted
     _hook_writer_allowed = _hook_writer_allowed and "hook" in _process_producers
-FORCED_BLOB_KEYS = frozenset({"raw", "prompt", "test_details", "decision_json", "hunk"})
+FORCED_BLOB_KEYS = frozenset({"raw", "prompt", "test_details", "decision_json", "hunk",
+                              "report_json"})
 
 # Field paths use envelope keys directly and ``payload.<key>`` for payload keys.
 OCCURRENCE_FIELDS: dict[str, tuple[str, ...]] = {
@@ -64,6 +65,7 @@ OCCURRENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "address": ("payload.canonical_id", "payload.pass", "attempt"),
     "proof": ("payload.canonical_id", "payload.pass", "attempt"),
     "test_call": ("payload.seq",),
+    "validation_report": ("ordinal",),
     "stage_attempt": ("stage", "attempt"),
     "check": ("payload.stage_attempt_event_id", "payload.check_id"),
     "transition": ("payload.from", "payload.to", "payload.trigger_event_id"),
@@ -149,6 +151,12 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "test_call": _spec("runner", ("payload.seq",), "payload.call_type",
                        {"seq": int, "call_type": str, "code_tree": str, "result": str},
                        {"details": list, "target": str, "snapshot": str}),
+    # the agent's own test report for one repo (S6-1, design usable-by-anyone §3.3.3):
+    # code_tree is computed by the engine at submission, the report itself is a blob
+    "validation_report": _spec("cli", ("ordinal",), "payload.repo",
+                               {"stage": str, "repo": str, "code_tree": str,
+                                "n_pass": int, "n_fail": int, "n_not_run": int,
+                                "report_json": (str, dict)}),
     "stage_attempt": _spec("cli", ("stage", "attempt"), "stage",
                            {"check_ids": list}),
     "check": _spec("cli", ("payload.stage_attempt_event_id", "payload.check_id"),
@@ -362,6 +370,14 @@ def _event_contract(event: Mapping[str, Any], *, allow_missing_ckey: bool) -> st
         if not isinstance(ids, list) or not ids or len(ids) != len(set(ids)) \
                 or any(not isinstance(item, str) or not item.startswith("CF-") for item in ids):
             raise EventError("R2 handout requires unique canonical finding_ids")
+    if kind == "validation_report":
+        if payload["stage"] not in {"build", "goal_cycle", "test"}:
+            raise EventError("validation_report stage is invalid")
+        tree = payload["code_tree"]
+        if len(tree) != 40 or any(char not in "0123456789abcdef" for char in tree):
+            raise EventError("validation_report code_tree must be a git tree id")
+        if min(payload["n_pass"], payload["n_fail"], payload["n_not_run"]) < 0:
+            raise EventError("validation_report counts must not be negative")
     if kind == "test_call":
         if payload["call_type"] not in {"test", "probe", "lint", "typecheck", "build",
                                              "security_scan", "mutation"}:
