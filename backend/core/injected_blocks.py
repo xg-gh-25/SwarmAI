@@ -63,11 +63,15 @@ TASK_CONTINUATION_HEADER = "## Task Continuation"
 SYSTEM_NOTE = "SYSTEM NOTE"
 TASK_NOTIFICATION_OPEN = "<task-notification"
 TASK_NOTIFICATION_CLOSE = "</task-notification>"
+# The Claude Code CLI puts this paragraph in front of a background-task notification;
+# the notification block follows it, so the whole lead is cut through the closing tag.
+SYSTEM_NOTIFICATION_MARKER = "[SYSTEM NOTIFICATION - NOT USER INPUT]"
 INJECT_DELIM = "\n\n---\n\n"
 
 # Shapes for readers that see one content block at a time.
 META_PREFIXES = (
-    *UI_STATE_HEADERS, TASK_NOTIFICATION_OPEN, _RESUME_PREFIX, RECALL_HEADER,
+    *UI_STATE_HEADERS, TASK_NOTIFICATION_OPEN, SYSTEM_NOTIFICATION_MARKER,
+    _RESUME_PREFIX, RECALL_HEADER,
     TERMINAL_HEADER, TASK_CONTINUATION_HEADER, "[Request interrupted",
 )
 # Whole delimiter-separated segments that are system text, never user text.
@@ -117,7 +121,7 @@ def _strip_leading(prompt: str) -> str:
         elif t.startswith(UI_STATE_HEADERS):
             # Single-\n-joined internally; the first blank line is the seam.
             s = _cut_after(t, "\n\n")
-        elif t.startswith(TASK_NOTIFICATION_OPEN):
+        elif t.startswith((TASK_NOTIFICATION_OPEN, SYSTEM_NOTIFICATION_MARKER)):
             s = _cut_after(t, TASK_NOTIFICATION_CLOSE)
         else:
             return t

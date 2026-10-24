@@ -42,6 +42,21 @@ def test_task_notification_removed():
     assert strip_injected_blocks(p) == "please check the result"
 
 
+def test_cli_notification_lead_is_removed_with_its_block():
+    p = ("[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated event.\n\n"
+         "<task-notification>\n<task-id>x</task-id>\n</task-notification>\nplease check it")
+    assert strip_injected_blocks(p) == "please check it"
+
+
+def test_cli_notification_lead_without_a_block_is_all_system():
+    assert strip_injected_blocks("[SYSTEM NOTIFICATION - NOT USER INPUT]\nAn event.") == ""
+
+
+def test_user_text_quoting_the_notification_marker_is_kept():
+    p = "why does [SYSTEM NOTIFICATION - NOT USER INPUT] show up in my chat?"
+    assert strip_injected_blocks(p) == p
+
+
 def test_only_system_blocks_leaves_nothing():
     assert strip_injected_blocks(f"{_resume()}\n\n{UI}") == ""
 
