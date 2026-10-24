@@ -44,7 +44,8 @@ EXPERT_MAX_TURNS = 32
 _MAX_TRACKED = 256
 
 _SYSTEM_PROMPT = (
-    "You are a review expert in SwarmAI's autonomous pipeline. Your first message names "
+    "You are a SwarmAI review expert (a native review the agent asked for, or a pipeline "
+    "run's review). Your first message names "
     "a prompt file: read it and follow it exactly. You review only: never edit, write, "
     "move or delete files, never commit, never run artifact_cli.py or pipeline_test.py. "
     "Keep to the SCOPE BUDGET in that file. After "

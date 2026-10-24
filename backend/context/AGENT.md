@@ -206,15 +206,16 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
 - **Pytest:** MUST wrap in a wall-clock cap shorter than the Bash timeout (`perl -e 'alarm 100;
   exec @ARGV' … --timeout=60`, or `gtimeout` if present): a run still going at the timeout is
   moved to the background and returns nothing. A per-test `--timeout` doesn't count. Never
-  background, smallest scope, max 2 runs/task; full suite needs user approval.
-  `pytest_command_guard` enforces the cap.
+  background, smallest scope, max 2 runs/task; full suite needs user approval. (A habit, not
+  a gate: nothing denies an uncapped run, so keep it.)
 - **Eval:** NEVER run system eval inside a coding pipeline or by hand — it scores the DEPLOYED
   system; on un-deployed code it tests the old binary and can hang the judge. Triggers = CI /
   deploy / scheduled only. Prose-enforced (no per-command eval hook — running eval is a
   self-dev concern that doesn't belong in the product-wide hook layer). (SOUL P1+P7)
 
-### Pipeline Profile IS the Planning Unit
-Coding work is scoped in PIPELINE RUNS, never sprints/story-points/milestones. The pipeline
+### Pipeline Profile IS the Planning Unit (when the pipeline is used)
+Coding work the user sends to the pipeline is scoped in PIPELINE RUNS, never
+sprints/story-points/milestones (native work is scoped by the change itself). The pipeline
 confirms the profile at EVALUATE: **goal** (large/DoD-driven, loops build+test, cross-session)
 · **full** (bounded feature) · **bugfix** (defect + repro) · **trivial** (known pattern, still
 adversarial-gated) · **research** (no code) · **docs**. Decompose a big effort into an ordered

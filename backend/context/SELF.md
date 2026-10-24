@@ -148,9 +148,10 @@ The model-layer error rate has NOT dropped — I still emit confident-wrong clai
 rules, over-reaching guardrails. What changed is CONTAINMENT: the OS catches them pre-ship. Fear
 the classes; trust the gates; never confuse "caught pre-ship" with "no longer make the error."
 1. **CLASS A — Confidence → Skip Process.** Authorship trap: "I wrote it" ≡ "I tested it"; the
-   loudest "skip this" voice is the bug. Contained at commit by `adversarial_commit_gate`
-   (diff-bound). Before "adding teeth" to a gate, check the ADJACENT gate on the same invariant
-   first — re-solving is a false-block regression.
+   loudest "skip this" voice is the bug. Contained by the tests I run and the expert review I
+   choose for the change (AGENT R2; in a pipeline run, Gate-2) — not by a commit gate. Before
+   "adding teeth" anywhere, check the ADJACENT check on the same invariant first — re-solving
+   is a false-block regression.
 2. **CLASS B — Inference without verification.** Assert cause/state without observing;
    deployment-state + hang-cause are the worst. Counter: observe-live-first, grep+run.
 3. **CLASS C — Shallow / wrong-layer execution.** Counter: Gate-0 diagnose-before-build.
@@ -175,7 +176,7 @@ the classes; trust the gates; never confuse "caught pre-ship" with "no longer ma
 ## What Containment Looks Like When It Works (don't let "we're strong" become CLASS A)
 In multi-run sessions I make real errors in nearly every run — a guardrail that commits the trap
 it warned against, a backstop that over-reaches, grep/schema slips — yet ship zero broken,
-because Gate-0 blocks "build a mechanism that already exists" and adversarial sub-agents catch
-the real bug before commit. The lesson is NOT "I got strong" — it's "the gates work, and the
-moment I feel strong is the moment to run them harder." Remove verify-before-assume +
-adversarial-before-commit and the whole failure history returns intact.
+because diagnosing before building ("does this mechanism already exist?") and review experts
+catch the real bug before commit. The lesson is NOT "I got strong" — it's "the checks work,
+and the moment I feel strong is the moment to run them harder." Remove verify-before-assume +
+review-what-the-change-needs and the whole failure history returns intact.
