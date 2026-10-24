@@ -1,9 +1,9 @@
 ---
 title: SwarmAI 让别人装上就能用 — 产品原则、安装包、通用 pipeline（Sev-1）
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-25
 project: SwarmAI
-status: final r15 — XG 2026-10-24 定稿；r1–r15 的演进见末尾"修订记录"
+status: final r18 — XG 2026-10-24 定稿；r1–r18 的演进见末尾"修订记录"
 ---
 
 # SwarmAI 让别人装上就能用（Sev-1）
@@ -322,34 +322,66 @@ S4b-1（`d0194fc74`）已删除 `worktree_mode` 设置（P7.5）。
 | SwarmAI 产品的记忆和 DDD 系统（只提示、不拦截） | `governance_file_gate`、`memory_edit_guard`、DailyActivity / DDD 相关 hook | 保留 |
 | 用户开启的 pipeline run 的完整性（只在 run 里生效） | `run_owner_gate`、`run_amend_gate`、`session_link_gate`（收窄为只管 pipeline 命令）、`expert_type_gate`、`expert_budget_gate`、worktree rule 1–3、`main_dirty_reporter`、`v1_reflect_trigger` | 保留 |
 | `active_run_commit_gate` | r8：今天它扫描所有 session 的 run，别的 run 读不出来时也会拒绝（`security_hooks.py:3628-3732`） | 改为按 owner 判断：只在提交者就是该 run 的 owner session（S6 前读签名事件，S6 后读日志）、且提交的是 run 改过的文件时拒绝；其他 session 只提示；读不出来的 run 不再导致拒绝 |
-| `audit_marker_write_gate` | r8：今天一直生效，保护整个共享审计目录，包括 commit 前审查用的通用 marker（`security_hooks.py:6586-6644`） | S4 实施时（2026-10-24）核对：同一个目录里既有 `runs/<run_id>/` 的签名事件和 key，也有审查 marker 和 `main_red.jsonl`，按路径细分会改动这个 gate 精细的 Bash 解析，而它本来就不挡 native（普通用户不碰这个目录）。所以 S4 只改了拒绝提示（不再提 commit 前审查），收窄和 S6 删签名一起做。原计划：S4 到 S6 之间只保留签名事件和 `authority.key` 的保护，始终生效（只在 pipeline 内部目录里，普通用户碰不到）；S6 后见 §3.3.5；commit 前审查 marker 的保护随 `adversarial_commit_gate` 一起删除（r9） |
+| `audit_marker_write_gate` | r8：今天一直生效，保护整个共享审计目录，包括 commit 前审查用的通用 marker（`security_hooks.py:6586-6644`） | S4 实施时（2026-10-24）核对：同一个目录里既有 `runs/<run_id>/` 的签名事件和 key，也有审查 marker 和 `main_red.jsonl`，按路径细分会改动这个 gate 精细的 Bash 解析，而它本来就不挡 native（普通用户不碰这个目录）。所以 S4 只改了拒绝提示（不再提 commit 前审查）。r18 核对 `gate_decisions.jsonl`（10-21 至 10-24）：15 次拒绝没有一次是真写入或真读 key，其中 6 次是 `find`、`grep -r`、`rg` 扫到 key 的上级目录被当成读 key；这条规则已随 S6-3（`5aa04971c`）和 key 一起删掉，剩下的写入规则不变。原计划：S4 到 S6 之间只保留签名事件和 `authority.key` 的保护，始终生效（只在 pipeline 内部目录里，普通用户碰不到）；S6 后见 §3.3.5；commit 前审查 marker 的保护随 `adversarial_commit_gate` 一起删除（r9） |
 | `external_approval_gate` | r8：靠工具名里的词（create / add / set / save）推断风险，会把远端的写操作误判成本地写（`tool_risk.py:65-75,137-154`） | 保留这个产品级 gate，加入按工具元数据判断（工具声明自己是否有对外副作用）。r14：MCP 工具今天都没有元数据（`tool_risk.py:105-112`），所以元数据**只能把风险往上调**，不能往下调（第三方 MCP 自称 readOnly 不算数）；没声明的工具照旧按现有的动词分类；用户可以在本地覆盖某个工具的分类（`tool_risk` 已预留的第 1 层 override）。S4 已实现：`<app data>/tool_risk_overrides.json`；元数据只升不降的规则在 `classify` 里，但 hook 今天拿不到 MCP 的工具注解，gate 暂不传元数据，等有来源再接 |
-| 挡 native、或把人赶进 pipeline | worktree rule 4、`direct_commit_gate`、`adversarial_commit_gate`（r9：连同 SubagentStop 写审查 marker 的逻辑一起删）、`pytest_command_guard`、`enforcement_injector` 里"必须对抗审查"的提示、`pipeline_test_gate` | 删除 |
+| 挡 native、或把人赶进 pipeline | worktree rule 4、`direct_commit_gate`、`adversarial_commit_gate`（r9：连同 SubagentStop 写审查 marker 的逻辑一起删；marker 链路在 S4 漏删，r18 `1dfdedba0` 补删：`_adv_` marker、意图分类、reviewed_paths、coverage 读取和 auto-commit 扣文件）、`pytest_command_guard`、`enforcement_injector` 里"必须对抗审查"的提示、`pipeline_test_gate` | 删除 |
 | 保护 session 本身（r15） | `background_command_guard`（后台命令逃出超时会一直挂着；近 4 天拒绝 9 次，都是普通短命令被放到后台，改前台即可）、`image_read_dedup_guard`（重复读未变化的图；近 4 天 0 次） | 保留。S5 度量后复查：持续 0 次的删掉 |
 | 只对 SwarmAI 仓库有意义 | `design_lint_guard`、`inclusive_term_guard`、`change_triggered_eval`、`session_checkpoint` 里写死的 pytest 提醒 | 从产品里删除（P7）：改成 SwarmAI 仓库自己的 lint 脚本、pre-commit 和 CI 检查 |
 | 运维开关 | `SWARM_GATE_FORCE` | 不作为产品开关，只留给运维调试；顺手修掉三个声称支持却从不检查它的 gate |
 
 ### 3.5 专家：native 和 pipeline 共用（r9）
 
-- 专家在 `backend/experts/code/` 下（correctness、security、red-team、concurrency、state-machine、api-contract、integration、performance、operational、code-quality、spec-compliance、ux-test），由 `expert_manager.py` 加载；每个文件的 frontmatter 写了显示名和 `scope`。
+- 专家在 `backend/experts/code/` 下（S6-4 前 12 个；按 §3.5.1 合并后是 correctness、security、concurrency、state-machine、api-contract、integration、performance、operational、ux），由 `expert_manager.py` 加载；每个文件的 frontmatter 写了显示名和 `scope`。
 - 新增 skill "专家审查"：把专家名录（每位管什么、什么改动该请）从 frontmatter 自动生成，注入给 agent。新增专家不改代码。名录给出的默认规则：
 
   | 改动 | 建议请 |
   |---|---|
   | 一般逻辑改动、有一定规模 | correctness |
-  | 认证、权限、输入校验、凭证、网络、文件路径 | security，风险高时加 red-team |
+  | 认证、权限、输入校验、凭证、网络、文件路径 | security（风险高时它的"高风险改动"一节一起审，§3.5.1） |
   | 并发、锁、异步、重试 | concurrency |
   | 状态机、生命周期 | state-machine |
   | 对外接口、schema、数据格式 | api-contract |
   | 跨模块、改了调用方 | integration |
   | 热路径、大数据量 | performance |
-  | 部署、配置、日志、故障恢复 | operational |
-  | UI 交互 | ux-test |
+  | 后台任务、重试、超时、日志、故障恢复 | operational |
+  | UI 交互 | ux |
   | 小改动、文档 | 通常不用请 |
 
 - native 模式：agent 用 sub-agent 加载对应专家的 prompt 审查，自己处理 finding。不写 run 日志，不经过任何 gate。
 - pipeline 模式：照旧由 `review-start` 派发、finding 账本收敛。
 - 专家 prompt 改为通用：去掉对 SwarmAI `REVIEW_PATTERNS.md`（RP 编号）的引用，换成和语言、仓库无关的检查要点；仓库可以在 `.swarmai/review.md` 里补充自己的要点，专家审查时一并读取。
+
+#### 3.5.1 专家合并：12 个减到 9 个（r18，S6-4 实施）
+
+判断依据是职责有没有重叠、在 native 和任意仓库下还成不成立。r16 清掉了历史 run，"哪个专家真的找出过问题"现在没有数据，所以这是结构判断，S5 有了 run 数据再复查（§6）。
+
+| 专家 | 问题 | 处理 |
+|---|---|---|
+| `red-team` | pipeline 里改动 ≥50 行且有安全风险时，和 security 一起派（`review.py:186-190`），两者审的是同一类风险。prompt 是"主动攻破"写法：审查模型可能拒绝任务、什么都不返回，空结果又容易被当成"审过了" | 并入 `security`：security 的 prompt 加一节"高风险改动"，写成"逐条确认防护成立"（输入从哪进、在哪校验、绕过路径是否都被挡住），每条给出处或标 UNCHECKED。高风险改动从 2 个 sub-agent 变 1 个 |
+| `spec-compliance` | 审"实现是否匹配 PLAN 验收标准"。native 和 direct profile 都没有 PLAN；有 PLAN 的 full profile 里 Gate-0 和 LG 检查已经在核对验收标准，pipeline 也不派它 | 删除 |
+| `code-quality` | "架构、约定、集成正确性"：集成和 `integration` 重叠，约定和 correctness 加仓库的 `.swarmai/review.md` 重叠；pipeline 不派它（`review.py:174`） | 删除。prompt 里集成相关的检查点并入 `integration` |
+| `operational` | scope 写的是"hook / 定时任务 / daemon"，是 SwarmAI 自己的场景（P7） | 保留 id，scope 和 prompt 改成通用的"后台任务、重试、超时、故障恢复、日志"。不并入 performance：一个管"出错后能不能恢复"，一个管"快不快"，触发条件不同 |
+| `ux-test` | 把前端体验和测试覆盖两件不相关的事绑在一起；S6-1 之后测试证据是 agent 自己的验证报告，测试覆盖的审法也变了 | 改名 `ux`，只管前端体验。"验证报告是否覆盖了这次改动"写进 `correctness` 的检查清单 |
+
+不动的：correctness、security、concurrency、state-machine、api-contract、integration、performance。它们各自对应一类明确的改动，职责不重叠。
+
+合并后：correctness、security、concurrency、state-machine、api-contract、integration、performance、operational、ux。
+
+**改哪些地方**（同一个 commit）：
+- `backend/experts/code/`：删 `red-team.md`、`spec-compliance.md`、`code-quality.md`；`ux-test.md` 改名 `ux.md`；改 `security.md`、`integration.md`、`operational.md`、`correctness.md` 的 prompt 和 scope。
+- `core/run_protocol/review.py` `reviewers()`：名单只剩 correctness、security；`required` 里写的旧 id（`red-team` 等）映射到对应的新专家，其余照旧回退到 correctness。
+- frontmatter 的 `spawn_as`：唯一读它做判断的是 `_registered_adversarial_experts`，已随 `1dfdedba0` 删除，现在只有 `routers/experts.py` 原样返回，前端不用。字段从 frontmatter、`expert_manager.py`、`routers/experts.py` 一起删。
+- `s_expert-review`：`CATALOG.md` 用 `gen_expert_catalog.py` 重新生成；INSTRUCTIONS 的默认规则表去掉"风险高时加 red-team"，`ux-test` 改 `ux`；SKILL.md 描述里的专家列表同步。§3.5 上面的表格一起改。
+- `pipeline_expert_agent.py` 的描述、`s_autonomous-pipeline/INSTRUCTIONS.md` 里的名单。
+- 测试：`test_run_protocol_review.py`（名单、旧 id 映射）、`test_expert_manager.py`、`test_experts_router.py`，以及引用旧 id 的 fixture。
+
+**验收**（测试先行，在当前代码上先红）：
+- `reviewers()` 对任何输入都不返回 `red-team`；≥50 行且有安全风险时只返回 correctness 和 security；`required=["red-team"]` 得到 security。
+- 生成的 CATALOG 里没有已删的 id，每个留下的专家都有一行。
+- `security.md` 有"高风险改动"一节，用词是确认防护成立，不出现攻破、伪造之类的指令。
+- 变异：把 `red-team` 加回名单，第一条测试变红。
+
+**没解决、留给 S5 的**：合并后高风险改动只剩 security 一个视角，会不会漏东西，要看 S5 的 run 数据（security 在高风险改动上的 finding 数和后来发现的漏网问题）。如果漏得明显，再考虑给 security 加第二轮，而不是恢复 red-team。
 
 ## 4. 用户场景
 
@@ -418,7 +450,7 @@ S6 拆分（r16，2026-10-24）。每步一个或几个 commit，每步结束时
 | S6-1 | 验证报告替代 runner（§3.3.3、§3.3.4 的测试部分）：新增 `validation_report` 事件，BUILD、TEST 用 `stage-complete --artifact -` 显式完成；TEST 改了代码退回 REVIEW；删除 `pipeline_test.py`、`runner`、`runner_service`、`final`、`probe`、`test_call`、`pipeline_test_gate`，以及 BX-1、BX-2、TS-2、DS-2b/4b/9b、LG-2、LG-5、QX-1、QX-2、MD-2；TS-1 改为验证报告存在且合法；lifecycle 的 TEST 状态和 runner 熔断、`next_step` 的 runner 命令、engine 的 final 加载一起删；SwarmAI 的选测逻辑留成 `backend/scripts/swarm_select_tests.py` | S6-0 |
 | S6-2 | 审查绑定 tree：R1、R2 和新增的增量审查都记 `code_tree`；增量审查审 `diff(上次审过的 tree, 当前 tree)`；LG-1 要求 TEST 报告的 tree 等于落地 tree 且等于某次审查的 tree；finding 关闭证据新增 `reported_test`，删 runner 作者和 old/old/new | S6-1 |
 | S6-3 | 删签名（§3.3.5）：事件改为只追加日志加校验和；删 `authority.key`、`allow_hook_writer`、`daemon_exec`、`hook_token`；pipeline 命令回到本地执行；保留 `_with_session`、操作锁、owner 转移；`audit_marker_write_gate` 只留提醒 | S6-1（runner 的 lease 和 token 已随 S6-1 删掉） |
-| S6-4 | 通用化：DESIGN_SPEC 测试引用改为不透明路径；RQ-3、RQ-8b 词表改进 Gate-0 检查清单；review 去掉 Python/React 启发式，security 按声明和 `.swarmai/review.md` 派；通用 review 清单，SwarmAI 的 `REVIEW_PATTERNS.md` 搬进它的 `.swarmai/review.md`；专家 prompt 去掉 RP 编号；REFLECT 未知项目回退；五维审计改读验证报告 | S6-2 |
+| S6-4 | 通用化：DESIGN_SPEC 测试引用改为不透明路径；RQ-3、RQ-8b 词表改进 Gate-0 检查清单；review 去掉 Python/React 启发式，security 按声明和 `.swarmai/review.md` 派；通用 review 清单，SwarmAI 的 `REVIEW_PATTERNS.md` 搬进它的 `.swarmai/review.md`；专家 prompt 去掉 RP 编号；REFLECT 未知项目回退；五维审计改读验证报告；专家合并（§3.5.1：red-team 并入 security，删 spec-compliance、code-quality，operational 通用化，ux-test 改为 ux，删 `spawn_as`） | S6-2 |
 | S6-5 | 收尾：删旧命令形式（`python …/pipeline_v1.py`）和 `utils/source_repo.py`；删 shared 模式和 `SWARM_WORKTREE_MODE`，测试改用隔离 worktree；`run_worktree.code_repos` 改用 `governed_repo_roots`；skill 卡片重写；重写受影响的 E2E 测试 | S6-1 至 S6-4 |
 | 验收 | G1 的通用 pipeline 部分：一个非 Python 样例仓库从 create 到 land 走通；daemon 不在线时 pipeline 照常工作 | S6-5 |
 
@@ -463,3 +495,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - S3c（2026-10-24）：skill 文档（`backend/skills/**`、`backend/templates/ddd-skills/**`）调 Python 一律写 `"$SWARM_BACKEND_BIN" py`（源码路径 `backend/scripts/X.py` -> `py -m scripts.X`，`backend/skills/s_*/` -> `{SKILL_DIR}/`，heredoc -> `py -`）；例外只有"仓库自己的代码在它自己的环境里跑"（用户自己的 MCP server、被审仓库的 ruff、SwarmAI checkout venv 里的 pytest / ci_eval_gate）和两处散文，列在 `tests/test_skill_python.py` EXEMPT。`py -` 读 stdin；缺模块时点名并提示告诉用户。SKILL.md frontmatter 新增 `python-deps`（打包进后端）/ `python-optional-deps`（不打包：playwright、pypdf、pdf2image、edge_tts），`scripts/skill_python_deps.py` 是 build 和测试共用的唯一来源；build spec 收集整个标准库 + 声明的依赖（含 data files）；lxml、httpx 写进 pyproject。verify_installer 新增 C14：用部署出来的程序 import 标准库和所有声明依赖，并跑一个真实 skill 脚本。未实测：真实 PyInstaller 打包（标准库全收集后的体积和耗时）。
 - r16（XG，2026-10-24）：不兼容旧 run，XG 本机历史 run 全部清掉（§3.3.5）；S6 拆成 S6-0 至 S6-5（§7）。
 - r17（XG，2026-10-25）：§3.8 `dangerous_command_gate` 的 history-rewrite 规则换成"丢弃别人未提交的工作"：ref 移动不再询问，销毁未提交改动的操作只在另一个 session 写过、仍未提交的文件会丢时询问，事实复用 `shared_checkout`；旧的按路径判断 scratch 的机制整套删除。
+- r18（XG，2026-10-25）：新增 §3.5.1 专家合并，S6-4 实施，12 个减到 9 个；§3.4 记下 `1dfdedba0`：补删 S4 漏下的 `_adv_` marker 链路，以及 `audit_marker_write_gate` 15 次拒绝的核对结果。
