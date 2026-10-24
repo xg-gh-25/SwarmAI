@@ -259,9 +259,6 @@ def _record_double_consume(store: AuditStore, request_id: str, auth_event_id: st
                                             request_id, exc)
 
 
-TRAILER = "Co-Authored-By: Swarm <swarm@swarmai.dev>"   # the trailer of legacy plans
-
-
 def check_message(message: str) -> str:
     """*message* without trailing whitespace; LandingError when it is empty."""
     text = str(message or "").rstrip()
@@ -270,7 +267,7 @@ def check_message(message: str) -> str:
     return text
 
 
-def with_trailer(message: str, trailer: str = TRAILER) -> str:
+def with_trailer(message: str, trailer: str) -> str:
     """*message* with the repo's landing *trailer* line added once if missing (none when
     *trailer* is empty). The trailer comes from the repo's ``.swarmai/pipeline.toml``
     (``repo_pipeline_config``), frozen in the landing plan."""
@@ -316,18 +313,25 @@ def _ident_env(author: str) -> dict:
             "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email}
 
 
+def _row_settings(row: Mapping[str, Any]) -> dict:
+    """A plan row's frozen {"author", "trailer"}. Every plan row carries both (written at
+    its first landing attempt); a row without them is from a pipeline this one does not
+    read (no old-run compatibility, design usable-by-anyone r16) → LandingError."""
+    author = row.get("author") if isinstance(row, Mapping) else None
+    trailer = row.get("trailer") if isinstance(row, Mapping) else None
+    if not isinstance(author, str) or not author or not isinstance(trailer, str):
+        raise LandingError("landing plan row has no author / trailer; this run's landing "
+                           "state is not from this pipeline version")
+    return {"author": author, "trailer": trailer}
+
+
 def _row_message(message: str, row: Mapping[str, Any]) -> str:
-    """The exact commit message of one plan row (legacy rows: the Swarm trailer)."""
-    return with_trailer(message, row.get("trailer", TRAILER) if isinstance(row, Mapping) else TRAILER)
-
-
-# the Swarm identity as git environment variables (legacy plans and author = "swarm")
-_IDENTITY = {"GIT_AUTHOR_NAME": "Swarm", "GIT_AUTHOR_EMAIL": "swarm@swarmai.dev",
-             "GIT_COMMITTER_NAME": "Swarm", "GIT_COMMITTER_EMAIL": "swarm@swarmai.dev"}
+    """The exact commit message of one plan row."""
+    return with_trailer(message, _row_settings(row)["trailer"])
 
 
 def _row_author(row: Mapping[str, Any]) -> str:
-    return row.get("author") if isinstance(row, Mapping) and row.get("author") else _swarm_ident()
+    return _row_settings(row)["author"]
 
 
 def _git(root: str, *args: str, env: Mapping[str, str] | None = None) -> str:
@@ -684,10 +688,9 @@ def commit_repos(
     plan = {}
     for name in sorted(expected):
         prior = old_plan.get(name) if isinstance(old_plan, Mapping) else None
-        # a plan's author and trailer are frozen when it is first written; a plan written
-        # before they existed landed as Swarm with the Swarm trailer (legacy rows)
+        # a plan's author and trailer are frozen when it is first written
         if isinstance(prior, Mapping):
-            settings = {"author": _row_author(prior), "trailer": prior.get("trailer", TRAILER)}
+            settings = _row_settings(prior)
         else:
             settings = landing_settings(integration_roots[name], bases[name])
         plan[name] = {"base": bases[name],

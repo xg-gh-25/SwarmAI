@@ -172,10 +172,7 @@ P5 已定不防 agent 作恶，S6 之后测试证据又是 agent 自己写的报
 - **删**：`authority.key` 及其读保护、`events.allow_hook_writer`、`daemon_exec`（daemon 代执行、socket、队列）、`hook_token` 和 `run_owner_gate` 用 `updatedInput` 发 token 的逻辑、`auth_consumed` 的签名校验。pipeline 命令回到本地进程执行，不再依赖 daemon 在线。
 - **随之简化**：`audit_marker_write_gate` 只剩"不让 agent 直接改 run 日志文件"的提醒级保护，是否保留由 §6 的度量决定；gate 不再需要为发 token 识别 pipeline 命令；Windows 少一个结构障碍（Unix socket），pipeline 在 Windows 上仍然不启用，剩下的障碍单独评估。
 - **代价**：推翻今天合入的 B-class 和 B-e（`2810e727b 740d6268a dfa761ac7 01fa52bee`）。S6 之前这套机制仍在（S3 照常做 token），S6 一起删；r14 起不发过渡版，所以没有用户会拿到"签名还在、runner 已删"之类的中间状态。
-- **现存 run 的迁移（r14）**：S6 删掉签名链和 runner 状态之后，旧 run 加载不了（`store.py:163-187` 读事件时校验签名链；mode "off" 的旧 run 还依赖 `run_worktree.py:1551`、`main_dirty_scan.py:133`）。规则：
-  - S6 的前置条件是没有未结束的 run。提供一个 drain 命令：列出未结束的 run，逐个让人选"跑完"或"放弃"（放弃时保留分支和 ledger，和今天的 abandon 一样）。
-  - 已结束的旧 run 一次性归档成只读：用 S6 之前的校验器最后校验一遍，把 REPORT、`run_audit.json` 和事件原文搬进归档目录，新代码只读归档里的 REPORT 和审计，不再解析旧事件。
-  - 迁移测试：一个停在 TEST 的旧 run、一个部分落地的旧 run，升级后 drain 能列出它们，归档后 Pipeline 面板和审计页仍能打开它们的 REPORT。
+- **现存 run（r16，XG 定，2026-10-24）**：不兼容任何旧 run。XG 本机的历史 run 已全部清掉（673 个 run 目录、审计目录、`worktrees/` 残留、runner 缓存和它在仓库里注册的 worktree、`refs/swarm/snapshots`），新代码不读、不迁移、不归档旧 run。原来的 drain 命令、只读归档和迁移测试都不做。新代码遇到读不了的 run 目录，按损坏处理（列为需要人处理），不尝试按旧格式解析。
 - **测试**：重写依赖签名的测试；新增：被接管的 prewarm session 能建 run 且 owner 正确；最后一行写了一半时丢掉继续，中间记录损坏时 run 停下等人处理；daemon 不在线时 pipeline 命令照常工作；两个 session 同时操作同一个 run 时由操作锁串行化。
 
 #### 3.3.6 `.swarmai/pipeline.toml`（全部字段可选）
@@ -372,8 +369,21 @@ S4b-1（`d0194fc74`）已删除 `worktree_mode` 设置（P7.5）。
 | S3 | `python-backend` 子命令（`pipeline-v1`、`py`）+ 打包版里所有起 Python 子进程的地方改用子命令 + `SWARM_BACKEND_BIN` + 命令识别模块（§3.2，替换六处文本匹配）+ Windows 返回不支持。旧的"python + 脚本路径"形式和 `source_repo` 保留到 S6 | 新旧两种命令形式并存，runner 照常工作 |
 | S4b | §3.8 native 按需 worktree（检测另一 session 的未提交改动 + AGENT.md 规则）；P7：清理产品代码里识别 SwarmAI 仓库 / 项目的逻辑（先出完整清单，逐项改成通用或删除）；删除 `worktree_mode` 设置；dev 模式的 `SWARM_BACKEND_BIN` shim；SwarmAI 仓库自己的 lint 脚本、pre-commit、CI 接住被删掉的三个 hook；XG 切换到和 CI 相同流程打出来的安装包 | |
 | S5 | 度量（§6） | |
-| S6 | pipeline 通用化（§3.3.3、§3.3.4）：验证报告事件和显式完成；删测试执行器、runner 证据相关的机器判定和状态，同一个 commit 删旧命令形式和 `source_repo`；TEST 不改代码、改了退回 REVIEW；审查记录 tree、增量审查；LG-1 绑定审查过的 tree；`reported_test` 证据；DESIGN_SPEC 测试引用通用化；Gate-0、Gate-2 检查清单补上对应要求；review 去掉语言启发式；REFLECT 的未知项目回退；删掉签名机制、事件改为只追加日志、pipeline 命令回到本地执行（§3.3.5）；现存 run 的 drain 和归档；通用 review 清单；skill 卡片重写；SwarmAI 仓库的 `.swarmai/review.md`、`swarm_select_tests.py`；重写受影响的 E2E 测试 | runner、旧命令形式、签名一起切换 |
+| S6 | pipeline 通用化（§3.3.3、§3.3.4）：验证报告事件和显式完成；删测试执行器、runner 证据相关的机器判定和状态，同一个 commit 删旧命令形式和 `source_repo`；TEST 不改代码、改了退回 REVIEW；审查记录 tree、增量审查；LG-1 绑定审查过的 tree；`reported_test` 证据；DESIGN_SPEC 测试引用通用化；Gate-0、Gate-2 检查清单补上对应要求；review 去掉语言启发式；REFLECT 的未知项目回退；删掉签名机制、事件改为只追加日志、pipeline 命令回到本地执行（§3.3.5）；通用 review 清单；skill 卡片重写；SwarmAI 仓库的 `.swarmai/review.md`、`swarm_select_tests.py`；重写受影响的 E2E 测试 | runner、旧命令形式、签名一起切换 |
 | 发布 | G1 两部分（native 和安装、通用 pipeline）+ G2 全绿后发布 | |
+
+S6 拆分（r16，2026-10-24）。每步一个或几个 commit，每步结束时相关测试全绿；中间不发版，所以步与步之间允许 pipeline 暂时只有新旧之一能用，但 main 上的测试不能红：
+
+| 步 | 内容 | 依赖 |
+|---|---|---|
+| S6-0 | 不兼容旧 run：删除落地计划里给旧行补 Swarm 作者和 trailer 的回退；spec 去掉 drain、归档、迁移 | 无 |
+| S6-1 | 验证报告替代 runner（§3.3.3、§3.3.4 的测试部分）：新增 `validation_report` 事件，BUILD、TEST 用 `stage-complete --artifact -` 显式完成；TEST 改了代码退回 REVIEW；删除 `pipeline_test.py`、`runner`、`runner_service`、`final`、`probe`、`test_call`、`pipeline_test_gate`，以及 BX-1、BX-2、TS-2、DS-2b/4b/9b、LG-2、LG-5、QX-1、QX-2、MD-2；TS-1 改为验证报告存在且合法；lifecycle 的 TEST 状态和 runner 熔断、`next_step` 的 runner 命令、engine 的 final 加载一起删；SwarmAI 的选测逻辑留成 `backend/scripts/swarm_select_tests.py` | S6-0 |
+| S6-2 | 审查绑定 tree：R1、R2 和新增的增量审查都记 `code_tree`；增量审查审 `diff(上次审过的 tree, 当前 tree)`；LG-1 要求 TEST 报告的 tree 等于落地 tree 且等于某次审查的 tree；finding 关闭证据新增 `reported_test`，删 runner 作者和 old/old/new | S6-1 |
+| S6-3 | 删签名（§3.3.5）：事件改为只追加日志加校验和；删 `authority.key`、`allow_hook_writer`、`daemon_exec`、`hook_token`；pipeline 命令回到本地执行；保留 `_with_session`、操作锁、owner 转移；`audit_marker_write_gate` 只留提醒 | S6-1（runner 的 lease 和 token 已随 S6-1 删掉） |
+| S6-4 | 通用化：DESIGN_SPEC 测试引用改为不透明路径；RQ-3、RQ-8b 词表改进 Gate-0 检查清单；review 去掉 Python/React 启发式，security 按声明和 `.swarmai/review.md` 派；通用 review 清单，SwarmAI 的 `REVIEW_PATTERNS.md` 搬进它的 `.swarmai/review.md`；专家 prompt 去掉 RP 编号；REFLECT 未知项目回退；五维审计改读验证报告 | S6-2 |
+| S6-5 | 收尾：删旧命令形式（`python …/pipeline_v1.py`）和 `utils/source_repo.py`；删 shared 模式和 `SWARM_WORKTREE_MODE`，测试改用隔离 worktree；`run_worktree.code_repos` 改用 `governed_repo_roots`；skill 卡片重写；重写受影响的 E2E 测试 | S6-1 至 S6-4 |
+| 验收 | G1 的通用 pipeline 部分：一个非 Python 样例仓库从 create 到 land 走通；daemon 不在线时 pipeline 照常工作 | S6-5 |
+
 
 S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"挡 native 测试命令"的部分，runner 自己的调用约束随 S6 和 runner 一起删除。
 
@@ -413,3 +423,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - S2（2026-10-24）：S2a `0b917ec16` 安装包带后端（清单 + ad-hoc 签名）；S2b `b6f2bcfb2` 三平台统一的版本化 runtime（指针文件 `current` / `previous`，dev 工具和 app 同一路径）；S2c release.yml 四个目标（macOS arm64 / x64、Windows x64、Linux x64 AppImage）走同一条构建路径，每个安装包在独立 job 里跑 `verify_installer.sh`（已支持三个平台），全部构建和验收通过才发布。
 - S3（2026-10-24）：S3a `52e1b7942` `desktop_main.py` 子命令 `daemon` / `pipeline-v1` / `py`（`-m` / `-c` / 脚本），dev shim `backend/bin/python-backend`，`utils/backend_bin.py`，daemon 启动时导出 `SWARM_BACKEND_BIN`；channel MCP、自升级、5 个系统脚本 job 改用自带 Python，不再要源码 checkout；删 `get_python_executable`。S3b：命令识别模块 `core/pipeline_command.py`（两种形式，旧脚本形式保留到 S6），run_owner_gate、runtime_hooks、pipeline_stage_events、daily_activity_hook、security_hooks（session link、后台、amend/commit 提示）、reflect_job 改用它；agent 被告知的命令统一为 `"$SWARM_BACKEND_BIN" pipeline-v1`（`v1_command`、skill 卡片）；前端 continue 文本由后端 `continue_prompt` 给出，turnView 按程序 + 子命令显示。skill 里其他 Python 脚本的调用方式见 S3c。
 - S3c（2026-10-24）：skill 文档（`backend/skills/**`、`backend/templates/ddd-skills/**`）调 Python 一律写 `"$SWARM_BACKEND_BIN" py`（源码路径 `backend/scripts/X.py` -> `py -m scripts.X`，`backend/skills/s_*/` -> `{SKILL_DIR}/`，heredoc -> `py -`）；例外只有"仓库自己的代码在它自己的环境里跑"（用户自己的 MCP server、被审仓库的 ruff、SwarmAI checkout venv 里的 pytest / ci_eval_gate）和两处散文，列在 `tests/test_skill_python.py` EXEMPT。`py -` 读 stdin；缺模块时点名并提示告诉用户。SKILL.md frontmatter 新增 `python-deps`（打包进后端）/ `python-optional-deps`（不打包：playwright、pypdf、pdf2image、edge_tts），`scripts/skill_python_deps.py` 是 build 和测试共用的唯一来源；build spec 收集整个标准库 + 声明的依赖（含 data files）；lxml、httpx 写进 pyproject。verify_installer 新增 C14：用部署出来的程序 import 标准库和所有声明依赖，并跑一个真实 skill 脚本。未实测：真实 PyInstaller 打包（标准库全收集后的体积和耗时）。
+- r16（XG，2026-10-24）：不兼容旧 run，XG 本机历史 run 全部清掉（§3.3.5）；S6 拆成 S6-0 至 S6-5（§7）。

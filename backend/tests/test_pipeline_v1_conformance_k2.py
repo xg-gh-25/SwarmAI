@@ -177,25 +177,18 @@ def test_a_checkout_on_another_branch_lands_nothing(tmp_path):
     assert _git(b, "rev-parse", "other") == bases["b"]
 
 
-def test_a_progress_file_written_before_message_and_branch_were_bound_resumes(tmp_path):
+def test_a_progress_file_without_author_and_trailer_is_refused(tmp_path):
+    """No old-run compatibility (usable-by-anyone r16): a progress file whose plan rows
+    lack the frozen author / trailer is not resumed as a Swarm landing; nothing lands."""
     import json
     roots, bases, bindings = _repos(tmp_path)
-    a = Path(roots["a"])
-    msg = "land"
-    import os
-    # a plan row written before author/trailer were recorded landed as Swarm with the
-    # Swarm trailer (the only identity the landing had then)
-    env = {**os.environ, **landing._IDENTITY}
-    commit = subprocess.run(["git", "-C", str(a), "commit-tree", bindings["a"]["delivery_tree"],
-                             "-p", bases["a"], "-m", landing.with_trailer(msg).rstrip("\n")],
-                            check=True, capture_output=True, text=True, env=env).stdout.strip()
-    _git(a, "merge", "--ff-only", "-q", commit)
-    old = {"schema": 1, "run_id": "run_one", "commits": {"a": commit},
+    old = {"schema": 1, "run_id": "run_one", "commits": {},
            "plan": {n: {"base": bases[n], "delivery_tree": bindings[n]["delivery_tree"]}
                     for n in ("a", "b")}}
     (tmp_path / "progress.json").write_text(json.dumps(old))
-    commits = _land(tmp_path, roots, bases, bindings)
-    assert commits["a"] == commit and set(commits) == {"a", "b"}
+    with pytest.raises(landing.LandingError, match="author / trailer"):
+        _land(tmp_path, roots, bases, bindings)
+    assert all(_git(Path(roots[n]), "rev-parse", "HEAD") == bases[n] for n in ("a", "b"))
 
 
 def _stream():

@@ -90,10 +90,23 @@ def test_tree_change_after_prepare_refuses_before_consuming(tmp_path):
     assert "auth_consumed" not in [row["kind"] for row in store.read_events()]
 
 
+def test_plan_row_without_author_or_trailer_is_refused_not_filled_in():
+    """No old-run compatibility (usable-by-anyone r16): a plan row missing the frozen
+    author / trailer is not landed as Swarm with the Swarm trailer."""
+    from core.run_protocol.landing import LandingError, _row_author, _row_message
+    for row in ({"base": "b"}, {"base": "b", "author": "A <a@x>"}, {"base": "b", "trailer": ""}):
+        with pytest.raises(LandingError):
+            _row_message("m", row)
+        with pytest.raises(LandingError):
+            _row_author(row)
+    assert _row_message("m", {"author": "A <a@x>", "trailer": ""}) == "m\n"
+
+
 def test_landing_message_always_carries_the_project_trailer():
-    from core.run_protocol.landing import TRAILER, LandingError, with_trailer
-    assert with_trailer("feat: x") == f"feat: x\n\n{TRAILER}\n"
-    once = with_trailer(f"feat: x\n\n{TRAILER}")
-    assert once.count(TRAILER) == 1 and with_trailer(once) == once
+    from core.run_protocol.landing import LandingError, with_trailer
+    TRAILER = "Co-Authored-By: Swarm <swarm@swarmai.dev>"
+    assert with_trailer("feat: x", TRAILER) == f"feat: x\n\n{TRAILER}\n"
+    once = with_trailer(f"feat: x\n\n{TRAILER}", TRAILER)
+    assert once.count(TRAILER) == 1 and with_trailer(once, TRAILER) == once
     with pytest.raises(LandingError):
-        with_trailer("  ")
+        with_trailer("  ", TRAILER)
