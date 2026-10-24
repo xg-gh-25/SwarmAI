@@ -233,8 +233,8 @@ function LeftSidebar() {
       style={{ width: LEFT_SIDEBAR_WIDTH }}
       data-testid="left-sidebar"
     >
-      {/* Swarm key — a static three-cell hive (brand mark) plus the "Swarm" label.
-          Click returns to chat (closes any open overlay). */}
+      {/* Swarm key — the brand S-hexagon logo (same mark as the welcome screen)
+          plus the "Swarm" label. Click returns to chat (closes any open overlay). */}
       <div className="p-2.5 pb-1.5">
         <button
           type="button"
@@ -243,7 +243,9 @@ function LeftSidebar() {
           title="Swarm"
           data-testid="chat-hero"
         >
-          <SwarmHiveMark />
+          <span className="flex-shrink-0 w-[26px] h-[26px] flex items-center justify-center">
+            <SwarmAILogo />
+          </span>
           <span className="text-heading font-semibold text-[var(--color-text)] flex-1 text-left">Swarm</span>
         </button>
 
@@ -405,19 +407,6 @@ function LeftSidebar() {
 // SwarmAI Logo — inline S-monogram honeycomb (matches desktop/src/assets/
 // swarm-avatar.svg). Inlined (not <img src>) so it renders with zero network
 // dependency and is assertable in tests (a bare <img> is not an <svg>).
-/** Static brand mark for the Swarm key: three hexagons (one top, two below) in
- *  the primary colour, the top cell solid, the lower two lighter. SVG only. */
-function SwarmHiveMark() {
-  const hex = 'M9.5 0 19 5.5V16.5L9.5 22 0 16.5V5.5Z';
-  return (
-    <svg width="40" height="38" viewBox="0 0 40 38" aria-hidden="true" className="flex-shrink-0" data-testid="swarm-hive-mark">
-      <path d={hex} transform="translate(10.5 0)" fill="var(--color-primary)" />
-      <path d={hex} transform="translate(0 16)" fill="var(--color-primary)" fillOpacity="0.55" />
-      <path d={hex} transform="translate(21 16)" fill="var(--color-primary)" fillOpacity="0.3" />
-    </svg>
-  );
-}
-
 function SwarmAILogo() {
   return (
     <span

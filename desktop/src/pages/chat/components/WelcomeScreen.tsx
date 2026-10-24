@@ -286,7 +286,7 @@ export const WelcomeScreen: React.FC = () => {
           </span>
         </div>
         <h1 data-testid="welcome-wordmark" className="text-display font-semibold tracking-[-0.01em] text-[var(--color-text)]">
-          SwarmAI
+          Swarm
         </h1>
         <p data-testid="welcome-slogan" className="mt-1 text-heading text-[var(--color-text-secondary)]">
           Grow your <span className="welcome-brand-text font-semibold">Brain</span>. Deliver{' '}
