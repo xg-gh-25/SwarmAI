@@ -52,10 +52,15 @@ export const ZONE_GAP = 'mt-5';
 export const RESULT_GAP = 'mt-7';
 /** Inside a zone: header → body, and between a body's thought / strips / panel. */
 const INNER_GAP = 'mt-2';
-/** The one column the agent's prose sits on, everywhere in a turn: where a group's
- *  label starts (mark column w-4 + gap-1.5). Marks (▸ ✓ ●) hang in the gutter left of
- *  it. A text keeps this column when it turns from a note in WORKING into the RESULT,
- *  so the end of a turn never moves it sideways. */
+// ── The turn's column grid (docs/design/2026-10-24-turn-column-grid.md) ──────────
+// A row's x is set by its KIND, never by how deep it is nested: every mark (▸ ✓ ● ◦)
+// in the gutter (0, MARK_COL + gap-1.5 wide), every text row and every work row
+// (strip, thought, Agents panel) at 22, a row's own opened detail at DETAIL_INSET
+// from that row. These three constants are the only places the 22px offset is written
+// (turnGrid.test.tsx guards it); nothing inside a group body adds left space again.
+/** A group's body (thinking, phase, stage, stage result): moves it to the 22 column. */
+const GROUP_BODY = 'ml-[22px]';
+/** A first-level text zone (restatement, note, answer, RESULT, the stopped line). */
 const TEXT_COL = 'pl-[22px]';
 /** A row inside a group body (already at the column): its mark hangs in the gutter. */
 const HANG = '-ml-[22px]';
@@ -259,7 +264,7 @@ export function ThinkingGroup({ zone, scope, open, onToggle }: {
     <div data-testid="zone-thinking" {...ANCHOR_PROPS}>
       <GroupHeader testid="thinking-toggle" open={open} onToggle={() => onToggle(!open)} label={label} meta={meta} />
       {open && (
-        <div className={`${INNER_GAP} ml-[22px] space-y-2`}>
+        <div className={`${INNER_GAP} ${GROUP_BODY} space-y-2`}>
           {zone.thoughts.map((th) => <div key={`th-${th.ordinal}`} data-testid="thought" className={THOUGHT_TEXT}>{th.text}</div>)}
         </div>
       )}
@@ -400,17 +405,20 @@ function StopReceiptBlock({ receipt }: { receipt: StopReceiptView }) {
   const { line, full } = stopSummary(t, receipt);
   return (
     <div data-testid="turn-stopped" data-receipt="" {...ANCHOR_PROPS}>
+      <div className={HANG}>
       <button
         type="button"
         data-testid="stop-summary"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="w-full min-w-0 truncate text-left text-[12.5px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50 rounded-[4px]"
+        className={`flex items-center gap-1.5 w-full min-w-0 text-left text-[12.5px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50 rounded-[4px]`}
       >
-        {open ? '▾ ' : '▸ '}{tf(t, 'chat.turn.zone.stoppedByYouPlain', 'Stopped by you')}{line ? ` · ${line}` : ''}
+        <span data-testid="stop-mark" aria-hidden="true" className={MARK_COL}>{open ? '▾' : '▸'}</span>
+        <span data-testid="stop-text" className="min-w-0 truncate">{tf(t, 'chat.turn.zone.stoppedByYouPlain', 'Stopped by you')}{line ? ` · ${line}` : ''}</span>
       </button>
+      </div>
       {open && (
-        <div data-testid="stop-detail" className="mt-1 ml-4 space-y-0.5 font-mono text-[11.5px] text-[var(--color-text-dim)] select-text">
+        <div data-testid="stop-detail" className={`${DETAIL_INSET} space-y-0.5 font-mono text-[11.5px] text-[var(--color-text-dim)] select-text`}>
           {full.map((r, i) => (
             <div key={i} data-testid={r.path ? 'stop-detail-path' : 'stop-detail-row'} className={r.path ? 'pl-4 break-all text-[var(--color-text-muted)]' : 'truncate'}>
               {r.label ? `${r.label}: ` : ''}{r.text}
@@ -751,7 +759,7 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
           <div key={key} data-testid="phase-segment" className="space-y-2">
             <PhaseNote text={seg.note.text} renderKey={`tx-${seg.note.textOrdinal}-b`} hasWork={hasWork} open={open}
               onToggle={(o) => ctx.choose(key, o)} ctx={ctx} />
-            {open && <div className="space-y-2 ml-[22px]">{renderItems(bodyItems(seg.members, settled, batchOf))}</div>}
+            {open && <div className="space-y-2">{renderItems(bodyItems(seg.members, settled, batchOf))}</div>}
           </div>
         );
       })}
@@ -783,7 +791,7 @@ export function PhaseGroup({ zone, ctx }: { zone: Extract<Zone, { kind: 'phase' 
         labelClass={zone.live ? 'text-[var(--color-text)]' : undefined}
         meta={meta}
       />
-      {open && <div className={`${INNER_GAP} ml-[22px]`}><PhaseBody members={zone.members} live={zone.live} ctx={ctx} /></div>}
+      {open && <div className={`${INNER_GAP} ${GROUP_BODY}`}><PhaseBody members={zone.members} live={zone.live} ctx={ctx} /></div>}
     </div>
   );
 }
@@ -830,12 +838,12 @@ export function StageGroup({ zone, ctx, mustOpen }: { zone: StageZone; ctx: Zone
       </div>
       {zone.status === 'done' && (zone.summary || zone.docs?.length) ? (
         // what the stage produced stays visible when its work is folded
-        <div className={`${INNER_GAP} ml-[22px]`}>
+        <div className={`${INNER_GAP} ${GROUP_BODY}`}>
           <StageResult summary={zone.summary} docs={zone.docs} renderText={ctx.renderText} />
         </div>
       ) : null}
       {open && zone.body.length > 0 && (
-        <div className={`${INNER_GAP} ml-[22px] space-y-3`}>
+        <div className={`${INNER_GAP} ${GROUP_BODY} space-y-3`}>
           {zone.body.map((z) => <BodyZone key={z.id} zone={z} ctx={ctx} />)}
         </div>
       )}
@@ -848,8 +856,10 @@ export function StageGroup({ zone, ctx, mustOpen }: { zone: StageZone; ctx: Zone
 function BodyZone({ zone, ctx }: { zone: Zone; ctx: ZoneContext }) {
   if (zone.kind === 'phase') return <PhaseBody members={zone.members} live={zone.live} ctx={ctx} />;
   if (zone.kind === 'text') return <div data-testid="zone-note" className="text-[14px]" {...ANCHOR_PROPS}>{ctx.renderText(zone.text, `${zone.id}-b`)}</div>;
-  if (zone.kind === 'needs' || zone.kind === 'failure') return <>{ctx.renderNeeds(zone)}</>;
-  if (zone.kind === 'stageResult') return <StageResultRow zone={zone} ctx={ctx} />;
+  // a card and a stage-result row are positioned by kind, not by the stage body they
+  // are in: back out to the first-level columns (card at 0, mark in the gutter)
+  if (zone.kind === 'needs' || zone.kind === 'failure') return <div data-testid="card-slot" className={HANG}>{ctx.renderNeeds(zone)}</div>;
+  if (zone.kind === 'stageResult') return <div className={HANG}><StageResultRow zone={zone} ctx={ctx} /></div>;
   return null;
 }
 
@@ -859,11 +869,11 @@ function StageResultRow({ zone, ctx }: { zone: Extract<Zone, { kind: 'stageResul
   const docs = b.docs?.length ? b.docs : b.doc ? [b.doc] : [];
   return (
     <div data-testid="zone-stage-result" data-stage={b.stage} {...ANCHOR_PROPS}>
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-center gap-1.5 min-w-0">
         <span aria-hidden="true" className={`${MARK_COL} text-[12px] text-[var(--color-text-dim)]`}>✓</span>
         <span className={`${TAG} text-[var(--color-text-secondary)]`}>{stageName(b.stage)}</span>
       </div>
-      <div className={`${INNER_GAP} ml-[22px]`}>
+      <div className={`${INNER_GAP} ${GROUP_BODY}`}>
         <StageResult summary={b.summary} docs={docs} renderText={ctx.renderText} />
       </div>
     </div>
@@ -944,7 +954,9 @@ export function TurnZoneList({ zones, ctx, hasOpenQuestionIn }: {
             break;
           default: el = null;
         }
-        return <div key={z.id} data-zone={z.kind} className={gap}>{el}</div>;
+        // the stopped line and receipt sit in the text column, like every text row
+        const cls = z.kind === 'stopped' ? `${gap} ${TEXT_COL}`.trim() : gap;
+        return <div key={z.id} data-zone={z.kind} className={cls}>{el}</div>;
       })}
     </>
   );

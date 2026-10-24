@@ -619,7 +619,7 @@ describe('AC9 — one signal; a stopped turn says so', () => {
     expect(container.querySelector('[data-zone="failure"]')).toBeNull();
     const stopped = screen.getByTestId('turn-stopped');
     expect(stopped.hasAttribute('data-receipt')).toBe(true);
-    expect(within(stopped).getByTestId('stop-summary').textContent?.replace(/^[▸▾] /, ''))
+    expect(within(stopped).getByTestId('stop-text').textContent)
       .toBe('Stopped by you · Bash stopped at 4m 12s · background agent phase3 experiment stopped');
     expect(within(stopped).queryByTestId('tool-strip')).toBeNull(); // the call is not listed twice
     expect(within(stopped).getByTestId('stop-continue-hint')).toBeTruthy();
@@ -650,7 +650,7 @@ describe('AC9 — one signal; a stopped turn says so', () => {
   it('a call still waiting for approval at the Stop is "not run", never "stopped"', () => {
     const r = { type: 'turn_stop', calls: [{ toolUseId: 'a', name: 'Bash', ran: false }], agents: [] } as ContentBlock;
     render(view([tx('go'), bash('a', 'rm -rf build'), r], false));
-    expect(screen.getByTestId('stop-summary').textContent?.replace(/^[▸▾] /, '')).toBe('Stopped by you · Bash not run');
+    expect(screen.getByTestId('stop-text').textContent).toBe('Stopped by you · Bash not run');
   });
 
   it('background agents stopped after the turn ended: said at its end, its RESULT kept', () => {
@@ -658,7 +658,7 @@ describe('AC9 — one signal; a stopped turn says so', () => {
       agents: [{ toolUseId: 'g1', description: 'phase3', status: 'stopped', background: true }] } as ContentBlock;
     render(view([tx('go'), bash('a', 'make'), tr('a'), tx('done'), r], false));
     expect(screen.getByTestId('turn-result')).toBeTruthy();
-    expect(screen.getByTestId('stop-summary').textContent?.replace(/^[▸▾] /, '')).toBe('Stopped by you · background agent phase3 stopped');
+    expect(screen.getByTestId('stop-text').textContent).toBe('Stopped by you · background agent phase3 stopped');
   });
 
   it('live, before the receipt: the marker alone makes the last call stopped, not failed', () => {

@@ -8,10 +8,9 @@
  * - C2 every piece of prose in a settled turn (restatement, a note with work under
  *   it, a note without, the RESULT) shares that column.
  *
- * Method: jsdom has no layout, so `columnOffset` sums the horizontal offset the
- * classes on the path from the text to the turn root give it: margins, the paddings
- * of its ancestors, and the siblings in front of it in a flex row (width + gap). A
- * class it does not know THROWS, so a new indent cannot slip past the test.
+ * Method: jsdom has no layout; x comes from the classes on the path to the turn root
+ * (helpers/columnOffset, shared with turnGrid.test.tsx; it throws on an unknown
+ * spacing class, so a new indent cannot slip past the test).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, act } from '@testing-library/react';
@@ -19,6 +18,7 @@ import { AssistantMessageView } from '../AssistantMessageView';
 import { ToastProvider } from '../../../../contexts/ToastContext';
 import { FOLD_DELAY_MS } from '../../../../hooks/useLinger';
 import type { Message, ContentBlock } from '../../../../types';
+import { columnOffset } from './helpers/columnOffset';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (_key: string, fallback: unknown) => fallback }),
@@ -45,76 +45,6 @@ const tr = (id: string): ContentBlock =>
 function view(content: ContentBlock[], isStreaming: boolean) {
   const message: Message = { id: 'm1', role: 'assistant', content, timestamp: '2026-10-19T10:00:00+08:00', isError: false };
   return <ToastProvider><AssistantMessageView message={message} isStreaming={isStreaming} isLastAssistant sessionId="s1" /></ToastProvider>;
-}
-
-const PX = 4; // one Tailwind spacing unit
-/** px of one spacing token's value: `1.5`, `[22px]`; anything else throws. */
-function tokenPx(v: string, cls: string): number {
-  const arb = /^\[(\d+(?:\.\d+)?)px\]$/.exec(v);
-  if (arb) return Number(arb[1]);
-  if (/^\d+(\.\d+)?$/.test(v)) return Number(v) * PX;
-  if (v === 'px') return 1;
-  throw new Error(`columnOffset: unknown spacing class ${cls}`);
-}
-const classes = (el: Element) => (el.getAttribute('class') || '').split(/\s+/).filter(Boolean);
-/** Left margin from an element's own classes. */
-function marginLeft(el: Element): number {
-  let n = 0;
-  for (const c of classes(el)) {
-    const m = /^(-?)(?:ml|mx|m)-(.+)$/.exec(c);
-    if (!m) continue;
-    if (m[2] === 'auto') throw new Error(`columnOffset: ${c} on the text path`);
-    n += (m[1] ? -1 : 1) * tokenPx(m[2], c);
-  }
-  return n;
-}
-/** Where an element's content starts inside it: left padding + left border. */
-function contentLeft(el: Element): number {
-  let n = 0;
-  for (const c of classes(el)) {
-    const p = /^(?:pl|px|p)-(.+)$/.exec(c);
-    if (p) n += tokenPx(p[1], c);
-    if (c === 'border-l' || c === 'border' || c === 'border-x') n += 1;
-  }
-  return n;
-}
-function widthOf(el: Element): number {
-  for (const c of classes(el)) {
-    const m = /^w-(.+)$/.exec(c);
-    if (m) return tokenPx(m[1], c);
-  }
-  // a wrapper (the ▸ button) is as wide as its one child plus its own padding
-  if (el.children.length === 1) return contentLeft(el) + widthOf(el.children[0]);
-  throw new Error(`columnOffset: a flex sibling in front of the text has no fixed width (${el.outerHTML.slice(0, 80)})`);
-}
-function gapOf(el: Element): number {
-  for (const c of classes(el)) {
-    const m = /^gap(?:-x)?-(.+)$/.exec(c);
-    if (m) return tokenPx(m[1], c);
-  }
-  return 0;
-}
-const isRow = (el: Element) => {
-  const cs = classes(el);
-  return (cs.includes('flex') || cs.includes('inline-flex')) && !cs.includes('flex-col');
-};
-
-/** Horizontal offset of `el` inside `root`, from the classes on the path between them. */
-function columnOffset(el: Element, root: Element): number {
-  let x = 0;
-  let node: Element = el;
-  while (node !== root) {
-    const parent = node.parentElement;
-    if (!parent) throw new Error('columnOffset: root is not an ancestor');
-    x += marginLeft(node);
-    x += contentLeft(parent);
-    if (isRow(parent)) {
-      const before = [...parent.children].slice(0, [...parent.children].indexOf(node));
-      for (const s of before) x += widthOf(s) + gapOf(parent);
-    }
-    node = parent;
-  }
-  return x;
 }
 
 /** The deepest element holding `text`, and the turn's content column. */
