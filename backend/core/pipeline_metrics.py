@@ -15,10 +15,13 @@ Public symbols:
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, Mapping, Optional
 
 from core.run_protocol import lifecycle
+
+logger = logging.getLogger(__name__)
 
 _DONE = frozenset({"completed", "degraded"})
 NEEDS_YOU_PAUSE_KINDS = frozenset({"decision", "stopped", "worktree", "idle"})
@@ -30,7 +33,8 @@ def is_v1(run_id: str) -> bool:
     from core.run_protocol.runner import is_v1_run
     try:
         return is_v1_run(get_app_data_dir(), run_id)
-    except Exception:  # noqa: BLE001 — an unreadable contract is not a v1 run
+    except Exception as exc:  # noqa: BLE001 — an unreadable contract is not a v1 run
+        logger.debug("run %s: contract unreadable, not listed as v1: %s", run_id, exc)
         return False
 
 

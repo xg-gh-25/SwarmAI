@@ -3563,8 +3563,8 @@ def _runs_touching(pending: set) -> "list[tuple[str, str]]":
                     homes.append(os.path.realpath(root))
                 try:
                     homes.append(os.path.realpath(str(run_worktree.wt_path(run_id, name))))
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001 — no worktree path for this repo
+                    logger.debug("run %s repo %s: no worktree path: %s", run_id, name, exc)
             # homes are realpath'd dirs; a pending identity's parent is realpath'd too
             if any(p == h or p.startswith(h + os.sep) for p in pending for h in homes):
                 out.append((project, run_id))
@@ -3820,13 +3820,15 @@ def _source_repo_root() -> "str | None":
         from config import get_app_data_dir
         from core.run_protocol.runner import read_contract
         data_dir = get_app_data_dir()
-    except Exception:  # noqa: BLE001 — no config: nothing to read
+    except Exception as exc:  # noqa: BLE001 — no config: nothing to read
+        logger.debug("source root: app data dir unavailable: %s", exc)
         data_dir = None
     for _t, f in sorted(files, reverse=True)[:50]:   # newest first, stop at the first fit
         try:
             contract = read_contract(data_dir, os.path.basename(os.path.dirname(f))) \
                 if data_dir is not None else None
-        except Exception:  # noqa: BLE001 — an unreadable contract names no root
+        except Exception as exc:  # noqa: BLE001 — an unreadable contract names no root
+            logger.debug("source root: contract of %s unreadable: %s", f, exc)
             contract = None
         roots = (contract or {}).get("repo_roots") if isinstance(contract, dict) else None
         for root in (roots or {}).values() if isinstance(roots, dict) else ():

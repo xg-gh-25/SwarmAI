@@ -2175,7 +2175,8 @@ def stamp_trust_from_run(run_id: "str | None", project_dir: "Path | None") -> st
         if runs_root not in run_dir.parents and run_dir != runs_root:
             return "n/a"
         audit = _signed_run_audit(run_id, project_dir)
-    except Exception:  # noqa: BLE001 — no readable signed run → fail closed
+    except Exception as exc:  # noqa: BLE001 — no readable signed run → fail closed
+        logger.debug("run %s: signed audit unreadable, trust n/a: %s", run_id, exc)
         return "n/a"
     return trust_from_gate2_outcome(derive_gate2_outcome(audit))
 

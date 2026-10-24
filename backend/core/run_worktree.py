@@ -1483,7 +1483,8 @@ def _signed_view(run_file: Path, data: dict) -> "dict | None":
     data_dir = Path(get_app_data_dir())
     try:
         cpath = contract_path(data_dir, rid)
-    except Exception:  # noqa: BLE001 — not a v1 run id
+    except Exception as exc:  # noqa: BLE001 — not a v1 run id
+        logger.debug("run %s: no contract path, not a v1 run: %s", rid, exc)
         return None
     if not cpath.exists():
         return None
@@ -1581,7 +1582,8 @@ def _contract_repos(rid: str) -> "frozenset[str]":
         from config import get_app_data_dir
         from core.run_protocol.runner import read_contract
         contract = read_contract(get_app_data_dir(), rid)
-    except Exception:  # noqa: BLE001 — not a v1 run id / unreadable
+    except Exception as exc:  # noqa: BLE001 — not a v1 run id / unreadable
+        logger.debug("run %s: contract unreadable, no repos: %s", rid, exc)
         return frozenset()
     if not isinstance(contract, dict):
         return frozenset()

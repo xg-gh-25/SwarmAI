@@ -238,7 +238,8 @@ def signed_terminal(data_dir: str | Path, run_id: str) -> bool:
         events = AuditStore(root, run_id, authority).read_events()
         return bool(events) and lifecycle.fold(
             events, authority, allow_pending_transition=True)["status"] in lifecycle.TERMINAL
-    except Exception:  # noqa: BLE001 — unverifiable: not finished
+    except Exception as exc:  # noqa: BLE001 — unverifiable: not finished
+        logger.debug("run %s: signed state unverifiable, not finished: %s", run_id, exc)
         return False
 
 
@@ -363,7 +364,9 @@ class RunEngine:
         for entry in sorted(base.iterdir()) if base.is_dir() else []:
             try:
                 contract = read_contract(data_dir, entry.name)
-            except Exception:  # noqa: BLE001 — an unreadable contract: its repos unknown
+            except Exception as exc:  # noqa: BLE001 — an unreadable contract: its repos unknown
+                logger.warning("run %s: contract unreadable while checking shared "
+                               "holders: %s", entry.name, exc)
                 # a run its projection calls finished holds nothing; any other might
                 # hold these repos: fail closed (re-audit 84b72ec1 MED)
                 if not signed_terminal(data_dir, entry.name):
@@ -379,8 +382,9 @@ class RunEngine:
                                  project=str(contract.get("project")), run_id=entry.name)
                 if other.projection(allow_pending=True)["status"] in lifecycle.TERMINAL:
                     continue
-            except Exception:  # noqa: BLE001 — unknown state: treated as live
-                pass
+            except Exception as exc:  # noqa: BLE001 — unknown state: treated as live
+                logger.warning("run %s: state unreadable, treated as live shared "
+                               "holder: %s", entry.name, exc)
             return entry.name
         return None
 
