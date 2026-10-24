@@ -50,8 +50,9 @@ only an in-memory read, everything durable is prepared or recorded off the tool 
 new gate in front of the human-only routes (usable P5).
 
 Revision 7 (2026-10-24), after a review of revision 6: the guidance hook returns
-`hookSpecificOutput.additionalContext` (the field the SDK passes to the model) and the
-chain is changed to concatenate it; the hook is registered in every session at spawn and
+`hookSpecificOutput.additionalContext` (the field the SDK passes to the model), relying on
+usable S4's chain fix (`002f7b4ec`) that joins it across hooks; the hook is registered in
+every session at spawn and
 does nothing unless that session drives a Run; Worker-only paragraphs are marked 2b.
 
 ## 1. Problem
@@ -330,12 +331,12 @@ and Worker Runs then have one item lifecycle and one 24-hour deadline (§5.3).
     holds an envelope the hook takes it and returns it as
     `hookSpecificOutput.additionalContext` with `hookEventName: "PostToolUse"`, the shape
     the SDK passes to the model and that existing PostToolUse hooks use
-    (`main_dirty_scan.py`). `_build_chain` today merges `hookSpecificOutput` later-wins,
-    so a second hook's context would replace this one (for example the repo-guide
-    injection of usable §3.7); Phase 2a changes the chain to **concatenate**
-    `hookSpecificOutput.additionalContext` across hooks, as it already does for the
-    top-level field. The hook then hands the `input_delivered` append to the Conductor
-    executor and returns; it does no git, disk or log write itself.
+    (`main_dirty_scan.py`). Since usable S4 (`002f7b4ec`), `_build_chain` joins every
+    hook's `hookSpecificOutput.additionalContext` in registration order, so this hook and
+    the repo-guide injection of usable §3.7 (`de8603c94`) both reach the model; the
+    Conductor relies on that and does not change the chain. The hook then hands the
+    `input_delivered` append to the Conductor executor and returns; it does no git, disk
+    or log write itself.
   - **At least once.** If the daemon dies after the hook returned and before
     `input_delivered` is appended, the input counts as undelivered and is delivered again;
     the agent's `input_ack` names the `input_id`, so a duplicate is recognized. The
@@ -444,9 +445,9 @@ guidance hook, delivery content snapshots.
 - guidance during a long BUILD is delivered at the next tool boundary; text with a forged
   envelope header, footer or system block parses to exactly one input;
 - the guidance hook and the repo-guide injection each return
-  `hookSpecificOutput.additionalContext` on the same tool call, the chain concatenates
-  them, and both texts reach the model on the real SDK; with nothing pending the hook
-  adds no measurable latency (S5);
+  `hookSpecificOutput.additionalContext` on the same tool call and both texts reach the
+  model on the real SDK (the join itself is already tested by usable S4,
+  `test_hook_builder`); with nothing pending the hook adds no measurable latency (S5);
   a daemon kill between the hook returning and `input_delivered` leads to one redelivery,
   recognized by `input_id`;
 - land refuses an unacked or undelivered input; a further edit to an already changed file
